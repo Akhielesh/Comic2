@@ -44,7 +44,7 @@ export const CATALOG_TABLES = {
   uptimeDaily: 'comic_model_uptime_daily'
 } as const;
 
-/** Upper bound for one database read on a request path. */
+/** Upper bound for one database read or write on a request path (a hung write must never pin a refresh). */
 export const DB_READ_TIMEOUT_MS = 5_000;
 const SNAPSHOT_READ_LIMIT = 2_000;
 
@@ -88,7 +88,8 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
         .upsert(
           rows.map((r) => ({ source, model_id: r.modelId, payload: r.payload, supports_image_output: true, is_free: false, last_seen_at: r.fetchedAt })),
           { onConflict: 'source,model_id' }
-        );
+        )
+        .abortSignal(timeout());
       if (error) throw new Error(error.message);
     },
     async latestPriceSnapshots() {
@@ -106,7 +107,8 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
       if (!rows.length) return;
       const { error } = await db()
         .from(CATALOG_TABLES.priceChanges)
-        .insert(rows.map((r) => ({ model_id: r.modelId, res: r.res, usd: r.usd, basis: r.basis, note: r.note ? r.note.slice(0, 500) : null, provider: r.provider ?? null, fetched_at: r.fetchedAt })));
+        .insert(rows.map((r) => ({ model_id: r.modelId, res: r.res, usd: r.usd, basis: r.basis, note: r.note ? r.note.slice(0, 500) : null, provider: r.provider ?? null, fetched_at: r.fetchedAt })))
+        .abortSignal(timeout());
       if (error) throw new Error(error.message);
     },
     async priceSnapshotsSince(sinceIso) {
@@ -127,7 +129,8 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
         .upsert(
           rows.map((r) => ({ model_id: r.modelId, provider: r.provider.slice(0, 120), day: r.day, uptime_1d: r.uptime1d, uptime_30m: r.uptime30m, fetched_at: r.fetchedAt })),
           { onConflict: 'model_id,provider,day' }
-        );
+        )
+        .abortSignal(timeout());
       if (error) throw new Error(error.message);
     },
     async uptimeSince(sinceIso) {

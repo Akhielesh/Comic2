@@ -643,7 +643,12 @@ export const createQualitySource = (deps: QualitySourceDeps = {}): QualitySource
       if (deps.store) {
         const lmBoards: PersistedQuality['boards'] = {};
         for (const board of LMARENA_BOARDS) if (snapshot.boards[board]) lmBoards[board] = snapshot.boards[board];
-        await deps.store.save({ fetchedAt: at, generatedAt: at, boards: lmBoards, history: snapshot.history }).catch((err) => logger.warn('comic_model_quality_persist_failed', { message: (err as Error)?.message }));
+        // Bounded like every request: a store that never answers must not keep this refresh (and the source) pending.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          deps.store.save({ fetchedAt: at, generatedAt: at, boards: lmBoards, history: snapshot.history }).catch((err) => logger.warn('comic_model_quality_persist_failed', { message: (err as Error)?.message })),
+          new Promise<void>((resolve) => (timer = setTimeout(resolve, requestMs)))
+        ]).finally(() => timer !== undefined && clearTimeout(timer));
       }
     } catch (err) {
       state = { ...state, stale: true };

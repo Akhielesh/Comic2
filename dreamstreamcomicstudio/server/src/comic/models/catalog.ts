@@ -186,8 +186,8 @@ export interface ModelCatalogDeps {
   baseUrl?: string;
   /** OpenRouter ids to fetch endpoints for (default: registry OpenRouter routes + WATCH_LIST_IDS). */
   ids?: string[];
-  /** Overrides for ROWS_WAIT_MS / PRICE_WAIT_MS / FETCH_TIMEOUT_MS (tests). */
-  waits?: { rowsMs?: number; priceMs?: number; fetchMs?: number };
+  /** Overrides for ROWS_WAIT_MS / PRICE_WAIT_MS / FETCH_TIMEOUT_MS / PERSIST_WAIT_MS (tests). */
+  waits?: { rowsMs?: number; priceMs?: number; fetchMs?: number; persistMs?: number };
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -204,6 +204,8 @@ export const FETCH_TIMEOUT_MS = 6_000;
 export const ROWS_WAIT_MS = 8_000;
 /** The longest a quote waits on a price refresh before using the cached or registry price. */
 export const PRICE_WAIT_MS = 2_500;
+/** The longest a refresh waits on its own persistence (cache, snapshots, uptime log) before it is done anyway. */
+export const PERSIST_WAIT_MS = 10_000;
 /** Observed kinds a catalog row carries (models.md §4.3 `observed[].kind`). */
 export const ROW_OBSERVED_KINDS: ReadonlySet<string> = new Set(['page', 'sheet', 'cover']);
 export const CACHE_SOURCE = { list: 'openrouter_images', endpoints: 'openrouter_images_endpoints' } as const;
@@ -360,6 +362,8 @@ interface KeyedOpts<T> {
   bootstrap?: () => Promise<Map<string, { value: T; fetchedAt: number; missing?: boolean }>>;
   /** Called once per batch with the ids that answered (missing ones included) at the batch's fetch time. */
   afterBatch?: (fresh: Map<string, { value: T; missing: boolean }>, fetchedAtIso: string) => Promise<void>;
+  /** The longest the batch waits on afterBatch (PERSIST_WAIT_MS). */
+  persistMs?: number;
 }
 
 /**
@@ -423,7 +427,12 @@ const keyedSource = <T>(opts: KeyedOpts<T>) => {
       }
     });
     if (fresh.size && opts.afterBatch) {
-      await opts.afterBatch(fresh, iso(at)).catch((err) => logger.warn('comic_model_catalog_after_batch_failed', { source: opts.name, message: (err as Error)?.message }));
+      // Bounded: a store that never answers must not keep this batch (and so the source) pending.
+      await within(
+        opts.afterBatch(fresh, iso(at)).catch((err) => logger.warn('comic_model_catalog_after_batch_failed', { source: opts.name, message: (err as Error)?.message })),
+        opts.persistMs ?? PERSIST_WAIT_MS,
+        () => logger.warn('comic_model_catalog_after_batch_slow', { source: opts.name })
+      );
     }
   };
 
@@ -617,6 +626,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
   const rowsWaitMs = deps.waits?.rowsMs ?? ROWS_WAIT_MS;
   const priceWaitMs = deps.waits?.priceMs ?? PRICE_WAIT_MS;
   const fetchMs = deps.waits?.fetchMs ?? FETCH_TIMEOUT_MS;
+  const persistMs = deps.waits?.persistMs ?? PERSIST_WAIT_MS;
   const needFetch = (): CatalogFetch => {
     if (!fetchImpl) throw new Error('fetch is not available');
     return fetchImpl;
@@ -648,7 +658,10 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       if (!models.length) throw new Error('empty image model list');
       const byId = new Map(models.map((m) => [m.id, { id: m.id, name: m.name, created: m.created, supported_parameters: m.supported_parameters }] as const));
       const at = iso(now());
-      if (store) await store.saveCache(CACHE_SOURCE.list, [...byId.values()].map((m) => ({ modelId: m.id, payload: m, fetchedAt: at }))).catch((err) => logger.warn('comic_model_catalog_cache_write_failed', { source: CACHE_SOURCE.list, message: (err as Error)?.message }));
+      if (store) {
+        const write = store.saveCache(CACHE_SOURCE.list, [...byId.values()].map((m) => ({ modelId: m.id, payload: m, fetchedAt: at }))).catch((err) => logger.warn('comic_model_catalog_cache_write_failed', { source: CACHE_SOURCE.list, message: (err as Error)?.message }));
+        await within(write, persistMs, () => logger.warn('comic_model_catalog_cache_write_slow', { source: CACHE_SOURCE.list }));
+      }
       return { value: { byId } };
     }
   });
@@ -687,6 +700,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     ids,
     ttlMs: TTL_MS.endpoints,
     now,
+    persistMs,
     bootstrap: async () => {
       const out = new Map<string, { value: OrImageEndpoint[]; fetchedAt: number; missing?: boolean }>();
       if (!store) return out;
@@ -727,6 +741,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     ids,
     ttlMs: TTL_MS.uptime,
     now,
+    persistMs,
     fetchOne: async (id) => {
       let body: { data?: { endpoints?: OrModelEndpoint[] } };
       try {

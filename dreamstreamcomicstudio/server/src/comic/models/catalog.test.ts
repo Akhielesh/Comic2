@@ -271,6 +271,23 @@ describe('cadence (models.md §4.5): TTLs, single-flight, stale-while-error', ()
     expect(src.rows.find((r) => r.id === 'nano-banana-2.1')!.stale).toBe(true);
   });
 
+  it('a store that never answers cannot pin a refresh: the batch finishes, and the next TTL refresh still runs', async () => {
+    const hung = memoryCatalogStore();
+    const never = () => new Promise<never>(() => undefined);
+    hung.saveCache = never;
+    hung.insertPriceSnapshots = never;
+    hung.logUptime = never;
+    const { catalog, fetch, c } = setup({ store: hung, waits: { persistMs: 20 } });
+    const t0 = Date.now();
+    const rows = await catalog.rows();
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(row(rows, 'nano-banana-2.1')).toMatchObject({ stale: false, price: { '1K': { usd: 0.0336 } } });
+    c.advance(TTL_MS.uptime + 1);
+    const before = fetch.calls.length;
+    expect(row(await catalog.rows(), 'nano-banana-2.1').stale).toBe(false);
+    expect(fetch.calls.length - before).toBe(catalogIds().length); // the uptime batch ran again
+  });
+
   it('a new process starts from the persisted cache (no fetch while it is fresh)', async () => {
     const { store, c } = setup();
     const warm = createModelCatalog({ fetch: fakeOpenRouterFetch(), store, baseUrl: FAKE_BASE, now: c.now, quality: createQualitySource({ fetch: null }) });
