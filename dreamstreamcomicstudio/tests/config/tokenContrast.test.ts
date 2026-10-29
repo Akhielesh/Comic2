@@ -285,25 +285,6 @@ function pairs(): Pair[] {
 }
 const label = (p: Pair) => `${p.ctx}: ${p.fg} on ${p.bg}`;
 
-/**
- * Known gap, tracked here so it cannot grow and so this list fails the day it is fixed: the DEFAULT
- * light `--ds-muted` (#6e6a60) is ~4.1–4.4:1 on tinted rows over the sidebar and on a track inside a
- * well. The fix is #67635a, but `--ds-muted`'s :root value is mirrored by services/dsSkin.ts
- * DS_COLOR_TOKENS (the cross-fade registration, pinned by atlasSkin.test.ts), which this package does
- * not own — the two-line change is in the package's wave notes. Comic Studio itself renders under
- * the Atlas skin (#5c5c5c), where every pair passes.
- */
-const KNOWN_GAPS = [
-  'default light: --ds-muted on active on canvas',
-  'default light: --ds-muted on active on sidebar',
-  'default light: --ds-muted on hover on sidebar',
-  'default light: --ds-muted on accent-soft on sidebar',
-  'default light: --ds-muted on well-strong on sidebar',
-  'default light: --ds-muted on well-strong on well on canvas',
-  'default light: --ds-muted on hover on well on canvas',
-  'default light: --ds-muted on hover on well on surface/canvas'
-];
-
 describe('token contrast — every text token on every surface it is used on (WCAG 2.x)', () => {
   // Measured inside the tests (not at collection), so a missing token fails a named test.
   let cached: Pair[] | null = null;
@@ -314,11 +295,9 @@ describe('token contrast — every text token on every surface it is used on (WC
     for (const ctx of Object.keys(CONTEXTS)) expect(all.filter((p) => p.ctx === ctx).length, ctx).toBeGreaterThan(100);
   });
 
-  it('body and label text reach 4.5:1 everywhere (light, dark, Atlas light, Atlas dark) — only the tracked gap remains', () => {
+  it('body and label text reach 4.5:1 everywhere (light, dark, Atlas light, Atlas dark) — no exceptions', () => {
     const failing = measure().filter((p) => p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
-    expect(failing.map((f) => f.replace(/ = [\d.]+$/, '')).sort()).toEqual([...KNOWN_GAPS].sort());
-    // …and the gap stays a near-miss, never a regression past it.
-    for (const f of failing) expect(Number(/= ([\d.]+)$/.exec(f)![1]), f).toBeGreaterThanOrEqual(4.05);
+    expect(failing).toEqual([]);
   });
 
   it('clears the exact rows the device matrix reported', () => {
@@ -329,8 +308,15 @@ describe('token contrast — every text token on every surface it is used on (WC
     const fill = token('--ds-accent-fill', 'default light');
     expect(ratio(hexColor('#ffffff'), fill)).toBeGreaterThanOrEqual(4.5);
     expect(ratio(over(withAlpha(hexColor('#ffffff'), 0.9), fill), fill)).toBeGreaterThanOrEqual(4.5);
-    // muted-text-contrast / the NEW segmented-label rows (#6e6a60 on #f0e5df 4.36, on #e9e8e4 4.39): the
-    // studio renders under the Atlas skin, where muted on those same tints passes.
+    // muted-text-contrast / the NEW segmented-label rows (#6e6a60 on #f0e5df 4.36, on #e9e8e4 4.39). The
+    // DEFAULT light token is what chat, settings, home and every sheet that portals to <body> outside the
+    // [data-ds-skin] root paint (PageEditor, ShareSheet, Bottom/Side/PopSheet on the apex host), so it
+    // must clear the exact rows itself — not only the skin's muted.
+    const light = surfaces('default light');
+    expect(ratio(hexColor('#6e6a60'), light.get('active on canvas')!), 'the old token really failed').toBeLessThan(4.5);
+    for (const bg of ['active on canvas', 'accent-soft on sidebar', 'well-strong on well on canvas', 'active on sidebar', 'hover on well on canvas']) {
+      expect(ratio(token('--ds-muted', 'default light'), light.get(bg)!), `default light ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
     for (const ctx of ['atlas light', 'atlas dark'] as const) {
       const s = surfaces(ctx);
       for (const bg of ['active on canvas', 'accent-soft on sidebar', 'well-strong on well on canvas']) expect(ratio(token('--ds-muted', ctx), s.get(bg)!), `${ctx} ${bg}`).toBeGreaterThanOrEqual(4.5);

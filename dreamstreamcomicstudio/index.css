@@ -413,7 +413,7 @@
   --ds-surface-strong: rgba(255,255,255,0.95); /* menus, sticky headers */
   --ds-raised: #ffffff;            /* active segmented pill, raised chips */
   --ds-ink: #1a1915;               /* primary text */
-  --ds-muted: #6e6a60;             /* secondary text */
+  --ds-muted: #67635a;             /* secondary text: ≥ 4.5:1 on every tinted row, well and track (was #6e6a60, 4.1–4.4 on some) */
   --ds-hairline: rgba(0,0,0,0.10); /* standard hairline */
   --ds-hairline-soft: rgba(0,0,0,0.05);
   --ds-well: rgba(0,0,0,0.03);     /* recessed wells */

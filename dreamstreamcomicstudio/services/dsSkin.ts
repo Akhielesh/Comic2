@@ -39,7 +39,7 @@ export const DS_COLOR_TOKENS: ReadonlyArray<{ name: string; initialValue: string
   { name: '--ds-surface-strong', initialValue: 'rgba(255,255,255,0.95)' },
   { name: '--ds-raised', initialValue: '#ffffff' },
   { name: '--ds-ink', initialValue: '#1a1915' },
-  { name: '--ds-muted', initialValue: '#6e6a60' },
+  { name: '--ds-muted', initialValue: '#67635a' },
   { name: '--ds-hairline', initialValue: 'rgba(0,0,0,0.10)' },
   { name: '--ds-hairline-soft', initialValue: 'rgba(0,0,0,0.05)' },
   { name: '--ds-well', initialValue: 'rgba(0,0,0,0.03)' },
