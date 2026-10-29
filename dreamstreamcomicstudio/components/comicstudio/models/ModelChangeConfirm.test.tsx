@@ -142,6 +142,14 @@ describe('C — after the lock', () => {
     expect(screen.getByText('This is over your budget by ≈$0.82.')).toBeInTheDocument();
   });
 
+  it('a legacy lock the catalog no longer lists still shows its registry price (never "no price" by omission)', () => {
+    open({ doc: lakeDoc({ model: 'nano-banana-2' }), targetId: 'nano-banana-2.1' });
+    expect(screen.getByRole('alertdialog')).toHaveAccessibleName('Switch this comic to Nano Banana 2.1?');
+    // (0.067 + 0.003) × 1.3 = 0.091 → ≈$0.09 per 1K page, from the registry's dated list.
+    expect(screen.getByText('Nano Banana 2: ≈$0.09 per page at 1K')).toBeInTheDocument();
+    expect(document.querySelector('[data-confirm="fineprint"]')).toHaveTextContent('from our price list, 2026-10-21');
+  });
+
   it('BYOK: the fine print says the user’s own key pays', () => {
     open({ byok: true });
     expect(document.querySelector('[data-confirm="fineprint"]')).toHaveTextContent('Prices: OpenRouter, 5 min ago. Paid by your own key. You can switch back the same way.');

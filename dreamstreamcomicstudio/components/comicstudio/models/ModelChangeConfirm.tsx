@@ -164,7 +164,11 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
     const prices = clientPriceBook(live, { now: Math.floor(now / 60_000) * 60_000 });
     const locked = isLocked(doc);
     const currentId = currentModelId(doc);
-    const models = buildPickerRows({ doc, caps, rows: live.filter((r) => r.id === spec.id || r.id === currentId), prices, byok });
+    // Both models' rows: live when the catalog has them, else the registry's dated facts (a legacy lock on a model
+    // the catalog no longer lists still shows its real list price).
+    const rowFor = (id: string) => live.find((r) => r.id === id) ?? registryCatalogRows([getImageModel(id)].filter((m): m is ImageModelSpec => !!m))[0];
+    const pair = [rowFor(spec.id), ...(currentId !== spec.id ? [rowFor(currentId)] : [])].filter((r): r is ModelCatalogRow => !!r);
+    const models = buildPickerRows({ doc, caps, rows: pair, prices, byok });
     const next = models.find((m) => m.id === spec.id);
     const current = models.find((m) => m.id === currentId);
     const drawn = drawnTargets(doc);
