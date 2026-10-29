@@ -8,8 +8,6 @@ import { getImageModel } from '../../../shared/comic/models';
 import { LAKE_MODEL, makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic';
 import { costFormat } from '../conversation/cost';
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
-import * as serverPricing from '../../../server/src/comic/models/pricing';
-import * as serverObserved from '../../../server/src/comic/models/observed';
 import { NOT_ENOUGH_DATA_COPY, NO_OPENROUTER_PRICE_COPY, NO_UPTIME_COPY, NOT_RANKED_COPY, PRICE_UNPUBLISHED_COPY } from './copy';
 import {
   OBSERVED_MIN_N,
@@ -32,8 +30,13 @@ import {
 const dollars = insightsMoney(costFormat(DOLLAR_CONTEXT));
 const governed = insightsMoney(costFormat({ governed: true, pctPerUsd: 20 }));
 
+// Loaded by a computed path so the client typecheck never pulls server modules into its program.
+const serverModule = async (path: string): Promise<Record<string, unknown>> => (await import(/* @vite-ignore */ path)) as Record<string, unknown>;
+
 describe('the §4.6 copy is the server’s copy', () => {
-  it('price, observed thresholds and "not enough data" match server/src/comic/models', () => {
+  it('price, observed thresholds and "not enough data" match server/src/comic/models', async () => {
+    const serverPricing = await serverModule('../../../server/src/comic/models/pricing');
+    const serverObserved = await serverModule('../../../server/src/comic/models/observed');
     expect(PRICE_UNPUBLISHED_COPY).toBe(serverPricing.PRICE_UNPUBLISHED_COPY);
     expect(NO_OPENROUTER_PRICE_COPY).toBe(serverPricing.NO_OPENROUTER_PRICE_COPY);
     expect(OBSERVED_MIN_N).toBe(serverPricing.OBSERVED_MIN_N);
