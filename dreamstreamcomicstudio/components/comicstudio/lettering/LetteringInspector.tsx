@@ -53,13 +53,15 @@ export interface LetteringInspectorProps extends Omit<LetteringPanelProps, 'line
   anchor: Rect | null;
   /** Narrow screens: a bottom sheet instead of a floating panel. */
   compact: boolean;
+  /** Bottom sheet only: its height cap in px (the page editor keeps the page above it usable); it scrolls. */
+  maxHeight?: number;
   onClose(): void;
 }
 
 const PANEL_W = 320;
 
 export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => {
-  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, onClose } = props;
+  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const lines = linesOf(page, lineIds);
@@ -210,7 +212,10 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
         data-testid="lettering-inspector"
         data-presentation="sheet"
         className="fixed inset-x-0 bottom-0 z-[85] flex max-h-[62vh] flex-col rounded-t-2xl border-t border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[0_-12px_40px_rgba(0,0,0,0.25)]"
-        style={{ paddingBottom: 'var(--sa-bottom-eff, env(safe-area-inset-bottom, 0px))' }}
+        style={{
+          paddingBottom: 'var(--sa-bottom-eff, env(safe-area-inset-bottom, 0px))',
+          ...(typeof maxHeight === 'number' && Number.isFinite(maxHeight) && maxHeight > 0 ? { maxHeight: `min(62vh, ${Math.round(maxHeight)}px)` } : {})
+        }}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {

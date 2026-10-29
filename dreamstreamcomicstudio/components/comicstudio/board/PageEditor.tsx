@@ -138,13 +138,21 @@ export const fitPageToStage = (stage: { w: number; h: number }, aspect: number, 
 
 /** The least stage height (px) the phone lettering sheet leaves above itself (a 2:3 page ≈ 145 px wide). */
 export const MIN_STAGE_PX = 240;
+/** …and at least this share of the viewport's height: the page and its balloons stay big enough to tap. */
+export const MIN_STAGE_SHARE = 0.45;
+/** The sheet never gets shorter than its header plus a row of controls (its content scrolls). */
+export const MIN_SHEET_PX = 168;
 
 /**
  * Height cap (px) for the phone lettering sheet: everything below the stage's top minus the page's
- * minimum height, never under 200 px (the sheet scrolls its own content).
+ * minimum height (MIN_STAGE_PX, or MIN_STAGE_SHARE of the viewport when that is more), never under
+ * MIN_SHEET_PX (the sheet scrolls its own content).
  */
-export const inspectorSheetMaxHeight = (stageTop: number, viewportHeight: number, minStage = MIN_STAGE_PX): number =>
-  Math.max(200, Math.round((Number.isFinite(viewportHeight) ? viewportHeight : 0) - (Number.isFinite(stageTop) ? stageTop : 0) - minStage));
+export const inspectorSheetMaxHeight = (stageTop: number, viewportHeight: number, minStage = MIN_STAGE_PX): number => {
+  const vh = Number.isFinite(viewportHeight) ? viewportHeight : 0;
+  const keep = Math.max(minStage, Math.round(vh * MIN_STAGE_SHARE));
+  return Math.max(MIN_SHEET_PX, Math.round(vh - (Number.isFinite(stageTop) ? stageTop : 0) - keep));
+};
 
 /** Default text for a balloon added from the toolbar (selected in the inline editor, so typing replaces it). */
 const NEW_LINE_TEXT: Record<LineKind, string> = {
@@ -1087,6 +1095,29 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       />
     ) : null;
 
+  // Landscape phones: the stage is short (the page is height-bound), so the coach moves to the top of the
+  // open side sheet instead of costing the page a third of its height.
+  const coachInSide = layout.kind === 'phone-landscape' && tools.side;
+  const coachInBanners = coach && !compactInspectorOpen && !coachInSide;
+  // Shown in the phone row, or (landscape) at the top of the side sheet; hidden while a balloon is selected
+  // on a phone — the user just did what it teaches, and the page needs the room above the lettering sheet.
+  const coachEl = (
+    <div data-testid="editor-coach" className={cx('flex min-w-0 basis-full items-center gap-2 border border-[var(--ds-hairline)] px-2.5 py-1.5', RADIUS_PANEL, ACCENT_SOFT_BG)}>
+      <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Tap a balloon to select, drag to move, pinch to zoom, long-press for more.</p>
+      <button
+        type="button"
+        onClick={() => {
+          setCoach(false);
+          writeFlag(COACH_KEY, '1');
+        }}
+        // A real 44 px box on touch (fold5 measured 47x26): a ::after hit area here sat under the stage.
+        className={cx('shrink-0 px-2 py-1 text-[12px] font-semibold text-[var(--ds-ink)] underline decoration-[var(--ds-hairline)] underline-offset-2 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11 coarse:min-w-11 coarse:px-3', RADIUS_CONTROL, TRANSITION)}
+      >
+        Got it
+      </button>
+    </div>
+  );
+
   const banners = (
     <>
       {lang && (
@@ -1100,22 +1131,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           {notice}
         </p>
       )}
-      {coach && (
-        <div data-testid="editor-coach" className="flex min-w-0 basis-full items-center gap-2 rounded-xl border border-[#D97757]/30 bg-[#D97757]/[0.08] px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Tap a balloon to select, drag to move, pinch to zoom, long-press for more.</p>
-          <button
-            type="button"
-            onClick={() => {
-              setCoach(false);
-              writeFlag(COACH_KEY, '1');
-            }}
-            // A real 44 px box on touch: a ::after hit area here sat under the stage, which took the taps.
-            className="shrink-0 rounded-lg px-2 py-1 text-[12px] font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-11 coarse:min-w-11 coarse:px-3"
-          >
-            Got it
-          </button>
-        </div>
-      )}
+      {coachInBanners && coachEl}
     </>
   );
 
@@ -1176,12 +1192,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge · right-click for more'
             : 'Lettering is drawn into the art on this comic.')}
       </span>
-      {(lang || notice || coach) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
+      {(lang || notice || coachInBanners) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
     </div>
   );
 
   // Phones: a slim row above the stage only when there is something to say.
-  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coach || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length || dense.length)));
+  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length || dense.length)));
   const phoneRow = phoneRowNeeded ? (
     <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3 pt-2" data-testid="editor-phone-row">
       {languageRow}
@@ -1198,10 +1214,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   const stageEl = (
     <div ref={stageBoxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="editor-canvas-box">
-      <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-resting-stage" />
+      {/* Touch: 24 px of stage around the page, so a balloon's or a handle's 44 px target at the page edge is never clipped. */}
+      <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-resting-stage" />
       <div ref={canvasAreaRef} className="absolute inset-x-0 top-0" style={{ bottom: stageInset }} data-testid="editor-canvas-area">
         {/* Measured, never transformed: the fit box for the page. */}
-        <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-stage-content" />
+        <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-stage-content" />
         <TouchCanvas
           maxScale={5}
           resetKey={String(zoomReset)}
@@ -1210,7 +1227,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           controls={zoom > 1.01}
           label={`Page ${sourcePage.n} — pinch or use + and − to zoom`}
         >
-          <div className="absolute inset-3 flex min-w-0 items-center justify-center sm:inset-6">
+          <div className="absolute inset-3 flex min-w-0 items-center justify-center coarse:inset-6 sm:inset-6">
             <div ref={pageBoxRef} style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
               <ComicPageView
                 doc={vDoc}
@@ -1619,6 +1636,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       padBottom={layout.kind === 'tablet-portrait'}
       header={layout.kind === 'fold-tabletop' ? modeRow : undefined}
     >
+      {coach && coachInSide && coachEl}
       {toolsContent}
     </EditorToolsSheet>
   );
