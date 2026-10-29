@@ -12,6 +12,10 @@
 // Signed-in users only (401 otherwise). A projectId is loaded owner-scoped, so anyone else gets the same 404 as a
 // missing comic. Answers are per user (their observed costs and reliability), so they are never cached publicly.
 // Nothing here spends: the catalog reads OpenRouter's free public endpoints on demand and our own tables.
+//
+// Governed users (on the included usage: not an admin, not on their own key; server/src/comic/costText.ts) never
+// see dollars: every answer carries `X-Cost-View: usage | dollars`, and for a usage view each free-text `note`
+// loses the parts that name a dollar amount (the numbers stay; the UI words them with formatCostForUser).
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
@@ -19,6 +23,7 @@ import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import type { ComicDoc } from '../../../shared/comic/doc.js';
 import { logger } from '../lib/logger.js';
 import { studioCapsFor } from '../comic/access.js';
+import { costViewFor, type CostView } from '../comic/costText.js';
 import { spendIsByok } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
 import { TREND_RANGES, modelCatalog, type ModelCatalog, type TrendRange } from '../comic/models/index.js';
@@ -70,24 +75,52 @@ const userOf = (req: Request): string => {
 
 const queryString = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
+/**
+ * A copy of an answer without dollar text: every `note` string keeps only its " · "-separated parts that name no
+ * dollar amount (and is dropped when nothing is left). Numbers are untouched.
+ */
+export const withoutDollarNotes = <T>(value: T): T => {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== 'object') return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      if (k === 'note' && typeof x === 'string') {
+        const kept = x
+          .split(' · ')
+          .filter((part) => !part.includes('$'))
+          .join(' · ');
+        if (kept) out[k] = kept;
+        continue;
+      }
+      out[k] = walk(x);
+    }
+    return out;
+  };
+  return walk(value) as T;
+};
+
 export function createComicModelsRouter(deps: ComicModelsRouterDeps = {}): Router {
   const router = Router();
   const catalog = deps.catalog ?? modelCatalog;
   const store = lazy(() => deps.store || createSupabaseDocStore());
 
-  /** The owner's doc and caps for `fit`, or nothing when no projectId was asked for. */
-  const fitContext = async (req: Request, userId: string): Promise<{ doc?: ComicDoc; caps?: StudioCaps }> => {
+  /** The request's caps (plan, admin, own key): they decide `fit` and the cost view. A lookup failure is governed. */
+  const capsOf = async (req: Request): Promise<StudioCaps> => {
+    const keys = deps.keysFor ? deps.keysFor(req) : studioKeysFromRequest(req);
+    try {
+      return await (deps.capsFor ?? ((r, o) => studioCapsFor(r, o)))(req, { byok: spendIsByok(keys) });
+    } catch {
+      return { ...DEFAULT_CAPS };
+    }
+  };
+
+  /** The owner's doc for `fit`, or nothing when no projectId was asked for. */
+  const fitContext = async (req: Request, userId: string, caps: StudioCaps): Promise<{ doc?: ComicDoc; caps?: StudioCaps }> => {
     const raw = queryString(req.query.projectId);
     if (raw === undefined || raw === '') return {};
     if (!PROJECT_ID.test(raw)) throw new StudioError('NOT_FOUND', NOT_FOUND_COMIC, { status: 404 });
     const session = await getStudioSession(raw, userId, store());
-    const keys = deps.keysFor ? deps.keysFor(req) : studioKeysFromRequest(req);
-    let caps: StudioCaps;
-    try {
-      caps = await (deps.capsFor ?? ((r, o) => studioCapsFor(r, o)))(req, { byok: spendIsByok(keys) });
-    } catch {
-      caps = { ...DEFAULT_CAPS };
-    }
     return { doc: session.doc, caps };
   };
 
@@ -98,17 +131,19 @@ export function createComicModelsRouter(deps: ComicModelsRouterDeps = {}): Route
       fn(req, res, next).catch((err) => sendError(res, err, next));
     };
 
-  const reply = (res: Response, body: unknown) => {
+  const reply = (res: Response, body: unknown, view: CostView) => {
     res.set('Cache-Control', 'private, no-store');
-    res.json(body);
+    res.set('X-Cost-View', view.governed ? 'usage' : 'dollars');
+    res.json(view.governed ? withoutDollarNotes(body) : body);
   };
 
   router.get(
     '/models/catalog',
     handle(async (req, res) => {
       const userId = userOf(req);
-      const ctx = await fitContext(req, userId);
-      reply(res, await catalog().rows({ userId, ...ctx }));
+      const caps = await capsOf(req);
+      const ctx = await fitContext(req, userId, caps);
+      reply(res, await catalog().rows({ userId, ...ctx }), costViewFor(caps));
     })
   );
 
@@ -118,7 +153,8 @@ export function createComicModelsRouter(deps: ComicModelsRouterDeps = {}): Route
       const userId = userOf(req);
       const raw = queryString(req.query.range) ?? '30d';
       if (!(TREND_RANGES as readonly string[]).includes(raw)) throw new StudioError('BAD_REQUEST', 'Pick a range of 30d or 90d.', { status: 400 });
-      reply(res, await catalog().trends(raw as TrendRange, { userId }));
+      const caps = await capsOf(req);
+      reply(res, await catalog().trends(raw as TrendRange, { userId }), costViewFor(caps));
     })
   );
 
@@ -129,10 +165,11 @@ export function createComicModelsRouter(deps: ComicModelsRouterDeps = {}): Route
       if (RESERVED_MODEL_SEGMENTS.has(id.toLowerCase())) return next();
       const userId = userOf(req);
       if (!MODEL_ID.test(id)) throw new StudioError('NOT_FOUND', "We don't know that model.", { status: 404 });
-      const ctx = await fitContext(req, userId);
+      const caps = await capsOf(req);
+      const ctx = await fitContext(req, userId, caps);
       const detail = await catalog().model(id, { userId, ...ctx });
       if (!detail) throw new StudioError('NOT_FOUND', "We don't know that model.", { status: 404 });
-      reply(res, detail);
+      reply(res, detail, costViewFor(caps));
     })
   );
 

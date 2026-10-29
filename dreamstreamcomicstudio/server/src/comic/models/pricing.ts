@@ -305,10 +305,37 @@ export interface PriceBookSources {
   qc?: { medianUsd: number; n: number } | null;
 }
 
+/**
+ * The basis of a quote as data, next to the text. The text names dollar amounts, so it is for dollar views only
+ * (admins, own-key calls); a governed user's copy must be worded from these fields through
+ * costFormatterFor(ctx) / formatCostForUser, never by printing `basis` or a price `note`.
+ */
+export interface QuoteBasis {
+  /** Which basis set the number: our observed median, the live list price, the registry's dated list, or none. */
+  source: 'observed' | 'list' | 'registry' | 'none';
+  /** Observed: how many calls, whose, and their range (provider cost per image). */
+  n?: number;
+  scope?: 'you' | 'platform';
+  minUsd?: number;
+  maxUsd?: number;
+  /** The list price including reference cost (what an observed median was compared with, or what was used). */
+  listUsd?: number;
+  /** Registry: the price list's date. */
+  factsAsOf?: string;
+  /** Live list: when OpenRouter's price was fetched. */
+  fetchedAt?: string;
+  /** References sent, what they added to the list basis, and whether their price is unpublished. */
+  refs?: number;
+  refsUsd?: number;
+  refsUnpriced?: boolean;
+}
+
 export interface PriceQuote {
   usd: number | null;
-  /** Human-readable basis, e.g. "your last 4 pages: $0.043–$0.054; list $0.0336". */
+  /** Human-readable basis, e.g. "your last 4 pages: $0.043–$0.054; list $0.0336". Dollar views only. */
   basis: string;
+  /** The same basis as data (every view; governed copy is worded from this). */
+  basisDetail: QuoteBasis;
   list: { usd: number | null; basis: PriceBasis | 'none'; label: string; note?: string };
   observed?: ObservedMedian;
   /** Reference cost added to the list basis (0 when none sent or unpublished). */
@@ -326,7 +353,9 @@ export interface JobQuote {
   /** QC added (page and edit jobs only). */
   qcUsd: number;
   markup: number;
+  /** Dollar views only (see QuoteBasis). */
   basis: string;
+  basisDetail: QuoteBasis & { qc?: { usd: number; source: 'observed' | 'default'; n?: number } };
 }
 
 export interface ServerPriceBook extends PriceBook {
@@ -389,7 +418,8 @@ export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => 
     let basis: string;
     const who = obs?.scope === 'platform' ? "DreamStream creators' last" : 'your last';
     const obsText = obs ? `${who} ${obs.n} ${kindNoun(kind, obs.n)}: ${money(obs.minUsd)}–${money(obs.maxUsd)}` : '';
-    if (obs && (listTotal === null || obs.medianUsd >= listTotal)) {
+    const usedObserved = Boolean(obs && (listTotal === null || obs.medianUsd >= listTotal));
+    if (obs && usedObserved) {
       usd = round4(obs.medianUsd);
       basis = listTotal === null ? obsText : `${obsText}; list ${money(listTotal)}`;
     } else if (listTotal !== null) {
@@ -398,7 +428,15 @@ export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => 
       basis = list.label;
     }
     if (refsUnpriced) basis += ' · reference cost unpublished';
-    return { usd, basis, list, ...(obs ? { observed: obs } : {}), refsUsd, refsUnpriced };
+    const basisDetail: QuoteBasis = {
+      source: usedObserved ? 'observed' : listTotal === null ? 'none' : list.basis === 'registry' ? 'registry' : 'list',
+      ...(usedObserved && obs ? { n: obs.n, scope: obs.scope, minUsd: obs.minUsd, maxUsd: obs.maxUsd } : {}),
+      ...(listTotal !== null ? { listUsd: listTotal } : {}),
+      ...(list.basis === 'registry' && spec ? { factsAsOf: spec.factsAsOf } : {}),
+      ...(list.basis !== 'registry' && list.basis !== 'none' && row?.fetchedAt?.catalog ? { fetchedAt: row.fetchedAt.catalog } : {}),
+      ...(sent > 0 ? { refs: sent, refsUsd, refsUnpriced } : {})
+    };
+    return { usd, basis, basisDetail, list, ...(obs ? { observed: obs } : {}), refsUsd, refsUnpriced };
   };
 
   const qcUsd = qc ? qc.medianUsd : QC_USD_PER_PAGE;
@@ -412,7 +450,8 @@ export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => 
       providerUsd: q.usd,
       qcUsd: qcAdd,
       markup,
-      basis: `${q.basis}${q.usd === null ? '' : qcBasis}`
+      basis: `${q.basis}${q.usd === null ? '' : qcBasis}`,
+      basisDetail: { ...q.basisDetail, ...(qcAdd ? { qc: { usd: qcAdd, source: qc ? ('observed' as const) : ('default' as const), ...(qc ? { n: qc.n } : {}) } } : {}) }
     };
   };
 

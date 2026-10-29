@@ -213,6 +213,19 @@ describe('PriceBook (models.md §2.3)', () => {
     expect(book.jobQuote('seedream-5-pro', '2K', 'page').usd).toBeNull();
   });
 
+  it('every quote carries its basis as data too, so governed copy never has to print the dollar text', () => {
+    const live = priceBookFromSources({ rows: liveRows(), qc: { medianUsd: 0.0049, n: 7 } });
+    expect(live.quote('nano-banana-2.1', '1K', 'page').basisDetail).toEqual({ source: 'list', listUsd: 0.0336, fetchedAt: at });
+    expect(priceBookFromSources({ rows: [] }).quote('nano-banana-pro', '2K', 'page').basisDetail).toEqual({ source: 'registry', listUsd: 0.1344, factsAsOf: '2026-10-22' });
+    const observed = priceBookFromSources({ rows: liveRows(), observed: [obs({})] });
+    expect(observed.quote('nano-banana-2.1', '1K', 'page').basisDetail).toEqual({ source: 'observed', n: 4, scope: 'you', minUsd: 0.0428, maxUsd: 0.0538, listUsd: 0.0336, fetchedAt: at });
+    expect(live.quote('seedream-5-pro', '2K', 'page').basisDetail).toEqual({ source: 'none' });
+    expect(live.quote('nano-banana-pro', '1K', 'page', 4).basisDetail).toMatchObject({ source: 'list', refs: 4, refsUsd: 0.0044, refsUnpriced: false, listUsd: 0.1388 });
+    expect(live.jobQuote('nano-banana-2.1', '1K', 'page').basisDetail).toMatchObject({ source: 'list', qc: { usd: 0.0049, source: 'observed', n: 7 } });
+    expect(priceBookFromSources({ rows: [] }).jobQuote('nano-banana-2.1', '1K', 'page').basisDetail.qc).toEqual({ usd: QC_USD_PER_PAGE, source: 'default' });
+    expect(live.jobQuote('nano-banana-2.1', '1K', 'sheet').basisDetail.qc).toBeUndefined();
+  });
+
   it('plugs into the shared redrawQuote (lake comic, BYOK): Pro redraw of pages + cover at list', () => {
     const doc = makeLakeComic();
     const book = priceBookFromSources({ rows: [] });

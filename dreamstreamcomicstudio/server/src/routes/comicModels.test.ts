@@ -12,7 +12,7 @@ import { fakeDocStore } from '../comic/orchestrator.fakes.js';
 import { FAKE_BASE, FIXTURE_NOW, fakeOpenRouterFetch } from '../comic/models/__fixtures__/catalogFakes.js';
 import { createModelCatalog, type ModelCatalog } from '../comic/models/catalog.js';
 import { createQualitySource } from '../comic/models/quality.js';
-import { MODELS_PATHS, NOT_BUILT, comicModelsRouter, createComicModelsRouter } from './comicModels.js';
+import { MODELS_PATHS, NOT_BUILT, comicModelsRouter, createComicModelsRouter, withoutDollarNotes } from './comicModels.js';
 
 const PROJECT = 'models-route-test-1';
 const store = fakeDocStore();
@@ -54,9 +54,9 @@ beforeAll(async () => {
 });
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
 
-const get = async (path: string, user?: string) => {
-  const res = await globalThis.fetch(`${base}${path}`, { headers: user ? { 'x-user': user } : {} });
-  return { status: res.status, body: (await res.json()) as any, cache: res.headers.get('cache-control') };
+const get = async (path: string, user?: string, root = base) => {
+  const res = await globalThis.fetch(`${root}${path}`, { headers: user ? { 'x-user': user } : {} });
+  return { status: res.status, body: (await res.json()) as any, cache: res.headers.get('cache-control'), view: res.headers.get('x-cost-view') };
 };
 
 describe('model catalog routes', () => {
@@ -90,7 +90,11 @@ describe('model catalog routes', () => {
     expect(nb.endpoints[0].uptime1d).toBeCloseTo(97.72, 2);
     expect(nb.fetchedAt.catalog).toBe('2026-10-22T17:51:00.000Z');
     expect(nb.fit).toBeUndefined();
-    expect(capsCalls).toEqual([]);
+    expect(nb.current).toBeUndefined();
+    // Caps are read on every request (they decide the cost view); this user is on their own key → dollars.
+    expect(capsCalls.at(-1)).toEqual({ byok: true });
+    expect(r.view).toBe('dollars');
+    expect(nb.price['1K'].note).toContain('$30/M');
   });
 
   it("GET /models/catalog?projectId=: the owner gets fit against their comic and caps (BYOK from the request's keys)", async () => {
@@ -147,5 +151,66 @@ describe('model catalog routes', () => {
     } finally {
       current = catalog;
     }
+  });
+});
+
+describe('governed users never get dollar text (limits.md; server/src/comic/costText.ts)', () => {
+  const governed = express();
+  governed.use((req, _res, next) => {
+    const user = req.header('x-user');
+    if (user) (req as unknown as { user: { id: string } }).user = { id: user };
+    next();
+  });
+  let role: 'member' | 'admin' = 'member';
+  governed.use(
+    '/api/comic',
+    createComicModelsRouter({
+      catalog: () => catalog,
+      store,
+      keysFor: () => ({}), // the platform's keys: usage is governed
+      capsFor: async (_req, opts) => resolveStudioCaps({ planId: 'creator', byok: opts.byok, isAdmin: role === 'admin' })
+    })
+  );
+  let gServer: http.Server;
+  let gBase: string;
+  beforeAll(async () => {
+    gServer = governed.listen(0);
+    await new Promise<void>((r) => gServer.once('listening', () => r()));
+    gBase = `http://127.0.0.1:${(gServer.address() as AddressInfo).port}`;
+  });
+  afterAll(() => new Promise<void>((r) => gServer.close(() => r())));
+
+  it('catalog, trends and detail: no "$" anywhere in the answer, the numbers stay, and the view is "usage"', async () => {
+    role = 'member';
+    for (const path of ['/api/comic/models/catalog', `/api/comic/models/catalog?projectId=${PROJECT}`, '/api/comic/models/trends?range=90d', '/api/comic/models/nano-banana-2']) {
+      const r = await get(path, 'owner-1', gBase);
+      expect(r.status, path).toBe(200);
+      expect(r.view, path).toBe('usage');
+      expect(JSON.stringify(r.body), path).not.toContain('$');
+    }
+    const rows = (await get('/api/comic/models/catalog', 'owner-1', gBase)).body;
+    const nb = rows.find((x: { id: string }) => x.id === 'nano-banana-2.1');
+    expect(nb.price['1K'].usd).toBe(0.0336); // the UI words it (formatCostForUser)
+    const seed = rows.find((x: { id: string }) => x.id === 'seedream-5-pro');
+    expect(seed.price['2K'].note).toContain('high_resolution'); // dollar-free notes are kept
+  });
+
+  it('an admin on the same router gets dollars', async () => {
+    role = 'admin';
+    try {
+      const r = await get('/api/comic/models/catalog', 'owner-1', gBase);
+      expect(r.view).toBe('dollars');
+      expect(JSON.stringify(r.body)).toContain('$');
+    } finally {
+      role = 'member';
+    }
+  });
+
+  it('withoutDollarNotes keeps the dollar-free parts of a note and never mutates its input', () => {
+    const input = { price: { '1K': { usd: 0.0336, note: 'from our price list, 2026-10-22 · OpenRouter: endpoints differ: A $0.06 · B $0.07' } }, other: '$ stays outside notes' };
+    const out = withoutDollarNotes(input);
+    expect(out.price['1K']).toEqual({ usd: 0.0336, note: 'from our price list, 2026-10-22' });
+    expect(withoutDollarNotes({ note: '1120 tokens × $30/M' })).toEqual({});
+    expect(input.price['1K'].note).toContain('$0.06');
   });
 });
