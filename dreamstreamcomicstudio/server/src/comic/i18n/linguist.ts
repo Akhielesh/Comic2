@@ -72,6 +72,8 @@ export interface ReviewRun {
 /** Review the given ids in ≤ REVIEW_CHUNK_LINES batches. Cancel/billing errors stop the rest; others skip a batch. */
 export async function reviewTranslations(llm: LlmClient, doc: ComicDoc, lang: string, ids: readonly string[], signal?: AbortSignal, onBatch?: (i: number, n: number) => void): Promise<ReviewRun> {
   const items = reviewItems(doc, lang, ids);
+  // The reviewer judges against the voice the author chose (everyday / formal / mixed with English).
+  const register: TranslationRegister = i18nOf(doc).editions[lang]?.register ?? 'everyday';
   const run: ReviewRun = { verdicts: new Map(), calls: 0, failedBatches: 0 };
   const batches: ReviewItem[][] = [];
   for (let i = 0; i < items.length; i += REVIEW_CHUNK_LINES) batches.push(items.slice(i, i + REVIEW_CHUNK_LINES));
@@ -85,7 +87,7 @@ export async function reviewTranslations(llm: LlmClient, doc: ComicDoc, lang: st
       const res = await llm.complete({
         role: 'linguist',
         messages: [
-          { role: 'system', content: linguistSystemPrompt(doc, lang) },
+          { role: 'system', content: linguistSystemPrompt(doc, lang, register) },
           { role: 'user', content: linguistUserMessage(doc, lang, batch) }
         ],
         jsonSchema: { name: 'comic_translation_review', schema: REVIEW_SCHEMA, strict: true }
@@ -140,7 +142,14 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     const g = glossaryNeeds(doc, lang, source);
     const suggestion = v.suggestion && v.suggestion !== cur.text ? v.suggestion : '';
     const usable = !!suggestion && !checkLine(lang, register, { id: 'x', source, maxChars: 9999, forms: g.forms, keep: g.keep }, suggestion, rating, sourceLang).problem;
-    if (v.severity === 'major') {
+    // "Mixed with English" is the author's choice: a reviewer objecting to the English words / script of a
+    // line that software accepts under that voice is a difference of taste, never an auto-correction.
+    const voiceClash =
+      register === 'code_mixed' &&
+      v.severity === 'major' &&
+      /\bscript\b|\benglish\b|\blatin\b|\broman/i.test(v.issue) &&
+      !checkLine(lang, register, { id: 'x', source, maxChars: 9999, forms: g.forms, keep: g.keep }, cur.text, rating, sourceLang).problem;
+    if (v.severity === 'major' && !voiceClash) {
       if (usable) {
         next.text = suggestion;
         next.status = 'reviewed';

@@ -16,6 +16,7 @@ import { costViewFor } from '../costText.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
 import { applyReview } from './linguist.js';
+import { linguistSystemPrompt } from './prompts.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
 import { fakeLinguist, fakeTranslator, requestedItems, sixPageKidsDoc, times } from './testing.js';
 import type { LlmRequest } from '../types.js';
@@ -268,6 +269,38 @@ describe('the linguist review (always)', () => {
     const last = session.doc.conversation[session.doc.conversation.length - 1];
     expect(last.text).toContain('1 line corrected by the review');
     expect(last.text).toContain('1 line flagged for a look');
+  });
+
+  it('"Mixed with English": the linguist is told about the voice and a valid Hinglish line survives its review', async () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    // The prompt names the voice (without the fix it only says "the wrong script" is major and asks for spoken Hindi).
+    const mixed = linguistSystemPrompt(doc, 'hi');
+    expect(mixed).toMatch(/code-mixed|mixed with English|English words/i);
+    expect(mixed).not.toContain('or the wrong script');
+    expect(linguistSystemPrompt(doc, 'hi', 'code_mixed')).toBe(mixed); // the edition's own voice is the default
+    expect(linguistSystemPrompt(sixPageKidsDoc(), 'hi')).toContain('or the wrong script');
+    expect(linguistSystemPrompt(doc, 'hi', 'formal')).toContain('polished written Hindi');
+
+    // Natural Hinglish (Devanagari + an English word) that software accepts under the code-mixed threshold.
+    const HINGLISH = 'चाँद कहाँ गया, bro?';
+    const session = newSession(doc);
+    const tr = fakeTranslator({ text: (id, lang) => (id === 'l1' && lang === 'hi' ? HINGLISH : undefined) });
+    // A reviewer that still objects to the English words (as the old prompt told it to) and offers pure Hindi.
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Wrong script: English words in a Hindi line.', suggestion: 'चाँद कहाँ गया?' } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, tr.step), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T({ languages: ['hi'] }), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    // The review call carried the edition's voice.
+    expect(String(roles(ctx, 'linguist')[0].messages[0].content)).toMatch(/mixed with English/);
+    const l1 = i18nOf(session.doc).editions.hi.lines.l1;
+    // Without the fix: l1.text === 'चाँद कहाँ गया?' with "Auto-corrected by review: Wrong script…".
+    expect(l1.text).toBe(HINGLISH);
+    expect(l1.status).toBe('reviewed');
+    // The reviewer's wording stays available as a one-tap suggestion, never applied over the author's voice.
+    expect(l1.issue).toMatchObject({ severity: 'minor', suggestion: 'चाँद कहाँ गया?' });
+    expect(l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(false);
+    expect(editionReadiness(session.doc, 'hi').publishable).toBe(true);
   });
 
   it('applyReview leaves a line alone when its text is no longer the one the linguist was shown, or the author wrote it', () => {
