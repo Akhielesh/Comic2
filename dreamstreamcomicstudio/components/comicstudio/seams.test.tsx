@@ -38,8 +38,8 @@ afterEach(() => {
 });
 
 describe('feature registries (real wave-1 modules)', () => {
-  it('fold the eleven feature modules into cards, tabs, header slots and admin sections', () => {
-    expect(featureModules()).toHaveLength(11);
+  it('fold the fourteen feature modules (eleven wave-1/2 modules + the W-M models, insights and reliability seams) into cards, tabs, header slots and admin sections', () => {
+    expect(featureModules()).toHaveLength(14);
     // Feature order = precedence: breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage.
     expect(registeredCardTypes()).toEqual(['breakdown', 'versions', 'refs', 'publish', 'share', 'translation', 'style_presets']);
     expect(registeredTabs().map((t) => [t.id, t.order])).toEqual([['media', 500], ['languages', 800]]);
