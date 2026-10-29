@@ -82,6 +82,22 @@ describe('status, progress, readiness', () => {
     const p = editionProgress(translated('machine'), 'hi');
     expect(p).toMatchObject({ total: 30, done: 30, unreviewed: 30, missing: 0, coverTitle: 'missing' });
   });
+
+  it('a machine line the review flagged MAJOR was judged: counted once (flagged), never also "waiting for review"', () => {
+    const flag = { op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } } as const;
+    // Everything else reviewed: the only open work is the flagged line.
+    const one = applyOps(translated(), [flag]);
+    expect(editionProgress(one, 'hi')).toMatchObject({ unreviewed: 0, flagged: 1, done: 30 });
+    // Without the fix: issues = ['unreviewed', 'major_issue'] — the same line listed twice.
+    expect(editionReadiness(one, 'hi').issues.map((i) => [i.code, i.count])).toEqual([['major_issue', 1]]);
+    // Among unreviewed lines, the flagged one still leaves the others waiting.
+    const many = applyOps(translated('machine'), [flag]);
+    expect(editionProgress(many, 'hi')).toMatchObject({ unreviewed: 29, flagged: 1 });
+    expect(editionReadiness(many, 'hi').issues.map((i) => [i.code, i.count])).toEqual([['unreviewed', 29], ['major_issue', 1]]);
+    // A minor flag on a machine line is still waiting for a reviewer's verdict.
+    const minor = applyOps(translated(), [{ op: 'translation', lang: 'hi', lineId: 'pg_1_l1', patch: { status: 'machine', issue: { severity: 'minor', note: 'Stiff.' } } }]);
+    expect(editionProgress(minor, 'hi')).toMatchObject({ unreviewed: 1, flagged: 1 });
+  });
 });
 
 describe('localizeDoc', () => {

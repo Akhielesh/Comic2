@@ -203,9 +203,12 @@ export const editionProgress = (doc: ComicDoc, lang: string): EditionProgress =>
     else if (status === 'stale_edited') out.staleEdited += 1;
     else {
       out.done += 1;
-      if (status === 'machine') out.unreviewed += 1;
+      const issue = edition?.lines[line.id]?.issue;
+      // "Waiting for review" = a machine line no reviewer has judged. One the review (or software) flagged
+      // MAJOR was judged: it counts as flagged (blocking via major_issue), never as unreviewed as well.
+      if (status === 'machine' && issue?.severity !== 'major') out.unreviewed += 1;
       if (status === 'edited') out.edited += 1;
-      if (edition?.lines[line.id]?.issue) out.flagged += 1;
+      if (issue) out.flagged += 1;
     }
   }
   return out;

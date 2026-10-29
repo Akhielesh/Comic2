@@ -223,7 +223,20 @@ interface TokenInput {
   review: string[];
 }
 
-/** Deterministic token estimate (i18n.md §8.4). Monotonic in lines and in the target's tokenFactor. */
+/**
+ * Expected share of translator chunks that need their one repair round (i18n.md §8.6) — an estimate, like
+ * tokenFactor. A repair is a second call that re-sends the conversation (system + user + the first answer)
+ * with the problems, and answers only the failing lines, so its expected cost is folded into every chunk.
+ * The server's per-language calibration (§8.4) then corrects the whole quote with what finished runs billed.
+ */
+export const REPAIR_SHARE = 0.3;
+/** A repair answers only the failing lines: about this share of the chunk's first answer. */
+const REPAIR_OUTPUT_SHARE = 0.15;
+
+/**
+ * Deterministic token estimate (i18n.md §8.4), including each chunk's expected repair round. Monotonic in
+ * lines and in the target's tokenFactor.
+ */
 export const estimateTranslationTokens = ({ doc, lang, chunks, review }: TokenInput): TranslationPlan['tokens'] & { reviewCalls: number } => {
   const tf = languageSpec(lang)?.tokenFactor ?? 1.5;
   const source = doc.format.language;
@@ -232,14 +245,16 @@ export const estimateTranslationTokens = ({ doc, lang, chunks, review }: TokenIn
   let output = 0;
   for (const chunk of chunks) {
     if (!chunk.length) continue;
-    input += fixed;
+    let chunkInput = fixed;
     let out = 80;
     for (const text of chunk) {
       const t = sourceTokens(text, source);
-      input += t + 22;
+      chunkInput += t + 22;
       out += t * tf + 16;
     }
-    output += out * 1.15; // bounded reasoning effort
+    const chunkOutput = out * 1.15; // bounded reasoning effort
+    input += chunkInput + REPAIR_SHARE * (chunkInput + chunkOutput);
+    output += chunkOutput * (1 + REPAIR_SHARE * REPAIR_OUTPUT_SHARE);
   }
   const reviewCalls = review.length ? Math.ceil(review.length / REVIEW_CHUNK_LINES) : 0;
   let reviewInput = 900 * reviewCalls;
@@ -307,7 +322,8 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
     // 1 · up to date
     if (current && !force) {
       plan.upToDate += 1;
-      if (entry.status === 'machine' && !entry.issue) plan.toReview!.push(line.id);
+      // The same rule as editionProgress.unreviewed: a line flagged MAJOR was judged and waits for the author.
+      if (entry.status === 'machine' && entry.issue?.severity !== 'major') plan.toReview!.push(line.id);
       continue;
     }
     // 7 (edited) · a punctuation-only source change keeps the author's text, refreshing only its hash.
