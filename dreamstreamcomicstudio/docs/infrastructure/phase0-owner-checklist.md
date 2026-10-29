@@ -37,7 +37,10 @@ Until Phase 1, a compromised deploy account is the biggest single path to a fami
 ## §2 Legal entity, D-U-N-S, store accounts (owner action #2) — start now, needed by Phase 1 week 4
 
 - [ ] Decide the entity that will own the apps (or decide to start as an individual and transfer
-      later — Apple and Google both allow a transfer).
+      later — Apple and Google both allow a transfer). If you start as an individual, don't
+      convert to an Organization during the Phase 1–3 betas: a pending Individual → Organization
+      migration has been reported to block new TestFlight uploads for over a month (Apple
+      Developer Forums thread 840600, August 2026), which would block safety fixes.
 - [ ] Entity: request a D-U-N-S number (free, 1–2 weeks) via Apple's D-U-N-S lookup tool
       (developer.apple.com → Account → Membership → *D-U-N-S Number*).
 - [ ] Apple Developer Program → *Enroll* as an Organization ($99/year).
@@ -63,12 +66,17 @@ is in the runbook §4.
       Providers → Email (or Authentication → Settings → User Signups / Security).
 - [ ] **Minimum password length → 12.** Same Email provider page → *Minimum password length*.
       Leave the character-class requirements off (NIST: length + breached-password check).
-- [ ] **Turnstile CAPTCHA.** Cloudflare → Turnstile → the existing widget (the one whose site key
-      is `VITE_TURNSTILE_SITE_KEY`) → copy its *secret key*. Supabase → Authentication → **Attack
-      Protection** → *Enable CAPTCHA protection* → provider **Turnstile** → paste the secret →
-      Save. (Supabase then demands a captcha token on sign-in, sign-up and recovery; the app
-      already sends one where `VITE_TURNSTILE_SITE_KEY` is set — check sign-in on
-      `stream.dreamstreamstudio.ai` and `dreamstreamstudio.ai` right after.)
+- [ ] **Turnstile CAPTCHA — not yet; wait for ADR 0006 Phase 1 P1-WS-23.** Supabase then demands a
+      captcha token on password sign-in, sign-up and recovery. Comic Studio's sign-in sends one,
+      but **Stream Studio's doesn't yet** (`live/account.ts` `signIn` and `confirmPassword`, checked
+      2026-10-29), so switching this on now would lock every Stream Studio user out, the camera
+      phones included. If you already switched it on, switch it off until P1-WS-23 has deployed.
+      Then: Cloudflare → Turnstile → the existing widget (the one whose site key is
+      `VITE_TURNSTILE_SITE_KEY`) → copy its *secret key*; check under *Hostname Management* that
+      `dreamstreamstudio.ai` and `stream.dreamstreamstudio.ai` are listed (the native apps' check
+      page lives on the first). Supabase → Authentication → **Attack Protection** → *Enable CAPTCHA
+      protection* → provider **Turnstile** → paste the secret → Save. Check sign-in on
+      `stream.dreamstreamstudio.ai` and `dreamstreamstudio.ai` right after.
 - [ ] **Security notification emails.** Authentication → **Emails** → *Security* (or
       *Notifications*) → turn on: Password changed, Email address changed, MFA factor
       enrolled, MFA factor unenrolled, Identity linked, Identity unlinked. They go out through the
@@ -76,6 +84,11 @@ is in the runbook §4.
 - [ ] **Decide Pro.** Pro ($25/month) adds leaked-password protection and session controls
       (time-box, single session). If yes: Organization → Billing → upgrade, then Authentication →
       Attack Protection → *Prevent use of leaked passwords* → On.
+      **Leave the session controls off** — *single session per user*, *time-box user sessions* and
+      *inactivity timeout*. Nursery cameras sign in with a parent's account until QR camera
+      pairing ships (ADR 0006 Phase 1.1). Single session would end the camera's session the moment
+      that parent signs in anywhere else, and a time-box or inactivity timeout would end it
+      overnight. Either way the nursery stops being monitored.
 - [ ] Verify: sign in from a private window → still works; a wrong-length password at sign-up is
       refused; Settings → Security (Stream Studio) can enrol TOTP once WS-5 ships.
 
