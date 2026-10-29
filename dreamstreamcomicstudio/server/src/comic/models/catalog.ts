@@ -174,6 +174,8 @@ export interface ModelCatalogDeps {
   baseUrl?: string;
   /** OpenRouter ids to fetch endpoints for (default: registry OpenRouter routes + WATCH_LIST_IDS). */
   ids?: string[];
+  /** Overrides for ROWS_WAIT_MS / PRICE_WAIT_MS / FETCH_TIMEOUT_MS (tests). */
+  waits?: { rowsMs?: number; priceMs?: number; fetchMs?: number };
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -294,9 +296,9 @@ const cachedSource = <T>(opts: SourceOpts<T>) => {
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
-const fetchJson = async (fetchImpl: CatalogFetch, url: string): Promise<unknown> => {
+const fetchJson = async (fetchImpl: CatalogFetch, url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<unknown> => {
   const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
-  const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : undefined; // per request, never at import
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined; // per request, never at import
   try {
     const res = await fetchImpl(url, { signal: controller?.signal, headers: { accept: 'application/json' } });
     if (!res.ok) throw new Error(`${res.status} ${url}`);
@@ -420,6 +422,9 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
   const ids = (deps.ids ?? catalogIds()).filter((id) => OR_ID.test(id));
   const registryByOrId = new Map<string, ImageModelSpec>(IMAGE_MODELS.filter((m) => m.routes.openrouter).map((m) => [m.routes.openrouter as string, m]));
 
+  const rowsWaitMs = deps.waits?.rowsMs ?? ROWS_WAIT_MS;
+  const priceWaitMs = deps.waits?.priceMs ?? PRICE_WAIT_MS;
+  const fetchMs = deps.waits?.fetchMs ?? FETCH_TIMEOUT_MS;
   const needFetch = (): CatalogFetch => {
     if (!fetchImpl) throw new Error('fetch is not available');
     return fetchImpl;
@@ -444,7 +449,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       return byId.size ? { value: { byId }, fetchedAt: Number.isFinite(oldest) ? oldest : 0 } : null;
     },
     load: async () => {
-      const body = (await fetchJson(needFetch(), `${base}/images/models`)) as { data?: OrImageModel[] };
+      const body = (await fetchJson(needFetch(), `${base}/images/models`, fetchMs)) as { data?: OrImageModel[] };
       const models = Array.isArray(body?.data) ? body.data.filter((m) => m && typeof m.id === 'string') : [];
       if (!models.length) throw new Error('empty image model list');
       const byId = new Map(models.map((m) => [m.id, { id: m.id, name: m.name, created: m.created, supported_parameters: m.supported_parameters }] as const));
@@ -509,7 +514,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       const fresh: CachedPayload[] = [];
       await mapConcurrent(ids, CONCURRENCY, async (id) => {
         try {
-          const body = (await fetchJson(f, `${base}/images/models/${id}/endpoints`)) as { endpoints?: OrImageEndpoint[]; data?: { endpoints?: OrImageEndpoint[] } };
+          const body = (await fetchJson(f, `${base}/images/models/${id}/endpoints`, fetchMs)) as { endpoints?: OrImageEndpoint[]; data?: { endpoints?: OrImageEndpoint[] } };
           // Documented as { id, endpoints }; accept the { data: { endpoints } } envelope of /models/{id}/endpoints too.
           const raw = Array.isArray(body?.endpoints) ? body.endpoints : body?.data?.endpoints;
           if (!Array.isArray(raw)) throw new Error('endpoint list missing');
@@ -541,7 +546,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       const log: UptimeLogRow[] = [];
       await mapConcurrent(ids, CONCURRENCY, async (id) => {
         try {
-          const body = (await fetchJson(f, `${base}/models/${id}/endpoints`)) as { data?: { endpoints?: OrModelEndpoint[] } };
+          const body = (await fetchJson(f, `${base}/models/${id}/endpoints`, fetchMs)) as { data?: { endpoints?: OrModelEndpoint[] } };
           if (!Array.isArray(body?.data?.endpoints)) throw new Error('endpoint list missing');
           const eps = body.data.endpoints.filter((e) => e && typeof e === 'object');
           value.set(id, eps.map((e) => ({ name: e.name, provider_name: e.provider_name, tag: e.tag, status: e.status, uptime_last_1d: e.uptime_last_1d, uptime_last_30m: e.uptime_last_30m })));
@@ -581,7 +586,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
   }
 
   const loadAll = async (userId?: string): Promise<Loaded> => {
-    const wait = { maxWaitMs: ROWS_WAIT_MS };
+    const wait = { maxWaitMs: rowsWaitMs };
     const [l, e, u, q, c] = await Promise.all([list.get(wait), endpoints.get(wait), uptime.get(wait), quality.get(), loadCalls(userId, now() - CALLS_LOOKBACK_DAYS * DAY_MS, { last24h: true })]);
     return { list: l, eps: e, up: u, q, ...c };
   };
@@ -671,7 +676,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
 
   const priceSources: ModelCatalog['priceSources'] = async (userId, opts = {}) => {
     const sinceMs = now() - CALLS_LOOKBACK_DAYS * DAY_MS;
-    const [eps, c] = await Promise.all([endpoints.get({ maxWaitMs: opts.maxWaitMs ?? PRICE_WAIT_MS }), loadCalls(userId, sinceMs, { last24h: false })]);
+    const [eps, c] = await Promise.all([endpoints.get({ maxWaitMs: opts.maxWaitMs ?? priceWaitMs }), loadCalls(userId, sinceMs, { last24h: false })]);
     return {
       rows: IMAGE_MODELS.map((spec) => {
         const p = pricesFor(spec, eps);
