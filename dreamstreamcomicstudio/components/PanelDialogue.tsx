@@ -1,6 +1,57 @@
-import React from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { ComicPanel, DialogueBlock, TextLayout } from '../types';
-import { ensureDialogueBlocks } from '../services/dialogueUtils';
+import { readerDialogueBlocks } from '../services/dialogueUtils';
+
+// ---------------------------------------------------------------------------
+// Placement (mobile-reading hotfix)
+// ---------------------------------------------------------------------------
+// Speech bubbles and captions are fixed-pixel overlays sized for desktop panels. On a phone the panel is ~300-350 px
+// wide, so the same bubbles cover 2-3x more of the art. On phones (coarse pointer or a viewport under 640 px), when
+// the RENDERED panel is narrower than STACK_BELOW_PX, they stack under the image instead (the chat_bubbles pattern),
+// at the same native 11-14 px text size, unclamped. Desktop keeps the overlay exactly as before.
+
+/** Where speech bubbles and captions go: over the art, under it, or decided by the rendered panel width on phones. */
+export type DialoguePlacement = 'auto' | 'overlay' | 'below';
+
+const PHONE_QUERY = '(pointer: coarse), (max-width: 639.98px)';
+/** Panels narrower than this (CSS px) stack their dialogue under the image on phones. */
+export const STACK_BELOW_PX = 480;
+
+const usePhoneContext = (enabled: boolean): boolean => {
+    const read = () => enabled && typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(PHONE_QUERY).matches;
+    const [phone, setPhone] = useState(read);
+    useEffect(() => {
+        if (!enabled || typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+        const mq = window.matchMedia(PHONE_QUERY);
+        const on = () => setPhone(mq.matches);
+        on();
+        mq.addEventListener?.('change', on);
+        return () => mq.removeEventListener?.('change', on);
+    }, [enabled]);
+    return enabled && phone;
+};
+
+/** Resolves the placement; for 'auto' on phones it measures the dialogue root (always as wide as the panel). */
+const useStackBelow = (placement: DialoguePlacement, active: boolean) => {
+    const phone = usePhoneContext(placement === 'auto' && active);
+    const [node, setNode] = useState<HTMLElement | null>(null);
+    // First-paint guess from the viewport; the layout effect corrects it from the real panel width before paint.
+    const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.innerWidth < STACK_BELOW_PX);
+    useLayoutEffect(() => {
+        if (!phone || !node) return;
+        const read = () => {
+            const width = node.getBoundingClientRect().width;
+            if (width > 0) setNarrow(width < STACK_BELOW_PX);
+        };
+        read();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(() => read());
+        ro.observe(node);
+        return () => ro.disconnect();
+    }, [phone, node]);
+    const below = placement === 'below' || (placement === 'auto' && phone && narrow);
+    return { below, phone, ref: setNode };
+};
 
 // ---------------------------------------------------------------------------
 // Props
@@ -9,26 +60,29 @@ import { ensureDialogueBlocks } from '../services/dialogueUtils';
 export interface PanelDialogueProps {
     panel: ComicPanel;
     layout: TextLayout;
-    /** When true, dialogue renders as an absolute overlay on the panel image. */
+    /** true: always an absolute overlay on the panel image; false: always under it. Unset: `placement` decides. */
     overlay?: boolean;
     /** Compact mode for small panels (e.g., 3×3 grids). */
     compact?: boolean;
+    /** Default 'auto': overlay, except on phones when the rendered panel is narrower than STACK_BELOW_PX. */
+    placement?: DialoguePlacement;
 }
 
 // ---------------------------------------------------------------------------
 // SVG speech bubble tail
 // ---------------------------------------------------------------------------
 
-function BubbleTail({ side, className, style = 'speech' }: { side: 'left' | 'right' | 'center'; className?: string, style?: 'speech' | 'thought' | 'shout' | 'whisper' | 'caption' }) {
+function BubbleTail({ side, className, style = 'speech', up = false }: { side: 'left' | 'right' | 'center'; className?: string, style?: 'speech' | 'thought' | 'shout' | 'whisper' | 'caption'; up?: boolean }) {
     if (side === 'center' || style === 'caption' || style === 'thought') return null; // Thought bubbles use small circles instead of tails
     const isLeft = side === 'left';
+    const flips = [isLeft ? '' : 'scaleX(-1)', up ? 'scaleY(-1)' : ''].filter(Boolean).join(' ');
     return (
         <svg
             width="16"
             height="10"
             viewBox="0 0 16 10"
-            className={`absolute -bottom-[9px] ${isLeft ? 'left-3' : 'right-3'} ${className || ''}`}
-            style={{ transform: isLeft ? 'none' : 'scaleX(-1)' }}
+            className={`absolute ${up ? '-top-[9px]' : '-bottom-[9px]'} ${isLeft ? 'left-3' : 'right-3'} ${className || ''}`}
+            style={{ transform: flips || 'none' }}
         >
             <path d={style === 'shout' ? "M0 0 L8 10 L16 0" : "M0 0 Q8 10 16 0"} fill="white" stroke="black" strokeWidth="2" strokeLinejoin="round" />
             {/* White cover to hide the top border where bubble meets tail */}
@@ -37,11 +91,11 @@ function BubbleTail({ side, className, style = 'speech' }: { side: 'left' | 'rig
     );
 }
 
-function ThoughtTail({ side }: { side: 'left' | 'right' | 'center' }) {
+function ThoughtTail({ side, up = false }: { side: 'left' | 'right' | 'center'; up?: boolean }) {
     if (side === 'center') return null;
     const isLeft = side === 'left';
     return (
-        <div className={`absolute -bottom-4 ${isLeft ? 'left-4' : 'right-4'} flex flex-col items-center gap-0.5 pointer-events-none`}>
+        <div className={`absolute ${up ? '-top-4 flex-col-reverse' : '-bottom-4 flex-col'} ${isLeft ? 'left-4' : 'right-4'} flex items-center gap-0.5 pointer-events-none`}>
             <div className="w-2 h-2 bg-white border border-black rounded-full" />
             <div className="w-1.5 h-1.5 bg-white border border-black rounded-full ml-1" />
         </div>
@@ -71,9 +125,15 @@ export function NarrationBox({ text, compact }: { text: string; compact?: boolea
 export function SpeechBubble({
     block,
     compact,
+    tail = 'down',
+    clamp = true,
 }: {
     block: DialogueBlock;
     compact?: boolean;
+    /** 'up' when the bubble sits under the art (stacked on phones) and points at it. */
+    tail?: 'down' | 'up';
+    /** Overlays clamp long lines to bound how much art they cover; stacked bubbles show every word. */
+    clamp?: boolean;
 }) {
     const side = block.side || 'left';
     const isRight = side === 'right';
@@ -108,9 +168,9 @@ export function SpeechBubble({
                         {block.speaker}
                     </span>
                 )}
-                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''} ${style === 'shout' ? 'uppercase text-red-600' : ''}`}>{block.text}</span>
+                <span className={`${clamp ? `line-clamp-3 ${compact ? 'line-clamp-2' : ''}` : 'block whitespace-pre-line break-words'} ${style === 'shout' ? 'uppercase text-red-600' : ''}`}>{block.text}</span>
             </div>
-            {style === 'thought' ? <ThoughtTail side={side} /> : (style !== 'caption' ? <BubbleTail side={side} style={style} /> : null)}
+            {style === 'thought' ? <ThoughtTail side={side} up={tail === 'up'} /> : (style !== 'caption' ? <BubbleTail side={side} style={style} up={tail === 'up'} /> : null)}
         </div>
     );
 }
@@ -122,16 +182,18 @@ export function SpeechBubble({
 function CaptionBar({
     blocks,
     compact,
+    rootRef,
 }: {
     blocks: DialogueBlock[];
     compact?: boolean;
+    rootRef?: (el: HTMLDivElement | null) => void;
 }) {
     // Group by kind: show narration separately from speech
     const narrations = blocks.filter(b => b.kind === 'narration');
     const speeches = blocks.filter(b => b.kind !== 'narration');
 
     return (
-        <div className={`
+        <div ref={rootRef} data-testid="panel-dialogue" data-placement="overlay" className={`
       absolute bottom-0 left-0 right-0
       bg-gradient-to-t from-black/80 via-black/60 to-transparent
       ${compact ? 'p-1.5 pt-4' : 'p-3 pt-8'}
@@ -178,9 +240,11 @@ function CaptionBar({
 function ChatMessage({
     block,
     compact,
+    clamp = true,
 }: {
     block: DialogueBlock;
     compact?: boolean;
+    clamp?: boolean;
 }) {
     const isRight = block.side === 'right';
     const isNarration = block.kind === 'narration';
@@ -191,7 +255,7 @@ function ChatMessage({
         text-center font-serif italic text-slate-500
         ${compact ? 'text-[8px] py-0.5' : 'text-[11px] py-1'}
       `}>
-                <span className={`line-clamp-2 ${compact ? 'line-clamp-1' : ''}`}>{block.text}</span>
+                <span className={clamp ? `line-clamp-2 ${compact ? 'line-clamp-1' : ''}` : 'block whitespace-pre-line break-words'}>{block.text}</span>
             </div>
         );
     }
@@ -215,8 +279,54 @@ function ChatMessage({
                         {block.speaker}
                     </span>
                 )}
-                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''}`}>{block.text}</span>
+                <span className={clamp ? `line-clamp-3 ${compact ? 'line-clamp-2' : ''}` : 'block whitespace-pre-line break-words'}>{block.text}</span>
             </div>
+        </div>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Stacked under the art (phones): the same bubbles / caption bar, below the image, every word
+// ---------------------------------------------------------------------------
+
+function StackedSpeechBubbles({ blocks, compact }: { blocks: DialogueBlock[]; compact?: boolean }) {
+    return (
+        <div className={compact ? 'space-y-2 px-1.5 pt-2.5 pb-1.5' : 'space-y-3 px-3 pt-3.5 pb-3'}>
+            {blocks.map((block, idx) => {
+                if (block.kind === 'narration') return <NarrationBox key={block.id} text={block.text} compact={compact} />;
+                // Same side rule as the overlay, so a conversation keeps its left/right rhythm.
+                const side = block.side || (idx % 2 === 0 ? 'left' : 'right');
+                return <SpeechBubble key={block.id} block={{ ...block, side }} compact={compact} tail="up" clamp={false} />;
+            })}
+        </div>
+    );
+}
+
+function StackedCaptions({ blocks, compact }: { blocks: DialogueBlock[]; compact?: boolean }) {
+    const narrations = blocks.filter(b => b.kind === 'narration');
+    const speeches = blocks.filter(b => b.kind !== 'narration');
+    return (
+        <div className={`bg-neutral-900 ${compact ? 'space-y-1 p-1.5' : 'space-y-1.5 px-3 py-2.5'}`}>
+            {narrations.map(block => (
+                <p key={block.id} className={`text-amber-100 font-serif italic text-center leading-snug ${compact ? 'text-[8px]' : 'text-[11px]'}`}>
+                    {block.text}
+                </p>
+            ))}
+            {speeches.length > 0 && (
+                <div className={`bg-white/95 border-2 border-black rounded font-comic font-bold text-black text-center leading-snug ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-3 py-2 text-sm'}`}>
+                    {speeches.map((block, idx) => (
+                        <span key={block.id}>
+                            {block.speaker && (
+                                <span className="text-brand-blue font-display uppercase text-[10px] mr-1">
+                                    {block.speaker}:
+                                </span>
+                            )}
+                            {block.text}
+                            {idx < speeches.length - 1 && <span className="mx-1 text-slate-400">·</span>}
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
@@ -228,10 +338,15 @@ function ChatMessage({
 export const PanelDialogue: React.FC<PanelDialogueProps> = ({
     panel,
     layout,
-    overlay = true,
+    overlay,
     compact = false,
+    placement,
 }) => {
-    const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
+    // Readers never show the scene description as dialogue (no fallback; stored echoes of it are hidden).
+    const blocks = readerDialogueBlocks(panel);
+    const resolved: DialoguePlacement = placement ?? (overlay === true ? 'overlay' : overlay === false ? 'below' : 'auto');
+    const canStack = layout === 'speech_bubbles' || layout === 'caption';
+    const { below, phone, ref } = useStackBelow(resolved, layout !== 'none' && blocks.length > 0);
     if (layout === 'none' || blocks.length === 0) return null;
 
     // Limit visible blocks in compact mode to prevent overflow
@@ -239,19 +354,26 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
     const visibleBlocks = blocks.slice(0, maxVisible);
     const hasMore = blocks.length > maxVisible;
 
+    // ---- Phones: speech bubbles and captions under the image -----------------
+    // `w-0 min-w-full`: exactly as wide as the panel, never widening a shrink-to-fit page (Page Flip).
+    if (canStack && below) {
+        return (
+            <div ref={ref} data-testid="panel-dialogue" data-placement="below" className="w-0 min-w-full">
+                {layout === 'speech_bubbles'
+                    ? <StackedSpeechBubbles blocks={blocks} compact={compact} />
+                    : <StackedCaptions blocks={blocks} compact={compact} />}
+            </div>
+        );
+    }
+
     // ---- Speech bubbles (overlay) ------------------------------------------
     if (layout === 'speech_bubbles') {
         // Distribute bubbles vertically within the panel
         const totalSlots = Math.min(visibleBlocks.length, compact ? 2 : 3);
-        const positions = visibleBlocks.map((_, idx) => {
-            // Evenly space from top: 8% to 70% of panel height
-            const pct = 8 + (idx / Math.max(totalSlots, 1)) * 55;
-            return pct;
-        });
 
         return (
 
-            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            <div ref={ref} data-testid="panel-dialogue" data-placement="overlay" className="absolute inset-0 pointer-events-none overflow-hidden">
                 {visibleBlocks.map((block, idx) => {
                     // Use stored position if available, otherwise fallback to calculated default
                     const side = block.side || (idx % 2 === 0 ? 'left' : 'right');
@@ -293,17 +415,24 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
 
     // ---- Captions (gradient overlay at bottom) -----------------------------
     if (layout === 'caption') {
-        return <CaptionBar blocks={visibleBlocks} compact={compact} />;
+        return <CaptionBar blocks={visibleBlocks} compact={compact} rootRef={ref} />;
     }
 
     // ---- Chat bubbles (below the panel image) ------------------------------
+    // Phones show every line (it is already under the art, nothing to bound); desktop keeps its 4-line cap.
     if (layout === 'chat_bubbles') {
+        const stacked = phone || resolved === 'below';
+        const shown = stacked ? blocks : visibleBlocks;
         return (
-            <div className={`${compact ? 'space-y-0.5 px-1 py-1' : 'space-y-1.5 px-3 py-2'}`}>
-                {visibleBlocks.map(block => (
-                    <ChatMessage key={block.id} block={block} compact={compact} />
+            <div
+                data-testid="panel-dialogue"
+                data-placement="below"
+                className={`${compact ? 'space-y-0.5 px-1 py-1' : 'space-y-1.5 px-3 py-2'}${stacked ? ' w-0 min-w-full' : ''}`}
+            >
+                {shown.map(block => (
+                    <ChatMessage key={block.id} block={block} compact={compact} clamp={!stacked} />
                 ))}
-                {hasMore && (
+                {!stacked && hasMore && (
                     <div className="text-center text-[9px] text-slate-400 font-bold">
                         +{blocks.length - maxVisible} more lines
                     </div>
