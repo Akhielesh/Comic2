@@ -10,7 +10,7 @@ vi.mock('../../monitor/keys', () => ({ deviceKeys: async () => ({ devId: 'MeMeMe
 
 import { noteNurseryCaps, registerStepUp } from '../../monitor/client';
 import type { MonSettings, NurseryDevice } from '../../monitor/protocol';
-import { NurserySettings } from './NurserySettings';
+import { NurserySettings, revokedText } from './NurserySettings';
 
 const NID = '22222222-2222-4333-8444-555555555555';
 const settings = { sensitivity: 'medium', cryRepeatMin: 3, cryEscalateMin: 5 } as MonSettings;
@@ -71,8 +71,15 @@ describe('Nursery security (parents)', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Remove' })));
     expect(asked).toEqual(['Removing Firefox on Windows from the nursery']);
     expect(q.asked.find((a) => a.q === 'dev_revoke')?.args).toEqual({ devId: 'OddOddOddOddOddOddOddO' });
-    expect(push).toHaveBeenCalledWith(expect.stringMatching(/Firefox on Windows removed.*key is being changed/), expect.anything());
+    // The room didn't say it told the camera: never claimed disconnected — and how to end a live view.
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/Firefox on Windows removed.*signed out.*key is being changed.*restart the camera/), expect.anything());
+    expect(push.mock.calls[0][0]).not.toMatch(/disconnected/);
     await waitFor(() => expect(screen.queryByText(/Firefox on Windows/)).toBeNull());
+  });
+
+  it('Revoke: “disconnected” only when the room says the camera was told to end its live view', () => {
+    expect(revokedText('Old iPad', true)).toMatch(/^Old iPad removed — it’s disconnected/);
+    expect(revokedText('Old iPad', false)).not.toMatch(/disconnected/);
   });
 
   it('a cancelled second step removes nothing', async () => {

@@ -142,6 +142,11 @@ export interface DevicesReply {
 export interface DevRevokeReply {
   ok: boolean;
   error?: string;
+  /**
+   * The room told the cameras to end the device's live direct calls (`peer_gone` with
+   * `why: 'revoked'`). Absent: a room that doesn't, so the parent is told how to end one.
+   */
+  ended?: boolean;
 }
 
 /** A device in the nursery's roster (`mon_devices`), as parents see it (`{t:'q', q:'devices'}`). */
@@ -381,6 +386,17 @@ export interface MonRtc {
   re?: 1;
   /** Camera → viewer, with its answer: send quality and screen state on the data channel (rtc.ts ViewerDcMsg). */
   dcc?: 1;
+  /**
+   * With an offer to a camera that seals: this viewer has no current family key (or the camera
+   * said `nok`), so the call is set up as before end to end — the camera takes it, counts it and
+   * says so, rather than leave the viewer without picture and sound (ADR 0006 WS-6 review).
+   */
+  nk?: 1;
+  /**
+   * Camera → viewer, plain: it couldn't open this viewer's sealed signaling, or seal its answer
+   * (it has no current key) — call again with `nk`.
+   */
+  nok?: 1;
 }
 
 export type MonCmd = 'soothe' | 'soothe_stop' | 'quality' | 'flip' | 'talk' | 'video';
@@ -472,7 +488,13 @@ export type MonServerMsg =
   | { t: 'relay_key' }
   | { t: 'settings'; settings: MonSettings }
   | { t: 'cam_gone'; sid: string; dev: string }
-  | { t: 'peer_gone'; sid: string }
+  /**
+   * Camera: a viewer's socket left. `why` (WS-6 → WS-9 contract): it lost access — its device was
+   * revoked or its person (or guest pass) removed. The camera then ends that viewer's direct call
+   * even while it is connected (and any call sealed by `devId`); without `why` a call that is still
+   * up carries on, as a home network keeps working when the internet blips.
+   */
+  | { t: 'peer_gone'; sid: string; why?: 'revoked' | 'removed'; devId?: string }
   | { t: 'roles_changed' }
   /** This guest was made a member: drop the guest pass, reconnect with the account. */
   | { t: 'promoted' }

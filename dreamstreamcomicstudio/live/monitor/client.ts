@@ -632,8 +632,13 @@ export function openMonitorSocket(
   onMsg: (m: MonServerMsg) => void,
   onBinary: (data: Blob) => void,
   onStatus: (s: MonSocketStatus, detail?: string) => void,
-  opts: { fast?: boolean } = {},
+  opts: {
+    fast?: boolean;
+    /** The room closed this socket for good, and why (removed, revoked, forbidden, …). */
+    onFinal?: (kind: CloseKind) => void;
+  } = {},
 ): MonitorSocket {
+  const { onFinal, ...rest } = opts;
   return openLiveSocket<MonServerMsg>(
     `/api/monitor/${nid}/ws`,
     async () => {
@@ -660,10 +665,11 @@ export function openMonitorSocket(
     onBinary,
     onStatus,
     {
-      ...opts,
+      ...rest,
       // A removed or expired guest pass is gone for good on this device — a role refusal isn't.
       onFinal: (_code, guest, kind) => {
         if (guest && (kind === 'removed' || kind === 'revoked')) clearGuest(nid);
+        onFinal?.(kind);
       },
       closeText: { removed: 'You were removed from this nursery.' },
     },

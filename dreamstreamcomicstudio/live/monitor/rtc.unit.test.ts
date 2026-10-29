@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { adapt, CameraHub, classifyPath, DC_RESTART_WAIT_MS, encodingFor, FirstArrival, ICE_BATCH_MS, LADDER, newAdapt, orderCodecs, readEncStats, summarizeEnc, v6Net, ViewerLink, type EncSample } from './rtc';
+import { adapt, CameraHub, classifyPath, DC_RESTART_WAIT_MS, directAlert, encodingFor, FirstArrival, ICE_BATCH_MS, LADDER, newAdapt, orderCodecs, readEncStats, repeatsOpen, summarizeEnc, v6Net, ViewerLink, type DirectMsg, type EncSample, type OpenAlert } from './rtc';
 import { HIDDEN_GRACE_MS } from './viewGate';
 import type { MonRtc } from './protocol';
 import { makeDevice, MemoryKeyStore, NurseryKeys } from './keys';
@@ -238,6 +238,8 @@ class FakePC {
   }
   async setRemoteDescription(d: { type: string; sdp: string }) {
     this.remote = d;
+    // Like a browser: an offer waits for our answer; an answer ends our offer's wait.
+    this.signalingState = d.type === 'offer' ? 'have-remote-offer' : 'stable';
     if (d.type === 'offer' && !this.transceivers.length) this.transceivers.push(new FakeTransceiver('video'), new FakeTransceiver('audio'));
   }
   async createAnswer() {
@@ -248,6 +250,8 @@ class FakePC {
   }
   async setLocalDescription(d: unknown) {
     this.localDescription = { toJSON: () => d };
+    if ((d as { type?: string })?.type === 'offer') this.signalingState = 'have-local-offer';
+    else if ((d as { type?: string })?.type === 'answer') this.signalingState = 'stable';
   }
   async addIceCandidate(c: unknown) {
     this.candidates.push(c);
@@ -331,6 +335,21 @@ describe('CameraHub: one connection per viewer session', () => {
     hub.release('s1');
     hub.release('s2');
     expect(hub.isConnected('v1')).toBe(true);
+  });
+
+  it('a viewer that lost access (revoked, removed): its live call ends at once — a blip still keeps one', async () => {
+    await hub.onSignal('s1', offer('p1', 'v1'), 'Grandma');
+    await hub.onSignal('s2', offer('p2', 'v2'), 'Mom');
+    FakePC.all.forEach((pc) => pc.connect('lan'));
+    // A socket that just left (no why): the home Wi-Fi call carries on.
+    hub.release('s1');
+    expect(hub.isConnected('v1')).toBe(true);
+    // The room says its device was revoked: the call ends, connected or not; the others stay.
+    expect(hub.cut('s1')).toBe(1);
+    expect(FakePC.all[0].connectionState).toBe('closed');
+    expect(hub.isConnected('v1')).toBe(false);
+    expect(hub.isConnected('v2')).toBe(true);
+    expect(hub.count).toBe(1);
   });
 
   it('ignores candidates and byes from an older call', async () => {
@@ -649,6 +668,7 @@ describe('direct-first and sound-only paths (feature doc §7 C3, C5, §4.7)', ()
     vi.stubGlobal('window', { ...globalThis, setTimeout, clearTimeout, setInterval, clearInterval, addEventListener: (t: string, f: () => void) => listeners.set(t, f), removeEventListener: (t: string) => listeners.delete(t) });
     const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
     await link.connect('cam1');
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: sent[0].d.pc }); // the call is set up (stable)
     FakePC.all[0].connect('lan');
     sent = [];
     listeners.get('online')!();
@@ -727,6 +747,30 @@ describe('sealed signaling (end to end through the room)', () => {
     hub.closeAll();
   });
 
+  it('camera: a call sealed by a revoked device ends — by its device id, or when the key moves on without it', async () => {
+    const k = await sharedKeys();
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    hub.seal = k.cam;
+    const call = async (sid: string, vid: string) => hub.onSignal(sid, (await k.view.seal(k.camDev.devId, { sdp: { type: 'offer', sdp: 'o' }, pc: 'p-' + vid, vid }))!);
+    await call('s1', 'v1');
+    FakePC.all[0].connect('lan');
+    // Removed by device (the room names the device): ended though the socket id is a newer one.
+    expect(hub.cut('another-socket', k.viewDev.devId)).toBe(1);
+    expect(FakePC.all[0].connectionState).toBe('closed');
+    await call('s1', 'v2');
+    FakePC.all[1].connect('lan');
+    // The room asks this camera for the next epoch, for everyone but that device: its call ends.
+    expect(hub.keepOnly(new Set(['someone-else-entirely1']))).toBe(1);
+    expect(FakePC.all[1].connectionState).toBe('closed');
+    // A device that stays keeps its call.
+    await call('s1', 'v3');
+    FakePC.all[2].connect('lan');
+    expect(hub.keepOnly(new Set([k.viewDev.devId]))).toBe(0);
+    expect(hub.isConnected('v3')).toBe(true);
+    await until(() => sent.length === 3); // the three sealed answers (none left in flight)
+    hub.closeAll();
+  });
+
   it('viewer: seals to a camera that seals; refuses its plain answer (the room’s, not the camera’s); takes an older camera’s as always', async () => {
     const k = await sharedKeys();
     const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'dev.tab');
@@ -759,6 +803,104 @@ describe('sealed signaling (end to end through the room)', () => {
   });
 });
 
+describe('never no picture because of a key: calls set up without it (nk / nok)', () => {
+  let sent: { to: string; d: MonRtc | SealedRtc }[];
+  beforeEach(() => {
+    vi.stubGlobal('window', globalThis);
+    vi.stubGlobal('RTCPeerConnection', FakePC);
+    vi.stubGlobal('MediaStream', class {});
+    vi.stubGlobal('RTCRtpReceiver', { getCapabilities: () => ({ codecs: [{ mimeType: 'video/VP8' }] }) });
+    FakePC.all = [];
+    sent = [];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('viewer without the key, camera that seals: the call goes without it (nk), the camera takes it — and says so', async () => {
+    const k = await sharedKeys();
+    // The viewer: no key at all (a lost race, a storage that failed …).
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'dev.tab');
+    link.camKey = () => k.camDev.devId;
+    await link.connect('cam1');
+    const offer = sent[0].d as MonRtc;
+    expect(isSealedRtc(offer)).toBe(false);
+    expect(offer).toMatchObject({ sdp: { type: 'offer' }, nk: 1 });
+    // It can't open the camera's sealed server picture: it doesn't offer to watch it instead.
+    expect(offer.ov).toBeUndefined();
+    // The camera holds the key and takes it (a plain offer without nk it still refuses).
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    hub.seal = k.cam;
+    await hub.onSignal('s1', { ...offer, nk: undefined });
+    expect(hub.refused).toBe(1);
+    await hub.onSignal('s1', offer);
+    expect(FakePC.all).toHaveLength(2);
+    await until(() => sent.length === 2);
+    const answer = sent[1].d as MonRtc;
+    expect(isSealedRtc(answer)).toBe(false);
+    expect(answer.sdp?.type).toBe('answer');
+    // Its candidates (plain, the same call) follow it.
+    await hub.onSignal('s1', { ices: [{ candidate: 'c1' }], pc: offer.pc, vid: offer.vid });
+    expect(FakePC.all[1].candidates).toEqual([{ candidate: 'c1' }]);
+    // The viewer takes the plain answer for the call it set up plain.
+    await link.onSignal('cam1', answer);
+    expect(FakePC.all[0].remote).toEqual({ type: 'answer', sdp: 'a' });
+    FakePC.all[0].connect();
+    FakePC.all[1].connect();
+    expect(link.unsealed).toBe(true);
+    expect(hub.unsealed).toBe(1);
+    link.close();
+    hub.closeAll();
+  });
+
+  it('camera: a plain offer never replaces a sealed call that is up; an app that never showed device keys is taken', async () => {
+    const k = await sharedKeys();
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    hub.seal = k.cam;
+    await hub.onSignal('s1', (await k.view.seal(k.camDev.devId, { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1' }))!);
+    FakePC.all[0].connect();
+    await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'room' }, pc: 'p2', vid: 'v1', nk: 1 });
+    expect(FakePC.all).toHaveLength(1);
+    expect(hub.isConnected('v1')).toBe(true);
+    // A page from before end to end (no devId in the room's presence): its plain offer is taken.
+    hub.plainOk = (sid) => sid === 'old-page';
+    await hub.onSignal('old-page', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p9', vid: 'old' });
+    expect(FakePC.all).toHaveLength(2);
+    await until(() => sent.length === 2);
+    hub.closeAll();
+  });
+
+  it('camera without a current key: a sealed offer it can’t open gets `nok`, and the viewer calls again without the key', async () => {
+    const k = await sharedKeys();
+    // The camera holds epoch 1, but the viewer seals with epoch 2 (the camera missed the rotation).
+    const nmk2 = newNmk();
+    await k.view.onMessage({ t: 'key_wrap', devId: k.viewDev.devId, e: 2, blob: await wrapNmk(nmk2, k.viewDev.ecdhPub, { nid: NID, e: 2, devId: k.viewDev.devId }) });
+    const toCam: (MonRtc | SealedRtc)[] = [];
+    const toView: (MonRtc | SealedRtc)[] = [];
+    const link = new ViewerLink((_to, d) => toCam.push(d), [], 'dev.tab');
+    link.seal = k.view;
+    link.camKey = () => k.camDev.devId;
+    const hub = new CameraHub((_to, d) => toView.push(d), [], () => ({ video: null, audio: null }));
+    hub.seal = k.cam;
+    await link.connect('cam1');
+    await until(() => toCam.length === 1);
+    expect(isSealedRtc(toCam[0])).toBe(true);
+    await hub.onSignal('s1', toCam[0]);
+    expect(FakePC.all).toHaveLength(1); // the viewer's only: the camera couldn't open it
+    expect(toView).toEqual([{ nok: 1 }]);
+    // The viewer, its sealed call unanswered: calls again at once, without the key.
+    await link.onSignal('cam1', toView[0]);
+    await until(() => toCam.length >= 3);
+    const again = toCam.find((d) => !isSealedRtc(d) && (d as MonRtc).sdp?.type === 'offer') as MonRtc;
+    expect(again).toMatchObject({ nk: 1, ov: 1 });
+    await hub.onSignal('s1', again);
+    expect(FakePC.all).toHaveLength(3);
+    // Another `nok` (the room's, say) for a call that isn't sealed changes nothing.
+    await link.onSignal('cam1', { nok: 1 });
+    expect(FakePC.all).toHaveLength(3);
+    link.close();
+    hub.closeAll();
+  });
+});
+
 describe('sealed signals are handled in the order they arrived', () => {
   beforeEach(() => {
     vi.stubGlobal('window', globalThis);
@@ -775,6 +917,7 @@ describe('sealed signals are handled in the order they arrived', () => {
     return {
       waits,
       holds: () => true,
+      canSeal: () => true,
       seal: async () => null,
       open: (s: SealedRtc) =>
         new Promise<{ d: MonRtc; from: string }>((resolve) => {
@@ -923,6 +1066,63 @@ describe('ICE candidate batching (75 ms) and ICE restarts on the data channel', 
     link.close();
   });
 
+  it('viewer: the same restart answered twice (on the channel and through the room) keeps the call — the second answer is a duplicate, not a failure', async () => {
+    const link = new ViewerLink((to, d) => sent.push({ to, d }), [], 'v');
+    const states: string[] = [];
+    link.onState = (st) => states.push(st);
+    await link.connect('cam1');
+    const pc = FakePC.all[0];
+    // A browser refuses an answer when no offer of ours waits for one.
+    const apply = pc.setRemoteDescription.bind(pc);
+    let applied = 0;
+    pc.setRemoteDescription = async (d) => {
+      if (d.type === 'answer' && pc.signalingState !== 'have-local-offer') throw new DOMException('Called in wrong state: stable', 'InvalidStateError');
+      applied++;
+      return apply(d);
+    };
+    const pcId = sent.find((m) => m.d.sdp)!.d.pc;
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'a' }, pc: pcId, dcc: 1, ib: 1, dcr: 1 });
+    pc.connect('internet');
+    const say = (m: unknown) => (pc.dc!.onmessage as (e: { data: string }) => void)({ data: JSON.stringify(m) });
+    say({ t: 'sig', d: { re: 1, pc: pcId } });
+    await vi.advanceTimersByTimeAsync(DC_RESTART_WAIT_MS); // no answer in time: the same offer through the room
+    // Both reach the camera, and both are answered.
+    say({ t: 'sig', d: { sdp: { type: 'answer', sdp: 'restarted' }, pc: pcId } });
+    await vi.advanceTimersByTimeAsync(0);
+    await link.onSignal('cam1', { sdp: { type: 'answer', sdp: 'restarted' }, pc: pcId });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(applied).toBe(2); // the first answer, and the restart's first
+    expect(link.state).toBe('connected');
+    expect(states).not.toContain('failed');
+    link.close();
+  });
+
+  it('camera: the same restart offer twice (channel, then the room) is answered again as it was — not negotiated twice', async () => {
+    const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
+    await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1', dcr: 1, ib: 1 });
+    const pc = FakePC.all[0];
+    const channel = { label: 'mon', readyState: 'open', onmessage: null as ((e: { data: string }) => void) | null, sent: [] as string[], send(m: string) { this.sent.push(m); } };
+    (pc.ondatachannel as (e: { channel: typeof channel }) => void)({ channel });
+    pc.connect('internet');
+    await vi.advanceTimersByTimeAsync(1600);
+    let negotiations = 0;
+    const apply = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (d) => {
+      negotiations++;
+      return apply(d);
+    };
+    sent = [];
+    const restart = { sdp: { type: 'offer' as const, sdp: 'restart' }, pc: 'p1', vid: 'v1' };
+    channel.onmessage?.({ data: JSON.stringify({ t: 'sig', d: restart }) });
+    await vi.advanceTimersByTimeAsync(0);
+    await hub.onSignal('s1', restart);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(negotiations).toBe(1);
+    // The second copy came through the room (the channel may be what's failing): answered there.
+    expect(sent).toEqual([{ to: 's1', d: { sdp: { type: 'answer', sdp: 'a' }, dcc: 1, ib: 1, dcr: 1, pc: 'p1' } }]);
+    hub.closeAll();
+  });
+
   it('camera: a restart offered on its call’s channel is answered there — a new call on the channel is not taken', async () => {
     const hub = new CameraHub((to, d) => sent.push({ to, d }), [], () => ({ video: null, audio: null }));
     await hub.onSignal('s1', { sdp: { type: 'offer', sdp: 'o' }, pc: 'p1', vid: 'v1', dcr: 1, ib: 1 });
@@ -959,5 +1159,48 @@ describe('alerts on first arrival (eid)', () => {
     expect(f.direct(undefined)).toBe(true);
     expect(f.room(null)).toBe('raise');
     expect(f.room('not an eid')).toBe('raise');
+  });
+
+  const SOUNDS = new Set(['cry', 'cough']);
+  const ev = (x: Partial<Extract<DirectMsg, { t: 'ev' }>>): DirectMsg => ({ t: 'ev', kind: 'vision', at: 1, dev: 'camA', ...x });
+  const ctx = (arrival: FirstArrival, open: OpenAlert[] = [], now = 100_000) => ({ sounds: SOUNDS, arrival, roomUp: true, eidRoom: true, open, now });
+
+  it('an event the direct copy doesn’t alert on (a cup, the remote, a pet) leaves the room’s copy free to sound', () => {
+    const f = new FirstArrival();
+    // A non-sharp object: the camera sends it on both paths with one eid; only the room alerts on it.
+    expect(directAlert(ev({ kind: 'scene', type: 'object_near', label: 'remote', sharp: false, eid: 'camA:7' }), ctx(f))).toBeNull();
+    expect(f.room('camA:7')).toBe('raise'); // the room's line sounds — not silenced by the direct copy
+    // A sharp one alerts from here first, and the room's copy then folds in quietly.
+    expect(directAlert(ev({ kind: 'scene', type: 'object_near', label: 'knife', sharp: true, eid: 'camA:8' }), ctx(f))).toEqual({ cat: 'object', quiet: false });
+    expect(f.room('camA:8')).toBe('quiet');
+    // A cry's end alerts nothing (and doesn't hide the room's line either).
+    expect(directAlert(ev({ kind: 'sound', cat: 'cry', phase: 'end', eid: 'camA:9' }), ctx(f))).toBeNull();
+    expect(f.room('camA:9')).toBe('raise');
+  });
+
+  it('a new hazard of the same kind always sounds — another zone, another camera, or after “I’m on it”; a genuine repeat folds in', () => {
+    const f = new FirstArrival();
+    const now = 100_000;
+    const stove: OpenAlert = { cat: 'zone', at: now - 15_000, acked: null, ended: null, dev: 'camA', zone: 'stove' };
+    // The same zone still sounding, a few seconds later: a repeat, folded in quietly.
+    expect(directAlert(ev({ type: 'zone', zone: 'stove', name: 'Stove', eid: 'camA:20' }), ctx(f, [stove], now))).toEqual({ cat: 'zone', quiet: true });
+    // Another zone on the same camera: sounds.
+    expect(directAlert(ev({ type: 'zone', zone: 'window', name: 'Window', eid: 'camA:21' }), ctx(f, [stove], now))).toEqual({ cat: 'zone', quiet: false });
+    // The parent tapped “I’m on it” for the stove: the stove again is new — sounds.
+    expect(directAlert(ev({ type: 'zone', zone: 'stove', name: 'Stove', eid: 'camA:22' }), ctx(f, [{ ...stove, acked: 'Mom' }], now))).toEqual({ cat: 'zone', quiet: false });
+    // A second camera's crib alert within 30 s of the first camera's: sounds.
+    const cribA: OpenAlert = { cat: 'crib_out', at: now - 10_000, acked: 'Dad', ended: null, dev: 'camA' };
+    expect(directAlert(ev({ type: 'crib_out', dev: 'camB', eid: 'camB:5' }), ctx(f, [cribA], now))).toEqual({ cat: 'crib_out', quiet: false });
+    expect(directAlert(ev({ type: 'crib_out', dev: 'camB', eid: 'camB:6' }), ctx(f, [{ ...cribA, acked: null }], now))).toEqual({ cat: 'crib_out', quiet: false });
+    // With the room down every direct alert sounds; without an eid room, the room's line raises it.
+    expect(directAlert(ev({ type: 'zone', zone: 'stove', eid: 'camA:23' }), { ...ctx(f, [stove], now), roomUp: false })).toEqual({ cat: 'zone', quiet: false });
+    expect(directAlert(ev({ type: 'zone', zone: 'stove', eid: 'camA:24' }), { ...ctx(f, [stove], now), eidRoom: false })).toBeNull();
+    expect(repeatsOpen([stove], { cat: 'zone', dev: 'camA', zone: 'stove' }, now + 20_000)).toBe(false); // over 30 s
+    // An alert the room's line raised knows its camera (not the zone): the same camera's cry again
+    // is a repeat; a zone it can't place sounds rather than risk silencing a new one.
+    const roomCry: OpenAlert = { cat: 'cry', at: now - 5000, acked: null, ended: null, dev: 'camA', zone: null };
+    expect(directAlert(ev({ kind: 'sound', cat: 'cry', phase: 'start', eid: 'camA:30' }), ctx(f, [roomCry], now))).toEqual({ cat: 'cry', quiet: true });
+    const roomZone: OpenAlert = { cat: 'zone', at: now - 5000, acked: null, ended: null, dev: 'camA', zone: null };
+    expect(directAlert(ev({ type: 'zone', zone: 'stove', eid: 'camA:31' }), ctx(f, [roomZone], now))).toEqual({ cat: 'zone', quiet: false });
   });
 });

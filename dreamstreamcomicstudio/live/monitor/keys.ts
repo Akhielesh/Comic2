@@ -21,12 +21,26 @@
  *  - someone was removed: the room asks a holder to `key_rotate` to the devices that remain; the
  *    old epoch still opens for EPOCH_OVERLAP_MS (60 s), then it is forgotten;
  *  - a camera that holds nothing current and gets no wrap within FRESH_START_MS starts a new
- *    epoch itself — by design harmless: the room has the new holder wrap it to everyone else.
+ *    epoch itself — by design harmless: the room has the new holder wrap it to everyone else;
+ *  - a device without a current key is never left waiting: it asks again (`dev_hello`, with
+ *    backoff from KEY_RETRY_MS to KEY_RETRY_MAX_MS) and re-reads its stored wraps (another tab
+ *    of this browser may have been given the key) until it has one — after a lost race
+ *    (`key_conflict`) as after anything else;
+ *  - safety first: a device that still has no current key after KEY_FALLBACK_MS is `fallback`.
+ *    The screens then use the path from before end-to-end encryption for what needs the key
+ *    (the camera's server picture goes plain, a call is set up without sealing) and say so,
+ *    rather than leave a parent with no picture or sound. It keeps asking, and seals again as
+ *    soon as the key comes.
  *
  * Sticky end to end: once this device holds a nursery key it refuses unsealed signaling from
- * peers that seal (rtc.ts), and never plays an unsealed relay picture from a camera that seals
- * (relayCrypto.ts) — a server that strips capabilities can't downgrade either. Which cameras
- * seal is remembered per nursery (`E2E_PEERS_KEY`).
+ * peers that seal (rtc.ts), and doesn't play an unsealed relay picture from a camera that seals
+ * while its sealed one works (relayCrypto.ts) — a server that strips capabilities can't quietly
+ * downgrade either. Which cameras seal is remembered per nursery (`E2E_PEERS_KEY`).
+ *
+ * Safety comes first, though (Phase 0 defends against a server that reads, not one that lies —
+ * ADR 0006 threat model): a device that can't get the key falls back to the path from before end
+ * to end for that peer (`fallback`; rtc.ts `nk`/`nok`; relayCrypto.ts RELAY_PLAIN_AFTER_MS), and
+ * both screens say so. Direct calls stay encrypted phone to phone (DTLS) either way.
  */
 import { b64url } from '../../packages/monitor-core/src/bytes';
 import {
@@ -325,8 +339,37 @@ export const INIT_WAIT_MS = 4000;
 export const FRESH_START_MS = 10_000;
 /** A key_init / key_rotate the room neither echoed nor refused counts as accepted after this. */
 export const ADOPT_WAIT_MS = 3000;
-/** Sealed signaling within this of our clock opens (relay frames measure the camera's clock instead). */
-export const SIGNAL_SKEW_MS = 60 * 60_000;
+/** No current key: ask again after this, doubling (± a quarter, so devices that raced don't again) … */
+export const KEY_RETRY_MS = 2000;
+/** … up to this. */
+export const KEY_RETRY_MAX_MS = 60_000;
+/** Lost a race: ask for the winner's key this soon (jittered). */
+export const KEY_CONFLICT_RETRY_MS = 1000;
+/** Still no current key after this: fall back to the path from before end to end (and say so). */
+export const KEY_FALLBACK_MS = 15_000;
+/**
+ * Sealed signaling isn't refused for a wrong clock. Spare phones used as cameras are often hours
+ * (a wrong time zone) or days off, and both ends must agree. Anything that can reach the room over
+ * TLS has a clock within its certificate's lifetime, so the bound is a year: it only drops the
+ * truly ancient. Replays are refused by their nonce (each iv opens once per session), an old
+ * epoch stops opening 60 s after a rotation, and the DTLS fingerprints inside bind a call to the
+ * devices that made it — a replayed offer can't connect anyone else. (Relay frames measure the
+ * camera's own clock instead: sealed.ts FrameReplay.)
+ */
+export const SIGNAL_SKEW_MS = 366 * 24 * 60 * 60_000;
+/** How many signaling nonces a session remembers (the oldest are forgotten first). */
+const SEEN_IVS = 4096;
+
+/** Where a device stands with the nursery key: what the screens seal, and what they say. */
+export type E2eState =
+  /** The room doesn't hand out keys and this device holds none: as before end to end. */
+  | 'off'
+  /** It holds the current key: everything that can be sealed is. */
+  | 'sealed'
+  /** It needs the key and is getting it (a moment). */
+  | 'waiting'
+  /** It still has no current key after KEY_FALLBACK_MS: the path from before end to end, said so. */
+  | 'fallback';
 
 export interface NurseryKeysOpts {
   nid: string;
@@ -337,8 +380,10 @@ export interface NurseryKeysOpts {
   /** Shown to parents in the device list. */
   name: string;
   now?: () => number;
-  /** A key arrived, an epoch became current, or one expired. */
+  /** A key arrived, an epoch became current, or one expired — or the device fell back without one. */
   onChange?: () => void;
+  /** 0 ≤ x < 1, for the retries' jitter (tests). */
+  random?: () => number;
 }
 
 interface Held {
@@ -372,11 +417,26 @@ export class NurseryKeys {
   private loaded: Promise<void> | null = null;
   private seenIvs = new Set<string>();
   private readonly now: () => number;
+  private readonly random: () => number;
+  /** This connection's nonce (`hello.nonce`), to ask again with `dev_hello`. */
+  private nonce: string | null = null;
+  /** Since when this device has needed a key it doesn't have (null: it has one, or needs none). */
+  private keylessSince: number | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private retries = 0;
+  private fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The camera: when it last tried (or began waiting) — it starts afresh FRESH_START_MS after. */
+  private freshFrom: number | null = null;
+  private freshTimer: ReturnType<typeof setTimeout> | undefined;
+  private closed = false;
+  /** Why the last sealed signal didn't open (diagnostics). */
+  lastRefusal: string | null = null;
 
   constructor(private o: NurseryKeysOpts) {
     this.nid = o.nid;
     this.devId = o.device.devId;
     this.now = o.now ?? (() => Date.now());
+    this.random = o.random ?? Math.random;
   }
 
   /** Open this device's stored wraps for the nursery (once): its keys work before the room answers — even with no room. */
@@ -414,6 +474,28 @@ export class NurseryKeys {
     return this.cur;
   }
 
+  /** It can seal right now (it holds the room's current epoch). */
+  canSeal(): boolean {
+    return this.sealing() != null;
+  }
+
+  /** It needs a key it doesn't have: the room hands them out, or it held one, and none is current. */
+  private needsKey(): boolean {
+    return (this.live || this.cur != null) && this.sealing() == null;
+  }
+
+  /** Where this device stands (see `E2eState`). */
+  get state(): E2eState {
+    if (this.sealing()) return 'sealed';
+    if (!this.needsKey()) return 'off';
+    return this.keylessSince != null && this.now() - this.keylessSince >= KEY_FALLBACK_MS ? 'fallback' : 'waiting';
+  }
+
+  /** No current key for KEY_FALLBACK_MS: the screens use the path from before end to end, and say so. */
+  get fallback(): boolean {
+    return this.state === 'fallback';
+  }
+
   /**
    * The key to seal with: the current epoch — unless the room has said a newer one is current
    * (we were offline through a rotation: wait for our wrap rather than seal with a key the
@@ -445,8 +527,18 @@ export class NurseryKeys {
   async onHello(h: { caps?: unknown; nonce?: unknown; e?: unknown }, role: KeyRole): Promise<void> {
     this.role = role;
     clearTimeout(this.waitTimer);
+    // A new connection: ask on it from the start (and give it its own FRESH_START_MS).
+    clearTimeout(this.retryTimer);
+    clearTimeout(this.freshTimer);
+    this.retryTimer = this.freshTimer = undefined;
+    this.retries = 0;
+    this.freshFrom = null;
     this.live = Array.isArray(h.caps) && hasCap(h.caps as string[], 'e2e1') && typeof h.nonce === 'string' && !!h.nonce;
-    if (!this.live) return;
+    this.nonce = this.live ? (h.nonce as string) : null;
+    if (!this.live) {
+      this.track();
+      return;
+    }
     await this.load();
     const roomE = typeof h.e === 'number' && Number.isInteger(h.e) && h.e >= 0 ? h.e : null;
     if (roomE === 0 && this.cur != null) {
@@ -457,26 +549,122 @@ export class NurseryKeys {
       this.o.onChange?.();
     }
     this.roomE = roomE;
-    const ts = Math.floor(this.now());
-    const sig = await signHello(this.o.device.sig, this.nid, h.nonce as string, ts, this.o.device.ecdhPub);
-    this.o.send({ t: 'dev_hello', devId: this.devId, sigPub: this.o.device.sigPub, ecdhPub: this.o.device.ecdhPub, name: this.o.name, platform: 'web', ts, sig });
+    await this.sayHello();
     const current = this.cur != null && (roomE == null || this.cur >= roomE);
-    if (current) return;
+    if (current) return this.track();
+    // Waiting for a key from here: the camera starts afresh FRESH_START_MS from now at the latest.
+    this.freshFrom = this.now();
     if (roomE === 0) {
       if (MAY_INIT.has(role)) await this.init();
-      return;
-    }
-    if (roomE == null && MAY_INIT.has(role)) {
+    } else if (roomE == null && MAY_INIT.has(role)) {
       // A room that doesn't say: start one if no wrap arrives (a conflict tells us one exists).
       this.waitTimer = setTimeout(() => void (this.cur == null && !this.pending ? this.init() : undefined), INIT_WAIT_MS);
+    }
+    // Asked again with backoff until a key comes (and, for the camera, the fresh start).
+    this.track();
+  }
+
+  /** `dev_hello` on this connection: the room answers with this device's wrap, or asks a holder for one. */
+  private async sayHello(): Promise<void> {
+    const nonce = this.nonce;
+    if (!nonce || this.closed) return;
+    const ts = Math.floor(this.now());
+    const sig = await signHello(this.o.device.sig, this.nid, nonce, ts, this.o.device.ecdhPub);
+    if (this.nonce !== nonce || this.closed) return;
+    this.o.send({ t: 'dev_hello', devId: this.devId, sigPub: this.o.device.sigPub, ecdhPub: this.o.device.ecdhPub, name: this.o.name, platform: 'web', ts, sig });
+  }
+
+  /**
+   * Keep a device without a current key from staying that way: note since when, say so after
+   * KEY_FALLBACK_MS (onChange: the screens fall back), ask again with backoff, and — the camera —
+   * start afresh. A device that has its key again stops all of it.
+   */
+  private track(): void {
+    if (this.closed) return;
+    if (!this.needsKey()) {
+      if (this.keylessSince != null) {
+        const was = this.keylessSince;
+        this.keylessSince = null;
+        // It had fallen back: the screens seal again.
+        if (this.now() - was >= KEY_FALLBACK_MS) this.o.onChange?.();
+      }
+      clearTimeout(this.fallbackTimer);
+      clearTimeout(this.retryTimer);
+      clearTimeout(this.freshTimer);
+      this.fallbackTimer = this.retryTimer = this.freshTimer = undefined;
+      this.retries = 0;
+      this.freshFrom = null;
       return;
     }
-    if (roomE != null && role === 'camera') {
-      // The camera must be able to seal: if no holder answers for us, start afresh.
-      this.waitTimer = setTimeout(() => {
-        if (this.sealing() || this.pending || this.roomE == null) return;
-        void this.rotate(this.roomE + 1, []);
-      }, FRESH_START_MS);
+    if (this.keylessSince == null) {
+      this.keylessSince = this.now();
+      clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = setTimeout(() => {
+        this.fallbackTimer = undefined;
+        if (this.needsKey()) this.o.onChange?.();
+      }, KEY_FALLBACK_MS);
+    }
+    if (!this.live) return; // a room that doesn't hand out keys: nothing to ask (the fallback stands)
+    if (this.retryTimer === undefined) this.scheduleRetry();
+    if (this.role === 'camera' && this.freshTimer === undefined) {
+      this.freshFrom ??= this.now();
+      const wait = Math.max(0, this.freshFrom + FRESH_START_MS - this.now());
+      this.freshTimer = setTimeout(() => {
+        this.freshTimer = undefined;
+        void this.freshStart();
+      }, wait);
+    }
+  }
+
+  private scheduleRetry(ms?: number): void {
+    clearTimeout(this.retryTimer);
+    const base = Math.min(KEY_RETRY_MAX_MS, KEY_RETRY_MS * 2 ** Math.min(this.retries, 10));
+    const wait = ms ?? Math.round(base * (0.75 + 0.5 * this.random()));
+    this.retries += 1;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.retry();
+    }, wait);
+  }
+
+  /** Ask again: re-read the stored wraps, then the room (`dev_hello`) — or start the first epoch. */
+  private async retry(): Promise<void> {
+    if (this.closed || !this.live) return;
+    await this.reload();
+    if (this.needsKey() && !this.pending) {
+      const waited = this.keylessSince != null ? this.now() - this.keylessSince : 0;
+      if (this.cur == null && MAY_INIT.has(this.role) && (this.roomE === 0 || (this.roomE == null && waited >= INIT_WAIT_MS))) await this.init();
+      else await this.sayHello();
+    }
+    this.track();
+  }
+
+  /** The camera, still without a current key FRESH_START_MS after it began waiting: it makes the next epoch itself. */
+  private async freshStart(): Promise<void> {
+    if (this.closed || !this.live || !this.needsKey()) return this.track();
+    if (!this.pending) {
+      if (this.roomE == null || this.roomE === 0) await this.init();
+      else await this.rotate(Math.max(this.roomE, this.cur ?? 0) + 1, []);
+    }
+    // Refused (someone was quicker) or not yet taken: another FRESH_START_MS before the next try.
+    this.freshFrom = this.now();
+    this.track();
+  }
+
+  /** Re-read this device's stored wraps: another tab of this browser may have been given the key. */
+  private async reload(): Promise<void> {
+    let list: StoredWrap[] = [];
+    try {
+      list = await this.o.store.wraps(this.nid);
+    } catch {
+      return;
+    }
+    for (const w of list.sort((a, b) => b.e - a.e)) {
+      if (this.cur != null && w.e <= this.cur) break;
+      const nmk = await unwrapNmk(w.blob, this.o.device.ecdh, { nid: this.nid, e: w.e, devId: this.devId });
+      if (!nmk) continue;
+      if (this.adoptNow(w.e, nmk)) this.o.onChange?.();
+      break;
     }
   }
 
@@ -487,7 +675,8 @@ export class NurseryKeys {
         const w = parseKeyWrap(m);
         if (!w || w.devId !== this.devId) return true;
         const nmk = await unwrapNmk(w.blob, this.o.device.ecdh, { nid: this.nid, e: w.e, devId: this.devId });
-        if (!nmk) return true;
+        // A wrap that doesn't open here: keep asking (track) rather than wait on it.
+        if (!nmk) return this.track(), true;
         if (this.pending?.e === w.e) this.clearPending();
         await this.adopt(w.e, nmk, w.blob);
         return true;
@@ -515,6 +704,14 @@ export class NurseryKeys {
         if (Number.isInteger(e) && e >= 0) this.roomE = e;
         this.clearPending();
         this.o.onChange?.();
+        // Lost the race: never left there. Ask for the winner's key soon (jittered, so the devices
+        // that raced don't collide again); the camera starts afresh if none comes — FRESH_START_MS
+        // from now, giving the winner's wrap its chance first.
+        clearTimeout(this.freshTimer);
+        this.freshTimer = undefined;
+        this.freshFrom = this.now();
+        this.track();
+        if (this.live && this.needsKey()) this.scheduleRetry(Math.round(KEY_CONFLICT_RETRY_MS * (0.5 + this.random())));
         return true;
       }
       default:
@@ -557,6 +754,8 @@ export class NurseryKeys {
     const timer = setTimeout(() => {
       if (this.pending?.e !== e) return;
       this.pending = null;
+      // A newer epoch came meanwhile (the room said so): this one never became current.
+      if (this.roomE != null && this.roomE > e) return this.track();
       void this.adopt(e, nmk, blob);
     }, ADOPT_WAIT_MS);
     this.pending = { e, nmk, timer };
@@ -589,6 +788,7 @@ export class NurseryKeys {
 
   private async adopt(e: number, nmk: Uint8Array, blob: string): Promise<void> {
     const became = this.adoptNow(e, nmk);
+    this.track();
     if (became) {
       try {
         await this.o.store.putWrap({ nid: this.nid, e, blob, at: this.now() });
@@ -609,15 +809,28 @@ export class NurseryKeys {
 
   /** Open sealed signaling addressed to this device (null: refuse it — wrong key, replay, tampered). */
   async open(sealed: SealedRtc): Promise<{ d: MonRtc; from: string } | null> {
-    if (this.seenIvs.size > 4000) this.seenIvs.clear();
+    // The oldest nonces are forgotten first (never all at once: that would reopen every replay).
+    if (this.seenIvs.size >= SEEN_IVS) {
+      const it = this.seenIvs.values();
+      for (let i = 0; i < SEEN_IVS / 4; i++) this.seenIvs.delete(it.next().value as string);
+    }
     const r = await openSignal(this.nmkFor, { nid: this.nid, toDev: this.devId }, sealed, { now: this.now(), maxSkewMs: SIGNAL_SKEW_MS, seen: this.seenIvs });
-    if (!r.ok || !r.d || typeof r.d !== 'object') return null;
+    if (r.ok === false) {
+      this.lastRefusal = r.reason;
+      return null;
+    }
+    if (!r.d || typeof r.d !== 'object') return null;
     return { d: r.d as MonRtc, from: r.from };
   }
 
   /** The screen closed. */
   close(): void {
+    this.closed = true;
     clearTimeout(this.waitTimer);
+    clearTimeout(this.retryTimer);
+    clearTimeout(this.fallbackTimer);
+    clearTimeout(this.freshTimer);
+    this.retryTimer = this.fallbackTimer = this.freshTimer = undefined;
     this.clearPending();
   }
 }

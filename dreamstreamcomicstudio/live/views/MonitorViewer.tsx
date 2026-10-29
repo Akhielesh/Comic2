@@ -16,7 +16,7 @@ import { focusLayout } from '../monitor/viewFocus';
 import { STATE_INFO, ROLE_INFO, type CamPresence, type CamStatus, type Duty, type FairState, type Incident, type MinuteRow, type MonLog, type MonRole, type MonServerMsg, type MonSettings, type ShareInfo, type SleepStatus, type TimelineBucket, type ViewerPresence, type BabyState, type Zone } from '../monitor/protocol';
 import { MonQuery } from '../monitor/query';
 import { currentSubscription, localNotify, needsHomeScreen, pushSupported, subscribe } from '../monitor/push';
-import { FirstArrival, ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
+import { directAlert, FirstArrival, ViewerLink, type DirectMsg, type LinkState, type NetPath, type Quality } from '../monitor/rtc';
 import { deviceKeys, E2ePeers, keysGate, KEYS_GATE_MS, keyStore, NurseryKeys } from '../monitor/keys';
 import { RelayOpener } from '../monitor/relayCrypto';
 import { initialFallback, RENDER_WAIT_MS, stepFallback, type FallbackInput } from '../monitor/linkFallback';
@@ -120,8 +120,14 @@ const pushKey = (nid: string) => `ds-monitor-push-${nid}`;
 const TAB_ID = Math.random().toString(36).slice(2, 8);
 /** In-app cue settings, most important first. */
 const camKey = (nid: string) => `ds-monitor-cam-${nid}`;
-/** A camera that seals and a device without the key yet: the direct call waits this long for the key before trying plain. */
+/**
+ * A camera that seals and a device without the key yet: the direct call waits this long for the
+ * key, then is set up without it (`nk`, which the camera takes) — never no picture — and is sealed
+ * again from the next call once the key is here.
+ */
 const KEY_WAIT_MS = 6000;
+/** Said on the direct pill when its call was set up without the family's key. */
+const DIRECT_UNSEALED = 'This connection was set up without your family’s key (this device didn’t have it yet, or the camera couldn’t use it). The picture is still encrypted between the two phones; it uses the key again from the next reconnect.';
 
 interface ActiveAlert {
   key: string;
@@ -132,6 +138,9 @@ interface ActiveAlert {
   acked: string | null;
   ended: number | null;
   secs?: number;
+  /** The camera it came from, and its zone — a repeat is only folded in quietly when both match. */
+  dev?: string | null;
+  zone?: string | null;
 }
 
 type LogFilter = 'all' | 'baby' | 'alerts' | 'care' | 'room';
@@ -529,6 +538,12 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       if (s !== 'connected') tracker.detach();
       if (s !== 'connected') usage.meter.disconnected();
       if (s === 'closed') setClosedMsg(detail || 'Disconnected from the nursery.');
+    }, {
+      // Removed from the nursery, or this device signed out: the direct call ends here too (the
+      // camera ends it as well once the room tells it why — this side doesn't wait for that).
+      onFinal: (kind) => {
+        if (kind === 'removed' || kind === 'revoked') link.close();
+      },
     });
     sockRef.current = sockNow;
     const tick = window.setInterval(() => {
@@ -638,14 +653,14 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   };
 
   /* ------------------------------------------------------------ alerts */
-  const raise = (cat: AlertCat, title: string, entryId: string | null, silent = false) => {
+  const raise = (cat: AlertCat, title: string, entryId: string | null, silent = false, meta?: { dev?: string | null; zone?: string | null }) => {
     const now = Date.now();
     const key = entryId || `${cat}-${now}`;
     setAlerts((list) => {
       // Fold a repeat of a still-active category into the existing banner.
       const open = list.find((a) => a.cat === cat && !a.ended && now - a.at < 10 * 60_000);
       if (open) return list.map((a) => (a === open ? { ...a, entryId: entryId ?? a.entryId } : a));
-      return [{ key, cat, title, at: now, entryId, acked: null, ended: null }, ...list].slice(0, 6);
+      return [{ key, cat, title, at: now, entryId, acked: null, ended: null, dev: meta?.dev ?? null, zone: meta?.zone ?? null }, ...list].slice(0, 6);
     });
     if (silent) return;
     cuesRef.current.raise(key, cat, title);
@@ -798,8 +813,10 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
         setLog((l) => [...l.slice(-399), e]);
         // The camera's own copy (data channel) may have alerted already: then this one folds in quietly.
         const quiet = arrivalRef.current.room(e.eid) === 'quiet';
-        if (SOUND_SET.has(e.kind)) raise(e.kind as SoundCat, e.msg.split(' · ')[0], e.id, quiet);
-        else if (ROOM_ALERTS.has(e.kind)) raise(e.kind as AlertCat, e.msg.split(' · ')[0], e.id, quiet);
+        // Which camera it came from: a direct copy from the same camera can then be told a repeat.
+        const from = { dev: e.dev ?? null };
+        if (SOUND_SET.has(e.kind)) raise(e.kind as SoundCat, e.msg.split(' · ')[0], e.id, quiet, from);
+        else if (ROOM_ALERTS.has(e.kind)) raise(e.kind as AlertCat, e.msg.split(' · ')[0], e.id, quiet, from);
         else if (e.kind === 'escalated') {
           // Nobody answered: sound the alert again, louder in everyone's ears.
           const inc = incidentsRef.current.find((i) => i.id === e.incident);
@@ -917,24 +934,25 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
       onMsg({ t: 'status', dev: dm.dev, sid: camSid ?? '', st: dm.st as unknown as CamStatus, at: Date.now() });
       return;
     }
-    // With the room up, its log line raises it — unless both carry the event's id (a room that
-    // lists `eid`): then whichever copy arrives first alerts, once (ADR 0006 D5.1).
-    const firstCopy = !!dm.eid && capsRef.current.includes('eid');
-    if (roomUp && !firstCopy) return;
-    if (dm.eid && !arrivalRef.current.direct(dm.eid)) return; // the room's copy came first
-    // A repeat of an alert still sounding, straight from the camera while the room is up: folded in
-    // quietly (the room spaces its repeats out; the banner already holds the alert).
-    const quiet = (cat: string) => roomUp && alertsRef.current.some((a) => a.cat === cat && !a.ended && Date.now() - a.at < 30_000);
-    if (dm.kind === 'sound' && dm.cat && SOUND_SET.has(dm.cat)) {
-      if (dm.phase === 'start') raise(dm.cat as SoundCat, soundHeadline(dm.cat as SoundCat, nursery.baby), null, quiet(dm.cat));
-      else resolve(dm.cat as SoundCat, dm.secs);
-    } else if (dm.kind === 'vision' && (dm.type === 'zone' || dm.type === 'crib_out' || dm.type === 'moved')) {
-      raise(dm.type as AlertCat, dm.type === 'zone' ? 'Movement in a danger zone' : dm.type === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null, quiet(dm.type));
-    } else if (dm.kind === 'scene' && dm.type === 'object_near' && dm.sharp && dm.label) {
-      raise('object', `${dm.label[0].toUpperCase()}${dm.label.slice(1)} within ${baby}’s reach`, null, quiet('object'));
-    } else if (dm.kind === 'noise' && dm.type === 'very_loud' && dm.phase === 'start') {
-      raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null, quiet('very_loud'));
+    // An episode that ended, straight from the camera (the room's line, if it comes, ends it too).
+    if (!roomUp && dm.kind === 'sound' && dm.cat && SOUND_SET.has(dm.cat) && dm.phase !== 'start') {
+      resolve(dm.cat as SoundCat, dm.secs);
+      return;
     }
+    // With the room up, its log line raises it — unless both carry the event's id (a room that
+    // lists `eid`): then whichever copy arrives first alerts, once (ADR 0006 D5.1). A repeat of an
+    // alert still sounding is folded in quietly; a new hazard always sounds (rtc.ts directAlert).
+    const a = directAlert(dm, { sounds: SOUND_SET, arrival: arrivalRef.current, roomUp, eidRoom: capsRef.current.includes('eid'), open: alertsRef.current, now: Date.now() });
+    if (!a) {
+      if (dm.kind === 'sound' && dm.cat && SOUND_SET.has(dm.cat) && dm.phase !== 'start' && dm.eid && capsRef.current.includes('eid')) resolve(dm.cat as SoundCat, dm.secs);
+      return;
+    }
+    const meta = { dev: dm.dev, zone: dm.kind === 'vision' && dm.type === 'zone' ? (dm.zone ?? dm.name ?? null) : null };
+    const zoneName = dm.kind === 'vision' && dm.type === 'zone' && dm.name ? dm.name : null;
+    if (a.cat === 'object' && dm.label) raise('object', `${dm.label[0].toUpperCase()}${dm.label.slice(1)} within ${baby}’s reach`, null, a.quiet, meta);
+    else if (a.cat === 'very_loud') raise('very_loud', `Very loud noise in the nursery${dm.db ? ` (${Math.round(dm.db)} dB)` : ''}`, null, a.quiet, meta);
+    else if (dm.kind === 'vision') raise(a.cat as AlertCat, a.cat === 'zone' ? (zoneName ? `Movement in ${zoneName}` : 'Movement in a danger zone') : a.cat === 'crib_out' ? `Movement outside the crib — ${baby} may be climbing out` : 'The camera was moved', null, a.quiet, meta);
+    else raise(a.cat as SoundCat, soundHeadline(a.cat as SoundCat, nursery.baby), null, a.quiet, meta);
   };
   const onDirectRef = useRef(onDirect);
   onDirectRef.current = onDirect;
@@ -1450,11 +1468,17 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
   const relayE2e = !!openerRef.current?.endToEnd();
   // A camera that seals, and this device has no key for what it sends yet.
   const relayWaitKey = relayOn && !relayE2e && !!camKeyRef.current && openerRef.current?.lastDrop === 'epoch';
+  // A camera that seals but has had no key for a while sends without it (never nothing): said so.
+  const relayFellBack = relayOn && !relayE2e && !!openerRef.current?.fellBack();
   const relayHow = relayE2e
     ? 'end-to-end encrypted with your family’s key: our server passes it along without being able to see or hear it, and never stores it.'
-    : relayWaitKey
-      ? 'the camera seals it with your family’s key, and this device is still getting that key — the picture appears as soon as it has it. Alerts still arrive.'
-      : null;
+    : relayFellBack
+      ? 'not end-to-end encrypted right now: the camera phone hasn’t been able to get your family’s key, so it sends without it rather than not at all — passed along in memory, never stored. It switches back as soon as the key arrives.'
+      : relayWaitKey
+        ? 'the camera seals it with your family’s key, and this device is still getting that key — the picture appears as soon as it has it. Alerts still arrive.'
+        : null;
+  // The direct call is up with a camera that seals, but was set up without the family's key.
+  const directUnsealed = linkState === 'connected' && !!linkRef.current?.unsealed;
   const relayTitle = relayEarly
     ? relayHow
       ? `A quick preview through our server while the direct connection starts — ${relayHow}`
@@ -1536,8 +1560,12 @@ function ViewerInner({ id, nav, push, guest, onLeave, onPromoted }: { id: string
           </span>
         )}
         {linkState === 'connected' && (
-          <span className={cx('ov-pill p2p', netPath === 'lan' && 'lan')} title={pathTip(streamPathOf(netPath), id, me?.role === 'parent' && !guest)}>
+          <span
+            className={cx('ov-pill p2p', netPath === 'lan' && 'lan')}
+            title={`${pathTip(streamPathOf(netPath), id, me?.role === 'parent' && !guest)}${directUnsealed ? ` ${DIRECT_UNSEALED}` : ''}`}
+          >
             <Icon name={netPath === 'lan' ? 'wifi' : 'lock'} size={11} /><span>{PATH_PILL[streamPathOf(netPath) ?? 'direct']}</span>
+            {directUnsealed && <span className="extra"> · without family key</span>}
           </span>
         )}
       </div>

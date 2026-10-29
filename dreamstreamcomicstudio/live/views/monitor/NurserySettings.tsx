@@ -158,8 +158,20 @@ async function mfaRefusal(res: Response): Promise<boolean> {
 const PLATFORM: Record<string, string> = { web: 'Browser', ios: 'iPhone or iPad app', android: 'Android app', watchos: 'Apple Watch', wearos: 'Wear OS watch' };
 
 /**
+ * What a parent is told after Revoke. Only says the device is disconnected when the room says it
+ * told the camera to end the device's live calls (`ended`): a direct call on the home Wi-Fi needs
+ * nothing from the room, so signing the device out alone doesn't end one already running.
+ */
+export function revokedText(name: string, ended: boolean): string {
+  return ended
+    ? `${name} removed — it’s disconnected, and the family’s key is being changed so it can’t open anything new`
+    : `${name} removed — it’s signed out of the nursery, and the family’s key is being changed so it can’t open anything new. If it was watching right now, stop and restart the camera to end that view too.`;
+}
+
+/**
  * Parents: who holds the family's key, and what happened (rooms that list `e2e1` / `reauth`).
- * Revoking a device cuts it off and changes the key, so it can't open anything sent after.
+ * Revoking a device signs it out of the nursery and changes the key, so it can't open anything
+ * sent after; the camera ends its live direct call once the room tells it (`peer_gone` + `why`).
  */
 export function NurserySecurity({ nid, query, push, now = Date.now() }: { nid: string; query: { ask<T>(q: string, args?: Record<string, unknown>, timeoutMs?: number): Promise<T | null> } | null; push: PushToast; now?: number }) {
   const caps = nurseryCaps(nid);
@@ -201,7 +213,7 @@ export function NurserySecurity({ nid, query, push, now = Date.now() }: { nid: s
     if (r?.error === 'mfa_required' && (await stepUp(`Removing ${d.name} from the nursery`))) r = await query.ask<DevRevokeReply>('dev_revoke', { devId: d.devId });
     setRevoking(null);
     if (r?.ok) {
-      push(`${d.name} removed — it’s disconnected, and the family’s key is being changed so it can’t open anything new`, { icon: 'check' });
+      push(revokedText(d.name, !!r.ended), { icon: 'check', duration: r.ended ? undefined : 12_000 });
       void loadDevices();
     } else push(r?.error === 'mfa_required' ? 'Enter the code from your authenticator app first, then try again' : 'Couldn’t remove it — try again', { icon: 'alert' });
   };

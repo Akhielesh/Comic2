@@ -24,7 +24,7 @@ import { CameraHub, type Quality } from '../monitor/rtc';
 import { sceneIntervalMs } from '../monitor/videoBudget';
 import { NO_WANT, readWant, RelayEncoder, watchersNote, type RelayWant } from '../monitor/relay';
 import { deviceKeys, keysGate, keyStore, NurseryKeys } from '../monitor/keys';
-import { holdCameraLock, RelaySealer } from '../monitor/relayCrypto';
+import { queueCameraLock, RelaySealer, relaySeqStore, type CameraLock } from '../monitor/relayCrypto';
 import { EidMinter } from '../../packages/monitor-core/src/eid';
 import { StatusCadence } from '../monitor/statusCadence';
 import type { BrainEvent } from '../monitor/soundBrain';
@@ -169,8 +169,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const keysGateRef = useRef<Promise<NurseryKeys | null>>(Promise.resolve(null));
   /** Room messages that need the keys wait for them, in order. */
   const keyChainRef = useRef<Promise<unknown>>(Promise.resolve());
-  /** This tab is the only camera of the nursery on this phone (Web Locks): only then does it seal. */
-  const camLockRef = useRef<{ release: (() => void) | null; held: boolean }>({ release: null, held: false });
+  /**
+   * This tab is the only camera of the nursery on this phone (Web Locks), held while it runs —
+   * queued behind another camera tab and taken over when that one goes.
+   */
+  const camLockRef = useRef<CameraLock | null>(null);
   const sealerRef = useRef<RelaySealer | null>(null);
   // One stable listener (added/removed by identity) — it only touches refs.
   const [onTilt] = useState(() => (e: DeviceOrientationEvent) => {
@@ -222,6 +225,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const [sockNote, setSockNote] = useState<string | null>(null);
   const [nursery, setNursery] = useState<{ name: string; baby: string | null }>({ name: 'Nursery', baby: null });
   const [viewers, setViewers] = useState<ViewerPresence[]>([]);
+  /** The same, for the call hub (which viewers showed device keys). */
+  const viewersRef = useRef<ViewerPresence[]>([]);
+  viewersRef.current = viewers;
   const [p2pCount, setP2pCount] = useState(0);
   /** What the relay sends right now (for the status line): a video codec, JPEG, or nothing. */
   const [relayMode, setRelayMode] = useState<string | null>(null);
@@ -262,8 +268,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   useFirstVisitTour('camera', phase === 'setup');
 
   // The nursery key (ADR 0006 D6.3): this phone's device keys and the wraps it holds, loaded
-  // while the camera is set up — so the first viewer's signaling is judged with them — and the
-  // lock that makes this tab the nursery's only camera on this phone (only then does it seal).
+  // while the camera is set up — so the first viewer's signaling is judged with them. (The lock
+  // that makes this tab the nursery's only camera on this phone is held while it runs: goLive.)
   useEffect(() => {
     let alive = true;
     const ready = (async () => {
@@ -278,16 +284,10 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
     })().catch(() => null);
     keysReadyRef.current = ready;
     keysGateRef.current = keysGate(ready);
-    void holdCameraLock(id).then((release) => {
-      if (!alive) return release?.();
-      camLockRef.current = { release, held: !!release };
-    });
     return () => {
       alive = false;
       keysRef.current?.close();
       keysRef.current = null;
-      camLockRef.current.release?.();
-      camLockRef.current = { release: null, held: false };
     };
   }, [id]);
 
@@ -295,6 +295,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const stopAll = (sayBye: boolean) => {
     if (sayBye) sockRef.current?.send({ t: 'bye' });
+    // The next camera tab on this phone may take over.
+    camLockRef.current?.release();
+    camLockRef.current = null;
     tickersRef.current.forEach((t) => t.stop());
     tickersRef.current = [];
     relayRef.current?.stop();
@@ -696,6 +699,9 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   /* --------------------------------------------------------------- room */
 
   const goLive = () => {
+    // Held while this camera runs; another camera tab of this browser that has it is waited out.
+    camLockRef.current?.release();
+    camLockRef.current = queueCameraLock(id, () => setKeyTick((n) => n + 1));
     const hub = new CameraHub(
       (to, d) => sockRef.current?.send({ t: 'rtc', to, d }),
       [],
@@ -705,8 +711,14 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
       peersRef.current = n;
       setP2pCount(n);
     };
-    // Holding the nursery key, the camera seals its signaling and refuses unsealed offers.
+    // Holding the nursery key, the camera seals its signaling and refuses unsealed offers — except
+    // from a viewer that has no key (it says nk) or never showed device keys (an older app): those
+    // calls are set up as before end to end and shown below, never refused into no picture.
     hub.seal = keysRef.current;
+    hub.plainOk = (sid) => {
+      const v = viewersRef.current.find((x) => x.sid === sid);
+      return !!v && !v.devId;
+    };
     // Relay credentials last a few hours: the room is asked for fresh ones before they lapse.
     hub.onIceStale = () => sockRef.current?.send({ t: 'ice' });
     hub.onTalk = (key, s) => {
@@ -888,7 +900,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
 
   const sendVision = (e: VisionEvent) => {
     const eid = nextEid();
-    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, at: Date.now(), dev: device.id, eid });
+    // The zone too: a viewer tells a new hazard (another zone) from a repeat of one still sounding.
+    hubRef.current?.direct({ t: 'ev', kind: 'vision', type: e.type, ...(e.zone ? { zone: e.zone } : {}), ...(e.name ? { name: e.name } : {}), at: Date.now(), dev: device.id, eid });
     sendEvent({ kind: 'vision', type: e.type, zone: e.zone, name: e.name, secs: e.secs, via: e.via }, eid);
   };
 
@@ -982,9 +995,18 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         // Rooms that hand out the nursery key: this phone's keys, then its wrap (or the first epoch).
         void keysReadyRef.current?.then((k) => k?.onHello(m, 'camera'));
         break;
+      case 'key_rotate':
+        // Someone was removed and the room asks this camera for the next epoch, for the devices that
+        // remain: a call sealed by any other device ends now (it would outlive the removal otherwise).
+        if (Array.isArray(m.devs) && keysRef.current) {
+          const keep = new Set<string>([keysRef.current.devId]);
+          for (const d of m.devs) if (d && typeof d.devId === 'string') keep.add(d.devId);
+          hubRef.current?.keepOnly(keep);
+        }
+        void keysReadyRef.current?.then((k) => k?.onMessage(m as unknown as { t: string } & Record<string, unknown>));
+        break;
       case 'key_req':
       case 'key_wrap':
-      case 'key_rotate':
       case 'key_conflict':
         void keysReadyRef.current?.then((k) => k?.onMessage(m as unknown as { t: string } & Record<string, unknown>));
         break;
@@ -1006,8 +1028,11 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         void keysGateRef.current.then(() => hubRef.current?.onSignal(m.from, m.d, m.label || m.name || 'Someone'));
         break;
       case 'peer_gone':
-        // Their socket left the room; a call that's still up (same Wi-Fi) carries on.
-        hubRef.current?.release(m.sid);
+        // They lost access (a device revoked, a person or guest removed): their call ends now, even
+        // a live one on the home Wi-Fi that needs nothing from the room.
+        if (m.why === 'revoked' || m.why === 'removed') hubRef.current?.cut(m.sid, typeof m.devId === 'string' ? m.devId : null);
+        // Otherwise their socket just left the room; a call that's still up (same Wi-Fi) carries on.
+        else hubRef.current?.release(m.sid);
         // A talker whose call is still up is only changing sockets (they say so again on reconnect).
         for (const [key, t] of [...talkersRef.current]) {
           if (t.sid === m.sid && !hubRef.current?.isConnected(key)) talkersRef.current.delete(key);
@@ -1110,11 +1135,17 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         new RelaySealer({
           nid: id,
           devId: () => keysRef.current?.devId ?? null,
-          key: () => (camLockRef.current.held ? keysRef.current?.sealing() ?? null : null),
+          // Nonce-safe when its part numbers are written down ahead (relaySeqStore) — a frozen
+          // camera tab holding the lock can't stop it then — or when this tab is the only camera.
+          key: () => (camLockRef.current?.held || sealerRef.current?.durable ? keysRef.current?.sealing() ?? null : null),
           required: () => !!keysRef.current && (keysRef.current.active || keysRef.current.holds()),
+          // No key for a while (keys.ts KEY_FALLBACK_MS): send as before end to end — said below —
+          // rather than leave viewers on the server path with no picture and no sound.
+          fallback: () => !!keysRef.current?.fallback,
           send: (buf, max) => !!sockRef.current?.sendBinary(buf, max),
           buffered: () => sockRef.current?.bufferedAmount() ?? 0,
           onLost: () => relayRef.current?.requestKey(),
+          seqStore: relaySeqStore(id),
         });
       sealerRef.current = sealer;
       enc = new RelayEncoder({
@@ -1354,6 +1385,8 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
   const busy = (hubRef.current?.pressure ?? 0) > 0;
   // How the picture through our server goes now: sealed with the family's key, plain (a room without the key), or waiting for the key.
   const relaySeal = relayRef.current?.active ? (sealerRef.current?.mode ?? 'plain') : 'plain';
+  // Direct calls set up without the family's key while this phone holds it (shown, never refused).
+  const unsealedCalls = hubRef.current?.unsealed ?? 0;
   return (
     <div className={cx('cam-run', dim && 'dimmed')} onPointerDown={touch}>
       {showCaller ? (
@@ -1468,7 +1501,23 @@ function CameraInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         {relayViewers > 0 && relaySeal === null && (
           <div className="cam-watchers cam-e2e" role="status">
             <Icon name="lock" size={14} />
-            <span>Getting this phone your family’s key — the picture through our server waits for it. Sound alerts are unaffected.</span>
+            <span>
+              {camLockRef.current?.waiting && !sealerRef.current?.durable
+                ? 'Another tab on this phone is already this nursery’s camera — close it, and this one takes over. Until then the picture through our server waits; sound alerts are unaffected.'
+                : 'Getting this phone your family’s key — the picture through our server waits a moment for it. Sound alerts are unaffected.'}
+            </span>
+          </div>
+        )}
+        {relayViewers > 0 && relaySeal === 'fallback' && (
+          <div className="cam-watchers cam-e2e" role="status">
+            <Icon name="alert" size={14} />
+            <span>This phone hasn’t been able to get your family’s key, so the picture through our server is not end-to-end encrypted right now — passed along in memory, never stored. It keeps trying and switches back as soon as the key arrives.</span>
+          </div>
+        )}
+        {unsealedCalls > 0 && (
+          <div className="cam-watchers cam-e2e" role="status">
+            <Icon name="info" size={14} />
+            <span>{unsealedCalls === 1 ? 'One direct connection was' : `${unsealedCalls} direct connections were`} set up without your family’s key (a device that doesn’t have it yet, or an older app). Still encrypted phone to phone; it uses the key from the next reconnect.</span>
           </div>
         )}
         {busy && (

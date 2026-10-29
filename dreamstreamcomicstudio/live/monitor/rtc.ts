@@ -56,11 +56,18 @@ const sendSealed = (signal: Signal, to: string, d: SealedRtc): void => (signal a
 export interface SignalSeal {
   /** This device holds a nursery key: sticky — unsealed signaling from a peer that seals is refused. */
   holds(): boolean;
+  /** It holds the room's current epoch: what it seals now opens for the others. */
+  canSeal(): boolean;
   /** Seal for that peer's device (null: no current key). */
   seal(peerDevId: string, d: MonRtc): Promise<SealedRtc | null>;
   /** Open sealed signaling addressed to this device (null: refuse it). */
   open(d: SealedRtc): Promise<{ d: MonRtc; from: string } | null>;
+  /** Why the last sealed signal didn't open ('epoch': no key for it). */
+  readonly lastRefusal?: string | null;
 }
+
+/** A camera tells a viewer it can't do sealed signaling with it at most this often (`nok`). */
+const NOK_EVERY_MS = 3000;
 
 /**
  * Hands signals on in the order they arrived. Opening a sealed one is asynchronous (WebCrypto),
@@ -129,6 +136,58 @@ export class FirstArrival {
   room(eid: string | null | undefined): 'raise' | 'quiet' {
     return this.seen.first(eid) ? 'raise' : 'quiet';
   }
+}
+
+/** The alert a camera event straight from its data channel raises; null: none (it only updates or ends one). */
+export function directAlertCat(dm: DirectMsg, sounds: ReadonlySet<string>): string | null {
+  if (dm.t !== 'ev') return null;
+  if (dm.kind === 'sound') return dm.cat && sounds.has(dm.cat) && dm.phase === 'start' ? dm.cat : null;
+  if (dm.kind === 'vision') return dm.type === 'zone' || dm.type === 'crib_out' || dm.type === 'moved' ? dm.type : null;
+  // Only sharp objects alert straight from the camera; the room alerts on the rest (its own list).
+  if (dm.kind === 'scene') return dm.type === 'object_near' && dm.sharp && dm.label ? 'object' : null;
+  if (dm.kind === 'noise') return dm.type === 'very_loud' && dm.phase === 'start' ? 'very_loud' : null;
+  return null;
+}
+
+/** An alert the viewer is showing, as far as telling a repeat from a new hazard goes. */
+export interface OpenAlert {
+  cat: string;
+  at: number;
+  acked: string | null;
+  ended: number | null;
+  /** The camera it came from, and its zone (zone alerts). */
+  dev?: string | null;
+  zone?: string | null;
+}
+
+/**
+ * A direct copy is folded in quietly only when it repeats an alert still sounding: same category,
+ * same camera, same zone, not acknowledged, under 30 s old (the room spaces such repeats out).
+ * A new hazard — another zone, another camera, the same kind again after "I'm on it" — always
+ * sounds; the same event twice is already caught by its eid.
+ */
+export function repeatsOpen(open: readonly OpenAlert[], ev: { cat: string; dev?: string | null; zone?: string | null }, now: number): boolean {
+  return open.some((a) => a.cat === ev.cat && !a.ended && !a.acked && now - a.at < 30_000 && (a.dev ?? null) === (ev.dev ?? null) && (a.zone ?? null) === (ev.zone ?? null));
+}
+
+/**
+ * What a viewer does with a camera event from the data channel: raise it (loud, or quietly as a
+ * repeat) or not at all. With the room up, only events that carry an eid in a room that lists
+ * `eid` alert from here (whichever copy comes first). The eid counts as seen only when this copy
+ * actually alerts — an event this side doesn't alert on (a non-sharp object: the room decides)
+ * leaves the room's copy free to sound.
+ */
+export function directAlert(
+  dm: DirectMsg,
+  o: { sounds: ReadonlySet<string>; arrival: FirstArrival; roomUp: boolean; eidRoom: boolean; open: readonly OpenAlert[]; now: number },
+): { cat: string; quiet: boolean } | null {
+  if (dm.t !== 'ev') return null;
+  const cat = directAlertCat(dm, o.sounds);
+  if (!cat) return null;
+  if (o.roomUp && !(dm.eid && o.eidRoom)) return null; // the room's log line raises it, with its id
+  if (dm.eid && !o.arrival.direct(dm.eid)) return null; // the room's copy came first
+  const zone = dm.kind === 'vision' && dm.type === 'zone' ? (dm.zone ?? dm.name ?? null) : null;
+  return { cat, quiet: o.roomUp && repeatsOpen(o.open, { cat, dev: dm.dev, zone }, o.now) };
 }
 /** How the media flows: on the home network, across the internet, or through a relay server. */
 export type NetPath = 'lan' | 'internet' | 'relay';
@@ -210,7 +269,7 @@ export async function netPath(pc: RTCPeerConnection, onReport?: ((r: RTCStatsRep
 /** Messages on the camera → viewer data channel. */
 export type DirectMsg =
   | { t: 'st'; st: Record<string, unknown>; dev: string }
-  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; at: number; dev: string; eid?: string };
+  | { t: 'ev'; kind: string; cat?: string; type?: string; phase?: string; conf?: number; secs?: number; db?: number; label?: string; sharp?: boolean; name?: string; zone?: string; at: number; dev: string; eid?: string };
 export type Quality = 'hd' | 'sd' | 'audio';
 
 /** A parent's face on the nursery screen doesn't need to be HD. */
@@ -502,6 +561,8 @@ interface CamPeer {
   ice: IceBatch;
   /** Sealed sends go out in order. */
   chain: Promise<void>;
+  /** The last offer taken (SDP): the same one again is a duplicate, answered as before. */
+  offer: string | null;
 }
 
 /**
@@ -541,6 +602,14 @@ export class CameraHub {
   refused = 0;
   /** Signals from the room, handed on in arrival order. */
   private rx = new InOrder();
+  /**
+   * The viewer on this socket never showed device keys (no `devId` in the room's presence): an app
+   * from before end to end, or a browser that can't hold keys. Its plain offer is taken (as before
+   * end to end, and counted) rather than leave it without picture and sound.
+   */
+  plainOk: ((sid: string) => boolean) | null = null;
+  /** When each socket was last told `nok`. */
+  private nokAt = new Map<string, number>();
 
   constructor(
     private signal: Signal,
@@ -567,6 +636,16 @@ export class CameraHub {
 
   get count(): number {
     return [...this.peers.values()].filter((p) => p.pc.connectionState === 'connected').length;
+  }
+
+  /**
+   * Calls up right now that were set up without the family's key while this camera holds it (a
+   * viewer that couldn't get the key, or an older app): still encrypted phone to phone, but the
+   * room could have set them up — the camera says so.
+   */
+  get unsealed(): number {
+    if (!this.seal?.holds()) return 0;
+    return [...this.peers.values()].filter((p) => !p.dk && p.pc.connectionState === 'connected').length;
   }
 
   /** Rungs every picture is stepped down because this phone is busy. */
@@ -618,6 +697,39 @@ export class CameraHub {
   }
 
   /**
+   * A viewer lost access — its device was revoked, or its person or guest pass removed (the room
+   * says why): end its call now, connected or not. Unlike `release`, a live call does NOT carry
+   * on: on the home Wi-Fi it would need nothing from the room and could last all night. Also ends
+   * any call sealed by `devId`. Returns how many calls ended.
+   */
+  cut(sid: string | null, devId?: string | null): number {
+    let n = 0;
+    for (const peer of [...this.peers.values()]) {
+      if ((sid && peer.sid === sid) || (devId && peer.dk === devId)) {
+        this.close(peer.key);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
+   * The nursery key moves on without some devices (the room asked this camera for the next epoch,
+   * for `keep`): end the calls sealed by a device that isn't kept. Calls set up without the key
+   * (dk null) can't be told apart here — the room's `peer_gone` with `why` ends those.
+   */
+  keepOnly(keep: ReadonlySet<string>): number {
+    let n = 0;
+    for (const peer of [...this.peers.values()]) {
+      if (peer.dk && !keep.has(peer.dk)) {
+        this.close(peer.key);
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /**
    * The picture this viewer gets: none while the video is paused for privacy, it asked for sound
    * only, it waits for a free slot, its screen has been hidden for a while — or the nursery's relay
    * data is used up and it is reached through a TURN relay (feature doc §4.7: sound only there;
@@ -655,7 +767,7 @@ export class CameraHub {
       // On its own call's channel: only that call (an ICE restart keeps the call id), never a new one.
       const d = { ...m.d, vid: peer.key, pc: peer.pcId ?? undefined };
       if (d.sdp?.type === 'offer' && m.d.pc !== peer.pcId) return;
-      void this.handle(peer.sid, d, peer.name, peer.dk);
+      void this.handle(peer.sid, d, peer.name, peer.dk, true);
     }
   }
 
@@ -724,9 +836,9 @@ export class CameraHub {
    * To one viewer: on its data channel once the call is up (when it takes signaling there —
    * nothing through the room), else through the room — sealed when its signaling is.
    */
-  private send(peer: CamPeer, d: MonRtc): void {
+  private send(peer: CamPeer, d: MonRtc, room = false): void {
     const msg = peer.pcId ? { ...d, pc: peer.pcId } : d;
-    if (!d.bye && peer.dcr && peer.dc?.readyState === 'open' && peer.pc.connectionState === 'connected') {
+    if (!room && !d.bye && peer.dcr && peer.dc?.readyState === 'open' && peer.pc.connectionState === 'connected') {
       try {
         peer.dc.send(JSON.stringify({ t: 'sig', d: msg } satisfies DcSignal));
         return;
@@ -736,13 +848,43 @@ export class CameraHub {
     if (dk && this.seal) {
       const seal = this.seal;
       peer.chain = peer.chain.then(async () => {
-        // No current key: nothing — a viewer that seals takes no plain signaling anyway.
         const sealed = await seal.seal(dk, msg).catch(() => null);
         if (sealed) sendSealed(this.signal, peer.sid, sealed);
+        // No current key here: a viewer that sealed takes no plain answer — tell it to call again
+        // without the key (`nok`) instead of leaving it waiting for one that never comes.
+        else if (!d.bye) this.nok(peer.sid, peer.pcId);
       });
       return;
     }
     this.signal(peer.sid, msg);
+  }
+
+  /** Plain, to a viewer whose sealed signaling this camera can't do: call again with `nk`. */
+  private nok(sid: string, pc?: string | null): void {
+    const now = Date.now();
+    if (now - (this.nokAt.get(sid) ?? 0) < NOK_EVERY_MS) return;
+    this.nokAt.set(sid, now);
+    if (this.nokAt.size > 64) this.nokAt.delete(this.nokAt.keys().next().value as string);
+    this.signal(sid, pc ? { nok: 1, pc } : { nok: 1 });
+  }
+
+  /**
+   * Whether a plain signal is taken. A camera without the key takes them, as before. Holding it:
+   * an offer from a viewer that has no current key (`nk`) or never showed device keys
+   * (`plainOk`) is taken — the call is set up as before end to end, counted in `unsealed` and
+   * said on both screens — but never in place of a sealed call that's up; the rest of a call
+   * set up plain (its candidates, its bye) follows it. Anything else plain is the room's, not a
+   * viewer's (sticky end to end).
+   */
+  private plainTaken(from: string, d: MonRtc): boolean {
+    if (!this.seal?.holds()) return true;
+    const key = typeof d.vid === 'string' && d.vid ? d.vid.slice(0, 64) : from;
+    const peer = this.peers.get(key);
+    if (d.sdp?.type === 'offer') {
+      if (peer?.dk && peer.pc.connectionState === 'connected') return false;
+      return d.nk === 1 || !!this.plainOk?.(from);
+    }
+    return !!peer && !peer.dk && (!d.pc || !peer.pcId || d.pc === peer.pcId);
   }
 
   /** A viewer's candidates, batched: one message for a viewer that takes batches, one each otherwise. */
@@ -759,21 +901,26 @@ export class CameraHub {
    */
   async onSignal(from: string, raw: MonRtc | SealedRtc, who = 'Someone'): Promise<void> {
     const seal = this.seal;
-    // Judged now (sticky: a plain one is refused while this camera holds the key), opened in parallel, handled in order.
-    const opened: Promise<{ d: MonRtc; dk: string | null } | null> = isSealedRtc(raw)
+    const sealed = isSealedRtc(raw);
+    // Opened in parallel, judged and handled in arrival order (a plain candidate is judged after
+    // the plain offer before it has made its call).
+    const opened: Promise<{ d: MonRtc; dk: string | null } | null> = sealed
       ? seal
         ? seal.open(raw).then((o) => (o ? { d: o.d, dk: o.from } : null), () => null)
         : Promise.resolve(null)
-      : Promise.resolve(seal?.holds() ? null : { d: raw as MonRtc, dk: null });
+      : Promise.resolve({ d: raw as MonRtc, dk: null });
     const o = await this.rx.run(opened);
-    if (!o) {
+    if (!o || (!o.dk && !this.plainTaken(from, o.d))) {
       this.refused += 1;
+      // Sealed for a key this camera doesn't have (or no keys at all): say so, so the viewer calls
+      // again without the key instead of waiting for an answer that never comes.
+      if (sealed && (!seal || seal.lastRefusal === 'epoch' || !seal.canSeal())) this.nok(from);
       return;
     }
     return this.handle(from, o.d, who, o.dk);
   }
 
-  private async handle(from: string, d: MonRtc, who: string, dk: string | null): Promise<void> {
+  private async handle(from: string, d: MonRtc, who: string, dk: string | null, viaDc = false): Promise<void> {
     const key = typeof d.vid === 'string' && d.vid ? d.vid.slice(0, 64) : from;
     let peer = this.peers.get(key);
     if (peer) peer.sid = from; // the viewer may be on a new socket
@@ -793,9 +940,19 @@ export class CameraHub {
         peer.ib = d.ib === 1;
         peer.dcr = d.dcr === 1;
       }
-      if (dk) peer.dk = dk;
-      if (d.q === 'hd' || d.q === 'sd' || d.q === 'audio') peer.quality = d.q;
       const { pc } = peer;
+      // The same restart offer again (it came on the channel and then through the room, or the
+      // other way): answer it again as it was — renegotiating would answer twice, and the viewer
+      // would see a second answer. Through the path this copy came by (the other may be failing).
+      const last = pc.localDescription?.toJSON?.() as RTCSessionDescriptionInit | undefined;
+      if (peer.offer === d.sdp.sdp && pc.signalingState === 'stable' && last?.type === 'answer') {
+        this.send(peer, { sdp: last, dcc: 1, ib: 1, dcr: 1 }, !viaDc);
+        return;
+      }
+      peer.offer = d.sdp.sdp ?? null;
+      // Sealed by that device — or set up without the key (dk null): its answer goes the same way.
+      peer.dk = dk;
+      if (d.q === 'hd' || d.q === 'sd' || d.q === 'audio') peer.quality = d.q;
       try {
         await pc.setRemoteDescription(d.sdp);
         const { audio } = this.tracks();
@@ -832,7 +989,7 @@ export class CameraHub {
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
     const peer: CamPeer = {
       key, sid, pcId, pc, quality: 'hd', name: who, dc: null, path: null, applied: '', ov: false, held: false, hidden: false, hideTimer: undefined, off: false,
-      dk: null, ib: false, dcr: false, ice: new IceBatch((list) => this.sendIce(peer, list)), chain: Promise.resolve(),
+      dk: null, ib: false, dcr: false, ice: new IceBatch((list) => this.sendIce(peer, list)), chain: Promise.resolve(), offer: null,
     };
     pc.ondatachannel = (e) => {
       if (e.channel.label !== 'mon') return;
@@ -1044,6 +1201,14 @@ export class ViewerLink {
   private iceBatch: IceBatch | null = null;
   private chain: Promise<void> = Promise.resolve();
   private dcRestartTimer: ReturnType<typeof setTimeout> | undefined;
+  /** This call is sealed (to this camera device key): only sealed signaling for it is taken. */
+  private callKey: string | null = null;
+  /** This call is to a camera that seals, set up without the key (`nk`). */
+  private nk = false;
+  /** The camera answered this call. */
+  private answered = false;
+  /** The camera said `nok`: the next call goes without the key. */
+  private plainNext = false;
 
   /**
    * `vid` identifies this viewer (device + tab) across room reconnects, so the
@@ -1081,10 +1246,18 @@ export class ViewerLink {
     this.onState?.(s);
   }
 
-  /** The camera seals its signaling, and so do we (we hold the nursery key). */
+  /** This call is sealed: the camera's device key id. */
   private sealing(): string | null {
-    const dk = this.camKey?.() ?? null;
-    return dk && this.seal?.holds() ? dk : null;
+    return this.callKey;
+  }
+
+  /**
+   * The call is up with a camera that seals, but was set up without the family's key — this device
+   * didn't have it, or the camera couldn't use it. Still encrypted phone to phone; the screen says
+   * the key wasn't used. The next call is sealed again once the key is here.
+   */
+  get unsealed(): boolean {
+    return this.nk && !!this.pc;
   }
 
   /**
@@ -1129,6 +1302,15 @@ export class ViewerLink {
     this.dcc = false;
     this.ib = false;
     this.dcr = false;
+    this.answered = false;
+    // Sealed when the camera seals and we can (the room's current key); otherwise — no key yet,
+    // or the camera said it can't — set up as before end to end, and the camera is told (`nk`):
+    // never no picture because of a key.
+    const camDk = this.camKey?.() ?? null;
+    const canSeal = !!camDk && !!this.seal?.canSeal();
+    this.callKey = canSeal && !this.plainNext ? camDk : null;
+    this.nk = !!camDk && !this.callKey;
+    this.plainNext = false;
     this.setState('connecting');
     // A candidate gathered ahead (iceCandidatePoolSize): the home Wi-Fi path is tried a moment sooner.
     const pc = new RTCPeerConnection({ iceServers: this.ice, bundlePolicy: 'max-bundle', iceCandidatePoolSize: 1 });
@@ -1208,9 +1390,11 @@ export class ViewerLink {
     window.addEventListener?.('online', this.onOnline);
     await pc.setLocalDescription(await pc.createOffer());
     if (this.pc !== pc) return;
-    // ov: if the camera's direct slots are full, we'll watch its relay picture;
-    // ib / dcr: we take candidate batches, and ICE restarts on the data channel.
-    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality, ov: 1, ib: 1, dcr: 1 });
+    // ov: if the camera's direct slots are full, we'll watch its relay picture — not when it seals
+    // and we have no key to open that picture with; ib / dcr: we take candidate batches, and ICE
+    // restarts on the data channel; nk: set up without the family's key.
+    const ov = !(this.nk && !canSeal);
+    this.send(camSid, { sdp: pc.localDescription!.toJSON(), q: this.quality, ...(ov ? { ov: 1 as const } : {}), ib: 1, dcr: 1, ...(this.nk ? { nk: 1 as const } : {}) });
   }
 
   /** Re-read which network path the call uses (it can change after an ICE restart). */
@@ -1288,7 +1472,12 @@ export class ViewerLink {
     if (isSealedRtc(raw)) {
       const dk = this.camKey?.() ?? null;
       opened = seal ? seal.open(raw).then((o) => (o && (!dk || o.from === dk) ? o.d : null), () => null) : Promise.resolve(null);
-    } else opened = Promise.resolve(this.sealing() ? null : (raw as MonRtc));
+    } else {
+      // A sealed call takes no plain signaling — except the camera's `nok` (it can't do the key
+      // with us: call again without). A call set up without the key takes plain, as before.
+      const d = raw as MonRtc;
+      opened = Promise.resolve(this.sealing() && d.nok !== 1 ? null : d);
+    }
     const d = await this.rx.run(opened);
     if (!d) {
       this.refused += 1;
@@ -1302,11 +1491,24 @@ export class ViewerLink {
     if (!this.pc) return;
     // Answers, candidates and byes for an older call of ours are stale.
     if (d.pc && d.pc !== this.pcId) return;
+    if (d.nok === 1) {
+      // The camera can't do the family's key with us right now: this sealed call would never be
+      // answered — call again at once without it (nk), and say so on screen.
+      if (this.callKey && !this.answered && this.camSid) {
+        this.plainNext = true;
+        await this.connect(this.camSid);
+      }
+      return;
+    }
     if (d.sdp?.type === 'answer') {
       if (d.dcc === 1) this.dcc = true;
       if (d.ib === 1) this.ib = true;
       if (d.dcr === 1) this.dcr = true;
+      this.answered = true;
       clearTimeout(this.dcRestartTimer);
+      // Only while an offer of ours waits for it: the same restart answered twice (it went on the
+      // channel, then through the room) is a duplicate — not a reason to call a working call failed.
+      if (this.pc.signalingState !== 'have-local-offer') return;
       await this.pc.setRemoteDescription(d.sdp).catch(() => this.setState('failed'));
     } else if (d.ice || d.ices) {
       for (const c of candidatesOf(d)) await this.pc?.addIceCandidate(c).catch(() => undefined);

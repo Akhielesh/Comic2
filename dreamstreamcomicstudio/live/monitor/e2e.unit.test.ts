@@ -10,12 +10,12 @@ import { audioOnly, readHead } from '../../live-worker/src/relayWire';
 import { fromB64url } from '../../packages/monitor-core/src/bytes';
 import { isSealedRtc, rtcPolicy, type KeyTarget } from '../../packages/monitor-core/src/wire';
 import {
-  ADOPT_WAIT_MS, E2ePeers, FRESH_START_MS, IdbKeyStore, keysGate, KEYS_GATE_MS, makeDevice, MemoryKeyStore, NurseryKeys, readDeviceId,
+  ADOPT_WAIT_MS, E2ePeers, FRESH_START_MS, IdbKeyStore, KEY_FALLBACK_MS, keysGate, KEYS_GATE_MS, makeDevice, MemoryKeyStore, NurseryKeys, readDeviceId,
   type KeyRole, type KeyStore, type StoredDevice,
 } from './keys';
-import { holdCameraLock, openRelay, PartCounter, RELAY_SEALED, RelayOpener, RelaySealer, sealedFits, sealRelay, splitRelay } from './relayCrypto';
+import { openRelay, PartCounter, queueCameraLock, relaySeqStore, RELAY_PLAIN_AFTER_MS, RELAY_SEALED, RelayOpener, RelaySealer, sealedFits, sealRelay, splitRelay } from './relayCrypto';
 import { pack, unpack } from './relayWire';
-import { FrameReplay } from '../../packages/monitor-core/src/sealed';
+import { FrameReplay, newNmk, wrapNmk } from '../../packages/monitor-core/src/sealed';
 
 const NID = '7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f';
 const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, ...new TextEncoder().encode('JFIF nursery picture'), 0xff, 0xd9]);
@@ -148,6 +148,29 @@ class Room {
   }
 }
 
+/**
+ * Fake timers, real WebCrypto: move the clock on in small steps, letting crypto finish between
+ * them, until `done` (or `ms` of fake time have passed). True when `done` held.
+ */
+async function pump(ms: number, done: () => boolean): Promise<boolean> {
+  const settle = async () => {
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  };
+  for (let t = 0; t <= ms; t += 250) {
+    await settle();
+    if (done()) return true;
+    await vi.advanceTimersByTimeAsync(250);
+  }
+  // The fake time is used up, but crypto a timer started (WebCrypto runs off the main thread) may
+  // still be finishing on a busy machine: give it real time — no more fake time — before judging.
+  const until = performance.now() + 3000;
+  while (performance.now() < until) {
+    await settle();
+    if (done()) return true;
+  }
+  return done();
+}
+
 /* ------------------------------------------------------------- the tests */
 
 describe('device keys (web)', () => {
@@ -245,6 +268,90 @@ describe('the nursery key: first epoch, wraps and rotation', () => {
     // A holder never wraps an epoch it doesn't have.
     await holder.onMessage({ t: 'key_req', e: 7, devId: dev.devId, ecdhPub: dev.ecdhPub });
     expect(camOut).toHaveLength(1);
+  });
+
+  it('a lost race (key_conflict) never leaves a device without the key: it asks again, and the camera starts afresh if nobody answers', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const store = new MemoryKeyStore();
+      const dev = await store.device(() => makeDevice());
+      const sent: Record<string, unknown>[] = [];
+      const cam = new NurseryKeys({ nid: NID, device: dev, store, name: 'cam', send: (m) => sent.push(m) });
+      // The room had no epoch: everyone reconnecting at once tries to start one; a parent's phone won.
+      await cam.onHello({ caps: ['e2e1'], nonce: 'n', e: 0 }, 'camera');
+      expect(sent.map((m) => m.t)).toEqual(['dev_hello', 'key_init']);
+      await cam.onMessage({ t: 'key_conflict', e: 1 });
+      expect(cam.sealing()).toBeNull();
+      // It asks for its wrap again (the room answers with it, or asks a holder) — not silence.
+      expect(await pump(3000, () => sent.filter((m) => m.t === 'dev_hello').length >= 2)).toBe(true);
+      // Nobody answers: the camera starts the next epoch itself rather than stay without a key.
+      expect(await pump(FRESH_START_MS + 1000, () => sent.some((m) => m.t === 'key_rotate' && m.e === 2))).toBe(true);
+      // The room took it (no refusal).
+      expect(await pump(ADOPT_WAIT_MS + 1000, () => cam.sealing()?.e === 2)).toBe(true);
+      cam.close();
+
+      // A parent's phone that lost: asks again with backoff until a wrap comes, then stops asking.
+      const pstore = new MemoryKeyStore();
+      const pdev = await pstore.device(() => makeDevice());
+      const psent: Record<string, unknown>[] = [];
+      const mom = new NurseryKeys({ nid: NID, device: pdev, store: pstore, name: 'mom', send: (m) => psent.push(m) });
+      await mom.onHello({ caps: ['e2e1'], nonce: 'n', e: 0 }, 'parent');
+      await mom.onMessage({ t: 'key_conflict', e: 1 });
+      expect(await pump(60_000, () => psent.filter((m) => m.t === 'dev_hello').length >= 3)).toBe(true);
+      const asked = psent.filter((m) => m.t === 'dev_hello').length;
+      expect(psent.some((m) => m.t === 'key_rotate')).toBe(false); // only a camera starts afresh
+      const nmk = newNmk();
+      await mom.onMessage({ t: 'key_wrap', devId: pdev.devId, e: 1, blob: await wrapNmk(nmk, pdev.ecdhPub, { nid: NID, e: 1, devId: pdev.devId }) });
+      expect(mom.sealing()?.e).toBe(1);
+      await pump(120_000, () => false);
+      expect(psent.filter((m) => m.t === 'dev_hello').length).toBe(asked);
+      mom.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still no key after KEY_FALLBACK_MS: the device says it fell back (the screens then use the path from before), and seals again once it comes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const store = new MemoryKeyStore();
+      const dev = await store.device(() => makeDevice());
+      let changes = 0;
+      const k = new NurseryKeys({ nid: NID, device: dev, store, name: 'p', send: () => undefined, onChange: () => changes++ });
+      expect(k.state).toBe('off');
+      await k.onHello({ caps: ['e2e1'], nonce: 'n', e: 1 }, 'viewer');
+      expect(k.state).toBe('waiting');
+      expect(k.fallback).toBe(false);
+      const before = changes;
+      await vi.advanceTimersByTimeAsync(KEY_FALLBACK_MS);
+      expect(k.state).toBe('fallback');
+      expect(changes).toBeGreaterThan(before); // the screens hear it
+      const nmk = newNmk();
+      await k.onMessage({ t: 'key_wrap', devId: dev.devId, e: 1, blob: await wrapNmk(nmk, dev.ecdhPub, { nid: NID, e: 1, devId: dev.devId }) });
+      expect(k.state).toBe('sealed');
+      expect(k.fallback).toBe(false);
+      k.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('another tab of this browser got the key: a retry finds it in the shared store', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const store = new MemoryKeyStore();
+      const dev = await store.device(() => makeDevice());
+      const k = new NurseryKeys({ nid: NID, device: dev, store, name: 'tab', send: () => undefined });
+      await k.onHello({ caps: ['e2e1'], nonce: 'n', e: 1 }, 'viewer');
+      expect(k.sealing()).toBeNull();
+      const nmk = newNmk();
+      await store.putWrap({ nid: NID, e: 1, blob: await wrapNmk(nmk, dev.ecdhPub, { nid: NID, e: 1, devId: dev.devId }), at: 1 });
+      expect(await pump(5000, () => k.sealing() != null)).toBe(true);
+      expect(k.sealing()?.nmk).toEqual(nmk);
+      k.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('removal rotates the key: the rest get epoch 2, the removed device can’t open what comes after (old epoch kept 60 s)', async () => {
@@ -361,6 +468,43 @@ describe('sealed signaling', () => {
     expect(await nan.keys.open(forCam!)).toBeNull();
   });
 
+  it('a camera phone whose clock is hours or days off still gets direct calls (no wall-clock refusal); replays still refused by nonce', async () => {
+    const nmk = newNmk();
+    const T = 1_800_000_000_000;
+    const keysAt = async (dev: StoredDevice, now: number) => {
+      const k = new NurseryKeys({ nid: NID, device: dev, store: new MemoryKeyStore(), name: 'x', send: () => undefined, now: () => now });
+      await k.onMessage({ t: 'key_wrap', devId: dev.devId, e: 1, blob: await wrapNmk(nmk, dev.ecdhPub, { nid: NID, e: 1, devId: dev.devId }) });
+      return k;
+    };
+    const viewDev = await makeDevice();
+    const camDev = await makeDevice();
+    const view = await keysAt(viewDev, T);
+    const offer = { sdp: { type: 'offer' as const, sdp: 'o' }, pc: 'p1', vid: 'v1' };
+    // A spare phone set to local time with the zone left on UTC (2 h behind), a day off, a month off.
+    for (const off of [-2 * 3600_000, 26 * 3600_000, -30 * 86_400_000]) {
+      const cam = await keysAt(camDev, T + off);
+      const sealed = (await view.seal(camDev.devId, offer))!;
+      expect(await cam.open(sealed)).toEqual({ d: offer, from: viewDev.devId });
+      // And the camera's answer opens on the viewer, the other way round.
+      expect(await view.open((await cam.seal(viewDev.devId, { sdp: { type: 'answer', sdp: 'a' }, pc: 'p1' }))!)).not.toBeNull();
+      // The exact same message again (the room replaying it): refused by its nonce.
+      expect(await cam.open(sealed)).toBeNull();
+      expect(cam.lastRefusal).toBe('replay');
+    }
+  });
+
+  it('remembered nonces are forgotten oldest first — never all at once (which would reopen every replay)', async () => {
+    const room = new Room();
+    const cam = await room.join('cam', 'camera');
+    const mom = await room.join('mom', 'parent');
+    const msgs = [];
+    for (let i = 0; i < 4001; i++) msgs.push((await mom.keys.seal(cam.dev.devId, { ice: null, pc: `p${i}` }))!);
+    for (const m of msgs) expect(await cam.keys.open(m)).not.toBeNull();
+    // The latest ones are still remembered after the set has grown past 4000.
+    expect(await cam.keys.open(msgs[4000])).toBeNull();
+    expect(await cam.keys.open(msgs[3990])).toBeNull();
+  }, 30_000);
+
   it('sticky: a device holding the key refuses unsealed signaling', () => {
     expect(rtcPolicy(true, { sdp: { type: 'offer', sdp: 'o' } })).toBe('refuse');
     expect(rtcPolicy(false, { sdp: { type: 'offer', sdp: 'o' } })).toBe('plain');
@@ -453,6 +597,42 @@ describe('sealed relay frames', () => {
     expect(await legacy.open(flagged.buffer)).toBeNull();
   });
 
+  it('a camera that seals but fell back (no key): its plain picture is taken once nothing sealed opens — never mixed into a sealed one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_800_000_000_000);
+    try {
+      const opener = new RelayOpener({ nid: NID, camDevId: () => cam.dev.devId, nmk: mom.keys.nmkFor });
+      const plain = (seq: number) => pack({ kind: 'jpeg', seq, ts: seq, body: JPEG });
+      const sealed = async (seq: number) => (await sealRelay(new Uint8Array(plain(seq)), cam.keys.sealing()!, ctx, new PartCounter(0)))!.slice().buffer;
+      // Right away: no (it could be the room's while the sealed picture is on its way).
+      expect(await opener.open(plain(1))).toBeNull();
+      expect(opener.lastDrop).toBe('plain');
+      // Nothing sealed for RELAY_PLAIN_AFTER_MS: the camera fell back — the picture shows, and says so.
+      vi.advanceTimersByTime(RELAY_PLAIN_AFTER_MS);
+      expect(await opener.open(plain(2))).not.toBeNull();
+      expect(opener.fellBack()).toBe(true);
+      expect(opener.endToEnd()).toBe(false);
+      // The key came back: sealed again, and plain is refused while sealed opens.
+      expect(await opener.open(await sealed(3))).not.toBeNull();
+      expect(opener.endToEnd()).toBe(true);
+      expect(opener.fellBack()).toBe(false);
+      vi.advanceTimersByTime(1000);
+      expect(await opener.open(plain(4))).toBeNull();
+      // A sealed message whose flag the room's sound cut cleared is still taken as sealed, never as plain.
+      const sound = new Uint8Array(pack({ kind: 'audio', seq: 5, ts: 5, audio: Uint8Array.from({ length: 64 }, (_, i) => i) }));
+      const s5 = (await sealRelay(sound, cam.keys.sealing()!, ctx, new PartCounter(0)))!;
+      s5[1] = 0;
+      vi.advanceTimersByTime(RELAY_PLAIN_AFTER_MS);
+      const stranger = new RelayOpener({ nid: NID, camDevId: () => cam.dev.devId, nmk: () => null });
+      expect(await stranger.open(s5.slice().buffer)).toBeNull();
+      vi.advanceTimersByTime(RELAY_PLAIN_AFTER_MS);
+      expect(await stranger.open(s5.slice().buffer)).toBeNull();
+      expect(stranger.lastDrop).toBe('epoch');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('without the key (a device not yet given one, or removed): sealed frames are dropped, never decoded as plain', async () => {
     const stranger = new RelayOpener({ nid: NID, camDevId: () => cam.dev.devId, nmk: () => null });
     const sealed = (await sealRelay(new Uint8Array(pack({ kind: 'audio', seq: 1, ts: 1, audio: Uint8Array.from([9, 9, 9]) })), cam.keys.sealing()!, ctx, new PartCounter(0)))!;
@@ -490,6 +670,20 @@ describe('RelaySealer: relay.ts’s send, sealed', () => {
     expect(sent).toHaveLength(1);
   });
 
+  it('a camera without its key for KEY_FALLBACK_MS sends as before end to end (said so), never nothing', async () => {
+    const sent: ArrayBuffer[] = [];
+    let fellBack = false;
+    const s = new RelaySealer({ nid: NID, devId: () => 'Pc-8NnpwUqWczWkTBOEIP5', key: () => null, required: () => true, fallback: () => fellBack, send: (b) => (sent.push(b), true), buffered: () => 0 });
+    expect(s.mode).toBeNull();
+    expect(s.send(plainJpeg(), 1e6)).toBe(false);
+    fellBack = true;
+    expect(s.mode).toBe('fallback');
+    expect(s.send(plainJpeg(), 1e6)).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(s.fellBack).toBe(1);
+    expect(new Uint8Array(sent[0])[1] & RELAY_SEALED).toBe(0);
+  });
+
   it('too big for the room once sealed: not sent (the encoder starts over on a key frame); a socket that refuses later: onLost', async () => {
     const room = new Room();
     const cam = await room.join('cam', 'camera');
@@ -511,25 +705,58 @@ describe('RelaySealer: relay.ts’s send, sealed', () => {
     expect(new PartCounter(5, () => 1000).next()).toBe(1_000_005);
   });
 
-  it('one camera per nursery per browser (Web Locks); without Web Locks, never blocked', async () => {
-    const held = new Set<string>();
-    const locks = {
-      request: (name: unknown, _o: unknown, cb: unknown) => {
-        const n = String(name);
-        if (held.has(n)) return Promise.resolve((cb as (l: unknown) => unknown)(null));
-        held.add(n);
-        return Promise.resolve((cb as (l: unknown) => Promise<unknown>)({ name: n })).finally(() => held.delete(n));
-      },
-    };
-    const first = await holdCameraLock(NID, locks);
-    expect(first).toBeTypeOf('function');
-    expect(await holdCameraLock(NID, locks)).toBeNull();
-    first!();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(await holdCameraLock(NID, locks)).toBeTypeOf('function');
-    expect(await holdCameraLock(NID, undefined)).toBeTypeOf('function');
+  it('part numbers never repeat across reloads, even when the phone’s clock steps back (persisted high-water mark)', () => {
+    const mem = new Map<string, string>();
+    const store = relaySeqStore(NID, { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => void mem.set(k, v) });
+    let clock = 1_800_000_000_000;
+    const run1 = new PartCounter(7, () => clock, store);
+    const first = Array.from({ length: 50 }, () => {
+      clock += 20;
+      return run1.next();
+    });
+    expect(run1.durable).toBe(true);
+    // The clock is corrected back half a second and the camera page reloads, same slot by chance:
+    // without the mark, run 2 walks the same numbers under the same key (a repeated nonce).
+    clock -= 500;
+    const run2 = new PartCounter(7, () => clock, store);
+    const second = Array.from({ length: 50 }, () => {
+      clock += 20;
+      return run2.next();
+    });
+    expect(Math.min(...second)).toBeGreaterThan(Math.max(...first));
+    // A browser whose storage refuses writes: not durable (the camera lock is what keeps it safe then).
+    const full = relaySeqStore(NID, { getItem: () => null, setItem: () => { throw new Error('QuotaExceeded'); } });
+    expect(new PartCounter(7, () => clock, full).durable).toBe(false);
   });
+
+  it('the camera lock is taken over when the other tab goes — not tried once and forgotten', async () => {
+    const locks = fakeLocks();
+    // Yesterday's camera tab (or one left on its setup screen) holds it.
+    const old = queueCameraLock(NID, () => undefined, locks);
+    await locks.settle();
+    expect(old.held).toBe(true);
+    let changes = 0;
+    const tab = queueCameraLock(NID, () => changes++, locks);
+    await locks.settle();
+    expect(tab.held).toBe(false);
+    expect(tab.waiting).toBe(true); // the screen says another tab is the camera
+    old.release();
+    await locks.settle();
+    expect(tab.held).toBe(true);
+    expect(tab.waiting).toBe(false);
+    expect(changes).toBeGreaterThanOrEqual(2);
+    // Stopping releases it for the next one; a stopped tab never takes it later.
+    const next = queueCameraLock(NID, () => undefined, locks);
+    const gone = queueCameraLock(NID, () => undefined, locks);
+    gone.release();
+    tab.release();
+    await locks.settle();
+    expect(next.held).toBe(true);
+    expect(gone.held).toBe(false);
+    // Without Web Locks: never blocked.
+    expect(queueCameraLock(NID, () => undefined, undefined).held).toBe(true);
+  });
+
 });
 
 describe('E2ePeers: which cameras seal, remembered', () => {
@@ -547,6 +774,54 @@ describe('E2ePeers: which cameras seal, remembered', () => {
     expect(new E2ePeers('other', storage).seals('camdev1')).toBe(false);
   });
 });
+
+/* ----------------------------------------------- a Web Locks stand-in */
+
+/** Exclusive locks with a queue, `ifAvailable` and `signal`, as navigator.locks does them. */
+function fakeLocks() {
+  const held = new Map<string, boolean>();
+  const queue = new Map<string, { cb: (l: unknown) => unknown; done: (v: unknown) => void; fail: (e: unknown) => void; signal?: AbortSignal }[]>();
+  let work: Promise<unknown> = Promise.resolve();
+  const grant = (name: string, cb: (l: unknown) => unknown, done: (v: unknown) => void) => {
+    held.set(name, true);
+    const p = Promise.resolve(cb({ name }));
+    work = Promise.all([work, p]);
+    void p.then((v) => {
+      held.set(name, false);
+      done(v);
+      next(name);
+    });
+  };
+  const next = (name: string) => {
+    const q = queue.get(name) ?? [];
+    while (q.length && q[0].signal?.aborted) q.shift();
+    const w = q.shift();
+    if (w) grant(name, w.cb, w.done);
+  };
+  return {
+    request: (name: unknown, opts: unknown, cb: unknown) =>
+      new Promise((done, fail) => {
+        const n = String(name);
+        const o = (opts ?? {}) as { ifAvailable?: boolean; signal?: AbortSignal };
+        const f = cb as (l: unknown) => unknown;
+        if (!held.get(n)) return grant(n, f, done);
+        if (o.ifAvailable) return done(f(null));
+        const entry = { cb: f, done, fail, signal: o.signal };
+        o.signal?.addEventListener('abort', () => {
+          const q = queue.get(n) ?? [];
+          const i = q.indexOf(entry);
+          if (i >= 0) q.splice(i, 1);
+          fail(new DOMException('aborted', 'AbortError'));
+        });
+        queue.set(n, [...(queue.get(n) ?? []), entry]);
+      }),
+    /** Let pending grants and releases run. */
+    async settle() {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+    },
+  };
+}
 
 /* --------------------------------------------- a tiny IndexedDB stand-in */
 

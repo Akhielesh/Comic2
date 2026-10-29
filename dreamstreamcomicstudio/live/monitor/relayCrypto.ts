@@ -19,13 +19,18 @@
  *
  * Camera — `RelaySealer`: `send()` keeps relay.ts's synchronous contract (true = it will go,
  * false = it didn't: hold back until a key frame), seals in order off the encoder's path and
- * hands the sealed message to the socket. Nothing leaves while the camera seals but has no
- * current key. Sequence numbers come from one counter per camera, seeded from the clock plus a
- * slot chosen per run, so a nonce never repeats under a key (and a second camera tab on the same
- * phone is held off by a Web Lock — `holdCameraLock`).
+ * hands the sealed message to the socket. While the camera seals but has no current key, nothing
+ * leaves for a moment; if the key still hasn't come after keys.ts KEY_FALLBACK_MS, the picture
+ * and sound go as before end to end and the camera says so — a parent is never left with no
+ * picture because of a key. Sequence numbers come from one counter per camera, seeded from the
+ * clock plus a slot chosen per run, so a nonce never repeats under a key (and a second camera tab
+ * on the same phone is held off by a Web Lock — `queueCameraLock`).
  *
  * Viewer — `RelayOpener`: opens each part in order (replayed or older-than-10-s frames are
  * dropped: sealed.ts `FrameReplay`), and hands relay.ts the plain message it has always decoded.
+ * A camera that seals is taken plain only when it fell back: nothing sealed from it has opened
+ * for RELAY_PLAIN_AFTER_MS (then the screen says it isn't end to end) — never mixed into a sealed
+ * picture that works.
  */
 import { FRAME_OVERHEAD, FRAME_STREAM, FrameReplay, openFrame, readFrameHeader, sealFrame, type NmkSource } from '../../packages/monitor-core/src/sealed';
 import { isBareJpeg, KIND, MAX_AUDIO_BYTES, MAX_JPEG_BYTES, MAX_VIDEO_BYTES, RELAY_HEADER } from './relayWire';
@@ -102,17 +107,76 @@ export function sealedFits(u: Uint8Array): { bytes: number; fits: boolean } | nu
   return { bytes, fits };
 }
 
+/** Where the camera keeps its part counter's high-water mark (survives reloads). */
+export interface SeqStore {
+  load(): number;
+  /** False: it couldn't be written. */
+  save(n: number): boolean;
+}
+
+/** Part numbers reserved ahead per write: about a minute of the counter (it tracks the clock in µs). */
+export const SEQ_BLOCK = 60_000_000;
+/** Never above this (the frame header's seq must stay a safe integer). */
+const MAX_SEQ = Number.MAX_SAFE_INTEGER - 2 ** 40;
+
+/** The high-water mark in localStorage, per nursery (the frame key is per nursery key and camera device). */
+export function relaySeqStore(nid: string, storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof localStorage !== 'undefined' ? localStorage : null): SeqStore {
+  const key = `ds-relay-seq-${nid}`;
+  return {
+    load: () => {
+      try {
+        const n = Number(storage?.getItem(key));
+        return Number.isSafeInteger(n) && n > 0 && n < MAX_SEQ ? n : 0;
+      } catch {
+        return 0;
+      }
+    },
+    save: (n) => {
+      try {
+        if (!storage) return false;
+        storage.setItem(key, String(n));
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+}
+
 /**
  * The camera's part counter: one across its streams, rising with the clock (µs) from a slot
- * picked per run — two runs never share a sequence number unless they pick the same slot and
- * send in the same millisecond, and the camera lock keeps a second run from sealing at all.
+ * picked per run. With a `store`, blocks of numbers are reserved ahead and written down before
+ * any is used, and each run starts above the last reservation — so a reload never reuses a
+ * number under the same key, even after the phone's clock steps back (`durable`). Without one
+ * (or a storage that refuses writes), two runs could only collide if they picked the same slot
+ * and walked the same clock — the camera lock keeps a second tab from sealing then.
  */
 export class PartCounter {
   private last = 0;
-  constructor(private readonly slot = Math.floor(Math.random() * 1000), private readonly clock: () => number = () => Date.now()) {}
+  private hi = 0;
+  /** The current reservation was written down (a reload can't reuse these numbers). */
+  durable = false;
+  constructor(
+    private readonly slot = Math.floor(Math.random() * 1000),
+    private readonly clock: () => number = () => Date.now(),
+    private readonly store: SeqStore | null = null,
+  ) {
+    if (store) this.last = this.reserve(Math.floor(clock()) * 1000 + slot) - 1;
+  }
+
+  /** Reserve the block from `from` (or above the last reservation anyone wrote), written first. */
+  private reserve(from: number): number {
+    const base = Math.max(from, this.store!.load());
+    this.hi = base + SEQ_BLOCK;
+    this.durable = this.store!.save(this.hi);
+    return base;
+  }
+
   next(): number {
-    this.last = Math.max(this.last + 1, Math.floor(this.clock()) * 1000 + this.slot);
-    return this.last;
+    let n = Math.max(this.last + 1, Math.floor(this.clock()) * 1000 + this.slot);
+    if (this.store && n >= this.hi) n = this.reserve(n);
+    this.last = n;
+    return n;
   }
 }
 
@@ -174,14 +238,21 @@ export interface RelaySealerDeps {
   devId: () => string | null;
   /** The key to seal with now (keys.ts `sealing()`). */
   key: () => SealKey | null;
-  /** This camera seals (the room lists `e2e1`, or it holds a nursery key): no key → nothing leaves. */
+  /** This camera seals (the room lists `e2e1`, or it holds a nursery key): no key → nothing leaves … */
   required: () => boolean;
+  /**
+   * … unless it has been without a current key for keys.ts KEY_FALLBACK_MS: then the picture and
+   * sound go as before end to end (and the camera says so) — never no picture because of a key.
+   */
+  fallback?: () => boolean;
   /** client.sendBinary. */
   send: (buf: ArrayBuffer, maxBuffered: number) => boolean;
   buffered: () => number;
   /** A message counted as sent couldn't go after all: the viewers need a key frame. */
   onLost?: () => void;
   now?: () => number;
+  /** The part counter's high-water mark across reloads (`relaySeqStore`). */
+  seqStore?: SeqStore;
 }
 
 /**
@@ -197,25 +268,40 @@ export class RelaySealer {
   sealed = 0;
   /** Plain messages sent (a room or a camera that doesn't seal). */
   plain = 0;
+  /** Of those, sent plain only because this camera seals but has no key (`fallback`). */
+  fellBack = 0;
 
   constructor(private d: RelaySealerDeps) {
     this.now = d.now ?? (() => Date.now());
-    this.counter = new PartCounter(undefined, this.now);
+    this.counter = new PartCounter(undefined, this.now, d.seqStore ?? null);
   }
 
-  /** Whether what goes out now is sealed (null: nothing goes — it seals but has no key yet). */
-  get mode(): 'sealed' | 'plain' | null {
+  /** Its part numbers are written down ahead: sealing stays nonce-safe across reloads and tabs. */
+  get durable(): boolean {
+    return this.counter.durable;
+  }
+
+  /**
+   * What goes out now: sealed; plain (a room or camera that doesn't seal); `fallback` (it seals but
+   * has had no key for a while: plain, said so); null (it seals and is getting the key — a moment).
+   */
+  get mode(): 'sealed' | 'plain' | 'fallback' | null {
     if (this.d.key() && this.d.devId()) return 'sealed';
-    return this.d.required() ? null : 'plain';
+    if (!this.d.required()) return 'plain';
+    return this.d.fallback?.() ? 'fallback' : null;
   }
 
   send = (buf: ArrayBuffer, maxBuffered: number): boolean => {
     const key = this.d.key();
     const devId = this.d.devId();
     if (!key || !devId) {
-      if (this.d.required()) return false;
+      const fallback = this.d.required();
+      if (fallback && !this.d.fallback?.()) return false;
       const ok = this.d.send(buf, maxBuffered);
-      if (ok) this.plain += 1;
+      if (ok) {
+        this.plain += 1;
+        if (fallback) this.fellBack += 1;
+      }
       return ok;
     }
     const u = new Uint8Array(buf);
@@ -247,30 +333,96 @@ export class RelaySealer {
   }
 }
 
+type Locks = { request?: (...a: unknown[]) => Promise<unknown> };
+const browserLocks = (): Locks | undefined => (typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: Locks }).locks : undefined);
+
+/** This tab's claim to be the nursery's camera on this browser (`queueCameraLock`). */
+export interface CameraLock {
+  /** This tab is the camera (always, without Web Locks). */
+  readonly held: boolean;
+  /** Another tab of this browser is the camera right now: this one takes over the moment it goes. */
+  readonly waiting: boolean;
+  /** The camera stopped: let the next tab have it (and never take it later). */
+  release(): void;
+}
+
 /**
- * One camera at a time per nursery on this browser: the sealer's counter is per run, so two
- * camera tabs of the same phone must never seal under the same key at once. Resolves with a
- * release function, or null when another tab already is the camera (Web Locks unavailable: true).
+ * The camera lock, held while the camera runs: taken at once when it's free, otherwise queued
+ * behind the tab that holds it — yesterday's frozen camera tab, one left on its setup screen, the
+ * installed app next to a browser tab — and taken over the moment that one goes. (A lock tried
+ * once and forgotten would keep this tab from sealing for its whole life.) `onChange`: held or
+ * waiting changed.
  */
-export function holdCameraLock(nid: string, locks: { request?: (...a: unknown[]) => Promise<unknown> } | undefined = typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: { request?: (...a: unknown[]) => Promise<unknown> } }).locks : undefined): Promise<(() => void) | null> {
-  if (!locks?.request) return Promise.resolve(() => undefined);
-  return new Promise((resolve) => {
-    let release: () => void = () => undefined;
-    const held = new Promise<void>((r) => (release = r));
-    void locks
-      .request(`ds-camera-${nid}`, { ifAvailable: true }, (lock: unknown) => {
-        if (!lock) {
-          resolve(null);
-          return undefined;
-        }
-        resolve(release);
-        return held;
-      })
-      .catch(() => resolve(() => undefined));
-  });
+export function queueCameraLock(nid: string, onChange: () => void, locks: Locks | undefined = browserLocks()): CameraLock {
+  let held = false;
+  let waiting = false;
+  let released = false;
+  let let_go: () => void = () => undefined;
+  const ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const handle: CameraLock = {
+    get held() {
+      return held;
+    },
+    get waiting() {
+      return waiting;
+    },
+    release() {
+      if (released) return;
+      released = true;
+      held = waiting = false;
+      ac?.abort();
+      let_go();
+    },
+  };
+  if (!locks?.request) {
+    held = true;
+    return handle;
+  }
+  const name = `ds-camera-${nid}`;
+  const take = (lock: unknown): Promise<void> | undefined => {
+    if (!lock || released) return undefined;
+    held = true;
+    waiting = false;
+    onChange();
+    return new Promise<void>((r) => (let_go = r));
+  };
+  void locks
+    .request(name, { ifAvailable: true }, (lock: unknown) => {
+      if (lock) return take(lock);
+      if (released) return undefined;
+      // Another tab is the camera: wait our turn (no ifAvailable) — not give up.
+      waiting = true;
+      onChange();
+      void locks.request!(name, ac ? { signal: ac.signal } : {}, take).catch(() => undefined);
+      return undefined;
+    })
+    .catch(() => {
+      // Web Locks that don't work: never blocked.
+      if (released) return;
+      held = true;
+      waiting = false;
+      onChange();
+    });
+  return handle;
 }
 
 /* ----------------------------------------------------------- the viewer */
+
+/**
+ * A camera that seals sends its picture plain only when it has no key (keys.ts `fallback`). A
+ * viewer takes that plain picture once nothing sealed from the camera has opened for this long —
+ * never mixed into a sealed picture that works (where a plain frame can only be the room's).
+ */
+export const RELAY_PLAIN_AFTER_MS = 6000;
+
+/** A plain relay message: not flagged sealed, and no part of it is a sealed frame (the room's sound cut clears the flag). */
+function plainRelay(u: Uint8Array): boolean {
+  if (isBareJpeg(u)) return true;
+  if (u.length > RELAY_HEADER && (u[1] & RELAY_SEALED) !== 0) return false;
+  const p = splitRelay(u);
+  if (!p) return false;
+  return !(p.sound && readFrameHeader(p.sound)) && !(p.picture && readFrameHeader(p.picture));
+}
 
 export interface RelayOpenerDeps {
   nid: string;
@@ -297,6 +449,10 @@ export class RelayOpener {
   lastOpenAt: number | null = null;
   /** Why the last message was dropped (diagnostics). */
   lastDrop: DropReason | null = null;
+  /** When a plain picture from a camera that seals was last taken (it fell back: said on screen). */
+  lastPlainAt: number | null = null;
+  /** When this camera's messages started arriving (the plain fallback waits from here too). */
+  private since: number | null = null;
 
   constructor(private d: RelayOpenerDeps) {
     this.now = d.now ?? (() => Date.now());
@@ -307,11 +463,18 @@ export class RelayOpener {
     this.replay.reset();
     this.replayFor = null;
     this.lastOpenAt = null;
+    this.lastPlainAt = null;
+    this.since = null;
   }
 
   /** The picture through our server is end to end right now (a sealed message opened in the last 10 s). */
   endToEnd(now = this.now()): boolean {
     return this.lastOpenAt != null && now - this.lastOpenAt < 10_000;
+  }
+
+  /** A camera that seals is sending without its key right now (fell back): not end to end — say so. */
+  fellBack(now = this.now()): boolean {
+    return !this.endToEnd(now) && this.lastPlainAt != null && now - this.lastPlainAt < 10_000;
   }
 
   /** A binary message from the room → the plain relay message to decode, or null (dropped). In order. */
@@ -335,6 +498,16 @@ export class RelayOpener {
     if (this.replayFor !== cam) {
       this.replay.reset();
       this.replayFor = cam;
+      this.since = null;
+    }
+    const now = this.now();
+    this.since ??= now;
+    if (plainRelay(u)) {
+      // It fell back (no key on the camera): taken once nothing sealed has opened for a while.
+      const quietSince = this.lastOpenAt ?? this.since;
+      if (now - quietSince < RELAY_PLAIN_AFTER_MS) return this.drop('plain');
+      this.lastPlainAt = now;
+      return u.slice().buffer;
     }
     const r = await openRelay(u, this.d.nmk, { nid: this.d.nid, camDev: cam }, this.replay, this.now());
     if (r.ok === false) return this.drop(r.reason);
