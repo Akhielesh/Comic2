@@ -216,10 +216,12 @@ describe('long-press vs lift-and-drag on a busy frame', () => {
       );
       const hit = container.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="pg_1_l3"]')!;
       fireEvent.pointerDown(hit, { clientX: 300, clientY: 300, pointerType: 'touch', pointerId: 3 });
-      // The hold lifts the balloon at 220 ms; the long-press timer is due at 450 ms…
+      // The hold lifts the balloon at 220 ms (no selection yet: the lettering sheet must not rise under the
+      // dragging finger); the long-press timer is due at 450 ms…
       act(() => {
         vi.advanceTimersByTime(451);
       });
+      expect(hit.getAttribute('aria-pressed')).toBe('false');
       // …and the finger's moves, queued behind the busy frame, are handled before the next frame.
       fireEvent.pointerMove(window, { clientX: 330, clientY: 300, pointerId: 3 });
       fireEvent.pointerMove(window, { clientX: 360, clientY: 300, pointerId: 3 });
@@ -229,6 +231,8 @@ describe('long-press vs lift-and-drag on a busy frame', () => {
       fireEvent.pointerUp(window, { clientX: 360, clientY: 300, pointerId: 3 });
       expect(onBalloonMenu).not.toHaveBeenCalled();
       expect(onBalloonChange).toHaveBeenCalledTimes(1);
+      // Put down: now it is the selection.
+      expect(container.querySelector('[data-testid="balloon-hit"][data-line-id="pg_1_l3"]')!.getAttribute('aria-pressed')).toBe('true');
     } finally {
       vi.useRealTimers();
     }

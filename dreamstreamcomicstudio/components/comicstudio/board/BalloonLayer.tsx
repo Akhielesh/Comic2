@@ -492,8 +492,11 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         armed = true;
         touchDragRef.current = true;
         own();
+        // The lift is the balloon's own visual (scale + shadow + haptic); it is SELECTED when the finger
+        // lets go (or the hold becomes the long-press menu). Selecting here opened the lettering sheet mid-
+        // gesture: a heavy re-render that held the finger's first moves past the long-press time (the menu
+        // opened instead of the drag) and a sheet rising under the finger that was dragging.
         setLifted(id);
-        select(id);
         haptic(10);
       }, LIFT_MS);
     }
@@ -611,6 +614,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         else changes.push({ id: lineId, patch: { w: b.w, pinned: true } });
       }
       commitMany(changes, mode === 'move' ? (changes.length > 1 ? 'Move balloons' : 'Move balloon') : mode === 'tail' ? 'Aim tail' : 'Resize balloon', mode === 'width' ? 'resize' : mode);
+      // A lifted (unselected) balloon becomes the selection once it is put down.
+      if (touch && mode === 'move' && !wasSelected) select(id);
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId === pid) finish(true);
