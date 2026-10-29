@@ -1,16 +1,16 @@
 // @vitest-environment node
 // Provider / model health (reliability.md §5 server tests): the public fetch is cached, single-flight,
 // stale-while-error and times out to unknown; the breaker opens on 3 upstream failures and never on key
-// errors; the preflight picks the same-payer alternate, blocks when every reachable route is down (no
-// image call, no reservation, one card's worth of options), never blocks on unknown, and its options carry
-// real registry prices and the real redraw count.
+// errors or our own bad requests; acquireRouteCall stops calls while down and lets one probe through while
+// half-open; the preflight picks the same-payer alternate, blocks when every reachable route is down (one
+// card's worth of options), never blocks on unknown, and its options carry real registry prices and the real
+// redraw count. The status agrees with the preflight when the user's keys have different payers.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Page } from '../../../../shared/comic/doc.js';
 import { resolveStudioCaps } from '../../../../shared/comic/capabilities.js';
 import { HEALTH_THRESHOLDS, type ProviderHealth } from '../../../../shared/comic/modelHealth.js';
 import { PLATFORM_MARKUP, getImageModel, imagePriceUsd } from '../../../../shared/comic/models.js';
 import { drawnTargets, redrawQuote, redrawResolution } from '../../../../shared/comic/modelLock.js';
-import { fakeBilling, fakeImages } from '../orchestrator.fakes.js';
 import { StudioError, type StudioKeys } from '../types.js';
 import { classifyImageError } from '../imageClient.js';
 import {
@@ -501,21 +501,19 @@ describe('preflightImageRun', () => {
     expect(noAlt.ok).toBe(false);
   });
 
-  it('blocks when every reachable route is down: no image call, no reservation, one set of options with real prices and redraw counts', async () => {
+  // "No reservation, no job, no spend, one card" is the wiring's contract (jobs.ts calls this BEFORE reserving);
+  // M1-LOCK-SERVER's 16:52 replay asserts it end to end with fakeModelHealth. Here: the decision and its options.
+  it('blocks when every reachable route is down, with one set of options carrying real prices and redraw counts', async () => {
     const f = scriptedFetch();
     f.set(async () => new Response(endpointsBody(failing), { status: 200 }));
     let t = T0;
     const h = createModelHealth({ fetch: f.fetchImpl, now: () => t });
     for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'RATE_LIMIT', at: T0 - 20_000 });
-    const images = fakeImages();
-    const billing = fakeBilling();
     const doc = lockedDoc();
     const out = await h.preflightImageRun({ specs: [NB21, NB21], keys: PLATFORM_BOTH, doc, caps: paidCaps });
     expect(out.ok).toBe(false);
     expect(out.useRoute).toBeUndefined();
     expect(out.blocked).toEqual([{ modelId: 'nano-banana-2.1', state: 'down', reason: expect.stringMatching(/provider|uptime/i) }]);
-    expect(images.calls).toHaveLength(0);
-    expect(billing.reserves).toHaveLength(0);
     // Options: wait first (free), then the switch with the REAL registry price and the real redraw count.
     expect(out.options[0]).toEqual({ kind: 'wait_and_retry' });
     const sw = out.options.find((o) => o.kind === 'switch_model');
