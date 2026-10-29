@@ -156,7 +156,7 @@ export interface CostInsightsProps {
   now?: number;
 }
 
-export const CostInsights: React.FC<CostInsightsProps> = ({ doc, book, quote, byok, pro, cost, coverLine, runClientAction, now }) => {
+export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pro, cost, coverLine, runClientAction, now }) => {
   const money = useMemo(() => insightsMoney(cost), [cost]);
   const summary = useMemo(() => spendSummary(doc), [doc]);
   const real = useMemo(() => pageRealCost(doc), [doc]);
@@ -186,7 +186,10 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, book, quote, by
   const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], tier, { override, byok, lock }).usd;
   const realList = real?.list ? `${money.price(real.list.usd)}${real.list.source === 'registry' ? ` (${priceListCopy(real.list.factsAsOf)})` : ''}` : 'not published';
   const realRange = real ? [money.priceShort(real.minUsd), money.priceShort(real.maxUsd)] : [];
-  const realValue = real ? money.price(real.medianUsd) : '';
+  // Narrow value cells: a governed share in its short form ("≈0.4%"; the card says "of your usage" once).
+  const realValue = real ? (money.governed ? (money.priceShort(real.medianUsd) ?? 'a little') : money.price(real.medianUsd)) : '';
+  const failedValue =
+    summary.failed.usd > 0 ? (cost.governed ? (cell(summary.failed.usd) ?? 'a little') : money.spent(summary.failed.usd)) : cost.governed ? 'nothing charged' : money.spent(0);
 
   return (
     <>
@@ -201,7 +204,7 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, book, quote, by
           {summary.failed.count > 0 && (
             <CostRow
               label="Failed attempts"
-              value={`${summary.failed.count} · ${money.spent(summary.failed.usd)}`}
+              value={`${summary.failed.count} · ${failedValue}`}
               note={summary.failed.usd > 0 ? 'What the provider charged for attempts that didn’t come back.' : 'Nothing was charged for them.'}
             />
           )}
@@ -231,7 +234,7 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, book, quote, by
           {real && (
             <CostRow
               label="Real cost per page"
-              value={realValue.startsWith('≈') ? realValue : `≈${realValue}`}
+              value={/^([≈<]|a little)/.test(realValue) ? realValue : `≈${realValue}`}
               note={`(your last ${real.n}${realRange[0] && realRange[1] ? `: ${realRange[0]}–${realRange[1]}` : ''}) · list ${realList} · ${real.nickname} at ${real.res}`}
             />
           )}
