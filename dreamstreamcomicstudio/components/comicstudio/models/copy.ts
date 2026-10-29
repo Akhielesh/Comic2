@@ -201,7 +201,8 @@ export const confirmFinePrint = (basisLine: string, byok: boolean) =>
   [basisLine ? `${basisLine.replace(/\.$/, '')}.` : '', byok ? BYOK_FINE_PRINT : '', SWITCH_BACK_FINE_PRINT].filter(Boolean).join(' ');
 export const basisLine = (labels: string[]) => (labels.length ? `Prices: ${labels.join('; ')}` : '');
 export const DETAILS_DISCLOSURE = 'Details';
-export const redrawDetailLine = (label: string, count: number, price: string | null) => `${label}: ${count} × → ${price ?? CANT_PRICE_YET}`;
+/** Pro "Details": one redraw line per kind of target, e.g. "Pages (5): ≈$0.89". */
+export const redrawDetailLine = (label: string, count: number, price: string | null) => `${label} (${count}): ${price ?? CANT_PRICE_YET}`;
 
 // ── D. Confirm before the lock ───────────────────────────────────────────────────────────────────────────────
 
