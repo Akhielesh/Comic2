@@ -114,8 +114,9 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     pages: 'good',
     edit: 'good',
     gradeSources: { text: 'AA text rendering #12 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #16 · LMArena edit #13 (2026-10-22)' },
-    // Google pricing page: 1120 tokens × $120/M at 1K and 2K; observed $0.134–0.138 (models.md §1.3).
-    priceUsd: { '1K': 0.134, '2K': 0.134, '4K': 0.24 },
+    // Google pricing page: 1120 tokens × $120/M = $0.1344 at 1K and 2K (models.md §1.1 #2); observed
+    // $0.134–0.138 (§1.3). The list figure is stored unrounded so a quote never under-reads it (§2.3).
+    priceUsd: { '1K': 0.1344, '2K': 0.1344, '4K': 0.24 },
     priceBasis: 'per_token_table',
     perRefUsd: 0.0011, // 560 tokens per reference image [G]
     factsAsOf: '2026-10-22',
@@ -192,8 +193,10 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     gradeSources: { text: 'AA text rendering #2 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #1 · LMArena edit #1 (2026-10-22)' },
     // Pinned to quality 'max' — the level the boards measured. $0.2107 per 1024² image in output tokens (OpenAI
     // calculator, matched by AA's $210.72/1k). 2:3 at 1024×1536 is ≈$0.1646 (output only; reference input unpriced).
+    // Basis: OpenAI calculator token factor (max = 96) × $30/M output tokens — a token table, not a published
+    // per-image price; reference input is unpriced, so totals are estimates (models.md §1.6 #1, §3.5 ex. 3, §3.6 C).
     priceUsd: { '1K': 0.2107 },
-    priceBasis: 'per_image',
+    priceBasis: 'per_token_table',
     fixedQuality: 'max',
     factsAsOf: '2026-10-22',
     // Hidden until the Images-API transport exists and the owner's smoke test (models.md §2.6 D2) passes.
@@ -217,8 +220,9 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     pages: 'good',
     edit: 'excellent',
     gradeSources: { text: 'AA text rendering #3 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #2 · LMArena edit #2 (2026-10-22)' },
+    // Same basis as Sunburst: OpenAI calculator, output tokens only; reference input unpriced → totals are estimates.
     priceUsd: { '1K': 0.2107 },
-    priceBasis: 'per_image',
+    priceBasis: 'per_token_table',
     fixedQuality: 'max',
     factsAsOf: '2026-10-22',
     pickable: false, // same gating as Sunburst (D2)
@@ -236,12 +240,14 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     lifecycle: 'experimental',
     refs: { total: 10, characters: 4, objects: 6, style: 0 },
     aspects: ['21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16'],
-    resolutions: ['1K', '2K', '4K'],
+    // No 4K: the provider caps output at 4,194,304 px whenever references are sent (models.md §1.4 #16/17, §1.6 #7),
+    // and every comic image carries references. nearestResolution snaps a 4K tier request to 2K instead of failing.
+    resolutions: ['1K', '2K'],
     text: 'good',
     pages: 'basic',
     edit: 'good',
     gradeSources: { text: 'AA text rendering #10 (2026-10-22)', pages: 'our judgement', edit: 'our judgement (not on an edit board, 2026-10-22)' },
-    priceUsd: { '1K': 0.048, '2K': 0.1, '4K': 0.607 },
+    priceUsd: { '1K': 0.048, '2K': 0.1 },
     priceBasis: 'per_image',
     factsAsOf: '2026-10-22',
     // Removed from the picker (models.md §2.2): unpinnable `latest`, ≤ 4 MP with references, and BFL's service

@@ -48,9 +48,14 @@ export interface DrawnTargets {
   cover: boolean;
 }
 
-/** Targets whose CURRENT image was generated (uploads, library art and adopted refs are not redrawn). */
+/**
+ * Targets whose CURRENT image was generated (uploads, library art and adopted refs are not redrawn). The
+ * render status is deliberately ignored: a failed re-render keeps the previous generated asset (ops.ts
+ * patchRenderRaw), so that page is still drawn on the old model and must be counted, quoted and redrawn
+ * (models.md §3.3 "generated assets only"; §2.3 never under-quotes).
+ */
 export const drawnTargets = (doc: ComicDoc): DrawnTargets => {
-  const drawn = (r: RenderState) => r.status === 'ready' && r.asset?.source === 'generated';
+  const drawn = (r: RenderState) => r.asset?.source === 'generated';
   return {
     pages: doc.pages.filter((p) => drawn(p.render)).map((p) => p.id),
     sheets: doc.cast.filter((c) => drawn(c.sheet)).map((c) => c.id),
@@ -156,10 +161,13 @@ const pageCastCount = (doc: ComicDoc, pageId: string): number => {
 export const modelFit = (spec: ImageModelSpec, doc: ComicDoc, caps: StudioCaps): FitReason[] => {
   const blocks: FitReason[] = [];
   const warns: FitReason[] = [];
+  // models.md §3.4 item 7.2: a hidden or deprecated model is allowed only when it is the current lock or the
+  // model just switched away from (changes[0].from), so "Switch back" (§3.6 F) keeps working after it was hidden.
   const current = lockedModelId(doc);
-  const isCurrent = current === spec.id;
-  if (!spec.pickable && !isCurrent) blocks.push({ code: 'hidden', severity: 'block', text: 'Not available in Comic Studio yet' });
-  else if (spec.lifecycle === 'deprecated' && !isCurrent) blocks.push({ code: 'hidden', severity: 'block', text: 'Not available in Comic Studio yet' });
+  const priorModel = doc.imageModel?.changes?.[0]?.from;
+  const allowed = spec.id === current || spec.id === priorModel;
+  if (!spec.pickable && !allowed) blocks.push({ code: 'hidden', severity: 'block', text: 'Not available in Comic Studio yet' });
+  else if (spec.lifecycle === 'deprecated' && !allowed) blocks.push({ code: 'hidden', severity: 'block', text: 'Not available in Comic Studio yet' });
   if (!Object.values(spec.routes).some(Boolean)) blocks.push({ code: 'transport', severity: 'block', text: 'Not available in Comic Studio yet' });
   if (!spec.aspects.includes(doc.format.pageAspect)) blocks.push({ code: 'aspect', severity: 'block', text: `Can't draw ${doc.format.pageAspect} pages` });
   if (!caps.modelOverride && spec.id !== FREE_PLAN_IMAGE_MODEL) blocks.push({ code: 'access', severity: 'block', text: 'Needs a paid plan or your own key' });

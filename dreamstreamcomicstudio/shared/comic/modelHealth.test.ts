@@ -14,6 +14,10 @@ describe('assessRouteHealth', () => {
     ['empty provider list → unknown', { providers: [], now: NOW }, 'unknown'],
     ['one serving provider with good uptime → ok', { providers: [provider()], now: NOW }, 'ok'],
     ['uptime30m null on every provider, status fine → ok (the 24 h figure is for display)', { providers: [provider({ uptime30m: null })], now: NOW }, 'ok'],
+    ['a provider with no status and no uptime30m carries no data → unknown, never ok', { providers: [provider({ status: null, uptime30m: null, uptime1d: null })], now: NOW }, 'unknown'],
+    ['no data on one provider, status null but uptime known on another → the uptime counts', { providers: [provider({ status: null, uptime30m: null, uptime1d: null }), provider({ name: 'Vertex', status: null, uptime30m: 99 })], now: NOW }, 'ok'],
+    ['no data on one provider, the other reports a problem → down (the only evidence is bad)', { providers: [provider({ status: null, uptime30m: null, uptime1d: null }), provider({ name: 'Vertex', status: 1 })], now: NOW }, 'down'],
+    ['status null with a bad uptime30m → that uptime is the evidence', { providers: [provider({ status: null, uptime30m: 50 })], now: NOW }, 'down'],
     ['every provider status ≠ 0 → down', { providers: [provider({ status: 1 }), provider({ name: 'Vertex', status: 2 })], now: NOW }, 'down'],
     ['one provider down, one serving → the serving one counts', { providers: [provider({ status: 1 }), provider({ name: 'Vertex', uptime30m: 100 })], now: NOW }, 'ok'],
     ['best uptime30m below 70 → down', { providers: [provider({ uptime30m: 60 }), provider({ name: 'Vertex', uptime30m: 69.9 })], now: NOW }, 'down'],
@@ -71,7 +75,7 @@ describe('normalizeOutageOption', () => {
     expect(normalizeOutageOption({ kind: 'wait_and_retry', etaHint: '' })).toEqual({ kind: 'wait_and_retry' });
     expect(normalizeOutageOption({ kind: 'other_route', route: 'gemini', label: 'Gemini key' })).toEqual({ kind: 'other_route', route: 'gemini', label: 'Gemini key' });
     expect(normalizeOutageOption({ kind: 'add_key', route: 'openrouter', label: 'Add key', extra: 1 })).toEqual({ kind: 'add_key', route: 'openrouter', label: 'Add key' });
-    const sw = { kind: 'switch_model', modelId: 'nano-banana-pro', nickname: 'Nano Banana Pro', usdPerImage: 0.134, consistency: 'different', redrawCount: 6.7, redrawUsd: 0.83 };
+    const sw = { kind: 'switch_model', modelId: 'nano-banana-pro', nickname: 'Nano Banana Pro', usdPerImage: 0.1344, consistency: 'different', redrawCount: 6.7, redrawUsd: 0.83 };
     expect(normalizeOutageOption(sw)).toEqual({ ...sw, redrawCount: 6 });
     for (const bad of [null, 'wait', { kind: 'nope' }, { kind: 'other_route', route: 'mars', label: 'x' }, { kind: 'add_key', route: 'gemini' }, { ...sw, usdPerImage: -1 }, { ...sw, consistency: 'maybe' }, { ...sw, redrawUsd: NaN }]) {
       expect(normalizeOutageOption(bad), JSON.stringify(bad)).toBeUndefined();

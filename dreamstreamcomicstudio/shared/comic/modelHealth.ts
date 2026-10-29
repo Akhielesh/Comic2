@@ -8,7 +8,8 @@
 //    no success since is `down` for breakerOpenMs after its last failure; then it is half-open (one call is
 //    allowed), reported as `degraded`.
 //  - Public: every provider with `status !== 0`, or the best uptime30m below downUptime30m → `down`;
-//    below degradedUptime30m → `degraded`; no data → `unknown`. Unknown never blocks a run.
+//    below degradedUptime30m → `degraded`; no data → `unknown`. A provider with neither a status nor a
+//    30-minute uptime carries no data and is never counted as serving. Unknown never blocks a run.
 //  - Both: the worse state wins; `unknown` on one side defers to the other.
 
 import type { ImageRoute } from './models.js';
@@ -122,7 +123,11 @@ const describeCode = (code?: string): string => (code ? ` (${code})` : '');
 /** Public endpoint data alone. */
 const assessPublic = (providers: ProviderHealth[] | undefined): Pick<RouteHealth, 'state' | 'reason'> => {
   if (!providers || !providers.length) return { state: 'unknown' };
-  const serving = providers.filter((p) => p.status === 0 || p.status === null);
+  // Evidence only: a provider with status null and no 30-minute uptime says nothing (reliability.md §1 "no data →
+  // unknown"); it must never make a route 'ok'. An explicit status 0, or a numeric uptime, is evidence of serving.
+  const known = providers.filter((p) => p.status !== null || isFiniteNumber(p.uptime30m));
+  if (!known.length) return { state: 'unknown' };
+  const serving = known.filter((p) => p.status === 0 || (p.status === null && isFiniteNumber(p.uptime30m)));
   if (!serving.length) return { state: 'down', reason: 'Every provider reports a problem' };
   const uptimes = serving.map((p) => p.uptime30m).filter((u): u is number => isFiniteNumber(u));
   if (!uptimes.length) return { state: 'ok' };

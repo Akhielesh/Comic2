@@ -727,8 +727,25 @@ export type Card =
   | { type: 'share'; id: string }
   | { type: 'translation'; id: string; languages: string[] }
   /** reliability.md: a provider outage became a calm card with real options; `blockedAction` is the spend
-   *  the preflight refused (re-sent once by "wait and retry" when the model is ok again). */
+   *  the preflight refused (re-sent once by "wait and retry" when the model is ok again). normalizeOutageCard
+   *  keeps it only when its `type` is a known StudioAction type; the server validates the whole action when the
+   *  client re-sends it, exactly as it does for every action it receives. */
   | { type: 'model_outage'; id: string; modelId: string; options: OutageOption[]; blockedAction?: import('./ops.js').StudioAction };
+
+/** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
+export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
+  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
+]);
+/** Moved from routes/comic.ts:47 (single source for client + server). */
+export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
+  'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
+  'relayout_balloons', 'cancel',
+  'fit_render', 'show_breakdown', 'use_preset', 'ref_crop',
+  'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
+  'safety_recheck', 'swap_source_language', 'accept_translation_issue',
+  'library_save', 'library_use', 'import_classic_cast',
+  'change_image_model'
+]);
 
 export type RenderTarget =
   | { kind: 'page'; id: string }
@@ -966,14 +983,21 @@ export const normalizeImageModelLock = (value: unknown): ImageModelLock | undefi
   return out;
 };
 
-/** A well-formed `model_outage` card (malformed options dropped; no valid option → undefined). */
+/** A StudioAction type name the server knows (spend or not). */
+const isStudioActionType = (type: unknown): type is string => typeof type === 'string' && (SPEND_ACTION_TYPES.has(type) || NON_SPEND_ACTION_TYPES.has(type));
+
+/**
+ * A well-formed `model_outage` card (malformed options dropped; no valid option → undefined). A `blockedAction`
+ * whose `type` is not a StudioAction type is dropped (the card stays): the client re-sends it as the "wait and
+ * retry" action, and the server validates the full action on receipt like every other action.
+ */
 export const normalizeOutageCard = (value: unknown): Extract<Card, { type: 'model_outage' }> | undefined => {
   if (!isObject(value) || value.type !== 'model_outage') return undefined;
   if (typeof value.id !== 'string' || !value.id || typeof value.modelId !== 'string' || !value.modelId) return undefined;
   const options = (Array.isArray(value.options) ? value.options : []).map(normalizeOutageOption).filter((o): o is OutageOption => !!o);
   if (!options.length) return undefined;
   const out: Extract<Card, { type: 'model_outage' }> = { type: 'model_outage', id: value.id, modelId: value.modelId, options };
-  if (isObject(value.blockedAction) && typeof value.blockedAction.type === 'string') out.blockedAction = value.blockedAction as never;
+  if (isObject(value.blockedAction) && isStudioActionType(value.blockedAction.type)) out.blockedAction = value.blockedAction as never;
   return out;
 };
 

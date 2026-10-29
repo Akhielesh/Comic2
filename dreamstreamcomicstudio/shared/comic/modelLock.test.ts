@@ -19,7 +19,7 @@ import { encodeStudioEvent } from './events';
 import { isUndoable } from './undo';
 import { DOC_LIMITS, MAX_SPEND_ENTRIES } from './limits';
 import { DEFAULT_CAPS, resolveStudioCaps } from './capabilities';
-import { IMAGE_MODELS, PRO_TIER_4K, STYLE_OPTION_MODEL, TIER_PRESETS, estimateJobs, getImageModel, pickableImageModels, resolveImageJob, tierPresetsFor, type ImageJobKind } from './models';
+import { IMAGE_MODELS, PRO_TIER_4K, STYLE_OPTION_MODEL, TIER_PRESETS, estimateJobs, getImageModel, nearestResolution, pickableImageModels, resolveImageJob, tierPresetsFor, type ImageJobKind } from './models';
 import { deriveLock, drawnModels, drawnTargets, lockedModelId, modelFit, modelFitById, redrawQuote, type PriceBook } from './modelLock';
 import { LAKE_MODEL, LAKE_NOW, makeLakeComic } from './__fixtures__/lakeComic';
 
@@ -71,13 +71,22 @@ describe('deriveLock (migration: existing comics keep their model)', () => {
     expect(lockedModelId(doc)).toBe('retired-model');
   });
 
-  it('drawnTargets counts generated current images only', () => {
+  it('drawnTargets counts generated current images only — the render status is not a filter', () => {
     expect(drawnTargets(makeLakeComic())).toEqual({ pages: ['pg_1', 'pg_2', 'pg_3', 'pg_4', 'pg_5'], sheets: ['c_baby', 'c_ducks', 'c_frog', 'c_bunny'], places: [], cover: true });
     const partial = makeLakeComic((d) => {
       d.pages[0].render.asset!.source = 'upload';
+      // A re-render that failed (429) keeps the previous generated asset: the cover is still drawn on the old model.
       d.cover.render.status = 'failed';
+      d.cover.render.error = 'rate limited';
+      d.pages[2].render.status = 'rendering';
     });
-    expect(drawnTargets(partial)).toMatchObject({ pages: ['pg_2', 'pg_3', 'pg_4', 'pg_5'], cover: false });
+    expect(drawnTargets(partial)).toMatchObject({ pages: ['pg_2', 'pg_3', 'pg_4', 'pg_5'], cover: true });
+    // Only a target with no generated asset at all is not drawn.
+    const gone = makeLakeComic((d) => {
+      d.cover.render = { status: 'failed', error: 'rate limited', history: [] };
+      d.pages[1].render = { status: 'none', history: [] };
+    });
+    expect(drawnTargets(gone)).toMatchObject({ pages: ['pg_1', 'pg_3', 'pg_4', 'pg_5'], cover: false });
   });
 });
 
@@ -111,7 +120,7 @@ describe('resolveImageJob with a lock', () => {
   it('estimateJobs quotes the locked model', () => {
     const est = estimateJobs([{ kind: 'page', count: 2 }], 'draft', { byok: true, lock });
     expect(est.model).toBe('Nano Banana Pro');
-    expect(est.usd).toBeCloseTo((0.134 + 0.003) * 2, 4);
+    expect(est.usd).toBeCloseTo((0.1344 + 0.003) * 2, 4); // the Google list figure, unrounded (never under-quotes)
   });
 });
 
@@ -141,6 +150,20 @@ describe('redrawQuote (models.md §3.5 example 1, the owner comic f8312c86 with 
     expect(redrawQuote(doc, 'nano-banana-pro', 'pages_cover', prices, false).usd).toBeCloseTo(1.08, 2);
     expect(redrawQuote(doc, 'nano-banana-pro', 'all', prices, false).usd).toBeCloseTo(1.78, 2);
     expect(redrawQuote(doc, 'nano-banana-pro', 'none', prices, false)).toEqual({ usd: 0, lines: [], basis: [] });
+  });
+
+  it('a page whose last redraw failed still carries its image and is quoted (never under-quotes)', () => {
+    const doc = makeLakeComic((d) => {
+      d.pages[1].render.status = 'failed';
+      d.pages[1].render.error = 'rate limited';
+      d.cover.render.status = 'failed';
+    });
+    const q = redrawQuote(doc, 'nano-banana-pro', 'pages_cover', prices, true);
+    expect(q.lines).toEqual([
+      { label: 'Pages', count: 5, usd: 0.6965 },
+      { label: 'Cover', count: 1, usd: 0.1344 }
+    ]);
+    expect(q.usd).toBeCloseTo(0.8309, 4);
   });
 
   it('any unit without a price makes the total null (never a guessed number)', () => {
@@ -190,6 +213,22 @@ describe('modelFit', () => {
     expect(codes(modelFit(getImageModel('nano-banana-2')!, doc, paid), 'block')).toContain('hidden');
     const onFlux = makeLakeComic((d) => { d.imageModel = { modelId: 'flux-3', lockedAt: 1, origin: 'migrated' }; });
     expect(codes(modelFit(getImageModel('flux-3')!, onFlux, paid), 'block')).not.toContain('hidden');
+    // models.md §3.4 item 7.2: the model just switched away from (changes[0].from) stays allowed so "Switch back"
+    // (§3.6 F) works when it is hidden or deprecated now; any other hidden model stays blocked.
+    const switched = makeLakeComic((d) => {
+      d.imageModel = {
+        modelId: 'nano-banana-2.1',
+        lockedAt: 10,
+        origin: 'user_change',
+        changes: [
+          { from: 'nano-banana-2', to: 'nano-banana-2.1', at: 10, redraw: 'none', quotedUsd: 0 },
+          { from: 'flux-3', to: 'nano-banana-2', at: 5, redraw: 'none', quotedUsd: 0 } // older: no longer a target
+        ]
+      };
+    });
+    expect(codes(modelFit(getImageModel('nano-banana-2')!, switched, paid), 'block')).not.toContain('hidden');
+    expect(codes(modelFit(getImageModel('flux-3')!, switched, paid), 'block')).toContain('hidden');
+    expect(codes(modelFitById('nano-banana-2', switched, paid), 'block')).not.toContain('hidden');
     expect(modelFitById('nope', doc, paid)).toEqual([{ code: 'hidden', severity: 'block', text: 'Not available in Comic Studio yet' }]);
     // Lite cannot hold characters at all.
     expect(codes(modelFit(getImageModel('nano-banana-lite')!, doc, paid), 'block')).toContain('refs');
@@ -202,7 +241,9 @@ describe('modelFit', () => {
     expect(seedream.find((r) => r.code === 'price_unverified')?.text).toBe("Price per image isn't published, so you'll see the real cost after the first image");
     const gpt = modelFit(getImageModel('gpt-image-2.5')!, standard2k, paid);
     expect(gpt).toContainEqual({ code: 'resolution', severity: 'warn', text: 'GPT Image 2.5 has no 2K option here.' });
-    expect(codes(gpt, 'warn')).not.toContain('price_unverified'); // $0.2107 at max is published
+    // $0.2107 at max is a number (OpenAI calculator token table), so it is not "unverified"; its basis tells the
+    // picker it is an estimate (reference input unpriced), see the registry test below.
+    expect(codes(gpt, 'warn')).not.toContain('price_unverified');
   });
 });
 
@@ -232,6 +273,17 @@ describe('registry data (models.md §2.2)', () => {
     expect(getImageModel('seedream-5-pro')).toMatchObject({ priceUsd: { '1K': 0.045 }, perRefUsd: 0.003, refs: { total: 10 } });
     expect(getImageModel('seedream-5-pro')!.priceUsd['2K']).toBeUndefined();
     expect(getImageModel('gpt-image-2.5')).toMatchObject({ fixedQuality: 'max', priceUsd: { '1K': 0.2107 }, resolutions: [], api: { openrouter: 'images' } });
+    // $0.2107 is the OpenAI calculator's token factor × $30/M output tokens, not a published per-image price
+    // (models.md §1.6 #1): the basis says so, so the UI can label the total an estimate (§3.6 C).
+    expect(getImageModel('gpt-image-2.5')!.priceBasis).toBe('per_token_table');
+    expect(getImageModel('gpt-image-2.5-flare')!.priceBasis).toBe('per_token_table');
+    // Nano Banana Pro list: 1120 tokens × $120/M = $0.1344, stored unrounded (§2.3 never under-quotes).
+    expect(getImageModel('nano-banana-pro')!.priceUsd).toEqual({ '1K': 0.1344, '2K': 0.1344, '4K': 0.24 });
+    // FLUX.3 refuses 4K whenever references are sent (§1.4 #16/17): a 4K tier request snaps to 2K instead of failing.
+    expect(getImageModel('flux-3')!.resolutions).not.toContain('4K');
+    expect(getImageModel('flux-3')!.priceUsd['4K']).toBeUndefined();
+    expect(nearestResolution(getImageModel('flux-3')!, '4K')).toBe('2K');
+    expect(resolveImageJob('page', 'pro', undefined, { modelId: 'flux-3', lockedAt: 1, origin: 'migrated' }).resolution).toBe('2K');
     expect(getImageModel('gpt-image-2.5')!.aspects).not.toContain('4:5');
     expect(getImageModel('gpt-image-2.5-flare')).toMatchObject({ routes: { openrouter: 'openai/gpt-image-2.5-flare' }, fixedQuality: 'max', pickable: false, lifecycle: 'experimental' });
     expect(getImageModel('nano-banana-pro')!.perRefUsd).toBe(0.0011);
@@ -422,7 +474,7 @@ describe('model_outage card', () => {
     options: [
       { kind: 'wait_and_retry', etaHint: 'a few minutes' },
       { kind: 'other_route', route: 'gemini', label: 'Use the same model through your Gemini key' },
-      { kind: 'switch_model', modelId: 'nano-banana-pro', nickname: 'Nano Banana Pro', usdPerImage: 0.134, consistency: 'same_family', redrawCount: 6, redrawUsd: 0.8309 },
+      { kind: 'switch_model', modelId: 'nano-banana-pro', nickname: 'Nano Banana Pro', usdPerImage: 0.1344, consistency: 'same_family', redrawCount: 6, redrawUsd: 0.8309 },
       { kind: 'add_key', route: 'gemini', label: 'Add a Gemini key' }
     ],
     blockedAction: { type: 'render_pages', pageIds: ['pg_1'], quotedUsd: 0.05 }
@@ -438,6 +490,16 @@ describe('model_outage card', () => {
     const emptied = normalizeDoc({ ...makeLakeComic(), conversation: [{ ...msg, cards: [{ ...card, options: [{ kind: 'nope' }] } as never, msg.cards![1]] }] });
     expect(emptied.conversation[0].cards).toEqual([msg.cards![1]]);
     expect(normalizeOutageCard({ type: 'model_outage', id: 'x', modelId: '', options: [{ kind: 'wait_and_retry' }] })).toBeUndefined();
+  });
+
+  it('blockedAction is kept only when its type is a StudioAction type; anything else is dropped, the card stays', () => {
+    const { blockedAction: _b, ...bare } = card;
+    for (const bad of [{ type: 'drop_tables' }, { type: '' }, { type: 42 }, 'render_pages', null, { pageIds: ['pg_1'] }]) {
+      expect(normalizeOutageCard({ ...card, blockedAction: bad }), JSON.stringify(bad)).toEqual(bare);
+    }
+    expect(normalizeOutageCard({ ...card, blockedAction: { type: 'change_image_model', modelId: 'nano-banana-pro', redraw: 'none', quotedUsd: 0, ack: true } })?.blockedAction?.type).toBe('change_image_model');
+    const stored = normalizeDoc({ ...makeLakeComic(), conversation: [{ id: 'm', role: 'assistant', text: 'paused', at: 1, cards: [{ ...card, blockedAction: { type: 'drop_tables' } } as never] }] });
+    expect(stored.conversation[0].cards).toEqual([bare]);
   });
 
   it('a message op carrying the card applies through applyOps unchanged', () => {

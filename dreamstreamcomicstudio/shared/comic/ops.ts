@@ -259,19 +259,11 @@ export type StudioAction =
    *  a redraw it triggers runs as a separate render_* action carrying that quote. */
   | { type: 'change_image_model'; modelId: string; redraw: RedrawScope; quotedUsd: number; ack: true };
 
-export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
-  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
-]);
-/** Moves here from routes/comic.ts:47 (single source for client + server). */
-export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
-  'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
-  'relayout_balloons', 'cancel',
-  'fit_render', 'show_breakdown', 'use_preset', 'ref_crop',
-  'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
-  'safety_recheck', 'swap_source_language', 'accept_translation_issue',
-  'library_save', 'library_use', 'import_classic_cast',
-  'change_image_model'
-]);
+/** The type names live in doc.ts (single source for client + server; doc.ts validates a stored card's
+ *  `blockedAction` against them and cannot import this module). Re-exported here, where StudioAction is
+ *  defined, so every existing import keeps working; comic.contract.test.ts checks they cover the union. */
+import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from './doc.js';
+export { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES };
 
 export const isSpendAction = (action: StudioAction): action is SpendAction => SPEND_ACTION_TYPES.has(action.type);
 
