@@ -369,6 +369,12 @@ export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE' as string as StudioError
  */
 export const lockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
 
+/**
+ * The registry id a lock names. Older assets may carry a provider id ('google/gemini-2.5-flash-image') as their
+ * model; the registry resolves those to the same entry, so the lock means that entry, never another one.
+ */
+export const lockedSpecId = (modelId: string): string => getImageModel(modelId)?.id ?? modelId;
+
 /** What a run pins at its start (models.md §3.4 item 4): the tier (resolution), the pre-lock override and the lock. */
 export interface RunPin extends Pick<Settings, 'quality' | 'imageModelOverride'> {
   lock?: ImageModelLock;
@@ -2598,7 +2604,7 @@ class RenderRun {
     if (!match) return false;
     // A locked comic is drawn on its model only: a version from another model is never put back silently (§3.1).
     const lock = lockOf(doc);
-    if (lock && match.version.model && match.version.model !== lock.modelId) return false;
+    if (lock && match.version.model && lockedSpecId(match.version.model) !== lockedSpecId(lock.modelId)) return false;
     const saved = this.priceOf(job.kind);
     const balloonsBefore = job.target.kind === 'page' ? findPage(doc, job.target.id)?.balloons : undefined;
     // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
@@ -2992,7 +2998,7 @@ class RenderRun {
           }
         },
         ...(job.landedOps ? job.landedOps() : []),
-        ...this.lockOps(job, compiled.spec, picked.model, result.model)
+        ...this.lockOps(job, compiled.spec, picked.model, result.modelVersion)
       ],
       { origin: 'job' }
     );
@@ -3132,7 +3138,7 @@ class RenderRun {
    */
   private assertLockedModel(job: ImageJob, spec: ImageModelSpec): void {
     const lock = lockOf(this.session.doc);
-    if (!lock || lock.modelId === spec.id) return;
+    if (!lock || lockedSpecId(lock.modelId) === spec.id) return;
     logger.error('comic_model_lock_violation', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), kind: job.kind, model: spec.id, locked: lock.modelId });
     throw modelLockedError(`This comic is locked to ${modelName(lock.modelId)}, so ${job.label.toLowerCase()} wasn't drawn on ${spec.nickname}. Nothing was charged.`);
   }
@@ -3146,10 +3152,10 @@ class RenderRun {
     const live = this.session.doc;
     if (live.imageModel) return [];
     const derived = deriveLock(live);
-    if (derived && derived.modelId !== spec.id) return []; // never re-point a legacy comic (the invariant refuses such jobs)
+    if (derived && lockedSpecId(derived.modelId) !== spec.id) return []; // never re-point a legacy comic (the invariant refuses such jobs)
     const canonical = reported && providerModel && reported !== providerModel && reported.startsWith(providerModel) ? reported : undefined;
     const lock: ImageModelLock = derived
-      ? { ...derived, ...(providerModel && !derived.providerModel ? { providerModel } : {}) }
+      ? { ...derived, modelId: spec.id, ...(providerModel && !derived.providerModel ? { providerModel } : {}) }
       : { modelId: spec.id, ...(providerModel ? { providerModel } : {}), ...(canonical ? { canonicalSlug: canonical } : {}), lockedAt: Date.now(), origin: 'first_render' };
     return [{ op: 'image_model', lock }];
   }

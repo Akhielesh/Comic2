@@ -491,6 +491,14 @@ describe('locked model edge cases (models.md §3.9)', () => {
     expect(new Set(images.calls.map((c) => c.spec.id))).toEqual(new Set(['nano-banana-2.1']));
   });
 
+  it("an older comic whose assets name the provider's id is locked to that registry entry (no false violation)", async () => {
+    const { session, ctx } = setup(drawnDoc(undefined, 'google/gemini-nano-banana-2.1'));
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(session.doc.pages[0].render.status).toBe('ready');
+    expect(session.doc.imageModel).toMatchObject({ modelId: 'nano-banana-2.1', origin: 'migrated' });
+    expect(ctx.imagesFake.calls.map((c) => c.spec.id)).toEqual(['nano-banana-2.1']);
+  });
+
   it('a legacy comic on a deprecated model keeps drawing on it, with one notice that offers the picker', async () => {
     const { session, ctx } = setup(drawnDoc(undefined, 'nano-banana-2'));
     await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);

@@ -31,6 +31,7 @@ import {
   hasActiveRun,
   imageRouteFor,
   lockOf,
+  lockedSpecId,
   priceBookFor,
   startAction,
   type RunActionOptions,
@@ -91,13 +92,14 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
   const prices = await priceBookFor(ctx);
   const doc = ctx.session.doc;
   const prior = lockOf(doc);
+  const priorId = prior ? lockedSpecId(prior.modelId) : undefined;
   const caps = opts.caps ?? ctx.caps ?? DEFAULT_CAPS;
 
   // 2. A registry id (never a provider id, never a `replacement` mapping).
   const spec: ImageModelSpec | undefined = IMAGE_MODELS.find((m) => m.id === action.modelId);
   if (!spec) throw bad("That image model isn't in Comic Studio.");
   const switchBack = !!prior?.changes?.[0] && prior.changes[0].from === spec.id;
-  if (prior && spec.id === prior.modelId) {
+  if (prior && spec.id === priorId) {
     const text = `This comic already draws with ${spec.nickname} — nothing changed.`;
     commitWithMessage(ctx, opts, [], text, []);
     return finished({ status: 'done', message: text });
@@ -154,7 +156,7 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
     providerModel: route.model,
     lockedAt: at,
     origin: 'user_change',
-    changes: [{ from: prior.modelId, to: spec.id, at, redraw: action.redraw, quotedUsd: round4(action.quotedUsd) }, ...(prior.changes ?? [])].slice(0, DOC_LIMITS.modelChanges)
+    changes: [{ from: priorId!, to: spec.id, at, redraw: action.redraw, quotedUsd: round4(action.quotedUsd) }, ...(prior.changes ?? [])].slice(0, DOC_LIMITS.modelChanges)
   };
   const fromName = modelName(prior.modelId);
   const steps: NextStep[] = [];
@@ -172,10 +174,10 @@ async function changeImageModel(ctx: StudioContext, action: ChangeImageModel, op
     const pagesCover = redrawQuote(doc, spec.id, 'pages_cover', prices, route.byok);
     const redraw = redrawActions(doc, 'pages_cover', pagesCover, pagesCover.usd ?? 0)[0];
     if (redraw && pagesCover.usd !== null) steps.push({ label: `Redraw them · ${cost.approx(pagesCover.usd)}`, action: redraw, usd: pagesCover.usd });
-    steps.push({ label: `Switch back to ${fromName}`, client: { type: 'open_model_picker', suggest: prior.modelId } });
+    steps.push({ label: `Switch back to ${fromName}`, client: { type: 'open_model_picker', suggest: priorId! } });
   }
   commitWithMessage(ctx, opts, [{ op: 'image_model', lock }], text, [], steps, 'Change model');
-  logger.info('comic_model_changed', { projectId: ctx.projectId, from: prior.modelId, to: spec.id, redraw: action.redraw, quotedUsd: action.quotedUsd });
+  logger.info('comic_model_changed', { projectId: ctx.projectId, from: priorId, to: spec.id, redraw: action.redraw, quotedUsd: action.quotedUsd });
 
   if (!actions.length) return finished({ status: 'done', message: text, nextSteps: steps });
   // The redraw is the normal spend: the same gate, budget and quote checks as any confirmed render (sheets first).
