@@ -135,6 +135,9 @@ export interface LabItem {
   prompt: LabPromptKey;
   /** D4: the blind pair this item is one side of. */
   pair?: { id: string; label: string };
+  /** The one provider endpoint this check tests (D2: OpenRouter's Images API). A click whose transport would send
+   *  its only call anywhere else is stopped before it leaves the server, so it is never paid through the wrong path. */
+  transport?: '/images';
   /** A dated number from models.md §1 / §2.6, used ONLY when the PriceBook has none (models outside the registry,
    *  or a resolution the registry cannot price). */
   research?: { baseUsd: number; perRefUsd?: number; label: string };
@@ -212,8 +215,8 @@ export const LAB_CHECKS: readonly LabCheck[] = [
     answers: 'Whether one 2:3 page with 4 references comes back through OpenRouter, what it costs, and what our transport actually sent (quality, references).',
     note: '2:3 at 1024×1536 is ≈ $0.1646 in output tokens at quality max (OpenAI calculator, models.md §1.1); reference input is unpublished. The lab reserves the higher 1024² price so the cap never under-counts.',
     items: [
-      { id: 'd2-gpt-image-2.5-sunburst', check: 'D2', title: 'GPT Image 2.5 Sunburst · 2:3 page', modelId: 'gpt-image-2.5', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1' },
-      { id: 'd2-gpt-image-2.5-flare', check: 'D2', title: 'GPT Image 2.5 Flare · 2:3 page', modelId: 'gpt-image-2.5-flare', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1' }
+      { id: 'd2-gpt-image-2.5-sunburst', check: 'D2', title: 'GPT Image 2.5 Sunburst · 2:3 page', modelId: 'gpt-image-2.5', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' },
+      { id: 'd2-gpt-image-2.5-flare', check: 'D2', title: 'GPT Image 2.5 Flare · 2:3 page', modelId: 'gpt-image-2.5-flare', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' }
     ]
   },
   {
@@ -406,6 +409,14 @@ export interface ProviderCapture {
   networkError?: string;
   /** Downloading an image the provider hosted (a GET, not a provider call) failed after a paid answer. */
   downloadFailed?: boolean;
+  /** The check requires one endpoint, and the transport's first POST was headed elsewhere (e.g. the studio skipping
+   *  OpenRouter's Images API for 15 minutes after a 404): that endpoint. Nothing was sent (`calls` stays 0). */
+  skippedTransport?: string;
+}
+
+export interface OneCallOptions {
+  /** The only endpoint (relative to OpenRouter's API base, e.g. '/images') the one call may go to. */
+  requirePath?: string;
 }
 
 const oneCallStop = (): StudioError =>
@@ -442,14 +453,24 @@ const describeSent = (body: unknown): LabSentFacts | undefined => {
 
 const requestUrl = (input: RequestInfo | URL): string => (typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url);
 
+/** '/images' for `${OPENROUTER_BASE_URL}/images?x`; the bare path for any other host. */
+const endpointOf = (url: string): string =>
+  (url.startsWith(OPENROUTER_BASE_URL) ? url.slice(OPENROUTER_BASE_URL.length) : url.replace(/^[a-z]+:\/\/[^/]+/i, '')).split('?')[0] || '/';
+
 /**
  * Wrap the network the image transport uses so exactly ONE provider call leaves the server. The first POST goes out
  * (its answer is read once and handed back, so nothing is fetched twice); any later POST — a 429 retry, the
  * text-only nudge, the Images-API → chat fallback, the other route — is stopped with a marked error before it is
  * sent. Every POST counts, whatever its host: the image transport only ever POSTs to a provider. GETs (downloading
  * an image the provider hosted) are not provider calls and pass through.
+ * With `requirePath`, a first POST to any other endpoint is stopped unsent too (and so is everything after it): a
+ * check that tests one transport is never paid through another.
  */
-export const oneCallTransport = (network: typeof fetch, now: () => number = Date.now): { fetch: typeof fetch; capture: ProviderCapture } => {
+export const oneCallTransport = (
+  network: typeof fetch,
+  now: () => number = Date.now,
+  opts: OneCallOptions = {}
+): { fetch: typeof fetch; capture: ProviderCapture } => {
   const capture: ProviderCapture = { calls: 0, stopped: 0 };
   const guarded = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
@@ -464,12 +485,18 @@ export const oneCallTransport = (network: typeof fetch, now: () => number = Date
         throw err;
       }
     }
-    if (capture.calls >= 1) {
+    if (capture.calls >= 1 || capture.skippedTransport !== undefined) {
       capture.stopped += 1;
       throw oneCallStop();
     }
+    const endpoint = endpointOf(url);
+    if (opts.requirePath && endpoint !== opts.requirePath) {
+      capture.stopped += 1;
+      capture.skippedTransport = endpoint;
+      throw oneCallStop();
+    }
     capture.calls = 1;
-    capture.endpoint = (url.startsWith(OPENROUTER_BASE_URL) ? url.slice(OPENROUTER_BASE_URL.length) : url.replace(/^[a-z]+:\/\/[^/]+/i, '')).split('?')[0] || '/';
+    capture.endpoint = endpoint;
     capture.sent = describeSent(init?.body);
     const started = now();
     let res: Response;
@@ -1087,6 +1114,23 @@ const downCopy = (nickname: string, h: LabHealthView): string => {
   return `${nickname} is paused right now${reason ? ` — ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : ''}${source ? ` (${source})` : ''}. The lab didn't call it. ${NOTHING_CHARGED} Provider status shows when it's serving again.`;
 };
 
+/** How long imageClient.ts skips a model's Images API after a 404/405 (its IMAGES_API_RECHECK_MS, per process). */
+const IMAGES_API_SKIP_MS = 15 * 60_000;
+const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+
+/**
+ * A D2 item whose Images API answered 404/405 in the last 15 minutes: say so before the click. Not a refusal — the
+ * transport's skip lives in this process only (a restart clears it), and the one-call guard stops a skipped click
+ * unsent anyway — but the owner should know a click now may come back "not sent".
+ */
+const imagesApiSkipNote = (item: LabItem, runs: LabRunRow[], now: number): string | undefined => {
+  if (item.transport !== '/images') return undefined;
+  const last = runs.find((r) => r.modelId === item.modelId && r.result.errorCode === 'IMAGES_API_UNAVAILABLE' && r.finishedAt); // newest first
+  const at = last?.finishedAt ? Date.parse(last.finishedAt) : NaN;
+  if (!Number.isFinite(at) || now - at >= IMAGES_API_SKIP_MS) return undefined;
+  return `OpenRouter's Images API answered ${last!.result.httpStatus ?? 404} for this model at ${hhmm(at)} UTC. Until about ${hhmm(at + IMAGES_API_SKIP_MS)} UTC our transport may skip it; if it does, the lab stops before sending this call and nothing is charged.`;
+};
+
 const capCopy = (spent: number, cap: number, quote: number): string =>
   `Today's lab budget can't cover this: ${money(spent)} of ${money(cap)} used (UTC day), and this check is quoted at ${money(quote)}. It resets at 00:00 UTC. ${NOTHING_CHARGED}`;
 
@@ -1100,6 +1144,12 @@ const factsView = (f: LabResultFacts): LabFactsView => {
 
 /** The provider's first answer, in words, when the lab stopped the transport's second attempt. */
 const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string } => {
+  if (cap.skippedTransport !== undefined) {
+    return {
+      code: 'IMAGES_API_SKIPPED',
+      message: `Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, so the lab didn't send this D2 call to chat. ${NOTHING_CHARGED}`
+    };
+  }
   const stop = ' The studio would try once more; the lab stops after one call.';
   if (cap.networkError) return { code: 'PROVIDER_ERROR', message: `The request failed before any answer (${cap.networkError}).${stop}` };
   if (cap.downloadFailed) return { code: 'PROVIDER_ERROR', message: `The image was made${cap.costUsd !== undefined ? ' and billed' : ''}, but downloading it from the provider failed.${stop}` };
@@ -1286,6 +1336,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       else if (!quote) reason = `There's no price to quote for ${spec?.nickname ?? item.modelId} at ${item.res}, so the lab won't run it.`;
       else if (health?.state === 'down') reason = downCopy(spec?.nickname ?? item.modelId, health);
       else if (spentUsd + quote.usd > capUsd + 1e-9) reason = capCopy(spentUsd, capUsd, quote.usd);
+      const note = [item.note, item.unavailable ? undefined : imagesApiSkipNote(item, runs, now)].filter(Boolean).join(' ') || undefined;
       return {
         id: item.id,
         check: item.check,
@@ -1301,7 +1352,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         health,
         canRun: !reason,
         ...(reason ? { reason } : {}),
-        ...(item.note ? { note: item.note } : {}),
+        ...(note ? { note } : {}),
         ...(item.pair ? { pair: item.pair } : {}),
         runs: { ok: mine.filter((r) => r.status === 'ok').length, failed: mine.filter((r) => r.status === 'failed').length, running: mine.filter((r) => r.status === 'running').length }
       };
@@ -1340,7 +1391,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     references: ImageReference[],
     adminId: string
   ): Promise<{ status: 'ok' | 'failed'; costUsd: number | null; providerModel: string | null; facts: LabResultFacts }> => {
-    const transport = oneCallTransport(deps.network, deps.now);
+    const transport = oneCallTransport(deps.network, deps.now, { requirePath: item.transport });
     const images = createImageGenerator(keys, {
       fetch: transport.fetch,
       // The lab never uses Gemini direct (its keys hold OpenRouter only); if anything tried, it would be a second call.
@@ -1361,7 +1412,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       sent: cap.sent ?? null,
       refsSent: cap.sent?.references ?? 0,
       costReported: cap.costUsd !== undefined,
-      stoppedSecondCall: cap.stopped > 0
+      // A SECOND call was stopped (one went out first). A first call stopped for its endpoint is not one.
+      stoppedSecondCall: cap.calls > 0 && cap.stopped > 0
     });
     try {
       const result = await images({ spec, resolution: item.res, aspect: item.aspect, prompt: labPrompt(item, references.map((r) => r.label)), references });

@@ -290,6 +290,54 @@ describe('running a check', () => {
     expect(h.store.imageCalls.at(-1)).toMatchObject({ outcome: 'failed', provider_cost_usd: 0.03 });
   });
 
+  it('D2 stays on the Images API: a second click inside the transport’s 15-minute skip after a 404 is stopped unsent, never paid through chat', async () => {
+    const h = harness();
+    h.setScript(() => new Response('not found', { status: 404 }));
+    const first = (await runItem(h, 'd2-gpt-image-2.5-sunburst')).run as LabRunView;
+    expect(first.facts).toMatchObject({ callMade: true, errorCode: 'IMAGES_API_UNAVAILABLE', httpStatus: 404 });
+    // No __resetImageClientForTests here: the studio transport now skips /images for this model and would go to chat.
+    h.setScript(() => imageAnswer(png2x3.toString('base64')));
+    const second = (await runItem(h, 'd2-gpt-image-2.5-sunburst')).run as LabRunView;
+    expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']); // the first click's only call
+    expect(second).toMatchObject({ status: 'failed', costUsd: 0 });
+    expect(second.facts).toMatchObject({ callMade: false, errorCode: 'IMAGES_API_SKIPPED', stoppedSecondCall: false, endpoint: null, httpStatus: null, sent: null, refsSent: 0 });
+    expect(second.facts.message).toBe(
+      "Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, so the lab didn't send this D2 call to chat. Nothing was charged."
+    );
+    expect(h.store.imageCalls).toHaveLength(1); // only the 404 that reached the provider is a comic_image_calls row
+    expect(h.store.runs.find((r) => r.id === second.id)).toMatchObject({ status: 'failed', costUsd: 0 });
+    // Before the next click the overview says so — without blocking (a restart clears the transport's skip).
+    const d2 = (await h.lab.overview(ADMIN)).checks.find((c) => c.id === 'D2')!.items;
+    const sunburst = d2.find((i) => i.id === 'd2-gpt-image-2.5-sunburst')!;
+    expect(sunburst.canRun).toBe(true);
+    expect(sunburst.note).toBe(
+      "OpenRouter's Images API answered 404 for this model at 12:00 UTC. Until about 12:15 UTC our transport may skip it; if it does, the lab stops before sending this call and nothing is charged."
+    );
+    expect(d2.find((i) => i.id === 'd2-gpt-image-2.5-flare')!.note).toBeUndefined(); // the other model is unaffected
+    // ...and its own click still goes to /images.
+    h.calls.length = 0;
+    const flare = (await runItem(h, 'd2-gpt-image-2.5-flare')).run as LabRunView;
+    expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']);
+    expect(flare.status).toBe('ok');
+  });
+
+  it('the transport wrapper with a required endpoint: a first POST anywhere else is stopped unsent, and so is everything after it', async () => {
+    const sent: string[] = [];
+    const t = oneCallTransport(
+      (async (input: RequestInfo | URL, init?: RequestInit) => {
+        sent.push(`${init?.method || 'GET'} ${String(input)}`);
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch,
+      Date.now,
+      { requirePath: '/images' }
+    );
+    await expect(t.fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', body: '{}' })).rejects.toMatchObject({ code: 'CANCELLED' });
+    await expect(t.fetch('https://openrouter.ai/api/v1/images', { method: 'POST', body: '{}' })).rejects.toMatchObject({ code: 'CANCELLED' });
+    expect(sent).toEqual([]);
+    expect(t.capture).toMatchObject({ calls: 0, stopped: 2, skippedTransport: '/chat/completions' });
+    expect(t.capture.endpoint).toBeUndefined();
+  });
+
   it('the transport wrapper itself: the first POST goes out, a second is refused unsent, GET downloads pass', async () => {
     const sent: string[] = [];
     const t = oneCallTransport((async (input: RequestInfo | URL, init?: RequestInit) => {
