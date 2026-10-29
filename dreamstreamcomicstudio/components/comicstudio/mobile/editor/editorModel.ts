@@ -146,6 +146,15 @@ export function editionViewDoc(doc: ComicDoc, lang: string): ComicDoc {
 const GEOMETRY_KEYS = ['x', 'y', 'w', 'tailX', 'tailY'] as const;
 const SHARED_BALLOON_KEYS = ['z', 'locked', 'linkTo'] as const;
 
+/** Same position, size and tail (absent and present differ: dropping a tail is a change). */
+const sameGeometry = (a: Partial<Balloon>, b: Partial<Balloon>): boolean =>
+  GEOMETRY_KEYS.every((k) => {
+    const x = a[k];
+    const y = b[k];
+    if (!finite(x) || !finite(y)) return !finite(x) && !finite(y);
+    return Math.abs(x - y) < 1e-9;
+  });
+
 const findLine = (doc: ComicDoc, pageId: string, lineId: string): Line | undefined => {
   const page = doc.pages.find((p) => p.id === pageId);
   for (const panel of page?.panels || []) {
@@ -178,9 +187,15 @@ export function translationEditOp(doc: ComicDoc, lang: string, pageId: string, l
 
 /**
  * Rewrite lettering ops made on an edition's view so they land in that edition:
- *  - `balloon` geometry (x, y, w, tail, pinned) → `edition_balloon`; stacking / lock / link stay on the
- *    shared source balloon, but only when it is stored (otherwise the op would invent a default one);
- *  - `balloons` (Tidy on this language) → one `edition_balloon` per placed line;
+ *  - `balloon` geometry (x, y, w, tail, pinned: a drag, a nudge, "Keep here") → `edition_balloon`;
+ *  - a `balloon` change to a SHARED key (stacking `z`, `locked`, `linkTo`) is the user's whole intent:
+ *    it goes to the shared source balloon when that is stored, and is dropped (counted) when it is not —
+ *    inventing a default source balloon would move the original. Geometry riding along with it (the full
+ *    resolved balloon `balloonOp` carries for a software-placed line, Lock's implied pin) is NEVER written
+ *    into the edition: that would freeze the balloon there as a side effect (bug hunt LE-3);
+ *  - `balloons` (a whole-page replace) → one `edition_balloon` per balloon whose geometry differs from what
+ *    the edition draws now (Tidy on this language). A replace that only changes shared keys (Unlink) moves
+ *    nothing and is counted as dropped, so the editor says the connector belongs to the original (LE-4);
  *  - `line` text → `translation`; any other `line` change (kind, speaker, delete, move) belongs to the
  *    original and is dropped (counted, so the editor can say so);
  *  - `line_style` / `letter_style` pass through: style is shared by every language.
@@ -191,24 +206,41 @@ export function editionOps(ops: readonly DocOp[], lang: string, sourceDoc: Comic
   for (const op of ops) {
     switch (op.op) {
       case 'balloon': {
-        const geo = geometryOf(op.patch || {});
-        if (Object.keys(geo).length) out.push({ op: 'edition_balloon', lang, lineId: op.lineId, patch: geo });
+        const patch = op.patch || {};
         const shared: Partial<Balloon> = {};
-        for (const k of SHARED_BALLOON_KEYS) if (op.patch && k in op.patch) (shared as Record<string, unknown>)[k] = (op.patch as Record<string, unknown>)[k];
+        for (const k of SHARED_BALLOON_KEYS) if (k in patch) (shared as Record<string, unknown>)[k] = (patch as Record<string, unknown>)[k];
         if (Object.keys(shared).length) {
           const stored = sourceDoc.pages.find((p) => p.id === op.pageId)?.balloons.some((b) => b.lineId === op.lineId);
           if (stored) out.push({ op: 'balloon', pageId: op.pageId, lineId: op.lineId, patch: shared });
           else dropped += 1;
-        } else if (!Object.keys(geo).length) dropped += 1;
+          break;
+        }
+        const geo = geometryOf(patch);
+        if (Object.keys(geo).length) out.push({ op: 'edition_balloon', lang, lineId: op.lineId, patch: geo });
+        else dropped += 1;
         break;
       }
-      case 'balloons':
+      case 'balloons': {
+        // What the edition draws now on this page (overrides applied, edition-only positions appended):
+        // the array was computed from exactly this view, so an untouched balloon compares equal.
+        const drawn = new Map((editionViewDoc(sourceDoc, lang).pages.find((p) => p.id === op.pageId)?.balloons || []).map((b) => [b.lineId, b]));
+        let moved = 0;
+        let sharedChanged = false;
         for (const b of op.balloons) {
+          const prev = drawn.get(b.lineId);
+          if (prev && sameGeometry(prev, b)) {
+            if (SHARED_BALLOON_KEYS.some((k) => prev[k] !== b[k])) sharedChanged = true;
+            continue;
+          }
           const geo = geometryOf(b);
           delete geo.pinned;
-          if (Object.keys(geo).length) out.push({ op: 'edition_balloon', lang, lineId: b.lineId, patch: geo });
+          if (!Object.keys(geo).length) continue;
+          out.push({ op: 'edition_balloon', lang, lineId: b.lineId, patch: geo });
+          moved += 1;
         }
+        if (!moved && sharedChanged) dropped += 1;
         break;
+      }
       case 'line': {
         const keys = op.patch ? Object.keys(op.patch) : [];
         if (op.patch && keys.length === 1 && keys[0] === 'text' && typeof op.patch.text === 'string') {
