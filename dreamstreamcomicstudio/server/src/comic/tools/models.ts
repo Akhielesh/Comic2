@@ -991,7 +991,7 @@ export async function modelStatusLine(
   ctx: StudioContext,
   doc: ComicDoc,
   userText: string,
-  opts: { health?: ModelHealthPort; now?: number; waitMs?: number; cost?: CostFormatter } = {}
+  opts: { health?: ModelHealthPort; now?: number; waitMs?: number; cost?: CostFormatter; drawIntent?: DirectorTurn['drawIntent'] } = {}
 ): Promise<string> {
   const now = opts.now ?? Date.now();
   const health = opts.health ?? modelHealth();
@@ -1010,15 +1010,25 @@ export async function modelStatusLine(
       return false;
     }
   });
-  if (!breaker && !streak.count && !outage) {
-    return STATUS_ASK_RE.test(userText) ? `MODEL STATUS (${cur.name}): no failures in this comic or in our recent calls; live provider status not checked.` : '';
-  }
+  const read = async (): Promise<ModelHealth | null> => {
+    try {
+      return await within(health.getModelHealth(cur.spec, { keys: ctx.keys, now }), opts.waitMs ?? HEALTH_WAIT_MS);
+    } catch {
+      return null;
+    }
+  };
   let mh: ModelHealth | null = null;
-  try {
-    mh = await within(health.getModelHealth(cur.spec, { keys: ctx.keys, now }), opts.waitMs ?? HEALTH_WAIT_MS);
-  } catch {
-    mh = null;
-  }
+  if (!breaker && !streak.count && !outage) {
+    // Nothing we saw ourselves (the breaker forgets when the container sleeps). A turn that may draw still reads the
+    // public status the preflight will read (cached 3 min, single-flight, bounded), and says so only when it is bad.
+    const drawing = !!opts.drawIntent && opts.drawIntent !== 'none';
+    mh = drawing ? await read() : null;
+    if (!mh || (mh.state !== 'down' && mh.state !== 'degraded')) {
+      return STATUS_ASK_RE.test(userText)
+        ? `MODEL STATUS (${cur.name}): no failures in this comic or in our recent calls; ${!mh ? 'live provider status not checked' : mh.state === 'ok' ? 'live status: serving normally' : 'live status unknown'}.`
+        : '';
+    }
+  } else mh = await read();
   const state: HealthState = mh?.state ?? (breaker ? 'down' : 'unknown');
   const route = mh?.routes.find((r) => r.state === state) ?? mh?.routes[0];
   const source = route?.source === 'openrouter' ? 'OpenRouter status' : route?.source === 'observed' ? 'our recent calls' : 'no live data';

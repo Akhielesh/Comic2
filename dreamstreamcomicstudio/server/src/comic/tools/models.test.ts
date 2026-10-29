@@ -375,7 +375,7 @@ describe('a lock the registry no longer knows (models.md §3.9)', () => {
     const health = fakeModelHealth({ now: LAKE_NOW });
     health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
     const getModelHealth = vi.spyOn(health, 'getModelHealth');
-    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW })).toBe('');
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW, drawIntent: 'draw' })).toBe('');
     expect(await modelFactLines(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW })).toEqual([
       'MODEL: nano-banana-0.9-retired is no longer offered by the studio. Say so and offer the picker (model_options); never pick another model yourself.'
     ]);
@@ -480,6 +480,30 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
     ]);
     expect(line).toContain('never say a drawing started unless a tool says so. Suggest waiting first (free).');
     expect(line.length).toBeLessThanOrEqual(400);
+  });
+
+  it('a drawing turn reads the public status even when nothing failed here (the breaker forgets when the container sleeps)', async () => {
+    const health = fakeModelHealth({ now: LAKE_NOW });
+    health.setPublic('google/gemini-nano-banana-2.1', [{ name: 'Google AI Studio', status: -1, uptime30m: 40, uptime1d: 90 }]);
+    const getModelHealth = vi.spyOn(health, 'getModelHealth');
+    setup(lakeLocked(), 'draw page 3 again', { caps: BYOK_CAPS, keys: BYOK_KEYS });
+    // No breaker, no failures in this comic, no outage card, and the turn won't draw: no I/O at all.
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'make the sky pink', { health, now: LAKE_NOW, drawIntent: 'none' })).toBe('');
+    expect(getModelHealth).not.toHaveBeenCalled();
+    // A turn that may draw: OpenRouter says the only provider is failing, so the fact is in context before any tool runs.
+    const line = await modelStatusLine(ctx, ctx.session.doc, 'draw page 3 again', { health, now: LAKE_NOW, drawIntent: 'redraw' });
+    expect(getModelHealth).toHaveBeenCalledTimes(1);
+    expect(line).toMatch(/^MODEL STATUS \(Nano Banana 2\.1\): not serving \(down\)[^(]*\(OpenRouter status, just now\)\./);
+    expect(line).toContain('never say a drawing started unless a tool says so. Suggest waiting first (free).');
+    expect(await modelFactLines(ctx, ctx.session.doc, 'draw page 3 again', { health, now: LAKE_NOW, drawIntent: 'redraw' })).toEqual([line]);
+    // Back to normal (after the 3-minute cache): a drawing turn says nothing; asked, it says what it read.
+    health.setPublic('google/gemini-nano-banana-2.1', [{ name: 'Google AI Studio', status: 0, uptime30m: 100, uptime1d: 99.9 }]);
+    const later = LAKE_NOW + 4 * 60_000;
+    health.setNow(later);
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'draw page 3 again', { health, now: later, drawIntent: 'redraw' })).toBe('');
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down? draw it', { health, now: later, drawIntent: 'draw' })).toBe(
+      'MODEL STATUS (Nano Banana 2.1): no failures in this comic or in our recent calls; live status: serving normally.'
+    );
   });
 
   it('a hung health read never holds the turn: the breaker alone words the status', async () => {
