@@ -3,7 +3,7 @@
 // writer-class translator per chunk, validation + one repair round, the safety hook, the linguist
 // review (always), duplicates copied for free, spend, the appended completion message, gating.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { editionReadiness, editionProgress, i18nOf } from '../../../../shared/comic/i18n.js';
+import { editionReadiness, editionProgress, i18nOf, lineSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps, type StudioAction } from '../../../../shared/comic/ops.js';
 import { AUTO_CORRECTED_NOTE, planTranslation } from '../../../../shared/comic/translationPlan.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
@@ -15,8 +15,10 @@ import type { Card, Msg } from '../../../../shared/comic/doc.js';
 import { costViewFor } from '../costText.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
+import { applyReview } from './linguist.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
 import { fakeLinguist, fakeTranslator, requestedItems, sixPageKidsDoc, times } from './testing.js';
+import type { LlmRequest } from '../types.js';
 
 vi.mock('../safety/index.js', async (orig) => {
   const real = await orig<typeof import('../safety/index.js')>();
@@ -122,6 +124,39 @@ describe('software first: caching and misses', () => {
     const second = await run(doc, { translator: times(2, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
     expect(roles(second.ctx, 'translator')).toHaveLength(0);
     expect(i18nOf(second.session.doc).editions.te.lines.l1).toMatchObject({ text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited' });
+  });
+
+  it('edits the author makes WHILE the run is going survive: a later chunk and the review never overwrite them', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const tr = fakeTranslator();
+    const lineOf = (id: string) => session.doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).find((l) => l.id === id)!;
+    const edit = (id: string, text: string) =>
+      session.commit([{ op: 'translation', lang: 'te', lineId: id, patch: { text, status: 'edited', sourceHash: lineSourceHash(lineOf(id)), at: Date.now() } }], { origin: 'user', label: 'Edit translation' });
+    let calls = 0;
+    const translator = (req: LlmRequest) => {
+      calls += 1;
+      // Chunk 1 (pages 1–3) is with the model: the author types the Telugu for l9 (page 5 → chunk 2).
+      if (calls === 1) edit('l9', 'నా స్వంత అనువాదం తొమ్మిది');
+      // Chunk 2 is with the model: the author rewrites l1 (committed as machine text by chunk 1).
+      if (calls === 2) edit('l1', 'నా స్వంత అనువాదం ఒకటి');
+      return tr.step(req);
+    };
+    // The linguist would "fix" l1 (major, with a suggestion) — but it is the author's line now.
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Meaning is off.', suggestion: 'చంద్రుడు ఎక్కడ?' } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, translator), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    const e = i18nOf(session.doc).editions.te;
+    // Without the fix: l9 = chunk 2's machine text ('reviewed'); l1 = the linguist's suggestion, 'Auto-corrected'.
+    expect(e.lines.l9).toMatchObject({ text: 'నా స్వంత అనువాదం తొమ్మిది', status: 'edited' });
+    expect(e.lines.l1).toMatchObject({ text: 'నా స్వంత అనువాదం ఒకటి', status: 'edited' });
+    expect(e.lines.l1.issue).toBeUndefined();
+    // The author's lines were not sent to the linguist either (their words are not up for review).
+    const reviewed = String(roles(ctx, 'linguist')[0].messages[1].content);
+    expect(reviewed).not.toContain('"id":"l1"');
+    expect(reviewed).not.toContain('"id":"l9"');
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
   });
 
   it('several languages run with concurrency ≤ 3; one chunk per ≤ 40 lines', async () => {
@@ -233,6 +268,22 @@ describe('the linguist review (always)', () => {
     const last = session.doc.conversation[session.doc.conversation.length - 1];
     expect(last.text).toContain('1 line corrected by the review');
     expect(last.text).toContain('1 line flagged for a look');
+  });
+
+  it('applyReview leaves a line alone when its text is no longer the one the linguist was shown, or the author wrote it', () => {
+    const first = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const l1 = first.pages[0].panels[0].lines[0];
+    const doc = applyOps(first, [
+      { op: 'translations', lang: 'te', lines: { l1: { text: 'రచయిత మాట', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 }, l2: { text: 'నా మాట', status: 'edited', sourceHash: lineSourceHash(first.pages[0].panels[0].lines[1]), at: 1 } } }
+    ]);
+    const verdicts = new Map([
+      // The review call went out with the machine text; the author rewrote l1 before the verdict came back.
+      ['l1', { id: 'l1', gloss: 'g', verdict: 'fix' as const, severity: 'major' as const, issue: 'Off.', suggestion: 'చంద్రుడు ఎక్కడ?', reviewed: 'యంత్ర మాట' }],
+      ['l2', { id: 'l2', gloss: 'g', verdict: 'ok' as const, severity: 'none' as const, issue: '', suggestion: '', reviewed: 'నా మాట' }]
+    ]);
+    const out = applyReview(doc, 'te', verdicts, 'PG', 2);
+    expect(out.ops).toEqual([]);
+    expect(out.reviewed + out.autoFixed + out.flagged).toBe(0);
   });
 
   it('a review that fails leaves lines "waiting for review"; the next run reviews them without re-translating', async () => {

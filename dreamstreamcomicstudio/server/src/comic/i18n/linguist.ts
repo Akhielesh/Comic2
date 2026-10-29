@@ -35,7 +35,10 @@ export function readReview(raw: unknown): ReviewVerdict[] {
   });
 }
 
-/** What the linguist reads: the lines (and cover/brief texts) of an edition, current translations only. */
+/**
+ * What the linguist reads: the lines (and cover/brief texts) of an edition — current machine translations
+ * only. The author's own words ('edited', e.g. typed while the run was going) are theirs and never reviewed.
+ */
 export function reviewItems(doc: ComicDoc, lang: string, ids: readonly string[]): ReviewItem[] {
   const edition = i18nOf(doc).editions[lang];
   if (!edition) return [];
@@ -44,7 +47,7 @@ export function reviewItems(doc: ComicDoc, lang: string, ids: readonly string[])
   for (const { line } of linesInOrder(doc)) {
     if (!want.has(line.id)) continue;
     const t = edition.lines[line.id];
-    if (!t || t.sourceHash !== lineSourceHash(line)) continue;
+    if (!t || t.status === 'edited' || t.sourceHash !== lineSourceHash(line)) continue;
     const speaker = line.speakerId ? doc.cast.find((c) => c.id === line.speakerId)?.name : undefined;
     items.push({ id: line.id, kind: line.kind, ...(speaker ? { speaker } : {}), source: normalizeSource(line.text), text: t.text });
   }
@@ -52,7 +55,7 @@ export function reviewItems(doc: ComicDoc, lang: string, ids: readonly string[])
     if (!want.has(field)) continue;
     const t = editionTextEntry(doc, lang, field);
     const source = editionTextSource(doc, field);
-    if (!t || !source || t.sourceHash !== textSourceHash(source)) continue;
+    if (!t || t.status === 'edited' || !source || t.sourceHash !== textSourceHash(source)) continue;
     items.push({ id: field, kind: field.split('.')[1], source, text: t.text });
   }
   return items;
@@ -89,8 +92,8 @@ export async function reviewTranslations(llm: LlmClient, doc: ComicDoc, lang: st
         // `signal` is checked BETWEEN batches only: a started review call is paid for, so it finishes and is kept.
       });
       run.calls += 1;
-      const wanted = new Set(batch.map((b) => b.id));
-      for (const v of readReview(outputOf(res))) if (wanted.has(v.id)) run.verdicts.set(v.id, v);
+      const shown = new Map(batch.map((b) => [b.id, b.text] as const));
+      for (const v of readReview(outputOf(res))) if (shown.has(v.id)) run.verdicts.set(v.id, { ...v, reviewed: shown.get(v.id) });
     } catch (err) {
       run.failedBatches += 1;
       if (err instanceof StudioError && (err.code === 'CANCELLED' || err.code === 'BILLING_DENIED')) {
@@ -157,11 +160,14 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     out.flagged += 1;
     return next;
   };
+  // The author's words win: an entry they wrote ('edited'), or whose text is no longer the one the linguist
+  // was shown (rewritten while the review call was out), is neither relabelled nor replaced.
+  const authored = (cur: TextTranslation, v: ReviewVerdict) => cur.status === 'edited' || (v.reviewed !== undefined && v.reviewed !== cur.text);
   const lines: Record<string, TextTranslation> = {};
   for (const { line } of linesInOrder(doc)) {
     const v = verdicts.get(line.id);
     const cur = edition.lines[line.id];
-    if (!v || !cur || cur.sourceHash !== lineSourceHash(line)) continue;
+    if (!v || !cur || cur.sourceHash !== lineSourceHash(line) || authored(cur, v)) continue;
     lines[line.id] = decide(cur, normalizeSource(line.text), v);
   }
   if (Object.keys(lines).length) out.ops.push({ op: 'translations', lang, lines });
@@ -169,7 +175,7 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     const v = verdicts.get(field);
     const cur = editionTextEntry(doc, lang, field);
     const source = editionTextSource(doc, field);
-    if (!v || !cur || !source || cur.sourceHash !== textSourceHash(source)) continue;
+    if (!v || !cur || !source || cur.sourceHash !== textSourceHash(source) || authored(cur, v)) continue;
     out.ops.push({ op: 'edition_text', lang, field, value: decide(cur, source, v) });
   }
   return out;

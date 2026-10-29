@@ -270,7 +270,16 @@ export const REVIEW_SCHEMA = strict({
   }
 });
 
-export type ReviewVerdict = { id: string; gloss: string; verdict: 'ok' | 'fix'; severity: 'none' | 'minor' | 'major'; issue: string; suggestion: string };
+export type ReviewVerdict = {
+  id: string;
+  gloss: string;
+  verdict: 'ok' | 'fix';
+  severity: 'none' | 'minor' | 'major';
+  issue: string;
+  suggestion: string;
+  /** The translation text the linguist was shown (a line rewritten by the author meanwhile is not this text). */
+  reviewed?: string;
+};
 
 /** The previous translation of a stale line ("small source edits produce small target edits"). */
 export const previousText = (t?: TextTranslation): string | undefined => (t && t.text ? t.text : undefined);

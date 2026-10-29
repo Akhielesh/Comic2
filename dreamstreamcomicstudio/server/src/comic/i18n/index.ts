@@ -297,10 +297,17 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
         // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
         // paid for, so its lines are kept), exactly like a render that is already drawing.
         const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating });
+        // Ops against the doc as it is NOW (the author may have edited lines while the chunk was out).
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
         if (ops.length) ctx.session.commit(ops, { origin: 'job' });
-        translatedIds.push(...Object.keys(result.lines), ...Object.keys(result.extras));
-        res.translated += Object.keys(result.lines).length;
+        // Only what the commit actually wrote goes to the review; an author's edit made meanwhile is theirs.
+        const written = new Set<string>();
+        for (const op of ops) {
+          if (op.op === 'translations') for (const id of Object.keys(op.lines)) written.add(id);
+          else if (op.op === 'edition_text') written.add(op.field);
+        }
+        translatedIds.push(...[...Object.keys(result.lines), ...Object.keys(result.extras)].filter((id) => written.has(id)));
+        res.translated += Object.keys(result.lines).filter((id) => written.has(id)).length;
         res.failed += result.failed.length;
         res.unsafe += result.unsafe.length;
         res.tooLong += Object.values(result.lines).filter((l) => l.tooLong).length;
