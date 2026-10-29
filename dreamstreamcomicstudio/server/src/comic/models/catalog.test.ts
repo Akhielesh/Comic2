@@ -6,7 +6,7 @@ import { DEFAULT_CAPS, resolveStudioCaps } from '../../../../shared/comic/capabi
 import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
 import { logger } from '../../lib/logger.js';
 import { FAKE_BASE, FIXTURE_NOW, callRow, fakeOpenRouterFetch, loadOpenRouterFixture, memoryCatalogStore, memoryImageCalls } from './__fixtures__/catalogFakes.js';
-import { CACHE_SOURCE, TTL_MS, catalogIds, createModelCatalog, type CatalogFetch, type ModelCatalogDeps, type ModelCatalogRow } from './catalog.js';
+import { CACHE_SOURCE, FAIL_RETRY_MS, TTL_MS, catalogIds, createModelCatalog, type CatalogFetch, type ModelCatalogDeps, type ModelCatalogRow } from './catalog.js';
 import { NOT_ENOUGH_DATA_COPY } from './observed.js';
 import { createQualitySource } from './quality.js';
 
@@ -152,14 +152,103 @@ describe('cadence (models.md §4.5): TTLs, single-flight, stale-while-error', ()
     expect(nb.stale).toBe(true);
   });
 
-  it('one model failing marks the data stale but keeps every other live price', async () => {
+  it('one id failing marks only its own row stale; after the retry wait only that id is fetched again', async () => {
     const fetch = fakeOpenRouterFetch();
     fetch.failing.match = ['/images/models/google/gemini-3-pro-image/endpoints'];
-    const { catalog } = setup({ fetch });
+    const { catalog, c } = setup({ fetch });
     const rows = await catalog.rows();
     expect(row(rows, 'nano-banana-2.1').price['1K']!.basis).toBe('vendor_table');
     expect(row(rows, 'nano-banana-pro').price['1K']!.basis).toBe('registry');
-    expect(rows.every((r) => r.stale)).toBe(true);
+    expect(row(rows, 'nano-banana-pro').stale).toBe(true);
+    expect(rows.filter((r) => r.stale).map((r) => r.id)).toEqual(['nano-banana-pro']);
+    // Within the retry wait nothing is fetched; after it, only the failed id (never every id again).
+    c.advance(FAIL_RETRY_MS - 1_000);
+    let before = fetch.calls.length;
+    await catalog.rows();
+    expect(fetch.calls.length).toBe(before);
+    c.advance(2_000);
+    before = fetch.calls.length;
+    fetch.failing.match = [];
+    const healed = await catalog.rows();
+    expect(fetch.calls.slice(before)).toEqual([`${FAKE_BASE}/images/models/google/gemini-3-pro-image/endpoints`]);
+    expect(row(healed, 'nano-banana-pro')).toMatchObject({ stale: false, price: { '1K': { usd: 0.1344, basis: 'vendor_table' } } });
+    expect(row(healed, 'nano-banana-pro').fetchedAt.catalog).toBe(new Date(c.now()).toISOString());
+    expect(row(healed, 'nano-banana-2.1').fetchedAt.catalog).toBe('2026-10-22T17:51:00.000Z'); // each id keeps its own time
+  });
+
+  it('an id that keeps failing backs off (60 s, 120 s, …) instead of costing a request a minute', async () => {
+    const fetch = fakeOpenRouterFetch();
+    fetch.failing.match = ['/images/models/google/gemini-3-pro-image/endpoints'];
+    const { catalog, c } = setup({ fetch });
+    await catalog.rows();
+    const tries = () => fetch.calls.filter((u) => u.endsWith('/images/models/google/gemini-3-pro-image/endpoints')).length;
+    expect(tries()).toBe(1);
+    c.advance(FAIL_RETRY_MS + 1);
+    await catalog.rows();
+    expect(tries()).toBe(2);
+    c.advance(FAIL_RETRY_MS + 1); // the second failure waits 2 × FAIL_RETRY_MS
+    await catalog.rows();
+    expect(tries()).toBe(2);
+    c.advance(FAIL_RETRY_MS);
+    await catalog.rows();
+    expect(tries()).toBe(3);
+  });
+
+  it('an id OpenRouter does not know (404) is "no data" for its row only: nothing else is stale and nothing is refetched within the TTL', async () => {
+    const fixture = loadOpenRouterFixture();
+    delete fixture.imageEndpoints['meta/muse-image']; // a watch-list slug OpenRouter retired
+    delete fixture.modelEndpoints['meta/muse-image'];
+    delete fixture.imageEndpoints['google/gemini-3.1-flash-lite-image']; // a registry model whose images endpoint 404s
+    const fetch = fakeOpenRouterFetch(fixture);
+    const { catalog, c } = setup({ fetch });
+    const rows = await catalog.rows();
+    expect(rows.filter((r) => r.stale)).toEqual([]);
+    const lite = row(rows, 'nano-banana-lite');
+    expect(lite.price['1K']).toMatchObject({ basis: 'registry', note: expect.stringContaining('from our price list') });
+    expect(lite.fetchedAt.catalog).toBeUndefined(); // a registry price never carries a fetch time
+    expect(lite.endpoints.length).toBeGreaterThan(0); // its uptime endpoint still answered
+    for (let i = 0; i < 3; i += 1) {
+      c.advance(61_000);
+      const before = fetch.calls.length;
+      const again = await catalog.rows();
+      expect(fetch.calls.length - before).toBe(0);
+      expect(again.filter((r) => r.stale)).toEqual([]);
+    }
+  });
+
+  it('a failing leaderboard refresh never marks prices stale (it has its own flag)', async () => {
+    const failing: CatalogFetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+    const { catalog } = setup({ quality: createQualitySource({ fetch: failing, now: () => FIXTURE_NOW }) });
+    await catalog.rows();
+    await new Promise((r) => setTimeout(r, 10)); // the background pull settles (failed)
+    const rows = await catalog.rows();
+    expect(rows.filter((r) => r.stale)).toEqual([]);
+    expect(rows.every((r) => r.qualityStale === true)).toBe(true);
+    expect(row(rows, 'nano-banana-2.1').quality.length).toBeGreaterThan(0); // the dated snapshot is still shown
+  });
+
+  it('an incomplete persisted cache and OpenRouter down: persisted rows keep their real time, never 1970', async () => {
+    const store = memoryCatalogStore();
+    const warm = createModelCatalog({ fetch: fakeOpenRouterFetch(), store, baseUrl: FAKE_BASE, now: () => FIXTURE_NOW, quality: createQualitySource({ fetch: null }) });
+    await warm.rows();
+    // An older deploy persisted fewer ids: drop two from the cache.
+    store.cache.set(CACHE_SOURCE.endpoints, store.cache.get(CACHE_SOURCE.endpoints)!.filter((r) => r.modelId !== 'meta/muse-image' && r.modelId !== 'google/gemini-3-pro-image'));
+    const down = fakeOpenRouterFetch();
+    down.failing.all = true;
+    for (const later of [10 * 60_000, TTL_MS.endpoints + 60_000]) {
+      const cold = createModelCatalog({ fetch: down, store, baseUrl: FAKE_BASE, now: () => FIXTURE_NOW + later, quality: createQualitySource({ fetch: null }) });
+      const rows = await cold.rows();
+      expect(JSON.stringify(rows)).not.toContain('1970-');
+      const nb = row(rows, 'nano-banana-2.1');
+      expect(nb.fetchedAt.catalog).toBe('2026-10-22T17:51:00.000Z');
+      expect(nb.price['1K']).toMatchObject({ usd: 0.0336, basis: 'vendor_table' });
+      expect(nb.price['1K']!.note).not.toContain('1970');
+      expect(nb.endpoints).toEqual([]); // uptime is memory-only and its fetch failed: "No uptime data right now"
+      expect(nb.stale).toBe(true);
+      const pro = row(rows, 'nano-banana-pro'); // not persisted and the fetch failed: the dated registry list
+      expect(pro).toMatchObject({ stale: true, price: { '1K': { basis: 'registry' } } });
+      expect(pro.fetchedAt.catalog).toBeUndefined();
+    }
   });
 
   it('a slow source never holds a request past its budget: the answer comes from what is held, marked stale', async () => {

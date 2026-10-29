@@ -7,9 +7,12 @@
 //   S3 GET /api/v1/models/{id}/endpoints         providers, uptime_last_1d/30m    30 min TTL
 //   S5 LMArena snapshot (quality.ts)             24 h TTL
 //   S7 comic_image_calls (observed.ts)           live on open
-// Each source is single-flight, cached in memory and (S1/S2) in the DB, and stale-while-error: a failed refresh
-// serves the last good value with `stale: true` ("as of {time} · couldn't refresh"); with no cache at all the
-// row falls back to the registry's dated price list ("from our price list, {factsAsOf}") and no uptime.
+// Each source is single-flight, cached in memory and (S1/S2) in the DB, and stale-while-error. S2 and S3 keep
+// their freshness PER OpenRouter id: every id has its own fetch time, TTL and failure backoff, so one id that
+// fails is retried alone (never a refetch of every id) and marks only its own row stale ("as of {time} ·
+// couldn't refresh"). An id OpenRouter does not know (404) or lists no endpoints for is "no data" for that row
+// (its §4.6 copy), not a failed refresh. With no cache at all a row falls back to the registry's dated price
+// list ("from our price list, {factsAsOf}") and no uptime. Times shown are always real fetch times.
 // Price snapshots are written only when a fetched price CHANGES (T3); the daily uptime value is logged on fetch (T6).
 
 import type { ComicDoc, Resolution } from '../../../../shared/comic/doc.js';
@@ -71,8 +74,10 @@ export interface ModelCatalogRow {
   /** When a projectId is passed: this is the comic's locked (or migrated) model. */
   current?: boolean;
   fetchedAt: { catalog?: string; uptime?: string; quality?: string };
-  /** The last refresh failed; showing cached data. */
+  /** This row's price or uptime refresh failed (or did not finish in time); showing cached data. */
   stale: boolean;
+  /** The leaderboard refresh failed; the dated snapshot (`fetchedAt.quality`) is shown. Never folded into `stale`. */
+  qualityStale?: boolean;
 }
 
 // ── OpenRouter shapes (documented fields only; trimmed) ──────────────────────
@@ -182,7 +187,10 @@ export interface ModelCatalogDeps {
 
 export const OPENROUTER_PUBLIC_BASE = 'https://openrouter.ai/api/v1';
 export const TTL_MS = { list: 6 * 3_600_000, endpoints: 6 * 3_600_000, uptime: 30 * 60_000 } as const;
-/** After a failed refresh with no cache, wait this long before trying the source again (never a hot loop). */
+/**
+ * After a failed refresh, wait this long before trying again (never a hot loop). Per id it doubles with each
+ * consecutive failure, capped at the source's TTL, so an id that keeps failing costs at most one request per TTL.
+ */
 export const FAIL_RETRY_MS = 60_000;
 export const FETCH_TIMEOUT_MS = 6_000;
 /** The longest a catalog / trends request waits on OpenRouter before answering with what it holds (marked stale). */
@@ -205,6 +213,11 @@ const OR_ID = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._:-]*$/i;
 const DAY_MS = 86_400_000;
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const iso = (ms: number) => new Date(ms).toISOString();
+/** A persisted fetch time, or undefined when it is missing or unparseable — never 0 (a displayed 1970 is a fabricated time). */
+const fetchTime = (raw: unknown): number | undefined => {
+  const ms = typeof raw === 'string' ? Date.parse(raw) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+};
 
 /** Registry OpenRouter ids + the watch list (deduped). */
 export const catalogIds = (): string[] => {
@@ -215,6 +228,7 @@ export const catalogIds = (): string[] => {
 };
 
 // ── Cached source (memory + optional persistent bootstrap; single-flight; stale-while-error) ──
+// S1 is one URL, so it is cached as one value. S2/S3 use keyedSource below (per OpenRouter id).
 
 interface SourceState<T> {
   value?: T;
@@ -226,25 +240,53 @@ interface SourceState<T> {
 interface SourceOpts<T> {
   ttlMs: number;
   now: () => number;
-  /** Fetch a fresh value; `partial` marks a value that is missing some parts (served, but stale). */
-  load: (previous: T | undefined) => Promise<{ value: T; partial?: boolean }>;
-  /** Persisted value to start from (undefined/null = nothing persisted). */
+  /** Fetch a fresh value. */
+  load: (previous: T | undefined) => Promise<{ value: T }>;
+  /** Persisted value to start from (null = nothing persisted). `fetchedAt` is a real fetch time, never 0. */
   bootstrap?: () => Promise<{ value: T; fetchedAt: number } | null>;
   name: string;
 }
 
+/** A per-request bounded wait: the caller gets `late()` when `work` has not settled within `maxWaitMs`. */
+const within = async <R>(work: Promise<R>, maxWaitMs: number | undefined, late: () => R): Promise<R> => {
+  if (!maxWaitMs || maxWaitMs <= 0) return work;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<R>((resolve) => {
+    timer = setTimeout(() => resolve(late()), maxWaitMs); // a per-request timer, cleared on settle — never one at import
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+};
+
 const cachedSource = <T>(opts: SourceOpts<T>) => {
   const st: SourceState<T> = { stale: false };
-  let booted = false;
+  let booted: Promise<void> | null = null;
   let inflight: Promise<SourceState<T>> | null = null;
+
+  const boot = () =>
+    (booted ??= (async () => {
+      if (!opts.bootstrap) return;
+      try {
+        const b = await opts.bootstrap();
+        if (b && b.fetchedAt > 0 && st.value === undefined) {
+          st.value = b.value;
+          st.fetchedAt = b.fetchedAt;
+        }
+      } catch (err) {
+        logger.warn('comic_model_catalog_bootstrap_failed', { source: opts.name, message: (err as Error)?.message });
+      }
+    })());
 
   const refresh = async (): Promise<SourceState<T>> => {
     try {
       const out = await opts.load(st.value);
       st.value = out.value;
       st.fetchedAt = opts.now();
-      st.stale = Boolean(out.partial);
-      st.failedAt = out.partial ? opts.now() : undefined;
+      st.stale = false;
+      st.failedAt = undefined;
     } catch (err) {
       st.stale = true;
       st.failedAt = opts.now();
@@ -258,55 +300,183 @@ const cachedSource = <T>(opts: SourceOpts<T>) => {
     /**
      * The value to serve. Fresh within the TTL → no fetch. Otherwise ONE refresh runs (single-flight); with
      * `maxWaitMs` the caller waits at most that long and then gets what is held, marked stale, while the
-     * refresh finishes for the next request (a per-request timer, cleared on settle — never one at import).
+     * refresh finishes for the next request.
      */
     get: async (call: { maxWaitMs?: number } = {}): Promise<SourceState<T>> => {
-      if (!booted) {
-        booted = true;
-        if (opts.bootstrap) {
-          try {
-            const b = await opts.bootstrap();
-            if (b) {
-              st.value = b.value;
-              st.fetchedAt = b.fetchedAt;
-            }
-          } catch (err) {
-            logger.warn('comic_model_catalog_bootstrap_failed', { source: opts.name, message: (err as Error)?.message });
-          }
-        }
-      }
+      await boot();
       const now = opts.now();
       if (st.value !== undefined && st.fetchedAt !== undefined && now - st.fetchedAt < opts.ttlMs && !st.stale) return st;
       if (st.failedAt !== undefined && now - st.failedAt < FAIL_RETRY_MS) return st; // recent failure: serve what we have
       if (!inflight) inflight = refresh().finally(() => (inflight = null));
-      const maxWaitMs = call.maxWaitMs;
-      if (!maxWaitMs || maxWaitMs <= 0) return inflight;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const late = new Promise<SourceState<T>>((resolve) => {
-        timer = setTimeout(() => resolve({ ...st, stale: true }), maxWaitMs);
-      });
+      return within(inflight, call.maxWaitMs, () => ({ ...st, stale: true }));
+    }
+  };
+};
+
+/** What one id of a keyed source holds. */
+export interface KeyedEntry<T> {
+  value?: T;
+  /** When this id's value was fetched (ms). Never 0. */
+  fetchedAt?: number;
+  /** This id's last refresh failed, or a refresh it needed did not finish within the caller's wait. */
+  stale: boolean;
+  /** OpenRouter answered 404 or listed no endpoints: no data for this id (a successful answer, kept for the TTL). */
+  missing: boolean;
+}
+
+export interface KeyedView<T> {
+  get(id: string): KeyedEntry<T> | undefined;
+  entries(): [string, KeyedEntry<T>][];
+}
+
+interface KeyedState<T> {
+  value?: T;
+  fetchedAt?: number;
+  missing: boolean;
+  failedAt?: number;
+  failures: number;
+}
+
+interface KeyedOpts<T> {
+  name: string;
+  ids: string[];
+  ttlMs: number;
+  now: () => number;
+  /** One id's fresh value; throw on failure. `missing` = OpenRouter has no data for this id. */
+  fetchOne: (id: string) => Promise<{ value: T; missing?: boolean }>;
+  /** Persisted values, each with its own real fetch time. */
+  bootstrap?: () => Promise<Map<string, { value: T; fetchedAt: number; missing?: boolean }>>;
+  /** Called once per batch with the ids that answered (missing ones included) at the batch's fetch time. */
+  afterBatch?: (fresh: Map<string, { value: T; missing: boolean }>, fetchedAtIso: string) => Promise<void>;
+}
+
+/**
+ * A source with per-id freshness: every id has its own fetch time, TTL and failure backoff. A request
+ * refreshes only the ids that are due (past the TTL, never fetched, or failed and past their backoff), in one
+ * single-flight batch; ids that answered keep their TTL, and an id that fails marks only itself stale.
+ */
+const keyedSource = <T>(opts: KeyedOpts<T>) => {
+  const states = new Map<string, KeyedState<T>>(opts.ids.map((id) => [id, { missing: false, failures: 0 }]));
+  let booted: Promise<void> | null = null;
+  interface Batch {
+    ids: string[];
+    /** Ids this batch has answered (successfully) so far. */
+    answered: Set<string>;
+    done: Promise<void>;
+  }
+  let inflight: Batch | null = null;
+
+  const lastAttemptFailed = (st: KeyedState<T>) => st.failedAt !== undefined && (st.fetchedAt === undefined || st.failedAt >= st.fetchedAt);
+  const backoffMs = (failures: number) => Math.min(FAIL_RETRY_MS * 2 ** Math.max(0, failures - 1), opts.ttlMs);
+  const isDue = (st: KeyedState<T>, now: number) => {
+    if (lastAttemptFailed(st)) return now - (st.failedAt as number) >= backoffMs(st.failures);
+    return st.fetchedAt === undefined || now - st.fetchedAt >= opts.ttlMs;
+  };
+
+  const boot = () =>
+    (booted ??= (async () => {
+      if (!opts.bootstrap) return;
       try {
-        return await Promise.race([inflight, late]);
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        const persisted = await opts.bootstrap();
+        for (const [id, p] of persisted) {
+          const st = states.get(id);
+          if (!st || st.fetchedAt !== undefined || !(p.fetchedAt > 0)) continue;
+          st.value = p.value;
+          st.fetchedAt = p.fetchedAt;
+          st.missing = Boolean(p.missing);
+        }
+      } catch (err) {
+        logger.warn('comic_model_catalog_bootstrap_failed', { source: opts.name, message: (err as Error)?.message });
       }
+    })());
+
+  const runBatch = async (batch: Batch): Promise<void> => {
+    const at = opts.now();
+    const fresh = new Map<string, { value: T; missing: boolean }>();
+    await mapConcurrent(batch.ids, CONCURRENCY, async (id) => {
+      const st = states.get(id) as KeyedState<T>;
+      try {
+        const out = await opts.fetchOne(id);
+        st.value = out.value;
+        st.fetchedAt = at;
+        st.missing = Boolean(out.missing);
+        st.failedAt = undefined;
+        st.failures = 0;
+        fresh.set(id, { value: out.value, missing: st.missing });
+        batch.answered.add(id);
+      } catch (err) {
+        st.failedAt = opts.now();
+        st.failures += 1;
+        logger.warn('comic_model_catalog_fetch_failed', { source: opts.name, modelId: id, failures: st.failures, message: (err as Error)?.message, cached: st.value !== undefined });
+      }
+    });
+    if (fresh.size && opts.afterBatch) {
+      await opts.afterBatch(fresh, iso(at)).catch((err) => logger.warn('comic_model_catalog_after_batch_failed', { source: opts.name, message: (err as Error)?.message }));
+    }
+  };
+
+  const view = (late: ReadonlySet<string>): KeyedView<T> => {
+    const entry = (id: string): KeyedEntry<T> | undefined => {
+      const st = states.get(id);
+      if (!st) return undefined;
+      return { value: st.value, fetchedAt: st.fetchedAt, missing: st.missing, stale: lastAttemptFailed(st) || late.has(id) };
+    };
+    return { get: entry, entries: () => opts.ids.map((id) => [id, entry(id) as KeyedEntry<T>]) };
+  };
+
+  return {
+    /**
+     * The view to serve. Only due ids are fetched (single-flight: a request that finds a batch running joins
+     * it). With `maxWaitMs` the caller waits at most that long; ids the batch has not answered by then are
+     * served from what is held and marked stale, while the batch finishes for the next request.
+     */
+    get: async (call: { maxWaitMs?: number } = {}): Promise<KeyedView<T>> => {
+      await boot();
+      if (!inflight) {
+        const now = opts.now();
+        const due = opts.ids.filter((id) => isDue(states.get(id) as KeyedState<T>, now));
+        if (!due.length) return view(new Set());
+        const batch: Batch = { ids: due, answered: new Set(), done: Promise.resolve() };
+        batch.done = runBatch(batch).finally(() => {
+          if (inflight === batch) inflight = null;
+        });
+        inflight = batch;
+      }
+      const running = inflight;
+      return within(
+        running.done.then(() => view(new Set())),
+        call.maxWaitMs,
+        () => view(new Set(running.ids.filter((id) => !running.answered.has(id))))
+      );
     }
   };
 };
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
+/** A non-2xx answer (the status decides "no data" (404/410) vs a failed refresh). */
+export class CatalogHttpError extends Error {
+  constructor(
+    readonly status: number,
+    url: string
+  ) {
+    super(`${status} ${url}`);
+  }
+}
+
 const fetchJson = async (fetchImpl: CatalogFetch, url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<unknown> => {
   const controller = typeof AbortController === 'function' ? new AbortController() : undefined;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined; // per request, never at import
   try {
     const res = await fetchImpl(url, { signal: controller?.signal, headers: { accept: 'application/json' } });
-    if (!res.ok) throw new Error(`${res.status} ${url}`);
+    if (!res.ok) throw new CatalogHttpError(res.status, url);
     return await res.json();
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
 };
+
+const isNoData = (err: unknown) => err instanceof CatalogHttpError && (err.status === 404 || err.status === 410);
 
 const mapConcurrent = async <T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> => {
   const out: R[] = new Array(items.length);
@@ -395,7 +565,6 @@ export interface ModelCatalog {
 
 type ListValue = { byId: Map<string, OrImageModel> };
 type EndpointsValue = Map<string, OrImageEndpoint[]>;
-type UptimeValue = Map<string, OrModelEndpoint[]>;
 
 /** Blocks last, then quality (best edit rank), then 1K price, then resilience (models.md §2.4 R2). */
 export const sortCatalogRows = (rows: ModelCatalogRow[]): ModelCatalogRow[] => {
@@ -440,13 +609,15 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       const rows = await store.loadCache(CACHE_SOURCE.list);
       if (!rows.length) return null;
       const byId = new Map<string, OrImageModel>();
-      let oldest = Number.POSITIVE_INFINITY;
+      let oldest: number | undefined;
       for (const r of rows) {
         const m = r.payload as OrImageModel;
-        if (m && typeof m.id === 'string') byId.set(m.id, m);
-        oldest = Math.min(oldest, Date.parse(r.fetchedAt) || 0);
+        const at = fetchTime(r.fetchedAt);
+        if (!m || typeof m.id !== 'string' || at === undefined) continue; // a row without a real fetch time is not served
+        byId.set(m.id, m);
+        oldest = oldest === undefined ? at : Math.min(oldest, at);
       }
-      return byId.size ? { value: { byId }, fetchedAt: Number.isFinite(oldest) ? oldest : 0 } : null;
+      return byId.size && oldest !== undefined ? { value: { byId }, fetchedAt: oldest } : null;
     },
     load: async () => {
       const body = (await fetchJson(needFetch(), `${base}/images/models`, fetchMs)) as { data?: OrImageModel[] };
@@ -487,78 +658,71 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     return rows;
   };
 
-  // S2 — per-endpoint pricing for the ids we track.
-  const endpoints = cachedSource<EndpointsValue>({
+  // S2 — per-endpoint pricing for the ids we track, each id with its own fetch time, TTL and backoff.
+  const endpoints = keyedSource<OrImageEndpoint[]>({
     name: 'openrouter_images_endpoints',
+    ids,
     ttlMs: TTL_MS.endpoints,
     now,
     bootstrap: async () => {
-      if (!store) return null;
-      const rows = await store.loadCache(CACHE_SOURCE.endpoints);
-      if (!rows.length) return null;
-      const value: EndpointsValue = new Map();
-      let oldest = Number.POSITIVE_INFINITY;
-      for (const r of rows) {
-        const eps = (r.payload as { endpoints?: OrImageEndpoint[] })?.endpoints;
-        if (Array.isArray(eps)) value.set(r.modelId, eps);
-        oldest = Math.min(oldest, Date.parse(r.fetchedAt) || 0);
+      const out = new Map<string, { value: OrImageEndpoint[]; fetchedAt: number; missing?: boolean }>();
+      if (!store) return out;
+      for (const r of await store.loadCache(CACHE_SOURCE.endpoints)) {
+        const payload = r.payload as { endpoints?: OrImageEndpoint[]; missing?: boolean } | null;
+        const at = fetchTime(r.fetchedAt);
+        if (!payload || !Array.isArray(payload.endpoints) || at === undefined) continue;
+        out.set(r.modelId, { value: payload.endpoints, fetchedAt: at, missing: Boolean(payload.missing) || payload.endpoints.length === 0 });
       }
-      const complete = ids.every((id) => value.has(id));
-      return value.size ? { value, fetchedAt: complete && Number.isFinite(oldest) ? oldest : 0 } : null;
+      return out;
     },
-    load: async (previous) => {
-      const f = needFetch();
-      const value: EndpointsValue = new Map(previous ?? []);
-      const failed: string[] = [];
-      const at = iso(now());
-      const fresh: CachedPayload[] = [];
-      await mapConcurrent(ids, CONCURRENCY, async (id) => {
-        try {
-          const body = (await fetchJson(f, `${base}/images/models/${id}/endpoints`, fetchMs)) as { endpoints?: OrImageEndpoint[]; data?: { endpoints?: OrImageEndpoint[] } };
-          // Documented as { id, endpoints }; accept the { data: { endpoints } } envelope of /models/{id}/endpoints too.
-          const raw = Array.isArray(body?.endpoints) ? body.endpoints : body?.data?.endpoints;
-          if (!Array.isArray(raw)) throw new Error('endpoint list missing');
-          const eps = raw.filter((e) => e && typeof e === 'object');
-          value.set(id, eps);
-          fresh.push({ modelId: id, payload: { id, endpoints: eps }, fetchedAt: at });
-        } catch (err) {
-          failed.push(id);
-          logger.warn('comic_model_catalog_endpoint_fetch_failed', { modelId: id, message: (err as Error)?.message });
-        }
-      });
-      if (failed.length === ids.length) throw new Error('every endpoint fetch failed');
-      if (store && fresh.length) await store.saveCache(CACHE_SOURCE.endpoints, fresh).catch((err) => logger.warn('comic_model_catalog_cache_write_failed', { source: CACHE_SOURCE.endpoints, message: (err as Error)?.message }));
-      await snapshotPriceChanges(new Map(fresh.map((r) => [r.modelId, (r.payload as { endpoints: OrImageEndpoint[] }).endpoints])), at);
-      return { value, partial: failed.length > 0 };
+    fetchOne: async (id) => {
+      let body: { endpoints?: OrImageEndpoint[]; data?: { endpoints?: OrImageEndpoint[] } };
+      try {
+        body = (await fetchJson(needFetch(), `${base}/images/models/${id}/endpoints`, fetchMs)) as typeof body;
+      } catch (err) {
+        if (isNoData(err)) return { value: [], missing: true }; // OpenRouter does not know this id (any more)
+        throw err;
+      }
+      // Documented as { id, endpoints }; accept the { data: { endpoints } } envelope of /models/{id}/endpoints too.
+      const raw = Array.isArray(body?.endpoints) ? body.endpoints : body?.data?.endpoints;
+      if (!Array.isArray(raw)) logger.warn('comic_model_catalog_endpoint_list_missing', { modelId: id });
+      const eps = Array.isArray(raw) ? raw.filter((e) => e && typeof e === 'object') : [];
+      return { value: eps, missing: eps.length === 0 };
+    },
+    afterBatch: async (fresh, at) => {
+      if (store) {
+        const rows = [...fresh].map(([id, f]) => ({ modelId: id, payload: { id, endpoints: f.value, ...(f.missing ? { missing: true } : {}) }, fetchedAt: at }));
+        await store.saveCache(CACHE_SOURCE.endpoints, rows).catch((err) => logger.warn('comic_model_catalog_cache_write_failed', { source: CACHE_SOURCE.endpoints, message: (err as Error)?.message }));
+      }
+      await snapshotPriceChanges(new Map([...fresh].filter(([, f]) => !f.missing).map(([id, f]) => [id, f.value])), at);
     }
   });
 
-  // S3 — providers and uptime (memory only; the daily value is logged for T6).
-  const uptime = cachedSource<UptimeValue>({
+  // S3 — providers and uptime (memory only; the daily value is logged for T6), each id with its own 30 min TTL.
+  const uptime = keyedSource<OrModelEndpoint[]>({
     name: 'openrouter_model_endpoints',
+    ids,
     ttlMs: TTL_MS.uptime,
     now,
-    load: async (previous) => {
-      const f = needFetch();
-      const value: UptimeValue = new Map(previous ?? []);
-      const failed: string[] = [];
-      const at = iso(now());
+    fetchOne: async (id) => {
+      let body: { data?: { endpoints?: OrModelEndpoint[] } };
+      try {
+        body = (await fetchJson(needFetch(), `${base}/models/${id}/endpoints`, fetchMs)) as typeof body;
+      } catch (err) {
+        if (isNoData(err)) return { value: [], missing: true };
+        throw err;
+      }
+      const raw = body?.data?.endpoints;
+      if (!Array.isArray(raw)) logger.warn('comic_model_catalog_uptime_list_missing', { modelId: id });
+      const eps = (Array.isArray(raw) ? raw : []).filter((e) => e && typeof e === 'object');
+      const value = eps.map((e) => ({ name: e.name, provider_name: e.provider_name, tag: e.tag, status: e.status, uptime_last_1d: e.uptime_last_1d, uptime_last_30m: e.uptime_last_30m }));
+      return { value, missing: value.length === 0 };
+    },
+    afterBatch: async (fresh, at) => {
+      if (!store) return;
       const log: UptimeLogRow[] = [];
-      await mapConcurrent(ids, CONCURRENCY, async (id) => {
-        try {
-          const body = (await fetchJson(f, `${base}/models/${id}/endpoints`, fetchMs)) as { data?: { endpoints?: OrModelEndpoint[] } };
-          if (!Array.isArray(body?.data?.endpoints)) throw new Error('endpoint list missing');
-          const eps = body.data.endpoints.filter((e) => e && typeof e === 'object');
-          value.set(id, eps.map((e) => ({ name: e.name, provider_name: e.provider_name, tag: e.tag, status: e.status, uptime_last_1d: e.uptime_last_1d, uptime_last_30m: e.uptime_last_30m })));
-          for (const e of eps) log.push({ modelId: id, provider: String(e.tag || e.provider_name || 'unknown'), day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
-        } catch (err) {
-          failed.push(id);
-          logger.warn('comic_model_catalog_uptime_fetch_failed', { modelId: id, message: (err as Error)?.message });
-        }
-      });
-      if (failed.length === ids.length) throw new Error('every uptime fetch failed');
-      if (store && log.length) await store.logUptime(log).catch((err) => logger.warn('comic_model_catalog_uptime_log_failed', { message: (err as Error)?.message }));
-      return { value, partial: failed.length > 0 };
+      for (const [id, f] of fresh) for (const e of f.value) log.push({ modelId: id, provider: String(e.tag || e.provider_name || 'unknown'), day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
+      if (log.length) await store.logUptime(log);
     }
   });
 
@@ -577,8 +741,8 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
 
   interface Loaded {
     list: SourceState<ListValue>;
-    eps: SourceState<EndpointsValue>;
-    up: SourceState<UptimeValue>;
+    eps: KeyedView<OrImageEndpoint[]>;
+    up: KeyedView<OrModelEndpoint[]>;
     q: Awaited<ReturnType<QualitySource['get']>>;
     yours: ImageCallRow[];
     platform: PlatformStatRow[];
@@ -591,28 +755,34 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     return { list: l, eps: e, up: u, q, ...c };
   };
 
-  /** Live prices merged with the registry (or the registry's dated list when nothing was fetched). */
-  const pricesFor = (spec: ImageModelSpec, eps: SourceState<EndpointsValue>) => {
+  /**
+   * Live prices merged with the registry, or the registry's dated list when this id has no live endpoints (never
+   * fetched, failed with no cache, or OpenRouter has no data for it). `at` is this id's own fetch time, set only
+   * when a live endpoint answered — a registry price never carries a fetch time.
+   */
+  const pricesFor = (spec: ImageModelSpec, eps: KeyedView<OrImageEndpoint[]>) => {
     const orId = spec.routes.openrouter;
-    const fetched = orId ? eps.value?.get(orId) : undefined;
-    const at = eps.fetchedAt !== undefined ? iso(eps.fetchedAt) : undefined;
+    const entry = orId ? eps.get(orId) : undefined;
+    const fetched = entry?.value?.length ? entry.value : undefined;
+    const at = fetched && entry?.fetchedAt !== undefined ? iso(entry.fetchedAt) : undefined;
     const live = fetched ? mapEndpointPricing({ modelId: orId as string, endpoints: fetched, spec, fetchedAt: at }) : null;
     return {
       price: live ? mergeWithRegistry(live.price, spec) : registryPrices(spec),
       perRefUsd: live ? live.perRefUsd : typeof spec.perRefUsd === 'number' ? spec.perRefUsd : null,
-      at: live ? at : undefined
+      at: live ? at : undefined,
+      stale: Boolean(entry?.stale)
     };
   };
 
   const buildRow = (spec: ImageModelSpec, data: Loaded, ctx: { doc?: ComicDoc; caps?: StudioCaps }): ModelCatalogRow => {
     const orId = spec.routes.openrouter;
     const listed = orId ? data.list.value?.byId.get(orId) : undefined;
-    const { price, perRefUsd, at: epsAt } = pricesFor(spec, data.eps);
-    const up = orId ? data.up.value?.get(orId) : undefined;
+    const { price, perRefUsd, at: epsAt, stale: priceStale } = pricesFor(spec, data.eps);
+    const upEntry = orId ? data.up.get(orId) : undefined;
+    const up = upEntry?.value?.length ? upEntry.value : undefined;
     const current = ctx.doc ? lockedModelId(ctx.doc) === spec.id : undefined;
     const reliability = reliabilityFor(data.yours, { modelId: spec.id, now: now() }) ?? platformReliabilityFor(data.platform24h, spec.id) ?? undefined;
     const canonicalSlug = canonicalSlugFrom(up, orId ?? '');
-    const catalogAt = epsAt ?? (listed && data.list.fetchedAt !== undefined ? iso(data.list.fetchedAt) : undefined);
     const qualityAt = data.q.fetchedAt ?? qualityAsOf(data.q.snapshot);
     return {
       id: spec.id,
@@ -631,11 +801,13 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps) } : {}),
       ...(current !== undefined ? { current } : {}),
       fetchedAt: {
-        ...(catalogAt ? { catalog: catalogAt } : {}),
-        ...(up && data.up.fetchedAt !== undefined ? { uptime: iso(data.up.fetchedAt) } : {}),
+        ...(epsAt ? { catalog: epsAt } : {}),
+        ...(up && upEntry?.fetchedAt !== undefined ? { uptime: iso(upEntry.fetchedAt) } : {}),
         ...(qualityAt ? { quality: qualityAt } : {})
       },
-      stale: Boolean(data.list.stale || data.eps.stale || data.up.stale || data.q.stale)
+      // This row's own price and uptime sources only; the leaderboard has its own flag.
+      stale: Boolean(priceStale || upEntry?.stale),
+      qualityStale: Boolean(data.q.stale)
     };
   };
 
@@ -680,7 +852,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     return {
       rows: IMAGE_MODELS.map((spec) => {
         const p = pricesFor(spec, eps);
-        return { id: spec.id, price: p.price, perRefUsd: p.perRefUsd, fetchedAt: p.at ? { catalog: p.at } : {}, stale: Boolean(eps.stale) };
+        return { id: spec.id, price: p.price, perRefUsd: p.perRefUsd, fetchedAt: p.at ? { catalog: p.at } : {}, stale: p.stale };
       }),
       observed: observedMedians(c.yours, c.platform),
       qc: qcObservedFor(c.yours)
@@ -725,14 +897,13 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       if (platform24) ours.push({ modelId: spec.id, window: '24h', calls: platform24.calls, failed: platform24.failed, rateLimited: platform24.rateLimited, scope: 'platform' });
     }
     const openrouter: ModelTrends['t6']['openrouter'] = uptimeLog.map((u) => ({ modelId: registryByOrId.get(u.modelId)?.id ?? u.modelId, provider: u.provider, day: u.day, uptime1d: u.uptime1d, uptime30m: u.uptime30m, fetchedAt: u.fetchedAt }));
-    if (data.up.value && data.up.fetchedAt !== undefined) {
-      const at = iso(data.up.fetchedAt);
-      for (const [orId, eps] of data.up.value) {
-        const modelId = registryByOrId.get(orId)?.id ?? orId;
-        for (const e of eps) {
-          const provider = String(e.tag || e.provider_name || 'unknown');
-          if (!openrouter.some((o) => o.modelId === modelId && o.provider === provider && o.day === at.slice(0, 10))) openrouter.push({ modelId, provider, day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
-        }
+    for (const [orId, entry] of data.up.entries()) {
+      if (!entry.value?.length || entry.fetchedAt === undefined) continue;
+      const at = iso(entry.fetchedAt);
+      const modelId = registryByOrId.get(orId)?.id ?? orId;
+      for (const e of entry.value) {
+        const provider = String(e.tag || e.provider_name || 'unknown');
+        if (!openrouter.some((o) => o.modelId === modelId && o.provider === provider && o.day === at.slice(0, 10))) openrouter.push({ modelId, provider, day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
       }
     }
 
