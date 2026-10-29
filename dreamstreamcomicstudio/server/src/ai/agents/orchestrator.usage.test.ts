@@ -187,16 +187,33 @@ describe('runSwarm in free-only mode (noPaidRetry)', () => {
     }
   });
 
+  it('the synthesis carries the caller\'s free chain (fallbackModels), so one throttled free model does not fail the turn', async () => {
+    runChatMock
+      .mockResolvedValueOnce(plan)
+      .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
+      .mockResolvedValueOnce({ text: 'Synthesized.', model: 'free/a:free', usage: u(0, 100) });
+    const chain = ['free/a:free', 'free/b:free'];
+    await runSwarm({ ...swarmParams, model: 'free/a:free', noPaidRetry: true, fallbackModels: chain });
+    const synth = runChatMock.mock.calls[2][0];
+    // Without the fix: no chain on the synthesis call (fallbackModels undefined).
+    expect(synth.fallbackModels).toEqual(chain);
+    expect(synth.fallbackModel).toBeUndefined();
+    expect(synth.noPaidRetry).toBe(true);
+  });
+
   it('off: the planner/agents keep the free-first pick and every call keeps the paid net', async () => {
     runChatMock
       .mockResolvedValueOnce(plan)
       .mockResolvedValueOnce({ text: 'Finding.', usage: u(0, 100) })
       .mockResolvedValueOnce({ text: 'Synthesized.', model: 'user/model', usage: u(0, 100) });
-    await runSwarm(swarmParams);
+    await runSwarm({ ...swarmParams, fallbackModels: ['user/model', 'other/model'] });
     expect(runChatMock.mock.calls.map(([req]) => req.model)).toEqual(['free/worker', 'free/worker', 'user/model']);
     for (const [req] of runChatMock.mock.calls) {
       expect(req.fallbackModel).toBe('fallback/model');
       expect(req.noPaidRetry).toBeUndefined();
+      // The chain is a free-only fallback; a paid turn keeps its single paid net, as before.
+      expect(req.fallbackModels).toBeUndefined();
     }
   });
 });
+

@@ -69,6 +69,12 @@ export interface RunSwarmParams {
    * (the model the route resolved and priced), never the paid TEXT_FALLBACK.
    */
   noPaidRetry?: boolean;
+  /**
+   * Free-only: the caller's free chain (OpenRouter `models`), carried by the synthesis so one throttled
+   * free model falls through to the next free one instead of failing the turn. Ignored without
+   * `noPaidRetry` (a paid run keeps its single paid net).
+   */
+  fallbackModels?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
   /** User-defined agents to add to the deployable pool for this run. */
@@ -350,6 +356,7 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   const synthRes = await runChat({
     ...baseReq,
     model: params.model,
+    ...(freeOnly && params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
     messages: synthMessages,
     systemPrompt: synthSystem,
     clientContext: params.clientContext,

@@ -2170,7 +2170,9 @@ chatRouter.post('/swarm', async (req, res, next) => {
       clientContext: p.clientContext,
       extraAgents: p.customAgents,
       fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
-      ...(p.noPaidRetry ? { noPaidRetry: true } : {}),
+      // Free-only: the prepared free chain rides on the synthesis (one throttled free model falls
+      // through to the next free one, as the single-model answer it replaced did).
+      ...(p.noPaidRetry ? { noPaidRetry: true, fallbackModels: p.fallbackModels } : {}),
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });

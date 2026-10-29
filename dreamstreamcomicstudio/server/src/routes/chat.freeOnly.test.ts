@@ -231,6 +231,8 @@ const isPaid = (model?: string) => Boolean(model) && !/:free$/.test(String(model
 const turnCalls = () => engine.providerCalls.filter((c) => !c.helper);
 const turnEvents = (user: string) => db.events.filter((e) => e.userId === user && e.operation === 'chat.completion');
 const ASK = { messages: [{ role: 'user', content: 'Explain how tides work in detail' }] };
+/** The free models of this catalog: prepareChat's free chain under free-only (pickTextModelChain, freeOnly, max 2), in its own order. */
+const FREE_CHAIN = ['meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen3-32b:free'];
 
 describe('free-only mode (X-Free-Only, the client default) for a governed user with usage left', () => {
   it('never offers the paid retry: the turn runs on the free chain with freeOnly set, and settles at $0', async () => {
@@ -313,6 +315,14 @@ describe('free-only mode (X-Free-Only, the client default) for a governed user w
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ status: 'SETTLED', costUsd: 0 });
     expect(body).not.toMatch(/instead of the agent team/);
+    // The synthesis (the team's last call) carries the prepared FREE chain, so one throttled free model
+    // falls through to the other free one. Without the fix: `models` undefined on every team call.
+    const chain = swarm.mock.calls[0][0].fallbackModels;
+    expect([...(chain || [])].sort()).toEqual([...FREE_CHAIN].sort());
+    const synth = calls[calls.length - 1];
+    expect(synth.models).toEqual(chain);
+    expect(synth.models?.[0]).toBe(synth.model);
+    expect(synth.models?.some((m) => isPaid(m) || m === TEXT_FALLBACK)).toBe(false);
   });
 
   it('/swarm: a slow free model in the team is never retried on the paid model', async () => {
@@ -354,6 +364,7 @@ describe('free-only OFF (the user opted into paid models): unchanged', () => {
     expect(res.status).toBe(200);
     expect(swarm).toHaveBeenCalledTimes(1);
     expect(swarm.mock.calls[0][0]).toMatchObject({ fallbackModel: TEXT_FALLBACK });
+    expect(swarm.mock.calls[0][0].fallbackModels).toBeUndefined();
     expect(body).toContain('The team answer.');
     expect(body).not.toMatch(/Free-Only mode/);
   });
