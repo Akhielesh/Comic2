@@ -89,7 +89,10 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
     model.uptime1d === null || !live ? '' : model.row.stale ? `OpenRouter ${asOfCouldntRefresh(ago(uptimeAt, now))}` : `OpenRouter, ${ago(uptimeAt, now)}`;
   // §4.6: an unpublished price is said once (the price line), not again as a warning.
   const warns = model.warns.filter((w) => !(model.pageUsd === null && w.code === 'price_unverified'));
-  const reasons = [...(model.current ? [] : model.blocks), ...warns];
+  // The current model keeps its blocking reasons too (§3.9: a free plan with a legacy Nano Banana Pro lock reads
+  // "Needs a paid plan or your own key"), so the picker says why its jobs fail and why another model is needed.
+  // modelFit never marks the comic's own model 'hidden', so only real blockers (plan, page shape, transport) show.
+  const reasons = [...model.blocks, ...warns];
 
   const perRes: string[] = [];
   if (detailed && model.spec) {

@@ -140,6 +140,22 @@ describe('picking', () => {
     expect(onPick).not.toHaveBeenCalled();
   });
 
+  it('the current model keeps its blocking reason (free plan, legacy Nano Banana Pro lock — §3.9) and is not offered', () => {
+    const { onPick } = panel({ caps: DEFAULT_CAPS, doc: lakeDoc({ model: 'nano-banana-pro' }) });
+    const pro = rowOf('nano-banana-pro');
+    expect(pro).toHaveAttribute('data-current');
+    expect(within(pro).getByText('This comic already uses it.')).toBeInTheDocument();
+    const reason = within(pro).getByText('Needs a paid plan or your own key');
+    expect(reason.closest('[data-reason]')).toHaveAttribute('data-severity', 'block');
+    const main = within(pro).getByRole('button', { name: /^Nano Banana Pro/ });
+    expect(main).toHaveAccessibleDescription(/Needs a paid plan or your own key/);
+    expect(main).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(main);
+    expect(onPick).not.toHaveBeenCalled();
+    // The model every plan may use is offered.
+    expect(within(rowOf('nano-banana-2.1')).getByRole('button', { name: /^Nano Banana 2\.1/ })).not.toHaveAttribute('aria-disabled');
+  });
+
   it('a paid user picks Nano Banana Pro', () => {
     const { onPick } = panel();
     fireEvent.click(within(rowOf('nano-banana-pro')).getByRole('button', { name: 'Nano Banana Pro' }));
