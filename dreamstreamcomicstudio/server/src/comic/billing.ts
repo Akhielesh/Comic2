@@ -50,9 +50,12 @@ export interface BillingDeps {
 /**
  * A settle that fails leaves a RESERVED row the budget stops counting after 20 minutes
  * (user_usage_budgets.sql) and nothing revisits — paid spend that silently stops counting.
- * The provider call already happened, so a failed settle is retried (the ledger's settle is
- * keyed by reservation id and idempotent on the row that counts) before it is given up on,
- * and a hold that is given up on is logged with its id and amount so it can be repaired.
+ * The provider call already happened, so a failed settle is retried before it is given up on —
+ * but ONLY where the ledger's settle cannot move money twice: a hold that skipped the wallet
+ * (usage budgets on) or a BYOK bypass settles by reservation id. The wallet branch runs
+ * billing_settle_tokens first, which takes no reservation id (it deducts purchased credits and
+ * adds overage), so a retry after a later write failed would charge the wallet again: one attempt.
+ * A hold that is given up on is logged with its id and amount so it can be repaired.
  */
 const SETTLE_ATTEMPTS = 3;
 const SETTLE_RETRY_DELAY_MS = 400;
@@ -229,7 +232,9 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
             : {}),
           ...(providerCostUsd !== undefined && providerCostUsd > 0 ? { providerCostUsd } : {})
         };
-        for (let attempt = 1; attempt <= SETTLE_ATTEMPTS; attempt += 1) {
+        const held = clone.usageReservation;
+        const attempts = held && (held.walletSkipped || held.byokBypass) ? SETTLE_ATTEMPTS : 1;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
           try {
             const settled = await settleFn({
               req: clone,
@@ -248,7 +253,7 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
             return { billableUsd: typeof settled?.billableUsd === 'number' ? settled.billableUsd : undefined };
           } catch (err) {
             const reservationId = clone.usageReservation?.reservationId;
-            if (attempt < SETTLE_ATTEMPTS) {
+            if (attempt < attempts) {
               logger.warn('comic_billing_settle_retry', { operation: args.operation, model: args.model, reservationId, attempt, message: (err as Error)?.message });
               await wait(retryDelayMs * attempt);
               continue;
@@ -261,7 +266,8 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
               reservationId,
               stranded: true,
               attempts: attempt,
-              holdUsd: estimateFloorUsd,
+              // The amount actually held (the ledger's estimate), not just the studio's floor for it.
+              holdUsd: held?.estimated?.estimatedProviderCostUsd ?? estimateFloorUsd,
               providerCostUsd,
               projectId,
               message: (err as Error)?.message

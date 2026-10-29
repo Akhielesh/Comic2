@@ -39,8 +39,8 @@ const pageArgs: ReserveArgs = {
   resolution: '2K'
 };
 
-const allowed = (req: Request, model = 'google/gemini-nano-banana-2.1') => {
-  (req as Request & { usageReservation?: unknown }).usageReservation = { reservationId: `r-${Math.random()}`, byokBypass: false } as never;
+const allowed = (req: Request, model = 'google/gemini-nano-banana-2.1', held: Record<string, unknown> = {}) => {
+  (req as Request & { usageReservation?: unknown }).usageReservation = { reservationId: `r-${Math.random()}`, byokBypass: false, ...held } as never;
   return {
     allowed: true as const,
     reservation: (req as Request & { usageReservation: never }).usageReservation,
@@ -208,13 +208,16 @@ describe('createBillingHooks', () => {
     await expect(b.reservation.release('x')).resolves.toBeUndefined();
   });
 
+  /** A usage-budget hold (the wallet was not touched at reserve): settle is keyed by reservation id, so it may be retried. */
+  const budgetHold = (extra: Record<string, unknown> = {}) => vi.fn(async (input: { req: Request }) => allowed(input.req, undefined, { walletSkipped: true, ...extra }));
+
   it('retries a failed settle (the provider call already happened) before giving up, and never releases', async () => {
     const settle = vi
       .fn()
       .mockRejectedValueOnce(new Error('ledger hiccup'))
       .mockRejectedValueOnce(new Error('ledger hiccup'))
       .mockResolvedValueOnce({ billableUsd: 0.065 });
-    const { hooks, release } = setup({ settle });
+    const { hooks, release } = setup({ settle, reserve: budgetHold() });
     const res = await hooks.reserve(pageArgs);
     if (!res.ok) throw new Error('expected ok');
     await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({ billableUsd: 0.065 });
@@ -225,23 +228,54 @@ describe('createBillingHooks', () => {
     expect(new Set(ids).size).toBe(1);
   });
 
-  it('logs a stranded hold with its reservation id and amount once the retries are spent', async () => {
+  it('logs a stranded hold with its reservation id and the amount actually held once the retries are spent', async () => {
     const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
     vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     try {
       const settle = vi.fn(async () => Promise.reject(new Error('ledger offline')));
-      const { hooks } = setup({ settle });
+      // The ledger held more than the studio's floor (0.0504): the log names the real hold.
+      const { hooks } = setup({ settle, reserve: budgetHold({ estimated: { estimatedProviderCostUsd: 0.0612 } }) });
       const res = await hooks.reserve({ ...pageArgs, resolution: '2K' });
       if (!res.ok) throw new Error('expected ok');
       await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({});
       expect(settle).toHaveBeenCalledTimes(3);
       expect(error).toHaveBeenCalledWith(
         'comic_billing_settle_failed',
-        expect.objectContaining({ stranded: true, attempts: 3, reservationId: expect.stringMatching(/^r-/), holdUsd: expect.closeTo(0.0504, 6), providerCostUsd: 0.05, projectId: 'proj-1' })
+        expect.objectContaining({ stranded: true, attempts: 3, reservationId: expect.stringMatching(/^r-/), holdUsd: 0.0612, providerCostUsd: 0.05, projectId: 'proj-1' })
       );
     } finally {
       vi.restoreAllMocks();
     }
+  });
+
+  it('never retries a wallet settle (billing_settle_tokens takes no reservation id: a retry would charge twice)', async () => {
+    const error = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      const settle = vi.fn(async () => Promise.reject(new Error('ledger rollup failed after the wallet moved')));
+      const { hooks, release } = setup({ settle, reserve: vi.fn(async (input: { req: Request }) => allowed(input.req, undefined, { walletSkipped: false, byokBypass: false })) });
+      const res = await hooks.reserve({ ...pageArgs, resolution: '2K' });
+      if (!res.ok) throw new Error('expected ok');
+      await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({});
+      expect(settle).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(
+        'comic_billing_settle_failed',
+        // No ledger estimate on this hold: the studio's floor stands in for the amount.
+        expect.objectContaining({ stranded: true, attempts: 1, reservationId: expect.stringMatching(/^r-/), holdUsd: expect.closeTo(0.0504, 6) })
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('retries a BYOK-bypass settle too (keyed by reservation id)', async () => {
+    const settle = vi.fn().mockRejectedValueOnce(new Error('ledger hiccup')).mockResolvedValueOnce({ billableUsd: 0 });
+    const { hooks } = setup({ settle, reserve: vi.fn(async (input: { req: Request }) => allowed(input.req, undefined, { byokBypass: true })) });
+    const res = await hooks.reserve(pageArgs);
+    if (!res.ok) throw new Error('expected ok');
+    await expect(res.reservation.settle({ costUsd: 0.05, imageUnits: 1 })).resolves.toEqual({ billableUsd: 0 });
+    expect(settle).toHaveBeenCalledTimes(2);
   });
 
   it('forwards allowance threshold notices to the real request', async () => {
