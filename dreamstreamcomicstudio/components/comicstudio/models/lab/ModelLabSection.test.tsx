@@ -268,6 +268,36 @@ describe('ModelLabSection', () => {
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveTextContent("Today's lab budget can't cover this. Nothing was charged.");
     expect(within(dialog).getAllByRole('button').map((b) => b.textContent)).toEqual(['Close']);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    // Provider down is the lab's own 503 refusal (nothing was sent): an answer, not a lost request — no "same click" retry.
+    runCheck.mockRejectedValueOnce(
+      new LabApiError(
+        "Nano Banana 2.1 is paused right now — our last 3 calls failed (RATE_LIMIT). The lab didn't call it. Nothing was charged. Provider status shows when it's serving again.",
+        503,
+        'PROVIDER_DOWN',
+        { code: 'PROVIDER_DOWN' }
+      )
+    );
+    fireEvent.click(runButton(/Run Nano Banana 2.1 · 4K page/));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Run — $0.113' }));
+    await act(async () => undefined);
+    const down = screen.getByRole('dialog');
+    expect(down).toHaveTextContent('Nano Banana 2.1 is paused right now');
+    expect(down).not.toHaveTextContent('Trying again sends the same click');
+    expect(within(down).getAllByRole('button').map((b) => b.textContent)).toEqual(['Close']);
+    expect(runCheck).toHaveBeenCalledTimes(2);
+  });
+
+  it('a gateway error with no lab code (the answer was lost) offers the same-click retry', async () => {
+    await open();
+    runCheck.mockRejectedValueOnce(new LabApiError('Bad Gateway', 502));
+    fireEvent.click(runButton(/Run Nano Banana 2.1 · 4K page/));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Run — $0.113' }));
+    await act(async () => undefined);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Trying again sends the same click');
+    expect(within(dialog).getByRole('button', { name: 'Try again (same click)' })).toBeInTheDocument();
   });
 
   it('blind pairs: A and B with no names before the vote; the vote reveals them', async () => {

@@ -60,6 +60,11 @@ describe('labApi', () => {
     const lost = await runLabCheck({ itemId: 'x', idempotencyKey: 'lab-0123456789abcdef', quotedUsd: 0.1 }).catch((e) => e);
     expect(lost).toMatchObject({ status: 0, unreached: true });
     expect(lost.message).toMatch(/same click/);
+    // The lab's own 503 refusals carry a code and are answers (nothing was sent); a bare gateway 502/504 is a lost answer.
+    post.mockRejectedValueOnce(new ApiError('Nano Banana 2.1 is paused right now. Nothing was charged.', 503, { code: 'PROVIDER_DOWN' }));
+    expect(await runLabCheck({ itemId: 'x', idempotencyKey: 'lab-0123456789abcdef', quotedUsd: 0.1 }).catch((e) => e)).toMatchObject({ status: 503, code: 'PROVIDER_DOWN', unreached: false });
+    post.mockRejectedValueOnce(new ApiError('Gateway Timeout', 504));
+    expect(await runLabCheck({ itemId: 'x', idempotencyKey: 'lab-0123456789abcdef', quotedUsd: 0.1 }).catch((e) => e)).toMatchObject({ status: 504, unreached: true });
     get.mockResolvedValueOnce({ junk: true });
     await expect(fetchLabOverview()).rejects.toMatchObject({ status: 502 });
   });

@@ -358,9 +358,13 @@ export class LabApiError extends Error {
     this.code = code;
     this.details = details;
   }
-  /** The request may never have reached the server (or its answer was lost): retrying the SAME click is safe. */
+  /**
+   * The request may never have reached the server (or its answer was lost): retrying the SAME click is safe. A gateway
+   * 502/504/524 carries no lab code; the lab's own 503 refusals (PROVIDER_DOWN, NO_PLATFORM_KEY, NO_STORAGE) do, and
+   * nothing was sent for them, so they are answers, not lost requests.
+   */
   get unreached(): boolean {
-    return this.status === 0 || this.status >= 502;
+    return this.status === 0 || (this.status >= 502 && !this.code);
   }
 }
 
