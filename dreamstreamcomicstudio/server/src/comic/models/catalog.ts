@@ -18,7 +18,7 @@
 import type { ComicDoc, Resolution } from '../../../../shared/comic/doc.js';
 import type { StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { IMAGE_MODELS, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
-import { lockedModelId, modelFit, type FitReason } from '../../../../shared/comic/modelLock.js';
+import { lockedModelId, modelFit, redrawResolution, type FitReason } from '../../../../shared/comic/modelLock.js';
 import { logger } from '../../lib/logger.js';
 import { mapEndpointPricing, mergeWithRegistry, registryPrices, type PriceBookSources } from './pricing.js';
 import { NOT_RANKED_COPY, createQualitySource, qualityAsOf, qualityEntriesFor, rankMovesFor, type QualityBoard, type QualityEntry, type QualitySource, type RankMove } from './quality.js';
@@ -73,6 +73,13 @@ export interface ModelCatalogRow {
   fit?: FitReason[];
   /** When a projectId is passed: this is the comic's locked (or migrated) model. */
   current?: boolean;
+  /**
+   * When a projectId is passed and this is not the comic's model: this model's list price per page at the
+   * resolution it would draw this comic's pages at, divided by the current model's (models.md §5.1 acceptance
+   * "Nano Banana Pro (warn: price)"; machine-readable until FitReason gains a 'price' code). Absent when either
+   * price is unknown.
+   */
+  priceVsCurrent?: { currentId: string; ratio: number; res: Resolution };
   fetchedAt: { catalog?: string; uptime?: string; quality?: string };
   /** This row's price or uptime refresh failed (or did not finish in time); showing cached data. */
   stale: boolean;
@@ -814,6 +821,18 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     };
   };
 
+  /** This model's list price per page for the comic vs the comic's current model (null when either is unknown). */
+  const priceVsCurrent = (spec: ImageModelSpec, doc: ComicDoc, eps: KeyedView<OrImageEndpoint[]>): ModelCatalogRow['priceVsCurrent'] | null => {
+    const currentId = lockedModelId(doc);
+    const current = currentId ? getImageModel(currentId) : undefined;
+    if (!current || current.id === spec.id) return null;
+    const res = redrawResolution(doc, spec.id, 'page');
+    const mine = pricesFor(spec, eps).price[res]?.usd;
+    const theirs = pricesFor(current, eps).price[redrawResolution(doc, current.id, 'page')]?.usd;
+    if (typeof mine !== 'number' || typeof theirs !== 'number' || !(theirs > 0)) return null;
+    return { currentId: current.id, ratio: Math.round((mine / theirs) * 100) / 100, res };
+  };
+
   const buildRow = (spec: ImageModelSpec, data: Loaded, ctx: { doc?: ComicDoc; caps?: StudioCaps }): ModelCatalogRow => {
     const orId = spec.routes.openrouter;
     const listed = orId ? data.list.value?.byId.get(orId) : undefined;
@@ -821,6 +840,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     const upEntry = orId ? data.up.get(orId) : undefined;
     const up = upEntry?.value?.length ? upEntry.value : undefined;
     const current = ctx.doc ? lockedModelId(ctx.doc) === spec.id : undefined;
+    const vsCurrent = ctx.doc ? priceVsCurrent(spec, ctx.doc, data.eps) : null;
     const reliability = reliabilityFor(data.yours, { modelId: spec.id, now: now() }) ?? platformReliabilityFor(data.platform24h, spec.id) ?? undefined;
     const canonicalSlug = canonicalSlugFrom(up, orId ?? '');
     const qualityAt = data.q.fetchedAt ?? qualityAsOf(data.q.snapshot);
@@ -840,6 +860,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       ...(reliability ? { reliability } : {}),
       ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps) } : {}),
       ...(current !== undefined ? { current } : {}),
+      ...(vsCurrent ? { priceVsCurrent: vsCurrent } : {}),
       fetchedAt: {
         ...(epsAt ? { catalog: epsAt } : {}),
         ...(up && upEntry?.fetchedAt !== undefined ? { uptime: iso(upEntry.fetchedAt) } : {}),
