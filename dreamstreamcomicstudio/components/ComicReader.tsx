@@ -15,13 +15,15 @@ import { LegalMicroLinks } from './layout/LegalMicroLinks';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import {
+  FullscreenFallbackHistoryContext,
   IOS_FULLSCREEN_NOTE,
   enterFullscreen,
   exitFullscreen,
   isFullscreenActive,
   markIosFullscreenNoteSeen,
   onFullscreenChange,
-  shouldShowIosFullscreenNote
+  shouldShowIosFullscreenNote,
+  type FullscreenFallbackHistory
 } from '../services/fullscreen';
 
 // Phones read in a "phone reading mode": no site header or footer inside the reader, Close and Full screen pinned
@@ -310,7 +312,28 @@ export const ComicReader: React.FC<ComicReaderProps> = (props) => {
 };
 
 const StudioComicReader: React.FC<{ projectId: string; onClose: () => void }> = ({ projectId, onClose }) => {
-  const history = useReaderHistory(projectId, onClose);
+  // The v4 view's full-viewport fallback gets the reading-mode entry, so Back leaves it before closing the comic
+  // (as in the classic reading mode); a control leaving it pops the entry.
+  const viewportBackRef = useRef<(() => void) | null>(null);
+  const history = useReaderHistory(projectId, onClose, () => {
+    const onBack = viewportBackRef.current;
+    viewportBackRef.current = null;
+    onBack?.();
+  });
+  const { pushReadingMode, popReadingMode } = history;
+  const fallbackHistory = useMemo<FullscreenFallbackHistory>(
+    () => ({
+      push: (onBack) => {
+        viewportBackRef.current = onBack;
+        pushReadingMode();
+      },
+      pop: () => {
+        viewportBackRef.current = null;
+        popReadingMode();
+      }
+    }),
+    [pushReadingMode, popReadingMode]
+  );
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
       <Suspense
@@ -320,7 +343,9 @@ const StudioComicReader: React.FC<{ projectId: string; onClose: () => void }> = 
           </div>
         }
       >
-        <PublicComicReader projectId={projectId} onClose={() => history.leave(onClose)} />
+        <FullscreenFallbackHistoryContext.Provider value={fallbackHistory}>
+          <PublicComicReader projectId={projectId} onClose={() => history.leave(onClose)} />
+        </FullscreenFallbackHistoryContext.Provider>
       </Suspense>
     </div>
   );

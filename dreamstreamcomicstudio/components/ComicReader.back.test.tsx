@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 import { ComicReader } from './ComicReader';
@@ -7,14 +7,26 @@ import { ComicReader } from './ComicReader';
 // The phone Back gesture (iOS edge swipe, Android system Back) closes the reader instead of changing the URL
 // under an open reader; the reader's own exits pop its history entry so a later Back behaves.
 
-vi.mock('./comicstudio/PublicComicReader', () => ({
-  PublicComicReader: ({ projectId, onClose }: { projectId: string; onClose?: () => void }) => (
-    <div data-testid="v4-reader">
-      v4 reader for {projectId}
-      <button onClick={onClose}>close v4</button>
-    </div>
-  )
-}));
+// The v4 delegate's PublicComicReader loads the doc over the network; here it is a stub, which for 'v4view…' ids
+// renders the real v4 ComicReaderView (its full-viewport mode is what Back must leave first).
+vi.mock('./comicstudio/PublicComicReader', async () => {
+  const { ComicReaderView } = await import('./comicstudio/reader/ComicReaderView');
+  const { fakeUrlFor, makeSampleDoc } = await import('./comicstudio/board/__fixtures__/sampleDoc');
+  const doc = makeSampleDoc((d) => {
+    d.pages.forEach((p, i) => {
+      if (!p.render.asset) p.render = { ...p.render, status: 'ready', asset: { path: `u/p${i + 1}.png`, source: 'generated', at: 0 } };
+    });
+  });
+  return {
+    PublicComicReader: ({ projectId, onClose }: { projectId: string; onClose?: () => void }) => (
+      <div data-testid="v4-reader">
+        v4 reader for {projectId}
+        <button onClick={onClose}>close v4</button>
+        {projectId.startsWith('v4view') && <ComicReaderView doc={doc} urlFor={fakeUrlFor} initialMode="page" autoFocus={false} />}
+      </div>
+    )
+  };
+});
 vi.mock('./layout/StaticSiteHeader', () => ({
   StaticSiteHeader: ({ onViewComics }: { onViewComics: () => void }) => (
     <div data-testid="static-header">
@@ -270,5 +282,55 @@ describe('Back closes the v4 reader too', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'close v4' }));
     await waitFor(() => expect(h2.onClose).toHaveBeenCalledTimes(1));
     expect(readerState()).toBeUndefined();
+  });
+});
+
+describe('the v4 full-viewport mode: Back leaves it before it closes the comic', () => {
+  // jsdom has no Fullscreen API, as on iPhone: Full screen falls back to the viewport mode.
+  const openViewport = async (id: string) => {
+    const h = handlers();
+    const before = window.history.length;
+    render(<ComicReader project={project(id, { studioVersion: 4 })} {...h} />);
+    const view = await screen.findByTestId('comic-reader');
+    expect(readerState()).toBe(id);
+    fireEvent.click(within(view).getByRole('button', { name: 'Full screen' }));
+    expect(view).toHaveAttribute('data-fullscreen', 'viewport');
+    expect(window.history.length).toBe(before + 2);
+    return { h, view, before };
+  };
+
+  it('Back leaves the viewport mode and the comic stays open; the next Back closes it', async () => {
+    const { h, view } = await openViewport('v4view1');
+    await back();
+    expect(view).toHaveAttribute('data-fullscreen', 'off');
+    expect(h.onClose).not.toHaveBeenCalled();
+    expect(readerState()).toBe('v4view1');
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
+  });
+
+  it('Exit pops the viewport entry; Back then closes the comic', async () => {
+    const { h, view } = await openViewport('v4view2');
+    fireEvent.click(within(view).getByRole('button', { name: 'Exit full screen' }));
+    expect(view).toHaveAttribute('data-fullscreen', 'off');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(readerState()).toBe('v4view2');
+    expect((window.history.state as Record<string, unknown>).__dsReadingMode).toBeUndefined();
+    expect(h.onClose).not.toHaveBeenCalled();
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
+  });
+
+  it('closing the comic from the viewport mode pops both entries, never further', async () => {
+    const { h, before } = await openViewport('v4view3');
+    fireEvent.click(screen.getByRole('button', { name: 'close v4' }));
+    await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(1));
+    await expectBackWhereOpened();
+    expect(window.history.length).toBe(before + 2);
+    expect(h.onClose).toHaveBeenCalledTimes(1);
   });
 });

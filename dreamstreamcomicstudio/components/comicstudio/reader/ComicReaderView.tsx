@@ -5,14 +5,16 @@
 // aware), Space/PageUp/PageDown, Home/End, swipes and taps on the outer thirds; the next
 // page is preloaded (after the current one has loaded) so turns never flash blank. Full screen on demand: native where
 // the browser has it, else the reader fills the viewport (services/fullscreen.ts) — the button always does something.
+// Inside the public reader that viewport mode has a history entry of its own, so Back leaves it before the comic.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Columns2, Maximize2, Minimize2, Rows3, Square } from 'lucide-react';
 import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
 import { ComicPageView } from '../board/ComicPageView';
 import { aspectNumber, pageAspectOf } from '../board/balloonGeometry';
 import { EmptyHint, IconButton, Segmented, cx, useElementSize } from '../board/ui';
 import {
+  FullscreenFallbackHistoryContext,
   IOS_FULLSCREEN_NOTE,
   enterFullscreen,
   exitFullscreen,
@@ -165,6 +167,12 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
   const [viewportFullscreen, setViewportFullscreen] = useState(false);
   const [showIosNote, setShowIosNote] = useState(false);
   const fullscreen = nativeFullscreen || viewportFullscreen;
+  // The viewport mode's history entry (only where a reader provides one: the public reader, not the studio tab).
+  const fallbackHistory = useContext(FullscreenFallbackHistoryContext);
+  const fallbackHistoryRef = useRef(fallbackHistory);
+  fallbackHistoryRef.current = fallbackHistory;
+  const viewportRef = useRef(false);
+  viewportRef.current = viewportFullscreen;
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
   // Safe gestures: every pointer on the stage is tracked; once a second one touches down (a pinch) the swipe
   // candidate is gone and nothing turns until every finger is up, whichever lifts first.
@@ -211,7 +219,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
     if (e.altKey || e.metaKey || e.ctrlKey) return;
     if (e.key === 'Escape' && viewportFullscreen) {
       e.preventDefault();
-      setViewportFullscreen(false);
+      leaveViewportFullscreen();
       return;
     }
     const tag = (e.target as HTMLElement).tagName;
@@ -255,16 +263,33 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
 
   const enterViewportFullscreen = useCallback(() => {
     setViewportFullscreen(true);
+    // Back pops this entry: the viewport mode ends and the comic stays open.
+    fallbackHistoryRef.current?.push(() => setViewportFullscreen(false));
     if (shouldShowIosFullscreenNote()) {
       markIosFullscreenNoteSeen();
       setShowIosNote(true);
     }
   }, []);
 
+  // A control (the Exit button, Esc) leaves the viewport mode and pops its entry.
+  const leaveViewportFullscreen = useCallback(() => {
+    setViewportFullscreen(false);
+    fallbackHistoryRef.current?.pop();
+  }, []);
+
+  // Unmounted while in the viewport mode (the reader swapped views): its entry goes too, so Back is never dead. A
+  // reader closing on its own has already unwound it (pop is then a no-op).
+  useEffect(
+    () => () => {
+      if (viewportRef.current) fallbackHistoryRef.current?.pop();
+    },
+    []
+  );
+
   // Called synchronously from the tap (full screen is only granted inside the user gesture); never throws.
   const toggleFullscreen = () => {
     if (viewportFullscreen) {
-      setViewportFullscreen(false);
+      leaveViewportFullscreen();
       return;
     }
     if (isFullscreenActive(rootRef.current)) {

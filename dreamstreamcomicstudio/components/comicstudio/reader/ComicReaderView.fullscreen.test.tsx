@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
+import { FullscreenFallbackHistoryContext, resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
 import { ComicReaderView } from './ComicReaderView';
 
 // The v4 reader on phones (mobile-reading hotfix, F1/F4/F5): Full screen did nothing on iPhone (no API, a silently
@@ -106,6 +106,81 @@ describe('Full screen always does something', () => {
       document.dispatchEvent(new Event('fullscreenchange'));
     });
     expect(fsButton()).toHaveAccessibleName('Full screen');
+  });
+});
+
+// Back leaves the viewport mode before it closes the comic: inside the public reader (ComicReader's v4 delegate
+// provides FullscreenFallbackHistoryContext) the mode gets the reader's reading-mode entry, as the classic reading mode
+// does. The end-to-end Back behaviour is in components/ComicReader.back.test.tsx.
+describe('the viewport mode has a history entry inside a reader that provides one', () => {
+  const renderWithHistory = () => {
+    const push = vi.fn<(onBack: () => void) => void>();
+    const pop = vi.fn<() => void>();
+    const utils = render(
+      <FullscreenFallbackHistoryContext.Provider value={{ push, pop }}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />
+      </FullscreenFallbackHistoryContext.Provider>
+    );
+    return { push, pop, ...utils };
+  };
+
+  it('entering pushes once; Back (the entry popped) leaves the mode and pops nothing more', () => {
+    const { push, pop } = renderWithHistory();
+    fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'viewport');
+    expect(push).toHaveBeenCalledTimes(1);
+    act(() => push.mock.calls[0][0]());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'off');
+    expect(reader().style.position).toBe('');
+    expect(document.documentElement.style.overflow).toBe('');
+    expect(pop).not.toHaveBeenCalled();
+  });
+
+  it('leaving with Exit or Esc pops the entry', () => {
+    const { push, pop } = renderWithHistory();
+    fireEvent.click(fsButton());
+    fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'off');
+    expect(pop).toHaveBeenCalledTimes(1);
+    fireEvent.click(fsButton());
+    fireEvent.keyDown(reader(), { key: 'Escape' });
+    expect(reader()).toHaveAttribute('data-fullscreen', 'off');
+    expect(push).toHaveBeenCalledTimes(2);
+    expect(pop).toHaveBeenCalledTimes(2);
+  });
+
+  it('native full screen gets no entry (the browser leaves it on Back itself)', () => {
+    (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(() => Promise.resolve());
+    const { push } = renderWithHistory();
+    fireEvent.click(fsButton());
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { value: reader(), configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    expect(reader()).toHaveAttribute('data-fullscreen', 'native');
+    expect(push).not.toHaveBeenCalled();
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+  });
+
+  it('unmounted in the viewport mode: its entry goes too; unmounted outside it: nothing', () => {
+    const a = renderWithHistory();
+    fireEvent.click(fsButton());
+    a.unmount();
+    expect(a.pop).toHaveBeenCalledTimes(1);
+    const b = renderWithHistory();
+    b.unmount();
+    expect(b.pop).not.toHaveBeenCalled();
+  });
+
+  it('the studio tab (no provider) keeps working without an entry', () => {
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'viewport');
+    fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'off');
   });
 });
 

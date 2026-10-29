@@ -10,6 +10,10 @@
 // - Full-screen STATE comes only from fullscreenchange / webkitfullscreenchange (onFullscreenChange +
 //   isFullscreenActive) or the caller's own reading-mode flag — never optimistically from the tap, so a refused
 //   request can never leave an "Exit" label behind.
+// - Back leaves a fallback before it closes the reader: a reader that owns a history entry provides
+//   FullscreenFallbackHistoryContext, and a view inside it gives its fallback one entry through it.
+
+import { createContext } from 'react';
 
 type WebkitElement = Element & {
   webkitRequestFullscreen?: () => void | Promise<void>;
@@ -232,3 +236,18 @@ export const resetIosFullscreenNoteForTests = (opts: { keepStorage?: boolean } =
     /* ignore */
   }
 };
+
+// ── Back leaves a fallback first ────────────────────────────────────────────────────────────────────────────
+/**
+ * The history entry of a full-screen fallback (the classic reading mode, the v4 full-viewport mode), so the phone
+ * Back gesture leaves the fallback before it closes the comic. The reader that owns the history entries (ComicReader)
+ * provides it; a view rendered inside that reader (the v4 ComicReaderView under ComicReader's v4 delegate) calls
+ * `push(onBack)` when its fallback starts (`onBack` runs if Back pops that entry) and `pop()` when a control leaves the
+ * fallback. Without a provider (the studio's reader tab) the fallback simply has no entry of its own.
+ */
+export interface FullscreenFallbackHistory {
+  push: (onBack: () => void) => void;
+  pop: () => void;
+}
+
+export const FullscreenFallbackHistoryContext = createContext<FullscreenFallbackHistory | null>(null);
