@@ -399,7 +399,7 @@ describe('a lock the registry no longer knows (models.md §3.9)', () => {
     const health = fakeModelHealth({ now: LAKE_NOW });
     health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
     const getModelHealth = vi.spyOn(health, 'getModelHealth');
-    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW, drawIntent: 'draw' })).toBe('');
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW, drawIntent: 'explicit' })).toBe('');
     expect(await modelFactLines(ctx, ctx.session.doc, 'is it down?', { health, now: LAKE_NOW })).toEqual([
       'MODEL: nano-banana-0.9-retired is no longer offered by the studio. Say so and offer the picker (model_options); never pick another model yourself.'
     ]);
@@ -552,7 +552,7 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
     const later = LAKE_NOW + 4 * 60_000;
     health.setNow(later);
     expect(await modelStatusLine(ctx, ctx.session.doc, 'draw page 3 again', { health, now: later, drawIntent: 'redraw' })).toBe('');
-    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down? draw it', { health, now: later, drawIntent: 'draw' })).toBe(
+    expect(await modelStatusLine(ctx, ctx.session.doc, 'is it down? draw it', { health, now: later, drawIntent: 'explicit' })).toBe(
       'MODEL STATUS (Nano Banana 2.1): no failures in this comic or in our recent calls; live status: serving normally.'
     );
   });
