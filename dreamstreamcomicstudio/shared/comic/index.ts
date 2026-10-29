@@ -26,3 +26,4 @@ export * from './translationPlan.js';
 export * from './modelHealth.js';
 export * from './modelLock.js';
 export * from './modelInsights.js';
+export * from './modelCatalog.js';
