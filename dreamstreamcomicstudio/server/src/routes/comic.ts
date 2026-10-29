@@ -111,6 +111,83 @@ export const cooldownMessage = (until: number, now = Date.now()): string => {
   return `Let's take a short break — you can pick the story back up in ${minutes} min. Reading and editing your pages still work.`;
 };
 
+// ── Stop, scoped to what it says it stops ────────────────────────────────────
+
+/**
+ * Which abort controllers a Stop reaches, per session. A queued render (and a translation run)
+ * captures the session's abort controller when its run starts, so every message request swaps in
+ * a fresh controller for its turn: work an EARLIER request queued keeps the earlier controller.
+ * - While a director turn is in flight (from its request's start, upload included, to the end of
+ *   the turn), Stop is "Stop the director": it stops that turn and whatever the turn queued, and
+ *   leaves the drawing an earlier request started alone (the composer unlocks once a reply lands,
+ *   so a turn and an earlier turn's renders overlap).
+ * - With no turn in flight, Stop is "Stop drawing": every queued render of the session stops
+ *   (images already drawing finish and are kept).
+ */
+interface StopScope {
+  /** Controllers of message requests whose director turn has not ended. */
+  turns: Set<AbortController>;
+  /** Controllers a later turn swapped out while work started under them may still run. */
+  earlier: Set<AbortController>;
+  /** Open stream requests. Each stays open until the work it started has settled, so at 0 nothing uses `earlier`. */
+  open: number;
+}
+const stopScopes = new WeakMap<StudioSession, StopScope>();
+
+const stopScopeOf = (session: StudioSession): StopScope => {
+  let scope = stopScopes.get(session);
+  if (!scope) {
+    scope = { turns: new Set(), earlier: new Set(), open: 0 };
+    stopScopes.set(session, scope);
+  }
+  return scope;
+};
+
+/**
+ * Register one stream request with its session's Stop scope; a message that will run (`turn`) gets
+ * its own controller. `endTurn` when the director turn is over (its renders stay reachable by
+ * "Stop drawing"), `close` when the request ends; both are idempotent.
+ */
+function openStopScope(session: StudioSession, turn: boolean): { endTurn(): void; close(): void } {
+  const scope = stopScopeOf(session);
+  scope.open += 1;
+  let mine: AbortController | null = null;
+  if (turn) {
+    const prior = session.abort;
+    if (!prior.signal.aborted) scope.earlier.add(prior);
+    mine = session.resetAbort();
+    scope.turns.add(mine);
+  }
+  let closed = false;
+  const endTurn = () => {
+    if (mine) scope.turns.delete(mine);
+    mine = null;
+  };
+  return {
+    endTurn,
+    close() {
+      endTurn();
+      if (closed) return;
+      closed = true;
+      scope.open = Math.max(0, scope.open - 1);
+      if (!scope.open) scope.earlier.clear();
+    }
+  };
+}
+
+/** POST /projects/:id/cancel (and a `cancel` action): stop the director turn in flight, or else all drawing. */
+function stopSessionWork(session: StudioSession): 'turn' | 'drawing' {
+  const scope = stopScopeOf(session);
+  if (scope.turns.size) {
+    for (const c of scope.turns) c.abort();
+    return 'turn';
+  }
+  for (const c of scope.earlier) c.abort();
+  scope.earlier.clear();
+  session.abort.abort();
+  return 'drawing';
+}
+
 // ── Dependencies ─────────────────────────────────────────────────────────────
 
 /** The safety seams the routes call (P1-SAFETY). Injectable for tests. */
@@ -1022,7 +1099,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     '/projects/:id/cancel',
     owned(async (req, res) => {
       const session = await sessionFor(req);
-      session.abort.abort();
+      const stopped = stopSessionWork(session);
+      logger.info('comic_stop', { requestId: req.requestId, projectId: session.projectId, stopped });
       res.json({ ok: true });
     })
   );
@@ -1065,13 +1143,13 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     // A Stop from an earlier turn no longer applies to this request: clear it BEFORE any
     // upload, so a Stop pressed from now on — during the upload or during the turn — cancels
     // THIS request instead of being undone later. The turn signal is per request so a Stop that
-    // lands mid-upload is honored once the stream opens (below).
+    // lands mid-upload is honored once the stream opens (below). A message that will run gets
+    // its own Stop scope (openStopScope, below): Stop during its turn leaves earlier drawing alone.
     // A dropped connection is NOT a Stop: a phone's network blip or an app switch closes the
     // socket, but the user still wants their answer. The turn finishes and commits its reply
     // (bounded by the director's tool rounds and the model timeout), the client's resync picks
     // it up, and only the writes to the dead socket are skipped (`send` checks the socket).
     if (session.abort.signal.aborted) session.resetAbort();
-    const sessionSignal = session.abort.signal;
     const turnAbort = new AbortController();
     res.on('close', () => {
       if (!res.writableEnded) logger.info('comic_stream_client_gone', { requestId: req.requestId, projectId: session.projectId, ...shape });
@@ -1080,6 +1158,10 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     // Refusals that persist nothing: busy → cooldown → restricted account.
     let refusal: { code: string; message: string } | null = null;
     if (request.kind === 'message' && session.turnRunning) refusal = { code: 'BUSY', message: BUSY_MESSAGE };
+    // From here to the end of the request (every path closes it): a message that will run is a
+    // director turn in flight for Stop, under its own controller (see StopScope).
+    const stops = openStopScope(session, request.kind === 'message' && !refusal);
+    const sessionSignal = session.abort.signal;
     if (!refusal && isCostlyRequest(request)) {
       const cooldown = await safety.cooldownFor(userId).catch((err) => {
         logger.warn('comic_cooldown_lookup_failed', { userId, message: (err as Error)?.message });
@@ -1095,25 +1177,30 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
     let ctx: OrchestratorContext | null = null;
     let prepared: PreparedMessage | null = null;
     if (!refusal) {
-      const { contextDeps, keys, byok } = keysFor(req);
-      const [caps, access] = await Promise.all([
-        capsFor(req, byok),
-        (deps.qualityAccess || checkQualityAccess)(req, 'pro', byok).catch(() => ({ ok: true as const }))
-      ]);
-      const rating: ContentRating = effectiveRating(session.doc, caps.ratingCeiling).rating;
-      ctx = createStudioContext({
-        req,
-        session,
-        signalFrom: turnAbort.signal,
-        deps: { ...contextDeps, keys, assets: contextDeps.assets || assets() },
-        caps,
-        rating,
-        ...(access.ok === false ? { qualityDenied: access.message } : {}),
-        ...(restricted ? { spendBlocked: RESTRICTED_SPEND_MESSAGE } : {})
-      });
-      // Attachments are validated (and legacy images stored) before the stream opens, so a
-      // bad file or a stale inbox path is a plain 400 with nothing persisted.
-      if (request.kind === 'message') prepared = await prepareMessage(request, ctx);
+      try {
+        const { contextDeps, keys, byok } = keysFor(req);
+        const [caps, access] = await Promise.all([
+          capsFor(req, byok),
+          (deps.qualityAccess || checkQualityAccess)(req, 'pro', byok).catch(() => ({ ok: true as const }))
+        ]);
+        const rating: ContentRating = effectiveRating(session.doc, caps.ratingCeiling).rating;
+        ctx = createStudioContext({
+          req,
+          session,
+          signalFrom: turnAbort.signal,
+          deps: { ...contextDeps, keys, assets: contextDeps.assets || assets() },
+          caps,
+          rating,
+          ...(access.ok === false ? { qualityDenied: access.message } : {}),
+          ...(restricted ? { spendBlocked: RESTRICTED_SPEND_MESSAGE } : {})
+        });
+        // Attachments are validated (and legacy images stored) before the stream opens, so a
+        // bad file or a stale inbox path is a plain 400 with nothing persisted.
+        if (request.kind === 'message') prepared = await prepareMessage(request, ctx);
+      } catch (err) {
+        stops.close();
+        throw err;
+      }
     }
 
     res.writeHead(200, {
@@ -1162,7 +1249,12 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const turnCtx = ctx;
       try {
         if (request.kind === 'message') {
-          await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape));
+          try {
+            await session.runExclusive(() => runMessage(req, turnCtx, prepared!, shape));
+          } finally {
+            // The turn is over (its reply is in): from now on Stop is "Stop drawing" for its renders.
+            stops.endTurn();
+          }
         } else {
           let action = request.action;
           // Free text a user typed into an action (edit instruction, plan notes, style directions) goes
@@ -1192,6 +1284,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
             if (screened.decision === 'adapt' && action.type === 'edit_page') action = { ...action, safe: true };
           }
           const runnable = action;
+          // A `cancel` action is the same Stop as POST /cancel (scoped; see StopScope).
+          if (runnable.type === 'cancel') stopSessionWork(session);
           // A click on a spend button IS the confirmation; the budget cap still applies.
           const run = () =>
             runAction(turnCtx, runnable, {
@@ -1222,6 +1316,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       }
     } finally {
       sessionSignal.removeEventListener('abort', onSessionAbort);
+      stops.close();
       await session.flush();
       // What software saved this request (free reuse instead of a paid redraw): the "Saved by software" toast.
       const savedUsd = round4(session.doc.spend.entries.reduce((sum, e) => (startEntries.has(e.id) ? sum : sum + (e.savedUsd || 0)), 0));

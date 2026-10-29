@@ -494,6 +494,37 @@ describe('useStudio — cancel and cleanup', () => {
     expect(result.current.cancelling).toBe(false);
   });
 
+  it('stopping the director ends "Stopping…" with that turn while an earlier turn keeps drawing; then Stop is "Stop drawing"', async () => {
+    const { result } = await setup();
+    act(() => void result.current.send('draw page 1'));
+    const s1 = lastStream();
+    emit(s1, { type: 'hello', rev: 5, turnId: 't1' });
+    emit(s1, {
+      type: 'ops',
+      rev: 6,
+      ops: [
+        { op: 'message', msg: { id: 'u1', role: 'user', text: 'draw page 1', at: 1 } },
+        { op: 'message', msg: { id: 'a1', role: 'assistant', text: 'On its way.', at: 2 } }
+      ]
+    });
+    act(() => void result.current.send('make it moodier'));
+    const s2 = lastStream();
+    expect(result.current.messageBusy).toBe(true);
+    await act(async () => result.current.cancel());
+    expect(result.current.cancelling).toBe(true);
+    // The server stopped turn 2 only: its stream closes, turn 1's stays open for page 1.
+    await finish(s2, 6);
+    expect(result.current.busy).toBe(true);
+    // Before: "Stopping…" stayed on (hiding the activity line's Stop) until every stream had closed.
+    expect(result.current.cancelling).toBe(false);
+    // No turn in flight now: this Stop is "Stop drawing", and it lasts until the render stream closes.
+    await act(async () => result.current.cancel());
+    expect(api.cancelStudio).toHaveBeenCalledTimes(2);
+    expect(result.current.cancelling).toBe(true);
+    await finish(s1, 6);
+    expect(result.current.cancelling).toBe(false);
+  });
+
   it('if the server cannot be reached, stop listening locally and resync', async () => {
     const { result } = await setup();
     act(() => void result.current.act({ type: 'render_pages' }));

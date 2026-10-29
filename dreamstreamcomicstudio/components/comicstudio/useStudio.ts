@@ -246,6 +246,8 @@ export function useStudio(projectId: string): ComicStudioController {
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** What the last Stop stopped (the server decides the same way): the director turn in flight, or all drawing. */
+  const cancelScopeRef = useRef<'turn' | 'drawing'>('drawing');
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
@@ -712,8 +714,10 @@ export function useStudio(projectId: string): ComicStudioController {
     const d = guarded(generation);
     d({ type: 'cancel_start' });
     if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-    // The server stops the director and queued renders; images already drawing finish
-    // (they are paid) and the streams close once they land.
+    // The server stops the director turn in flight and what it queued (renders an earlier turn
+    // started keep drawing) — or, with no turn in flight, every queued render. Images already
+    // drawing finish (they are paid) and the streams close once they land.
+    cancelScopeRef.current = isMessageBusy(stateRef.current) ? 'turn' : 'drawing';
     cancelTimerRef.current = setTimeout(() => d({ type: 'cancel_end' }), CANCEL_SAFETY_MS);
     try {
       await cancelStudio(projectRef.current);
@@ -1123,7 +1127,15 @@ export function useStudio(projectId: string): ComicStudioController {
   // stream `replied`) while that stream stays open for the renders it started: the server accepts
   // the next message then, so the in-flight guard follows the reducer, not the stream's end.
   useEffect(() => {
-    if (!messageBusy) messageInFlightRef.current = null;
+    if (messageBusy) return;
+    messageInFlightRef.current = null;
+    // A Stop of the director is done once no turn is awaited: renders an earlier turn started keep
+    // drawing on their own stream, so "Stopping…" must not linger over them (nor hide their Stop).
+    if (stateRef.current.cancelling && cancelScopeRef.current === 'turn') {
+      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+      cancelTimerRef.current = null;
+      dispatch({ type: 'cancel_end' });
+    }
   }, [messageBusy]);
   const { canUndo, canRedo, undoLabel, redoLabel } = undoApi;
 

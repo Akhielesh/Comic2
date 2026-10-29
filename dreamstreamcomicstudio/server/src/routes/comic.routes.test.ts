@@ -424,6 +424,125 @@ describe('POST /projects/:id/stream', () => {
     expect(docOf().conversation[1].text).not.toContain('(stopped)');
   });
 
+  describe('Stop is scoped to what it says it stops', () => {
+    /** Four planned pages with their sheets drawn: while page 1's image is held, pages 2–4 wait in the queue. */
+    const fourPageDoc = () => {
+      const doc = plannedDoc();
+      doc.planStatus = 'approved';
+      const p3 = doc.pages[2];
+      doc.pages.push({
+        ...p3,
+        id: 'pg_4',
+        n: 4,
+        summary: 'Page 4 beat',
+        panels: p3.panels.map((p) => ({
+          ...p,
+          id: p.id.replace('pn_3', 'pn_4'),
+          action: `Action 4.${p.n}`,
+          lines: p.lines.map((l) => ({ ...l, id: l.id.replace('ln_3', 'ln_4'), text: 'Line on page 4' }))
+        })),
+        render: emptyRender(),
+        balloons: []
+      });
+      doc.format = { ...doc.format, pageCount: 4 };
+      // Sheets already drawn: the run goes straight to the pages.
+      const drawn = (path: string) => ({ ...emptyRender(), status: 'ready' as const, asset: { path, source: 'generated' as const, at: 1 } });
+      doc.cast = doc.cast.map((c) => ({ ...c, sheet: drawn(`u/user-1/p/proj-1/img/${c.id}.webp`) }));
+      doc.places = doc.places.map((p) => ({ ...p, sheet: drawn(`u/user-1/p/proj-1/img/${p.id}.webp`) }));
+      return doc;
+    };
+    const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+    const live = () => peekStudioSession('proj-1')!.doc;
+    const statuses = (doc: ComicDoc) => doc.pages.map((p) => p.render.status);
+
+    /** Turn 1 asks the director to draw every page; images are held, so pages 2–4 stay queued after the reply. */
+    const drawEverything = async () => {
+      seed(fourPageDoc());
+      let releaseImages!: () => void;
+      const imagesHeld = new Promise<void>((r) => (releaseImages = r));
+      images.behave = async () => {
+        await imagesHeld;
+        return undefined;
+      };
+      llm.script.director = [{ toolCalls: [{ id: 'r', name: 'render_pages', arguments: '{}' }] }, { text: 'Drawing all four pages.' }];
+      const drawing = stream('proj-1', { kind: 'message', text: 'draw all the pages' });
+      for (let i = 0; i < 300 && !(images.calls.length >= 1 && live().conversation.some((m) => m.text === 'Drawing all four pages.')); i += 1) await tick();
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      return { drawing, releaseImages };
+    };
+
+    it('"Stop the director" during turn 2 stops turn 2 only: pages turn 1 queued keep drawing', async () => {
+      const { drawing, releaseImages } = await drawEverything();
+      let markWaiting!: () => void;
+      const waiting = new Promise<void>((r) => (markWaiting = r));
+      let directorStopped = false;
+      llm.script.director = [
+        async (req) => {
+          markWaiting();
+          await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
+          directorStopped = true;
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+      ];
+      const turn2 = stream('proj-1', { kind: 'message', text: 'Make Maya taller.' });
+      await waiting;
+      expect(await (await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} })).json()).toEqual({ ok: true });
+      await turn2;
+      expect(directorStopped).toBe(true);
+      // Before: one session-wide abort — the pages turn 1 queued were dropped by turn 2's Stop.
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      releaseImages();
+      await drawing;
+      expect(statuses(store.docs.get('proj-1')!.doc)).toEqual(['ready', 'ready', 'ready', 'ready']);
+      expect(images.calls).toHaveLength(4);
+    });
+
+    it('"Stop the director" still stops what that turn itself queued', async () => {
+      seed(fourPageDoc());
+      let releaseImages!: () => void;
+      const imagesHeld = new Promise<void>((r) => (releaseImages = r));
+      images.behave = async () => {
+        await imagesHeld;
+        return undefined;
+      };
+      let markWaiting!: () => void;
+      const waiting = new Promise<void>((r) => (markWaiting = r));
+      llm.script.director = [
+        { toolCalls: [{ id: 'r', name: 'render_pages', arguments: '{}' }] },
+        async (req) => {
+          markWaiting();
+          await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+      ];
+      const turn = stream('proj-1', { kind: 'message', text: 'draw all the pages' });
+      await waiting;
+      for (let i = 0; i < 300 && images.calls.length < 1; i += 1) await tick();
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} });
+      releaseImages();
+      await turn;
+      const saved = statuses(store.docs.get('proj-1')!.doc);
+      expect(saved[0]).toBe('ready');
+      expect(saved.slice(1).some((s) => s === 'ready' || s === 'queued' || s === 'rendering')).toBe(false);
+      expect(images.calls).toHaveLength(1);
+    });
+
+    it('with no director turn in flight, Stop is "Stop drawing": queued pages are dropped, the one drawing is kept', async () => {
+      const { drawing, releaseImages } = await drawEverything();
+      // The reply has landed; the next message came and went (its controller replaced turn 1's).
+      llm.script.director = [{ text: 'Sure.' }];
+      await stream('proj-1', { kind: 'message', text: 'Make Maya taller.' });
+      expect(await (await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} })).json()).toEqual({ ok: true });
+      releaseImages();
+      await drawing;
+      const saved = statuses(store.docs.get('proj-1')!.doc);
+      expect(saved[0]).toBe('ready');
+      expect(saved.slice(1).some((s) => s === 'ready' || s === 'queued' || s === 'rendering')).toBe(false);
+      expect(images.calls).toHaveLength(1);
+    });
+  });
+
   it('stores image attachments and turns a long text file into the source script', async () => {
     seed();
     const script = 'PAGE 1. Maya runs. '.repeat(120);
