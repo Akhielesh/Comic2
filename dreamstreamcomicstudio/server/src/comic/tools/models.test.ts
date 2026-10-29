@@ -492,6 +492,37 @@ describe('reply guards: never a switch, never a start that did not happen', () =
     expect(governed).not.toMatch(/\$/);
     expect(governed).toMatch(/switch to Nano Banana Pro \(≈[\d.]+% of your usage per image/);
   });
+
+  it('a start claim is dropped even when a negation sits elsewhere in the sentence, and retry / redraw verbs count', () => {
+    const doc = lakeLocked();
+    const line = guardModelReply('', { doc, outages: [outageCard()], queued: 0, cost: dollars }).text;
+    expect(line).toMatch(/^Nano Banana 2\.1 isn't drawing right now, so I paused — nothing was started and nothing was charged\./);
+    for (const claim of [
+      "No problem — I've started redrawing pages 3 to 5!",
+      'Pages 3 to 5 are on their way, no extra charge.',
+      "It won't take long: page 5 is on its way.",
+      'Retrying pages 3 to 5 now.',
+      'Redrawing page 5 for you.',
+      // The director's own failure fallback (director.ts) when a tool had said it started.
+      "Sorry — I couldn't finish my reply, but what I already started keeps drawing.",
+      'Trying them again now — here goes.',
+      'It’s drawing page 5 now.'
+    ]) {
+      expect(guardModelReply(claim, { doc, outages: [outageCard()], queued: 0, cost: dollars }).text, claim).toBe(line);
+    }
+    // Honest sentences are kept after the line: negations right before the verb, offers, prices, promises on a condition.
+    for (const honest of [
+      "I haven't started anything yet.",
+      'No drawing has started.',
+      'Want me to start them once it is back?',
+      'Redrawing them to match would cost about the same.',
+      "It'll start again once Google lets it through."
+    ]) {
+      expect(guardModelReply(honest, { doc, outages: [outageCard()], queued: 0, cost: dollars }).text, honest).toBe(`${line} ${honest}`);
+    }
+    // Something else this turn did start: its sentences stay.
+    expect(guardModelReply('Page 2 is on its way.', { doc, outages: [outageCard()], queued: 1, cost: dollars }).text).toBe(`${line} Page 2 is on its way.`);
+  });
 });
 
 

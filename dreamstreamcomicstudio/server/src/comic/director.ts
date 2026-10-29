@@ -807,7 +807,7 @@ async function directorTurnBody(
         ? [failure.userMessage, runLine].filter(Boolean).join(' ')
         : runLine
           ? `Sorry — I couldn't finish my reply. ${runLine}`
-          : turn.outcome === 'started'
+          : turn.outcome === 'started' && !(outages.length && !turn.runs?.length)
             ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
             : "Sorry — I couldn't finish that just now. Try again in a moment.";
     } else if (!outages.length) text = composeTurnReply({ before, after, turn, userText });

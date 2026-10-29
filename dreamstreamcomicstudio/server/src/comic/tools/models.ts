@@ -701,10 +701,60 @@ export function outageReplyLine(card: OutageCard, c: CostFormatter, reason?: str
   return `${head} You can ${said.length === 1 ? said[0] : `${said.slice(0, -1).join(', ')}, or ${said[said.length - 1]}`}.`;
 }
 
-/** A sentence that says a drawing is under way (mirrors replies.ts; negated sentences never count). */
-const START_CLAIM_RE =
-  /\b(kick(?:ed|ing)? off|start(?:ed|ing)?|on (?:its|their|the) way|(?:are|is|now) (?:drawing|rendering|generating|cooking|being drawn)|drawing (?:them|it|now|your)|will (?:appear|land|show up)|coming (?:right )?up|in (?:the )?(?:works|progress)|appear on the board|working on (?:it|them|the))/i;
-const NEGATED_RE = /\b(?:no|not|nothing|never|paused|couldn'?t|can'?t|won'?t|didn'?t|isn'?t|wasn'?t|hasn'?t|haven'?t)\b/i;
+/**
+ * Words that say a drawing is under way (replies.ts' list plus retry / redraw verbs). Every match is judged on its
+ * own: only a negation just before it (same clause) or an offer ("want me to start…?") takes it back — a "no" or a
+ * "won't" elsewhere in the sentence never does ("No problem — I've started…", "It won't take long: … on its way").
+ */
+const START_CLAIM_RE = new RegExp(
+  [
+    String.raw`\bkick(?:ed|ing|s)? (?:it |them |that |those )?off\b`,
+    String.raw`\bstart(?:ed|ing|s)?\b`,
+    String.raw`\bon (?:its|their|the) way\b`,
+    String.raw`(?:\b(?:are|is|now)|'re|'s) (?:re-?)?(?:drawing|rendering|generating|cooking|painting|being (?:re-?)?(?:drawn|rendered))\b`,
+    String.raw`\b(?:re-?)?drawing (?:them|it|now|your|those|these)\b`,
+    String.raw`\bwill (?:appear|land|show up)\b`,
+    String.raw`\bcoming (?:right )?up\b`,
+    String.raw`\bin (?:the )?(?:works|progress)\b`,
+    String.raw`\bappear on the board\b`,
+    String.raw`\bworking on (?:it|them|the|those|these|your)\b`,
+    String.raw`\bre-?(?:draw|render|generat|paint)ing\b`,
+    String.raw`\bre-?tr(?:y|i)ing\b`,
+    String.raw`\btrying (?:it |them |that |those |these )?again\b`,
+    String.raw`\btrying\b[^.!?]{0,40}\bnow\b`,
+    String.raw`\bkeeps? (?:on )?(?:drawing|rendering|going)\b`,
+    String.raw`\bhere (?:it |we )?goes\b`,
+    String.raw`^(?:drawing|rendering|generating|painting)\b`
+  ].join('|'),
+  'gi'
+);
+/** A negation that takes back the claim right after it ("nothing was started", "I haven't started"). */
+const NEGATED_BEFORE_RE =
+  /(?:\b(?:not|never|nothing|none|neither|nor|without|didn'?t|did not|couldn'?t|could not|can'?t|cannot|won'?t|will not|wouldn'?t|isn'?t|is not|wasn'?t|was not|aren'?t|weren'?t|haven'?t|hasn'?t|hadn'?t|don'?t|doesn'?t)\b|\bno (?:new |more |other )?(?:images?|drawings?|pages?|runs?|jobs?|work|renders?|calls?)\b)[^.!?:;,—–]{0,20}$/i;
+/** An offer or a condition right before the words ("want me to start?", "if you like, I can start"). */
+const OFFER_BEFORE_RE = /\b(?:if|could|can|would|shall|should|may|might|want|wanna|ready to|once|when|until|unless|as soon as)\b[^.!?;:—–]{0,40}$/i;
+/** A promise for later that waits on a condition ("it'll start once it's back"). */
+const FUTURE_BEFORE_RE = /(?:'ll|\bwill|\bgoing to|\bto)\s+(?:\w+\s+)?$/i;
+const CONDITION_AFTER_RE = /^[^.!?]{0,60}\b(?:once|when|as soon as|after|if|until)\b/i;
+/** "Redrawing them would cost ≈ $0.82": the gerund is a noun, not a claim. */
+const NOUN_AFTER_RE = /^[^.!?]{0,30}\b(?:would|could|costs?|will cost)\b/i;
+
+/** Does this sentence say a drawing is under way (any one claim that nothing before it takes back)? */
+const claimsStart = (sentence: string): boolean => {
+  const s = sentence.replace(/[’‘]/g, "'");
+  START_CLAIM_RE.lastIndex = 0;
+  for (let m = START_CLAIM_RE.exec(s); m; m = START_CLAIM_RE.exec(s)) {
+    if (m[0].length === 0) START_CLAIM_RE.lastIndex += 1;
+    const before = s.slice(0, m.index);
+    const after = s.slice(m.index + m[0].length);
+    if (NEGATED_BEFORE_RE.test(before) || OFFER_BEFORE_RE.test(before)) continue;
+    if (FUTURE_BEFORE_RE.test(before) && CONDITION_AFTER_RE.test(after)) continue;
+    if (/ing\b/i.test(m[0]) && NOUN_AFTER_RE.test(after)) continue;
+    return true;
+  }
+  return false;
+};
+
 const PAUSE_ACK_RE = /\b(?:paused|isn'?t drawing|not drawing|nothing (?:was|is) (?:started|drawn|charged)|wasn'?t (?:drawn|started|charged)|unavailable|rate-?limit\w*|busy|down right now|couldn'?t (?:draw|start))\b/i;
 
 /** "switched it to X", "now using X", "I'll switch to X": the X a sentence claims the comic is (or will be) on. */
@@ -769,7 +819,6 @@ export function guardModelReply(text: string, i: ReplyGuardInput): { text: strin
     const line = outageReplyLine(outage, i.cost);
     if (!out) return { text: line, steps };
     const sentences = sentencesOf(out);
-    const claimsStart = (s: string) => START_CLAIM_RE.test(s) && !NEGATED_RE.test(s);
     // Something else this turn did start: keep its sentences, only make sure the pause is said.
     const kept = i.queued > 0 ? sentences : sentences.filter((s) => !claimsStart(s));
     if (kept.length === sentences.length && PAUSE_ACK_RE.test(out)) return { text: out, steps };
