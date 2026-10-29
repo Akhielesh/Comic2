@@ -68,6 +68,7 @@ import { ModeToggle } from './mobile/ModeToggle';
 import { SavingsBreakdown, savedTotal } from './mobile/SavingsChip';
 import { AdaptiveSheet } from './mobile/sheets/AdaptiveSheet';
 import { StudioLayout, SPLIT_STORAGE_KEY } from './mobile/shell/StudioLayout';
+import { phoneChromeVars } from './mobile/shell/phoneChrome';
 import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
@@ -822,8 +823,9 @@ export const SettingsPanel: React.FC<{
 
 // ── Loading / fatal ──────────────────────────────────────────────────────────
 
-const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean }> = ({ onBack, wide }) => (
-  <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} aria-busy="true" aria-label="Opening your comic">
+/** `chrome`: the phone portrait header size (phoneChrome.ts), so the header doesn't jump when the comic arrives. */
+const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean; chrome?: React.CSSProperties }> = ({ onBack, wide, chrome }) => (
+  <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} style={chrome} aria-busy="true" aria-label="Opening your comic">
     <header className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-3" style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}>
       <button type="button" onClick={onBack} aria-label="Back to your projects" className={headerIconBtn}>
         <ArrowLeft className="h-4 w-4" />
@@ -872,16 +874,6 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
     </div>
   </main>
 );
-
-// ── Phone chrome ─────────────────────────────────────────────────────────────
-
-/**
- * Phones in portrait: the header and the tab bar are 44 + 52 px (their controls stay 44 px), so the
- * board and the message list keep ≥ 45 % of an iPhone's height under the notch and the home indicator
- * (P1-QA phone-content; visualqa P1-6). Set on the studio root, so everything that offsets by these
- * tokens (the savings chip, toasts) reads the same values.
- */
-const PHONE_CHROME = { '--header-h': '44px', '--tabbar-h': '52px' } as React.CSSProperties;
 
 // ── Shell ────────────────────────────────────────────────────────────────────
 
@@ -1039,7 +1031,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
     if (studio.loadError) {
       return <FatalError message={studio.loadError} onRetry={() => void studio.refresh()} onBack={onBack} retrying={studio.refreshing} />;
     }
-    return <StudioSkeleton onBack={onBack} wide={!phone} />;
+    return <StudioSkeleton onBack={onBack} wide={!phone} chrome={phoneChromeVars(ff.layout)} />;
   }
 
   const pagesRendering = renderingPageCount(doc);
@@ -1110,7 +1102,7 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
   return (
     <div
       className={`gesture-root relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}
-      style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)', ...(tabBar ? PHONE_CHROME : null) }}
+      style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)', ...phoneChromeVars(ff.layout) }}
       data-layout={ff.layout}
       // Comic Studio renders in the Atlas design language wherever it is mounted (the comics host
       // sets the same attribute on <html>; on the apex this root is the skin's boundary).

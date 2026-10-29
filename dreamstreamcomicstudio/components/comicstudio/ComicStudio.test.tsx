@@ -314,6 +314,17 @@ describe('ComicStudio on phones (single)', () => {
     expect(root.style.getPropertyValue('--tabbar-h')).toBe('52px');
   });
 
+  it('the loading skeleton uses the same phone header size, so the header does not jump when the comic arrives', () => {
+    const { unmount } = mountAt(PHONE, makeFakeStudio({ doc: null, loading: true }));
+    const skeleton = screen.getByLabelText('Opening your comic');
+    expect(skeleton.style.getPropertyValue('--header-h')).toBe('44px');
+    expect(skeleton.querySelector('header')?.style.height).toBe('var(--header-h, 56px)');
+    unmount();
+    // Tablets and desktop keep index.css's values.
+    mountAt(formFactorFor({ w: 1440, h: 900 }), makeFakeStudio({ doc: null, loading: true }));
+    expect(screen.getByLabelText('Opening your comic').style.getPropertyValue('--header-h')).toBe('');
+  });
+
   it('opening a page from a card reveals the board', () => {
     const studio = makeFakeStudio({
       doc: makeSampleDoc({ conversation: [{ id: 'a1', role: 'assistant', text: 'Here is the plan', at: 1, cards: [{ type: 'plan', id: 'cp' }] }] })
