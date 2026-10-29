@@ -11,6 +11,8 @@ import {
   imageFailureDetail,
   imageFailureInfo,
   looksLikeRefusal,
+  MODEL_GONE_REASON,
+  modelUnavailableReason,
   pickAlternateRoute,
   pickImageRoute,
   providerDetail,
@@ -671,8 +673,48 @@ describe('Images-API transport (api.openrouter === images)', () => {
     expect(at4k).toEqual({ only: ['google-ai-studio'], resolution: '4K', referenceCap: 14 });
     // No endpoint data: nothing is pinned that can't be justified; the vendor cap still applies.
     expect(planImagesApi(imagesPro, null, '2K', 0.1344)).toEqual({ resolution: '2K', referenceCap: imagesPro.refs.total });
-    // Nothing at or under the quote: no `only` list (OpenRouter keeps the model fixed either way).
-    expect(planImagesApi(imagesPro, [studio], '2K', 0.1)).toEqual({ resolution: '2K', referenceCap: 14 });
+    // Nothing at or under the quote: a refusal (an unpinned call could be served dearer than the quote).
+    expect(planImagesApi(imagesPro, [studio], '2K', 0.1)).toEqual({ refuse: 'no provider serves 2K at the quoted price', referenceCap: 14 });
+    // No endpoint lists the resolution at all.
+    expect(planImagesApi(imagesPro, [vertex], '4K', 1)).toEqual({ refuse: 'no provider serves 4K for it', referenceCap: imagesPro.refs.total });
+  });
+
+  it('endpoint data but none within the quote: NO call, a classified non-retryable refusal with the H reason', async () => {
+    const { generate, fetchMock } = imagesSetup([endpoint('OpenAI', 0.2107), endpoint('Azure', 0.31)], [gptOk()]);
+    const err = await generate({ ...baseReq({ spec: GPT, aspect: '2:3' }), maxUsd: 0.15 } as ImageRequestPlus).catch((e) => e);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(err).toBeInstanceOf(StudioError);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', status: 422, retryable: false });
+    expect(imageFailureInfo(err)).toMatchObject({ route: 'openrouter' });
+    expect(modelUnavailableReason(err)).toBe('no provider serves it at the quoted price');
+    expect(health.outcomes.every((o) => o.code === 'NOT_UPSTREAM' || o.keyScoped)).toBe(true); // never counted against the model
+  });
+
+  it('an Images-API model whose /images answers 404 never falls back to chat (no quality or provider pin there)', async () => {
+    const { generate, fetchMock } = imagesSetup([endpoint('OpenAI', 0.2107)], [json({ error: { message: 'Not Found' } }, 404), gptOk()]);
+    const err = await generate(baseReq({ spec: GPT, aspect: '2:3' })).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String((fetchMock.mock.calls[0] as unknown as [string])[0])).toMatch(/\/images$/);
+    expect(err).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false });
+    expect(modelUnavailableReason(err)).toBe("OpenRouter's image service doesn't offer it right now");
+    // The next call skips /images (recently unavailable) and still never calls chat.
+    const again = await generate(baseReq({ spec: GPT, aspect: '2:3' })).catch((e) => e);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(modelUnavailableReason(again)).toBeDefined();
+  });
+
+  it('a 404 on the model call marks H (the provider no longer serves it); a 404 downloading the picture does not', async () => {
+    const gone = setup(OR, [json({ error: { message: 'No endpoints found for google/gemini-nano-banana-2.1' } }, 404), json({ error: { message: 'Not Found' } }, 404)]);
+    const err = await gone.generate(baseReq()).catch((e) => e);
+    expect(imageFailureInfo(err)).toMatchObject({ status: 404 });
+    expect(modelUnavailableReason(err)).toBe(MODEL_GONE_REASON);
+    __resetImageClientForTests();
+    const download = setup(OR, [imagesOk({ data: [{ url: 'https://cdn.example/x.png' }] }), new Response('', { status: 404 })]);
+    const dl = await download.generate(baseReq()).catch((e) => e);
+    expect(download.fetchMock.mock.calls.map((c) => String(c[0]))).toEqual(['https://openrouter.ai/api/v1/images', 'https://cdn.example/x.png']);
+    expect(dl).toBeInstanceOf(StudioError);
+    expect(imageFailureInfo(dl)).toMatchObject({ status: 404 });
+    expect(modelUnavailableReason(dl)).toBeUndefined();
   });
 
   it('chat-transport models keep today\'s request exactly (no provider pinning, no endpoint lookup)', async () => {

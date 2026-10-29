@@ -513,11 +513,14 @@ describe('replays with the real image client over fake transports', () => {
 // ── §3.9 edge cases and the §5.1 acceptance ──────────────────────────────────
 
 describe('locked model edge cases (models.md §3.9)', () => {
-  it('the provider no longer serving the locked model ends with H — no other model is tried', async () => {
-    const gone = () =>
-      Object.assign(new StudioError('PROVIDER_ERROR', "That image model isn't available on OpenRouter right now. Please try again later.", { status: 502, retryable: false }), {
-        imageFailure: { route: 'openrouter', status: 404 }
-      });
+  /** What the image client throws for a 404 on the model call (imageClient marks it modelUnavailable). */
+  const gone = (reason = 'the provider no longer serves it') =>
+    Object.assign(new StudioError('PROVIDER_ERROR', "That image model isn't available on OpenRouter right now. Please try again later.", { status: 502, retryable: false }), {
+      imageFailure: { route: 'openrouter', status: 404 },
+      modelUnavailable: reason
+    });
+
+  it('the provider no longer serving the locked model ends with H — no other model is tried, no raw error line beside it', async () => {
     const images = fakeImages(() => gone());
     const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { images });
     await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
@@ -525,6 +528,20 @@ describe('locked model edge cases (models.md §3.9)', () => {
     expect(cardsOf(session.doc).some((c) => c.type === 'notice' && c.text.startsWith("Nano Banana 2.1 isn't available for this comic right now (the provider no longer serves it). Nothing was drawn."))).toBe(true);
     expect(last.nextSteps).toEqual(expect.arrayContaining([{ label: 'See other models', client: { type: 'open_model_picker' } }]));
     expect(new Set(images.calls.map((c) => c.spec.id))).toEqual(new Set(['nano-banana-2.1']));
+    // H carries the message: no "Page 1 failed — <raw error>", no retry line.
+    expect(last.text).toBe("Page 1 wasn't drawn.");
+    expect(session.doc.conversation.some((m) => /failed —|isn't available on OpenRouter right now|Retry from the board/.test(m.text))).toBe(false);
+    expect(session.doc.pages[0].render).toMatchObject({ status: 'failed', error: "That image model isn't available on OpenRouter right now. Please try again later." });
+  });
+
+  it('an Images-API refusal (no endpoint within the quote) is H with its reason, and a kept-status edit gets no red notice', async () => {
+    const images = fakeImages(() => gone('no provider serves 2K at the quoted price'));
+    const { session, ctx } = setup(makeLakeComic(), { images, keys: { openrouter: { key: 'sk-or-platform', byok: false } } });
+    await runAction(ctx, { type: 'edit_page', pageId: 'pg_1', instruction: 'Make the sky a little brighter.' }, UI);
+    const cards = cardsOf(session.doc);
+    expect(cards.some((c) => c.type === 'notice' && c.text.startsWith("Nano Banana 2.1 isn't available for this comic right now (no provider serves 2K at the quoted price). Nothing was drawn."))).toBe(true);
+    expect(cards.some((c) => c.type === 'notice' && c.tone === 'error')).toBe(false);
+    expect(session.doc.pages[0].render.status).toBe('ready'); // the edit kept the page as it was
   });
 
   it("an older comic whose assets name the provider's id is locked to that registry entry (no false violation)", async () => {
@@ -541,7 +558,20 @@ describe('locked model edge cases (models.md §3.9)', () => {
     await runAction(ctx, { type: 'render_pages', pageIds: ['pg_2'] }, UI);
     expect(ctx.imagesFake.calls.map((c) => c.spec.id)).toEqual(['nano-banana-2', 'nano-banana-2']);
     expect(session.doc.imageModel).toMatchObject({ modelId: 'nano-banana-2', origin: 'migrated' });
-    const notices = cardsOf(session.doc).filter((c) => c.type === 'notice' && /maker has retired/.test(c.text));
+    const notices = cardsOf(session.doc).filter((c) => c.type === 'notice' && /no longer offered for new comics/.test(c.text));
+    expect(notices).toHaveLength(1);
+    expect(notices[0].type === 'notice' && notices[0].text).toBe(
+      'This comic is drawn with Nano Banana 2, which is no longer offered for new comics. It keeps working while the provider serves it; you can switch in the model picker (switching can affect consistency).'
+    );
+    // "retired" is reserved for the H case (§3.9): a model still served is never called retired.
+    expect(cardsOf(session.doc).some((c) => c.type === 'notice' && /retired/.test(c.text))).toBe(false);
+  });
+
+  it('a legacy comic on a now-hidden (not deprecated) model gets the same one notice (§3.9 row 1)', async () => {
+    const { session, ctx } = setup(drawnDoc(undefined, 'nano-banana-lite'));
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(ctx.imagesFake.calls.map((c) => c.spec.id)).toEqual(['nano-banana-lite']);
+    const notices = cardsOf(session.doc).filter((c) => c.type === 'notice' && /^This comic is drawn with Nano Banana Lite, which is no longer offered for new comics\./.test(c.text));
     expect(notices).toHaveLength(1);
   });
 });

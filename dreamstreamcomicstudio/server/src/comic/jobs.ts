@@ -119,7 +119,7 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, pickImageRoute, type ImageRequestPlus, type ImageResultPlus } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute, type ImageRequestPlus, type ImageResultPlus } from './imageClient.js';
 import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
 import { recordImageCall } from './billing.js';
@@ -2300,7 +2300,9 @@ class RenderRun {
     const failedAll = this.results.filter((r) => !r.ok && !r.skipped);
     // reliability.md §2: a provider-side failure is said calmly (§3.6 G) and gets the outage card, never raw error text.
     const upstream = failedAll.filter(isUpstreamResult);
-    const failed = failedAll.filter((r) => !isUpstreamResult(r));
+    // §3.6 H: the model itself can't be drawn (no longer served, nothing within the quote): the H notice says why.
+    const unavailable = failedAll.filter((r) => !!unavailableReasonOf(r));
+    const failed = failedAll.filter((r) => !isUpstreamResult(r) && !unavailableReasonOf(r));
     const skipped = this.results.filter((r) => r.skipped);
     const noun = (list: JobResult[]) => describeJobs(list.map((r) => r.job));
     const are = (list: JobResult[]) => (list.length === 1 ? 'is' : 'are');
@@ -2346,6 +2348,7 @@ class RenderRun {
       );
       if (limited.length) parts.push(`I already waited for the provider and tried ${limited.length === 1 ? 'it' : 'them'} once more.`);
     }
+    if (unavailable.length) parts.push(`${capitalize(noun(unavailable))} ${unavailable.length === 1 ? "wasn't" : "weren't"} drawn.`);
     if (upstream.length) {
       parts.push(this.upstreamText(upstream));
       const limited = upstream.filter((r) => r.rateLimited && r.job.requeued);
@@ -2375,11 +2378,12 @@ class RenderRun {
    * a model its vendor deprecated. Jobs never fall back to another model; the notice offers the picker (and its confirm).
    */
   private modelUnavailableNotice(failed: JobResult[]): Card | null {
-    const gone = failed.find((r) => !isUpstreamResult(r) && imageFailureInfo(r.raw)?.status === 404);
-    if (gone) return noticeCard('warn', modelUnavailableText(this.specOf(gone.job).nickname, 'the provider no longer serves it'));
+    const gone = failed.find((r) => !!unavailableReasonOf(r));
+    if (gone) return noticeCard('warn', modelUnavailableText(this.specOf(gone.job).nickname, unavailableReasonOf(gone)!));
+    // §3.9 row 1: a legacy comic on a deprecated or now-hidden model keeps drawing on it, with one notice.
     const locked = this.pinned.lock ? getImageModel(this.pinned.lock.modelId) : undefined;
-    if (locked?.lifecycle !== 'deprecated') return null;
-    const text = `This comic is drawn with ${locked.nickname}, which its maker has retired. It keeps working while the provider still serves it; you can switch in the model picker (switching can affect consistency).`;
+    if (!locked || (locked.lifecycle !== 'deprecated' && locked.pickable)) return null;
+    const text = `This comic is drawn with ${locked.nickname}, which is no longer offered for new comics. It keeps working while the provider serves it; you can switch in the model picker (switching can affect consistency).`;
     const said = this.session.doc.conversation.some((m) => m.cards?.some((c) => c.type === 'notice' && c.text === text));
     return said ? null : noticeCard('info', text);
   }
@@ -2574,7 +2578,8 @@ class RenderRun {
     ]);
     const result: JobResult = { job, ok: false, error: message, ...extra };
     this.results.push(result);
-    if (job.keepStatusOnFailure && !isUpstreamResult(result)) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
+    // Provider pauses get the outage card and an unavailable model gets H: neither is a red error line.
+    if (job.keepStatusOnFailure && !isUpstreamResult(result) && !unavailableReasonOf(result)) this.notices.push(noticeCard('error', `${job.label} didn't work: ${message}`));
   }
 
   private async runJob(job: ImageJob): Promise<void> {
@@ -3477,6 +3482,12 @@ const isUpstreamResult = (r: JobResult): boolean => {
   if (r.ok || r.skipped || r.raw === undefined) return false;
   if (isRoutePausedError(r.raw)) return true;
   return UPSTREAM_FAILURE_CODES.has(String(r.code)) && !isOwnSideFailure(r.raw) && !isKeyScopedFailure(r.raw);
+};
+
+/** models.md §3.6 H: the model itself can't be drawn here (no longer served, no endpoint within the quote), else undefined. */
+const unavailableReasonOf = (r: JobResult): string | undefined => {
+  if (r.ok || r.skipped || r.raw === undefined || isUpstreamResult(r)) return undefined;
+  return modelUnavailableReason(r.raw);
 };
 
 const describeJobs = (jobs: ImageJob[]): string => {

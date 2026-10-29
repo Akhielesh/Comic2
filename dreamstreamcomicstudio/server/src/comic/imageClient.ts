@@ -4,7 +4,9 @@
 // Routes:
 //  - OpenRouter Unified Image API (POST /images) with ordered `input_references`. If the
 //    endpoint is not available (404/405) we fall back once to the chat-completions image
-//    path, which every OpenRouter image model supports.
+//    path, which every chat-transport OpenRouter image model supports. An Images-API model
+//    (registry `api.openrouter === 'images'`) never falls back: the chat path has neither its
+//    quality pin nor its provider pin, so it fails honestly instead (models.md §3.6 H).
 //  - Gemini direct via @google/genai generateContent, references INTERLEAVED with their
 //    labels ("Image 2: CHARACTER SHEET: ARJUN") so the model can bind label → picture.
 //
@@ -150,6 +152,29 @@ class ImageHttpError extends Error {
     this.name = 'ImageHttpError';
   }
 }
+
+/** Downloading a generated image (a hosted URL) failed: its 404 says nothing about the model being served. */
+class ImageDownloadError extends ImageHttpError {}
+
+/** models.md §3.6 H reason for a 404 on the model call: the provider no longer serves this model. */
+export const MODEL_GONE_REASON = 'the provider no longer serves it';
+
+/**
+ * The §3.6 H reason when the comic's model can't be drawn at all on this route (the provider no longer serves it,
+ * no endpoint serves the resolution at the quoted price, the Images API is unavailable for an Images-API model).
+ * Undefined for every other failure. Never a key, a body or a provider message.
+ */
+export const modelUnavailableReason = (err: unknown): string | undefined => {
+  const reason = (err as { modelUnavailable?: unknown } | null)?.modelUnavailable;
+  return typeof reason === 'string' && reason ? reason : undefined;
+};
+
+/** A classified, non-retryable refusal that made no paid call: the job fails with H (never another model). */
+const modelUnavailableError = (route: ImageRoute, nickname: string, reason: string, status = 422): StudioError =>
+  Object.assign(
+    new StudioError('PROVIDER_ERROR', `${nickname} can't be drawn right now: ${reason}.`, { status, retryable: false }),
+    { imageFailure: { route } as ImageFailureInfo, modelUnavailable: reason, spentUsd: 0 }
+  );
 
 const SAFETY_FINISH = new Set([
   'SAFETY',
@@ -715,8 +740,13 @@ const endpointRef = (ep: OrImageEndpoint): string | undefined => {
 };
 
 export interface ImagesApiPlan {
-  /** Endpoints allowed to serve the call (absent = no restriction could be justified). */
+  /** Endpoints allowed to serve the call (absent = no endpoint data, so no restriction could be justified). */
   only?: string[];
+  /**
+   * Endpoint data exists but no endpoint both lists the resolution and costs no more than the quote: make NO call
+   * (sending it unpinned could be served dearer than the quote). The §3.6 H reason, user-safe.
+   */
+  refuse?: string;
   /** The resolution to send (only if an allowed endpoint lists it). */
   resolution?: Resolution;
   /** min(OpenRouter's input_references cap, the vendor cap). */
@@ -741,16 +771,17 @@ export const planImagesApi = (spec: ImageModelSpec, endpoints: OrImageEndpoint[]
     const usd = mapEndpointPricing({ modelId: spec.routes.openrouter || spec.id, endpoints: [ep], spec }).price[res]?.usd;
     return typeof usd === 'number' && Number.isFinite(usd) && usd <= ceiling + 1e-9;
   });
-  const allowed = affordable.length ? affordable : [];
+  const allowed = affordable.filter((ep) => !!endpointRef(ep));
   const only = [...new Set(allowed.map(endpointRef).filter((r): r is string => !!r))];
   const caps = (allowed.length ? allowed : endpoints).map((ep) => openRouterReferenceCap(ep.supported_parameters)).filter((n): n is number => typeof n === 'number');
   const orCap = caps.length ? Math.min(...caps) : undefined;
+  const referenceCap = orCap !== undefined ? Math.min(orCap, vendorCap) : vendorCap;
+  if (!only.length) {
+    const refuse = !serving.length && want ? `no provider serves ${want} for it` : `no provider serves ${want ?? 'it'} at the quoted price`;
+    return { refuse, referenceCap };
+  }
   const listsWant = !!want && allowed.some((ep) => endpointResolutionsOf(ep).includes(want));
-  return {
-    ...(only.length ? { only } : {}),
-    ...(want && (listsWant || !allowed.length) ? { resolution: want } : {}),
-    referenceCap: orCap !== undefined ? Math.min(orCap, vendorCap) : vendorCap
-  };
+  return { only, ...(want && listsWant ? { resolution: want } : {}), referenceCap };
 };
 
 // ── Factory ──────────────────────────────────────────────────────────────────
@@ -840,7 +871,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
   const toDataUrl = async (url: string, signal: AbortSignal): Promise<string> => {
     if (url.startsWith('data:')) return url;
     const res = await doFetch(url, { signal });
-    if (!res.ok) throw new ImageHttpError(res.status, `Image download ${res.status}`);
+    if (!res.ok) throw new ImageDownloadError(res.status, `Image download ${res.status}`);
     const buffer = Buffer.from(await res.arrayBuffer());
     if (!buffer.byteLength || buffer.byteLength > MAX_REMOTE_IMAGE_BYTES) throw new ImageHttpError(502, 'Image download had an invalid size');
     const type = (res.headers?.get?.('content-type') || 'image/png').split(';')[0].trim() || 'image/png';
@@ -858,6 +889,11 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     // the resolution and cost no more than the quote, and references capped at min(OpenRouter, vendor).
     const pinned = usesImagesApi(req.spec);
     const plan = pinned ? planImagesApi(req.spec, await imageEndpoints(picked.model).catch(() => null), prepared.resolution, req.maxUsd) : null;
+    // No endpoint serves it within the quote: no call at all (never drawn above the quote, never another model).
+    if (plan?.refuse) {
+      logger.warn('comic_image_images_api_refused', { model: picked.model, resolution: prepared.resolution, reason: plan.refuse });
+      throw modelUnavailableError(picked.route, req.spec.nickname, plan.refuse);
+    }
     const references = plan ? prepared.references.slice(0, plan.referenceCap) : prepared.references;
     const resolution = plan ? plan.resolution : prepared.resolution;
     const body = stripUnsupported(
@@ -963,6 +999,8 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
       const result = await openRouterImagesApi(picked, req, prepared, prompt);
       if (result !== 'unavailable') return result;
     }
+    // An Images-API model never goes to chat: that path has no quality pin and no provider pin (§3.4 item 8).
+    if (usesImagesApi(req.spec)) throw modelUnavailableError(picked.route, req.spec.nickname, "OpenRouter's image service doesn't offer it right now", 404);
     return openRouterChat(picked, req, prepared, prompt);
   };
 
@@ -1094,6 +1132,9 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
           if (hinted !== undefined) failure.retryAfterMs = hinted;
           Object.assign(error, { imageFailure: failure });
         }
+        // A 404 on the model call itself (not on downloading a picture) = the provider no longer serves it (§3.6 H).
+        const answered = err instanceof ImageHttpError ? err.status : Number((err as { status?: unknown })?.status);
+        if (answered === 404 && !(err instanceof ImageDownloadError) && !modelUnavailableReason(error)) Object.assign(error, { modelUnavailable: MODEL_GONE_REASON });
         // Every answer is recorded (key-scoped and our-side ones are not counted, but they release a probe).
         record(outcomeFromError(error, picked));
         if (error.code === 'RATE_LIMIT') {
