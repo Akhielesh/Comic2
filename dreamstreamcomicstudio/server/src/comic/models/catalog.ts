@@ -491,6 +491,16 @@ const mapConcurrent = async <T, R>(items: T[], limit: number, fn: (item: T) => P
   return out;
 };
 
+/**
+ * How an uptime endpoint is named: its provider name, plus its tag when another endpoint of the same model has
+ * the same name (OpenRouter calls both Vertex endpoints of Nano Banana 2 "Google").
+ */
+export const endpointLabel = (e: OrModelEndpoint, all: OrModelEndpoint[]): string => {
+  const name = String(e.provider_name || e.tag || 'unknown');
+  const shared = all.filter((o) => String(o.provider_name || o.tag || 'unknown') === name).length > 1;
+  return shared && e.tag && e.tag !== name ? `${name} (${e.tag})` : name;
+};
+
 /** The dated canonical slug OpenRouter prints in an endpoint name ("Google AI Studio | google/gemini-nano-banana-2.1-20261006"). */
 export const canonicalSlugFrom = (endpoints: OrModelEndpoint[] | undefined, id: string): string | undefined => {
   for (const ep of endpoints ?? []) {
@@ -517,7 +527,8 @@ export interface ModelTrends {
   t3: {
     trackingSince: string | null;
     changes: { modelId: string; res: Resolution; usd: number | null; basis: PriceBasis; at: string; note?: string | null }[];
-    note: string;
+    /** "Tracking since {first fetch}"; null before the first fetch (§4.4: no line before that date). */
+    note: string | null;
   };
   /** T4 — leaderboard movement from the history we hold. */
   t4: { moves: (RankMove & { modelId: string })[]; trackingSince: string | null; asOf?: string; source: string };
@@ -721,7 +732,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     afterBatch: async (fresh, at) => {
       if (!store) return;
       const log: UptimeLogRow[] = [];
-      for (const [id, f] of fresh) for (const e of f.value) log.push({ modelId: id, provider: String(e.tag || e.provider_name || 'unknown'), day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
+      for (const [id, f] of fresh) for (const e of f.value) log.push({ modelId: id, provider: endpointLabel(e, f.value), day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
       if (log.length) await store.logUptime(log);
     }
   });
@@ -794,7 +805,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       lifecycle: spec.lifecycle,
       price,
       perRefUsd,
-      endpoints: (up ?? []).map((e) => ({ provider: String(e.provider_name || e.tag || 'unknown'), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m) })),
+      endpoints: (up ?? []).map((e, _i, all) => ({ provider: endpointLabel(e, all), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m) })),
       quality: qualityEntriesFor(orId, data.q.snapshot),
       observed: observedEntriesFor(data.yours, data.platform, spec.id).filter((o) => ROW_OBSERVED_KINDS.has(o.kind)),
       ...(reliability ? { reliability } : {}),
@@ -902,7 +913,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       const at = iso(entry.fetchedAt);
       const modelId = registryByOrId.get(orId)?.id ?? orId;
       for (const e of entry.value) {
-        const provider = String(e.tag || e.provider_name || 'unknown');
+        const provider = endpointLabel(e, entry.value);
         if (!openrouter.some((o) => o.modelId === modelId && o.provider === provider && o.day === at.slice(0, 10))) openrouter.push({ modelId, provider, day: at.slice(0, 10), uptime1d: num(e.uptime_last_1d), uptime30m: num(e.uptime_last_30m), fetchedAt: at });
       }
     }
@@ -920,7 +931,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       t3: {
         trackingSince,
         changes: snapshots.map((s) => ({ modelId: registryByOrId.get(s.modelId)?.id ?? s.modelId, res: s.res, usd: s.usd, basis: s.basis, at: s.fetchedAt, note: s.note ?? null })).sort((a, b) => a.at.localeCompare(b.at)),
-        note: trackingSince ? `Tracking since ${trackingSince}` : 'No price snapshots yet'
+        note: trackingSince ? `Tracking since ${trackingSince}` : null
       },
       t4: { moves: t4moves, trackingSince: t4since, ...(qualityAsOf(data.q.snapshot) ? { asOf: qualityAsOf(data.q.snapshot) } : {}), source: 'LMArena leaderboard-dataset history we hold (Hugging Face, CC BY 4.0)' },
       t5: { sinceDays: days, models: newModels, ...(data.list.fetchedAt !== undefined ? { fetchedAt: iso(data.list.fetchedAt) } : {}), stale: Boolean(data.list.stale) },

@@ -34,9 +34,10 @@ export const PER_TOKEN_NOTE = 'billed per token; tokens per image not published'
 // ── Vendor tokens-per-image tables (only where published) ────────────────────
 
 /**
- * Google's image-output token table (ai.google.dev pricing + image-generation pages, re-checked 2026-10-22,
+ * Google's image-output tokens per image (ai.google.dev pricing + image-generation pages, re-checked 2026-10-22,
  * models.md §1.1 #1–4, #25 and §7.1). Keyed by OpenRouter id. 4K on Nano Banana 2.1 is a documented conflict
- * (2520 tokens on the token table vs 3780 on the pricing page); we quote the higher (§1.6 #2) and say so.
+ * (2520 tokens on the image-generation token table vs 3780 on the pricing page); we quote the higher, the
+ * pricing page's (§1.6 #2), and say so with both numbers (§4.6).
  */
 export const GOOGLE_TOKENS_PER_IMAGE: Record<string, Partial<Record<Resolution, number>>> = {
   'google/gemini-nano-banana-2.1': { '1K': 1120, '2K': 1680, '4K': 3780 },
@@ -46,7 +47,9 @@ export const GOOGLE_TOKENS_PER_IMAGE: Record<string, Partial<Record<Resolution, 
   'google/gemini-2.5-flash-image': { '1K': 1290 }
 };
 export const GOOGLE_TOKEN_TABLE_SOURCE = 'Google image token table (ai.google.dev, 2026-10-22)';
-const GOOGLE_4K_CONFLICT_NOTE = 'Google lists 4K as $0.076 in one place and $0.113 in another; we quote the higher';
+const GOOGLE_PRICING_PAGE_SOURCE = 'Google pricing page (ai.google.dev, 2026-10-22)';
+/** models.md §4.6 "Data sources disagree", with the number we actually quote. */
+export const google4kConflictNote = (quotedUsd: number) => `Google lists 4K as $0.076 in one place and $0.113 in another; we quote ${money(quotedUsd)}`;
 
 /** Square-image megapixels per resolution tier (long side 512 / 1024 / 2048 / 4096). */
 export const MEGAPIXELS: Record<Resolution, number> = { '512': 0.262144, '1K': 1.048576, '2K': 4.194304, '4K': 16.777216 };
@@ -99,9 +102,19 @@ const endpointResolutions = (ep: OrImageEndpoint): Resolution[] => {
   return values.map(variantToResolution).filter((r): r is Resolution => !!r);
 };
 
+/**
+ * How an endpoint is named in notes: its provider name, plus its tag when another endpoint of the same model has
+ * the same name ("Google Vertex (google-vertex/us)" next to "Google Vertex (google-vertex/global)").
+ */
+export const imageEndpointLabel = (ep: OrImageEndpoint, all: OrImageEndpoint[]): string => {
+  const name = String(ep.provider_name || ep.provider_slug || 'OpenRouter');
+  const tag = ep.provider_tag || ep.provider_slug;
+  const shared = all.filter((o) => String(o.provider_name || o.provider_slug || 'OpenRouter') === name).length > 1;
+  return shared && tag && tag !== name ? `${name} (${tag})` : name;
+};
+
 /** One endpoint's candidate price per resolution (models.md §4.3 mapping rules). */
-const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolution[]): Map<Resolution, Candidate> => {
-  const provider = String(ep.provider_name || ep.provider_slug || 'OpenRouter');
+const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolution[], provider: string): Map<Resolution, Candidate> => {
   const out = new Map<Resolution, Candidate>();
   const lines: OrPricingLine[] = Array.isArray(ep.pricing) ? ep.pricing : [];
   const outputs = lines.filter((l) => l && (l.billable === undefined || l.billable === 'output_image'));
@@ -156,8 +169,9 @@ const endpointCandidates = (modelId: string, ep: OrImageEndpoint, wanted: Resolu
       const tokens = table?.[r];
       if (isFiniteNumber(tokens)) {
         const usd = round6(tokens * (tokenLine.cost_usd as number));
-        const conflict = modelId === 'google/gemini-nano-banana-2.1' && r === '4K' ? ` · ${GOOGLE_4K_CONFLICT_NOTE}` : '';
-        out.set(r, { provider, usd, basis: 'vendor_table', note: `${tokens} tokens × $${round4((tokenLine.cost_usd as number) * 1_000_000)}/M (${GOOGLE_TOKEN_TABLE_SOURCE})${conflict}` });
+        const conflicted = modelId === 'google/gemini-nano-banana-2.1' && r === '4K';
+        const source = conflicted ? GOOGLE_PRICING_PAGE_SOURCE : GOOGLE_TOKEN_TABLE_SOURCE;
+        out.set(r, { provider, usd, basis: 'vendor_table', note: `${tokens} tokens × $${round4((tokenLine.cost_usd as number) * 1_000_000)}/M (${source})${conflicted ? ` · ${google4kConflictNote(usd)}` : ''}` });
       } else {
         out.set(r, { provider, usd: null, basis: 'openrouter_endpoint', note: PER_TOKEN_NOTE });
       }
@@ -209,7 +223,7 @@ export const mapEndpointPricing = (input: EndpointPricingInput): EndpointPricing
       const served = endpointResolutions(ep);
       return !served.length || served.includes(r);
     });
-    const candidates = serving.map((ep) => endpointCandidates(input.modelId, ep, wanted).get(r)).filter((c): c is Candidate => !!c);
+    const candidates = serving.map((ep) => endpointCandidates(input.modelId, ep, wanted, imageEndpointLabel(ep, endpoints)).get(r)).filter((c): c is Candidate => !!c);
     const priced = candidates.filter((c) => isFiniteNumber(c.usd));
     if (priced.length) {
       priced.forEach((c) => providers.add(c.provider));

@@ -31,7 +31,9 @@ describe('mapEndpointPricing (models.md §4.3 mapping rules, 17:51Z data)', () =
     expect(r.price['1K']!.note).toContain('1120 tokens × $30/M');
     // 4K: the two Google pages disagree; we take the higher table and say so (§1.6 #2, §4.6).
     expect(r.price['4K']!.usd).toBeGreaterThanOrEqual(0.113);
-    expect(r.price['4K']!.note).toContain('Google lists 4K as $0.076 in one place and $0.113 in another');
+    // §4.6 copy with the number actually quoted (3780 tokens × $30/M from Google's pricing page), never "the higher".
+    expect(r.price['4K']!.note).toContain('Google lists 4K as $0.076 in one place and $0.113 in another; we quote $0.1134');
+    expect(r.price['4K']!.note).toContain('3780 tokens × $30/M (Google pricing page');
     expect(r.providers).toEqual(['Google AI Studio']);
   });
 
@@ -94,6 +96,10 @@ describe('mapEndpointPricing (models.md §4.3 mapping rules, 17:51Z data)', () =
     expect(r.price['2K']!.usd).toBeCloseTo(0.1109, 4);
     expect(r.price['1K']!.note).toContain('endpoints differ');
     expect(r.price['1K']!.note).toContain('we quote $0.0739');
+    // Two endpoints share the name "Google Vertex": each is told apart by its tag.
+    expect(r.price['1K']!.note).toContain('Google Vertex (google-vertex/us) $0.0739');
+    expect(r.price['1K']!.note).toContain('Google Vertex (google-vertex/global) $0.0672');
+    expect(r.price['1K']!.note).toContain('Google AI Studio $0.0672');
     expect(mapEndpointPricing({ modelId: 'google/gemini-3.1-flash-image', endpoints: twoEndpoints }).price['1K']!.usd).toBeCloseTo(0.0739, 4); // no spec: never under-quote
   });
 

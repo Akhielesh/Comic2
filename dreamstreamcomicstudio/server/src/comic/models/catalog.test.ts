@@ -378,6 +378,25 @@ describe('our own facts in the rows and trends (S7, AT-9)', () => {
   });
 });
 
+describe('copy (models.md §4.4, §4.6)', () => {
+  it('endpoints that share a provider name are told apart by their tag (no "Google · Google")', async () => {
+    const { catalog } = setup();
+    const nb2 = row(await catalog.rows(), 'nano-banana-2');
+    expect(nb2.endpoints.map((e) => e.provider)).toEqual(['Google AI Studio', 'Google (google-vertex/global)', 'Google (google-vertex/us)']);
+    expect(new Set(nb2.endpoints.map((e) => e.provider)).size).toBe(nb2.endpoints.length);
+    const t = await catalog.trends('30d');
+    expect(t.t6.openrouter.filter((o) => o.modelId === 'nano-banana-2').map((o) => o.provider)).toEqual(['Google AI Studio', 'Google (google-vertex/global)', 'Google (google-vertex/us)']);
+  });
+
+  it('T3 has no line before the first price fetch (note null), then "Tracking since {first fetch}"', async () => {
+    const none = setup({ store: null }).catalog;
+    const t = await none.trends('30d');
+    expect(t.t3).toMatchObject({ trackingSince: null, note: null, changes: [] });
+    const { catalog } = setup();
+    expect((await catalog.trends('30d')).t3.note).toBe('Tracking since 2026-10-22T17:51:00.000Z');
+  });
+});
+
 describe('model detail', () => {
   it('resolves registry and provider ids, adds the registry facts and history; unknown ids are null', async () => {
     const { catalog } = setup();
