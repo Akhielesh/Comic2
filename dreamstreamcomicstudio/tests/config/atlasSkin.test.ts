@@ -208,7 +208,8 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     for (const tone of ['success', 'warning', 'danger', 'info'] as const) {
       expect(design.TONE_TEXT[tone]).toBe(`text-[var(--ds-${tone}-text)]`);
       expect(design.TONE_CHIP[tone]).toBe(`${design.TONE_SURFACE[tone]} ${design.TONE_TEXT[tone]}`);
-      expect(design.TONE_FILL[tone]).toBe(`bg-[var(--ds-${tone})]`);
+      // Danger marks read the danger mark (wave 5): = --ds-danger outside the skin and in Atlas light.
+      expect(design.TONE_FILL[tone]).toBe(tone === 'danger' ? 'bg-[var(--ds-danger-mark)]' : `bg-[var(--ds-${tone})]`);
     }
     // No literal accent left in the constants (ACCENT_HEX is the documented inline-style escape hatch).
     for (const [name, value] of Object.entries(design)) {
@@ -529,6 +530,119 @@ describe('Atlas skin — wave 5 base rules (motion, skeletons, toasts, the inver
     expect(find('[data-ds-skin="atlas"] .ds-inverse-surface :focus-visible')?.body).toBe('outline-color: var(--ds-canvas);');
     // The swapped panel is still readable: paper ink on the raised dark panel.
     expect(contrastRatio('#fafafa', '#161616')).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe('Atlas skin — wave 5 recipes in studioDesign (focus, fields, overlays, chips, status, tabs, section cards, toasts)', () => {
+  const classes = (v: string) => v.split(/\s+/).filter(Boolean);
+  const all = Object.entries(design).flatMap(([name, v]) =>
+    typeof v === 'string' ? [[name, v] as const] : v && typeof v === 'object' ? Object.entries(v).map(([k, x]) => [`${name}.${k}`, String(x)] as const) : []
+  );
+
+  it('focus: the solid 2 px focus-colour outline offset 2 px (flush for tabs), 3 px under increase contrast; inset ring for list items', () => {
+    expect(classes(design.FOCUS_RING)).toEqual([
+      'focus-visible:outline', 'focus-visible:outline-2', 'focus-visible:outline-offset-2', 'focus-visible:outline-[color:var(--ds-focus)]', 'contrast-more:focus-visible:outline-[3px]'
+    ]);
+    expect(design.FOCUS_RING_FLUSH).toBe(design.FOCUS_RING.replace('outline-offset-2', 'outline-offset-0'));
+    expect(design.FOCUS_ITEM).toBe('focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)]');
+  });
+
+  it('fields: the 3:1 control edge, focus drawn as a ring (2 px of focus colour set 2 px off) so an embedded field can drop it', () => {
+    for (const c of [
+      'border-[var(--ds-control-border)]', 'hover:border-[var(--ds-control-border-hover)]', 'focus-visible:border-[var(--ds-focus)]',
+      'focus-visible:outline-none', 'focus-visible:ring-2', 'focus-visible:ring-[var(--ds-focus)]', 'focus-visible:ring-offset-2',
+      'focus-visible:ring-offset-[color:var(--ds-canvas)]', 'placeholder:text-[var(--ds-muted)]', design.RADIUS_CONTROL
+    ]) expect(classes(design.FIELD), c).toContain(c);
+    // Embedded in a group that shows focus itself: drop BOTH the ring and its offset (ring-0 alone
+    // leaves the page-coloured offset painted over a 0 px ring: no visible focus at all).
+    expect(classes(design.FIELD_EMBEDDED)).toEqual(expect.arrayContaining(['focus-visible:ring-0', 'focus-visible:ring-offset-0', 'focus-visible:outline-none']));
+    for (const c of ['border-[var(--ds-control-border)]', 'focus-within:border-[color:color-mix(in_srgb,var(--ds-ink)_70%,transparent)]', 'focus-within:ring-[3px]'])
+      expect(classes(design.FIELD_GROUP), c).toContain(c);
+  });
+
+  it('overlays and scrims read the overlay tokens; the scrim has no blur', () => {
+    for (const c of ['bg-[var(--ds-raised)]', 'border-[var(--ds-overlay-edge)]', 'shadow-[shadow:var(--ds-shadow-overlay)]', design.RADIUS_PANEL])
+      expect(classes(design.OVERLAY), c).toContain(c);
+    expect(design.SCRIM).toBe('bg-[var(--ds-scrim)]');
+    expect(design.SCRIM).not.toMatch(/blur/);
+  });
+
+  it('the overline: 11 px semibold, 0.12em tracking, uppercase, muted', () => {
+    expect(design.OVERLINE).toBe('text-[11px] font-semibold leading-4 tracking-[0.12em] uppercase text-[var(--ds-muted)]');
+  });
+
+  it('chips: one shape, three variants (outline, filled, dashed)', () => {
+    expect(classes(design.CHIP)).toEqual(expect.arrayContaining([design.RADIUS_PILL, 'border', 'text-[11px]', 'font-medium', 'leading-4']));
+    expect(Object.keys(design.CHIP_VARIANT)).toEqual(['outline', 'filled', 'dashed']);
+    expect(design.CHIP_VARIANT.dashed).toContain('border-dashed');
+    expect(design.CHIP_VARIANT.filled).toContain('bg-[color:color-mix(in_srgb,var(--ds-ink)_6%,transparent)]');
+  });
+
+  it('one status vocabulary: healthy / active / waiting / attention / error, ink + surface + dot, hue only where it means something', () => {
+    const states = ['healthy', 'active', 'waiting', 'attention', 'error'] as const;
+    for (const m of [design.STATUS_INK, design.STATUS_SURFACE, design.STATUS_DOT, design.STATUS_CHIP_TONE]) expect(Object.keys(m)).toEqual([...states]);
+    expect(design.STATUS_INK).toEqual({
+      healthy: design.TONE_TEXT.success, active: 'text-[var(--ds-ink)]', waiting: 'text-[var(--ds-muted)]', attention: design.TONE_TEXT.warning, error: design.TONE_TEXT.danger
+    });
+    expect(design.STATUS_SURFACE.healthy).toContain('var(--ds-success)_6%');
+    expect(design.STATUS_SURFACE.attention).toContain('var(--ds-warning)_8%');
+    expect(design.STATUS_SURFACE.error).toContain('var(--ds-danger-mark)_6%');
+    expect(design.STATUS_SURFACE.error).toContain('var(--ds-danger-mark)_35%');
+    expect(design.STATUS_DOT.error).toBe('bg-[var(--ds-danger-mark)]');
+    expect(design.STATUS_DOT.active).toBe('bg-[var(--ds-ink)]');
+    for (const st of states) expect(design.STATUS_CHIP_TONE[st]).toBe(`${design.STATUS_SURFACE[st]} ${design.STATUS_INK[st]}`);
+    expect(classes(design.STATUS_CHIP)).toEqual(expect.arrayContaining([design.RADIUS_PILL, 'border', 'px-2.5', 'py-0.5', 'text-[11px]', 'font-medium']));
+    // The danger MARK (brighter in dark) for fills and tone surfaces; the readable danger text is unchanged.
+    expect(design.TONE_FILL.danger).toBe('bg-[var(--ds-danger-mark)]');
+    expect(design.TONE_SURFACE.danger).toContain('var(--ds-danger-mark)');
+  });
+
+  it('segmented tabs: a soft track, the pill that glides on the panel time and the spring, flush focus', () => {
+    for (const c of ['bg-[var(--ds-well-strong)]', 'border-[var(--ds-hairline-soft)]', 'p-0.5', design.RADIUS_CONTROL]) expect(classes(design.SEGMENTED_TRACK), c).toContain(c);
+    expect(design.SEGMENTED_ITEM).toContain(design.FOCUS_RING_FLUSH);
+    expect(classes(design.SEGMENTED_ITEM)).toEqual(expect.arrayContaining(['text-[var(--ds-muted)]', 'hover:text-[var(--ds-ink)]', 'aria-checked:text-[var(--ds-ink)]', 'aria-selected:text-[var(--ds-ink)]', 'text-[13px]']));
+    expect(design.SEGMENTED_ACTIVE).toBe('bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]');
+    expect(classes(design.SEGMENTED_PILL)).toEqual(expect.arrayContaining([
+      'bg-[var(--ds-segment-pill)]', 'shadow-[shadow:var(--ds-shadow-segment)]', 'transition-[transform,width]', 'duration-[var(--ds-motion-panel)]', 'ease-[var(--ds-ease-spring)]', 'motion-reduce:transition-none'
+    ]));
+  });
+
+  it('section cards: the settings-style header (36 px icon tile, 16 px title, muted description, divider)', () => {
+    for (const c of ['overflow-hidden', design.RADIUS_PANEL, 'border-[var(--ds-hairline)]', 'bg-[var(--ds-surface)]', design.SHADOW_SOFT]) expect(design.SECTION_CARD, c).toContain(c);
+    expect(classes(design.SECTION_HEADER)).toEqual(expect.arrayContaining(['border-b', 'border-[var(--ds-hairline)]', 'px-5', 'py-5', 'sm:px-6', 'flex-wrap']));
+    expect(classes(design.SECTION_ICON_TILE)).toEqual(expect.arrayContaining(['h-9', 'w-9', 'bg-[var(--ds-well)]', 'border-[var(--ds-hairline)]']));
+    expect(classes(design.SECTION_TITLE)).toEqual(expect.arrayContaining(['text-[length:var(--ds-text-lg)]', 'font-semibold', 'leading-6', 'tracking-[-0.01em]', design.FONT_DISPLAY]));
+    expect(classes(design.SECTION_DESCRIPTION)).toEqual(expect.arrayContaining(['text-[var(--ds-muted)]', 'text-[length:var(--ds-text-base)]']));
+    expect(design.SECTION_BODY).toBe('px-5 py-5 sm:px-6');
+  });
+
+  it('toasts: a monochrome card with a status edge and a time-left bar; the hue lives on the edge, bar and icon only', () => {
+    for (const c of ['ds-toast', design.RADIUS_PANEL, 'border-[var(--ds-overlay-edge)]', 'bg-[var(--ds-raised)]', 'shadow-[shadow:var(--ds-shadow-panel)]', 'text-[var(--ds-ink)]'])
+      expect(classes(design.TOAST), c).toContain(c);
+    expect(design.TOAST).not.toMatch(/--ds-(success|warning|danger|info)/);
+    expect(classes(design.TOAST_EDGE)).toEqual(expect.arrayContaining(['absolute', 'inset-y-0', 'left-0', 'w-1']));
+    expect(classes(design.TOAST_COUNTDOWN)).toEqual(expect.arrayContaining(['ds-toast-countdown', 'absolute', 'bottom-0', 'h-0.5', 'w-full']));
+    expect([design.TOAST_ENTER, design.TOAST_EXIT]).toEqual(['ds-toast-enter', 'ds-toast-exit']);
+    expect(design.TOAST_MESSAGE).toContain('text-[var(--ds-muted)]');
+    expect(classes(design.TOAST_SLOT)).toEqual(expect.arrayContaining(['grid', 'transition-[grid-template-rows]', 'motion-reduce:transition-none']));
+    expect([design.TOAST_SLOT_OPEN, design.TOAST_SLOT_CLOSED]).toEqual(['grid-rows-[1fr]', 'grid-rows-[0fr]']);
+  });
+
+  it('the inverse surface helper', () => {
+    expect(design.INVERSE_SURFACE).toBe('ds-inverse-surface bg-[var(--ds-ink)] text-[var(--ds-canvas)]');
+  });
+
+  it('every wave 5 recipe is token-driven: no hex, no rgb literal, no Tailwind palette colour', () => {
+    const recipes = all.filter(([n]) => /^(FOCUS_|FIELD|OVERLAY|SCRIM|OVERLINE|CHIP|STATUS_|SEGMENTED_|SECTION_|TOAST|INVERSE_)/.test(n));
+    expect(recipes.length).toBeGreaterThan(30);
+    for (const [n, v] of recipes) {
+      expect(v, n).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|\b(?:bg|text|border|ring|outline)-(?:white|black|gray|slate|zinc|neutral|red|green|amber|blue)\b/i);
+    }
+  });
+
+  it('overlay entrances (.animate-scale-in: popovers, sheets, toasts) run on the enter curve under the skin', () => {
+    const r = rules.find((x) => x.selector === '[data-ds-skin="atlas"] .animate-scale-in');
+    expect(r?.body).toBe('animation-timing-function: var(--ds-ease-enter);');
   });
 });
 

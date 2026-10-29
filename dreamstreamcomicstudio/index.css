@@ -1058,6 +1058,10 @@ html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
   [data-ds-skin="atlas"] .transition-transform { transition-duration: 0s !important; }
   [data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce) { animation: none; }
 }
+/* Overlay entrances run on the app's enter curve (Atlas wave 5 moved its Radix overlays off the
+   browser's plain `ease`): .animate-scale-in is the popover / sheet / toast pop-in here. Its
+   duration and its reduced-motion rule are unchanged. */
+[data-ds-skin="atlas"] .animate-scale-in { animation-timing-function: var(--ds-ease-enter); }
 /* Skeletons: the kit's .studio-shimmer is a slate (blue-grey) block — hue decorating. Under the skin
    it is Atlas's: the muted block with a page-colour glint in light, lifted with ink in dark (the
    muted step on a card measured 1.1:1 there). Its motion and reduced-motion rule are unchanged. */

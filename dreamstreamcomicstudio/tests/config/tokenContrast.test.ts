@@ -128,7 +128,8 @@ function statusSurfaces(ctx: ContextName, tone: (typeof TONES)[number]): Map<str
   const all = surfaces(ctx);
   const s = new Map<string, Rgba>();
   for (const k of ['canvas', 'sidebar', 'surface/canvas', 'surface-strong/canvas', 'well on canvas', 'hover on canvas', 'hover on surface/canvas']) s.set(k, all.get(k)!);
-  const tint = withAlpha(token(`--ds-${tone}`, ctx), 0.1);
+  // TONE_SURFACE's tint: the hue at 10 % (danger reads the danger mark, the brighter red in Atlas dark).
+  const tint = withAlpha(token(tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`, ctx), 0.1);
   for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
   return s;
 }
@@ -508,6 +509,50 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   });
 });
 
+/**
+ * Atlas wave 5's one status vocabulary (studioDesign STATUS_*): its text on its own surface, both
+ * themes, both skins and under "increase contrast". The surfaces are the 6 % / 8 % tints, the active
+ * well and the waiting page; error tints read the danger MARK (the brighter red in dark).
+ */
+describe('token contrast — the status vocabulary (healthy / active / waiting / attention / error)', () => {
+  const STATES: Array<[string, string, (ctx: ContextName, under: Rgba) => Rgba]> = [
+    ['healthy', '--ds-success-text', (ctx, under) => over(withAlpha(token('--ds-success', ctx), 0.06), under)],
+    ['active', '--ds-ink', (ctx, under) => over(token('--ds-well', ctx), under)],
+    ['waiting', '--ds-muted', (ctx) => token('--ds-canvas', ctx)],
+    ['attention', '--ds-warning-text', (ctx, under) => over(withAlpha(token('--ds-warning', ctx), 0.08), under)],
+    ['error', '--ds-danger-text', (ctx, under) => over(withAlpha(token('--ds-danger-mark', ctx), 0.06), under)]
+  ];
+
+  it('the studioDesign maps spell exactly these tokens and tints', () => {
+    for (const [state, text] of STATES) expect(design.STATUS_INK[state as keyof typeof design.STATUS_INK]).toBe(`text-[var(${text})]`);
+  });
+
+  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card and a raised overlay) in every context', () => {
+    const failing: string[] = [];
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const s = surfaces(ctx);
+      for (const base of ['canvas', 'surface/canvas', 'raised', 'surface-strong/canvas']) {
+        for (const [state, text, surface] of STATES) {
+          const bg = surface(ctx, s.get(base)!);
+          const r = ratio(over(token(text, ctx), bg), bg);
+          if (r < 4.5) failing.push(`${ctx}: ${state} (${text}) on ${base} = ${r.toFixed(2)}`);
+        }
+      }
+    }
+    expect(failing).toEqual([]);
+  });
+
+  it('the danger tone surface (TONE_SURFACE) on its mark tint keeps the readable danger text ≥ 4.5:1', () => {
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const s = surfaces(ctx);
+      for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) {
+        const bg = over(withAlpha(token('--ds-danger-mark', ctx), 0.1), s.get(base)!);
+        expect(ratio(over(token('--ds-danger-text', ctx), bg), bg), `${ctx} ${base}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});
+
 describe('token contrast — studioDesign spells the readable tokens', () => {
   it('accent text, the text-bearing fill and the primary button', () => {
     expect(design.ACCENT_TEXT).toBe('text-[var(--ds-accent-text)]');
@@ -530,7 +575,8 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
   });
 
   it('every text constant reads a token this matrix measures', () => {
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', ...TONES.map((t) => `--ds-${t}-text`)]);
+    // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas.
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-canvas', ...TONES.map((t) => `--ds-${t}-text`)]);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
