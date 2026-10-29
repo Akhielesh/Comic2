@@ -293,6 +293,24 @@ describe('ComicReaderView', () => {
     expect(await within(dialog).findByText('Downloaded the PDF (Hindi).')).toBeInTheDocument();
   });
 
+  it('readerDownload: offered in the full-screen reader and on the End card, never as a second entry in the ⋯ menu', async () => {
+    vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
+    const readerDownload = vi.fn(async () => 'Downloaded the PDF.');
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" immersiveEntry endCard={{}} readerDownload={readerDownload} />);
+    // The host's header carries Download: nothing here duplicates it.
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+    press('End');
+    expect(within(screen.getByTestId('end-card')).getByRole('button', { name: /Download/ })).toBeInTheDocument();
+    press('Home');
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+    const dialog = screen.getByTestId('immersive-reader');
+    await act(async () => {
+      fireEvent.click(within(dialog).getAllByRole('button', { name: 'Download' })[0]);
+    });
+    expect(readerDownload).toHaveBeenCalledTimes(1);
+    expect(pdfMock.exportComicPdf).not.toHaveBeenCalled();
+  });
+
   it('inline, a host download runs once per tap; its own notice is the one on screen, a throw reads calmly', async () => {
     let finish!: (v: string) => void;
     const onDownload = vi.fn(() => new Promise<string>((r) => (finish = r)));

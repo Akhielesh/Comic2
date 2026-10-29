@@ -94,6 +94,12 @@ export interface ComicReaderViewProps {
    */
   onDownload?(): Promise<string | void> | string | void;
   /**
+   * A download offered inside the book only — the full-screen reader's HUD and the End cards — never in
+   * this toolbar's ⋯ menu: for a host whose own header already carries Download (the share link's page),
+   * so the full-screen reader opened from here still offers it (publish-share-reader-05). `onDownload` wins.
+   */
+  readerDownload?(): Promise<string | void> | string | void;
+  /**
    * Show the browser full-screen button (default true). A host whose own "Read full screen" sits in
    * `toolbarExtra` (the studio Read tab at a compact height) turns it off: one Expand icon, not two.
    */
@@ -266,6 +272,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   ratingReason,
   onReport,
   onDownload,
+  readerDownload,
   fullscreenControl = true
 }) => {
   // ── Document (keyed on the language CODE: a host's inline slot object must not re-localize) ──
@@ -681,16 +688,18 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // ── Download (client-side PDF from the images already served; withheld pages never included) ──
   const [downloading, setDownloading] = useState(false);
   const downloadingRef = useRef(false);
+  // The host's download (its toolbar menu entry, or the book-only one) replaces the built-in PDF.
+  const hostDownload = onDownload ?? readerDownload;
   const download = useCallback(async () => {
     // Synchronous guard: a double tap never starts two exports.
     if (downloadingRef.current) return;
-    if (onDownload) {
+    if (hostDownload) {
       // The host's download (a share link's gated one). Inline, the host's own notice is on screen, so its
       // returned line is not repeated here (the full-screen reader, which covers that notice, shows it).
       downloadingRef.current = true;
       setDownloading(true);
       try {
-        await onDownload();
+        await hostDownload();
       } catch (err) {
         setNote(pdfDownloadFailedNote(err));
       } finally {
@@ -714,7 +723,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       downloadingRef.current = false;
       setDownloading(false);
     }
-  }, [onDownload, doc, lang, urlFor]);
+  }, [hostDownload, doc, lang, urlFor]);
 
   if (!items.length) {
     return (
@@ -769,7 +778,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         language={language}
         onReadAgain={() => goToView(0)}
         onShare={onShare}
-        onDownload={allowDownload || onDownload ? () => void download() : undefined}
+        onDownload={allowDownload || hostDownload ? () => void download() : undefined}
         downloadBusy={downloading}
         dense={(geo?.page.w ?? stageW) < 360}
       />
@@ -1091,7 +1100,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           intro={immersive.intro}
           initialPage={immersive.page}
           allowDownload={allowDownload}
-          onDownload={onDownload}
+          onDownload={hostDownload}
           syncUrl={syncUrl}
           onImageError={onImageError}
           onPageChange={(n) => {

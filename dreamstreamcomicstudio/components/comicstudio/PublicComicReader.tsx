@@ -533,6 +533,10 @@ const ReaderShell: React.FC<ShellProps> = ({
         // The embed has no header menu: its ⋯ Download goes through the same gated public download (its
         // full-screen reader repeats the returned line over this page's notice).
         onDownload={embed && builtInDownload ? () => download('pdf') : undefined}
+        // With a header (its Download menu), the inline reader adds no second menu entry — but the
+        // full-screen reader its "Full screen" opens, and the End card, still offer the same gated
+        // download (publish-share-reader-05: a ?p= deep link → Full screen had none).
+        readerDownload={!embed && builtInDownload ? () => download('pdf') : undefined}
         onReport={
           embed && canReport
             ? (n) => {
