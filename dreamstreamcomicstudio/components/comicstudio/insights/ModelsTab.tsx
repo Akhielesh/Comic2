@@ -204,9 +204,11 @@ const ModelItem: React.FC<{
   health?: ReturnType<typeof useModelStatus>['byId'][string];
   /** A quiet notice under the model (the §2.5 "newer build" line for the locked model). */
   notice?: string;
+  /** L3 (§4.1): everything known about this model — the picker opened on it (`open_model_picker` with suggest). */
+  onDetails(): void;
   money: InsightsMoney;
   now?: number;
-}> = ({ doc, modelId, images, usd, failed, current, defaultOpen, row, state, health, notice, money, now }) => {
+}> = ({ doc, modelId, images, usd, failed, current, defaultOpen, row, state, health, notice, onDetails, money, now }) => {
   const [open, setOpen] = useState(defaultOpen);
   const panelId = useId();
   const sizes = useMemo(() => sizeCosts(doc, modelId), [doc, modelId]);
@@ -233,16 +235,21 @@ const ModelItem: React.FC<{
           ))}
         </ul>
       )}
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((v) => !v)}
-        className={cx('mt-1 inline-flex items-center gap-1 rounded-[var(--ds-radius-control)] px-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] coarse:min-h-11 coarse:px-2', FOCUS)}
-      >
-        <ChevronDown className={cx('h-3.5 w-3.5 shrink-0', open && 'rotate-180')} aria-hidden />
-        Live prices, uptime and ranks
-      </button>
+      <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((v) => !v)}
+          className={cx('inline-flex items-center gap-1 rounded-[var(--ds-radius-control)] px-1 text-[11.5px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] coarse:min-h-11 coarse:px-2', FOCUS)}
+        >
+          <ChevronDown className={cx('h-3.5 w-3.5 shrink-0', open && 'rotate-180')} aria-hidden />
+          Live prices, uptime and ranks
+        </button>
+        <TextButton onClick={onDetails} aria-label={`Details… about ${nickname}`} className="text-[11.5px]">
+          Details…
+        </TextButton>
+      </div>
       {open && (
         <div id={panelId} className="mt-1 min-w-0 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)] px-2.5 py-2">
           <LiveFacts modelId={modelId} row={row} state={state} money={money} now={now} />
@@ -312,6 +319,7 @@ export const ModelsTab: React.FC<ModelsTabProps> = ({ doc, money, pro, openPicke
                 state={catalog}
                 health={status.byId[m.modelId]}
                 notice={m.modelId === lockId ? newerBuild : undefined}
+                onDetails={() => openPicker(m.modelId)}
                 money={money}
                 now={now}
               />

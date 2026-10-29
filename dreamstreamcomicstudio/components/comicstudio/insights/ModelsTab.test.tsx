@@ -141,6 +141,13 @@ describe('Models tab — this comic (acceptance)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Compare models' }));
     expect(openPicker).toHaveBeenCalledTimes(2);
   });
+
+  it('L3: each model has "Details…", which opens the picker on that model (open_model_picker with suggest)', async () => {
+    serve([lakeRow()]);
+    const { openPicker } = await mount();
+    fireEvent.click(within(item('Nano Banana 2.1')).getByRole('button', { name: 'Details… about Nano Banana 2.1' }));
+    expect(openPicker).toHaveBeenCalledWith(LAKE_MODEL);
+  });
 });
 
 describe('Models tab — live facts, with source and time', () => {

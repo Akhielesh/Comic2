@@ -155,6 +155,15 @@ describe('L2 — tabs', () => {
     await act(async () => {});
   });
 
+  it('the Models tab’s "Details…" dispatches open_model_picker with that model as suggest (never a switch)', async () => {
+    const { runClientAction } = mount(makeLakeComic(), { pro: true });
+    fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Details… about Nano Banana 2.1' }));
+    expect(runClientAction).toHaveBeenCalledWith({ type: 'open_model_picker', suggest: 'nano-banana-2.1' });
+    expect(runClientAction).toHaveBeenCalledTimes(1);
+  });
+
   it('only the open tab is mounted: the catalog is asked when Models opens, the trends when Trends opens', async () => {
     mount(makeLakeComic(), { pro: true });
     await act(async () => {});
