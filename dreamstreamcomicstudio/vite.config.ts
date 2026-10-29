@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
 import react from '@vitejs/plugin-react';
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
       port: Number(env.VITE_PORT) || 7000,
       strictPort: false,
       host: '0.0.0.0',
+      fs: {
+        // Git worktrees link node_modules to the main checkout; vite's fs guard checks the
+        // REAL path, so without this every `?url` font import (fontFiles.ts) fails in tests there.
+        allow: [searchForWorkspaceRoot(process.cwd()), ...(fs.existsSync('node_modules') ? [fs.realpathSync('node_modules')] : [])]
+      },
       proxy: {
         // Regex, not the bare '/api' prefix: a prefix key also captures app MODULE
         // requests like /apiTypes.ts and forwards them to the backend, whose Express
