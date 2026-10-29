@@ -469,10 +469,10 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
       }
       // Our optimistic user bubble is replaced by the server's copy.
       if (pendingMessage && op.msg.role === 'user' && !knownIds.has(op.msg.id)) pendingMessage = null;
-      // The director's reply: a NEW assistant message with text, committed by the turn itself
-      // (a job notice carries origin 'job'; an older message re-committed, e.g. with an option
-      // answer recorded on its card, is not new).
-      if (op.msg.role === 'assistant' && !event.origin && !knownIds.has(op.msg.id) && landedText(op.msg)) replyLanded = true;
+      // The director's reply: a NEW assistant message with text, committed by the turn itself and
+      // delivered by a stream (a job notice carries origin 'job'; an older message re-committed,
+      // e.g. with an option answer recorded on its card, is not new; server_ops have no stream).
+      if (streamId && op.msg.role === 'assistant' && !event.origin && !knownIds.has(op.msg.id) && landedText(op.msg)) replyLanded = true;
     } else if (op.op === 'message_patch' && typeof op.patch.text === 'string' && op.patch.text.trim() && drafts[op.id] !== undefined) {
       drafts = { ...drafts };
       delete drafts[op.id];
