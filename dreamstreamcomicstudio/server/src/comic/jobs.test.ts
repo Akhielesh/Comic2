@@ -14,7 +14,7 @@ import {
 } from '../../../shared/comic/doc.js';
 import type { SpendAction } from '../../../shared/comic/ops.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, estimateJobs, imagePriceUsd, resolveImageJob, type SpendEstimate } from '../../../shared/comic/models.js';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, TIER_PRESETS, estimateJobs, imagePriceUsd, resolveImageJob, type SpendEstimate } from '../../../shared/comic/models.js';
 import { logger } from '../lib/logger.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
@@ -1984,14 +1984,19 @@ describe('own Gemini key beside the platform OpenRouter key', () => {
     return { billing, reserves };
   };
 
-  it('imageRouteFor is the image client’s own pick (and spendIsByok agrees), so the reserve names the key that draws', () => {
+  it('imageRouteFor is the image client’s own pick, so the reserve names the key that draws; spendIsByok stays keys-level', () => {
     for (const keys of [KEYS, OWN_GEMINI, OWN_BOTH, { gemini: { key: 'AIza-own', byok: true } } as StudioKeys]) {
       const drawn = pickImageRoute(spec, keys);
       expect(imageRouteFor(spec, keys)).toEqual({ route: drawn.route, model: drawn.model, byok: drawn.key.byok });
-      expect(spendIsByok(keys)).toBe(drawn.key.byok);
     }
     // The own-Gemini-key user draws on Gemini direct — their own key, not the platform's.
     expect(imageRouteFor(spec, OWN_GEMINI)).toEqual({ route: 'gemini', model: spec.routes.gemini, byok: true });
+    // …but at the keys level they are still a usage user: their text (OpenRouter-first) and OpenRouter-only
+    // images run on the platform key, so caps, the cost view and text quotes stay governed.
+    expect(spendIsByok(OWN_GEMINI)).toBe(false);
+    expect(spendIsByok(OWN_BOTH)).toBe(true);
+    expect(spendIsByok(KEYS)).toBe(false);
+    expect(spendIsByok({ gemini: { key: 'AIza-own', byok: true } })).toBe(true);
     expect(imageRouteFor(spec, KEYS)).toMatchObject({ route: 'openrouter', byok: false });
     expect(imageRouteFor(spec, {})).toBeNull();
     // An OpenRouter-only model still goes through the platform key for that user (platform spend).
@@ -2007,7 +2012,7 @@ describe('own Gemini key beside the platform OpenRouter key', () => {
     const { billing, reserves } = billingRecordingProvider();
     const images = fakeImages(() => ({ route: 'gemini', byok: true, model: spec.routes.gemini, costUsd: undefined }));
     const ctx = testContext(session, { keys: OWN_GEMINI, images, billing });
-    const quote = estimateSpendAction(session.doc, { type: 'render_cover' }, spendIsByok(OWN_GEMINI));
+    const quote = estimateSpendAction(session.doc, { type: 'render_cover' }, imageRouteFor(spec, OWN_GEMINI)!.byok);
     await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
     expect(images.calls).toHaveLength(1);
     expect(reserves).toEqual([{ provider: 'gemini', model: spec.routes.gemini, operation: 'comic.image.cover' }]);
@@ -2030,5 +2035,37 @@ describe('own Gemini key beside the platform OpenRouter key', () => {
     expect(images.calls).toHaveLength(1);
     expect(session.doc.cover.render.status).toBe('ready');
     expect(session.doc.conversation.at(-1)?.text).not.toMatch(/used all of your DreamStream usage/);
+  });
+
+  it('governed caps: an OpenRouter-only override is still refused (platform key), while Pro on their own Gemini key draws', async () => {
+    // FLUX has no Gemini route: for this user it would draw on the PLATFORM key, so the plan's caps apply.
+    const flux = plannedDoc();
+    flux.settings = { ...flux.settings, confirm: 'never', imageModelOverride: 'flux-3' };
+    const fluxSession = newSession(flux);
+    const blockedRun = billingRecordingProvider();
+    const fluxImages = fakeImages();
+    const fluxCtx = testContext(fluxSession, { keys: OWN_GEMINI, images: fluxImages, billing: blockedRun.billing, caps: DEFAULT_CAPS });
+    const refused = await startAction(fluxCtx, { type: 'render_cover' }, { confirmed: true });
+    await refused.done;
+    expect(refused.outcome).toMatchObject({ status: 'blocked' });
+    expect(refused.outcome.message).toMatch(/FLUX/i);
+    expect(blockedRun.reserves).toHaveLength(0);
+    expect(fluxImages.calls).toHaveLength(0);
+    expect(fluxSession.doc.cover.render.status).not.toBe('ready');
+
+    // Pro (Nano Banana Pro) reaches their own Gemini key: plan limits govern the platform key only.
+    const pro = getImageModel(TIER_PRESETS.pro.coverModel)!;
+    expect(pro.routes.gemini).toBeDefined();
+    expect(DEFAULT_CAPS.qualityTiers).not.toContain('pro');
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never', quality: 'pro' };
+    const session = newSession(doc);
+    const { billing, reserves } = billingRecordingProvider();
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: pro.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing, caps: DEFAULT_CAPS });
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(images.calls).toHaveLength(1);
+    expect(reserves).toEqual([{ provider: 'gemini', model: pro.routes.gemini, operation: 'comic.image.cover' }]);
+    expect(session.doc.cover.render.status).toBe('ready');
   });
 });

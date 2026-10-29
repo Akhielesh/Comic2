@@ -115,7 +115,6 @@ import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
 import { imageFailureDetail, imageFailureInfo, pickImageRoute } from './imageClient.js';
-import { prefersGeminiDirect } from './keys.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -317,11 +316,13 @@ export const imageRouteFor = (spec: ImageModelSpec, keys: StudioKeys): { route: 
 };
 
 /**
- * Whether spend will run on the user's own key: their Gemini key when the image client prefers
- * it (own Gemini key, no own OpenRouter key — prefersGeminiDirect), else OpenRouter's, else Gemini's.
+ * Whether spend runs on the user's own key at the keys level (OpenRouter preferred, else Gemini) — what
+ * caps, the cost view and text quotes follow (text routes are OpenRouter-first). An own Gemini key beside
+ * the platform OpenRouter key is NOT byok here: that user's text and OpenRouter-only images still draw on
+ * usage. Whether one IMAGE spend runs on their own key is imageRouteFor(spec, keys).byok.
  */
 export const spendIsByok = (keys: StudioKeys): boolean =>
-  prefersGeminiDirect(keys) || (keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok));
+  keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok);
 
 /** BYOK-ness of an image spend: the key of the route that will draw ITS model (an OpenRouter-only model stays platform spend for an own-Gemini-key user). */
 const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
@@ -1174,6 +1175,10 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
  * While billing is off there is no plan to buy: the denial says what IS included (P1-LIMITS).
  */
 const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageModelSpec): string | null => {
+  // The user's own key draws this model (e.g. Pro on their Gemini key): plan limits govern the platform
+  // key only. An OpenRouter-only override for an own-Gemini-key user still draws on the platform key and
+  // stays governed by the caps below.
+  if (imageRouteFor(spec, ctx.keys)?.byok) return null;
   const caps = opts.caps ?? ctx.caps;
   const doc = ctx.session.doc;
   if (caps) {
