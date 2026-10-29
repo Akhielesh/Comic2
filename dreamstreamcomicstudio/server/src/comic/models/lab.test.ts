@@ -129,6 +129,10 @@ describe('the checks and their quotes', () => {
     expect(d1.quote).toEqual({ usd: 0.113, source: 'pricebook', basis: 'price list from 2026-10-22 · reference cost unpublished', refsUnpriced: true });
     expect(d1).toMatchObject({ res: '4K', aspect: '2:3', refs: 4, canRun: true });
     expect(items.find((i) => i.id === 'd2-gpt-image-2.5-sunburst')!.quote!.usd).toBe(0.2107);
+    // D2 is quoted at quality max, but our Images-API transport sends no quality yet: the check says so before a click.
+    expect(o.checks.find((c) => c.id === 'D2')!.note).toContain(
+      'Until our Images-API transport sends quality (M1-LOCK-SERVER), this run uses OpenAI’s default quality: it answers whether a page comes back, not the max-quality price.'
+    );
     // D3: the registry has no 2K price for Seedream 5.0 Pro → the §2.6 upper estimate with its label.
     const d3 = items.find((i) => i.id === 'd3-seedream-5-pro-2k')!;
     expect(d3.quote!.usd).toBe(0.102);

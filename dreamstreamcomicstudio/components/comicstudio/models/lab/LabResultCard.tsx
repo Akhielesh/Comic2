@@ -30,6 +30,15 @@ export const costLine = (run: Pick<LabRun, 'costUsd' | 'quotedUsd' | 'status'> &
   return run.facts.costReported ? `Cost ${formatLabUsd(run.costUsd)} (provider-reported) · ${quoted}` : `Cost ${formatLabUsd(run.costUsd)} (the provider answered with an error, so nothing was billed) · ${quoted}`;
 };
 
+/**
+ * D2 is quoted at quality max. When the call that went out carried any other quality (today our Images-API transport
+ * sends none, so OpenAI's default applies), its cost is not the max-quality price — say so next to the cost.
+ */
+export const qualityCaveat = (run: Pick<LabRun, 'checkId' | 'facts'>): string | undefined =>
+  run.checkId === 'D2' && run.facts.callMade && run.facts.sent && run.facts.sent.quality !== 'max'
+    ? 'Not drawn at quality max: this cost is not the max-quality price.'
+    : undefined;
+
 const sentLine = (f: LabFacts): string | undefined => {
   if (!f.sent) return undefined;
   const s = f.sent;
@@ -111,6 +120,7 @@ export const LabResultCard: React.FC<{ run: LabRun; onChange?: (run: LabRun) => 
   const H = headingLevel;
   const f = run.facts;
   const [imageFailed, setImageFailed] = useState(false);
+  const caveat = qualityCaveat(run);
   return (
     <article className={cx(LAB_WELL, 'min-w-0 p-3')} data-lab-run={run.id}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -119,6 +129,11 @@ export const LabResultCard: React.FC<{ run: LabRun; onChange?: (run: LabRun) => 
         <span className="ml-auto text-[11.5px] tabular-nums text-[var(--ds-muted)]">{run.createdAt ? new Date(run.createdAt).toLocaleString() : ''}</span>
       </div>
       <p className={cx('mt-1 text-[12.5px] tabular-nums text-[var(--ds-ink)]', WRAP)}>{costLine(run)}</p>
+      {caveat && (
+        <p className={cx('text-[12px]', TONE_TEXT.warning, WRAP)} data-lab-quality-caveat="">
+          {caveat}
+        </p>
+      )}
       {run.quoteBasis && <p className={cx('text-[11.5px] text-[var(--ds-muted)]', WRAP)}>Quote basis: {run.quoteBasis}</p>}
       {run.status !== 'ok' && f.message && <p className={cx('mt-1 text-[12.5px]', TONE_TEXT.warning, WRAP)}>{f.message}</p>}
       {f.providerSaid && <p className={cx('text-[12px] text-[var(--ds-muted)]', WRAP)}>The provider said: {f.providerSaid}</p>}

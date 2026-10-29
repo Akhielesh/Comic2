@@ -308,6 +308,28 @@ describe('ModelLabSection', () => {
     expect(within(document.querySelector('[data-lab-run="run-d3"]') as HTMLElement).getByRole('radio', { name: 'Yes, visible' })).toBeChecked();
   });
 
+  it('a D2 result not drawn at quality max says its cost is not the max-quality price', async () => {
+    const d2Run: LabRun = {
+      ...seedreamRun,
+      id: 'run-d2',
+      checkId: 'D2',
+      itemId: 'd2-gpt-image-2.5-sunburst',
+      title: 'GPT Image 2.5 Sunburst · 2:3 page',
+      model: { id: 'gpt-image-2.5', nickname: 'GPT Image 2.5' },
+      quotedUsd: 0.2107,
+      costUsd: 0.041,
+      facts: { ...seedreamRun.facts, sent: { aspect: '2:3', resolution: null, quality: null, references: 4 } }
+    };
+    const atMax: LabRun = { ...d2Run, id: 'run-d2-max', facts: { ...d2Run.facts, sent: { ...d2Run.facts.sent!, quality: 'max' } } };
+    fetchOverview.mockReset().mockResolvedValue(overview({ results: [d2Run, atMax, seedreamRun] }));
+    await open();
+    const card = document.querySelector('[data-lab-run="run-d2"]') as HTMLElement;
+    expect(card).toHaveTextContent('Not drawn at quality max: this cost is not the max-quality price.');
+    expect(card).toHaveTextContent('no quality setting (provider default)');
+    expect(document.querySelector('[data-lab-run="run-d2-max"]')).not.toHaveTextContent('Not drawn at quality max');
+    expect(document.querySelector('[data-lab-run="run-d3"]')).not.toHaveTextContent('Not drawn at quality max');
+  });
+
   it('no timers: one read on open, one per Refresh', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
     render(<ModelLabSection />);

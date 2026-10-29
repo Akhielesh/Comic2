@@ -213,7 +213,7 @@ export const LAB_CHECKS: readonly LabCheck[] = [
     title: 'GPT Image 2.5 Sunburst and Flare as Experimental',
     decision: 'Offer both as Experimental only if a page comes back through our Images-API transport.',
     answers: 'Whether one 2:3 page with 4 references comes back through OpenRouter, what it costs, and what our transport actually sent (quality, references).',
-    note: '2:3 at 1024×1536 is ≈ $0.1646 in output tokens at quality max (OpenAI calculator, models.md §1.1); reference input is unpublished. The lab reserves the higher 1024² price so the cap never under-counts.',
+    note: '2:3 at 1024×1536 is ≈ $0.1646 in output tokens at quality max (OpenAI calculator, models.md §1.1); reference input is unpublished. The lab reserves the higher 1024² price so the cap never under-counts. Until our Images-API transport sends quality (M1-LOCK-SERVER), this run uses OpenAI’s default quality: it answers whether a page comes back, not the max-quality price. The result’s “Sent” line shows the quality that went out.',
     items: [
       { id: 'd2-gpt-image-2.5-sunburst', check: 'D2', title: 'GPT Image 2.5 Sunburst · 2:3 page', modelId: 'gpt-image-2.5', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' },
       { id: 'd2-gpt-image-2.5-flare', check: 'D2', title: 'GPT Image 2.5 Flare · 2:3 page', modelId: 'gpt-image-2.5-flare', kind: 'page', res: '1K', aspect: '2:3', references: 'fixture', prompt: 'page-1', transport: '/images' }
