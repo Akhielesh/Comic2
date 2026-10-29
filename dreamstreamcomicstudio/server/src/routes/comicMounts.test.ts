@@ -138,6 +138,37 @@ describe('owner mounts', () => {
     expect(active.hits).toHaveLength(3); // refs + both publication calls
   });
 
+  it('W-M model routes: status/catalog/trends/:id answer 501 on their own paths (text-limited once), the lab is admin-only, the static /models list still reaches the studio', async () => {
+    text.hits.length = 0;
+    // The existing static list is untouched: it is the studio router's route, counted by the studio's limiter once.
+    expect(await call('/api/comic/models', { headers: user })).toEqual({ status: 200, body: { route: 'studio', path: '/models' } });
+    expect(text.hits).toEqual(['GET /api/comic/models']);
+    text.hits.length = 0;
+    for (const path of ['/api/comic/models/status?ids=nano-banana-2.1', '/api/comic/models/catalog?projectId=p1', '/api/comic/models/trends?range=30d', '/api/comic/models/nano-banana-2.1']) {
+      const r = await call(path, { headers: user });
+      expect(r, path).toEqual({ status: 501, body: { error: 'not built yet' } });
+    }
+    expect(text.hits).toEqual([
+      'GET /api/comic/models/status?ids=nano-banana-2.1',
+      'GET /api/comic/models/catalog?projectId=p1',
+      'GET /api/comic/models/trends?range=30d',
+      'GET /api/comic/models/nano-banana-2.1'
+    ]); // each counted exactly once; never the studio
+    expect((await call('/api/comic/models/status', { headers: { ...user, 'x-limit': '1' } })).status).toBe(429);
+    // The lab: role-gated before anything answers, admin-limited, never text-limited; the stub answers 501 with the role.
+    text.hits.length = 0;
+    expect((await call('/api/comic/models/lab/checks', { headers: user })).status).toBe(403);
+    expect(await call('/api/comic/models/lab/checks', { headers: { ...user, 'x-admin': '1' } })).toEqual({ status: 501, body: { error: 'not built yet' } });
+    expect(await call('/api/comic/models/lab', { method: 'POST', headers: { ...user, 'x-admin': '1' }, body: {} })).toEqual({ status: 501, body: { error: 'not built yet' } });
+    expect(text.hits).toEqual([]);
+    // Unauthenticated: the global requireAuth refuses first.
+    for (const path of ['/api/comic/models/status', '/api/comic/models/catalog', '/api/comic/models/lab/checks']) expect((await call(path)).status, path).toBe(401);
+    // Model routers answer only their own paths: other /api/comic paths still reach the studio once.
+    text.hits.length = 0;
+    expect((await call('/api/comic/projects/p1/models', { headers: user })).body).toMatchObject({ route: 'studio' });
+    expect(text.hits).toEqual(['GET /api/comic/projects/p1/models']);
+  });
+
   it('admin and moderation consoles need their roles and mount before /api/comic and /api/moderation', async () => {
     expect((await call('/api/comic/admin/library/manifest', { headers: user })).status).toBe(403);
     // With the role, the real consoles answer — honestly unavailable without storage (503), never the studio.
@@ -202,6 +233,9 @@ describe('early refusals (requireAuth 401, rate-limit 429) leave one structured 
 
   it('comicRoutePattern keeps route words and masks ids/slugs; the observer never answers', () => {
     expect(comicRoutePattern('/api/comic/public/s/Ab3dE5fG7hJ9kL1mN/report?x=1')).toBe('/api/comic/public/s/:id/report');
+    expect(comicRoutePattern('/api/comic/models/status?ids=a,b')).toBe('/api/comic/models/status');
+    expect(comicRoutePattern('/api/comic/models/lab/run-9f8e')).toBe('/api/comic/models/lab/:id');
+    expect(comicRoutePattern('/api/comic/models/nano-banana-2.1')).toBe('/api/comic/models/:id');
     expect(comicRoutePattern('/api/comic/projects/0b9c-uuid/refs/u%2Fx%2Fref.webp')).toBe('/api/comic/projects/:id/refs/:id');
     expect(comicRoutePattern('/api/moderation/comic-cases/c_1/appeal')).toBe('/api/moderation/comic-cases/:id/appeal');
     expect(refusalIpHash('1.2.3.4', 0)).toBe(refusalIpHash('1.2.3.4', 1000));
