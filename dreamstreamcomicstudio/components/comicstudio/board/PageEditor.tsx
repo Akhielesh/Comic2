@@ -682,6 +682,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [inspectorMaxH, setInspectorMaxH] = useState<number | undefined>(undefined);
   /** Dual-screen: the floating inspector stays on the tools segment (never across the hinge, never clipped by the grid). */
   const foldGridRef = useRef<HTMLDivElement>(null);
+  /** Every other layout: its root (it clips — overflow-hidden — so the floating inspector stays inside it). */
+  const layoutRootRef = useRef<HTMLDivElement>(null);
   const [inspectorBounds, setInspectorBounds] = useState<Rect | null>(null);
   const ff = useFormFactor();
   const [coach, setCoach] = useState(() => ff.coarse && readFlag(COACH_KEY) !== '1');
@@ -874,20 +876,25 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     setAnchor((cur) => (cur && Math.abs(cur.left - next.left) < 0.5 && Math.abs(cur.top - next.top) < 0.5 && Math.abs(cur.right - next.right) < 0.5 && Math.abs(cur.bottom - next.bottom) < 0.5 ? cur : next));
   }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset, slide]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Dual-screen layouts: the floating inspector lives on the tools segment (the far side of the hinge from
-  // the page), inside the editor's grid — never across the fold, never clipped by the grid's edge.
+  // The floating inspector stays inside the editor's layout (which clips its overflow): on dual-screen
+  // layouts on the tools segment (the far side of the hinge from the page) — never across the fold — and
+  // in every other layout inside the layout root (phone landscape: below the header, not under it).
   const foldSplit = layout.kind === 'fold-book' || layout.kind === 'fold-tabletop' ? layout.split : undefined;
   useLayoutEffect(() => {
-    const grid = foldGridRef.current;
-    if (!foldSplit || !grid || !inspectorOpen) {
+    const root = foldSplit ? foldGridRef.current : layoutRootRef.current;
+    if (!root || !inspectorOpen || layout.compactInspector) {
       setInspectorBounds((cur) => (cur === null ? cur : null));
       return;
     }
-    const r = grid.getBoundingClientRect();
-    const offset = foldSplit.first + foldSplit.gap;
-    const next: Rect = foldSplit.axis === 'rows' ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom } : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
+    const r = root.getBoundingClientRect();
+    const offset = foldSplit ? foldSplit.first + foldSplit.gap : 0;
+    const next: Rect = !foldSplit
+      ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      : foldSplit.axis === 'rows'
+        ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom }
+        : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
     setInspectorBounds((cur) => (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom ? cur : next));
-  }, [foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
   // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
@@ -1284,8 +1291,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const chipLine = letteringEditable && lettering;
   const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || chipLine);
   const phoneRow = phoneRowNeeded ? (
-    // pt-3 when chips can show: their 44 px ::after areas reach 10.5 px above them, clear of the header.
-    <div className={cx('flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3', chipLine ? 'pt-3' : 'pt-2')} data-testid="editor-phone-row">
+    <div className={cx('flex min-w-0 shrink-0 flex-wrap items-center gap-x-1.5 px-3', chipLine ? 'pt-0.5' : 'gap-y-1.5 pt-2')} data-testid="editor-phone-row">
       {languageRow}
       {region && (
         <GhostButton size="xs" onClick={clearRegion} className="tap-target">
@@ -1293,7 +1299,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         </GhostButton>
       )}
       {chipLine && (
-        <div className="flex h-6 min-w-0 flex-1 basis-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-line">
+        // 44 px tall: each chip's 44 px ::after area lies inside the line, clear of the header above and
+        // of the stage (or a banner) below.
+        <div className="flex h-11 min-w-0 flex-1 basis-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-line">
           {chips}
         </div>
       )}
@@ -1770,7 +1778,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   if (layout.kind === 'phone-landscape') {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
+      <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
         {toolbar}
         <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
           {phoneRow}
@@ -1786,7 +1794,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   if (layout.tools === 'sheet') {
     // Phone portrait and tablet portrait: the stage above, the tools sheet resting at its foot.
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
+      <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
         <div ref={bodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
           {phone ? phoneRow : modeRow}
           {stageEl}
@@ -1801,7 +1809,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // Desktop / tablet landscape: today's stage + aside.
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
+    <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
       <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
         {modeRow}
         {stageEl}
