@@ -73,8 +73,20 @@ as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
 `border-[var(--ds-hairline)]`/`[var(--ds-hairline-soft)]`,
 `hover:bg-[var(--ds-hover)]`, accent `bg-[var(--ds-accent)]`
 `hover:bg-[var(--ds-accent-hover)]`. Never hardcode the paper/ink hexes; never put
-a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use the
-literal `bg-[#D97757]/10` form since the accent is theme-invariant.
+a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use
+`bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the old literal `bg-[#D97757]/10`.
+
+**Design skins** (`docs/design/atlas-skin.md`): Comic Studio renders in the Atlas
+language through one attribute, `data-ds-skin="atlas"`, set on `<html>` at boot on the
+comics host (`services/dsSkin.ts`) and on the Comic Studio / reader roots everywhere; a
+skin is one block of `--ds-*` overrides at the end of `index.css`, so nothing outside
+the attribute changes. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
+`--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
+readable status text, always with a word or icon), `--ds-ring`, `--ds-font-sans|display`,
+`--ds-radius-panel|control|chip|sm`, `--ds-shadow-soft|panel|lift`,
+`--ds-motion-fast|medium|slow|panel|modal|theme`, `--ds-ease`, `--ds-surface-blur` —
+via the `studioDesign.ts` constants (`RADIUS_*`, `SHADOW_SOFT`, `TRANSITION`, `TONE_*`,
+`PRESS`), never by spelling out `rounded-2xl` / `duration-200` / a hue.
 
 ### Two versions per widget (density)
 
