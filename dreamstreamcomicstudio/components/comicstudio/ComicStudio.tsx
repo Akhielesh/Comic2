@@ -42,6 +42,7 @@ import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
+import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
 import { registerStudioRefresh } from './board/ui';
 import { pageProgress } from './board/boardModel';
@@ -1098,6 +1099,9 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       className={`gesture-root relative flex min-h-0 w-full min-w-0 flex-col overflow-hidden font-sans ${CANVAS_BG} text-[var(--ds-ink)]`}
       style={{ height: 'var(--app-h, 100%)', maxHeight: '100%', paddingLeft: 'var(--sa-left, 0px)', paddingRight: 'var(--sa-right, 0px)' }}
       data-layout={ff.layout}
+      // Comic Studio renders in the Atlas design language wherever it is mounted (the comics host
+      // sets the same attribute on <html>; on the apex this root is the skin's boundary).
+      data-ds-skin={COMIC_STUDIO_SKIN}
     >
       <KeyboardInsetMount />
       <button

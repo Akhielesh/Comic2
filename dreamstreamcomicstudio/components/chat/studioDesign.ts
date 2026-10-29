@@ -5,6 +5,13 @@
  * `shadow-comic`, brand-yellow, `font-display`). Inside the chat shell, always
  * compose from these constants instead. Tailwind scans this file (it's under
  * components/**), so arbitrary values here are safe to use.
+ *
+ * Every constant is token-driven (`--ds-*` in index.css): the defaults of those tokens
+ * reproduce exactly the classes these constants used to spell out (rounded-2xl,
+ * duration-200, backdrop-blur-md, …), and a skin (`[data-ds-skin="atlas"]`, see
+ * docs/design/atlas-skin.md) restyles everything built from them by overriding the
+ * tokens — Comic Studio imports this file too, so its look follows the skin while chat,
+ * settings and home stay as they are.
  */
 
 // ---------------------------------------------------------------------------
@@ -17,11 +24,11 @@ export const CANVAS_BG = 'bg-[var(--ds-canvas)]';
 /** Slightly deeper paper for the sidebar column. */
 export const SIDEBAR_BG = 'bg-[var(--ds-sidebar)]';
 
-/** Floating glass surface (panels, toolbars, menus). */
-export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-md';
+/** Floating glass surface (panels, toolbars, menus). The blur amount is a token (12 px = blur-md). */
+export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-[var(--ds-surface-blur)]';
 
 /** Stronger glass for the composer bar and modals that sit over content. */
-export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-md';
+export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-[var(--ds-surface-blur)]';
 
 // ---------------------------------------------------------------------------
 // Lines, depth, shape
@@ -31,16 +38,16 @@ export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-md';
 export const HAIRLINE = 'border border-[var(--ds-hairline)]';
 
 /** Soft ambient shadow — never the comic offset shadow. */
-export const SHADOW_SOFT = 'shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]';
+export const SHADOW_SOFT = 'shadow-[shadow:var(--ds-shadow-soft)]';
 
-/** Panel radius. */
-export const RADIUS_PANEL = 'rounded-2xl';
+/** Panel radius (1rem = rounded-2xl by default). */
+export const RADIUS_PANEL = 'rounded-[var(--ds-radius-panel)]';
 
-/** Control radius (buttons, inputs). */
-export const RADIUS_CONTROL = 'rounded-xl';
+/** Control radius (buttons, inputs; 0.75rem = rounded-xl by default). */
+export const RADIUS_CONTROL = 'rounded-[var(--ds-radius-control)]';
 
-/** Pill radius (chips, toggles). */
-export const RADIUS_PILL = 'rounded-full';
+/** Pill radius (chips, toggles; rounded-full by default). */
+export const RADIUS_PILL = 'rounded-[var(--ds-radius-chip)]';
 
 // ---------------------------------------------------------------------------
 // Color & type
@@ -56,28 +63,80 @@ export const MUTED = 'text-[var(--ds-muted)]';
 export const ACCENT_HEX = '#D97757';
 export const ACCENT_HOVER_HEX = '#c2643f';
 
-/** Terracotta accent utilities. */
+/** Accent utilities (terracotta by default; ink under the Atlas skin). */
 export const ACCENT_BG = 'bg-[var(--ds-accent)]';
 export const ACCENT_BG_HOVER = 'hover:bg-[var(--ds-accent-hover)]';
 export const ACCENT_TEXT = 'text-[var(--ds-accent)]';
-/** Soft accent tint for active/selected rows. */
-export const ACCENT_SOFT_BG = 'bg-[#D97757]/10';
+/** Text on a solid accent fill (white by default; paper on ink in the dark Atlas skin). */
+export const ON_ACCENT_TEXT = 'text-[var(--ds-on-accent)]';
+/** Soft accent tint for active/selected rows (= the old bg-[#D97757]/10 by default). */
+export const ACCENT_SOFT_BG = 'bg-[var(--ds-accent-soft)]';
+
+/** Display face for headings (index.css: inherits the body face by default, Space Grotesk under Atlas). */
+export const FONT_DISPLAY = 'ds-font-display';
 
 /** Headings inside chat: quiet semibold, never comic display lettering. */
-export const HEADING = 'font-semibold tracking-tight text-[var(--ds-ink)]';
+export const HEADING = `font-semibold tracking-tight text-[var(--ds-ink)] ${FONT_DISPLAY}`;
 
 /** Quiet small-caps label (section/group headers). */
 export const LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]';
 
 // ---------------------------------------------------------------------------
+// Status tones (mirrors Atlas's tone.ts). Hue only ever carries meaning and is always
+// paired with a word or an icon — never colour alone.
+// ---------------------------------------------------------------------------
+
+export type StatusTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+/** Readable status text (and the icon next to it): the `-text` tokens stay ≥ 4.5:1 on the page. */
+export const TONE_TEXT: Record<StatusTone, string> = {
+  success: 'text-[var(--ds-success-text)]',
+  warning: 'text-[var(--ds-warning-text)]',
+  danger: 'text-[var(--ds-danger-text)]',
+  info: 'text-[var(--ds-info-text)]',
+  neutral: 'text-[var(--ds-muted)]'
+};
+
+/** A tinted panel, chip or banner background with a matching border. */
+export const TONE_SURFACE: Record<StatusTone, string> = {
+  success: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)]',
+  warning: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,transparent)]',
+  danger: 'border-[color:color-mix(in_srgb,var(--ds-danger)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger)_10%,transparent)]',
+  info: 'border-[color:color-mix(in_srgb,var(--ds-info)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-info)_10%,transparent)]',
+  neutral: 'border-[var(--ds-hairline)] bg-[var(--ds-well-strong)]'
+};
+
+/** Small solid marks: status dots, bar fills, progress segments. */
+export const TONE_FILL: Record<StatusTone, string> = {
+  success: 'bg-[var(--ds-success)]',
+  warning: 'bg-[var(--ds-warning)]',
+  danger: 'bg-[var(--ds-danger)]',
+  info: 'bg-[var(--ds-info)]',
+  neutral: 'bg-[var(--ds-muted)]'
+};
+
+/** Text + surface together, for chips and inline banners. */
+export const TONE_CHIP: Record<StatusTone, string> = {
+  success: `${TONE_SURFACE.success} ${TONE_TEXT.success}`,
+  warning: `${TONE_SURFACE.warning} ${TONE_TEXT.warning}`,
+  danger: `${TONE_SURFACE.danger} ${TONE_TEXT.danger}`,
+  info: `${TONE_SURFACE.info} ${TONE_TEXT.info}`,
+  neutral: `${TONE_SURFACE.neutral} ${TONE_TEXT.neutral}`
+};
+
+// ---------------------------------------------------------------------------
 // Motion
 // ---------------------------------------------------------------------------
 
-/** Standard motion — slight tint or lift on hover, no comic translate-jump. */
-export const TRANSITION = 'transition-all duration-200';
+/** Standard motion — slight tint or lift on hover, no comic translate-jump (200 ms by default). */
+export const TRANSITION =
+  'transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]';
 
 /** Subtle hover lift for floating elements. */
 export const HOVER_LIFT = 'hover:-translate-y-px';
+
+/** Press feedback: dips while pressed and springs back (index.css; motion-safe, skin only). */
+export const PRESS = 'ds-press';
 
 // ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)
@@ -86,8 +145,8 @@ export const HOVER_LIFT = 'hover:-translate-y-px';
 /** Floating glass panel: glass + hairline + soft shadow + panel radius. */
 export const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL}`;
 
-/** Primary action (send, new chat): terracotta with white text. */
-export const PRIMARY_BTN = `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION}`;
+/** Primary action (send, new chat): accent fill with on-accent text. */
+export const PRIMARY_BTN = `${ACCENT_BG} ${ACCENT_BG_HOVER} ${ON_ACCENT_TEXT} ${TRANSITION}`;
 
 /** Quiet glass pill for toggles/chips. */
 export const PILL = `${HAIRLINE} ${RADIUS_PILL} bg-[var(--ds-surface-soft)] backdrop-blur-sm ${TRANSITION}`;
@@ -98,11 +157,11 @@ export const CONTROL_BTN = `${HAIRLINE} ${RADIUS_CONTROL} bg-[var(--ds-surface-s
 /** Soft hover row (sidebar sessions, menu items). */
 export const HOVER_ROW = `${RADIUS_CONTROL} hover:bg-[var(--ds-hover)] ${TRANSITION}`;
 
-/** Active sidebar row: soft terracotta tint with ink text. */
+/** Active sidebar row: soft accent tint with ink text. */
 export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-ink)]`;
 
 /** Floating dropdown/context menu. */
-export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-md ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-surface-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
 
 /** Row inside a floating menu (icon + label, quiet hover). */
 export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-[var(--ds-hover)] ${TRANSITION}`;
@@ -115,10 +174,10 @@ export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px]
 export const NAV_ROW = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
 
 /** Active nav row — soft accent tint, same geometry as NAV_ROW. */
-export const NAV_ROW_ACTIVE = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] bg-[#D97757]/10 ${TRANSITION}`;
+export const NAV_ROW_ACTIVE = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] ${ACCENT_SOFT_BG} ${TRANSITION}`;
 
 /** Compact session row in the rail (single-line truncated title). */
 export const RAIL_ROW = `rounded-lg px-2.5 py-1.5 text-[13px] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
 
 /** Active session row — soft accent tint. */
-export const RAIL_ROW_ACTIVE = `rounded-lg px-2.5 py-1.5 text-[13px] bg-[#D97757]/10 text-[var(--ds-ink)] ${TRANSITION}`;
+export const RAIL_ROW_ACTIVE = `rounded-lg px-2.5 py-1.5 text-[13px] ${ACCENT_SOFT_BG} text-[var(--ds-ink)] ${TRANSITION}`;

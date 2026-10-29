@@ -10,6 +10,8 @@
 //                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
 //                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
+//                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
+//                                   the studio and reader roots carry the attribute regardless)
 //
 // Contract with the specs (tests/e2e):
 //   html[data-qa-ready]   set once the surface mounted and fonts loaded
@@ -30,6 +32,8 @@ import { PublicComicReader } from '../components/comicstudio/PublicComicReader';
 import { ImmersiveReader } from '../components/comicstudio/immersive/ImmersiveReader';
 import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
 import { parseQaParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
+import { bootDsSkin } from '../services/dsSkin';
+import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
 
 const FULL: React.CSSProperties = { height: '100dvh', width: '100%', overflow: 'hidden' };
@@ -217,6 +221,9 @@ const boot = () => {
   }
   document.documentElement.classList.toggle('dark', params.theme === 'dark');
   if (params.still) document.documentElement.setAttribute('data-qa-still', '1');
+  // ?skin=atlas: the page-level skin exactly as the comics host boots it (attribute, token
+  // registration, local font preloads). Without it only the studio/reader roots are skinned.
+  if (new URLSearchParams(window.location.search).get('skin') === 'atlas') bootDsSkin({ document, hostname: COMICS_HOST });
   window.__qaOps = window.__qaOps || [];
   const doc = params.state === 'loading' || params.state === 'load-error' ? null : makeQaDoc(params.fixture, { rtl: params.rtl });
   window.__qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
