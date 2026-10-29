@@ -55,6 +55,7 @@ import {
   type ImageModelSpec,
   type ResolvedImageJob
 } from '../../../shared/comic/models.js';
+import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { isPhotoLikeness, pickRefs, type RefContext } from '../../../shared/comic/refRanking.js';
 import {
   estimatePanelBoxes,
@@ -426,7 +427,7 @@ const styleParagraph = (doc: ComicDoc, opts: { avoid?: boolean; rating?: Content
 // ── Aspect & model resolution ────────────────────────────────────────────────
 
 const resolveJob = (doc: ComicDoc, kind: ImageJobKind): ResolvedImageJob =>
-  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride);
+  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride, doc.imageModel ?? deriveLock(doc));
 
 /**
  * Aspect for a page render. Webtoon segments are tall (1:4 when the model supports it and

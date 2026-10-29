@@ -16,6 +16,7 @@
 import {
   CAST_KINDS,
   castNoun,
+  findPage,
   isPageStale,
   isTargetStale,
   newId,
@@ -60,6 +61,8 @@ import { estimateJobs, getImageModel, resolveImageJob } from '../../../shared/co
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
+import { panelBudgetSentence } from '../../../shared/comic/pagePlanCheck.js';
+import { OFF_PANEL_SHOTS, PANEL_LIMITS, panelCountNote } from '../../../shared/comic/panelRules.js';
 import { coverNeedsDraw, pageTargets as drawablePages } from '../../../shared/comic/plan.js';
 import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
@@ -560,15 +563,20 @@ function guardPaidText(ctx: StudioContext, turn: DirectorTurn): void {
 const imageQuoteIsByok = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet'): boolean => {
   const doc = ctx.session.doc;
   try {
-    return imageRouteFor(resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride).spec, ctx.keys)?.byok ?? spendIsByok(ctx.keys);
+    return imageRouteFor(resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride, lockOfDoc(doc)).spec, ctx.keys)?.byok ?? spendIsByok(ctx.keys);
   } catch {
     return spendIsByok(ctx.keys);
   }
 };
 
+/** The comic's model lock (persisted, or derived from a legacy doc's drawn art): every quote and slot count follows it
+ *  (models.md §3.4 item 1), so the director quotes the model that will really draw. */
+const lockOfDoc = (doc: ComicDoc) => doc.imageModel ?? deriveLock(doc);
+
 const priceOf = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet', count = 1): number => {
   const doc = ctx.session.doc;
-  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: imageQuoteIsByok(ctx, kind) }).usd;
+  const lock = lockOfDoc(doc);
+  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: imageQuoteIsByok(ctx, kind), ...(lock ? { lock } : {}) }).usd;
 };
 
 const pageWord = (pages: Page[]) => (pages.length === 1 ? `Page ${pages[0].n}` : `Pages ${joinList(pages.map((p) => String(p.n)))}`);
@@ -626,7 +634,8 @@ export function styleFromArgs(raw: unknown): LetterStylePatch | undefined {
  * character (else object) slots, and the total minus the style board when one is attached.
  */
 const sheetRefSlots = (doc: ComicDoc): number => {
-  const { spec } = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride);
+  // The locked model's slots (prompts.ts resolveJob follows the lock too), so the count matches what is attached.
+  const { spec } = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride, lockOfDoc(doc));
   const board = doc.style.board && canServeToOwner(doc.style.board) ? 1 : 0;
   return Math.max(0, Math.min(REF_LIMITS.sheetAuthorRefs, spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects, spec.refs.total - board));
 };
@@ -744,7 +753,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         kind: S('Comic kind.', { enum: COMIC_KINDS }),
         pageCount: I('Number of pages, 1–40.'),
         pageAspect: S('Page aspect ratio (2:3 is a standard comic page).', { enum: ASPECT_RATIOS }),
-        panelsPerPage: S('"auto" (writer varies 3–6) or a number like "4".'),
+        panelsPerPage: S(`"auto" (${PANEL_LIMITS.autoTypical}–4 big panels; the dialogue decides) or ${PANEL_LIMITS.uiChoices.join(', ')} panels a page.`, {
+          enum: ['auto', ...PANEL_LIMITS.uiChoices.map(String)]
+        }),
         readingDirection: S('ltr, or rtl for manga.', { enum: ['ltr', 'rtl'] }),
         lettering: S('overlay = editable balloons (default); in_art = the model letters the page.', { enum: LETTERING_MODES }),
         colorMode: S('Color mode.', { enum: COLOR_MODES }),
@@ -755,7 +766,14 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const raw: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(args)) if (k !== 'confirm' && v !== undefined && v !== null && v !== '') raw[k] = v;
         if (typeof raw.pageCount === 'string') raw.pageCount = int(raw.pageCount);
-        if (raw.panelsPerPage !== undefined && raw.panelsPerPage !== 'auto') raw.panelsPerPage = int(raw.panelsPerPage);
+        if (raw.panelsPerPage !== undefined && raw.panelsPerPage !== 'auto') {
+          raw.panelsPerPage = int(raw.panelsPerPage);
+          // Plan §4.1 / §4.7: the director offers the Format panel's choices (2–6; the fit check still applies). Old
+          // docs and authors' own scripts keep up to PANEL_LIMITS.codeMax; nothing here rewrites them.
+          if (!(PANEL_LIMITS.uiChoices as readonly number[]).includes(raw.panelsPerPage as number)) {
+            throw argError(`panelsPerPage is "auto" or one of ${PANEL_LIMITS.uiChoices.join(', ')} (bigger panels fit their words better).`);
+          }
+        }
         let patch;
         try {
           patch = sanitizeFormatPatch(raw);
@@ -780,7 +798,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         else captured('the format');
         const stale = staled.length ? ` ${staled.length} drawn page${staled.length === 1 ? ' is' : 's are'} now out of date (redraw ${cost.approx(priceOf(ctx, 'page', staled.length))}, or keep them).` : '';
         const lettering = patch.kind !== undefined || patch.lettering !== undefined ? followLetteringPreset() : '';
-        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.${stale}${lettering}`;
+        // A storybook set above its new-plan maximum: say what new plans will do (PD-2; existing pages untouched).
+        const clamp = patch.panelsPerPage !== undefined || patch.kind !== undefined ? panelCountNote(f) : undefined;
+        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.${stale}${lettering}${clamp ? ` ${clamp}` : ''}`;
       }
     ),
 
@@ -1164,6 +1184,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         type Wanted = Omit<Line, 'id'> & { position?: Position };
         const wanted: Wanted[] = [];
         const addCast = new Set<string>();
+        const offPanel = new Set<string>();
         for (const raw of args.lines.slice(0, 6)) {
           if (!isObject(raw)) continue;
           const kind = LINE_KINDS.includes(raw.kind as LineKind) ? (raw.kind as LineKind) : 'speech';
@@ -1174,7 +1195,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             const speaker = resolveCharacter(d, text(raw.speaker, 80));
             if (!speaker) throw argError(`Unknown speaker "${text(raw.speaker, 80)}". Cast: ${castList(d)}.`);
             line.speakerId = speaker.id;
-            if (!panel.castIds.includes(speaker.id)) addCast.add(speaker.id);
+            // A speaker in a pov / insert / establishing shot is a legitimate off-panel voice (heard, not drawn):
+            // never pushed into castIds (that would change the drawn spec and ask for them to be drawn).
+            if (!panel.castIds.includes(speaker.id)) (OFF_PANEL_SHOTS.has(panel.shot) ? offPanel : addCast).add(speaker.id);
           }
           const style = lineStyleFromArgs(d, { id: '', kind, text: lineText, ...(line.speakerId ? { speakerId: line.speakerId } : {}) } as Line, raw.style);
           if (style) line.style = style;
@@ -1224,7 +1247,18 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const kept = reused.filter(Boolean).length;
         const long = tooLong(d, wanted);
         captured(`page ${page.n} panel ${panel.n}'s text`);
-        return `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place)` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
+        // Plan §4.7: the panel's word budget, measured on the boxes the words are lettered into ("That makes panel 6
+        // about 34 words; it holds about 32."). Free; never blocks the edit.
+        const after = findPage(doc(), page.id);
+        const index = after ? after.panels.findIndex((p) => p.id === panel.id) : -1;
+        let budget: string | undefined;
+        try {
+          budget = after && index >= 0 ? panelBudgetSentence(doc(), after, index) : undefined;
+        } catch {
+          budget = undefined;
+        }
+        const voices = [...offPanel].map((id) => doc().cast.find((c) => c.id === id)?.name).filter((n): n is string => !!n);
+        return `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place)` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${voices.length ? ` ${joinList(voices.map(upper))} ${voices.length === 1 ? 'speaks' : 'speak'} off-panel (heard, not drawn — a ${panel.shot} shot).` : ''}${budget ? ` ${budget}` : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
       }
     ),
 
@@ -1272,7 +1306,10 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         }
         if (!Object.keys(patch).length) throw argError('Nothing to change on that line.');
         const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch }];
-        if (patch.speakerId && !panel.castIds.includes(patch.speakerId)) ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, patch.speakerId] } });
+        // An off-panel voice (pov / insert / establishing shot) stays out of castIds (heard, not drawn).
+        if (patch.speakerId && !panel.castIds.includes(patch.speakerId) && !OFF_PANEL_SHOTS.has(panel.shot)) {
+          ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, patch.speakerId] } });
+        }
         commit(ops, `Page ${page.n} panel ${panel.n} line ${n}`);
         captured(`page ${page.n} panel ${panel.n} line ${n}`);
         const inArt = d.format.lettering === 'in_art' && page.render.status === 'ready';

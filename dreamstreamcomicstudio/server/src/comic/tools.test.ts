@@ -4,6 +4,8 @@ import { lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS, imageRouteFor, startAction } from './jobs.js';
 import { estimateJobs, formatUsd, resolveImageJob } from '../../../shared/comic/models.js';
 import { newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
+import { costFormatterFor } from './costText.js';
+import { panelCountNote } from '../../../shared/comic/panelRules.js';
 import { GROUP_HINTS, buildDirectorTools, buildTurnToolset, createDirectorTurn, type DirectorTool, type DirectorTurn } from './tools.js';
 import type { ToolGroup } from './extensions.js';
 import { analyzeSource, writePagePlan } from './writer.js';
@@ -90,6 +92,67 @@ describe('story tools', () => {
     expect(ctx.session.doc.format).toMatchObject({ kind: 'manga', pageCount: 12, panelsPerPage: 5, readingDirection: 'rtl' });
     await call('set_format', { panelsPerPage: 'auto', pageCount: 500 });
     expect(ctx.session.doc.format).toMatchObject({ panelsPerPage: 'auto', pageCount: 40 });
+  });
+});
+
+describe('K1: set_format 2–6, panel budgets, off-panel voices, lock-aware quotes', () => {
+  it('set_format offers auto and the Format choices 2–6, and accepts 2', async () => {
+    const spec = tools.get('set_format')!.spec.function.parameters as { properties: Record<string, { enum?: string[] }> };
+    expect(spec.properties.panelsPerPage.enum).toEqual(['auto', '2', '3', '4', '5', '6']);
+    expect(await call('set_format', { panelsPerPage: '2' })).toContain('panels 2');
+    expect(ctx.session.doc.format.panelsPerPage).toBe(2);
+    expect(await call('set_format', { panelsPerPage: 6 })).toContain('panels 6');
+    // Outside the choices: a clear error, nothing changed (old docs keep their own counts; nothing rewrites them).
+    expect(await call('set_format', { panelsPerPage: '9' })).toMatch(/^Error: panelsPerPage is "auto" or one of 2, 3, 4, 5, 6/);
+    expect(ctx.session.doc.format.panelsPerPage).toBe(6);
+    expect(await call('set_format', { panelsPerPage: 'auto' })).toContain('panels auto');
+  });
+
+  it('a storybook set above 3 panels says what new plans will do (PD-2)', async () => {
+    const out = await call('set_format', { kind: 'storybook', panelsPerPage: '5' });
+    const note = panelCountNote({ kind: 'storybook', panelsPerPage: 5 });
+    expect(note).toBeTruthy();
+    expect(out).toContain(note!);
+    expect(await call('set_format', { kind: 'storybook', panelsPerPage: '2' })).not.toContain(note!);
+  });
+
+  it('edit_panel_text says when the words overfill the panel', async () => {
+    const long = Array.from({ length: 70 }, () => 'spice').join(' ');
+    const out = await call('edit_panel_text', { page: 2, panel: 3, lines: [{ kind: 'speech', speaker: 'Maya', text: long }] });
+    expect(out).toMatch(/That makes panel 3 about \d+ words; it holds about \d+\. That's too much text for this panel\./);
+  });
+
+  it('an off-panel voice in a pov / insert / establishing shot is never pushed into castIds', async () => {
+    const doc = plannedDoc();
+    doc.pages[2].panels[1].shot = 'pov';
+    setup(doc);
+    const out = await call('edit_panel_text', { page: 3, panel: 2, lines: [{ kind: 'speech', speaker: 'maya', text: 'I can see the gate!' }] });
+    expect(out).toMatch(/MAYA speaks off-panel \(heard, not drawn — a pov shot\)/);
+    expect(out).not.toMatch(/Added the speaker/);
+    expect(ctx.session.doc.pages[2].panels[1].castIds).toEqual(['c_arjun']);
+    expect(ctx.session.doc.pages[2].panels[1].lines[0]).toMatchObject({ speakerId: 'c_maya' });
+    // set_line: a new speaker on an establishing panel stays off-panel too; on a medium panel it is still added.
+    await call('edit_panel_text', { page: 3, panel: 1, lines: [{ kind: 'caption', text: 'The market at dawn.' }] });
+    await call('set_line', { page: 3, panel: 1, line: 1, kind: 'speech', speaker: 'maya' });
+    expect(ctx.session.doc.pages[2].panels[0].castIds).toEqual(['c_arjun']);
+    await call('set_line', { page: 3, panel: 3, line: 1, speaker: 'maya' }).catch(() => undefined);
+    await call('edit_panel_text', { page: 3, panel: 3, lines: [{ kind: 'speech', speaker: 'maya', text: 'Here!' }] });
+    expect(ctx.session.doc.pages[2].panels[2].castIds).toEqual(['c_arjun', 'c_maya']);
+  });
+
+  it("quotes follow the comic's model lock (a drawn page goes out of date on a locked Pro comic)", async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 } };
+    doc.pages[0].render.specHash = pageSpecHash(doc, doc.pages[0]);
+    const lock = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'first_render' as const };
+    doc.imageModel = lock;
+    setup(doc);
+    const out = await call('set_format', { pageAspect: '1:1' });
+    const locked = estimateJobs([{ kind: 'page', count: 1 }], doc.settings.quality, { byok: false, lock }).usd;
+    const unlocked = estimateJobs([{ kind: 'page', count: 1 }], doc.settings.quality, { byok: false }).usd;
+    expect(locked).not.toBe(unlocked);
+    expect(out).toMatch(/^Not changed yet: this makes 1 drawn page out of date/);
+    expect(out).toContain(`(redrawing ${costFormatterFor(ctx).approx(locked)})`);
   });
 });
 
@@ -259,7 +322,8 @@ describe('plan tools', () => {
         { kind: 'caption', text: 'Meanwhile…' }
       ]
     });
-    expect(out).toBe('Page 3 panel 2 now has 2 lines. Added the speaker to the panel.');
+    // Plan §4.7: the result reports the panel's word budget (measured on the boxes the words are lettered into).
+    expect(out).toBe('Page 3 panel 2 now has 2 lines. Added the speaker to the panel. That makes panel 2 about 2 words; it holds about 30.');
     const panel = ctx.session.doc.pages[2].panels[1];
     expect(panel.lines.map((l) => [l.kind, l.speakerId, l.text])).toEqual([
       ['speech', 'c_maya', 'Run!'],
@@ -686,7 +750,7 @@ describe('lettering edits keep ids, pins and translations', () => {
   it('edit_panel_text keeps the id (pinned balloon + translation survive) when kind and speaker match', async () => {
     setup(lakeWithText(), [], { userText: 'change what the baby says' });
     const out = await call('edit_panel_text', { page: 1, panel: 3, lines: [{ kind: 'speech', speaker: 'The Baby', text: 'Bye bye, ducks!' }] });
-    expect(out).toBe('Page 1 panel 3 now has 1 line (1 kept in place).');
+    expect(out).toBe('Page 1 panel 3 now has 1 line (1 kept in place). That makes panel 3 about 3 words; it holds about 32.');
     const page = ctx.session.doc.pages[0];
     expect(page.panels[2].lines).toEqual([{ id: 'ln_l3', kind: 'speech', speakerId: 'c_baby', text: 'Bye bye, ducks!' }]);
     expect(page.balloons).toEqual([{ lineId: 'ln_l3', x: 0.62, y: 0.7, w: 0.3, pinned: true }]);
