@@ -700,7 +700,7 @@ describe('director wiring (director.ts): rule, facts, history', () => {
     const health = fakeModelHealth();
     const prev = __setModelHealthForTests(health);
     try {
-      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS }), { text: 'hello', attachments: [] });
+      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS, health }), { text: 'hello', attachments: [] });
     } finally {
       __setModelHealthForTests(prev);
     }
@@ -726,7 +726,7 @@ describe('director wiring (director.ts): rule, facts, history', () => {
     const health = fakeModelHealth({ now: Date.now() });
     const prev = __setModelHealthForTests(health);
     try {
-      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS }), { text: 'ok', attachments: [] });
+      await runDirectorTurn(testContext(session, { llm, caps: BYOK_CAPS, keys: BYOK_KEYS, health }), { text: 'ok', attachments: [] });
     } finally {
       __setModelHealthForTests(prev);
     }
@@ -848,6 +848,8 @@ describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)'
       const caps = scenario.caps === 'byok' ? BYOK_CAPS : GOVERNED_CAPS;
       const keys = scenario.caps === 'byok' ? BYOK_KEYS : { openrouter: { key: 'sk-or-platform-test', byok: false } };
       const health = scenario.health === 'rate-limited' ? rateLimitedHealth(Date.now()) : fakeModelHealth({ now: Date.now() });
+      // testContext() installs its own fresh fake port unless it is handed this one (orchestrator.fakes.ts), so every
+      // context below gets `health`: the 429 scenario's breaker and OpenRouter answer must be what the turn reads.
       const prev = __setModelHealthForTests(health);
       try {
         const session = newSession(await goldenDoc(scenario, { health, keys, caps }));
@@ -861,7 +863,7 @@ describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)'
           const e = turn.expect || {};
           try {
             if (turn.action) {
-              const tctx = testContext(session, { caps, keys, ...(images ? { images } : {}) });
+              const tctx = testContext(session, { caps, keys, health, ...(images ? { images } : {}) });
               await (await startAction(tctx, turn.action, { confirmed: true, origin: 'user' })).done;
               await tctx.settled();
             } else {
@@ -879,7 +881,7 @@ describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)'
                 };
               }
               const llm = scriptedLlm({ director: steps });
-              const tctx = testContext(session, { llm, caps, keys, ...(images ? { images } : {}) });
+              const tctx = testContext(session, { llm, caps, keys, health, ...(images ? { images } : {}) });
               images = tctx.imagesFake;
               const imagesBefore = tctx.imagesFake.calls.length;
               await runDirectorTurn(tctx, { text: turn.say || '', attachments: [] });
