@@ -100,6 +100,8 @@ values ('00000000-0000-0000-0000-000000000006', 'nano-banana-2.1', 'openrouter',
 -- ------------------------------------------------------------------ checks
 do $$
 begin
+  assert exists (select 1 from pg_indexes where schemaname = 'public' and tablename = 'comic_image_calls' and indexname = 'comic_image_calls_created_idx'),
+    'the aggregate and the purge have a created_at index';
   begin
     insert into public.comic_image_calls (user_id, route, outcome) values ('00000000-0000-0000-0000-000000000001', 'other', 'ok');
     raise exception 'route check missing';

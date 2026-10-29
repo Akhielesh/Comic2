@@ -80,6 +80,8 @@ alter table public.comic_image_calls add constraint comic_image_calls_outcome_ch
 
 create index if not exists comic_image_calls_model_created_idx on public.comic_image_calls (model_id, created_at desc);
 create index if not exists comic_image_calls_user_created_idx on public.comic_image_calls (user_id, created_at desc);
+-- The platform aggregate and the retention purge filter on created_at alone (across all users and models).
+create index if not exists comic_image_calls_created_idx on public.comic_image_calls (created_at);
 
 -- ── 2. Access: owner SELECT, service-role writes ────────────────────────────────────────────
 

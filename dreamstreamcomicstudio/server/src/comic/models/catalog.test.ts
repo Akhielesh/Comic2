@@ -6,7 +6,7 @@ import { DEFAULT_CAPS, resolveStudioCaps } from '../../../../shared/comic/capabi
 import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
 import { logger } from '../../lib/logger.js';
 import { FAKE_BASE, FIXTURE_NOW, callRow, fakeOpenRouterFetch, loadOpenRouterFixture, memoryCatalogStore, memoryImageCalls } from './__fixtures__/catalogFakes.js';
-import { CACHE_SOURCE, FAIL_RETRY_MS, TTL_MS, catalogIds, createModelCatalog, type CatalogFetch, type ModelCatalogDeps, type ModelCatalogRow } from './catalog.js';
+import { CACHE_SOURCE, FAIL_RETRY_MS, PLATFORM_STATS_TTL_MS, TTL_MS, catalogIds, createModelCatalog, type CatalogFetch, type ModelCatalogDeps, type ModelCatalogRow } from './catalog.js';
 import { NOT_ENOUGH_DATA_COPY } from './observed.js';
 import { createQualitySource } from './quality.js';
 
@@ -367,6 +367,24 @@ describe('our own facts in the rows and trends (S7, AT-9)', () => {
     expect(t90.t5.models.length).toBeGreaterThanOrEqual(t.t5.models.length);
     // 90 days reaches back to the first point we hold: Nano Banana Pro on edit #5 (2026-07-28) → #13.
     expect(t90.t4.moves.find((m) => m.modelId === 'nano-banana-pro' && m.board === 'lmarena_edit')).toMatchObject({ from: { asOf: '2026-07-28', rank: 5 }, to: { rank: 13 }, delta: -8 });
+  });
+
+  it('the platform aggregate is read once per window per 10 minutes (single-flight), not on every quote and picker open', async () => {
+    const calls = memoryImageCalls([...mine, rateLimited]);
+    const { catalog, c } = setup({ calls });
+    await Promise.all([catalog.rows({ userId: 'user-a' }), catalog.rows({ userId: 'user-b' }), catalog.priceSources('user-a')]);
+    expect(calls.statsCalls).toHaveLength(2); // the 90-day and the 24-hour window, once each
+    await catalog.trends('30d', { userId: 'user-a' });
+    await catalog.priceSources('user-c');
+    c.advance(PLATFORM_STATS_TTL_MS - 1_000);
+    await catalog.rows({ userId: 'user-a' });
+    expect(calls.statsCalls).toHaveLength(2);
+    c.advance(2_000);
+    await catalog.rows({ userId: 'user-a' });
+    expect(calls.statsCalls).toHaveLength(4);
+    // The user's own rows are never cached: a new call shows up at once.
+    calls.rows.push(callRow({ at: c.now(), providerCostUsd: 0.06 }));
+    expect(row(await catalog.rows({ userId: 'user-a' }), 'nano-banana-2.1').observed[0].n).toBe(5);
   });
 
   it('a failing calls database degrades to "no data", never an error', async () => {

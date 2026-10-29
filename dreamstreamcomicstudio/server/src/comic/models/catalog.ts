@@ -205,6 +205,11 @@ export const WATCH_LIST_IDS = ['microsoft/mai-image-2.6-flash', 'meta/muse-image
 export const TREND_RANGES = ['30d', '90d'] as const;
 export type TrendRange = (typeof TREND_RANGES)[number];
 export const USAGE_PRODUCT = 'comic_studio';
+/**
+ * The platform aggregate (comic_image_model_stats, a scan of everyone's calls in the window) is read at most
+ * once per window per this long, single-flight — checked on read, never a timer. Our own rows stay live.
+ */
+export const PLATFORM_STATS_TTL_MS = 10 * 60_000;
 const CALLS_LOOKBACK_DAYS = 90;
 const CALLS_LIMIT = 2000;
 const CONCURRENCY = 4;
@@ -737,15 +742,39 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     }
   });
 
-  // S7 — our own calls for this user (owner-scoped) and the platform aggregate (≥ 5 users).
-  const loadCalls = async (userId: string | undefined, sinceMs: number, opts: { last24h: boolean }) => {
+  // S7 — our own calls for this user (owner-scoped, live) and the platform aggregate (≥ 5 users, cached briefly).
+  const statsCache = new Map<number, { at: number; value?: PlatformStatRow[]; inflight?: Promise<PlatformStatRow[]> }>();
+  /** The aggregate over the last `windowMs`, shared by every request for PLATFORM_STATS_TTL_MS; a failure is not cached. */
+  const platformStatsFor = (windowMs: number): Promise<PlatformStatRow[]> => {
+    if (!calls) return Promise.resolve([]);
+    const t = now();
+    const hit = statsCache.get(windowMs);
+    if (hit?.value && t - hit.at < PLATFORM_STATS_TTL_MS) return Promise.resolve(hit.value);
+    if (hit?.inflight) return hit.inflight;
+    const inflight = calls.platformStats(iso(t - windowMs)).then(
+      (value) => {
+        statsCache.set(windowMs, { at: t, value });
+        return value;
+      },
+      (err) => {
+        if (hit?.value) statsCache.set(windowMs, { at: hit.at, value: hit.value });
+        else statsCache.delete(windowMs);
+        throw err;
+      }
+    );
+    statsCache.set(windowMs, { at: hit?.at ?? t, value: hit?.value, inflight });
+    return inflight;
+  };
+
+  const CALLS_WINDOW_MS = CALLS_LOOKBACK_DAYS * DAY_MS;
+  const loadCalls = async (userId: string | undefined, opts: { last24h: boolean }) => {
     const empty = { yours: [] as ImageCallRow[], platform: [] as PlatformStatRow[], platform24h: [] as PlatformStatRow[] };
     if (!calls) return empty;
-    const sinceIso = iso(sinceMs);
+    const sinceIso = iso(now() - CALLS_WINDOW_MS);
     const [yours, platform, platform24h] = await Promise.all([
       userId ? calls.callsForUser(userId, { sinceIso, limit: CALLS_LIMIT }).catch((err) => (logger.warn('comic_image_calls_read_failed', { message: (err as Error)?.message }), [] as ImageCallRow[])) : Promise.resolve([] as ImageCallRow[]),
-      calls.platformStats(sinceIso).catch((err) => (logger.warn('comic_image_calls_stats_failed', { message: (err as Error)?.message }), [] as PlatformStatRow[])),
-      opts.last24h ? calls.platformStats(iso(now() - DAY_MS)).catch(() => [] as PlatformStatRow[]) : Promise.resolve([] as PlatformStatRow[])
+      platformStatsFor(CALLS_WINDOW_MS).catch((err) => (logger.warn('comic_image_calls_stats_failed', { message: (err as Error)?.message }), [] as PlatformStatRow[])),
+      opts.last24h ? platformStatsFor(DAY_MS).catch(() => [] as PlatformStatRow[]) : Promise.resolve([] as PlatformStatRow[])
     ]);
     return { yours, platform, platform24h };
   };
@@ -762,7 +791,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
 
   const loadAll = async (userId?: string): Promise<Loaded> => {
     const wait = { maxWaitMs: rowsWaitMs };
-    const [l, e, u, q, c] = await Promise.all([list.get(wait), endpoints.get(wait), uptime.get(wait), quality.get(), loadCalls(userId, now() - CALLS_LOOKBACK_DAYS * DAY_MS, { last24h: true })]);
+    const [l, e, u, q, c] = await Promise.all([list.get(wait), endpoints.get(wait), uptime.get(wait), quality.get(), loadCalls(userId, { last24h: true })]);
     return { list: l, eps: e, up: u, q, ...c };
   };
 
@@ -858,8 +887,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
   };
 
   const priceSources: ModelCatalog['priceSources'] = async (userId, opts = {}) => {
-    const sinceMs = now() - CALLS_LOOKBACK_DAYS * DAY_MS;
-    const [eps, c] = await Promise.all([endpoints.get({ maxWaitMs: opts.maxWaitMs ?? priceWaitMs }), loadCalls(userId, sinceMs, { last24h: false })]);
+    const [eps, c] = await Promise.all([endpoints.get({ maxWaitMs: opts.maxWaitMs ?? priceWaitMs }), loadCalls(userId, { last24h: false })]);
     return {
       rows: IMAGE_MODELS.map((spec) => {
         const p = pricesFor(spec, eps);
