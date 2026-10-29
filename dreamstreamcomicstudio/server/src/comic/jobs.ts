@@ -865,7 +865,13 @@ export type ActionOutcome =
   | { status: 'done'; message: string; nextSteps?: NextStep[] }
   | { status: 'started'; message: string; estimate: SpendEstimate }
   | { status: 'gated'; message: string; gate: Gate }
-  | { status: 'blocked'; message: string; code?: StudioErrorCode }
+  | {
+      status: 'blocked';
+      message: string;
+      code?: StudioErrorCode;
+      /** change_image_model: the server's fresh redraw quote when the confirmed one drifted (nothing was changed). */
+      requote?: { usd: number | null; quotedUsd: number; lines: { label: string; count: number; usd: number | null }[] };
+    }
   /** Everything requested is already ready and fresh ($0). */
   | { status: 'nothing'; message: string; nextSteps: NextStep[] };
 
@@ -889,6 +895,32 @@ const deliver = (ctx: StudioContext, opts: RunActionOptions, text: string, cards
     return;
   }
   commitAs(ctx, [{ op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], 'job');
+};
+
+/**
+ * Commit `ops` and an assistant message in ONE batch (one rev bump), the message in this user's cost terms. A
+ * director turn gets the cards and chips in its own message instead (the ops are committed on their own then).
+ */
+export const commitWithMessage = (ctx: StudioContext, opts: RunActionOptions, ops: DocOp[], text: string, cards: Card[], steps?: NextStep[], label?: string): void => {
+  if (opts.collectCard) {
+    if (ops.length) commitAs(ctx, ops, originOf(opts), label);
+    deliver(ctx, opts, text, cards, steps);
+    return;
+  }
+  commitAs(ctx, [...ops, { op: 'message', msg: governMsg(ctx, assistantMessage(text, cards, steps)) }], opts.origin ?? 'job', label);
+};
+
+/** A render run is under way for this comic: a target is queued or drawing, or a run still holds pending spend. */
+export const hasActiveRun = (session: StudioSessionApi): boolean => {
+  if (pendingUsdOf(session) > 0) return true;
+  const doc = session.doc;
+  return (
+    doc.pages.some((p) => isBusy(p.render)) ||
+    doc.cast.some((c) => isBusy(c.sheet)) ||
+    doc.places.some((p) => isBusy(p.sheet)) ||
+    isBusy(doc.cover.render) ||
+    doc.style.options.some((o) => isBusy(o.render))
+  );
 };
 
 /** The chip a budget-cap notice carries: opens this comic's settings at the budget cap (ClientAction open_settings). */
