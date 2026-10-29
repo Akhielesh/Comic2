@@ -3,7 +3,7 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
-import { readShareVia, usePublicComic } from './usePublicComic';
+import { readShareBootNotFound, readShareVia, usePublicComic } from './usePublicComic';
 
 vi.mock('../studioApi', async (orig) => {
   const mod = await orig<typeof import('../studioApi')>();
@@ -67,6 +67,55 @@ describe('share-link channel attribution (?via=)', () => {
     expect(readShareVia('')).toBeUndefined();
   });
 
+});
+
+describe('the server’s dead-link boot ({"notFound":true})', () => {
+  const setBoot = (boot: unknown) => {
+    const el = document.createElement('script');
+    el.type = 'application/json';
+    el.id = 'ds-share-boot';
+    el.textContent = typeof boot === 'string' ? boot : JSON.stringify(boot);
+    document.body.appendChild(el);
+  };
+
+  it('is honoured for the link’s own address (/embed with embedding off, a dead slug): not_found at once, the API never asked', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}/embed`);
+    setBoot({ notFound: true });
+    render(<Probe />);
+    expect(screen.getByTestId('status')).toHaveTextContent('not_found');
+    await new Promise((r) => setTimeout(r, 5));
+    expect(screen.getByTestId('status')).toHaveTextContent('not_found');
+    expect(api.loadPublicComicBySlug).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'view' }));
+    expect(api.trackPublicEvent).toHaveBeenCalledTimes(1); // analytics are blind to live vs dead, as on the edge
+  });
+
+  it('a boot left in the page for another address never kills this comic’s reader', async () => {
+    window.history.replaceState(null, '', '/c/Zz3dEf6hIj9kLm2nP');
+    setBoot({ notFound: true });
+    render(<Probe />);
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('ready'));
+    expect(api.loadPublicComicBySlug).toHaveBeenCalledTimes(1);
+  });
+
+  it('readShareBootNotFound: only the exact marker, for the slug’s own path (with or without a tail)', () => {
+    setBoot({ notFound: true });
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}`)).toBe(true);
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}/embed`)).toBe(true);
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}/playtime-at-the-lake`)).toBe(true);
+    expect(readShareBootNotFound(SLUG, document, '/c/Zz3dEf6hIj9kLm2nP')).toBe(false);
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}x`)).toBe(false);
+    expect(readShareBootNotFound('', document, `/c/${SLUG}`)).toBe(false);
+    document.getElementById('ds-share-boot')!.remove();
+    setBoot({ slug: SLUG, card: { title: 'Live' } });
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}`)).toBe(false);
+    document.getElementById('ds-share-boot')!.remove();
+    setBoot('{not json');
+    expect(readShareBootNotFound(SLUG, document, `/c/${SLUG}`)).toBe(false);
+  });
+});
+
+describe('owner', () => {
   it('never sends for the owner, channel or not', async () => {
     window.history.replaceState(null, '', `/c/${SLUG}?via=copy`);
     render(<Probe owner />);

@@ -6,7 +6,7 @@
 // "This link isn't active") | error (network; "Couldn't open — Try again").
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { parseShareParams, SLUG_RE, type PublicComicPayload, type ShareChannel } from '../../../shared/comic/publication';
+import { parseShareParams, SHARE_PATH, SLUG_RE, type PublicComicPayload, type ShareChannel } from '../../../shared/comic/publication';
 import { loadPublicComicBySlug, trackPublicEvent, type PublicEventType } from '../studioApi';
 
 export interface ShareBoot {
@@ -58,6 +58,29 @@ export function readShareBoot(slug?: string, root: Document | undefined = typeof
 }
 
 /**
+ * The Pages Function's dead-link boot (`{"notFound":true}`, functions/_shared/shareHead.ts notFoundHead): it
+ * serves it for unknown, revoked, unpublished and suspended links, and for /embed when the author turned
+ * embedding off. Honoured only when this document was served for the slug's own address, so a boot
+ * left in the page can never kill another comic's reader; the API is not asked at all.
+ */
+export function readShareBootNotFound(
+  slug: string,
+  root: Document | undefined = typeof document === 'undefined' ? undefined : document,
+  path: string = typeof window === 'undefined' ? '' : window.location.pathname
+): boolean {
+  const el = root?.getElementById('ds-share-boot');
+  if (!el?.textContent || !SLUG_RE.test(slug)) return false;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(el.textContent);
+  } catch {
+    return false;
+  }
+  const own = SHARE_PATH(slug);
+  return isRecord(raw) && raw.notFound === true && (path === own || path.startsWith(`${own}/`));
+}
+
+/**
  * The share channel this page was opened from (`?via=<channel>`, sharing.md: analytics only), read once
  * per page load and allow-listed to SHARE_CHANNELS — the same set the edge accepts. Anything else
  * (`via=webdriver`, a typo) counts as direct.
@@ -93,8 +116,9 @@ export interface UsePublicComic {
 
 export function usePublicComic(slug: string, opts: { isOwner?: boolean } = {}): UsePublicComic {
   const [boot] = useState(() => readShareBoot(slug));
+  const [dead] = useState(() => readShareBootNotFound(slug));
   const [via] = useState(() => readShareVia());
-  const [state, setState] = useState<{ status: PublicComicStatus; data: PublicComicPayload | null; error: string | null }>({ status: 'loading', data: null, error: null });
+  const [state, setState] = useState<{ status: PublicComicStatus; data: PublicComicPayload | null; error: string | null }>({ status: dead ? 'not_found' : 'loading', data: null, error: null });
   const [attempt, setAttempt] = useState(0);
   const sent = useRef(new Set<string>());
 
@@ -102,7 +126,8 @@ export function usePublicComic(slug: string, opts: { isOwner?: boolean } = {}): 
   useEffect(() => stripViaFromAddress(), []);
 
   useEffect(() => {
-    if (!SLUG_RE.test(slug)) {
+    // A malformed slug, or the server already said the link is not active: no round-trip.
+    if (!SLUG_RE.test(slug) || dead) {
       setState({ status: 'not_found', data: null, error: null });
       return;
     }
@@ -116,7 +141,7 @@ export function usePublicComic(slug: string, opts: { isOwner?: boolean } = {}): 
         setState({ status: gone ? 'not_found' : 'error', data: null, error: gone ? null : err?.message || "Couldn't open this comic." });
       });
     return () => controller.abort();
-  }, [slug, attempt]);
+  }, [slug, attempt, dead]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
   const track = useCallback(
