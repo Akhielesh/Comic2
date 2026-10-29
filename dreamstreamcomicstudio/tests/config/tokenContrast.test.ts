@@ -396,7 +396,8 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   /**
    * Fills: a solid accent that carries white / on-accent text is routed to the fill tokens; a tint
    * (≤ 35 %) is a surface (accent text and ink on it are in the matrix above); the rest are marks
-   * that never carry text (a resize hairline, a toggle track, a cost bar, a draft dot).
+   * that never carry text (a resize hairline, a toggle track, a draft dot). Stage B's Insights cost bars
+   * (insights/OverviewTab.tsx) paint `bg-[var(--ds-accent)]`, whose remap applies only beside text.
    */
   const TEXT_BEARING: Record<string, 'fill' | 'hover'> = {
     'bg-[var(--ds-accent)]': 'fill',
@@ -408,7 +409,6 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   const DECORATIVE: Record<string, string> = {
     'hover:bg-[var(--ds-accent)]': 'chat/AIChatPlatform.tsx: the pane resize handle',
     'peer-checked:bg-[#D97757]': 'comicstudio/immersive/ReaderSettingsSheet.tsx: a switch track',
-    'bg-[#D97757]/60': 'comicstudio/breakdown/BreakdownCard.tsx: a cost bar',
     'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'
   };
 
