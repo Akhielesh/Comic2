@@ -317,4 +317,26 @@ describe('BoardPane feature tabs and dock (wave 2)', () => {
     expect(screen.getByRole('tablist', { name: 'Board' }).parentElement).not.toHaveAttribute('data-board-tabs');
     expect(screen.getByRole('region', { name: 'Waiting for your approval' }).className).toMatch(/\bmt-2\b/);
   });
+
+  // Atlas skin rule (review 2026-10-29): restyled chrome is drawn from the --ds-* tokens, never a hue.
+  it('the gate banner (one line and full) is drawn from the skin tokens, never a literal hue or rounded-2xl', () => {
+    const doc = makeSampleDoc((d) => {
+      d.gate = { id: 'g_t', action: { type: 'render_pages' }, title: 'Draw 2 pages', summary: '', estimateUsd: 0.1, imageCount: 2, model: 'x', createdAt: SAMPLE_NOW, status: 'open', reason: 'policy' };
+    });
+    for (const ff of [formFactorFor({ w: 360, h: 740, coarse: true }), formFactorFor({ w: 1440, h: 900, coarse: false })]) {
+      const { unmount } = render(
+        <FormFactorProvider value={ff}>
+          <BoardPane studio={makeStudio(doc)} />
+        </FormFactorProvider>
+      );
+      const gate = screen.getByRole('region', { name: 'Waiting for your approval' });
+      expect(gate.className).toContain('bg-[var(--ds-accent-soft)]');
+      expect(gate.className).toContain('rounded-[var(--ds-radius-panel)]');
+      expect(gate.className).not.toMatch(/rounded-2xl|#D97757/i);
+      // The one-line banner's own details toggle too (the shared Approve / Not now buttons are ui.tsx's).
+      const toggle = within(gate).queryByRole('button', { name: /Show details/ });
+      if (toggle) expect(toggle.className).toContain('ring-[var(--ds-ring)]');
+      unmount();
+    }
+  });
 });

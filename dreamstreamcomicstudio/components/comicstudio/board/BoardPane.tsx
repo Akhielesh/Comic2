@@ -26,7 +26,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController, StudioTab } from '../types';
 import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
-import { HAIRLINE } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, HAIRLINE, RADIUS_PANEL } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -121,7 +121,7 @@ export const GateBanner: React.FC<{
         role="region"
         aria-label="Waiting for your approval"
         data-gate-banner="compact"
-        className={cx('mx-2 shrink-0 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-2.5 text-[var(--ds-ink)]', dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
+        className={cx('mx-2 shrink-0 border border-[var(--ds-hairline)] px-2.5 text-[var(--ds-ink)]', RADIUS_PANEL, ACCENT_SOFT_BG, dense ? 'mt-1 py-0' : 'mt-2 py-1.5')}
       >
         <div className="flex min-w-0 items-center gap-2">
           <button
@@ -129,7 +129,7 @@ export const GateBanner: React.FC<{
             onClick={() => setDetails((d) => !d)}
             aria-expanded={details}
             title={`${gate.title} · ${price} · ${images}${overBudget}`}
-            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-[44px]"
+            className="flex min-h-[36px] min-w-0 flex-1 items-center gap-1 text-left text-[12.5px] leading-snug focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]"
           >
             <span className="min-w-0 truncate font-semibold">{gate.title}</span>
             <span className="min-w-0 max-w-[45%] shrink-0 truncate tabular-nums text-[var(--ds-muted)]">· {price}</span>
@@ -153,7 +153,7 @@ export const GateBanner: React.FC<{
       role="region"
       aria-label="Waiting for your approval"
       data-gate-banner="full"
-      className="mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-[#D97757]/35 bg-[#D97757]/10 px-3 py-2.5 sm:mx-4"
+      className={cx('mx-3 mt-3 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border border-[var(--ds-hairline)] px-3 py-2.5 sm:mx-4', RADIUS_PANEL, ACCENT_SOFT_BG)}
     >
       <div className="min-w-0 flex-1 text-[12.5px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">
         <span className="font-semibold">{gate.title}</span>

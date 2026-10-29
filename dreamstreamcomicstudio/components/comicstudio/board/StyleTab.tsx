@@ -20,6 +20,7 @@ import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
 import type { StudioController } from '../types';
+import { RADIUS_PILL } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
 import { LibraryImage } from '../library/LibraryImage';
 import { PresetThumb } from '../library/procedural/PresetThumb';
@@ -38,7 +39,7 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 const STATUS_TEXT: Record<StyleBible['status'], string> = { empty: 'Not chosen', drafted: 'Drafted', locked: 'Locked' };
 
-const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]';
 
 const PaletteEditor: React.FC<{ palette: string[]; onChange: (next: string[]) => void }> = ({ palette, onChange }) => {
   const [adding, setAdding] = useState('#d97757');
@@ -60,9 +61,9 @@ const PaletteEditor: React.FC<{ palette: string[]; onChange: (next: string[]) =>
         );
         const drop = () => onChange(palette.filter((_, j) => j !== i));
         return touch ? (
-          <span key={`${color}-${i}`} className="inline-flex h-11 items-center gap-0.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-1.5">
+          <span key={`${color}-${i}`} className={cx('inline-flex h-11 items-center gap-0.5 border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-1.5', RADIUS_PILL)}>
             {swatch}
-            <button type="button" aria-label={`Remove ${color}`} onClick={drop} className={cx('grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]', FOCUS)}>
+            <button type="button" aria-label={`Remove ${color}`} onClick={drop} className={cx('grid h-11 w-11 shrink-0 place-items-center text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]', RADIUS_PILL, FOCUS)}>
               <X className="h-4 w-4" aria-hidden />
             </button>
           </span>
@@ -81,7 +82,7 @@ const PaletteEditor: React.FC<{ palette: string[]; onChange: (next: string[]) =>
       })}
       {palette.length < 8 && (
         <label
-          className="relative grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-dashed border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-within:ring-2 focus-within:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
+          className="relative grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-dashed border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-within:ring-2 focus-within:ring-[var(--ds-ring)] coarse:h-11 coarse:w-11"
           title="Add a color"
         >
           <Plus className="h-3.5 w-3.5" aria-hidden />

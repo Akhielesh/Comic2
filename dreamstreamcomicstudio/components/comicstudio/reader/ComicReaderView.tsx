@@ -948,7 +948,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       // `scrollable-region-focusable`, ui-findings 2026-10-29 public/axe-public. The page, not the
       // box: in a ~100 px tall pane the box itself would be a sub-44 px "control".
       <div
-        className="relative w-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/40"
+        className="relative w-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)]"
         style={{ height: geo.book.y + geo.book.h + 12 }}
         tabIndex={0}
         role="region"
