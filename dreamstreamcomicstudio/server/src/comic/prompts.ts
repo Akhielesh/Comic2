@@ -622,7 +622,7 @@ export const describeLook = (c: Character, opts: { colors?: boolean } = {}): str
 // ── Identity anchors (plan §4.2: every panel's Who line restates ≤ 12 words of the look) ──
 
 const ANCHOR_WORDS = 12;
-const ANCHOR_PIECE_WORDS = 6;
+const ANCHOR_PIECE_WORDS = 7;
 /** Words a fragment never ends on ("black bun with a" → "black bun"). */
 const ANCHOR_TAIL_WORDS = new Set([
   'a', 'an', 'the', 'and', 'or', 'with', 'of', 'on', 'in', 'at', 'to', 'for', 'from', 'by', 'over', 'under', 'through',
@@ -651,7 +651,7 @@ const headBeforePreposition = (text: string, minHead: number): string => {
 /**
  * One short visual fragment of a look field: its first clause (comma parts join until the fragment
  * holds ≥ 3 words, so "fine, soft brown hair" stays whole), without a leading article, cut before
- * a prepositional tail when longer than 5 words, at most 6 words.
+ * a prepositional tail when longer than 7 words, at most 7 words.
  */
 const anchorPiece = (value?: string): string => {
   const clause = stripEnd(clean(value)).split(/\s*;\s*/)[0] || '';
@@ -661,7 +661,7 @@ const anchorPiece = (value?: string): string => {
     if (wordCount(text) >= 3) break;
   }
   text = text.replace(/^(?:a|an|the)\s+/i, '');
-  if (wordCount(text) > 5) text = headBeforePreposition(text, 3) || text;
+  if (wordCount(text) > ANCHOR_PIECE_WORDS) text = headBeforePreposition(text, 3) || text;
   return trimFragment(text, ANCHOR_PIECE_WORDS);
 };
 

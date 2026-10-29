@@ -343,9 +343,11 @@ describe('compilePage', () => {
     expect(job.prompt).toContain('- MAYA (Image 1): Wiry courier with restless eyes; 19-year-old female; hair: black bun with a pencil through it; outfit: faded red kurta, cargo pants; always visible: thin scar through left eyebrow.');
     expect(job.prompt).toMatch(/- ARJUN \(Image 2\): Broad spice merchant in his fifties; face: grey stubble beard\./);
     expect(job.prompt).toContain('- VENDOR (no reference — follow this description exactly): Toothless fruit seller in a green turban.');
-    // Traits are stated once — never repeated in the panel lines.
-    expect(job.prompt.split('thin scar through left eyebrow')).toHaveLength(2);
-    expect(job.prompt.split('green turban')).toHaveLength(2);
+    // The full look is stated once; panels only restate a short identity anchor in their Who line.
+    const outsideWho = job.prompt.split('\n').filter((l) => !l.startsWith('Who: ')).join('\n');
+    expect(outsideWho.split('thin scar through left eyebrow')).toHaveLength(2);
+    expect(outsideWho.split('green turban')).toHaveLength(2);
+    expect(job.prompt).not.toMatch(/^Who: .*thin scar through left eyebrow/m);
     // Pronouns follow the look.
     expect(job.prompt).toContain('CHARACTER SHEET: MAYA. Match her face');
     expect(job.prompt).toContain('CHARACTER SHEET: ARJUN. Match his face, facial hair');
@@ -374,7 +376,7 @@ describe('compilePage', () => {
         'PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).',
         'Camera: establishing shot (the whole location). Place: SPICE MARKET.',
         'Must show: Maya sprints into the market.',
-        'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar).',
+        'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar).',
         'Speaks: nobody (a silent panel); fill the panel with art to its borders.',
         'Detail: Shoppers scatter. Mood: frantic dawn.'
       ].join('\n')
@@ -384,7 +386,7 @@ describe('compilePage', () => {
         'PANEL 2 of 4 — box 2 in the layout (row 2, left; 47% wide × 31% tall).',
         'Camera: over-the-shoulder shot, low angle.',
         'Must show: Maya slams the ledger down.',
-        'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.',
+        'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.',
         "Speaks: MAYA — 1 balloon; ARJUN — 2 balloons; compose open background (sky, wall, floor or shadow) beside each speaker's head for their balloons."
       ].join('\n')
     );
@@ -399,7 +401,7 @@ describe('compilePage', () => {
     );
     // The action already places people → no conflicting position hints; one visible speaker gets room beside her head.
     expect(prompt).toContain(
-      'Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar); ARJUN (Image 2 — grey stubble beard).\nSpeaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.'
+      'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar); ARJUN (Image 2 — grey stubble beard).\nSpeaks: MAYA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.'
     );
     // Measured proportions under the blueprint.
     expect(prompt).toContain(
@@ -423,10 +425,10 @@ describe('compilePage', () => {
     );
     // Panel 2: the action names Arjun as the viewer → he leaves the drawn cast and speaks off-panel.
     expect(prompt).toContain(
-      "Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar); seen through ARJUN's eyes (do not draw ARJUN; at most a hand at the frame edge).\nOFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon."
+      "Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar); seen through ARJUN's eyes (do not draw ARJUN; at most a hand at the frame edge).\nOFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon."
     );
     // Panel 3: a POV shot that names no viewer keeps the planned cast.
-    expect(prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.\nSpeaks: ARJUN — 1 balloon;');
+    expect(prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar), on the left; ARJUN (Image 2 — grey stubble beard), on the right.\nSpeaks: ARJUN — 1 balloon;');
     // In-art pages: the off-panel balloon's tail points out of the panel.
     const inArt = compilePage(baseDoc((d) => (d.format.lettering = 'in_art')), pg).prompt;
     expect(inArt).toContain('OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon; its tail points out of the panel.');
@@ -434,10 +436,10 @@ describe('compilePage', () => {
 
   it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {
     const doc = baseDoc();
-    expect(identityAnchor(doc.cast[0])).toBe('black bun with a pencil, faded red kurta, thin scar');
+    expect(identityAnchor(doc.cast[0])).toBe('black bun with a pencil through it, faded red kurta, thin scar');
     // No hair/outfit/marks/props: the face, else the summary's head.
     expect(identityAnchor(doc.cast[1])).toBe('grey stubble beard');
-    expect(identityAnchor(doc.cast[2])).toBe('toothless fruit seller');
+    expect(identityAnchor(doc.cast[2])).toBe('toothless fruit seller in a green turban');
     const duck = character('pip', 'Pip', 'support', {
       kind: 'animal',
       look: { summary: 'A tiny fluffy yellow duckling with a bright orange bill', marks: 'a little tuft of down sticking up on top of the head', palette: '#ffd60a, orange' }
@@ -663,7 +665,7 @@ describe('compilePage', () => {
     expect(job.prompt).not.toContain('Image 1 — black bun');
     expect(job.prompt).toContain('hair: black bun with a pencil through it');
     // A normal page keeps them.
-    expect(compilePage(doc, page(1, [panel(1, ['maya'])])).prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar).');
+    expect(compilePage(doc, page(1, [panel(1, ['maya'])])).prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar).');
   });
 
   it('layout guide (COMIC_LAYOUT_GUIDE, off by default): Image 1 is PAGE LAYOUT GUIDE in one object slot, boxes are named in the guide', () => {
@@ -1176,7 +1178,7 @@ describe('non-human cast, groups and props (director.md §3.5)', () => {
     expect(job.prompt).toContain('- FROG (no reference — follow this description exactly): small green frog; kind: animal.');
     expect(job.prompt).toContain('PROPS — the same object, colors and details every time it appears:\n- RED KITE (no reference — follow this description exactly): a red diamond kite with a long tail.');
     expect(job.prompt).toContain(
-      'Who: BABY ANU (Image 1 — chubby toddler in a yellow romper), on the far left; DUCKLINGS ×3 (Image 2 — fluffy yellow ducklings), left of center; FROG (small green frog), right of center. Props: RED KITE (red diamond kite).'
+      'Who: BABY ANU (Image 1 — chubby toddler in a yellow romper), on the far left; DUCKLINGS ×3 (Image 2 — fluffy yellow ducklings), left of center; FROG (small green frog), right of center. Props: RED KITE (red diamond kite with a long tail).'
     );
     expect(job.prompt).toContain('CHARACTER SHEET: DUCKLINGS. Match their species, face, markings, proportions and colors exactly. It shows one member of the group of 3: draw all 3 to this exact design.');
     expect(legendLabels(job.prompt)).toEqual(labelsOf(job.references));
