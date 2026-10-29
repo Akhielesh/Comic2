@@ -8,6 +8,7 @@
 import { createKeyedRegistry, type OpSanitizer, type PatchScreen } from '../extensions.js';
 import { I18N_SANITIZERS } from './i18n.js';
 import { LETTERING_SANITIZERS } from './lettering.js';
+import { MODELS_SANITIZERS } from './models.js';
 import { READER_SANITIZERS } from './reader.js';
 import { REFS_SANITIZERS } from './refs.js';
 import { SAFETY_SANITIZERS, safetyPatchScreen } from './safety.js';
@@ -23,7 +24,8 @@ const registry = createKeyedRegistry<OpSanitizer>({
   what: 'op sanitizer',
   keyOf: (s) => s.op,
   reserved: CORE_PATCH_OPS,
-  lists: () => [LETTERING_SANITIZERS, TIMELINE_SANITIZERS, SAFETY_SANITIZERS, I18N_SANITIZERS, REFS_SANITIZERS, READER_SANITIZERS]
+  // MODELS_SANITIZERS is empty on purpose (image_model is never client-patchable; models.md §3.4) and listed for symmetry.
+  lists: () => [LETTERING_SANITIZERS, TIMELINE_SANITIZERS, SAFETY_SANITIZERS, I18N_SANITIZERS, REFS_SANITIZERS, READER_SANITIZERS, MODELS_SANITIZERS]
 });
 
 /** op → sanitizer for every feature op (null-prototype object). */
