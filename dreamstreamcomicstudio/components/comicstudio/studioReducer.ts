@@ -104,6 +104,11 @@ export interface StreamInfo {
   errored?: string;
   /** Its server code (COOLDOWN, CONTENT_POLICY, …). */
   erroredCode?: string;
+  /**
+   * Message streams only: the director's reply has landed. The stream stays open for the renders
+   * the turn started (live progress), but the server accepts the next message, so the composer does.
+   */
+  replied?: boolean;
 }
 
 /** A user message shown immediately, until the server's `message` op for it lands. */
@@ -121,6 +126,8 @@ export interface PendingUserMessage {
   inboxPaths?: string[];
   attachmentTargets?: AttachmentTarget[];
   focus?: StudioFocus;
+  /** The option card the message answers (OptionCardAnswer in useStudio), re-sent by "Try again". */
+  card?: { id: string; choiceIds?: string[]; custom?: string };
 }
 
 export interface OptimisticPatch {
@@ -246,8 +253,9 @@ export const needsRefresh = (state: StudioState): boolean =>
 export const visibleStreams = (state: StudioState): StreamInfo[] =>
   Object.values(state.streams).filter((s) => s.kind !== 'patch');
 
+/** A director turn is in flight: a message stream whose reply has not landed yet (renders may go on after). */
 export const isMessageBusy = (state: StudioState): boolean =>
-  Object.values(state.streams).some((s) => s.kind === 'message');
+  Object.values(state.streams).some((s) => s.kind === 'message' && !s.replied);
 
 export const isRenderBusy = (status?: string): boolean => status === 'queued' || status === 'rendering';
 
@@ -453,6 +461,7 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
 
   let drafts = state.drafts;
   let pendingMessage = state.pendingMessage;
+  let replyLanded = false;
   for (const op of event.ops) {
     if (op.op === 'message') {
       // The committed assistant text replaces the streamed draft once it has text.
@@ -462,11 +471,21 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
       }
       // Our optimistic user bubble is replaced by the server's copy.
       if (pendingMessage && op.msg.role === 'user' && !knownIds.has(op.msg.id)) pendingMessage = null;
+      // The director's reply: a NEW assistant message with text, committed by the turn itself and
+      // delivered by a stream (a job notice carries origin 'job'; an older message re-committed,
+      // e.g. with an option answer recorded on its card, is not new; server_ops have no stream).
+      if (streamId && op.msg.role === 'assistant' && !event.origin && !knownIds.has(op.msg.id) && landedText(op.msg)) replyLanded = true;
     } else if (op.op === 'message_patch' && typeof op.patch.text === 'string' && op.patch.text.trim() && drafts[op.id] !== undefined) {
       drafts = { ...drafts };
       delete drafts[op.id];
     }
   }
+  // One director turn runs at a time, and every open stream delivers every batch (whichever gets
+  // it first applies it), so a landed reply answers every message stream still waiting for one.
+  const streams =
+    replyLanded && Object.values(state.streams).some((s) => s.kind === 'message' && !s.replied)
+      ? Object.fromEntries(Object.entries(state.streams).map(([id, s]) => [id, s.kind === 'message' && !s.replied ? { ...s, replied: true } : s]))
+      : state.streams;
 
   const origin = event.origin;
   const label = typeof event.label === 'string' && event.label.trim() ? event.label.trim() : undefined;
@@ -479,6 +498,7 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
   return withView({
     ...state,
     base: nextBase,
+    streams,
     drafts,
     pendingMessage,
     behindRev: Math.max(state.behindRev, event.rev),

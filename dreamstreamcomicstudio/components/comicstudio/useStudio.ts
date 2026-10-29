@@ -87,8 +87,25 @@ import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
 
+/**
+ * The option card a message answers, named by the card (OptionsCard: `send(reply, { card: { id,
+ * choiceIds } })`, or `custom` with a typed answer): the server records the answer on THAT card —
+ * a typed answer too, and the right card when two share labels. Without it the server matches the
+ * text against the open cards. (Additive request field `card`; see routes/comic.ts parseOptionAnswer.)
+ */
+export interface OptionCardAnswer {
+  id: string;
+  choiceIds?: string[];
+  custom?: string;
+}
+
+/** send()'s options: SendOptions plus the option card the message answers. */
+export type MessageSendOptions = SendOptions & { card?: OptionCardAnswer };
+
 /** Extra state the conversation pane uses on top of the shared StudioController contract. */
 export interface ComicStudioController extends StudioController {
+  /** As StudioController's, plus the option card the message answers (MessageSendOptions.card). */
+  send(text: string, opts?: MessageSendOptions | PendingAttachment[]): Promise<void>;
   /** A director turn is streaming (the composer waits; actions may still run). */
   messageBusy: boolean;
   /** The user's message, shown until the server records it (or marked failed). */
@@ -238,13 +255,16 @@ export function useStudio(projectId: string): ComicStudioController {
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
   const controllersRef = useRef(new Map<string, { ctrl: AbortController; kind: StreamKind }>());
-  const messageInFlightRef = useRef(false);
+  /** The message stream whose director reply is still awaited (null: the composer may send). */
+  const messageInFlightRef = useRef<string | null>(null);
   const actionsInFlightRef = useRef(new Set<string>());
   const patchQueueRef = useRef<QueuedPatch[]>([]);
   const patchInFlightRef = useRef(false);
   const patchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** What the last Stop stopped (the server decides the same way): the director turn in flight, or all drawing. */
+  const cancelScopeRef = useRef<'turn' | 'drawing'>('drawing');
 
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
@@ -306,7 +326,7 @@ export function useStudio(projectId: string): ComicStudioController {
     const d = guarded(generation);
     const ctrl = new AbortController();
     abortStreams();
-    messageInFlightRef.current = false;
+    messageInFlightRef.current = null;
     actionsInFlightRef.current.clear();
     patchQueueRef.current.splice(0).forEach((p) => p.resolve());
     patchInFlightRef.current = false;
@@ -635,9 +655,9 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Messages ───────────────────────────────────────────────────────────────
 
   const send = useCallback(
-    async (text: string, opts?: SendOptions | PendingAttachment[]) => {
+    async (text: string, opts?: MessageSendOptions | PendingAttachment[]) => {
       // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
-      const o: SendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
+      const o: MessageSendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
       const clean = (typeof text === 'string' ? text : '').trim();
       const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
       const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
@@ -648,10 +668,11 @@ export function useStudio(projectId: string): ComicStudioController {
         return;
       }
       if (messageInFlightRef.current || !stateRef.current.base) return;
-      messageInFlightRef.current = true;
       const streamId = localId('stream');
+      messageInFlightRef.current = streamId;
       const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
       const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
+      const card = o.card && typeof o.card.id === 'string' && o.card.id ? o.card : undefined;
       dispatch({
         type: 'message_pending',
         message: {
@@ -662,6 +683,7 @@ export function useStudio(projectId: string): ComicStudioController {
           ...(inbox.length ? { inboxPaths: inbox } : {}),
           ...(targets ? { attachmentTargets: targets } : {}),
           ...(focus ? { focus } : {}),
+          ...(card ? { card } : {}),
           at: Date.now(),
           status: 'sending',
           streamId
@@ -669,20 +691,19 @@ export function useStudio(projectId: string): ComicStudioController {
       });
       const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
+      const request: StreamRequest & { card?: OptionCardAnswer } = {
+        kind: 'message',
+        text: clean,
+        ...(attachments.length ? { attachments } : {}),
+        ...(targets ? { attachmentTargets: targets } : {}),
+        ...(focus ? { focus } : {}),
+        ...(card ? { card } : {})
+      };
       try {
-        await runStream(
-          'message',
-          {
-            kind: 'message',
-            text: clean,
-            ...(attachments.length ? { attachments } : {}),
-            ...(targets ? { attachmentTargets: targets } : {}),
-            ...(focus ? { focus } : {})
-          },
-          { streamId }
-        );
+        await runStream('message', request, { streamId });
       } finally {
-        if (generation === generationRef.current) messageInFlightRef.current = false;
+        // Only this stream's own marker: a later message may already be in flight (see below).
+        if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
       }
     },
     [runStream, historyStep]
@@ -696,7 +717,8 @@ export function useStudio(projectId: string): ComicStudioController {
       attachments: pending.attachments,
       ...(pending.inboxPaths?.length ? { inboxPaths: pending.inboxPaths } : {}),
       ...(pending.attachmentTargets?.length ? { attachmentTargets: pending.attachmentTargets } : {}),
-      ...(pending.focus ? { focus: pending.focus } : {})
+      ...(pending.focus ? { focus: pending.focus } : {}),
+      ...(pending.card ? { card: pending.card } : {})
     });
   }, [send]);
 
@@ -710,8 +732,10 @@ export function useStudio(projectId: string): ComicStudioController {
     const d = guarded(generation);
     d({ type: 'cancel_start' });
     if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
-    // The server stops the director and queued renders; images already drawing finish
-    // (they are paid) and the streams close once they land.
+    // The server stops the director turn in flight and what it queued (renders an earlier turn
+    // started keep drawing) — or, with no turn in flight, every queued render. Images already
+    // drawing finish (they are paid) and the streams close once they land.
+    cancelScopeRef.current = isMessageBusy(stateRef.current) ? 'turn' : 'drawing';
     cancelTimerRef.current = setTimeout(() => d({ type: 'cancel_end' }), CANCEL_SAFETY_MS);
     try {
       await cancelStudio(projectRef.current);
@@ -1117,6 +1141,20 @@ export function useStudio(projectId: string): ComicStudioController {
 
   const busy = visibleStreams(state).length > 0;
   const messageBusy = isMessageBusy(state);
+  // The composer unlocks as soon as the director's reply lands (the reducer marks the message
+  // stream `replied`) while that stream stays open for the renders it started: the server accepts
+  // the next message then, so the in-flight guard follows the reducer, not the stream's end.
+  useEffect(() => {
+    if (messageBusy) return;
+    messageInFlightRef.current = null;
+    // A Stop of the director is done once no turn is awaited: renders an earlier turn started keep
+    // drawing on their own stream, so "Stopping…" must not linger over them (nor hide their Stop).
+    if (stateRef.current.cancelling && cancelScopeRef.current === 'turn') {
+      if (cancelTimerRef.current) clearTimeout(cancelTimerRef.current);
+      cancelTimerRef.current = null;
+      dispatch({ type: 'cancel_end' });
+    }
+  }, [messageBusy]);
   const { canUndo, canRedo, undoLabel, redoLabel } = undoApi;
 
   return useMemo(
