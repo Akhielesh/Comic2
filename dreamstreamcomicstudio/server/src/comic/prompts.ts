@@ -1089,13 +1089,22 @@ const speakerLabel = (doc: ComicDoc, line: Line): string => {
 const stripCaseWords = (hint: string): string =>
   clean(hint.replace(/\s*\bin\s+upper-?case\b/gi, '').replace(/\b(?:upper-?case|lower-?case|mixed-?case)\s+/gi, ''));
 
+/**
+ * The no-blank-bars rule (plan §4.2; panels challenge R4): the old "leave natural empty space near the
+ * top of each panel" produced flat white bars that balloons never filled — even on panels with no
+ * lines. Overlay pages now ask for open BACKGROUND beside each speaker (the panel's Speaks line) and
+ * forbid empty shapes inside panels; "inside a panel" keeps the white gutters the layout asks for.
+ */
+export const NO_BLANK_SHAPES = 'Never draw blank boxes, empty bars or white strips inside a panel.';
+const OVERLAY_BALLOONS =
+  "Balloons and captions are added later by software. Where a panel's Speaks line names someone, compose open background (sky, wall, floor or shadow) beside that speaker's head.";
+
 const letteringBlock = (doc: ComicDoc, page: Page): string => {
   const lettered = page.panels.filter((p) => p.lines.some((l) => clean(l.text)));
   if (doc.format.lettering !== 'in_art') {
     const base = 'LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects.';
-    if (!lettered.length) return `${base} This page is wordless.`;
-    const which = lettered.length === page.panels.length ? 'each panel' : `panel${lettered.length > 1 ? 's' : ''} ${joinList(lettered.map((p) => String(p.n)))}`;
-    return `${base} Leave natural empty space near the top of ${which} for balloons that will be added later; keep faces and key action out of that space.`;
+    if (!lettered.length) return `${base} This page is wordless. ${NO_BLANK_SHAPES}`;
+    return `${base} ${OVERLAY_BALLOONS} ${NO_BLANK_SHAPES}`;
   }
   if (!lettered.length) return 'LETTERING: This page is wordless — draw no text, balloons, captions or sound effects anywhere.';
   const kinds = new Set<LineKind>();
@@ -1128,7 +1137,7 @@ const letteringBlock = (doc: ComicDoc, page: Page): string => {
   return [
     `LETTERING: Letter the page like a professional comic: ${joinList(shapes)}. ${font}${language} Place balloons in ${order} reading order within each panel and never over faces. Spell every line exactly as written:`,
     ...lines,
-    'No other text anywhere on the page.'
+    'No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips inside a panel.'
   ].join('\n');
 };
 

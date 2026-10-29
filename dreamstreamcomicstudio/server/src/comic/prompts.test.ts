@@ -328,7 +328,7 @@ describe('compilePage', () => {
     expect(prompt).toContain('Arjun steps to the left of Maya. Characters: MAYA, ARJUN.');
   });
 
-  it('overlay lettering: text-free instruction with balloon space, and no dialogue in the prompt', () => {
+  it('overlay lettering: text-free, open background beside speakers, never blank bars, and no dialogue in the prompt', () => {
     const doc = baseDoc();
     const pg = page(1, [
       panel(1, ['maya'], { lines: [line('speech', 'SECRET-DIALOGUE-ONE', 'maya')] }),
@@ -337,10 +337,17 @@ describe('compilePage', () => {
     ]);
     const prompt = compilePage(doc, pg).prompt;
     expect(prompt).toContain('Do not draw any text, letters, speech balloons, captions or sound effects.');
-    expect(prompt).toContain('Leave natural empty space near the top of panels 1 and 3 for balloons that will be added later; keep faces and key action out of that space.');
+    // The blank-bar wording (panels challenge R4) is gone; open background beside the speaker replaces it.
+    expect(prompt).not.toContain('Leave natural empty space');
+    expect(prompt).not.toContain('keep faces and key action out of that space');
+    expect(prompt).toContain("Balloons and captions are added later by software. Where a panel's Speaks line names someone, compose open background (sky, wall, floor or shadow) beside that speaker's head.");
+    expect(prompt).toContain('Never draw blank boxes, empty bars or white strips inside a panel.');
     expect(prompt).not.toContain('SECRET-DIALOGUE-ONE');
     expect(prompt).not.toContain('SECRET-CAPTION');
     expect(prompt).not.toContain('Spell every line');
+    // A wordless overlay page still forbids empty shapes (b4b5774f p5's bar sat on a panel with no lines).
+    const wordless = compilePage(doc, page(2, [panel(1, ['maya']), panel(2, ['arjun'])])).prompt;
+    expect(wordless).toContain('This page is wordless. Never draw blank boxes, empty bars or white strips inside a panel.');
   });
 
   it('in-art lettering: every line verbatim per panel with speaker and kind, quotes escaped', () => {
