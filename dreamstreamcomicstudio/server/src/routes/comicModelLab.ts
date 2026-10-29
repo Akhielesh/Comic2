@@ -28,6 +28,11 @@ export interface ComicModelLabRouterDeps {
   requireAdmin?: RequestHandler;
 }
 
+/** An unexpected failure. A paid result whose record could not be written stays 'running' (then 'interrupted'), never
+ *  'done' — so the copy promises only what a refresh really shows. */
+export const LAB_INTERNAL_COPY =
+  "The Model Lab couldn't finish that. If a check was running, refresh: it shows as running or interrupted, and its quote keeps counting against today's cap.";
+
 const PAIR_ID_RE = /^[a-z0-9-]{1,40}$/;
 const RUN_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
 
@@ -44,7 +49,7 @@ function sendError(res: Response, err: unknown, next: NextFunction): void {
     return;
   }
   logger.error('comic_model_lab_failed', { message: String((err as Error)?.message || err).slice(0, 200) });
-  res.status(500).json({ error: { code: 'INTERNAL', message: "The Model Lab couldn't finish that. If a check was running, its result shows after a refresh." } });
+  res.status(500).json({ error: { code: 'INTERNAL', message: LAB_INTERNAL_COPY } });
 }
 
 const signedIn: RequestHandler = (req, res, next) => {

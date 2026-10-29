@@ -5,6 +5,7 @@
 // until the owner votes. Fakes only: the "provider" is a scripted fetch; nothing here spends.
 import sharp from 'sharp';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { logger } from '../../lib/logger.js';
 import { __resetImageClientForTests } from '../imageClient.js';
 import { fakeModelHealth } from './health.fakes.js';
 import { registryPriceBook } from './index.js';
@@ -471,6 +472,40 @@ describe('running a check', () => {
     expect(run.status).toBe('ok');
     expect(run.facts.recordedCall).toBe(false);
     expect(h.store.runs[0].costUsd).toBe(0.0756);
+  });
+
+  it('if both finish writes fail after a paid call, every fact goes to the error log before the failure is answered', async () => {
+    const h = harness();
+    let attempts = 0;
+    h.store.finish = async () => {
+      attempts += 1;
+      throw new Error('comic_model_lab_runs unreachable');
+    };
+    const logged = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    await expect(runItem(h, 'd1-nano-banana-2.1-4k')).rejects.toThrow('comic_model_lab_runs unreachable');
+    expect(attempts).toBe(2);
+    expect(h.calls).toHaveLength(1);
+    const path = [...h.storage.objects.keys()][0];
+    expect(logged).toHaveBeenCalledWith(
+      'comic_model_lab_finish_failed',
+      expect.objectContaining({
+        id: h.store.runs[0].id,
+        status: 'ok',
+        costUsd: 0.0756,
+        costReported: true,
+        providerModelVersion: 'google/gemini-nano-banana-2.1-20261006',
+        generationId: 'gen-123',
+        imagePath: path,
+        width: 200,
+        height: 300,
+        bytes: png2x3.byteLength,
+        recordedCall: true
+      })
+    );
+    // The row stays 'running' (then 'interrupted'): its quote keeps counting against the cap, as the 500 copy says.
+    expect(h.store.runs[0]).toMatchObject({ status: 'running', quotedUsd: 0.113 });
+    expect(await h.store.spent('2026-10-29')).toBe(0.113);
+    logged.mockRestore();
   });
 });
 

@@ -12,7 +12,7 @@ import { __resetImageClientForTests } from '../comic/imageClient.js';
 import { fakeModelHealth } from '../comic/models/health.fakes.js';
 import { registryPriceBook } from '../comic/models/index.js';
 import { createMemoryLabStore, createModelLab, labItems, type LabOverview, type ModelLab } from '../comic/models/lab.js';
-import { MODEL_LAB_BASE, comicModelLabRouter, createComicModelLabRouter } from './comicModelLab.js';
+import { LAB_INTERNAL_COPY, MODEL_LAB_BASE, comicModelLabRouter, createComicModelLabRouter } from './comicModelLab.js';
 import { mountComicOwnerRoutes } from './comicMounts.js';
 
 const ADMIN = '00000000-0000-4000-8000-0000000000a1';
@@ -214,6 +214,19 @@ describe('running checks over HTTP', () => {
     expect([voted.body.a.run.model.nickname, voted.body.b.run.model.nickname].sort()).toEqual(['Qwen 2.1 Turbo', 'Seedream 5 Flash']);
     expect(await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'A', seen: pair.seen } })).toMatchObject({ status: 409, body: { error: { code: 'ALREADY_VOTED' } } });
     expect(await call('/api/comic/models/lab/blind/NOT_A_PAIR!/vote', { method: 'POST', headers: admin, body: { pick: 'A' } })).toMatchObject({ status: 404 });
+  });
+
+  it('an unexpected failure answers 500 with copy that promises only what a refresh shows', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    lab = { ...makeLab(), run: async () => Promise.reject(new Error('comic_model_lab_runs unreachable')) };
+    const r = await call('/api/comic/models/lab/runs', { method: 'POST', headers: admin, body: { itemId: 'd1-nano-banana-2.1-4k', idempotencyKey: key(), ack: true, quotedUsd: 0.113 } });
+    expect(r).toMatchObject({ status: 500, body: { error: { code: 'INTERNAL', message: LAB_INTERNAL_COPY } } });
+    expect(LAB_INTERNAL_COPY).toBe(
+      "The Model Lab couldn't finish that. If a check was running, refresh: it shows as running or interrupted, and its quote keeps counting against today's cap."
+    );
+    expect(r.cache).toBe('private, no-store');
+    expect(JSON.stringify(r.body)).not.toContain('unreachable'); // the internal message is logged, never answered
+    quiet.mockRestore();
   });
 
   it('watermark checkbox on a D3 result', async () => {

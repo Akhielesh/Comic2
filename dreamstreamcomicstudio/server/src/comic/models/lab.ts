@@ -1582,10 +1582,34 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       }
 
       const patch = { status: outcome.status, costUsd: outcome.costUsd, providerModel: outcome.providerModel, result: facts, finishedAt: new Date(deps.now()).toISOString() };
-      // The call is made and paid for: try twice to record it (a row left 'running' keeps holding its quote).
-      const finished = await store.finish(reserved.row.id, patch).catch((err) => {
+      // The call is made and paid for: try twice to record it (a row left 'running' keeps holding its quote). If both
+      // writes fail, the facts would survive nowhere else (comic_image_calls has no version, pixels or preview path),
+      // so they go to the error log before the failure is answered.
+      const finished = await store.finish(reserved.row.id, patch).catch(async (err) => {
         logger.warn('comic_model_lab_finish_retry', { id: reserved.row.id, message: String((err as Error)?.message || err).slice(0, 200) });
-        return store.finish(reserved.row.id, patch);
+        try {
+          return await store.finish(reserved.row.id, patch);
+        } catch (again) {
+          logger.error('comic_model_lab_finish_failed', {
+            id: reserved.row.id,
+            check: item.check,
+            item: item.id,
+            status: patch.status,
+            quotedUsd: quote.usd,
+            costUsd: patch.costUsd,
+            costReported: facts.costReported ?? false,
+            providerModelVersion: facts.providerModelVersion ?? null,
+            generationId: facts.generationId ?? null,
+            imagePath: facts.imagePath ?? null,
+            width: facts.width ?? null,
+            height: facts.height ?? null,
+            bytes: facts.bytes ?? null,
+            latencyMs: facts.latencyMs ?? null,
+            recordedCall: facts.recordedCall ?? false,
+            message: String((again as Error)?.message || again).slice(0, 200)
+          });
+          throw again;
+        }
       });
       try {
         await deps.audit?.({
