@@ -7,15 +7,22 @@
 // stays RESERVED, and the usage budget stops counting it after 20 minutes
 // (server/sql/user_usage_budgets.sql) — paid spend that silently never counts.
 //
-// This sweep runs from the nightly reconciliation job (jobs/dailyBillingReconciliation.ts, a
-// GitHub Actions cron that talks to the database directly — it never wakes the API container).
+// This sweep runs when the reconciliation job runs (jobs/dailyBillingReconciliation.ts:
+// `npm run billing:reconcile`; scheduled once the root workflow exists — the Daily Billing
+// Reconciliation workflow under dreamstreamcomicstudio/.github/ is never discovered by GitHub). It
+// talks to the database directly and never wakes the API container.
 // For each usage-budget hold of the comic studio, /api/text or /api/image older than 20 minutes:
 //   - a SETTLE ledger entry already exists (the settle's first write landed): settle the row at that
 //     entry's real provider cost;
 //   - a RELEASE ledger entry already exists (the call failed and was released): mark it RELEASED —
 //     nothing was spent, nothing is charged;
-//   - otherwise: settle at its HELD provider cost, with the ledger entry a normal usage-budget settle
-//     writes (walletSkipped: no wallet credit moves).
+//   - no RESERVE ledger entry either (usageEnforcer.reserveForOperation: the budget RPC inserted the
+//     row, then the RESERVE ledger write failed, so the call was refused before any provider ran and
+//     the user was told nothing was spent; the best-effort release failed too): mark it RELEASED
+//     (releaseReason 'reserve_incomplete') — never charged;
+//   - otherwise (the reserve completed, so the provider may have run): settle at its HELD provider
+//     cost, with the ledger entry a normal usage-budget settle writes (walletSkipped: no wallet
+//     credit moves).
 // The row update is a compare-and-set on status = 'RESERVED', so a second run settles nothing and a
 // row settled meanwhile is untouched; the usage budget counts SETTLED rows, so it reflects each hold
 // exactly once. Wallet (non-usage-budget) holds are never listed: their settle moves wallet credits
@@ -26,7 +33,7 @@ import { logger } from '../lib/logger.js';
 
 /** A hold younger than this may still be settling (usage_budget_try_reserve counts it as in flight). */
 export const STRANDED_HOLD_MIN_AGE_MINUTES = 20;
-/** Default look-back: a week covers missed nightly runs without reaching back into history. */
+/** Default look-back: a week covers missed or late runs without reaching back into history. */
 export const STRANDED_HOLD_DEFAULT_MAX_AGE_HOURS = 24 * 7;
 const DEFAULT_LIMIT = 500;
 
@@ -47,10 +54,19 @@ export interface StrandedHoldRow {
 }
 
 export interface LedgerDecision {
-  entryType: 'SETTLE' | 'RELEASE';
+  /**
+   * The strongest ledger entry for the reservation: SETTLE, else RELEASE, else RESERVE (a reserve with no
+   * decision yet).
+   */
+  entryType: 'SETTLE' | 'RELEASE' | 'RESERVE';
   providerCostUsd?: number | null;
   billableUsd?: number | null;
   metadata?: Record<string, unknown>;
+  /**
+   * A RESERVE ledger entry exists: the reserve completed, so the provider call may have run. Without one
+   * (and no SETTLE) the call was refused before any provider ran — released, never charged.
+   */
+  reserved?: boolean;
 }
 
 export interface StrandedHoldStore {
@@ -58,7 +74,10 @@ export interface StrandedHoldStore {
   listStranded(opts: { before: string; from: string; limit: number }): Promise<StrandedHoldRow[]>;
   /** How many such holds are older than `from` (left alone, reported). */
   countOlder(from: string): Promise<number>;
-  /** The settle/release decision a ledger entry already recorded, by reservation id (SETTLE wins). */
+  /**
+   * The ledger entries of each reservation id that has any: the settle/release decision already recorded
+   * (SETTLE wins over RELEASE, either over a lone RESERVE) and whether a RESERVE entry exists (`reserved`).
+   */
   ledgerDecisions(reservationIds: string[]): Promise<Map<string, LedgerDecision>>;
   /** Patch the cost event only while it is still RESERVED; true when this call changed it. */
   finishIfReserved(key: { reservationId: string; userId: string }, patch: Record<string, unknown>): Promise<boolean>;
@@ -83,6 +102,8 @@ export interface StrandedHoldSweepResult {
   settledFromLedger: number;
   settledUsd: number;
   released: number;
+  /** Of `released`: holds with no RESERVE ledger entry (the reserve never completed; nothing ran). */
+  releasedUnreserved: number;
   /** Settled or released by someone else between the read and the write. */
   raced: number;
   /** Usage holds of other surfaces (chat), left alone. */
@@ -137,6 +158,7 @@ export async function sweepStrandedHolds(input: {
     settledFromLedger: 0,
     settledUsd: 0,
     released: 0,
+    releasedUnreserved: 0,
     raced: 0,
     otherSurface: 0,
     failed: 0,
@@ -171,6 +193,19 @@ export async function sweepStrandedHolds(input: {
         continue;
       }
       const fromLedger = decision?.entryType === 'SETTLE';
+      if (!fromLedger && decision?.reserved !== true) {
+        // No RESERVE entry: the reserve failed after the budget row was inserted, the call was refused
+        // ("nothing was spent") and no provider ran. Never charge it.
+        const done = await input.store.finishIfReserved(key, {
+          status: 'RELEASED',
+          metadata: { ...base, releasedBy: 'sweep', sweptAt, releaseReason: 'reserve_incomplete' }
+        });
+        if (done) {
+          res.released += 1;
+          res.releasedUnreserved += 1;
+        } else res.raced += 1;
+        continue;
+      }
       const providerCostUsd = round6((fromLedger ? finite(decision?.providerCostUsd) : undefined) ?? finite(row.provider_cost_usd) ?? 0);
       const billableUsd = round6((fromLedger ? finite(decision?.billableUsd) : undefined) ?? finite(row.billable_usd) ?? 0);
       const actualCt = Math.max(0, Math.floor((fromLedger ? finite(decision?.metadata?.actualCt) : undefined) ?? finite(row.estimated_ct) ?? 0));
@@ -223,6 +258,8 @@ export async function sweepStrandedHolds(input: {
 
 const COST_EVENT_COLUMNS = 'id, user_id, reservation_id, operation, provider, model, project_id, estimated_ct, provider_cost_usd, billable_usd, metadata, created_at';
 const ID_CHUNK = 100;
+/** Which ledger entry decides a reservation: a settle, else a release, else a reserve alone. */
+const LEDGER_RANK: Record<LedgerDecision['entryType'], number> = { RESERVE: 0, RELEASE: 1, SETTLE: 2 };
 
 /** The production store: the service-role client over generation_cost_events + token_ledger_entries. */
 export const supabaseStrandedHoldStore = (admin: SupabaseClient): StrandedHoldStore => {
@@ -273,16 +310,24 @@ export const supabaseStrandedHoldStore = (admin: SupabaseClient): StrandedHoldSt
           .from('token_ledger_entries')
           .select('reservation_id, entry_type, provider_cost_usd, billable_usd, metadata')
           .in('reservation_id', ids.slice(i, i + ID_CHUNK))
-          .in('entry_type', ['SETTLE', 'RELEASE']);
+          .in('entry_type', ['SETTLE', 'RELEASE', 'RESERVE']);
         if (error) throw error;
         for (const e of (data || []) as Record<string, unknown>[]) {
+          const type = e.entry_type;
+          if (type !== 'SETTLE' && type !== 'RELEASE' && type !== 'RESERVE') continue;
           const id = String(e.reservation_id);
-          if (out.get(id)?.entryType === 'SETTLE') continue;
+          const prev = out.get(id);
+          const reserved = prev?.reserved === true || type === 'RESERVE';
+          if (prev && LEDGER_RANK[prev.entryType] >= LEDGER_RANK[type]) {
+            out.set(id, { ...prev, reserved });
+            continue;
+          }
           out.set(id, {
-            entryType: e.entry_type === 'SETTLE' ? 'SETTLE' : 'RELEASE',
+            entryType: type,
             providerCostUsd: finite(e.provider_cost_usd) ?? null,
             billableUsd: finite(e.billable_usd) ?? null,
-            metadata: e.metadata && typeof e.metadata === 'object' ? (e.metadata as Record<string, unknown>) : {}
+            metadata: e.metadata && typeof e.metadata === 'object' ? (e.metadata as Record<string, unknown>) : {},
+            reserved
           });
         }
       }

@@ -1,11 +1,12 @@
 // @vitest-environment node
 // The stranded-hold sweep (UB-5 second half + the usage-billing new finding). A settle that fails
 // after the provider was paid leaves a RESERVED generation_cost_events row that the usage budget
-// stops counting after 20 minutes (user_usage_budgets.sql) — paid spend nothing counts. The nightly
-// reconciliation now settles such holds at their held provider cost, through the same rows the usage
-// budget counts, exactly once. Fake store only: no database, no network.
+// stops counting after 20 minutes (user_usage_budgets.sql) — paid spend nothing counts. The
+// reconciliation job now settles such holds at their held provider cost, through the same rows the usage
+// budget counts, exactly once — and releases, never charges, a hold whose reserve never completed (no
+// RESERVE ledger entry: no provider ran). Fake store only: no database, no network.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STRANDED_HOLD_MIN_AGE_MINUTES, sweepStrandedHolds, sweptSurfaceOf, type StrandedHoldRow, type StrandedHoldStore } from './strandedHolds.js';
+import { STRANDED_HOLD_MIN_AGE_MINUTES, sweepStrandedHolds, sweptSurfaceOf, type LedgerDecision, type StrandedHoldRow, type StrandedHoldStore } from './strandedHolds.js';
 
 type Row = StrandedHoldRow & { status: string; is_byok: boolean; actual_ct: number };
 type Ledger = {
@@ -43,8 +44,22 @@ const row = (o: Partial<Row> & { minutes: number }): Row => {
   };
 };
 
-/** In-memory generation_cost_events + token_ledger_entries with the real store's semantics. */
-const fakeStore = (rows: Row[], ledger: Ledger[] = []) => {
+/** The RESERVE ledger entry every completed usage-budget reserve writes (billingLedger reserveWithoutWallet). */
+const reserveEntry = (r: Row): Ledger => ({
+  entry_type: 'RESERVE',
+  reservation_id: r.reservation_id,
+  user_id: r.user_id,
+  provider_cost_usd: null,
+  billable_usd: null,
+  metadata: { walletSkipped: true, usageBudget: true }
+});
+
+/**
+ * In-memory generation_cost_events + token_ledger_entries with the real store's semantics. Every row gets
+ * its RESERVE ledger entry (a completed reserve) unless it is listed in `noReserve`.
+ */
+const fakeStore = (rows: Row[], extraLedger: Ledger[] = [], noReserve: Row[] = []) => {
+  const ledger: Ledger[] = [...rows.filter((r) => !noReserve.includes(r)).map(reserveEntry), ...extraLedger];
   const usageRow = (r: Row) => r.status === 'RESERVED' && !r.is_byok && !!r.reservation_id && r.metadata?.usageBudget === true;
   const store: StrandedHoldStore & { rows: Row[]; ledger: Ledger[]; beforeFinish?: (r: Row) => void; failOn?: string } = {
     rows,
@@ -60,11 +75,25 @@ const fakeStore = (rows: Row[], ledger: Ledger[] = []) => {
       return rows.filter((r) => usageRow(r) && r.created_at < from).length;
     },
     async ledgerDecisions(ids) {
-      const out = new Map();
+      // As the real store: SETTLE wins over RELEASE, and either wins over a lone RESERVE; `reserved`
+      // says a RESERVE entry exists whatever the decision.
+      const rank = { RESERVE: 0, RELEASE: 1, SETTLE: 2 } as Record<string, number>;
+      const out = new Map<string, LedgerDecision>();
       for (const e of ledger) {
-        if (!ids.includes(e.reservation_id) || (e.entry_type !== 'SETTLE' && e.entry_type !== 'RELEASE')) continue;
-        if (out.get(e.reservation_id)?.entryType === 'SETTLE') continue;
-        out.set(e.reservation_id, { entryType: e.entry_type, providerCostUsd: e.provider_cost_usd, billableUsd: e.billable_usd, metadata: e.metadata });
+        if (!ids.includes(e.reservation_id) || !(e.entry_type in rank)) continue;
+        const prev = out.get(e.reservation_id);
+        const reserved = prev?.reserved === true || e.entry_type === 'RESERVE';
+        if (prev && rank[prev.entryType] >= rank[e.entry_type]) {
+          out.set(e.reservation_id, { ...prev, reserved });
+          continue;
+        }
+        out.set(e.reservation_id, {
+          entryType: e.entry_type as LedgerDecision['entryType'],
+          providerCostUsd: e.provider_cost_usd,
+          billableUsd: e.billable_usd,
+          metadata: e.metadata,
+          reserved
+        });
       }
       return out;
     },
@@ -97,6 +126,9 @@ const usedUsd = (rows: Row[], userId: string) =>
     .filter((r) => r.user_id === userId && !r.is_byok && r.reservation_id && r.metadata?.platformPaid !== true)
     .filter((r) => r.status === 'SETTLED' || (r.status === 'RESERVED' && Date.parse(r.created_at) > NOW - 20 * 60_000))
     .reduce((s, r) => s + r.provider_cost_usd, 0);
+
+/** The SETTLE entries in the fake ledger (each fixture row also has its RESERVE entry). */
+const settles = (store: { ledger: Ledger[] }) => store.ledger.filter((e) => e.entry_type === 'SETTLE');
 
 const logs: string[] = [];
 beforeEach(() => {
@@ -137,8 +169,8 @@ describe('sweepStrandedHolds', () => {
     expect(chat.status).toBe('RESERVED');
     expect(wallet.status).toBe('RESERVED');
     // The ledger entry a normal usage-budget settle writes (no wallet CT moves), one per hold.
-    expect(store.ledger).toHaveLength(3);
-    expect(store.ledger.find((e) => e.reservation_id === comic.reservation_id)).toMatchObject({
+    expect(settles(store)).toHaveLength(3);
+    expect(settles(store).find((e) => e.reservation_id === comic.reservation_id)).toMatchObject({
       entry_type: 'SETTLE',
       user_id: 'user-a',
       provider_cost_usd: 0.07,
@@ -156,6 +188,7 @@ describe('sweepStrandedHolds', () => {
     await run(store);
     const usedA = usedUsd(store.rows, 'user-a');
     const ledgerAfter = store.ledger.length;
+    expect(settles(store)).toHaveLength(2);
     const again = await run(store);
     expect(again).toMatchObject({ checked: 0, settled: 0 });
     expect(store.ledger).toHaveLength(ledgerAfter);
@@ -171,7 +204,7 @@ describe('sweepStrandedHolds', () => {
     expect(res).toMatchObject({ settled: 0, raced: 1 });
     expect(late.provider_cost_usd).toBe(0.055);
     expect(late.metadata.settledBy).toBeUndefined();
-    expect(store.ledger).toHaveLength(0);
+    expect(settles(store)).toHaveLength(0);
   });
 
   it('a hold whose settle already wrote its ledger entry settles at that real cost — no second entry', async () => {
@@ -182,7 +215,7 @@ describe('sweepStrandedHolds', () => {
     const res = await run(store);
     expect(res).toMatchObject({ settled: 1, settledFromLedger: 1 });
     expect(half).toMatchObject({ status: 'SETTLED', provider_cost_usd: 0.031, billable_usd: 0.0403, actual_ct: 403 });
-    expect(store.ledger).toHaveLength(1);
+    expect(settles(store)).toHaveLength(1);
   });
 
   it('a hold whose release already wrote its ledger entry is released, never charged', async () => {
@@ -195,7 +228,35 @@ describe('sweepStrandedHolds', () => {
     expect(failed.status).toBe('RELEASED');
     expect(failed.metadata).toMatchObject({ releasedBy: 'sweep', releaseReason: 'image_failed' });
     expect(usedUsd(store.rows, 'user-a')).toBe(0);
-    expect(store.ledger).toHaveLength(1);
+    expect(settles(store)).toHaveLength(0);
+  });
+
+  it('a hold whose reserve never wrote its RESERVE ledger entry is released, never charged (the provider never ran)', async () => {
+    // usageEnforcer.reserveForOperation: the budget RPC inserted the RESERVED row, then the RESERVE ledger
+    // write failed, the best-effort release failed too, and the user was told nothing was spent.
+    const neverRan = row({ minutes: 40 });
+    const store = fakeStore([neverRan], [], [neverRan]);
+    const res = await run(store);
+    // Without the fix: settled 1 at the full hold ($0.07) against a call that never reached a provider.
+    expect(res).toMatchObject({ settled: 0, released: 1 });
+    expect(neverRan.status).toBe('RELEASED');
+    expect(neverRan.provider_cost_usd).toBe(0.07); // the hold figure is left as it was, uncounted
+    expect(neverRan.metadata).toMatchObject({ releasedBy: 'sweep', releaseReason: 'reserve_incomplete' });
+    expect(neverRan.metadata.settledBy).toBeUndefined();
+    expect(usedUsd(store.rows, 'user-a')).toBe(0);
+    expect(store.ledger).toHaveLength(0);
+    // A second run touches nothing.
+    expect(await run(store)).toMatchObject({ checked: 0, settled: 0, released: 0 });
+  });
+
+  it('a hold with its RESERVE entry and no decision still settles at the hold', async () => {
+    const reserved = row({ minutes: 40 });
+    const store = fakeStore([reserved]);
+    expect(store.ledger.map((e) => e.entry_type)).toEqual(['RESERVE']);
+    const res = await run(store);
+    expect(res).toMatchObject({ settled: 1, released: 0 });
+    expect(reserved).toMatchObject({ status: 'SETTLED', provider_cost_usd: 0.07 });
+    expect(usedUsd(store.rows, 'user-a')).toBeCloseTo(0.07, 9);
   });
 
   it('holds older than the look-back are reported, not settled', async () => {
