@@ -5,7 +5,7 @@
 // activity cost badges. Fakes only at the network edge; $0.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, pageSpecHash, type CharacterLook, type ComicDoc } from '../../../shared/comic/doc.js';
-import { i18nOf, lineSourceHash } from '../../../shared/comic/i18n.js';
+import { editionReadiness, i18nOf, lineSourceHash } from '../../../shared/comic/i18n.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import { inverseOps } from '../../../shared/comic/undo.js';
@@ -190,6 +190,28 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(after, [...inverse, { op: 'note_add', text: 'x' }], sctx)).toThrow(/Too many changes/);
     // And a translation for an edition nobody re-creates in the batch is still refused.
     expect(() => sanitizePatchOps(after, [inverse[1]], sctx)).toThrow(/no Telugu translation yet/);
+  });
+
+  it('Undo of a removed edition never lifts its publish block: an unreviewed AI draft comes back "waiting for review"', () => {
+    const { session, sctx } = ctxFor();
+    const base: ComicDoc = { ...session.doc, format: { ...session.doc.format, lettering: 'overlay' } };
+    const all = base.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    expect(all.length).toBeGreaterThan(1);
+    const machine = all[1];
+    const te = Object.fromEntries(
+      all.map((l) => [l.id, { text: `తెలుగు ${l.id}`, status: l.id === machine.id ? ('machine' as const) : ('reviewed' as const), sourceHash: lineSourceHash(l), at: 1 }])
+    );
+    const before = applyOps(base, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: te }
+    ]);
+    expect(editionReadiness(before, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'unreviewed', count: 1 })] });
+    const remove: DocOp[] = [{ op: 'edition', lang: 'te', patch: null }];
+    const after = applyOps(before, remove);
+    const restored = applyOps(after, sanitizePatchOps(after, inverseOps(before, remove), sctx));
+    expect(i18nOf(restored).editions.te.lines[machine.id]).toMatchObject({ text: `తెలుగు ${machine.id}`, status: 'machine' });
+    expect(i18nOf(restored).editions.te.lines[all[0].id]).toMatchObject({ status: 'edited' }); // never re-minted 'reviewed'
+    expect(editionReadiness(restored, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'unreviewed', count: 1 })] });
   });
 
   it('a line create keeps its position and its style through the sanitizer (⌘D and Undo of a delete land where the client put them)', () => {

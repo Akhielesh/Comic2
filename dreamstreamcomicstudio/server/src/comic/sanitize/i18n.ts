@@ -6,9 +6,11 @@
 //
 //   edition          registry tag, never the source; only `register`; creation counts toward the cap (409)
 //   translation      edition + line exist; text 1–600 chars; FORCED {status:'edited', at:now,
-//                    sourceHash: lineSourceHash(current line)}; model is cleared; a gloss (≤ 300) and a
-//                    review issue ({severity, note ≤ 300, suggestion ≤ 600}) the client sends are KEPT —
-//                    an Undo restores them, and they only ever add information or blocking — else cleared
+//                    sourceHash: lineSourceHash(current line)}; model is cleared. What an Undo sends back
+//                    is KEPT where it can only add information or a publish block, never lift one:
+//                    a gloss (≤ 300), a review issue ({severity, note ≤ 300, suggestion ≤ 600}), status
+//                    'machine' (an unreviewed AI draft: "waiting for review") and an OLDER sourceHash
+//                    (a line changed since translating: stale). 'reviewed' is never accepted.
 //   edition_text     edition exists, the source field is non-empty; same forcing with textSourceHash
 //   edition_balloon  edition + line exist; x/y/w/tail clamped 0..1, fontScale 0.7..1.3, pinned boolean
 //   glossary_term    id shape; term ≤ 80; kind/policy enums; forms keys are registry langs (not the
@@ -93,6 +95,14 @@ const clientIssue = (raw: unknown): TextTranslation['issue'] | undefined => {
   return issue;
 };
 
+/**
+ * A source hash the client sends back (Undo to a line that had changed since translating): kept only when it is
+ * a well-formed hash that is NOT the current one — it can only mark the line stale (a publish block), never
+ * claim a translation is current. Anything else → undefined (the current hash is stamped).
+ */
+const olderSourceHash = (raw: unknown, current: string): string | undefined =>
+  typeof raw === 'string' && /^[0-9a-f]{8}$/.test(raw) && raw !== current ? raw : undefined;
+
 export const sanitizeEdition: OpSanitizer<Op<'edition'>> = {
   op: 'edition',
   sanitize(doc, op) {
@@ -115,15 +125,17 @@ export const sanitizeTranslation: OpSanitizer<Op<'translation'>> = {
     if (op.patch === null) return { op: 'translation', lang, lineId: line.id, patch: null };
     if (!isObj(op.patch)) throw bad('Bad translation change.');
     const text = cleanText(op.patch.text);
-    // Forced: a human edit is always 'edited' (the client never mints 'reviewed' or a model), stamped now,
-    // against the CURRENT source. The gloss and the review flag are kept when the client sends them (an Undo
-    // brings them back; both only add information or blocking) and cleared otherwise — the old ones
-    // described a different text.
+    // Forced: a human edit is 'edited' (the client never mints 'reviewed' or a model), stamped now, against
+    // the CURRENT source. An Undo sends the previous entry back; of it, only what can add a publish block is
+    // kept: 'machine' (back to "waiting for review"), an older source hash (back to "changed since
+    // translating"), the review flag, and the gloss (information). Unsent gloss/issue are cleared — the
+    // old ones described a different text.
+    const current = lineSourceHash(line);
     const patch: Partial<TextTranslation> = {
       text,
-      status: 'edited',
+      status: op.patch.status === 'machine' ? 'machine' : 'edited',
       at: ctx.now,
-      sourceHash: lineSourceHash(line),
+      sourceHash: olderSourceHash(op.patch.sourceHash, current) ?? current,
       gloss: clientGloss(op.patch.gloss),
       issue: clientIssue(op.patch.issue),
       model: undefined
