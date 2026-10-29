@@ -31,6 +31,7 @@ import { ComicStudio, ComicStudioShell, READER_REFRESH_MS, SPLIT_STORAGE_KEY, Sp
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 import { resetBackStack } from './mobile/backStack';
 import type { FormFactor } from './mobile/formFactor';
+import { labelInName } from './mobile/testing/labelInName';
 
 const mount = (studio: FakeStudio, onBack = vi.fn()) => {
   state.studio = studio;
@@ -287,16 +288,27 @@ describe('ComicStudio on phones (single)', () => {
     expect(screen.getByLabelText('Message the Comic Director')).toBeInTheDocument();
   });
 
-  it('the Board tab announces page progress; the pill points at renders and switches to the board', () => {
+  it('the Board tab announces page progress; the activity line’s View opens the board (one status row, no extra pill)', () => {
     const doc = makeSampleDoc();
     doc.pages = doc.pages.map((p) => ({ ...p, render: { ...p.render, status: 'rendering' as const } }));
-    const studio = makeFakeStudio({ doc });
+    const studio = makeFakeStudio({ doc, renderingTotal: 3 });
     mountAt(PHONE, studio);
     const nav = screen.getByRole('navigation', { name: 'Studio views' });
     expect(within(nav).getByRole('button', { name: /^Board, 0 of 3 pages ready, drawing/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /3 pages rendering/ }));
+    // The status line above the composer is the only one (the old "3 pages rendering · View" pill is gone).
+    expect(screen.queryByRole('button', { name: /pages rendering/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /View the pages$/ }));
     expect(studio.setTab).toHaveBeenCalledWith('pages');
     expect(pane('board')).not.toHaveAttribute('hidden');
+    // With the board showing there is nothing to point at.
+    expect(screen.queryByRole('button', { name: /View the pages$/ })).toBeNull();
+  });
+
+  it('phone portrait chrome: 44 px header and 52 px tab bar on the studio root (the board and chat keep ≥ 45 %)', () => {
+    mountAt(PHONE, makeFakeStudio());
+    const root = document.querySelector('[data-layout="single"].gesture-root') as HTMLElement;
+    expect(root.style.getPropertyValue('--header-h')).toBe('44px');
+    expect(root.style.getPropertyValue('--tabbar-h')).toBe('52px');
   });
 
   it('opening a page from a card reveals the board', () => {
@@ -392,11 +404,17 @@ describe('ComicStudio on phones (single)', () => {
     expect(screen.queryByRole('dialog', { name: 'Full-screen reader' })).toBeNull();
   });
 
-  it('"Ask the Director…" on the board opens a composer sheet that closes after sending', () => {
+  it('"Ask" in the board’s header opens a composer sheet that closes after sending (no third bottom bar)', () => {
     const studio = makeFakeStudio();
     mountAt(PHONE, studio);
+    // Chat view: the composer is right there, so no Ask.
+    expect(screen.queryByRole('button', { name: 'Ask the Director' })).toBeNull();
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Studio views' })).getByRole('button', { name: /^Board/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ask the Director…' }));
+    expect(document.querySelector('[data-ask-pill]')).toBeNull();
+    const ask = screen.getByRole('button', { name: 'Ask the Director' });
+    expect(ask.closest('header')).not.toBeNull();
+    expect(labelInName(ask).ok).toBe(true);
+    fireEvent.click(ask);
     const sheet = screen.getByRole('dialog', { name: 'Ask the Director' });
     const box = within(sheet).getByLabelText('Message the Comic Director');
     expect(document.activeElement).toBe(box);

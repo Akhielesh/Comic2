@@ -353,6 +353,29 @@ const renderAt = (ff: ReturnType<typeof formFactorFor>, studio: ComicStudioContr
     </FormFactorProvider>
   );
 
+describe('StudioComposer — short windows (phones in landscape)', () => {
+  const LANDSCAPE = formFactorFor({ w: 844, h: 390, coarse: true });
+
+  it('the box and its controls share one row (the conversation keeps its height); portrait keeps two rows', () => {
+    const { unmount } = renderAt(LANDSCAPE, makeFakeStudio());
+    expect(LANDSCAPE.layout).toBe('single-rail');
+    const box = screen.getByLabelText('Message the Comic Director');
+    const row = box.closest('[data-composer-row="inline"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    expect(row.className).toContain('flex');
+    // The Send button and the option chips sit in the same row as the box.
+    expect(row.contains(screen.getByRole('button', { name: 'Send' }))).toBe(true);
+    expect(row.contains(screen.getByRole('toolbar', { name: 'Comic options' }))).toBe(true);
+    expect(box.className).toContain('flex-1');
+    expect(box.className).not.toMatch(/(^| )w-full( |$)/);
+    unmount();
+    renderAt(PHONE, makeFakeStudio());
+    const tall = screen.getByLabelText('Message the Comic Director');
+    expect(tall.closest('[data-composer-row="inline"]')).toBeNull();
+    expect(tall.className).toMatch(/(^| )w-full( |$)/);
+  });
+});
+
 describe('StudioComposer — the Enter rule by pointer', () => {
   it('enterAction: coarse → newline, fine → send, Shift → newline, ⌘/Ctrl → always send, IME → nothing', () => {
     expect(enterAction({ key: 'Enter' }, true)).toBe('newline');

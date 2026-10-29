@@ -15,6 +15,7 @@ import type { ComicStudioController } from '../useStudio';
 import { activeActivities } from '../studioReducer';
 import { useCostFormat } from './cost';
 import { cx, plural } from './ui';
+import { RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
 
 export type ActivityCost = 'free' | 'text' | 'image';
 
@@ -73,7 +74,20 @@ export const savedSince = (currentSavedUsd: number | undefined, baseline: number
   return d > 0 ? d : 0;
 };
 
-export const ActivityLine: React.FC<{ studio: ComicStudioController; className?: string }> = ({ studio, className }) => {
+export interface ActivityLineProps {
+  studio: ComicStudioController;
+  className?: string;
+  /**
+   * Phones with the board out of sight: the status itself opens the board where the work shows
+   * ("Drawing page 3… View"). It replaces the separate "N pages rendering · View" pill, so the chat
+   * keeps one status row instead of two (P1-QA phone-content: the message list keeps ≥ 45 %).
+   */
+  onView?: () => void;
+  /** What View opens, for its spoken name ("View the pages"). */
+  viewLabel?: string;
+}
+
+export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, onView, viewLabel = 'View the pages' }) => {
   const [open, setOpen] = useState(false);
   const active = activeActivities(studio.activity);
   const detached = !studio.busy && studio.renderingTotal > 0;
@@ -113,9 +127,29 @@ export const ActivityLine: React.FC<{ studio: ComicStudioController; className?:
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--ds-accent)] opacity-40 motion-reduce:animate-none" />
           <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--ds-accent)]" />
         </span>
-        <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={label}>
-          {label}
-        </span>
+        {onView ? (
+          <button
+            type="button"
+            onClick={onView}
+            title={`${label} ${viewLabel}`}
+            data-activity-view
+            className={cx(
+              'flex min-h-[28px] min-w-0 flex-1 basis-[8rem] items-center gap-1.5 text-left text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
+              RADIUS_CONTROL,
+              TRANSITION
+            )}
+          >
+            <span className="min-w-0 truncate">{label}</span>{' '}
+            <span className="shrink-0 font-medium text-[var(--ds-accent)]">
+              View{' '}
+              <span className="sr-only">{viewLabel.replace(/^View\s*/, '')}</span>
+            </span>
+          </button>
+        ) : (
+          <span className="min-w-0 flex-1 basis-[8rem] truncate text-[var(--ds-ink)]" title={label}>
+            {label}
+          </span>
+        )}
         {cost && <CostBadge cost={cost} governed={fmt.governed} />}
         {saved > 0 && (
           <span

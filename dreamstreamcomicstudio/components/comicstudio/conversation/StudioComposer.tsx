@@ -1076,17 +1076,22 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   const format = doc?.format;
   const styleName = doc?.style.status !== 'empty' ? doc?.style.name : undefined;
   const tierLabel = TIER_PRESETS[doc?.settings.quality || 'standard']?.label || 'Standard';
+  // Short windows put the box beside its controls: a placeholder that fits one line there.
   const placeholder =
     hint ||
     placeholderProp ||
-    (doc?.conversation.length
-      ? 'Reply, or describe a change…'
-      : roomy
-        ? 'Describe your comic, paste a script, or drop in character photos…'
-        : 'Describe your comic or paste a script…');
+    (ff.layout === 'single-rail'
+      ? 'Message the director…'
+      : doc?.conversation.length
+        ? 'Reply, or describe a change…'
+        : roomy
+          ? 'Describe your comic, paste a script, or drop in character photos…'
+          : 'Describe your comic or paste a script…');
   const panelLabel = panel === 'format' ? 'Format' : panel === 'style' ? 'Style' : 'Quality';
   // Phones: the box never grows past 30 % of the visible height, so the keyboard can't push the
   // conversation away (mobile.md §3.8); elsewhere the 240 px cap of today.
+  // Short windows (phones in landscape, `single-rail`): the box and the controls share one row.
+  const inlineRow = ff.layout === 'single-rail';
   const textareaMaxHeight = phone ? `min(${MAX_TEXTAREA_PX}px, calc(var(--app-h, 100dvh) * 0.3))` : `${MAX_TEXTAREA_PX}px`;
   const showVoiceToggleInline = voiceOk && roomy;
   const iconBtn = 'grid h-8 w-8 shrink-0 place-items-center rounded-full coarse:h-11 coarse:w-11';
@@ -1373,194 +1378,200 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           </div>
         )}
 
-        <textarea
-          ref={textareaRef}
-          value={text}
-          rows={1}
-          disabled={!ready}
-          aria-label="Message the Comic Director"
-          placeholder={placeholder}
-          // Touch: Enter is a newline (the Send button sends) — the keyboard key says so.
-          enterKeyHint={coarse ? 'enter' : 'send'}
-          onChange={(e) => {
-            setText(e.target.value);
-            autoGrow();
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          style={{ maxHeight: textareaMaxHeight }}
-          className={cx(
-            'block min-h-[44px] w-full resize-none bg-transparent px-1.5 py-2 leading-relaxed text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-60',
-            // 16 px on every touch device (iOS never zooms into the field); 14 px with a mouse on wide screens.
-            coarse ? 'text-base' : 'text-base sm:text-[14px]'
-          )}
-        />
-
-        {text.trim().length > MAX_MESSAGE_CHARS && (
-          <p className="mb-1.5 px-1.5 text-[11.5px] text-[var(--ds-muted)]">
-            That's a long one ({charCount(text.trim().length)}) — it will be sent as your script file and saved as the comic's source.
-          </p>
-        )}
-
-        {notice && (
-          <div role="status" className="mb-1.5 flex items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:text-amber-300">
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
-            <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="tap-target shrink-0 opacity-70 hover:opacity-100">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        )}
-
-        <div className="flex min-w-0 items-center gap-1.5">
-          <input ref={fileInputRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-file-input" />
-          <input ref={photoInputRef} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-photo-input" />
-          <input
-            ref={cameraInputRef}
-            type="file"
-            accept={IMAGE_ACCEPT}
-            capture="environment"
-            hidden
-            onChange={(e) => e.target.files && void addFiles(e.target.files)}
-            data-testid="composer-camera-input"
-          />
-          <input ref={scriptInputRef} type="file" accept={SCRIPT_ACCEPT} hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-script-input" />
-          <button
-            ref={plusRef}
-            type="button"
-            onClick={() => (attachSheet ? setAttachOpen((o) => !o) : fileInputRef.current?.click())}
+        {/* Short windows (phones in landscape): the box and its controls share ONE row, so the
+            conversation keeps ≥ 45 % of the height (P1-QA phone-content). Notes stay full-width above
+            it; the row wraps the controls under the box when the column is too narrow for both. */}
+        <div className={inlineRow ? 'flex min-w-0 flex-wrap items-end gap-x-1.5' : 'contents'} data-composer-row={inlineRow ? 'inline' : undefined}>
+          <textarea
+            ref={textareaRef}
+            value={text}
+            rows={1}
             disabled={!ready}
-            aria-label="Add images or a script"
-            aria-haspopup={attachSheet ? 'menu' : undefined}
-            aria-expanded={attachSheet ? attachOpen : undefined}
-            title={attachSheet ? 'Add a photo, take one, or attach a script' : 'Add character photos, style references or a script (.txt, .md)'}
-            className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
-          >
-            <Plus className="h-4 w-4" />
-          </button>
-          {voiceOk && (
-            <>
-              {/* The shared dictation control keeps its desktop look; on touch the mic and its settings caret are real 44 px targets. */}
-              <span className="contents coarse:[&_button]:min-h-[44px] coarse:[&_button]:min-w-[44px]">
-                <DictationButton
-                  disabled={!ready || messageBusy}
-                  onStart={() => {
-                    dictationBaseRef.current = text;
-                  }}
-                  onPartial={applyDictation}
-                  onFinal={onDictationFinal}
-                />
-              </span>
-              {showVoiceToggleInline && (
-                <button
-                  type="button"
-                  onClick={toggleAutoSend}
-                  aria-pressed={autoSend}
-                  aria-label="Auto-send when I stop talking"
-                  title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
-                  className={cx(
-                    // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
-                    `relative ${iconBtn} ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
-                    autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
-                  )}
-                >
-                  <AudioLines className="h-4 w-4" aria-hidden />
-                  {autoSend && <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)] ring-2 ring-[var(--ds-surface)]" aria-hidden />}
-                </button>
-              )}
-            </>
+            aria-label="Message the Comic Director"
+            placeholder={placeholder}
+            // Touch: Enter is a newline (the Send button sends) — the keyboard key says so.
+            enterKeyHint={coarse ? 'enter' : 'send'}
+            onChange={(e) => {
+              setText(e.target.value);
+              autoGrow();
+            }}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            style={{ maxHeight: textareaMaxHeight }}
+            className={cx(
+              'block min-h-[44px] resize-none bg-transparent px-1.5 py-2 leading-relaxed text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] disabled:opacity-60',
+              // 16 px on every touch device (iOS never zooms into the field); 14 px with a mouse on wide screens.
+              coarse ? 'text-base' : 'text-base sm:text-[14px]',
+              inlineRow ? 'min-w-0 flex-1 basis-[10rem]' : 'w-full'
+            )}
+          />
+
+          {text.trim().length > MAX_MESSAGE_CHARS && (
+            <p className="order-first mb-1.5 basis-full px-1.5 text-[11.5px] text-[var(--ds-muted)]">
+              That's a long one ({charCount(text.trim().length)}) — it will be sent as your script file and saved as the comic's source.
+            </p>
           )}
 
-          <div
-            ref={chipsRef}
-            onScroll={measureChips}
-            className={cx(
-              'flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5',
-              chipsClipped.end && chipsClipped.start
-                ? '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]'
-                : chipsClipped.end
-                  ? '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]'
-                  : chipsClipped.start
-                    ? '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
-                    : ''
-            )}
-            role="toolbar"
-            aria-label="Comic options"
-          >
-            {chip(
-              'format',
+          {notice && (
+            <div role="status" className="order-first mb-1.5 flex basis-full items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:text-amber-300">
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
+              <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="tap-target shrink-0 opacity-70 hover:opacity-100">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
+          <div className={cx('flex min-w-0 items-center gap-1.5', inlineRow && 'max-w-[62%]')}>
+            <input ref={fileInputRef} type="file" accept={ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-file-input" />
+            <input ref={photoInputRef} type="file" accept={IMAGE_ACCEPT} multiple hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-photo-input" />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept={IMAGE_ACCEPT}
+              capture="environment"
+              hidden
+              onChange={(e) => e.target.files && void addFiles(e.target.files)}
+              data-testid="composer-camera-input"
+            />
+            <input ref={scriptInputRef} type="file" accept={SCRIPT_ACCEPT} hidden onChange={(e) => e.target.files && void addFiles(e.target.files)} data-testid="composer-script-input" />
+            <button
+              ref={plusRef}
+              type="button"
+              onClick={() => (attachSheet ? setAttachOpen((o) => !o) : fileInputRef.current?.click())}
+              disabled={!ready}
+              aria-label="Add images or a script"
+              aria-haspopup={attachSheet ? 'menu' : undefined}
+              aria-expanded={attachSheet ? attachOpen : undefined}
+              title={attachSheet ? 'Add a photo, take one, or attach a script' : 'Add character photos, style references or a script (.txt, .md)'}
+              className={`${iconBtn} ${CONTROL_BTN} ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+            {voiceOk && (
               <>
-                <AspectGlyph aspect={format?.pageAspect || '2:3'} size={13} />
-                <span className="tabular-nums">
-                  {/* Narrow: the glyph already shows the page shape. */}
-                  {roomy && <span>{format?.pageAspect || '2:3'} · </span>}
-                  {format?.pageCount ?? 6}p
+                {/* The shared dictation control keeps its desktop look; on touch the mic and its settings caret are real 44 px targets. */}
+                <span className="contents coarse:[&_button]:min-h-[44px] coarse:[&_button]:min-w-[44px]">
+                  <DictationButton
+                    disabled={!ready || messageBusy}
+                    onStart={() => {
+                      dictationBaseRef.current = text;
+                    }}
+                    onPartial={applyDictation}
+                    onFinal={onDictationFinal}
+                  />
                 </span>
-              </>,
-              'Format: page shape, pages, panels, lettering',
-              undefined,
-              'Format'
+                {showVoiceToggleInline && (
+                  <button
+                    type="button"
+                    onClick={toggleAutoSend}
+                    aria-pressed={autoSend}
+                    aria-label="Auto-send when I stop talking"
+                    title={autoSend ? 'Voice: sends when you stop talking (click to review first)' : 'Voice: fills the box for review (click to auto-send)'}
+                    className={cx(
+                      // A quiet setting beside the mic, not a call to action: icon only, accent ink when on.
+                      `relative ${iconBtn} ${TRANSITION} hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+                      autoSend ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                    )}
+                  >
+                    <AudioLines className="h-4 w-4" aria-hidden />
+                    {autoSend && <span className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--ds-accent)] ring-2 ring-[var(--ds-surface)]" aria-hidden />}
+                  </button>
+                )}
+              </>
             )}
-            {chip(
-              'style',
-              <>
-                <Palette className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                <span className={cx('truncate', roomy ? 'max-w-[9rem]' : 'max-w-[5.5rem]')}>{styleName || 'Style'}</span>
-              </>,
-              'Art style',
-              undefined,
-              'Art style'
+
+            <div
+              ref={chipsRef}
+              onScroll={measureChips}
+              className={cx(
+                'flex min-w-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden flex-1 items-center gap-1.5 overflow-x-auto px-0.5 py-0.5',
+                chipsClipped.end && chipsClipped.start
+                  ? '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]'
+                  : chipsClipped.end
+                    ? '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]'
+                    : chipsClipped.start
+                      ? '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
+                      : ''
+              )}
+              role="toolbar"
+              aria-label="Comic options"
+            >
+              {chip(
+                'format',
+                <>
+                  <AspectGlyph aspect={format?.pageAspect || '2:3'} size={13} />
+                  <span className="tabular-nums">
+                    {/* Narrow: the glyph already shows the page shape. */}
+                    {roomy && <span>{format?.pageAspect || '2:3'} · </span>}
+                    {format?.pageCount ?? 6}p
+                  </span>
+                </>,
+                'Format: page shape, pages, panels, lettering',
+                undefined,
+                'Format'
+              )}
+              {chip(
+                'style',
+                <>
+                  <Palette className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span className={cx('truncate', roomy ? 'max-w-[9rem]' : 'max-w-[5.5rem]')}>{styleName || 'Style'}</span>
+                </>,
+                'Art style',
+                undefined,
+                'Art style'
+              )}
+              {chip(
+                'quality',
+                <>
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden />
+                  {tierLabel}
+                </>,
+                'Quality and price per page',
+                roomy || panel === 'quality' ? undefined : 'hidden',
+                'Quality'
+              )}
+            </div>
+
+            {stopDrawing && (
+              <button
+                type="button"
+                onClick={() => void studio.cancel()}
+                disabled={cancelling}
+                aria-label={cancelling ? 'Stopping' : 'Stop drawing'}
+                title={cancelling ? 'Stopping…' : 'Stop drawing (images already drawing finish and are kept)'}
+                className={cx(
+                  `inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-[var(--ds-hairline)] text-[12px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] disabled:opacity-50 coarse:h-11 coarse:min-w-11`,
+                  roomy ? 'px-3' : 'px-0'
+                )}
+              >
+                <Square className="h-3 w-3 shrink-0 fill-current" aria-hidden />
+                {roomy && <span className="whitespace-nowrap">{cancelling ? 'Stopping…' : 'Stop drawing'}</span>}
+              </button>
             )}
-            {chip(
-              'quality',
-              <>
-                <Sparkles className="h-3.5 w-3.5" aria-hidden />
-                {tierLabel}
-              </>,
-              'Quality and price per page',
-              roomy || panel === 'quality' ? undefined : 'hidden',
-              'Quality'
+            {messageBusy ? (
+              <button
+                type="button"
+                onClick={() => void studio.cancel()}
+                disabled={cancelling}
+                aria-label={cancelling ? 'Stopping' : 'Stop'}
+                title={cancelling ? 'Stopping…' : 'Stop the director'}
+                className={`grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${TRANSITION} hover:opacity-85 disabled:opacity-50 coarse:h-11 coarse:w-11`}
+              >
+                <Square className="h-3.5 w-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!canSend}
+                aria-label="Send"
+                title={uploadsBusy ? 'Waiting for your photos to finish uploading' : coarse ? 'Send' : 'Send (Enter)'}
+                className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
             )}
           </div>
-
-          {stopDrawing && (
-            <button
-              type="button"
-              onClick={() => void studio.cancel()}
-              disabled={cancelling}
-              aria-label={cancelling ? 'Stopping' : 'Stop drawing'}
-              title={cancelling ? 'Stopping…' : 'Stop drawing (images already drawing finish and are kept)'}
-              className={cx(
-                `inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-[var(--ds-hairline)] text-[12px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] disabled:opacity-50 coarse:h-11 coarse:min-w-11`,
-                roomy ? 'px-3' : 'px-0'
-              )}
-            >
-              <Square className="h-3 w-3 shrink-0 fill-current" aria-hidden />
-              {roomy && <span className="whitespace-nowrap">{cancelling ? 'Stopping…' : 'Stop drawing'}</span>}
-            </button>
-          )}
-          {messageBusy ? (
-            <button
-              type="button"
-              onClick={() => void studio.cancel()}
-              disabled={cancelling}
-              aria-label={cancelling ? 'Stopping' : 'Stop'}
-              title={cancelling ? 'Stopping…' : 'Stop the director'}
-              className={`grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-ink)] text-[var(--ds-canvas)] ${TRANSITION} hover:opacity-85 disabled:opacity-50 coarse:h-11 coarse:w-11`}
-            >
-              <Square className="h-3.5 w-3.5 fill-current" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSend}
-              aria-label="Send"
-              title={uploadsBusy ? 'Waiting for your photos to finish uploading' : coarse ? 'Send' : 'Send (Enter)'}
-              className={`press grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white ${TRANSITION} hover:bg-[var(--ds-accent-hover)] disabled:bg-[var(--ds-well-strong)] disabled:text-[var(--ds-muted)] coarse:h-11 coarse:w-11`}
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
-          )}
         </div>
       </div>
     </div>

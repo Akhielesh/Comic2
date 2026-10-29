@@ -1,5 +1,5 @@
 // MobileTabBar (mobile.md §3.1): the phone portrait app navigation — Chat · Board · Read — at the
-// bottom, in the thumb zone. 56 px + the bottom safe area; items ≥ 64×44 with an active pill; it
+// bottom, in the thumb zone. 52 px + the bottom safe area; items ≥ 64×44 with an active pill; it
 // hides while the on-screen keyboard is open (html.kb-open) so it never rides on the keyboard.
 // NavigationRail renders the same items for phones in landscape.
 
@@ -149,7 +149,7 @@ export const MobileTabBar: React.FC<{ items: StudioNavItem[] }> = ({ items }) =>
     className="shrink-0 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-strong)] backdrop-blur-xl [html.kb-open_&]:hidden"
     style={{ paddingBottom: 'var(--sa-bottom-eff, 0px)' }}
   >
-    <div className="mx-auto flex h-[var(--tabbar-h,56px)] max-w-md items-stretch justify-around gap-1 px-2 py-1.5">
+    <div className="mx-auto flex h-[var(--tabbar-h,52px)] max-w-md items-stretch justify-around gap-1 px-2 py-1">
       {items.map((item) => (
         <NavItemButton key={item.id} item={item} orientation="bar" />
       ))}

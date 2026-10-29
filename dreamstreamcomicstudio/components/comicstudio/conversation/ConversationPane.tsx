@@ -37,6 +37,11 @@ export interface ConversationPaneProps {
   insetBottom?: boolean;
   /** The composer's imperative handle, for the shell ("Ask the Director…" focuses it in-gesture). */
   composerApiRef?: React.Ref<StudioComposerHandle>;
+  /**
+   * Phones with the board hidden: the activity line's status opens the board (one status row instead
+   * of the line plus a "N pages rendering · View" pill).
+   */
+  onViewActivity?: () => void;
 }
 
 /** Messages before the last few skip offscreen rendering (`content-visibility: auto`). */
@@ -48,7 +53,7 @@ const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null) => {
   else (ref as React.MutableRefObject<T | null>).current = value;
 };
 
-export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef }) => {
+export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity }) => {
   const { doc, drafts, pendingMessage, messageBusy } = studio;
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -224,7 +229,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
         </div>
       )}
 
-      <div className={cx('relative shrink-0 px-3 pt-1 sm:px-4', insetBottom ? 'pb-[max(0.75rem,var(--sa-bottom-eff,0px))]' : 'pb-2')} data-composer-dock>
+      <div className={cx('relative shrink-0 px-3 pt-0.5 sm:px-4', insetBottom ? 'pb-[max(0.75rem,var(--sa-bottom-eff,0px))]' : 'pb-2')} data-composer-dock>
         {!replaceList && !pinned && (
           <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 flex justify-center">
             <button
@@ -242,7 +247,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
           <StudioErrorBanner studio={studio} className="mb-2" />
           <StudioNoticeToast studio={studio} className="mb-2" />
           <SavedByEditorNote studio={studio} className="mb-1" />
-          <ActivityLine studio={studio} className="mb-1" />
+          <ActivityLine studio={studio} className="mb-0.5" onView={onViewActivity} />
           {aboveComposer}
           <StudioComposer studio={studio} apiRef={setComposer} />
         </div>
