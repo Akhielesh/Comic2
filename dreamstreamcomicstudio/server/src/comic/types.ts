@@ -21,6 +21,7 @@ import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
+import type { PriceBook } from '../../../shared/comic/modelLock.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -336,4 +337,9 @@ export interface StudioContext {
   caps?: StudioCaps;
   /** v5: effectiveRating() resolved for this request (account ceiling applied). Absent ⇒ computed from the doc. */
   rating?: ContentRating;
+  /**
+   * W-M (models.md §2.3): this request's PriceBook, memoised per request (live OpenRouter prices + the user's observed
+   * costs; never throws). Absent ⇒ jobs.ts priceBookFor builds one itself.
+   */
+  prices?: () => Promise<PriceBook>;
 }

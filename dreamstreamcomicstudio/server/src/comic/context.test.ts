@@ -4,6 +4,7 @@ import { createEmptyDoc } from '../../../shared/comic/doc.js';
 import type { StudioEvent } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { createStudioContext, signAssetPaths, spendLockedBilling } from './context.js';
+import { registryPriceBook, setModelCatalog, type ModelCatalog } from './models/index.js';
 import { KEYS, fakeAssetStore, fakeBilling, fakeDocStore, fakeImages, scriptedLlm } from './orchestrator.fakes.js';
 import { SESSION_IDLE_MS, StudioSession } from './session.js';
 
@@ -80,6 +81,39 @@ describe('createStudioContext', () => {
     release();
     await ctx.settled();
     expect(session.isIdle(later)).toBe(true);
+  });
+});
+
+describe('the request PriceBook (models.md §2.3)', () => {
+  it('is built once per request (memoised), never at construction, and a test or route can bring its own', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let reads = 0;
+    // The catalog read fails here, so createPriceBook falls back to the registry list (it never throws).
+    setModelCatalog({
+      priceSources: async () => {
+        reads += 1;
+        throw new Error('catalog offline');
+      }
+    } as unknown as ModelCatalog);
+    try {
+      const { ctx } = build();
+      expect(reads).toBe(0); // nothing is fetched until a quote asks
+      const [a, b] = await Promise.all([ctx.prices!(), ctx.prices!()]);
+      expect(a).toBe(b);
+      expect(reads).toBe(1);
+      expect(a.unit('nano-banana-2.1', '2K', 'page')).toEqual(registryPriceBook().unit('nano-banana-2.1', '2K', 'page'));
+      await build().ctx.prices!(); // another request reads again
+      expect(reads).toBe(2);
+
+      const own = registryPriceBook();
+      const session = new StudioSession({ projectId: 'p2', userId: 'user-1', doc: createEmptyDoc('p2'), store: fakeDocStore() });
+      const injected = createStudioContext({ req, session, deps: { keys: KEYS, llm: scriptedLlm(), images: fakeImages().generate, assets: fakeAssetStore(), billing: fakeBilling(), prices: async () => own } });
+      expect(await injected.prices!()).toBe(own);
+      expect(reads).toBe(2);
+    } finally {
+      setModelCatalog(null);
+      warn.mockRestore();
+    }
   });
 });
 

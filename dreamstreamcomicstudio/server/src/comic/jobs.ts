@@ -405,9 +405,6 @@ export const SEE_OTHER_MODELS_STEP: NextStep = { label: 'See other models', clie
 
 // ── Real prices (models.md §2.3) ─────────────────────────────────────────────
 
-/** A context that brings its own PriceBook (tests; OrchestratorContext gains `prices`: wave note). */
-type PricedContext = StudioContext & { prices?: () => Promise<PriceBook> };
-
 const priceBooks = new WeakMap<StudioContext, Promise<PriceBook>>();
 
 /**
@@ -417,7 +414,7 @@ const priceBooks = new WeakMap<StudioContext, Promise<PriceBook>>();
 export const priceBookFor = (ctx: StudioContext): Promise<PriceBook> => {
   let book = priceBooks.get(ctx);
   if (!book) {
-    const own = (ctx as PricedContext).prices;
+    const own = ctx.prices;
     book = Promise.resolve()
       .then(() => (own ? own() : createPriceBook({ userId: ctx.userId })))
       .catch((err: unknown) => {

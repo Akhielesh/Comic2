@@ -9,11 +9,13 @@
 // v5 (contract §12.1, §12.5): the context also carries the request's StudioCaps and
 // effective rating, a spend lock for restricted accounts (no image or translation spend
 // can even reserve), and signs private paths (reference photos) with a 300 s TTL.
+// W-M: it also carries the request's PriceBook (`prices`, memoised per request).
 //
 // Every dependency is injectable so routes and tests can swap in fakes.
 
 import type { Request } from 'express';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
+import type { PriceBook } from '../../../shared/comic/modelLock.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
 import { createSupabaseAssetStore } from './assets.js';
@@ -21,6 +23,7 @@ import { createBillingHooks } from './billing.js';
 import { createImageGenerator } from './imageClient.js';
 import { studioKeysFromRequest } from './keys.js';
 import { createLlmClient } from './llm.js';
+import { createPriceBook } from './models/index.js';
 import { SIGNED_TTL_SEC, isPrivatePath } from './storagePaths.js';
 import type {
   AssetStore,
@@ -54,6 +57,8 @@ export interface StudioContextDeps {
   images?: ImageGenerator;
   assets?: AssetStore;
   billing?: BillingHooks;
+  /** The request's PriceBook (tests pass registry prices); default: createPriceBook for this user, once per request. */
+  prices?: () => Promise<PriceBook>;
 }
 
 /**
@@ -118,6 +123,10 @@ export function createStudioContext(args: {
   const billing = deps.billing || createBillingHooks(req, session.projectId);
   const pending = new Set<Promise<unknown>>();
   const retain = (session as { retain?: () => () => void }).retain?.bind(session) as (() => () => void) | undefined;
+  // One PriceBook per request (models.md §2.3): every quote, gate and reservation in this turn reads the same prices.
+  // createPriceBook never throws (bounded wait, registry fallback); nothing is fetched until a quote asks.
+  let book: Promise<PriceBook> | undefined;
+  const prices = deps.prices || (() => (book ??= createPriceBook({ userId: session.userId })));
 
   const ctx: OrchestratorContext = {
     session,
@@ -129,6 +138,7 @@ export function createStudioContext(args: {
     assets,
     billing: args.spendBlocked ? spendLockedBilling(billing, args.spendBlocked) : billing,
     signal: args.signalFrom || session.abort.signal,
+    prices,
     ...(args.qualityDenied ? { qualityDenied: args.qualityDenied } : {}),
     ...(args.spendBlocked ? { spendBlocked: args.spendBlocked } : {}),
     ...(args.caps ? { caps: args.caps } : {}),
