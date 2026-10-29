@@ -14,7 +14,13 @@
 //  - A balloon's FOOTPRINT is its outline plus its tail tip (the box the drawn group occupies): tails
 //    never cross another balloon, and nothing is placed under a stored balloon's tail.
 //  - Reading order is part of a clean spot: a line is read after the previous line of its panel (below it,
-//    or after it on its row), and a full panel packs again compactly before anything leaves it.
+//    or after it on its row) AND before every later line of its panel the owner already fixed there (a stored
+//    or pinned balloon): it tucks in between them, or beside one on its row, never below a line read after
+//    it. A full panel packs again compactly before anything leaves it. Whole words first: a width that
+//    splits a word ("EXPLANATI / ON") is tried only when no whole-word width has a clean spot.
+//  - A tail is part of the footprint, so a tail aimed across a stored balloon would close the room between
+//    two lines: the balloon then takes a shorter tail toward the speaker, else a short stub on the speaker's
+//    side (both cost a little more than an aimed tail, so an aimed one wins wherever it fits).
 //  - A panel that is full spills, still in reading order: beside the panel in its own tier first, then a
 //    later tier, never into a panel the reader finishes first, never above its tier, never more than
 //    about a panel away; it is reported as `crowded` so the editor can offer free fixes. Only an over-full
@@ -38,6 +44,12 @@ const PAGE_FALLBACK_BOX: Box = { x: 0.02, y: 0.02, w: 0.96, h: 0.96 };
 const SPOKEN: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
+/**
+ * A text box whose top-left is (ax, ay) is read before one at (bx, by): above its row, or on its row (tops
+ * within `tol`) nearer the reading start (ltr: left of it; rtl: right of it).
+ */
+const readsBefore = (ax: number, ay: number, bx: number, by: number, rtl: boolean, tol: number): boolean =>
+  ay < by - tol || (Math.abs(ay - by) < tol && (rtl ? ax > bx : ax < bx));
 const clampP = (n: number, lo: number, hi: number) => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : lo);
 
 export interface PlaceArgs {
@@ -60,6 +72,12 @@ export interface PlaceArgs {
   keep?: 'pinned' | 'all';
   /** Only (re)place these lines (locked ones never move); every other stored balloon stays. */
   only?: readonly string[];
+  /**
+   * Lines lettered in whole words only: never narrower than their longest word (nor than their first width,
+   * when even that splits one), even if that costs reading order or a clean spot (the planner's retry of a
+   * `split` line).
+   */
+  wholeWords?: readonly string[];
   /** Lettering language (estimates); default the line's own `lang`, else 'en'. */
   lang?: string;
 }
@@ -71,6 +89,11 @@ export interface PlaceResult {
   placed: string[];
   /** Placed lines that could not avoid an overlap / face / the safe area (least-bad position used). */
   crowded: string[];
+  /**
+   * Placed lines lettered narrower than their longest word (or than their first width, when even that splits
+   * one) because no wider spot was free: the drawn lettering splits a word ("EXPLANATI / ON").
+   */
+  split: string[];
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -258,6 +281,9 @@ export interface SizedLine {
   bounds: Box;
   /** The style draws a tail (default: spoken kinds do). */
   tail?: boolean;
+  /** Narrowest text-box width (page widths) that splits no word of the line: placement letters narrower only
+   *  when no spot is free at a whole-word width. */
+  minW?: number;
 }
 
 const sizeOf = (args: PlaceArgs, line: Line, w: number, lang: string): SizedLine => {
@@ -273,7 +299,9 @@ const sizeOf = (args: PlaceArgs, line: Line, w: number, lang: string): SizedLine
   const b = got.bounds;
   const x = Math.min(0, b.x);
   const y = Math.min(0, b.y);
-  return { h: got.h, bounds: { x, y, w: Math.max(b.x + b.w, w) - x, h: Math.max(b.y + b.h, got.h) - y }, tail };
+  const out: SizedLine = { h: got.h, bounds: { x, y, w: Math.max(b.x + b.w, w) - x, h: Math.max(b.y + b.h, got.h) - y }, tail };
+  if (typeof got.minW === 'number' && Number.isFinite(got.minW) && got.minW > 0) out.minW = got.minW;
+  return out;
 };
 
 /** The box a drawn balloon really occupies: its outline plus (when it has one) its tail tip. */
@@ -358,6 +386,8 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
   const result: Balloon[] = [];
   const placedIds: string[] = [];
   const crowded: string[] = [];
+  const split: string[] = [];
+  const wholeOnly = new Set(args.wholeWords ?? []);
 
   type Pick = { cost: number; x: number; y: number; w: number; h: number; outline: Box; clean: boolean; roomy: boolean; spill: boolean; tip: { x: number; y: number } | null };
 
@@ -386,6 +416,16 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     };
     /** Farthest a spilled balloon's outline centre may sit from its panel: about one panel away (page widths). */
     const spillReach = Math.max(box.w, box.h / aspect);
+    /**
+     * Where the reader meets each kept line of this panel (its stored top-left), or undefined: a line this call
+     * places, or a stored balloon the owner put in another panel (it says nothing about this panel's order).
+     */
+    const anchors = lines.map((line): { x: number; y: number } | undefined => {
+      if (!isKept(line)) return undefined;
+      const b = existing.get(line.id)!;
+      const cx = b.x + b.w / 2;
+      return cx >= box.x && cx <= box.x + box.w && b.y >= box.y - GAP && b.y <= box.y + box.h ? { x: b.x, y: b.y } : undefined;
+    });
 
     /**
      * Letter the panel's lines in reading order. `compact`: a full panel is packed the way a letterer packs
@@ -402,13 +442,17 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const stageX = spoken ? stagedSpeakerX(page, index, line.speakerId, spokenSeen, rtl) : 0.5;
         if (spoken) spokenSeen += 1;
         if (isKept(line)) {
-          const b = existing.get(line.id)!;
-          result.push(b);
+          result.push(existing.get(line.id)!);
           // A stored balloon the owner put in another panel says nothing about this panel's reading order.
-          const cx = b.x + b.w / 2;
-          if (cx >= box.x && cx <= box.x + box.w && b.y >= box.y - GAP && b.y <= box.y + box.h) prevInPanel = { x: b.x, y: b.y };
+          if (anchors[k]) prevInPanel = anchors[k];
           return;
         }
+        // The later lines of the panel the owner already fixed here: this line is read before every one of them
+        // (one the owner stored before the previous line already breaks the order and binds nothing).
+        const prevAt = prevInPanel;
+        const ahead = anchors
+          .slice(k + 1)
+          .filter((a): a is { x: number; y: number } => !!a && (!prevAt || !readsBefore(a.x, a.y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE)));
         const prior = existing.get(line.id);
         const head = spoken ? (args.heads || []).find((h) => h && h.panel === panel.n && !!line.speakerId && h.characterId === line.speakerId) : undefined;
         const headPt = head ? head.mouth ?? head.head : undefined;
@@ -416,33 +460,63 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const opening = line.kind === 'caption' && lines.slice(0, k).every((l) => l.kind === 'caption');
 
         const w0 = Math.min(estimateWidthForText(line.text, lang), Math.max(0.08, box.w - 2 * PAD));
-        const widths = [w0, Math.max(0.1, round4(w0 * 0.8)), Math.max(0.1, round4(w0 * 0.65))].filter((w, i, a) => a.indexOf(w) === i);
+        // Narrower tries first stop at the longest word (rounded up to the stored precision, never wider than
+        // the first width): a balloon that letters whole words wins. Only then the narrower widths that split
+        // a word ("EXPLANATI / ON").
+        const minW = sizeOf(args, line, w0, lang).minW;
+        // (A word longer than the first width splits anyway: then the first width is the whole-word one.)
+        const noSplit = typeof minW === 'number' ? Math.min(w0, Math.ceil(minW * 10000 - 1e-6) / 10000) : 0;
+        const rawW = (f: number) => Math.max(0.1, round4(w0 * f));
+        const narrow = (f: number) => Math.max(rawW(f), noSplit);
+        const allowed = (w: number) => !wholeOnly.has(line.id) || w >= noSplit;
+        const widths = [w0, narrow(0.8), narrow(0.65), rawW(0.8), rawW(0.65)].filter((w, i, a) => a.indexOf(w) === i && allowed(w));
 
-        /** Score one text-box position (x, y) at a width: the drawn footprint (outline + tail) against everything on the page. */
-        const score = (x: number, y: number, w: number, size: SizedLine, bias: number, spill: boolean): Pick => {
+        /**
+         * Score one text-box position (x, y) at a width: the drawn footprint (outline + tail) against everything
+         * on the page. `bendable`: the panel's in-order fallback, where a tail whose aim alone is in the way bends.
+         */
+        const score = (x: number, y: number, w: number, size: SizedLine, bias: number, spill: boolean, bendable = false): Pick => {
           const b = size.bounds;
           const outline: Box = { x: x + b.x, y: y + b.y, w: b.w, h: b.h };
-          let tip = spoken && size.tail !== false ? tailTip({ x, y, w, h: size.h }, box, headPt, faces, aspect, box.x + stageX * box.w) : null;
+          const text: Box = { x, y, w, h: size.h };
+          let tip = spoken && size.tail !== false ? tailTip(text, box, headPt, faces, aspect, box.x + stageX * box.w) : null;
           // A spilled balloon sits away from its panel: its tail points home but stays short, so it never
           // reaches back across the balloons that filled the panel.
-          if (tip && spill) tip = shortenTail({ x, y, w, h: size.h }, tip, aspect, SPILL_TAIL_LEN);
-          const foot = balloonFootprint(outline, tip);
-          let overlap = 0;
+          if (tip && spill) tip = shortenTail(text, tip, aspect, SPILL_TAIL_LEN);
           // The full gap (a hair more than the render-time settle asks for, so a rounded placement never
           // needs a nudge): what is clean here stays clean when drawn.
-          const grownFoot = inflate(foot, CLEAR_GAP, CLEAR_GAP * aspect);
-          for (const o of obstacles) overlap += covered(grownFoot, o.box);
+          const overlapOf = (t: { x: number; y: number } | null): number => {
+            const grownFoot = inflate(balloonFootprint(outline, t), CLEAR_GAP, CLEAR_GAP * aspect);
+            let sum = 0;
+            for (const o of obstacles) sum += covered(grownFoot, o.box);
+            return sum;
+          };
+          let overlap = overlapOf(tip);
+          /** Cost of a tail that had to bend away from its aim (0 = aimed at the speaker). */
+          let bend = 0;
+          if (bendable && tip && overlap >= 1e-9 && overlapOf(null) < 1e-9) {
+            // Only the aimed tail reaches across a balloon: a shorter one toward the speaker, else a stub on the
+            // speaker's side, keeps this spot (a tail may never cross a face on the way).
+            for (const alt of tailAlternatives(text, tip, aspect)) {
+              const root = tailExitPoint(text, alt.tip);
+              if (faces.some((f) => segmentHitsBox(root, alt.tip, f))) continue;
+              const o = overlapOf(alt.tip);
+              if (o >= 1e-9) continue;
+              tip = alt.tip;
+              overlap = o;
+              bend = alt.cost;
+              break;
+            }
+          }
           let faceHit = 0;
           for (const f of faces) faceHit += covered(outline, f);
           let busyHit = 0;
           for (const a of busy) busyHit += covered(outline, a);
           let otherHit = 0;
           for (const a of other) otherHit += covered(outline, a);
-          let order = 0;
-          if (prevInPanel) {
-            const sameRow = Math.abs(y - prevInPanel.y) < ROW_TOLERANCE;
-            if (y < prevInPanel.y - ROW_TOLERANCE || (sameRow && (rtl ? x > prevInPanel.x : x < prevInPanel.x))) order = 1;
-          }
+          // Read in turn: after the previous line of the panel, and before every later line fixed in it.
+          let order = prevAt && readsBefore(x, y, prevAt.x, prevAt.y, rtl, ROW_TOLERANCE) ? 1 : 0;
+          for (const a of ahead) if (!readsBefore(x, y, a.x, a.y, rtl, ROW_TOLERANCE)) order = 1;
           const cx = x + w / 2;
           const dist = spill ? distToRegion(outline, box, aspect) : 0;
           let aim = 0;
@@ -459,11 +533,15 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
             // A spilled balloon stays as close to its panel as the page allows.
             300 * dist +
             40 * order +
+            bend +
+            // The in-order fallback may reach into the panel's inner padding (never past the panel or the safe area).
+            (bendable && outside(outline, region) > 1e-6 ? 6 : 0) +
             (compact
               ? 30 * clampP((y - region.y) / Math.max(0.01, region.h), 0, 1) + 8 * clampP((rtl ? region.x + region.w - (x + w) : x - region.x) / Math.max(0.01, region.w), 0, 1)
               : 12 * aim + 6 * clampP((y - box.y) / Math.max(0.01, box.h), 0, 1) + 4 * sug + bias);
-          // Clean: clear of every balloon and face, inside the safe area, and read after the panel's previous
-          // line. A spilled spot must also be read after everything before this panel and stay near it.
+          // Clean: clear of every balloon and face, inside the safe area, and read in turn inside the panel (after
+          // its previous line, before its later fixed ones). A spilled spot must also be read after everything
+          // before this panel and stay near it.
           const roomy = overlap < 1e-9 && faceHit < 0.005 && outside(outline, safe) < 0.001;
           const clean = roomy && !order && (!spill || (!readsEarly(cx, y + size.h / 2) && dist <= spillReach));
           return { cost, x, y, w, h: size.h, outline, clean, roomy, spill, tip };
@@ -478,64 +556,80 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           if (p.clean && (!bestClean || p.cost < bestClean.cost - 1e-9)) bestClean = p;
           if (p.roomy && !p.spill && (!bestRoomy || p.cost < bestRoomy.cost - 1e-9)) bestRoomy = p;
         };
-        for (const w of widths) {
-          const size = sizeOf(args, line, w, lang);
-          const b = size.bounds;
-          // Text-box positions that keep the outline inside the region (centred when it can't fit).
-          const xLo = region.x - b.x;
-          const xHi = region.x + region.w - (b.x + b.w);
-          const yLo = region.y - b.y;
-          const yHi = region.y + region.h - (b.y + b.h);
-          const xs = xHi >= xLo ? Array.from({ length: 7 }, (_, i) => xLo + ((xHi - xLo) * i) / 6) : [(xLo + xHi) / 2];
-          const ys = yHi >= yLo ? Array.from({ length: 7 }, (_, i) => yLo + ((yHi - yLo) * i) / 6) : [(yLo + yHi) / 2];
-          const cands: Candidate[] = [];
-          if (line.kind === 'caption' && !compact) {
-            const startX = rtl ? xHi : xLo;
-            const endX = rtl ? xLo : xHi;
-            cands.push(opening ? { x: startX, y: yLo, bias: -25 } : { x: endX, y: yHi, bias: -25 });
-          }
-          if (line.kind === 'sfx' && !compact) {
-            const actions = busy.filter((a) => covered(a, box) > 0.3);
-            for (const a of actions) {
-              cands.push({ x: a.x + a.w + GAP - b.x, y: a.y, bias: -10 }, { x: a.x - (b.x + b.w) - GAP, y: a.y, bias: -10 });
+        /** The panel's own search over `reg`: a grid, then flush against every balloon near it; widest first, the first width with a clean spot wins. */
+        const searchPanel = (reg: Box, bendable: boolean, ws: readonly number[]): void => {
+          for (const w of ws) {
+            const size = sizeOf(args, line, w, lang);
+            const b = size.bounds;
+            // Text-box positions that keep the outline inside the region (centred when it can't fit).
+            const xLo = reg.x - b.x;
+            const xHi = reg.x + reg.w - (b.x + b.w);
+            const yLo = reg.y - b.y;
+            const yHi = reg.y + reg.h - (b.y + b.h);
+            const xs = xHi >= xLo ? Array.from({ length: 7 }, (_, i) => xLo + ((xHi - xLo) * i) / 6) : [(xLo + xHi) / 2];
+            const ys = yHi >= yLo ? Array.from({ length: 7 }, (_, i) => yLo + ((yHi - yLo) * i) / 6) : [(yLo + yHi) / 2];
+            const cands: Candidate[] = [];
+            if (line.kind === 'caption' && !compact) {
+              const startX = rtl ? xHi : xLo;
+              const endX = rtl ? xLo : xHi;
+              cands.push(opening ? { x: startX, y: yLo, bias: -25 } : { x: endX, y: yHi, bias: -25 });
             }
-            cands.push({ x: box.x + box.w * 0.55 - w / 2, y: box.y + box.h * 0.55, bias: -4 });
-          }
-          if (suggestion && validBalloon(suggestion)) cands.push({ x: suggestion.x, y: suggestion.y, bias: 0 });
-          for (const y of ys) for (const x of xs) cands.push({ x, y, bias: 0 });
-          const place = (list: readonly Candidate[]) => {
-            for (const c of list) {
-              // Keep every candidate's outline inside the page safe area when it can fit there at all.
-              const x = b.w <= safe.w ? clampP(c.x, safe.x - b.x, safe.x + safe.w - (b.x + b.w)) : c.x;
-              const y = b.h <= safe.h ? clampP(c.y, safe.y - b.y, safe.y + safe.h - (b.y + b.h)) : c.y;
-              consider(score(x, y, w, size, c.bias, false));
-            }
-          };
-          place(cands);
-          // A clean spot (no overlap, no face, inside the safe area) at this width: never go narrower.
-          if (bestClean) break;
-          // Flush against every balloon already in (or reaching into) the panel: below it, beside it, above it.
-          // A busy panel's free pockets sit right next to its balloons, between the grid's points.
-          const flush: Candidate[] = [];
-          if (xHi >= xLo && yHi >= yLo) {
-            const gx = CLEAR_GAP + 1e-4;
-            const gy = (CLEAR_GAP + 1e-4) * aspect;
-            const near = inflate(region, 2 * GAP, 2 * GAP * aspect);
-            for (const o of obstacles) {
-              if (!area(intersect(o.box, near))) continue;
-              const below = o.box.y + o.box.h + gy - b.y;
-              const above = o.box.y - gy - (b.y + b.h);
-              const right = o.box.x + o.box.w + gx - b.x;
-              const left = o.box.x - gx - (b.x + b.w);
-              for (const x of [xLo, xHi, o.box.x - b.x, right, left]) flush.push({ x: clampP(x, xLo, xHi), y: clampP(below, yLo, yHi), bias: 0 });
-              for (const y of [yLo, yHi, o.box.y - b.y, below]) {
-                flush.push({ x: clampP(right, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 }, { x: clampP(left, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 });
+            if (line.kind === 'sfx' && !compact) {
+              const actions = busy.filter((a) => covered(a, box) > 0.3);
+              for (const a of actions) {
+                cands.push({ x: a.x + a.w + GAP - b.x, y: a.y, bias: -10 }, { x: a.x - (b.x + b.w) - GAP, y: a.y, bias: -10 });
               }
-              for (const x of [xLo, xHi]) flush.push({ x, y: clampP(above, yLo, yHi), bias: 0 });
+              cands.push({ x: box.x + box.w * 0.55 - w / 2, y: box.y + box.h * 0.55, bias: -4 });
             }
+            if (suggestion && validBalloon(suggestion)) cands.push({ x: suggestion.x, y: suggestion.y, bias: 0 });
+            for (const y of ys) for (const x of xs) cands.push({ x, y, bias: 0 });
+            const place = (list: readonly Candidate[]) => {
+              for (const c of list) {
+                // Keep every candidate's outline inside the page safe area when it can fit there at all.
+                const x = b.w <= safe.w ? clampP(c.x, safe.x - b.x, safe.x + safe.w - (b.x + b.w)) : c.x;
+                const y = b.h <= safe.h ? clampP(c.y, safe.y - b.y, safe.y + safe.h - (b.y + b.h)) : c.y;
+                consider(score(x, y, w, size, c.bias, false, bendable));
+              }
+            };
+            place(cands);
+            // A clean spot (no overlap, no face, inside the safe area) at this width: never go narrower.
+            if (bestClean) break;
+            // Flush against every balloon already in (or reaching into) the panel: below it, beside it, above it.
+            // A busy panel's free pockets sit right next to its balloons, between the grid's points.
+            const flush: Candidate[] = [];
+            if (xHi >= xLo && yHi >= yLo) {
+              const gx = CLEAR_GAP + 1e-4;
+              const gy = (CLEAR_GAP + 1e-4) * aspect;
+              const near = inflate(reg, 2 * GAP, 2 * GAP * aspect);
+              for (const o of obstacles) {
+                if (!area(intersect(o.box, near))) continue;
+                const below = o.box.y + o.box.h + gy - b.y;
+                const above = o.box.y - gy - (b.y + b.h);
+                const right = o.box.x + o.box.w + gx - b.x;
+                const left = o.box.x - gx - (b.x + b.w);
+                for (const x of [xLo, xHi, o.box.x - b.x, right, left]) flush.push({ x: clampP(x, xLo, xHi), y: clampP(below, yLo, yHi), bias: 0 });
+                for (const y of [yLo, yHi, o.box.y - b.y, below]) {
+                  flush.push({ x: clampP(right, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 }, { x: clampP(left, xLo, xHi), y: clampP(y, yLo, yHi), bias: 0 });
+                }
+                for (const x of [xLo, xHi]) flush.push({ x, y: clampP(above, yLo, yHi), bias: 0 });
+              }
+            }
+            place(flush);
+            if (bestClean) break;
           }
-          place(flush);
-          if (bestClean) break;
+        };
+        // When no spot of the panel is read in turn and a later line is already fixed in it (so nothing below that
+        // line, and no spill, is read in turn either), reading order beats a tail's exact aim and the panel's
+        // inner padding: the panel is searched again up to its edge (inside the safe area), and a tail whose aim
+        // alone is in the way bends. Without a fixed later line the panel's usual spill keeps aimed tails.
+        // Whole words first, both ways, and only then the widths that split a word: a balloon tucked against the
+        // panel's edge beats one lettered "EXPLANATI / ON".
+        const room = intersect(box, safe);
+        const edge = room.w >= 0.02 && room.h >= 0.02 ? room : region;
+        for (const ws of [widths.filter((w) => w >= noSplit), widths.filter((w) => w < noSplit)]) {
+          if (bestClean || !ws.length) continue;
+          searchPanel(region, false, ws);
+          if (!bestClean && ahead.length) searchPanel(edge, true, ws);
         }
         // The panel is full: spill to the nearest free spot in the page's safe area that the reader still
         // meets after this panel's earlier lines and every earlier panel (never over another balloon, never
@@ -547,7 +641,9 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const spillSearch = (mode: 'tier' | 'later' | 'free'): void => {
           const strict = mode !== 'free';
           // Slimmer than the panel search would go: a tall narrow balloon fits a gutter or a side band.
-          const spillWidths = [...new Set([...widths, Math.max(0.1, round4(w0 * 0.5))])].sort((a, b) => a - b);
+          // Whole words first (narrowest first), then the widths that split one.
+          const whole = (w: number) => w >= noSplit;
+          const spillWidths = [...new Set([...widths, narrow(0.5), rawW(0.5)])].filter(allowed).sort((a, b) => (whole(a) === whole(b) ? a - b : whole(a) ? -1 : 1));
           for (const w of spillWidths) {
             const size = sizeOf(args, line, w, lang);
             const b = size.bounds;
@@ -599,6 +695,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const pick = (bestClean ?? bestRoomy ?? bestFree ?? best)!;
         if (!pick.clean) stuck += 1;
         if (!pick.clean || spilled) crowded.push(line.id);
+        if (pick.w < noSplit - 1e-9) split.push(line.id);
 
         // Rounded to the stored precision without nudging an outline that fits the safe area out of it.
         const inside = (v: number, lo: number, hi: number) => {
@@ -636,13 +733,20 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     };
 
     // A panel whose lines did not all find a clean spot is packed again, compactly; the better one stays.
-    const mark = { obstacles: obstacles.length, result: result.length, placed: placedIds.length, crowded: crowded.length };
-    const keep = () => ({ obstacles: obstacles.slice(mark.obstacles), result: result.slice(mark.result), placed: placedIds.slice(mark.placed), crowded: crowded.slice(mark.crowded) });
+    const mark = { obstacles: obstacles.length, result: result.length, placed: placedIds.length, crowded: crowded.length, split: split.length };
+    const keep = () => ({
+      obstacles: obstacles.slice(mark.obstacles),
+      result: result.slice(mark.result),
+      placed: placedIds.slice(mark.placed),
+      crowded: crowded.slice(mark.crowded),
+      split: split.slice(mark.split)
+    });
     const rewind = () => {
       obstacles.length = mark.obstacles;
       result.length = mark.result;
       placedIds.length = mark.placed;
       crowded.length = mark.crowded;
+      split.length = mark.split;
     };
     const stuck = letterPanel(false);
     if (!stuck) return;
@@ -654,8 +758,9 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     result.push(...first.result);
     placedIds.push(...first.placed);
     crowded.push(...first.crowded);
+    split.push(...first.split);
   });
-  return { balloons: result, placed: placedIds, crowded };
+  return { balloons: result, placed: placedIds, crowded, split };
 }
 
 /** Two text boxes whose tops are this close (page heights) share a row: the reader takes them left to right (rtl: right to left). */
@@ -672,6 +777,26 @@ const shortenTail = (r: Box, tip: { x: number; y: number }, aspect: number, maxL
   const len = Math.hypot(dx, dy);
   if (len <= maxLen) return tip;
   return { x: clampP(exit.x + (dx / len) * maxLen, 0, 1), y: clampP(exit.y + (dy / len) * maxLen * aspect, 0, 1) };
+};
+
+/** A tail at most this long (page widths) when the aimed one reaches across a balloon. */
+const SHORT_TAIL_LEN = 0.05;
+/** A stub tail's reach past the text box (page heights): the renderer's own short default. */
+const STUB_TAIL = 0.035;
+
+/**
+ * Tails to try, in order, when the aimed one (`tip`) reaches across a balloon: a shorter one on the same aim,
+ * then a stub straight out of the box on the speaker's side (below the box when the speaker is below its
+ * middle, else above; on the speaker's side of it across; never off the page — and never pointing away from
+ * the speaker). `cost` is what bending away from the aim costs a candidate spot.
+ */
+const tailAlternatives = (r: Box, tip: { x: number; y: number }, aspect: number): { tip: { x: number; y: number }; cost: number }[] => {
+  const out: { tip: { x: number; y: number }; cost: number }[] = [];
+  const short = shortenTail(r, tip, aspect, SHORT_TAIL_LEN);
+  if (short.x !== tip.x || short.y !== tip.y) out.push({ tip: short, cost: 4 });
+  const y = tip.y >= r.y + r.h / 2 ? r.y + r.h + STUB_TAIL : r.y - STUB_TAIL;
+  if (y >= 0 && y <= 1) out.push({ tip: { x: clampP(clampP(tip.x, r.x + r.w * 0.2, r.x + r.w * 0.8), 0, 1), y }, cost: 8 });
+  return out;
 };
 
 /** Where the ray from the text box's centre toward `p` leaves the box (the visible start of a tail). */
@@ -768,6 +893,8 @@ export interface SettleItem {
   before?: Box[];
   /** The line this one is read after (the previous line of its panel): a nudge keeps it read after that one. */
   after?: string;
+  /** Later lines of its panel the owner fixed there: a nudge keeps this one read before every one of them. */
+  next?: readonly string[];
 }
 
 export interface SettleMove {
@@ -783,7 +910,7 @@ export interface SettleResult {
   /** Movable balloons that still overlap something (the page is full). */
   unresolved: string[];
   /** Moved balloons that only found room where the reader meets them out of order (outside their panel's tier,
-   *  in an earlier panel, or before the previous line of their panel). */
+   *  in an earlier panel, before the previous line of their panel, or after a later line fixed in it). */
   reordered: string[];
 }
 
@@ -860,8 +987,8 @@ export function settleBalloons(
    * Reading-order level of a text box for `it` (only what its start spot does not already break counts):
    *  0 = in its panel's tier and read in order;
    *  1 = read after everything before it, but in a later tier (a forward spill);
-   *  2 = read a little early, inside its own tier (the panel before it on the same row, or before the
-   *      previous line of its panel) — an over-full page's last resort;
+   *  2 = read out of turn inside its own tier (the panel before it on the same row, before the previous
+   *      line of its panel, or after a later line fixed in it) — an over-full page's last resort;
    *  3 = read far too early (above its tier, or in a panel of an earlier tier).
    */
   const orderLevel = (it: SettleItem, t: Box): number => {
@@ -886,6 +1013,14 @@ export function settleBalloons(
       const p = cur.get(prev.id)!;
       const p0 = start.get(prev.id)!;
       if (!readsAfter(t, textAt(prev, p.x, p.y)) && readsAfter(t0, textAt(prev, p0.x, p0.y))) level = 2;
+    }
+    for (const id of it.next ?? []) {
+      if (level >= 2) break;
+      const q = byId.get(id);
+      if (!q || q.id === it.id) continue;
+      const c = cur.get(id)!;
+      const c0 = start.get(id)!;
+      if (!readsAfter(textAt(q, c.x, c.y), t) && readsAfter(textAt(q, c0.x, c0.y), t0)) level = 2;
     }
     return level;
   };

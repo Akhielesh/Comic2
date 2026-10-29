@@ -10,10 +10,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { makeQaDoc } from '../../../components/comicstudio/testing/qaFixtures';
+import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures__/sampleDoc';
 import type { Box, ComicDoc, Page } from '../doc';
-import { DENSITY_STEPS, estimateMeasure, letteringAspect, planLettering, type LetterPlan, type Measure } from './layout';
+import { DENSITY_STEPS, estimateMeasure, letteringAspect, letteringSizer, planLettering, type LetterPlan, type Measure } from './layout';
 import { panelBoxesFor } from '../pageGeometry';
-import { balloonFootprint } from './place';
+import { balloonFootprint, placeBalloonsDetailed } from './place';
 
 /** Real fonts run wider than the estimates: 1.2× the registry numbers. */
 const wideMeasure: Measure = (text, font) => estimateMeasure(text, font) * 1.2;
@@ -221,5 +222,197 @@ describe('reading order on every drawn page of the QA fixtures (crowded pages in
       const tierTop = panelBoxesFor(doc, page)[4].y * H;
       expect(p.y + p.h / 2, `${id}_p5_l2 centre`).toBeGreaterThanOrEqual(tierTop);
     }
+  });
+});
+
+// ── Reading order against the NEXT line the owner fixed in a panel ───────────────────────────────────────
+
+/**
+ * The fixtures with holes punched: every line whose next line in its panel has a stored balloon loses its own,
+ * so the engine places it in front of a line the owner already fixed (`pin` pins the kept ones, so the
+ * dense-page repack cannot move them either). The sample doc's page 1 is that shape as shipped.
+ */
+const withHoles = (doc: ComicDoc, pin: boolean): ComicDoc => {
+  for (const page of drawnPages(doc)) {
+    const stored = new Set(page.balloons.map((b) => b.lineId));
+    const drop = new Set<string>();
+    for (const panel of page.panels) {
+      const lines = panel.lines.filter((l) => l.text.trim());
+      lines.forEach((l, k) => {
+        if (k + 1 < lines.length && stored.has(lines[k + 1].id)) drop.add(l.id);
+      });
+    }
+    page.balloons = page.balloons.filter((b) => !drop.has(b.lineId)).map((b) => (pin ? { ...b, pinned: true } : b));
+  }
+  return doc;
+};
+
+/**
+ * Every software-placed line that the reader meets AFTER a later line of its panel the owner fixed (stored,
+ * drawn where stored, met in that panel, and read after the placed line's previous line) — unless the engine
+ * reports it read out of turn (`crowdedReason: 'order'`). Returns "line: why" strings.
+ */
+const nextFixedBreaks = (doc: ComicDoc, page: Page, plans: readonly LetterPlan[]): string[] => {
+  const aspect = letteringAspect(doc, page);
+  const H = 1000 / aspect;
+  const tol = 0.02 * H;
+  const rtl = doc.format.readingDirection === 'rtl';
+  const boxes = panelBoxesFor(doc, page).map((b) => ({ x: b.x * 1000, y: b.y * H, w: b.w * 1000, h: b.h * H }));
+  const by = new Map(plans.map((p) => [p.lineId, p]));
+  const stored = new Map(page.balloons.map((b) => [b.lineId, b]));
+  /** Text box `a` is read before `b` (tops within the row tolerance share a row). */
+  const before = (a: LetterPlan, b: LetterPlan) => a.y < b.y - tol || (Math.abs(a.y - b.y) < tol && (rtl ? a.x >= b.x - 0.01 : a.x <= b.x + 0.01));
+  const out: string[] = [];
+  page.panels.forEach((panel, index) => {
+    const own = boxes[index];
+    const metHere = (p: LetterPlan) => {
+      const cx = p.x + p.w / 2;
+      return cx >= own.x && cx <= own.x + own.w && p.y >= own.y - 0.01 * H && p.y <= own.y + own.h;
+    };
+    const lines = panel.lines.filter((l) => l.text.trim());
+    lines.forEach((line, k) => {
+      const a = by.get(line.id)!;
+      if (!a.fallback) return;
+      const prevLine = lines[k - 1];
+      const prev = prevLine ? by.get(prevLine.id) : undefined;
+      const ps = prevLine ? stored.get(prevLine.id) : undefined;
+      const anchoredPrev = prev && (!(ps?.pinned || ps?.locked) || metHere(prev)) ? prev : undefined;
+      for (const later of lines.slice(k + 1)) {
+        const b = by.get(later.id)!;
+        const s = stored.get(later.id);
+        if (!s || Math.abs(b.x - s.x * 1000) >= 40 || Math.abs(b.y - s.y * H) >= 40 || !metHere(b)) continue; // not where the owner fixed it
+        if (anchoredPrev && before(b, anchoredPrev)) continue; // the owner already stored it before the previous line
+        if (!before(a, b) && a.crowdedReason !== 'order') out.push(`${line.id}: read after ${later.id}`);
+      }
+    });
+  });
+  return out;
+};
+
+/** The fixture pages that are over-full even at the smallest lettering (see the reading-order sweep above). */
+const OVERFULL_PAGES: Record<string, readonly string[]> = { stress: ['pg_7', 'pg_11', 'pg_19'] };
+
+describe('a placed line is read before the later lines the owner fixed in its panel (every drawn page, holes punched)', () => {
+  const docs = (rtl: boolean): [string, ComicDoc][] => [
+    ['sample', rtl ? { ...makeSampleDoc(), format: { ...makeSampleDoc().format, readingDirection: 'rtl' } } : makeSampleDoc()],
+    ...(['stress', 'heist-12p', 'lake-1p', 'deep-40p'] as const).flatMap((f): [string, ComicDoc][] => [
+      [`${f} holes`, withHoles(makeQaDoc(f, { rtl }), false)],
+      [`${f} holes pinned`, withHoles(makeQaDoc(f, { rtl }), true)]
+    ])
+  ];
+  for (const rtl of [false, true]) {
+    for (const [name, measure] of [
+      ['the registry estimates', estimateMeasure],
+      ['a 1.2× wider measure', wideMeasure]
+    ] as const) {
+      it(`${rtl ? 'rtl' : 'ltr'} with ${name}: in turn, or reported read out of turn — and still no overlaps, nothing off the page`, () => {
+        let placedBeforeFixed = 0;
+        for (const [label, doc] of docs(rtl)) {
+          for (const page of drawnPages(doc)) {
+            const plans = planLettering(doc, page, letteringAspect(doc, page), measure);
+            expect(nextFixedBreaks(doc, page, plans), `${label} ${page.id}`).toEqual([]);
+            const aspect = letteringAspect(doc, page);
+            const H = 1000 / aspect;
+            const owner = new Set(page.balloons.filter((b) => b.pinned || b.locked).map((b) => b.lineId));
+            const feet = plans.map((p) => ({ id: p.lineId, box: groupBox(p), linked: p.linkTo }));
+            for (const { id, box } of feet) {
+              expect(box.x, `${label} ${page.id} ${id} left`).toBeGreaterThanOrEqual(-0.01);
+              expect(box.y, `${label} ${page.id} ${id} top`).toBeGreaterThanOrEqual(-0.01);
+              expect(box.x + box.w, `${label} ${page.id} ${id} right`).toBeLessThanOrEqual(1000.01);
+              expect(box.y + box.h, `${label} ${page.id} ${id} bottom`).toBeLessThanOrEqual(H + 0.01);
+            }
+            for (let i = 0; i < feet.length; i += 1)
+              for (let j = i + 1; j < feet.length; j += 1) {
+                if (feet[i].linked === feet[j].id || feet[j].linked === feet[i].id) continue;
+                if (owner.has(feet[i].id) && owner.has(feet[j].id)) continue; // two pins the owner overlapped
+                const f = overlapFraction(feet[i].box, feet[j].box);
+                // An over-full page (more words than room even at the smallest lettering) may be left with an
+                // overlap, and then says so; any other page has none.
+                const said = [feet[i].id, feet[j].id].some((id) => plans.find((p) => p.lineId === id)?.crowdedReason === 'overlap');
+                if (f > 0 && (OVERFULL_PAGES[label.split(' ')[0]] ?? []).includes(page.id)) expect(said, `${label} ${page.id}: ${feet[i].id} × ${feet[j].id} overlap is reported`).toBe(true);
+                else expect(f, `${label} ${page.id}: ${feet[i].id} × ${feet[j].id} overlap`).toBe(0);
+              }
+            // The sweep really exercises the rule: placed lines in front of a fixed one exist.
+            const stored = new Set(page.balloons.map((b) => b.lineId));
+            for (const panel of page.panels) {
+              const ids = panel.lines.filter((l) => l.text.trim()).map((l) => l.id);
+              ids.forEach((id, k) => {
+                if (!stored.has(id) && ids.slice(k + 1).some((n) => stored.has(n))) placedBeforeFixed += 1;
+              });
+            }
+          }
+        }
+        expect(placedBeforeFixed).toBeGreaterThan(20);
+      });
+    }
+  }
+});
+
+describe('the sample page: a new line before one the owner stored, with no whole-word room in turn', () => {
+  it('pg_1_l4 is lettered whole and flagged `order`; nothing the owner lettered moves', () => {
+    // Panel 3: l3 pinned at y .50 (its tail reaches down to .75), l4 has no balloon, l5 stored (unpinned) at
+    // y .80. The placement tucks l4 in on l3's row (the board's fallback spot), but that gap is too narrow for
+    // "EXPLANATION," — it letters "EXPLANATI / ON". The planner places l4 again in whole words only: after
+    // l5 (read out of turn, and flagged so the editor says so), and it never moves or shrinks the owner's
+    // balloons to make room. Before the fix l4 was drawn after l5 with no flag.
+    const doc = makeSampleDoc();
+    const page = doc.pages[0];
+    const aspect = letteringAspect(doc, page);
+    const placed = placeBalloonsDetailed({
+      page,
+      boxes: panelBoxesFor(doc, page),
+      aspect,
+      rtl: false,
+      plansFor: letteringSizer(doc, page, aspect, estimateMeasure),
+      safeMargin: 0.03,
+      existing: page.balloons,
+      keep: 'all'
+    });
+    expect(placed.split).toEqual(['pg_1_l4']);
+    for (const measure of [estimateMeasure, wideMeasure]) {
+      const H = 1000 / aspect;
+      const plans = planLettering(doc, page, aspect, measure);
+      const by = (id: string) => plans.find((p) => p.lineId === id)!;
+      const [l3, l4, l5] = [by('pg_1_l3'), by('pg_1_l4'), by('pg_1_l5')];
+      const tol = 0.02 * H;
+      expect(l4.fallback).toBe(true);
+      expect(l4.runs.map((r) => r.text).join(' '), 'no word split').toBe('YOU OWE ME AN EXPLANATION, MAYA.');
+      expect(l4.densityScale).toBeUndefined();
+      expect(l4.y, 'l4 is read after l3').toBeGreaterThan(l3.y + tol);
+      const inTurn = l4.y < l5.y - tol || (Math.abs(l4.y - l5.y) < tol && l4.x < l5.x);
+      expect(inTurn || l4.crowdedReason === 'order', 'read in turn, or flagged').toBe(true);
+      expect(l4.crowdedReason).toBe('order');
+      for (const id of ['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l5']) {
+        const s = page.balloons.find((b) => b.lineId === id)!;
+        const p = by(id);
+        expect(p.x, `${id} x`).toBeCloseTo(s.x * 1000, 1);
+        expect(p.y, `${id} y`).toBeCloseTo(s.y * H, 1);
+        expect(p.w, `${id} w`).toBeCloseTo(s.w * 1000, 1);
+        expect(p.crowded, `${id} untouched`).toBeUndefined();
+        expect(p.densityScale, `${id} size`).toBeUndefined();
+      }
+      const groups = plans.map((p) => ({ id: p.lineId, box: groupBox(p) }));
+      for (let i = 0; i < groups.length; i += 1)
+        for (let j = i + 1; j < groups.length; j += 1) expect(overlapFraction(groups[i].box, groups[j].box), `${groups[i].id} × ${groups[j].id}`).toBe(0);
+    }
+  });
+
+  it('with room before the stored line, the new line is lettered whole in turn and nothing is flagged', () => {
+    // The same page with l5 stored lower (y .90): l4 now fits between l3's tail and l5 in whole words.
+    const doc = makeSampleDoc((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l5' ? { ...b, y: 0.9 } : b));
+    });
+    const page = doc.pages[0];
+    const aspect = letteringAspect(doc, page);
+    const H = 1000 / aspect;
+    const plans = planLettering(doc, page, aspect, estimateMeasure);
+    const by = (id: string) => plans.find((p) => p.lineId === id)!;
+    const [l3, l4, l5] = [by('pg_1_l3'), by('pg_1_l4'), by('pg_1_l5')];
+    const tol = 0.02 * H;
+    expect(l4.y, 'l4 is read after l3').toBeGreaterThan(l3.y + tol);
+    expect(l4.y, 'l4 is read before l5').toBeLessThan(l5.y - tol);
+    expect(l4.runs.map((r) => r.text).join(' ')).toBe('YOU OWE ME AN EXPLANATION, MAYA.');
+    expect(plans.filter((p) => p.crowded).map((p) => p.lineId)).toEqual([]);
+    expect(l5.y).toBeCloseTo(0.9 * H, 1);
   });
 });

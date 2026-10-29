@@ -17,7 +17,7 @@
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
 import { panelBoxesFor } from '../pageGeometry.js';
-import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
+import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, wrapLines, wrapUnits, type FitResult, type WrapUnit } from '../textLayout.js';
 import { FONT_REGISTRY, fontByFamily, fontString, resolveLetteringFont } from './fonts.js';
 import { balloonFootprint, placeBalloonsDetailed, ROW_TOLERANCE, safeAreaBox, settleBalloons, type SettleItem, type SizedLine } from './place.js';
 import { bubbleGeometry, hashSeed, resolveTailStyle, type BubbleGeometry } from './shapes.js';
@@ -79,8 +79,9 @@ export interface LetterPlan {
   densityScale?: number;
   /**
    * Why a crowded balloon is flagged (set with `crowded`): 'overlap' — it still overlaps another balloon (a
-   * page with no free room left); 'order' — the only free room is where the reader meets it before its
-   * turn; 'outside' — no room in its panel, so it sits beside it; 'moved' — moved to make room.
+   * page with no free room left); 'order' — the only free room is where the reader meets it out of turn
+   * (before its turn, or after a later line the owner fixed in its panel); 'outside' — no room in its
+   * panel, so it sits beside it; 'moved' — moved to make room.
    */
   crowdedReason?: CrowdedReason;
 }
@@ -288,7 +289,7 @@ const layoutText = (
       const lines = wrapBalancedLines(text, lang, inner, (s) => setup.measureAt(s, size));
       return { w: r4(b.w), fontPx: size, lines, heightPx: r2(Math.max(1, lines.length) * size * lineHeight + 2 * pad.y), overflow: false, grew: false, shrank: false };
     }
-    return fitBalloonText({
+    const fit = fitBalloonText({
       text,
       lang,
       kind: setup.line.kind,
@@ -303,8 +304,52 @@ const layoutText = (
       padY: pad.y / PLAN_W,
       ...(b.growLeft ? { growLeft: true } : {})
     });
+    // Balancing narrows the lines as far as the line count allows, and on a narrow balloon that can split a word
+    // the plain wrap keeps whole ("EXPLANATI / ON"). Then the plain wrap is lettered: same lines, same height.
+    const units = wrapUnits(text, lang);
+    if (fit.lines.length > 1 && splitsUnit(fit.lines, units)) {
+      const plain = wrapLines(text, lang, Math.max(1, fit.w * PLAN_W - 2 * pad.x), (s) => setup.measureAt(s, fit.fontPx));
+      if (plain.length === fit.lines.length && !splitsUnit(plain, units)) return { ...fit, lines: plain };
+    }
+    return fit;
   });
   return { w: fit.w * PLAN_W, h: fit.heightPx, fontSize: fit.fontPx, lines: fit.lines, overflow: fit.overflow };
+};
+
+/** The wrapped lines break inside a wrap unit (a word, or an unspaced script's unbreakable cluster). */
+const splitsUnit = (lines: readonly string[], units: readonly WrapUnit[]): boolean => {
+  let u = 0;
+  for (const line of lines) {
+    let rest = line;
+    while (rest) {
+      const t = units[u]?.text;
+      if (!t || !rest.startsWith(t)) return true;
+      rest = rest.slice(t.length).replace(/^ +/, '');
+      u += 1;
+    }
+  }
+  return u !== units.length;
+};
+
+const WORD_MEMO = new WeakMap<Measure, Map<string, number>>();
+/** The widest wrap unit (word) of a line's lettering at a font size, in plan units; memoized like the fits. */
+const longestWord = (setup: LineSetup, measure: Measure, px: number): number => {
+  let memo = WORD_MEMO.get(measure);
+  if (!memo) {
+    memo = new Map();
+    WORD_MEMO.set(measure, memo);
+  }
+  const key = [setup.lang, setup.fontId, setup.weight, setup.italic ? 1 : 0, setup.style.letterSpacing, r4(px), setup.text].join('|');
+  const hit = memo.get(key);
+  if (hit !== undefined) return hit;
+  let longest = 0;
+  for (const u of wrapUnits(setup.text, setup.lang)) longest = Math.max(longest, setup.measureAt(u.text, px));
+  memo.set(key, longest);
+  if (memo.size > MEMO_SIZE) {
+    const oldest = memo.keys().next().value;
+    if (oldest !== undefined) memo.delete(oldest);
+  }
+  return longest;
 };
 
 const geometryFor = (setup: LineSetup, w: number, h: number, tip: { x: number; y: number } | null): BubbleGeometry =>
@@ -352,6 +397,11 @@ export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measu
     // `tail`: the placement keeps tails out of other balloons; a tail-less style needs no room for one.
     const tail = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape) !== 'none' && setup.style.shape !== 'none';
     const sized: SizedLine = { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H }, tail };
+    // `minW`: the narrowest box that splits no word at this size (a sound effect shrinks to its box instead).
+    if (line.kind !== 'sfx') {
+      const longest = longestWord(setup, measure, t.fontSize);
+      if (longest > 0) sized.minW = (longest + 2 * setup.pad.x) / PLAN_W;
+    }
     entry.sized.set(w, sized);
     return sized;
   };
@@ -457,24 +507,39 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
   // Reading order counts as much as room: a software-placed balloon the reader would meet out of order (in
   // an earlier panel, above its panel's tier, before the previous line of its panel) or that had to leave
   // its panel's tier is not a finished page either, so the page is lettered smaller before that happens.
-  // Ranking: overlaps, then far-early reads, then early reads, then tier spills; the larger size wins a tie.
+  // So is one lettered so narrow that a word splits ("EXPLANATI / ON"): the step first places those lines
+  // again in whole words only. A line placed after a later line the owner already lettered in its panel
+  // (the placement tucks it in before that line whenever there is room) is flagged `order` but moves
+  // nothing of the owner's: that is the owner's call, not a reason to repack or shrink the page.
+  // Ranking: overlaps, then far-early reads, then early reads, then tier spills, then split words, then
+  // lines read after a later fixed one; the larger size wins a tie.
   //
-  // Search order (each step tries both packings): full size; then the smallest step — a page that is not
-  // finished even there is over-full and stops (the best attempt so far is drawn, its stuck lines flagged);
-  // else the steps in between, largest first, and the first finished one is drawn.
+  // Search order (each step tries the stored layout — again in whole words when a word split — then the
+  // repack): full size; then the smallest step — a page that is not finished even there is over-full and
+  // stops (the best attempt so far is drawn, its stuck lines flagged); else the steps in between, largest
+  // first, and the first finished one is drawn.
   let best: PageAttempt | undefined;
   const repackable = [...stored.values()].some((b) => !b.pinned && !b.locked);
   /** Tail-less outlines by line, size and box: every attempt draws the same few. */
   const shapes = new Map<string, BubbleGeometry>();
   const tryScale = (scale: number): PageAttempt | undefined => {
-    // One sizer per size step: both packings of a step measure the same lines at the same widths.
+    // One sizer per size step: every packing of a step measures the same lines at the same widths.
     const sizer = letteringSizer(doc, page, asp, m, scale);
-    for (const keep of repackable ? (['all', 'pinned'] as const) : (['all'] as const)) {
-      const a = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep, sizer, shapes);
+    const attempt = (keep: 'all' | 'pinned', whole: readonly string[] = []): PageAttempt => {
+      const a = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep, sizer, shapes, whole);
       if (!best || worse(best, a) || (!worse(a, best) && a.scale > best.scale)) best = a;
-      if (finished(a)) return a;
+      return a;
+    };
+    const all = attempt('all');
+    if (finished(all)) return all;
+    // A word split: those lines again, in whole words only (wherever that puts them).
+    if (all.split.length) {
+      const whole = attempt('all', all.split);
+      if (finished(whole)) return whole;
     }
-    return undefined;
+    if (!repackable) return undefined;
+    const repack = attempt('pinned');
+    return finished(repack) ? repack : undefined;
   };
   const steps = [...DENSITY_STEPS].sort((a, b) => b - a);
   const first = tryScale(steps[0]);
@@ -491,13 +556,14 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
   return best ? best.build() : [];
 }
 
-const finished = (a: PageAttempt) => !a.unresolved && !a.farEarly && !a.early && !a.spilled;
+// A line read after a later line the owner fixed (`late`) is flagged, never a reason to move the owner's balloons.
+const finished = (a: PageAttempt) => !a.unresolved && !a.farEarly && !a.early && !a.spilled && !a.split.length;
 
 
 interface PageAttempt {
   /** The attempt's plans (built on demand: only the winning attempt draws). */
   build: () => LetterPlan[];
-  /** Lines still overlapping, read too early or spilled out of their tier. */
+  /** Lines still overlapping, read out of turn or spilled out of their tier (each one flagged). */
   stuck: string[];
   /** The density step of this attempt. */
   scale: number;
@@ -509,14 +575,23 @@ interface PageAttempt {
   early: number;
   /** Software-placed balloons drawn outside their panel's tier (a later tier). */
   spilled: number;
+  /** Software-placed balloons lettered so narrow that a word splits across lines ("EXPLANATI / ON"). */
+  split: string[];
+  /** Software-placed balloons read after a later line the owner fixed in their panel (no room before it). */
+  late: number;
 }
 
-/** `a` is a worse page than `b`: more overlaps, else more far-early reads, else more early reads, else more tier spills. */
+/**
+ * `a` is a worse page than `b`: more overlaps, else more far-early reads, else more early reads, else more
+ * tier spills, else more split words, else more lines read after a later fixed one.
+ */
 const worse = (a: PageAttempt, b: PageAttempt): boolean => {
   if (a.unresolved !== b.unresolved) return a.unresolved > b.unresolved;
   if (a.farEarly !== b.farEarly) return a.farEarly > b.farEarly;
   if (a.early !== b.early) return a.early > b.early;
-  return a.spilled > b.spilled;
+  if (a.spilled !== b.spilled) return a.spilled > b.spilled;
+  if (a.split.length !== b.split.length) return a.split.length > b.split.length;
+  return a.late > b.late;
 };
 
 /** Panel indexes in reading order (the panel number, then the array order). */
@@ -529,6 +604,7 @@ const readingOrder = (page: Page): number[] =>
 /**
  * One planning pass at a density scale (1 = the style's size). `keep: 'all'` draws every stored balloon
  * where it is; `keep: 'pinned'` re-places the unpinned stored ones too (an over-full page's repack).
+ * `wholeWords`: lines the placement letters in whole words only (a retry after a split word).
  * `unresolved` counts the balloons the settle pass could not clear of overlaps.
  */
 function planAtDensity(
@@ -547,7 +623,8 @@ function planAtDensity(
   scale: number,
   keep: 'all' | 'pinned',
   sizer: (line: Line, w: number) => SizedLine,
-  shapes: Map<string, BubbleGeometry>
+  shapes: Map<string, BubbleGeometry>,
+  wholeWords: readonly string[]
 ): PageAttempt {
   const repacks = (id: string) => {
     const b = stored.get(id);
@@ -557,6 +634,8 @@ function planAtDensity(
   // around everything else on the page.
   const placed = new Map<string, Balloon>();
   let crowded: ReadonlySet<string> = new Set<string>();
+  /** Lines the placement lettered narrower than their whole words allow (it found no wider spot). */
+  let narrowed: ReadonlySet<string> = new Set<string>();
   if (items.some((it) => !stored.has(it.line.id) || repacks(it.line.id))) {
     const qc = page.render?.qc;
     const result = placeBalloonsDetailed({
@@ -570,10 +649,12 @@ function planAtDensity(
       safeMargin,
       existing: page.balloons || [],
       keep,
+      ...(wholeWords.length ? { wholeWords } : {}),
       lang: doc.format?.language
     });
     for (const b of result.balloons) if (!stored.has(b.lineId) || repacks(b.lineId)) placed.set(b.lineId, b);
     crowded = new Set(result.crowded.filter((id) => !stored.has(id) || repacks(id)));
+    narrowed = new Set(result.split);
   }
 
   const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
@@ -674,6 +755,30 @@ function planAtDensity(
     const cx = prev.x + prev.w / 2;
     if (prev.movable || !reg || (cx >= reg.x && cx <= reg.x + reg.w && prev.y >= reg.y - 0.01 * H && prev.y <= reg.y + reg.h)) afterOf.set(p.line.id, prev.line.id);
   }
+  const rowTol = ROW_TOLERANCE * H;
+  /** Text box `a` (top-left) is read before `b`: above its row, or on its row nearer the reading start. */
+  const readsBefore = (a: { x: number; y: number }, b: { x: number; y: number }): boolean =>
+    a.y < b.y - rowTol || (Math.abs(a.y - b.y) < rowTol && (rtl ? a.x > b.x - 1e-6 : a.x < b.x + 1e-6));
+  /**
+   * The later lines of each line's panel that the owner fixed there (stored, drawn from the stored values, and
+   * met in this panel) and that the reader meets after its previous line: it is read before every one of them.
+   */
+  const nextOf = new Map<string, string[]>();
+  const byLine = new Map(pre.map((p) => [p.line.id, p]));
+  for (const p of pre) {
+    const reg = planBox(p.panelIndex);
+    const prevId = afterOf.get(p.line.id);
+    const prev = prevId ? byLine.get(prevId) : undefined;
+    const ids: string[] = [];
+    for (const q of pre) {
+      if (q.panelIndex !== p.panelIndex || q.order <= p.order || q.fallback || repacked.has(q.line.id)) continue;
+      const cx = q.x + q.w / 2;
+      if (reg && !(cx >= reg.x && cx <= reg.x + reg.w && q.y >= reg.y - 0.01 * H && q.y <= reg.y + reg.h)) continue;
+      if (prev && readsBefore(q, prev)) continue; // the owner stored it before the previous line: it binds nothing
+      ids.push(q.line.id);
+    }
+    if (ids.length) nextOf.set(p.line.id, ids);
+  }
   const settled = settleBalloons(
     pre.map((p): SettleItem => {
       const outline = { x: p.x + p.g0.bounds.x, y: p.y + p.g0.bounds.y, w: p.g0.bounds.w, h: p.g0.bounds.h };
@@ -691,6 +796,8 @@ function planAtDensity(
       };
       const after = afterOf.get(p.line.id);
       if (after) item.after = after;
+      const next = nextOf.get(p.line.id);
+      if (next) item.next = next;
       return item;
     }),
     { w: PLAN_W, h: H },
@@ -713,10 +820,12 @@ function planAtDensity(
   let farEarly = 0;
   let early = 0;
   let spilled = 0;
+  let late = 0;
   const stuck = new Set<string>();
   const levels = new Map<string, number>();
   const textOf = new Map(pre.map((p) => [p.line.id, { x: p.x, y: p.y }]));
-  const rowTol = ROW_TOLERANCE * H;
+  const reordered = new Set(settled.reordered);
+  const split: string[] = [];
   const inside = (b: Box, px: number, py: number) => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h;
   for (const p of pre) {
     const engine = p.fallback || repacked.has(p.line.id) || nudged.has(p.line.id);
@@ -726,6 +835,7 @@ function planAtDensity(
     const cy = p.y + p.h / 2;
     // Where the owner (or an earlier software pass) stored it.
     const s0 = p.fallback || repacked.has(p.line.id) ? undefined : { x: p.b.x * PLAN_W + p.w / 2, y: p.b.y * H + p.h / 2 };
+    const t = textOf.get(p.line.id)!;
     const level = ((): number => {
       if (reg && cy < reg.y && !(s0 && s0.y < reg.y)) return 3;
       let lv = 0;
@@ -738,18 +848,24 @@ function planAtDensity(
       const after = afterOf.get(p.line.id);
       const prev = after ? textOf.get(after) : undefined;
       if (prev && !s0) {
-        const t = textOf.get(p.line.id)!;
         if (t.y < prev.y - rowTol || (Math.abs(t.y - prev.y) < rowTol && (rtl ? t.x > prev.x + 1e-6 : t.x < prev.x - 1e-6))) return 2;
       }
+      // A stored balloon the settle pass could only clear by reading it out of turn (its own report).
+      if (s0 && reordered.has(p.line.id)) return 2;
       const out = (y: number) => !!reg && (y < reg.y - 0.02 * H || y > reg.y + reg.h + 0.02 * H);
       return out(cy) && !(s0 && out(s0.y)) ? 1 : 0;
     })();
+    // Read after a later line the owner fixed in its panel (no room before it): flagged `order`, counted apart.
+    const isLate = !level && !s0 && (nextOf.get(p.line.id) ?? []).some((id) => !readsBefore(t, textOf.get(id)!));
+    // Lettered so narrow that a word splits (the placement found no wider spot): not finished either.
+    if (!s0 && narrowed.has(p.line.id) && p.t.lines.length > 1 && splitsUnit(p.t.lines, wrapUnits(p.setup.text, p.setup.lang))) split.push(p.line.id);
     if (level === 3) farEarly += 1;
     else if (level === 2) early += 1;
     else if (level === 1) spilled += 1;
-    if (level) {
+    else if (isLate) late += 1;
+    if (level || isLate) {
       stuck.add(p.line.id);
-      levels.set(p.line.id, level);
+      levels.set(p.line.id, level || 2);
     }
   }
   const unresolved = new Set(settled.unresolved);
@@ -814,7 +930,7 @@ function planAtDensity(
     plans.sort((a, b) => a.z - b.z || a.order - b.order);
     return plans.map(({ order: _order, ...plan }) => plan);
   };
-  return { build, unresolved: settled.unresolved.length, farEarly, early, spilled, stuck: [...stuck], scale };
+  return { build, unresolved: settled.unresolved.length, farEarly, early, spilled, split, late, stuck: [...stuck], scale };
 }
 
 

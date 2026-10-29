@@ -3,7 +3,7 @@ import { makeSampleDoc } from '../../../components/comicstudio/board/__fixtures_
 import { createEmptyDoc, normalizeDoc, type Balloon, type Box, type ComicDoc, type KeepOut, type Line, type Page, type SpeakerMark } from '../doc';
 import { panelBoxesFor } from '../pageGeometry';
 import { estimateMeasure, letteringSizer } from './layout';
-import { OUTLINE_BLEED, OUTLINE_BLEED_XY, balloonFootprint, defaultTailTip, fitBalloonOnPage, outlineBounds, placeBalloons, placeBalloonsDetailed, safeAreaBox, settleBalloons, stagedSpeakerX, tailExitPoint, type SettleItem } from './place';
+import { OUTLINE_BLEED, OUTLINE_BLEED_XY, ROW_TOLERANCE, balloonFootprint, defaultTailTip, fitBalloonOnPage, outlineBounds, placeBalloons, placeBalloonsDetailed, safeAreaBox, settleBalloons, stagedSpeakerX, tailExitPoint, type SettleItem } from './place';
 
 const ASPECT = 2 / 3;
 
@@ -485,3 +485,128 @@ describe('placeBalloons: reading order when a panel is full', () => {
       for (let j = i + 1; j < outlines.length; j += 1) expect(overlapArea(outlines[i], outlines[j]), `${res.balloons[i].lineId}×${res.balloons[j].lineId}`).toBe(0);
   });
 });
+
+// ── Reading order against BOTH neighbours: the previous line and the next line the owner fixed ─────────
+
+const round = (n: number) => Math.round(n * 10000) / 10000;
+
+/** A text box at `p` (top-left) is read before one at `q`: above its row, or on its row nearer the reading start. */
+const readsBeforePt = (p: { x: number; y: number }, q: { x: number; y: number }, rtl: boolean): boolean =>
+  p.y < q.y - ROW_TOLERANCE || (Math.abs(p.y - q.y) < ROW_TOLERANCE && (rtl ? p.x > q.x : p.x < q.x));
+
+/** One full-page panel: a pinned sound effect, a caption with no balloon, then a caption the owner stored (not pinned). */
+const orderDoc = (rtl: boolean, a: Omit<Balloon, 'lineId'>, c: (aBottom: number) => Omit<Balloon, 'lineId'>): { doc: ComicDoc; page: Page; a: Balloon; c: Balloon } => {
+  const doc = normalizeDoc(createEmptyDoc('p_order', 'Order', 1));
+  if (rtl) doc.format = { ...doc.format, readingDirection: 'rtl' };
+  const page = {
+    id: 'pg_order',
+    n: 1,
+    summary: '',
+    layout: 'Row 1: one wide panel (panel 1).',
+    render: { status: 'none' as const },
+    balloons: [] as Balloon[],
+    panels: [
+      {
+        id: 'p1',
+        n: 1,
+        size: 'splash',
+        shot: 'wide',
+        action: 'A pond at dawn.',
+        castIds: [],
+        lines: [
+          line('a', 'sfx', 'SPLOOSH'),
+          line('b', 'caption', 'Then the ducks arrived, all seven of them.'),
+          line('c', 'caption', 'And then it rained.')
+        ]
+      }
+    ]
+  } as unknown as Page;
+  doc.pages = [page];
+  const stored: Balloon = { lineId: 'a', ...a, pinned: true };
+  const bottom = outlineOf(doc, page, stored);
+  const later: Balloon = { lineId: 'c', ...c(bottom.y + bottom.h) };
+  page.balloons = [stored, later];
+  return { doc, page, a: stored, c: later };
+};
+
+describe('placeBalloons: a placed line is read before the next line the owner fixed in its panel', () => {
+  for (const rtl of [false, true]) {
+    const dir = rtl ? 'rtl' : 'ltr';
+    it(`${dir}: tucks a line between the previous line and a later stored one instead of after the later one`, () => {
+      // A caption after a sound effect is drawn to the panel's end corner (bottom right; rtl bottom left) —
+      // below the stored caption c, so the reader would meet c before b. There is plenty of room between a and c.
+      const { doc, page, a, c } = orderDoc(rtl, { x: rtl ? 0.64 : 0.06, y: 0.06, w: 0.3 }, () => ({ x: rtl ? 0.64 : 0.06, y: 0.55, w: 0.3 }));
+      const res = placeAll(doc, page, { keep: 'all' });
+      const b = res.balloons.find((q) => q.lineId === 'b')!;
+      expect(res.placed).toEqual(['b']);
+      expect(readsBeforePt(b, a, rtl), 'b is read after a').toBe(false);
+      expect(readsBeforePt(b, c, rtl), 'b is read before c').toBe(true);
+      expect(res.crowded).toEqual([]);
+      // Clear of both stored balloons.
+      for (const s of [a, c]) expect(overlapArea(outlineOf(doc, page, b), outlineOf(doc, page, s)), `b × ${s.lineId}`).toBe(0);
+    });
+
+    it(`${dir}: with no room between them, sits beside the later stored line on its row, on the reading-start side`, () => {
+      // a spans the panel and ends just above c: nothing fits between them, so the only spot read in order is
+      // on c's row before it (left of it; rtl right of it) — not after it on its row, not below it.
+      const { doc, page, a, c } = orderDoc(rtl, { x: 0.05, y: 0.06, w: 0.9 }, (aBottom) => ({ x: rtl ? 0.08 : 0.57, y: round(aBottom + 0.015), w: 0.35 }));
+      const res = placeAll(doc, page, { keep: 'all' });
+      const b = res.balloons.find((q) => q.lineId === 'b')!;
+      expect(readsBeforePt(b, a, rtl), 'b is read after a').toBe(false);
+      expect(readsBeforePt(b, c, rtl), 'b is read before c').toBe(true);
+      expect(Math.abs(b.y - c.y), 'on c’s row').toBeLessThan(ROW_TOLERANCE);
+      expect(res.crowded).toEqual([]);
+      for (const s of [a, c]) expect(overlapArea(outlineOf(doc, page, b), outlineOf(doc, page, s)), `b × ${s.lineId}`).toBe(0);
+    });
+  }
+
+  it('tucks in at a word-splitting width only when no whole-word spot is in turn, says so, and never with wholeWords', () => {
+    // Sample page 1, panel 3: l3 pinned with a long tail, l5 stored below it. Right of l3's tail is the only
+    // spot read in turn, and it is too narrow for "EXPLANATION," at full size.
+    const doc = makeSampleDoc();
+    const page = doc.pages[0];
+    const l4 = page.panels[2].lines[1];
+    const sizer = letteringSizer(doc, page, ASPECT, estimateMeasure);
+    const minW = sizer(l4, 0.2).minW!;
+    expect(minW).toBeGreaterThan(0);
+    const res = placeAll(doc, page, { keep: 'all' });
+    const b = res.balloons.find((q) => q.lineId === 'pg_1_l4')!;
+    const l5 = page.balloons.find((q) => q.lineId === 'pg_1_l5')!;
+    expect(readsBeforePt(b, l5, false), 'in turn').toBe(true);
+    expect(b.w).toBeLessThan(minW);
+    expect(res.split).toEqual(['pg_1_l4']);
+    // Whole words only (the planner's retry): never narrower than the longest word, even out of turn.
+    const whole = placeBalloonsDetailed({
+      page,
+      boxes: panelBoxesFor(doc, page),
+      aspect: ASPECT,
+      rtl: false,
+      plansFor: sizer,
+      safeMargin: 0.03,
+      existing: page.balloons,
+      keep: 'all',
+      wholeWords: ['pg_1_l4']
+    });
+    const w = whole.balloons.find((q) => q.lineId === 'pg_1_l4')!;
+    expect(w.w).toBeGreaterThanOrEqual(minW - 1e-4);
+    expect(whole.split).toEqual([]);
+    expect(whole.crowded).toContain('pg_1_l4');
+    for (const s of page.balloons) expect(overlapArea(outlineOf(doc, page, w), outlineOf(doc, page, s)), `l4 × ${s.lineId}`).toBe(0);
+  });
+
+  it('a panel with no room in order still places the line clear of everything, and flags it', () => {
+    // a fills the panel's top, c sits right under it at the far end of its row and a pinned wall covers the
+    // rest of c's row: the only free room is below c (read after it). The line goes there, never over a
+    // balloon, and is reported crowded so the editor can say so.
+    const { doc, page, c } = orderDoc(false, { x: 0.05, y: 0.06, w: 0.9 }, (aBottom) => ({ x: 0.57, y: round(aBottom + 0.015), w: 0.35 }));
+    const wall: Balloon = { lineId: 'w', x: 0.05, y: c.y, w: 0.5, pinned: true };
+    page.panels[0].lines.push(line('w', 'caption', 'A wall of text the owner pinned across the start of this row, long enough to fill it.'));
+    page.balloons = [...page.balloons, wall];
+    const res = placeAll(doc, page, { keep: 'all' });
+    const b = res.balloons.find((q) => q.lineId === 'b')!;
+    for (const s of page.balloons) expect(overlapArea(outlineOf(doc, page, b), outlineOf(doc, page, s)), `b × ${s.lineId}`).toBe(0);
+    expect(readsBeforePt(b, c, false)).toBe(false);
+    expect(res.crowded).toContain('b');
+  });
+});
+
