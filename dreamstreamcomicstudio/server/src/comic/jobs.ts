@@ -3553,6 +3553,19 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   // The doc as the batch builds it, for feature ops that need an earlier op of the same batch: Undo of a
   // removed edition re-creates it and then restores its lines (contract §6), which must find it existing.
   let working = doc;
+  // Line ids per panel as the batch moves, creates and deletes them (seeded from the doc on first touch):
+  // several `line_move`s into one panel must not push it past DOC_LIMITS.linesPerPanel — the session's
+  // limit pass counts `line` creates only.
+  const panelLines = new Map<string, Set<string>>();
+  const linesIn = (p: Page, panel: Page['panels'][number]): Set<string> => {
+    const key = `${p.id}/${panel.id}`;
+    let set = panelLines.get(key);
+    if (!set) {
+      set = new Set(panel.lines.map((l) => l.id));
+      panelLines.set(key, set);
+    }
+    return set;
+  };
   for (const raw of ops) {
     if (!isObject(raw) || typeof raw.op !== 'string') throw badRequest('Invalid change.');
     const kind = raw.op as DocOp['op'];
@@ -3720,9 +3733,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         const panel = panelOf(p, raw.panelId);
         const lineId = id(raw.id, 'line');
         if (raw.patch === null) {
+          linesIn(p, panel).delete(lineId);
           out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch: null });
           break;
         }
+        linesIn(p, panel).add(lineId);
         const existing = panel.lines.find((l) => l.id === lineId);
         const patch = pick(
           raw.patch,
@@ -3751,11 +3766,17 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         // so the only checks are that everything named exists and that the new panel has room.
         const p = page(raw.pageId);
         const lineId = id(raw.id, 'line');
-        const from = p.panels.find((x) => x.lines.some((l) => l.id === lineId));
+        // Where the line is NOW in this batch (an earlier op may have moved, created or deleted it).
+        const from = p.panels.find((x) => linesIn(p, x).has(lineId));
         if (!from) throw badRequest('That line is no longer on the page.');
         const target = panelOf(p, raw.toPanelId);
-        if (target.id !== from.id && target.lines.length >= DOC_LIMITS.linesPerPanel) {
-          throw badRequest(`Panel ${target.n} already has ${DOC_LIMITS.linesPerPanel} lines — move the line to another panel.`);
+        if (target.id !== from.id) {
+          const into = linesIn(p, target);
+          if (into.size >= DOC_LIMITS.linesPerPanel) {
+            throw badRequest(`Panel ${target.n} already has ${DOC_LIMITS.linesPerPanel} lines — move the line to another panel.`);
+          }
+          linesIn(p, from).delete(lineId);
+          into.add(lineId);
         }
         const index = lineIndex(raw.index);
         out.push({ op: 'line_move', pageId: p.id, id: lineId, toPanelId: target.id, ...(index === undefined ? {} : { index }) });

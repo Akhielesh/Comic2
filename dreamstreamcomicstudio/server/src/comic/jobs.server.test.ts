@@ -262,6 +262,31 @@ describe('patch sanitizer (P2-SERVER)', () => {
     const full = applyOps(doc, Array.from({ length: DOC_LIMITS.linesPerPanel }, (_, i): DocOp => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_3', id: `ln_full_${i}`, patch: { kind: 'caption', text: `c${i}` } })));
     expect(() => sanitizePatchOps(full, [move], sctx)).toThrow(/already has/);
   });
+
+  it('several line_moves in one batch are counted together: a panel is never pushed past its line limit', () => {
+    const { session, sctx } = ctxFor();
+    const limit = DOC_LIMITS.linesPerPanel;
+    const caption = (panelId: string, lineId: string): DocOp => ({ op: 'line', pageId: 'pg_1', panelId, id: lineId, patch: { kind: 'caption', text: lineId } });
+    // pn_1_3 one short of the limit; two lines waiting in pn_1_1.
+    const doc = applyOps(session.doc, [
+      ...Array.from({ length: limit - 1 }, (_, i) => caption('pn_1_3', `ln_full_${i}`)),
+      caption('pn_1_1', 'ln_a'),
+      caption('pn_1_1', 'ln_b')
+    ]);
+    const moveA: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_a', toPanelId: 'pn_1_3' };
+    const moveB: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_3' };
+    expect(sanitizePatchOps(doc, [moveA], sctx)).toEqual([moveA]);
+    expect(() => sanitizePatchOps(doc, [moveA, moveB], sctx)).toThrow(/already has/);
+    // A create in the same batch counts too…
+    expect(() => sanitizePatchOps(doc, [caption('pn_1_3', 'ln_new'), moveA], sctx)).toThrow(/already has/);
+    // …and a delete or a move out frees room (no false refusal).
+    const freed = [caption('pn_1_3', 'ln_full_0'), moveA, moveB].map((op, i) => (i === 0 ? { ...op, patch: null } : op)) as DocOp[];
+    expect(sanitizePatchOps(doc, freed, sctx)).toHaveLength(3);
+    const outThenIn: DocOp[] = [{ op: 'line_move', pageId: 'pg_1', id: 'ln_full_1', toPanelId: 'pn_1_2' }, moveA, moveB];
+    expect(sanitizePatchOps(doc, outThenIn, sctx)).toHaveLength(3);
+    const settled = applyOps(doc, sanitizePatchOps(doc, outThenIn, sctx));
+    expect(settled.pages[0].panels[2].lines).toHaveLength(limit);
+  });
 });
 
 describe('cast details and non-human look lines (P2-WIRING-SERVER)', () => {
