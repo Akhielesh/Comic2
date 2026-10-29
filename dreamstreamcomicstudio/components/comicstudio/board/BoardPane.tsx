@@ -36,7 +36,7 @@ import { StoryTab } from './StoryTab';
 import { StyleTab } from './StyleTab';
 import { pageProgress } from './boardModel';
 import { useCostFormat } from './costFormat';
-import { GhostButton, PrimaryButton, cx, useClickGuard, useElementSize } from './ui';
+import { GhostButton, PrimaryButton, cx, edgeFadeMask, useClickGuard, useEdgeClip, useElementSize } from './ui';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { useBackLayer } from '../mobile/backStack';
 import { BookTimeline } from '../timeline/BookTimeline';
@@ -166,35 +166,6 @@ export const GateBanner: React.FC<{
       {buttons}
     </div>
   );
-};
-
-/** Sideways-scrolling rows: which edges are clipped (for the "there is more" fade). */
-const useEdgeClip = (ref: React.RefObject<HTMLElement | null>, deps: React.DependencyList) => {
-  const [clip, setClip] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
-  const measure = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const start = el.scrollLeft > 2;
-    const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
-    setClip((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
-  }, [ref]);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measure, ...deps]);
-  return { clip, measure };
-};
-
-const FADE_MASK = {
-  both: '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]',
-  end: '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]',
-  start: '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
 };
 
 /** A feature surface docked in the board (the book timeline): a crash hides it, never the board. */
@@ -338,7 +309,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
   // A landscape phone (~343 px tall, of which the shell keeps ~140): the board's own chrome — the tab row
   // and the one-line gate — loses its outer padding, so the panel under them is not a 35 px slit.
   const denseChrome = ff.heightClass === 'compact';
-  const mask = clip.start && clip.end ? FADE_MASK.both : clip.end ? FADE_MASK.end : clip.start ? FADE_MASK.start : '';
+  const mask = edgeFadeMask(clip);
 
   return (
     <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>

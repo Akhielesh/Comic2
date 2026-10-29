@@ -21,7 +21,7 @@ import { sameLanguage } from '../../../shared/comic/languages';
 import { PLATFORM_CEILING, canServeToOwner, type ContentRating } from '../../../shared/comic/safety';
 import { ComicPageView } from '../board/ComicPageView';
 import { aspectNumber, pageAspectOf } from '../board/balloonGeometry';
-import { EmptyHint, IconButton, Segmented, cx, useElementSize } from '../board/ui';
+import { EmptyHint, IconButton, Segmented, cx, edgeFadeMask, useEdgeClip, useElementSize } from '../board/ui';
 import { ReaderLanguagePicker, type ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 import { readerString } from '../i18n/readerStrings';
 import { EndCard } from '../immersive/EndCard';
@@ -104,6 +104,13 @@ export interface ComicReaderViewProps {
    * `toolbarExtra` (the studio Read tab at a compact height) turns it off: one Expand icon, not two.
    */
   fullscreenControl?: boolean;
+  /**
+   * Host notices (an export status, a draft-edition line) laid over the bottom of the page area, below
+   * the toolbar: for a host whose pane is too short to stack them above the reader (the studio Read tab
+   * at a compact height), so they never push the toolbar out of the pane. The reader's own notices join
+   * them there at a compact height.
+   */
+  overlay?: React.ReactNode;
 }
 
 /** Reader ink on paper (same in both themes, like the immersive reading room). */
@@ -273,7 +280,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   onReport,
   onDownload,
   readerDownload,
-  fullscreenControl = true
+  fullscreenControl = true,
+  overlay
 }) => {
   // ── Document (keyed on the language CODE: a host's inline slot object must not re-localize) ──
   const lang = language?.current;
@@ -392,6 +400,12 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   const [chromeShown, setChromeShown] = useState(true);
   const chromeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarSizeRef, toolbarSize] = useElementSize<HTMLDivElement>();
+  // Compact height: the toolbar's leading controls (mode, page arrows, counter, chips) scroll sideways
+  // with a fade when the one row can't hold them — never squeezed to nothing, never clipped by the pane.
+  // Only that part scrolls: the trailing group keeps its popovers (⋯, the language menu) unclipped.
+  const leadRef = useRef<HTMLDivElement>(null);
+  const { clip: leadClip, measure: measureLead } = useEdgeClip(leadRef, [compactH, layout, rtl, fallback.length, rating, items.length]);
   const pokeChrome = useCallback(
     (show = true) => {
       if (!autoHide) return;
@@ -727,12 +741,17 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   if (!items.length) {
     return (
-      <div className={cx('flex h-full items-center justify-center p-6', className)} data-testid="comic-reader">
+      <div className={cx('relative flex h-full items-center justify-center p-6', className)} data-testid="comic-reader">
         <EmptyHint icon={<BookOpen className="h-8 w-8" />} title="Nothing to read yet">
           {doc.pages.length
             ? 'Pages appear here as soon as they are drawn.'
             : 'Once pages are planned and drawn, read the finished comic here — page by page or as one long scroll.'}
         </EmptyHint>
+        {overlay && (
+          <div data-testid="reader-overlay" className="absolute inset-x-0 bottom-0 z-20 flex max-h-full flex-col gap-1.5 overflow-y-auto p-2">
+            {overlay}
+          </div>
+        )}
       </div>
     );
   }
@@ -787,7 +806,10 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
 
   const toolbar = (
     <div
-      ref={toolbarRef}
+      ref={(el) => {
+        toolbarRef.current = el;
+        toolbarSizeRef(el);
+      }}
       data-testid="reader-toolbar"
       data-shown={chromeShown ? 'true' : 'false'}
       onFocus={() => pokeChrome(true)}
@@ -801,34 +823,51 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         autoHide && !chromeShown && 'pointer-events-none -translate-y-full opacity-0'
       )}
     >
-      {layoutOptions.length > 1 && <Segmented label="Reading mode" size="xs" value={layoutValue} onChange={setLayoutChoice} options={layoutOptions} />}
-      {layout !== 'scroll' && (
-        <div className="flex items-center gap-0.5">
-          <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
-            <ChevronLeft className="h-4 w-4" />
-          </IconButton>
-          <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', compactH ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
-            {counter}
+      <div
+        ref={leadRef}
+        onScroll={compactH ? measureLead : undefined}
+        data-testid="reader-toolbar-lead"
+        className={
+          compactH
+            ? cx('flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0', edgeFadeMask(leadClip))
+            : 'contents'
+        }
+      >
+        {layoutOptions.length > 1 && <Segmented label="Reading mode" size="xs" value={layoutValue} onChange={setLayoutChoice} options={layoutOptions} />}
+        {layout !== 'scroll' && (
+          <div className="flex items-center gap-0.5">
+            <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
+              <ChevronLeft className="h-4 w-4" />
+            </IconButton>
+            <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', compactH ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
+              {counter}
+            </span>
+            <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
+              <ChevronRight className="h-4 w-4" />
+            </IconButton>
+          </div>
+        )}
+        {layout === 'scroll' && <span className="text-[12px] text-[var(--ds-muted)]">{counter}</span>}
+        {rating && <RatingBadge rating={rating} reason={ratingReason} />}
+        {/* At a compact height the two information chips are read out, not drawn: the one row needs the room
+            (the arrows and swipes already follow the reading direction; the edition is in the picker). */}
+        {rtl && (
+          <span className={cx(compactH ? 'sr-only' : 'rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]')} data-testid="reader-rtl-chip">
+            {t('readsRightToLeft')}
           </span>
-          <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
-            <ChevronRight className="h-4 w-4" />
-          </IconButton>
-        </div>
-      )}
-      {layout === 'scroll' && <span className="text-[12px] text-[var(--ds-muted)]">{counter}</span>}
-      {rating && <RatingBadge rating={rating} reason={ratingReason} />}
-      {rtl && <span className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]">{t('readsRightToLeft')}</span>}
-      {drawnPages < doc.pages.length && (
-        <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')}>
-          {drawnPages} of {doc.pages.length} pages drawn
-        </span>
-      )}
-      {fallback.length > 0 && (
-        <span className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]" data-testid="reader-fallback-chip">
-          {t('untranslatedLines', { n: fallback.length })}
-        </span>
-      )}
-      <div className="ml-auto flex min-w-0 items-center gap-1">
+        )}
+        {drawnPages < doc.pages.length && (
+          <span className={cx('text-[11px] text-[var(--ds-muted)]', narrow && 'sr-only')}>
+            {drawnPages} of {doc.pages.length} pages drawn
+          </span>
+        )}
+        {fallback.length > 0 && (
+          <span className={cx(compactH ? 'sr-only' : 'rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]')} data-testid="reader-fallback-chip">
+            {t('untranslatedLines', { n: fallback.length })}
+          </span>
+        )}
+      </div>
+      <div className={cx('ml-auto flex items-center gap-1', compactH ? 'shrink-0' : 'min-w-0')} data-testid="reader-toolbar-actions">
         {toolbarExtra}
         {language && <ReaderLanguagePicker {...language} source={doc.format.language} compact={narrow} />}
         {onShare && (
@@ -885,6 +924,23 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       )}
     </div>
   );
+
+  // Over the page area, below the toolbar (it stays the first row): the host's notices, and the reader's
+  // own at a compact height, where stacking them above the page would push the toolbar out of the pane.
+  const ownFloating = !autoHide && compactH && !!notices;
+  const floating =
+    overlay || ownFloating ? (
+      <div
+        data-testid="reader-overlay"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col overflow-y-auto overscroll-contain p-2"
+        style={{ top: autoHide ? 0 : toolbarSize.height, paddingBottom: frame.flushBottom ? 'calc(0.5rem + var(--sa-bottom-eff, 0px))' : undefined }}
+      >
+        <div className="pointer-events-auto mt-auto flex min-w-0 flex-col gap-1.5">
+          {ownFloating && notices}
+          {overlay}
+        </div>
+      </div>
+    ) : null;
 
   const bookLabel = localized.cover.title || localized.brief.title || 'Comic';
   const bookRegion = { 'data-testid': 'reader-book', role: 'region', 'aria-roledescription': 'book', 'aria-label': bookLabel } as const;
@@ -999,7 +1055,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       className={cx('relative flex h-full min-h-0 flex-col bg-[var(--ds-canvas)] focus:outline-none', className)}
     >
       {toolbar}
-      {!autoHide && notices}
+      {!autoHide && !compactH && notices}
 
       {layout === 'scroll' ? (
         // The scroller is itself keyboard-reachable — a named region (axe `scrollable-region-focusable`):
@@ -1104,6 +1160,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         </div>
       )}
       {autoHide && notices}
+      {floating}
 
       {immersive && (
         <ImmersiveReader

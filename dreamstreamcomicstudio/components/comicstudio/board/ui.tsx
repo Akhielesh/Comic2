@@ -820,6 +820,44 @@ export const useFocusTrap = (ref: React.RefObject<HTMLElement | null>, active: b
   }, [ref, active]);
 };
 
+/**
+ * Sideways-scrolling rows (the board's tab strip, the reader's compact toolbar): which edges are
+ * clipped, for the "there is more" fade. Re-measures on scroll (call `measure`), on a resize of the row
+ * or of any of its items, and when `deps` change.
+ */
+export const useEdgeClip = (ref: React.RefObject<HTMLElement | null>, deps: React.DependencyList) => {
+  const [clip, setClip] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
+  const measure = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.scrollLeft > 2;
+    const end = el.scrollWidth - el.clientWidth - el.scrollLeft > 2;
+    setClip((prev) => (prev.start === start && prev.end === end ? prev : { start, end }));
+  }, [ref]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [measure, ...deps]);
+  return { clip, measure };
+};
+
+/** The fade on a sideways-scrolling row's clipped edge(s) — "there is more this way". */
+export const EDGE_FADE_MASK = {
+  both: '[mask-image:linear-gradient(to_right,transparent,black_20px,black_calc(100%-28px),transparent)]',
+  end: '[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]',
+  start: '[mask-image:linear-gradient(to_right,transparent,black_20px)]'
+};
+
+export const edgeFadeMask = (clip: { start: boolean; end: boolean }): string =>
+  clip.start && clip.end ? EDGE_FADE_MASK.both : clip.end ? EDGE_FADE_MASK.end : clip.start ? EDGE_FADE_MASK.start : '';
+
 /** Element size via ResizeObserver (falls back to one measurement where unavailable, e.g. jsdom). */
 export const useElementSize = <T extends HTMLElement>(): [React.RefCallback<T>, { width: number; height: number }] => {
   const [size, setSize] = useState({ width: 0, height: 0 });

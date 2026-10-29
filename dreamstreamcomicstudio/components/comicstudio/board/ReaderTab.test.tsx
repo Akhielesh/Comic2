@@ -226,6 +226,51 @@ describe('ReaderTab in phone landscape (compact height)', () => {
     expect(within(toolbar).queryByRole('button', { name: 'Full screen' })).toBeNull();
   });
 
+  // Review 2026-10-29: in a 127 px pane one notice stacked above the reader left a 16 px page, and a
+  // second (the draft-edition line, a two-line copy error) pushed the folded toolbar out of the pane.
+  it('notices float over the page area at a compact height: the toolbar stays the first row', async () => {
+    ex.print.mockResolvedValue({ pages: 0, skipped: [], failedImages: [], notice: undefined });
+    const doc = makeSampleDoc((d) => {
+      d.i18n = { editions: { te: { lang: 'te', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    });
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    pickTelugu();
+    fireEvent.click(within(openSheet()).getByRole('button', { name: /^Print/ }));
+    const status = await screen.findByText(/Print view ready/);
+    const draft = screen.getByText(/still shown in English — not translated yet/);
+    const toolbar = screen.getByTestId('reader-toolbar');
+    const overlay = screen.getByTestId('reader-overlay');
+    for (const notice of [status, draft]) {
+      // Laid over the page (absolutely positioned inside the reader), after the toolbar — never above it.
+      expect(overlay).toContainElement(notice);
+      expect(toolbar.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(overlay.className).toMatch(/\babsolute\b/);
+    // The tab's own column holds nothing but the reader (and the closed sheets' anchors).
+    const column = document.querySelector('[data-reader-tab]') as HTMLElement;
+    expect(within(column.firstElementChild as HTMLElement).getByTestId('reader-toolbar')).toBe(toolbar);
+    // The notices keep working there: Dismiss clears the status.
+    fireEvent.click(within(status.closest('[role="status"]') as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText(/Print view ready/)).toBeNull();
+    expect(overlay).toContainElement(screen.getByText(/still shown in English/));
+  });
+
+  it('the dense language switch keeps its width in the toolbar (never squeezed to nothing)', () => {
+    const doc = withTelugu();
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ReaderTab studio={makeStudio(doc)} doc={doc} />
+      </FormFactorProvider>
+    );
+    const sw = within(screen.getByTestId('reader-toolbar')).getByRole('radiogroup', { name: 'Reading language' });
+    expect(sw.className).toMatch(/\bshrink-0\b/);
+    expect(screen.getByTestId('reader-toolbar-actions')).toContainElement(sw);
+  });
+
   it('keeps the action row above the reader at regular heights', () => {
     const doc = makeSampleDoc();
     render(

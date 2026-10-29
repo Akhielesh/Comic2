@@ -567,4 +567,92 @@ describe('ComicReaderView on devices', () => {
     const scroll = within(toolbar).getByRole('radio', { name: 'Scroll' });
     expect(scroll.querySelector('.sr-only')).toHaveTextContent('Scroll');
   });
+
+  // Review 2026-10-29 (iPhone 15 landscape, 734×343): with rtl the row was already full, so an edition's
+  // picker was squeezed to ~0 px; an RTL, rated, partly translated edition needed ~700 px of a 616 px row.
+  const teluguDraft = (rtl: boolean) =>
+    drawnDoc((d) => {
+      if (rtl) d.format.readingDirection = 'rtl';
+      const line = d.pages[0].panels[0].lines[0];
+      d.i18n = {
+        editions: { te: { lang: 'te', lines: { [line.id]: { text: 'తెలుగు వాక్యం', status: 'edited', sourceHash: 'x' } }, balloons: {}, register: 'neutral' } as never },
+        glossary: []
+      };
+    });
+  const teluguSlot = { current: 'te', options: [{ code: 'en', label: 'English', status: 'ready' as const }, { code: 'te', label: 'Telugu', native: 'తెలుగు', status: 'ready' as const }], onChange: () => undefined };
+
+  it('compact height: the RTL and untranslated chips are read out, not drawn; the leading controls scroll sideways, the trailing group never shrinks', () => {
+    size(734, 343);
+    const { unmount } = render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={teluguDraft(true)} urlFor={fakeUrlFor} initialMode="page" rating="PG" language={teluguSlot} allowDownload />
+      </FormFactorProvider>
+    );
+    const toolbar = screen.getByTestId('reader-toolbar');
+    // (The chrome speaks the edition's language here, so the chips are found by their test ids.)
+    expect(within(toolbar).getByTestId('reader-rtl-chip')).toHaveClass('sr-only');
+    expect(within(toolbar).getByTestId('reader-rtl-chip').textContent).toBeTruthy();
+    expect(within(toolbar).getByTestId('reader-fallback-chip')).toHaveClass('sr-only');
+    // Only the leading part scrolls (its items never shrink): the ⋯ menu and the language picker sit in
+    // the trailing group, outside any scroller, so their popovers are never clipped.
+    const lead = within(toolbar).getByTestId('reader-toolbar-lead');
+    expect(lead.className).toMatch(/\boverflow-x-auto\b/);
+    expect(lead.className).toContain('[&>*]:shrink-0');
+    expect(lead).toContainElement(within(toolbar).getByTestId('reader-counter'));
+    expect(lead).toContainElement(within(toolbar).getByRole('radiogroup', { name: 'Reading mode' }));
+    const actions = within(toolbar).getByTestId('reader-toolbar-actions');
+    expect(actions.className).toMatch(/\bshrink-0\b/);
+    expect(actions).toContainElement(within(toolbar).getByRole('button', { name: 'More' }));
+    expect(toolbar.className).not.toMatch(/overflow-(x-)?auto/);
+    unmount();
+    const english = render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={drawnDoc((d) => (d.format.readingDirection = 'rtl'))} urlFor={fakeUrlFor} initialMode="page" />
+      </FormFactorProvider>
+    );
+    expect(screen.getByText('Reads right to left')).toHaveClass('sr-only');
+    english.unmount();
+    // Regular heights: the chips are drawn and the row wraps as before (the lead adds no box).
+    size(1280, 800);
+    render(<ComicReaderView doc={teluguDraft(true)} urlFor={fakeUrlFor} initialMode="page" language={teluguSlot} />);
+    expect(screen.getByTestId('reader-rtl-chip')).not.toHaveClass('sr-only');
+    expect(screen.getByTestId('reader-fallback-chip')).not.toHaveClass('sr-only');
+    expect(screen.getByTestId('reader-toolbar-lead')).toHaveClass('contents');
+  });
+
+  it('the sideways-scrolling lead fades the edge that has more', () => {
+    size(734, 343);
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={teluguDraft(false)} urlFor={fakeUrlFor} initialMode="page" />
+      </FormFactorProvider>
+    );
+    const lead = screen.getByTestId('reader-toolbar-lead');
+    expect(lead.className).not.toContain('mask-image');
+    Object.defineProperty(lead, 'scrollWidth', { value: 400, configurable: true });
+    Object.defineProperty(lead, 'clientWidth', { value: 200, configurable: true });
+    fireEvent.scroll(lead);
+    expect(lead.className).toContain('[mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]');
+    lead.scrollLeft = 200;
+    fireEvent.scroll(lead);
+    expect(lead.className).toContain('[mask-image:linear-gradient(to_right,transparent,black_20px)]');
+  });
+
+  it('host notices float over the page area below the toolbar; at a compact height the reader’s own join them', () => {
+    size(734, 343);
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" initialPage={9} overlay={<p role="status">Print view ready.</p>} />
+      </FormFactorProvider>
+    );
+    const overlay = screen.getByTestId('reader-overlay');
+    expect(overlay.className).toMatch(/\babsolute\b/);
+    expect(overlay).toContainElement(screen.getByText('Print view ready.'));
+    // The reader's own note (an undrawn deep link) is in the overlay too, not stacked under the toolbar.
+    expect(overlay).toContainElement(screen.getByText(/Page 9 isn’t drawn yet/));
+    // The toolbar stays the first row of the reader; nothing sits between it and the page.
+    const root = reader();
+    expect(root.firstElementChild).toBe(screen.getByTestId('reader-toolbar'));
+    expect(screen.getByTestId('reader-toolbar').nextElementSibling).toBe(screen.getByTestId('reader-stage'));
+  });
 });
