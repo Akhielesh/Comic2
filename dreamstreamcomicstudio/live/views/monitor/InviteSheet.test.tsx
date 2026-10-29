@@ -76,12 +76,22 @@ const linkOn = (over: Partial<ShareInfo> = {}): ShareInfo => ({
 /** The sheet's own (admin) connection to the nursery: say hello and the share state. */
 const connect = async (share: ShareInfo) => {
   await waitFor(() => expect(h.sockets.some((s) => s.mode === 'admin')).toBe(true));
+  // The sheet binds to its channel in a state update scheduled right after the socket opened. Let
+  // that commit first, so the messages below land in a subscribed component inside act() — not in
+  // a render that follows the test's next assertion (it raced under CI load).
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
   const s = h.sockets.find((x) => x.mode === 'admin')!;
   act(() => {
     s.onStatus('connected');
     s.onMsg({ t: 'hello', you: { sid: 'a', uid: 'u-me', name: 'Alice', role: 'parent', label: 'Mom', mode: 'admin', dev: 'd' }, nursery: { id: NID, name: 'Nursery', baby: 'Aria' } });
     s.onMsg({ t: 'share', share });
   });
+  // A link that is on (or locked) opens the sheet on the link tab; be sure it has before returning.
+  if (share.on || share.locked_until) {
+    await waitFor(() => expect(screen.getByRole('tab', { name: /Share a link/ }).getAttribute('aria-selected')).toBe('true'));
+  }
   return s;
 };
 const push = vi.fn();
