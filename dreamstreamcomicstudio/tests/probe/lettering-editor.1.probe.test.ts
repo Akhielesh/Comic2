@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../components/comicstudio/lettering/fontFiles', () => ({ FONT_FILES: {} }));
 import { SAMPLE_NOW, makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { applyOps } from '../../shared/comic/ops';
-import { editionReadiness, i18nOf, lineSourceHash, translationStatus } from '../../shared/comic/i18n';
+import { editionReadiness, lineSourceHash, translationStatus } from '../../shared/comic/i18n';
 import { estimateMeasure, planLettering } from '../../shared/comic/lettering/layout';
 import { resolvePlacements } from '../../components/comicstudio/lettering/useLetterPlans';
 import { easyShapeOps, findLineRef, linkOps, lockOps, tidyOps, zOrderOps } from '../../components/comicstudio/lettering/styleOps';

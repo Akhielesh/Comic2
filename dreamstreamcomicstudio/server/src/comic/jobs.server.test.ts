@@ -155,6 +155,43 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(session.doc, translations, sctx)).toThrow(/Too many changes/);
   });
 
+  it('Undo of a removed edition is accepted as one batch: the edition is re-created first, then its lines, titles and balloons — 300 lines included', () => {
+    const { session, sctx } = ctxFor();
+    const base = session.doc;
+    const linesFor = (n: number, k: number) => Array.from({ length: 34 }, (_, i) => ({ id: `ln_${n}_${k}_${i}`, kind: 'speech' as const, speakerId: 'c_maya', text: `Line ${n}.${k}.${i}` }));
+    const big: ComicDoc = {
+      ...base,
+      cover: { ...base.cover, title: 'Spice Run', tagline: 'Fast.' },
+      pages: base.pages.map((p) => ({ ...p, panels: p.panels.map((pn) => ({ ...pn, lines: linesFor(p.n, pn.n) })) }))
+    };
+    const all = big.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    expect(all.length).toBeGreaterThanOrEqual(300);
+    const te = Object.fromEntries(all.map((l) => [l.id, { text: `తెలుగు ${l.id}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), at: 1, gloss: 'g' }]));
+    const before = applyOps(big, [
+      { op: 'edition', lang: 'te', patch: { register: 'formal' } },
+      { op: 'translations', lang: 'te', lines: te },
+      { op: 'edition_text', lang: 'te', field: 'cover.title', value: { text: 'మసాలా పరుగు', status: 'edited', sourceHash: 'h', at: 1 } },
+      { op: 'edition_balloon', lang: 'te', lineId: all[0].id, patch: { x: 0.2, y: 0.3, w: 0.25, pinned: true } }
+    ]);
+    const remove: DocOp[] = [{ op: 'edition', lang: 'te', patch: null }];
+    const after = applyOps(before, remove);
+    expect(i18nOf(after).editions.te).toBeUndefined();
+    const inverse = inverseOps(before, remove);
+    expect(inverse[0]).toEqual({ op: 'edition', lang: 'te', patch: { register: 'formal' } });
+    expect(inverse.length).toBeGreaterThan(300);
+    const restored = applyOps(after, sanitizePatchOps(after, inverse, sctx));
+    const e = i18nOf(restored).editions.te;
+    expect(e.register).toBe('formal');
+    expect(Object.keys(e.lines)).toHaveLength(all.length);
+    expect(e.lines[all[5].id]).toMatchObject({ text: `తెలుగు ${all[5].id}`, gloss: 'g', sourceHash: lineSourceHash(all[5]) });
+    expect(e.cover?.title).toMatchObject({ text: 'మసాలా పరుగు' });
+    expect(e.balloons[all[0].id]).toEqual({ x: 0.2, y: 0.3, w: 0.25, pinned: true });
+    // The allowance is for that undo alone: the same batch padded with any other op is an ordinary (≤ 200) edit.
+    expect(() => sanitizePatchOps(after, [...inverse, { op: 'note_add', text: 'x' }], sctx)).toThrow(/Too many changes/);
+    // And a translation for an edition nobody re-creates in the batch is still refused.
+    expect(() => sanitizePatchOps(after, [inverse[1]], sctx)).toThrow(/no Telugu translation yet/);
+  });
+
   it('a line create keeps its position and its style through the sanitizer (⌘D and Undo of a delete land where the client put them)', () => {
     const { session, sctx } = ctxFor();
     const doc = applyOps(session.doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { kind: 'speech', speakerId: 'c_maya', text: 'Second', style: { textCase: 'upper' } } }]);

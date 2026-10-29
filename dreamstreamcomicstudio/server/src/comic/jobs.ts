@@ -70,7 +70,7 @@ import {
   type StyleBible,
   type VersionMeta
 } from '../../../shared/comic/doc.js';
-import { CLIENT_PATCHABLE_OPS, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
@@ -3518,6 +3518,13 @@ const assetList = (known: Map<string, AssetRef>, restore?: RestoreScope) => (v: 
   return out;
 };
 
+/** Undo of a removed edition (undo.ts): its `edition` op first, then only that language's lines, titles and balloons. */
+const isEditionRestoreBatch = (ops: unknown[]): boolean => {
+  const [first, ...rest] = ops;
+  if (!isObject(first) || first.op !== 'edition' || first.patch === null || typeof first.lang !== 'string') return false;
+  return rest.every((o) => isObject(o) && (o.op === 'translation' || o.op === 'edition_text' || o.op === 'edition_balloon') && o.lang === first.lang);
+};
+
 /**
  * Validate a client `patch` action. Only CLIENT_PATCHABLE_OPS are accepted; each op is
  * re-built from known keys with bounded values; anything structurally wrong rejects the
@@ -3525,9 +3532,10 @@ const assetList = (known: Map<string, AssetRef>, restore?: RestoreScope) => (v: 
  */
 export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: SanitizeCtx): DocOp[] {
   if (!Array.isArray(ops) || !ops.length) throw badRequest('Nothing to change.');
-  // Undoing a removed edition sends one `translation` op per line: such an all-translation batch may be longer.
-  const translationOnly = ops.every((o) => isObject(o) && o.op === 'translation');
-  if (ops.length > (translationOnly ? MAX_TRANSLATION_PATCH_OPS : MAX_PATCH_OPS)) throw badRequest('Too many changes at once.');
+  // Undoing a removed edition sends its `edition` op and then one op per line, title and balloon of that
+  // language (an all-translation batch is the same undo from before titles and balloons): longer than any edit.
+  const editionRestore = ops.every((o) => isObject(o) && o.op === 'translation') || isEditionRestoreBatch(ops);
+  if (ops.length > (editionRestore ? MAX_TRANSLATION_PATCH_OPS : MAX_PATCH_OPS)) throw badRequest('Too many changes at once.');
   const known = knownAssets(doc);
   // Photos of a removed character/place/style come back only from this project's own storage lanes.
   const restore: RestoreScope | undefined = sanitizeCtx?.userId
@@ -3537,6 +3545,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   const placeIds = new Set(doc.places.map((p) => p.id));
   // Characters/places created earlier in the same batch count as existing.
   const out: DocOp[] = [];
+  // The doc as the batch builds it, for feature ops that need an earlier op of the same batch: Undo of a
+  // removed edition re-creates it and then restores its lines (contract §6), which must find it existing.
+  let working = doc;
   for (const raw of ops) {
     if (!isObject(raw) || typeof raw.op !== 'string') throw badRequest('Invalid change.');
     const kind = raw.op as DocOp['op'];
@@ -3817,7 +3828,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         // v5 feature ops (letter_style, page_*, ref_*, edition*, …): their own sanitizer.
         const sanitizer = opSanitizerFor(kind);
         if (!sanitizer) throw badRequest(`“${kind}” can't be changed directly.`);
-        out.push(sanitizer.sanitize(doc, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc)));
+        const clean = sanitizer.sanitize(working, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc));
+        out.push(clean);
+        if (clean.op === 'edition' && clean.patch !== null) working = applyOp(working, clean);
       }
     }
   }
