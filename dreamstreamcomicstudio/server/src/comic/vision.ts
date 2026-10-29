@@ -16,7 +16,7 @@
 // corner, w = its width as a fraction of the page width; tailX/tailY = the tail tip.
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
-import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
+import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcMissingSpeaker, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
 import { placeBalloonsWholeWords } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
@@ -414,36 +414,18 @@ export const visionSpecText = (doc: ComicDoc, page: Page): string => {
 
 // ── Honest panel checks (plan §4.3 Ship 1, §5.1) ─────────────────────────────
 
-/** A speaker who has lines in a panel but, per the page check, is not drawn there (plan §5.1). */
-export interface MissingSpeaker {
-  /** Script panel number (1-based). */
-  panel: number;
-  castId: string;
-}
+/** A speaker who has lines in a panel but, per the page check, is not drawn there (plan §5.1; QcReport.missingSpeakers). */
+export type MissingSpeaker = QcMissingSpeaker;
 
 /**
- * The Ship 1 additions to QcReport (plan §5.1), typed here until K1 adds them to shared/comic/doc.ts
- * (K1 then switches this to the shared type). All optional and never hashed; a report without them
- * is an older check and means "not measured", never "fine".
+ * The Ship 1 additions to QcReport (plan §5.1), now typed in shared/comic/doc.ts (K1). All optional and never
+ * hashed; a report without them is an older check and means "not measured", never "fine":
+ * beats (per drawn panel, the planned moment it shows; a permutation is reported, never applied), crosses (drawn
+ * panels whose art breaks over their border), drawnBoxes (kept even on a count mismatch), missingSpeakers (a
+ * model's reading; off-panel voices never) and boxesFrom ('estimate' = the blueprint: crops, badges and paste-back
+ * must not act on those boxes).
  */
-export interface QcPanelChecks {
-  /** Per DRAWN panel in reading order: the script panel number whose moment it shows (0 = none). Only
-   *  stored when the model answered it for every drawn panel. A permutation is reported, never applied. */
-  beats?: number[];
-  /** Drawn panel numbers (1-based, reading order) whose art breaks over their border; [] = none do.
-   *  Absent = not answered (older check). */
-  crosses?: number[];
-  /** The panel rectangles the vision pass measured, in reading order — kept even when their count
-   *  differs from the plan (panelBoxes then holds the estimate). */
-  drawnBoxes?: Box[];
-  /** Speakers with lines in a panel whom the check's character notes read as not drawn there (a
-   *  model's reading: the chat says "may not be drawn"). Off-panel voices (pov, insert, establishing
-   *  shots, or a speaker the panel's cast does not list) are never reported. */
-  missingSpeakers?: MissingSpeaker[];
-  /** Where panelBoxes came from: measured by the vision pass, or estimated from the layout blueprint
-   *  (count mismatch or no usable reading — crops, badges and paste-back must not act on these). */
-  boxesFrom?: 'vision' | 'estimate';
-}
+export type QcPanelChecks = Pick<QcReport, 'beats' | 'crosses' | 'drawnBoxes' | 'missingSpeakers' | 'boxesFrom'>;
 
 /** A page check result carrying the Ship 1 panel checks. */
 export type CheckedQcReport = QcReport & QcPanelChecks;
