@@ -194,6 +194,13 @@ export const WARN = {
 export const keepButton = (current: string) => `Keep ${current}`;
 export const switchButton = (next: string) => `Switch to ${next}`;
 export const switchRedrawButton = (price: string | null) => (price ? `Switch and redraw · ${price}` : 'Switch and redraw');
+/**
+ * The switch's stream was stopped before the server answered (the studio closed or stopped listening). The
+ * request may already have been applied, so the line says so instead of claiming either outcome.
+ */
+export const SWITCH_STOPPED = "The switch was stopped before it finished, so it may not have gone through. Check which model this comic shows before trying again.";
+export const SWITCH_FAILED = "The switch didn't go through. Nothing was changed.";
+export const SWITCH_IN_FLIGHT = 'That is already being sent — give it a moment.';
 export const BYOK_FINE_PRINT = 'Paid by your own key.';
 export const SWITCH_BACK_FINE_PRINT = 'You can switch back the same way.';
 /** "{basis line}. {BYOK: 'Paid by your own key.'} You can switch back the same way." */

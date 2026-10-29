@@ -106,6 +106,14 @@ describe('C. confirm after the lock', () => {
     expect(copy.confirmFinePrint(copy.basisLine(['OpenRouter, 5 min ago']), true)).toBe('Prices: OpenRouter, 5 min ago. Paid by your own key. You can switch back the same way.');
     expect(copy.confirmFinePrint(copy.basisLine(['OpenRouter, 5 min ago']), false)).toBe('Prices: OpenRouter, 5 min ago. You can switch back the same way.');
   });
+
+  it('what the dialog says when the switch does not complete (not §3.6 copy; claims no outcome it cannot know)', () => {
+    expect(copy.SWITCH_STOPPED).toBe(
+      'The switch was stopped before it finished, so it may not have gone through. Check which model this comic shows before trying again.'
+    );
+    expect(copy.SWITCH_FAILED).toBe("The switch didn't go through. Nothing was changed.");
+    expect(copy.SWITCH_IN_FLIGHT).toBe('That is already being sent — give it a moment.');
+  });
 });
 
 describe('D. confirm before the lock', () => {

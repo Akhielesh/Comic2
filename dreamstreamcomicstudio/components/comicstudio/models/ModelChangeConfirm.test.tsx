@@ -122,6 +122,22 @@ describe('C — after the lock', () => {
     expect(onPricesStale).toHaveBeenCalledTimes(1);
   });
 
+  it('a stopped switch is not a success: the dialog stays open and says it may not have gone through', async () => {
+    const stopped: StudioActOutcome = { ok: false, aborted: true, retryable: true, gated: false };
+    const { act: send, onDone, onPricesStale, dialog } = open();
+    send.mockResolvedValueOnce(stopped);
+    await act(async () => fireEvent.click(primary()));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(onDone).not.toHaveBeenCalled();
+    expect(onPricesStale).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The switch was stopped before it finished, so it may not have gone through. Check which model this comic shows before trying again.'
+    );
+    // The user can try again from the same dialog.
+    expect(primary()).not.toBeDisabled();
+  });
+
   it('Keep and Esc cancel without sending anything', () => {
     const { act: send, onCancel } = open();
     fireEvent.click(screen.getByRole('button', { name: 'Keep Nano Banana 2.1' }));

@@ -32,6 +32,9 @@ import {
   SCOPE_GROUP_LABEL,
   SCOPE_KEEP,
   SCOPE_PAGES_COVER,
+  SWITCH_FAILED,
+  SWITCH_IN_FLIGHT,
+  SWITCH_STOPPED,
   WARN,
   alreadyDrawn,
   basisLine,
@@ -254,18 +257,24 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
         return;
       }
       const outcome = await changeImageModel(act, { modelId: spec.id, redraw: selected.scope, quotedUsd: selected.scope === 'none' ? 0 : selectedUsd });
-      if (outcome && outcome.ok === false && !outcome.aborted) {
+      // Stopped before the server answered: not done. The dialog stays open and says the switch may not have
+      // happened (it may also have landed just before the stop, so neither outcome is claimed).
+      if (outcome && outcome.aborted) {
+        setError(SWITCH_STOPPED);
+        return;
+      }
+      if (outcome && outcome.ok === false) {
         if (outcome.skipped) {
-          setError('That is already being sent — give it a moment.');
+          setError(SWITCH_IN_FLIGHT);
           return;
         }
         if (outcome.code && QUOTE_CODES.test(outcome.code)) onPricesStale?.();
-        setError(outcome.error || "The switch didn't go through. Nothing was changed.");
+        setError(outcome.error || SWITCH_FAILED);
         return;
       }
       onDone();
     } catch (err) {
-      setError(err instanceof Error && err.message ? err.message : "The switch didn't go through. Nothing was changed.");
+      setError(err instanceof Error && err.message ? err.message : SWITCH_FAILED);
     } finally {
       setBusy(false);
     }
