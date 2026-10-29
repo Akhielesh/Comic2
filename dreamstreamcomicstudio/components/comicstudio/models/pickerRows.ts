@@ -5,7 +5,9 @@
 // Order (R2): fit first (a model with a blocking reason drops to the bottom; one that cannot fit this comic's
 // pages comes after the ones that can), then quality (public edit leaderboards), then price per page, then
 // resilience (providers, then their 24 h uptime). Easy shows the 3 best-fitting models a user may pick (the
-// suggested and the current model are kept in view); "Compare all" / Pro shows every row, sortable.
+// suggested and the current model are kept in view); "Compare all" / Pro shows every listed row, sortable.
+// Listed (isListedRow): the models a user may pick and the gated experimental ones on their way; retired, legacy
+// and removed models only when the comic uses one, it is suggested, or it is the model just switched away from.
 
 import type { ComicDoc, Resolution } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
@@ -121,6 +123,32 @@ export const buildPickerRows = ({ doc, caps, rows, prices, byok, suggest }: Buil
     };
   });
 };
+
+/**
+ * Taken out of the picker for good (models.md §2.2): FLUX.3 (unpinnable `latest`, ≤ 4 MP with references, and BFL's
+ * terms allow training on inputs and outputs). The registry keeps its entry so comics drawn with it still resolve.
+ */
+export const REMOVED_FROM_PICKER: ReadonlySet<string> = new Set(['flux-3']);
+
+/**
+ * Whether the picker lists a model (the catalog serves every registry model):
+ *   - every model the user may pick (`pickable`);
+ *   - the gated experimental models still on their way into Comic Studio (GPT Image 2.5 / Flare, Seedream), shown
+ *     with "Not available in Comic Studio yet";
+ *   - always the comic's own model, the suggested one and the model just switched away from (`changes[0].from`,
+ *     which keeps "Switch back" possible — models.md §3.4 item 7.2).
+ * Retired or legacy models (deprecated, hidden GA such as Nano Banana Lite) and removed ones are left out
+ * otherwise: "not available yet" would be untrue for a model that will never be offered.
+ */
+export const isListedRow = (model: PickerRowModel, doc: ComicDoc): boolean => {
+  if (model.pickable || model.current || model.suggested) return true;
+  if (model.id === doc.imageModel?.changes?.[0]?.from) return true;
+  const lifecycle = model.spec?.lifecycle ?? model.row.lifecycle;
+  return lifecycle === 'experimental' && !REMOVED_FROM_PICKER.has(model.id);
+};
+
+/** The rows the picker lists (isListedRow), in their incoming order. */
+export const listedPickerRows = (rows: readonly PickerRowModel[], doc: ComicDoc): PickerRowModel[] => rows.filter((m) => isListedRow(m, doc));
 
 const byNumberAsc = (a: number | null | undefined, b: number | null | undefined) => {
   const x = typeof a === 'number' ? a : Infinity;

@@ -15,6 +15,7 @@ import { resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversa
 import { __resetStatusStore, __setStatusFetcherForTests } from '../reliability/statusStore';
 import { ModelPicker, ModelPickerPanel, type ModelPickerPanelProps } from './ModelPicker';
 import { __resetModelCatalogForTests } from './useModelCatalog';
+import { registryCatalogRows } from './modelsApi';
 import { NOW, catalogRows, lakeDoc } from './testing/fixtures';
 
 const PAID: StudioCaps = { ...DEFAULT_CAPS, plan: 'paid', modelOverride: true, qualityTiers: ['draft', 'standard', 'pro'] };
@@ -113,6 +114,15 @@ describe('Easy', () => {
     expect(within(gpt).getByText('Experimental')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Show the best fits' }));
     expect(listRows()).toHaveLength(2);
+  });
+
+  it('the full table never lists removed or retired models (all 9 registry models served)', () => {
+    panel({ mode: 'pro', catalog: view(registryCatalogRows()) });
+    const listed = listRows().map((r) => r.getAttribute('data-model'));
+    expect([...listed].sort()).toEqual(['gpt-image-2.5', 'gpt-image-2.5-flare', 'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro']);
+    expect(screen.queryByText('FLUX.3')).toBeNull();
+    // Each gated experimental model says it is not available yet; the pickable ones do not.
+    expect(screen.getAllByText('Not available in Comic Studio yet')).toHaveLength(3);
   });
 
   it('keeps a suggested model in view, highlighted, within the 3 rows', () => {

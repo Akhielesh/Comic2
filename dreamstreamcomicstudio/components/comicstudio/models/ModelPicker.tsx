@@ -38,7 +38,18 @@ import {
 import { ModelRow } from './ModelRow';
 import { ModelDetailView } from './ModelDetailSheet';
 import { registryCatalogRows } from './modelsApi';
-import { PICKER_SORTS, buildPickerRows, currentModelId, easyPickerRows, footerSources, isLocked, modelNickname, sortPickerRows, type PickerSort } from './pickerRows';
+import {
+  PICKER_SORTS,
+  buildPickerRows,
+  currentModelId,
+  easyPickerRows,
+  footerSources,
+  isLocked,
+  listedPickerRows,
+  modelNickname,
+  sortPickerRows,
+  type PickerSort
+} from './pickerRows';
 import { clientPriceBook } from './priceBook';
 import { useModelCatalog, type ModelCatalogView } from './useModelCatalog';
 import { BTN_LINK, BTN_SECONDARY, FOCUS, cx } from './ui';
@@ -74,7 +85,9 @@ export const ModelPickerPanel: React.FC<ModelPickerPanelProps> = ({ doc, caps, b
   // Minute resolution is plenty for "5 min ago" labels and keeps the price book stable between renders.
   const minute = Math.floor(now / 60_000);
   const prices = useMemo(() => clientPriceBook(rows, { now: minute * 60_000 }), [rows, minute]);
-  const all = useMemo(() => buildPickerRows({ doc, caps, rows, prices, byok, suggest }), [doc, caps, rows, prices, byok, suggest]);
+  // Retired, legacy and removed models are not listed (they will never be offered); the comic's own model, the
+  // suggested one and the one just switched away from always are.
+  const all = useMemo(() => listedPickerRows(buildPickerRows({ doc, caps, rows, prices, byok, suggest }), doc), [doc, caps, rows, prices, byok, suggest]);
   const [showAll, setShowAll] = useState(mode === 'pro' || initialView === 'all');
   const [sort, setSort] = useState<PickerSort>('fit');
   const [detail, setDetail] = useState<string | null>(initialDetail ?? null);

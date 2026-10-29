@@ -4,7 +4,9 @@
 
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities';
-import { buildPickerRows, currentModelId, easyPickerRows, footerSources, isLocked, sortPickerRows, type PickerRowModel } from './pickerRows';
+import { IMAGE_MODELS } from '../../../shared/comic/models';
+import { registryCatalogRows } from './modelsApi';
+import { buildPickerRows, currentModelId, easyPickerRows, footerSources, isLocked, listedPickerRows, sortPickerRows, type PickerRowModel } from './pickerRows';
 import { clientPriceBook } from './priceBook';
 import { NOW, catalogRows, freshDoc, lakeDoc } from './testing/fixtures';
 
@@ -80,6 +82,40 @@ describe('easyPickerRows', () => {
     expect(easy).toHaveLength(3);
     expect(ids(easy)).toContain('seedream-5-pro');
     expect(ids(easy)).toContain('nano-banana-2.1'); // the current model stays too
+  });
+});
+
+describe('listedPickerRows (every registry model is in the catalog)', () => {
+  const allRows = (doc = lakeDoc(), caps: StudioCaps = PAID, suggest?: string) => {
+    const rows = registryCatalogRows();
+    return buildPickerRows({ doc, caps, rows, prices: clientPriceBook(rows, { now: NOW }), byok: false, suggest });
+  };
+
+  it('lists the pickable models and the gated experimental ones; never removed, retired or hidden legacy models', () => {
+    const all = allRows();
+    expect(all).toHaveLength(IMAGE_MODELS.length);
+    const listed = listedPickerRows(all, lakeDoc());
+    expect(ids(listed).sort()).toEqual(['gpt-image-2.5', 'gpt-image-2.5-flare', 'nano-banana-2.1', 'nano-banana-pro', 'seedream-5-pro']);
+    // FLUX.3 was removed (models.md §2.2); Nano Banana 2 and the legacy model are for existing comics only; Lite is
+    // used by no default. None of them will be offered, so none reads "Not available in Comic Studio yet".
+    for (const id of ['flux-3', 'nano-banana-2', 'nano-banana-legacy', 'nano-banana-lite']) expect(ids(listed)).not.toContain(id);
+    // The experimental ones that are on their way say so.
+    expect(listed.find((r) => r.id === 'gpt-image-2.5-flare')!.blocks.map((b) => b.text)).toContain('Not available in Comic Studio yet');
+  });
+
+  it('always lists the comic’s own model, the suggested one and the one just switched away from', () => {
+    // A legacy comic locked to Nano Banana 2 (deprecated) keeps seeing its model.
+    const legacy = lakeDoc({ model: 'nano-banana-2' });
+    expect(ids(listedPickerRows(allRows(legacy), legacy))).toContain('nano-banana-2');
+    expect(listedPickerRows(allRows(legacy), legacy).find((r) => r.id === 'nano-banana-2')!.current).toBe(true);
+    // "Switch back" (§3.6 F) to a model that is now hidden.
+    const switched = lakeDoc();
+    switched.imageModel = { ...switched.imageModel!, origin: 'user_change', changes: [{ from: 'flux-3', to: 'nano-banana-2.1', at: NOW - 60_000, redraw: 'none', quotedUsd: 0 }] };
+    const back = listedPickerRows(allRows(switched), switched).find((r) => r.id === 'flux-3');
+    expect(back).toBeDefined();
+    expect(back!.blocks.map((b) => b.code)).not.toContain('hidden');
+    // A suggestion is kept in view even when it is hidden.
+    expect(ids(listedPickerRows(allRows(lakeDoc(), PAID, 'nano-banana-lite'), lakeDoc()))).toContain('nano-banana-lite');
   });
 });
 

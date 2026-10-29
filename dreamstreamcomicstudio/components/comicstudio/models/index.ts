@@ -33,6 +33,6 @@ export { useModelCatalog, useModelDetail, loadModelCatalog, seedModelCatalog, CA
 export { fetchModelCatalog, fetchModelDetail, asCatalogRow, asCatalogDetail, registryCatalogRows, MODEL_CATALOG_PATH } from './modelsApi';
 export { clientPriceBook } from './priceBook';
 export type { ClientPriceBook, ClientQuote } from './priceBook';
-export { buildPickerRows, sortPickerRows, easyPickerRows, currentModelId, isLocked, EASY_MAX_ROWS } from './pickerRows';
+export { buildPickerRows, sortPickerRows, easyPickerRows, listedPickerRows, isListedRow, currentModelId, isLocked, EASY_MAX_ROWS, REMOVED_FROM_PICKER } from './pickerRows';
 export type { PickerRowModel, PickerSort } from './pickerRows';
 export * as modelCopy from './copy';
