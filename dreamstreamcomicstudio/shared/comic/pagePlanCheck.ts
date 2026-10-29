@@ -280,6 +280,27 @@ export function candidateLayouts(doc: Pick<ComicDoc, 'format'>, panelCount: numb
   return rowBlueprints(n, doc.format.readingDirection === 'rtl');
 }
 
+/** Candidate blueprints with their boxes, per (kind, direction, count): boxes depend on nothing else. Bounded
+ *  (5 kinds × 2 directions × at most codeMax counts), so a module-level cache is safe. */
+const CANDIDATE_BOXES = new Map<string, { layout: string; boxes: Box[] }[]>();
+
+const candidatesWithBoxes = (doc: Pick<ComicDoc, 'format'>, n: number): { layout: string; boxes: Box[] }[] => {
+  const key = `${doc.format.kind}|${doc.format.readingDirection}|${n}`;
+  const hit = CANDIDATE_BOXES.get(key);
+  if (hit) return hit;
+  const panels = Array.from({ length: n }, () => ({ size: 'medium' as PanelSize }));
+  const out: { layout: string; boxes: Box[] }[] = [];
+  for (const layout of candidateLayouts(doc, n)) {
+    const parsed = parseLayout(layout);
+    if (!parsed || layoutPanelCount(parsed) !== n) continue;
+    if (doc.format.kind === 'webtoon' ? parsed.mode !== 'stack' : parsed.mode === 'stack') continue;
+    const boxes = estimatePanelBoxes({ panels: panels as Page['panels'], layout }, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+    if (boxes.length === n) out.push({ layout, boxes });
+  }
+  if (n <= PANEL_LIMITS.codeMax) CANDIDATE_BOXES.set(key, out);
+  return out;
+};
+
 /**
  * The blueprint that makes an overfull page fit, or null when none does. Ranking: fits (≤ 0.22) before tight;
  * then fewest wide/tall/establishing panels shrunk; then fewest panels below their minimum area; then the lowest
@@ -287,7 +308,7 @@ export function candidateLayouts(doc: Pick<ComicDoc, 'format'>, panelCount: numb
  */
 export function chooseLayout(doc: ComicDoc, page: Page, opts: { meter?: NeedMeter; measure?: Measure } = {}): LayoutChoice | null {
   const n = page.panels.length;
-  const candidates = candidateLayouts(doc, n);
+  const candidates = candidatesWithBoxes(doc, n);
   if (!candidates.length) return null;
   const meter = opts.meter ?? needMeter(doc, { aspect: letteringAspect(doc, page), measure: opts.measure });
   const hard = hardFitLimit(doc);
@@ -301,12 +322,8 @@ export function chooseLayout(doc: ComicDoc, page: Page, opts: { meter?: NeedMete
   const sameBoxes = (boxes: Box[]) => boxes.every((b, i) => orig[i] && Math.abs(b.x - orig[i].x) < 1e-4 && Math.abs(b.y - orig[i].y) < 1e-4 && Math.abs(b.w - orig[i].w) < 1e-4 && Math.abs(b.h - orig[i].h) < 1e-4);
   type Scored = LayoutChoice & { cls: number; distance: number; order: number };
   let best: Scored | null = null;
-  for (const [order, layout] of candidates.entries()) {
-    const parsed = parseLayout(layout);
-    if (!parsed || layoutPanelCount(parsed) !== n) continue;
-    if (doc.format.kind === 'webtoon' ? parsed.mode !== 'stack' : parsed.mode === 'stack') continue;
-    const boxes = estimatePanelBoxes({ panels: page.panels, layout }, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
-    if (boxes.length !== n || sameBoxes(boxes)) continue;
+  for (const [order, { layout, boxes }] of candidates.entries()) {
+    if (sameBoxes(boxes)) continue;
     const areas = boxes.map(boxArea);
     const fits = page.panels.map((p, i) => panelFit(meter.panel(p.lines, boxes[i]), areas[i]));
     const worst = r4(Math.max(0, ...fits));
@@ -419,12 +436,17 @@ export interface HeldBackPage {
  * back from "Render all" with free fixes and "Draw anyway"; never refused). `drawOverfull` lists pages the
  * user chose to draw anyway. Unknown ids pass through untouched. Order is kept.
  */
-export function splitHeldBack(doc: ComicDoc, pageIds: string[], drawOverfull: readonly string[] = []): { draw: string[]; heldBack: HeldBackPage[] } {
+export function splitHeldBack(
+  doc: ComicDoc,
+  pageIds: string[],
+  drawOverfull: readonly string[] = [],
+  opts: { meter?: NeedMeter; fixLayout?: boolean } = {}
+): { draw: string[]; heldBack: HeldBackPage[] } {
   const ids = Array.isArray(pageIds) ? pageIds.filter((id): id is string => typeof id === 'string') : [];
   if (!PLAN_POLICY.holdBackOverfull) return { draw: [...ids], heldBack: [] };
   const anyway = new Set(Array.isArray(drawOverfull) ? drawOverfull : []);
   const byId = new Map(doc.pages.map((p) => [p.id, p]));
-  const meter = needMeter(doc, { aspect: letteringAspect(doc, null) });
+  const meter = opts.meter ?? needMeter(doc, { aspect: letteringAspect(doc, null) });
   const draw: string[] = [];
   const heldBack: HeldBackPage[] = [];
   for (const id of ids) {
@@ -433,7 +455,7 @@ export function splitHeldBack(doc: ComicDoc, pageIds: string[], drawOverfull: re
       draw.push(id);
       continue;
     }
-    const check = checkPagePlan(doc, page, { meter });
+    const check = checkPagePlan(doc, page, { meter, fixLayout: opts.fixLayout });
     if (check.state !== 'overfull') {
       draw.push(id);
       continue;

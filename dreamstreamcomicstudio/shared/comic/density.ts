@@ -59,20 +59,23 @@ export interface NeedMeter {
 export function needMeter(doc: ComicDoc, opts: Omit<NeedOptions, 'box'> = {}): NeedMeter {
   const aspect = Number.isFinite(opts.aspect) && (opts.aspect as number) > 0 ? (opts.aspect as number) : letteringAspect(doc, null);
   const sizer = letteringSizer(doc, EMPTY_PAGE, aspect, opts.measure ?? estimateMeasure);
-  const cache = new Map<string, number>();
+  // Per line object: its starting width estimate and its need at each width (the placer's widths are few).
+  const cache = new Map<Line, { text: string; kind: Line['kind']; est: number; fill: number; byWidth: Map<number, number> }>();
   const line = (l: Line, box?: Pick<Box, 'w'>): number => {
     if (!l || !normalizeLetteringText(l.text)) return 0;
-    const lang = l.lang || doc.format?.language || 'en';
-    const est = estimateWidthForText(l.text, lang);
-    const w = box && Number.isFinite(box.w) && box.w > 0 ? Math.min(est, Math.max(0.08, box.w - 2 * PLACE_PAD)) : est;
-    const key = `${l.id}\u0000${l.kind}\u0000${l.text}\u0000${w}`;
-    const hit = cache.get(key);
+    let entry = cache.get(l);
+    if (!entry || entry.text !== l.text || entry.kind !== l.kind) {
+      const lang = l.lang || doc.format?.language || 'en';
+      const shape = resolveLetterStyle(doc, l).shape;
+      entry = { text: l.text, kind: l.kind, est: estimateWidthForText(l.text, lang), fill: BOXY.has(shape) ? 1 : Math.PI / 4, byWidth: new Map() };
+      cache.set(l, entry);
+    }
+    const w = box && Number.isFinite(box.w) && box.w > 0 ? Math.min(entry.est, Math.max(0.08, box.w - 2 * PLACE_PAD)) : entry.est;
+    const hit = entry.byWidth.get(w);
     if (hit !== undefined) return hit;
     const size = sizer(l, w);
-    const shape = resolveLetterStyle(doc, l).shape;
-    const fill = BOXY.has(shape) ? 1 : Math.PI / 4;
-    const need = r4(NEED_SCALE * fill * size.bounds.w * size.bounds.h);
-    cache.set(key, need);
+    const need = r4(NEED_SCALE * entry.fill * size.bounds.w * size.bounds.h);
+    entry.byWidth.set(w, need);
     return need;
   };
   return { line, panel: (lines, box) => r4((lines || []).reduce((sum, l) => sum + line(l, box), 0)) };
