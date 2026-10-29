@@ -873,9 +873,8 @@ const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () =>
   </main>
 );
 
-// ── Phone board: "Ask the Director…" ─────────────────────────────────────────
+// ── Phone chrome ─────────────────────────────────────────────────────────────
 
-/** The composer collapsed to one 44 px pill at the foot of the phone Board (mobile.md §3.1). */
 /**
  * Phones in portrait: the header and the tab bar are 44 + 52 px (their controls stay 44 px), so the
  * board and the message list keep ≥ 45 % of an iPhone's height under the notch and the home indicator
