@@ -142,7 +142,6 @@ export function summarizeDocForDirector(
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
-  const f = doc.format;
 
   const tail: string[] = [];
   for (const extra of extraLines) if (extra) tail.push(clip(extra, 400));
