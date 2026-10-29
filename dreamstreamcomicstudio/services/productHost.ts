@@ -25,6 +25,24 @@ export const isComicsHost = (hostname: string = currentHostname()): boolean => {
   return host === COMICS_HOST || COMICS_ALIAS_HOSTS.includes(host);
 };
 
+/**
+ * Design skins (docs/design/atlas-skin.md): a `data-ds-skin` value that selects one block of
+ * `--ds-*` token overrides in index.css. Comic Studio renders in the Atlas language; a "fun" skin
+ * comes later as a sibling over the same tokens.
+ */
+export type DsSkin = 'atlas';
+export const DS_SKIN_ATTR = 'data-ds-skin';
+/** The skin every Comic Studio surface carries on its root (studio, public reader, immersive reader). */
+export const COMIC_STUDIO_SKIN: DsSkin = 'atlas';
+
+/**
+ * The skin the whole page runs under for this hostname: the Atlas skin on the comics host and its
+ * alias (home, gallery, sign-in, studio, readers and the /c/<slug> share pages all live there), and
+ * none elsewhere — the apex keeps its own look, with only the Comic Studio roots skinned.
+ */
+export const comicsSkin = (hostname: string = currentHostname()): DsSkin | null =>
+  isComicsHost(hostname) ? COMIC_STUDIO_SKIN : null;
+
 const joinPath = (origin: string, path: string): string => {
   const p = String(path || '/');
   return `${origin}${p.startsWith('/') ? p : `/${p}`}`;

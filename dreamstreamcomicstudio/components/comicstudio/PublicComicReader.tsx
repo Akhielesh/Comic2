@@ -24,7 +24,7 @@ import type { AssetRef, ComicDoc } from '../../shared/comic/doc';
 import { buildShareUrl, SHARE_PATH, SLUG_RE, type PublicPublicationInfo } from '../../shared/comic/publication';
 import { canServeToOwner, isContentRating, type ContentRating } from '../../shared/comic/safety';
 import { languageSpec, sameLanguage } from '../../shared/comic/languages';
-import { COMICS_ORIGIN } from '../../services/productHost';
+import { COMIC_STUDIO_SKIN, COMICS_ORIGIN } from '../../services/productHost';
 import { CANVAS_BG } from '../chat/studioDesign';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { GhostButton, IconButton, cx } from './board/ui';
@@ -578,6 +578,9 @@ const ReaderShell: React.FC<ShellProps> = ({
       data-testid="public-comic-reader"
       data-view={view}
       data-embed={embed ? 'true' : undefined}
+      // The public reader renders in the Atlas design language wherever it is mounted (the comics
+      // host sets the same attribute on <html>; on the apex this root is the skin's boundary).
+      data-ds-skin={COMIC_STUDIO_SKIN}
     >
       {header}
       <main

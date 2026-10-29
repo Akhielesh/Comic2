@@ -14,6 +14,7 @@ import { bookOf, readerOf, type AssetRef, type ComicDoc } from '../../../shared/
 import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
+import { COMIC_STUDIO_SKIN } from '../../../services/productHost';
 import { ExportError } from '../export/errors';
 import type { PdfExportResult } from '../export/pdfExport';
 import type { StudioController } from '../types';
@@ -760,6 +761,9 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       data-layout={state.layout}
       data-phase={state.phase}
       data-guided={state.guided.on ? 'true' : 'false'}
+      // Portaled to <body>, so the reader carries the Atlas skin attribute itself: its chrome (HUD,
+      // sheets, end card) follows the skin while the room stays a content surface (--ds-reader-*).
+      data-ds-skin={COMIC_STUDIO_SKIN}
       className={cx('gesture-root fixed inset-0 z-[80] overflow-hidden text-white outline-none', fullscreenCursorHidden && 'cursor-none')}
       style={{ ...READER_TOKENS, background: 'var(--ds-reader-room)' }}
       onKeyDown={onKeyDown}
