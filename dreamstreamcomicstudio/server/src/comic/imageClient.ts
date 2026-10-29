@@ -56,29 +56,10 @@ import {
 } from './types.js';
 import { prefersGeminiDirect } from './keys.js';
 
-// ── Request / result extras (types.ts ImageRequest / ImageResult gain these: wave note) ──
-
-/** What the job runner may add to an ImageRequest. */
-export interface ImageRequestExtras {
-  /**
-   * The route the money-safe preflight chose (reliability.md §2): the same model on the other route, used ONLY when
-   * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
-   */
-  preferRoute?: ImageRoute;
-  /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
-  maxUsd?: number;
-}
-
-/** What the transport reports beyond ImageResult. */
-export interface ImageResultExtras {
-  /** The upstream provider that served the call (OpenRouter's `provider`), when reported. */
-  providerName?: string;
-  /** The model version the provider reported (OpenRouter `model`, Gemini `modelVersion`; models.md §2.5). */
-  modelVersion?: string;
-}
-
-export type ImageRequestPlus = ImageRequest & ImageRequestExtras;
-export type ImageResultPlus = ImageResult & ImageResultExtras;
+// ImageRequest carries preferRoute / maxUsd and ImageResult providerName / modelVersion (types.ts); the old names stay
+// as aliases for existing imports.
+export type ImageRequestPlus = ImageRequest;
+export type ImageResultPlus = ImageResult;
 
 // ── Dependencies (injectable for tests) ──────────────────────────────────────
 
@@ -1202,8 +1183,7 @@ export function createImageGenerator(keys: StudioKeys, deps: ImageClientDeps = {
     }
   };
 
-  return async (input: ImageRequest): Promise<ImageResult> => {
-    const req = input as ImageRequestPlus;
+  return async (req: ImageRequest): Promise<ImageResult> => {
     const primary = pickImageRoute(req.spec, keys);
     const prepared = prepareImageRequest(req);
     // The SAME model on the other route, only with a key of the same payer (never another model, never another payer).

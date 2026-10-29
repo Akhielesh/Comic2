@@ -119,7 +119,7 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute, type ImageRequestPlus, type ImageResultPlus } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute } from './imageClient.js';
 import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
 import { recordImageCall } from './billing.js';
@@ -133,6 +133,7 @@ import {
   type BillingReservation,
   type CompiledImageJob,
   type ImageReference,
+  type ImageRequest,
   type ImageResult,
   type LlmClient,
   type LlmResult,
@@ -359,9 +360,9 @@ const imageOperation: Record<ImageJobKind, string> = {
 
 // ── Image-model lock (models.md §3) ──────────────────────────────────────────
 
-/** models.md §3.4 codes (types.ts StudioErrorCode gains them: wave note). Casts keep the runtime code exact. */
+/** models.md §3.4 codes. */
 export const MODEL_LOCKED: StudioErrorCode = MODEL_LOCKED_CODE;
-export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE' as string as StudioErrorCode;
+export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE';
 
 /**
  * The comic's image-model lock: the persisted one, else the migration lock of a legacy doc drawn before the lock
@@ -2860,7 +2861,7 @@ class RenderRun {
     }
     const reservation = reserved.reservation;
 
-    let result: ImageResultPlus | undefined;
+    let result: ImageResult | undefined;
     let lastError: StudioError | undefined;
     let lastRaw: unknown;
     let attempts = 0;
@@ -2879,7 +2880,7 @@ class RenderRun {
       try {
         // No abort signal: a call that has started is paid and is always kept. preferRoute: the preflight found
         // the primary route down and the same model on a same-payer route up (reliability.md §2).
-        const request: ImageRequestPlus = {
+        const request: ImageRequest = {
           spec: prepared.compiled.spec,
           resolution: prepared.compiled.resolution,
           aspect: prepared.compiled.aspect,
@@ -2889,7 +2890,7 @@ class RenderRun {
           // Images-API models pin `provider.only` to endpoints at or under this per-image quote (models.md §2.4 R3.4).
           ...(this.unitQuoteUsd(prepared.compiled, job.kind) !== null ? { maxUsd: this.unitQuoteUsd(prepared.compiled, job.kind)! } : {})
         };
-        result = (await ctx.images(request)) as ImageResultPlus;
+        result = await ctx.images(request);
         if (safe && safeRetried) saferTake = true;
         break;
       } catch (err) {
@@ -3373,7 +3374,7 @@ class RenderRun {
       reported: number | null;
       estimated: boolean;
       byok: boolean;
-      result?: ImageResultPlus;
+      result?: ImageResult;
       error?: StudioError;
       raw?: unknown;
       latencyMs: number;

@@ -54,7 +54,12 @@ export type StudioErrorCode =
   /** 501 (not built yet) or 503 (dependency down): the feature cannot run right now. */
   | 'NOT_AVAILABLE'
   /** 422: a language edition is not complete/reviewed enough for this (publish, per-language export). */
-  | 'LANG_INCOMPLETE';
+  | 'LANG_INCOMPLETE'
+  // W-M model lock (models.md §3.4)
+  /** 409: the comic's image model is locked; only the user's confirmed change_image_model action may change it. */
+  | 'MODEL_LOCKED'
+  /** 409: a render run is under way; the model cannot change until it finishes or is stopped. */
+  | 'RUN_ACTIVE';
 
 export class StudioError extends Error {
   readonly code: StudioErrorCode;
@@ -140,6 +145,13 @@ export interface ImageRequest {
   prompt: string;
   references: ImageReference[];
   signal?: AbortSignal;
+  /**
+   * The route the money-safe preflight chose (reliability.md §2): the same model on the other route, used ONLY when
+   * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
+   */
+  preferRoute?: ImageRoute;
+  /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
+  maxUsd?: number;
 }
 
 export interface ImageResult {
@@ -152,6 +164,10 @@ export interface ImageResult {
   /** Any text the model returned alongside the image. */
   text?: string;
   latencyMs: number;
+  /** The upstream provider that served the call (OpenRouter's `provider`), when reported. */
+  providerName?: string;
+  /** The model version the provider reported (OpenRouter `model`, Gemini `modelVersion`; models.md §2.5). */
+  modelVersion?: string;
 }
 
 export type ImageGenerator = (req: ImageRequest) => Promise<ImageResult>;

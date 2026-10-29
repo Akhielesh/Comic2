@@ -13,8 +13,8 @@ import { lockedModelId } from '../../../../shared/comic/modelLock.js';
 import type { OpSanitizer } from '../extensions.js';
 import { StudioError, type StudioErrorCode } from '../types.js';
 
-/** models.md §3.4 error code (types.ts StudioErrorCode gains it; the cast keeps the runtime code exact meanwhile). */
-export const MODEL_LOCKED_CODE = 'MODEL_LOCKED' as string as StudioErrorCode;
+/** models.md §3.4 error code. */
+export const MODEL_LOCKED_CODE: StudioErrorCode = 'MODEL_LOCKED';
 
 /** "Nano Banana 2.1" for a registry id; the id itself when the registry no longer lists it. */
 export const modelName = (modelId: string): string => getImageModel(modelId)?.nickname ?? modelId;
