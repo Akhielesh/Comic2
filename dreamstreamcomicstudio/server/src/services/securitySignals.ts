@@ -16,7 +16,7 @@
 
 import type { CspViolationRow, SecuritySection, SecuritySignalRow, StreamAlertRow } from '../../../shared/types/costCentre.js';
 import { SECURITY_SIGNALS, SIGNAL_LABEL, SIGNAL_TONE, sumSignal, type SignalRow } from '../../../shared/stream/signals.js';
-import { analyticsEngineSqlUrl, cfPost, scrub, streamCredentialsFromEnv, type FetchLike, type StreamCredentials } from './streamCosts.js';
+import { aeCapNote, analyticsEngineSqlUrl, cfPost, scrub, streamCredentialsFromEnv, type FetchLike, type StreamCredentials } from './streamCosts.js';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -94,6 +94,8 @@ export function parseCspRows(json: unknown): CspHourRow[] {
 export interface CspCounts {
   measured: boolean;
   rows: CspHourRow[];
+  /** The answer hit CSP_ROW_LIMIT (judged on the raw rows, before any were dropped as malformed). */
+  truncated?: boolean;
   error?: string;
 }
 
@@ -109,8 +111,9 @@ export async function fetchCspCounts(input: {
   const fetchImpl = input.fetchImpl ?? (fetch as unknown as FetchLike);
   try {
     const json = await cfPost(creds, analyticsEngineSqlUrl(creds.accountId), cspSql(input.dataset ?? cspDatasetFromEnv(), input.days), 'text/plain', fetchImpl);
-    if (!Array.isArray((json as { data?: unknown })?.data)) throw new Error('unexpected answer (no data rows)');
-    return { measured: true, rows: parseCspRows(json) };
+    const data = (json as { data?: unknown })?.data;
+    if (!Array.isArray(data)) throw new Error('unexpected answer (no data rows)');
+    return { measured: true, rows: parseCspRows(json), truncated: data.length >= CSP_ROW_LIMIT };
   } catch (err) {
     return { measured: false, rows: [], error: scrub(scrub((err as Error)?.message || 'request failed', creds.token), creds.accountId) };
   }
@@ -180,9 +183,26 @@ export interface SecurityBuildInput {
   signIns: SignInCounts | null;
   /** The live Worker's signal rows (null = Analytics Engine not asked or didn't answer). */
   signals: SignalRow[] | null;
-  /** First UTC day Analytics Engine rows cover (for the previous-period column). */
+  /** First UTC day Analytics Engine rows cover COMPLETELY (for the previous-period column). */
   aeFromMs?: number | null;
+  /** The Analytics Engine answer hit its row cap (StreamAnalytics.aeTruncated): aeFromMs is where complete days start. */
+  aeTruncated?: boolean;
 }
+
+/**
+ * Trusted Types directives. Stream Studio sends `require-trusted-types-for 'script'` as a SEPARATE
+ * policy that stays report-only for good (functions/_middleware.ts LIVE_TRUSTED_TYPES_REPORT_ONLY:
+ * MediaPipe's loader assigns `script.src`), so ENFORCE_LIVE never enforces it and its reports can
+ * never reach zero while cameras load smart vision.
+ */
+export const TRUSTED_TYPES_DIRECTIVES: ReadonlySet<string> = new Set(['require-trusted-types-for', 'trusted-types']);
+
+/**
+ * A report against that report-only Trusted Types policy: informational, never part of the 48 h gate.
+ * One that says it was ENFORCED is not this — something blocked our code for real and stays critical.
+ */
+export const isTrustedTypesReport = (r: Pick<CspHourRow, 'directive' | 'disposition'>): boolean =>
+  TRUSTED_TYPES_DIRECTIVES.has(r.directive) && r.disposition !== 'enforce';
 
 const dayKey = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const plural = (n: number, word: string, many = `${word}s`) => `${n.toLocaleString('en-US')} ${n === 1 ? word : many}`;
@@ -198,12 +218,16 @@ export function buildSecuritySection(input: SecurityBuildInput): SecuritySection
   const cspMeasured = !!input.csp?.measured;
   const inRange = (r: CspHourRow) => r.at >= fromMs && r.at < toMs;
   const liveFirst = (r: CspHourRow) => r.page === 'live' && r.firstParty;
+  // The gate and the report-only count read only the policy ENFORCE_LIVE will enforce: Trusted Types
+  // reports (report-only for good) are their own informational count. Anything enforced counts.
+  const liveGate = (r: CspHourRow) => liveFirst(r) && !isTrustedTypesReport(r);
   const sum = (rows: CspHourRow[]) => rows.reduce((s, r) => s + r.count, 0);
   const rangeRows = cspRows.filter(inRange);
   const since48 = nowMs - SECURITY_THRESHOLDS.cspCleanHours * HOUR_MS;
-  const live48 = sum(cspRows.filter((r) => liveFirst(r) && r.at + HOUR_MS > since48));
+  const live48 = sum(cspRows.filter((r) => liveGate(r) && r.at + HOUR_MS > since48));
   const liveEnforced = sum(rangeRows.filter((r) => liveFirst(r) && r.disposition === 'enforce'));
-  const liveReportOnly = sum(rangeRows.filter((r) => liveFirst(r) && r.disposition !== 'enforce'));
+  const liveReportOnly = sum(rangeRows.filter((r) => liveGate(r) && r.disposition !== 'enforce'));
+  const liveTrustedTypes = sum(rangeRows.filter((r) => liveFirst(r) && isTrustedTypesReport(r)));
   const buckets = new Map<string, CspViolationRow>();
   for (const r of rangeRows) {
     const key = [r.page, r.directive, r.blocked, r.disposition, r.firstParty].join('|');
@@ -233,7 +257,7 @@ export function buildSecuritySection(input: SecurityBuildInput): SecuritySection
     ? 'Cloudflare analytics is not connected, so CSP counts aren’t read (set CF_ANALYTICS_API_TOKEN and CLOUDFLARE_ACCOUNT_ID on the backend).'
     : !cspMeasured
       ? `CSP counts didn’t answer. Until the Pages project has the Analytics Engine binding CSP_REPORTS (dataset ${DEFAULT_CSP_DATASET}, or CSP_REPORTS_DATASET on the backend) and has received a report, the counts live only in the Pages Functions log (the 1st, 10th, 100th… of each kind).`
-      : `Counts of browser reports, by app, directive and blocked origin — never a URL. “Extension” rows come from browser add-ons, not our code. Enforcing the policy on Stream Studio waits for ${SECURITY_THRESHOLDS.cspCleanHours} h with no first-party violations there.`;
+      : `Counts of browser reports, by app, directive and blocked origin — never a URL. “Extension” rows come from browser add-ons, not our code. Enforcing the policy on Stream Studio waits for ${SECURITY_THRESHOLDS.cspCleanHours} h with no first-party violations there. Trusted Types reports (require-trusted-types-for) are not part of that wait: that policy stays report-only for good — the smart-vision loader sets a script’s src — so they are counted on their own as an inventory.`;
 
   // ---- Sign-ins -------------------------------------------------------------------------------
   const si = input.signIns;
@@ -303,8 +327,9 @@ export function buildSecuritySection(input: SecurityBuildInput): SecuritySection
   // ---- Notes ----------------------------------------------------------------------------------
   notes.push('Everything on this tab is a count. No account, nursery, device, IP address, token, email or page URL is read or shown.');
   notes.push('What to do when an alert fires: docs/infrastructure/live-security-runbook.md.');
-  if (!prevCovered && signalsMeasured) notes.push('The previous period is older than Analytics Engine keeps (about 90 days) — no comparison column.');
-  if (cspRows.length >= CSP_ROW_LIMIT) notes.push(`CSP counts hit the ${CSP_ROW_LIMIT.toLocaleString('en-US')}-row cap — the oldest hours are partial.`);
+  if (signalsMeasured && input.aeTruncated && input.aeFromMs != null) notes.push(aeCapNote(input.aeFromMs, fromMs, prevCovered));
+  else if (!prevCovered && signalsMeasured) notes.push('The previous period is older than Analytics Engine keeps (about 90 days) — no comparison column.');
+  if (input.csp?.truncated || cspRows.length >= CSP_ROW_LIMIT) notes.push(`CSP counts hit the ${CSP_ROW_LIMIT.toLocaleString('en-US')}-row cap — the oldest hours are partial.`);
 
   return {
     range: { from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString(), days },
@@ -314,6 +339,7 @@ export function buildSecuritySection(input: SecurityBuildInput): SecuritySection
       firstPartyLive48h: cspMeasured ? live48 : null,
       firstPartyLiveEnforced: cspMeasured ? liveEnforced : null,
       firstPartyLiveReportOnly: cspMeasured ? liveReportOnly : null,
+      trustedTypesLive: cspMeasured ? liveTrustedTypes : null,
       extension: cspMeasured ? sum(rangeRows.filter((r) => !r.firstParty)) : null,
       top: cspMeasured ? top : [],
       note: cspNote,

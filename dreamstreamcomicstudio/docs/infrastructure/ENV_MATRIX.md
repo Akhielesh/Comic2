@@ -107,7 +107,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `CF_ANALYTICS_API_TOKEN` | `services/costCentre.ts`, `streamCosts.ts`, `securitySignals.ts` → `GET /api/admin/costs` | ⭕ 🔐 | — | **Read-only** token with *Account › Account Analytics › Read*. Queries the GraphQL Analytics API (Workers invocations per script, R2 storage; Durable Object requests, duration, rows written and storage; TURN) and Analytics Engine SQL (`stream_usage`: usage points, activity marks, the live Worker's signals; `csp_reports`: CSP violation counts). Never logged or returned to the client. Unset ⇒ Admin → Costs shows a setup card; all Supabase-based figures still work. Also a GitHub repository secret for `stream-cost-watch.yml` |
 | `CLOUDFLARE_ACCOUNT_ID` | `services/costCentre.ts` | ⭕ | — | The account tag for the analytics query; both vars must be set (as `dreamstream-api` Worker secrets or D1 `backend_env` rows) |
 | `STREAM_DO_NAMESPACES` | `services/streamCosts.ts` (Admin → Costs → Stream Studio) | ⭕ | — | Non-secret. `MonitorRoom=<id>,EventRoom=<id>,UserLine=<id>,CallRoom=<id>` (32-hex Durable Object namespace ids) — splits measured DO requests / rows / GB-s by room and gives exact per-nursery-day KPIs. Unset ⇒ DO figures are account-wide (labelled so). The same token above also reads the `stream_usage` Analytics Engine dataset. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
-| `STREAM_PHASE0_SHIPPED` | `services/streamCosts.ts` | ⭕ | — | `1` once ADR 0006 Phase 0 ships (Wave 2 deployed): applies the per-nursery-day budget alerts — ≤ 1,800 rows (`write_diet`) and ≤ 1,000 DO requests (`request_diet`), both on the 7-day median. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
+| `STREAM_PHASE0_SHIPPED` | `services/streamCosts.ts` | ⭕ | — | `1` once ADR 0006 Phase 0 ships (Wave 2 deployed): applies the per-nursery-day budget alerts — ≤ 1,800 rows (`write_diet`) and ≤ 2,600 DO invocations as Cloudflare counts them ≈ 1,000 billed requests (`request_diet`), both on the 7-day median. Also a GitHub Actions *variable* for `stream-cost-watch.yml` |
 | `CSP_REPORTS_DATASET` | `services/securitySignals.ts` (Admin → Costs → Security) | ⭕ | — | Non-secret. The Analytics Engine dataset the Pages binding `CSP_REPORTS` writes to; default `csp_reports`. Set only if the binding uses another name (a plain identifier; anything else falls back to the default) |
 
 ## Live / email workers (set on the workers, mirrored on backend)
@@ -146,11 +146,6 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `TURN_TAG_SALT` | dreamstream-live | ⭕ 🔐 | — | Optional secret that keys the TURN `customIdentifier` HMAC. Unset: the TURN API token keys it (still non-reversible). Set it before Phase A's per-identifier analytics so tags stay stable if the API token is rotated (a new salt or token changes every tag) |
 | `STREAM_USAGE` (binding) | dreamstream-live | ⭕ | — (10M points/mo included) | Workers Analytics Engine dataset `stream_usage` (`wrangler.jsonc` `analytics_engine_datasets`): ≤ 1 usage point per room per hour (`src/usageMeter.ts`), plus the privacy-safe signal counts (`src/signals.ts`: a name, a surface word and a count; ≤ 1 point per minute per isolate per signal; ADR 0006 WS-8). Optional in code — absent ⇒ no points, the rooms' monthly `use:YYYY-MM` rows still count. Read by Admin → Costs (Stream Studio and Security) and the daily `stream-cost-watch` job |
 | `CSP_REPORTS` (binding, **Pages**) | Pages Functions `functions/csp-report.ts` | ⭕ | — | Analytics Engine dataset (default name `csp_reports`) for CSP violation counts — by app, directive and blocked origin, never a URL. Added by the owner in the Pages project's Bindings (owner checklist §6c). Absent ⇒ counts only in bounded log lines |
-
-**Supabase-side configuration (not env vars, but set by the owner — `server/sql/live_security_v2.sql`):**
-Vault secret `SECURITY_HOOK_SECRET`; `public.live_private_config` row `security_hook_url` =
-`https://dreamstream-email.akhieleshsrirangam.workers.dev/security`; the *Customize Access Token
-(JWT) Claims* hook → `public.live_access_token_hook`. Owner checklist §4.
 | `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list (includes `https://stream.dreamstreamstudio.ai`, Stream Studio's own host); from ADR 0006 WS-7 also the WebSocket `Origin` allowlist (an upgrade with no `Origin` — a native app — is allowed) |
 | `DEVICE_TOKEN_JWK` | dreamstream-live | ⭕ 🔐 | — | P-256 private JWK from `scripts/ops/genDeviceTokenKey.mjs` (`{"keys":[new, old]}` while rotating): device grants (30 days) and 10-minute device access tokens with `DS-Proof` (watches, native apps; `src/auth/deviceToken.ts`). Unset ⇒ device enrolment answers 501 |
 | `ACT_TOKEN_KEY` | dreamstream-live | ⭕ 🔐 | — | 32+ characters: single-use "I'm on it" tokens in web pushes (`src/auth/actToken.ts`, 30 min). Unset ⇒ pushes offer no action. One key, no overlap: rotating breaks the last 30 minutes' actions |
@@ -159,6 +154,11 @@ Vault secret `SECURITY_HOOK_SECRET`; `public.live_private_config` row `security_
 | `APNS_KEY_P8` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_BUNDLE` / `FCM_SA_JSON` | dreamstream-live | ⭕ 🔐 | — (APNs and FCM are free) | Native push (`src/push/*`, Phase 1). Unset ⇒ native kinds make no request (the router is dormant) |
 | `PUSH_IOS_VIA` / `PUSH_CRITICAL_ALERTS` / `PUSH_LA_SEALED` / `PUSH_VOIP` | dreamstream-live (vars) | ⭕ | — | Non-secret switches (`src/push/router.ts`): `PUSH_IOS_VIA=fcm` if the APNs HTTP/2 probe fails; the others `1` only once Critical Alerts are granted, sealed Live Activity state is proven, and VoIP push ships (Phase 1.1) |
 | `RL_WS` / `RL_GUEST` / `RL_GUEST_NID` / `RL_EVENT` (bindings) | dreamstream-live | ⭕ | — | Workers Rate Limiting (`ratelimits` in `wrangler.jsonc`, ADR 0006 WS-7): 60 upgrades/60 s per address, 10 share-link joins/60 s per address, 30 per nursery, 10 events/60 s per account. Every check fails open. Runbook §3 |
+
+**Supabase-side configuration (not env vars, but set by the owner — `server/sql/live_security_v2.sql`):**
+Vault secret `SECURITY_HOOK_SECRET`; `public.live_private_config` row `security_hook_url` =
+`https://dreamstream-email.akhieleshsrirangam.workers.dev/security`; the *Customize Access Token
+(JWT) Claims* hook → `public.live_access_token_hook`. Owner checklist §4.
 
 ---
 

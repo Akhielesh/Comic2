@@ -347,7 +347,7 @@ KPIs, in the shape of the ADR 0006 table.
 
 | KPI | Threshold |
 |---|---|
-| DO requests | ≤ 1,000 |
+| DO requests | ≤ 1,000 billed, judged as ≤ 2,600 measured invocations (below) |
 | Rows written | ≤ 1,800 |
 | DO duration | ≤ 40 GB-s |
 | Relay and TURN share of viewer-minutes | reported |
@@ -357,6 +357,17 @@ The KPIs apply after Phase 0 ships. Before that, the panel shows the baseline. S
 the three budgets are judged on the **7-day median** over the last complete days with activity
 marks (the ADR's acceptance criterion), with the month-to-date average beside it.
 
+**Units.** Cloudflare's GraphQL `durableObjectsInvocationsAdaptiveGroups` counts *invocations*:
+alarms, socket upgrades and every incoming message on a hibernatable socket, each once ("the 20:1
+ratio does not affect Durable Object metrics and analytics"). It can't split messages from alarms.
+So the request KPI and its budget are both in invocations: 2,600, the ADR's 1,000 billed requests at
+the simulated night's mix (216 alarms + 6 upgrades + 1,212 messages = 1,434 invocations for 542
+billed; `PHASE0_DO_INVOCATIONS` in `shared/stream/usage.ts`). At 2,600 a night whose extra traffic
+is all messages bills about 340 requests, one whose extra is all alarms or reconnects about 1,450;
+alarm loops also show in `write_diet` (each re-arm is a row). The simulation assumes the app's
+auto-answered pings invoke nothing (they wake nothing): if the first production week reads several
+times the simulation with no client change, that assumption is wrong — recalibrate.
+
 **9. Alerts.** Each has a threshold and a plain-words cause:
 
 | Alert | Fires when |
@@ -364,7 +375,7 @@ marks (the ADR's acceptance criterion), with the month-to-date average beside it
 | Free tier filling | Any allowance projected ≥ 80% (amber) or ≥ 100% (red) by month end |
 | Hibernation broken | DO GB-s per active nursery-day > 40 for 2 days in a row |
 | Write diet regressed | Rows per active nursery-day > 1,800 (7-day median when known; after Phase 0) |
-| Request budget exceeded | DO requests per active nursery-day > 1,000 (7-day median; after Phase 0) |
+| Request budget exceeded | DO invocations per active nursery-day > 2,600 — ≈ 1,000 billed requests (7-day median; after Phase 0) |
 | TURN leak | Any one TURN identifier > 20 GB in a day, or account TURN > 500 GB before the 15th |
 | Relay creep | Our-server share of monitor viewer-minutes > 10% over 7 days |
 | R2 near free | R2 stored > 8 GB-month |
@@ -698,6 +709,11 @@ There is no cross-user comparison, ranking or leaderboard for users.
 **Retention**
 - Monthly rows are kept 13 months in the DOs (tiny; for a year-on-year view), then pruned by the existing 6-hour purge.
 - Analytics Engine keeps its own limited retention. The owner view needs at most 90 days.
+- The owner view's one Analytics Engine query returns at most 10,000 rows, newest day first, and the
+  usage points, the daily activity marks and the live Worker's signal counts share them. At the cap
+  the oldest returned day can be cut part-way, so the backend keeps only complete days, says from
+  which day (on both the Stream Studio and Security tabs), and hides the previous-period comparisons
+  it can no longer make (`aeTruncated` in `streamCosts.ts`).
 
 **Honesty:** every estimate is labelled; list prices carry their date; privacy wording stays bound to `privacyCopy.unit.test.ts`.
 

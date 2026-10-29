@@ -222,11 +222,14 @@ Repository `Akhielesh/Comic2`, default and production branch `Dreamstrream-v1`.
       glance1`. Then set the backend var / D1 row **`STREAM_PHASE0_SHIPPED=1`** and the GitHub
       Actions variable of the same name — the Phase 0 cost budgets' alerts switch on.
 - [ ] **R4 — 48 h of clean CSP reports** (Admin → Costs → Security → *Stream Studio CSP · last
-      48 h* = 0, with §6c done): set `ENFORCE_LIVE = true` in `functions/_middleware.ts` (a code
+      48 h* = 0, with §6c done; it counts only the policy the flip enforces — the Trusted Types
+      reports from cameras running smart vision are listed separately and don't hold it up): set `ENFORCE_LIVE = true` in `functions/_middleware.ts` (a code
       change — ask the team), then runbook §7's 10-minute phone check.
 - [ ] **R5 — 7 days later:** Admin → Costs → Stream Studio → *Baby monitor health* shows the 7-day
       medians with 7 days, all *within budget*; record the three numbers in ADR 0006's acceptance
-      list. Only then does Phase 1 cut its first TestFlight build.
+      list. Only then does Phase 1 cut its first TestFlight build. (The request figure is
+      *invocations* as Cloudflare counts them — every incoming WebSocket message once — so its
+      budget reads ≤ 2,600, which is the ADR's 1,000 billed requests at the simulated night's mix.)
 
 ---
 

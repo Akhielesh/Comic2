@@ -329,7 +329,7 @@ describe('Cost centre — ADR 0006 Phase 0 observability (WS-8)', () => {
 
   it('passes the Phase 0 budgets and the 7-day median shape through the Stream Studio section', () => {
     const report = buildCostCentreReport(emptyRows(), { days: 30, now: NOW, budgetFor: () => null });
-    expect(report.stream?.kpis.budgets).toEqual({ doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 });
+    expect(report.stream?.kpis.budgets).toEqual({ doRequests: 2600, rowsWritten: 1800, gbSeconds: 40 });
     expect(report.stream?.kpis.median7d).toEqual({ days: 0, doRequests: null, rowsWritten: null, gbSeconds: null });
     expect(report.stream?.kpis.status).toEqual({ doRequests: 'unknown', rowsWritten: 'unknown', gbSeconds: 'unknown' });
   });

@@ -193,6 +193,68 @@ describe('Stream costs — fetch (≤ 5 GraphQL + 1 Analytics Engine query)', ()
     expect(failedDatasets({ configured: false, nowMs: NOW, aeFromMs: NOW, errors: [] })).toEqual([]);
   });
 
+  it('notices the 10,000-row cap on the whole answer (marks and signals too), keeps only complete days, and hides what it cut', async () => {
+    // A 30-day view asks 60 days. 120 nurseries with a camera on (marks), the Worker's signals and some
+    // relay users fill the cap after 42 days: the oldest returned day is cut part-way, older days are
+    // missing. Only 78 rows a day are usage rows, so the parsed usage alone is far below the cap.
+    const range = range30();
+    const days = Array.from({ length: 42 }, (_, i) => new Date(Date.parse('2026-10-21T00:00:00Z') - i * 86_400_000).toISOString().slice(0, 10));
+    const names = ['kick', 'kick_closed', 'removed_closed', 'mfa_refused', 'session_expired', 'session_revoked', 'reauth_ok', 'rate_limited', 'origin_refused', 'preauth_evicted', 'guest_lockout', 'camera_spoof_refused', 'device_revoked_closed'];
+    const data: Record<string, unknown>[] = [];
+    for (const day of days) {
+      const at = `${day} 00:00:00`;
+      for (let n = 0; n < 120; n++) data.push({ day: at, kind: 'active', scope: 'nursery', scope_id: `nursery-${n}`, account: '' });
+      for (const name of names) for (const surface of ['monitor', 'edge', 'camera']) data.push({ day: at, kind: 'sig', scope: name, scope_id: surface, account: '', d1: 1 });
+      data.push({ day: at, kind: 'sig', scope: 'glance_bump', scope_id: '', account: '', d1: 40 });
+      for (let n = 0; n < 78; n++) {
+        const d: Record<string, unknown> = { day: at, kind: 'monitor', scope: 'nursery', scope_id: `nursery-${n}`, account: '' };
+        usageToDoubles(addUsage(emptyCounters(), { relayFrames: 1000, minutes: { server: 10 } })).forEach((v, i) => (d[`d${i + 1}`] = v));
+        data.push(d);
+      }
+    }
+    while (data.length < AE_ROW_LIMIT) data.push({ ...data[data.length - 1], scope_id: `extra-${data.length}` });
+    expect(data.length).toBe(AE_ROW_LIMIT);
+    const fetchImpl = vi.fn(async (url: string, init?: { body?: string }) =>
+      url.endsWith('/sql')
+        ? { ok: true, status: 200, json: async () => ({ data, rows: data.length }) }
+        : { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(JSON.parse(String(init?.body)).query)] } } }) }
+    );
+    const a = await fetchStreamAnalytics({ nowMs: NOW, fromMs: range.prevFromMs, creds: { token: 't', accountId: 'acct' }, fetchImpl });
+    expect(a.ae!.length).toBeLessThan(AE_ROW_LIMIT); // what the old check looked at
+    expect(a.aeTruncated).toBe(true);
+    // The oldest returned day (Sep 10) may be cut part-way: complete from Sep 11, and nothing older is kept.
+    expect(new Date(a.aeFromMs).toISOString()).toBe('2026-09-11T00:00:00.000Z');
+    expect([...a.ae!, ...a.aeActive!, ...a.aeSignals!].every((r) => r.day >= '2026-09-11')).toBe(true);
+    const s = buildStreamSection({ nowMs: NOW, range, analytics: a });
+    expect(s.notes.some((n) => n.includes('10,000-row cap') && n.includes('2026-09-11'))).toBe(true);
+    expect(s.prevListValueUsd).toBeNull(); // the period before starts Aug 22: not fully read
+    expect(s.notes.some((n) => n.includes('older than Analytics Engine keeps'))).toBe(false); // not the retention note
+    // The Security tab reads the same answer: no "period before" counts from a cut answer, and it says why.
+    const report = buildCostCentreReport(
+      { costEvents: [], ledger: [], providerUsage: [], emails: [], studioRuns: [], subscriptions: [], plans: [], profiles: [], liveProfiles: 0, telemetry: [], modelUsage: [], truncated: [] },
+      { days: 30, now: new Date(NOW), budgetFor: () => null, stream: { analytics: a } }
+    );
+    const sec = report.security!;
+    expect(sec.signals.counted).toBe(true);
+    expect(sec.signals.rows.find((r) => r.id === 'mfa_refused')?.count).toBeGreaterThan(0);
+    expect(sec.signals.rows.every((r) => r.prevCount === null)).toBe(true);
+    expect(sec.notes.some((n) => n.includes('10,000-row cap') && n.includes('no previous-period comparison'))).toBe(true);
+    // Under the cap nothing changes: the period before is read and no cap note appears.
+    const small = await fetchStreamAnalytics({
+      nowMs: NOW,
+      fromMs: range.prevFromMs,
+      creds: { token: 't', accountId: 'acct' },
+      fetchImpl: vi.fn(async (url: string, init?: { body?: string }) =>
+        url.endsWith('/sql')
+          ? { ok: true, status: 200, json: async () => ({ data: data.slice(0, 2000) }) }
+          : { ok: true, status: 200, json: async () => ({ data: { viewer: { accounts: [healthyAccount(JSON.parse(String(init?.body)).query)] } } }) }
+      )
+    });
+    expect(small.aeTruncated).toBe(false);
+    expect(small.aeFromMs).toBeLessThanOrEqual(range.prevFromMs); // the period before is covered
+    expect(buildStreamSection({ nowMs: NOW, range, analytics: small }).notes.some((n) => n.includes('row cap'))).toBe(false);
+  });
+
   it('maps every alert to the datasets it is evaluated from (unknown ids: all of them)', () => {
     expect(alertDatasets('turn_spend')).toEqual(['turn']);
     expect(alertDatasets('turn_leak')).toEqual(['turn']);
@@ -469,7 +531,7 @@ describe('Stream costs — the section (pure)', () => {
     expect(s.kpis.median7d).toMatchObject({ days: 7, doRequests: 950, rowsWritten: 1000, gbSeconds: 12 });
     expect(s.kpis.doRequests).toBeGreaterThan(4000); // the month-to-date mean
     expect(s.kpis.status?.doRequests).toBe('ok');
-    expect(s.kpis.budgets).toEqual({ doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 });
+    expect(s.kpis.budgets).toEqual({ doRequests: 2600, rowsWritten: 1800, gbSeconds: 40 });
     expect(s.alerts.map((a) => a.id)).not.toContain('request_diet');
     expect(s.notes.some((n) => n.includes('7-day MEDIAN'))).toBe(true);
     // A week over budget does fire it.
@@ -478,10 +540,43 @@ describe('Stream costs — the section (pure)', () => {
       range: range30(),
       phase0Shipped: true,
       namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
-      analytics: analytics({ doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 1500 })), aeActive: days.map((d) => mark(d, N1)), ae: [] })
+      analytics: analytics({ doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: 3000 })), aeActive: days.map((d) => mark(d, N1)), ae: [] })
     });
     expect(over.kpis.status?.doRequests).toBe('over');
     expect(over.alerts.map((a) => a.id)).toContain('request_diet');
+  });
+
+  it('compares the request KPI with a budget in the unit Cloudflare’s analytics count (messages 1:1), both ways', () => {
+    // live-worker/src/monitorRoom.night.test.ts (NIGHT_OUT run): a 12 h night that meets ADR 0006's
+    // billed budget — 216 alarms + 6 upgrades + 1,212 delivered messages (+ 5,180 auto-answered pings)
+    // = 542 billed requests (messages 20:1). Cloudflare's GraphQL invocations count the delivered
+    // messages 1:1: 216 + 6 + 1,212 = 1,434 per nursery-day.
+    const days = ['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19', '2026-10-20'];
+    const night = (invocations: number) =>
+      buildStreamSection({
+        nowMs: NOW,
+        range: range30(),
+        phase0Shipped: true,
+        namespaceLabels: { [MONITOR_NS]: 'MonitorRoom' },
+        analytics: analytics({
+          doRequests: days.map((date) => ({ date, namespaceId: MONITOR_NS, requests: invocations })),
+          doPeriodic: days.map((date) => ({ date, namespaceId: MONITOR_NS, activeTimeUs: (3.6 / 0.128) * 1e6, rowsWritten: 1040 })),
+          aeActive: days.map((d) => mark(d, N1)),
+          ae: []
+        })
+      });
+    const ok = night(216 + 6 + 1212);
+    expect(ok.kpis.median7d).toMatchObject({ days: 7, doRequests: 1434, rowsWritten: 1040 });
+    expect(ok.kpis.status).toEqual({ doRequests: 'ok', rowsWritten: 'ok', gbSeconds: 'ok' });
+    expect(ok.alerts.map((a) => a.id)).not.toContain('request_diet');
+    expect(ok.alerts).toEqual([]);
+    // The other way: a chatty client (status every 2 s from one viewer: +21,600 messages) or a
+    // reconnect / alarm loop pushes the invocations past the budget, and the alert fires.
+    for (const invocations of [216 + 6 + 1212 + 21_600, 216 + 6 + 1212 + 1500]) {
+      const over = night(invocations);
+      expect(over.kpis.status?.doRequests).toBe('over');
+      expect(over.alerts.map((a) => a.id)).toContain('request_diet');
+    }
   });
 
   it('reports DO storage as an account-wide level with its own headroom row, and per nursery', () => {

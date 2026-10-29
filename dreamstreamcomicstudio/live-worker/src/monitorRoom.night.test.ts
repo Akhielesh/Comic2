@@ -32,6 +32,7 @@ vi.mock('./webpush', () => ({
 
 import { billedRequests, monitorWorld, rowsWritten, WSPair, type Counts, type KitWS, type MonitorWorld } from './monitorTestKit';
 import { StatusCadence } from '../../live/monitor/statusCadence';
+import { PHASE0_DO_INVOCATIONS } from '../../shared/stream/usage';
 import { ViewGate } from '../../live/monitor/viewGate';
 
 const NID = '11111111-2222-4333-8444-555555555555';
@@ -347,6 +348,10 @@ describe('MonitorRoom: a 12 h night costs what ADR 0006 WS-9 budgets', () => {
     expect(r.requests).toBeLessThanOrEqual(TARGET.requests);
     expect(r.rows).toBeLessThanOrEqual(TARGET.rows);
     expect(r.gbSeconds).toBeLessThanOrEqual(TARGET.gbSeconds);
+    // What Cloudflare's analytics will show for this night — invocations, each incoming message once
+    // (auto-answered pings invoke nothing) — stays inside the budget Admin → Costs judges production
+    // against in that unit (shared/stream/usage.ts PHASE0_DO_INVOCATIONS, derived from this night).
+    expect(r.counts.alarms + r.counts.http + r.counts.delivered).toBeLessThanOrEqual(PHASE0_DO_INVOCATIONS);
     // Against the same night before this change (87082ad: 4,261 requests, 11,898 rows, 2,880 alarms).
     expect(r.requests).toBeLessThan(BEFORE.requests / 4);
     expect(r.rows).toBeLessThan(BEFORE.rows / 8);

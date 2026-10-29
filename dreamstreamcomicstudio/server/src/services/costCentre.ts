@@ -953,7 +953,8 @@ export const buildCostCentreReport = (rows: CostCentreRows, opts: CostCentreBuil
       signIns: opts.security?.signIns ?? null,
       // Analytics Engine answered → its signal rows (maybe none yet); didn't, or wasn't asked → unknown.
       signals: opts.stream?.analytics?.ae !== undefined ? opts.stream.analytics.aeSignals ?? [] : null,
-      aeFromMs: opts.stream?.analytics?.aeFromMs ?? null
+      aeFromMs: opts.stream?.analytics?.aeFromMs ?? null,
+      aeTruncated: !!opts.stream?.analytics?.aeTruncated
     })
   };
 };

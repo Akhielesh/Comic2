@@ -39,7 +39,7 @@ const stream = (over: Partial<StreamCostSection> = {}): StreamCostSection => ({
     { id: 'doRowsWritten', label: 'Durable Object rows written', unit: 'rows', used: 40_000_000, allowance: 50_000_000, projected: 60_000_000, projectedPct: 120, crossesOn: '2026-10-26', overageUsd: 0, source: 'measured' }
   ],
   projection: { perNurseryMonthUsd: 0.21, at1k: 210, at10k: 2100, source: 'estimated' },
-  kpis: { activeNurseryDays: 3, doRequests: 2000, rowsWritten: 6000, gbSeconds: 12, serverShare: 0.05, source: 'measured', note: 'MonitorRoom namespace.' },
+  kpis: { activeNurseryDays: 3, doRequests: 3000, rowsWritten: 6000, gbSeconds: 12, serverShare: 0.05, source: 'measured', note: 'MonitorRoom namespace.' },
   alerts: [
     { id: 'free_tier:doRowsWritten', severity: 'critical', title: 'Durable Object rows written: free tier will run out this month', cause: '40,000,000 used so far.' },
     { id: 'turn_spend', severity: 'warning', title: 'TURN on course for $10.85 at list price this month', cause: 'Still inside the free 1,000 GB.' }
@@ -102,7 +102,9 @@ describe('StreamCard', () => {
     render(<StreamCard stream={stream()} days={30} />);
     const kpis = screen.getByTestId('stream-kpis');
     expect(kpis).toHaveTextContent('6,000 rows');
-    expect(within(kpis).getAllByLabelText('over budget')).toHaveLength(2); // 2,000 requests > 1,000 · 6,000 rows > 1,800 · 12 GB-s fine
+    expect(within(kpis).getAllByLabelText('over budget')).toHaveLength(2); // 3,000 invocations > 2,600 · 6,000 rows > 1,800 · 12 GB-s fine
+    // The request budget is in the unit Cloudflare measures (messages 1:1), with the billed figure it stands for.
+    expect(screen.getByTestId('stream-kpi-doRequests')).toHaveTextContent('DO invocations3,000 invocationsbudget ≤ 2,600 (≈ 1,000 billed)');
     expect(screen.getByTestId('stream-projection')).toHaveTextContent('1k nurseries ≈ $210.00/mo · 10k ≈ $2,100/mo');
   });
 
@@ -115,7 +117,7 @@ describe('StreamCard', () => {
           kpis: {
             ...base.kpis,
             median7d: { days: 7, doRequests: 950, rowsWritten: 2100, gbSeconds: null },
-            budgets: { doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 },
+            budgets: { doRequests: 2600, rowsWritten: 1800, gbSeconds: 40 },
             status: { doRequests: 'ok', rowsWritten: 'over', gbSeconds: 'unknown' },
             turnGbMonthToDate: 40,
             relayShare: 0.08,
@@ -128,8 +130,8 @@ describe('StreamCard', () => {
       />
     );
     const req = screen.getByTestId('stream-kpi-doRequests');
-    expect(req).toHaveTextContent('950 requests');
-    expect(req).toHaveTextContent('7-day median · ≤ 1,000 · within budget · month avg 2,000 requests');
+    expect(req).toHaveTextContent('950 invocations');
+    expect(req).toHaveTextContent('7-day median · ≤ 2,600 (≈ 1,000 billed) · within budget · month avg 3,000 invocations');
     expect(within(req).queryByLabelText('over budget')).toBeNull(); // the month average is over, the median isn't
     const rows = screen.getByTestId('stream-kpi-rowsWritten');
     expect(within(rows).getByLabelText('over budget')).toBeInTheDocument();

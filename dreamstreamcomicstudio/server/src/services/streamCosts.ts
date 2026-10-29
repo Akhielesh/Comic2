@@ -30,6 +30,7 @@ import type {
 import {
   ACTIVE_MARK,
   addUsage,
+  ALERT_THRESHOLDS,
   allocateOverage,
   emptyCounters,
   evaluateStreamAlerts,
@@ -38,6 +39,9 @@ import {
   listValueOfMonth,
   listValueUsd,
   monthBounds,
+  NIGHT_SIM,
+  PHASE0_BILLED_REQUESTS,
+  PHASE0_DO_INVOCATIONS,
   PROJECTION_MIN_DAYS,
   projectMonthEnd,
   STREAM_ALLOWANCES,
@@ -69,8 +73,17 @@ export const LIVE_SCRIPT = 'dreamstream-live';
 export const LIVE_BUCKET = 'dreamstream-live';
 /** ADR 0006 acceptance: the per-active-nursery-day KPIs are judged on a 7-day production median. */
 export const KPI_MEDIAN_DAYS = 7;
-/** ADR 0006 Phase 0 budgets per active nursery-day (the same numbers the alerts use). */
-export const PHASE0_BUDGETS = { doRequests: 1000, rowsWritten: 1800, gbSeconds: 40 } as const;
+/**
+ * ADR 0006 Phase 0 budgets per active nursery-day, in the units the KPIs are MEASURED in (the same numbers
+ * the alerts use). `doRequests` is Cloudflare's invocation count — every incoming WebSocket message once —
+ * so its budget is the ADR's 1,000 billed requests (messages 20:1) converted at the simulated night's mix:
+ * 2,600 invocations (PHASE0_DO_INVOCATIONS, shared/stream/usage.ts says how).
+ */
+export const PHASE0_BUDGETS = {
+  doRequests: PHASE0_DO_INVOCATIONS,
+  rowsWritten: ALERT_THRESHOLDS.rowsPerNurseryDay,
+  gbSeconds: ALERT_THRESHOLDS.gbSecPerNurseryDay
+} as const;
 /** The Durable Object classes that are Stream Studio (all in dreamstream-live). */
 export const STREAM_DO_CLASSES = ['MonitorRoom', 'EventRoom', 'UserLine', 'CallRoom'] as const;
 
@@ -326,6 +339,12 @@ export interface StreamAnalytics {
   aeActive?: AeActiveMark[];
   /** The live Worker's privacy-safe signal counts (shared/stream/signals.ts), from the same query. */
   aeSignals?: SignalRow[];
+  /**
+   * The Analytics Engine answer hit AE_ROW_LIMIT (usage rows, activity marks and signal rows share it).
+   * Then `aeFromMs` is moved up to the first COMPLETE day and older rows are dropped: the oldest day
+   * returned may have been cut part-way, and anything older is missing.
+   */
+  aeTruncated?: boolean;
   /** Per-dataset failures, already scrubbed of the token. */
   errors: string[];
   /** The same failures by dataset (absent from callers that predate it: failedDatasets() also reads the shape). */
@@ -471,14 +490,49 @@ export async function fetchStreamAnalytics(input: {
   });
 
   settle('ae', ae, (v) => {
-    if (!Array.isArray((v as { data?: unknown })?.data)) throw new Error('unexpected answer (no data rows)');
-    Object.assign(out, { ae: parseAeRows(v), aeActive: parseAeActive(v), aeSignals: parseAeSignals(v) });
+    const data = (v as { data?: unknown })?.data;
+    if (!Array.isArray(data)) throw new Error('unexpected answer (no data rows)');
+    let rows = parseAeRows(v);
+    let marks = parseAeActive(v);
+    let sigs = parseAeSignals(v);
+    let fromMs = out.aeFromMs;
+    // The cap is on the WHOLE answer — usage rows, activity marks and signal rows together — so it is
+    // judged on the raw row count, never on one parsed slice. Rows come newest day first: at the cap the
+    // oldest day returned may be cut part-way and older days are missing, so keep complete days only.
+    const truncated = data.length >= AE_ROW_LIMIT;
+    if (truncated) {
+      let oldest = '';
+      for (const r of data as Array<Record<string, unknown>>) {
+        const d = String(r?.day ?? '').slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(d) && (!oldest || d < oldest)) oldest = d;
+      }
+      if (oldest) fromMs = Math.max(fromMs, Date.parse(`${oldest}T00:00:00Z`) + DAY_MS);
+      const keep = dayKey(fromMs);
+      rows = rows.filter((r) => r.day >= keep);
+      marks = marks.filter((m) => m.day >= keep);
+      sigs = sigs.filter((x) => x.day >= keep);
+    }
+    Object.assign(out, { ae: rows, aeActive: marks, aeSignals: sigs, aeTruncated: truncated, aeFromMs: fromMs });
   });
 
   return out;
 }
 
 // ─── Build (pure) ────────────────────────────────────────────────────────────────────────
+
+/**
+ * The note for an Analytics Engine answer cut at AE_ROW_LIMIT (both Cost centre tabs use it): from which
+ * day the rows are complete, and what that leaves out.
+ */
+export function aeCapNote(completeFromMs: number, rangeFromMs: number, prevCovered: boolean): string {
+  const lost: string[] = [];
+  if (completeFromMs > rangeFromMs) lost.push('the start of the selected range is missing, so its in-room counts are low');
+  if (!prevCovered) lost.push('there is no previous-period comparison');
+  return (
+    `Analytics Engine returned its ${AE_ROW_LIMIT.toLocaleString('en-US')}-row cap (usage points, activity marks and the Worker's signals share one answer): ` +
+    `only the days from ${dayKey(completeFromMs)} are complete, so older ones are left out${lost.length ? ` — ${lost.join(', and ')}` : ''}.`
+  );
+}
 
 export interface StreamBuildInput {
   nowMs: number;
@@ -766,7 +820,10 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
       note:
         m.id === 'doStoredGb'
           ? 'Account-wide level (the latest day): every Durable Object on the account; no per-room split exists for storage.'
-          : `Account-wide: shared with every Worker on the Cloudflare account. Stream Studio ≈ ${Math.round(m.share * 100)}%.`
+          : `Account-wide: shared with every Worker on the Cloudflare account. Stream Studio ≈ ${Math.round(m.share * 100)}%.` +
+            (m.id === 'doRequests'
+              ? ' Cloudflare’s analytics count each incoming WebSocket message once; the bill counts 20 as one request, so this reads higher than what is billed.'
+              : '')
     };
   });
   if (input.emailsMonthToDate != null) {
@@ -852,7 +909,8 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
     gbSecPerNurseryDay: gbSecSeries.length ? gbSecSeries : null,
     // The 7-day median when there are days to take it over; month to date otherwise.
     rowsPerNurseryDay: monitorNs ? median7d.rowsWritten ?? kpiRows : null,
-    requestsPerNurseryDay: monitorNs ? median7d.doRequests : null,
+    // Invocations as measured (messages 1:1) against the budget in the same unit — never the billed 1,000.
+    doInvocationsPerNurseryDay: monitorNs ? median7d.doRequests : null,
     phase0Shipped: input.phase0Shipped,
     serverShare7d,
     r2StoredGb,
@@ -878,14 +936,21 @@ export function buildStreamSection(input: StreamBuildInput): StreamCostSection {
         'Baby-monitor viewers don’t report their Home Wi-Fi / Direct / relay minutes yet (Phase B), so only our-server minutes are known: the our-server share and the relay-creep alert are off, and “Minutes on free paths” counts calls and meetings only.'
       );
     }
-    if (ae && ae.length >= AE_ROW_LIMIT) notes.push(`Analytics Engine returned the ${AE_ROW_LIMIT.toLocaleString('en-US')}-row cap — the oldest days of the range are partial.`);
-    if (!prevCovered) notes.push('The previous period is older than Analytics Engine keeps (about 90 days) — no list-value delta.');
+    const capped = a?.aeTruncated ?? (!!ae && ae.length >= AE_ROW_LIMIT);
+    if (aeOk && capped) notes.push(aeCapNote(a!.aeFromMs, input.range.fromMs, prevCovered));
+    else if (!prevCovered) notes.push('The previous period is older than Analytics Engine keeps (about 90 days) — no list-value delta.');
   }
   notes.push('In-room counters are written at most once an hour per room, so the latest hour can lag; Cloudflare’s own figures are the control total. Estimates are not billing-grade.');
   notes.push('TURN is the account total. Per-socket figures need per-socket credentials with a custom identifier (TURN guardrails, P2); until then call TURN GB is estimated from minutes on the relay path.');
   notes.push(`Marginal cost is month to date: Stream Studio's share of what the account owes past each free allowance — $0 while the account stays inside them, whatever the list value.`);
   notes.push(`Month-end projections are straight-line, counting at least ${PROJECTION_MIN_DAYS} days of the month as elapsed, so one night early in the month isn't read as the month's trend. The TURN-leak alert uses actual GB, not a projection.`);
-  if (!input.phase0Shipped) notes.push('The ADR 0006 per-nursery-day budgets (≤ 1,000 requests, ≤ 1,800 rows, ≤ 40 GB-s) apply after Phase 0 ships; until then the KPIs are the baseline.');
+  notes.push(
+    `Durable Object requests per nursery-day are Cloudflare’s invocation counts: alarms, socket upgrades and every incoming WebSocket message, each once (the bill counts 20 messages as one request). So their budget is in the same unit — ${PHASE0_DO_INVOCATIONS.toLocaleString('en-US')} invocations, the ADR’s ${PHASE0_BILLED_REQUESTS.toLocaleString('en-US')} billed requests at the simulated night’s mix (${(NIGHT_SIM.alarms + NIGHT_SIM.upgrades + NIGHT_SIM.delivered).toLocaleString('en-US')} invocations for ${NIGHT_SIM.billedRequests} billed) — and the per-nursery cost projection counts them at full price, an upper bound.`
+  );
+  if (!input.phase0Shipped)
+    notes.push(
+      `The ADR 0006 per-nursery-day budgets (≤ ${PHASE0_DO_INVOCATIONS.toLocaleString('en-US')} DO invocations ≈ ${PHASE0_BILLED_REQUESTS.toLocaleString('en-US')} billed requests, ≤ 1,800 rows, ≤ 40 GB-s) apply after Phase 0 ships; until then the KPIs are the baseline.`
+    );
   notes.push(
     `Phase 0 acceptance reads the 7-day MEDIAN per active nursery-day (the last ${KPI_MEDIAN_DAYS} complete days with activity marks; ${kpiDays.length} so far) — the month-to-date averages beside it can be pulled up by one bad night. Acceptance needs all ${KPI_MEDIAN_DAYS} days.`
   );

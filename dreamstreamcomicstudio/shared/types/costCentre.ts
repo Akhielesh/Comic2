@@ -197,6 +197,7 @@ export interface StreamCostSection {
   kpis: {
     /** Month to date: active nursery-days, and the averages per active nursery-day. */
     activeNurseryDays: number;
+    /** Durable Object INVOCATIONS as Cloudflare's analytics count them (incoming WebSocket messages 1:1). */
     doRequests: number | null;
     rowsWritten: number | null;
     gbSeconds: number | null;
@@ -207,7 +208,11 @@ export interface StreamCostSection {
      * that predate ADR 0006 WS-8.
      */
     median7d?: { days: number; doRequests: number | null; rowsWritten: number | null; gbSeconds: number | null };
-    /** ADR 0006 Phase 0 budgets per active nursery-day (≤ 1,000 requests, ≤ 1,800 rows, ≤ 40 GB-s). */
+    /**
+     * ADR 0006 Phase 0 budgets per active nursery-day, in the units measured: `doRequests` is Cloudflare's
+     * invocation count (every incoming WebSocket message once, not the billed 20:1), so its budget is
+     * 2,600 invocations ≈ the ADR's 1,000 billed requests; ≤ 1,800 rows; ≤ 40 GB-s.
+     */
     budgets?: { doRequests: number; rowsWritten: number; gbSeconds: number };
     /** The 7-day medians against the budgets ('unknown' with no days to judge). */
     status?: Record<'doRequests' | 'rowsWritten' | 'gbSeconds', 'ok' | 'over' | 'unknown'>;
@@ -269,11 +274,22 @@ export interface SecuritySection {
     /** The dataset answered (the Pages binding exists and has data). */
     measured: boolean;
     total: number | null;
-    /** First-party violations on Stream Studio in the last 48 h — the gate for enforcing the policy there. */
+    /**
+     * First-party violations on Stream Studio in the last 48 h of the policy ENFORCE_LIVE will enforce — the
+     * gate for enforcing it. Trusted Types reports are not in it (that policy stays report-only for good).
+     */
     firstPartyLive48h: number | null;
-    /** First-party violations on Stream Studio in the range, enforced (blocked for real) vs report-only. */
+    /**
+     * First-party violations on Stream Studio in the range: enforced (blocked for real, whatever the policy)
+     * vs report-only (of the policy that will be enforced).
+     */
     firstPartyLiveEnforced: number | null;
     firstPartyLiveReportOnly: number | null;
+    /**
+     * First-party reports on Stream Studio in the range against the report-only Trusted Types policy
+     * (require-trusted-types-for): an inventory, never a gate or an alert. Absent from older servers.
+     */
+    trustedTypesLive?: number | null;
     /** Caused by browser extensions (not our code). */
     extension: number | null;
     top: CspViolationRow[];

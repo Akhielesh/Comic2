@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChevronDown, Info, KeyRound, OctagonAlert, Radio, TriangleAlert } from 'lucide-react';
 import { RangeTabs, Surface, SurfaceSubtitle, SurfaceTitle } from '../../chat/artifacts/kit';
 import type { StreamConsumerRow, StreamCostSection, StreamFeatureRow, StreamHeadroomRow, StreamPathKey } from '../../../shared/types/costCentre';
+import { ALERT_THRESHOLDS, PHASE0_BILLED_REQUESTS, PHASE0_DO_INVOCATIONS } from '../../../shared/stream/usage';
 import { SortableTable, type Column } from './SortableTable';
 import { BudgetMeter, CostDelta, KpiTile, SourceBadge } from './CostBits';
 import { fmtCount, fmtDay, fmtPct, fmtUsd, pctChange } from './costFormat';
@@ -21,7 +22,7 @@ type ConsumerTab = (typeof CONSUMER_TABS)[number];
 /** "27,000 requests" · "69 GB-s" · "0.34 GB" — counts whole, fractional units with sensible digits. */
 export const fmtUnits = (value: number, unit: string): string => {
   if (!Number.isFinite(value)) return '—';
-  const whole = unit === 'requests' || unit === 'rows' || unit === 'operations' || unit === 'emails';
+  const whole = unit === 'requests' || unit === 'invocations' || unit === 'rows' || unit === 'operations' || unit === 'emails';
   if (whole) return `${fmtCount(value)} ${unit}`;
   const digits = value >= 100 ? 0 : value >= 1 ? 1 : value >= 0.01 ? 2 : 3;
   return `${value.toLocaleString('en-US', { maximumFractionDigits: digits })} ${unit}`;
@@ -174,10 +175,12 @@ const AlertList: React.FC<{ alerts: StreamCostSection['alerts'] }> = ({ alerts }
     </ul>
   );
 
-const KPI_ROWS: { key: 'doRequests' | 'rowsWritten' | 'gbSeconds'; label: string; budget: number; unit: string }[] = [
-  { key: 'doRequests', label: 'DO requests', budget: 1000, unit: 'requests' },
-  { key: 'rowsWritten', label: 'Rows written', budget: 1800, unit: 'rows' },
-  { key: 'gbSeconds', label: 'DO duration', budget: 40, unit: 'GB-s' }
+// Cloudflare's analytics count every incoming WebSocket message as an invocation (the bill counts 20 as one
+// request), so the request KPI and its budget are in invocations: 2,600 ≈ the ADR's 1,000 billed requests.
+const KPI_ROWS: { key: 'doRequests' | 'rowsWritten' | 'gbSeconds'; label: string; budget: number; unit: string; billedHint?: string }[] = [
+  { key: 'doRequests', label: 'DO invocations', budget: PHASE0_DO_INVOCATIONS, unit: 'invocations', billedHint: `≈ ${fmtCount(PHASE0_BILLED_REQUESTS)} billed` },
+  { key: 'rowsWritten', label: 'Rows written', budget: ALERT_THRESHOLDS.rowsPerNurseryDay, unit: 'rows' },
+  { key: 'gbSeconds', label: 'DO duration', budget: ALERT_THRESHOLDS.gbSecPerNurseryDay, unit: 'GB-s' }
 ];
 
 /** One small figure in the health panel: a value, its unit, and a line of context under it. */
@@ -210,6 +213,7 @@ const Kpis: React.FC<{ s: StreamCostSection }> = ({ s }) => {
           const m = med ? med[row.key] : null;
           const status = k.status?.[row.key];
           const shown = med ? m : avg;
+          const limit = `≤ ${fmtCount(budget)}${row.billedHint && budget === row.budget ? ` (${row.billedHint})` : ''}`;
           return (
             <HealthTile
               key={row.key}
@@ -219,8 +223,8 @@ const Kpis: React.FC<{ s: StreamCostSection }> = ({ s }) => {
               warn={status ? status === 'over' : avg != null && avg > budget}
               sub={
                 med
-                  ? `7-day median · ≤ ${fmtCount(budget)} · ${STATUS_WORD[status ?? 'unknown']}${avg == null ? '' : ` · month avg ${fmtUnits(avg, row.unit)}`}`
-                  : `budget ≤ ${fmtCount(budget)}`
+                  ? `7-day median · ${limit} · ${STATUS_WORD[status ?? 'unknown']}${avg == null ? '' : ` · month avg ${fmtUnits(avg, row.unit)}`}`
+                  : `budget ${limit}`
               }
             />
           );

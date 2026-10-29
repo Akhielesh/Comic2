@@ -178,7 +178,8 @@ Then run this once a month (or when a bill looks off):
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
 - [ ] Admin → Costs → **Stream Studio**: no alerts; every headroom meter projects < 80% of its
       allowance (they are account-wide, DO storage included); *Baby monitor health* shows the
-      **7-day medians** within the ADR 0006 budgets — DO requests ≤ 1,000, rows written ≤ 1,800,
+      **7-day medians** within the ADR 0006 budgets — DO invocations ≤ 2,600 (Cloudflare counts
+      each incoming WebSocket message once; that is ≈ 1,000 billed requests), rows written ≤ 1,800,
       DO GB-s ≤ 40 per active nursery-day (hibernation working) — with all 7 days counted;
       our-server share of monitor minutes ≤ 10% (shown once viewers report their paths, Phase B);
       Glance bumps ≤ 60 a night once the rooms count them.
@@ -218,4 +219,4 @@ Then run this once a month (or when a bill looks off):
 | 2026-10-21 | Admin Cost centre (real data, measured / estimated / fixed, cost-benefit per product, optional live Cloudflare analytics). |
 | 2026-10-22 | Stream Studio cost metering (ADR 0007 Phase A): rooms count usage in memory + WebSocket attachments and write ≤ 1 `use:YYYY-MM` row + 1 Analytics Engine point per room per hour; Admin → Costs gets a Stream Studio tab (measured DO / R2 / TURN month to date + estimated per-feature, per-path, top consumers, headroom, alerts); daily `stream-cost-watch` GitHub job (needs the read-only `CF_ANALYTICS_API_TOKEN` secret). §1 gains the DO rows, server relay and TURN lines. |
 | 2026-10-22 | Code Studio retired (ADR 0005): the `studio-worker` sandbox Containers (`standard-3`) — the old cost landmine — removed from the repo; Workers Paid stays for the backend container. Cost centre labels the sandbox line "(retired)" and keeps reading `studio_runs` as history. |
-| 2026-10-29 | ADR 0006 WS-8: the Stream Studio tab judges Phase 0 on **7-day medians** per active nursery-day (requests / rows / GB-s vs 1,000 / 1,800 / 40; new `request_diet` alert), reads Durable Object **storage** (`durableObjectsStorageGroups`, its own headroom row), and shows TURN GB, relay share, Glance bumps and pushes per night. The DO datasets reach back 7 days before the 1st so the medians and the hibernation check work early in a month. New **Security** tab (CSP counts, sign-in alerts, the live Worker's refusal / disconnect signals). The daily watch reads six datasets (storage added). |
+| 2026-10-29 | ADR 0006 WS-8: the Stream Studio tab judges Phase 0 on **7-day medians** per active nursery-day (invocations / rows / GB-s vs 2,600 / 1,800 / 40 — the request budget in the unit Cloudflare's analytics count, ≈ 1,000 billed; new `request_diet` alert), reads Durable Object **storage** (`durableObjectsStorageGroups`, its own headroom row), and shows TURN GB, relay share, Glance bumps and pushes per night. The DO datasets reach back 7 days before the 1st so the medians and the hibernation check work early in a month. New **Security** tab (CSP counts, sign-in alerts, the live Worker's refusal / disconnect signals). The daily watch reads six datasets (storage added). |

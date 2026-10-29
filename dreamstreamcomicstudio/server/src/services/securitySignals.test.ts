@@ -5,6 +5,7 @@ import {
   cspDatasetFromEnv,
   cspQueryDays,
   cspSql,
+  CSP_ROW_LIMIT,
   fetchCspCounts,
   loadSignInCounts,
   parseCspRows,
@@ -92,7 +93,13 @@ describe('security signals — CSP counts', () => {
       return { ok: true, status: 200, json: async () => ({ data: [{ hour: '2026-10-28 10:00:00', disposition: 'report', page: 'live', directive: 'img-src', blocked: 'data:', party: 'first', n: 1 }] }) };
     });
     const measured = await fetchCspCounts({ nowMs: NOW, days: 7, creds: { token: 't', accountId: 'acct-9' }, dataset: 'csp_reports', fetchImpl: ok });
-    expect(measured).toMatchObject({ measured: true, rows: [expect.objectContaining({ blocked: 'data:', count: 1 })] });
+    expect(measured).toMatchObject({ measured: true, truncated: false, rows: [expect.objectContaining({ blocked: 'data:', count: 1 })] });
+    // The cap is judged on the raw answer: rows dropped as malformed don't hide it.
+    const full = Array.from({ length: CSP_ROW_LIMIT }, (_, i) => ({ hour: i % 2 ? 'nope' : '2026-10-28 10:00:00', disposition: 'report', page: 'main', directive: 'img-src', blocked: 'data:', party: 'first', n: 1 }));
+    const capped = await fetchCspCounts({ nowMs: NOW, days: 7, creds: { token: 't', accountId: 'acct-9' }, fetchImpl: vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ data: full }) })) });
+    expect(capped?.rows.length).toBeLessThan(CSP_ROW_LIMIT);
+    expect(capped?.truncated).toBe(true);
+    expect(buildSecuritySection(input({ csp: capped })).notes.some((n) => n.includes('row cap'))).toBe(true);
   });
 });
 
@@ -149,6 +156,26 @@ describe('security signals — the section (pure)', () => {
     // Browser extensions never count against us.
     const ext = buildSecuritySection(input({ csp: { measured: true, rows: [csp(1, { firstParty: false, blocked: 'extension', disposition: 'enforce' })] } }));
     expect(ext.alerts).toEqual([]);
+  });
+
+  it('keeps the report-only Trusted Types policy out of the 48 h gate, before and after the flip — but an enforced block stays critical', () => {
+    const tt = (hoursAgo: number, over: Partial<CspHourRow> = {}) => csp(hoursAgo, { directive: 'require-trusted-types-for', blocked: 'trusted-types-sink', count: 20, ...over });
+    // Before the flip: cameras loading smart vision report against Trusted Types every night.
+    const before = buildSecuritySection(input({ csp: { measured: true, rows: [tt(3), tt(30), tt(40, { directive: 'trusted-types', blocked: 'trusted-types-policy', count: 1 })] } }));
+    expect(before.csp).toMatchObject({ firstPartyLive48h: 0, firstPartyLiveReportOnly: 0, firstPartyLiveEnforced: 0, trustedTypesLive: 41 });
+    expect(before.alerts).toEqual([]);
+    expect(before.csp.note).toContain('Trusted Types');
+    // After the flip the Trusted Types policy is still report-only: still not a warning.
+    const after = buildSecuritySection(input({ csp: { measured: true, rows: [tt(3), csp(80, { disposition: 'enforce', page: 'main', firstParty: false, blocked: 'extension' })] } }));
+    expect(after.alerts).toEqual([]);
+    // A real violation of the policy that will be enforced still holds the gate.
+    const held = buildSecuritySection(input({ csp: { measured: true, rows: [tt(3), csp(4, { directive: 'connect-src', blocked: 'wss://other.example' })] } }));
+    expect(held.csp).toMatchObject({ firstPartyLive48h: 1, firstPartyLiveReportOnly: 1, trustedTypesLive: 20 });
+    expect(held.alerts.map((a) => a.id)).toEqual(['csp_live_violations']);
+    // Should anyone ever enforce Trusted Types and it blocks our code, that is a monitor at risk: critical.
+    const blocked = buildSecuritySection(input({ csp: { measured: true, rows: [tt(3, { disposition: 'enforce' })] } }));
+    expect(blocked.csp).toMatchObject({ firstPartyLiveEnforced: 20, trustedTypesLive: 0 });
+    expect(blocked.alerts.map((a) => a.id)).toEqual(['csp_live_blocked']);
   });
 
   it('says how to turn CSP counts on when the binding is missing — never "zero violations"', () => {

@@ -92,7 +92,13 @@ export const SecurityCard: React.FC<{ security?: SecuritySection; days: number }
           testId="security-kpi-csp"
           label="Stream Studio CSP · last 48 h"
           value={n(s.csp.firstPartyLive48h)}
-          sub={s.csp.measured ? 'Violations by our own code. Enforcing waits for 0.' : 'Not measured yet.'}
+          sub={
+            s.csp.measured
+              ? `Violations by our own code of the policy that will be enforced. Enforcing waits for 0.${
+                  s.csp.trustedTypesLive ? ` (Trusted Types reports, report-only for good, not counted: ${n(s.csp.trustedTypesLive)} in ${days}d.)` : ''
+                }`
+              : 'Not measured yet.'
+          }
         />
         <KpiTile
           testId="security-kpi-signins"
@@ -121,7 +127,9 @@ export const SecurityCard: React.FC<{ security?: SecuritySection; days: number }
             <SurfaceTitle>Browser protections (CSP)</SurfaceTitle>
             <SurfaceSubtitle>
               {s.csp.measured
-                ? `Last ${days} days · ${n(s.csp.total)} reports · ${n(s.csp.extension)} from browser extensions · blocked for real on Stream Studio: ${n(s.csp.firstPartyLiveEnforced)}`
+                ? `Last ${days} days · ${n(s.csp.total)} reports · ${n(s.csp.extension)} from browser extensions · blocked for real on Stream Studio: ${n(s.csp.firstPartyLiveEnforced)}${
+                    s.csp.trustedTypesLive != null ? ` · Trusted Types inventory (report-only): ${n(s.csp.trustedTypesLive)}` : ''
+                  }`
                 : 'Not measured'}
             </SurfaceSubtitle>
           </div>

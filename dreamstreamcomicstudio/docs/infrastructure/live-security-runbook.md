@@ -153,8 +153,10 @@ Apple account or key needed.
 
 Admin console → Costs. Two tabs carry Phase 0:
 
-- **Stream Studio** → *Baby monitor health (ADR 0006)*: DO requests, rows written and DO GB-s per
-  active nursery-day as a **7-day median** against the budgets (≤ 1,000 / ≤ 1,800 / ≤ 40), the
+- **Stream Studio** → *Baby monitor health (ADR 0006)*: DO invocations, rows written and DO GB-s per
+  active nursery-day as a **7-day median** against the budgets (≤ 2,600 / ≤ 1,800 / ≤ 40; Cloudflare's
+  analytics count each incoming WebSocket message once, the bill 20:1, so 2,600 invocations is the
+  ADR's 1,000 billed requests at the simulated night's mix), the
   month average beside it, our-server and relay share of viewer minutes, TURN GB this month, DO
   storage, Glance bumps and pushes per nursery-night.
 - **Security**: browser-protection (CSP) reports, new sign-ins and the alerts about them, “Not
@@ -167,7 +169,7 @@ binding).
 | Alert | Means | Do |
 |---|---|---|
 | `csp_live_blocked` (critical) | The **enforced** policy blocked our own code on Stream Studio | Open the Security tab's CSP table: which directive, which origin. If it is something the monitor needs (a worklet, the model, the Worker, Supabase), set `ENFORCE_LIVE = false` in `functions/_middleware.ts` and ship at once, then fix the policy. Cry detection outranks the CSP. |
-| `csp_live_violations` (warning) | First-party report-only violations on Stream Studio in the last 48 h | Don't flip `ENFORCE_LIVE` yet. Fix the source or add it to the policy (`tests/edge/liveCsp.built.test.ts` must pass). |
+| `csp_live_violations` (warning) | First-party report-only violations on Stream Studio in the last 48 h, of the policy `ENFORCE_LIVE` will enforce (Trusted Types reports are not counted: that policy stays report-only for good) | Don't flip `ENFORCE_LIVE` yet. Fix the source or add it to the policy (`tests/edge/liveCsp.built.test.ts` must pass). |
 | `not_you_used` (warning) | Someone used “Not you? Secure my account” | §8 playbook if they contact us or it repeats. Their sessions are already ended. |
 | `flood:<signal>` (warning) | ≥ 500 of one refusal in a UTC day | Read *Where*. `rate_limited`/`origin_refused` on `edge`: a client loop or probing — check `wrangler tail dreamstream-live` for the pattern (no ids are logged). `mfa_refused` on `monitor`: an app version that doesn't step up — check the client. `preauth_evicted`: socket exhaustion attempt — the caps hold; consider tightening `RL_WS`. |
 | `camera_spoof` (warning) | Another account tried to replace a running camera | Usually a family member starting camera mode under their own account. Repeated for one nursery: ask the parents to check People. |
@@ -189,6 +191,13 @@ rooms and routes call it (ADR 0006 WS-7/WS-9/WS-10), the Security tab says "not 
   blocked **origin** — never a URL, a query or a sample.
 - Before the flip: 48 h of Admin → Costs → Security → *Stream Studio CSP · last 48 h* = 0 (with the
   binding on) **and** `npm run build && npx vitest run tests/edge/liveCsp.built.test.ts` green.
+  That figure counts only the policy the flip enforces. Stream Studio also sends a Trusted Types
+  policy (`require-trusted-types-for 'script'`) as a separate Report-Only header, before and after
+  the flip, and never enforces it: MediaPipe's loader sets a script's `src`, so every camera that
+  loads smart vision in Chrome reports against it. Those reports show as the *Trusted Types
+  inventory* line and as `require-trusted-types-for` rows in the table — never in the gate or an
+  alert. If one ever arrives as *enforced*, something blocked our code for real:
+  `csp_live_blocked` fires and the undo below applies.
 - Flip: set `ENFORCE_LIVE = true`, ship, open Stream Studio on a phone, run a camera and a viewer
   for 10 minutes (sound alerts, relay picture, a call). Watch the tab for `csp_live_blocked`.
 - Undo: `ENFORCE_LIVE = false`, ship. Takes effect on the next page load.

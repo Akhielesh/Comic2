@@ -48,6 +48,24 @@ describe('SecurityCard', () => {
     expect(within(screen.getByTestId('security-kpi-mfa')).getByText('3')).toBeInTheDocument();
   });
 
+  it('keeps the Trusted Types inventory out of the 48 h gate and says so', () => {
+    const base = section();
+    render(
+      <SecurityCard
+        days={7}
+        security={section({
+          csp: { ...base.csp, firstPartyLive48h: 0, trustedTypesLive: 40, top: [{ page: 'live', directive: 'require-trusted-types-for', blocked: 'trusted-types-sink', disposition: 'report', firstParty: true, count: 40 }] },
+          alerts: []
+        })}
+      />
+    );
+    const tile = screen.getByTestId('security-kpi-csp');
+    expect(within(tile).getByText('0')).toBeInTheDocument();
+    expect(tile).toHaveTextContent('Trusted Types reports, report-only for good, not counted: 40 in 7d');
+    expect(screen.getByText(/Trusted Types inventory \(report-only\): 40/)).toBeInTheDocument();
+    expect(screen.queryByTestId('security-alerts')).toBeNull();
+  });
+
   it('shows CSP buckets by app, directive and origin, and says whose code it was', () => {
     render(<SecurityCard security={section()} days={7} />);
     const table = screen.getByRole('table', { name: 'Content-Security-Policy violation reports' });
