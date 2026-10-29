@@ -389,7 +389,7 @@ export const visionSpecText = (doc: ComicDoc, page: Page): string => {
       })
       .filter(Boolean);
     const action = clean(panel.action);
-    const offPanel = offPanelSpeakerIds(panel);
+    const offPanel = qcOffPanelSpeakerIds(panel);
     const voices = [...offPanel].map((id) => doc.cast.find((c) => c.id === id)).filter((c): c is ComicDoc['cast'][number] => !!c);
     out.push(
       `Panel ${panel.n} [${panel.size}, ${panel.shot.replace(/_/g, ' ')}]: ${action.length > 220 ? `${action.slice(0, 219)}…` : action} Characters: ${staged.join(', ') || 'none'}.` +
@@ -427,8 +427,9 @@ export interface QcPanelChecks {
   /** The panel rectangles the vision pass measured, in reading order — kept even when their count
    *  differs from the plan (panelBoxes then holds the estimate). */
   drawnBoxes?: Box[];
-  /** Speakers with lines in a panel the art does not show them in. Off-panel voices (pov, insert,
-   *  establishing shots, or a speaker the panel's cast does not list) are never reported. */
+  /** Speakers with lines in a panel whom the check's character notes read as not drawn there (a
+   *  model's reading: the chat says "may not be drawn"). Off-panel voices (pov, insert, establishing
+   *  shots, or a speaker the panel's cast does not list) are never reported. */
   missingSpeakers?: MissingSpeaker[];
   /** Where panelBoxes came from: measured by the vision pass, or estimated from the layout blueprint
    *  (count mismatch or no usable reading — crops, badges and paste-back must not act on these). */
@@ -452,8 +453,11 @@ export const panelSpeakerIds = (panel: Pick<Panel, 'lines'>): string[] => [
  * Speakers of this panel who are heard, not necessarily drawn (plan §3 C6): every speaker in a pov,
  * insert or establishing shot, a speaker the panel's cast does not list, and anyone the panel's
  * direction marks off-panel (Ship 2 field, read when present). The page check never reports them missing.
+ * This is the QC rule (the looser §3 C6 union, so the check never blames art that followed the shot);
+ * it is deliberately not prompts.ts's `offPanelSpeakerIds(doc, panel)`, the voices the page PROMPT asks
+ * not to draw.
  */
-export const offPanelSpeakerIds = (panel: Pick<Panel, 'lines' | 'shot' | 'castIds'>): Set<string> => {
+export const qcOffPanelSpeakerIds = (panel: Pick<Panel, 'lines' | 'shot' | 'castIds'>): Set<string> => {
   const direction = (panel as { direction?: { offPanel?: unknown } }).direction;
   const marked = new Set(Array.isArray(direction?.offPanel) ? direction.offPanel.filter((id): id is string => typeof id === 'string') : []);
   const castIds = new Set(Array.isArray(panel.castIds) ? panel.castIds : []);
@@ -462,40 +466,94 @@ export const offPanelSpeakerIds = (panel: Pick<Panel, 'lines' | 'shot' | 'castId
 
 /** Stored per report at most (a runaway reply can't bloat the doc). */
 export const MAX_MISSING_SPEAKERS = 16;
-/** Character notes and issues read for missing speakers, at most (a reply is ≤ 14 issues in practice). */
+/** Character notes read for missing speakers, at most (a reply is ≤ 14 notes in practice). */
 const MAX_NOTES_READ = 60;
+/** Characters of one note read for missing speakers (a runaway note can't make the patterns slow). */
+const MAX_NOTE_CHARS = 400;
 /** Extra output tokens per panel for its beat and crosses answers (plan §4.3, inside the same QC call). */
 export const PANEL_CHECK_TOKENS = 20;
 
-/** Words a vision note uses for "not drawn". */
-const MISSING_RE =
-  /\b(?:missing|absent|omitted|left out|nowhere to be seen|not (?:drawn|shown|visible|present|seen|depicted|pictured|there|in (?:the )?(?:panel|frame|art|image))|isn['’]?t (?:drawn|shown|visible|present|there)|(?:does|do)(?:n['’]?t| not) appear|can(?:not|['’]?t) be seen)\b/i;
-const PANEL_RE = /\bpanel\s*#?\s*(\d{1,2})\b/i;
-const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// ── Reading "MAYA missing" out of a character note ──
+// A cast name counts only when the "not drawn" phrase is about the NAME itself:
+//   NAME [is|are] <not drawn>   "Panel 2: MAYA missing", "Panel 1: Ravi and Meera are not visible"
+//   <not drawn>[:] NAME         "Panel 2: missing: MAYA"
+//   no NAME                     "Panel 2: no Maya in the art"
+// Never a possessive ("Arjun's left hand is missing a finger", "Maya’s scarf is missing"), a phrase
+// whose subject is another noun ("the lantern Arjun should hold is not visible") or one that takes an
+// object ("Arjun is missing a finger"). A note this does not read stays a plain note.
 
-/** Cast ids a note names (longest names first, so "Ravi Kumar" never also counts as "Ravi"). */
-const castNamed = (note: string, cast: Pick<ComicDoc, 'cast'>['cast']): string[] => {
-  let rest = ` ${note} `;
-  const ids: string[] = [];
+const TOKEN = '\\u0001[\\uE000-\\uF8FF]\\u0002';
+/** A run of named cast members: "MAYA", "Ravi and Meera", "Ravi, Meera & Arjun". */
+const NAMES = `${TOKEN}(?:(?:\\s*,\\s*(?:(?:and|or)\\s+)?|\\s*&\\s*|\\s+(?:and|or|nor)\\s+)${TOKEN})*`;
+const QUOTE = `["'“”‘’]?`;
+/** "Not drawn", as a vision note says it about a character. */
+const NOT_DRAWN =
+  '(?:missing|absent|omitted|left out|nowhere to be seen|' +
+  "(?:not|(?:isn|aren|wasn|weren)['’]?t) (?:drawn|shown|visible|present|seen|depicted|pictured|there|in (?:the |this )?(?:panel|frame|art|image|picture|scene))|" +
+  "(?:does|do|did)(?:n['’]?t| not) appear|can(?:not|['’]?t) be seen)";
+const PLACE = '(?:in|on|at|within|inside)\\s+(?:(?:the|this|that|any|either|its)\\s+)?(?:panel|frame|art|artwork|image|picture|scene|shot|page|drawing|background|foreground|crowd)\\b';
+/** What may follow "MAYA missing": the note ends, a clause ends, or where she is missing from. */
+const AFTER_BODY = `\\s*(?:$|[.,;:!?()\\[\\]–—]|-\\s|(?:from|of|anywhere|here|there|entirely|completely|altogether|again|too|either|even|though|although|but|despite|while|whereas|yet|and|or|at all)\\b|${PLACE})`;
+const AFTER = `(?=${AFTER_BODY})`;
+/** Where a clause starts ("Panel 2:", a comma, the note's start). */
+const CLAUSE = '(?:^|[:;,.(]\\s*|\\bpanel\\s*#?\\s*\\d{1,2}\\s*[:,–—-]?\\s*)';
+const SUBJECT_RES = [
+  new RegExp(
+    `${NAMES}${QUOTE}(?:\\s*\\([^()\\u0001]{0,60}\\))?(?:\\s*[:–—-]\\s*|\\s+)(?:(?:is|are|was|were|remains?|appears? to be|seems? to be)\\s+)?(?:(?:both|all|still|also|completely|entirely|clearly|simply|actually|totally)\\s+)?${NOT_DRAWN}${AFTER}`,
+    'giu'
+  ),
+  new RegExp(`${CLAUSE}${NOT_DRAWN}(?:\\s+(?:characters?|speakers?|figures?|people))?\\s*[:–—-]?\\s*${QUOTE}${NAMES}${QUOTE}${AFTER}`, 'giu'),
+  new RegExp(`(?:${CLAUSE}|\\s)no\\s+${QUOTE}${NAMES}${QUOTE}(?=\\s*(?:(?:is|are)\\s+)?(?:visible|drawn|shown|present|depicted|in sight|to be seen)\\b|${AFTER_BODY})`, 'giu')
+];
+const TOKEN_RE = /\u0001([\uE000-\uF8FF])\u0002/gu;
+const PANEL_RE = /\bpanel\s*#?\s*(\d{1,2})\b/i;
+const PANEL_REF_RE = /\bpanels?\s*#?\s*\d{1,2}\b/giu;
+const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Words a note about a missing off-panel voice may carry besides the name (it is then only about that). */
+const NOTE_FILLER = new Set(
+  (
+    'panel panels the and but from art artwork image picture frame scene shot page drawing she they her his their him them ' +
+    'speaks speaking speak spoken says said voice voiced heard hear line lines dialogue balloon balloons only off anywhere here ' +
+    'there this that with entirely completely altogether all still also despite though although even has have who character ' +
+    'characters speaker speakers script should visible shown drawn present its are was were not any either for listed named expected planned'
+  ).split(' ')
+);
+
+/**
+ * The cast members a note says are not drawn (the subjects of its "not drawn" phrase), and whether the
+ * note is about nothing else (`only`: no other noun is left once the panel, the names and the phrase
+ * are taken out, so dropping it as an off-panel voice can't drop a real problem with it).
+ */
+const notDrawnIn = (note: string, cast: Pick<ComicDoc, 'cast'>['cast']): { ids: string[]; only: boolean } => {
   const named = cast
     .map((c) => ({ id: c.id, key: nameKey(c.name) }))
     .filter((c) => c.key.length >= 2)
-    .sort((a, b) => b.key.length - a.key.length);
-  for (const c of named) {
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(c.key).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])`, 'giu');
-    if (!re.test(rest)) continue;
-    ids.push(c.id);
+    .sort((a, b) => b.key.length - a.key.length)
+    .slice(0, 0x1900); // one private-use token per name
+  // Longest names first, so "Ravi Kumar" never also counts as "Ravi"; a possessive is not a name.
+  let text = note.slice(0, MAX_NOTE_CHARS);
+  named.forEach((c, i) => {
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRe(c.key).replace(/\s+/g, '\\s+')}(?![\\p{L}\\p{N}])(['’]s(?![\\p{L}\\p{N}]))?`, 'giu');
+    text = text.replace(re, (_m, possessive?: string) => (possessive ? ' \u0003 ' : `\u0001${String.fromCharCode(0xe000 + i)}\u0002`));
+  });
+  const ids = new Set<string>();
+  let rest = text;
+  for (const re of SUBJECT_RES) {
+    for (const m of text.matchAll(re)) for (const t of m[0].matchAll(TOKEN_RE)) ids.add(named[t[1].charCodeAt(0) - 0xe000].id);
     rest = rest.replace(re, ' ');
   }
-  return ids;
+  const left = rest.replace(PANEL_REF_RE, ' ').replace(TOKEN_RE, ' ').match(/[\p{L}\u0003][\p{L}\p{N}'’-]*/gu) || [];
+  const only = left.every((w) => w !== '\u0003' && (w.length < 3 || NOTE_FILLER.has(w.toLowerCase())));
+  return { ids: [...ids], only };
 };
 
 /**
  * Structure the vision pass's character notes (plan §4.3, density FX8): a note that names a panel and
- * says a cast member who SPEAKS there is not drawn becomes {panel, castId}. Off-panel voices are never
- * reported — a note that only names them is dropped as `excused` (it must not cap the score: the art
- * followed the shot, findings R8) — and a speaker the same reply located in that panel (heads) is not
- * missing. Listed non-speakers stay plain notes (Ship 2 findings).
+ * says a cast member who SPEAKS there is not drawn becomes {panel, castId}. Only the character notes
+ * are read (the issues list is about everything else: a hand, a scarf, a prop). Off-panel voices are
+ * never reported — a note about nothing but them is dropped as `excused` (it must not cap the score:
+ * the art followed the shot, findings R8) — and a speaker the same reply located in that panel (heads)
+ * is not missing. Listed non-speakers stay plain notes (Ship 2 findings).
  */
 export const readMissingSpeakers = (
   page: Pick<Page, 'panels'>,
@@ -508,19 +566,19 @@ export const readMissingSpeakers = (
   const located = new Set(heads.filter((h) => h.characterId).map((h) => `${h.panel}:${h.characterId}`));
   // Bounded: a runaway reply can't make us scan thousands of notes against the cast.
   for (const note of notes.slice(0, MAX_NOTES_READ)) {
-    if (!MISSING_RE.test(note)) continue;
+    if (typeof note !== 'string') continue;
     const panelN = Number(PANEL_RE.exec(note)?.[1]);
     const panel = page.panels.find((p) => p.n === panelN);
     if (!panel) continue;
-    const named = castNamed(note, cast);
-    if (!named.length) continue;
+    const named = notDrawnIn(note, cast);
+    if (!named.ids.length) continue;
     const speakers = new Set(panelSpeakerIds(panel));
-    const offPanel = offPanelSpeakerIds(panel);
-    if (named.every((id) => offPanel.has(id))) {
-      excused.push(note);
+    const offPanel = qcOffPanelSpeakerIds(panel);
+    if (named.ids.every((id) => offPanel.has(id))) {
+      if (named.only) excused.push(note);
       continue;
     }
-    for (const id of named) {
+    for (const id of named.ids) {
       if (!speakers.has(id) || offPanel.has(id) || located.has(`${panel.n}:${id}`)) continue;
       found.set(`${panel.n}:${id}`, { panel: panel.n, castId: id });
     }
@@ -554,8 +612,8 @@ export const beatProblems = (
 const beatIssues = (beats: number[] | undefined, planned: number): string[] => {
   const { swapped, undrawn } = beatProblems(beats, planned);
   return [
-    ...swapped.slice(0, 3).map((s) => `Panel ${s.panel}'s picture shows panel ${s.shows}'s moment.`),
-    ...undrawn.slice(0, 3).map((n) => `Panel ${n}'s moment isn't drawn in any panel.`)
+    ...swapped.slice(0, 3).map((s) => `Panel ${s.panel}'s picture looks like panel ${s.shows}'s moment.`),
+    ...undrawn.slice(0, 3).map((n) => `Panel ${n}'s moment may not be drawn in any panel.`)
   ];
 };
 
@@ -799,6 +857,8 @@ const dedupe = (items: string[]) => {
 };
 
 const TEXT_BLOCK_NOTE = 'text drawn in the art breaks the content rules';
+/** The QC issue for drawn text that breaks the content rules (the page is then withheld; qcNotice stays quiet). */
+export const TEXT_RULES_ISSUE = 'Some text drawn in the art breaks the content rules — redraw this page safer.';
 const MAX_TEXT_FOUND = 100;
 
 /**
@@ -914,13 +974,15 @@ export async function analyzePageRender(args: {
   const roundBox = (b: Box): Box => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) });
   // Beats only when answered for every drawn panel; a beat past the plan's last panel shows none of them.
   const beats = reading.beats.length && reading.beats.every((b) => b !== undefined) ? reading.beats.map((b) => ((b as number) > n ? 0 : (b as number))) : undefined;
-  const crosses = reading.crosses.some((c) => c !== undefined) ? reading.crosses.flatMap((c, i) => (c ? [i + 1] : [])) : undefined;
-  // Speakers the art left out, structured from the notes; notes that only name off-panel voices are
-  // dropped (never reported, never a score cap — the art followed the shot).
-  const speakers = readMissingSpeakers(page, doc.cast, [...reading.characterNotes, ...reading.issues], reading.heads);
+  // Crosses likewise: a panel left unanswered must not read as "does not cross" (B2 acts on []).
+  const crosses = reading.crosses.length && reading.crosses.every((c) => c !== undefined) ? reading.crosses.flatMap((c, i) => (c ? [i + 1] : [])) : undefined;
+  // Speakers the art left out, structured from the character notes only; a character note about
+  // nothing but off-panel voices is dropped (never reported, never a score cap — the art followed the
+  // shot). The issues list is never filtered: a hand, a scarf or a prop there is a real problem.
+  const speakers = readMissingSpeakers(page, doc.cast, reading.characterNotes, reading.heads);
   const excused = new Set(speakers.excused);
   const characterNotes = reading.characterNotes.filter((note) => !excused.has(note));
-  const issues: string[] = [...(countOk ? beatIssues(beats, n) : []), ...reading.issues.filter((i) => !excused.has(i)), ...characterNotes];
+  const issues: string[] = [...(countOk ? beatIssues(beats, n) : []), ...reading.issues, ...characterNotes];
   // Drawn text is screened before anything reads or stores it ($0).
   const screened = prefilterFoundText(doc, reading.textFound);
   const textFound = screened.kept;
@@ -931,7 +993,7 @@ export async function analyzePageRender(args: {
     score = Math.min(score, 0.6);
   }
   if (screened.blocked) {
-    issues.unshift('Some text drawn in the art breaks the content rules — redraw this page safer.');
+    issues.unshift(TEXT_RULES_ISSUE);
     score = Math.min(score, 0.4);
   }
   if (characterNotes.length) score = Math.min(score, 0.75);

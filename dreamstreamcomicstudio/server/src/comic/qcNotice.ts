@@ -1,11 +1,14 @@
 // The page-check notice (plan §3 C14, §4.3 Ship 1): what the chat says after a page is checked.
 //
-// It replaces the bare `qc.score < 0.45` rule in jobs.ts letterPage. A calm "Check page N" notice
-// fires for a MAJOR structured problem — the drawn panel count differs from the plan, the pictures
-// show the planned moments in another order or leave one out, a speaker who should be visible is
-// not drawn, or (once COMIC_IDENTITY_NOTICES is on, Ship 2) a character is drawn off-model — or for
+// It replaces the bare `qc.score < 0.45` rule in jobs.ts letterPage. A calm "Check panels on page N"
+// notice fires for a MAJOR structured problem — the drawn panel count differs from the plan, the pictures
+// show the planned moments in another order or leave one out, a speaker who should be visible may
+// not be drawn, or (once COMIC_IDENTITY_NOTICES is on, Ship 2) a character is drawn off-model — or for
 // a score below QC_NOTICE_SCORE. Badges and the page's quality list always show everything; this
 // only decides when to speak up in the chat. Off-panel voices are never a problem (vision.ts).
+// The readings are a model's (beat accuracy is not yet measured), so the words hedge: "looks like",
+// "may not be drawn". A page the safety check withheld gets no notice at all — its safety card speaks,
+// and the version on screen is no longer the one this check describes.
 //
 // The notice carries fix chips, free first. Every fix is an action that exists today: the free one
 // is a script edit that changes no hashed field (so the page never goes falsely "out of date"); the
@@ -16,8 +19,9 @@
 import type { ComicDoc, Line, Page, Panel, QcReport } from '../../../shared/comic/doc.js';
 import type { DocOp, SpendAction, StudioAction } from '../../../shared/comic/ops.js';
 import { LOW_QC_SCORE } from '../../../shared/comic/plan.js';
+import { PLATFORM_CEILING, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { upperName } from './prompts.js';
-import { beatProblems, offPanelSpeakerIds, panelSpeakerIds, type MissingSpeaker, type QcPanelChecks } from './vision.js';
+import { TEXT_RULES_ISSUE, beatProblems, panelSpeakerIds, qcOffPanelSpeakerIds, type MissingSpeaker, type QcPanelChecks } from './vision.js';
 
 /** C14: a page check scoring below this raises a notice even with no structured problem (provisional; one constant). */
 export const QC_NOTICE_SCORE = 0.75;
@@ -51,6 +55,11 @@ export interface QcNoticeOptions {
   quote?: (action: SpendAction) => number | undefined;
   /** COMIC_IDENTITY_NOTICES (Ship 2): identity "no" findings raise the notice. Off by default. */
   identityNotices?: boolean;
+  /** The same check's safety verdict (letterPage's `safety`). Blocked ⇒ no notice: the safety card
+   *  speaks and the previous version is current again. Above `rating` ⇒ every redraw chip is a safer take. */
+  safety?: SafetyVerdict;
+  /** The comic's effective rating (jobs.ts ratingOf); the platform ceiling when not given. */
+  rating?: ContentRating;
 }
 
 /** The env switch for identity notices (Ship 2); off unless COMIC_IDENTITY_NOTICES=1. */
@@ -79,7 +88,7 @@ const currentMissingSpeakers = (qc: QcPanelChecks, page: Page): MissingSpeaker[]
   for (const m of raw) {
     if (!isObject(m) || !Number.isInteger(m.panel) || typeof m.castId !== 'string' || !m.castId) continue;
     const panel = page.panels.find((p) => p.n === m.panel);
-    if (!panel || !panelSpeakerIds(panel).includes(m.castId) || offPanelSpeakerIds(panel).has(m.castId)) continue;
+    if (!panel || !panelSpeakerIds(panel).includes(m.castId) || qcOffPanelSpeakerIds(panel).has(m.castId)) continue;
     const key = `${m.panel}:${m.castId}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -114,9 +123,12 @@ const clip = (text: string, max: number) => {
 
 const swapSentence = (swapped: { panel: number; shows: number }[]): string => {
   const pair = swapped.length === 2 && swapped[0].shows === swapped[1].panel && swapped[1].shows === swapped[0].panel;
-  if (pair) return `panels ${swapped[0].panel} and ${swapped[1].panel} show each other's moments`;
-  return named(swapped, (s) => `panel ${s.panel}'s picture shows panel ${s.shows}'s moment`);
+  if (pair) return `the pictures in panels ${swapped[0].panel} and ${swapped[1].panel} look like each other's moments`;
+  return named(swapped, (s) => `panel ${s.panel}'s picture looks like panel ${s.shows}'s moment`);
 };
+
+/** A speaker's spoken lines (with text) in one panel. */
+const voiceLines = (panel: Panel, castId: string): Line[] => panel.lines.filter((l) => l.speakerId === castId && VOICE_KINDS.has(l.kind) && l.text.trim());
 
 // ── The notice ──
 
@@ -127,6 +139,10 @@ const swapSentence = (swapped: { panel: number; shows: number }[]): string => {
  */
 export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: QcNoticeOptions = {}): QcNotice | null {
   if (!qc || !isObject(qc) || !page) return null;
+  // Withheld by the safety check: the safety card speaks (a redraw chip here would not be the safe one,
+  // and a panel fix would edit the previous version, which this check did not see).
+  if (safetyStatusOf(opts.safety, PLATFORM_CEILING) === 'blocked') return null;
+  if (Array.isArray(qc.issues) && qc.issues.includes(TEXT_RULES_ISSUE)) return null;
   const checks = qc as QcReport & QcPanelChecks;
   const planned = page.panels.length;
   const score = typeof qc.score === 'number' && Number.isFinite(qc.score) ? qc.score : undefined;
@@ -151,11 +167,18 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
   if (beats.undrawn.length) {
     sentences.push(
       beats.undrawn.length === 1
-        ? `panel ${beats.undrawn[0]}'s moment isn't drawn in any panel`
-        : `the moments of panels ${listWords(beats.undrawn.slice(0, 3).map(String))}${beats.undrawn.length > 3 ? ' and more' : ''} aren't drawn`
+        ? `panel ${beats.undrawn[0]}'s moment may not be drawn in any panel`
+        : `the moments of panels ${listWords(beats.undrawn.slice(0, 3).map(String))}${beats.undrawn.length > 3 ? ' and more' : ''} may not be drawn`
     );
   }
-  if (speakers.length) sentences.push(named(speakers, (m) => `${nameOf(m.castId)} speaks in panel ${m.panel} but isn't drawn there`));
+  if (speakers.length) {
+    sentences.push(
+      named(speakers, (m) => {
+        const panel = page.panels.find((p) => p.n === m.panel);
+        return `${nameOf(m.castId)} has ${plural(panel ? voiceLines(panel, m.castId).length : 1, 'line')} in panel ${m.panel} but may not be drawn`;
+      })
+    );
+  }
   if (identity.length) sentences.push(named(identity, (f) => `${f.characterId ? nameOf(f.characterId) : 'a character'} looks different from their sheet in panel ${f.panel}`));
   if (!sentences.length) {
     const issues = (Array.isArray(qc.issues) ? qc.issues : []).filter((i): i is string => typeof i === 'string' && !!i.trim()).slice(0, 2);
@@ -164,9 +187,11 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
 
   // A check that measured nothing (no usable reply): its boxes are the blueprint's.
   const unmeasured = checks.boxesFrom === 'estimate' && !drawn;
-  const fixes = fixesFor(page, { speakers, undrawn: beats.undrawn, countOff, unmeasured, structured, low }, opts, nameOf);
+  // Above the comic's rating (but servable to its owner): every redraw is a safer take.
+  const safer = safetyStatusOf(opts.safety, opts.rating ?? PLATFORM_CEILING) === 'over_rating';
+  const fixes = fixesFor(page, { speakers, undrawn: beats.undrawn, countOff, unmeasured, structured, low, safer }, opts, nameOf);
   const freeFixes = fixes.filter((f) => f.free);
-  const lead = score !== undefined && score < LOW_QC_SCORE ? `Page ${page.n} may need another pass` : `Check page ${page.n}`;
+  const lead = score !== undefined && score < LOW_QC_SCORE ? `Page ${page.n} may need another pass` : `Check panels on page ${page.n}`;
   const text = [
     `${lead}: ${sentences.join('; ')}.`,
     freeFixes.length ? `Free fix: ${listWords(freeFixes.map((f) => lowerFirst(f.label)))}.` : '',
@@ -180,7 +205,7 @@ export function qcNoticeFor(qc: QcReport | undefined | null, page: Page, opts: Q
 /** Fix chips: free first, then paid by price (cheapest first), at most MAX_NOTICE_FIXES. */
 function fixesFor(
   page: Page,
-  found: { speakers: MissingSpeaker[]; undrawn: number[]; countOff: boolean; unmeasured: boolean; structured: boolean; low: boolean },
+  found: { speakers: MissingSpeaker[]; undrawn: number[]; countOff: boolean; unmeasured: boolean; structured: boolean; low: boolean; safer: boolean },
   opts: QcNoticeOptions,
   nameOf: (castId?: string) => string
 ): QcNoticeFix[] {
@@ -192,13 +217,14 @@ function fixesFor(
     paid.push({ fix: { label, free: false, action: { ...action, quotedUsd: usd } as StudioAction }, usd });
   };
   const panelOf = (n: number): Panel | undefined => page.panels.find((p) => p.n === n);
+  const safe = found.safer ? { safe: true as const } : {};
 
   // Missing speaker: a caption needs no drawing (overlay pages only — in-art lines are part of the
   // picture and hashed), or one quoted redraw of that panel.
   for (const m of found.speakers.slice(0, MAX_NAMED)) {
     const panel = panelOf(m.panel);
     if (!panel) continue;
-    const lines = panel.lines.filter((l) => l.speakerId === m.castId && VOICE_KINDS.has(l.kind) && l.text.trim());
+    const lines = voiceLines(panel, m.castId);
     const name = nameOf(m.castId);
     if (opts.doc && opts.doc.format.lettering !== 'in_art' && lines.length) {
       const ops: DocOp[] = lines.map((l) => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: { kind: 'caption' } }));
@@ -208,7 +234,8 @@ function fixesFor(
       type: 'edit_page',
       pageId: page.id,
       panelN: m.panel,
-      instruction: `In panel ${m.panel} only, draw ${name} clearly — they speak in this panel and must be visible. Keep everything else on the page exactly as it is.`
+      instruction: `In panel ${m.panel} only, draw ${name} clearly — they speak in this panel and must be visible. Keep everything else on the page exactly as it is.`,
+      ...safe
     });
   }
 
@@ -220,13 +247,14 @@ function fixesFor(
       type: 'edit_page',
       pageId: page.id,
       panelN: n,
-      instruction: `In panel ${n} only, redraw the art to show: ${/[.!?…]$/.test(action) ? action : `${action}.`} Keep everything else on the page exactly as it is.`
+      instruction: `In panel ${n} only, redraw the art to show: ${/[.!?…]$/.test(action) ? action : `${action}.`} Keep everything else on the page exactly as it is.`,
+      ...safe
     });
   }
 
   // The panels may simply have been misread (or not read at all): a re-check is the cheapest look.
   if (found.countOff || found.unmeasured) offerPaid(`Re-check page ${page.n}`, { type: 'recheck_page', pageId: page.id });
-  if (found.structured || found.low) offerPaid(`Redraw page ${page.n}`, { type: 'render_pages', pageIds: [page.id], force: true });
+  if (found.structured || found.low) offerPaid(`Redraw page ${page.n}`, { type: 'render_pages', pageIds: [page.id], force: true, ...safe });
 
   const seen = new Set<string>();
   return [...free, ...paid.sort((a, b) => a.usd - b.usd).map((p) => p.fix)]
