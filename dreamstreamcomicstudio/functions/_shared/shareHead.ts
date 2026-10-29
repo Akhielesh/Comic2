@@ -13,7 +13,7 @@
  * `comic_share_card` and is shape-validated here (validateShareCardRpc) before use.
  */
 import type { AspectRatio } from '../../shared/comic/doc';
-import { SLUG_RE, type ShareCard } from '../../shared/comic/publication';
+import { SLUG_RE, ratedDescription, type ShareCard } from '../../shared/comic/publication';
 import { COMICS_ORIGIN, comicShareUrl } from '../../services/productHost';
 
 export const SITE_NAME = 'DreamStream Studio';
@@ -161,9 +161,9 @@ export function validateShareCardRpc(raw: unknown): ShareCardRpc | null {
   };
 }
 
-/** The preview text with the rating appended ("… · Rated PG-13"), so a parent sees it before tapping. */
-export const ratedDescription = (description: string, rating?: ShareRating): string =>
-  rating ? (description ? `${description} · Rated ${rating}` : `Rated ${rating}`) : description;
+// The preview text with the rating appended ("… · Rated PG-13"), so a parent sees it before tapping —
+// the shared one (shared/comic/publication), re-exported for existing importers.
+export { ratedDescription };
 
 // ── Head ─────────────────────────────────────────────────────────────────────
 
