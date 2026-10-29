@@ -522,9 +522,21 @@ export interface MembersRequest {
   label?: string | null;
 }
 export interface MembersResponse {
+  /**
+   * The change is in effect. A change that takes access away (a removal, a lower role) is only
+   * `ok` once the room confirmed it closed what the person had open; until then the answer is
+   * 202 `{ok: false, error: 'unconfirmed', committed: true, told: false}` — the membership change
+   * itself is saved, the Worker keeps telling the room, and asking again is safe.
+   */
   ok: boolean;
   /** User ids whose membership changed (the room kicks, prunes push and rotates the NMK for these). */
   changed?: string[];
+  /** User ids removed (the room closes their sockets and drops their push targets). */
+  removed?: string[];
+  /** The room confirmed it heard the change (`/x/members`). */
+  told?: boolean;
+  /** The membership change is saved in Supabase (with `ok: false, error: 'unconfirmed'`). */
+  committed?: boolean;
   error?: string;
 }
 
@@ -555,21 +567,33 @@ export interface KickResponse {
   closed: number;
 }
 
-/** Worker → room `/x/kick` (internal). */
+/** Worker → room, call line and direct call `/x/kick` (internal). */
 export interface XKickBody {
   uid: string;
   why: 'signout' | 'secure' | 'removed';
+  /**
+   * When the kick was asked for (ms). The room closes the person's sockets admitted before it and
+   * refuses their tokens issued before it (`iat < at`, account and device tokens alike) until those
+   * expire — never a sign-in after it.
+   */
+  at?: number;
 }
 /** Room → Worker: what it closed, and the TURN usernames to revoke. */
 export interface XKickResult {
   closed: number;
   turn: string[];
+  /** Call line only: the direct calls (CallRoom ids) the person is in, being rung into or just placed — the Worker kicks each. */
+  calls?: string[];
 }
 /** Worker → room `/x/members` (internal): re-check these members now. */
 export interface XMembersBody {
   ids: string[];
+  /** Of those, the ones no longer members: close their sockets and drop their push targets. */
+  removed?: string[];
   /** Who made the change (for the parents' notice). */
   by?: string;
+  /** When the change was made (ms): apply a person's changes in this order, so a late retry never undoes a newer one. */
+  at?: number;
 }
 
 /** POST /api/devices/enroll (a signed-in phone, for itself or its watch). */

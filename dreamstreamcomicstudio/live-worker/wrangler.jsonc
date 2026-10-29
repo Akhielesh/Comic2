@@ -26,6 +26,11 @@
   "r2_buckets": [
     // `wrangler dev` simulates this locally; create the real bucket before deploying:
     //   npx wrangler r2 bucket create dreamstream-live
+    // Lifecycle rules live on the bucket, not in this file. They are the backstop for the rooms'
+    // own janitors: events/ expire after 9 days, unfinished multipart uploads are aborted after
+    // 1 day, the 7-day-copy ledger quota/rec/ expires after 8 days. The commands, and why each
+    // must stay longer than what we promise, are in README.md ("Deploy") and the security
+    // runbook, docs/infrastructure/live-security-runbook.md (ADR 0006 WS-8).
     { "binding": "LIVE_BUCKET", "bucket_name": "dreamstream-live" }
   ],
 
@@ -34,6 +39,25 @@
   // missing binding just means no points (the rooms' monthly rows still count). Read by the backend's
   // Admin → Costs and the daily cost watch with the read-only Account Analytics token.
   "analytics_engine_datasets": [{ "binding": "STREAM_USAGE", "dataset": "stream_usage" }],
+
+  // Edge rate limits (ADR 0006 D6.2; src/origin.ts). Workers Rate Limiting counts per Cloudflare
+  // location and is eventually consistent: a brake on floods, not an exact meter. Every check fails
+  // OPEN (no binding, no client address, a limiter error) — the rooms' own caps and lockouts stand
+  // behind them, and a monitor must never stop connecting because a limiter hiccuped.
+  // `namespace_id` is any positive integer unique within the Cloudflare account (not a secret).
+  // Keys are `edge:` + the client's IPv4 address or IPv6 /64, the nursery id, or the account id.
+  "ratelimits": [
+    // Every monitor and call socket upgrade, per address (F8: pre-auth socket exhaustion).
+    // Stream Studio broadcast sockets are left out: venue Wi-Fi or a carrier NAT puts a whole
+    // audience behind one address, and the EventRoom caps its own viewers.
+    { "name": "RL_WS", "namespace_id": "60601", "simple": { "limit": 60, "period": 60 } },
+    // Share-link joins (passcode tries), per address and per nursery (F13). The room still locks
+    // out wrong passcodes behind them (src/monitorGuests.ts).
+    { "name": "RL_GUEST", "namespace_id": "60602", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_GUEST_NID", "namespace_id": "60603", "simple": { "limit": 30, "period": 60 } },
+    // Creating a Stream Studio event, per account (each one is a new Durable Object).
+    { "name": "RL_EVENT", "namespace_id": "60604", "simple": { "limit": 10, "period": 60 } }
+  ],
 
   "vars": {
     // Comma-separated list of origins allowed to call the API (was "*" while testing).
@@ -45,9 +69,30 @@
     // caller's own bearer token to SECURITY DEFINER RPCs — it holds no secrets.
     "SUPABASE_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_xoFR3-YPdAOrtpTYdEHO8A_wEOhoZUF"
-    // Optional TURN for networks that block peer-to-peer (Cloudflare Realtime):
-    //   npx wrangler secret put TURN_KEY_ID && npx wrangler secret put TURN_KEY_API_TOKEN
   },
+
+  // SECRETS: never in this file (the repo is public). Set each with `npx wrangler secret put <NAME>`;
+  // the security runbook (docs/infrastructure/live-security-runbook.md, WS-8) says how to make and
+  // rotate them. Every feature that needs one stays dormant, and says so, until it is set:
+  //   TURN_KEY_ID, TURN_KEY_API_TOKEN  Cloudflare Realtime TURN for networks that block
+  //                                    peer-to-peer (src/ice.ts). Without them: STUN only.
+  //   TURN_TAG_SALT                    optional key for the TURN attribution tags (src/ice.ts).
+  //   DEVICE_TOKEN_JWK                 P-256 private JWK from scripts/ops/genDeviceTokenKey.mjs
+  //                                    (`{"keys":[new, old]}` while rotating): device grants and
+  //                                    10-minute access tokens (src/devices.ts). Without: 501.
+  //   ACT_TOKEN_KEY                    32+ random characters: "I'm on it" from a notification
+  //                                    (src/auth/actToken.ts). Without: pushes offer no action.
+  //   SECURITY_HOOK_SECRET             the same value as the email Worker's, the backend's and
+  //                                    Supabase Vault's (`old|new` while rotating): signs
+  //                                    /x/user/:uid/notify and /x/user/:uid/kick (src/ops.ts; the
+  //                                    kick is "Not you? Secure my account"). Without: both refuse
+  //                                    everything, and "Not you?" can't close open monitors.
+  //   OPS_KEY                          16+ characters: POST /api/ops/apns-probe (x-ops-key).
+  //   APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE, FCM_SA_JSON
+  //                                    native push (src/push/*, Phase 1). Without: native push off.
+  // Non-secret push switches become vars when their time comes (src/push/router.ts):
+  // PUSH_IOS_VIA=fcm if the APNs probe fails; PUSH_CRITICAL_ALERTS=1, PUSH_LA_SEALED=1 and
+  // PUSH_VOIP=1 once each is granted or proven.
 
   // Public URLs:
   // - https://stream.dreamstreamstudio.ai/live-api/* — Stream Studio's own host (same-origin API).
