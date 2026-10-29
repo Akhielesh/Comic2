@@ -6,8 +6,10 @@ import { applyOps } from '../../../../shared/comic/ops.js';
 import { AUTO_CORRECTED_NOTE } from '../../../../shared/comic/translationPlan.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { startAction } from '../jobs.js';
-import { newSession, testContext } from '../orchestrator.fakes.js';
+import { KEYS, newSession, testContext } from '../orchestrator.fakes.js';
+import { quoteTranslation } from '../i18n/index.js';
 import { sixPageKidsDoc } from '../i18n/testing.js';
+import { planTranslation, syncGlossaryOps } from '../../../../shared/comic/translationPlan.js';
 import { actionHandlerFor } from './index.js';
 import { I18N_ACTIONS, swapSourceOps } from './i18n.js';
 
@@ -73,6 +75,32 @@ describe('swap_source_language', () => {
     doc = applyOps(doc, [{ op: 'glossary_term', id: 'g_milo', patch: { term: 'Milo', forms: { te: 'మైలో' } } }]);
     const next = applyOps(doc, swapSourceOps(doc, 'te'));
     expect(i18nOf(next).glossary.find((g) => g.id === 'g_milo')).toMatchObject({ term: 'మైలో', forms: { en: 'Milo' } });
+  });
+
+  it("after a swap the next run's glossary seed is a no-op (every form kept) and the other editions' titles stay current ($0)", () => {
+    let doc = translated(translated(), 'hi');
+    for (const lang of ['te', 'hi']) doc = applyOps(doc, [{ op: 'edition_text', lang, field: 'brief.logline', value: { text: `${lang}:logline`, status: 'reviewed', sourceHash: textSourceHash(doc.brief.logline || ''), at: 1 } }]);
+    // The glossary as the first run seeds it (cast + title), with the forms the runs coined / the author typed.
+    doc = applyOps(doc, syncGlossaryOps(doc));
+    doc = applyOps(doc, [
+      { op: 'glossary_term', id: 'gl_c_c_milo', patch: { forms: { te: 'మైలో', hi: 'माइलो' } } },
+      { op: 'glossary_term', id: 'gl_c_c_frog', patch: { forms: { te: 'కప్ప', hi: 'मेंढक' } } }
+    ]);
+    const swapped = applyOps(doc, swapSourceOps(doc, 'te'));
+    expect(swapped.format.language).toBe('te');
+    // The cast takes its Telugu names (the comic is written in Telugu now), so the term and the name agree…
+    expect(swapped.cast.map((c) => c.name)).toEqual(['మైలో', 'కప్ప']);
+    expect(i18nOf(swapped).glossary.find((g) => g.id === 'gl_c_c_milo')).toMatchObject({ term: 'మైలో', forms: { en: 'Milo', hi: 'माइलो' } });
+    // …and the title term follows the swapped title even without a stored Telugu form.
+    expect(i18nOf(swapped).glossary.find((g) => g.id === 'gl_title')).toMatchObject({ term: 'te:title', forms: { en: 'Milo and the Moon' } });
+    // (a) What the next translate run commits first. Without the fix: {term:'Milo', forms:{hi:null,en:null}} — every form wiped.
+    expect(syncGlossaryOps(swapped)).toEqual([]);
+    // (b) The Hindi title and logline were re-hashed like the lines. Without the fix: coverTexts = ['brief.title','brief.logline'], usd > 0.
+    expect(planTranslation(swapped, 'hi').coverTexts).toEqual([]);
+    expect(quoteTranslation(swapped, KEYS, { languages: ['hi'] })).toMatchObject({ estimate: { usd: 0 }, perLanguage: [{ upToDate: true, usd: 0 }] });
+    expect(editionReadiness(swapped, 'hi').publishable).toBe(true);
+    // The old source's edition carries the old names as its forms and reads as reviewed.
+    expect(editionReadiness(swapped, 'en').publishable).toBe(true);
   });
 });
 

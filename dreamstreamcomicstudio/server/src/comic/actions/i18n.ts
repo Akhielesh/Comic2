@@ -27,6 +27,8 @@ type Accept = Extract<StudioAction, { type: 'accept_translation_issue' }>;
 
 const EDITION_FIELDS: readonly EditionTextField[] = ['brief.title', 'brief.logline', 'cover.title', 'cover.tagline'];
 const isField = (v: string): v is EditionTextField => (EDITION_FIELDS as readonly string[]).includes(v);
+/** The glossary seed's term length (syncGlossaryOps clips names to this). */
+const GLOSSARY_TERM_CHARS = 80;
 const finished = (outcome: StartedAction['outcome']): StartedAction => ({ outcome, done: Promise.resolve() });
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -68,9 +70,11 @@ export function swapSourceOps(doc: ComicDoc, lang: string, now = Date.now()): Do
   const lines = linesInOrder(doc).map(({ page, line }) => ({ page, line }));
   const newText = (line: Line): string => (line.noTranslate || !normalizeSource(line.text) ? line.text : edition.lines[line.id]?.text ?? line.text);
 
-  // Other editions stay current: their entries that matched the old source are re-hashed to the new one.
+  // Other editions stay current: their entries (lines AND cover/brief texts) that matched the old source are
+  // re-hashed to the new one, so the next run has nothing to translate for them ($0).
   const others = Object.keys(i18n.editions).filter((k) => k !== lang);
   const refreshed: Record<string, Record<string, TextTranslation>> = {};
+  const refreshedTexts: { lang: string; field: EditionTextField; value: TextTranslation }[] = [];
   for (const other of others) {
     const e = i18n.editions[other];
     const out: Record<string, TextTranslation> = {};
@@ -80,6 +84,14 @@ export function swapSourceOps(doc: ComicDoc, lang: string, now = Date.now()): Do
       out[line.id] = { ...t, sourceHash: lineSourceHash({ ...line, text: newText(line) }) };
     }
     refreshed[other] = out;
+    for (const field of EDITION_FIELDS) {
+      const t = editionTextEntry(doc, other, field);
+      const old = editionTextSource(doc, field);
+      if (!t || !old || t.sourceHash !== textSourceHash(old)) continue;
+      const next = editionTextEntry(doc, lang, field)?.text;
+      if (!next || normalizeSource(next) === old) continue;
+      refreshedTexts.push({ lang: other, field, value: { ...t, sourceHash: textSourceHash(next) } });
+    }
   }
 
   ops.push({ op: 'edition', lang, patch: null });
@@ -117,12 +129,20 @@ export function swapSourceOps(doc: ComicDoc, lang: string, now = Date.now()): Do
     ops.push({ op: 'edition_text', lang: oldSource, field, value: { text: old, status: 'reviewed', sourceHash: textSourceHash(t.text), at: now } });
   }
   for (const [other, out] of Object.entries(refreshed)) if (Object.keys(out).length) ops.push({ op: 'translations', lang: other, lines: out });
+  for (const r of refreshedTexts) ops.push({ op: 'edition_text', lang: r.lang, field: r.field, value: r.value });
 
-  // Glossary: the new source form becomes the term; the old term becomes the old source's form.
+  // Glossary: the new source form becomes the term; the old term becomes the old source's form. The cast
+  // member or place a term names takes that form as its name too (the comic is written in `lang` now), so
+  // the next run's glossary seed (syncGlossaryOps) sees term === name and keeps every language's forms.
+  // The title term follows the swapped title even when no form was stored for it.
   for (const term of i18n.glossary) {
-    const form = term.forms[lang];
-    if (!form || term.policy === 'keep') continue;
-    ops.push({ op: 'glossary_term', id: term.id, patch: { term: form, forms: { [oldSource]: term.term, [lang]: null as unknown as string } } });
+    if (term.policy === 'keep') continue;
+    const form = term.forms[lang] || (term.kind === 'title' ? editionTextEntry(doc, lang, 'brief.title')?.text : undefined);
+    if (!form) continue;
+    const next = normalizeSource(form).slice(0, GLOSSARY_TERM_CHARS);
+    ops.push({ op: 'glossary_term', id: term.id, patch: { term: next, forms: { [oldSource]: term.term, [lang]: null as unknown as string } } });
+    if (term.kind === 'character' && term.refId && doc.cast.some((c) => c.id === term.refId && c.name !== next)) ops.push({ op: 'character', id: term.refId, patch: { name: next } });
+    else if (term.kind === 'place' && term.refId && doc.places.some((p) => p.id === term.refId && p.name !== next)) ops.push({ op: 'place', id: term.refId, patch: { name: next } });
   }
   return ops;
 }
@@ -151,10 +171,11 @@ async function swapSource(ctx: StudioContext, action: Swap, opts: RunActionOptio
   const ops = swapSourceOps(doc, lang);
   ctx.session.commit(ops, { origin: opts.origin ?? 'user', label: `Make ${spec.english} the source` });
   const inArt = doc.format.lettering === 'in_art' && doc.pages.some((pg) => pg.render.asset);
+  const renamed = ops.some((o) => o.op === 'character' || o.op === 'place');
   const text = priced(
     ctx,
     opts,
-    `${languageLabel(lang)} is now the comic's language; ${languageLabel(oldSource)} became a reviewed translation. Every other translation stays current ($0).${inArt ? ' The pages have the old lettering painted into the art, so they are now marked out of date.' : ''}`
+    `${languageLabel(lang)} is now the comic's language; ${languageLabel(oldSource)} became a reviewed translation. Every other translation stays current ($0).${renamed ? ` Cast and place names now use their ${spec.english} spelling from the glossary.` : ''}${inArt ? ' The pages have the old lettering painted into the art, so they are now marked out of date.' : ''}`
   );
   say(ctx, opts, text, 'success');
   return finished({ status: 'done', message: text });
