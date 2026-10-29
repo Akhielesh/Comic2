@@ -247,6 +247,39 @@ describe('modelFit', () => {
   });
 });
 
+describe('modelFit: the price warning (models.md §5.1 acceptance "Nano Banana Pro (warn: price)")', () => {
+  const paidCaps = resolveStudioCaps({ planId: 'Creator', byok: false, isAdmin: false });
+  /** The registry's list prices (what the server's price book falls back to). */
+  const registryBook: PriceBook = { unit: (id, res) => ({ usd: getImageModel(id)?.priceUsd[res] ?? null, basis: 'registry' }), qcUsd: 0.002 };
+  const priceOf = (fit: ReturnType<typeof modelFit>) => fit.filter((r) => r.code === 'price');
+
+  it('on the lake comic, Nano Banana Pro warns about its price against the current Nano Banana 2.1, per page', () => {
+    const lake = makeLakeComic();
+    expect(lockedModelId(lake)).toBe(LAKE_MODEL);
+    const pro = modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, registryBook);
+    expect(pro.filter((r) => r.severity === 'block')).toEqual([]);
+    expect(priceOf(pro)).toEqual([{ code: 'price', severity: 'warn', text: 'About 4× the price of Nano Banana 2.1 per page' }]);
+    // Standard quality draws 2K pages: 0.1344 / 0.0504.
+    const standard = makeLakeComic((d) => (d.settings = { ...d.settings, quality: 'standard' }));
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, standard, paidCaps, registryBook))).toEqual([
+      { code: 'price', severity: 'warn', text: 'About 2.7× the price of Nano Banana 2.1 per page' }
+    ]);
+  });
+
+  it('only with a price book (existing callers unchanged), never for the current model, a cheaper one or an unknown price', () => {
+    const lake = makeLakeComic();
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps))).toEqual([]);
+    expect(priceOf(modelFit(getImageModel(LAKE_MODEL)!, lake, paidCaps, registryBook))).toEqual([]);
+    expect(priceOf(modelFit(getImageModel('nano-banana-lite')!, lake, paidCaps, registryBook))).toEqual([]);
+    const unknown: PriceBook = { unit: (id, res) => ({ usd: id === LAKE_MODEL ? getImageModel(id)!.priceUsd[res] ?? null : null, basis: 'none' }), qcUsd: 0 };
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, unknown))).toEqual([]);
+    // No lock yet (nothing drawn): no "current" to compare with.
+    expect(priceOf(modelFit(getImageModel('nano-banana-pro')!, createEmptyDoc('d', 'Empty', 1), paidCaps, registryBook))).toEqual([]);
+    // Never a dollar figure in the copy (governed users read it too).
+    for (const r of modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, registryBook)) expect(r.text).not.toMatch(/\$/);
+  });
+});
+
 describe('registry data (models.md §2.2)', () => {
   it('every spec carries the §3.3 fields and a cited or owned grade', () => {
     for (const spec of IMAGE_MODELS) {

@@ -139,7 +139,7 @@ export const redrawQuote = (doc: ComicDoc, toModelId: string, scope: RedrawScope
 };
 
 export interface FitReason {
-  code: 'aspect' | 'characters' | 'resolution' | 'refs' | 'lettering' | 'access' | 'experimental' | 'price_unverified' | 'transport' | 'hidden';
+  code: 'aspect' | 'characters' | 'resolution' | 'refs' | 'lettering' | 'access' | 'experimental' | 'price_unverified' | 'transport' | 'hidden' | 'price';
   severity: 'block' | 'warn';
   /** Exact picker copy (models.md §3.6 B / C). */
   text: string;
@@ -158,7 +158,34 @@ const pageCastCount = (doc: ComicDoc, pageId: string): number => {
  * Why a model does (not) fit this comic, blocks first. Pure over the registry spec, the doc and the user's caps;
  * transport facts that need the server's keys (M1-LOCK-SERVER) are not judged here.
  */
-export const modelFit = (spec: ImageModelSpec, doc: ComicDoc, caps: StudioCaps): FitReason[] => {
+/** A model at least this many times the comic's current model's price per page gets the 'price' warning. */
+export const PRICE_WARN_RATIO = 1.5;
+
+const ratioWords = (ratio: number): string => (ratio >= 10 ? String(Math.round(ratio)) : String(Math.round(ratio * 10) / 10));
+
+/**
+ * 'price' (models.md §5.1 "Nano Banana Pro (warn: price)"): this model's price per page at the resolution it would
+ * draw this comic's pages at, against the comic's current (locked) model's. Only with a price book, only when both
+ * prices are known, never for the current model itself; no dollar figure in the copy.
+ */
+const priceFit = (spec: ImageModelSpec, doc: ComicDoc, prices: PriceBook): FitReason | null => {
+  const currentId = lockedModelId(doc);
+  const current = currentId ? getImageModel(currentId) : undefined;
+  if (!current || current.id === spec.id) return null;
+  try {
+    const mine = prices.unit(spec.id, redrawResolution(doc, spec.id, 'page'), 'page').usd;
+    const theirs = prices.unit(current.id, redrawResolution(doc, current.id, 'page'), 'page').usd;
+    if (typeof mine !== 'number' || !Number.isFinite(mine) || typeof theirs !== 'number' || !(theirs > 0)) return null;
+    const ratio = mine / theirs;
+    if (ratio < PRICE_WARN_RATIO) return null;
+    return { code: 'price', severity: 'warn', text: `About ${ratioWords(ratio)}× the price of ${current.nickname} per page` };
+  } catch {
+    return null;
+  }
+};
+
+/** `prices` (optional): adds the 'price' warning against the comic's current model (existing callers unchanged). */
+export const modelFit = (spec: ImageModelSpec, doc: ComicDoc, caps: StudioCaps, prices?: PriceBook): FitReason[] => {
   const blocks: FitReason[] = [];
   const warns: FitReason[] = [];
   // models.md §3.4 item 7.2: a hidden or deprecated model is allowed only when it is the current lock or the
@@ -188,6 +215,8 @@ export const modelFit = (spec: ImageModelSpec, doc: ComicDoc, caps: StudioCaps):
     warns.push({ code: 'lettering', severity: 'warn', text: `${spec.nickname} is weak at in-art lettering; overlay lettering keeps the words exact.` });
   }
   if (spec.lifecycle === 'experimental') warns.push({ code: 'experimental', severity: 'warn', text: 'Experimental in Comic Studio.' });
+  const pricier = prices ? priceFit(spec, doc, prices) : null;
+  if (pricier) warns.push(pricier);
   const res = spec.resolutions.length ? redrawResolution(doc, spec.id, 'page') : '1K';
   if (spec.priceBasis === 'unverified' || typeof spec.priceUsd[res] !== 'number') {
     warns.push({ code: 'price_unverified', severity: 'warn', text: "Price per image isn't published, so you'll see the real cost after the first image" });

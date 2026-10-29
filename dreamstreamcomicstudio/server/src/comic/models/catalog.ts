@@ -18,7 +18,7 @@
 import type { ComicDoc, Resolution } from '../../../../shared/comic/doc.js';
 import type { StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { IMAGE_MODELS, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
-import { lockedModelId, modelFit, redrawResolution, type FitReason } from '../../../../shared/comic/modelLock.js';
+import { lockedModelId, modelFit, redrawResolution, type FitReason, type PriceBook } from '../../../../shared/comic/modelLock.js';
 import type {
   CatalogEndpoint,
   CatalogPrice,
@@ -766,6 +766,15 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
     return { currentId: current.id, ratio: Math.round((mine / theirs) * 100) / 100, res };
   };
 
+  /** The prices this catalog shows, as a PriceBook: modelFit's 'price' warning agrees with priceVsCurrent. */
+  const shownPrices = (eps: KeyedView<OrImageEndpoint[]>): PriceBook => ({
+    unit: (modelId, res) => {
+      const model = getImageModel(modelId);
+      return { usd: model ? (pricesFor(model, eps).price[res]?.usd ?? null) : null, basis: 'catalog' };
+    },
+    qcUsd: 0
+  });
+
   const buildRow = (spec: ImageModelSpec, data: Loaded, ctx: { doc?: ComicDoc; caps?: StudioCaps }): ModelCatalogRow => {
     const orId = spec.routes.openrouter;
     const listed = orId ? data.list.value?.byId.get(orId) : undefined;
@@ -791,7 +800,7 @@ export const createModelCatalog = (deps: ModelCatalogDeps = {}): ModelCatalog =>
       quality: qualityEntriesFor(orId, data.q.snapshot),
       observed: observedEntriesFor(data.yours, data.platform, spec.id).filter((o) => ROW_OBSERVED_KINDS.has(o.kind)),
       ...(reliability ? { reliability } : {}),
-      ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps) } : {}),
+      ...(ctx.doc && ctx.caps ? { fit: modelFit(spec, ctx.doc, ctx.caps, shownPrices(data.eps)) } : {}),
       ...(current !== undefined ? { current } : {}),
       ...(vsCurrent ? { priceVsCurrent: vsCurrent } : {}),
       fetchedAt: {

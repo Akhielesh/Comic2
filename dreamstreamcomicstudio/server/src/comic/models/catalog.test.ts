@@ -76,11 +76,15 @@ describe('catalog rows from the 17:51Z data (models.md §4.3)', () => {
     expect(pro.price['1K']!.usd!).toBeGreaterThan(nb.price['1K']!.usd!);
     // "Nano Banana Pro (warn: price)": machine-readable for the UI — about 4× per page on this draft (1K) comic.
     expect(pro.priceVsCurrent).toEqual({ currentId: 'nano-banana-2.1', ratio: 4, res: '1K' });
+    // …and in words, as a fit warning priced on the same numbers the row shows.
+    expect(pro.fit).toContainEqual({ code: 'price', severity: 'warn', text: 'About 4× the price of Nano Banana 2.1 per page' });
+    expect(nb.fit!.some((f) => f.code === 'price')).toBe(false);
     expect(nb.priceVsCurrent).toBeUndefined(); // the current model is not compared with itself
     expect(gpt.priceVsCurrent).toEqual({ currentId: 'nano-banana-2.1', ratio: 6.27, res: '1K' });
     expect(row(await catalog.rows(), 'nano-banana-pro').priceVsCurrent).toBeUndefined(); // no comic, no comparison
     const standard = await catalog.rows({ doc: makeLakeComic((d) => (d.settings = { ...d.settings, quality: 'standard' })), caps: paid });
     expect(row(standard, 'nano-banana-pro').priceVsCurrent).toEqual({ currentId: 'nano-banana-2.1', ratio: 2.67, res: '2K' }); // 0.1344 / 0.0504
+    expect(row(standard, 'nano-banana-pro').fit).toContainEqual({ code: 'price', severity: 'warn', text: 'About 2.7× the price of Nano Banana 2.1 per page' });
     expect(gpt.fit).toContainEqual({ code: 'aspect', severity: 'block', text: "Can't draw 4:5 pages" });
     const firstBlocked = rows.findIndex((r) => r.fit!.some((f) => f.severity === 'block'));
     expect(rows.slice(firstBlocked).every((r) => r.fit!.some((f) => f.severity === 'block'))).toBe(true);
