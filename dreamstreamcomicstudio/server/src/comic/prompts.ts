@@ -1300,11 +1300,26 @@ const positionPhrase = (word: string): string => {
 const imageWords = (indexes?: number[]): string =>
   indexes?.length ? (indexes.length > 1 ? `Images ${joinList(indexes.map(String))}` : `Image ${indexes[0]}`) : '';
 
-/** First sentence of an action, and the rest ("Must show" / "Detail"). */
+/** A sentence end followed by the start of another sentence (a capital, a digit, a quote or a bracket). */
+const SENTENCE_BOUNDARY = /[.!?…]["'”’)\]]*(?=\s+[\p{Lu}\p{N}"“'‘(])/gu;
+/** A full stop that ends a title or a single initial ("Dr.", "St.", "J."), not a sentence. */
+const ABBREVIATION_END = /(?:^|[^\p{L}\p{N}])(?:Mr|Mrs|Ms|Dr|Prof|St|Mt|Sr|Jr|Capt|Lt|Sgt|Col|Gen|No|vs|etc|\p{Lu})\.$/u;
+
+/**
+ * First sentence of an action, and the rest ("Must show" / "Detail"). A boundary after a title or
+ * an initial ("Dr. Rao opens the vault.") is not a sentence end, and a one-word first sentence
+ * ("Boom! The door falls.") is not split off; with no valid boundary the whole action is the first.
+ */
 const splitAction = (text: string): { first: string; rest: string } => {
   const t = clean(text);
-  const m = /^(.+?[.!?…]["'”’)\]]*)\s+(?=[\p{Lu}\p{N}"“'‘(])(.+)$/su.exec(t);
-  return m ? { first: m[1], rest: m[2] } : { first: t, rest: '' };
+  for (const m of t.matchAll(SENTENCE_BOUNDARY)) {
+    const end = (m.index ?? 0) + m[0].length;
+    const first = t.slice(0, end);
+    if (ABBREVIATION_END.test(first) || wordCount(first) < 2) continue;
+    const rest = t.slice(end).trim();
+    if (rest) return { first, rest };
+  }
+  return { first: t, rest: '' };
 };
 
 interface PanelBlockContext {

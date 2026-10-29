@@ -440,6 +440,36 @@ describe('compilePage', () => {
     expect(talking).not.toContain('OFF-PANEL VOICE: MAGIC SHELL');
   });
 
+  it('Must show is the first real sentence: a title or an initial never ends it, and a one-word exclamation is not split off', () => {
+    const blockOf = (action: string): string => {
+      const prompt = compilePage(baseDoc(), page(1, [panel(1, ['maya'], { action })])).prompt;
+      const start = prompt.indexOf('PANEL 1 of 1');
+      return prompt.slice(start, prompt.indexOf('\n\n', start));
+    };
+    const mustShow = (action: string) => blockOf(action).split('\n').find((l) => l.startsWith('Must show: '));
+    const detail = (action: string) => blockOf(action).split('\n').find((l) => l.startsWith('Detail: '));
+    // Reviewer repro (courier-p4): "Dr." used to end the first sentence ("Must show: Dr.").
+    expect(mustShow('Dr. Rao opens the vault. Gold spills out.')).toBe('Must show: Dr. Rao opens the vault.');
+    expect(detail('Dr. Rao opens the vault. Gold spills out.')).toBe('Detail: Gold spills out.');
+    expect(mustShow('Dr. Rao opens the vault with Isha and Dev behind him. Gold spills out.')).toBe(
+      'Must show: Dr. Rao opens the vault with Isha and Dev behind him.'
+    );
+    // One sentence with two titles: nothing is split off.
+    expect(mustShow('Mr. Iyer waves from St. Mary’s gate.')).toBe('Must show: Mr. Iyer waves from St. Mary’s gate.');
+    expect(detail('Mr. Iyer waves from St. Mary’s gate.')).toBeUndefined();
+    // Initials, numbers and the rest of the list.
+    expect(mustShow('J. R. Rao checks platform No. 5 for Prof. Sen. The train is late.')).toBe('Must show: J. R. Rao checks platform No. 5 for Prof. Sen.');
+    expect(mustShow('Capt. Noor and Sgt. Bala climb Mt. Abu at dawn. Mist rolls in.')).toBe('Must show: Capt. Noor and Sgt. Bala climb Mt. Abu at dawn.');
+    // A one-word first sentence stays with the next one; with no valid boundary the whole action is shown.
+    expect(mustShow('Boom! The door falls.')).toBe('Must show: Boom! The door falls.');
+    expect(mustShow('Boom! The door falls. Dust everywhere.')).toBe('Must show: Boom! The door falls.');
+    expect(mustShow('“Run!” Maya shouts. The stall collapses.')).toBe('Must show: “Run!” Maya shouts.');
+    // Ordinary sentences split exactly as before.
+    expect(mustShow('Maya sprints into the market. Shoppers scatter.')).toBe('Must show: Maya sprints into the market.');
+    expect(mustShow('Is it him? 3 shadows answer.')).toBe('Must show: Is it him?');
+    expect(mustShow('The lock clicks… “Now,” she breathes.')).toBe('Must show: The lock clicks…');
+  });
+
   it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {
     const doc = baseDoc();
     expect(identityAnchor(doc.cast[0])).toBe('black bun with a pencil through it, faded red kurta, thin scar');
