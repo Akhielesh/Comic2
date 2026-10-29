@@ -5,7 +5,8 @@
 // labels, no anti-aliasing — so the image model has nothing to copy into the art except the
 // borders. compilePage attaches it as Image 1 ("PAGE LAYOUT GUIDE", path LAYOUT_REFERENCE_PATH)
 // when the job runner passes `layoutGuide`; the runner renders it here at prepare time and
-// substitutes the placeholder, exactly as it does for `__region__`. Nothing is stored.
+// substitutes the placeholder, exactly as it does for `__region__`. Nothing is stored. The runner
+// uses tryRenderPageLayoutGuide: a guide that cannot be drawn drops the guide, never the page job.
 //
 // Flag: COMIC_LAYOUT_GUIDE, OFF until the owner-approved Model Lab A/B (decision 1, PD-8).
 // The boxes are pageLayoutBoxes(doc, page) — the same rectangles the prompt's "box N" and
@@ -14,6 +15,7 @@
 import sharp from 'sharp';
 import type { AspectRatio, Box, ComicDoc, Page, Resolution } from '../../../../shared/comic/doc.js';
 import { aspectRatioOf } from '../../../../shared/comic/models.js';
+import { logger } from '../../lib/logger.js';
 import { withSharpSlot } from '../imageMeasure.js';
 import { LAYOUT_GUIDE_LABEL, LAYOUT_REFERENCE_PATH, pageLayoutBoxes } from '../prompts.js';
 import { StudioError } from '../types.js';
@@ -157,3 +159,32 @@ export const renderPageLayoutGuide = (
   res: Resolution,
   frameStyle?: GuideFrameStyle
 ): Promise<LayoutGuideImage> => renderLayoutGuide(pageLayoutBoxes(doc, page), aspect, res, frameStyle);
+
+/**
+ * The page's guide, or null — never a throw. A guide failure (no drawable box, a sharp error) must
+ * never fail or re-quote the paid page job: this logs `comic_layout_guide_failed`, and the runner then
+ * recompiles with `layoutGuide: false` (the prompt drops its guide lines and the image indexes
+ * renumber) and draws the page without it. `context` adds ids to the log line (no user content).
+ */
+export async function tryRenderPageLayoutGuide(
+  doc: ComicDoc,
+  page: Page,
+  aspect: AspectRatio,
+  res: Resolution,
+  frameStyle?: GuideFrameStyle,
+  context: Record<string, string | number | undefined> = {}
+): Promise<LayoutGuideImage | null> {
+  try {
+    return await renderPageLayoutGuide(doc, page, aspect, res, frameStyle);
+  } catch (err) {
+    logger.warn('comic_layout_guide_failed', {
+      ...context,
+      pageId: page.id,
+      panels: page.panels.length,
+      aspect,
+      res,
+      message: String((err as Error)?.message || err)
+    });
+    return null;
+  }
+}

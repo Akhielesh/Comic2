@@ -2,7 +2,8 @@
 // The page layout guide (plan §4.2, C9): black borders exactly where the boxes say (±1 px), pure
 // white gutters, a near-white fill, no text or anti-aliasing, at the job's aspect.
 import sharp from 'sharp';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { logger } from '../../lib/logger.js';
 import { createEmptyDoc, emptyRender, type Box, type Page, type Panel } from '../../../../shared/comic/doc.js';
 import { estimatePanelBoxes } from '../../../../shared/comic/pageGeometry.js';
 import { pageLayoutBoxes } from '../prompts.js';
@@ -17,6 +18,7 @@ import {
   layoutGuideSize,
   renderLayoutGuide,
   renderPageLayoutGuide,
+  tryRenderPageLayoutGuide,
   type GuideRect
 } from './wireframe.js';
 
@@ -164,5 +166,32 @@ describe('renderLayoutGuide', () => {
         bottom: Math.round((b.y + b.h) * 1024)
       }))
     );
+  });
+});
+
+describe('tryRenderPageLayoutGuide (a guide failure never fails the page job)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const pageOf = (n: number, layout = ''): Page => ({ id: `pg_${n}`, n: 1, summary: '', layout, panels: panels(n), render: emptyRender(), balloons: [] });
+
+  it('returns the same guide as renderPageLayoutGuide and logs nothing when it draws', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const doc = createEmptyDoc('d', 'T', 1);
+    const guide = await tryRenderPageLayoutGuide(doc, pageOf(3, THREE), '2:3', '1K');
+    expect(guide).not.toBeNull();
+    expect(guide!.rects).toEqual((await renderPageLayoutGuide(doc, pageOf(3, THREE), '2:3', '1K')).rects);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('returns null and logs comic_layout_guide_failed instead of throwing (no drawable box)', async () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const doc = createEmptyDoc('d', 'T', 1);
+    // The plain renderer refuses this page with a 400 …
+    await expect(renderPageLayoutGuide(doc, pageOf(0), '2:3', '1K')).rejects.toBeInstanceOf(StudioError);
+    // … the safe one resolves to null, so the runner recompiles without the guide and draws on.
+    await expect(tryRenderPageLayoutGuide(doc, pageOf(0), '2:3', '1K', undefined, { jobId: 'job_1' })).resolves.toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBe('comic_layout_guide_failed');
+    expect(warn.mock.calls[0][1]).toMatchObject({ jobId: 'job_1', pageId: 'pg_0', panels: 0, aspect: '2:3', res: '1K' });
+    expect(String(warn.mock.calls[0][1]?.message)).toMatch(/no panel boxes/);
   });
 });
