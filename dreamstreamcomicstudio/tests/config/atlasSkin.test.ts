@@ -200,7 +200,10 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
     expect(ATLAS_DARK.get('--ds-danger')).toBe('oklch(0.396 0.141 25.723)');
     for (const block of [ATLAS_LIGHT, ATLAS_DARK]) {
       for (const tone of ['success', 'warning', 'danger', 'info']) {
-        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(--ds-${tone}) 60%, var(--ds-ink))`);
+        // Dark danger mixes 55 %: Atlas's deep dark red at 60 % measures 4.36:1 on a hover row
+        // (tests/config/tokenContrast.test.ts measures every status text on its surfaces).
+        const pct = block === ATLAS_DARK && tone === 'danger' ? 55 : 60;
+        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(--ds-${tone}) ${pct}%, var(--ds-ink))`);
       }
     }
   });
@@ -320,6 +323,17 @@ describe('Atlas skin — (c) text contrast in both skin themes', () => {
   it('on-accent text on the accent fill ≥ 4.5:1', () => {
     expect(contrastRatio(ATLAS_LIGHT.get('--ds-on-accent')!, ATLAS_LIGHT.get('--ds-accent')!)).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio(ATLAS_DARK.get('--ds-on-accent')!, ATLAS_DARK.get('--ds-accent')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('the readable accent tokens (accent text, text-bearing fill) are the ink accent under the skin, so they fade with it', () => {
+    // Outside the skin they are deeper terracottas (tokenContrast.test.ts); inside it nothing changes.
+    expect(ATLAS_LIGHT.get('--ds-accent-text')).toBe('var(--ds-accent)');
+    expect(ATLAS_LIGHT.get('--ds-accent-fill')).toBe('var(--ds-accent)');
+    expect(ATLAS_LIGHT.get('--ds-accent-fill-hover')).toBe('var(--ds-accent-hover)');
+    expect(ATLAS_DARK.get('--ds-accent-text')).toBe('var(--ds-accent)');
+    // A selection inside a text-bearing fill flips like one inside the accent fill.
+    const flip = rules.find((r) => r.selector.startsWith('[data-ds-skin="atlas"] :is(.bg-\\[var\\(--ds-ink\\)\\]') && r.selector.includes('::selection'));
+    expect(flip?.selector).toContain('.bg-\\[var\\(--ds-accent-fill\\)\\]');
   });
 
   it('the helper itself is right (white on black = 21, white on #767676 ≈ 4.54)', () => {

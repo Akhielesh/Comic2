@@ -59,14 +59,29 @@ export const INK = 'text-[var(--ds-ink)]';
 /** Muted/secondary text. */
 export const MUTED = 'text-[var(--ds-muted)]';
 
-/** Terracotta accent hex values (for the rare inline-style need). */
+/**
+ * Terracotta accent hex values (for the rare inline-style need). The brand accent is DECORATIVE
+ * (~3:1 on paper): never use it for text or under text — ACCENT_TEXT_HEX / ACCENT_FILL_HEX are the
+ * readable values (= the light-theme --ds-accent-text / --ds-accent-fill in index.css).
+ */
 export const ACCENT_HEX = '#D97757';
 export const ACCENT_HOVER_HEX = '#c2643f';
+export const ACCENT_TEXT_HEX = '#A0472A';
+export const ACCENT_FILL_HEX = '#AE5132';
 
-/** Accent utilities (terracotta by default; ink under the Atlas skin). */
+/**
+ * Accent utilities (terracotta by default; ink under the Atlas skin). ACCENT_BG is the brand fill
+ * for marks that carry no text (dots, bars, toggles, the send glyph); a fill that carries a label
+ * uses ACCENT_FILL (+ ACCENT_FILL_HOVER) with ON_ACCENT_TEXT, which is ≥ 4.5:1 in both themes
+ * (index.css routes the older `bg-[var(--ds-accent)] text-white` pairing there too).
+ */
 export const ACCENT_BG = 'bg-[var(--ds-accent)]';
 export const ACCENT_BG_HOVER = 'hover:bg-[var(--ds-accent-hover)]';
-export const ACCENT_TEXT = 'text-[var(--ds-accent)]';
+/** Accent-coloured text and the icons beside it: the readable accent (≥ 4.5:1 on every studio surface). */
+export const ACCENT_TEXT = 'text-[var(--ds-accent-text)]';
+/** Solid accent fill that carries text (primary buttons, badges, chips). */
+export const ACCENT_FILL = 'bg-[var(--ds-accent-fill)]';
+export const ACCENT_FILL_HOVER = 'hover:bg-[var(--ds-accent-fill-hover)]';
 /** Text on a solid accent fill (white by default; paper on ink in the dark Atlas skin). */
 export const ON_ACCENT_TEXT = 'text-[var(--ds-on-accent)]';
 /** Soft accent tint for active/selected rows (= the old bg-[#D97757]/10 by default). */
@@ -150,8 +165,8 @@ export const PRESS = 'ds-press';
 /** Floating glass panel: glass + hairline + soft shadow + panel radius. */
 export const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL}`;
 
-/** Primary action (send, new chat): accent fill with on-accent text. */
-export const PRIMARY_BTN = `${ACCENT_BG} ${ACCENT_BG_HOVER} ${ON_ACCENT_TEXT} ${TRANSITION}`;
+/** Primary action (send, new chat): the text-bearing accent fill with on-accent text (≥ 4.5:1). */
+export const PRIMARY_BTN = `${ACCENT_FILL} ${ACCENT_FILL_HOVER} ${ON_ACCENT_TEXT} ${TRANSITION}`;
 
 /** Quiet glass pill for toggles/chips. */
 export const PILL = `${HAIRLINE} ${RADIUS_PILL} bg-[var(--ds-surface-soft)] backdrop-blur-sm ${TRANSITION}`;
