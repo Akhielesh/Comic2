@@ -46,8 +46,14 @@ vi.mock('../services/supabase', () => ({
   },
   getAuthRedirectUrl: () => '/auth/callback',
   isSessionExpiredByInactivity: () => h.expired,
-  // Like the real one: true unless the event's session differs from the one stored for this tab.
-  isStoredSession: (session: { access_token?: string } | null) => !session?.access_token || !h.storedToken || session.access_token === h.storedToken,
+  // Like the real one: compared with the session stored for this tab; a tab that stores nothing
+  // while "Remember me" is off holds no session (a definite no), and with "Remember me" on
+  // (shared storage) it can't tell (true).
+  isStoredSession: (session: { access_token?: string } | null) => {
+    if (!session?.access_token) return true;
+    if (h.storedToken) return session.access_token === h.storedToken;
+    return localStorage.getItem('dreamstream_auth_persist') !== 'session';
+  },
   // Like the real one: this tab's stored session is gone from then on.
   forgetTabSession: vi.fn(() => {
     h.storedToken = null;
@@ -300,6 +306,7 @@ describe('AuthProvider — an account switch never carries data across', () => {
 
 describe('AuthProvider — "Remember me" off, two tabs', () => {
   it('the same account’s session announced by another tab (not the one this tab stores) changes nothing here; this tab’s own events and sign-outs still do', async () => {
+    localStorage.setItem('dreamstream_auth_persist', 'session'); // "Remember me" off: one session per tab
     // Tab 1 is A, with A's session in its own sessionStorage.
     h.session = session(A);
     h.storedToken = session(A).access_token;
@@ -319,7 +326,7 @@ describe('AuthProvider — "Remember me" off, two tabs', () => {
     await act(async () => h.emit('TOKEN_REFRESHED', { ...session(A), access_token: 't-A-2' }));
     expect(getLocalOwner()).toBe(A);
     expect(listKeys().length).toBe(1);
-    // With "Remember me" on, storage is shared: a real switch stored here matches, and purges.
+    // A switch stored in THIS tab (its own sign-in as B) matches, and purges.
     h.storedToken = session(B).access_token;
     net.cloud[B] = { version: 2, keys: [], settings: {}, chat: { memory: '', agents: [] } };
     h.session = session(B);
@@ -335,6 +342,7 @@ describe('AuthProvider — "Remember me" off, two tabs', () => {
   });
 
   it('another ACCOUNT’s session announced by another tab: that tab took the device, so this one steps aside — signed out here, no purge, no sign-out call, its stored session forgotten, a notice shown', async () => {
+    localStorage.setItem('dreamstream_auth_persist', 'session'); // "Remember me" off: one session per tab
     h.session = session(A);
     h.storedToken = session(A).access_token;
     setLocalOwner(A);

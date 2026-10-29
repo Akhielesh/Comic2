@@ -177,9 +177,13 @@ export const lookupAccessTokenEmail = async (accessToken: string, timeoutMs = 80
  * With "Remember me" on, storage is shared, so a real switch matches and is handled.
  *
  * Compared by access token against the session stored for this tab (either storage, read
- * without the self-healing move). When nothing readable is stored (a signed-out tab, blocked
- * storage) or there is no session to compare, it can't tell and answers true — callers then
- * behave exactly as before. Sign-outs are not sessions and are always honoured by callers.
+ * without the self-healing move). A tab that stores nothing while "Remember me" is off holds
+ * no session at all, so an announced one is not its own: false — the tab that asked for a
+ * magic link must not adopt the session the tab the link opened in signed in to (it would show
+ * that account with no session of its own: an empty dashboard, saves dropped, a reload signed
+ * out). When it can't tell — nothing stored with "Remember me" on (shared storage, or storage
+ * blocked) or no session to compare — it answers true and callers behave exactly as before.
+ * Sign-outs are not sessions and are always honoured by callers.
  */
 export const isStoredSession = (session: { access_token?: string | null } | null | undefined): boolean => {
     if (!session?.access_token || typeof window === 'undefined') return true;
@@ -187,7 +191,7 @@ export const isStoredSession = (session: { access_token?: string | null } | null
     const raw =
         safeStorageGet(getModeStorage(mode), SUPABASE_AUTH_STORAGE_KEY) ??
         safeStorageGet(getModeStorage(mode === 'local' ? 'session' : 'local'), SUPABASE_AUTH_STORAGE_KEY);
-    if (raw == null) return true;
+    if (raw == null) return mode !== 'session';
     try {
         const stored = JSON.parse(raw) as { access_token?: unknown; currentSession?: { access_token?: unknown } } | null;
         const token = stored?.access_token ?? stored?.currentSession?.access_token;
@@ -211,6 +215,22 @@ export const isStoredSession = (session: { access_token?: string | null } | null
 export const forgetTabSession = (): void => {
     if (typeof window === 'undefined') return;
     safeStorageRemove(window.sessionStorage, SUPABASE_AUTH_STORAGE_KEY);
+};
+
+/**
+ * Drop the session this device stores (both storages) — the local half of a sign-out, for when
+ * the auth server could not be told. supabase.auth.signOut keeps the stored session when POST
+ * /logout fails with anything but 401/403/404 (offline, a flaky network), fires no SIGNED_OUT,
+ * and its refresh timer keeps that session alive: the next refresh tick or reload signs the
+ * account straight back in. supabase-js reads the session from storage on every getSession and
+ * refresh, so once it is gone this device has none. This announces nothing itself:
+ * contexts/AuthContext then calls supabase.auth.signOut again, which — with nothing stored —
+ * skips POST /logout and fires SIGNED_OUT here and in the browser's other tabs, as a recorded
+ * sign-out does.
+ */
+export const dropStoredSession = (): void => {
+    if (typeof window === 'undefined') return;
+    authStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
 };
 
 /* ----------------------- session inactivity policy ----------------------- */

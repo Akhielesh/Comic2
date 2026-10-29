@@ -83,6 +83,18 @@ A sign-out in another tab now also drops a Stream Studio tab's own session copy
 (sessionStorage, when "Remember me" was off), and `www.dreamstreamstudio.ai` (and since
 2026-10-22 `comic2.pages.dev`) redirects to the bare domain (sessions are per host).
 
+When the sign-in server cannot be reached at sign-out (offline, a flaky network), the
+auth client keeps the session and fires no `SIGNED_OUT`; the main app's sign-out (and
+its 30-day inactivity sign-out) then drops the stored session and the cached token
+itself, runs the same purge, and says so: "Signed out on this device. The sign-in server
+couldn't be reached, so the sign-out wasn't recorded there — other devices stay signed in
+until you sign out on them." It then announces the sign-out to the browser's other tabs
+(`SIGNED_OUT`: main app, Stream Studio), as a recorded sign-out does. A later refresh tick
+or reload finds no session to resume. The auth client puts no time limit on the sign-out
+request, so the app waits at most 8 seconds for an answer before doing all this; the
+announcement then follows once that request settles (the auth client runs one call at a
+time), and a token refresh finishing inside it does not sign the account back in.
+
 ## One address per app — stream.dreamstreamstudio.ai
 
 **The switch.** `shared/streamHost.ts` → `STREAM_HOST_ON` (one constant, read by the Pages

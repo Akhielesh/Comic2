@@ -28,7 +28,7 @@ vi.mock('./supabase', () => ({
   isStoredSession: h.isStored
 }));
 
-import { get } from './apiClient';
+import { clearCachedAuthToken, get } from './apiClient';
 
 const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } }));
 const lastAuth = () => ((fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit])[1].headers as Record<string, string>).Authorization;
@@ -77,5 +77,28 @@ describe('apiClient bearer token — follows this tab’s own session', () => {
     expect(lastAuth()).toBeUndefined();
     // Never the other tab's token either.
     expect((fetchMock.mock.calls as unknown as [string, RequestInit][]).some((c) => JSON.stringify(c[1].headers).includes('tab-2-token-b'))).toBe(false);
+  });
+
+  it('a signed-out tab with "Remember me" off (nothing stored): the sign-in another tab announced is not adopted — requests stay anonymous', async () => {
+    h.stored = null;
+    await get('/api/x');
+    expect(lastAuth()).toBeUndefined();
+    // What the real isStoredSession answers for such a tab: not its session.
+    h.isStored.mockImplementationOnce(() => false);
+    h.emit('SIGNED_IN', { access_token: 'the-link-tabs-token', user: { id: 'user-b' } });
+    await get('/api/x');
+    expect(lastAuth()).toBeUndefined();
+  });
+});
+
+describe('apiClient bearer token — a sign-out the auth server could not be told about', () => {
+  it('clearCachedAuthToken forgets the token: with the stored session dropped, the next request carries no Authorization', async () => {
+    await get('/api/x');
+    expect(lastAuth()).toBe('Bearer tab-own-token');
+    // AuthContext dropped the stored session itself (no SIGNED_OUT fired) and cleared the cache.
+    h.stored = null;
+    clearCachedAuthToken();
+    await get('/api/x');
+    expect(lastAuth()).toBeUndefined();
   });
 });
