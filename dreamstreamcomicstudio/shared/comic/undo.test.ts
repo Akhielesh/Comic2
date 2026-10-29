@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { createEmptyDoc, normalizeDoc, trashOf, type ComicDoc, type RefOwner } from './doc';
-import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp } from './ops';
+import { applyOp, applyOps, CLIENT_PATCHABLE_OPS, type DocOp } from './ops';
 import { describeOps, inverseOps, isUndoable } from './undo';
 import { refsOf } from './refs';
 
@@ -97,7 +97,7 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
   const historyPaths = pages.flatMap((p) => p.render.history.map((v) => v.path));
   const kinds = [
     'brief', 'note_add', 'format', 'settings', 'source', 'style', 'cover', 'plan_status', 'character', 'character_remove', 'place',
-    'place_remove', 'page', 'panel', 'line', 'line_del', 'line_style', 'letter_style', 'balloon', 'balloons', 'pages_reorder',
+    'place_remove', 'page', 'panel', 'line', 'line_del', 'line_move', 'line_style', 'letter_style', 'balloon', 'balloons', 'pages_reorder',
     'page_insert', 'page_duplicate', 'page_delete', 'page_restore', 'book', 'reader', 'version_star', 'ref_add', 'ref_patch',
     'ref_move', 'ref_remove', 'ref_transfer', 'edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term'
   ] as const;
@@ -141,6 +141,10 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
       return { op: 'line', pageId: page!.id, panelId: panel!.id, id: line.id, patch: chance(0.5) ? { text: `edit ${step}` } : { style: { fill: '#ffeeaa' }, kind: 'shout' } };
     case 'line_del':
       return { op: 'line', pageId: page?.id || 'ghost', panelId: panel?.id || 'ghost', id: line?.id || 'ghost', patch: null };
+    case 'line_move': {
+      const to = page?.panels.length ? pick(page.panels) : undefined;
+      return { op: 'line_move', pageId: page?.id || 'ghost', id: line?.id || 'ghost', toPanelId: to?.id || 'ghost', ...(chance(0.7) ? { index: Math.floor(r() * 4) } : {}) };
+    }
     case 'line_style': {
       const ids = page ? page.panels.flatMap((p) => p.lines.map((l) => l.id)).filter(() => chance(0.5)) : [];
       const mode = pick(['merge', 'replace', undefined] as const);
@@ -276,6 +280,34 @@ describe('inverseOps (contract §6)', () => {
     expect(undone.pages[0].render.asset?.path).toBe('u/proj/pages/p1.png');
     const adopt: DocOp = { op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path: 'u/proj/pages/p1.png', at: 9 };
     expect(isUndoable(doc, [adopt])).toBe(false);
+  });
+
+  it('line_move: across panels and within one, undo is exact; balloons and editions are never touched', () => {
+    const before = sampleV5();
+    const page = before.pages[0];
+    const order = (d: ComicDoc) => d.pages[0].panels.map((p) => p.lines.map((l) => l.id));
+    const move: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l2', toPanelId: 'pg_1_p3', index: 1 };
+    const after = applyOp(before, move);
+    expect(order(after)).toEqual([['pg_1_l1'], [], ['pg_1_l3', 'pg_1_l2', 'pg_1_l4', 'pg_1_l5']]);
+    expect(after.pages[0].panels[2].lines[1]).toBe(page.panels[1].lines[0]); // the same Line object
+    expect(after.pages[0].balloons).toBe(page.balloons);
+    expect(after.i18n).toBe(before.i18n); // the hi translation and edition balloon of pg_1_l2 stay
+    expect(inverseOps(before, [move])).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'pg_1_l2', toPanelId: 'pg_1_p2', index: 0 }]);
+    expect(comparable(applyOps(after, inverseOps(before, [move])))).toEqual(comparable(before));
+    expect(isUndoable(before, [move])).toBe(true);
+    // Within one panel: no index = last; moving to where it already sits is a no-op (nothing to undo).
+    const reorder: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'pg_1_p3' };
+    const reordered = applyOp(before, reorder);
+    expect(order(reordered)[2]).toEqual(['pg_1_l4', 'pg_1_l5', 'pg_1_l3']);
+    expect(comparable(applyOps(reordered, inverseOps(before, [reorder])))).toEqual(comparable(before));
+    expect(applyOp(before, { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'pg_1_p3', index: 0 })).toBe(before);
+    // Unknown page, line or panel: no-op (R6), so no inverse.
+    for (const ghost of [{ pageId: 'ghost', id: 'pg_1_l3', toPanelId: 'pg_1_p3' }, { pageId: 'pg_1', id: 'ghost', toPanelId: 'pg_1_p3' }, { pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'ghost' }]) {
+      expect(applyOp(before, { op: 'line_move', ...ghost })).toBe(before);
+      expect(inverseOps(before, [{ op: 'line_move', ...ghost }])).toEqual([]);
+    }
+    expect(describeOps([move])).toBe('move a line to another panel');
+    expect(describeOps([move, reorder])).toBe('move 2 lines to other panels');
   });
 
   it('describeOps labels', () => {

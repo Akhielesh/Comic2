@@ -925,7 +925,7 @@ describe('v5 §16.5 sets', () => {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
       expect(SERVER_ONLY_OPS).toContain(op);
     }
-    expect(CLIENT_PATCHABLE_OPS.size).toBe(17 + 21);
+    expect(CLIENT_PATCHABLE_OPS.size).toBe(17 + 22); // + line_move
   });
 
   it('spend and non-spend action types are disjoint and cover every StudioAction type', () => {

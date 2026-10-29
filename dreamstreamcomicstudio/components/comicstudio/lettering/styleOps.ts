@@ -495,13 +495,15 @@ export function moveLineToPanelOps(page: Page, lineId: string, toPanelId: string
   const ref = findLineRef(page, lineId);
   const target = page.panels.find((p) => p.id === toPanelId);
   if (!ref || !target || target.id === ref.panel.id) return [];
-  const { id: _id, ...fields } = ref.line;
-  const patch: Partial<Line> = { ...fields };
-  if (SPOKEN.has(fields.kind) && fields.speakerId && !target.castIds.includes(fields.speakerId) && target.castIds[0]) patch.speakerId = target.castIds[0];
-  return [
-    { op: 'line', pageId: page.id, panelId: ref.panel.id, id: lineId, patch: null },
-    { op: 'line', pageId: page.id, panelId: target.id, id: lineId, patch, index: 0 }
-  ];
+  // The line travels whole — never a delete + create, which would prune its translations, their review state and
+  // the editions' balloons (paid, reviewed work). Its stored balloon is released so the placer sets it in the new panel.
+  const ops: DocOp[] = [{ op: 'line_move', pageId: page.id, id: lineId, toPanelId: target.id, index: 0 }];
+  if (page.balloons.some((b) => b.lineId === lineId)) ops.push({ op: 'balloons', pageId: page.id, balloons: page.balloons.filter((b) => b.lineId !== lineId) });
+  const { kind, speakerId } = ref.line;
+  if (SPOKEN.has(kind) && speakerId && !target.castIds.includes(speakerId) && target.castIds[0]) {
+    ops.push({ op: 'line', pageId: page.id, panelId: target.id, id: lineId, patch: { speakerId: target.castIds[0] } });
+  }
+  return ops;
 }
 
 /** Commit inline text (no-op when unchanged). */

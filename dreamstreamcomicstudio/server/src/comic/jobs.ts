@@ -38,6 +38,7 @@ import {
   normalizeErrorDetail,
   renderTargetKey,
   specHashFor,
+  trashOf,
   versionsOf,
   type AspectRatio,
   type AssetRef,
@@ -69,10 +70,11 @@ import {
   type StyleBible,
   type VersionMeta
 } from '../../../shared/comic/doc.js';
-import { CLIENT_PATCHABLE_OPS, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
+import { mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
 import {
@@ -112,7 +114,7 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, pickImageRoute } from './imageClient.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -133,6 +135,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
+import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
@@ -296,16 +299,42 @@ const governMsg = (ctx: StudioContext, msg: Msg): Msg => {
   return { ...msg, text: governDollars(msg.text, view), ...(cards ? { cards } : {}) };
 };
 
-/** Which transport an image model will use with these keys (mirrors the image client). */
+/**
+ * Which transport an image model will use with these keys — the image client's OWN choice
+ * (pickImageRoute), never a second opinion: the billing reserve is made for this route, so a
+ * user's own Gemini key draws AND is billed as their own key (BYOK never touches usage), while
+ * the platform key is reserved against usage. Null when no key reaches the model.
+ */
 export const imageRouteFor = (spec: ImageModelSpec, keys: StudioKeys): { route: ImageRoute; model: string; byok: boolean } | null => {
-  if (keys.openrouter?.key && spec.routes.openrouter) return { route: 'openrouter', model: spec.routes.openrouter, byok: keys.openrouter.byok };
-  if (keys.gemini?.key && spec.routes.gemini) return { route: 'gemini', model: spec.routes.gemini, byok: keys.gemini.byok };
-  return null;
+  try {
+    const picked = pickImageRoute(spec, keys);
+    return { route: picked.route, model: picked.model, byok: picked.key.byok };
+  } catch (err) {
+    if (err instanceof StudioError && err.code === 'NO_IMAGE_KEY') return null;
+    throw err;
+  }
 };
 
-/** Whether spend will run on the user's own key (OpenRouter preferred, else Gemini). */
+/**
+ * Whether spend runs on the user's own key at the keys level (OpenRouter preferred, else Gemini) — what
+ * caps, the cost view and text quotes follow (text routes are OpenRouter-first). An own Gemini key beside
+ * the platform OpenRouter key is NOT byok here: that user's text and OpenRouter-only images still draw on
+ * usage. Whether one IMAGE spend runs on their own key is imageRouteFor(spec, keys).byok.
+ */
 export const spendIsByok = (keys: StudioKeys): boolean =>
   keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok);
+
+/** BYOK-ness of an image spend: the key of the route that will draw ITS model (an OpenRouter-only model stays platform spend for an own-Gemini-key user). */
+const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
+  imageRouteFor(modelLabel(doc, describeSpend(doc, action).kind).spec, keys)?.byok ?? spendIsByok(keys);
+
+/**
+ * BYOK-ness of a spend action for the key that will run it — what its gate was quoted with, so an approval
+ * re-prices like with like: the page re-check is one vision TEXT call (startRecheck prices it on the vision
+ * route's key; text routes are OpenRouter-first), everything else is an image drawn on its model's route.
+ */
+export const spendActionIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
+  action.type === 'recheck_page' ? (resolveTextRoute('vision', keys)?.key.byok ?? spendIsByok(keys)) : imageSpendIsByok(doc, action, keys);
 
 /** Spend in the same unit as estimates: provider cost, plus platform markup unless BYOK. */
 const chargedUsd = (providerUsd: number, byok: boolean) => round4(Math.max(0, providerUsd) * (byok ? 1 : PLATFORM_MARKUP));
@@ -437,6 +466,8 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           operation: args.operation,
           provider: route.route,
           model: route.model,
+          // OpenRouter may serve any model of the chain: the hold is priced at the dearest.
+          models: route.models,
           stage: args.stage,
           inputTokens: approxPrompt,
           outputTokens: req.maxTokens
@@ -687,6 +718,8 @@ export interface RunActionOptions {
   collectNextSteps?: (steps: NextStep[]) => void;
   /** Force a gate even below bigSpendUsd (drawIntent 'none', first_render, plan_review, redraw). */
   forceGate?: Gate['reason'];
+  /** A re-quote of an approval whose price moved: the old quote, so the new card says the price changed. */
+  staleFrom?: number;
   /** Ops origin for session.commit (undo + "saved by software" attribution). Absent ⇒ 'director' when collecting, else none. */
   origin?: OpsOrigin;
 }
@@ -787,7 +820,7 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
     forceGate: stale ? 'policy' : opts.forceGate,
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
   return handler.run(ctx, action, opts);
 }
 
@@ -812,16 +845,17 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendIsByok(ctx.keys));
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys));
   const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
     // The plan, quality or model changed since the card was shown: never run a bigger
-    // or different spend on an old approval — re-quote instead.
+    // or different spend on an old approval — re-quote instead. `forceGate: 'policy'` holds
+    // under every confirm setting (under 'big' a cheaper-than-threshold price would otherwise
+    // run at once); `staleFrom` makes the new card say the price changed.
     commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], origin);
-    return handler
-      ? runFeatureAction(ctx, handler, gate.action, { ...opts, confirmed: false, budgetApproved: false })
-      : startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
+    const requote: RunActionOptions = { ...opts, confirmed: false, budgetApproved: false, forceGate: 'policy', staleFrom: gate.estimateUsd };
+    return handler ? runFeatureAction(ctx, handler, gate.action, requote) : startSpend(ctx, gate.action, requote);
   }
   // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
   // 'declined' by startSpend), then put the card back if the spend never started —
@@ -834,10 +868,17 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     const cur = ctx.session.doc.gate;
     if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
   };
+  // Nothing left to do (the quoted page was deleted, the cover got drawn meanwhile): the gate is
+  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent".
+  const close = () => {
+    const cur = ctx.session.doc.gate;
+    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined' } }], origin);
+  };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
     const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gate.action, next);
     if (started.outcome.status === 'blocked') reopen();
+    else if (started.outcome.status === 'nothing') close();
     return started;
   } catch (err) {
     reopen();
@@ -1104,6 +1145,13 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
   const empty = asked.filter((p) => !p.panels.length);
   const ready = asked.filter((p) => p.render.status === 'ready' && !isPageStale(doc, p));
   const parts: string[] = [];
+  // Pages the request named that are no longer in the plan (deleted since the quote): say so by their old number.
+  const gone = ids ? [...ids].filter((id) => !doc.pages.some((p) => p.id === id)) : [];
+  if (gone.length) {
+    const numbers = gone.map((id) => trashOf(doc).find((t) => t.page.id === id)?.fromN).filter((n): n is number => typeof n === 'number');
+    const label = numbers.length === gone.length ? capitalize(pagesPhrase(numbers.map((n) => ({ n })))) : gone.length === 1 ? 'The page you approved' : `${gone.length} of the pages you approved`;
+    parts.push(`${label} ${gone.length === 1 ? 'is' : 'are'} no longer in the plan.`);
+  }
   if (ready.length) {
     parts.push(
       ready.length === doc.pages.length && !ids
@@ -1135,6 +1183,10 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
  * While billing is off there is no plan to buy: the denial says what IS included (P1-LIMITS).
  */
 const qualityProblem = (ctx: StudioContext, opts: RunActionOptions, spec: ImageModelSpec): string | null => {
+  // The user's own key draws this model (e.g. Pro on their Gemini key): plan limits govern the platform
+  // key only. An OpenRouter-only override for an own-Gemini-key user still draws on the platform key and
+  // stays governed by the caps below.
+  if (imageRouteFor(spec, ctx.keys)?.byok) return null;
   const caps = opts.caps ?? ctx.caps;
   const doc = ctx.session.doc;
   if (caps) {
@@ -1167,7 +1219,8 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
     return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error');
   }
-  if (!imageRouteFor(spec, ctx.keys)) {
+  const picked = imageRouteFor(spec, ctx.keys);
+  if (!picked) {
     return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
   }
   const denied = qualityProblem(ctx, opts, spec);
@@ -1177,7 +1230,8 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     ]);
   }
 
-  const byok = spendIsByok(ctx.keys);
+  // Priced for the key that will draw (the quote, the markup and the reserve agree).
+  const byok = picked.byok;
   const estimate = estimateSpendAction(doc, action, byok);
   if (estimate.imageCount <= 0) {
     // Everything requested is ready and current (R1): $0, with what exists and what's next.
@@ -1198,7 +1252,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     redraw: !opts.confirmed && replacesCurrentArt(doc, action),
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
   const open = ctx.session.doc.gate;
@@ -1252,9 +1306,11 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   if (!canServeToOwner(asset)) {
     return blocked(ctx, opts, `Page ${page.n}'s current take didn't pass the content check, so it can't be re-checked — redraw it safer instead.`, 'warn');
   }
-  if (!resolveTextRoute('vision', ctx.keys)) return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to re-check pages.', 'error');
+  const visionRoute = resolveTextRoute('vision', ctx.keys);
+  if (!visionRoute) return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to re-check pages.', 'error');
 
-  const byok = spendIsByok(ctx.keys);
+  // A text spend: priced for the key the vision call runs on (text routes OpenRouter-first).
+  const byok = visionRoute.key.byok;
   const estimate = estimateSpendAction(doc, action, byok);
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
@@ -1264,7 +1320,7 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
     forceGate: stale ? 'policy' : opts.forceGate,
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
@@ -3017,6 +3073,15 @@ export async function planPages(
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
   }
 
+  // The budget cap governs the writer like it governs image clicks (a click is the confirmation,
+  // the cap still applies): at or past it, nothing is written and nothing is spent.
+  const budget = budgetOf(before.settings);
+  if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
+    const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
+    deliver(ctx, runOpts, text, [noticeCard('info', text)], nextStepsFor(before, { byok }));
+    return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
+  }
+
   const drawn = before.pages.filter(hasArt);
   let rewroteAll = false;
   if (!pageIds && drawn.length) {
@@ -3234,6 +3299,34 @@ const clearable =
  * except a sanitizer that answers DROP (that key is left out and the rest of the edit still applies)
  * or CLEAR (the key is unset).
  */
+/** `index` on a line op (contract §5.4): absent, or an integer ≥ 0 — anything else rejects the batch. */
+const lineIndex = (v: unknown): number | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw badRequest('Invalid line: index.');
+  return v;
+};
+
+const jsonBytes = (v: unknown): number => {
+  try {
+    return JSON.stringify(v ?? null).length;
+  } catch {
+    return Infinity;
+  }
+};
+
+/**
+ * A line's per-balloon style from a client `line` patch (contract §5.4: sanitizeLetterStylePatch, ≤ 2 KB
+ * before and after the merge with the line's current style). Nothing valid in it → the key is dropped.
+ */
+const lineStylePatch = (v: unknown, current: LetterStylePatch | undefined): LetterStylePatch | typeof DROP | undefined => {
+  if (!isObject(v)) return undefined;
+  if (jsonBytes(v) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
+  const style = sanitizeLetterStylePatch(v);
+  if (!style) return DROP;
+  if (jsonBytes(mergeStylePatch(current, style)) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
+  return style;
+};
+
 const pick = (raw: unknown, spec: Record<string, (v: unknown) => unknown>, what: string): Record<string, unknown> => {
   if (!isObject(raw)) throw badRequest(`Invalid ${what}.`);
   const out: Record<string, unknown> = {};
@@ -3438,6 +3531,13 @@ const assetList = (known: Map<string, AssetRef>, restore?: RestoreScope) => (v: 
   return out;
 };
 
+/** Undo of a removed edition (undo.ts): its `edition` op first, then only that language's lines, titles and balloons. */
+const isEditionRestoreBatch = (ops: unknown[]): boolean => {
+  const [first, ...rest] = ops;
+  if (!isObject(first) || first.op !== 'edition' || first.patch === null || typeof first.lang !== 'string') return false;
+  return rest.every((o) => isObject(o) && (o.op === 'translation' || o.op === 'edition_text' || o.op === 'edition_balloon') && o.lang === first.lang);
+};
+
 /**
  * Validate a client `patch` action. Only CLIENT_PATCHABLE_OPS are accepted; each op is
  * re-built from known keys with bounded values; anything structurally wrong rejects the
@@ -3445,9 +3545,10 @@ const assetList = (known: Map<string, AssetRef>, restore?: RestoreScope) => (v: 
  */
 export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: SanitizeCtx): DocOp[] {
   if (!Array.isArray(ops) || !ops.length) throw badRequest('Nothing to change.');
-  // Undoing a removed edition sends one `translation` op per line: such an all-translation batch may be longer.
-  const translationOnly = ops.every((o) => isObject(o) && o.op === 'translation');
-  if (ops.length > (translationOnly ? MAX_TRANSLATION_PATCH_OPS : MAX_PATCH_OPS)) throw badRequest('Too many changes at once.');
+  // Undoing a removed edition sends its `edition` op and then one op per line, title and balloon of that
+  // language (an all-translation batch is the same undo from before titles and balloons): longer than any edit.
+  const editionRestore = ops.every((o) => isObject(o) && o.op === 'translation') || isEditionRestoreBatch(ops);
+  if (ops.length > (editionRestore ? MAX_TRANSLATION_PATCH_OPS : MAX_PATCH_OPS)) throw badRequest('Too many changes at once.');
   const known = knownAssets(doc);
   // Photos of a removed character/place/style come back only from this project's own storage lanes.
   const restore: RestoreScope | undefined = sanitizeCtx?.userId
@@ -3457,6 +3558,22 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   const placeIds = new Set(doc.places.map((p) => p.id));
   // Characters/places created earlier in the same batch count as existing.
   const out: DocOp[] = [];
+  // The doc as the batch builds it, for feature ops that need an earlier op of the same batch: Undo of a
+  // removed edition re-creates it and then restores its lines (contract §6), which must find it existing.
+  let working = doc;
+  // Line ids per panel as the batch moves, creates and deletes them (seeded from the doc on first touch):
+  // several `line_move`s into one panel must not push it past DOC_LIMITS.linesPerPanel — the session's
+  // limit pass counts `line` creates only.
+  const panelLines = new Map<string, Set<string>>();
+  const linesIn = (p: Page, panel: Page['panels'][number]): Set<string> => {
+    const key = `${p.id}/${panel.id}`;
+    let set = panelLines.get(key);
+    if (!set) {
+      set = new Set(panel.lines.map((l) => l.id));
+      panelLines.set(key, set);
+    }
+    return set;
+  };
   for (const raw of ops) {
     if (!isObject(raw) || typeof raw.op !== 'string') throw badRequest('Invalid change.');
     const kind = raw.op as DocOp['op'];
@@ -3624,23 +3741,57 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         const panel = panelOf(p, raw.panelId);
         const lineId = id(raw.id, 'line');
         if (raw.patch === null) {
+          linesIn(p, panel).delete(lineId);
           out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch: null });
           break;
         }
+        linesIn(p, panel).add(lineId);
+        const existing = panel.lines.find((l) => l.id === lineId);
         const patch = pick(
           raw.patch,
           {
             kind: (v) => oneOf(v, LINE_KINDS),
             speakerId: (v) => (v === null || v === '' ? null : typeof v === 'string' && castIds.has(v) ? v : undefined),
             // Balloon text as typed (no trim: the editor owns spacing), jsonb-safe, clipped without splitting a pair.
-            text: (v) => (typeof v === 'string' ? clipText(storableText(v), 600) : undefined)
+            text: (v) => (typeof v === 'string' ? clipText(storableText(v), 600) : undefined),
+            // The line's own lettering style rides a create (⌘D, Undo of a delete) and merges on an update, as in
+            // line_style merge mode; null clears it. Dropping it here made every such line lose its look on save.
+            style: (v) => (v === null ? null : lineStylePatch(v, existing?.style)),
+            noTranslate: (v) => (typeof v === 'boolean' ? v : undefined)
           },
           'line'
         );
         if (patch.speakerId === null) patch.speakerId = undefined;
-        const kindAfter = (patch.kind as LineKind | undefined) || panel.lines.find((l) => l.id === lineId)?.kind || 'speech';
+        const kindAfter = (patch.kind as LineKind | undefined) || existing?.kind || 'speech';
         if (!SPOKEN_KINDS.has(kindAfter) && 'speakerId' in patch) patch.speakerId = undefined;
-        out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch });
+        // Where a NEW line goes (Undo of a delete, a duplicate right after its original); applyOp ignores it on an update.
+        const index = lineIndex(raw.index);
+        const clean: DocOp = { op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch, ...(index === undefined ? {} : { index }) };
+        out.push(clean);
+        // A line this batch creates (Undo of a delete) exists for the feature ops after it: its translations and
+        // edition balloons come back in the same batch instead of failing it with "That line no longer exists."
+        if (!existing) working = applyOp(working, clean);
+        break;
+      }
+      case 'line_move': {
+        // "Move to panel N": the line travels whole (its translations, review state and edition balloons stay),
+        // so the only checks are that everything named exists and that the new panel has room.
+        const p = page(raw.pageId);
+        const lineId = id(raw.id, 'line');
+        // Where the line is NOW in this batch (an earlier op may have moved, created or deleted it).
+        const from = p.panels.find((x) => linesIn(p, x).has(lineId));
+        if (!from) throw badRequest('That line is no longer on the page.');
+        const target = panelOf(p, raw.toPanelId);
+        if (target.id !== from.id) {
+          const into = linesIn(p, target);
+          if (into.size >= DOC_LIMITS.linesPerPanel) {
+            throw badRequest(`Panel ${target.n} already has ${DOC_LIMITS.linesPerPanel} lines — move the line to another panel.`);
+          }
+          linesIn(p, from).delete(lineId);
+          into.add(lineId);
+        }
+        const index = lineIndex(raw.index);
+        out.push({ op: 'line_move', pageId: p.id, id: lineId, toPanelId: target.id, ...(index === undefined ? {} : { index }) });
         break;
       }
       case 'balloons': {
@@ -3715,7 +3866,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         // v5 feature ops (letter_style, page_*, ref_*, edition*, …): their own sanitizer.
         const sanitizer = opSanitizerFor(kind);
         if (!sanitizer) throw badRequest(`“${kind}” can't be changed directly.`);
-        out.push(sanitizer.sanitize(doc, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc)));
+        const clean = sanitizer.sanitize(working, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc));
+        out.push(clean);
+        if (clean.op === 'edition' && clean.patch !== null) working = applyOp(working, clean);
       }
     }
   }
