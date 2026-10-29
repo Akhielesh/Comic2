@@ -327,19 +327,25 @@ const densify = (setup: LineSetup, scale: number): LineSetup => (scale >= 1 ? se
  */
 export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure, densityScale = 1): (line: Line, w: number) => SizedLine {
   const H = PLAN_W / (Number.isFinite(aspect) && aspect > 0 ? aspect : 2 / 3);
-  const setups = new Map<string, LineSetup>();
+  const setups = new Map<string, { setup: LineSetup; sized: Map<number, SizedLine> }>();
   const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
   return (line, w) => {
-    let setup = setups.get(line.id);
-    if (!setup || setup.line !== line) {
-      setup = densify(lineSetup(doc, line, measure), densityScale);
-      setups.set(line.id, setup);
+    let entry = setups.get(line.id);
+    if (!entry || entry.setup.line !== line) {
+      entry = { setup: densify(lineSetup(doc, line, measure), densityScale), sized: new Map() };
+      setups.set(line.id, entry);
     }
+    // The placement asks for the same few widths over and over (every candidate, every pass).
+    const hit = entry.sized.get(w);
+    if (hit) return hit;
+    const setup = entry.setup;
     const t = layoutText(setup, measure, { x: 0, y: 0, w, pinned: true }, whole, H);
     const g = geometryFor(setup, t.w, t.h, null);
     // `tail`: the placement keeps tails out of other balloons; a tail-less style needs no room for one.
     const tail = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape) !== 'none' && setup.style.shape !== 'none';
-    return { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H }, tail };
+    const sized: SizedLine = { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H }, tail };
+    entry.sized.set(w, sized);
+    return sized;
   };
 }
 
@@ -442,8 +448,10 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
   let best: { plans: LetterPlan[]; unresolved: number } | undefined;
   const repackable = [...stored.values()].some((b) => !b.pinned && !b.locked);
   for (const scale of DENSITY_STEPS) {
+    // One sizer per size step: both packings of a step measure the same lines at the same widths.
+    const sizer = letteringSizer(doc, page, asp, m, scale);
     for (const keep of repackable ? (['all', 'pinned'] as const) : (['all'] as const)) {
-      const attempt = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep);
+      const attempt = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep, sizer);
       if (!best || attempt.unresolved < best.unresolved) best = attempt;
       if (!attempt.unresolved) return attempt.plans;
     }
@@ -470,7 +478,8 @@ function planAtDensity(
   H: number,
   m: Measure,
   scale: number,
-  keep: 'all' | 'pinned'
+  keep: 'all' | 'pinned',
+  sizer: (line: Line, w: number) => SizedLine
 ): { plans: LetterPlan[]; unresolved: number } {
   const repacks = (id: string) => {
     const b = stored.get(id);
@@ -487,7 +496,7 @@ function planAtDensity(
       boxes: [...boxes],
       aspect: asp,
       rtl,
-      plansFor: letteringSizer(doc, page, asp, m, scale),
+      plansFor: sizer,
       keepOut: qc?.keepOut,
       heads: qc?.heads,
       safeMargin,

@@ -486,8 +486,26 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           const yHi = safe.y + safe.h - (b.y + b.h);
           const nx = Math.max(2, Math.min(24, Math.round((xHi - xLo) / Math.max(0.01, b.w / 3)) + 1));
           const ny = Math.max(2, Math.min(40, Math.round((yHi - yLo) / Math.max(0.01, b.h / 3)) + 1));
+          // Only a CLEAN spill spot is ever taken (the panel search already holds the least-bad one), so a
+          // cell whose outline alone already overlaps a balloon or a face is skipped before the full score.
+          // Conservative: the footprint (outline + a tail of at most SPILL_TAIL_LEN) is no bigger than this.
+          const maxFoot = (b.w + 2 * SPILL_TAIL_LEN + GAP) * (b.h + (2 * SPILL_TAIL_LEN + GAP) * aspect);
+          const hopeless = (x: number, y: number): boolean => {
+            const outline: Box = { x: x + b.x, y: y + b.y, w: b.w, h: b.h };
+            const grown = inflate(outline, GAP / 2, (GAP / 2) * aspect);
+            let hit = 0;
+            for (const o of obstacles) hit += area(intersect(grown, o.box));
+            if (hit / maxFoot >= 0.005) return true;
+            let faceHit = 0;
+            for (const f of faces) faceHit += covered(outline, f);
+            return faceHit >= 0.005;
+          };
           for (let j = 0; j < ny; j += 1)
-            for (let i = 0; i < nx; i += 1) consider(score(xLo + ((xHi - xLo) * i) / (nx - 1), yLo + ((yHi - yLo) * j) / (ny - 1), w, size, 0, true));
+            for (let i = 0; i < nx; i += 1) {
+              const x = xLo + ((xHi - xLo) * i) / (nx - 1);
+              const y = yLo + ((yHi - yLo) * j) / (ny - 1);
+              if (!hopeless(x, y)) consider(score(x, y, w, size, 0, true));
+            }
           if (bestClean) {
             spilled = true;
             break;
@@ -669,12 +687,6 @@ export function settleBalloons(items: readonly SettleItem[], page: { w: number; 
   };
   const insideX = (o: Box) => o.w > W - 2 * margin.x || (o.x >= margin.x - 1e-6 && o.x + o.w <= W - margin.x + 1e-6);
   const insideY = (o: Box) => o.h > H - 2 * margin.y || (o.y >= margin.y - 1e-6 && o.y + o.h <= H - margin.y + 1e-6);
-  const clampInside = (o: Box): Box => ({
-    x: o.w > W - 2 * margin.x ? (W - o.w) / 2 : clampP(o.x, margin.x, W - margin.x - o.w),
-    y: o.h > H - 2 * margin.y ? (H - o.h) / 2 : clampP(o.y, margin.y, H - margin.y - o.h),
-    w: o.w,
-    h: o.h
-  });
 
   live.forEach((it, index) => {
     if (!it.movable) return;
@@ -687,46 +699,82 @@ export function settleBalloons(items: readonly SettleItem[], page: { w: number; 
     const tip0 = tips.get(it.id) ?? null;
     /** Two attempts: the tail keeps its aim (fixed tip), else the tail moves with the balloon (offset kept). */
     const tipAt = (c: Box, follow: boolean) => (tip0 && follow ? { x: tip0.x + (c.x - o.x), y: tip0.y + (c.y - o.y) } : tip0);
-    const free = (c: Box, follow: boolean) => {
-      const fc = footOf(it, c, tipAt(c, follow));
-      return live.every((b) => !collides(it, fc, b));
+    // Everything else stays put while this balloon looks for room: its footprints are computed once.
+    const others: Box[] = [];
+    for (const b of live) if (b.id !== it.id && !(it.group && it.group === b.group)) others.push(footOf(b, cur.get(b.id)!));
+    /** The footprint (outline + tail tip, inflated by half the gap) at outline position (x, y) is clear of everything. */
+    const fits = (x: number, y: number, follow: boolean): boolean => {
+      let lx = x;
+      let ly = y;
+      let rx = x + o.w;
+      let ry = y + o.h;
+      if (tip0) {
+        const tx = follow ? tip0.x + (x - o.x) : tip0.x;
+        const ty = follow ? tip0.y + (y - o.y) : tip0.y;
+        if (tx < lx) lx = tx;
+        if (tx > rx) rx = tx;
+        if (ty < ly) ly = ty;
+        if (ty > ry) ry = ty;
+      }
+      lx -= half;
+      ly -= half;
+      rx += half;
+      ry += half;
+      for (const f of others) if (Math.min(rx, f.x + f.w) - Math.max(lx, f.x) > 1e-6 && Math.min(ry, f.y + f.h) - Math.max(ly, f.y) > 1e-6) return false;
+      return true;
     };
-    const cands: Box[] = [];
+    // Candidate outline positions (clamped inside the page margin): flush against each blocker's footprint
+    // first, then a lattice over the page (2.5 % of the width per step).
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const loX = margin.x;
+    const hiX = W - margin.x - o.w;
+    const loY = margin.y;
+    const hiY = H - margin.y - o.h;
+    const add = (x: number, y: number) => {
+      xs.push(o.w > W - 2 * margin.x ? (W - o.w) / 2 : clampP(x, loX, hiX));
+      ys.push(o.h > H - 2 * margin.y ? (H - o.h) / 2 : clampP(y, loY, hiY));
+    };
     for (const b of blockers) {
       const fb = footOf(b, cur.get(b.id)!);
-      cands.push({ ...o, y: fb.y + fb.h + half }, { ...o, y: fb.y - half - o.h }, { ...o, x: fb.x + fb.w + half }, { ...o, x: fb.x - half - o.w });
+      add(o.x, fb.y + fb.h + half);
+      add(o.x, fb.y - half - o.h);
+      add(fb.x + fb.w + half, o.y);
+      add(fb.x - half - o.w, o.y);
     }
-    // A lattice over the page (2.5 % of the width per step), nearest cells first.
     const step = W * 0.025;
-    const x0 = margin.x;
-    const x1 = W - margin.x - o.w;
-    const y0 = margin.y;
-    const y1 = H - margin.y - o.h;
-    if (x1 >= x0 && y1 >= y0) {
-      const nx = Math.min(48, Math.floor((x1 - x0) / step) + 1);
-      const ny = Math.min(64, Math.floor((y1 - y0) / step) + 1);
-      for (let j = 0; j < ny; j += 1) for (let i = 0; i < nx; i += 1) cands.push({ ...o, x: x0 + (nx > 1 ? ((x1 - x0) * i) / (nx - 1) : 0), y: y0 + (ny > 1 ? ((y1 - y0) * j) / (ny - 1) : 0) });
+    if (hiX >= loX && hiY >= loY) {
+      const nx = Math.min(48, Math.floor((hiX - loX) / step) + 1);
+      const ny = Math.min(64, Math.floor((hiY - loY) / step) + 1);
+      for (let j = 0; j < ny; j += 1) for (let i = 0; i < nx; i += 1) add(loX + (nx > 1 ? ((hiX - loX) * i) / (nx - 1) : 0), loY + (ny > 1 ? ((hiY - loY) * j) / (ny - 1) : 0));
     }
-    const unique: Box[] = [];
-    const seen = new Set<string>();
-    for (const raw of cands) {
-      const c = clampInside(raw);
-      const key = `${Math.round(c.x * 10)}|${Math.round(c.y * 10)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(c);
-    }
+    // Stay in the panel when there is room; a slight preference for moving down / forward keeps reading order.
+    const reg = it.region;
+    const costAt = (x: number, y: number): number => {
+      let c = Math.hypot(x - o.x, y - o.y);
+      if (reg) {
+        const iw = Math.min(x + o.w, reg.x + reg.w) - Math.max(x, reg.x);
+        const ih = Math.min(y + o.h, reg.y + reg.h) - Math.max(y, reg.y);
+        c += 0.5 * W * (1 - (iw > 0 && ih > 0 ? (iw * ih) / (o.w * o.h) : 0));
+      }
+      return y < o.y - 1e-6 ? c + 0.04 * W : c;
+    };
+    // The cheapest free candidate (the first one in candidate order on a tie); the free check runs only for
+    // candidates that would beat the best so far.
     let best: { c: Box; cost: number; follow: boolean } | undefined;
     for (const follow of tip0 ? [false, true] : [false]) {
-      for (const c of unique) {
-        const dist = Math.hypot(c.x - o.x, c.y - o.y);
-        // Stay in the panel when there is room; a slight preference for moving down / forward keeps reading order.
-        const cost = dist + (it.region ? 0.5 * W * outside(c, it.region) : 0) + (c.y < o.y - 1e-6 ? 0.04 * W : 0);
-        if (best && cost >= best.cost - 1e-9) continue;
-        if (!free(c, follow)) continue;
-        best = { c, cost, follow };
+      let bestK = -1;
+      let bestCost = Infinity;
+      for (let k = 0; k < xs.length; k += 1) {
+        const c = costAt(xs[k], ys[k]);
+        if (c >= bestCost - 1e-9 || !fits(xs[k], ys[k], follow)) continue;
+        bestK = k;
+        bestCost = c;
       }
-      if (best) break;
+      if (bestK >= 0) {
+        best = { c: { x: xs[bestK], y: ys[bestK], w: o.w, h: o.h }, cost: bestCost, follow };
+        break;
+      }
     }
     if (!best) {
       unresolved.push(it.id);

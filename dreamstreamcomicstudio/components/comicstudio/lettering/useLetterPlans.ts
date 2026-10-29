@@ -70,6 +70,30 @@ export function resolvePlacements(doc: ComicDoc, page: Page, aspect: number, mea
   return { balloons, fallback, crowded };
 }
 
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
+
+/**
+ * The render-time settle and dense-page repack (planLettering) may draw a software-placed or an unpinned
+ * stored balloon somewhere else than the placement put it, tail included. Those lines are `crowded` (the
+ * editor's chip and the inspector's free fixes), and the balloon behind each of them is the one the user
+ * SEES — so a first drag, nudge, lock or tail aim starts from the drawn spot and never jumps back. Pinned
+ * and locked balloons are drawn where they are stored and stay as they are. Pure; mutates and returns `p`.
+ */
+export function withDrawnGeometry(p: Placements, plans: readonly LetterPlan[], H: number): Placements {
+  for (const plan of plans) {
+    if (plan.crowded) p.crowded.add(plan.lineId);
+    const b = p.balloons.get(plan.lineId);
+    if (!b || b.pinned || b.locked || !(plan.crowded || p.fallback.has(plan.lineId)) || !(H > 0)) continue;
+    const next: Balloon = { ...b, x: r4(plan.x / 1000), y: r4(plan.y / H) };
+    if (plan.tip && Number.isFinite(plan.tip.x) && Number.isFinite(plan.tip.y)) {
+      next.tailX = r4(Math.min(1, Math.max(0, plan.tip.x / 1000)));
+      next.tailY = r4(Math.min(1, Math.max(0, plan.tip.y / H)));
+    }
+    p.balloons.set(plan.lineId, next);
+  }
+  return p;
+}
+
 /** Faces (id + weight + italic) the plans draw with — what to load before measuring for real. */
 export function facesOfPlans(plans: readonly LetterPlan[]): { id: FontId; weights: number[]; italic: boolean; sample: string }[] {
   const by = new Map<FontId, { id: FontId; weights: Set<number>; italic: boolean; sample: string }>();
@@ -122,14 +146,7 @@ export function useLetterPlans(doc: ComicDoc, page: Page, aspect: number, opts: 
   const measure = measureForGeneration(generation);
   const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : letteringAspect(doc, page);
   const plans = useMemo(() => planLettering(doc, page, asp, measure), [doc, page, asp, measure]);
-  const placements = useMemo(() => {
-    if (!wantPlacements) return NO_PLACEMENTS;
-    const p = resolvePlacements(doc, page, asp, measure);
-    // The render-time settle (planLettering) may have moved or shrunk balloons the placement itself
-    // thought were fine: those are crowded too (the editor's chip and the inspector's free fixes).
-    for (const plan of plans) if (plan.crowded) p.crowded.add(plan.lineId);
-    return p;
-  }, [wantPlacements, doc, page, asp, measure, plans]);
+  const placements = useMemo(() => (wantPlacements ? withDrawnGeometry(resolvePlacements(doc, page, asp, measure), plans, 1000 / asp) : NO_PLACEMENTS), [wantPlacements, doc, page, asp, measure, plans]);
   useEnsurePlanFonts(plans);
   return { plans, placements, measure, H: 1000 / asp };
 }
