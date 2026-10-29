@@ -305,6 +305,7 @@ const tabForOp = (op: DocOp): BoardTab | null => {
     case 'page_panels':
     case 'panel':
     case 'line':
+    case 'line_move':
     case 'balloons':
     case 'balloon':
     case 'plan_status':
