@@ -238,7 +238,8 @@ export function useStudio(projectId: string): ComicStudioController {
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
   const controllersRef = useRef(new Map<string, { ctrl: AbortController; kind: StreamKind }>());
-  const messageInFlightRef = useRef(false);
+  /** The message stream whose director reply is still awaited (null: the composer may send). */
+  const messageInFlightRef = useRef<string | null>(null);
   const actionsInFlightRef = useRef(new Set<string>());
   const patchQueueRef = useRef<QueuedPatch[]>([]);
   const patchInFlightRef = useRef(false);
@@ -306,7 +307,7 @@ export function useStudio(projectId: string): ComicStudioController {
     const d = guarded(generation);
     const ctrl = new AbortController();
     abortStreams();
-    messageInFlightRef.current = false;
+    messageInFlightRef.current = null;
     actionsInFlightRef.current.clear();
     patchQueueRef.current.splice(0).forEach((p) => p.resolve());
     patchInFlightRef.current = false;
@@ -648,8 +649,8 @@ export function useStudio(projectId: string): ComicStudioController {
         return;
       }
       if (messageInFlightRef.current || !stateRef.current.base) return;
-      messageInFlightRef.current = true;
       const streamId = localId('stream');
+      messageInFlightRef.current = streamId;
       const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
       const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
       dispatch({
@@ -682,7 +683,8 @@ export function useStudio(projectId: string): ComicStudioController {
           { streamId }
         );
       } finally {
-        if (generation === generationRef.current) messageInFlightRef.current = false;
+        // Only this stream's own marker: a later message may already be in flight (see below).
+        if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
       }
     },
     [runStream, historyStep]
@@ -1117,6 +1119,12 @@ export function useStudio(projectId: string): ComicStudioController {
 
   const busy = visibleStreams(state).length > 0;
   const messageBusy = isMessageBusy(state);
+  // The composer unlocks as soon as the director's reply lands (the reducer marks the message
+  // stream `replied`) while that stream stays open for the renders it started: the server accepts
+  // the next message then, so the in-flight guard follows the reducer, not the stream's end.
+  useEffect(() => {
+    if (!messageBusy) messageInFlightRef.current = null;
+  }, [messageBusy]);
   const { canUndo, canRedo, undoLabel, redoLabel } = undoApi;
 
   return useMemo(

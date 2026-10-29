@@ -130,6 +130,36 @@ describe('useStudio — director turns', () => {
     expect(api.streamStudio).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts the next message as soon as the reply lands, while the first stream still carries the renders', async () => {
+    const { result } = await setup();
+    act(() => void result.current.send('draw page 1'));
+    const s1 = lastStream();
+    emit(s1, { type: 'hello', rev: 5, turnId: 't1' });
+    emit(s1, { type: 'ops', rev: 6, ops: [{ op: 'message', msg: { id: 'u1', role: 'user', text: 'draw page 1', at: 1 } }] });
+    expect(result.current.messageBusy).toBe(true);
+    emit(s1, { type: 'ops', rev: 7, ops: [{ op: 'message', msg: { id: 'a1', role: 'assistant', text: 'On its way.', at: 2 } }] });
+    // The reply landed: the director is free although the stream stays open for the page's progress.
+    expect(result.current.messageBusy).toBe(false);
+    expect(result.current.busy).toBe(true);
+    // Before the fix send() returned silently here until every render had finished.
+    act(() => void result.current.send('what is left?'));
+    expect(api.streamStudio).toHaveBeenCalledTimes(2);
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'what is left?' });
+    expect(result.current.messageBusy).toBe(true);
+    const s2 = lastStream();
+    // The first stream closes (renders done) while the second turn is still running: still locked, one turn at a time.
+    await finish(s1, 7);
+    expect(result.current.messageBusy).toBe(true);
+    act(() => void result.current.send('three'));
+    expect(api.streamStudio).toHaveBeenCalledTimes(2);
+    emit(s2, { type: 'ops', rev: 8, ops: [{ op: 'message', msg: { id: 'u2', role: 'user', text: 'what is left?', at: 3 } }] });
+    emit(s2, { type: 'ops', rev: 9, ops: [{ op: 'message', msg: { id: 'a2', role: 'assistant', text: 'Page 1 is drawing.', at: 4 } }] });
+    await finish(s2, 9);
+    expect(result.current.messageBusy).toBe(false);
+    expect(result.current.busy).toBe(false);
+    expect(result.current.doc?.conversation.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'a2']);
+  });
+
   it('sends images as attachments', async () => {
     const { result } = await setup();
     const att = { name: 'maya.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAA' };
