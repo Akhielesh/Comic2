@@ -660,6 +660,9 @@ export interface Gate {
   /** Why it stopped: policy=confirm setting, budget=would exceed the budget cap, first_render / plan_review /
    *  redraw / no_intent = director-initiated spends the user must confirm. */
   reason: 'policy' | 'budget' | 'first_render' | 'plan_review' | 'redraw' | 'no_intent';
+  /** Why a 'declined' gate closed when the user did NOT decline it: approved, but its target was gone
+   *  (a deleted page, a cover drawn meanwhile) — the card reads "Nothing left to draw — nothing was spent.". */
+  closedReason?: 'nothing_to_draw';
 }
 
 // ── Conversation ─────────────────────────────────────────────────────────────

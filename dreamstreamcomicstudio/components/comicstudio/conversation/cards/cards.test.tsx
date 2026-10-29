@@ -473,8 +473,13 @@ describe('GateCard', () => {
     expect(screen.queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument();
     unmount();
     const r2 = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, status: 'declined' } }) })} />);
-    expect(screen.getByText(/nothing was spent/)).toBeInTheDocument();
+    expect(screen.getByText(/Not now — nothing was spent\./)).toBeInTheDocument();
     r2.unmount();
+    // Approved after its target vanished (DIR-6): the card names why it closed, not a "Not now" the user never said.
+    const closed = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, status: 'declined', closedReason: 'nothing_to_draw' } }) })} />);
+    expect(screen.getByText(/Nothing left to draw — nothing was spent\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Not now/)).not.toBeInTheDocument();
+    closed.unmount();
     const r3 = render(<CardRenderer card={card} studio={makeFakeStudio({ doc: makeSampleDoc({ gate: { ...gate, id: 'gate_2' } }) })} />);
     expect(screen.getByText(/replaced by a newer one/)).toBeInTheDocument();
     r3.unmount();

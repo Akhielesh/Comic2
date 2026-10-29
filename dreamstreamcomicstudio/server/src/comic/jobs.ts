@@ -869,10 +869,11 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'open' } }], origin);
   };
   // Nothing left to do (the quoted page was deleted, the cover got drawn meanwhile): the gate is
-  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent".
+  // closed, never left 'approved' — its card would claim "drawing now" beside "nothing was spent" —
+  // and says why ("Nothing left to draw"), not a "Not now" the user never said.
   const close = () => {
     const cur = ctx.session.doc.gate;
-    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined' } }], origin);
+    if (cur?.id === gate.id && cur.status === 'approved') commitAs(ctx, [{ op: 'gate', gate: { ...cur, status: 'declined', closedReason: 'nothing_to_draw' } }], origin);
   };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {

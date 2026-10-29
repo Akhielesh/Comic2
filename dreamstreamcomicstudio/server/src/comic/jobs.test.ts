@@ -538,7 +538,8 @@ describe('spend gating', () => {
     session.commit([{ op: 'page_delete', id: 'pg_3', deletedAt: Date.now() }], { origin: 'user' });
     await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true, origin: 'user' });
     expect(ctx.imagesFake.calls).toHaveLength(0);
-    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+    // Closed for a reason the card can name ("Nothing left to draw"), not a plain "Not now".
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined', closedReason: 'nothing_to_draw' });
     const last = session.doc.conversation.at(-1)!;
     expect(last.text).toMatch(/^Page 3 is no longer in the plan\./);
     expect(last.text).toContain('Nothing was spent.');
