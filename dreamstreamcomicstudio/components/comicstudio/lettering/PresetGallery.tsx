@@ -128,7 +128,9 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
     );
   }
   return (
-    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-1 gap-2 medium:grid-cols-2">
+    // Columns follow the CONTAINER, not the window: a 320 px side sheet on a landscape phone gets one
+    // column (two squeezed each blurb to ~46 px and cut its words), a wide aside or tab gets two.
+    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-2">
       {LETTERING_PRESET_IDS.map((id) => (
         <button
           key={id}
@@ -149,7 +151,7 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
               <span className="truncate">{LETTERING_PRESETS[id].name}</span>
               {value === id && <Check className="h-3.5 w-3.5 shrink-0 text-[#D97757]" aria-hidden />}
             </span>
-            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)]">{LETTERING_PRESETS[id].blurb}</span>
+            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{LETTERING_PRESETS[id].blurb}</span>
           </span>
         </button>
       ))}
