@@ -11,7 +11,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { ModelTrends, TrendRange } from '../../../shared/comic/modelCatalog';
 import { Segmented, cx, plural } from '../conversation/ui';
 import { NOT_ENOUGH_DATA_COPY, NO_UPTIME_COPY, couldntRefreshCopy, recentLabel } from './copy';
-import { SERIES_GROUPS, bucketLabel, clockText, dateText, nicknameOf, spendSeries, uptimeLines, type InsightsMoney } from './insightsModel';
+import { SERIES_GROUPS, bucketLabel, clockText, dateText, nicknameOf, priceView, spendSeries, uptimeLines, type InsightsMoney } from './insightsModel';
 import { Sparkline, StackedBars } from './Sparkline';
 import { useInsightsTrends } from './useInsights';
 import { MAX_SPEND_ENTRIES } from '../../../shared/comic/limits';
@@ -123,7 +123,8 @@ export const TrendsTab: React.FC<TrendsTabProps> = ({ doc, money, pro, now }) =>
 
 const TrendSections: React.FC<{ t: ModelTrends; money: InsightsMoney; now?: number }> = ({ t, money, now }) => {
   const t2 = t2Lines(t);
-  const changes = t.t3.changes.map((c) => `${dateText(c.at)} · ${nicknameOf(c.modelId)} ${c.res}: ${c.usd === null ? 'no published price' : money.price(c.usd)}`);
+  // A price, or the exact §4.6 copy when the change was to "no price" (unpublished / OpenRouter lists none).
+  const changes = t.t3.changes.map((c) => `${dateText(c.at)} · ${nicknameOf(c.modelId)} ${c.res}: ${priceView({ usd: c.usd, basis: c.basis, note: c.note ?? undefined }, money)!.text}`);
   const moves = t.t4.moves.map((m) => `${nicknameOf(m.modelId)}: ${rankWords(m.from)} → ${rankWords(m.to)} ${sinceMonth(m.from.asOf)}`);
   const ours = t.t6.ours.map(
     (o) => `${nicknameOf(o.modelId)}, last ${o.window === '24h' ? '24 h' : '7 days'} (${o.scope === 'you' ? 'your calls' : 'all creators'}): ${plural(o.calls, 'call')} · ${o.failed} failed · ${o.rateLimited} rate-limited`

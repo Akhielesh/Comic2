@@ -14,7 +14,20 @@ import { byModel } from '../../../shared/comic/modelInsights';
 import type { CatalogPrice, ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { ModelHealthDot, useModelStatus } from '../reliability';
 import { GhostButton, cx, plural } from '../conversation/ui';
-import { CHANGE_MODEL_LINK, CHOOSE_MODEL_LINK, LOCK_ICON_LABEL, NO_UPTIME_COPY, couldntRefreshCopy, lockedLine, mixedModelsCopy, priceListCopy, recentLabel, unlockedLine } from './copy';
+import {
+  CHANGE_MODEL_LINK,
+  CHOOSE_MODEL_LINK,
+  LOCK_ICON_LABEL,
+  NO_OPENROUTER_PRICE_COPY,
+  NO_UPTIME_COPY,
+  PRICE_UNPUBLISHED_COPY,
+  couldntRefreshCopy,
+  lockedLine,
+  mixedModelsCopy,
+  priceListCopy,
+  recentLabel,
+  unlockedLine
+} from './copy';
 import {
   RESOLUTION_ORDER,
   catalogSourceLabel,
@@ -50,7 +63,9 @@ const listWords = (list: ListPrice | null, live: CatalogPrice | undefined, money
   if (list?.source === 'recorded') return `list ${money.price(list.usd)} at the time`;
   if (live && typeof live.usd === 'number' && Number.isFinite(live.usd)) return `list ${money.price(live.usd)} (${catalogSourceLabel(live)})`;
   if (list) return `list ${money.price(list.usd)} (${priceListCopy(list.factsAsOf)})`;
-  return 'no list price';
+  // No list price anywhere: the exact §4.6 copy for the catalog's reason, else "isn't published".
+  const unavailable = live ? priceView(live, money) : undefined;
+  return unavailable?.unavailable ? unavailable.text : PRICE_UNPUBLISHED_COPY;
 };
 
 const sizeLine = (s: SizeCost, row: ModelCatalogRow | undefined, money: InsightsMoney): string => {
@@ -121,7 +136,7 @@ const LiveFacts: React.FC<{ modelId: string; row?: ModelCatalogRow; state: Loada
           {prices.map(({ res, view }) => (
             <Fact key={res} label={`${res} per image`} value={view!.text} note={view!.unavailable ? undefined : view!.source} className={view!.unavailable ? 'text-[var(--ds-muted)]' : undefined} />
           ))}
-          {!prices.length && <Fact label="Price" value="—" note="No price for any size yet" />}
+          {!prices.length && <Fact label="Price" value={NO_OPENROUTER_PRICE_COPY} className="text-[var(--ds-muted)]" />}
         </dl>
         {priceSource && <Source>{priceSource}</Source>}
       </div>

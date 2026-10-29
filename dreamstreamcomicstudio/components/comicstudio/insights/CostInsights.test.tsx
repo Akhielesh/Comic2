@@ -16,6 +16,7 @@ import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { costFormat } from '../conversation/cost';
 import { __resetStatusStore } from '../reliability/statusStore';
 import { CostInsights } from './CostInsights';
+import { PRICE_UNPUBLISHED_COPY } from './copy';
 import { __resetInsightsCacheForTests } from './useInsights';
 
 const NO_DOLLARS = /\$\s?\d|\$0\b|<\$/;
@@ -73,6 +74,20 @@ describe('L1 — the cost card', () => {
     unmount();
     mount(makeLakeComic((d) => { d.spend.entries = d.spend.entries.filter((e) => !(e.res === '1K' && (e.label === 'Page 2' || e.label === 'Page 3'))); }));
     expect(within(card()).queryByText('Real cost per page')).toBeNull();
+  });
+
+  it('real cost on a model with no published per-image price at this size says so with the exact §4.6 copy', () => {
+    // Seedream 5 Pro lists 1K only; Standard draws its pages at 2K.
+    const doc = makeLakeComic((d) => {
+      d.settings.quality = 'standard';
+      d.imageModel = { modelId: 'seedream-5-pro', lockedAt: 1, origin: 'user_change' };
+      for (let i = 0; i < 3; i += 1) {
+        d.spend.entries.unshift({ id: `sd${i}`, at: 9e12 + i, kind: 'page', label: `Page ${i + 1}`, usd: 0.05 + i * 0.001, model: 'seedream-5-pro', byok: true, estimated: false, res: '2K', target: `page:pg_${i + 1}` });
+      }
+    });
+    mount(doc);
+    const row = within(card()).getByText('Real cost per page').closest('div')!;
+    expect(row).toHaveTextContent(`(your last 3: $0.05–$0.052) · ${PRICE_UNPUBLISHED_COPY} · Seedream 5 Pro at 2K`);
   });
 
   it('the lock line (§3.6 A) with its lock icon; Change… opens the picker through the client action', () => {

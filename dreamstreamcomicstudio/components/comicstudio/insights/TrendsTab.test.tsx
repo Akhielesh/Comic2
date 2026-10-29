@@ -11,7 +11,7 @@ vi.mock('../../../services/apiClient', () => ({ get: getMock }));
 import { makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic';
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { costFormat } from '../conversation/cost';
-import { NOT_ENOUGH_DATA_COPY, NO_UPTIME_COPY } from './copy';
+import { NOT_ENOUGH_DATA_COPY, NO_OPENROUTER_PRICE_COPY, NO_UPTIME_COPY, PRICE_UNPUBLISHED_COPY } from './copy';
 import { insightsMoney } from './insightsModel';
 import { TrendsTab } from './TrendsTab';
 import { __resetInsightsCacheForTests } from './useInsights';
@@ -70,6 +70,26 @@ describe('Trends tab', () => {
     await mount();
     expect(screen.getByText('Tracking since 2026-10-23')).toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Price changes' })).toHaveTextContent('Oct 25, 2026 · Nano Banana 2.1 4K: $0.113');
+  });
+
+  it('T3: a change to "no price" reads as the exact §4.6 copy, never a number', async () => {
+    getMock.mockResolvedValue(
+      trends({
+        t3: {
+          trackingSince: '2026-10-23',
+          changes: [
+            { modelId: 'nano-banana-2.1', res: '4K', usd: null, basis: 'openrouter_endpoint', at: '2026-10-25T00:00:00Z', note: null },
+            { modelId: 'nano-banana-pro', res: '1K', usd: null, basis: 'openrouter_endpoint', at: '2026-10-26T00:00:00Z', note: 'OpenRouter publishes no price' }
+          ],
+          note: 'Tracking since 2026-10-23'
+        }
+      })
+    );
+    await mount();
+    const list = screen.getByRole('list', { name: 'Price changes' });
+    expect(list).toHaveTextContent(`Oct 25, 2026 · Nano Banana 2.1 4K: ${PRICE_UNPUBLISHED_COPY}`);
+    expect(list).toHaveTextContent(`Oct 26, 2026 · Nano Banana Pro 1K: ${NO_OPENROUTER_PRICE_COPY}`);
+    expect(list.textContent).not.toMatch(/\$/);
   });
 
   it('a failed load shows nothing invented and offers Try again; the range is asked on demand', async () => {

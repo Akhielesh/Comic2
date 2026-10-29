@@ -147,6 +147,23 @@ describe('Models tab — live facts, with source and time', () => {
     expect(cell.closest('div')!.textContent).not.toMatch(/\$\s?\d/);
   });
 
+  it('a row with no price at any size says "OpenRouter doesn’t list a price for this model", with no number', async () => {
+    serve([lakeRow({ price: {}, observed: [] })]);
+    await mount();
+    const cell = within(item('Nano Banana 2.1')).getByText(NO_OPENROUTER_PRICE_COPY);
+    expect(cell.closest('div')!.textContent).not.toMatch(/\$\s?\d/);
+  });
+
+  it('a size with no list price anywhere reads "Price per image isn’t published …" in its size line', async () => {
+    serve([lakeRow()]);
+    const doc = makeLakeComic((d) => {
+      d.spend.entries.unshift({ id: 'small', at: 9e12, kind: 'page', label: 'Page 6', usd: 0.03, model: LAKE_MODEL, byok: true, estimated: false, res: '512', target: 'page:pg_6' });
+    });
+    await mount(doc);
+    const sizes = within(item('Nano Banana 2.1')).getByRole('list', { name: 'Nano Banana 2.1 by size' });
+    expect(sizes).toHaveTextContent(`512: 1 image · ${PRICE_UNPUBLISHED_COPY}`);
+  });
+
   it('fetch failed, cache exists → the cached value with "as of {time} · couldn’t refresh"', async () => {
     serve([lakeRow({ stale: true })]);
     await mount();

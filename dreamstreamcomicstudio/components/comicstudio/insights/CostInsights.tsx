@@ -29,6 +29,7 @@ import {
   CHOOSE_MODEL_LINK,
   INSIGHTS_TAB_LABELS,
   LOCK_ICON_LABEL,
+  PRICE_UNPUBLISHED_COPY,
   SAVED_BY_SOFTWARE_COPY,
   lockedLine,
   priceListCopy,
@@ -184,7 +185,8 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
   const priced = !lock || !!lockedSpec;
   const pageUsd = estimateJobs([{ kind: 'page', count: 1 }], tier, { override, byok, lock }).usd;
   const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], tier, { override, byok, lock }).usd;
-  const realList = real?.list ? `${money.price(real.list.usd)}${real.list.source === 'registry' ? ` (${priceListCopy(real.list.factsAsOf)})` : ''}` : 'not published';
+  // The list beside the real cost, or the exact §4.6 copy when the model publishes no per-image price.
+  const realList = real?.list ? `list ${money.price(real.list.usd)}${real.list.source === 'registry' ? ` (${priceListCopy(real.list.factsAsOf)})` : ''}` : PRICE_UNPUBLISHED_COPY;
   const realRange = real ? [money.priceShort(real.minUsd), money.priceShort(real.maxUsd)] : [];
   // Narrow value cells: a governed share in its short form ("≈0.4%"; the card says "of your usage" once).
   const realValue = real ? (money.governed ? (money.priceShort(real.medianUsd) ?? 'a little') : money.price(real.medianUsd)) : '';
@@ -235,7 +237,7 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
             <CostRow
               label="Real cost per page"
               value={/^([≈<]|a little)/.test(realValue) ? realValue : `≈${realValue}`}
-              note={`(your last ${real.n}${realRange[0] && realRange[1] ? `: ${realRange[0]}–${realRange[1]}` : ''}) · list ${realList} · ${real.nickname} at ${real.res}`}
+              note={`(your last ${real.n}${realRange[0] && realRange[1] ? `: ${realRange[0]}–${realRange[1]}` : ''}) · ${realList} · ${real.nickname} at ${real.res}`}
             />
           )}
         </div>
