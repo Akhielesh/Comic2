@@ -412,4 +412,76 @@ describe('settleBalloons (render-time collision pass)', () => {
     expect(1320 + mv.dy + 120).toBeLessThanOrEqual(H - 12 + 1e-6);
     expect(320 + mv.dx).toBeGreaterThanOrEqual(8 - 1e-6);
   });
+
+  it('never moves a balloon into a panel the reader finishes before its own while its tier has room (reading order)', () => {
+    // Top tier = panel 1 (empty, closest); bottom tier = panel 2, whose left half is taken by a pin.
+    const panel1: Box = { x: 20, y: 20, w: 960, h: 700 };
+    const panel2: Box = { x: 20, y: 760, w: 960, h: 720 };
+    const r = settle([
+      item('pin', { x: 30, y: 770, w: 470, h: 300 }, { movable: false }),
+      item('late', { x: 40, y: 780, w: 300, h: 120 }, { region: panel2, before: [panel1], text: { x: 40, y: 780, w: 300, h: 120 } })
+    ]);
+    const mv = r.moves.get('late')!;
+    const cy = 780 + mv.dy + 60;
+    expect(cy, 'text centre stays in its own tier').toBeGreaterThanOrEqual(panel2.y);
+    expect(r.reordered).toEqual([]);
+  });
+
+  it('keeps a moved line after the previous line of its panel; only a page with no room at all reads it early, and says so', () => {
+    const panel: Box = { x: 20, y: 20, w: 960, h: 1460 };
+    // The previous line sits mid-panel; the blocked line must land below or after it, not above.
+    const r = settle([
+      item('prev', { x: 100, y: 600, w: 300, h: 120 }, { movable: false, region: panel }),
+      item('pin', { x: 500, y: 600, w: 300, h: 300 }, { movable: false }),
+      item('next', { x: 520, y: 620, w: 280, h: 100 }, { region: panel, after: 'prev', text: { x: 520, y: 620, w: 280, h: 100 } })
+    ]);
+    const mv = r.moves.get('next')!;
+    expect(620 + mv.dy, 'not above the previous line').toBeGreaterThanOrEqual(600 - 0.02 * H);
+    // A page whose only free room is above: the balloon still never overlaps, and is reported as read early.
+    const full = settle([
+      item('prev', { x: 8, y: 700, w: W - 16, h: 120 }, { movable: false, region: panel }),
+      item('wall', { x: 8, y: 830, w: W - 16, h: H - 830 - 12 }, { movable: false }),
+      item('next', { x: 100, y: 840, w: 280, h: 100 }, { region: { x: 20, y: 700, w: 960, h: 780 }, after: 'prev', text: { x: 100, y: 840, w: 280, h: 100 } })
+    ]);
+    expect(full.unresolved).toEqual([]);
+    expect(full.reordered).toEqual(['next']);
+  });
+});
+
+describe('placeBalloons: reading order when a panel is full', () => {
+  it('a line whose panel is full spills beside it or later — never into a panel read before it', () => {
+    const { doc, page } = liveDoc();
+    // Panel 3 (middle tier, right) is covered by three pinned captions; panels 1 and 2 before it are empty
+    // and closest — the old spill took them. Its two lines must go beside it or to a later tier.
+    // Panel 5 (below it) is covered too, so the nearest free room is panel 2 beside it — read first.
+    const boxes = panelBoxesFor(doc, page);
+    const p3 = boxes[2];
+    const p5 = boxes[4];
+    const long = 'A pinned caption that the owner placed over this panel, long enough to cover a third of it from edge to edge, and then some more words, and then some more words again, so that nothing else fits there at all.';
+    page.panels[0].lines = [1, 2, 3, 4, 5, 6].map((i) => line(`x${i}`, 'caption', long));
+    page.panels[1].lines = [];
+    page.panels[4].lines = [];
+    page.balloons = [0, 1, 2, 3, 4, 5].map((i) => {
+      const box = i < 3 ? p3 : p5;
+      return { lineId: `x${i + 1}`, x: box.x + 0.005, y: box.y + 0.005 + ((i % 3) * box.h) / 3, w: box.w - 0.01, pinned: true };
+    });
+    const res = placeAll(doc, page);
+    const sizer = letteringSizer(doc, page, ASPECT, estimateMeasure);
+    for (const id of ['l4', 'l5']) {
+      const b = res.balloons.find((q) => q.lineId === id)!;
+      const s = sizer(page.panels[2].lines.find((l) => l.id === id)!, b.w);
+      const cx = b.x + b.w / 2;
+      const cy = b.y + s.h / 2;
+      for (const r of [0, 1]) {
+        const e = boxes[r];
+        expect(cx >= e.x && cx <= e.x + e.w && cy >= e.y && cy <= e.y + e.h, `${id} drawn in panel ${r + 1}, read before panel 3`).toBe(false);
+      }
+      expect(cy, `${id} not above panel 3's tier`).toBeGreaterThanOrEqual(p3.y - 1e-6);
+      expect(res.crowded).toContain(id);
+    }
+    // And still nothing overlaps.
+    const outlines = res.balloons.map((b) => outlineOf(doc, page, b));
+    for (let i = 0; i < outlines.length; i += 1)
+      for (let j = i + 1; j < outlines.length; j += 1) expect(overlapArea(outlines[i], outlines[j]), `${res.balloons[i].lineId}×${res.balloons[j].lineId}`).toBe(0);
+  });
 });
