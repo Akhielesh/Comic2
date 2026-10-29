@@ -103,8 +103,11 @@ const historyState = (): Record<string, unknown> => {
 };
 
 interface ReaderHistory {
-  /** Leave the reader (close or navigate away): pop the reader's entries first, then run `action` once. */
-  leave: (action: () => void) => void;
+  /**
+   * Leave the reader (close or navigate away): pop the reader's entries first, then run `action` once. A navigation
+   * (`final: false`) re-arms the reader afterwards, so if the app keeps it open its controls still work.
+   */
+  leave: (action: () => void, opts?: { final?: boolean }) => void;
   /** The reading mode gets its own entry so the Back gesture leaves it before it closes the comic. */
   pushReadingMode: () => void;
   /** Leaving the reading mode with a control pops its entry (no-op when Back already did). */
@@ -116,7 +119,7 @@ const useReaderHistory = (id: string, onBack: () => void, onReadingModeBack?: ()
   const onReadingModeBackRef = useRef(onReadingModeBack);
   onBackRef.current = onBack;
   onReadingModeBackRef.current = onReadingModeBack;
-  const pendingRef = useRef<(() => void) | null>(null);
+  const pendingRef = useRef<{ action: () => void; final: boolean } | null>(null);
   const inFlightRef = useRef(false);
   const doneRef = useRef(false);
   const settleTimerRef = useRef<number | null>(null);
@@ -124,13 +127,14 @@ const useReaderHistory = (id: string, onBack: () => void, onReadingModeBack?: ()
   const ours = (s = historyState()) => s[READER_KEY] === id;
 
   const runPending = useCallback(() => {
-    const action = pendingRef.current;
-    if (!action) return;
+    const pending = pendingRef.current;
+    if (!pending) return;
     pendingRef.current = null;
     doneRef.current = true;
     if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current);
     settleTimerRef.current = null;
-    action();
+    pending.action();
+    if (!pending.final) doneRef.current = false;
   }, []);
 
   const goBack = useCallback(() => {
@@ -186,9 +190,9 @@ const useReaderHistory = (id: string, onBack: () => void, onReadingModeBack?: ()
   );
 
   const leave = useCallback(
-    (action: () => void) => {
+    (action: () => void, opts?: { final?: boolean }) => {
       if (doneRef.current) return;
-      pendingRef.current = action;
+      pendingRef.current = { action, final: opts?.final ?? true };
       if (inFlightRef.current) return; // the traversal already under way continues the unwinding when it lands
       if (!ours()) {
         runPending();
@@ -399,9 +403,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     setChromeTick((n) => n + 1);
   });
   /** Navigation out of the reader pops the reader's history entries first. */
-  const leaveTo = (fn: () => void) => () => readerHistory.leave(fn);
+  const leaveTo = (fn: () => void) => () => readerHistory.leave(fn, { final: false });
   const navigate = (view: string, id?: string) =>
-    readerHistory.leave(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)));
+    readerHistory.leave(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)), { final: false });
   // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
   // so we collapse every layout to a single vertical column — the standard way comics are
   // read on mobile. Tracked reactively so rotating the device re-flows immediately.

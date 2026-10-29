@@ -154,6 +154,15 @@ describe('Back closes the classic reader', () => {
     expect(h.onClose).not.toHaveBeenCalled();
   });
 
+  it('a navigation the app ignores leaves the reader working: Close still closes', async () => {
+    const h = handlers(); // onNavigate is a mock: the reader stays open, as if the app ignored the view
+    render(<ComicReader project={project('c10')} {...h} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Library' }));
+    await waitFor(() => expect(h.onNavigate).toHaveBeenCalledWith('gallery'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
+    await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(1));
+  });
+
   it('StrictMode (mount, unmount, mount) adopts its entry instead of pushing twice or closing', async () => {
     const before = window.history.length;
     const h = handlers();
