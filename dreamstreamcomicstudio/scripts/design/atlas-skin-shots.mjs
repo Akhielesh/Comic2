@@ -221,7 +221,9 @@ const main = async () => {
                 dark: document.documentElement.classList.contains('dark'),
                 fontFamily: cs.fontFamily,
                 plexLoaded: !!document.fonts?.check('14px "IBM Plex Sans"'),
-                grotesk: !!document.fonts?.check('600 16px "Space Grotesk"'),
+                // The display face loads only where a heading uses it (font-display: swap), so this
+                // is its FontFace status, not a pass/fail: 'unloaded' means no heading on this scene.
+                groteskStatus: [...(document.fonts ?? [])].find((f) => /Space Grotesk/.test(f.family))?.status ?? 'missing',
                 canvas: cs.getPropertyValue('--ds-canvas').trim(),
                 ink: cs.getPropertyValue('--ds-ink').trim(),
                 accent: cs.getPropertyValue('--ds-accent').trim()
