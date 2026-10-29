@@ -152,6 +152,32 @@ describe('patch sanitizer (P2-SERVER)', () => {
     const translations = Array.from({ length: 2001 }, (): unknown => ({ op: 'translation', lang: 'hi', lineId: 'ln_1_2', patch: { text: 'x' } }));
     expect(() => sanitizePatchOps(session.doc, translations, sctx)).toThrow(/Too many changes/);
   });
+
+  it('a line create keeps its position and its style through the sanitizer (⌘D and Undo of a delete land where the client put them)', () => {
+    const { session, sctx } = ctxFor();
+    const doc = applyOps(session.doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { kind: 'speech', speakerId: 'c_maya', text: 'Second', style: { textCase: 'upper' } } }]);
+    const order = (d: ComicDoc) => d.pages[0].panels[1].lines.map((l) => l.id);
+    const styleOf = (d: ComicDoc, id: string) => d.pages[0].panels[1].lines.find((l) => l.id === id)?.style;
+    // ⌘D: the copy sits right after its original, with the same style (lettering.md §7.5).
+    const copy: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_copy', patch: { kind: 'speech', speakerId: 'c_maya', text: 'Line on page 1', style: { textCase: 'upper' } }, index: 1 };
+    const clean = sanitizePatchOps(doc, [copy], sctx);
+    expect(clean).toEqual([copy]);
+    expect(order(applyOps(doc, clean))).toEqual(['ln_1_2', 'ln_copy', 'ln_1_2b']);
+    expect(styleOf(applyOps(doc, clean), 'ln_copy')).toEqual({ textCase: 'upper' });
+    // Undo of a delete puts the line back where it was.
+    const del: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: null };
+    const deleted = applyOps(doc, [del]);
+    const undone = applyOps(deleted, sanitizePatchOps(deleted, inverseOps(doc, [del]), sctx));
+    expect(order(undone)).toEqual(['ln_1_2', 'ln_1_2b']);
+    expect(undone.pages[0].panels[1].lines).toEqual(doc.pages[0].panels[1].lines);
+    // Bounds (contract §5.4 `line`): index an integer ≥ 0, style ≤ 2 KB; null clears a style on an update.
+    expect(() => sanitizePatchOps(doc, [{ ...copy, index: -1 }], sctx)).toThrow(/index/);
+    expect(() => sanitizePatchOps(doc, [{ ...copy, index: 1.5 }], sctx)).toThrow(/index/);
+    const huge: unknown = { ...copy, patch: { kind: 'speech', text: 'x', style: { fontFamily: 'x'.repeat(2100) } } };
+    expect(() => sanitizePatchOps(doc, [huge], sctx)).toThrow(/too large/);
+    const cleared = sanitizePatchOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { style: null } as never }], sctx);
+    expect(styleOf(applyOps(doc, cleared), 'ln_1_2b')).toBeUndefined();
+  });
 });
 
 describe('cast details and non-human look lines (P2-WIRING-SERVER)', () => {

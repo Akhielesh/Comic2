@@ -74,6 +74,7 @@ import { CLIENT_PATCHABLE_OPS, isSpendAction, type DocOp, type SpendAction, type
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
+import { mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
 import {
@@ -135,6 +136,7 @@ import {
 } from './types.js';
 import { analyzePageRender, placeStoredBalloons } from './vision.js';
 import { opSanitizerFor, patchScreens } from './sanitize/index.js';
+import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
@@ -3284,6 +3286,34 @@ const clearable =
  * except a sanitizer that answers DROP (that key is left out and the rest of the edit still applies)
  * or CLEAR (the key is unset).
  */
+/** `index` on a line op (contract §5.4): absent, or an integer ≥ 0 — anything else rejects the batch. */
+const lineIndex = (v: unknown): number | undefined => {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw badRequest('Invalid line: index.');
+  return v;
+};
+
+const jsonBytes = (v: unknown): number => {
+  try {
+    return JSON.stringify(v ?? null).length;
+  } catch {
+    return Infinity;
+  }
+};
+
+/**
+ * A line's per-balloon style from a client `line` patch (contract §5.4: sanitizeLetterStylePatch, ≤ 2 KB
+ * before and after the merge with the line's current style). Nothing valid in it → the key is dropped.
+ */
+const lineStylePatch = (v: unknown, current: LetterStylePatch | undefined): LetterStylePatch | typeof DROP | undefined => {
+  if (!isObject(v)) return undefined;
+  if (jsonBytes(v) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
+  const style = sanitizeLetterStylePatch(v);
+  if (!style) return DROP;
+  if (jsonBytes(mergeStylePatch(current, style)) > LINE_STYLE_MAX_BYTES) throw badRequest('That balloon style is too large.');
+  return style;
+};
+
 const pick = (raw: unknown, spec: Record<string, (v: unknown) => unknown>, what: string): Record<string, unknown> => {
   if (!isObject(raw)) throw badRequest(`Invalid ${what}.`);
   const out: Record<string, unknown> = {};
@@ -3677,20 +3707,27 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
           out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch: null });
           break;
         }
+        const existing = panel.lines.find((l) => l.id === lineId);
         const patch = pick(
           raw.patch,
           {
             kind: (v) => oneOf(v, LINE_KINDS),
             speakerId: (v) => (v === null || v === '' ? null : typeof v === 'string' && castIds.has(v) ? v : undefined),
             // Balloon text as typed (no trim: the editor owns spacing), jsonb-safe, clipped without splitting a pair.
-            text: (v) => (typeof v === 'string' ? clipText(storableText(v), 600) : undefined)
+            text: (v) => (typeof v === 'string' ? clipText(storableText(v), 600) : undefined),
+            // The line's own lettering style rides a create (⌘D, Undo of a delete) and merges on an update, as in
+            // line_style merge mode; null clears it. Dropping it here made every such line lose its look on save.
+            style: (v) => (v === null ? null : lineStylePatch(v, existing?.style)),
+            noTranslate: (v) => (typeof v === 'boolean' ? v : undefined)
           },
           'line'
         );
         if (patch.speakerId === null) patch.speakerId = undefined;
-        const kindAfter = (patch.kind as LineKind | undefined) || panel.lines.find((l) => l.id === lineId)?.kind || 'speech';
+        const kindAfter = (patch.kind as LineKind | undefined) || existing?.kind || 'speech';
         if (!SPOKEN_KINDS.has(kindAfter) && 'speakerId' in patch) patch.speakerId = undefined;
-        out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch });
+        // Where a NEW line goes (Undo of a delete, a duplicate right after its original); applyOp ignores it on an update.
+        const index = lineIndex(raw.index);
+        out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch, ...(index === undefined ? {} : { index }) });
         break;
       }
       case 'balloons': {
