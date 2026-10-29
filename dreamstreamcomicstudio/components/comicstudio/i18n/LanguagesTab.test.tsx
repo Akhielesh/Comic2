@@ -259,6 +259,39 @@ describe('an edition whose only open work is lines the review flagged', () => {
   });
 });
 
+describe("the row's review button counts only what blocks publishing", () => {
+  function noted() {
+    let doc = withTelugu();
+    const [first, second, third] = allLines(doc);
+    // A minor note (never blocks publishing) on the first line…
+    doc = applyOps(doc, [{ op: 'translation', lang: 'te', lineId: first.id, patch: { issue: { severity: 'minor', note: 'Could read more naturally.', suggestion: 'తెలుగు సూచన' } } }]);
+    // …while the edition is held by something else: the original of the second line changed.
+    const page = doc.pages.find((pg) => pg.panels.some((pn) => pn.lines.some((l) => l.id === second.id)))!;
+    const panel = page.panels.find((pn) => pn.lines.some((l) => l.id === second.id))!;
+    doc = applyOps(doc, [{ op: 'line', pageId: page.id, panelId: panel.id, id: second.id, patch: { text: `${second.text} Again.` } }]);
+    return { doc, third };
+  }
+
+  it('a minor note is a chip, not a "Review N flagged" button that points away from the blocker', () => {
+    const { doc } = noted();
+    render(<LanguagesTab studio={makeFakeStudio({ doc })} />);
+    expect(screen.getByText('1 flagged')).toBeTruthy(); // the chip row still shows every note
+    expect(screen.getByText('1 line changed since translating.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Translate missing/ })).toBeTruthy();
+    // Without the fix: "Review 1 flagged" is offered for a note that blocks nothing.
+    expect(screen.queryByRole('button', { name: /^Review \d+ flagged/ })).toBeNull();
+  });
+
+  it('with a MAJOR flag as well, the button counts the major only', () => {
+    const { doc: noted1, third } = noted();
+    const doc = applyOps(noted1, [{ op: 'translation', lang: 'te', lineId: third.id, patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+    render(<LanguagesTab studio={makeFakeStudio({ doc })} />);
+    expect(screen.getByText('2 flagged')).toBeTruthy();
+    expect(screen.getByText(/1 line flagged by the review\./)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Review 1 flagged' })).toBeTruthy();
+  });
+});
+
 describe('a stale_edited line (the author edited it, then the original changed)', () => {
   function staleEdited() {
     let doc = withTelugu();

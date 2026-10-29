@@ -319,9 +319,11 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
     p.flagged ? `${p.flagged} flagged` : ''
   ].filter(Boolean);
   const blocking = r.issues.filter((i) => i.blocking && i.code !== 'in_art_pages');
-  // Work only the author can settle (no translator, no reviewer): lines the review flagged ("Looks right" /
-  // edit / use the suggestion) and their own edits whose original changed.
-  const attention = [p.flagged ? `${p.flagged} flagged` : '', p.staleEdited ? `${p.staleEdited} changed` : ''].filter(Boolean);
+  // Work only the author can settle (no translator, no reviewer) that BLOCKS publishing: lines the review
+  // flagged MAJOR ("Looks right" / edit / use the suggestion) and their own edits whose original changed.
+  // Minor notes never block, so they stay in the chips only — the button points at what holds the edition.
+  const majors = r.issues.find((i) => i.code === 'major_issue')?.count ?? 0;
+  const attention = [majors ? `${majors} flagged` : '', p.staleEdited ? `${p.staleEdited} changed` : ''].filter(Boolean);
   return (
     <li className="min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
