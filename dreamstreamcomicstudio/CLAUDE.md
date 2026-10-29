@@ -82,11 +82,15 @@ comics host (`services/dsSkin.ts`) and on the Comic Studio / reader roots everyw
 skin is one block of `--ds-*` overrides at the end of `index.css`, so nothing outside
 the attribute changes. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
 `--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
-readable status text, always with a word or icon), `--ds-ring`, `--ds-font-sans|display`,
-`--ds-radius-panel|control|chip|sm`, `--ds-shadow-soft|panel|lift`,
-`--ds-motion-fast|medium|slow|panel|modal|theme`, `--ds-ease`, `--ds-surface-blur` —
-via the `studioDesign.ts` constants (`RADIUS_*`, `SHADOW_SOFT`, `TRANSITION`, `TONE_*`,
-`PRESS`), never by spelling out `rounded-2xl` / `duration-200` / a hue.
+readable status text, always with a word or icon; `--ds-danger-mark` for dots and edges),
+`--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge`, `--ds-scrim`,
+`--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm`,
+`--ds-shadow-soft|panel|lift|overlay`, `--ds-motion-fast|medium|slow|panel|modal|theme|enter|exit`,
+`--ds-ease(-enter)`, `--ds-surface-blur` — via the `studioDesign.ts` constants (`RADIUS_*`,
+`SHADOW_SOFT`, `TRANSITION`, `TONE_*`, `PRESS`, and the Atlas wave 5 recipes `FOCUS_RING`,
+`FIELD*`, `OVERLAY`, `SCRIM`, `CHIP*`, `STATUS_*`, `SEGMENTED_*`, `SECTION_*`, `TOAST*`),
+never by spelling out `rounded-2xl` / `duration-200` / a hue. Theme changes go through
+`services/theme.ts` (under the skin: one view-transition cross-fade).
 
 ### Two versions per widget (density)
 
