@@ -83,3 +83,52 @@
   /* Clear of the bottom tab bar. */
   .mfa-nudge { left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); max-width: none; }
 }
+
+/* ----------------------------------------- signing in to Stream Studio (SignInGate.tsx) */
+.gate-page {
+  min-height: 100vh; min-height: 100dvh; width: 100%;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  padding: 24px 16px calc(24px + env(safe-area-inset-bottom)); background: var(--bg);
+}
+.gate-card { width: 100%; max-width: 460px; }
+.gate-brand { margin-bottom: 18px; font-weight: 700; font-size: 15.5px; letter-spacing: -.01em; }
+.gate-brand .sub { color: var(--muted); font-weight: 500; }
+.gate-card h1 { font-size: 26px; margin: 0 0 8px; line-height: 1.2; }
+/* Focus is moved here for screen readers; the heading isn't a control, so no ring. */
+.gate-card h1:focus { outline: none; }
+.gate-card .lead { color: var(--muted); font-size: 14.5px; line-height: 1.55; margin: 0 0 18px; }
+.gate-card .lead b { color: var(--text); }
+.gate-email { overflow-wrap: anywhere; }
+.gate-actions { display: grid; gap: 8px; }
+.gate-actions .btn { width: 100%; min-height: 44px; }
+.gate-note { margin: 12px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.gate-links {
+  display: flex; gap: 10px; align-items: flex-start; margin: 18px 0 0; padding-top: 14px;
+  border-top: 1px solid var(--line-soft); font-size: 13px; line-height: 1.55; color: var(--muted);
+}
+.gate-links svg { flex: none; margin-top: 2px; color: var(--accent-ink); }
+.gate-who {
+  display: flex; align-items: center; gap: 12px; min-width: 0; margin: 0 0 14px; padding: 12px;
+  border-radius: var(--r-md); background: var(--panel-2); border: 1px solid var(--line);
+}
+.gate-who-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.gate-who-text b { font-size: 14.5px; overflow-wrap: anywhere; }
+.gate-who-text span { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.gate-who-text .faint { font-size: 11.5px; color: var(--muted); }
+/* Muted, not faint: small text on the canvas keeps AA contrast in both themes. */
+.gate-foot { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 12px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.gate-foot .legal-links { color: inherit; }
+.gate-foot > a { color: inherit; text-decoration: none; }
+.gate-foot > a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 3px; }
+.gate-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* The splash: nothing to read yet — the mark, and a line only if it takes a moment. */
+.gate-splash { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.gate-splash-text { font-size: 13px; color: var(--muted); opacity: 0; animation: gate-fade .3s ease .6s forwards; }
+@keyframes gate-fade { to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .gate-splash-text { animation: none; opacity: 1; }
+}
+@media (max-width: 420px) {
+  .gate-card h1 { font-size: 23px; }
+}
