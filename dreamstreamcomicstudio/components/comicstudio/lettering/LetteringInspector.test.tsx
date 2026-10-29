@@ -139,8 +139,10 @@ describe('LetteringInspector', () => {
     const id = [...base.fallback][0];
     expect(id).toBeTruthy();
     const onEditText = vi.fn();
-    const { apply } = inspector([id], { placements: { ...base, crowded: new Set([id]) }, onEditText }, doc);
-    expect(screen.getByText(/Crowded panel/)).toBeInTheDocument();
+    // The drawn plan says it is crowded (and why): here it still overlaps another balloon.
+    const plans = planLettering(doc, doc.pages[0], ASPECT, estimateMeasure).map((p) => (p.lineId === id ? { ...p, crowded: true, crowdedReason: 'overlap' as const } : p));
+    const { apply } = inspector([id], { plans, placements: { ...base, crowded: new Set([id]) }, onEditText }, doc);
+    expect(screen.getByText(/Crowded panel — this balloon overlaps another/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Shorten' }));
     expect(onEditText).toHaveBeenCalledWith(id);
     fireEvent.click(screen.getByRole('button', { name: 'Keep here' }));

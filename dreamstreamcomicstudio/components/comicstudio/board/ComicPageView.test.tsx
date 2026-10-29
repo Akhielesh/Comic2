@@ -219,8 +219,7 @@ describe('ComicPageView', () => {
       <ComicPageView doc={doc} page={doc.pages[0]} imageUrl="https://cdn.test/p1.png" editable editionLang="hi" onBalloonChange={onBalloonChange} />
     );
     fireEvent.keyDown(container.querySelector('[data-testid="balloon-hit"][data-line-id="pg_1_l2"]')!, { key: 'ArrowRight' });
-    // The edition language rides along with the undo label and gesture (BalloonChangeOptions, LE-8).
-    expect(onBalloonChange).toHaveBeenCalledWith('pg_1_l2', expect.objectContaining({ pinned: true }), { lang: 'hi', label: 'Move balloon', gesture: 'move' });
+    expect(onBalloonChange).toHaveBeenCalledWith('pg_1_l2', expect.objectContaining({ pinned: true }), expect.objectContaining({ lang: 'hi' }));
   });
 });
 

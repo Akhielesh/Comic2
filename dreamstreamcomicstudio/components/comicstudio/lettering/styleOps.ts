@@ -497,6 +497,15 @@ export function keepDrawnSizeOps(page: Page, plans: readonly LetterPlan[], lineI
   return [...by].map(([sizeScale, ids]) => ({ op: 'line_style', pageId: page.id, lineIds: ids, patch: { sizeScale }, mode: 'merge' }) as DocOp);
 }
 
+/**
+ * Lock, "Keep here" or any other pin from a menu or a panel: `ops` plus, in the original language, the size
+ * override that keeps a dense page's balloon at the size it is drawn at (keepDrawnSizeOps) — one patch, one
+ * undo entry. A translated edition shares the original's line styles, so there it is `ops` alone.
+ */
+export function pinKeepingSizeOps(ops: DocOp[], page: Page, plans: readonly LetterPlan[], lineIds: readonly string[], editionLang?: string): DocOp[] {
+  return editionLang ? ops : [...ops, ...keepDrawnSizeOps(page, plans, lineIds)];
+}
+
 // ── Lines ─────────────────────────────────────────────────────────────────────
 
 const DEFAULT_TEXT: Record<LineKind, string> = {

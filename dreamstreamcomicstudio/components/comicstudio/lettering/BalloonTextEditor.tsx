@@ -161,7 +161,7 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
             commit();
           }
         }}
-        className="block w-full resize-none overflow-hidden rounded-xl border border-[#D97757]/60 px-2 py-1.5 leading-snug shadow-[0_8px_30px_rgba(0,0,0,0.25)] outline-none focus:ring-2 focus:ring-[#D97757]/45"
+        className="block w-full resize-none overflow-hidden rounded-xl border border-[var(--ds-accent)] px-2 py-1.5 leading-snug shadow-[0_8px_30px_rgba(0,0,0,0.25)] outline-none focus:ring-2 focus:ring-[var(--ds-ring)]"
         style={{
           fontFamily: fontFamilyStack(plan.fontId),
           fontWeight: parsed?.weight ?? 700,

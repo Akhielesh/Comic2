@@ -33,7 +33,7 @@ const ROW_LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
 // Touch (coarse pointers): every control is a REAL 44 px box (not a 32 px box with an ::after hit area —
 // neighbouring ::after areas overlapped and stole each other's taps; P1-QA easy-lettering-small-targets).
 const SMALL_BTN =
-  'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]';
+  'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]';
 
 type SeeThrough = 'solid' | 'soft' | 'see' | 'clear';
 const SEE_ALPHA: Record<Exclude<SeeThrough, 'clear'>, number> = { solid: 1, soft: 0.85, see: 0.6 };
@@ -149,7 +149,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
                   aria-checked={on}
                   title={o.title}
                   onClick={() => setSee(o.value)}
-                  className={cx(SMALL_BTN, 'rounded-full', on && 'border-[#D97757]/60 bg-[#D97757]/10')}
+                  className={cx(SMALL_BTN, 'rounded-full', on && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
                 >
                   <span aria-hidden className="relative h-3.5 w-3.5 shrink-0 overflow-hidden rounded-full border border-[var(--ds-hairline)]" style={CHECKER}>
                     <span className="absolute inset-0" style={{ background: swatch }} />
@@ -176,7 +176,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
         {!sfxOnly && (
           <button
             type="button"
-            className={cx(SMALL_BTN, tailOn && 'border-[#D97757]/50 bg-[#D97757]/10')}
+            className={cx(SMALL_BTN, tailOn && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
             aria-pressed={tailOn}
             onClick={() => run(tailToggleOps(doc, page, ids, !tailOn, placements.balloons, H), tailOn ? 'Remove tail' : 'Add tail')}
           >
@@ -225,7 +225,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
             onChange={(e) => setAsk(e.target.value)}
             onKeyDown={(e) => e.stopPropagation()}
             placeholder={lines.length > 1 ? 'Ask AI about these balloons…' : 'Ask AI about this balloon…'}
-            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] coarse:h-11 coarse:text-[16px] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none"
+            className="h-9 min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 text-[13px] text-[var(--ds-ink)] coarse:h-11 coarse:text-[16px] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-accent)] focus:outline-none"
           />
           <button type="submit" disabled={!ask.trim()} aria-label="Send to the director" className={SMALL_BTN}>
             <Send className="h-3.5 w-3.5" aria-hidden />

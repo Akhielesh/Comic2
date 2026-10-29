@@ -55,7 +55,7 @@ import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
-import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
@@ -90,7 +90,7 @@ import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { useLetteringSelection } from '../lettering/useLetteringSelection';
-import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
+import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, pinKeepingSizeOps, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { TouchCanvas, useZoom } from '../mobile/touch/TouchCanvas';
 import { useGestureArbiter } from '../mobile/touch/GestureArbiter';
@@ -217,7 +217,7 @@ const isEditableTarget = (el: EventTarget | null) => {
 };
 
 const SELECT_CLS =
-  'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-50 coarse:h-11';
+  'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-50 coarse:h-11';
 
 /** Any per-line, per-kind, per-speaker or base lettering overrides in the comic? */
 const hasLetteringOverrides = (doc: ComicDoc): boolean =>
@@ -399,7 +399,7 @@ const MarkupLayer: React.FC<{
             data-testid={`markup-corner-${c.id}`}
             onPointerDown={(e) => onCornerDown(e, c)}
             onKeyDown={(e) => onCornerKey(e, c)}
-            className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-red-500 shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]"
+            className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-red-500 shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
             style={{ left: `${(region.x + c.x * region.w) * 100}%`, top: `${(region.y + c.y * region.h) * 100}%`, width: 14 / scale, height: 14 / scale, cursor: c.id === 'nw' || c.id === 'se' ? 'nwse-resize' : 'nesw-resize' }}
           >
             <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ width: 44 / scale, height: 44 / scale }} />
@@ -472,7 +472,7 @@ const LineRow: React.FC<{
       onClick={onSelect}
       className={cx(
         'space-y-1 rounded-xl border p-1.5 transition-colors duration-200 motion-reduce:transition-none',
-        selected ? 'border-[#D97757]/45 bg-[#D97757]/[0.07]' : 'border-transparent bg-[var(--ds-well)]'
+        selected ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent bg-[var(--ds-well)]'
       )}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -622,7 +622,7 @@ const PanelEditor: React.FC<{
       <button
         type="button"
         onClick={addLine}
-        className="tap-target mt-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+        className="tap-target mt-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
       >
         <Plus className="h-3.5 w-3.5" aria-hidden /> Add line
       </button>
@@ -803,7 +803,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const letteringEditable = mode === 'move' && overlayLettering && !busy && artOk;
   const tidy = useMemo(() => (overlayLettering ? tidyOps(vDoc, page, aspect, measure) : []), [overlayLettering, vDoc, page, aspect, measure]);
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
-  const crowdedIds = [...placements.crowded];
+  // The drawn plans say which balloons are crowded (the editor's own placement may flag a line the drawn
+  // page fits fine); a line with no plan (no text) keeps the placement's flag.
+  const crowdedIds = useMemo(() => {
+    const planned = new Set(plans.map((p) => p.lineId));
+    return [...new Set([...plans.filter((p) => p.crowded).map((p) => p.lineId), ...[...placements.crowded].filter((id) => !planned.has(id))])];
+  }, [plans, placements]);
   const overflowIds = plans.filter((p) => p.overflow).map((p) => p.lineId);
   // Dense page: the renderer lettered the software-placed balloons smaller so nothing overlaps.
   const dense = plans.filter((p) => typeof p.densityScale === 'number' && p.densityScale < 1);
@@ -1010,7 +1015,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         id: 'lock',
         label: locked ? 'Unlock' : 'Lock',
         icon: locked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
-        onSelect: () => apply(lockOps(page, [lineId], !locked, placements.balloons), { label: locked ? 'Unlock balloon' : 'Lock balloon' })
+        // Locking a dense page's balloon keeps the size it is drawn at (one patch with the lock).
+        onSelect: () =>
+          apply(locked ? lockOps(page, [lineId], false, placements.balloons) : pinKeepingSizeOps(lockOps(page, [lineId], true, placements.balloons), page, plans, [lineId], lang), {
+            label: locked ? 'Unlock balloon' : 'Lock balloon'
+          })
       },
       {
         id: 'reset',
@@ -1090,7 +1099,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           type="button"
           data-testid="crowded-chip"
           onClick={() => selection.select(crowdedIds[0])}
-          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/[0.1] px-2 py-0.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-500/[0.16] dark:text-amber-200"
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`}
           title="A balloon couldn’t find free space in its panel — free fixes in the lettering panel"
         >
           <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Crowded panel{crowdedIds.length > 1 ? ` (${crowdedIds.length})` : ''}</span>
@@ -1101,7 +1110,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           type="button"
           data-testid="density-chip"
           onClick={() => selection.set(dense.map((p) => p.lineId))}
-          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}
           title="This page is dense: its auto-placed balloons are lettered smaller so none overlap — shorten lines or move some to another page to get the full size back (free)"
         >
           <Type className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Dense page · text at {densityPct}%</span>
@@ -1112,7 +1121,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           type="button"
           data-testid="overflow-chip"
           onClick={() => selection.set(overflowIds)}
-          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/[0.1] px-2 py-0.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-500/[0.16] dark:text-amber-200"
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`}
           title="The text doesn’t fit its balloon even at the smallest size — select to widen it or shorten the line (free)"
         >
           <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
@@ -1375,7 +1384,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 ? 'e.g. “Make it night with lanterns lit” or “Give Maya a red scarf”'
                 : 'Render this page first — edits change an existing drawing.'
           }
-          className="w-full resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-60 coarse:text-[16px]"
+          className="w-full resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-60 coarse:text-[16px]"
         />
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
           {region ? (
@@ -1564,7 +1573,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           <button
             type="button"
             onClick={() => closeEditorTo('languages')}
-            className="tap-target inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className="tap-target inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
           >
             <Languages className="h-3.5 w-3.5" aria-hidden /> Review every {languageLabel(lang)} line
           </button>
@@ -1603,6 +1612,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         }}
         onAskAI={(text) => void studio.send(`(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`, { focus: 'selection' })}
         onDeselect={selection.clear}
+        editionLang={lang}
         mode={viewMode}
         onModeChange={setViewMode}
         canPro={canPro}

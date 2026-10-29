@@ -910,8 +910,8 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
                 addArmed ? 'pointer-events-none' : 'pointer-events-auto',
                 p.locked ? 'cursor-not-allowed' : 'cursor-move',
                 // A selected balloon owns its touches (drag at once); unselected ones let the page pan/scroll.
-                sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[#D97757]',
-                'focus-visible:outline-dashed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D97757]',
+                sel && 'touch-none outline-dashed outline-2 outline-offset-2 outline-[var(--ds-accent)]',
+                'focus-visible:outline-dashed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--ds-accent)]',
                 lifted === id && 'scale-[1.04] shadow-[0_10px_30px_rgba(0,0,0,0.35)] motion-reduce:scale-100'
               )}
               style={{ left: `${o.x * 100}%`, top: `${o.y * 100}%`, width: `${o.w * 100}%`, height: `${o.h * 100}%`, zIndex: sel ? 5 : 1 }}
@@ -976,7 +976,7 @@ export const BalloonLayer: React.FC<BalloonLayerProps> = ({
         <div
           aria-hidden
           data-testid="marquee"
-          className="pointer-events-none absolute z-[7] rounded-[3px] border border-dashed border-[#D97757] bg-[#D97757]/10"
+          className="pointer-events-none absolute z-[7] rounded-[3px] border border-dashed border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]"
           style={{ left: `${marquee.x * 100}%`, top: `${marquee.y * 100}%`, width: `${marquee.w * 100}%`, height: `${marquee.h * 100}%` }}
         />
       )}
@@ -1201,7 +1201,7 @@ const Handles: React.FC<{
           tabIndex={0}
           onPointerDown={(e) => onDrag(e, 'tail')}
           onKeyDown={(e) => onKey(e, 'tail')}
-          className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
+          className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] focus-visible:ring-offset-1"
           style={{ left: `${(pos.dot.x / pw) * 100}%`, top: `${(pos.dot.y / ph) * 100}%`, width: dot, height: dot }}
           title="Drag to aim the tail"
         >
@@ -1221,7 +1221,7 @@ const Handles: React.FC<{
         aria-orientation="horizontal"
         onPointerDown={(e) => onDrag(e, 'width')}
         onKeyDown={(e) => onKey(e, 'width')}
-        className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757] focus-visible:ring-offset-1"
+        className="pointer-events-auto absolute z-[6] -translate-x-1/2 -translate-y-1/2 cursor-ew-resize rounded-full border border-white bg-[var(--ds-accent)] shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] focus-visible:ring-offset-1"
         style={{ left: `${(pos.grip.x / pw) * 100}%`, top: `${(pos.grip.y / ph) * 100}%`, width: grip.w, height: grip.h }}
         title="Drag to resize"
       >

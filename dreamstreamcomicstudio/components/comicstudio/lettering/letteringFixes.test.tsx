@@ -7,13 +7,16 @@
 
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { makeQaDoc } from '../testing/qaFixtures';
 import { applyOps } from '../../../shared/comic/ops';
 import { estimateMeasure, letteringAspect, planLettering } from '../../../shared/comic/lettering/layout';
 import { resolveLetteringFont, fontCoversLanguage } from '../../../shared/comic/lettering/fonts';
 import { keepDrawnSizeOps, keptSizes, sameBalloons, tidyOps } from './styleOps';
+import { CROWDED_COPY, LetteringInspector, densityNote } from './LetteringInspector';
+import { resolvePlacements, withDrawnGeometry } from './useLetterPlans';
+import type { DocOp } from '../../../shared/comic/ops';
 import { FontPicker, easyFontsFor, EASY_FONTS } from './FontPicker';
 import { BalloonLayer, balloonHitRect, handlePositions } from '../board/BalloonLayer';
 import { inspectorSheetMaxHeight, MIN_SHEET_PX, PHONE_SHEET_OPEN_MIN_H, selectionSlide, toolsSheetOpenAtStart } from '../board/PageEditor';
@@ -91,6 +94,85 @@ describe('dense pages: a balloon the user pins keeps the size it is drawn at', (
     // A full-size balloon needs no override.
     const full = plans.find((p) => p.densityScale === undefined);
     if (full) expect(keepDrawnSizeOps(page, plans, [full.lineId])).toEqual([]);
+  });
+});
+
+describe('dense pages: Lock and "Keep here" keep the drawn size too (one patch with the pin)', () => {
+  const stressPg11 = () => {
+    const doc = makeQaDoc('stress');
+    const page = doc.pages.find((p) => p.id === 'pg_11')!;
+    const aspect = letteringAspect(doc, page);
+    const H = 1000 / aspect;
+    const plans = planLettering(doc, page, aspect, estimateMeasure);
+    const placements = withDrawnGeometry(resolvePlacements(doc, page, aspect, estimateMeasure), plans, H);
+    return { doc, page, plans, placements, H };
+  };
+  const renderInspector = (lineId: string, mode: 'easy' | 'pro', editionLang?: string) => {
+    const { doc, page, plans, placements, H } = stressPg11();
+    const apply = vi.fn();
+    render(
+      <LetteringInspector
+        doc={doc}
+        page={page}
+        lineIds={[lineId]}
+        plans={plans}
+        placements={placements}
+        H={H}
+        apply={apply}
+        onEditText={vi.fn()}
+        onDeselect={vi.fn()}
+        mode={mode}
+        onModeChange={vi.fn()}
+        canPro
+        anchor={{ left: 100, top: 100, right: 200, bottom: 160 }}
+        compact={false}
+        onClose={vi.fn()}
+        editionLang={editionLang}
+      />
+    );
+    return { apply, plans };
+  };
+  const sizeOp = (ops: DocOp[], id: string) => ops.find((o) => o.op === 'line_style' && o.lineIds.includes(id)) as Extract<DocOp, { op: 'line_style' }> | undefined;
+
+  it('"Keep here" on a crowded dense balloon pins it AND keeps its size, in the same patch', () => {
+    const { plans } = stressPg11();
+    const target = plans.find((p) => p.crowded && p.densityScale && p.crowdedReason !== 'overlap')!;
+    expect(target, 'stress pg_11 has a crowded balloon lettered smaller').toBeTruthy();
+    const { apply } = renderInspector(target.lineId, 'easy');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep here' }));
+    const [ops, opts] = apply.mock.calls.at(-1)!;
+    expect(opts).toEqual({ label: 'Keep balloon here' });
+    expect(ops[0]).toMatchObject({ op: 'balloon', lineId: target.lineId, patch: { pinned: true } });
+    expect(sizeOp(ops, target.lineId)?.patch.sizeScale).toBeCloseTo(target.style.sizeScale * target.densityScale!, 2);
+  });
+
+  it('the Pro panel Lock keeps the size too; Unlock does not touch it; a translated edition never sends a line style', () => {
+    const { plans } = stressPg11();
+    const target = plans.find((p) => p.densityScale && !p.locked)!;
+    const { apply } = renderInspector(target.lineId, 'pro');
+    fireEvent.click(screen.getByRole('tab', { name: /Arrange/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Lock$/ }));
+    const [ops, opts] = apply.mock.calls.at(-1)!;
+    expect(opts).toMatchObject({ label: 'Lock balloon' });
+    expect(ops.some((o: DocOp) => o.op === 'balloon' && o.lineId === target.lineId && (o.patch as { locked?: boolean }).locked === true)).toBe(true);
+    expect(sizeOp(ops, target.lineId)).toBeTruthy();
+    cleanup();
+    const edition = renderInspector(target.lineId, 'pro', 'hi');
+    fireEvent.click(screen.getByRole('tab', { name: /Arrange/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Lock$/ }));
+    expect(sizeOp(edition.apply.mock.calls.at(-1)![0], target.lineId)).toBeUndefined();
+  });
+
+  it('the inspector says why honestly: a moved balloon never "overlaps another"; a dense balloon explains its size in visible text', () => {
+    const { plans } = stressPg11();
+    const moved = plans.find((p) => p.crowded && (p.crowdedReason === 'moved' || p.crowdedReason === 'outside'))!;
+    expect(moved).toBeTruthy();
+    renderInspector(moved.lineId, 'easy');
+    const reason = screen.getByTestId('crowded-reason');
+    expect(reason.textContent).not.toMatch(/overlaps another/);
+    expect(reason.textContent).toBe(CROWDED_COPY[moved.crowdedReason!]);
+    expect(screen.getByTestId('density-note').textContent).toBe(densityNote(moved.densityScale!));
+    expect(screen.getByTestId('density-note').textContent).toMatch(/\d+%/);
   });
 });
 

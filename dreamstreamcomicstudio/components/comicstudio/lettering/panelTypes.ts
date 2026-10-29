@@ -23,6 +23,8 @@ export interface LetteringPanelProps {
   onAskAI?(text: string): void;
   /** Clear the selection (after delete). */
   onDeselect(): void;
+  /** The translated edition being edited (undefined in the original language): line styles stay the original's. */
+  editionLang?: string;
 }
 
 /** Text colours offered everywhere (plus the comic's palette). */

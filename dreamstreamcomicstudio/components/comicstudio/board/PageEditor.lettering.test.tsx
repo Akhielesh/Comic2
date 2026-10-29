@@ -13,6 +13,9 @@ import { SAMPLE_NOW, makeSampleDoc, makeStudio } from './__fixtures__/sampleDoc'
 import { lineSourceHash } from '../../../shared/comic/i18n';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioController } from '../types';
+import type { DocOp } from '../../../shared/comic/ops';
+import { makeQaDoc } from '../testing/qaFixtures';
+import { estimateMeasure, letteringAspect, planLettering } from '../../../shared/comic/lettering/layout';
 
 const allowance = vi.hoisted(() => ({ status: null as unknown }));
 vi.mock('../../usage/useUsageAllowance', () => ({ useUsageAllowance: () => allowance.status }));
@@ -138,5 +141,25 @@ describe('LE-11: clearing a balloon’s text in the inline editor', () => {
     const [ops, opts] = calls(studio).at(-1)!;
     expect(ops[0]).toMatchObject({ op: 'line', id: 'pg_1_l2', patch: null });
     expect(opts).toMatchObject({ undo: true, label: 'Delete balloon' });
+  });
+});
+
+describe('dense page: the balloon menu Lock keeps the size the balloon is drawn at', () => {
+  it('stress pg_11: Lock sends the lock and a line_style sizeScale override in ONE patch (the touch path)', () => {
+    const doc = makeQaDoc('stress');
+    const page = doc.pages.find((p) => p.id === 'pg_11')!;
+    const plans = planLettering(doc, page, letteringAspect(doc, page), estimateMeasure);
+    const target = plans.find((p) => p.densityScale && !p.locked && !page.balloons.find((b) => b.lineId === p.lineId)?.pinned)!;
+    expect(target, 'pg_11 letters an unpinned balloon smaller').toBeTruthy();
+    const studio = makeStudio(doc, { focusedPageId: 'pg_11' });
+    render(<PageEditor studio={studio} doc={doc} pageId="pg_11" />);
+    fireEvent.contextMenu(hitOf(target.lineId), { clientX: 120, clientY: 300 });
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Lock/ }));
+    const [ops, opts] = calls(studio).at(-1)!;
+    expect(opts).toMatchObject({ undo: true, label: 'Lock balloon' });
+    expect(ops.some((o: DocOp) => o.op === 'balloon' && o.lineId === target.lineId && (o.patch as { locked?: boolean }).locked === true)).toBe(true);
+    const size = ops.find((o: DocOp) => o.op === 'line_style' && o.lineIds.includes(target.lineId));
+    expect(size, 'the drawn size rides along with the lock').toBeTruthy();
+    expect(size.patch.sizeScale).toBeCloseTo(target.style.sizeScale * target.densityScale!, 2);
   });
 });

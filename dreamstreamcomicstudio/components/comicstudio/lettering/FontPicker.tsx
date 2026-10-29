@@ -9,6 +9,7 @@ import type { FontId, LatinFontId } from '../../../shared/comic/lettering/style'
 import { languageSpec } from '../../../shared/comic/languages';
 import { ensureFonts } from './fontLoader';
 import { cx } from '../board/ui';
+import { RADIUS_PILL } from '../../chat/studioDesign';
 
 const ROLE: Record<LatinFontId, string> = {
   'comic-neue': 'Classic dialogue',
@@ -117,8 +118,9 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
               title={`${labelOf(f)} — ${(ROLE as Record<string, string>)[f] ?? `${spec?.english ?? 'Script'} face`}`}
               onClick={() => onChange(f)}
               className={cx(
-                'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
-                current === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+                RADIUS_PILL,
+                'border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
+                current === f ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
               )}
               style={{ fontFamily: fontFamilyStack(f) }}
             >
@@ -153,7 +155,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
         aria-expanded={open}
         aria-labelledby={`${id}-label ${id}-value`}
         onClick={() => setOpen((v) => !v)}
-        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+        className="flex h-9 w-full min-w-0 items-center gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 text-left text-[14px] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
       >
         <span id={`${id}-value`} className="min-w-0 flex-1 truncate" style={{ fontFamily: value ? fontFamilyStack(value) : undefined }}>
           {value ? labelOf(value) : 'Mixed'}
@@ -211,7 +213,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
                 <span className="shrink-0 rounded-full border border-[var(--ds-hairline)] px-1.5 py-px text-[9.5px] font-medium tabular-nums text-[var(--ds-muted)]" title="Font licence">
                   {meta.license === 'Apache-2.0' ? 'Apache' : 'OFL'}
                 </span>
-                {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[#D97757]" aria-hidden />}
+                {value === f && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
               </li>
             );
           })}

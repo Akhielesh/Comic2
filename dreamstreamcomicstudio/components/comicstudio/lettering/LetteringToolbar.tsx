@@ -38,7 +38,7 @@ const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
 // Touch: real 44 px buttons (a 30x28 button's ::after hit area overlapped its neighbours' — P1-QA
 // lettering-toolbar-small-add); fine pointers keep the compact 28 px row.
 const BTN =
-  'inline-flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11.5px] font-medium text-[var(--ds-muted)] transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none coarse:h-11 coarse:min-w-11 coarse:px-2.5 coarse:text-[12.5px]';
+  'inline-flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11.5px] font-medium text-[var(--ds-muted)] transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none coarse:h-11 coarse:min-w-11 coarse:px-2.5 coarse:text-[12.5px]';
 
 export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
   addKind,

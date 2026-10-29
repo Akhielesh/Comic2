@@ -67,9 +67,9 @@ export const SnapGuides: React.FC<{ guides: readonly SnapGuide[] }> = ({ guides 
     <div className="pointer-events-none absolute inset-0 z-[7]" aria-hidden data-testid="snap-guides">
       {guides.map((g, i) =>
         g.axis === 'x' ? (
-          <span key={i} className="absolute inset-y-0 w-px bg-[#D97757]" style={{ left: `${g.at * 100}%` }} />
+          <span key={i} className="absolute inset-y-0 w-px bg-[var(--ds-accent)]" style={{ left: `${g.at * 100}%` }} />
         ) : (
-          <span key={i} className="absolute inset-x-0 h-px bg-[#D97757]" style={{ top: `${g.at * 100}%` }} />
+          <span key={i} className="absolute inset-x-0 h-px bg-[var(--ds-accent)]" style={{ top: `${g.at * 100}%` }} />
         )
       )}
     </div>

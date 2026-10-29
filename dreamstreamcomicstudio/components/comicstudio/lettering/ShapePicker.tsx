@@ -81,7 +81,7 @@ export const ShapeIcon: React.FC<{ shape: BubbleShape; tail?: TailStyle; border?
 };
 
 const TILE =
-  'tap-target flex min-w-0 flex-col items-center gap-0.5 rounded-xl border px-1 py-1 text-[10.5px] leading-tight transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50';
+  'tap-target flex min-w-0 flex-col items-center gap-0.5 rounded-xl border px-1 py-1 text-[10.5px] leading-tight transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]';
 
 /** Pro: the whole bubble library. */
 export const ShapePicker: React.FC<{ value: BubbleShape | undefined; onChange(shape: BubbleShape): void; label?: string }> = ({ value, onChange, label = 'Bubble shape' }) => (
@@ -94,7 +94,7 @@ export const ShapePicker: React.FC<{ value: BubbleShape | undefined; onChange(sh
         aria-checked={value === s}
         title={SHAPE_LABEL[s]}
         onClick={() => onChange(s)}
-        className={cx(TILE, value === s ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-transparent hover:bg-[var(--ds-hover)]')}
+        className={cx(TILE, value === s ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent hover:bg-[var(--ds-hover)]')}
       >
         <ShapeIcon shape={s} tail="none" size={40} />
         <span className="w-full truncate text-center text-[var(--ds-muted)]">{SHAPE_LABEL[s]}</span>
@@ -114,7 +114,7 @@ export const TailPicker: React.FC<{ value: TailStyle | undefined; shape?: Bubble
         aria-checked={value === t}
         title={TAIL_LABEL[t]}
         onClick={() => onChange(t)}
-        className={cx(TILE, value === t ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-transparent hover:bg-[var(--ds-hover)]')}
+        className={cx(TILE, value === t ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent hover:bg-[var(--ds-hover)]')}
       >
         <ShapeIcon shape={shape === 'none' ? 'squircle' : shape} tail={t} size={40} />
         <span className="w-full truncate text-center text-[var(--ds-muted)]">{TAIL_LABEL[t]}</span>
@@ -143,7 +143,7 @@ export const EasyShapePicker: React.FC<{ value: EasyShapeId | undefined; onChang
         aria-checked={value === s.id}
         title={s.hint}
         onClick={() => onChange(s.id)}
-        className={cx(TILE, value === s.id ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-transparent hover:bg-[var(--ds-hover)]')}
+        className={cx(TILE, value === s.id ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent hover:bg-[var(--ds-hover)]')}
       >
         <ShapeIcon {...EASY_ICON[s.id]} size={40} />
         <span className="w-full truncate text-center text-[var(--ds-muted)]">{s.label}</span>
