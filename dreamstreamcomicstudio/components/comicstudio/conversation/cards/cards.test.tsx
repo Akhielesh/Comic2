@@ -680,6 +680,23 @@ describe('RecapCard', () => {
     expect(studio.setTab).toHaveBeenCalledWith('story');
   });
 
+  it('rows follow the card’s width, not the window’s: Change wraps under a row that is too narrow, cast chips never overflow it (recap-change-chips)', () => {
+    renderCard(card, lakeDoc());
+    const recap = screen.getByRole('region', { name: 'What I understood' });
+    // No viewport breakpoints in the row layout: an iPad's narrow split pane at Text size XL is ≥ sm
+    // wide as a window while the card is 170 px — the value got 0 px and its avatars ran under Change.
+    expect(recap.querySelector('[class*="sm:"]')).toBeNull();
+    for (const change of within(recap).getAllByRole('button', { name: /^Change the / })) {
+      const row = change.parentElement!;
+      expect(row.className).toContain('flex-wrap');
+      expect(change.className).toContain('shrink-0');
+      // The main block gives way first (it has a basis, Change does not grow over it).
+      expect(row.firstElementChild!.className).toMatch(/flex-\[1_1_/);
+    }
+    const chip = within(recap).getByText('×3').parentElement!;
+    expect(chip.className).toContain('max-w-[min(13rem,100%)]');
+  });
+
   it('an empty brief asks for the story instead of showing blanks', () => {
     renderCard(card, makeSampleDoc({ brief: { title: 'Untitled comic', notes: [] }, cast: [], pages: [] }));
     expect(screen.getByText(/Nothing yet — tell me what your comic is about/)).toBeInTheDocument();

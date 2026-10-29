@@ -29,6 +29,15 @@ const CHANGE_LABEL: Record<RecapKey | 'cast', string> = {
 
 const MAX_CAST_CHIPS = 8;
 
+// Container-driven rows (no viewport breakpoints — the card lives in panes of every width):
+//   ROW       wraps Change under the row when the row is narrower than the main block's basis + Change;
+//   ROW_MAIN  the label and its value, wrapping the value under the label below ~16.75rem;
+//   ROW_VALUE never narrower than its content allows (min-w-0) and never under 12rem beside a label.
+const ROW = 'flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1';
+const ROW_MAIN = 'flex min-w-0 flex-[1_1_12rem] flex-wrap items-start gap-x-3 gap-y-0.5';
+const ROW_LABEL = 'block w-[4.25rem] shrink-0 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]';
+const ROW_VALUE = 'block min-w-0 max-w-full flex-[1_1_12rem]';
+
 export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioController }> = ({ studio }) => {
   const doc = studio.doc;
   const [panel, setPanel] = useState<'format' | 'style' | null>(null);
@@ -77,8 +86,8 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
         aria-expanded={inline ? panel === k : undefined}
         className={cx(
           // Real heights (no ::after spilling over the row above): 28 px with a mouse, 44 px on touch.
-          'inline-flex min-h-[28px] shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:px-3',
-          inline && panel === k ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]'
+          'ml-auto inline-flex min-h-[28px] shrink-0 items-center rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px] coarse:px-3',
+          inline && panel === k ? 'bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]' : 'text-[var(--ds-accent)] hover:bg-[var(--ds-hover)]'
         )}
       >
         {inline && panel === k ? 'Done' : 'Change'}
@@ -91,18 +100,13 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
       <div className="divide-y divide-[var(--ds-hairline-soft)]">
         {rows.map((row) => (
           <div key={row.key} className="py-2 first:pt-0">
-            {/* Phones: the label sits above its value so the value gets the row's full width. */}
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-3">
-                <span className="block pt-px text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] sm:w-[4.25rem] sm:shrink-0">{row.label}</span>
-                <span
-                  className={cx(
-                    'mt-0.5 block min-w-0 text-[13px] leading-snug [overflow-wrap:anywhere] sm:mt-0 sm:flex-1',
-                    row.open ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]'
-                  )}
-                >
-                  {row.value}
-                </span>
+            {/* The card's own width decides (not the window's): the label sits beside its value when
+                there is room and above it when not, and Change drops under the row in a very narrow
+                column (an iPad split pane at Text size XL) instead of being overlapped by the value. */}
+            <div className={ROW}>
+              <div className={ROW_MAIN}>
+                <span className={cx(ROW_LABEL, 'pt-px')}>{row.label}</span>
+                <span className={cx(ROW_VALUE, 'text-[13px] leading-snug [overflow-wrap:anywhere]', row.open ? 'text-[var(--ds-muted)]' : 'text-[var(--ds-ink)]')}>{row.value}</span>
               </div>
               {changeButton(row.key)}
             </div>
@@ -128,16 +132,16 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
         ))}
         {doc.cast.length > 0 && (
           <div className="py-2">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-3">
-                <span className="block pt-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] sm:w-[4.25rem] sm:shrink-0">Cast</span>
-                <div className="mt-1 min-w-0 sm:mt-0 sm:flex-1">
+            <div className={ROW}>
+              <div className={ROW_MAIN}>
+                <span className={cx(ROW_LABEL, 'pt-1')}>Cast</span>
+                <div className={ROW_VALUE}>
                   <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Cast">
                     {cast.map((c: Character) => {
                       const n = groupCount(c);
                       return (
                         <li key={c.id} className="min-w-0 max-w-full" title={c.look?.summary || c.name}>
-                          <span className="flex max-w-[13rem] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-0.5 pl-0.5 pr-2 text-[12px] text-[var(--ds-ink)]">
+                          <span className="flex max-w-[min(13rem,100%)] items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-0.5 pl-0.5 pr-2 text-[12px] text-[var(--ds-ink)]">
                             <CastAvatar character={c} urlFor={studio.urlFor} size={22} showCount={false} />
                             <span className="sr-only">{castAriaLabel(c)}</span>
                             <span className="min-w-0 truncate font-medium" aria-hidden>
@@ -149,7 +153,7 @@ export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioContr
                               </span>
                             )}
                             {castRoleLabel(c) === 'Companion' && (
-                              <span className="shrink-0 text-[10.5px] text-[var(--ds-muted)]" aria-hidden>
+                              <span className="min-w-0 truncate text-[10.5px] text-[var(--ds-muted)]" aria-hidden>
                                 companion
                               </span>
                             )}
