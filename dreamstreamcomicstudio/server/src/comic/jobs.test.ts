@@ -499,6 +499,31 @@ describe('spend gating', () => {
     expect(session.doc.gate).toMatchObject({ status: 'open', model: 'Nano Banana Pro' });
   });
 
+  it('under confirm "big" (the default) a stale approval re-quotes with a fresh card instead of running the pricier spend', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.5 };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    // The director quoted the cover without draw intent (a forced gate), at Standard quality.
+    const quoted = await startAction(ctx, { type: 'render_cover' }, { confirmed: false, forceGate: 'no_intent' });
+    expect(quoted.outcome.status).toBe('gated');
+    const first = session.doc.gate!;
+    expect(first).toMatchObject({ status: 'open', reason: 'no_intent', model: 'Nano Banana 2.1' });
+    // The user switches quality to Pro (still under bigSpendUsd), then taps Approve on the old card.
+    session.commit([{ op: 'settings', patch: { quality: 'pro' } }], { origin: 'user' });
+    const proUsd = estimateSpendAction(session.doc, { type: 'render_cover' }, false).usd;
+    expect(proUsd).toBeLessThan(0.5);
+    await runAction(ctx, { type: 'approve_gate', gateId: first.id }, { confirmed: true, origin: 'user' });
+    // Nothing drawn, nothing spent: a NEW open gate at the Pro price that says the price changed.
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    const gate = session.doc.gate!;
+    expect(gate.id).not.toBe(first.id);
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy', model: 'Nano Banana Pro', estimateUsd: proUsd });
+    expect(session.doc.conversation.at(-1)!.text).toContain(`The price changed since that button was shown: the cover is now ≈ $${proUsd.toFixed(2)} (was $${first.estimateUsd.toFixed(2)})`);
+    expect(cardsOf(session.doc)).toContainEqual(expect.objectContaining({ type: 'gate', gateId: gate.id }));
+  });
+
   it('an open-ended render gate is pinned to the pages it quoted', async () => {
     const doc = plannedDoc();
     doc.settings.confirm = 'always';

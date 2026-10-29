@@ -706,6 +706,8 @@ export interface RunActionOptions {
   collectNextSteps?: (steps: NextStep[]) => void;
   /** Force a gate even below bigSpendUsd (drawIntent 'none', first_render, plan_review, redraw). */
   forceGate?: Gate['reason'];
+  /** A re-quote of an approval whose price moved: the old quote, so the new card says the price changed. */
+  staleFrom?: number;
   /** Ops origin for session.commit (undo + "saved by software" attribution). Absent ⇒ 'director' when collecting, else none. */
   origin?: OpsOrigin;
 }
@@ -806,7 +808,7 @@ export async function runFeatureAction(ctx: StudioContext, handler: ActionHandle
     forceGate: stale ? 'policy' : opts.forceGate,
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
   return handler.run(ctx, action, opts);
 }
 
@@ -836,11 +838,12 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
     // The plan, quality or model changed since the card was shown: never run a bigger
-    // or different spend on an old approval — re-quote instead.
+    // or different spend on an old approval — re-quote instead. `forceGate: 'policy'` holds
+    // under every confirm setting (under 'big' a cheaper-than-threshold price would otherwise
+    // run at once); `staleFrom` makes the new card say the price changed.
     commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], origin);
-    return handler
-      ? runFeatureAction(ctx, handler, gate.action, { ...opts, confirmed: false, budgetApproved: false })
-      : startSpend(ctx, gate.action, { ...opts, confirmed: false, budgetApproved: false });
+    const requote: RunActionOptions = { ...opts, confirmed: false, budgetApproved: false, forceGate: 'policy', staleFrom: gate.estimateUsd };
+    return handler ? runFeatureAction(ctx, handler, gate.action, requote) : startSpend(ctx, gate.action, requote);
   }
   // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
   // 'declined' by startSpend), then put the card back if the spend never started —
@@ -1219,7 +1222,7 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     redraw: !opts.confirmed && replacesCurrentArt(doc, action),
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
 
   // Proceeding: retire any open gate for the same kind of spend (it is now moot).
   const open = ctx.session.doc.gate;
@@ -1287,7 +1290,7 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
     forceGate: stale ? 'policy' : opts.forceGate,
     action
   });
-  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : undefined });
+  if (reason) return createGate(ctx, action, estimate, reason, opts, { staleFrom: stale ? (action.quotedUsd as number) : opts.staleFrom });
   const open = ctx.session.doc.gate;
   if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
