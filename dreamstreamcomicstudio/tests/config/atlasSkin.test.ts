@@ -7,7 +7,8 @@
  *       values for the core colours, fonts, radii and motion;
  *   (b) the NEW tokens' defaults reproduce today's look (panel 1rem, control .75rem, the old soft
  *       shadow, 200 ms, blur-md) and studioDesign's constants read them, so nothing changes outside
- *       the skin;
+ *       the skin except the contrast fixes tokenContrast.test.ts measures (the ink label on an
+ *       accent fill, the readable status text);
  *   (c) ink and muted text stay ≥ 4.5:1 on canvas, surface, surface-soft and well in both Atlas
  *       themes;
  *   plus the fonts, the cross-fade mechanism (registered tokens = :root defaults) and the base rules.

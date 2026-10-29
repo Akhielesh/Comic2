@@ -6,12 +6,15 @@
  * compose from these constants instead. Tailwind scans this file (it's under
  * components/**), so arbitrary values here are safe to use.
  *
- * Every constant is token-driven (`--ds-*` in index.css): the defaults of those tokens
- * reproduce exactly the classes these constants used to spell out (rounded-2xl,
- * duration-200, backdrop-blur-md, …), and a skin (`[data-ds-skin="atlas"]`, see
- * docs/design/atlas-skin.md) restyles everything built from them by overriding the
- * tokens — Comic Studio imports this file too, so its look follows the skin while chat,
- * settings and home stay as they are.
+ * Every constant is token-driven (`--ds-*` in index.css). The defaults of those tokens
+ * reproduce the classes these constants used to spell out (rounded-2xl, duration-200,
+ * backdrop-blur-md, …) except where a text pairing fell below 4.5:1
+ * (tests/config/tokenContrast.test.ts): ACCENT_TEXT reads the deeper readable accent, the
+ * label on an accent fill (ON_ACCENT_TEXT, so PRIMARY_BTN) is ink instead of white, and the
+ * muted ink and the status text move a shade toward more contrast. A skin
+ * (`[data-ds-skin="atlas"]`, see docs/design/atlas-skin.md) restyles everything built from
+ * them by overriding the tokens — Comic Studio imports this file too, so its look follows the
+ * skin while chat, settings and home keep the default tokens.
  */
 
 // ---------------------------------------------------------------------------

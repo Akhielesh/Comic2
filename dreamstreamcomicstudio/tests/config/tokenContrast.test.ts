@@ -3,22 +3,27 @@
  * Text contrast of the `--ds-*` theme tokens (ui-tokens-contrast; P3-OVERFLOW `accent-text-contrast`,
  * `muted-text-contrast` and the axe `color-contrast` rows on the segmented radio labels).
  *
- * index.css is the single source of the studio colours, so this parses it and, for each of the four
- * contexts a page can be in — default light (:root), default dark (.dark), Atlas light and Atlas dark
- * (`[data-ds-skin="atlas"]`, with `.dark`) — composes every surface a text token is actually used on
- * (paper, sidebar, the three glass levels over paper and sidebar, raised chips, wells, hover / active
- * tints, the accent tints, a tint inside a well, the status tone surfaces) and computes the WCAG 2.x
- * contrast of every text token on each. Body / label text must reach 4.5:1:
+ * index.css is the single source of the studio colours, so this parses it (tests/config/cssTokens.ts,
+ * shared with atlasSkin.test.ts) and, for each of the four contexts a page can be in — default light
+ * (:root), default dark (.dark), Atlas light and Atlas dark (`[data-ds-skin="atlas"]`, with `.dark`) —
+ * composes every surface a text token is actually used on (paper, sidebar, the three glass levels over
+ * paper and sidebar, raised chips, wells, hover / active tints, the accent tints, a tint inside a well,
+ * the status tone surfaces) and computes the WCAG 2.x contrast of every text token on each. Body /
+ * label text must reach 4.5:1, with no known-gap list:
  *   ink, muted and the readable accent (--ds-accent-text) on every surface;
  *   on-accent text on the text-bearing accent fill (--ds-accent-fill and its hover), also at the 90 %
  *   opacity the secondary labels inside a button use;
- *   the status `-text` tokens on the page, glass, hover rows and their own tone surface.
+ *   the status `-text` tokens on the page, glass, hover rows and their own tone surface;
+ *   --ds-faint is measured too and is the one exempt token: a source scan holds every use of it to a
+ *   placeholder or an aria-hidden glyph (the readable uses elsewhere are an exact, shrinking map).
+ * Non-text (WCAG 1.4.11, which axe cannot check): the focus ring and accent state borders reach 3:1.
  * The test also proves the "accent contrast" block in index.css routes every accent text / text-
  * bearing fill utility found in the source tree to those tokens (so the 4.5:1 tokens are what the
- * page actually paints), and that studioDesign's constants spell the readable tokens.
+ * page actually paints), that inside the Atlas skin the block paints exactly what the skin did (rule
+ * by rule, by specificity), and that studioDesign's constants spell the readable tokens.
  *
- * (The Atlas-only checks — every token has a skin override, ink/muted on the four base surfaces —
- * stay in atlasSkin.test.ts; this file adds the rest of the surfaces and the accent/status tokens.)
+ * (Atlas ink/muted on the skin's four base surfaces and every token's skin override stay in
+ * atlasSkin.test.ts; this file adds the rest of the surfaces and the accent/status/faint tokens.)
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
