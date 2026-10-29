@@ -260,3 +260,48 @@ describe('sizer, estimate measure, helpers', () => {
     expect(planLetteringForPage(doc, 1)!.length).toBe(5);
   });
 });
+
+describe('planLettering: render-time settle and dense pages', () => {
+  it('draws an unpinned stored balloon beside the pinned one it was stored over; stored values stay', () => {
+    const { doc, page } = sample();
+    const before = JSON.stringify(page.balloons);
+    const pinned = page.balloons.find((b) => b.pinned) ?? page.balloons[0];
+    pinned.pinned = true;
+    // The second stored balloon sits right over the pinned one, unpinned (software placed it there).
+    const other = page.balloons.find((b) => b.lineId !== pinned.lineId)!;
+    other.x = pinned.x + 0.01;
+    other.y = pinned.y + 0.01;
+    other.pinned = false;
+    delete other.locked;
+    const after = JSON.stringify(page.balloons);
+    const plans = planLettering(doc, page, ASPECT, fixedMeasure);
+    const a = plans.find((p) => p.lineId === pinned.lineId)!;
+    const b = plans.find((p) => p.lineId === other.lineId)!;
+    const box = (p: typeof a) => ({ x: p.x + p.geometry.bounds.x, y: p.y + p.geometry.bounds.y, w: p.geometry.bounds.w, h: p.geometry.bounds.h });
+    const A = box(a);
+    const B = box(b);
+    const w = Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x);
+    const h = Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y);
+    expect(w <= 0 || h <= 0, 'the outlines no longer overlap').toBe(true);
+    // The pinned balloon is drawn where it is stored; the other one is flagged as moved by software.
+    expect(a.x).toBeCloseTo(pinned.x * 1000, 0);
+    expect(a.crowded).toBeUndefined();
+    expect(b.crowded).toBe(true);
+    expect(b.fallback).toBe(false);
+    expect(JSON.stringify(page.balloons)).toBe(after);
+    expect(after).not.toBe(before);
+  });
+
+  it('a page with room is lettered at full size (no densityScale) and nothing is crowded', () => {
+    const { doc, page } = sample();
+    const plans = planLettering(doc, page, ASPECT, fixedMeasure);
+    expect(plans.every((p) => p.densityScale === undefined)).toBe(true);
+    expect(plans.every((p) => !p.crowded)).toBe(true);
+  });
+
+  it('software-placed balloons are fitted against the whole page (a spilled balloon never shrinks for its panel)', () => {
+    const { doc, page } = sample();
+    const plans = planLettering(doc, page, ASPECT, fixedMeasure);
+    for (const p of plans.filter((x) => x.fallback)) expect(p.overflow).toBe(false);
+  });
+});

@@ -17,9 +17,9 @@
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
 import { panelBoxesFor } from '../pageGeometry.js';
-import { fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
+import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, type FitResult } from '../textLayout.js';
 import { FONT_REGISTRY, fontByFamily, fontString, resolveLetteringFont } from './fonts.js';
-import { placeBalloonsDetailed, safeAreaBox } from './place.js';
+import { balloonFootprint, placeBalloonsDetailed, ROW_TOLERANCE, safeAreaBox, settleBalloons, type SettleItem, type SizedLine } from './place.js';
 import { bubbleGeometry, hashSeed, resolveTailStyle, type BubbleGeometry } from './shapes.js';
 import {
   DEFAULT_LETTERING,
@@ -75,7 +75,17 @@ export interface LetterPlan {
   /** A software-placed line that could not avoid an overlap / face / the safe area (the editor's free-fix chip).
    *  Set only when true (P2-AMEND). */
   crowded?: boolean;
+  /** Dense page: this (software-placed) balloon is lettered at this fraction of its size so the page fits. Set only when < 1. */
+  densityScale?: number;
+  /**
+   * Why a crowded balloon is flagged (set with `crowded`): 'overlap' — it still overlaps another balloon (a
+   * page with no free room left); 'order' — the only free room is where the reader meets it before its
+   * turn; 'outside' — no room in its panel, so it sits beside it; 'moved' — moved to make room.
+   */
+  crowdedReason?: CrowdedReason;
 }
+
+export type CrowdedReason = 'overlap' | 'order' | 'outside' | 'moved';
 
 /** Page width in plan units. */
 export const PLAN_W = 1000;
@@ -310,22 +320,40 @@ const geometryFor = (setup: LineSetup, w: number, h: number, tip: { x: number; y
   });
 
 /**
+ * Dense pages: when the page cannot hold every software-placed balloon at full size without overlaps,
+ * the renderer letters those balloons smaller (a letterer's point-size drop) in these steps; the last one
+ * is below the auto-fit floor and only ever reached on a page that is over-full (the crowded chip says
+ * so). Pinned and locked balloons keep the size their owner chose.
+ */
+export const DENSITY_STEPS: readonly number[] = [1, 0.9, FIT_FONT_FLOOR, 0.72];
+
+const densify = (setup: LineSetup, scale: number): LineSetup => (scale >= 1 ? setup : { ...setup, baseSize: r2(setup.baseSize * scale) });
+
+/**
  * plansFor() for placeBalloons from the real plan metrics: the text-box height and the outline bounds
  * (relative to the text box) of `line` at width `w`, as page fractions.
  */
-export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure): (line: Line, w: number) => { h: number; bounds: Box } {
+export function letteringSizer(doc: ComicDoc, _page: Page, aspect: number, measure: Measure = estimateMeasure, densityScale = 1): (line: Line, w: number) => SizedLine {
   const H = PLAN_W / (Number.isFinite(aspect) && aspect > 0 ? aspect : 2 / 3);
-  const setups = new Map<string, LineSetup>();
+  const setups = new Map<string, { setup: LineSetup; sized: Map<number, SizedLine> }>();
   const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
   return (line, w) => {
-    let setup = setups.get(line.id);
-    if (!setup || setup.line !== line) {
-      setup = lineSetup(doc, line, measure);
-      setups.set(line.id, setup);
+    let entry = setups.get(line.id);
+    if (!entry || entry.setup.line !== line) {
+      entry = { setup: densify(lineSetup(doc, line, measure), densityScale), sized: new Map() };
+      setups.set(line.id, entry);
     }
+    // The placement asks for the same few widths over and over (every candidate, every pass).
+    const hit = entry.sized.get(w);
+    if (hit) return hit;
+    const setup = entry.setup;
     const t = layoutText(setup, measure, { x: 0, y: 0, w, pinned: true }, whole, H);
     const g = geometryFor(setup, t.w, t.h, null);
-    return { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H } };
+    // `tail`: the placement keeps tails out of other balloons; a tail-less style needs no room for one.
+    const tail = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape) !== 'none' && setup.style.shape !== 'none';
+    const sized: SizedLine = { h: r4(t.h / H), bounds: { x: g.bounds.x / PLAN_W, y: g.bounds.y / H, w: g.bounds.w / PLAN_W, h: g.bounds.h / H }, tail };
+    entry.sized.set(w, sized);
+    return sized;
   };
 }
 
@@ -419,51 +447,190 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     for (const line of panel.lines || []) if (normalizeLetteringText(line.text)) items.push({ line, panelIndex, panelN: panel.n });
   });
   if (!items.length) return [];
+  const lineIds = new Set(items.map((it) => it.line.id));
 
-  // Lines without a stored balloon: deterministic placement around everything already on the page.
+  // A dense page is tried at full size first. When software-placed balloons still overlap something after
+  // the settle pass, the software-placed balloons are packed again from scratch around the pinned ones
+  // (stored-but-unpinned balloons included: software placed them, software may move them), and if that
+  // is not enough they are lettered smaller and the page is planned again.
+  //
+  // Reading order counts as much as room: a software-placed balloon the reader would meet out of order (in
+  // an earlier panel, above its panel's tier, before the previous line of its panel) or that had to leave
+  // its panel's tier is not a finished page either, so the page is lettered smaller before that happens.
+  // Ranking: overlaps, then far-early reads, then early reads, then tier spills; the larger size wins a tie.
+  //
+  // Search order (each step tries both packings): full size; then the smallest step — a page that is not
+  // finished even there is over-full and stops (the best attempt so far is drawn, its stuck lines flagged);
+  // else the steps in between, largest first, and the first finished one is drawn.
+  let best: PageAttempt | undefined;
+  const repackable = [...stored.values()].some((b) => !b.pinned && !b.locked);
+  /** Tail-less outlines by line, size and box: every attempt draws the same few. */
+  const shapes = new Map<string, BubbleGeometry>();
+  const tryScale = (scale: number): PageAttempt | undefined => {
+    // One sizer per size step: both packings of a step measure the same lines at the same widths.
+    const sizer = letteringSizer(doc, page, asp, m, scale);
+    for (const keep of repackable ? (['all', 'pinned'] as const) : (['all'] as const)) {
+      const a = planAtDensity(doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, scale, keep, sizer, shapes);
+      if (!best || worse(best, a) || (!worse(a, best) && a.scale > best.scale)) best = a;
+      if (finished(a)) return a;
+    }
+    return undefined;
+  };
+  const steps = [...DENSITY_STEPS].sort((a, b) => b - a);
+  const first = tryScale(steps[0]);
+  if (first) return first.build();
+  if (steps.length > 1) {
+    const last = tryScale(steps[steps.length - 1]);
+    if (!last) return best!.build();
+    for (const scale of steps.slice(1, -1)) {
+      const a = tryScale(scale);
+      if (a) return a.build();
+    }
+    return last.build();
+  }
+  return best ? best.build() : [];
+}
+
+const finished = (a: PageAttempt) => !a.unresolved && !a.farEarly && !a.early && !a.spilled;
+
+
+interface PageAttempt {
+  /** The attempt's plans (built on demand: only the winning attempt draws). */
+  build: () => LetterPlan[];
+  /** Lines still overlapping, read too early or spilled out of their tier. */
+  stuck: string[];
+  /** The density step of this attempt. */
+  scale: number;
+  /** Movable balloons still overlapping something. */
+  unresolved: number;
+  /** Balloons the engine put far too early: above their panel's tier or in a panel of an earlier tier. */
+  farEarly: number;
+  /** Balloons the engine put where the reader meets them too early (earlier panel, above the tier, before the previous line). */
+  early: number;
+  /** Software-placed balloons drawn outside their panel's tier (a later tier). */
+  spilled: number;
+}
+
+/** `a` is a worse page than `b`: more overlaps, else more far-early reads, else more early reads, else more tier spills. */
+const worse = (a: PageAttempt, b: PageAttempt): boolean => {
+  if (a.unresolved !== b.unresolved) return a.unresolved > b.unresolved;
+  if (a.farEarly !== b.farEarly) return a.farEarly > b.farEarly;
+  if (a.early !== b.early) return a.early > b.early;
+  return a.spilled > b.spilled;
+};
+
+/** Panel indexes in reading order (the panel number, then the array order). */
+const readingOrder = (page: Page): number[] =>
+  page.panels
+    .map((panel, index) => ({ n: panel.n, index }))
+    .sort((a, b) => a.n - b.n || a.index - b.index)
+    .map((p) => p.index);
+
+/**
+ * One planning pass at a density scale (1 = the style's size). `keep: 'all'` draws every stored balloon
+ * where it is; `keep: 'pinned'` re-places the unpinned stored ones too (an over-full page's repack).
+ * `unresolved` counts the balloons the settle pass could not clear of overlaps.
+ */
+function planAtDensity(
+  doc: ComicDoc,
+  page: Page,
+  items: readonly { line: Line; panelIndex: number; panelN: number }[],
+  lineIds: ReadonlySet<string>,
+  stored: ReadonlyMap<string, Balloon>,
+  boxes: readonly Box[],
+  rtl: boolean,
+  safe: Box,
+  safeMargin: number,
+  asp: number,
+  H: number,
+  m: Measure,
+  scale: number,
+  keep: 'all' | 'pinned',
+  sizer: (line: Line, w: number) => SizedLine,
+  shapes: Map<string, BubbleGeometry>
+): PageAttempt {
+  const repacks = (id: string) => {
+    const b = stored.get(id);
+    return keep === 'pinned' && !!b && !b.pinned && !b.locked;
+  };
+  // Lines without a stored balloon (and, when repacking, the unpinned stored ones): deterministic placement
+  // around everything else on the page.
   const placed = new Map<string, Balloon>();
   let crowded: ReadonlySet<string> = new Set<string>();
-  if (items.some((it) => !stored.has(it.line.id))) {
+  if (items.some((it) => !stored.has(it.line.id) || repacks(it.line.id))) {
     const qc = page.render?.qc;
     const result = placeBalloonsDetailed({
       page,
-      boxes,
+      boxes: [...boxes],
       aspect: asp,
       rtl,
-      plansFor: letteringSizer(doc, page, asp, m),
+      plansFor: sizer,
       keepOut: qc?.keepOut,
       heads: qc?.heads,
       safeMargin,
       existing: page.balloons || [],
-      keep: 'all',
+      keep,
       lang: doc.format?.language
     });
-    for (const b of result.balloons) if (!stored.has(b.lineId)) placed.set(b.lineId, b);
-    crowded = new Set(result.crowded.filter((id) => !stored.has(id)));
+    for (const b of result.balloons) if (!stored.has(b.lineId) || repacks(b.lineId)) placed.set(b.lineId, b);
+    crowded = new Set(result.crowded.filter((id) => !stored.has(id) || repacks(id)));
   }
 
-  const lineIds = new Set(items.map((it) => it.line.id));
-  const plans: (LetterPlan & { order: number })[] = [];
+  const whole: Box = { x: 0, y: 0, w: 1, h: 1 };
+  const mx = PAGE_FIT_MARGIN * PLAN_W;
+  const my = PAGE_FIT_MARGIN * H;
+
+  // Pass 1: every line's text box at its (stored or placed) balloon, the real outline, the render-time page
+  // fit and the tail tip. Nothing is final yet: the settle pass may still nudge movable balloons.
+  interface Pre {
+    line: Line;
+    panelIndex: number;
+    panelN: number;
+    order: number;
+    setup: LineSetup;
+    b: Balloon;
+    fallback: boolean;
+    movable: boolean;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    t: ReturnType<typeof layoutText>;
+    g0: BubbleGeometry;
+    /** Absolute tail tip (plan units) or null; `tipFollows` when it is the default one derived from the box. */
+    tip: { x: number; y: number } | null;
+    tipFollows: boolean;
+  }
+  const pre: Pre[] = [];
+  const repacked = new Set<string>();
   items.forEach(({ line, panelIndex, panelN }, order) => {
     const fallback = !stored.has(line.id);
-    const src = stored.get(line.id) ?? placed.get(line.id);
+    const again = repacks(line.id) && placed.has(line.id);
+    const src = again ? placed.get(line.id) : stored.get(line.id) ?? placed.get(line.id);
     if (!src) return;
+    if (again) repacked.add(line.id);
     const b = clampStored(src);
-    const setup = lineSetup(doc, line, m);
-    const panelBox = boxes[panelIndex] ?? { x: 0, y: 0, w: 1, h: 1 };
+    const panelBox = boxes[panelIndex] ?? whole;
     const pinned = !!(b.pinned || b.locked);
+    // Dense pages letter the software-placed balloons smaller; a balloon the owner placed keeps its size.
+    const setup = densify(lineSetup(doc, line, m), pinned ? 1 : scale);
     // Captions of rtl comics are anchored at their right (reading-start) edge: they grow leftwards.
     const growLeft = rtl && line.kind === 'caption';
-    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned, growLeft }, panelBox, H);
+    // A software-placed balloon was sized against the whole page by the placement (it may have spilled out
+    // of a full panel): fitting it to its panel again would shrink or overflow text that already fits. A
+    // balloon lettered smaller for a dense page is not shrunk again by the auto-fit floor either (that
+    // would stack: 0.72 × 0.82 ≈ 59 % of its size); it wraps taller and the settle pass finds it room.
+    const densified = !pinned && scale < 1;
+    const t = layoutText(setup, m, { x: b.x, y: b.y, w: b.w, pinned, growLeft }, fallback || again || densified ? whole : panelBox, H);
     let x = growLeft ? (b.x + b.w) * PLAN_W - t.w : b.x * PLAN_W;
     let y = b.y * H;
     const w = t.w;
     const h = t.h;
 
     // Render-time page fit on the real outline (stored values untouched).
-    const g0 = geometryFor(setup, w, h, null);
-    const mx = PAGE_FIT_MARGIN * PLAN_W;
-    const my = PAGE_FIT_MARGIN * H;
+    const g0Key = `${line.id}|${setup.baseSize}|${r2(w)}|${r2(h)}`;
+    let g0 = shapes.get(g0Key);
+    if (!g0) shapes.set(g0Key, (g0 = geometryFor(setup, w, h, null)));
     const ox = (lo: number, size: number, start: number, span: number) =>
       size > span - 2 * lo ? start + (span - size) / 2 : clampV(start, lo, span - lo - size);
     const outlineX = ox(mx, g0.bounds.w, x + g0.bounds.x, PLAN_W);
@@ -471,59 +638,203 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     x = outlineX - g0.bounds.x;
     y = outlineY - g0.bounds.y;
 
-    // Tail tip (absolute), then relative to the drawn text box.
+    // Tail tip (absolute): the stored one, else the default below the box for spoken kinds.
     const tailStyle = resolveTailStyle(setup.style.tail, line.kind, setup.style.shape);
     let tip: { x: number; y: number } | null = null;
+    let tipFollows = false;
     if (tailStyle !== 'none' && setup.style.shape !== 'none') {
       if (typeof b.tailX === 'number' && typeof b.tailY === 'number') tip = { x: b.tailX * PLAN_W, y: b.tailY * H };
       else if (SPOKEN.has(line.kind)) {
         tip = { x: clampV(x + w * 0.42, 0, PLAN_W), y: clampV(y + h + 0.04 * H, 0, H) };
+        tipFollows = true;
       }
     }
-    const geometry = geometryFor(setup, w, h, tip ? { x: r2(tip.x - x), y: r2(tip.y - y) } : null);
-
-    const rotate = typeof setup.style.rotate === 'number' ? setup.style.rotate : 0;
-    const skewX = line.kind === 'sfx' && setup.style.sfxEffect === 'skewed' ? -12 : setup.synthItalic ? -10 : 0;
-    const outline = { x: x + geometry.bounds.x, y: y + geometry.bounds.y, w: geometry.bounds.w, h: geometry.bounds.h };
-    const eps = 0.5;
-    const outOfSafeArea =
-      outline.x < safe.x - eps || outline.y < safe.y - eps || outline.x + outline.w > safe.x + safe.w + eps || outline.y + outline.h > safe.y + safe.h + eps;
-
-    const plan: LetterPlan & { order: number } = {
-      lineId: line.id,
-      kind: line.kind,
-      panelN,
-      lang: setup.lang,
-      dir: setup.spec.dir,
-      fallback,
-      style: setup.style,
-      fontId: setup.fontId,
-      x: r2(x),
-      y: r2(y),
-      w: r2(w),
-      h: r2(h),
-      font: setup.fontAt(t.fontSize),
-      fontSize: t.fontSize,
-      lineHeight: r4(setup.lineHeight),
-      pad: { x: r2(setup.pad.x), y: r2(setup.pad.y) },
-      runs: runsFor(setup, t.lines, { x, y, w }, t.fontSize),
-      geometry,
-      stroke: setup.stroke,
-      z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : order,
-      locked: !!b.locked,
-      outOfSafeArea,
-      overflow: t.overflow,
-      order
-    };
-    if (rotate || skewX) plan.transform = { rotate, skewX, cx: r2(x + w / 2), cy: r2(y + h / 2) };
-    if (b.linkTo && b.linkTo !== line.id && lineIds.has(b.linkTo)) plan.linkTo = b.linkTo;
-    if (tip) plan.tip = { x: r2(tip.x), y: r2(tip.y) };
-    if (crowded.has(line.id)) plan.crowded = true;
-    plans.push(plan);
+    pre.push({ line, panelIndex, panelN, order, setup, b, fallback, movable: !pinned, x, y, w, h, t, g0, tip, tipFollows });
   });
-  plans.sort((a, b) => a.z - b.z || a.order - b.order);
-  return plans.map(({ order: _order, ...plan }) => plan);
+
+  // Pass 2: settle — software-placed and unpinned stored balloons slide off pinned ones and each other,
+  // tails included, with the real sizes, keeping reading order. Stored values stay as they are; pinned and
+  // locked balloons never move.
+  const groupOf = linkGroups(pre.map((p) => ({ id: p.line.id, linkTo: p.b.linkTo })));
+  const order = readingOrder(page);
+  const readPos = new Map(order.map((index, r) => [index, r]));
+  const planBox = (index: number): Box | undefined => {
+    const b = boxes[index];
+    return b ? { x: b.x * PLAN_W, y: b.y * H, w: b.w * PLAN_W, h: b.h * H } : undefined;
+  };
+  /** Earlier panels (reading order) of the panel at `index`, plan units. */
+  const earlierOf = (index: number): Box[] => order.slice(0, readPos.get(index) ?? 0).flatMap((i) => planBox(i) ?? []);
+  /** The previous line of each line's panel, as the reader meets it: the line it must read after. */
+  const afterOf = new Map<string, string>();
+  for (const p of pre) {
+    const prev = pre.filter((q) => q.panelIndex === p.panelIndex && q.order < p.order).pop();
+    if (!prev) continue;
+    // A pinned balloon the owner put outside the panel says nothing about this panel's order.
+    const reg = planBox(p.panelIndex);
+    const cx = prev.x + prev.w / 2;
+    if (prev.movable || !reg || (cx >= reg.x && cx <= reg.x + reg.w && prev.y >= reg.y - 0.01 * H && prev.y <= reg.y + reg.h)) afterOf.set(p.line.id, prev.line.id);
+  }
+  const settled = settleBalloons(
+    pre.map((p): SettleItem => {
+      const outline = { x: p.x + p.g0.bounds.x, y: p.y + p.g0.bounds.y, w: p.g0.bounds.w, h: p.g0.bounds.h };
+      // A default tail follows the box: its reach is part of the outline instead of a fixed tip.
+      const foot = p.tip && p.tipFollows ? balloonFootprint(outline, p.tip) : outline;
+      const item: SettleItem = {
+        id: p.line.id,
+        outline: foot,
+        tip: p.tip && !p.tipFollows ? p.tip : null,
+        movable: p.movable,
+        region: planBox(p.panelIndex),
+        group: groupOf.get(p.line.id),
+        text: { x: p.x, y: p.y, w: p.w, h: p.h },
+        before: earlierOf(p.panelIndex)
+      };
+      const after = afterOf.get(p.line.id);
+      if (after) item.after = after;
+      return item;
+    }),
+    { w: PLAN_W, h: H },
+    { margin: { x: mx, y: my }, gap: 0.01 * PLAN_W, rtl }
+  );
+  const nudged = new Set<string>();
+  for (const p of pre) {
+    const mv = settled.moves.get(p.line.id);
+    if (!mv || (!mv.dx && !mv.dy)) continue;
+    p.x += mv.dx;
+    p.y += mv.dy;
+    if (p.tip && p.tipFollows) p.tip = { x: clampV(p.x + p.w * 0.42, 0, PLAN_W), y: clampV(p.y + p.h + 0.04 * H, 0, H) };
+    else if (p.tip && mv.tipMoved) p.tip = { x: clampV(p.tip.x + mv.dx, 0, PLAN_W), y: clampV(p.tip.y + mv.dy, 0, H) };
+    nudged.add(p.line.id);
+  }
+
+  // Reading order of what the engine drew: every balloon it placed or moved is read in its panel's turn.
+  // Levels as settleBalloons ranks them: a later tier (1), a little early inside the tier (2), far too
+  // early — above the tier or in a panel of an earlier tier (3). Only what the engine changed counts.
+  let farEarly = 0;
+  let early = 0;
+  let spilled = 0;
+  const stuck = new Set<string>();
+  const levels = new Map<string, number>();
+  const textOf = new Map(pre.map((p) => [p.line.id, { x: p.x, y: p.y }]));
+  const rowTol = ROW_TOLERANCE * H;
+  const inside = (b: Box, px: number, py: number) => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h;
+  for (const p of pre) {
+    const engine = p.fallback || repacked.has(p.line.id) || nudged.has(p.line.id);
+    if (!engine || !p.movable) continue;
+    const reg = planBox(p.panelIndex);
+    const cx = p.x + p.w / 2;
+    const cy = p.y + p.h / 2;
+    // Where the owner (or an earlier software pass) stored it.
+    const s0 = p.fallback || repacked.has(p.line.id) ? undefined : { x: p.b.x * PLAN_W + p.w / 2, y: p.b.y * H + p.h / 2 };
+    const level = ((): number => {
+      if (reg && cy < reg.y && !(s0 && s0.y < reg.y)) return 3;
+      let lv = 0;
+      for (const b of earlierOf(p.panelIndex)) {
+        if (!inside(b, cx, cy) || (s0 && inside(b, s0.x, s0.y))) continue;
+        if (reg && !(b.y < reg.y + reg.h - rowTol && b.y + b.h > reg.y + rowTol)) return 3;
+        lv = 2;
+      }
+      if (lv) return lv;
+      const after = afterOf.get(p.line.id);
+      const prev = after ? textOf.get(after) : undefined;
+      if (prev && !s0) {
+        const t = textOf.get(p.line.id)!;
+        if (t.y < prev.y - rowTol || (Math.abs(t.y - prev.y) < rowTol && (rtl ? t.x > prev.x + 1e-6 : t.x < prev.x - 1e-6))) return 2;
+      }
+      const out = (y: number) => !!reg && (y < reg.y - 0.02 * H || y > reg.y + reg.h + 0.02 * H);
+      return out(cy) && !(s0 && out(s0.y)) ? 1 : 0;
+    })();
+    if (level === 3) farEarly += 1;
+    else if (level === 2) early += 1;
+    else if (level === 1) spilled += 1;
+    if (level) {
+      stuck.add(p.line.id);
+      levels.set(p.line.id, level);
+    }
+  }
+  const unresolved = new Set(settled.unresolved);
+  for (const id of unresolved) stuck.add(id);
+
+  // Pass 3 (only for the attempt that wins): the plans themselves.
+  const build = (): LetterPlan[] => {
+    const plans: (LetterPlan & { order: number })[] = [];
+    for (const p of pre) {
+      const { line, setup, b, x, y, w, h, t, tip } = p;
+      const geometry = geometryFor(setup, w, h, tip ? { x: r2(tip.x - x), y: r2(tip.y - y) } : null);
+
+      const rotate = typeof setup.style.rotate === 'number' ? setup.style.rotate : 0;
+      const skewX = line.kind === 'sfx' && setup.style.sfxEffect === 'skewed' ? -12 : setup.synthItalic ? -10 : 0;
+      const outline = { x: x + geometry.bounds.x, y: y + geometry.bounds.y, w: geometry.bounds.w, h: geometry.bounds.h };
+      const eps = 0.5;
+      const outOfSafeArea =
+        outline.x < safe.x - eps || outline.y < safe.y - eps || outline.x + outline.w > safe.x + safe.w + eps || outline.y + outline.h > safe.y + safe.h + eps;
+
+      const plan: LetterPlan & { order: number } = {
+        lineId: line.id,
+        kind: line.kind,
+        panelN: p.panelN,
+        lang: setup.lang,
+        dir: setup.spec.dir,
+        fallback: p.fallback,
+        style: setup.style,
+        fontId: setup.fontId,
+        x: r2(x),
+        y: r2(y),
+        w: r2(w),
+        h: r2(h),
+        font: setup.fontAt(t.fontSize),
+        fontSize: t.fontSize,
+        lineHeight: r4(setup.lineHeight),
+        pad: { x: r2(setup.pad.x), y: r2(setup.pad.y) },
+        runs: runsFor(setup, t.lines, { x, y, w }, t.fontSize),
+        geometry,
+        stroke: setup.stroke,
+        z: typeof b.z === 'number' && Number.isFinite(b.z) ? b.z : p.order,
+        locked: !!b.locked,
+        outOfSafeArea,
+        overflow: t.overflow,
+        order: p.order
+      };
+      if (rotate || skewX) plan.transform = { rotate, skewX, cx: r2(x + w / 2), cy: r2(y + h / 2) };
+      if (b.linkTo && b.linkTo !== line.id && lineIds.has(b.linkTo)) plan.linkTo = b.linkTo;
+      if (tip) plan.tip = { x: r2(tip.x), y: r2(tip.y) };
+      // Crowded: the placement could not keep it clean, the settle pass had to move it off another balloon,
+      // an over-full page re-placed it, or it is read out of turn. The reason says which, honestly.
+      if (crowded.has(line.id) || nudged.has(line.id) || repacked.has(line.id) || stuck.has(line.id)) {
+        plan.crowded = true;
+        const reg = planBox(p.panelIndex);
+        const cx = x + w / 2;
+        const cy = y + h / 2;
+        const inPanel = !reg || (cx >= reg.x && cx <= reg.x + reg.w && cy >= reg.y && cy <= reg.y + reg.h);
+        plan.crowdedReason = unresolved.has(line.id) ? 'overlap' : (levels.get(line.id) ?? 0) >= 2 ? 'order' : !inPanel ? 'outside' : 'moved';
+      }
+      if (scale < 1 && p.movable) plan.densityScale = scale;
+      plans.push(plan);
+    }
+    plans.sort((a, b) => a.z - b.z || a.order - b.order);
+    return plans.map(({ order: _order, ...plan }) => plan);
+  };
+  return { build, unresolved: settled.unresolved.length, farEarly, early, spilled, stuck: [...stuck], scale };
 }
+
+
+/** Linked balloons (speech chains) by the root of their linkTo chain — they touch by design. */
+const linkGroups = (items: readonly { id: string; linkTo?: string }[]): Map<string, string> => {
+  const ids = new Set(items.map((i) => i.id));
+  const parent = new Map<string, string>();
+  for (const it of items) parent.set(it.id, it.linkTo && it.linkTo !== it.id && ids.has(it.linkTo) ? it.linkTo : it.id);
+  const root = (id: string): string => {
+    let cur = id;
+    for (let i = 0; i < items.length && parent.get(cur) !== cur; i += 1) cur = parent.get(cur) ?? cur;
+    return cur;
+  };
+  const out = new Map<string, string>();
+  for (const it of items) {
+    const r = root(it.id);
+    if (r !== it.id || items.some((o) => o.linkTo === it.id)) out.set(it.id, r);
+  }
+  return out;
+};
 
 /** Convenience for tools/tests: plans for page number n (undefined when the page doesn't exist). */
 export function planLetteringForPage(doc: ComicDoc, n: number, measure: Measure = estimateMeasure): LetterPlan[] | undefined {

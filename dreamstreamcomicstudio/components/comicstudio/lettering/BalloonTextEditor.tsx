@@ -20,11 +20,22 @@ export interface BalloonTextEditorProps {
   onCancel(): void;
   /** Max characters (server cap). */
   maxLength?: number;
+  /**
+   * Clearing the text keeps the line EMPTY (committed as '': no balloon is drawn, the line stays in the
+   * script) instead of silently restoring the old text (LE-11). Off where a line can't be empty (a
+   * translation): the hint then says so and Enter / blur keep the current text.
+   */
+  allowEmpty?: boolean;
+  /** Offered while the text is empty: remove the line and its balloon (one undoable change). */
+  onDelete?(): void;
 }
+
+/** The longest balloon line the server stores (jobs.ts `line` sanitizer clips at 600). */
+export const LINE_TEXT_MAX = 600;
 
 const CASE: Record<string, React.CSSProperties['textTransform']> = { upper: 'uppercase', lower: 'lowercase', title: 'capitalize', as_typed: 'none' };
 
-export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, pageWidthPx, text, onCommit, onCancel, maxLength = 600 }) => {
+export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, pageWidthPx, text, onCommit, onCancel, maxLength = LINE_TEXT_MAX, allowEmpty = false, onDelete }) => {
   const [value, setValue] = useState(text);
   const ref = useRef<HTMLTextAreaElement>(null);
   const done = useRef(false);
@@ -62,7 +73,13 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
     done.current = true;
     const next = value.replace(/\r\n?/g, '\n').slice(0, maxLength);
     if (next.trim() && next !== text) onCommit(next);
+    else if (!next.trim() && allowEmpty && text.trim()) onCommit('');
     else onCancel();
+  };
+  const remove = () => {
+    if (done.current) return;
+    done.current = true;
+    onDelete?.();
   };
   const cancel = () => {
     if (done.current) return;
@@ -76,10 +93,35 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
   const leftFrac = Math.max(0, Math.min(plan.x / 1000, 1 - widthFrac));
   const topFrac = Math.max(0, Math.min(plan.y / H, 0.9));
   const hintAbove = topFrac > 0.75;
+  const blank = !value.trim();
+  // Never silent: an emptied balloon says what Enter will do, and offers the delete right there.
   const hint = (
-    <p className={`${hintAbove ? 'mb-1' : 'mt-1'} rounded-md bg-black/70 px-1.5 py-0.5 text-center text-[10.5px] font-medium text-white`}>
-      Enter to save · Shift+Enter new line · Esc to cancel
-    </p>
+    <div
+      role={blank ? 'status' : undefined}
+      data-testid="balloon-text-hint"
+      className={`${hintAbove ? 'mb-1' : 'mt-1'} flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 rounded-md bg-black/75 px-1.5 py-0.5 text-center text-[10.5px] font-medium text-white`}
+    >
+      {!blank ? (
+        <span>Enter to save · Shift+Enter new line · Esc to cancel</span>
+      ) : allowEmpty ? (
+        <span>Empty: Enter keeps the line with no balloon · Esc brings the text back</span>
+      ) : (
+        <span>The text can’t be empty here — Esc keeps the current text</span>
+      )}
+      {blank && onDelete && (
+        <button
+          type="button"
+          data-testid="balloon-text-delete"
+          // Keep the focus in the field (a blur would commit first); the click removes the line.
+          onPointerDown={(e) => e.preventDefault()}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={remove}
+          className="rounded px-1.5 py-0.5 font-semibold text-white underline underline-offset-2 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white coarse:min-h-11 coarse:px-2.5"
+        >
+          Delete balloon
+        </button>
+      )}
+    </div>
   );
   return (
     <div
@@ -119,7 +161,7 @@ export const BalloonTextEditor: React.FC<BalloonTextEditorProps> = ({ plan, H, p
             commit();
           }
         }}
-        className="block w-full resize-none overflow-hidden rounded-xl border border-[#D97757]/60 px-2 py-1.5 leading-snug shadow-[0_8px_30px_rgba(0,0,0,0.25)] outline-none focus:ring-2 focus:ring-[#D97757]/45"
+        className="block w-full resize-none overflow-hidden rounded-xl border border-[var(--ds-accent)] px-2 py-1.5 leading-snug shadow-[0_8px_30px_rgba(0,0,0,0.25)] outline-none focus:ring-2 focus:ring-[var(--ds-ring)]"
         style={{
           fontFamily: fontFamilyStack(plan.fontId),
           fontWeight: parsed?.weight ?? 700,

@@ -54,11 +54,14 @@ import type { DocOp, StudioAction } from '../../../shared/comic/ops';
 import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
+import { DOC_LIMITS } from '../../../shared/comic/limits';
+import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
 import { useDialogA11y } from '../../studio/kit/useDialogA11y';
 import { ComicPageView } from './ComicPageView';
+import type { BalloonChangeOptions } from './BalloonLayer';
 import { isSpokenKind, pageAspectOf } from './balloonGeometry';
 import {
   CLEAR,
@@ -83,10 +86,11 @@ import type { PatchOptions } from '../types';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import { LetteringInspector, type Rect } from '../lettering/LetteringInspector';
 import { LetteringToolbar } from '../lettering/LetteringToolbar';
+import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { useLetterPlans } from '../lettering/useLetterPlans';
 import { useLetteringSelection } from '../lettering/useLetteringSelection';
-import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
+import { addLineAtOps, deleteLinesOps, duplicateLineOps, fixSafeAreaOps, lockOps, outlineFractions, pinKeepingSizeOps, presetOps, resetPositionOps, tidyOps, zOrderOps } from '../lettering/styleOps';
 import { useFormFactor } from '../mobile/useFormFactor';
 import { TouchCanvas, useZoom } from '../mobile/touch/TouchCanvas';
 import { useGestureArbiter } from '../mobile/touch/GestureArbiter';
@@ -132,6 +136,52 @@ export const fitPageToStage = (stage: { w: number; h: number }, aspect: number, 
   return Math.floor(Math.min(w, h * aspect));
 };
 
+/** Phones shorter than this open the editor with the page tools sheet closed (the Tools button opens it). */
+export const PHONE_SHEET_OPEN_MIN_H = 780;
+
+/**
+ * Is the page tools sheet open when the editor opens? The user's last choice on this device wins. With
+ * none, a phone shorter than PHONE_SHEET_OPEN_MIN_H starts with it closed: under the sheet's peek detent a
+ * 660 px phone kept an ~85 px page whose balloons were too small to read or tap. Tablets and taller phones
+ * start with it open, as before.
+ */
+export const toolsSheetOpenAtStart = (flag: string | null, kind: EditorLayout['kind'], viewportHeight: number): boolean => {
+  if (flag === 'open') return true;
+  if (flag === 'closed') return false;
+  return kind !== 'phone' || !(viewportHeight > 0) || viewportHeight >= PHONE_SHEET_OPEN_MIN_H;
+};
+
+/**
+ * Phones: how far (px) the page slides up so a selection (viewport px, measured without any slide) ends
+ * 12 px above the lettering sheet's top — 0 when it already does (the page holds still), and never so far
+ * that the selection's own top would leave the stage (8 px margin). Pure; tested.
+ */
+export const selectionSlide = (sel: { top: number; bottom: number }, stageTop: number, sheetTop: number): number => {
+  if (![sel.top, sel.bottom, stageTop, sheetTop].every(Number.isFinite)) return 0;
+  const need = sel.bottom + 12 - sheetTop;
+  if (need <= 0) return 0;
+  const room = Math.max(0, sel.top - stageTop - 8);
+  return Math.round(Math.min(need, room));
+};
+
+/** The least stage height (px) the phone lettering sheet leaves above itself (a 2:3 page ≈ 145 px wide). */
+export const MIN_STAGE_PX = 240;
+/** …and at least this share of the viewport's height: the page and its balloons stay big enough to tap. */
+export const MIN_STAGE_SHARE = 0.45;
+/** The sheet never gets shorter than its header plus a row of controls (its content scrolls). */
+export const MIN_SHEET_PX = 168;
+
+/**
+ * Height cap (px) for the phone lettering sheet: everything below the stage's top minus the page's
+ * minimum height (MIN_STAGE_PX, or MIN_STAGE_SHARE of the viewport when that is more), never under
+ * MIN_SHEET_PX (the sheet scrolls its own content).
+ */
+export const inspectorSheetMaxHeight = (stageTop: number, viewportHeight: number, minStage = MIN_STAGE_PX): number => {
+  const vh = Number.isFinite(viewportHeight) ? viewportHeight : 0;
+  const keep = Math.max(minStage, Math.round(vh * MIN_STAGE_SHARE));
+  return Math.max(MIN_SHEET_PX, Math.round(vh - (Number.isFinite(stageTop) ? stageTop : 0) - keep));
+};
+
 /** Default text for a balloon added from the toolbar (selected in the inline editor, so typing replaces it). */
 const NEW_LINE_TEXT: Record<LineKind, string> = {
   speech: 'Hello!',
@@ -167,7 +217,7 @@ const isEditableTarget = (el: EventTarget | null) => {
 };
 
 const SELECT_CLS =
-  'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-50 coarse:h-11';
+  'h-7 min-w-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-1.5 text-[12px] text-[var(--ds-ink)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-50 coarse:h-11';
 
 /** Any per-line, per-kind, per-speaker or base lettering overrides in the comic? */
 const hasLetteringOverrides = (doc: ComicDoc): boolean =>
@@ -349,7 +399,7 @@ const MarkupLayer: React.FC<{
             data-testid={`markup-corner-${c.id}`}
             onPointerDown={(e) => onCornerDown(e, c)}
             onKeyDown={(e) => onCornerKey(e, c)}
-            className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-red-500 shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]"
+            className="absolute z-[5] -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-red-500 shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
             style={{ left: `${(region.x + c.x * region.w) * 100}%`, top: `${(region.y + c.y * region.h) * 100}%`, width: 14 / scale, height: 14 / scale, cursor: c.id === 'nw' || c.id === 'se' ? 'nwse-resize' : 'nesw-resize' }}
           >
             <span aria-hidden className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full" style={{ width: 44 / scale, height: 44 / scale }} />
@@ -366,6 +416,39 @@ interface EditionLineProps {
   text?: string;
   onCommit(text: string): void;
 }
+
+/** Show the count when this close to the cap (and always once at it). */
+const COUNT_FROM = 40;
+
+/**
+ * A text field with a live "n / max" count once the text is within COUNT_FROM characters of `max` (the
+ * field itself carries maxLength). Reads the length from the field's own input events, so it counts the
+ * draft as it is typed, not just the committed value.
+ */
+export const CountedField: React.FC<{ max: number; value: string; testId?: string; children: React.ReactNode }> = ({ max, value, testId, children }) => {
+  const [len, setLen] = useState(value.length);
+  useEffect(() => setLen(value.length), [value]);
+  const near = len >= max - COUNT_FROM;
+  return (
+    <div
+      onInput={(e) => {
+        const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+        if (typeof t.value === 'string') setLen(t.value.length);
+      }}
+      onBlur={(e) => {
+        const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+        if (typeof t.value === 'string') setLen(t.value.length);
+      }}
+    >
+      {children}
+      {near && (
+        <p data-testid={testId} className={cx('px-2 text-right text-[11px] tabular-nums', len >= max ? 'font-medium text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>
+          {len >= max ? `${max} / ${max} — the limit` : `${len} / ${max}`}
+        </p>
+      )}
+    </div>
+  );
+};
 
 const LineRow: React.FC<{
   doc: ComicDoc;
@@ -389,7 +472,7 @@ const LineRow: React.FC<{
       onClick={onSelect}
       className={cx(
         'space-y-1 rounded-xl border p-1.5 transition-colors duration-200 motion-reduce:transition-none',
-        selected ? 'border-[#D97757]/45 bg-[#D97757]/[0.07]' : 'border-transparent bg-[var(--ds-well)]'
+        selected ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-transparent bg-[var(--ds-well)]'
       )}
     >
       <div className="flex min-w-0 items-center gap-1.5">
@@ -441,27 +524,35 @@ const LineRow: React.FC<{
           {castName(doc, line.speakerId)} isn’t in this panel — the line reads as off-panel.
         </p>
       )}
-      <InlineField
-        label={`Line text (${LINE_KIND_LABEL[line.kind]})`}
-        multiline
-        rows={1}
-        autoFocus={autoFocus}
-        value={line.text}
-        placeholder="Type the line…"
-        onCommit={(text) => patch([lineOp({ text })])}
-        inputClassName="text-[13px]"
-      />
+      {/* The server stores at most LINE_TEXT_MAX characters (LE-6): the field stops there and counts down
+          near the cap, so what the editor shows is what is saved. */}
+      <CountedField max={LINE_TEXT_MAX} value={line.text} testId="line-text-count">
+        <InlineField
+          label={`Line text (${LINE_KIND_LABEL[line.kind]})`}
+          multiline
+          rows={1}
+          autoFocus={autoFocus}
+          value={line.text}
+          maxLength={LINE_TEXT_MAX}
+          placeholder="Type the line…"
+          onCommit={(text) => patch([lineOp({ text: text.slice(0, LINE_TEXT_MAX) })])}
+          inputClassName="text-[13px]"
+        />
+      </CountedField>
       {edition && (
         <div lang={edition.lang} dir={dirOf(edition.lang)} style={{ fontFamily: cssFontFamily(edition.lang, line.kind === 'sfx' ? 'sfx' : 'dialogue') }}>
-          <InlineField
-            label={`${languageLabel(edition.lang)} translation`}
-            multiline
-            rows={1}
-            value={edition.text ?? ''}
-            placeholder={`Not translated yet — type the ${languageLabel(edition.lang)} line`}
-            onCommit={(text) => text.trim() && text !== edition.text && edition.onCommit(text)}
-            inputClassName="text-[13px]"
-          />
+          <CountedField max={DOC_LIMITS.translationChars} value={edition.text ?? ''} testId="translation-text-count">
+            <InlineField
+              label={`${languageLabel(edition.lang)} translation`}
+              multiline
+              rows={1}
+              value={edition.text ?? ''}
+              maxLength={DOC_LIMITS.translationChars}
+              placeholder={`Not translated yet — type the ${languageLabel(edition.lang)} line`}
+              onCommit={(text) => text.trim() && text !== edition.text && edition.onCommit(text.slice(0, DOC_LIMITS.translationChars))}
+              inputClassName="text-[13px]"
+            />
+          </CountedField>
         </div>
       )}
     </div>
@@ -531,7 +622,7 @@ const PanelEditor: React.FC<{
       <button
         type="button"
         onClick={addLine}
-        className="tap-target mt-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+        className="tap-target mt-1.5 inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
       >
         <Plus className="h-3.5 w-3.5" aria-hidden /> Add line
       </button>
@@ -583,6 +674,17 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [zoomReset, setZoomReset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [coverInset, setCoverInset] = useState(0);
+  /** Phones: how far (px) the page slides up so the selection clears the lettering sheet (0 = holds still). */
+  const [slide, setSlide] = useState(0);
+  const slideRef = useRef(0);
+  slideRef.current = slide;
+  /** Phones: the lettering sheet's height cap, so the page above it keeps at least MIN_STAGE_PX. */
+  const [inspectorMaxH, setInspectorMaxH] = useState<number | undefined>(undefined);
+  /** Dual-screen: the floating inspector stays on the tools segment (never across the hinge, never clipped by the grid). */
+  const foldGridRef = useRef<HTMLDivElement>(null);
+  /** Every other layout: its root (it clips — overflow-hidden — so the floating inspector stays inside it). */
+  const layoutRootRef = useRef<HTMLDivElement>(null);
+  const [inspectorBounds, setInspectorBounds] = useState<Rect | null>(null);
   const ff = useFormFactor();
   const [coach, setCoach] = useState(() => ff.coarse && readFlag(COACH_KEY) !== '1');
   const { busyKey, fire } = useClickGuard(2500);
@@ -636,17 +738,26 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         return;
       }
       void studio.patch(ops, { undo: true, ...opts });
+      // A balloon whose text was cleared keeps its (empty) line: say so, and where it went (LE-11).
+      if (ops.some((o) => o.op === 'line' && !!o.patch && typeof o.patch.text === 'string' && !o.patch.text.trim()))
+        setNotice('The balloon’s text is empty, so it is hidden — its line stays in the script (Page tools). Type it again there, Delete it, or Undo.');
     },
     [studio, lang, doc, sourceName]
   );
+  /**
+   * One balloon's move / resize / tail aim: the undo entry is named for what it did (LE-8) and a resize
+   * then a move within the coalesce window stay two entries (the gesture is part of the coalesce key).
+   */
   const onBalloonChange = useCallback(
-    (lineId: string, p: Partial<Balloon>, opts?: { lang?: string }) => {
+    (lineId: string, p: Partial<Balloon>, opts?: BalloonChangeOptions) => {
+      const label = opts?.label || 'Move balloon';
+      const gesture = opts?.gesture || 'move';
       if (opts?.lang) {
         const r = editionOps([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], opts.lang, doc);
-        if (r.ops.length) void studio.patch(r.ops, { undo: true, label: 'Move balloon', coalesce: `edition_balloon:${opts.lang}:${sourcePage.id}:${lineId}` });
+        if (r.ops.length) void studio.patch(r.ops, { undo: true, label, coalesce: `edition_balloon:${gesture}:${opts.lang}:${sourcePage.id}:${lineId}` });
         return;
       }
-      void studio.patch([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], { undo: true, label: 'Move balloon', coalesce: `balloon:${sourcePage.id}:${lineId}` });
+      void studio.patch([{ op: 'balloon', pageId: sourcePage.id, lineId, patch: p }], { undo: true, label, coalesce: `balloon:${gesture}:${sourcePage.id}:${lineId}` });
     },
     [studio, sourcePage.id, doc]
   );
@@ -697,8 +808,16 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const letteringEditable = mode === 'move' && overlayLettering && !busy && artOk;
   const tidy = useMemo(() => (overlayLettering ? tidyOps(vDoc, page, aspect, measure) : []), [overlayLettering, vDoc, page, aspect, measure]);
   const outsideCount = plans.filter((p) => p.outOfSafeArea && !p.locked).length;
-  const crowdedIds = [...placements.crowded];
+  // The drawn plans say which balloons are crowded (the editor's own placement may flag a line the drawn
+  // page fits fine); a line with no plan (no text) keeps the placement's flag.
+  const crowdedIds = useMemo(() => {
+    const planned = new Set(plans.map((p) => p.lineId));
+    return [...new Set([...plans.filter((p) => p.crowded).map((p) => p.lineId), ...[...placements.crowded].filter((id) => !planned.has(id))])];
+  }, [plans, placements]);
   const overflowIds = plans.filter((p) => p.overflow).map((p) => p.lineId);
+  // Dense page: the renderer lettered the software-placed balloons smaller so nothing overlaps.
+  const dense = plans.filter((p) => typeof p.densityScale === 'number' && p.densityScale < 1);
+  const densityPct = dense.length ? Math.round(Math.min(...dense.map((p) => p.densityScale as number)) * 100) : 100;
   // The balloon menu is the one surface while it is open: the inspector (a second sheet on phones, which
   // would also re-fit the page under the menu) waits until it closes ("Style…" then shows it).
   const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu;
@@ -755,20 +874,55 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       return;
     }
     setAnchor((cur) => (cur && Math.abs(cur.left - next.left) < 0.5 && Math.abs(cur.top - next.top) < 0.5 && Math.abs(cur.right - next.right) < 0.5 && Math.abs(cur.bottom - next.bottom) < 0.5 ? cur : next));
-  }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset, slide]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The floating inspector stays inside the editor's layout (which clips its overflow): on dual-screen
+  // layouts on the tools segment (the far side of the hinge from the page) — never across the fold — and
+  // in every other layout inside the layout root (phone landscape: below the header, not under it).
+  const foldSplit = layout.kind === 'fold-book' || layout.kind === 'fold-tabletop' ? layout.split : undefined;
+  useLayoutEffect(() => {
+    const root = foldSplit ? foldGridRef.current : layoutRootRef.current;
+    if (!root || !inspectorOpen || layout.compactInspector) {
+      setInspectorBounds((cur) => (cur === null ? cur : null));
+      return;
+    }
+    const r = root.getBoundingClientRect();
+    const offset = foldSplit ? foldSplit.first + foldSplit.gap : 0;
+    const next: Rect = !foldSplit
+      ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+      : foldSplit.axis === 'rows'
+        ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom }
+        : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
+    setInspectorBounds((cur) => (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom ? cur : next));
+  }, [layout.kind, foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
-  // covers, so the whole page — and the selected balloon — stays above it.
+  // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
+  // the page keeps MIN_STAGE_PX: a page squeezed to 100 px has no tappable balloons left (its own content
+  // scrolls instead).
   useLayoutEffect(() => {
     if (!compactInspectorOpen) {
       setCoverInset(0);
+      setSlide(0);
+      setInspectorMaxH(undefined);
       return;
     }
     const host = inspectorHostRef.current;
     const stageBox = stageBoxRef.current;
     const sheet = host?.querySelector<HTMLElement>('[data-testid="lettering-inspector"]');
     if (!sheet || !stageBox) return;
-    const measureCover = () => setCoverInset(coveredByBottomSheet(stageBox.getBoundingClientRect().bottom, sheet.getBoundingClientRect().top));
+    const measureCover = () => {
+      const stageRect = stageBox.getBoundingClientRect();
+      const sheetTop = sheet.getBoundingClientRect().top;
+      setInspectorMaxH(inspectorSheetMaxHeight(stageRect.top, window.innerHeight));
+      setCoverInset(coveredByBottomSheet(stageRect.bottom - restingInsetRef.current, sheetTop));
+      // Measured where the page would be without the slide (the selection rect includes the current one).
+      const sel = selectionRect();
+      if (!sel) return;
+      const top0 = sel.top + slideRef.current;
+      const bottom0 = sel.bottom + slideRef.current;
+      setSlide(selectionSlide({ top: top0, bottom: bottom0 }, stageRect.top, sheetTop));
+    };
     measureCover();
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measureCover);
@@ -886,7 +1040,11 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         id: 'lock',
         label: locked ? 'Unlock' : 'Lock',
         icon: locked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />,
-        onSelect: () => apply(lockOps(page, [lineId], !locked, placements.balloons), { label: locked ? 'Unlock balloon' : 'Lock balloon' })
+        // Locking a dense page's balloon keeps the size it is drawn at (one patch with the lock).
+        onSelect: () =>
+          apply(locked ? lockOps(page, [lineId], false, placements.balloons) : pinKeepingSizeOps(lockOps(page, [lineId], true, placements.balloons), page, plans, [lineId], lang), {
+            label: locked ? 'Unlock balloon' : 'Lock balloon'
+          })
       },
       {
         id: 'reset',
@@ -933,7 +1091,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // Phones may close the sheet (the toolbar reopens it); tablets have no toolbar, so theirs always shows.
   const sheetShown = layout.tools === 'sheet' && (tools.open || layout.kind !== 'phone') && !compactInspectorOpen;
   const sheetInset = sheetShown ? sheetHeights[tools.detent] : 0;
-  const stageInset = Math.max(sheetInset, coverInset);
+  // Phones: the lettering sheet OVERLAYS the stage. The page holds still under the finger that selected a
+  // balloon (no re-fit, no re-centre — the finger's next move is a drag of that balloon); it only slides
+  // up (`slide`) when the selection would sit under the sheet. The stage keeps the inset it had before.
+  const restingInsetRef = useRef(0);
+  if (!compactInspectorOpen) restingInsetRef.current = sheetInset;
+  const stageInset = compactInspectorOpen ? restingInsetRef.current : sheetInset;
   // The image variant follows the page's size with NO sheet over the stage: opening the lettering
   // inspector or moving the tools sheet between detents never swaps in (and downloads) a smaller file.
   const restingPageWidth = fitPageToStage({ w: restingStage.width, h: restingStage.height }, aspect, 0);
@@ -961,10 +1124,21 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           type="button"
           data-testid="crowded-chip"
           onClick={() => selection.select(crowdedIds[0])}
-          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/[0.1] px-2 py-0.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-500/[0.16] dark:text-amber-200"
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`}
           title="A balloon couldn’t find free space in its panel — free fixes in the lettering panel"
         >
           <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Crowded panel{crowdedIds.length > 1 ? ` (${crowdedIds.length})` : ''}</span>
+        </button>
+      )}
+      {letteringEditable && lettering && dense.length > 0 && (
+        <button
+          type="button"
+          data-testid="density-chip"
+          onClick={() => selection.set(dense.map((p) => p.lineId))}
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}
+          title="This page is dense: its auto-placed balloons are lettered smaller so none overlap — shorten lines or move some to another page to get the full size back (free)"
+        >
+          <Type className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Dense page · text at {densityPct}%</span>
         </button>
       )}
       {letteringEditable && lettering && overflowIds.length > 0 && (
@@ -972,7 +1146,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           type="button"
           data-testid="overflow-chip"
           onClick={() => selection.set(overflowIds)}
-          className="tap-target inline-flex min-w-0 items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/[0.1] px-2 py-0.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-500/[0.16] dark:text-amber-200"
+          className={`tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`}
           title="The text doesn’t fit its balloon even at the smallest size — select to widen it or shorten the line (free)"
         >
           <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
@@ -1000,6 +1174,30 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       />
     ) : null;
 
+  // Landscape phones: the stage is short (the page is height-bound), so the coach moves to the top of the
+  // open side sheet instead of costing the page a third of its height.
+  const coachInSide = layout.kind === 'phone-landscape' && tools.side;
+  // Never toggled by a selection: a banner appearing or vanishing above the stage would move the page
+  // under the finger that just selected a balloon (and is about to drag it).
+  const coachInBanners = coach && !coachInSide;
+  // Shown in the phone row, or (landscape) at the top of the side sheet.
+  const coachEl = (
+    <div data-testid="editor-coach" className={cx('flex min-w-0 basis-full items-center gap-2 border border-[var(--ds-hairline)] px-2.5 py-1.5', RADIUS_PANEL, ACCENT_SOFT_BG)}>
+      <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Tap a balloon to select, drag to move, pinch to zoom, long-press for more.</p>
+      <button
+        type="button"
+        onClick={() => {
+          setCoach(false);
+          writeFlag(COACH_KEY, '1');
+        }}
+        // A real 44 px box on touch (fold5 measured 47x26): a ::after hit area here sat under the stage.
+        className={cx('shrink-0 px-2 py-1 text-[12px] font-semibold text-[var(--ds-ink)] underline decoration-[var(--ds-hairline)] underline-offset-2 hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11 coarse:min-w-11 coarse:px-3', RADIUS_CONTROL, TRANSITION)}
+      >
+        Got it
+      </button>
+    </div>
+  );
+
   const banners = (
     <>
       {lang && (
@@ -1013,21 +1211,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           {notice}
         </p>
       )}
-      {coach && (
-        <div data-testid="editor-coach" className="flex min-w-0 basis-full items-center gap-2 rounded-xl border border-[#D97757]/30 bg-[#D97757]/[0.08] px-2.5 py-1.5">
-          <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Tap a balloon to select, drag to move, pinch to zoom, long-press for more.</p>
-          <button
-            type="button"
-            onClick={() => {
-              setCoach(false);
-              writeFlag(COACH_KEY, '1');
-            }}
-            className="tap-target shrink-0 rounded-lg px-2 py-1 text-[12px] font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
-          >
-            Got it
-          </button>
-        </div>
-      )}
+      {coachInBanners && coachEl}
     </>
   );
 
@@ -1040,7 +1224,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // Desktop / tablet mode row (today's position).
   const modeRow = (
-    <div className={cx('flex min-w-0 flex-wrap items-center gap-2 px-4 pt-3', layout.kind === 'fold-tabletop' && 'pb-2')} data-testid="editor-mode-row">
+    // gap-y-3: a wrapped line of chips keeps its 44 px ::after areas clear of the toolbar's above it.
+    <div className={cx('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-3', layout.kind === 'fold-tabletop' && 'pb-2')} data-testid="editor-mode-row">
       <Segmented<Mode>
         label="Editing mode"
         size="xs"
@@ -1080,7 +1265,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         />
       )}
       {!(letteringEditable && lettering) && undoPill /* Undo / redo stay one tap away in every mode. */}
-      {chips}
+      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0) && (
+        // The status chips move as one line (they shrink and truncate, never stack): a chip wrapped under
+        // another put each one's 44 px area on its neighbour's (fold5 dense page).
+        <span className="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-group">
+          {chips}
+        </span>
+      )}
       {languageRow}
       <span className="ml-auto hidden text-[11px] text-[var(--ds-muted)] xl:inline">
         {hint ??
@@ -1088,21 +1279,32 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             ? 'Drag balloons · Shift-click or drag a box to multi-select · double-click edits text · arrows nudge · right-click for more'
             : 'Lettering is drawn into the art on this comic.')}
       </span>
-      {(lang || notice || coach) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
+      {(lang || notice || coachInBanners) && <div className="flex min-w-0 basis-full flex-wrap gap-1.5">{banners}</div>}
     </div>
   );
 
-  // Phones: a slim row above the stage only when there is something to say.
-  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coach || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length)));
+  // Phones: a slim row above the stage when there is something to say. While lettering is editable the
+  // status chips (crowded / dense / overflow) get a line of their own with a FIXED height, kept even when
+  // empty: they come and go with every edit, and a line that appeared (or wrapped) under a just-dropped
+  // balloon re-fitted — shrank — the page, so the balloon no longer sat under the finger (iPhone 15: a
+  // 60 px drag measured 52 px). The chips never wrap there; they shrink and truncate instead.
+  const chipLine = letteringEditable && lettering;
+  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || chipLine);
   const phoneRow = phoneRowNeeded ? (
-    <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3 pt-2" data-testid="editor-phone-row">
+    <div className={cx('flex min-w-0 shrink-0 flex-wrap items-center gap-x-1.5 px-3', chipLine ? 'pt-0.5' : 'gap-y-1.5 pt-2')} data-testid="editor-phone-row">
       {languageRow}
       {region && (
         <GhostButton size="xs" onClick={clearRegion} className="tap-target">
           <X className="h-3 w-3" aria-hidden /> Clear mark
         </GhostButton>
       )}
-      {chips}
+      {chipLine && (
+        // 44 px tall: each chip's 44 px ::after area lies inside the line, clear of the header above and
+        // of the stage (or a banner) below.
+        <div className="flex h-11 min-w-0 flex-1 basis-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-line">
+          {chips}
+        </div>
+      )}
       {hint && <p className="min-w-0 basis-full truncate text-[12px] text-[var(--ds-muted)]">{hint}</p>}
       {banners}
     </div>
@@ -1110,10 +1312,17 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   const stageEl = (
     <div ref={stageBoxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="editor-canvas-box">
-      <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-resting-stage" />
-      <div ref={canvasAreaRef} className="absolute inset-x-0 top-0" style={{ bottom: stageInset }} data-testid="editor-canvas-area">
+      {/* Touch: 24 px of stage around the page, so a balloon's or a handle's 44 px target at the page edge is never clipped. */}
+      <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-resting-stage" />
+      <div
+        ref={canvasAreaRef}
+        className={cx('absolute inset-x-0 top-0', TRANSITION, 'motion-reduce:transition-none')}
+        style={{ bottom: stageInset, ...(slide ? { transform: `translateY(${-slide}px)` } : {}) }}
+        data-slide={slide || undefined}
+        data-testid="editor-canvas-area"
+      >
         {/* Measured, never transformed: the fit box for the page. */}
-        <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 sm:inset-6" data-testid="editor-stage-content" />
+        <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-stage-content" />
         <TouchCanvas
           maxScale={5}
           resetKey={String(zoomReset)}
@@ -1122,12 +1331,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           controls={zoom > 1.01}
           label={`Page ${sourcePage.n} — pinch or use + and − to zoom`}
         >
-          <div className="absolute inset-3 flex min-w-0 items-center justify-center sm:inset-6">
+          <div className="absolute inset-3 flex min-w-0 items-center justify-center coarse:inset-6 sm:inset-6">
             <div ref={pageBoxRef} style={{ width: pageWidth ? `${pageWidth}px` : '100%', maxWidth: '100%' }} className="shadow-[0_10px_40px_rgba(0,0,0,0.25)]">
               <ComicPageView
                 doc={vDoc}
                 page={page}
                 imageUrl={imageUrl}
+                // The editor's hit layer reaches past the art (44 px halos and handles on edge balloons); the
+                // stage (TouchCanvas) clips, the page box must not.
+                className={letteringEditable ? 'overflow-visible' : undefined}
                 editable={letteringEditable}
                 onBalloonChange={onBalloonChange}
                 onLetteringOps={apply}
@@ -1163,13 +1375,18 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             </div>
           </div>
         </TouchCanvas>
-        {phone && compactInspectorOpen && (
-          // The inspector sheet covers the toolbar: keep undo / redo one tap away above it.
-          <div className="absolute bottom-2 left-2 z-[5] rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 shadow-[0_2px_10px_rgba(0,0,0,0.12)]" data-no-canvas-gesture>
-            {undoPill}
-          </div>
-        )}
       </div>
+      {phone && compactInspectorOpen && (
+        // The inspector sheet covers the toolbar: keep undo / redo one tap away just above it.
+        <div
+          className="absolute left-2 z-[5] rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 shadow-[0_2px_10px_rgba(0,0,0,0.12)]"
+          style={{ bottom: stageInset + coverInset + 8 }}
+          data-no-canvas-gesture
+          data-testid="editor-undo-float"
+        >
+          {undoPill}
+        </div>
+      )}
     </div>
   );
 
@@ -1210,7 +1427,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
                 ? 'e.g. “Make it night with lanterns lit” or “Give Maya a red scarf”'
                 : 'Render this page first — edits change an existing drawing.'
           }
-          className="w-full resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[#D97757]/50 focus:outline-none disabled:opacity-60 coarse:text-[16px]"
+          className="w-full resize-none rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-2 text-[13px] leading-relaxed text-[var(--ds-ink)] placeholder:text-[var(--ds-faint)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-60 coarse:text-[16px]"
         />
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
           {region ? (
@@ -1399,7 +1616,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           <button
             type="button"
             onClick={() => closeEditorTo('languages')}
-            className="tap-target inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[#D97757]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            className="tap-target inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-accent)] hover:bg-[var(--ds-accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
           >
             <Languages className="h-3.5 w-3.5" aria-hidden /> Review every {languageLabel(lang)} line
           </button>
@@ -1438,11 +1655,14 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         }}
         onAskAI={(text) => void studio.send(`(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`, { focus: 'selection' })}
         onDeselect={selection.clear}
+        editionLang={lang}
         mode={viewMode}
         onModeChange={setViewMode}
         canPro={canPro}
         anchor={anchor}
         compact={layout.compactInspector}
+        maxHeight={inspectorMaxH}
+        bounds={inspectorBounds}
         onClose={() => setInspectorClosed(true)}
       />
     </div>
@@ -1527,6 +1747,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       padBottom={layout.kind === 'tablet-portrait'}
       header={layout.kind === 'fold-tabletop' ? modeRow : undefined}
     >
+      {coach && coachInSide && coachEl}
       {toolsContent}
     </EditorToolsSheet>
   );
@@ -1537,6 +1758,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     const rows = split.axis === 'rows';
     return (
       <div
+        ref={foldGridRef}
         className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
         style={rows ? { gridTemplateRows: `minmax(0, ${split.first}px) ${split.gap}px minmax(0, 1fr)` } : { gridTemplateColumns: `minmax(0, ${split.first}px) ${split.gap}px minmax(0, 1fr)` }}
         data-layout={layout.kind}
@@ -1556,7 +1778,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   if (layout.kind === 'phone-landscape') {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
+      <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
         {toolbar}
         <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
           {phoneRow}
@@ -1572,7 +1794,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   if (layout.tools === 'sheet') {
     // Phone portrait and tablet portrait: the stage above, the tools sheet resting at its foot.
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
+      <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-layout={layout.kind}>
         <div ref={bodyRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
           {phone ? phoneRow : modeRow}
           {stageEl}
@@ -1587,7 +1809,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // Desktop / tablet landscape: today's stage + aside.
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
+    <div ref={layoutRootRef} className="flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden" data-layout={layout.kind}>
       <div ref={bodyRef} className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="editor-stage">
         {modeRow}
         {stageEl}
@@ -1622,7 +1844,7 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
   const layout = useMemo(() => editorLayoutFor(ff), [ff]);
   // Survive page turns: the language being edited and where the tools are.
   const [edition, setEdition] = useState<string | null>(null);
-  const [tools, setTools] = useState<ToolsState>(() => ({ open: readFlag(TOOLS_SHEET_KEY) !== 'closed', detent: 'peek', side: true }));
+  const [tools, setTools] = useState<ToolsState>(() => ({ open: toolsSheetOpenAtStart(readFlag(TOOLS_SHEET_KEY), layout.kind, ff.height), detent: 'peek', side: true }));
   const onTools = useCallback((patch: Partial<ToolsState>) => {
     setTools((cur) => {
       const nextState = { ...cur, ...patch };
@@ -1731,6 +1953,9 @@ export const PageEditor: React.FC<{ studio: StudioController; doc: ComicDoc; pag
         >
           <header
             className={cx('flex shrink-0 select-none items-center gap-2 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-1.5 sm:px-3 sm:py-2', layout.fullBleed && 'touch-pan-y')}
+            // Landscape phones: the dialog leaves the right inset to the side sheet (its tab hugs the edge),
+            // so the header pads the notch itself — "Close editor" never sits under it.
+            style={layout.fullBleed && layout.tools === 'side' ? { paddingRight: 'calc(var(--sa-right, 0px) + 0.75rem)' } : undefined}
             {...headerSwipe}
             data-testid="editor-header"
           >

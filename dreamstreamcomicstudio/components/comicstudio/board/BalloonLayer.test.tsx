@@ -204,7 +204,7 @@ describe('BalloonLayer — editing', () => {
     const { hit, onBalloonChange } = setup({ editable: true });
     drag(hit('pg_1_l1'), [10, 10], [-500, -500]);
     // caption rect: no bleed; safe margin 0.03 of the width = 0.02 of the height on a 2:3 page
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l1', { x: 0.03, y: 0.02, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l1', { x: 0.03, y: 0.02, pinned: true }, expect.objectContaining({ label: 'Move balloon', gesture: 'move' }));
     drag(hit('pg_1_l1'), [10, 10], [-500, -500], { altKey: true });
     const [, patch] = onBalloonChange.mock.calls[1];
     expect(patch.x).toBeCloseTo(0.008, 4);
@@ -243,11 +243,11 @@ describe('BalloonLayer — editing', () => {
     const { hit, onBalloonChange } = setup({ editable: true });
     const el = hit('pg_1_l2');
     fireEvent.keyDown(el, { key: 'ArrowRight' });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.065, y: 0.5, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.065, y: 0.5, pinned: true }, expect.objectContaining({ label: 'Move balloon', gesture: 'move' }));
     fireEvent.keyDown(el, { key: 'ArrowDown', shiftKey: true });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.06, y: 0.52, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.06, y: 0.52, pinned: true }, expect.objectContaining({ label: 'Move balloon', gesture: 'move' }));
     fireEvent.keyDown(el, { key: 'ArrowLeft', altKey: true });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { tailX: 0.195, tailY: 0.7, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { tailX: 0.195, tailY: 0.7, pinned: true }, expect.objectContaining({ label: 'Aim tail', gesture: 'tail' }));
   });
 
   it('reports selection to a controlled parent', () => {
@@ -383,11 +383,11 @@ describe('BalloonLayer — review fixes', () => {
     expect(tail).toHaveAttribute('tabindex', '0');
     expect(grip).toHaveAttribute('tabindex', '0');
     fireEvent.keyDown(tail, { key: 'ArrowLeft' });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { tailX: 0.195, tailY: 0.7, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { tailX: 0.195, tailY: 0.7, pinned: true }, expect.objectContaining({ label: 'Aim tail', gesture: 'tail' }));
     fireEvent.keyDown(grip, { key: 'ArrowRight' });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.225, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.225, pinned: true }, expect.objectContaining({ label: 'Resize balloon', gesture: 'resize' }));
     fireEvent.keyDown(grip, { key: 'ArrowDown', shiftKey: true });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.2, pinned: true });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { w: 0.2, pinned: true }, expect.objectContaining({ label: 'Resize balloon', gesture: 'resize' }));
     expect(onBalloonChange).toHaveBeenCalledTimes(3);
   });
 
@@ -618,7 +618,8 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
       const { hit, onBalloonChange } = setup({ editable: true, onBalloonMenu });
       fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 1 });
       act(() => {
-        vi.advanceTimersByTime(460);
+        // 450 ms, then the menu opens on the next frame (after any moves still queued from a busy frame).
+        vi.advanceTimersByTime(490);
       });
       expect(onBalloonMenu).toHaveBeenCalledWith('pg_1_l2', { x: 100, y: 100 });
       expect(hit('pg_1_l2')).toHaveAttribute('aria-pressed', 'true');
@@ -638,7 +639,7 @@ describe('BalloonLayer — touch (mobile.md §5.4)', () => {
       onBalloonMenu.mockClear();
       fireEvent.pointerDown(hit('pg_1_l2'), { clientX: 100, clientY: 100, pointerType: 'touch', pointerId: 5 });
       act(() => {
-        vi.advanceTimersByTime(460);
+        vi.advanceTimersByTime(490);
       });
       expect(onBalloonMenu).toHaveBeenCalledTimes(1);
       fireEvent.pointerUp(window, { clientX: 100, clientY: 100, pointerId: 5 });
@@ -748,6 +749,6 @@ describe('BalloonLayer — languages (i18n.md)', () => {
   it('drags in an edition call back with { lang }', () => {
     const { hit, onBalloonChange } = setup({ editable: true, editionLang: 'te' });
     fireEvent.keyDown(hit('pg_1_l2'), { key: 'ArrowRight' });
-    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.065, y: 0.5, pinned: true }, { lang: 'te' });
+    expect(onBalloonChange).toHaveBeenLastCalledWith('pg_1_l2', { x: 0.065, y: 0.5, pinned: true }, { lang: 'te', label: 'Move balloon', gesture: 'move' });
   });
 });

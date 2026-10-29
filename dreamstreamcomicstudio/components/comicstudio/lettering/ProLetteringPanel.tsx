@@ -27,6 +27,7 @@ import {
   fitWidthOps,
   linkOps,
   lockOps,
+  pinKeepingSizeOps,
   resetPositionOps,
   sharedValue,
   speakerMarkFor,
@@ -51,7 +52,7 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 const LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
 const BTN =
-  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
+  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
 const CASES: { value: TextCase; label: string }[] = [
   { value: 'upper', label: 'UPPER' },
   { value: 'as_typed', label: 'As typed' },
@@ -98,7 +99,7 @@ const Slider: React.FC<{
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
         onKeyDown={(e) => e.stopPropagation()}
-        className="w-full accent-[#D97757] disabled:opacity-40"
+        className="w-full accent-[var(--ds-accent)] disabled:opacity-40"
       />
       {note && <p className="text-[10.5px] leading-snug text-[var(--ds-muted)]">{note}</p>}
     </div>
@@ -106,15 +107,15 @@ const Slider: React.FC<{
 };
 
 const Toggle: React.FC<{ label: string; on: boolean; disabled?: boolean; title?: string; onChange(on: boolean): void }> = ({ label, on, disabled, title, onChange }) => (
-  <button type="button" role="switch" aria-checked={on} disabled={disabled} title={title} onClick={() => onChange(!on)} className={cx(BTN, on && 'border-[#D97757]/50 bg-[#D97757]/10')}>
-    <span aria-hidden className={cx('h-3 w-5 rounded-full p-px transition-colors', on ? 'bg-[#D97757]' : 'bg-[var(--ds-well-strong)]')}>
+  <button type="button" role="switch" aria-checked={on} disabled={disabled} title={title} onClick={() => onChange(!on)} className={cx(BTN, on && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}>
+    <span aria-hidden className={cx('h-3 w-5 rounded-full p-px transition-colors', on ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-well-strong)]')}>
       <span className={cx('block h-2.5 w-2.5 rounded-full bg-white transition-transform motion-reduce:transition-none', on && 'translate-x-2')} />
     </span>
     {label}
   </button>
 );
 
-export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect }) => {
+export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, lines, plans, placements, H, apply, onEditText, onDeselect, editionLang }) => {
   const [tab, setTab] = useState<Tab>('text');
   const [scope, setScope] = useState<StyleScope>('kind_comic');
   const ids = lines.map((l) => l.id);
@@ -159,7 +160,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
             aria-controls={`pl-panel-${t.id}`}
             onClick={() => setTab(t.id)}
             className={cx(
-              'min-w-0 flex-1 whitespace-nowrap rounded-[10px] px-2 py-1 text-[11.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45',
+              'min-w-0 flex-1 whitespace-nowrap rounded-[10px] px-2 py-1 text-[11.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
               tab === t.id ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
@@ -254,7 +255,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
                       role="radio"
                       aria-checked={v('sfxEffect') === e}
                       onClick={() => style({ sfxEffect: e, ...(e === 'arched' && !v('arc') ? { arc: 0.4 } : {}) }, 'Sound effect style')}
-                      className={cx(BTN, 'px-1', v('sfxEffect') === e && 'border-[#D97757]/50 bg-[#D97757]/10')}
+                      className={cx(BTN, 'px-1', v('sfxEffect') === e && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')}
                     >
                       {SFX_LABEL[e]}
                     </button>
@@ -273,7 +274,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
                       onChange={(x) => style({ rotate: x }, 'Rotate', 'rot')}
                     />
                   </div>
-                  <button type="button" className={cx(BTN, v('rotate') === 'auto' && 'border-[#D97757]/50 bg-[#D97757]/10')} onClick={() => style({ rotate: 'auto' }, 'Automatic tilt')}>
+                  <button type="button" className={cx(BTN, v('rotate') === 'auto' && 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]')} onClick={() => style({ rotate: 'auto' }, 'Automatic tilt')}>
                     Auto
                   </button>
                 </div>
@@ -324,7 +325,14 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
               <button type="button" className={BTN} onClick={() => run(zOrderOps(page, ids, 'back', plans, placements.balloons), 'Send to back')}>
                 <ArrowDownToLine className="h-3.5 w-3.5" aria-hidden /> Back
               </button>
-              <button type="button" className={BTN} aria-pressed={locked} onClick={() => run(lockOps(page, ids, !locked, placements.balloons), locked ? 'Unlock balloon' : 'Lock balloon')}>
+              <button
+                type="button"
+                className={BTN}
+                aria-pressed={locked}
+                onClick={() =>
+                  run(locked ? lockOps(page, ids, false, placements.balloons) : pinKeepingSizeOps(lockOps(page, ids, true, placements.balloons), page, plans, ids, editionLang), locked ? 'Unlock balloon' : 'Lock balloon')
+                }
+              >
                 {locked ? <LockOpen className="h-3.5 w-3.5" aria-hidden /> : <Lock className="h-3.5 w-3.5" aria-hidden />} {locked ? 'Unlock' : 'Lock'}
               </button>
               {one && (
@@ -348,7 +356,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
                 step={0.01}
                 format={(x) => `${Math.round(x * 100)}%`}
                 disabled={locked}
-                onChange={(x) => run([balloonOp(page, one.id, { w: Math.round(x * 1000) / 1000, pinned: true }, placements.balloons)], 'Balloon width', { coalesce: `w:${page.id}:${one.id}` })}
+                onChange={(x) => run(pinKeepingSizeOps([balloonOp(page, one.id, { w: Math.round(x * 1000) / 1000, pinned: true }, placements.balloons)], page, plans, [one.id], editionLang), 'Balloon width', { coalesce: `w:${page.id}:${one.id}` })}
               />
             )}
             {lines.length >= 2 && (
@@ -404,7 +412,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, li
               <legend className={LABEL}>Apply this balloon’s style to…</legend>
               {scopes.map((s) => (
                 <label key={s.id} className={cx('flex items-center gap-2 rounded-lg px-1.5 py-1 text-[12.5px] text-[var(--ds-ink)]', s.disabled ? 'opacity-40' : 'hover:bg-[var(--ds-hover)]')}>
-                  <input type="radio" name={`scope-${page.id}`} value={s.id} checked={scope === s.id} disabled={s.disabled} onChange={() => setScope(s.id)} className="accent-[#D97757]" />
+                  <input type="radio" name={`scope-${page.id}`} value={s.id} checked={scope === s.id} disabled={s.disabled} onChange={() => setScope(s.id)} className="accent-[var(--ds-accent)]" />
                   {s.label}
                 </label>
               ))}

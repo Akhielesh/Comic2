@@ -114,8 +114,8 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
             title={LETTERING_PRESETS[id].blurb}
             onClick={() => onChange(id)}
             className={cx(
-              'flex min-h-[44px] shrink-0 flex-col items-center gap-0.5 rounded-xl border px-1.5 py-1 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50',
-              value === id ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+              'flex min-h-[44px] shrink-0 flex-col items-center gap-0.5 rounded-xl border px-1.5 py-1 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
+              value === id ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
             )}
           >
             <span className="grid h-9 place-items-center rounded-md bg-[var(--ds-reader-paper-back)] px-1">
@@ -128,7 +128,9 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
     );
   }
   return (
-    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-1 gap-2 medium:grid-cols-2">
+    // Columns follow the CONTAINER, not the window: a 320 px side sheet on a landscape phone gets one
+    // column (two squeezed each blurb to ~46 px and cut its words), a wide aside or tab gets two.
+    <div role="radiogroup" aria-label="Lettering style" className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,15rem),1fr))] gap-2">
       {LETTERING_PRESET_IDS.map((id) => (
         <button
           key={id}
@@ -137,8 +139,8 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
           aria-checked={value === id}
           onClick={() => onChange(id)}
           className={cx(
-            'flex min-w-0 items-center gap-2 rounded-xl border p-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50',
-            value === id ? 'border-[#D97757]/60 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+            'flex min-w-0 items-center gap-2 rounded-xl border p-2 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
+            value === id ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
           )}
         >
           <span className="grid h-12 w-[4.5rem] shrink-0 place-items-center overflow-hidden rounded-lg bg-[var(--ds-reader-paper-back)]">
@@ -147,9 +149,9 @@ export const PresetGallery: React.FC<PresetGalleryProps> = ({ value, onChange, v
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1 text-[12.5px] font-semibold text-[var(--ds-ink)]">
               <span className="truncate">{LETTERING_PRESETS[id].name}</span>
-              {value === id && <Check className="h-3.5 w-3.5 shrink-0 text-[#D97757]" aria-hidden />}
+              {value === id && <Check className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />}
             </span>
-            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)]">{LETTERING_PRESETS[id].blurb}</span>
+            <span className="line-clamp-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{LETTERING_PRESETS[id].blurb}</span>
           </span>
         </button>
       ))}

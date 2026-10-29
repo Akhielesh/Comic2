@@ -4,13 +4,14 @@
 // (same sizer, same measure, keep: 'all'), so the editor knows the FULL balloon behind every drawn plan
 // (x/y/w + the tail tip). The first drag or nudge of a never-placed balloon then sends that whole balloon,
 // never a bare {x, y} that the op would complete with a 0.28-wide default (the old "jumping balloon" bug).
-// It also reports which placed lines are `crowded` (could not avoid an overlap): the editor's chip.
+// It also reports which placed lines are `crowded` (could not avoid an overlap, or had to be moved /
+// lettered smaller by the render-time settle): the editor's chip.
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Balloon, ComicDoc, Page } from '../../../shared/comic/doc';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { normalizeLetteringText } from '../../../shared/comic/textLayout';
-import { letteringAspect, letteringSizer, planLettering, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
+import { letteringAspect, letteringSizer, planLettering, type CrowdedReason, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place';
 import { DEFAULT_LETTERING, DEFAULT_SAFE_MARGIN, type FontId } from '../../../shared/comic/lettering/style';
 import { ensureFonts, fontLoadGeneration, subscribeFontLoads } from './fontLoader';
@@ -27,6 +28,8 @@ export interface Placements {
   fallback: Set<string>;
   /** Placed lines that could not avoid an overlap / the safe area. */
   crowded: Set<string>;
+  /** Why each crowded line is flagged, when the plan says (LetterPlan.crowdedReason). */
+  reasons?: Map<string, CrowdedReason>;
 }
 
 /** Stored + software-placed balloons for every lettered line of a page (pure; matches planLettering). */
@@ -34,7 +37,8 @@ export function resolvePlacements(doc: ComicDoc, page: Page, aspect: number, mea
   const balloons = new Map<string, Balloon>();
   const fallback = new Set<string>();
   const crowded = new Set<string>();
-  if (!page || !Array.isArray(page.panels)) return { balloons, fallback, crowded };
+  const reasons = new Map<string, CrowdedReason>();
+  if (!page || !Array.isArray(page.panels)) return { balloons, fallback, crowded, reasons };
   const stored = new Map<string, Balloon>();
   for (const b of page.balloons || []) if (validBalloon(b) && !stored.has(b.lineId)) stored.set(b.lineId, b);
   const lines = page.panels.flatMap((p) => (p.lines || []).filter((l) => normalizeLetteringText(l.text)));
@@ -66,7 +70,36 @@ export function resolvePlacements(doc: ComicDoc, page: Page, aspect: number, mea
     }
     for (const id of result.crowded) if (!stored.has(id)) crowded.add(id);
   }
-  return { balloons, fallback, crowded };
+  return { balloons, fallback, crowded, reasons };
+}
+
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
+
+/**
+ * The render-time settle and dense-page repack (planLettering) may draw a software-placed or an unpinned
+ * stored balloon somewhere else than the placement put it, tail included. Those lines are `crowded` (the
+ * editor's chip and the inspector's free fixes), and the balloon behind each of them is the one the user
+ * SEES — so a first drag, nudge, lock or tail aim starts from the drawn spot and never jumps back. Pinned
+ * and locked balloons are drawn where they are stored and stay as they are. Pure; mutates and returns `p`.
+ */
+export function withDrawnGeometry(p: Placements, plans: readonly LetterPlan[], H: number): Placements {
+  for (const plan of plans) {
+    if (plan.crowded) {
+      p.crowded.add(plan.lineId);
+      if (plan.crowdedReason) (p.reasons ??= new Map()).set(plan.lineId, plan.crowdedReason);
+    }
+    const b = p.balloons.get(plan.lineId);
+    if (!b || b.pinned || b.locked || !(plan.crowded || p.fallback.has(plan.lineId)) || !(H > 0)) continue;
+    // x, y AND w as drawn: the text box the fit settled on (a dense page letters it smaller, an rtl caption
+    // grows left), so pinning it by a drag keeps its left edge under the finger.
+    const next: Balloon = { ...b, x: r4(plan.x / 1000), y: r4(plan.y / H), w: r4(plan.w / 1000) };
+    if (plan.tip && Number.isFinite(plan.tip.x) && Number.isFinite(plan.tip.y)) {
+      next.tailX = r4(Math.min(1, Math.max(0, plan.tip.x / 1000)));
+      next.tailY = r4(Math.min(1, Math.max(0, plan.tip.y / H)));
+    }
+    p.balloons.set(plan.lineId, next);
+  }
+  return p;
 }
 
 /** Faces (id + weight + italic) the plans draw with — what to load before measuring for real. */
@@ -100,6 +133,58 @@ export function useEnsurePlanFonts(plans: readonly LetterPlan[]): void {
   }, [key]);
 }
 
+// ── Plans cache ──────────────────────────────────────────────────────────────
+//
+// planLettering is pure, but a dense page runs several placement and settle passes. Every doc change (any
+// op, on any page) hands the hooks a new doc object, so without this every page view on screen — board
+// thumbnails, the reader, the editor — would re-plan after each commit. Plans are cached per measure (a
+// font load gives a new one) by the CONTENT planLettering reads, so a change that leaves a page's lettering
+// alone returns the very same array.
+
+const PLAN_CACHE = new WeakMap<Measure, Map<string, LetterPlan[]>>();
+const PLAN_CACHE_SIZE = 240;
+
+/**
+ * Everything planLettering reads from a doc and a page, as one string: equal keys plan identically. (The
+ * lettering style and format of the doc; the page's layout, panel numbers / sizes / cast, every line's
+ * lettering fields, stored balloons and the vision qc that holds panel boxes, faces and heads.)
+ */
+export function letteringKey(doc: Pick<ComicDoc, 'letterStyle' | 'format'>, page: Page, aspect: number): string {
+  const f = doc.format;
+  return JSON.stringify([
+    Math.round(aspect * 1e6) / 1e6,
+    doc.letterStyle ?? null,
+    f ? [f.language, f.readingDirection, f.kind, f.pageAspect] : null,
+    page.layout ?? '',
+    (page.panels || []).map((p) => [p.n, p.size, p.castIds ?? [], (p.lines || []).map((l) => [l.id, l.kind, l.text, l.lang ?? '', l.speakerId ?? '', l.style ?? null])]),
+    page.balloons ?? [],
+    page.render?.qc ?? null
+  ]);
+}
+
+/** planLettering, memoized by content (see letteringKey). The returned array is shared: treat it as read-only. */
+export function planLetteringCached(doc: ComicDoc, page: Page, aspect: number, measure: Measure): LetterPlan[] {
+  let memo = PLAN_CACHE.get(measure);
+  if (!memo) {
+    memo = new Map();
+    PLAN_CACHE.set(measure, memo);
+  }
+  const key = letteringKey(doc, page, aspect);
+  const hit = memo.get(key);
+  if (hit) {
+    memo.delete(key);
+    memo.set(key, hit);
+    return hit;
+  }
+  const plans = planLettering(doc, page, aspect, measure);
+  memo.set(key, plans);
+  if (memo.size > PLAN_CACHE_SIZE) {
+    const oldest = memo.keys().next().value;
+    if (oldest !== undefined) memo.delete(oldest);
+  }
+  return plans;
+}
+
 export interface PagePlans {
   plans: LetterPlan[];
   placements: Placements;
@@ -108,7 +193,7 @@ export interface PagePlans {
   H: number;
 }
 
-const NO_PLACEMENTS: Placements = { balloons: new Map(), fallback: new Set(), crowded: new Set() };
+const NO_PLACEMENTS: Placements = { balloons: new Map(), fallback: new Set(), crowded: new Set(), reasons: new Map() };
 
 /**
  * Plans + placements for a page at `aspect` (w/h), re-planned when lettering faces finish loading.
@@ -120,8 +205,8 @@ export function useLetterPlans(doc: ComicDoc, page: Page, aspect: number, opts: 
   const generation = useFontGeneration();
   const measure = measureForGeneration(generation);
   const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : letteringAspect(doc, page);
-  const plans = useMemo(() => planLettering(doc, page, asp, measure), [doc, page, asp, measure]);
-  const placements = useMemo(() => (wantPlacements ? resolvePlacements(doc, page, asp, measure) : NO_PLACEMENTS), [wantPlacements, doc, page, asp, measure]);
+  const plans = useMemo(() => planLetteringCached(doc, page, asp, measure), [doc, page, asp, measure]);
+  const placements = useMemo(() => (wantPlacements ? withDrawnGeometry(resolvePlacements(doc, page, asp, measure), plans, 1000 / asp) : NO_PLACEMENTS), [wantPlacements, doc, page, asp, measure, plans]);
   useEnsurePlanFonts(plans);
   return { plans, placements, measure, H: 1000 / asp };
 }
