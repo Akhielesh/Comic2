@@ -64,15 +64,17 @@ const normalizeForEcho = (value: string): string =>
     .trim();
 
 /**
- * True when `text` is the panel's scene description (or the fallback's 157-character cut of it): one is a prefix of
- * the other, ignoring case, spacing and a trailing ellipsis, and both are at least 40 characters long.
+ * True when `text` is the panel's scene description (or the fallback's 157-character cut of it): `text` is a prefix of
+ * the description, ignoring case, spacing and a trailing ellipsis, and both are at least 40 characters long. A line
+ * that repeats the whole description and then goes on ("…at dawn. Three years she has waited.") is real writing and
+ * is never hidden.
  */
 export const isDescriptionEcho = (text: string | undefined, description: string | undefined): boolean => {
   if (!text || !description) return false;
   const t = normalizeForEcho(text);
   const d = normalizeForEcho(description);
   if (t.length < ECHO_MIN_CHARS || d.length < ECHO_MIN_CHARS) return false;
-  return d.startsWith(t) || t.startsWith(d);
+  return d.startsWith(t);
 };
 
 /** The dialogue a reader shows for a panel: its own lines only — never the scene description. */

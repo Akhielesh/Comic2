@@ -30,6 +30,15 @@ describe('isDescriptionEcho', () => {
     expect(isDescriptionEcho(DESC, '')).toBe(false);
     expect(isDescriptionEcho(DESC, undefined)).toBe(false);
   });
+
+  it('never hides a line that repeats the whole description and then goes on', () => {
+    expect(isDescriptionEcho(`${DESC} And then the bell rang.`, DESC)).toBe(false);
+    const pier = 'Meera stands at the end of the pier at dawn.';
+    expect(isDescriptionEcho(`${pier} Three years she has waited.`, pier)).toBe(false);
+    expect(isDescriptionEcho(pier, pier)).toBe(true); // the exact echo still is one
+    const kept = readerDialogueBlocks({ dialogueBlocks: [block(`${pier} Three years she has waited.`, { kind: 'narration', id: 'n' })], description: pier });
+    expect(kept.map((b) => b.id)).toEqual(['n']);
+  });
 });
 
 describe('readerDialogueBlocks', () => {
