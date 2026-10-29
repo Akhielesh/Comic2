@@ -3,7 +3,8 @@
 // Three ways to read — Scroll (vertical, webtoon-friendly), Page (one at a time) and
 // Spread (facing pages on wide screens). Page modes turn with ←/→ (reading-direction
 // aware), Space/PageUp/PageDown, Home/End, swipes and taps on the outer thirds; the next
-// pages are preloaded so turns never flash blank. Fullscreen on demand.
+// page is preloaded (after the current one has loaded) so turns never flash blank. Full screen on demand: native where
+// the browser has it, else the reader fills the viewport (services/fullscreen.ts) — the button always does something.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpen, ChevronLeft, ChevronRight, Columns2, Maximize2, Minimize2, Rows3, Square } from 'lucide-react';
@@ -11,6 +12,15 @@ import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
 import { ComicPageView } from '../board/ComicPageView';
 import { aspectNumber, pageAspectOf } from '../board/balloonGeometry';
 import { EmptyHint, IconButton, Segmented, cx, useElementSize } from '../board/ui';
+import {
+  IOS_FULLSCREEN_NOTE,
+  enterFullscreen,
+  exitFullscreen,
+  isFullscreenActive,
+  markIosFullscreenNoteSeen,
+  onFullscreenChange,
+  shouldShowIosFullscreenNote
+} from '../../../services/fullscreen';
 import {
   clampIndex,
   defaultReaderMode,
@@ -37,6 +47,9 @@ export interface ComicReaderViewProps {
 }
 
 const MODE_KEY = 'comicstudio.reader.mode';
+
+/** Toolbar targets: 32 px for a mouse, 44 px under a finger (coarse pointer). */
+const TOUCH_TARGET = 'coarse:h-11 coarse:w-11';
 
 /** Pinch-zoomed in (the browser's own page zoom): drags pan the page, swipes and taps never turn it. */
 const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
@@ -146,7 +159,12 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
   const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
-  const [fullscreen, setFullscreen] = useState(false);
+  // Full screen: native state only from fullscreenchange; the viewport mode is the fallback when the browser has no
+  // API (iPhone) or refuses. Either counts as full screen for the button.
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  const [viewportFullscreen, setViewportFullscreen] = useState(false);
+  const [showIosNote, setShowIosNote] = useState(false);
+  const fullscreen = nativeFullscreen || viewportFullscreen;
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
   // Safe gestures: every pointer on the stage is tracked; once a second one touches down (a pinch) the swipe
   // candidate is gone and nothing turns until every finger is up, whichever lifts first.
@@ -191,6 +209,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.altKey || e.metaKey || e.ctrlKey) return;
+    if (e.key === 'Escape' && viewportFullscreen) {
+      e.preventDefault();
+      setViewportFullscreen(false);
+      return;
+    }
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (e.key === 'Home' || e.key === 'End') {
@@ -214,32 +237,88 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
     if (autoFocus) rootRef.current?.focus({ preventScroll: true });
   }, [autoFocus]);
 
+  useEffect(() => onFullscreenChange(() => setNativeFullscreen(isFullscreenActive(rootRef.current))), []);
+
+  // The viewport mode locks the page behind the reader (no rubber-band scrolling of the site underneath).
   useEffect(() => {
-    const onChange = () => setFullscreen(!!document.fullscreenElement);
-    document.addEventListener('fullscreenchange', onChange);
-    return () => document.removeEventListener('fullscreenchange', onChange);
-  }, []);
-  const toggleFullscreen = async () => {
-    try {
-      if (!document.fullscreenElement) await rootRef.current?.requestFullscreen?.();
-      else await document.exitFullscreen?.();
-    } catch {
-      /* fullscreen refused (iframe / iOS) — keep reading inline */
+    if (!viewportFullscreen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prev = [html.style.overflow, body.style.overflow];
+    html.style.overflow = 'hidden';
+    body.style.overflow = 'hidden';
+    return () => {
+      html.style.overflow = prev[0];
+      body.style.overflow = prev[1];
+    };
+  }, [viewportFullscreen]);
+
+  const enterViewportFullscreen = useCallback(() => {
+    setViewportFullscreen(true);
+    if (shouldShowIosFullscreenNote()) {
+      markIosFullscreenNoteSeen();
+      setShowIosNote(true);
     }
+  }, []);
+
+  // Called synchronously from the tap (full screen is only granted inside the user gesture); never throws.
+  const toggleFullscreen = () => {
+    if (viewportFullscreen) {
+      setViewportFullscreen(false);
+      return;
+    }
+    if (isFullscreenActive(rootRef.current)) {
+      exitFullscreen();
+      return;
+    }
+    enterFullscreen(rootRef.current, { onFallback: enterViewportFullscreen });
   };
 
-  // Preload the next and previous views.
+  // Preload only the next view, and only once the current one has loaded: on a slow phone connection, parallel
+  // full-size downloads made the page on screen arrive last. (Same URLs as the <img> on screen, so the browser shares
+  // the request; a failed current page still lets the next one load.)
   useEffect(() => {
     if (mode === 'scroll' || typeof Image === 'undefined') return;
-    [current + 1, current + 2, current - 1].forEach((v) => {
-      views[v]?.forEach((i) => {
-        const url = urlFor(items[i]?.asset);
-        if (url) {
-          const img = new Image();
-          img.src = url;
-        }
+    const urlsOf = (v: number) => (views[v] || []).map((i) => urlFor(items[i]?.asset)).filter((u): u is string => !!u);
+    const next = urlsOf(current + 1);
+    if (!next.length) return;
+    const now = urlsOf(current);
+    let cancelled = false;
+    const preloadNext = () => {
+      if (cancelled) return;
+      next.forEach((url) => {
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = url;
       });
+    };
+    if (!now.length) {
+      preloadNext();
+      return () => {
+        cancelled = true;
+      };
+    }
+    let waiting = now.length;
+    const probes = now.map((url) => {
+      const probe = new Image();
+      const done = () => {
+        probe.onload = null;
+        probe.onerror = null;
+        waiting -= 1;
+        if (waiting === 0) preloadNext();
+      };
+      probe.onload = done;
+      probe.onerror = done;
+      probe.src = url;
+      return probe;
     });
+    return () => {
+      cancelled = true;
+      probes.forEach((probe) => {
+        probe.onload = null;
+        probe.onerror = null;
+      });
+    };
   }, [current, mode, views, items, urlFor]);
 
   if (!items.length) {
@@ -279,14 +358,32 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
       tabIndex={-1}
       onKeyDown={onKeyDown}
       data-testid="comic-reader"
+      data-fullscreen={viewportFullscreen ? 'viewport' : nativeFullscreen ? 'native' : 'off'}
       aria-label={`Read ${doc.brief.title}`}
       role="region"
       className={cx('flex h-full min-h-0 flex-col bg-[var(--ds-canvas)] focus:outline-none', className)}
+      style={
+        viewportFullscreen
+          ? {
+              // The fallback "full screen": the whole viewport, clear of notches and the home indicator.
+              position: 'fixed',
+              inset: 0,
+              zIndex: 70,
+              width: '100%',
+              height: '100dvh',
+              paddingTop: 'var(--sa-top, 0px)',
+              paddingBottom: 'var(--sa-bottom, 0px)',
+              paddingLeft: 'var(--sa-left, 0px)',
+              paddingRight: 'var(--sa-right, 0px)'
+            }
+          : undefined
+      }
     >
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2">
         <Segmented
           label="Reading mode"
           size="xs"
+          className="coarse:[&>button]:min-h-[44px]"
           value={mode}
           onChange={setMode}
           options={[
@@ -298,13 +395,13 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
         />
         {mode !== 'scroll' && (
           <div className="flex items-center gap-0.5">
-            <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? current >= views.length - 1 : current <= 0}>
+            <IconButton label={prevLabel} className={TOUCH_TARGET} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? current >= views.length - 1 : current <= 0}>
               <ChevronLeft className="h-4 w-4" />
             </IconButton>
             <span className="min-w-[5.5rem] text-center text-[12px] tabular-nums text-[var(--ds-muted)] sm:min-w-[7rem]" aria-live="polite" data-testid="reader-counter">
               {counter}
             </span>
-            <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? current <= 0 : current >= views.length - 1}>
+            <IconButton label={nextLabel} className={TOUCH_TARGET} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? current <= 0 : current >= views.length - 1}>
               <ChevronRight className="h-4 w-4" />
             </IconButton>
           </div>
@@ -318,11 +415,32 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
         )}
         <div className="ml-auto flex items-center gap-1.5">
           {toolbarExtra}
-          <IconButton label={fullscreen ? 'Exit full screen' : 'Full screen'} onClick={() => void toggleFullscreen()}>
+          <IconButton label={fullscreen ? 'Exit full screen' : 'Full screen'} className={TOUCH_TARGET} aria-pressed={fullscreen} onClick={toggleFullscreen}>
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </IconButton>
         </div>
       </div>
+
+      {showIosNote && (
+        // iPhone browsers have no element full screen: say once, honestly, what does work.
+        <div
+          role="status"
+          aria-label="Full screen on iPhone"
+          className="fixed inset-x-3 z-[71] mx-auto max-w-sm rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-3 text-[13px] leading-snug text-[var(--ds-ink)] shadow-[0_12px_40px_rgba(0,0,0,0.18)] backdrop-blur-md"
+          style={{ bottom: 'calc(var(--sa-bottom, 0px) + 16px)' }}
+        >
+          <p>{IOS_FULLSCREEN_NOTE}</p>
+          <div className="mt-1 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowIosNote(false)}
+              className="min-h-[44px] rounded-full px-4 text-[13px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
 
       {mode === 'scroll' ? (
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" data-testid="reader-scroll">
