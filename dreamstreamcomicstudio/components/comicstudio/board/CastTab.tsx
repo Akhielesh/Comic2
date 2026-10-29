@@ -303,7 +303,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
         type="button"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        className="tap-target inline-flex min-h-[32px] items-center gap-1 self-start rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
+        className="tap-target inline-flex min-h-[32px] items-center gap-1 self-start rounded-lg px-2 py-1 text-[12px] font-medium text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 coarse:min-h-[44px]"
       >
         {expanded ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
         {expanded ? 'Hide look details' : 'Look details, personality & voice'}

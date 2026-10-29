@@ -25,6 +25,7 @@ import { LibraryImage } from '../library/LibraryImage';
 import { PresetThumb } from '../library/procedural/PresetThumb';
 import { PresetGallery } from '../lettering/PresetGallery';
 import { presetOps as letteringPresetOps } from '../lettering/styleOps';
+import { useFormFactor } from '../mobile/useFormFactor';
 import { RefStrip } from '../refs/RefStrip';
 import { EmptyIllustration, ImageFrame, VIEW_MAX_W, VersionsButton, frameSources } from './ImageFrame';
 import { byokFromDoc, estimateOne, hasImage, isBusy, jobModel, presetOps, sheetVisualStatus } from './boardModel';
@@ -37,36 +38,50 @@ const HEX = /^#[0-9a-f]{6}$/i;
 
 const STATUS_TEXT: Record<StyleBible['status'], string> = { empty: 'Not chosen', drafted: 'Drafted', locked: 'Locked' };
 
+const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
+
 const PaletteEditor: React.FC<{ palette: string[]; onChange: (next: string[]) => void }> = ({ palette, onChange }) => {
   const [adding, setAdding] = useState('#d97757');
+  // Touch (ui-findings 2026-10-29, board/style on the Fold): the 20 px corner dot was a 44 px ::after
+  // zone that ran over the next swatch. On a coarse pointer each colour is a 44 px chip with a visible
+  // 44 px remove button; fine pointers keep the compact swatches with the hover-revealed dot.
+  const touch = useFormFactor().coarse;
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Palette">
-      {palette.map((color, i) => (
-        <span key={`${color}-${i}`} className="group relative">
+      {palette.map((color, i) => {
+        const swatch = (
           <span
-            className="block h-8 w-8 rounded-lg border border-[var(--ds-hairline)] shadow-sm coarse:h-10 coarse:w-10"
+            className="block h-8 w-8 shrink-0 rounded-lg border border-[var(--ds-hairline)] shadow-sm"
             style={{ background: HEX.test(color) ? color : 'var(--ds-well)' }}
             title={color}
             aria-label={color}
             role="img"
           />
-          {/* Visible on touch, revealed on hover/focus with a fine pointer (never hover-only). The
-              wrapper holds the position so the 44 px tap zone (.tap-target) can't reset it. */}
-          <span className="absolute -right-1.5 -top-1.5">
-            <button
-              type="button"
-              aria-label={`Remove ${color}`}
-              onClick={() => onChange(palette.filter((_, j) => j !== i))}
-              className="hover-reveal tap-target grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45"
-            >
-              <X className="h-3 w-3" aria-hidden />
+        );
+        const drop = () => onChange(palette.filter((_, j) => j !== i));
+        return touch ? (
+          <span key={`${color}-${i}`} className="inline-flex h-11 items-center gap-0.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-1.5">
+            {swatch}
+            <button type="button" aria-label={`Remove ${color}`} onClick={drop} className={cx('grid h-11 w-11 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]', FOCUS)}>
+              <X className="h-4 w-4" aria-hidden />
             </button>
           </span>
-        </span>
-      ))}
+        ) : (
+          <span key={`${color}-${i}`} className="group relative">
+            {swatch}
+            {/* Revealed on hover/focus with a fine pointer; the wrapper holds the position so the 44 px
+                tap zone (.tap-target) can't reset it. */}
+            <span className="absolute -right-1.5 -top-1.5">
+              <button type="button" aria-label={`Remove ${color}`} onClick={drop} className={cx('hover-reveal tap-target grid h-5 w-5 place-items-center rounded-full bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] shadow', FOCUS)}>
+                <X className="h-3 w-3" aria-hidden />
+              </button>
+            </span>
+          </span>
+        );
+      })}
       {palette.length < 8 && (
         <label
-          className="relative grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-dashed border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-within:ring-2 focus-within:ring-[#D97757]/45 coarse:h-10 coarse:w-10"
+          className="relative grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-dashed border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] focus-within:ring-2 focus-within:ring-[#D97757]/45 coarse:h-11 coarse:w-11"
           title="Add a color"
         >
           <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -97,13 +112,15 @@ const AvoidEditor: React.FC<{ avoid: string[]; onChange: (next: string[]) => voi
   return (
     <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Avoid">
       {avoid.map((a) => (
-        <Chip key={a} className="min-w-0">
+        // Touch: the chip is 44 px tall and its remove button a real 44 px square (a ::after zone on a
+        // 16 px button reached the "Add a never…" field on the next row and stole its taps).
+        <Chip key={a} className="min-w-0 coarse:py-0">
           <span className="text-[var(--ds-muted)]">no</span> <span className="min-w-0 truncate">{a}</span>
           <button
             type="button"
             aria-label={`Allow ${a}`}
             onClick={() => onChange(avoid.filter((x) => x !== a))}
-            className="tap-target -mr-1 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]"
+            className="tap-target -mr-1 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] coarse:-mr-2.5 coarse:h-11 coarse:w-11"
           >
             <X className="h-3 w-3" aria-hidden />
           </button>
