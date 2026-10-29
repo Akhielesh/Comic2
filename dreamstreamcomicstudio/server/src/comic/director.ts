@@ -11,6 +11,7 @@
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
 import { aspectFromSize, aspectMatches, estimateJobs, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { costFormatter, costFormatterFor, governCard, governDollars, type CostFormatter } from './costText.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -36,6 +37,7 @@ import {
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { toolGroups } from './tools/index.js';
+import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
@@ -78,6 +80,7 @@ RULES
 6. Money. Never call a PAID tool on a question, complaint or feedback — ask which fix, with prices. "Draw everything" = render_pages without pages (+ include_cover); it only draws what is missing and costs $0 when nothing is. redraw:true only when the user asked for another take. A spend may answer "Waiting for the user to approve ~$X": say the estimate in one line and stop — you cannot approve for them. Never claim something was drawn, saved, published or shared unless a tool result says so; drawing runs in the background ("on its way").
 7. Named characters and brands (Shin-chan, Baahubali, LEGO, Disney, Marvel…): warmly make an original homage — new name, distinct design, same spirit — say so once; never refuse silently.
 8. Brevity: at most 80 words, plain sentences, no headings or lists. Always at least one sentence, in the SAME message as your tool calls.
+9. The image model is locked per comic: never say you switched it (no tool can); only the user can, in the model picker, and consistency can be affected. A drawing tool that says it paused or did not start means nothing started and nothing was charged: say so and offer its options in words.
 
 HOW TO USE TOOLS
 - Write your reply in the same message as your tool calls; never send tool calls without a sentence.
@@ -148,10 +151,13 @@ export function summarizeDocForDirector(
   const focus = focusLine(doc, opts.focus);
   if (focus) tail.push(focus);
   const set = doc.settings;
-  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
+  // The comic's model (models.md §3.4 #1): with a lock every tier draws on it; the tier only picks the resolution.
+  const lock = deriveLock(doc);
+  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride, lock);
+  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok, ...(lock ? { lock } : {}) }).usd;
+  const pageUsd = lock ? estimateJobs([{ kind: 'page', count: 1 }], set.quality, { override: set.imageModelOverride, byok, lock }).usd : tierPagePrice(set.quality, byok);
   tail.push(
-    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
+    `Settings: ${set.quality} quality (${spec.nickname}${lock ? ' (locked)' : ''} ${resolution}, ${c.approx(pageUsd)}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
   );
   tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
   if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
@@ -250,6 +256,8 @@ const cardText = (card: Card, cardDoc?: ComicDoc): string => {
       return `[drawing: ${clip(card.label, 80)}]`;
     case 'notice':
       return `[${card.tone}: ${clip(card.text, 200)}]`;
+    case 'model_outage':
+      return outageCardText(card);
     default:
       return '';
   }
@@ -588,9 +596,12 @@ async function directorTurnBody(
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
   const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
+  // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
+  // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
+  const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
   const system = [
     prompt,
-    summarizeDocForDirector(doc, byok, toolset.summaryLines, { userText, focus: input.focus, cost }),
+    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost }),
     memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
   ]
     .filter(Boolean)
@@ -623,12 +634,17 @@ async function directorTurnBody(
 
   // Watch what this turn sets in motion: queued render targets and background error notices,
   // so the committed reply can be checked against what actually happened (honest outcomes).
+  // A model_outage card is the studio pausing a run (reliability.md §2): the reply must never claim it started.
+  const outages: OutageCard[] = [];
   const unwatch = session.subscribe((e) => {
     if (e.type !== 'ops') return;
     for (const op of e.ops) {
       if (op.op === 'render' && op.patch?.status === 'queued') turn.runs!.push(op.target);
       else if (op.op === 'message' && op.msg.role === 'assistant' && op.msg.id !== msgId) {
-        for (const card of op.msg.cards || []) if (card.type === 'notice' && card.tone === 'error' && card.text) turn.bgErrors!.push(card.text);
+        for (const card of op.msg.cards || []) {
+          if (card.type === 'notice' && card.tone === 'error' && card.text) turn.bgErrors!.push(card.text);
+          else if (card.type === 'model_outage' && !outages.some((o) => o.id === card.id)) outages.push(card);
+        }
       }
     }
   });
@@ -773,19 +789,38 @@ async function directorTurnBody(
   // When the model said nothing, a not-transient reason is the reply itself (said once, not also as a card).
   const reasonIsReply = notTransient && !text;
   if (failure && !reasonIsReply) cards.push(noticeCard('error', failure.userMessage));
+  for (const card of turn.cards) if (card.type === 'model_outage' && !outages.some((o) => o.id === card.id)) outages.push(card);
+  const advice = modelAdviceOf(turn);
   if (!cancelled && !refused) {
     if (text) text = reconcileReply(withEarlyRecap(text, before, after, userText), { after, turn });
-    else if (failure) {
+    else if (!failure && !outages.length && advice) {
+      // The model asked model_options and wrote nothing: the studio says the trade-off from the same numbers.
+      const said = modelAdviceReply(advice, cost);
+      text = said.text;
+      // R5 / an outage: waiting comes first, so the retry chips lead (models.md §3.6 G); one picker chip.
+      if (advice.streak.count >= R5_FAILURES || advice.outage) pushOutageSteps(turn, after, byok, said.steps);
+      else pushNextSteps(turn, said.steps);
+    } else if (failure) {
       // Never claim work "keeps drawing" when it already failed (b4b5774f): say what really happened.
       const runLine = runFailureLine(after, runOutcome(after, turn));
       text = reasonIsReply
         ? [failure.userMessage, runLine].filter(Boolean).join(' ')
         : runLine
           ? `Sorry — I couldn't finish my reply. ${runLine}`
-          : turn.outcome === 'started'
+          : turn.outcome === 'started' && !(outages.length && !turn.runs?.length)
             ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
             : "Sorry — I couldn't finish that just now. Try again in a moment.";
-    } else text = composeTurnReply({ before, after, turn, userText });
+    } else if (!outages.length) text = composeTurnReply({ before, after, turn, userText });
+    // Never a switch the director can't make, never a start the studio paused (an empty reply gets the outage line).
+    const guarded = guardModelReply(text, { doc: after, outages, queued: turn.runs?.length ?? 0, cost });
+    text = guarded.text;
+    pushNextSteps(turn, guarded.steps);
+    if (advice) {
+      // model_options ran: the picker is always one tap away; a failing provider also gets its retry chips (§3.6 G).
+      const troubled = advice.streak.count >= R5_FAILURES || !!advice.outage;
+      if (troubled) pushOutageSteps(turn, after, byok);
+      else if (!turn.nextSteps.some((s) => s.client?.type === 'open_model_picker')) pushNextSteps(turn, modelAdviceReply(advice, cost).steps.filter((s) => s.client));
+    }
   }
   if (cancelled && !text && !cards.length) {
     recordTextSpend(ctx, tracker, 'chat', 'Director');

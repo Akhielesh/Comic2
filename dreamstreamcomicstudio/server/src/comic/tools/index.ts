@@ -9,6 +9,7 @@ import { breakdownToolGroup } from './breakdown.js';
 import { i18nToolGroup } from './i18n.js';
 import { letteringToolGroup } from './lettering.js';
 import { libraryToolGroup } from './library.js';
+import { modelsToolGroup } from './models.js';
 import { publishToolGroup } from './publish.js';
 import { readerToolGroup } from './reader.js';
 import { refsToolGroup } from './refs.js';
@@ -29,7 +30,8 @@ const registry = createKeyedRegistry<ToolGroup>({
       publishToolGroup,
       i18nToolGroup,
       libraryToolGroup,
-      readerToolGroup
+      readerToolGroup,
+      modelsToolGroup
     ]
   ]
 });
