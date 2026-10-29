@@ -54,6 +54,28 @@ describe('DictationButton target sizes', () => {
     expect(screen.getByRole('button', { name: 'Balanced' })).toHaveClass('coarse:min-h-11');
   });
 
+  it('the caret discloses a named group of toggles, not a menu (no aria-haspopup); Escape closes it', () => {
+    render(<DictationButton onPartial={vi.fn()} onFinal={vi.fn()} />);
+    const caret = screen.getByRole('button', { name: 'Dictation settings' });
+    // aria-haspopup="true" announces a menu, and the popup has no menu role or menu keys.
+    expect(caret).not.toHaveAttribute('aria-haspopup');
+    expect(caret).not.toHaveAttribute('aria-controls');
+    fireEvent.click(caret);
+    const group = screen.getByRole('group', { name: 'Dictation settings' });
+    expect(caret).toHaveAttribute('aria-controls', group.id);
+    expect(group.id).not.toBe('');
+    expect(screen.queryByRole('menu')).toBeNull();
+    // Its options are toggle buttons that never submit the composer's form.
+    for (const b of Array.from(group.querySelectorAll('button'))) {
+      expect(b).toHaveAttribute('type', 'button');
+      expect(b).toHaveAttribute('aria-pressed');
+    }
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Balanced' }), { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'Dictation settings' })).toBeNull();
+    expect(caret).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(caret);
+  });
+
   it('while recording, Discard and Finish are named 44 px touch targets', () => {
     state.status = 'recording';
     render(<DictationButton onPartial={vi.fn()} onFinal={vi.fn()} />);

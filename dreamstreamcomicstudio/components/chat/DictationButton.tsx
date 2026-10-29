@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { Mic, Check, X, Loader2, ChevronDown, ShieldCheck, Zap } from 'lucide-react';
 import {
   useDictation,
@@ -118,6 +118,10 @@ const RECORD_BTN = `grid h-7 w-7 shrink-0 place-items-center ${RADIUS_CONTROL} c
 export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPartial, onFinal, onStart }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const caretRef = useRef<HTMLButtonElement>(null);
+  // The settings popup is a plain group of toggle buttons (a disclosure), not an ARIA menu: the caret
+  // says expanded/collapsed and which element it controls, never aria-haspopup (that announces a menu).
+  const menuId = useId();
   const { status, level, elapsed, error, download, settings, setSettings, start, stop, cancel } = useDictation({
     onPartial,
     onFinal
@@ -140,11 +144,23 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
     <div ref={rootRef} className="relative shrink-0">
       {/* Engine / model settings */}
       {menuOpen && (
-        <div className={`absolute bottom-full right-0 z-30 mb-2 w-64 overflow-hidden ${MENU} animate-fade-in`}>
+        <div
+          id={menuId}
+          role="group"
+          aria-label="Dictation settings"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.stopPropagation();
+            setMenuOpen(false);
+            caretRef.current?.focus();
+          }}
+          className={`absolute bottom-full right-0 z-30 mb-2 w-64 overflow-hidden ${MENU} animate-fade-in`}
+        >
           <div className={`px-3 pt-2 pb-1 ${LABEL}`}>Dictation engine</div>
           {ENGINE_OPTIONS.filter((o) => o.available()).map((o) => (
             <button
               key={o.id}
+              type="button"
               onClick={() => setSettings({ ...settings, engine: o.id })}
               aria-pressed={settings.engine === o.id}
               className={`flex w-full items-start gap-2 px-3 py-2 text-left coarse:min-h-11 ${TRANSITION} ${settings.engine === o.id ? ACCENT_SOFT_BG : 'hover:bg-[var(--ds-hover)]'}`}
@@ -163,6 +179,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                 {MODEL_OPTIONS.map((m) => (
                   <button
                     key={m.id}
+                    type="button"
                     onClick={() => setSettings({ ...settings, model: m.id })}
                     title={m.hint}
                     aria-pressed={settings.model === m.id}
@@ -262,11 +279,12 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
           <Mic className={`h-4 w-4 ${status === 'recording' ? 'animate-pulse motion-reduce:animate-none' : ''}`} aria-hidden />
         </button>
         <button
+          ref={caretRef}
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
           disabled={busy}
-          aria-haspopup="true"
           aria-expanded={menuOpen}
+          aria-controls={menuOpen ? menuId : undefined}
           className={`grid min-w-6 place-items-center border-l border-[var(--ds-hairline-soft)] px-1.5 coarse:min-h-11 coarse:min-w-11 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
           title="Dictation settings"
           aria-label="Dictation settings"
