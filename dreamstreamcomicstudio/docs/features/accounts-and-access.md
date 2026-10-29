@@ -27,6 +27,76 @@ contract in `shared/studioAccess.ts`, client `services/studioAccessApi.ts`.
 Code Studio is retired ([ADR 0005](../decisions/0005-retire-code-studio.md)) and is never
 listed, not even for admins; the `retiring` status went with it.
 
+## Signing in to Stream Studio (2026-10-29)
+
+Stream Studio is for signed-in DreamStream accounts — the same account as Comic Studio and Chat
+Studio. The server already refused hosting (`POST /api/events` → `sign_in_required`), the baby
+monitor and calls without one; now the app itself does too. A signed-out visitor gets a
+full-screen **Sign in to Stream Studio** screen (Sign in / Create account through the sign-in
+sheet; **Continue with DreamStream** on Stream Studio's own address) — no dashboard, no create
+flow, no settings, no events this browser remembers, no tour. **Links people were sent still
+open with just a name.**
+
+One module decides it: `live/accessGate.ts` — `LINK_ROUTES` (the links that stay open; change
+the policy there), `GUEST_PASS_ROUTES` (where a nursery share link leads on to: the watch page,
+open to a device holding a guest pass for that nursery — `holdsGuestPass`), `gateFor(route,
+status, { guestPass })` and `statusForGate` (a sign-in link being finished holds the splash). `LiveApp` renders the answer in one place with
+`live/views/account/SignInGate.tsx`. `live/accessGate.unit.test.ts` checks every route view ×
+every account status.
+
+| Account status | Studio screens | Links people were sent |
+|---|---|---|
+| `loading` | a quiet splash ("Checking your account…"; "Finishing sign-in…" while an email or handoff link signs in) | open |
+| `signed_out` | **Sign in to Stream Studio** | open |
+| `needs_code` (signed in, no welcome code yet) | **One more step**: who's signed in, "Enter your welcome code" (the sheet's code step, with the account's name), Sign out | open |
+| `needs_mfa` (two-step code owed) | **Finish signing in**: the code sheet opens by itself; "Enter your code", Sign out | open |
+| `member` | the studio | open |
+| `offline` (a session the server couldn't confirm, or no auth client) | the studio, exactly as before — never gated | open |
+
+| Route view | Address | Without an account |
+|---|---|---|
+| `viewer`, `event`, `event-auto` | `?e=ID` (`#/watch`, `#/event`) | **Opens** — the watch / invite page, a name only |
+| `guest` | `?e=ID#/guest?g=KEY` (older `?e=ID&g=KEY`) | **Opens** — a meeting or broadcast guest seat |
+| `monitor-join` | `#/monitor/join/<nursery>/<code>` | **Opens** — a nursery share link (+ the passcode, typed) |
+| `secure` | `#/secure/<token>` | **Opens** — "Not you? Secure my account" must work signed out |
+| — | `?token_hash=…`, `?code=…`, `#access_token=…`, `?error=…` | Sign-in links are finished on any address (`consumeAuthReturn`), with the splash meanwhile |
+| `dashboard` | `/` (`/live`) | Sign-in screen |
+| `create`, `settings` | `#/create`, `#/settings`, `#/account` | Sign-in screen |
+| `monitor`, `nursery` | `#/monitor`, `#/monitor/<id>[/invite]` | Sign-in screen (an Invite link opens its sheet once signed in) |
+| `monitor-watch` | `#/monitor/<id>/watch` | **Opens for a share-link guest** — this device holds a guest pass for that nursery (`GUEST_PASS_ROUTES`): the join form sends them here, and so do reopening the share link, a reload and a crying / smoke alert's tap. Without a pass: sign-in screen |
+| `monitor-camera` | `#/monitor/<id>/camera` | Sign-in screen |
+| `calls` | `#/calls`, `#/call/<nursery>/<call>`, `#/call/d/<call>` (a ringing notification) | Sign-in screen |
+| `studio` | `?e=ID#/studio?k=KEY` (older `?e=ID&k=KEY`) | Sign-in screen — on entry only (`GATED_ON_ENTRY`): a running studio stays up through a sign-out elsewhere |
+| `summary`, `summary-lookup` | `?e=ID#/summary?k=KEY`, `#/summary/<id>` | Sign-in screen |
+
+- **The baby monitor is never gated out by the network.** Only a definite answer gates
+  (signed out, code owed). A failed account check never downgrades a member, and a reload while
+  the auth server can't be reached (an expired access token, no internet, the home Wi-Fi still
+  up) reads as `offline`, not "signed out" — and wipes nothing (`refreshAccount` in
+  `live/account.ts`; before, that case read as signed out and cleared the device's Stream Studio
+  data). The splash lasts only while the account check runs — the same wait the monitor's own
+  account check (`MonitorGate`) already had — and links never wait for it.
+- **A blip never opens the studio either.** A definite "not yet" (`needs_code`, `needs_mfa`)
+  survives a failed check for the same account, exactly like `member` does; `offline` is only
+  for no answer yet this page load (or a different account signing in), or no auth client. And a
+  failed request is never read as "not yet": a pre-launch account (or a sign-up with its ticket)
+  whose automatic `live_join` fails on a blip is `offline`, not asked for a code it doesn't need
+  — only the server's own `{ ok: false }` is `needs_code`.
+- **The address is kept.** After signing in, the screen they were opening opens — a private
+  studio link included. "Continue with DreamStream" carries only the screen, so it isn't offered
+  from a private event link (the key would be lost).
+- Signed out everywhere ("Sign out everywhere", "Not you?", a password reset) lands on the
+  sign-in screen with the "you were signed out" notice.
+- **A running broadcast or meeting is never cut by the gate.** The host studio is gated when it
+  opens (`GATED_ON_ENTRY`); signing out in another tab (Comic Studio shares the session) or being
+  asked for the two-step code again while it runs leaves it up, with a notice ("this stream keeps
+  going until you end it") — unmounting it would stop the camera, close the room and drop every
+  viewer and guest with none of its "you're on air" guards. Leaving it, or a reload, applies the
+  gate. The host key, not the account, runs the stream.
+- The main app's **Open Stream Studio** stays: signed in to DreamStream, you're straight in
+  (the same session on `/live`; the one-time handoff link on Stream Studio's own address), or
+  asked for the welcome code once; signed out, it lands on this sign-in screen.
+
 Sources (read only): `product_access` (admin-managed, Admin → Studios),
 `live_profiles` + `live__legacy_eligible`, `monitor_members`, `user_roles` / owner
 emails (rbac, shown as "admin" on the account), `user_plan_subscriptions` (shown as the
@@ -59,8 +129,8 @@ Comic Studio handle (profiles, comments, the gallery) and is never changed by a 
   last, else the `@username`; plus `account.username`. No backfill: the first save from
   either app aligns all three stores.
 - **Editing it.** DreamStream: Account → Profile → **Name** (one required field, max 40;
-  replaces First/Last). Stream Studio: Settings → Account & sync → **Your name**, for
-  members *and* people who haven't entered a welcome code yet. Settings → Scenes has an
+  replaces First/Last). Stream Studio: Settings → Account & sync → **Your name** for members;
+  before the welcome code, the code step's **Your name** (filled with the account's name). Settings → Scenes has an
   optional **On-stream name** that overrides it for streams only; left empty (the new
   default) the studio uses the account name, so renames flow through.
 - **Privacy.** For Stream Studio members the name is visible to their nursery members
@@ -126,7 +196,7 @@ account**:
   the main app's `/auth/callback` verifies the link and goes straight on to `next`.
   Privacy/Terms links are plain absolute links (`mainAppUrl`).
 - Landing on Stream Studio signed out (an old bookmark, an installed app, a 301): the sign-in
-  sheet offers **Continue with DreamStream** → `dreamstreamstudio.ai/?next=<stream screen>` →
+  screen and its sheet offer **Continue with DreamStream** → `dreamstreamstudio.ai/?next=<stream screen>` →
   signed in there? straight back, signed in; if not, sign in there once and come back.
   Only the screen travels, never a viewer/studio/guest key.
 - Stream Studio finishes `?token_hash=…&type=magiclink` in `live/account.ts`
