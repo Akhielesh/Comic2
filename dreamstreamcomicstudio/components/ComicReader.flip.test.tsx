@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project, TextLayout } from '../types';
 import { ComicReader } from './ComicReader';
+import { loadReaderState } from '../services/db';
 
 // Page Flip on phones (mobile-reading hotfix): chat-bubble dialogue used to sit BESIDE the art in an inline-flex row,
 // completely off-screen to the right on a phone, and in landscape the art shrank to a 13-30 px strip. On phones the
@@ -10,8 +11,8 @@ import { ComicReader } from './ComicReader';
 vi.mock('./layout/StaticSiteHeader', () => ({ StaticSiteHeader: () => <div data-testid="static-header" /> }));
 vi.mock('./layout/LegalMicroLinks', () => ({ LegalMicroLinks: () => <div data-testid="legal-links" /> }));
 vi.mock('./PanelDialogue', () => ({
-  PanelDialogue: ({ panel, placement }: { panel: ComicPanel; placement?: string }) => (
-    <div data-testid="panel-dialogue" data-placement={placement ?? 'auto'}>
+  PanelDialogue: ({ panel, placement, reader }: { panel: ComicPanel; placement?: string; reader?: boolean }) => (
+    <div data-testid="panel-dialogue" data-placement={placement ?? 'unset'} data-reader={reader ? 'true' : 'false'}>
       {panel.dialogue}
     </div>
   )
@@ -173,15 +174,54 @@ describe('Page Flip on phones', () => {
 });
 
 describe('desktop Page Flip is unchanged', () => {
-  it('keeps the art and its dialogue together in the inline-flex page, placement left to PanelDialogue', async () => {
+  it('keeps the art and its dialogue together in the inline-flex page, as an overlay', async () => {
     setPhone(false);
     await openFlip('speech_bubbles');
     expect(screen.queryByTestId('flip-region')).toBeNull();
     const dialogue = screen.getByTestId('panel-dialogue');
-    expect(dialogue).toHaveAttribute('data-placement', 'auto');
+    expect(dialogue).toHaveAttribute('data-placement', 'overlay');
     const page = dialogue.parentElement!;
     expect(page.className).toMatch(/\brelative inline-flex max-h-full max-w-full\b/);
     expect(page.querySelector('img')).not.toBeNull();
     expect(page.querySelector('img')!.getAttribute('style')).toBeNull();
+  });
+});
+
+// PanelDialogue renders as it did before the hotfix unless the caller opts in (the studio's Review/Export step and its
+// Book/PDF export do not): every classic reader surface must pass its placement and `reader`.
+describe('every classic reader surface opts in to the reader dialogue', () => {
+  const expectReader = (placement: string, count: number) => {
+    const all = screen.getAllByTestId('panel-dialogue');
+    expect(all).toHaveLength(count);
+    all.forEach((d) => {
+      expect(d).toHaveAttribute('data-placement', placement);
+      expect(d).toHaveAttribute('data-reader', 'true');
+    });
+  };
+
+  for (const phone of [true, false]) {
+    it(`Scroll mode (${phone ? 'phone' : 'desktop'}): placement "auto" (phones stack narrow panels), description filter on`, async () => {
+      setPhone(phone);
+      vi.mocked(loadReaderState).mockResolvedValueOnce(undefined);
+      render(<ComicReader project={makeProject('speech_bubbles')} {...props()} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByTestId('flip-region')).toBeNull();
+      expectReader('auto', 2);
+    });
+  }
+
+  it('Page Flip: "below" on phones, "overlay" on desktop, description filter on both', async () => {
+    setPhone(true);
+    const { unmount } = render(<ComicReader project={makeProject('speech_bubbles')} {...props()} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expectReader('below', 1);
+    unmount();
+    setPhone(false);
+    await openFlip('speech_bubbles');
+    expectReader('overlay', 1);
   });
 });

@@ -1094,7 +1094,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                             Dialogue shown without artwork
                           </div>
                         )}
-                        <PanelDialogue panel={panel} layout={textLayout} />
+                        <PanelDialogue panel={panel} layout={textLayout} placement="auto" reader />
 	                      </div>
 	                    </RevealOnScroll>
 	                  ))}
@@ -1167,7 +1167,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                           className="w-full shrink-0 overflow-y-auto overscroll-contain"
                           style={{ maxWidth: FLIP_DIALOGUE_MAX_W, maxHeight: flipDialogueMax ?? `${FLIP_DIALOGUE_MAX_SHARE * 100}%` }}
                         >
-                          <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="below" />
+                          <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="below" reader />
                         </div>
                       )}
                     </div>
@@ -1198,7 +1198,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                           {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
                         </div>
                       )}
-                      {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
+                      {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="overlay" reader />}
                     </div>
                   </div>
                 ) : (

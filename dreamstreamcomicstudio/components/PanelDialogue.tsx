@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useState } from 'react';
 import { ComicPanel, DialogueBlock, TextLayout } from '../types';
-import { readerDialogueBlocks } from '../services/dialogueUtils';
+import { ensureDialogueBlocks, readerDialogueBlocks } from '../services/dialogueUtils';
 
 // ---------------------------------------------------------------------------
 // Placement (mobile-reading hotfix)
@@ -9,6 +9,9 @@ import { readerDialogueBlocks } from '../services/dialogueUtils';
 // wide, so the same bubbles cover 2-3x more of the art. On phones (coarse pointer or a viewport under 640 px), when
 // the RENDERED panel is narrower than STACK_BELOW_PX, they stack under the image instead (the chat_bubbles pattern),
 // at the same native 11-14 px text size, unclamped. Desktop keeps the overlay exactly as before.
+// Only readers opt in (placement 'auto' / 'below', and `reader`). With no props the component renders exactly as it
+// did before the hotfix: the studio's Review/Export cards are fixed-height and overflow-hidden, so dialogue stacked
+// under the art there would be clipped away, on screen and in the Book/PDF export rasterised from them.
 
 /** Where speech bubbles and captions go: over the art, under it, or decided by the rendered panel width on phones. */
 export type DialoguePlacement = 'auto' | 'overlay' | 'below';
@@ -60,12 +63,22 @@ const useStackBelow = (placement: DialoguePlacement, active: boolean) => {
 export interface PanelDialogueProps {
     panel: ComicPanel;
     layout: TextLayout;
-    /** true: always an absolute overlay on the panel image; false: always under it. Unset: `placement` decides. */
+    /** true or unset: an absolute overlay on the panel image (as before the hotfix); false: under it. `placement` wins. */
     overlay?: boolean;
     /** Compact mode for small panels (e.g., 3×3 grids). */
     compact?: boolean;
-    /** Default 'auto': overlay, except on phones when the rendered panel is narrower than STACK_BELOW_PX. */
+    /**
+     * Unset: from `overlay`, i.e. the overlay, as before the hotfix (the studio's Review/Export step and its Book/PDF
+     * export). Readers opt in: 'auto' = overlay, except on phones when the rendered panel is narrower than
+     * STACK_BELOW_PX; 'below' = always under the art; 'overlay' = never under it.
+     */
     placement?: DialoguePlacement;
+    /**
+     * Reader surfaces: never the scene description as dialogue (readerDialogueBlocks: no fallback, stored echoes of it
+     * hidden). Unset (the studio): ensureDialogueBlocks with its description fallback, exactly as before the hotfix, so
+     * the page and its Book/PDF export keep agreeing with the bubble editor, which seeds from that same fallback.
+     */
+    reader?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +359,14 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
     overlay,
     compact = false,
     placement,
+    reader = false,
 }) => {
-    // Readers never show the scene description as dialogue (no fallback; stored echoes of it are hidden).
-    const blocks = readerDialogueBlocks(panel);
-    const resolved: DialoguePlacement = placement ?? (overlay === true ? 'overlay' : overlay === false ? 'below' : 'auto');
+    // Readers never show the scene description as dialogue (no fallback; stored echoes of it are hidden). The studio
+    // keeps the fallback it has always shown.
+    const blocks = reader
+        ? readerDialogueBlocks(panel)
+        : ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
+    const resolved: DialoguePlacement = placement ?? (overlay === false ? 'below' : 'overlay');
     const canStack = layout === 'speech_bubbles' || layout === 'caption';
     const { below, phone, ref } = useStackBelow(resolved, layout !== 'none' && blocks.length > 0);
     if (layout === 'none' || blocks.length === 0) return null;
