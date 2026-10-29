@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type Msg, type Page } from '../../../shared/comic/doc.js';
+import { createEmptyDoc, emptyRender, type Card, type Msg, type Page } from '../../../shared/comic/doc.js';
 import {
   DIRECTOR_SYSTEM_PROMPT,
   HISTORY_WINDOW,
@@ -56,6 +56,48 @@ describe('runDirectorTurn', () => {
     // Director spend is recorded as chat.
     expect(doc.spend.entries[0]).toMatchObject({ kind: 'chat', label: 'Director', estimated: false });
     expect(ctx.billingFake.reserves[0]).toMatchObject({ operation: 'comic.text.director', stage: 'chat' });
+  });
+
+  it('a tapped option is recorded on its card (reload-safe) and the model history reads "answered: …"', async () => {
+    const session = newSession(createEmptyDoc('q-1'));
+    const llm = scriptedLlm({
+      director: [
+        { text: 'What tone?', toolCalls: [toolCall('q1', 'ask_user', { question: 'What tone?', options: [{ label: 'Funny', reply: 'Make it funny' }, { label: 'Tense' }] })] },
+        { text: 'Funny it is.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'A story about a cat.', attachments: [] });
+    const asked = session.doc.conversation.at(-1)!;
+    const card = asked.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    expect(card.answered).toBeUndefined();
+    // The OptionsCard sends the choice's reply as the user's next message.
+    await runDirectorTurn(ctx, { text: 'Make it funny', attachments: [] });
+    const after = session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    // Without the fix nothing ever wrote `answered`: after a reload the chips were live again.
+    expect(after.answered).toEqual([card.choices[0].id]);
+    expect(session.doc.conversation.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    // The model's history carries the answer by label, not by id.
+    expect(JSON.stringify(llm.calls[1].messages)).toContain('[asked: What tone? — options: Funny / Tense; answered: Funny]');
+  });
+
+  it('option answers: free text that matches no choice leaves the card open; a multi-select "A and B" records both', async () => {
+    const session = newSession(createEmptyDoc('q-2'));
+    const llm = scriptedLlm({
+      director: [
+        { text: 'Which pets?', toolCalls: [toolCall('q1', 'ask_user', { question: 'Which pets?', options: [{ label: 'Cats' }, { label: 'Dogs' }, { label: 'Birds' }], multi: true })] },
+        { text: 'Noted.' },
+        { text: 'Both then.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'pets?', attachments: [] });
+    const asked = session.doc.conversation.at(-1)!;
+    const cardOf = () => session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    await runDirectorTurn(ctx, { text: 'Something else entirely', attachments: [] });
+    expect(cardOf().answered).toBeUndefined();
+    await runDirectorTurn(ctx, { text: 'Cats and Birds', attachments: [] });
+    expect(cardOf().answered).toEqual([cardOf().choices[0].id, cardOf().choices[2].id]);
   });
 
   it('runs a multi-round tool loop with OpenRouter-native tool messages', async () => {

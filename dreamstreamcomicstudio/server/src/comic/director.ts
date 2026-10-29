@@ -232,7 +232,7 @@ function summaryBody(doc: ComicDoc, compact: boolean): string {
 const cardText = (card: Card, cardDoc?: ComicDoc): string => {
   switch (card.type) {
     case 'options':
-      return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${card.answered.join(', ')}` : ''}]`;
+      return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${answeredLabels(card).join(', ')}` : ''}]`;
     case 'style_choice':
       return '[showed style options to pick from]';
     case 'cast':
@@ -382,6 +382,50 @@ const withEarlyRecap = (text: string, before: ComicDoc, after: ComicDoc, userTex
   return recap ? `Got it — ${recap}. ${text}` : text;
 };
 
+// ── Option-card answers ──────────────────────────────────────────────────────
+
+type OptionsCard = Extract<Card, { type: 'options' }>;
+
+/** `answered` holds choice ids (what the OptionsCard locks on); the model reads the labels. */
+const answeredLabels = (card: OptionsCard): string[] => (card.answered || []).map((a) => card.choices.find((c) => c.id === a)?.label ?? a);
+
+const normalizeAnswer = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** The choice ids the user's text picks on an options card (none when it is free text). */
+function pickedChoices(card: OptionsCard, userText: string): string[] {
+  const want = normalizeAnswer(userText);
+  if (!want) return [];
+  const byText = (s: string) => card.choices.find((c) => normalizeAnswer(c.reply || c.label) === s || normalizeAnswer(c.label) === s);
+  const one = byText(want);
+  if (one) return [one.id];
+  if (!card.multi) return [];
+  // A multi-select card sends its picks as "A, B and C" (OptionsCard.joinChoices).
+  const parts = want.split(/\s*,\s*|\s+and\s+/).filter(Boolean);
+  const ids = parts.map((p) => byText(p)?.id);
+  return parts.length > 1 && ids.every((id): id is string => !!id) ? [...new Set(ids)] : [];
+}
+
+/**
+ * A tapped option (the client sends the choice's reply as the user's message) is recorded on its
+ * card before the turn runs, so a reload or another device shows the question answered and the
+ * model's history reads "answered: …" (cardText). Free text that matches no choice leaves the card
+ * as it is. The most recent unanswered card in the director's window wins.
+ */
+function recordOptionAnswer(session: StudioContext['session'], userText: string): void {
+  const conv = session.doc.conversation;
+  for (let i = conv.length - 1; i >= Math.max(0, conv.length - HISTORY_WINDOW); i -= 1) {
+    const m = conv[i];
+    if (m.role !== 'assistant' || !m.cards?.length) continue;
+    for (const card of m.cards) {
+      if (card.type !== 'options' || card.answered?.length) continue;
+      const answered = pickedChoices(card, userText);
+      if (!answered.length) continue;
+      session.commit([{ op: 'message', msg: { ...m, cards: m.cards.map((c) => (c === card ? { ...c, answered } : c)) } }]);
+      return;
+    }
+  }
+}
+
 export interface DirectorTurnInput {
   text: string;
   attachments: AssetRef[];
@@ -410,6 +454,11 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     at: startedAt,
     ...(attachments.length ? { attachments } : {})
   };
+  try {
+    recordOptionAnswer(session, userText);
+  } catch (err) {
+    logger.warn('comic_director_answer_record_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+  }
   session.commit([{ op: 'message', msg: userMsg }]);
   const msgId = newId('msg');
   try {
