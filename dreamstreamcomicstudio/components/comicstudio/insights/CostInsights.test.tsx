@@ -90,6 +90,21 @@ describe('L1 — the cost card', () => {
     expect(row).toHaveTextContent(`(your last 3: $0.05–$0.052) · ${PRICE_UNPUBLISHED_COPY} · Seedream 5 Pro at 2K`);
   });
 
+  it('the next page is priced like a quote: this comic’s observed median at n ≥ 3 (never under list), with its source', () => {
+    const { unmount } = mount();
+    const lockRow = within(card()).getByText('Drawn with Nano Banana 2.1 · locked for this comic').closest('div')!;
+    // 1K pages: observed median $0.047 (n = 4) beats the $0.0336 list → $0.047 + QC $0.003, own key, no markup.
+    expect(lockRow).toHaveTextContent('≈$0.05/page');
+    expect(lockRow).toHaveTextContent('Draft quality · 1K · a page ≈$0.05 (your last 4) · cover ≈$0.03 (from our price list, 2026-10-22) · no markup on your key');
+    expect(within(card()).getByText('Real cost per page').closest('div')!).toHaveTextContent('≈$0.047');
+    unmount();
+    // Below n = 3 the dated list price, × PLATFORM_MARKUP when the platform pays.
+    mount(makeLakeComic((d) => { d.spend.entries = d.spend.entries.filter((e) => !(e.res === '1K' && (e.label === 'Page 2' || e.label === 'Page 3'))); }), { byok: false });
+    const listRow = within(card()).getByText('Drawn with Nano Banana 2.1 · locked for this comic').closest('div')!;
+    expect(listRow).toHaveTextContent('Draft quality · 1K · a page ≈$0.05 · cover ≈$0.04 · from our price list, 2026-10-22');
+    expect(listRow).not.toHaveTextContent('your last');
+  });
+
   it('the lock line (§3.6 A) with its lock icon; Change… opens the picker through the client action', () => {
     const { runClientAction } = mount();
     expect(within(card()).getByText('Drawn with Nano Banana 2.1 · locked for this comic')).toBeInTheDocument();

@@ -16,7 +16,8 @@
 import React, { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { Lock, PanelsTopLeft } from 'lucide-react';
 import type { ClientAction, ComicDoc, QualityTier } from '../../../shared/comic/doc';
-import { estimateJobs, getImageModel, resolveImageJob } from '../../../shared/comic/models';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, resolveImageJob } from '../../../shared/comic/models';
+import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { deriveLock } from '../../../shared/comic/modelLock';
 import type { BookSummary, quoteRenderPages } from '../../../shared/comic/plan';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
@@ -31,14 +32,15 @@ import {
   LOCK_ICON_LABEL,
   PRICE_UNPUBLISHED_COPY,
   SAVED_BY_SOFTWARE_COPY,
+  couldntRefreshCopy,
   lockedLine,
   priceListCopy,
   unlockedLine
 } from './copy';
-import { insightsMoney, pageRealCost, spendSummary, type InsightsMoney } from './insightsModel';
+import { clockText, insightsMoney, pageRealCost, rowFor, spendSummary, type InsightsMoney } from './insightsModel';
 import { ModelsTab } from './ModelsTab';
 import { OverviewTab, SpendByKindList } from './OverviewTab';
-import { PagesTab } from './PagesTab';
+import { PagesTab, insightsUnit, type InsightsUnit } from './PagesTab';
 import { TrendsTab } from './TrendsTab';
 import { useHeldCatalog } from './useInsights';
 import { FOCUS, TextButton, WRAP } from './ui';
@@ -139,6 +141,21 @@ const CostRow: React.FC<{ label: React.ReactNode; value: React.ReactNode; note?:
   </div>
 );
 
+const round4 = (n: number) => Math.round(n * 10000) / 10000;
+
+/** Where one new image's price comes from, in words (§4.7: every figure carries its source and time). */
+const unitSource = (u: InsightsUnit, modelId: string, rows: readonly ModelCatalogRow[] | null, now?: number): string => {
+  if (u.basis === 'observed') return `your last ${u.n}`;
+  if (u.basis === 'catalog') {
+    const row = rowFor(rows, modelId);
+    const p = row?.price[u.res];
+    const at = row?.fetchedAt.catalog;
+    if (row && p && p.basis !== 'registry' && at) return row.stale ? couldntRefreshCopy(clockText(at, now)) : `OpenRouter, ${clockText(at, now)}`;
+  }
+  const spec = getImageModel(modelId);
+  return spec ? priceListCopy(spec.factsAsOf) : '';
+};
+
 /** "3 pages $0.21" / "1 character sheet ≈1% of your usage" from an estimate line. */
 const lineText = (l: { label: string; count: number; usd: number }, cost: CostFormat) =>
   `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${amountInSentence(cost.exact(l.usd))}`;
@@ -159,6 +176,7 @@ export interface CostInsightsProps {
 
 export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pro, cost, coverLine, runClientAction, now }) => {
   const money = useMemo(() => insightsMoney(cost), [cost]);
+  const held = useHeldCatalog(doc.id);
   const summary = useMemo(() => spendSummary(doc), [doc]);
   const real = useMemo(() => pageRealCost(doc), [doc]);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -182,9 +200,27 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
   const lockedSpec = lock ? getImageModel(lock.modelId) : undefined;
   const next = resolveImageJob('page', tier, override, lock);
   const modelName = lock ? (lockedSpec?.nickname ?? lock.modelId) : next.spec.nickname;
-  const priced = !lock || !!lockedSpec;
-  const pageUsd = estimateJobs([{ kind: 'page', count: 1 }], tier, { override, byok, lock }).usd;
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], tier, { override, byok, lock }).usd;
+  // The next page and cover on the comic's model, priced like a quote (models.md §2.3, AT-6): the held catalog
+  // price, else the dated price list; this comic's own observed median when n ≥ 3 and higher — never under list,
+  // never under what the user really paid. + QC per page, × PLATFORM_MARKUP unless the user's own key pays.
+  const pageModel = lock ? lock.modelId : next.spec.id;
+  const coverModel = lock ? lock.modelId : resolveImageJob('cover', tier, override).spec.id;
+  const markup = byok ? 1 : PLATFORM_MARKUP;
+  const pageUnit = useMemo(() => insightsUnit(doc, held, pageModel, 'page'), [doc, held, pageModel]);
+  const coverUnit = useMemo(() => insightsUnit(doc, held, coverModel, 'cover'), [doc, held, coverModel]);
+  const pageUsd = pageUnit.usd === null ? null : round4((pageUnit.usd + QC_USD_PER_PAGE) * markup);
+  const coverUsd = coverUnit.usd === null ? null : round4(coverUnit.usd * markup);
+  const pageSource = unitSource(pageUnit, pageModel, held, now);
+  const coverSource = unitSource(coverUnit, coverModel, held, now);
+  const sameSource = coverUsd === null || pageSource === coverSource;
+  const nextWords =
+    pageUsd === null
+      ? null
+      : [
+          `a page ${cost.badge(pageUsd)}${sameSource || !pageSource ? '' : ` (${pageSource})`}`,
+          ...(coverUsd !== null ? [`cover ${cost.badge(coverUsd)}${sameSource || !coverSource ? '' : ` (${coverSource})`}`] : []),
+          ...(sameSource && pageSource ? [pageSource] : [])
+        ].join(' · ');
   // The list beside the real cost, or the exact §4.6 copy when the model publishes no per-image price.
   const realList = real?.list ? `list ${money.price(real.list.usd)}${real.list.source === 'registry' ? ` (${priceListCopy(real.list.factsAsOf)})` : ''}` : PRICE_UNPUBLISHED_COPY;
   const realRange = real ? [money.priceShort(real.minUsd), money.priceShort(real.maxUsd)] : [];
@@ -223,12 +259,14 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
                 {lock && <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" role="img" aria-label={LOCK_ICON_LABEL} />}
               </span>
             }
-            value={priced ? `${quoteCell(pageUsd) ?? 'a little'}/page` : '—'}
+            value={pageUsd !== null ? `${quoteCell(pageUsd) ?? 'a little'}/page` : '—'}
             note={
               <>
-                {priced
-                  ? `${TIER_LABEL[tier] ?? tier} quality · ${next.resolution} · a page ${cost.badge(pageUsd)} · cover ${cost.badge(coverUsd)} · prices from the model price list${byok ? ', no markup on your key' : ''} `
-                  : 'This model is no longer in our price list, so it can’t be priced here. '}
+                {nextWords
+                  ? `${TIER_LABEL[tier] ?? tier} quality · ${pageUnit.res} · ${nextWords}${byok ? ' · no markup on your key' : ''} `
+                  : lock && !lockedSpec
+                    ? 'This model is no longer in our price list, so it can’t be priced here. '
+                    : `${TIER_LABEL[tier] ?? tier} quality · ${pageUnit.res} · ${PRICE_UNPUBLISHED_COPY} `}
                 <TextButton onClick={() => openPicker()}>{lock ? CHANGE_MODEL_LINK : CHOOSE_MODEL_LINK}</TextButton>
               </>
             }
