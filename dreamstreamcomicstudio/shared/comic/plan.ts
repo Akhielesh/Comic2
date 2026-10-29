@@ -25,12 +25,12 @@ import {
   type RenderState,
   type ShotType
 } from './doc.js';
-import { boxArea, fitState, hardFitLimit, needMeter, panelFit, wordBudget, type FitState, type NeedMeter } from './density.js';
+import { needMeter, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect } from './lettering/layout.js';
 import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type SpendEstimate } from './models.js';
 import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
 import { panelBoxesFor } from './pageGeometry.js';
-import { PLAN_POLICY, RECURRING } from './panelRules.js';
+import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
 
 const isBusy = (r?: RenderState) => !!r && (r.status === 'queued' || r.status === 'rendering');
@@ -164,8 +164,11 @@ export function spendByTarget(doc: ComicDoc): Map<string, TargetSpend> {
 }
 
 export interface PanelSummary {
+  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), its blueprint — the plan as it will be
+   *  drawn, the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels. */
   n: number; box: Box; shot: ShotType; size: PanelSize; castIds: string[]; speech: number; captions: number; sfx: number; words: number;
-  /** How much of the panel its lettering covers (density.ts need ÷ area, on `box`), its state and its word budget. */
+  /** How much of the panel its lettering covers (density.ts need ÷ area, on `box`), its state and what it holds
+   *  (in BookSummary.budgetUnit: words, or characters for Japanese and Chinese). Same boxes as the page's planFit. */
   fit?: number;
   fitState?: FitState;
   budget?: number;
@@ -221,6 +224,8 @@ export interface BookSummary {
   /** "6 pages · 19 panels. Want more moments? Add a page." — the page count stays the user's choice; the UI
    *  formats `addPageUsd` (usage words for governed users). */
   moments?: { pages: number; panels: number; addPageUsd: number; line: string };
+  /** What PanelSummary.budget counts: words, or characters for Japanese and Chinese (the book's language). */
+  budgetUnit?: 'words' | 'chars';
 }
 
 const statusOf = (r: RenderState, stale: boolean): PageSummary['status'] => {
@@ -290,27 +295,30 @@ export function summarizeBook(
   const ledger = spendByTarget(doc);
   const anyway = new Set(opts.drawOverfull ?? []);
   const meter = needMeter(doc, { aspect: letteringAspect(doc, null) });
-  const hard = hardFitLimit(doc);
   const recurring = recurringCastIds(doc);
   const pages: PageSummary[] = [...doc.pages]
     .sort((a, b) => a.n - b.n)
     .filter((p) => (ids ? ids.has(p.id) : true))
     .map((p) => {
-      const boxes = panelBoxesFor(doc, p);
       const castIds = [...new Set(p.panels.flatMap((panel) => panel.castIds))];
       const asset = p.render.asset;
+      // One plan check per page, on one set of boxes, feeds the per-panel dots AND the page verdict, so they never
+      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on its blueprint — the plan
+      // as it will be drawn, the gate's boxes — even when an older take left measured boxes; a drawn, current (or
+      // busy) page on the panels it was drawn with, and is never held back.
+      const about = drawable.has(p.id);
+      const check = p.panels.length
+        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: panelBoxesFor(doc, p), fixLayout: false })
+        : undefined;
       const summary: PageSummary = {
         id: p.id,
         n: p.n,
         summary: p.summary,
         panels: p.panels.map((panel, i) => {
-          const box = boxes[i] ?? { x: 0, y: 0, w: 1, h: 1 };
-          const area = boxArea(box);
-          const fit = panelFit(meter.panel(panel.lines, box), area);
-          const balloons = panel.lines.filter((l) => l.text.trim()).length;
+          const fit = check?.panels[i];
           return {
             n: panel.n,
-            box,
+            box: fit?.box ?? { x: 0, y: 0, w: 1, h: 1 },
             shot: panel.shot,
             size: panel.size,
             castIds: panel.castIds,
@@ -318,39 +326,23 @@ export function summarizeBook(
             captions: panel.lines.filter((l) => l.kind === 'caption').length,
             sfx: panel.lines.filter((l) => l.kind === 'sfx').length,
             words: panel.lines.reduce((n, l) => n + words(l.text), 0),
-            fit,
-            fitState: fitState(fit, hard),
-            budget: wordBudget(area, Math.max(1, balloons))
+            ...(fit ? { fit: fit.fit, fitState: fit.state, budget: fit.budget } : {})
           };
         }),
         castIds,
         missingRefCastIds: missingRefCastIdsFor(doc, castIds, recurring),
         status: statusOf(p.render, isPageStale(doc, p))
       };
-      if (p.panels.length) {
-        if (drawable.has(p.id)) {
-          // About to be drawn: the plan check on the blueprint decides the hold-back (the same rule as the gate).
-          const check = checkPagePlan(doc, p, { meter });
-          const back = PLAN_POLICY.holdBackOverfull && check.state === 'overfull' && !anyway.has(p.id) ? heldBackOf(check) : undefined;
-          summary.planFit = {
-            state: check.state,
-            worst: check.worst,
-            ...(check.worstPanel !== undefined ? { panel: check.worstPanel } : {}),
-            ...(back ? { heldBack: true, text: back.text } : {}),
-            ...(check.layoutFix ? { layoutFix: check.layoutFix.layout } : {})
-          };
-        } else {
-          // Drawn and current (or busy): the fit of what is on the page now; nothing is held back.
-          let worst = 0;
-          let panel: number | undefined;
-          for (const ps of summary.panels) {
-            if ((ps.fit ?? 0) > worst) {
-              worst = ps.fit ?? 0;
-              panel = ps.n;
-            }
-          }
-          summary.planFit = { state: fitState(worst, hard), worst, ...(panel !== undefined ? { panel } : {}) };
-        }
+      if (check) {
+        // About to be drawn: the hold-back follows the gate's rule (PD-1). Drawn and current: nothing is held back.
+        const back = about && PLAN_POLICY.holdBackOverfull && check.state === 'overfull' && !anyway.has(p.id) ? heldBackOf(check) : undefined;
+        summary.planFit = {
+          state: check.state,
+          worst: check.worst,
+          ...(check.worstPanel !== undefined ? { panel: check.worstPanel } : {}),
+          ...(back ? { heldBack: true, text: back.text } : {}),
+          ...(about && check.layoutFix ? { layoutFix: check.layoutFix.layout } : {})
+        };
       }
       if (p.turnHook) summary.turnHook = p.turnHook;
       if (p.chapterTitle) summary.chapterTitle = p.chapterTitle;
@@ -400,7 +392,8 @@ export function summarizeBook(
       ...renderAllTotals(doc, { byok: opts.byok, tier, modelOverride: override, drawOverfull: [...anyway], meter })
     },
     pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override },
-    moments: momentsLine(doc, page1.usd)
+    moments: momentsLine(doc, page1.usd),
+    budgetUnit: textUnitFor(doc.format.language).unit
   };
 }
 

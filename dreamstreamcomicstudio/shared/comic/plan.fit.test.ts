@@ -105,6 +105,50 @@ describe('summarizeBook — plan fit', () => {
     expect(s.totals.heldBack).toBeUndefined();
   });
 
+  it('a stale drawn page reads its dots and its hold-back from the same (blueprint) boxes, never the old take\'s', () => {
+    // b4b5774f p2 shape, drawn once (measured qc boxes give panel 6 a big full-width cell), then re-planned (stale).
+    const page = overfull(1);
+    const measured = page.panels.map((_, i) => (i === 5 ? { x: 0.02, y: 0.5, w: 0.96, h: 0.48 } : { x: 0.02 + (i % 3) * 0.32, y: 0.02 + Math.floor(i / 3) * 0.24, w: 0.3, h: 0.22 }));
+    page.render = {
+      status: 'ready',
+      history: [],
+      specHash: 'an-older-plan',
+      asset: { path: 'u/x/p1.webp', source: 'generated', at: 1 },
+      qc: { model: 'x', score: 0.9, issues: [], checkedAt: 1, panelBoxes: measured }
+    } as Page['render'];
+    const doc = docOf(page);
+    const s = summarizeBook(doc, { byok: false });
+    const p1 = s.pages[0];
+    expect(p1.status).toBe('stale');
+    expect(p1.planFit).toMatchObject({ state: 'overfull', panel: 6, heldBack: true });
+    // The dot agrees with the hold-back: panel 6 is red on the boxes the gate uses, and its box is the blueprint's.
+    expect(p1.panels[5].fitState).toBe('overfull');
+    expect(p1.panels[5].fit).toBe(p1.planFit!.worst);
+    expect(p1.panels[5].budget).toBe(9);
+    expect(p1.panels[5].box.w).toBeLessThan(0.4);
+    expect(p1.planFit!.worst).toBe(Math.max(...p1.panels.map((ps) => ps.fit ?? 0)));
+    // The same page drawn and current is read on its measured panels: roomy dot, nothing held back.
+    const current = overfull(1);
+    current.render = { ...page.render, specHash: undefined } as Page['render'];
+    const drawn = summarizeBook(docOf(current), { byok: false }).pages[0];
+    expect(drawn.status).toBe('ready');
+    expect(drawn.panels[5].box).toEqual(measured[5]);
+    expect(drawn.panels[5].fitState).toBe('roomy');
+    expect(drawn.planFit!.heldBack).toBeUndefined();
+    expect(drawn.planFit!.worst).toBe(Math.max(...drawn.panels.map((ps) => ps.fit ?? 0)));
+  });
+
+  it('budgets for a Japanese book are in characters, and the summary says so', () => {
+    const doc = docOf(roomy(1));
+    doc.format.language = 'ja';
+    doc.pages[0].panels[1].lines = [{ id: 'j', kind: 'speech', speakerId: 'c_kal', text: 'この荷台にはナンバーがない。' }];
+    const s = summarizeBook(doc, { byok: false });
+    expect(s.budgetUnit).toBe('chars');
+    expect(summarizeBook(docOf(roomy(1)), { byok: false }).budgetUnit).toBe('words');
+    const en = summarizeBook(docOf(roomy(1)), { byok: false }).pages[0].panels[1].budget!;
+    expect(s.pages[0].panels[1].budget).toBe(Math.floor(en * 1.6 + 1e-9));
+  });
+
   it('missing references include recurring on-page extras without a sheet; extras with a ready sheet and one-off walk-ons are not flagged', () => {
     const doc = docOf(roomy(1, ['c_kal', 'c_pip', 'c_frog', 'c_crow']), roomy(2, ['c_kal', 'c_pip', 'c_frog']));
     doc.pages[0].panels[0].castIds = ['c_kal', 'c_owl'];
