@@ -16,6 +16,7 @@ import { getImageModel } from '../../../shared/comic/models.js';
 import { RATING_RULES, SAFE_TAKE_LINE } from '../../../shared/comic/safety.js';
 import {
   DEFAULT_STYLE_SPEC,
+  LAYOUT_REFERENCE_PATH,
   LETTERING_LOOK,
   REGION_REFERENCE_PATH,
   SAFETY_AVOID,
@@ -663,6 +664,36 @@ describe('compilePage', () => {
     expect(job.prompt).toContain('hair: black bun with a pencil through it');
     // A normal page keeps them.
     expect(compilePage(doc, page(1, [panel(1, ['maya'])])).prompt).toContain('Who: MAYA (Image 1 — black bun with a pencil, faded red kurta, thin scar).');
+  });
+
+  it('layout guide (COMIC_LAYOUT_GUIDE, off by default): Image 1 is PAGE LAYOUT GUIDE in one object slot, boxes are named in the guide', () => {
+    const doc = crowdedDoc('standard');
+    const prev = page(0, [panel(1, ['a'])], { render: ready('pages/p0.png') });
+    const off = compilePage(doc, crowdedPage(), { previousPage: prev });
+    expect(off.references.some((r) => r.path === LAYOUT_REFERENCE_PATH)).toBe(false);
+    expect(off.prompt).not.toContain('LAYOUT GUIDE');
+    expect(off.prompt).toContain('PANEL 1 of 6 — box 1 in the layout (');
+
+    const on = compilePage(doc, crowdedPage(), { previousPage: prev, layoutGuide: true });
+    expect(on.references[0]).toEqual({ label: 'PAGE LAYOUT GUIDE', path: LAYOUT_REFERENCE_PATH });
+    expect(on.prompt).toContain(
+      'Image 1 — PAGE LAYOUT GUIDE. Draw the panel borders exactly on its black lines and keep its white gutters; it shows layout only — never copy its flat fill, and it holds no characters or text.'
+    );
+    expect(on.prompt).toContain('Panel borders: follow the PAGE LAYOUT GUIDE (Image 1) exactly');
+    expect(on.prompt).toContain('PANEL 1 of 6 — box 1 in the layout guide (');
+    expect(legendLabels(on.prompt)).toEqual(on.references.map((r) => r.label));
+    // Everything else shifts by one and keeps its order; caps hold.
+    expect(on.references.slice(1)).toEqual(off.references);
+    const spec = getImageModel('nano-banana-2.1')!;
+    const planned = planPageReferences(doc, crowdedPage(), spec, prev, { layoutGuide: true });
+    expect(planned.length).toBeLessThanOrEqual(spec.refs.total);
+    expect(planned.filter((r) => r.slot === 'object').length).toBeLessThanOrEqual(spec.refs.objects);
+    expect(planned.filter((r) => r.slot === 'character').length).toBeLessThanOrEqual(spec.refs.characters);
+    // Never a model's only object slot: the legacy model keeps its style anchor and states the layout in words.
+    const legacy = getImageModel('nano-banana-legacy')!;
+    const tight = planPageReferences(doc, crowdedPage(), legacy, prev, { layoutGuide: true });
+    expect(tight.some((r) => r.kind === 'layout')).toBe(false);
+    expect(tight.map((r) => r.label)).toContain('STYLE BOARD');
   });
 
   it('is deterministic', () => {

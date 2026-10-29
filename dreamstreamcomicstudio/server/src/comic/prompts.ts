@@ -114,6 +114,16 @@ const DEFAULT_AVOID = ['photorealism', 'muddy or blurry rendering', 'warped anat
 /** Path placeholder for the red-outlined copy of the page; the job runner substitutes the real image. */
 export const REGION_REFERENCE_PATH = '__region__';
 
+/**
+ * Path placeholder for the page layout guide (plan C9; panelize/wireframe.ts renders it from
+ * pageLayoutBoxes at prepare time; nothing is stored). Attached only when the caller asks for it
+ * (`layoutGuide`, set by the job runner while COMIC_LAYOUT_GUIDE is on — off until the A/B).
+ */
+export const LAYOUT_REFERENCE_PATH = '__layout__';
+export const LAYOUT_GUIDE_LABEL = 'PAGE LAYOUT GUIDE';
+const LAYOUT_GUIDE_INSTRUCTION =
+  'Draw the panel borders exactly on its black lines and keep its white gutters; it shows layout only — never copy its flat fill, and it holds no characters or text.';
+
 export const SHOT_TEXT: Record<ShotType, string> = {
   establishing: 'establishing shot (the whole location)',
   wide: 'wide shot',
@@ -801,7 +811,7 @@ export const effectiveLayout = (page: Page, format: Pick<Format, 'kind' | 'readi
 
 // ── References ───────────────────────────────────────────────────────────────
 
-export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art';
+export type ReferenceKind = 'character' | 'place' | 'style' | 'previous_page' | 'current_page' | 'region' | 'author' | 'page_art' | 'layout';
 
 export interface PlannedReference {
   kind: ReferenceKind;
@@ -856,7 +866,7 @@ const LABEL_WORDS: Record<RefLabel, string> = {
 };
 
 /** Legend keywords a note must never spell in capitals (labels are matched downstream, e.g. PREVIOUS PAGE). */
-const RESERVED_LABEL_WORDS = /\b(?:previous page|current page|story page|style board|style reference|character sheet|character reference|author reference|location photo|location|photo of|reference images|same page)\b/gi;
+const RESERVED_LABEL_WORDS = /\b(?:previous page|current page|story page|style board|style reference|character sheet|character reference|author reference|location photo|location|photo of|reference images|same page|page layout guide|layout guide)\b/gi;
 
 /** The author's note as quoted DATA: one line, ≤ 140 chars, never instructions, never a legend keyword. */
 const noteText = (ref: RefAsset): string => {
@@ -1060,9 +1070,19 @@ const styleReferences = (doc: ComicDoc, spec: ImageModelSpec, budget: { total: n
   return out;
 };
 
+/** Page-render options beyond CompileOptions. */
+export interface PageCompileOptions extends CompileOptions {
+  /**
+   * Attach the PAGE LAYOUT GUIDE as Image 1 (plan C9, C19): it takes one object slot before
+   * anything else and the panel blocks name their box "in the layout guide". The job runner sets
+   * it while COMIC_LAYOUT_GUIDE is on and substitutes LAYOUT_REFERENCE_PATH with the rendered guide.
+   */
+  layoutGuide?: boolean;
+}
+
 /**
  * Reference images for a page render, ordered exactly as they must be attached:
- * characters → locations → style → previous page.
+ * (layout guide, when asked) → characters → locations → style → previous page.
  *
  * Budget priority (when caps bind): characters (≤ refs.characters, every being on the page with a
  * ready sheet or photo — extras included — ranked by rankPageCast; overflow and extra props are
@@ -1076,9 +1096,17 @@ export const planPageReferences = (
   page: Page,
   spec: ImageModelSpec,
   previousPage?: Page,
-  opts: CompileOptions = {}
+  opts: PageCompileOptions = {}
 ): PlannedReference[] => {
   const budget = { total: Math.max(0, spec.refs.total), objects: Math.max(0, spec.refs.objects) };
+  const guide: PlannedReference[] = [];
+  // One object slot, first in the legend (C19) — never a model's ONLY object slot (a legacy-locked
+  // comic keeps its style anchor; the layout is still stated in words).
+  if (opts.layoutGuide && spec.refs.objects >= 2 && budget.objects > 0 && budget.total > 1) {
+    guide.push({ kind: 'layout', slot: 'object', label: LAYOUT_GUIDE_LABEL, path: LAYOUT_REFERENCE_PATH, instruction: LAYOUT_GUIDE_INSTRUCTION });
+    budget.objects -= 1;
+    budget.total -= 1;
+  }
   const effective = artRatingFor(doc, opts);
   const shotsOf = (id: string) => page.panels.filter((p) => p.castIds.includes(id)).map((p) => p.shot);
   const characters = castReferences(rankPageCast(doc, page), spec, budget, 'page', (c) => ({ shots: shotsOf(c.id), effectiveRating: effective }));
@@ -1120,7 +1148,7 @@ export const planPageReferences = (
     });
   }
 
-  return [...characters, ...places, ...style, ...previous];
+  return [...guide, ...characters, ...places, ...style, ...previous];
 };
 
 const toJobReferences = (refs: PlannedReference[]) => refs.map((r) => ({ label: r.label, path: r.path }));
@@ -1444,7 +1472,7 @@ const letteringBlock = (doc: ComicDoc, page: Page): string => {
 };
 
 /** Legend line of the layout guide image (Image 1 when COMIC_LAYOUT_GUIDE is on; plan C9, C19). */
-const LAYOUT_GUIDE_LINE = 'Panel borders: follow the PAGE LAYOUT GUIDE image exactly — its black lines are the borders, its white bands the gutters.';
+const LAYOUT_GUIDE_LINE = 'Panel borders: follow the PAGE LAYOUT GUIDE (Image 1) exactly — its black lines are the borders, its white bands the gutters.';
 
 const layoutBlock = (doc: ComicDoc, page: Page, boxes: Box[] = [], guide = false): string => {
   const n = page.panels.length;
@@ -1526,7 +1554,7 @@ const castBlocks = (cast: Character[], names: Map<string, string>, index: Map<st
 export const PAGE_PROMPT_CHAR_BUDGET = 9000;
 
 /** Compile the image job for one comic page (one image containing every panel). */
-export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Page } & CompileOptions = {}): CompiledRenderJob => {
+export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Page } & PageCompileOptions = {}): CompiledRenderJob => {
   if (!page.panels.length) throw new StudioError('BAD_REQUEST', `Page ${page.n} has no panels to draw yet.`, { status: 400 });
   const resolved = resolveJob(doc, 'page');
   const { spec } = resolved;
@@ -1534,7 +1562,7 @@ export const compilePage = (doc: ComicDoc, page: Page, opts: { previousPage?: Pa
   const rating = artRatingFor(doc, opts);
   const refs = planPageReferences(doc, page, spec, opts.previousPage, opts);
   const index = indexReferences(refs);
-  const guide = false;
+  const guide = refs.some((r) => r.kind === 'layout');
   const boxes = pageLayoutBoxes(doc, page);
 
   const cast = rankPageCast(doc, page);
