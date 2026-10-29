@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { b64url, jwkThumbprint, parseJwt, signEs256Jwt, unb64url } from './jose';
 import { JWKS_FAIL_HOLD_MS, JWKS_MISS_REFETCH_MS, JWKS_TTL_MS, getSigningKey, resetJwksCache } from './jwks';
 import { CLOSE, MemoryRoleStore, ROLE_TTL_MS, SqlRoleStore, admitMember, closeAtFor } from './roleCache';
-import { EXPIRY_GRACE_MS, mfaProblem, stepUpNeeded, verifyAccessToken } from '../supabaseAuth';
+import { EXPIRY_GRACE_MS, mfaProblem, stepUpNeeded, verifyAccessToken, watchProblem } from '../supabaseAuth';
 
 const SUPA = 'https://proj.supabase.co';
 const env = { SUPABASE_URL: SUPA, SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test' };
@@ -218,6 +218,34 @@ describe('admitMember (role cache + aal2)', () => {
     expect(await admitMember({ token: await sign({ aal: 'aal2' }), nid: NID, env, store, now: NOW + 2000, fetcher: sb.fetcher })).toMatchObject({ ok: true, mfa: true, id: { mfa: true } });
     const told = fakeSupabase({ keys: [k1.jwk], my_role: role({ ok: false, error: 'mfa_required' }) });
     expect(await admitMember({ token: await sign({}), nid: NID, env, store: new MemoryRoleStore(), now: NOW, fetcher: told.fetcher })).toMatchObject({ ok: false, code: 4003 });
+  });
+
+  it('a session signed in BEFORE two-step sign-in was switched on keeps watching on aal1 (the nursery camera stays on air) — admin actions still need the code', async () => {
+    // From the hook's claim: no round trip for the grace itself.
+    const sb = fakeSupabase({ keys: [k1.jwk], my_role: role({ ...parent, mfa: true, mfa_grace: true }) });
+    const store = new MemoryRoleStore();
+    const camera = await sign({ ds_mfa: true, ds_mfa_grace: true });
+    expect(await admitMember({ token: camera, nid: NID, env, store, now: NOW, fetcher: sb.fetcher })).toMatchObject({ ok: true, role: 'parent', mfa: true, id: { mfaGrace: true } });
+    expect(await admitMember({ token: camera, nid: NID, env, store, now: NOW + 60_000, fetcher: sb.fetcher })).toMatchObject({ ok: true, checked: 'cache' });
+    expect(sb.count('monitor_my_role')).toBe(1);
+    // A session signed in after (a phished password): refused, grace or not in the cache.
+    expect(await admitMember({ token: await sign({ ds_mfa: true, ds_mfa_grace: false }), nid: NID, env, store, now: NOW, fetcher: sb.fetcher })).toEqual({ ok: false, code: CLOSE.MFA_REQUIRED, reason: 'mfa_required' });
+    // Hook off: Supabase says it's a grace session (monitor_my_role mfa_grace) — in, and not cached as such.
+    const hookOff = fakeSupabase({ keys: [k1.jwk], my_role: role({ ...parent, mfa: true, mfa_grace: true }) });
+    const s2 = new MemoryRoleStore();
+    expect(await admitMember({ token: await sign({}), nid: NID, env, store: s2, now: NOW, fetcher: hookOff.fetcher })).toMatchObject({ ok: true, mfa: true, checked: 'rpc' });
+    expect(s2.get(UID)).not.toHaveProperty('mfaGrace');
+    // …and another session of the same person that Supabase does NOT vouch for is refused.
+    const notGrace = fakeSupabase({ keys: [k1.jwk], my_role: role({ ok: false, error: 'mfa_required' }) });
+    expect(await admitMember({ token: await sign({}), nid: NID, env, store: s2, now: NOW + 1000, fetcher: notGrace.fetcher })).toMatchObject({ ok: false, code: 4003 });
+    // Admin actions ignore grace: step-up is still needed.
+    expect(stepUpNeeded({ mfa: true, aal: 'aal1' })).toBe(true);
+    expect(watchProblem({ mfa: true, aal: 'aal1', mfaGrace: true })).toBe(false);
+    expect(watchProblem({ mfa: true, aal: 'aal1', mfaGrace: null })).toBe(true);
+    // The legacy RPC path (live_me) carries it too.
+    const legacy = fakeSupabase({ keys: [], live_me: () => Response.json({ signed_in: true, member: true, user_id: UID, mfa: true, mfa_grace: true }) });
+    const hs = `${b64url(enc.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))}.${b64url(enc.encode(JSON.stringify(claims({}))))}.${b64url(new Uint8Array(32))}`;
+    expect(await verifyAccessToken(hs, env, { now: NOW, fetcher: legacy.fetcher })).toMatchObject({ ok: true, id: { mfa: true, mfaGrace: true, via: 'rpc' } });
   });
 
   it('a cached "has a second factor" never locks anyone out: the fresh claim wins, and a disagreement asks Supabase', async () => {

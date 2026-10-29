@@ -179,6 +179,45 @@ function connectSources({ origin, env }: PolicyInput): string[] {
 }
 
 /**
+ * The Stream Studio alerts bridge (ADR 0006 WS-5; docs/infrastructure/INFRA_MAP.md §2a):
+ * public/stream-alerts-bridge.html on the apex, the ONE apex page Stream Studio's own host may
+ * frame. Hidden in a frame there, it ends this browser's old dreamstreamstudio.ai/live alert
+ * subscription once the new host covers it, and on sign-out (live/monitor/push.ts), so no alert
+ * arrives twice. It gets its own enforced policy: its one same-origin script, nothing else, and
+ * frame-ancestors = Stream Studio's host only (the main app's Report-Only `frame-ancestors 'self'`
+ * would report every load, and block it the day that policy is enforced). It's outside /live on
+ * purpose: the apex's /live redirect and frame block never touch it.
+ */
+export const ALERTS_BRIDGE_PATH = '/stream-alerts-bridge';
+/** Exact path: a CSP source with a path that doesn't end in "/" matches only that path. */
+const ALERTS_BRIDGE_URL = `${MAIN_ORIGIN}${ALERTS_BRIDGE_PATH}`;
+
+/** The bridge page by either name (Pages answers the .html with a 308 to the pretty one). */
+export const isAlertsBridgePath = (pathname: string): boolean => {
+  const p = pathname.replace(/\/+$/, '');
+  return p === ALERTS_BRIDGE_PATH || p === `${ALERTS_BRIDGE_PATH}.html`;
+};
+
+export const ALERTS_BRIDGE_CSP = serialize([
+  ['default-src', ["'none'"]],
+  ['script-src', ["'self'"]],
+  ['base-uri', ["'none'"]],
+  ['form-action', ["'none'"]],
+  ['frame-ancestors', [STREAM_ORIGIN]],
+  ...reporting,
+]);
+
+/** The bridge's response: its own enforced policy instead of the main app's inventory policy. */
+function alertsBridgeHeaders(res: Response): Response {
+  const headers = new Headers(res.headers);
+  headers.delete('content-security-policy-report-only');
+  headers.delete('x-frame-options');
+  headers.set('content-security-policy', ALERTS_BRIDGE_CSP);
+  headers.set('x-robots-tag', 'noindex, nofollow');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+/**
  * Stream Studio's policy. Each source is there because the live bundle uses it:
  *   script-src 'wasm-unsafe-eval' — MediaPipe (main thread) compiles WebAssembly;
  *   script-src blob: — the sound engine's and the relay player's AudioWorklets load from blob:
@@ -187,6 +226,7 @@ function connectSources({ origin, env }: PolicyInput): string[] {
  *   img-src / media-src blob: — relay snapshots, MediaSource playback, recordings;
  *   style-src 'unsafe-inline' — style attributes (live.html's body margin) and runtime-injected
  *     styles; a far weaker vector than scripts, and Google Fonts' CSS needs no more than this.
+ *   frame-src — Turnstile's challenge, and the apex's alerts bridge page (exact path, below).
  * No 'unsafe-inline' or 'unsafe-eval' for scripts, no third-party scripts but Turnstile.
  */
 export function liveCsp(input: PolicyInput & { enforce?: boolean }): string {
@@ -199,7 +239,7 @@ export function liveCsp(input: PolicyInput & { enforce?: boolean }): string {
     ['media-src', ["'self'", 'blob:']],
     ['style-src', ["'self'", "'unsafe-inline'", GOOGLE_FONTS_CSS]],
     ['font-src', ["'self'", 'data:', GOOGLE_FONTS_FILES]],
-    ['frame-src', [TURNSTILE_ORIGIN]],
+    ['frame-src', [TURNSTILE_ORIGIN, ALERTS_BRIDGE_URL]],
     ['manifest-src', ["'self'"]],
     ['object-src', ["'none'"]],
     ['base-uri', ["'none'"]],
@@ -472,6 +512,7 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
       return secured(legacyReaderHead(request, url, env, next));
     }
     if (isPage && isSignInLandingPath(url.pathname)) return blockFraming(await secured(next()));
+    if (isPage && isAlertsBridgePath(url.pathname)) return alertsBridgeHeaders(await secured(next()));
     return secured(next());
   };
 }

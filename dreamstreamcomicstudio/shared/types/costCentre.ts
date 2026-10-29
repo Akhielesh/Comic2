@@ -195,11 +195,37 @@ export interface StreamCostSection {
   projection: { perNurseryMonthUsd: number | null; at1k: number | null; at10k: number | null; source: CostSource };
   /** ADR 0006 per-active-nursery-day KPIs (thresholds apply after Phase 0). */
   kpis: {
+    /** Month to date: active nursery-days, and the averages per active nursery-day. */
     activeNurseryDays: number;
+    /** Durable Object INVOCATIONS as Cloudflare's analytics count them (incoming WebSocket messages 1:1). */
     doRequests: number | null;
     rowsWritten: number | null;
     gbSeconds: number | null;
     serverShare: number | null;
+    /**
+     * The Phase 0 acceptance figures: the MEDIAN per active nursery-day over the last 7 complete days
+     * with activity marks (`days` says how many there were; acceptance needs 7). Absent from servers
+     * that predate ADR 0006 WS-8.
+     */
+    median7d?: { days: number; doRequests: number | null; rowsWritten: number | null; gbSeconds: number | null };
+    /**
+     * ADR 0006 Phase 0 budgets per active nursery-day, in the units measured: `doRequests` is Cloudflare's
+     * invocation count (every incoming WebSocket message once, not the billed 20:1), so its budget is
+     * 2,600 invocations ≈ the ADR's 1,000 billed requests; ≤ 1,800 rows; ≤ 40 GB-s.
+     */
+    budgets?: { doRequests: number; rowsWritten: number; gbSeconds: number };
+    /** The 7-day medians against the budgets ('unknown' with no days to judge). */
+    status?: Record<'doRequests' | 'rowsWritten' | 'gbSeconds', 'ok' | 'over' | 'unknown'>;
+    /** TURN relay egress this month, GB (account-wide, measured). */
+    turnGbMonthToDate?: number | null;
+    /** Share (0–1) of monitor viewer-minutes on a paid path (TURN relay + our server), once viewers report paths. */
+    relayShare?: number | null;
+    /** Durable Object storage now (account-wide level, GB), and per nursery active this month (MB, an upper bound). */
+    doStoredGb?: number | null;
+    doStoredMbPerNursery?: number | null;
+    /** Watch readiness: Glance bumps and pushes per active nursery-night (floors; null until the rooms count them). */
+    glanceBumpsPerNight?: number | null;
+    pushesPerNight?: number | null;
     source: CostSource;
     note: string;
   };
@@ -209,6 +235,83 @@ export interface StreamCostSection {
   notes: string[];
   /** Per-dataset failures (the rest still shows). */
   errors: string[];
+}
+
+// ─── Security signals (ADR 0006 WS-8; docs/infrastructure/live-security-runbook.md) ──────
+// Aggregate counts only: no account, nursery, device, IP, token, URL or email ever appears here.
+
+/** One CSP violation bucket: which app, which directive, which ORIGIN (or keyword) was blocked. */
+export interface CspViolationRow {
+  /** 'live' (Stream Studio) · 'main' · 'srcdoc' (a chat artifact frame) · 'other'. */
+  page: string;
+  directive: string;
+  /** An origin (`https://x.example`) or a keyword (`inline`, `eval`, `data:`, `extension`, …) — never a path. */
+  blocked: string;
+  /** 'enforce' · 'report' · 'unknown'. */
+  disposition: string;
+  /** False when a browser extension caused it (not our code). */
+  firstParty: boolean;
+  count: number;
+}
+
+export interface SecuritySignalRow {
+  id: string;
+  label: string;
+  /** In the selected range (a floor: counts held by an evicted isolate are lost). */
+  count: number;
+  /** The equal period before (null when Analytics Engine doesn't reach back that far). */
+  prevCount: number | null;
+  /** 'bad' = refusals, lockouts, spoof attempts; 'neutral' = expected traffic. */
+  tone: 'bad' | 'neutral';
+  /** Where it happened (socket kind / route), largest first. */
+  bySurface: { surface: string; count: number }[];
+}
+
+export interface SecuritySection {
+  range: { from: string; to: string; days: number };
+  /** Browser protections: the Content-Security-Policy violation counts (functions/csp-report.ts → CSP_REPORTS). */
+  csp: {
+    /** The dataset answered (the Pages binding exists and has data). */
+    measured: boolean;
+    total: number | null;
+    /**
+     * First-party violations on Stream Studio in the last 48 h of the policy ENFORCE_LIVE will enforce — the
+     * gate for enforcing it. Trusted Types reports are not in it (that policy stays report-only for good).
+     */
+    firstPartyLive48h: number | null;
+    /**
+     * First-party violations on Stream Studio in the range: enforced (blocked for real, whatever the policy)
+     * vs report-only (of the policy that will be enforced).
+     */
+    firstPartyLiveEnforced: number | null;
+    firstPartyLiveReportOnly: number | null;
+    /**
+     * First-party reports on Stream Studio in the range against the report-only Trusted Types policy
+     * (require-trusted-types-for): an inventory, never a gate or an alert. Absent from older servers.
+     */
+    trustedTypesLive?: number | null;
+    /** Caused by browser extensions (not our code). */
+    extension: number | null;
+    top: CspViolationRow[];
+    note: string;
+    error?: string;
+  };
+  /** New sign-ins and the alerts about them (Supabase `security_events`, live_security_v2.sql). */
+  signIns: {
+    measured: boolean;
+    newSessions: number | null;
+    alertsEmailed: number | null;
+    /** "Not you? Secure my account" used — each one is a suspected account takeover. */
+    secured: number | null;
+    devicesAdded: number | null;
+    devicesRevoked: number | null;
+    note: string;
+    error?: string;
+  };
+  /** The live Worker's refusal / disconnect counts (shared/stream/signals.ts). */
+  signals: { measured: boolean; counted: boolean; rows: SecuritySignalRow[]; note: string };
+  alerts: StreamAlertRow[];
+  notes: string[];
 }
 
 export interface CloudflareWorkerRow {
@@ -270,4 +373,6 @@ export interface CostCentreReport {
   notes: string[];
   /** Admin → Costs → Stream Studio (absent from servers that predate it). */
   stream?: StreamCostSection;
+  /** Admin → Costs → Security: aggregate security signals (absent from servers that predate ADR 0006 WS-8). */
+  security?: SecuritySection;
 }

@@ -160,7 +160,74 @@ the Stream Studio data it holds (`live/accountPurge.ts`).
 root (`live/host.ts`); the apex keeps its old manifest and worker. Existing alert subscriptions
 keep receiving pushes, and tapping one opens the new address. To install the app or turn
 alerts on at the new address, add it to the Home Screen again from there and turn "Alerts on
-this device" on there (the help centre says so once the switch is on).
+this device" on there (the help centre says so once the switch is on). A device never gets the
+same alert twice: once the new address covers everything the old subscription alerted for, the
+old one is ended, and signing out on the new address ends it too (an apex bridge page in a
+hidden frame — `docs/infrastructure/INFRA_MAP.md` §2a "Alerts across the two addresses").
+
+## Account security in Stream Studio (ADR 0006 WS-5, 2026-10-29)
+
+Settings → **Security** (`live/views/account/SecurityPanel.tsx`; also in the account menu):
+- **Two-step sign-in** (TOTP, Supabase MFA; `views/account/TwoStep.tsx`). Built so a parent is
+  never locked out, and never loses the nursery camera, because of it:
+  - *Turning it on* first says what changes and lists the devices signed in right now (they
+    stay signed in — a nursery camera included), then asks for the password again (a sign-in
+    in the last 10 minutes skips it; "Forgot password" for anyone without one), then the QR
+    code or setup key and its first code, then **ten single-use recovery codes** that must be
+    saved before it's done. The server only counts an authenticator switched on this way
+    (`live_mfa_activate`: the first one needs a password or email link used in the last 30
+    minutes), so a stolen session can't switch it on; it emails the person with a "Not you?"
+    link that removes it again.
+  - *Once it's on*, a NEW sign-in leaves the account `needs_mfa` until the code is given
+    (`StepUp.tsx`; any of the account's authenticators works). Devices signed in **before** it
+    was switched on keep watching without the code until they sign out (`mfa_grace`), and
+    admin actions — share links, adding people, export, approving or revoking a device,
+    recovery codes, changing two-step sign-in — ask every session for the code
+    (`ensureStepUp(reason)`, exported for the monitor screens). Only the server decides
+    (`mfa_required`, socket close 4003); the app never shuts a screen on its own reading.
+  - *Lost phone:* "Lost your phone? → Use a recovery code" on the code sheet switches two-step
+    sign-in off (`live_mfa_recover`: single use, 5 wrong tries per 15 minutes, emailed) so the
+    parent gets in and sets it up again. The Security panel shows how many codes are left and
+    makes a new set (with the code).
+  - A nudge after creating a nursery suggests turning it on (`MfaNudge.tsx`). Until
+    `server/sql/live_security_v2.sql` is applied it can't be turned on ("isn't switched on for
+    DreamStream accounts yet"), and the lists below say "Not switched on yet".
+- **Your devices** (`live_device_list`, Revoke → `DELETE /live-api/api/devices/:id`; the plain
+  RPC only where that route is missing, and any other failure says "try again" and changes
+  nothing; a sign-out not every nursery heard keeps a **Finish signing out** button) and
+  **recent security events** (`live_security_events`, two-step sign-in changes included).
+- **Sign out of this device** and **Sign out everywhere**. Everywhere = `POST
+  /live-api/api/me/kick` (closes every open monitor, call line and admin socket of the account;
+  contract: 2xx `{ok: true}` only when every room confirmed) → `signOut({scope:'global'})` →
+  this device wiped. The message after it never claims more than happened (offline: only this
+  device; kick route missing: other devices must sign in again, but an open monitor stays
+  connected until it next reconnects).
+- **Socket re-auth:** every `SIGNED_IN`, `TOKEN_REFRESHED` and `MFA_CHALLENGE_VERIFIED` fires the
+  window event `ds:token` (detail = access token); open room sockets send `{t:'reauth', token}`
+  when the room lists the `reauth` capability, so a socket never outlives its token and a
+  step-up reaches sockets already open.
+- A session ended elsewhere (`session_revoked`) signs this device out and says so once.
+
+**"Not you? Secure my account"** — `#/secure/<token>` (`live/views/account/SecureAccount.tsx`),
+the link in the new-sign-in email (`email-worker/src/securityAlert.ts`). The token is read once
+and taken out of the address bar; one tap posts it to `POST /api/auth/email/secure`, which ends
+every session of the account, signs out devices added since that sign-in, removes
+authenticators added or switched on since then (so an intruder can't lock the parent out with
+two-step sign-in; the parent's earlier ones stay), asks the live Worker to close the account's
+open monitors and calls and drop their alert subscriptions — signed with the backend's own
+`SECURITY_HOOK_SECRET` (`server/src/services/liveKick.ts`), since the account's tokens just died
+— and emails a password-reset link. The page says exactly what happened, including when the
+Worker couldn't confirm the sockets closed (then: sign in and use "Sign out everywhere"). If
+this browser was signed in to that account it is signed out too. The same link comes in the
+emails about two-step sign-in being turned on, an authenticator added, or a recovery code used.
+
+**The flip — `SECURE_ACCOUNT_PAGE`.** The email Worker sends the "Not you?" button only when its
+var `SECURE_ACCOUNT_PAGE` is `on`; otherwise the email points to Settings → Security. It is set
+in `email-worker/wrangler.jsonc` `vars` (with this page, 2026-10-29), so it ships with the next
+email Worker deploy from the same push as the page. Set it there, not in the dashboard: `wrangler
+deploy` replaces dashboard vars with the config's. No email carries a token before the owner
+applies `live_security_v2.sql` and enables the access-token hook (ADR 0006 owner action #4), so
+the order is safe either way. Undo: remove the var (or set any other value) and redeploy.
 
 ## Owner decisions — DECIDED 2026-10-22
 

@@ -50,7 +50,64 @@ create extension if not exists pgcrypto with schema extensions;
 
 -- ===================================================================== helpers
 
--- Has this person turned on two-step sign-in (a verified MFA factor)?
+-- ============================================== two-step sign-in, as Stream Studio counts it
+-- Supabase Auth lets the FIRST authenticator be added by anyone holding a signed-in session, and
+-- can't be told to ask for more (its MFA-verification hook isn't on our plan). So here an
+-- authenticator only COUNTS once it was switched on through live_mfa_activate(), which for the
+-- first one demands a fresh sign-in (a password typed, or an email link opened, in the last 30
+-- minutes), hands out recovery codes and records an emailed security event. One added any other
+-- way — a stolen session calling the auth API directly — changes nothing for the account and is
+-- tidied away after an hour (live_mfa_status). Losing the phone has a way back
+-- (live_mfa_recover, with a recovery code), and "Not you?" removes authenticators switched on
+-- since the sign-in it reports (live_secure_account). A parent is never locked out by a feature
+-- that was meant to protect them.
+create table if not exists public.live_mfa_factors (
+  factor_id uuid primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  -- The session that switched it on ("Not you?" removes what an intruder's session added).
+  session_id uuid,
+  activated_at timestamptz not null default now()
+);
+create index if not exists idx_live_mfa_factors_user on public.live_mfa_factors (user_id);
+
+-- When two-step sign-in was (last) switched on. Sessions signed in BEFORE then stay valid for
+-- watching — the nursery camera and bedside monitors don't go dark because a parent turned it on
+-- from another room — while anything that changes who can see a nursery still needs the code.
+create table if not exists public.live_mfa_on (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  since timestamptz not null default now()
+);
+
+-- Single-use recovery codes (shown once, when two-step sign-in is turned on). Only a salted
+-- sha256 is kept; the codes carry ~59 random bits and guesses are rate limited.
+create table if not exists public.live_mfa_recovery_codes (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  code_hash text not null,
+  created_at timestamptz not null default now(),
+  used_at timestamptz
+);
+create unique index if not exists live_mfa_recovery_codes_hash on public.live_mfa_recovery_codes (user_id, code_hash);
+
+-- Wrong recovery codes, for the rate limit (5 per 15 minutes per account).
+create table if not exists public.live_mfa_attempts (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  at timestamptz not null default now()
+);
+create index if not exists idx_live_mfa_attempts_user_at on public.live_mfa_attempts (user_id, at desc);
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['live_mfa_factors', 'live_mfa_on', 'live_mfa_recovery_codes', 'live_mfa_attempts'] loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon, authenticated', t);
+  end loop;
+end $$;
+
+-- Has this person two-step sign-in on: a verified authenticator that was switched on here?
 create or replace function public.live__has_mfa(p_uid uuid)
 returns boolean
 language sql
@@ -59,7 +116,27 @@ security definer
 set search_path = ''
 as $$
   select p_uid is not null and exists (
-    select 1 from auth.mfa_factors f where f.user_id = p_uid and f.status = 'verified'
+    select 1
+    from auth.mfa_factors f
+    join public.live_mfa_factors a on a.factor_id = f.id and a.user_id = f.user_id
+    where f.user_id = p_uid and f.status = 'verified'
+  );
+$$;
+
+-- Was this session signed in before two-step sign-in was switched on? Then it may keep WATCHING
+-- without the code until it signs out (see live_mfa_on).
+create or replace function public.live__mfa_grace(p_uid uuid, p_sid uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p_uid is not null and p_sid is not null and exists (
+    select 1
+    from public.live_mfa_on o
+    join auth.sessions s on s.user_id = o.user_id
+    where o.user_id = p_uid and s.id = p_sid and s.created_at < o.since
   );
 $$;
 
@@ -67,7 +144,10 @@ $$;
 --   null              fine (or nobody signed in — callers handle that themselves)
 --   'session_revoked' the token's session no longer exists (signed out everywhere, "Not you?",
 --                     password reset, or an admin revoke) — the JWT alone is still unexpired
---   'mfa_required'    the person has a verified factor but this token is only aal1
+--   'mfa_required'    the person has two-step sign-in on, this token is only aal1, and the
+--                     session was signed in after it was switched on (an older session may keep
+--                     watching — live__mfa_grace — but live__step_up_problem() still asks it
+--                     for the code before anything that changes who can see a nursery)
 create or replace function public.live__session_problem()
 returns text
 language plpgsql
@@ -93,9 +173,79 @@ begin
   ) then
     return 'session_revoked';
   end if;
-  if public.live__has_mfa(v_uid) and coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2' then
+  if public.live__has_mfa(v_uid) and coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2'
+     and not public.live__mfa_grace(v_uid, v_sid) then
     return 'mfa_required';
   end if;
+  return null;
+end;
+$$;
+
+-- The stricter check for actions that change who can see a nursery or how the account is
+-- protected (adding or removing people, deleting a nursery, devices, recovery codes): once
+-- two-step sign-in is on, every session needs the code — including one old enough to keep
+-- watching without it. Callers run live__session_problem() first.
+create or replace function public.live__step_up_problem()
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select case
+    when public.live__has_mfa(auth.uid()) and coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2' then 'mfa_required'
+  end;
+$$;
+
+-- A fresh sign-in on this session: a first factor (password, email link, …) used in the last
+-- p_minutes, by the token's `amr` timestamps or the session's own age. A stolen long-lived
+-- session can't produce one without the password or the mailbox.
+create or replace function public.live__recent_sign_in(p_minutes integer)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_floor double precision := extract(epoch from now()) - greatest(1, p_minutes) * 60;
+  v_amr jsonb := auth.jwt()->'amr';
+  v_sid uuid;
+  e jsonb;
+begin
+  if jsonb_typeof(v_amr) = 'array' then
+    for e in select * from jsonb_array_elements(v_amr) loop
+      if jsonb_typeof(e) = 'object'
+         and coalesce(e->>'method', '') not in ('', 'totp', 'mfa/totp', 'mfa/phone', 'mfa/webauthn', 'mfa/recovery_code', 'token_refresh', 'anonymous')
+         and jsonb_typeof(e->'timestamp') = 'number'
+         and (e->>'timestamp')::double precision >= v_floor then
+        return true;
+      end if;
+    end loop;
+  end if;
+  begin
+    v_sid := nullif(auth.jwt()->>'session_id', '')::uuid;
+  exception when others then
+    v_sid := null;
+  end;
+  return v_sid is not null and exists (
+    select 1 from auth.sessions s
+    where s.id = v_sid and s.user_id = auth.uid() and s.created_at >= to_timestamp(v_floor)
+  );
+end;
+$$;
+
+-- The caller's session id, or null (never raises on a malformed claim).
+create or replace function public.live__jwt_sid()
+returns uuid
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  return nullif(auth.jwt()->>'session_id', '')::uuid;
+exception when others then
   return null;
 end;
 $$;
@@ -134,7 +284,10 @@ alter table public.security_events add column if not exists detail jsonb;
 
 alter table public.security_events drop constraint if exists security_events_kind_check;
 alter table public.security_events add constraint security_events_kind_check
-  check (kind in ('sign_in', 'secured', 'device_added', 'device_revoked'));
+  check (kind in ('sign_in', 'secured', 'device_added', 'device_revoked',
+                  -- two-step sign-in: switched on, another authenticator added, one gone, new
+                  -- recovery codes, switched off with a recovery code
+                  'mfa_on', 'mfa_added', 'mfa_removed', 'mfa_codes', 'mfa_recovered'));
 alter table public.security_events drop constraint if exists security_events_sizes_check;
 alter table public.security_events add constraint security_events_sizes_check
   check ((ua is null or char_length(ua) <= 300)
@@ -219,7 +372,8 @@ begin
   if v_uid is null or not public.live__is_member(v_uid) then
     return jsonb_build_object('ok', false, 'error', 'not_member');
   end if;
-  v_problem := public.live__session_problem();
+  -- Changes who can see a nursery: the code even on a session old enough to keep watching without it.
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
   if v_problem is not null then
     return jsonb_build_object('ok', false, 'error', v_problem);
   end if;
@@ -300,7 +454,8 @@ begin
   if v_uid is null then
     return jsonb_build_object('ok', false, 'error', 'signed_out');
   end if;
-  v_problem := public.live__session_problem();
+  -- Changes who can see a nursery: the code even on a session old enough to keep watching without it.
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
   if v_problem is not null then
     return jsonb_build_object('ok', false, 'error', v_problem);
   end if;
@@ -399,7 +554,9 @@ $$;
 -- (live_private_config 'security_hook_url'), the Vault secret and pg_net. Signs
 -- `<unix seconds>.<payload>` with HMAC-SHA256; the payload travels as a JSON *string* inside
 -- the body so its exact bytes survive pg_net's jsonb serialisation.
-create or replace function public.live__send_signin_alert(p_uid uuid, p_event bigint, p_ua text, p_ip text, p_method text)
+-- p_kind: 'sign_in' (the hook), or a two-step sign-in change — 'mfa_on', 'mfa_added',
+-- 'mfa_recovered' — each with its own one-time "Not you? Secure my account" link.
+create or replace function public.live__send_security_alert(p_uid uuid, p_event bigint, p_kind text, p_ua text, p_ip text, p_method text)
 returns boolean
 language plpgsql
 volatile
@@ -417,6 +574,9 @@ declare
   v_sig text;
 begin
   select value into v_url from public.live_private_config where key = 'security_hook_url';
+  if p_kind is null or p_kind not in ('sign_in', 'mfa_on', 'mfa_added', 'mfa_recovered') then
+    return false;
+  end if;
   if v_url is null or v_url !~ '^https://[^[:space:]]+$' then
     return false;
   end if;
@@ -443,7 +603,7 @@ begin
 
   v_payload := jsonb_build_object(
     'v', 1,
-    'kind', 'sign_in',
+    'kind', p_kind,
     'email', v_email,
     'name', v_name,
     'at', (extract(epoch from now()) * 1000)::bigint,
@@ -459,6 +619,41 @@ begin
           jsonb_build_object('p', v_payload),
           jsonb_build_object('Content-Type', 'application/json', 'x-ds-signature', 't=' || v_ts || ',v1=' || v_sig);
   return true;
+end;
+$$;
+
+-- The new-sign-in alert (the hook's caller; kept under its own name).
+create or replace function public.live__send_signin_alert(p_uid uuid, p_event bigint, p_ua text, p_ip text, p_method text)
+returns boolean
+language sql
+volatile
+security definer
+set search_path = ''
+as $$
+  select public.live__send_security_alert(p_uid, p_event, 'sign_in', p_ua, p_ip, p_method);
+$$;
+
+-- Email the person about a two-step sign-in change made from the CALLER's session (device and
+-- network from that session). Never fails the change it reports: no email is the worst case.
+create or replace function public.live__notify_mfa(p_uid uuid, p_event bigint, p_kind text)
+returns void
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_ua text;
+  v_ip inet;
+begin
+  begin
+    select left(s.user_agent, 300), s.ip into v_ua, v_ip
+      from auth.sessions s where s.id = nullif(auth.jwt()->>'session_id', '')::uuid;
+    update public.security_events set ua = v_ua, ip_masked = public.live__mask_ip(v_ip) where id = p_event;
+    perform public.live__send_security_alert(p_uid, p_event, p_kind, v_ua, public.live__mask_ip(v_ip), null);
+  exception when others then
+    raise warning 'live__notify_mfa: no email for event % (%)', p_event, sqlstate;
+  end;
 end;
 $$;
 
@@ -517,8 +712,10 @@ end;
 $$;
 
 -- Supabase Custom Access Token hook. Runs on every token issue (sign-in, MFA verify, refresh):
---   * adds `ds_mfa` (true when the person has a verified factor) so the Worker can demand
---     aal2 without asking the database;
+--   * adds `ds_mfa` (true when the person has two-step sign-in on) so the Worker can demand
+--     aal2 without asking the database, and `ds_mfa_grace` (true when this session was signed
+--     in before it was switched on: it may keep watching without the code — never for admin
+--     actions);
 --   * notes the session the first time it's seen and, for a new sign-in, emails the person.
 -- It never blocks a sign-in: anything that fails only costs the email.
 create or replace function public.live_access_token_hook(event jsonb)
@@ -555,6 +752,12 @@ begin
   exception when others then
     v_sid := null;
   end;
+  begin
+    v_claims := jsonb_set(v_claims, '{ds_mfa_grace}',
+      to_jsonb(coalesce(v_mfa, false) and coalesce(public.live__mfa_grace(v_uid, v_sid), false)), true);
+  exception when others then
+    v_claims := v_claims - 'ds_mfa_grace';
+  end;
   if v_sid is not null then
     begin
       perform public.live__note_session(v_uid, v_sid, event->>'authentication_method');
@@ -566,15 +769,294 @@ begin
 end;
 $$;
 
+-- ========================================================= two-step sign-in RPCs
+
+-- How a recovery code is kept: salted with the account, ignoring case, spaces and dashes.
+create or replace function public.live__recovery_hash(p_uid uuid, p_code text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select encode(extensions.digest(p_uid::text || ':' || lower(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g')), 'sha256'), 'hex');
+$$;
+
+-- Ten new recovery codes for p_uid (any older set stops working), returned in plain text as
+-- "abcd-efgh-jkmn" — the only time they exist outside the person's hands.
+create or replace function public.live__new_recovery_codes(p_uid uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_alpha constant text := '23456789abcdefghjkmnpqrstuvwxyz'; -- no 0/o, 1/i/l
+  v_codes jsonb := '[]'::jsonb;
+  v_bytes bytea;
+  v_code text;
+  i integer;
+  j integer;
+begin
+  delete from public.live_mfa_recovery_codes where user_id = p_uid;
+  for i in 1..10 loop
+    v_bytes := extensions.gen_random_bytes(12);
+    v_code := '';
+    for j in 0..11 loop
+      v_code := v_code || substr(v_alpha, (get_byte(v_bytes, j) % 31) + 1, 1);
+    end loop;
+    insert into public.live_mfa_recovery_codes (user_id, code_hash)
+    values (p_uid, public.live__recovery_hash(p_uid, v_code));
+    v_codes := v_codes || to_jsonb(substr(v_code, 1, 4) || '-' || substr(v_code, 5, 4) || '-' || substr(v_code, 9, 4));
+  end loop;
+  return v_codes;
+end;
+$$;
+
+-- Bring our record in line with Supabase Auth's: an authenticator that was never switched on
+-- here goes after an hour (a set-up abandoned half-way, or one added by a stolen session straight
+-- through the auth API); one removed in Supabase is noted as 'mfa_removed'; with none left, two-step
+-- sign-in is off and its recovery codes go too. Returns whether two-step sign-in is on.
+create or replace function public.live__mfa_tidy(p_uid uuid)
+returns boolean
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_gone record;
+  v_on boolean;
+begin
+  begin
+    delete from auth.mfa_factors f
+     where f.user_id = p_uid and f.status = 'verified' and f.created_at < now() - interval '1 hour'
+       and not exists (select 1 from public.live_mfa_factors a where a.factor_id = f.id);
+  exception when others then
+    raise warning 'live__mfa_tidy: could not remove stray authenticators (%)', sqlstate;
+  end;
+  for v_gone in
+    delete from public.live_mfa_factors a
+     where a.user_id = p_uid
+       and not exists (select 1 from auth.mfa_factors f where f.id = a.factor_id and f.user_id = p_uid and f.status = 'verified')
+    returning a.factor_id
+  loop
+    insert into public.security_events (user_id, session_id, kind, detail)
+    values (p_uid, public.live__jwt_sid(), 'mfa_removed', jsonb_build_object('factor_id', v_gone.factor_id));
+  end loop;
+  v_on := public.live__has_mfa(p_uid);
+  if not v_on then
+    delete from public.live_mfa_on where user_id = p_uid;
+    delete from public.live_mfa_recovery_codes where user_id = p_uid;
+  end if;
+  return v_on;
+end;
+$$;
+
+-- Settings → Security: is two-step sign-in on, with which authenticators, how many recovery codes
+-- are left, and may this session watch without the code (`grace`).
+create or replace function public.live_mfa_status()
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_on boolean;
+  v_aal text := coalesce(auth.jwt()->>'aal', 'aal1');
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'signed_out');
+  end if;
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  v_on := public.live__mfa_tidy(v_uid);
+  return jsonb_build_object(
+    'ok', true,
+    'on', v_on,
+    'aal', v_aal,
+    'since', (select o.since from public.live_mfa_on o where o.user_id = v_uid and v_on),
+    'grace', v_on and v_aal <> 'aal2' and public.live__mfa_grace(v_uid, public.live__jwt_sid()),
+    'factors', coalesce((
+      select jsonb_agg(jsonb_build_object('id', f.id, 'name', coalesce(f.friendly_name, ''), 'created_at', f.created_at,
+                                          'activated_at', a.activated_at) order by a.activated_at)
+      from auth.mfa_factors f
+      join public.live_mfa_factors a on a.factor_id = f.id
+      where f.user_id = v_uid and f.status = 'verified'
+    ), '[]'::jsonb),
+    'codes_left', (select count(*) from public.live_mfa_recovery_codes c where c.user_id = v_uid and c.used_at is null),
+    'codes_total', (select count(*) from public.live_mfa_recovery_codes c where c.user_id = v_uid)
+  );
+end;
+$$;
+
+-- Switch on an authenticator the caller has just verified (the session is aal2 with it). The
+-- FIRST one needs a fresh sign-in — a password typed, or an email link opened, in the last 30
+-- minutes (`reauth_required` otherwise) — so a stolen session can't turn two-step sign-in on and
+-- lock the parent out. It returns ten recovery codes (shown once), sets `since` (sessions signed
+-- in before now keep watching without the code) and emails the person with a "Not you?" link
+-- that removes it again. A second authenticator needs only the code (the session is aal2).
+create or replace function public.live_mfa_activate(p_factor uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_first boolean;
+  v_codes jsonb;
+  v_event bigint;
+  v_kind text;
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'signed_out');
+  end if;
+  v_problem := public.live__session_problem();
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2' then
+    -- The new authenticator's code hasn't been given on this session.
+    return jsonb_build_object('ok', false, 'error', 'mfa_required');
+  end if;
+  v_first := not public.live__mfa_tidy(v_uid);
+  if not exists (select 1 from auth.mfa_factors f
+                  where f.id = p_factor and f.user_id = v_uid and f.status = 'verified' and f.factor_type = 'totp') then
+    return jsonb_build_object('ok', false, 'error', 'not_found');
+  end if;
+  if exists (select 1 from public.live_mfa_factors a where a.factor_id = p_factor) then
+    return jsonb_build_object('ok', true, 'already', true, 'first', false, 'codes', '[]'::jsonb);
+  end if;
+  if v_first and not public.live__recent_sign_in(30) then
+    return jsonb_build_object('ok', false, 'error', 'reauth_required');
+  end if;
+  insert into public.live_mfa_factors (factor_id, user_id, session_id) values (p_factor, v_uid, public.live__jwt_sid());
+  if v_first then
+    insert into public.live_mfa_on (user_id, since) values (v_uid, now())
+      on conflict (user_id) do update set since = excluded.since;
+    v_codes := public.live__new_recovery_codes(v_uid);
+  end if;
+  v_kind := case when v_first then 'mfa_on' else 'mfa_added' end;
+  insert into public.security_events (user_id, session_id, kind, detail)
+  values (v_uid, public.live__jwt_sid(), v_kind, jsonb_build_object('factor_id', p_factor))
+  returning id into v_event;
+  perform public.live__notify_mfa(v_uid, v_event, v_kind);
+  return jsonb_build_object('ok', true, 'already', false, 'first', v_first, 'codes', coalesce(v_codes, '[]'::jsonb));
+end;
+$$;
+
+-- A new set of recovery codes (the old ones stop working). Needs the code on this session.
+create or replace function public.live_mfa_codes_regenerate()
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_codes jsonb;
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'signed_out');
+  end if;
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
+  if v_problem is not null then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if not public.live__mfa_tidy(v_uid) then
+    return jsonb_build_object('ok', false, 'error', 'not_on');
+  end if;
+  v_codes := public.live__new_recovery_codes(v_uid);
+  insert into public.security_events (user_id, session_id, kind) values (v_uid, public.live__jwt_sid(), 'mfa_codes');
+  return jsonb_build_object('ok', true, 'codes', v_codes);
+end;
+$$;
+
+-- Lost the phone: a recovery code, typed after the password (this session still owes the
+-- code), switches two-step sign-in OFF so the person can get back in — Supabase Auth can't be
+-- told to accept a recovery code as the second step, so every authenticator goes, the lost one
+-- with it, and the app asks them to set it up again on the new phone. Single use; 5 wrong codes
+-- per 15 minutes; emailed with a "Not you?" link.
+create or replace function public.live_mfa_recover(p_code text)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_problem text;
+  v_id bigint;
+  v_removed integer := 0;
+  v_event bigint;
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'signed_out');
+  end if;
+  -- A session that still owes the code is exactly who this is for: only a dead one is refused.
+  v_problem := public.live__session_problem();
+  if v_problem = 'session_revoked' then
+    return jsonb_build_object('ok', false, 'error', v_problem);
+  end if;
+  if not public.live__has_mfa(v_uid) then
+    return jsonb_build_object('ok', true, 'removed', 0, 'already_off', true);
+  end if;
+  if (select count(*) from public.live_mfa_attempts t where t.user_id = v_uid and t.at > now() - interval '15 minutes') >= 5 then
+    return jsonb_build_object('ok', false, 'error', 'too_many');
+  end if;
+  select c.id into v_id from public.live_mfa_recovery_codes c
+   where c.user_id = v_uid and c.used_at is null and c.code_hash = public.live__recovery_hash(v_uid, p_code)
+   for update;
+  if v_id is null then
+    insert into public.live_mfa_attempts (user_id) values (v_uid);
+    return jsonb_build_object('ok', false, 'error', 'invalid_code');
+  end if;
+  begin
+    delete from auth.mfa_factors where user_id = v_uid;
+    get diagnostics v_removed = row_count;
+    update public.live_mfa_recovery_codes set used_at = now() where id = v_id;
+  exception when others then
+    -- Nothing changed and the code still works: never "used up" without getting them back in.
+    raise warning 'live_mfa_recover: could not remove authenticators (%)', sqlstate;
+    return jsonb_build_object('ok', false, 'error', 'failed');
+  end;
+  delete from public.live_mfa_factors where user_id = v_uid;
+  delete from public.live_mfa_on where user_id = v_uid;
+  delete from public.live_mfa_recovery_codes where user_id = v_uid;
+  delete from public.live_mfa_attempts where user_id = v_uid;
+  insert into public.security_events (user_id, session_id, kind, detail)
+  values (v_uid, public.live__jwt_sid(), 'mfa_recovered', jsonb_build_object('removed', v_removed))
+  returning id into v_event;
+  perform public.live__notify_mfa(v_uid, v_event, 'mfa_recovered');
+  return jsonb_build_object('ok', true, 'removed', v_removed);
+end;
+$$;
+
 -- ==================================================== "Not you? Secure my account"
--- Redeems the one-time token from a new-sign-in email (single use, 7 days):
+-- Redeems the one-time token from a security email — a new sign-in, or two-step sign-in being
+-- switched on or off (single use, 7 days):
 --   * ends every session of the account (refresh tokens go with them), so every device must
 --     sign in again — and the Worker refuses their access tokens from the next check;
 --   * revokes devices enrolled since that sign-in (an intruder's watch or browser);
+--   * removes authenticators switched on since then, or by the session it reports (a password
+--     thief who turned on two-step sign-in can't lock the parent out of their own account), and
+--     recovery codes that may be in their hands; authenticators the parent had before stay;
 --   * records a 'secured' event.
 -- Callable without a session (the person may be locked out). The backend's
 -- POST /api/auth/email/secure calls it with the service role and then emails a password-reset
--- link; only that caller gets the address back, everyone else gets a masked hint.
+-- link and asks the live Worker to close the account's open sockets; only that caller gets the
+-- address, the account id and its nurseries back, everyone else gets a masked hint.
 create or replace function public.live_secure_account(p_token text)
 returns jsonb
 language plpgsql
@@ -586,6 +1068,7 @@ declare
   v_ev public.security_events;
   v_sessions integer := 0;
   v_devices jsonb;
+  v_factors integer := 0;
   v_email text;
   v_hint text;
   v_service boolean := coalesce(auth.jwt()->>'role', '') = 'service_role';
@@ -623,14 +1106,49 @@ begin
     returning id, thumb
   )
   select coalesce(jsonb_agg(jsonb_build_object('id', id, 'thumb', thumb)), '[]'::jsonb) into v_devices from gone;
+  -- Authenticators switched on since that event (or by the session it reports, or the one it is
+  -- about), and any added in that window that were never switched on here.
+  begin
+    delete from auth.mfa_factors f
+     where f.user_id = v_ev.user_id
+       and (f.created_at >= v_ev.at - interval '1 minute'
+            or exists (select 1 from public.live_mfa_factors a
+                        where a.factor_id = f.id
+                          and (a.activated_at >= v_ev.at - interval '1 minute'
+                               or (v_ev.session_id is not null and a.session_id = v_ev.session_id)))
+            or f.id::text = coalesce(v_ev.detail->>'factor_id', ''));
+    get diagnostics v_factors = row_count;
+  exception when others then
+    raise warning 'live_secure_account: could not remove authenticators (%)', sqlstate;
+    v_factors := -1;
+  end;
+  delete from public.live_mfa_factors a
+   where a.user_id = v_ev.user_id and not exists (select 1 from auth.mfa_factors f where f.id = a.factor_id);
+  if not public.live__has_mfa(v_ev.user_id) then
+    delete from public.live_mfa_on where user_id = v_ev.user_id;
+    delete from public.live_mfa_recovery_codes where user_id = v_ev.user_id;
+  elsif exists (select 1 from public.security_events e
+                 where e.user_id = v_ev.user_id and e.kind = 'mfa_codes' and e.at >= v_ev.at - interval '1 minute') then
+    -- New recovery codes were made since: whoever made them may hold them. The parent makes a
+    -- fresh set once they're back in (their authenticator still works).
+    delete from public.live_mfa_recovery_codes where user_id = v_ev.user_id;
+  end if;
   insert into public.security_events (user_id, kind, detail)
-  values (v_ev.user_id, 'secured', jsonb_build_object('from_event', v_ev.id, 'sessions', v_sessions, 'devices', jsonb_array_length(v_devices)));
+  values (v_ev.user_id, 'secured', jsonb_build_object('from_event', v_ev.id, 'sessions', v_sessions,
+          'devices', jsonb_array_length(v_devices), 'factors', v_factors));
 
   select u.email into v_email from auth.users u where u.id = v_ev.user_id;
   v_hint := case when v_email is null then null
                  else left(split_part(v_email, '@', 1), 1) || '•••@' || split_part(v_email, '@', 2) end;
-  return jsonb_build_object('ok', true, 'sessions_ended', v_sessions, 'devices_revoked', v_devices, 'email_hint', v_hint)
-    || case when v_service then jsonb_build_object('user_id', v_ev.user_id, 'email', v_email) else '{}'::jsonb end;
+  return jsonb_build_object('ok', true, 'sessions_ended', v_sessions, 'devices_revoked', v_devices,
+                            'factors_removed', v_factors, 'email_hint', v_hint)
+    || case when v_service then jsonb_build_object(
+         'user_id', v_ev.user_id,
+         'email', v_email,
+         -- Where the account's sockets and alert subscriptions live, for the server-side kick
+         -- (its own token can't list them any more: every session just ended).
+         'nurseries', coalesce((select jsonb_agg(m.nursery_id) from public.monitor_members m where m.user_id = v_ev.user_id), '[]'::jsonb)
+       ) else '{}'::jsonb end;
 end;
 $$;
 
@@ -665,7 +1183,10 @@ begin
     return jsonb_build_object('signed_in', true, 'member', true, 'user_id', v_uid,
       'profile', public.live__profile_json(v_uid),
       'mfa', public.live__has_mfa(v_uid),
-      'aal', coalesce(auth.jwt()->>'aal', 'aal1'));
+      'aal', coalesce(auth.jwt()->>'aal', 'aal1'),
+      -- Signed in before two-step sign-in was switched on: watching works without the code.
+      'mfa_grace', coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2'
+                   and public.live__mfa_grace(v_uid, nullif(auth.jwt()->>'session_id', '')::uuid));
   end if;
   return jsonb_build_object('signed_in', true, 'member', false, 'user_id', v_uid,
     'needs_code', not public.live__legacy_eligible(v_uid),
@@ -674,8 +1195,9 @@ end;
 $$;
 
 -- The live Worker's authorization check for a monitor socket (the connecting user's own token).
--- Adds `error` ('session_revoked' | 'mfa_required') on refusal, and `mfa`/`aal` on success so
--- the room's role cache knows to demand aal2 on later re-auths.
+-- Adds `error` ('session_revoked' | 'mfa_required') on refusal, and `mfa`/`aal`/`mfa_grace` on
+-- success so the room's role cache knows to demand aal2 on later re-auths (`mfa_grace`: this
+-- session predates two-step sign-in and may keep watching without the code).
 create or replace function public.monitor_my_role(p_nursery uuid)
 returns jsonb
 language plpgsql
@@ -705,7 +1227,9 @@ begin
     'nursery_name', (select name from public.monitor_nurseries where id = p_nursery),
     'baby_name', (select baby_name from public.monitor_nurseries where id = p_nursery),
     'mfa', public.live__has_mfa(v_uid),
-    'aal', coalesce(auth.jwt()->>'aal', 'aal1')
+    'aal', coalesce(auth.jwt()->>'aal', 'aal1'),
+    'mfa_grace', coalesce(auth.jwt()->>'aal', 'aal1') <> 'aal2'
+                 and public.live__mfa_grace(v_uid, nullif(auth.jwt()->>'session_id', '')::uuid)
   );
 end;
 $$;
@@ -728,7 +1252,8 @@ declare
   v_problem text;
   v_prev text;
 begin
-  v_problem := public.live__session_problem();
+  -- Changes who can see a nursery: the code even on a session old enough to keep watching without it.
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
   if v_problem is not null then
     return jsonb_build_object('ok', false, 'error', v_problem);
   end if;
@@ -778,7 +1303,8 @@ declare
   v_problem text;
   v_n integer;
 begin
-  v_problem := public.live__session_problem();
+  -- Changes who can see a nursery: the code even on a session old enough to keep watching without it.
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
   if v_problem is not null then
     return jsonb_build_object('ok', false, 'error', v_problem);
   end if;
@@ -1041,7 +1567,8 @@ declare
   v_uid uuid := auth.uid();
   v_problem text;
 begin
-  v_problem := public.live__session_problem();
+  -- Changes who can see a nursery: the code even on a session old enough to keep watching without it.
+  v_problem := coalesce(public.live__session_problem(), public.live__step_up_problem());
   if v_problem is not null then
     return jsonb_build_object('ok', false, 'error', v_problem);
   end if;
@@ -1125,11 +1652,20 @@ begin
   -- Internal helpers: nobody calls these directly.
   foreach f in array array[
     'public.live__has_mfa(uuid)',
+    'public.live__mfa_grace(uuid, uuid)',
     'public.live__session_problem()',
+    'public.live__step_up_problem()',
+    'public.live__recent_sign_in(integer)',
+    'public.live__jwt_sid()',
     'public.live__mask_ip(inet)',
     'public.live__device_json(public.live_devices)',
+    'public.live__send_security_alert(uuid, bigint, text, text, text, text)',
     'public.live__send_signin_alert(uuid, bigint, text, text, text)',
-    'public.live__note_session(uuid, uuid, text)'
+    'public.live__notify_mfa(uuid, bigint, text)',
+    'public.live__note_session(uuid, uuid, text)',
+    'public.live__recovery_hash(uuid, text)',
+    'public.live__new_recovery_codes(uuid)',
+    'public.live__mfa_tidy(uuid)'
   ] loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
   end loop;
@@ -1152,7 +1688,12 @@ begin
     'public.live_device_enroll(text, text, text)',
     'public.live_device_list()',
     'public.live_device_revoke(uuid)',
-    'public.live_security_events(integer)'
+    'public.live_security_events(integer)',
+    'public.live_mfa_status()',
+    'public.live_mfa_activate(uuid)',
+    'public.live_mfa_codes_regenerate()',
+    -- (serves a session that still owes the code, but refuses one that was ended)
+    'public.live_mfa_recover(text)'
   ] loop
     execute format('revoke all on function %s from public, anon', f);
     execute format('grant execute on function %s to authenticated', f);
@@ -1191,6 +1732,8 @@ begin
         -- refresh next time — recorded again, never emailed.)
         delete from public.security_events where at < now() - interval '180 days';
         delete from public.live_devices where revoked_at < now() - interval '180 days';
+        -- Wrong recovery codes only matter for the 15-minute limit.
+        delete from public.live_mfa_attempts where at < now() - interval '1 day';
       $job$
     );
   end if;

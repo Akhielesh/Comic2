@@ -46,6 +46,7 @@ import { callUsage, carriersOf, clampClientReport, relayClock, UsageMeter, type 
 import { compactUsage, FAIR_USE, isEmptyUsage, monthKey, type UsageMonth } from '../../shared/stream/usage';
 import { userLineName } from './directCalls';
 import { generateVapidKeys, isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
+import { replacedEndpoint, storeReplacing } from './pushReplace';
 
 export const KEY_HOLDER = '__vapid_keys__';
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -2698,8 +2699,11 @@ export class MonitorRoom {
       ),
       at: Date.now(),
     };
-    const all = ((await this.state.storage.get<PushRec[]>('push')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
-    all.push(rec);
+    // `was` (ADR 0006 WS-5, live/monitor/push.ts): the subscription this browser had at
+    // dreamstreamstudio.ai/live before Stream Studio moved to its own host. It goes now, so the
+    // nursery alerts this browser once, not twice — the same account's only.
+    const was = replacedEndpoint(sub, rec.sub.endpoint);
+    const all = storeReplacing((await this.state.storage.get<PushRec[]>('push')) ?? [], rec, was, (r) => r.uid === rec.uid);
     await this.state.storage.put('push', all.slice(-PUSH_CAP));
     this.send(ws, { t: 'push_ok', prefs: rec.prefs });
   }
@@ -3316,8 +3320,8 @@ export class MonitorRoom {
         if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) return;
         if (!isAllowedPushEndpoint(sub.endpoint) || sub.endpoint.length > 1024) return this.send(ws, { t: 'call_err', error: 'push' });
         const rec: CallPushRec = { sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } }, uid: a.uid, at: now };
-        const all = ((await this.state.storage.get<CallPushRec[]>('callPush')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
-        all.push(rec);
+        const was = replacedEndpoint(sub, rec.sub.endpoint); // the same browser's old /live one (onPushSub)
+        const all = storeReplacing((await this.state.storage.get<CallPushRec[]>('callPush')) ?? [], rec, was, (r) => r.uid === a.uid);
         await this.state.storage.put('callPush', all.slice(-CALL_PUSH_CAP));
         return;
       }
