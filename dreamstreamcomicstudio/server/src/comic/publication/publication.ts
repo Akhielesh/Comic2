@@ -400,13 +400,17 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
 
   const source = doc.format?.language || 'en';
   const wanted = req?.languages?.length ? req.languages : doc.publication?.languages?.length ? doc.publication.languages : [source];
-  const languages = wanted.map((lang) => {
+  // Every edition the doc holds is listed (the Share sheet offers a finished translation that is not
+  // published yet); only the requested ones decide `ok`.
+  const listed: string[] = [];
+  for (const lang of [...wanted, ...Object.keys(doc.i18n?.editions || {})]) if (!listed.some((l) => sameLanguage(l, lang))) listed.push(lang);
+  const languages = listed.map((lang) => {
     const r = editionReadiness(doc, lang);
-    return { lang, publishable: r.publishable, blocking: r.issues.filter((i) => i.blocking).map((i) => i.text) };
+    return { lang, publishable: r.publishable, blocking: r.issues.filter((i) => i.blocking).map((i) => i.text), requested: wanted.some((w) => sameLanguage(w, lang)) };
   });
   const safetyStatus: PublishReadiness['safety']['status'] = blockedPages.length ? 'blocked' : unchecked ? 'needs_check' : 'cleared';
   return {
-    ok: drawn.length > 0 && missing.length === 0 && stalePages.length === 0 && safetyStatus !== 'blocked' && languages.every((l) => l.publishable),
+    ok: drawn.length > 0 && missing.length === 0 && stalePages.length === 0 && safetyStatus !== 'blocked' && languages.every((l) => !l.requested || l.publishable),
     drawnPages: drawn.length,
     plannedPages: pages.length,
     missing,

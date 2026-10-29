@@ -79,7 +79,13 @@ export interface PublishReadiness {
   missing: Array<{ kind: 'cover' | 'page'; n?: number; status: string }>;
   stalePages: number[];
   safety: { status: 'cleared' | 'needs_check' | 'blocked'; blockedPages: number[]; reasons: string[] };
-  languages: Array<{ lang: string; publishable: boolean; blocking: string[] }>;
+  /**
+   * Every edition the comic holds, not only the ones asked about: the requested (or published, else the
+   * source) languages first, then the doc's other editions, so the Share sheet can offer a finished
+   * translation that is not published yet. `requested` marks the entries this readiness was asked
+   * about; absent means requested (older views). `ok` considers requested entries only.
+   */
+  languages: Array<{ lang: string; publishable: boolean; blocking: string[]; requested?: boolean }>;
 }
 export interface PublicationOwnerView {
   visibility: Visibility;

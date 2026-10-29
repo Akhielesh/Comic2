@@ -142,7 +142,8 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       const busy = d.pages.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering').map((p) => p.n);
       const blockers: string[] = [];
       if (busy.length) blockers.push(`page ${busy.join(', ')} still drawing`);
-      for (const l of readiness.languages.filter((x) => !x.publishable)) blockers.push(`${langName(l.lang)}: ${l.blocking[0] || 'not finished'}`);
+      // Only the editions this card would publish can block it (readiness lists every edition the doc holds).
+      for (const l of readiness.languages.filter((x) => x.requested !== false && !x.publishable)) blockers.push(`${langName(l.lang)}: ${l.blocking[0] || 'not finished'}`);
       if (readiness.safety.blockedPages.length) blockers.push(`page ${readiness.safety.blockedPages.join(', ')} blocked by the content rules (the card can publish without ${readiness.safety.blockedPages.length === 1 ? 'it' : 'them'})`);
       const mode = isLive(d) ? 'update' : 'publish';
       turn.cards.push(publishCard(mode, request));

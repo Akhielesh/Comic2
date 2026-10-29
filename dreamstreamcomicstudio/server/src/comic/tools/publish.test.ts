@@ -75,6 +75,18 @@ describe('publish tool group', () => {
     expect(await live.tools.get_share_link.execute({ language: 'hi' })).toMatch(/edition isn't published/);
   });
 
+  it('publish_comic only names the editions it would publish as blockers (readiness lists every edition the doc holds)', async () => {
+    const doc = drawn();
+    doc.format = { ...doc.format, lettering: 'overlay' };
+    doc.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    const { tools } = toolsFor(doc);
+    const sourceOnly = await tools.publish_comic.execute({ visibility: 'unlisted' });
+    expect(sourceOnly).not.toMatch(/Hindi/);
+    expect(sourceOnly).toMatch(/NOT published yet/);
+    const withHindi = await tools.publish_comic.execute({ visibility: 'unlisted', languages: ['en', 'hi'] });
+    expect(withHindi).toMatch(/Heads-up: Hindi: /);
+  });
+
   it('unpublish_comic posts a confirmation card; update_publication can only offer a new link via a card', async () => {
     const doc = drawn();
     doc.publication = { visibility: 'public', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 4, publishedAt: Date.now(), languages: ['en'] };

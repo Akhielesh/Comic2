@@ -105,6 +105,15 @@ function richDoc(): ComicDoc {
   return doc;
 }
 
+/** A complete, reviewed, current edition of every spoken line: what editionReadiness() calls publishable. */
+function withReviewedEdition(doc: ComicDoc, lang: string): ComicDoc {
+  doc.format = { ...doc.format, lettering: 'overlay' };
+  const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => l.text.trim());
+  const translated = Object.fromEntries(lines.map((l) => [l.id, { text: `${lang.toUpperCase()}:${l.text}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), at: 1 }]));
+  doc.i18n = { editions: { ...(doc.i18n?.editions || {}), [lang]: { lang, lines: translated, balloons: {}, register: 'everyday' } }, glossary: doc.i18n?.glossary || [] };
+  return doc;
+}
+
 const gateFor =
   (statuses: Record<string, SafetyStatus> = {}, overall?: PublishGateResult['status'], rating: PublishGateResult['rating'] = 'PG') =>
   async (_ctx: unknown, _doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
@@ -556,6 +565,39 @@ describe('publish', () => {
     expect(r.missing).toEqual([{ kind: 'page', n: 1, status: 'not drawn yet' }]);
     expect(r.stalePages).toEqual([2]);
     expect(r.safety).toMatchObject({ status: 'blocked', blockedPages: [3] });
+  });
+
+  it('readiness lists every edition the comic holds: a finished one is publishable before it is published (the sheet can offer it); an unfinished one never blocks a publish that does not ask for it', async () => {
+    const { getPublicationView } = await import('./index.js');
+    // richDoc's Hindi edition is one machine line with a stale hash: listed, not publishable, not requested.
+    const partial = await getReadiness(ctx, richDoc());
+    expect(partial.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: false, blocking: expect.arrayContaining([expect.any(String)]), requested: false }
+    ]);
+    expect(partial.ok).toBe(true);
+    // Asked for, the same edition blocks (and says why).
+    expect((await getReadiness(ctx, richDoc(), { visibility: 'unlisted', languages: ['en', 'hi'] })).ok).toBe(false);
+
+    const doc = withReviewedEdition(richDoc(), 'hi');
+    expect(editionReadiness(doc, 'hi').publishable).toBe(true);
+    setup(doc);
+    const before = await getPublicationView(ctx);
+    expect(before.readiness.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: true, blocking: [], requested: false }
+    ]);
+    await publish(ctx, { visibility: 'unlisted', languages: ['en'] });
+    const after = await getPublicationView(ctx);
+    expect(after.languages).toEqual(['en']);
+    expect(after.readiness.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: true, blocking: [], requested: false }
+    ]);
+    // …and adding it later is a plain update of the same link.
+    const both = await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'] });
+    expect([both.slug, both.languages]).toEqual([after.slug, ['en', 'hi']]);
+    expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
   });
 
   it('card patch ops update only the publish card in its message', () => {
