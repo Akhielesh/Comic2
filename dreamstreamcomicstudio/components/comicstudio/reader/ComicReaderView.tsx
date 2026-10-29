@@ -38,6 +38,22 @@ export interface ComicReaderViewProps {
 
 const MODE_KEY = 'comicstudio.reader.mode';
 
+/** Pinch-zoomed in (the browser's own page zoom): drags pan the page, swipes and taps never turn it. */
+const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
+
+const useViewportZoomed = (): boolean => {
+  const [zoomed, setZoomed] = useState(isViewportZoomed);
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const on = () => setZoomed(isViewportZoomed());
+    on();
+    vv.addEventListener('resize', on);
+    return () => vv.removeEventListener('resize', on);
+  }, []);
+  return zoomed;
+};
+
 const readStoredMode = (): ReaderMode | null => {
   try {
     const v = window.localStorage.getItem(MODE_KEY);
@@ -132,6 +148,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
   const [fullscreen, setFullscreen] = useState(false);
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
+  // Safe gestures: every pointer on the stage is tracked; once a second one touches down (a pinch) the swipe
+  // candidate is gone and nothing turns until every finger is up, whichever lifts first.
+  const pointers = useRef(new Set<number>());
+  const multiPointer = useRef(false);
+  // touch-action can only change between gestures (a change mid-gesture is ignored), so it follows the zoom level:
+  // at 1x vertical pans and pinch-zoom go to the browser and horizontal swipes to us; zoomed in, the browser pans
+  // in every direction.
+  const zoomed = useViewportZoomed();
   // Real width/height of each image once loaded (models snap to their nearest aspect).
   const [loadedAspects, setLoadedAspects] = useState<Record<string, number>>({});
   const onAspect = useCallback((path: string, a: number) => {
@@ -313,14 +337,31 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
         <div
           ref={stageRef}
           data-testid="reader-stage"
-          className="relative flex min-h-0 flex-1 touch-pan-y select-none items-center justify-center gap-0 overflow-hidden px-4 py-3"
+          className="relative flex min-h-0 flex-1 select-none items-center justify-center gap-0 overflow-hidden px-4 py-3"
+          style={{ touchAction: zoomed ? 'manipulation' : 'pan-y pinch-zoom' }}
+          data-zoomed={zoomed ? 'true' : undefined}
           onPointerDown={(e) => {
+            if (e.isPrimary || pointers.current.size === 0) {
+              pointers.current.clear();
+              multiPointer.current = false;
+            }
+            pointers.current.add(e.pointerId);
+            if (pointers.current.size > 1) {
+              multiPointer.current = true;
+              swipe.current = null;
+              return;
+            }
             swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
           }}
           onPointerUp={(e) => {
+            pointers.current.delete(e.pointerId);
             const start = swipe.current;
             swipe.current = null;
-            if (!start) return;
+            if (multiPointer.current) {
+              if (pointers.current.size === 0) multiPointer.current = false;
+              return;
+            }
+            if (!start || isViewportZoomed()) return;
             const dx = e.clientX - start.x;
             const dy = e.clientY - start.y;
             const s = swipeDelta(dx, dy, rtl);
@@ -335,7 +376,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
               if (t) go(t);
             }
           }}
-          onPointerCancel={() => {
+          onPointerCancel={(e) => {
+            pointers.current.delete(e.pointerId);
+            if (pointers.current.size === 0) multiPointer.current = false;
             swipe.current = null;
           }}
         >
@@ -357,7 +400,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
             aria-label={prevLabel}
             data-zone="prev"
             tabIndex={-1}
-            onClick={() => go(rtl ? 1 : -1)}
+            onClick={() => !isViewportZoomed() && go(rtl ? 1 : -1)}
             className="absolute inset-y-0 left-0 hidden w-[12%] cursor-w-resize opacity-0 md:block"
           />
           <button
@@ -365,7 +408,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({ doc, urlFor, i
             aria-label={nextLabel}
             data-zone="next"
             tabIndex={-1}
-            onClick={() => go(rtl ? -1 : 1)}
+            onClick={() => !isViewportZoomed() && go(rtl ? -1 : 1)}
             className="absolute inset-y-0 right-0 hidden w-[12%] cursor-e-resize opacity-0 md:block"
           />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[var(--ds-well-strong)]" aria-hidden>

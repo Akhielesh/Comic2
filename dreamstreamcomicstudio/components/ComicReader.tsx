@@ -37,6 +37,10 @@ const FLIP_DIALOGUE_MAX_SHARE_SHORT = 0.35;
 const FLIP_SHORT_REGION_PX = 480;
 const FLIP_GAP_PX = 8;
 const FLIP_DIALOGUE_MAX_W = 576;
+/** A horizontal drag at least this long (and mostly horizontal) turns a Page Flip page. */
+const SWIPE_MIN_PX = 45;
+/** Pinch-zoomed in: drags pan the page instead of turning it. */
+const isViewportZoomed = (): boolean => typeof window !== 'undefined' && (window.visualViewport?.scale ?? 1) > 1.01;
 const PHONE_BTN =
   'inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
 const PHONE_MENU_ITEM =
@@ -452,7 +456,8 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
-  const touchStartX = useRef<number | null>(null);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const touchMulti = useRef(false);
   const textLayout = project.state.textLayout || 'caption';
   const panelCount = project.state.panels.length;
   const panelsWithArtCount = project.state.panels.filter((panel) => !!panel.imageUrl).length;
@@ -643,14 +648,45 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     return () => window.clearTimeout(timer);
   }, [flipDirection]);
 
-  // Touch swipe in flip mode (horizontal drag turns the page).
-  const onTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0]?.clientX ?? null; };
+  // Touch swipe in flip mode (a horizontal drag turns the page). Safe gestures: a pinch never turns a page, whichever
+  // finger lifts first (once a second finger touched down, the gesture is spent until every finger is up); while the
+  // page is zoomed in (visualViewport.scale > 1.01) drags pan the zoomed page and never turn it; a mostly vertical drag
+  // (scrolling the dialogue under the art) is not a swipe.
+  const onTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length > 1) {
+      touchMulti.current = true;
+      touchStart.current = null;
+      return;
+    }
+    touchMulti.current = false;
+    const t = e.touches[0];
+    touchStart.current = t ? { x: t.clientX, y: t.clientY } : null;
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length > 1) {
+      touchMulti.current = true;
+      touchStart.current = null;
+    }
+  };
   const onTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current == null) return;
-    const dx = (e.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
-    touchStartX.current = null;
-    if (Math.abs(dx) < 45) return;
+    const start = touchStart.current;
+    if (touchMulti.current || e.touches.length > 0) {
+      touchStart.current = null;
+      if (e.touches.length === 0) touchMulti.current = false;
+      return;
+    }
+    touchStart.current = null;
+    if (!start || isViewportZoomed()) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * 1.2) return;
     if (dx < 0) goNext(); else goPrev();
+  };
+  const onTouchCancel = () => {
+    touchStart.current = null;
+    touchMulti.current = false;
   };
 
   // Keyboard navigation: arrows/space/PageUp-Down turn pages (flip) or page-scroll
@@ -1096,7 +1132,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                     data-testid="flip-region"
                     className="flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none"
                     onTouchStart={onTouchStart}
+                    onTouchMove={onTouchMove}
                     onTouchEnd={onTouchEnd}
+                    onTouchCancel={onTouchCancel}
                   >
                     <div
                       key={pageIndex}
@@ -1137,7 +1175,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   <div
                     className={phoneUi ? 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 select-none' : 'flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 sm:p-3 select-none'}
                     onTouchStart={onTouchStart}
+                    onTouchMove={onTouchMove}
                     onTouchEnd={onTouchEnd}
+                    onTouchCancel={onTouchCancel}
                   >
                     <div
                       key={pageIndex}
