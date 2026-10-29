@@ -90,6 +90,23 @@ export const segmentsFromRects = (rects: ArrayLike<DOMRectReadOnly> | null | und
   return SINGLE_SEGMENT;
 };
 
+/**
+ * The side-by-side screens of a dual-screen device as x spans, so a popover can stay on one of them
+ * (mobile.md §3.6). The media-query fallback — `(horizontal-viewport-segments: 2)` matched with no
+ * Viewport Segments API — knows there are two screens but not their rects: the window is split in
+ * half (the hinge of a book-posture device is centred). Null on one screen or stacked screens.
+ */
+export const sideBySideScreens = (segments: Segments, width: number): { left: number; right: number }[] | null => {
+  if (segments.count !== 2 || segments.axis !== 'horizontal') return null;
+  if (segments.rects.length === 2) return segments.rects.map((r) => ({ left: r.left, right: r.left + r.width }));
+  if (!(Number.isFinite(width) && width > 0)) return null;
+  const mid = width / 2;
+  return [
+    { left: 0, right: mid },
+    { left: mid, right: width }
+  ];
+};
+
 /** Minimum width of one split pane: 320 on small tablets (iPad mini portrait), 360 from 1024. */
 export const minPanePx = (containerWidth: number): number => (containerWidth > 0 && containerWidth < 1024 ? 320 : 360);
 
