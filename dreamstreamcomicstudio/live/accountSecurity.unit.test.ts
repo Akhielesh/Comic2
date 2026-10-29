@@ -101,6 +101,19 @@ describe('a session ended elsewhere', () => {
     expect(h.auth.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(localStorage.getItem('ds-live-my-events')).toBeNull(); // host keys never outlive the session
   });
+
+  it('a second check that overlaps it (and then finds no session) keeps the reason — the notice isn’t lost', async () => {
+    h.state.me = { signed_in: false, member: false, error: 'session_revoked' };
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out', ended: 'revoked' });
+    // The other screen's check, a moment later: the session is gone now.
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out', ended: 'revoked' });
+    // A sign-in and an ordinary sign-out later, there's no reason left to tell.
+    h.state.session = { access_token: 'tok-2', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u1', email: 'ada@example.com', user_metadata: {} } };
+    h.state.me = { member: true, profile: { display_name: 'Ada' } };
+    expect((await account.refreshAccount()).status).toBe('member');
+    await account.signOutThisDevice();
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out' });
+  });
 });
 
 describe('two-step sign-in at sign-in', () => {
@@ -147,6 +160,31 @@ describe('two-step sign-in at sign-in', () => {
     vi.resetModules();
     account = await import('./account');
     expect((await account.refreshAccount()).status).toBe('offline');
+  });
+
+  it('a reload while the internet is down (the stored session can’t be refreshed) is never "signed out", and wipes nothing', async () => {
+    // Stream Studio's sign-in gate shows the sign-in screen only for a definite "signed out": a camera
+    // phone reloaded during an outage must not land there, nor lose its nursery data.
+    localStorage.setItem('ds-live-owner', 'u1');
+    localStorage.setItem('ds-monitor-zones-n1', '[{"x":1}]');
+    const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+    expect((await account.refreshAccount()).status).toBe('offline');
+    expect(localStorage.getItem('ds-live-owner')).toBe('u1');
+    expect(localStorage.getItem('ds-monitor-zones-n1')).toBe('[{"x":1}]');
+    // Back online: in, as before.
+    expect((await account.refreshAccount()).status).toBe('member');
+    // Already in: a failed session read (unreachable, or thrown) keeps the member.
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+    expect((await account.refreshAccount()).status).toBe('member');
+    h.auth.getSession.mockRejectedValueOnce(new Error('storage unavailable'));
+    expect((await account.refreshAccount()).status).toBe('member');
+  });
+
+  it('a refresh token the server rejected IS signed out (the session is gone)', async () => {
+    const rejected = Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { name: 'AuthApiError', status: 400 });
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: rejected } as never);
+    expect((await account.refreshAccount()).status).toBe('signed_out');
   });
 
   it('picks up changes made elsewhere: after a token refresh and when the code was given in another tab', async () => {
@@ -541,5 +579,65 @@ describe('"Not you? Secure my account"', () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
     expect(await account.secureAccount(TOKEN)).toMatchObject({ ok: false, code: 'unreachable' });
     expect(await account.secureAccount('nope')).toMatchObject({ ok: false, code: 'invalid_token' });
+  });
+});
+
+describe('only a definite answer changes what Stream Studio lets in (the sign-in gate, live/accessGate.ts)', () => {
+  const FAILED = { message: 'TypeError: Failed to fetch' };
+
+  it('a pre-launch account whose automatic join fails on a blip is not "needs_code" — and joins on the next check', async () => {
+    h.state.me = { member: false, needs_code: false, suggested_name: 'Ada' };
+    h.state.rpcs.live_join = { data: null, error: FAILED };
+    const a = await account.refreshAccount();
+    expect(a.status).not.toBe('needs_code');
+    expect(a).toMatchObject({ status: 'offline', userId: 'u1', email: 'ada@example.com' });
+    h.state.rpcs.live_join = { data: { ok: true, profile: { display_name: 'Ada' } }, error: null };
+    expect((await account.refreshAccount()).status).toBe('member');
+  });
+
+  it('a sign-up’s ticket whose redemption fails on a blip: not "needs_code", and the ticket is kept for the next check', async () => {
+    localStorage.setItem('ds-live-welcome-ticket', 't'.repeat(32));
+    h.state.me = { member: false, needs_code: true };
+    h.state.rpcs.live_join = { data: null, error: FAILED };
+    expect((await account.refreshAccount()).status).toBe('offline');
+    expect(localStorage.getItem('ds-live-welcome-ticket')).toBe('t'.repeat(32));
+    expect(h.rpc).toHaveBeenCalledWith('live_join', expect.objectContaining({ p_ticket: 't'.repeat(32) }));
+  });
+
+  it('the server’s own "no" ({ ok: false }) is definite: needs_code', async () => {
+    h.state.me = { member: false, needs_code: false };
+    h.state.rpcs.live_join = { data: { ok: false, error: 'welcome_code_required' }, error: null };
+    expect((await account.refreshAccount()).status).toBe('needs_code');
+  });
+
+  it('needs_code and needs_mfa survive a failed check for the same account, like a member — a blip never opens the studio', async () => {
+    for (const me of [{ member: false, needs_code: true }, { signed_in: true, member: false, error: 'mfa_required', mfa_required: true, needs_code: false }]) {
+      vi.resetModules();
+      account = await import('./account');
+      h.state.meError = null;
+      h.state.me = me;
+      const want = (await account.refreshAccount()).status;
+      expect(['needs_code', 'needs_mfa']).toContain(want);
+      h.state.meError = FAILED;
+      expect((await account.refreshAccount()).status).toBe(want);
+      h.auth.getSession.mockRejectedValueOnce(new Error('storage unavailable'));
+      expect((await account.refreshAccount()).status).toBe(want);
+      const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+      h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+      expect((await account.refreshAccount()).status).toBe(want);
+    }
+  });
+
+  it('…but not for a different account signing in: no answer for it yet is "offline"', async () => {
+    h.state.me = { member: false, needs_code: true };
+    expect((await account.refreshAccount()).status).toBe('needs_code');
+    h.state.session = { access_token: 'tok-u2', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u2', email: 'bo@example.com', user_metadata: {} } };
+    h.state.meError = FAILED;
+    expect(await account.refreshAccount()).toMatchObject({ status: 'offline', userId: 'u2' });
+  });
+
+  it('the first check of a page load that fails is still "offline" (let through), as before', async () => {
+    h.state.meError = FAILED;
+    expect((await account.refreshAccount()).status).toBe('offline');
   });
 });

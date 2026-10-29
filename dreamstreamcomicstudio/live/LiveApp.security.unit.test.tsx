@@ -92,23 +92,28 @@ describe('the new-sign-in email lands on this page (the SECURE_ACCOUNT_PAGE flip
 });
 
 describe('session lifecycle in the shell', () => {
-  it('says once that the session was ended elsewhere', async () => {
+  it('says once that the session was ended elsewhere — on the sign-in screen', async () => {
     h.account = { status: 'signed_out', ended: 'revoked' };
     const { rerender } = render(<LiveApp />);
     await settle();
     expect(screen.getAllByText(/your account was signed out on every device/)).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Sign in to Stream Studio' })).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard')).toBeNull();
     rerender(<LiveApp />);
     await settle();
     expect(screen.getAllByText(/your account was signed out on every device/)).toHaveLength(1);
   });
 
-  it('asks for the two-step code by itself after the password', async () => {
+  it('asks for the two-step code by itself after the password — full screen, nothing of the studio behind it', async () => {
     h.account = { status: 'needs_mfa', userId: 'u1', email: 'ada@example.com', mfa: true };
     render(<LiveApp />);
     await settle();
     expect(screen.getByRole('dialog', { name: 'Two-step sign-in' })).toBeInTheDocument();
-    // The rail offers it too, instead of "Sign in".
-    expect(screen.getByRole('button', { name: 'Finish signing in with your two-step code' })).toBeInTheDocument();
+    // Behind the sheet: the "Finish signing in" screen, whose button asks again (Escape closes the sheet).
+    expect(screen.getByRole('heading', { name: 'Finish signing in' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enter your code' })).toBeInTheDocument();
+    expect(screen.queryByTestId('dashboard')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull();
   });
 
   it('the account menu has both sign-out paths and Security', async () => {

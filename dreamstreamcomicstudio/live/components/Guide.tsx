@@ -20,11 +20,11 @@ export type TourId = 'welcome' | 'create' | 'studio' | 'monitor' | 'nursery' | '
 export const TOURS: Record<TourId, TourStep[]> = {
   welcome: [
     { title: 'Welcome to Stream Studio 👋', body: 'Go live from your browser — viewers join with just a name — and run a private baby monitor from any of your devices. This 30-second tour shows you around.' },
-    { target: 'nav-create', title: 'Meet or go live', body: 'One tap starts an instant meeting (people you invite join on camera) or a live stream; schedule one with an invite page under Advanced. Hosting needs a free account (with your welcome code); joining or watching never does.' },
+    { target: 'nav-create', title: 'Meet or go live', body: 'One tap starts an instant meeting (people you invite join on camera) or a live stream; schedule one with an invite page under Advanced. The people you invite join from your link with just a name — no account.' },
     { target: 'nav-monitor', title: 'Baby monitor', body: 'Turn a spare phone into a baby camera and watch from your other devices. Live only — never recorded — with two-way talk, video calls and alerts for crying, coughing and smoke alarms.' },
     { target: 'nav-calls', title: 'Calls', body: 'FaceTime-style video and voice calls with your family — or anyone on Stream Studio, found by name. One person or up to four at once.' },
     { target: 'nav-settings', title: 'Make it yours', body: 'Quality, recording time limits, where recordings save (including Google Drive), alerts and hotkeys — and Usage: what was free this month, and what went through our servers.' },
-    { target: 'account', title: 'Your account', body: 'Sign in or create an account here. New accounts need the welcome code you were given — it’s checked securely on our server.' },
+    { target: 'account', title: 'Your account', body: 'Your DreamStream account — the same one as Comic Studio and Chat Studio. Account & sync, Security and signing out are here.' },
     { target: 'help', title: 'Help is always here', body: 'Open Help anytime to search answers or replay a tour for the screen you’re on.' },
   ],
   create: [
@@ -412,10 +412,10 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
     section: 'Getting started',
     icon: 'sparkles',
     items: [
-      { q: 'Do viewers need an account?', a: 'No. Viewers open your link and type a name — that’s it. Only hosts and baby-monitor families sign in.' },
-      { q: 'How do I create an account?', a: 'Tap your name/avatar (bottom of the menu) → Create account. Enter your name, email, password, date of birth and the welcome code you were given. Then confirm your email if asked.', tags: 'sign up register' },
-      { q: 'What is the welcome code?', a: 'An invite code required for new accounts. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
-      { q: 'I already had a DreamStream account', a: 'Just sign in — accounts created before Stream Studio accounts launched are unlocked automatically.' },
+      { q: 'Do viewers need an account?', a: 'No. Viewers open the link you sent and type a name — that’s it (a nursery share link also needs its passcode). Everything else in Stream Studio — hosting, the baby monitor, calls — needs your DreamStream account.', tags: 'sign in guest watch link' },
+      { q: 'How do I create an account?', a: 'Stream Studio uses your DreamStream account — the same one as Comic Studio and Chat Studio. On the sign-in screen tap Create account, and enter your name, email, password, date of birth and the welcome code you were given. Then confirm your email if asked.', tags: 'sign up register' },
+      { q: 'What is the welcome code?', a: 'While Stream Studio is in private beta, an account needs a welcome code once to use it. It’s case-sensitive and checked only on our server — it never ships in the app, and repeated wrong guesses are locked out for 15 minutes.', tags: 'invite code security' },
+      { q: 'I already had a DreamStream account', a: 'Just sign in with it — it’s the same account as Comic Studio and Chat Studio. Accounts created before Stream Studio accounts launched are unlocked automatically; anyone else enters their welcome code once.' },
       ...(STREAM_HOST_ON
         ? [{
             q: `Stream Studio’s address: ${STREAM_HOSTNAME}`,
