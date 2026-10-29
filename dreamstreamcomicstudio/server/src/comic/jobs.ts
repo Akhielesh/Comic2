@@ -1466,6 +1466,9 @@ const preflightFor = async (ctx: StudioContext, opts: RunActionOptions, action: 
   }
 };
 
+/** A health reason inside a sentence: "Our last 3 calls failed…" → "our last 3 calls failed…" (names stay as they are). */
+const lowerLead = (reason: string): string => (/^(Our|Every|Provider|Retrying)\b/.test(reason) ? reason[0].toLowerCase() + reason.slice(1) : reason);
+
 /** "OpenRouter" / "Gemini" for a route. */
 const ROUTE_NAMES: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
 
@@ -1486,7 +1489,8 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Sp
     blockedAction: bindSpendAction(doc, action),
     origin: 'preflight'
   };
-  const text = `${spec.nickname} isn't available right now (${reason}), so I haven't started ${go.plan.what} — nothing was charged. Your comic stays on ${spec.nickname} so every page matches.`;
+  const why = reason.includes(spec.nickname) ? reason : `${spec.nickname} is down right now (${lowerLead(reason)})`;
+  const text = `I haven't started ${go.plan.what}: ${why}. Nothing was charged — your comic stays on ${spec.nickname} so every page matches.`;
   deliver(ctx, opts, text, [card]);
   for (const b of pre.blocked || [go.spec].map((s) => ({ modelId: s.id }))) {
     const blockedSpec = getImageModel(b.modelId);
@@ -1508,7 +1512,7 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Sp
   return finished({
     status: 'blocked',
     code: 'PROVIDER_ERROR',
-    message: `Not started: ${spec.nickname} is down on every route this account can use (${reason}). Nothing was drawn and nothing was charged; the outage card offers: ${options}. Never say the drawing started.`
+    message: `Not started: ${spec.nickname} is down on every route this account can use (${lowerLead(reason)}). Nothing was drawn and nothing was charged; the outage card offers: ${options}. Do not say the drawing is under way.`
   });
 };
 
@@ -3487,6 +3491,23 @@ export async function letterPage(
     } finally {
       if (tracker.calls && !tracker.usd && tracker.estimated) tracker.usd = chargedUsd(QC_USD_PER_PAGE, tracker.byok);
       recordTextSpend(ctx, tracker, 'qc', `Check page ${page.n}`);
+      // M1-CATALOG's observed QC median reads these rows (kind 'qc', the vision model, no resolution).
+      if (tracker.calls) {
+        const route = resolveTextRoute('vision', ctx.keys)?.route;
+        recordImageCall({
+          userId: ctx.userId,
+          projectId: ctx.projectId,
+          modelId: tracker.model || 'vision',
+          ...(route ? { route } : {}),
+          kind: 'qc',
+          res: null,
+          outcome: visionRan ? 'ok' : 'failed',
+          // The provider's own figure only when it reported one (the tracker holds the charged amount).
+          providerCostUsd: tracker.estimated ? null : round4(tracker.usd / (tracker.byok ? 1 : PLATFORM_MARKUP)),
+          billedUsd: tracker.usd,
+          byok: tracker.byok
+        });
+      }
     }
   }
   // Re-read: lines may have been edited while the check ran.

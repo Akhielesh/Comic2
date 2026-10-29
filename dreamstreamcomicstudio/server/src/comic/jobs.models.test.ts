@@ -7,10 +7,13 @@ import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilitie
 import type { DocOp } from '../../../shared/comic/ops.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
-import { JOB_TIMINGS, MODEL_LOCKED, lockOf, runAction, sanitizePatchOps, startAction, type RunActionOptions } from './jobs.js';
-import { fakeImages, newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
+import { JOB_TIMINGS, MODEL_LOCKED, estimateSpendAction, lockOf, runAction, sanitizePatchOps, startAction, type RunActionOptions } from './jobs.js';
+import { createImageGenerator, __resetImageClientForTests, type GeminiModelsLike } from './imageClient.js';
+import { priceBookFromSources } from './models/pricing.js';
+import { fakeImageCalls, fakeImages, newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
-import { StudioError, type StudioKeys } from './types.js';
+import { StudioError, type ImageRequest, type StudioKeys } from './types.js';
+import { fakeModelHealth } from './models/health.fakes.js';
 import { analyzePageRender } from './vision.js';
 
 vi.mock('./vision.js', async (importOriginal) => {
@@ -202,3 +205,270 @@ describe('model lock (models.md §3.4)', () => {
   });
 });
 
+
+// ── §3.4 item 9: recording ───────────────────────────────────────────────────
+
+describe('per-attempt recording (models.md §3.4 item 9)', () => {
+  it('a drawn page writes a SpendEntry with res, route, outcome, listUsd and refs, the running totals, and one comic_image_calls row', async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    const images = fakeImages(() => ({ costUsd: 0.0386 }));
+    const { session, ctx } = setup(doc, { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    const entry = session.doc.spend.entries.find((e) => e.kind === 'page')!;
+    expect(entry).toMatchObject({
+      label: 'Page 1',
+      model: 'nano-banana-2.1',
+      res: '2K',
+      route: 'openrouter',
+      outcome: 'ok',
+      usd: Math.round(0.0386 * 1.3 * 10000) / 10000,
+      listUsd: Math.round(0.0504 * 1.3 * 10000) / 10000, // the list price, in the same (charged) unit as usd
+      target: 'page:pg_1',
+      estimated: false
+    });
+    expect(entry.refs).toBe(ctx.imagesFake.calls[0].references.length);
+    expect(session.doc.spend.byModel?.['nano-banana-2.1']).toMatchObject({ images: 1, failed: 0 });
+    expect(session.doc.spend.byTarget?.['page:pg_1']).toBe(entry.usd);
+    const rows = ctx.callsFake.rows.filter((r) => r.kind === 'page');
+    expect(rows).toEqual([
+      expect.objectContaining({
+        userId: 'user-1',
+        projectId: 'proj-1',
+        modelId: 'nano-banana-2.1',
+        providerModel: 'google/gemini-nano-banana-2.1',
+        route: 'openrouter',
+        res: '2K',
+        outcome: 'ok',
+        httpStatus: 200,
+        providerCostUsd: 0.0386,
+        billedUsd: entry.usd,
+        byok: false
+      })
+    ]);
+  });
+
+  it('a failed attempt is recorded with what the provider reported (usually $0) and counts in failed totals', async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    const images = fakeImages(() => new StudioError('PROVIDER_ERROR', 'The image model rejected the request.', { status: 502, retryable: false }));
+    const { session, ctx } = setup(doc, { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(session.doc.spend.entries).toEqual([expect.objectContaining({ label: 'Page 1 (failed attempt)', outcome: 'failed', usd: 0, model: 'nano-banana-2.1', res: '2K' })]);
+    expect(session.doc.spend.failed).toEqual({ count: 1, usd: 0 });
+    expect(session.doc.spend.byModel?.['nano-banana-2.1']).toMatchObject({ images: 0, failed: 1 });
+    expect(ctx.callsFake.rows).toEqual([expect.objectContaining({ outcome: 'failed', errorCode: 'PROVIDER_ERROR', providerCostUsd: null, billedUsd: 0 })]);
+  });
+
+  it('recording failures never fail the job', async () => {
+    const calls = fakeImageCalls();
+    calls.failWith = 'throw';
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { calls });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(session.doc.pages[0].render.status).toBe('ready');
+    expect(session.doc.spend.entries.filter((e) => e.kind === 'page' && e.outcome === 'ok')).toHaveLength(1);
+  });
+
+  it('vision QC calls are recorded as kind qc rows (model = the vision model, res null)', async () => {
+    vi.mocked(analyzePageRender).mockImplementation(async ({ llm }) => {
+      await llm.complete({ role: 'vision', messages: [{ role: 'user', content: 'check' }] });
+      throw new StudioError('NO_IMAGE', 'unreadable');
+    });
+    const { ctx } = setup(drawnDoc('nano-banana-2.1'));
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(ctx.callsFake.rows.filter((r) => r.kind === 'qc')).toEqual([expect.objectContaining({ kind: 'qc', modelId: 'fake-vision', res: null, outcome: 'failed' })]);
+  });
+});
+
+// ── §2.3 real prices ─────────────────────────────────────────────────────────
+
+describe('quotes through the PriceBook (models.md §2.3)', () => {
+  const observedBook = () =>
+    priceBookFromSources({
+      rows: [],
+      observed: [{ modelId: 'nano-banana-2.1', kind: 'page', res: '2K', n: 4, medianUsd: 0.07, minUsd: 0.06, maxUsd: 0.08, scope: 'you' }]
+    });
+
+  it('a gate is quoted at the real price (observed median above the list) and says its basis, with no dollar figure in the phrase', async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    doc.settings.confirm = 'always';
+    const { session, ctx } = setup(doc, { prices: observedBook() });
+    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, { confirmed: false, caps: PAID_CAPS });
+    expect(started.outcome.status).toBe('gated');
+    const gate = session.doc.gate!;
+    expect(gate.estimateUsd).toBeCloseTo((0.07 + 0.003) * 1.3, 4);
+    expect(gate.estimateUsd).toBeGreaterThan(estimateSpendAction(session.doc, { type: 'render_pages', pageIds: ['pg_1'] }, false).usd);
+    expect(gate.summary).toContain('priced from your recent real costs');
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+  });
+
+  it('a chip carrying its list-price quote is not re-gated just because real costs run above the list', async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    const { session, ctx } = setup(doc, { prices: observedBook() });
+    const quotedUsd = estimateSpendAction(session.doc, { type: 'render_pages', pageIds: ['pg_1'] }, false).usd;
+    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], quotedUsd }, UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+  });
+});
+
+// ── reliability.md §2: preflight and outage cards ────────────────────────────
+
+describe('money-safe preflight (reliability.md §2)', () => {
+  it('a model down on every reachable route starts NOTHING: no reservation, no job, no failed tile, no spend, one calm outage card', async () => {
+    const health = fakeModelHealth();
+    health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down', 'Every provider reports a problem');
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { health });
+    const before = session.doc.conversation.length;
+    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1', 'pg_2'] }, UI);
+    expect(started.outcome).toMatchObject({ status: 'blocked' });
+    expect(started.outcome.message).toMatch(/^Not started: Nano Banana 2\.1 is down/);
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+    expect(session.doc.spend.entries).toHaveLength(0);
+    expect(session.doc.pages.every((p) => p.render.status === 'none')).toBe(true);
+    expect(opsOf(ctx).flat().some((o) => o.op === 'render')).toBe(false);
+    const added = session.doc.conversation.slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0].text).toBe(
+      "I haven't started pages 1–2: Nano Banana 2.1 is down right now (every provider reports a problem). Nothing was charged — your comic stays on Nano Banana 2.1 so every page matches."
+    );
+    expect(added[0].cards).toHaveLength(1);
+    expect(added[0].cards![0]).toMatchObject({
+      type: 'model_outage',
+      modelId: 'nano-banana-2.1',
+      origin: 'preflight',
+      blockedAction: { type: 'render_pages', pageIds: ['pg_1', 'pg_2'] },
+      options: expect.arrayContaining([expect.objectContaining({ kind: 'wait_and_retry' })])
+    });
+    expect(health.preflights).toHaveLength(1);
+    expect(ctx.callsFake.rows).toEqual([expect.objectContaining({ modelId: 'nano-banana-2.1', outcome: 'blocked', errorCode: 'MODEL_DOWN', billedUsd: 0 })]);
+  });
+
+  it('picks the same model on the same-payer route when only the primary is down (the run starts, routed there)', async () => {
+    const health = fakeModelHealth();
+    health.forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down');
+    const keys: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-platform', byok: false } };
+    const { ctx } = setup(drawnDoc('nano-banana-2.1'), { health, keys });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect((ctx.imagesFake.calls[0] as ImageRequest & { preferRoute?: string }).preferRoute).toBe('gemini');
+  });
+
+  it('unknown health never blocks a run (no public data, no observations)', async () => {
+    const { ctx } = setup(drawnDoc('nano-banana-2.1'));
+    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(started.outcome.status).toBe('started');
+    await started.done;
+    expect(ctx.healthFake.preflights).toHaveLength(1);
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+  });
+
+  it('a mid-run provider failure ends with the outage card (mid_run, $0 charged, narrowed re-send) and the calm G copy, never raw error text', async () => {
+    const limited = () =>
+      Object.assign(new StudioError('RATE_LIMIT', 'Nano Banana 2.1 is being throttled by its provider (Google AI Studio) for everyone on OpenRouter right now — your key and limits are fine.', { status: 429, retryable: true }), {
+        imageFailure: { route: 'openrouter', status: 429, providerName: 'Google AI Studio', retryAfterMs: 1_000 }
+      });
+    const images = fakeImages((req) => (req.prompt.includes('Action 2.1') ? limited() : undefined));
+    const { session, ctx } = setup(drawnDoc('nano-banana-2.1'), { images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1', 'pg_2'] }, UI);
+    const last = lastMsg(session.doc);
+    expect(last.text).toContain(
+      "Google AI Studio is rate-limiting Nano Banana 2.1 right now (OpenRouter · 429 · upstream Google AI Studio). Page 2 wasn't drawn, and you weren't charged for it. Your comic stays on Nano Banana 2.1 so every page matches."
+    );
+    expect(last.text).not.toMatch(/failed —|throttled by its provider/);
+    const outage = (last.cards || []).filter((c) => c.type === 'model_outage');
+    expect(outage).toEqual([
+      expect.objectContaining({ modelId: 'nano-banana-2.1', origin: 'mid_run', chargedUsd: 0, blockedAction: expect.objectContaining({ type: 'render_pages', pageIds: ['pg_2'] }), options: [{ kind: 'wait_and_retry' }] })
+    ]);
+    expect((last.cards || []).some((c) => c.type === 'notice' && c.tone === 'error')).toBe(false);
+    expect(last.nextSteps?.slice(0, 2)).toEqual([
+      expect.objectContaining({ label: 'Try again in 1s', action: expect.objectContaining({ type: 'render_pages', pageIds: ['pg_2'], quotedUsd: expect.any(Number) }) }),
+      { label: 'See other models', client: { type: 'open_model_picker' } }
+    ]);
+    // The tile keeps the precise reason for its Details row.
+    expect(session.doc.pages[1].render).toMatchObject({ status: 'failed', error: expect.stringContaining('throttled'), errorDetail: { code: '429', provider: 'OpenRouter' } });
+    expect(session.doc.pages[0].render.status).toBe('ready');
+  });
+});
+
+// ── The 429 replay (models.md §5.1) and the 16:52 incident (reliability.md §5) ──
+
+describe('replays with the real image client over fake transports', () => {
+  const ORG_429 = { error: { code: 429, message: 'Provider returned error', metadata: { provider_name: 'Google AI Studio', raw: 'RESOURCE_EXHAUSTED' } } };
+  const transports = (opts: { gemini?: boolean } = {}) => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(ORG_429), { status: 429, headers: { 'content-type': 'application/json' } });
+    });
+    const geminiCalls: Array<Record<string, unknown>> = [];
+    const gemini: GeminiModelsLike = {
+      generateContent: vi.fn(async (params: Record<string, unknown>) => {
+        geminiCalls.push(params);
+        throw Object.assign(new Error('RESOURCE_EXHAUSTED: rate limited'), { status: 429 });
+      })
+    };
+    return { bodies, geminiCalls, fetchMock, gemini, withGemini: !!opts.gemini };
+  };
+  const realImages = (keys: StudioKeys, t: ReturnType<typeof transports>) =>
+    createImageGenerator(keys, { fetch: t.fetchMock as unknown as typeof fetch, createGemini: () => t.gemini, sleep: async () => undefined, imageEndpoints: async () => null });
+
+  beforeEach(() => __resetImageClientForTests());
+
+  it('429 on both routes: every call carries the locked model, the notice says it stays on it, a $0 failed SpendEntry and a RATE_LIMIT call row', async () => {
+    const keys: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-platform', byok: false } };
+    const t = transports({ gemini: true });
+    const doc = drawnDoc('nano-banana-2.1');
+    const session = newSession(doc);
+    const ctx = testContext(session, { keys });
+    ctx.images = realImages(keys, t);
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    expect(t.bodies.length + t.geminiCalls.length).toBeGreaterThan(0);
+    expect(t.bodies.every((b) => b.model === 'google/gemini-nano-banana-2.1' && !('models' in b))).toBe(true);
+    expect(t.geminiCalls.every((c) => c.model === 'gemini-nano-banana-2.1')).toBe(true);
+    expect(t.geminiCalls.length).toBeGreaterThan(0); // the same model was tried on the other same-payer route
+    const last = lastMsg(session.doc);
+    expect(last.text).toContain('stays on Nano Banana 2.1');
+    const failedEntries = session.doc.spend.entries.filter((e) => e.outcome === 'failed');
+    expect(failedEntries.length).toBeGreaterThan(0);
+    expect(failedEntries.every((e) => e.usd === 0 && e.model === 'nano-banana-2.1')).toBe(true);
+    expect(ctx.callsFake.rows.some((r) => r.outcome === 'failed' && r.errorCode === 'RATE_LIMIT' && r.modelId === 'nano-banana-2.1')).toBe(true);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    expect(session.doc.imageModel?.modelId).toBe('nano-banana-2.1');
+  });
+
+  it('16:52 incident: 3 style tests on a down single-provider model — the breaker caps the calls, nothing is spent, one calm card, and the next request starts nothing', async () => {
+    const keys: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false } };
+    const t = transports();
+    const health = fakeModelHealth();
+    const session = newSession(drawnDoc(undefined));
+    const ctx = testContext(session, { keys, health, caps: PAID_CAPS });
+    ctx.images = realImages(keys, t);
+    const styles = { type: 'render_style_options' as const, directions: [{ name: 'Ink', spec: 'Bold ink.' }, { name: 'Wash', spec: 'Soft wash.' }, { name: 'Pop', spec: 'Pop art.' }] };
+    await runAction(ctx, styles, UI);
+    // Three parallel jobs, three 429s: the breaker opened and refused every later attempt (the incident burned 12).
+    expect(t.bodies).toHaveLength(3);
+    expect(health.acquires.filter((a) => !a.allowed).length).toBeGreaterThan(0);
+    expect(health.outcomes.filter((o) => !o.ok)).toHaveLength(3);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    expect(ctx.billingFake.settled).toHaveLength(0);
+    const first = lastMsg(session.doc);
+    const outageCards = (first.cards || []).filter((c) => c.type === 'model_outage');
+    expect(outageCards).toHaveLength(1);
+    expect(outageCards[0]).toMatchObject({ origin: 'mid_run', chargedUsd: 0 });
+    const kinds = (outageCards[0] as Extract<Card, { type: 'model_outage' }>).options.map((o) => o.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['wait_and_retry', 'add_key', 'switch_model']));
+    expect((first.cards || []).some((c) => c.type === 'notice' && c.tone === 'error')).toBe(false);
+
+    // The director asks again a moment later: the preflight sees the open breaker and nothing starts.
+    const cards: Card[] = [];
+    const out = await startAction(ctx, styles, { confirmed: true, caps: PAID_CAPS, collectCard: (c) => cards.push(c), origin: 'director' });
+    expect(t.bodies).toHaveLength(3); // zero image calls after the breaker opened
+    expect(out.outcome.status).toBe('blocked');
+    expect(out.outcome.message).toMatch(/^Not started: /);
+    expect(out.outcome.message).not.toMatch(/Started drawing/);
+    expect(cards).toEqual([expect.objectContaining({ type: 'model_outage', origin: 'preflight', modelId: 'nano-banana-2.1' })]);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    expect(session.doc.conversation.some((m) => /Started drawing/.test(m.text))).toBe(false);
+  });
+});
