@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from 'vitest';
-import { HOOK_TOLERANCE_S, handleOps, handleUserNotify, resetOpsState, signHookPayload, verifyHookSignature, type OpsEnv } from './ops';
+import { HOOK_TOLERANCE_S, handleOps, handleUserKick, handleUserNotify, resetOpsState, signHookPayload, verifyHookSignature, type OpsEnv } from './ops';
 
 const UID = '0a0a0a0a-1111-4222-8333-444455556666';
 const SECRET = 'hook-secret-0123456789abcdef';
@@ -78,6 +78,73 @@ describe('POST /x/user/:uid/notify (the security notice push mirror)', () => {
     expect((await verifyHookSignature(SECRET, sig, p, NOW)).ok).toBe(true);
     expect(await verifyHookSignature(SECRET, sig, `${p} `, NOW)).toEqual({ ok: false, reason: 'bad-signature' });
     expect(await verifyHookSignature('short', sig, p, NOW)).toEqual({ ok: false, reason: 'no-secret' });
+  });
+});
+
+describe('POST /x/user/:uid/kick (“Not you?” from the backend, signed)', () => {
+  const N1 = '9d9d9d9d-1111-4222-8333-444455556661';
+  const N2 = '9d9d9d9d-1111-4222-8333-444455556662';
+
+  /** Rooms and the call line, implementing `/x/kick` as WS-9/WS-10 will. */
+  function world(o: { missing?: string[] } = {}) {
+    const got: { ns: string; name: string; body: Record<string, unknown> }[] = [];
+    const ns = (label: string) =>
+      ({
+        idFromName: (n: string) => n,
+        get: (name: string) => ({
+          fetch: async (req: Request) => {
+            got.push({ ns: label, name, body: (await req.json()) as Record<string, unknown> });
+            if (o.missing?.includes(name)) return Response.json({ error: 'not found' }, { status: 404 });
+            return Response.json({ closed: 1, turn: [] });
+          },
+        }),
+      }) as unknown as DurableObjectNamespace;
+    const env: OpsEnv = { SECURITY_HOOK_SECRET: SECRET, MONITOR_ROOM: ns('room'), USER_LINE: ns('line'), CALL_ROOM: ns('call') };
+    const pending: Promise<unknown>[] = [];
+    return { env, got, ctx: { waitUntil: (p: Promise<unknown>) => void pending.push(p) } };
+  }
+
+  const kick = async (payload: unknown, o: { secret?: string; at?: number; uid?: string } = {}) => {
+    const p = JSON.stringify(payload);
+    const sig = await signHookPayload(o.secret ?? SECRET, p, o.at ?? NOW);
+    return new Request(`https://w.example/x/user/${o.uid ?? UID}/kick`, { method: 'POST', body: JSON.stringify({ p }), headers: { 'x-ds-signature': sig } });
+  };
+  const asSent = (over: Record<string, unknown> = {}) => ({ v: 1, kind: 'kick', uid: UID, why: 'secured', nids: [N1, N2], at: NOW - 1000, ...over });
+
+  it('closes the account’s sockets in every nursery it names and on the call line; ok only when all confirmed', async () => {
+    const w = world();
+    const res = await handleUserKick(await kick(asSent()), w.env, w.ctx, UID, { now: NOW });
+    expect([res.status, await res.json()]).toEqual([200, { ok: true, rooms: 2, calls: 0, closed: 3, unconfirmed: 0 }]);
+    expect(w.got).toEqual([
+      { ns: 'room', name: N1, body: { uid: UID, why: 'secure', at: NOW } },
+      { ns: 'room', name: N2, body: { uid: UID, why: 'secure', at: NOW } },
+      { ns: 'line', name: `u:${UID}`, body: { uid: UID, why: 'secure', at: NOW } },
+    ]);
+    const partial = world({ missing: [N2] });
+    const p2 = await handleUserKick(await kick(asSent({ at: NOW - 2 })), partial.env, partial.ctx, UID, { now: NOW });
+    expect(await p2.json()).toEqual({ ok: false, rooms: 2, calls: 0, closed: 2, unconfirmed: 1 });
+  });
+
+  it('dormant without the secret; forged, stale, replayed, mis-addressed or malformed kicks reach nobody', async () => {
+    const w = world();
+    const go = async (r: Request, env: OpsEnv = w.env, uid = UID) => (await handleUserKick(r, env, w.ctx, uid, { now: NOW })).status;
+    expect(await go(await kick(asSent()), { ...w.env, SECURITY_HOOK_SECRET: undefined })).toBe(403);
+    expect(await go(await kick(asSent(), { secret: 'another-secret-0123456789' }))).toBe(403);
+    expect(await go(await kick(asSent(), { at: NOW - (HOOK_TOLERANCE_S + 5) * 1000 }))).toBe(403);
+    // Signed for one account, posted for another: refused.
+    const other = '0b0b0b0b-1111-4222-8333-444455556666';
+    expect(await go(await kick(asSent({ uid: other })), w.env, UID)).toBe(400);
+    expect(await go(await kick(asSent({ kind: 'sign_in' })))).toBe(400);
+    expect(await go(await kick(asSent({ nids: [N1, 'not-a-nursery'] })))).toBe(400);
+    expect(await go(await kick(asSent({ nids: 'all' })))).toBe(400);
+    // None of those reached a room; a genuine kick works once.
+    expect(w.got).toEqual([]);
+    const once = await kick(asSent({ at: NOW - 3 }));
+    const again = once.clone();
+    expect(await go(once)).toBe(200);
+    expect(await go(again)).toBe(409);
+    expect(w.got.filter((g) => g.ns === 'line')).toHaveLength(1);
+    expect((await handleUserKick(new Request(`https://w.example/x/user/${UID}/kick`), w.env, w.ctx, UID)).status).toBe(405);
   });
 });
 

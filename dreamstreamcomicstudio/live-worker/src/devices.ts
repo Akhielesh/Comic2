@@ -20,7 +20,10 @@
  *       if Supabase can't be asked, nothing is minted (fail closed).
  *   POST /api/devices/push     Bearer <device access token> + DS-Proof, or Bearer <Supabase token>
  *        {kind, token, enc, env?, plat?, la?, fcm?}   (push/router.ts parsePushSub)
- *     Stores where the device gets pushes in each of its nurseries' rooms (`/x/push-reg`).
+ *     Stores where the device gets pushes in each of its nurseries' rooms (`/x/push-reg`). A
+ *     device token is checked against the registry first, like the exchange (`live_device_active`,
+ *     fail closed): a revoked watch's access token is still unexpired for up to 10 minutes, and a
+ *     push target it stored now would outlive it.
  *   DELETE /api/devices/:id    Bearer <Supabase token>
  *     `live_device_revoke` (aal2 when MFA is on), then every nursery of the person hears
  *     `/x/device-revoked {uid, dev, thumb}`: the room drops that device's push targets, closes
@@ -50,7 +53,7 @@ import {
   type Scope,
 } from './auth/deviceToken';
 import { ecJwkFromRaw, jwkThumbprint, parseJwt, unb64url } from './auth/jose';
-import { methodNotAllowed, myNurseries, parseJson, readBody, reply, rpcFailure, tellLine, tellRooms, UUID_RE, verifyCaller, type KickEnv } from './kick';
+import { keepTellingRooms, MAX_ROOMS, methodNotAllowed, myNurseries, parseJson, readBody, reply, retryable, RETRY_DELAYS_MS, rpcFailure, tellLine, tellRooms, UUID_RE, verifyCaller, type KickEnv } from './kick';
 import { withinLimit } from './origin';
 import { parsePushSub } from './push/router';
 import { bearerFrom, callRpc, stepUpNeeded, type RpcResult, type SupabaseEnv } from './supabaseAuth';
@@ -62,6 +65,8 @@ export interface DevicesOptions {
   now?: number;
   /** DS-Proof nonce memory (tests); the isolate's own by default. */
   nonces?: NonceStore;
+  /** Background retries for rooms that didn't hear a revocation (tests shorten them). */
+  retryDelaysMs?: readonly number[];
 }
 
 const isolateNonces = new MemoryNonceStore();
@@ -203,6 +208,20 @@ async function enroll(req: Request, env: DevicesEnv, ctx: Pick<ExecutionContext,
 
 /* ------------------------------------------------------------------ token */
 
+/**
+ * Is this device still in the registry, for this account and this key? Asked on every use of a
+ * device credential the Worker acts on (token exchange, push registration), with the publishable
+ * key alone — never only at mint: an access token outlives a revocation by up to 10 minutes.
+ * null = go ahead; otherwise the refusal (401 `revoked`; 503 when Supabase can't be asked — fail
+ * closed; 501 before live_security_v2.sql).
+ */
+async function stillActive(env: DevicesEnv, claims: { dev: string; sub: string; cnf: { jkt: string } }, fetcher?: typeof fetch): Promise<Response | null> {
+  const active = await anonRpc<{ ok?: boolean; active?: boolean; user_id?: unknown }>(env, 'live_device_active', { p_device: claims.dev, p_thumb: claims.cnf.jkt }, fetcher);
+  if (!active.ok) return active.status === 404 ? notEnabled() : reply({ ok: false, error: 'unavailable' }, 503);
+  if (!active.data?.active || String(active.data.user_id ?? '').toLowerCase() !== claims.sub) return reply({ ok: false, error: 'revoked' }, 401);
+  return null;
+}
+
 async function token(req: Request, env: DevicesEnv, opts: DevicesOptions): Promise<Response> {
   if (!(await deviceTokensConfigured(env))) return notEnabled();
   const raw = await readBody(req, 8 * 1024);
@@ -221,9 +240,8 @@ async function token(req: Request, env: DevicesEnv, opts: DevicesOptions): Promi
   const proof = await verifyDsProof(req, claims.cnf.jkt, opts.nonces ?? isolateNonces, { now, body: raw });
   if (proof.ok === false) return reply({ ok: false, error: 'bad_proof', reason: proof.reason }, 401);
 
-  const active = await anonRpc<{ ok?: boolean; active?: boolean; user_id?: unknown }>(env, 'live_device_active', { p_device: claims.dev, p_thumb: claims.cnf.jkt }, opts.fetcher);
-  if (!active.ok) return active.status === 404 ? notEnabled() : reply({ ok: false, error: 'unavailable' }, 503);
-  if (!active.data?.active || String(active.data.user_id ?? '').toLowerCase() !== claims.sub) return reply({ ok: false, error: 'revoked' }, 401);
+  const standing = await stillActive(env, claims, opts.fetcher);
+  if (standing) return standing;
 
   const access = await mintDeviceAccess(env, claims, now);
   if (!access) return notEnabled();
@@ -252,6 +270,9 @@ async function push(req: Request, env: DevicesEnv, opts: DevicesOptions): Promis
     if (v.ok === false) return reply({ ok: false, error: v.reason === 'unavailable' ? 'not_enabled' : 'auth' }, v.reason === 'unavailable' ? 501 : 401);
     const proof = await verifyDsProof(req, v.claims.cnf.jkt, opts.nonces ?? isolateNonces, { now, body: raw });
     if (proof.ok === false) return reply({ ok: false, error: 'bad_proof', reason: proof.reason }, 401);
+    // Revoked since its token was minted: it must not store a push target that outlives the token.
+    const standing = await stillActive(env, v.claims, opts.fetcher);
+    if (standing) return standing;
     who = { uid: v.claims.sub, dev: v.claims.dev };
     nids = v.claims.nid;
     via = 'device';
@@ -278,7 +299,7 @@ async function push(req: Request, env: DevicesEnv, opts: DevicesOptions): Promis
 
 /* ----------------------------------------------------------------- revoke */
 
-async function revoke(req: Request, env: DevicesEnv, opts: DevicesOptions, id: string): Promise<Response> {
+async function revoke(req: Request, env: DevicesEnv, ctx: Pick<ExecutionContext, 'waitUntil'>, opts: DevicesOptions, id: string): Promise<Response> {
   const caller = await verifyCaller(req, env, { fetcher: opts.fetcher, now: opts.now });
   if (!caller.ok) return caller.res;
   if (caller.id && stepUpNeeded(caller.id)) return reply({ ok: false, error: 'mfa_required' }, 403);
@@ -292,7 +313,11 @@ async function revoke(req: Request, env: DevicesEnv, opts: DevicesOptions, id: s
   // Tell every nursery: its sockets close and its push targets go now, not at token expiry.
   const list = await myNurseries(env, caller.token, opts.fetcher);
   const nids = list.ok ? list.nids : [];
-  const told = await tellRooms(env, nids, '/x/device-revoked', { uid: caller.uid, dev: id, thumb });
+  const msg = { uid: caller.uid, dev: id, thumb };
+  const told = await tellRooms(env, nids, '/x/device-revoked', msg, { keep: (p) => ctx.waitUntil(p) });
+  // A room that didn't hear keeps the device's push targets: tell it again in the background.
+  const missed = nids.slice(0, MAX_ROOMS).filter((_, i) => retryable(told[i]));
+  if (missed.length) ctx.waitUntil(keepTellingRooms(env, missed, '/x/device-revoked', msg, opts.retryDelaysMs ?? RETRY_DELAYS_MS).catch(() => 0));
   return reply({ ok: true, already: r.data.already === true, rooms: nids.length, told: told.filter((t) => t.ok).length });
 }
 
@@ -316,6 +341,6 @@ export async function handleDevices(req: Request, env: DevicesEnv, ctx: Pick<Exe
       return reply({ ok: false, error: 'not_yet' }, 501);
   }
   const id = sub.toLowerCase();
-  if (UUID_RE.test(id)) return req.method === 'DELETE' ? revoke(req, env, opts, id) : methodNotAllowed('DELETE');
+  if (UUID_RE.test(id)) return req.method === 'DELETE' ? revoke(req, env, ctx, opts, id) : methodNotAllowed('DELETE');
   return reply({ ok: false, error: 'not_found' }, 404);
 }

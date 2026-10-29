@@ -32,6 +32,8 @@
  *   DELETE /api/devices/:id                revoke a device everywhere (devices.ts)
  *   POST   /api/ops/apns-probe             the APNs HTTP/2 probe (ops.ts; x-ops-key)
  *   POST   /x/user/:userId/notify          signed security notice → that person's call line (ops.ts)
+ *   POST   /x/user/:userId/kick            signed "Not you?" kick from the backend: the nurseries it names,
+ *                                          the call line and its calls (ops.ts → kick.ts kickEverywhere)
  *
  * Direct calls (Calls → search → call anyone on Stream Studio):
  *   GET  /api/calls/u/:userId/ws           WebSocket → that member's UserLine (auth = first frame, own token)
@@ -42,7 +44,7 @@
  * origin or no Origin at all (native); monitor and call upgrades are rate limited per address
  * (RL_WS, refused with close code 4008), share-link joins per address and per nursery
  * (RL_GUEST, RL_GUEST_NID), event creation per account (RL_EVENT). The Durable Objects' own
- * /x/* endpoints are never routed from outside — only the signed /x/user/:id/notify above.
+ * /x/* endpoints are never routed from outside — only the signed /x/user/:id/notify and /kick above.
  *
  * Creating an event requires a signed-in Stream Studio member (welcome-code
  * gated; verified against Supabase with the caller's own token). Watching
@@ -60,7 +62,7 @@ import { EventRoom } from './eventRoom';
 import { handleKick, parseJson, readBody } from './kick';
 import { handleMembers } from './members';
 import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
-import { handleOps, handleUserNotify } from './ops';
+import { handleOps, handleUserKick, handleUserNotify } from './ops';
 import { clientKey, corsHeaders, isUpgrade, noteRefusedOrigin, originAllowed, refuseOrigin, refuseRateLimited, tooMany, withinLimit, LIMIT_PERIOD_S, type RateLimiterLike } from './origin';
 import { bearerFrom, verifyMember } from './supabaseAuth';
 import { UserLine } from './userLine';
@@ -89,7 +91,7 @@ export interface Env extends DeviceTokenEnv, ActTokenEnv {
   RL_EVENT?: RateLimiterLike;
   /** Secret: x-ops-key for /api/ops/* (ops.ts). */
   OPS_KEY?: string;
-  /** Secret: signs /x/user/:uid/notify (ops.ts); the email Worker's and Supabase Vault's value. */
+  /** Secret: signs /x/user/:uid/notify and /kick (ops.ts); the email Worker's, the backend's and Supabase Vault's value. */
   SECURITY_HOOK_SECRET?: string;
 }
 
@@ -289,6 +291,8 @@ export default {
         if (ops) return await handleOps(req, env, ops[1]);
         const notify = pathname.match(/^\/x\/user\/([0-9a-f-]{36})\/notify$/);
         if (notify) return await handleUserNotify(req, env, notify[1]);
+        const kick = pathname.match(/^\/x\/user\/([0-9a-f-]{36})\/kick$/);
+        if (kick) return await handleUserKick(req, env, ctx, kick[1]);
       } catch (err) {
         console.error('account route error', err);
         return withCors(json({ error: 'internal error' }, 500), cors);
@@ -319,16 +323,19 @@ export default {
           return withCors(res, cors);
         }
         if (sub === 'guest' && req.method === 'POST') {
-          // Share link + passcode → a guest pass. Per address and per nursery at the edge (no room
-          // woken for a flood); the room still rate-limits and locks out guessing behind that.
+          // Share link + passcode → a guest pass. Per address, then per nursery, at the edge (no
+          // room woken for a flood); the room still rate-limits and locks out guessing behind that.
+          // In that order, and only for a request of sane size: a try refused for its address (or
+          // oversized junk) never spends the nursery's allowance, so one address can use at most
+          // its own 10 of the nursery's 30 a minute — a real guest elsewhere still gets in.
+          const body = await readBody(req, 2048);
+          if (body == null) return withCors(json({ ok: false, reason: 'bad_link' }, 413), cors);
           const ipKey = clientKey(req);
-          const [byAddress, byNursery] = await Promise.all([withinLimit(env.RL_GUEST, ipKey && `ip:${ipKey}`), withinLimit(env.RL_GUEST_NID, `n:${nid}`)]);
-          if (!byAddress || !byNursery) {
+          const slowDown = () =>
             // The app's own words for it ("Too many tries — wait until …"), live/monitor/guest.ts.
-            return withCors(tooMany({ ok: false, reason: 'slow_down', retryAt: Date.now() + LIMIT_PERIOD_S * 1000, left: null }), cors);
-          }
-          const body = await req.text();
-          if (body.length > 2048) return withCors(json({ ok: false, reason: 'bad_link' }, 413), cors);
+            withCors(tooMany({ ok: false, reason: 'slow_down', retryAt: Date.now() + LIMIT_PERIOD_S * 1000, left: null }), cors);
+          if (!(await withinLimit(env.RL_GUEST, ipKey && `ip:${ipKey}`))) return slowDown();
+          if (!(await withinLimit(env.RL_GUEST_NID, `n:${nid}`))) return slowDown();
           const res = await monitor(env, nid).fetch(
             new Request(`https://monitor.internal/guest?nid=${nid}`, {
               method: 'POST',

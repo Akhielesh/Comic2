@@ -83,12 +83,18 @@ function supabase(o: { roles?: Record<string, string | null>; v2?: boolean; acti
 }
 
 /** Rooms and lines recording the internal messages they get; `missing` = before ADR 0006 WS-9/WS-10. */
-function cloudflare(o: { missing?: boolean; withKey?: boolean } = {}) {
+function cloudflare(o: { missing?: boolean; withKey?: boolean; failFirst?: Record<string, number> } = {}) {
   const got: { ns: string; name: string; path: string; body: Record<string, unknown> }[] = [];
+  const failures = new Map(Object.entries(o.failFirst ?? {}));
   const ns = (label: string) => ({
     idFromName: (n: string) => n,
     get: (name: string) => ({
       fetch: async (req: Request) => {
+        const left = failures.get(name) ?? 0;
+        if (left > 0) {
+          failures.set(name, left - 1);
+          throw new Error('Durable Object reset because its code was updated.');
+        }
         got.push({ ns: label, name, path: new URL(req.url).pathname, body: (await req.json()) as Record<string, unknown> });
         return o.missing ? Response.json({ error: 'not found' }, { status: 404 }) : Response.json({ ok: true });
       },
@@ -102,7 +108,10 @@ function cloudflare(o: { missing?: boolean; withKey?: boolean } = {}) {
     USER_LINE: ns('line') as unknown as DurableObjectNamespace,
   };
   const pending: Promise<unknown>[] = [];
-  return { env, got, ctx: { waitUntil: (p: Promise<unknown>) => void pending.push(p) }, settle: () => Promise.all(pending.splice(0)) };
+  const settle = async () => {
+    while (pending.length) await Promise.all(pending.splice(0));
+  };
+  return { env, got, ctx: { waitUntil: (p: Promise<unknown>) => void pending.push(p) }, settle };
 }
 
 const enrollBody = (over: Record<string, unknown> = {}) =>
@@ -294,6 +303,35 @@ describe('POST /api/devices/push', () => {
     expect(cf.got[0].body).toMatchObject({ uid: ME, dev: DEV, via: 'device', sub: { kind: 'apns', uid: ME, dev: DEV, token: 'a'.repeat(64), plat: 'watchos', enc: { p256dh: keys.p256dh, auth: keys.auth } } });
   });
 
+  it('a revoked watch can’t put its push target back with the access token it still holds', async () => {
+    const { access, sb, cf } = await accessToken();
+    // The owner revokes the lost watch; its 10-minute access token is still unexpired.
+    await handleDevices(await req(DEV, { method: 'DELETE', bearer: supaToken() }), cf.env, cf.ctx, DEV, { fetcher: sb.fetcher, now: NOW });
+    cf.got.length = 0;
+    const keys = await import('./push/testKit').then((m) => m.testDeviceKeys());
+    const body = JSON.stringify({ ...apns, enc: { p256dh: keys.p256dh, auth: keys.auth } });
+    const res = await handleDevices(await req('push', { body, bearer: access, proof: await proofFor('/api/devices/push', body) }), cf.env, cf.ctx, 'push', { fetcher: sb.fetcher, now: NOW, nonces: new MemoryNonceStore() });
+    expect([res.status, await res.json()]).toEqual([401, { ok: false, error: 'revoked' }]);
+    expect(cf.got).toEqual([]);
+    // Asked of the registry by the device's id and key, without any session.
+    expect(sb.rpc('live_device_active').at(-1)).toMatchObject({ auth: null, args: { p_device: DEV, p_thumb: watch.jkt } });
+  });
+
+  it('a device’s push registration fails closed when the registry can’t be asked, and a grant for another account is refused', async () => {
+    for (const [o, status, error] of [
+      [{ active: 'down' as const }, 503, 'unavailable'],
+      [{ activeUser: '0b0b0b0b-1111-4222-8333-444455556666' }, 401, 'revoked'],
+    ] as const) {
+      const { access, cf } = await accessToken();
+      const sb = supabase(o);
+      cf.got.length = 0;
+      const body = JSON.stringify({ kind: 'apns', token: 'a'.repeat(64), plat: 'watchos' });
+      const res = await handleDevices(await req('push', { body, bearer: access, proof: await proofFor('/api/devices/push', body) }), cf.env, cf.ctx, 'push', { fetcher: sb.fetcher, now: NOW, nonces: new MemoryNonceStore() });
+      expect([res.status, ((await res.json()) as { error: string }).error]).toEqual([status, error]);
+      expect(cf.got).toEqual([]);
+    }
+  });
+
   it('without a proof, or with junk, nothing is stored', async () => {
     const { access, sb, cf } = await accessToken();
     cf.got.length = 0;
@@ -335,6 +373,21 @@ describe('DELETE /api/devices/:id', () => {
     const body = JSON.stringify({ grant: e.grant });
     const t = await handleDevices(await req('token', { body, proof: await proofFor('/api/devices/token', body) }), cf.env, cf.ctx, 'token', { fetcher: sb.fetcher, now: NOW, nonces: new MemoryNonceStore() });
     expect([t.status, ((await t.json()) as { error: string }).error]).toEqual([401, 'revoked']);
+  });
+
+  it('a nursery that didn’t hear the revocation is told again in the background, so the device’s push targets still go', async () => {
+    const { sb, cf } = await enrolled();
+    // N2's room is reset by a deploy for both tries inside the request.
+    const flaky = cloudflare({ failFirst: { [N2]: 2 } });
+    const res = await handleDevices(await req(DEV, { method: 'DELETE', bearer: supaToken() }), flaky.env, flaky.ctx, DEV, { fetcher: sb.fetcher, now: NOW, retryDelaysMs: [1] });
+    expect([res.status, await res.json()]).toEqual([200, { ok: true, already: false, rooms: 2, told: 1 }]);
+    expect(flaky.got.map((g) => g.name)).toEqual([N1]);
+    await flaky.settle();
+    expect(flaky.got.map((g) => [g.name, g.path])).toEqual([
+      [N1, '/x/device-revoked'],
+      [N2, '/x/device-revoked'],
+    ]);
+    expect(cf.got.filter((g) => g.path === '/x/device-revoked')).toEqual([]);
   });
 
   it('needs aal2 from anyone with a second factor; someone else’s device is not found', async () => {

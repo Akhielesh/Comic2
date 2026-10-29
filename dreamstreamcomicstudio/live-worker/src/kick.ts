@@ -5,30 +5,37 @@
  *   POST /api/me/kick          Authorization: Bearer <Supabase access token>     body: {} | {why}
  *     1. who is asking: the token, verified (supabaseAuth.verifyAccessToken — JWKS locally, or
  *        Supabase itself for legacy HS256 tokens);
- *     2. their nurseries (`monitor_list`, with their own token);
- *     3. every nursery's MonitorRoom `/x/kick {uid, why}` and their call line (UserLine)
- *        `/x/kick`, all at once, each given ≤ 4 s so the whole answer lands inside the 5 s the
- *        acceptance criterion allows; the rooms close the person's sockets (monitor, family-call
- *        line, admin, glance), drop their push targets and answer `{closed, turn}`;
+ *     2. their nurseries, from their memberships (`monitor_list`, with their own token);
+ *     3. `kickEverywhere`: every nursery's MonitorRoom `/x/kick {uid, why, at}` and their call
+ *        line (UserLine) `/x/kick`, all at once; the line names the direct calls (CallRoom) the
+ *        person is in, and each of those hears `/x/kick` too. The whole fan-out answers inside
+ *        KICK_BUDGET_MS (4.5 s), under the 5 s the acceptance criterion allows; the rooms close the
+ *        person's sockets (monitor, family-call line, admin, glance, call), drop their push targets
+ *        and answer `{closed, turn}`;
  *     4. the TURN usernames the rooms hand back are revoked at Cloudflare (after answering).
- *   → 200 `{ok, rooms, closed, unconfirmed}`. `ok` is true only when every room AND the line
- *     confirmed (the web app's "open monitors and calls were disconnected" depends on it —
- *     live/account.ts kickMySockets). A room that doesn't know `/x/kick` yet (before ADR 0006
- *     WS-9/WS-10 deploy) answers 404: unconfirmed, never pretended. Those sockets still close
- *     once their token can't be renewed (`exp` + 120 s, once the rooms enforce it).
+ *   → 200 `{ok, rooms, calls, closed, unconfirmed}`. `ok` is true only when every room, the line
+ *     and every call it named confirmed (the web app's "open monitors and calls were
+ *     disconnected" depends on it — live/account.ts kickMySockets). A room that doesn't know
+ *     `/x/kick` yet (before ADR 0006 WS-9/WS-10 deploy) answers 404: unconfirmed, never pretended.
  *
- * The client calls this BEFORE `signOut({scope:'global'})` (it needs a live token). The "Not
- * you?" page calls it AFTER the backend has ended every session, with the token this browser
- * still holds: a token whose session was revoked is still accepted here — kicking yourself only
- * ever takes access away — but such a token can no longer list nurseries once
- * live_security_v2.sql is applied (`session_revoked`), so then only the call line is reached and
- * the answer says so (`error: 'session_revoked'`, ok: false).
+ * The client calls this BEFORE `signOut({scope:'global'})` (it needs a live token). "Not you?
+ * Secure my account" can't: the backend has just ended every session, so the account's tokens
+ * can no longer list its nurseries (`session_revoked` once live_security_v2.sql is applied). For
+ * that the backend kicks with its own signed credential instead — `POST /x/user/:uid/kick`
+ * (ops.ts), naming the nurseries from the membership table — which runs the same
+ * `kickEverywhere`. A revoked session calling this route is still accepted (kicking yourself
+ * only ever takes access away): its call line is reached, and the answer says the rest couldn't
+ * be listed (`error: 'session_revoked'`, ok: false).
+ *
+ * `at` on every `/x/kick` is when the kick was asked for: a room closes the person's sockets
+ * admitted before it and refuses tokens issued before it (`iat < at`) until they expire, so a
+ * message that arrives late never cuts off a fresh sign-in (contract notes, ADR 0006 WS-7).
  *
  * Two-step sign-in: someone with a verified factor must present an aal2 token (403
  * `mfa_required`) — a phished password alone can't switch off a family's monitors.
  */
 
-import { userLineName } from './directCalls';
+import { CALL_ID_RE, userLineName } from './directCalls';
 import { hasTurnConfig, type IceEnv } from './ice';
 import { withinLimit, type RateLimiterLike } from './origin';
 import { bearerFrom, callRpc, mfaProblem, verifyAccessToken, type AccessIdentity, type SupabaseEnv } from './supabaseAuth';
@@ -36,6 +43,8 @@ import { bearerFrom, callRpc, mfaProblem, verifyAccessToken, type AccessIdentity
 export interface KickEnv extends SupabaseEnv, IceEnv {
   MONITOR_ROOM?: DurableObjectNamespace;
   USER_LINE?: DurableObjectNamespace;
+  /** Direct calls' rooms: a kick reaches the ones the person's call line names. */
+  CALL_ROOM?: DurableObjectNamespace;
   RL_WS?: RateLimiterLike;
 }
 
@@ -43,8 +52,22 @@ export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 /** Each room gets this long to answer, so a fan-out finishes inside the 5 s budget. */
 export const ROOM_TIMEOUT_MS = 4_000;
-/** At most this many nurseries are told in one fan-out (a person is in far fewer). */
+/**
+ * A whole kick — nurseries, call line, then the calls the line names — answers within this, under
+ * the 5 s the acceptance criterion allows (the calls get what's left after the line answers).
+ */
+export const KICK_BUDGET_MS = 4_500;
+/** At most this many nurseries are told in one fan-out (a person is in far fewer); more is reported unconfirmed. */
 export const MAX_ROOMS = 50;
+/** Direct calls one kick reaches at most (a person is in one or two at a time); more is reported unconfirmed. */
+export const MAX_CALLS = 20;
+/** Nursery ids kept from a membership list (the fan-out tells MAX_ROOMS of them and counts the rest). */
+const MAX_LISTED = 500;
+/** A failed tell is tried once more only when this much of its time is left (a deploy resets an object at once). */
+const RETRY_MIN_MS = 500;
+const RETRY_PAUSE_MS = 150;
+/** How long a request we stopped waiting for is kept alive (ctx.waitUntil), so a slow room still hears it. */
+const KEEP_MS = 25_000;
 /** TURN usernames revoked per request, at most. */
 const MAX_TURN = 200;
 const TURN_NAME_RE = /^[A-Za-z0-9._:+/=-]{1,256}$/;
@@ -140,7 +163,7 @@ export async function myNurseries(env: SupabaseEnv, token: string, fetcher?: typ
     return { ok: false, error: error === 'session_revoked' ? 'session_revoked' : error, status: error === 'mfa_required' ? 403 : error === 'session_revoked' ? 401 : 503 };
   }
   const nids = Array.isArray(d.nurseries) ? d.nurseries.map((n) => String(n?.id ?? '').toLowerCase()).filter((id) => UUID_RE.test(id)) : [];
-  return { ok: true, nids: [...new Set(nids)].slice(0, MAX_ROOMS) };
+  return { ok: true, nids: [...new Set(nids)].slice(0, MAX_LISTED) };
 }
 
 /* ----------------------------------------------------------------- fan-out */
@@ -153,17 +176,33 @@ export interface Told {
   data: Record<string, unknown> | null;
 }
 
+const NO_ANSWER: Told = { ok: false, status: 0, data: null };
+
+export interface TellOptions {
+  /** How long to wait for the answer (default ROOM_TIMEOUT_MS). */
+  timeoutMs?: number;
+  /** Keeps a request alive after we stop waiting for it (ctx.waitUntil), so a slow room still hears it. */
+  keep?: (p: Promise<unknown>) => void;
+}
+
 function within<T>(p: Promise<T>, ms: number): Promise<T | 'timeout'> {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  return Promise.race([p, new Promise<'timeout'>((resolve) => (timer = setTimeout(() => resolve('timeout'), ms)))]).finally(() => {
+  return Promise.race([p, new Promise<'timeout'>((resolve) => (timer = setTimeout(() => resolve('timeout'), Math.max(0, ms))))]).finally(() => {
     if (timer != null) clearTimeout(timer);
   });
 }
 
-async function tell(stub: DurableObjectStub, url: string, body: unknown, timeoutMs: number): Promise<Told> {
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Worth trying again: no answer (it threw — a deploy resets objects) or the object failed (5xx). Never a 4xx. */
+export const retryable = (t: Told): boolean => !t.ok && (t.status === 0 || t.status >= 500);
+
+async function tellOnce(stub: DurableObjectStub, url: string, body: string, timeoutMs: number, keep?: (p: Promise<unknown>) => void): Promise<Told> {
   try {
-    const res = await within(stub.fetch(new Request(url, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })), timeoutMs);
-    if (res === 'timeout') return { ok: false, status: 0, data: null };
+    const sent = stub.fetch(new Request(url, { method: 'POST', body, headers: { 'content-type': 'application/json' } }));
+    if (keep) keep(within(sent.catch(() => null), KEEP_MS).catch(() => null));
+    const res = await within(sent, timeoutMs);
+    if (res === 'timeout') return NO_ANSWER;
     let data: Record<string, unknown> | null = null;
     try {
       const text = await res.text();
@@ -174,27 +213,95 @@ async function tell(stub: DurableObjectStub, url: string, body: unknown, timeout
     }
     return { ok: res.ok, status: res.status, data };
   } catch {
-    return { ok: false, status: 0, data: null };
+    return NO_ANSWER;
   }
 }
 
-/** POST an internal message to one nursery's MonitorRoom (`/x/...`). The Worker never routes /x/ from outside. */
-export function tellRoom(env: KickEnv, nid: string, path: string, body: unknown, timeoutMs = ROOM_TIMEOUT_MS): Promise<Told> {
-  if (!env.MONITOR_ROOM || !UUID_RE.test(nid)) return Promise.resolve({ ok: false, status: 0, data: null });
-  const stub = env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(nid));
-  return tell(stub, `https://monitor.internal${path}?nid=${nid}`, body, timeoutMs);
+/**
+ * One internal message to one Durable Object, answered within `timeoutMs`. A try that failed fast
+ * (a Durable Object reset by a deploy throws at once; a stub that threw must be made anew) is
+ * tried once more while enough of the time is left. Every message sent this way is idempotent.
+ */
+async function tell(stubFor: () => DurableObjectStub, url: string, body: unknown, opts: TellOptions): Promise<Told> {
+  const timeoutMs = opts.timeoutMs ?? ROOM_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  const text = JSON.stringify(body);
+  let stub: DurableObjectStub;
+  try {
+    stub = stubFor();
+  } catch {
+    return NO_ANSWER;
+  }
+  const first = await tellOnce(stub, url, text, timeoutMs, opts.keep);
+  if (!retryable(first) || deadline - Date.now() - RETRY_PAUSE_MS < RETRY_MIN_MS) return first;
+  await pause(RETRY_PAUSE_MS);
+  try {
+    stub = stubFor();
+  } catch {
+    return first;
+  }
+  return tellOnce(stub, url, text, deadline - Date.now(), opts.keep);
 }
 
-/** The same message to many nurseries at once. */
-export function tellRooms(env: KickEnv, nids: readonly string[], path: string, body: unknown, timeoutMs = ROOM_TIMEOUT_MS): Promise<Told[]> {
-  return Promise.all(nids.slice(0, MAX_ROOMS).map((nid) => tellRoom(env, nid, path, body, timeoutMs)));
+/** POST an internal message to one nursery's MonitorRoom (`/x/...`). The Worker never routes /x/ from outside. */
+export function tellRoom(env: KickEnv, nid: string, path: string, body: unknown, opts: TellOptions = {}): Promise<Told> {
+  const ns = env.MONITOR_ROOM;
+  if (!ns || !UUID_RE.test(nid)) return Promise.resolve(NO_ANSWER);
+  return tell(() => ns.get(ns.idFromName(nid)), `https://monitor.internal${path}?nid=${nid}`, body, opts);
+}
+
+/**
+ * Background retries for a message some rooms didn't confirm (all inside the 30 s a Worker may
+ * keep working after answering; each try also gets the room's own 4 s).
+ */
+export const RETRY_DELAYS_MS: readonly number[] = [2_000, 6_000];
+
+/**
+ * Tell these rooms again after each pause until each confirms or refuses (a 4xx — a room without
+ * the route yet — is an answer). Only for messages that can never undo a newer change (a device
+ * revocation stays revoked). Returns how many confirmed.
+ */
+export async function keepTellingRooms(env: KickEnv, nids: readonly string[], path: string, body: unknown, delays: readonly number[] = RETRY_DELAYS_MS): Promise<number> {
+  let left = [...nids];
+  let heard = 0;
+  for (const delay of delays) {
+    if (!left.length) break;
+    await pause(delay);
+    const told = await Promise.all(left.map((nid) => tellRoom(env, nid, path, body)));
+    heard += told.filter((t) => t.ok).length;
+    left = left.filter((_, i) => retryable(told[i]));
+  }
+  if (left.length) console.warn(JSON.stringify({ evt: 'rooms_untold', path, rooms: left.length }));
+  return heard;
+}
+
+/** The same message to many nurseries at once (the first MAX_ROOMS). */
+export function tellRooms(env: KickEnv, nids: readonly string[], path: string, body: unknown, opts: TellOptions = {}): Promise<Told[]> {
+  return Promise.all(nids.slice(0, MAX_ROOMS).map((nid) => tellRoom(env, nid, path, body, opts)));
 }
 
 /** POST an internal message to a person's call line (UserLine `/x/...`). */
-export function tellLine(env: KickEnv, uid: string, path: string, body: unknown, timeoutMs = ROOM_TIMEOUT_MS): Promise<Told> {
-  if (!env.USER_LINE || !UUID_RE.test(uid)) return Promise.resolve({ ok: false, status: 0, data: null });
-  const stub = env.USER_LINE.get(env.USER_LINE.idFromName(userLineName(uid)));
-  return tell(stub, `https://line.internal${path}?uid=${uid}`, body, timeoutMs);
+export function tellLine(env: KickEnv, uid: string, path: string, body: unknown, opts: TellOptions = {}): Promise<Told> {
+  const ns = env.USER_LINE;
+  if (!ns || !UUID_RE.test(uid)) return Promise.resolve(NO_ANSWER);
+  return tell(() => ns.get(ns.idFromName(userLineName(uid))), `https://line.internal${path}?uid=${uid}`, body, opts);
+}
+
+/** POST an internal message to one direct call's room (CallRoom `/x/...`). */
+export function tellCall(env: KickEnv, id: string, path: string, body: unknown, opts: TellOptions = {}): Promise<Told> {
+  const ns = env.CALL_ROOM;
+  if (!ns || !CALL_ID_RE.test(id)) return Promise.resolve(NO_ANSWER);
+  return tell(() => ns.get(ns.idFromName(id)), `https://call.internal${path}?id=${id}`, body, opts);
+}
+
+/**
+ * The direct calls a line's `/x/kick` answer names (`calls`: CallRoom ids the person is in, being
+ * rung into or just placed), once each; `over` counts any past MAX_CALLS (reported unconfirmed).
+ */
+export function callsNamed(t: Told): { ids: string[]; over: number } {
+  const raw = t.ok && Array.isArray(t.data?.calls) ? (t.data.calls as unknown[]) : [];
+  const ids = [...new Set(raw.filter((c): c is string => typeof c === 'string' && CALL_ID_RE.test(c)))];
+  return { ids: ids.slice(0, MAX_CALLS), over: Math.max(0, ids.length - MAX_CALLS) };
 }
 
 /** `{closed, turn}` from a room's `/x/kick` or `/x/members` (wire.ts XKickResult), cleaned. */
@@ -223,6 +330,71 @@ export async function revokeTurnUsernames(env: IceEnv, names: Iterable<string>, 
 
 export type KickWhy = 'signout' | 'secure';
 
+/** Worker → room, line and call `/x/kick` (wire.ts XKickBody, plus `at`). */
+export interface KickMessage {
+  uid: string;
+  why: KickWhy;
+  /** When the kick was asked for (ms): rooms close what was admitted before it, never a later sign-in. */
+  at: number;
+}
+
+export interface KickReport {
+  /** Every room, the line and every call it named confirmed. */
+  ok: boolean;
+  /** Nurseries asked (all of them, including any past MAX_ROOMS). */
+  rooms: number;
+  /** Direct calls the line named. */
+  calls: number;
+  /** Sockets closed, as the rooms report. */
+  closed: number;
+  /** Places that didn't confirm (no answer in time, an error, a room without `/x/kick` yet, or past a cap). */
+  unconfirmed: number;
+}
+
+/**
+ * Close every socket `uid` holds and drop their push targets: each nursery in `nids` (from their
+ * memberships), their call line, and each direct call the line names — at once, inside
+ * KICK_BUDGET_MS. Requests still in flight at the deadline are kept alive (`ctx.waitUntil`), so a
+ * slow room still hears it; the answer only ever counts what confirmed. TURN usernames the rooms
+ * return are revoked after answering.
+ */
+export async function kickEverywhere(
+  env: KickEnv,
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
+  uid: string,
+  nids: readonly string[],
+  why: KickWhy,
+  opts: { fetcher?: typeof fetch; now?: number } = {},
+): Promise<KickReport> {
+  const deadline = Date.now() + KICK_BUDGET_MS;
+  const keep = (p: Promise<unknown>) => ctx.waitUntil(p);
+  const msg: KickMessage = { uid, why, at: opts.now ?? Date.now() };
+  const all = [...new Set(nids.filter((n) => UUID_RE.test(n)))];
+  const told = all.slice(0, MAX_ROOMS);
+
+  const [rooms, { line, calls, over }] = await Promise.all([
+    Promise.all(told.map((nid) => tellRoom(env, nid, '/x/kick', msg, { keep }))),
+    tellLine(env, uid, '/x/kick', msg, { keep }).then(async (line) => {
+      const named = callsNamed(line);
+      const left = Math.max(0, deadline - Date.now());
+      const calls = await Promise.all(named.ids.map((id) => tellCall(env, id, '/x/kick', msg, { timeoutMs: left, keep })));
+      return { line, calls, over: named.over };
+    }),
+  ]);
+
+  const results = [...rooms, line, ...calls].map(kickResult);
+  const turn = results.flatMap((r) => r.turn);
+  if (turn.length) ctx.waitUntil(revokeTurnUsernames(env, turn, opts.fetcher).catch(() => 0));
+  const unconfirmed = rooms.filter((r) => !r.ok).length + (all.length - told.length) + (line.ok ? 0 : 1) + calls.filter((c) => !c.ok).length + over;
+  return {
+    ok: unconfirmed === 0,
+    rooms: all.length,
+    calls: calls.length + over,
+    closed: results.reduce((n, r) => n + r.closed, 0),
+    unconfirmed,
+  };
+}
+
 export interface KickOptions {
   fetcher?: typeof fetch;
   now?: number;
@@ -242,24 +414,11 @@ export async function handleKick(req: Request, env: KickEnv, ctx: Pick<Execution
 
   const list: NurseryList = caller.revoked ? { ok: false, error: 'session_revoked', status: 401 } : await myNurseries(env, caller.token, opts.fetcher);
   if (!list.ok && list.error === 'mfa_required') return reply({ ok: false, error: 'mfa_required' }, 403);
-  const nids = list.ok ? list.nids : [];
-  const msg = { uid: caller.uid, why };
-  const [rooms, line] = await Promise.all([tellRooms(env, nids, '/x/kick', msg), tellLine(env, caller.uid, '/x/kick', msg)]);
-
-  const results = [...rooms, line].map(kickResult);
-  const turn = results.flatMap((r) => r.turn);
-  if (turn.length) ctx.waitUntil(revokeTurnUsernames(env, turn, opts.fetcher).catch(() => 0));
-  const unconfirmed = rooms.filter((r) => !r.ok).length + (line.ok ? 0 : 1);
-  const ok = list.ok && unconfirmed === 0;
+  const report = await kickEverywhere(env, ctx, caller.uid, list.ok ? list.nids : [], why, opts);
+  const ok = list.ok && report.ok;
   if (!ok) {
     // One line for `wrangler tail`: how many places didn't confirm — no ids, names or tokens.
-    console.warn(JSON.stringify({ evt: 'kick_partial', rooms: nids.length, unconfirmed, list: list.ok ? 'ok' : list.error }));
+    console.warn(JSON.stringify({ evt: 'kick_partial', via: 'me', rooms: report.rooms, calls: report.calls, unconfirmed: report.unconfirmed, list: list.ok ? 'ok' : list.error }));
   }
-  return reply({
-    ok,
-    rooms: nids.length,
-    closed: results.reduce((n, r) => n + r.closed, 0),
-    unconfirmed,
-    ...(list.ok ? {} : { error: list.error }),
-  });
+  return reply({ ...report, ok, ...(list.ok ? {} : { error: list.error }) });
 }

@@ -14,10 +14,20 @@
  *     SECURITY_HOOK_SECRET (`old|new` while rotating), so the same sender can post to both.
  *     ±5 minutes; each signature works once per isolate; the payload's uid must be the path's.
  *     Without the secret every call is refused (403): dormant, never open.
+ *
+ *   POST /x/user/:uid/kick        signed the same way
+ *        p = {"v": 1, "kind": "kick", "uid": "<uid>", "why": "secured", "nids": [<nursery ids>], "at": <ms>}
+ *     "Not you? Secure my account" (server/src/services/liveKick.ts, ADR 0006 WS-5). The backend
+ *     has just ended every session of the account (live_secure_account), so the account's own
+ *     tokens can't list its nurseries any more — the backend names them, from the membership
+ *     table, with its own signed credential. Runs the same fan-out as /api/me/kick (kick.ts
+ *     kickEverywhere): every named nursery's room, the call line and the direct calls it names
+ *     close the account's sockets and drop its push targets.
+ *     → 200 `{ok, rooms, calls, closed, unconfirmed}`, `ok` only when every one confirmed.
  */
 
 import { MemoryNonceStore } from './auth/deviceToken';
-import { methodNotAllowed, readBody, reply, tellLine, UUID_RE, type KickEnv } from './kick';
+import { kickEverywhere, MAX_ROOMS, methodNotAllowed, readBody, reply, tellLine, UUID_RE, type KickEnv, type KickWhy } from './kick';
 import { handleApnsProbe } from './push/probe';
 
 export interface OpsEnv extends KickEnv {
@@ -104,33 +114,48 @@ let seenSignatures = new MemoryNonceStore(5_000);
 
 const short = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, max) : undefined);
 
-/** POST /x/user/:uid/notify (see the top of the file). */
-export async function handleUserNotify(req: Request, env: OpsEnv, uid: string, opts: OpsOptions = {}): Promise<Response> {
-  if (req.method !== 'POST') return methodNotAllowed('POST');
+type Signed = { ok: true; id: string; payload: Record<string, unknown>; now: number } | { ok: false; res: Response };
+
+/**
+ * A signed `/x/user/:uid/...` request: POST, the `{"p": "<payload>"}` body, a valid signature
+ * (never twice per isolate inside its window: a captured one can't be replayed), and a JSON
+ * payload whose `uid` is the path's.
+ */
+async function readSigned(req: Request, env: OpsEnv, uid: string, use: string, opts: OpsOptions): Promise<Signed> {
+  if (req.method !== 'POST') return { ok: false, res: methodNotAllowed('POST') };
   const id = uid.toLowerCase();
-  if (!UUID_RE.test(id)) return reply({ ok: false, error: 'not_found' }, 404);
+  if (!UUID_RE.test(id)) return { ok: false, res: reply({ ok: false, error: 'not_found' }, 404) };
   const raw = await readBody(req, 16 * 1024);
-  if (raw == null) return reply({ ok: false, error: 'bad_request' }, 413);
+  if (raw == null) return { ok: false, res: reply({ ok: false, error: 'bad_request' }, 413) };
   let p: unknown;
   try {
     p = (JSON.parse(raw) as { p?: unknown }).p;
   } catch {
     p = undefined;
   }
-  if (typeof p !== 'string') return reply({ ok: false, error: 'bad_request' }, 400);
+  if (typeof p !== 'string') return { ok: false, res: reply({ ok: false, error: 'bad_request' }, 400) };
   const now = opts.now ?? Date.now();
   const v = await verifyHookSignature(env.SECURITY_HOOK_SECRET, req.headers.get('x-ds-signature'), p, now);
-  if (v.ok === false) return reply({ ok: false, error: 'forbidden' }, 403);
-  // Each signed notice works once (per isolate) inside its window: a captured one can't be replayed to spam a phone.
-  if (seenSignatures.checkAndSet(`n:${v.sig}`, (v.t + HOOK_TOLERANCE_S + 1) * 1000, now)) return reply({ ok: false, error: 'replay' }, 409);
+  if (v.ok === false) return { ok: false, res: reply({ ok: false, error: 'forbidden' }, 403) };
+  if (seenSignatures.checkAndSet(`${use}:${v.sig}`, (v.t + HOOK_TOLERANCE_S + 1) * 1000, now)) return { ok: false, res: reply({ ok: false, error: 'replay' }, 409) };
 
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(p) as Record<string, unknown>;
   } catch {
-    return reply({ ok: false, error: 'bad_request' }, 400);
+    return { ok: false, res: reply({ ok: false, error: 'bad_request' }, 400) };
   }
-  if (!payload || typeof payload !== 'object' || String(payload.uid ?? '').toLowerCase() !== id) return reply({ ok: false, error: 'bad_request' }, 400);
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || String(payload.uid ?? '').toLowerCase() !== id) {
+    return { ok: false, res: reply({ ok: false, error: 'bad_request' }, 400) };
+  }
+  return { ok: true, id, payload, now };
+}
+
+/** POST /x/user/:uid/notify (see the top of the file). */
+export async function handleUserNotify(req: Request, env: OpsEnv, uid: string, opts: OpsOptions = {}): Promise<Response> {
+  const s = await readSigned(req, env, uid, 'n', opts);
+  if (s.ok === false) return s.res;
+  const { id, payload, now } = s;
   const kind = payload.kind as NoticeKind;
   if (!NOTICE_KINDS.includes(kind)) return reply({ ok: false, error: 'bad_request' }, 400);
   const notice = {
@@ -143,6 +168,23 @@ export async function handleUserNotify(req: Request, env: OpsEnv, uid: string, o
   };
   const told = await tellLine(env, id, '/x/notify', notice);
   return reply({ ok: told.ok, told: told.ok }, told.ok ? 200 : told.status === 404 ? 501 : 502);
+}
+
+/** Nursery ids a signed kick may name (the backend sends at most 50; beyond MAX_ROOMS is reported unconfirmed). */
+const MAX_KICK_NIDS = MAX_ROOMS * 4;
+
+/** POST /x/user/:uid/kick (see the top of the file). */
+export async function handleUserKick(req: Request, env: OpsEnv, ctx: Pick<ExecutionContext, 'waitUntil'>, uid: string, opts: OpsOptions = {}): Promise<Response> {
+  const s = await readSigned(req, env, uid, 'k', opts);
+  if (s.ok === false) return s.res;
+  const { id, payload, now } = s;
+  if (payload.kind !== 'kick' || !Array.isArray(payload.nids) || payload.nids.length > MAX_KICK_NIDS) return reply({ ok: false, error: 'bad_request' }, 400);
+  const nids = payload.nids.map((n) => String(n ?? '').toLowerCase());
+  if (nids.some((n) => !UUID_RE.test(n))) return reply({ ok: false, error: 'bad_request' }, 400);
+  const why: KickWhy = payload.why === 'signout' ? 'signout' : 'secure';
+  const report = await kickEverywhere(env, ctx, id, nids, why, { fetcher: opts.fetcher, now });
+  if (!report.ok) console.warn(JSON.stringify({ evt: 'kick_partial', via: 'signed', rooms: report.rooms, calls: report.calls, unconfirmed: report.unconfirmed }));
+  return reply(report);
 }
 
 /** Test hook. */

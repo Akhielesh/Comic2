@@ -82,9 +82,11 @@
   //                                    10-minute access tokens (src/devices.ts). Without: 501.
   //   ACT_TOKEN_KEY                    32+ random characters: "I'm on it" from a notification
   //                                    (src/auth/actToken.ts). Without: pushes offer no action.
-  //   SECURITY_HOOK_SECRET             the same value as the email Worker's and Supabase Vault's
-  //                                    (`old|new` while rotating): signs /x/user/:uid/notify
-  //                                    (src/ops.ts). Without: that route refuses everything.
+  //   SECURITY_HOOK_SECRET             the same value as the email Worker's, the backend's and
+  //                                    Supabase Vault's (`old|new` while rotating): signs
+  //                                    /x/user/:uid/notify and /x/user/:uid/kick (src/ops.ts; the
+  //                                    kick is "Not you? Secure my account"). Without: both refuse
+  //                                    everything, and "Not you?" can't close open monitors.
   //   OPS_KEY                          16+ characters: POST /api/ops/apns-probe (x-ops-key).
   //   APNS_KEY_P8, APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE, FCM_SA_JSON
   //                                    native push (src/push/*, Phase 1). Without: native push off.

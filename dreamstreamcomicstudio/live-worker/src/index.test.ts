@@ -4,6 +4,7 @@ import { mintActToken, resetActKeyCache } from './auth/actToken';
 import { resetJwksCache } from './auth/jwks';
 import { b64url } from './auth/jose';
 import liveWorker, { resetHostPasses, type Env } from './index';
+import { resetOpsState, signHookPayload } from './ops';
 import { resetEdgeState, type RateLimiterLike } from './origin';
 import { clearMemberCache } from './supabaseAuth';
 
@@ -666,7 +667,7 @@ describe('WS-7 routing: the account routes and the internal ones', () => {
     stubSupabase();
     const w = edgeWorld();
     const res = await w.go('/live-api/api/me/kick', { method: 'POST', body: '{}', headers: { authorization: `Bearer ${tokenFor(ME)}`, Origin: OURS } });
-    expect(await res.json()).toEqual({ ok: true, rooms: 1, closed: 2, unconfirmed: 0 });
+    expect(await res.json()).toEqual({ ok: true, rooms: 1, calls: 0, closed: 2, unconfirmed: 0 });
     expect(res.headers.get('access-control-allow-origin')).toBe(OURS);
     expect(w.sockets.get(NID)).toEqual([VIEWER]);
     expect(w.sockets.get(`u:${ME}`)).toEqual([]);
@@ -693,14 +694,36 @@ describe('WS-7 routing: the account routes and the internal ones', () => {
     expect((await w.go('/api/ops/anything', { method: 'POST' })).status).toBe(404);
   });
 
-  it('the rooms’ /x/ endpoints are never routed from outside — only the signed notify, which refuses unsigned calls', async () => {
+  it('the rooms’ /x/ endpoints are never routed from outside — only the signed notify and kick, which refuse unsigned calls', async () => {
     const w = edgeWorld();
-    for (const path of ['/x/kick', `/x/members`, `/x/user/${ME}/kick`, '/x/push-reg', `/api/monitor/${NID}/x/kick`, `/live-api/x/user/${ME}/notify/extra`]) {
+    for (const path of ['/x/kick', `/x/members`, '/x/push-reg', `/api/monitor/${NID}/x/kick`, `/live-api/x/user/${ME}/notify/extra`, `/x/user/${ME}/kick/extra`]) {
       const res = await w.go(path, { method: 'POST', body: JSON.stringify({ uid: ME }) });
       expect(res.status, path).toBe(404);
     }
     expect((await w.go(`/live-api/x/user/${ME}/notify`, { method: 'POST', body: JSON.stringify({ p: '{}' }) })).status).toBe(403);
+    expect((await w.go(`/live-api/x/user/${ME}/kick`, { method: 'POST', body: JSON.stringify({ p: '{}' }) })).status).toBe(403);
     expect(w.hits).toEqual([]);
+  });
+
+  it('“Not you?”: the backend’s signed kick reaches every nursery it names and the call line, though the account’s tokens are dead', async () => {
+    resetOpsState();
+    const secret = 'hook-secret-0123456789abcdef';
+    const w = edgeWorld({ SECURITY_HOOK_SECRET: secret });
+    const other = '22222222-2222-4333-8444-555555555555';
+    w.sockets.set(other, [ME, VIEWER]);
+    // Exactly what server/src/services/liveKick.ts (WS-5) sends.
+    const p = JSON.stringify({ v: 1, kind: 'kick', uid: ME, why: 'secured', nids: [NID, other], at: Date.now() });
+    const res = await w.go(`/live-api/x/user/${ME}/kick`, { method: 'POST', body: JSON.stringify({ p }), headers: { 'content-type': 'application/json', 'x-ds-signature': await signHookPayload(secret, p) } });
+    expect([res.status, await res.json()]).toEqual([200, { ok: true, rooms: 2, calls: 0, closed: 3, unconfirmed: 0 }]);
+    expect(res.headers.get('access-control-allow-origin')).toBeNull(); // machinery, never a browser
+    expect(w.sockets.get(NID)).toEqual([VIEWER]);
+    expect(w.sockets.get(other)).toEqual([VIEWER]);
+    expect(w.sockets.get(`u:${ME}`)).toEqual([]);
+    expect(w.roomHits('/x/kick').map((h) => [h.ns, h.name, JSON.parse(h.body).why])).toEqual([
+      ['monitor', NID, 'secure'],
+      ['monitor', other, 'secure'],
+      ['line', `u:${ME}`, 'secure'],
+    ]);
   });
 });
 
@@ -764,12 +787,33 @@ describe('WS-7 edge gates: Origin allowlist and rate limits on sockets', () => {
       expect(res.status).toBe(429);
       expect(res.headers.get('retry-after')).toBe('60');
       expect(await res.json()).toMatchObject({ ok: false, reason: 'slow_down', left: null });
-      expect(keys.sort()).toEqual(['edge:ip:4:203.0.113.9', `edge:n:${NID}`]);
+      // The address first; the nursery's allowance only for a try its address may make.
+      expect(keys).toEqual(which === 'RL_GUEST' ? ['edge:ip:4:203.0.113.9'] : ['edge:ip:4:203.0.113.9', `edge:n:${NID}`]);
       expect(w.hits).toEqual([]);
     }
     // Under the limits (or with no binding at all), the room answers as before.
     const open = edgeWorld();
     expect((await open.go(`/api/monitor/${NID}/guest`, { method: 'POST', body: '{}' })).status).toBe(200);
+  });
+
+  it('one address can’t use up a nursery’s share-link allowance: a real guest on another network still gets in', async () => {
+    const byAddress = counter(10);
+    const byNursery = counter(30);
+    const w = edgeWorld({ RL_GUEST: byAddress.rl, RL_GUEST_NID: byNursery.rl });
+    const join = (ip: string, body = '{}') => w.go(`/api/monitor/${NID}/guest`, { method: 'POST', body, headers: { 'cf-connecting-ip': ip, 'content-type': 'application/json' } });
+    // Someone who has seen the link (the nursery id is in it) floods from one address.
+    const flood: number[] = [];
+    for (let i = 0; i < 30; i++) flood.push((await join('203.0.113.7')).status);
+    expect(flood.filter((s) => s === 200)).toHaveLength(10);
+    expect(flood.filter((s) => s === 429)).toHaveLength(20);
+    // The refused tries never touched the nursery's allowance…
+    expect(byNursery.n.get(`edge:n:${NID}`)).toBe(10);
+    // …so Grandma's first try, from her own network, reaches the room.
+    expect((await join('198.51.100.20')).status).toBe(200);
+    // Oversized junk is refused before either allowance is spent.
+    expect((await join('198.51.100.21', JSON.stringify({ pad: 'x'.repeat(4096) }))).status).toBe(413);
+    expect(byAddress.n.get('edge:ip:4:198.51.100.21')).toBeUndefined();
+    expect(byNursery.n.get(`edge:n:${NID}`)).toBe(11);
   });
 
   it('creating events is braked per account', async () => {
