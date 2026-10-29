@@ -13,6 +13,7 @@ import { applyOps, type DocOp, type StudioAction } from '../../../shared/comic/o
 import { DEFAULT_CAPS, type StudioCaps, type StudioMode } from '../../../shared/comic/capabilities';
 import type { ComicStudioController } from '../useStudio';
 import type { ActivityItem, PatchOptions, ReaderRequest, SendOptions, StudioNotice, StudioSelection } from '../types';
+import { requestOpenModelPicker } from '../models/openPicker';
 import { QA_FIXTURES, QA_NOW, isQaFixture, makeQaDoc, parseQaImagePath, type QaFixtureName } from './qaFixtures';
 
 // ── Query parameters ─────────────────────────────────────────────────────────
@@ -354,6 +355,9 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
           break;
         case 'set_mode':
           setModeState(action.mode);
+          break;
+        case 'open_model_picker':
+          requestOpenModelPicker({ suggest: action.suggest });
           break;
       }
     },

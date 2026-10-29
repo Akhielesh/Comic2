@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { normalizeDoc } from '../../../shared/comic/doc';
 import { QA_FIXTURES, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
 import { clearQaOps, makeQaUrlFor, parseQaParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
+import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
 
 const setDpr = (v: number) => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: v });
 
@@ -147,6 +148,17 @@ describe('useQaController', () => {
     expect(result.current.focusedPageId).toBe('pg_2');
     act(() => result.current.runClientAction({ type: 'open_tab', tab: 'cast' }));
     expect(result.current.tab).toBe('cast');
+    // QA chips open the model picker the way useStudio does (the mounted host answers the event; nothing switches).
+    const asked: unknown[] = [];
+    const onOpen = (e: Event) => asked.push((e as CustomEvent).detail);
+    window.addEventListener(OPEN_MODEL_PICKER_EVENT, onOpen);
+    try {
+      act(() => result.current.runClientAction({ type: 'open_model_picker', suggest: 'nano-banana-pro' }));
+      act(() => result.current.runClientAction({ type: 'open_model_picker' }));
+    } finally {
+      window.removeEventListener(OPEN_MODEL_PICKER_EVENT, onOpen);
+    }
+    expect(asked).toEqual([{ suggest: 'nano-banana-pro' }, {}]);
   });
 
   it('scene states map to honest controller states', () => {
