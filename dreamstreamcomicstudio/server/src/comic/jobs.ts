@@ -428,6 +428,23 @@ export const priceBookFor = (ctx: StudioContext): Promise<PriceBook> => {
   return book;
 };
 
+/** How long a FREE action (pick a style, restore a version, plan) waits for real prices for its chips. */
+const CHIP_PRICES_WAIT_MS = 800;
+
+/**
+ * The request's PriceBook if it is ready within `ms` (else undefined: the chips quote the registry list, and a tap
+ * whose real price outgrew that quote gets a fresh real-price gate). Free actions never stall on a cold catalog.
+ */
+const priceBookWithin = async (ctx: StudioContext, ms = CHIP_PRICES_WAIT_MS): Promise<PriceBook | undefined> => {
+  const timer = delay(ms);
+  try {
+    const won = await Promise.race([priceBookFor(ctx), timer.promise]);
+    return won === 'timeout' ? undefined : won;
+  } finally {
+    timer.cancel();
+  }
+};
+
 /** "your recent real costs" / "OpenRouter's current price" — the basis of a quote above the price list (no dollars). */
 const basisPhrase = (prices: PriceBook | undefined, pin: RunPin, kind: ImageJobKind): string | null => {
   const quote = (prices as Partial<ServerPriceBook> | undefined)?.quote;
@@ -964,7 +981,7 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'decline_gate':
       return finished(declineGate(ctx, action.gateId, opts));
     case 'pick_style':
-      return finished(pickStyle(ctx, action.optionId, opts));
+      return finished(pickStyle(ctx, action.optionId, opts, await priceBookWithin(ctx)));
     case 'plan_pages':
       return finished(await planPages(ctx, { instructions: action.instructions }, opts));
     case 'approve_plan':
@@ -972,7 +989,7 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
     case 'patch':
       return finished(applyPatch(ctx, action.ops, opts));
     case 'restore_render':
-      return finished(restoreRender(ctx, action.target, action.path, opts));
+      return finished(restoreRender(ctx, action.target, action.path, opts, await priceBookWithin(ctx)));
     case 'relayout_balloons':
       return relayoutBalloons(ctx, action.pageId, opts, { useVision: action.useVision === true });
     case 'cancel':
@@ -1314,15 +1331,24 @@ const replacesCurrentArt = (doc: ComicDoc, action: SpendAction): boolean => {
   }
 };
 
-/** The quote for a single new take of one page / the cover (chip prices). */
-const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean) => estimateSpendAction(doc, action, byok).usd;
+/**
+ * The quote for a single new take of one page / the cover (chip prices). With the request's PriceBook the chip
+ * carries the real price the run is reserved and charged at, so its tap is not re-gated for nothing.
+ */
+const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean, prices?: PriceBook) => estimateSpendAction(doc, action, byok, prices).usd;
 
 /** A spend that would draw nothing: what exists, what's next ($0). */
-const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: CostFormatter): { message: string; steps: NextStep[]; breakdown: boolean } => {
+const nothingToDraw = (
+  doc: ComicDoc,
+  action: SpendAction,
+  byok: boolean,
+  cost: CostFormatter,
+  prices?: PriceBook
+): { message: string; steps: NextStep[]; breakdown: boolean } => {
   if (action.type === 'render_sheets') {
-    return { message: 'All character sheets are already drawn and up to date — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+    return { message: 'All character sheets are already drawn and up to date — nothing was spent.', steps: nextStepsFor(doc, { byok, prices }), breakdown: false };
   }
-  if (action.type !== 'render_pages') return { message: 'Nothing to draw right now — nothing was spent.', steps: nextStepsFor(doc, { byok }), breakdown: false };
+  if (action.type !== 'render_pages') return { message: 'Nothing to draw right now — nothing was spent.', steps: nextStepsFor(doc, { byok, prices }), breakdown: false };
   const ids = action.pageIds?.length ? new Set(action.pageIds) : null;
   const asked = doc.pages.filter((p) => !ids || ids.has(p.id)).sort((a, b) => a.n - b.n);
   const busy = asked.filter((p) => isBusy(p.render));
@@ -1349,14 +1375,14 @@ const nothingToDraw = (doc: ComicDoc, action: SpendAction, byok: boolean, cost: 
   if (empty.length) parts.push(`${capitalize(pagesPhrase(empty))} ${empty.length === 1 ? 'has' : 'have'} no panels yet — write ${empty.length === 1 ? 'it' : 'them'} first.`);
   const cover = doc.cover.render;
   if (cover.status === 'ready') parts.push(coverNeedsDraw(doc) ? 'The cover is out of date.' : 'The cover is drawn too.');
-  else if (!isBusy(cover)) parts.push(`The cover isn't drawn yet (${cost.approx(quoteOf(doc, { type: 'render_cover' }, byok))}).`);
+  else if (!isBusy(cover)) parts.push(`The cover isn't drawn yet (${cost.approx(quoteOf(doc, { type: 'render_cover' }, byok, prices))}).`);
   parts.push('Nothing was spent.');
-  const steps = nextStepsFor(doc, { byok });
+  const steps = nextStepsFor(doc, { byok, prices });
   // "A new take" is the honest paid alternative (a click is a confirmation; the chip carries its quote).
   const first = ready[0];
   if (first) {
     const take: SpendAction = { type: 'render_pages', pageIds: [first.id], force: true };
-    const usd = quoteOf(doc, take, byok);
+    const usd = quoteOf(doc, take, byok, prices);
     steps.push({ label: `New take of page ${first.n}`, action: { ...take, quotedUsd: usd }, usd });
   }
   return { message: parts.join(' '), steps: dedupeSteps(steps).slice(0, MAX_NEXT_STEPS), breakdown: true };
@@ -1450,7 +1476,7 @@ function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOpt
   const estimate = estimateSpendAction(doc, action, byok, prices);
   if (estimate.imageCount <= 0) {
     // Everything requested is ready and current (R1): $0, with what exists and what's next.
-    const nothing = nothingToDraw(doc, action, byok, costOf(ctx));
+    const nothing = nothingToDraw(doc, action, byok, costOf(ctx), prices);
     const cards: Card[] = nothing.breakdown
       ? [{ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(action.type === 'render_pages' && action.pageIds?.length ? { pageIds: action.pageIds } : {}) }]
       : [noticeCard('info', nothing.message)];
@@ -1458,9 +1484,10 @@ function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOpt
     return done(finished({ status: 'nothing', message: nothing.message, nextSteps: nothing.steps }));
   }
 
-  // A chip carries the list-price quote it was shown with (shared/comic/plan.ts): judge staleness on that basis,
-  // so a real-price quote above the list never re-gates a click by itself; budget and policy use the real price.
-  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimateSpendAction(doc, action, byok));
+  // Staleness is judged on the estimate that is reserved and charged (models.md §2.3: never under-quote; §3.4 7.7
+  // tolerance). Server chips carry PriceBook quotes and start directly; a quote on another basis (the client's
+  // registry-priced plan cards) that the real price outgrew by more than 15% + $0.01 gets a fresh real-price gate.
+  const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
     pendingUsd: pendingUsdOf(ctx.session),
@@ -1922,7 +1949,8 @@ class RenderRun {
 
   /** What one image of this job would cost at the pinned quality (savedUsd, reservation shares, chip quotes). */
   private priceOf(kind: ImageJobKind): number {
-    return priceImageJobs(this.session.doc, [{ kind, count: 1 }], this.byok, undefined, this.pinned).usd;
+    // The basis the run was reserved at (its PriceBook), so shares and chip quotes agree with the reservation.
+    return priceImageJobs(this.session.doc, [{ kind, count: 1 }], this.byok, this.prices, this.pinned).usd;
   }
 
   private commit(ops: DocOp[], label?: string) {
@@ -1933,7 +1961,7 @@ class RenderRun {
   private priced(step: NextStep): NextStep {
     const action = step.action;
     if (!action || !isSpendAction(action) || typeof action.quotedUsd === 'number' || actionHandlerFor(action.type)) return step;
-    const usd = estimateSpendAction(this.session.doc, action, this.byok).usd;
+    const usd = estimateSpendAction(this.session.doc, action, this.byok, this.prices).usd;
     return { ...step, action: { ...action, quotedUsd: usd }, usd };
   }
 
@@ -2243,7 +2271,7 @@ class RenderRun {
 
   /** Background work always posts its own message, after a running director turn's reply. */
   private async post(text: string, cards: Card[]) {
-    await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, cards, nextStepsFor(this.session.doc, { byok: this.byok }))) }]));
+    await this.afterTurn(() => this.commit([{ op: 'message', msg: this.message(assistantMessage(text, cards, nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices }))) }]));
   }
 
   /** Anything still queued/rendering that this run owns goes back to its previous state (or failed). */
@@ -2449,7 +2477,7 @@ class RenderRun {
       ...(unavailable ? [SEE_OTHER_MODELS_STEP] : []),
       ...safety.steps.map((s) => this.priced(s)),
       ...this.extraSteps,
-      ...nextStepsFor(this.session.doc, { byok: this.byok })
+      ...nextStepsFor(this.session.doc, { byok: this.byok, prices: this.prices })
     ]).slice(0, MAX_NEXT_STEPS);
     const lead: Card[] = styleRun && ok.length ? [{ type: 'style_choice', id: newId('card') }] : [];
     if (this.hosted) {
@@ -2662,7 +2690,7 @@ class RenderRun {
     else if (job.target.kind === 'cover') action = { type: 'render_cover' };
     else if (job.target.kind === 'sheet') action = { type: 'render_sheets', characterIds: [job.target.id], force: true };
     if (!action) return;
-    const usd = quoteOf(doc, action, this.byok);
+    const usd = quoteOf(doc, action, this.byok, this.prices);
     if (usd <= 0) return;
     this.extraSteps.push({ label: `Fresh take of ${job.label.toLowerCase()}`, action: { ...action, quotedUsd: usd }, usd });
   }
@@ -3620,7 +3648,7 @@ const sanitizeBox = (raw: unknown): Box | undefined => {
   return { x: round4(x), y: round4(y), w: round4(w), h: round4(h) };
 };
 
-function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions): ActionOutcome {
+function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions, prices?: PriceBook): ActionOutcome {
   const doc = ctx.session.doc;
   const option = doc.style.options.find((o) => o.id === optionId);
   if (!option) throw badRequest('That style option is no longer available.');
@@ -3628,7 +3656,7 @@ function pickStyle(ctx: StudioContext, optionId: string, opts: RunActionOptions)
   const board = option.render.status === 'ready' ? option.render.asset : undefined;
   const origin = originOf(opts);
   commitAs(ctx, [{ op: 'style', patch: { status: 'locked', name: option.name, spec: option.spec, board, presetId: undefined, palette: undefined, linework: undefined } }], origin, 'Pick style');
-  const steps = nextStepsFor(ctx.session.doc, { byok: spendIsByok(ctx.keys) });
+  const steps = nextStepsFor(ctx.session.doc, { byok: spendIsByok(ctx.keys), prices });
   deliver(ctx, opts, `Locked “${option.name}”. Every sheet and page now follows it.`, [], steps);
   return { status: 'done', message: `Locked the style “${option.name}”.`, nextSteps: steps };
 }
@@ -3686,9 +3714,11 @@ export async function planPages(
   const origin = originOf(opts);
   const runOpts = { ...opts, confirmed: false } as RunActionOptions;
   const byok = spendIsByok(ctx.keys);
+  // Real prices for the chips (the draw chips start at the price they show): fetched while the writer works.
+  void priceBookFor(ctx);
 
   if (!pageIds && !instructions && before.pages.length && before.planStatus !== 'none' && knownPlanHash(ctx.session) === planInputHashOf(before)) {
-    const steps = nextStepsFor(before, { byok });
+    const steps = nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) });
     const text = `Nothing changed since the plan was written, so here it is again — ${plural(before.pages.length, 'page')}, no writer call (${costOf(ctx).governed ? 'free' : '$0'}).`;
     deliver(ctx, runOpts, text, [breakdownCardFor(before, { view: 'plan' })], steps);
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
@@ -3699,7 +3729,7 @@ export async function planPages(
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
     const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
-    deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok })]);
+    deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
     return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
   }
 
@@ -3712,7 +3742,7 @@ export async function planPages(
         `${drawn.length === 1 ? `Page ${drawn[0].n} is` : `${capitalize(pagesPhrase(drawn))} are`} already drawn, so I won't re-plan the whole book from scratch — ` +
         `the art could land on the wrong story beat. Use revise_pages for the pages to change, insert_page to add a page or delete_page to remove one. Nothing was spent.`;
       const userText = `${drawn.length === 1 ? `Page ${drawn[0].n} is` : 'Some pages are'} already drawn, so I won't re-plan the whole book from scratch (the art could end up on the wrong page). Tell me which pages to change, or add/remove pages in the timeline — nothing was spent.`;
-      deliver(ctx, runOpts, userText, [noticeCard('info', userText)], nextStepsFor(before, { byok }));
+      deliver(ctx, runOpts, userText, [noticeCard('info', userText)], nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) }));
       return { status: 'blocked', message, code: 'CONFLICT' };
     }
     // Same page count: rewrite every page in place, by id (the writer returns the target ids).
@@ -3802,7 +3832,7 @@ export async function planPages(
   const text = revising && !rewroteAll
     ? `Rewrote ${plural(result.pages.length, 'page')}.${drawnNote}${castNote}`
     : `Here's the plan: ${plural(after.pages.length, 'page')}${result.newCast.length ? `, plus ${plural(result.newCast.length, 'new character')}` : ''}. Read it here — edit anything, then draw the pages.${drawnNote}${castNote}`;
-  const steps = nextStepsFor(after, { byok });
+  const steps = nextStepsFor(after, { byok, prices: await priceBookWithin(ctx) });
   deliver(ctx, runOpts, text, [card], steps);
   return { status: 'done', message: `${headline}${castNote}`, nextSteps: steps };
 }
@@ -3819,7 +3849,7 @@ export const planHeadline = (doc: ComicDoc, onlyIds?: string[]): string => {
  * meta, so a version made for another spec or shape stays "out of date" honestly; blocked or
  * quarantined versions are refused.
  */
-function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, opts: RunActionOptions): ActionOutcome {
+function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, opts: RunActionOptions, prices?: PriceBook): ActionOutcome {
   const doc = ctx.session.doc;
   if (!isObject(target) || typeof (target as { kind?: unknown }).kind !== 'string') throw badRequest('Unknown render target.');
   const render = getRender(doc, target);
@@ -3850,7 +3880,7 @@ function restoreRender(ctx: StudioContext, target: RenderTarget, path: string, o
   if (shapeOff) {
     notes.push(`note it's ${got}, your pages are ${want}`);
     const redraw: SpendAction = target.kind === 'cover' ? { type: 'render_cover' } : { type: 'render_pages', pageIds: [target.id], force: true };
-    const usd = quoteOf(after, redraw, byok);
+    const usd = quoteOf(after, redraw, byok, prices);
     steps.push(
       { label: `Fit to ${want} (Free)`, action: { type: 'fit_render', target, mode: 'auto' }, usd: 0 },
       { label: `Switch book to ${got} (Free)`, action: { type: 'patch', ops: [{ op: 'format', patch: { pageAspect: got } }] }, usd: 0 },
@@ -4601,22 +4631,24 @@ const publicationBehind = (doc: ComicDoc): boolean => {
 /**
  * 2–4 acting chips from doc state (deterministic, $0). They follow the forward motion
  * idea → style → cast → plan → draw → cover → read → share, and they act: a spend chip
- * carries its action and quote (a tap is the confirmation; a stale quote re-gates),
+ * carries its action and quote (a tap is the confirmation; a stale quote re-gates), at the request's PriceBook
+ * when given (real prices, so the tap starts at the price shown) else the registry list,
  * navigation is a client action, everything else is said to the director.
  * - Never "draw all" when every page is drawn and current.
  * - "Make the cover" as soon as page 1 is ready.
  * - "Compare versions" before "Redraw" when a low-QC page has ≥ 2 versions.
  * - "Share it" after the last page; "Update the published version" when the comic is behind.
  */
-export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean } = {}): NextStep[] {
+export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean; prices?: PriceBook } = {}): NextStep[] {
   const byok = !!opts.byok;
+  const prices = opts.prices;
   const out: NextStep[] = [];
   const add = (s: NextStep | null) => {
     if (s && !out.some((o) => o.label === s.label)) out.push(s);
   };
   const say = (label: string): NextStep => ({ label });
   const spend = (label: string, action: SpendAction): NextStep | null => {
-    const est = estimateSpendAction(doc, action, byok);
+    const est = estimateSpendAction(doc, action, byok, prices);
     if (est.imageCount <= 0) return null;
     return { label, action: { ...action, quotedUsd: est.usd }, usd: est.usd };
   };

@@ -7,7 +7,7 @@ import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilitie
 import type { DocOp } from '../../../shared/comic/ops.js';
 import { logger } from '../lib/logger.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
-import { JOB_TIMINGS, MODEL_LOCKED, estimateSpendAction, lockOf, runAction, sanitizePatchOps, startAction, type RunActionOptions } from './jobs.js';
+import { JOB_TIMINGS, MODEL_LOCKED, estimateSpendAction, lockOf, nextStepsFor, runAction, sanitizePatchOps, startAction, type RunActionOptions } from './jobs.js';
 import { createImageGenerator, __resetImageClientForTests, type GeminiModelsLike } from './imageClient.js';
 import { priceBookFromSources } from './models/pricing.js';
 import { fakeImageCalls, fakeImages, newSession, plannedDoc, testContext, type TestContext } from './orchestrator.fakes.js';
@@ -301,14 +301,50 @@ describe('quotes through the PriceBook (models.md §2.3)', () => {
     expect(ctx.imagesFake.calls).toHaveLength(0);
   });
 
-  it('a chip carrying its list-price quote is not re-gated just because real costs run above the list', async () => {
+  it('a list-price quote the real price outgrew by more than 15% + $0.01 is re-gated at the real price (never runs under-quoted)', async () => {
     const doc = drawnDoc('nano-banana-2.1');
     const { session, ctx } = setup(doc, { prices: observedBook() });
-    const quotedUsd = estimateSpendAction(session.doc, { type: 'render_pages', pageIds: ['pg_1'] }, false).usd;
-    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], quotedUsd }, UI);
+    const action = { type: 'render_pages' as const, pageIds: ['pg_1'] };
+    const quotedUsd = estimateSpendAction(session.doc, action, false).usd;
+    const real = estimateSpendAction(session.doc, action, false, observedBook()).usd;
+    expect(real).toBeGreaterThan(quotedUsd * 1.15 + 0.01);
+    const started = await startAction(ctx, { ...action, quotedUsd }, UI);
+    expect(started.outcome.status).toBe('gated');
+    expect(session.doc.gate).toMatchObject({ status: 'open', reason: 'policy' });
+    expect(session.doc.gate!.estimateUsd).toBeCloseTo(real, 4);
+    // staleFrom: the card says the price changed, from the quote on the button.
+    expect(lastMsg(session.doc).text).toContain(`The price changed since that button was shown: page 1 is now ≈ $${real.toFixed(2)} (was $${quotedUsd.toFixed(2)})`);
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+  });
+
+  it('a chip priced from the same PriceBook starts directly (server chips carry real-price quotes)', async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    const book = observedBook();
+    const { session, ctx } = setup(doc, { prices: book });
+    const chip = nextStepsFor(session.doc, { prices: book }).find((s) => s.label === 'Draw all pages');
+    expect(chip?.action).toMatchObject({ type: 'render_pages' });
+    const quotedUsd = (chip!.action as { quotedUsd: number }).quotedUsd;
+    expect(quotedUsd).toBeCloseTo(estimateSpendAction(session.doc, { type: 'render_pages' }, false, book).usd, 4);
+    expect(quotedUsd).toBeGreaterThan(estimateSpendAction(session.doc, { type: 'render_pages' }, false).usd);
+    const started = await startAction(ctx, chip!.action!, UI);
     expect(started.outcome.status).toBe('started');
+    expect(session.doc.gate?.status).not.toBe('open');
     await started.done;
-    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(ctx.imagesFake.calls.length).toBeGreaterThan(0);
+  });
+
+  it("the chips a run posts (the G 'Try again', a fresh take, next steps) are quoted from the run's PriceBook", async () => {
+    const doc = drawnDoc('nano-banana-2.1');
+    const book = observedBook();
+    const images = fakeImages(() => new StudioError('RATE_LIMIT', 'Too many requests', { status: 429, retryable: true }));
+    const { session, ctx } = setup(doc, { prices: book, images });
+    await runAction(ctx, { type: 'render_pages', pageIds: ['pg_1'] }, UI);
+    const retry = lastMsg(session.doc).nextSteps?.find((s) => /^Try again/.test(s.label));
+    expect(retry?.action).toMatchObject({ type: 'render_pages', pageIds: ['pg_1'] });
+    const real = estimateSpendAction(session.doc, { type: 'render_pages', pageIds: ['pg_1'] }, false, book).usd;
+    expect((retry!.action as { quotedUsd: number }).quotedUsd).toBeCloseTo(real, 4);
+    expect(retry!.usd).toBeCloseTo(real, 4);
   });
 });
 
