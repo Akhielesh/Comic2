@@ -23,7 +23,7 @@ const scene = (kit: 'model-picker' | 'model-confirm', theme: 'light' | 'dark'): 
  */
 const isolateModal = async (page: Page) =>
   page.addStyleTag({ content: 'body > *:not([data-model-confirm-layer]) { visibility: hidden !important; }' });
-const restoreModal = async (page: Page, tag: Awaited<ReturnType<Page['addStyleTag']>>) => tag.evaluate((el) => el.remove());
+const restoreModal = async (page: Page, tag: Awaited<ReturnType<Page['addStyleTag']>>) => tag.evaluate((el) => (el as Element).remove());
 
 /** No sideways scroll, and every visible control inside `root` is at least 44 × 44 px (or 44 px tall and wide enough). */
 const measure = (page: Page, root: string) =>
