@@ -57,7 +57,19 @@ export interface LetteringInspectorProps extends Omit<LetteringPanelProps, 'line
   compact: boolean;
   /** Bottom sheet only: its height cap in px (the page editor keeps the page above it usable); it scrolls. */
   maxHeight?: number;
+  /**
+   * Floating only: the area (viewport px) the panel must stay inside — on a dual-screen device the editor
+   * passes the tools segment, so the panel never straddles the hinge or leaves the editor's grid.
+   */
+  bounds?: Rect | null;
   onClose(): void;
+}
+
+/** A placed panel clamped into `bounds` (8 px margin); unchanged without bounds. Pure; tested. */
+export function clampIntoBounds(p: { left: number; top: number }, size: { w: number; h: number }, bounds: Rect | null | undefined, margin = 8): { left: number; top: number } {
+  if (!bounds) return p;
+  const clampN = (n: number, lo: number, hi: number) => Math.min(Math.max(n, lo), Math.max(lo, hi));
+  return { left: clampN(p.left, bounds.left + margin, bounds.right - size.w - margin), top: clampN(p.top, bounds.top + margin, bounds.bottom - size.h - margin) };
 }
 
 const PANEL_W = 320;
@@ -83,7 +95,8 @@ export const densityNote = (scale: number): string =>
   `Dense page — lettered at ${Math.round(scale * 100)}% of its size so every line fits without overlapping. Shorten the text to letter it bigger; Keep here keeps this size.`;
 
 export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => {
-  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, onClose } = props;
+  const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, bounds, onClose } = props;
+  const boundsKey = bounds ? `${Math.round(bounds.left)},${Math.round(bounds.top)},${Math.round(bounds.right)},${Math.round(bounds.bottom)}` : '';
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const lines = linesOf(page, lineIds);
@@ -100,10 +113,10 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
     }
     const el = ref.current;
     const size = { w: el?.offsetWidth || PANEL_W, h: el?.offsetHeight || 420 };
-    const p = placeInspector(anchor, size, { w: window.innerWidth, h: window.innerHeight });
+    const p = clampIntoBounds(placeInspector(anchor, size, { w: window.innerWidth, h: window.innerHeight }), size, bounds);
     setPos((cur) => (cur && cur.left === p.left && cur.top === p.top ? cur : { left: p.left, top: p.top }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchorKey, compact, view, lineIds.join('|'), sizeTick]);
+  }, [anchorKey, boundsKey, compact, view, lineIds.join('|'), sizeTick]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (compact || !el || typeof ResizeObserver === 'undefined') return;
@@ -276,7 +289,11 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
       data-testid="lettering-inspector"
       data-presentation="floating"
       className="fixed z-[85] flex w-[320px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[0_18px_60px_rgba(0,0,0,0.28)] backdrop-blur-xl"
-      style={pos ? { left: pos.left, top: pos.top } : { right: 16, top: 72 }}
+      style={{
+        ...(pos ? { left: pos.left, top: pos.top } : { right: 16, top: 72 }),
+        // Inside its bounds (a dual-screen segment) the whole panel fits: its body scrolls instead.
+        ...(bounds ? { maxHeight: Math.max(160, Math.round(bounds.bottom - bounds.top - 16)) } : {})
+      }}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {

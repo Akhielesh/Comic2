@@ -840,8 +840,6 @@ export function settleBalloons(
     if (a.id === b.id || (a.group && a.group === b.group)) return false;
     return overlapsBox(fa, footOf(b, cur.get(b.id)!));
   };
-  const insideX = (o: Box) => o.w > W - 2 * margin.x || (o.x >= margin.x - 1e-6 && o.x + o.w <= W - margin.x + 1e-6);
-  const insideY = (o: Box) => o.h > H - 2 * margin.y || (o.y >= margin.y - 1e-6 && o.y + o.h <= H - margin.y + 1e-6);
 
   const byId = new Map(live.map((it) => [it.id, it]));
   const start = new Map(live.map((it) => [it.id, { ...cur.get(it.id)! }]));
@@ -895,7 +893,8 @@ export function settleBalloons(
   live.forEach((it, index) => {
     if (!it.movable) return;
     const o = cur.get(it.id)!;
-    if (!insideX(o) || !insideY(o)) return; // the page fit owns oversized or off-page boxes
+    // A footprint that reaches past the page margin (a default tail below a balloon at the page foot) is
+    // settled like any other: every candidate keeps it inside the margins (or centred when it is bigger).
     const fo = footOf(it, o);
     // Blockers: everything this balloon may not sit on. A movable balloon that reads LATER moves itself.
     const blockers = live.filter((b, j) => collides(it, fo, b) && (!b.movable || j < index));

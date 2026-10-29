@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, renderHook, act, screen, within } from '@testing-library/react';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { estimateMeasure, planLettering } from '../../../shared/comic/lettering/layout';
-import { LetteringInspector, placeInspector } from './LetteringInspector';
+import { LetteringInspector, clampIntoBounds, placeInspector } from './LetteringInspector';
 import { resolvePlacements } from './useLetterPlans';
 import { computeSnap, snapTargets } from './SnapGuides';
 import { nextSelection, useLetteringSelection } from './useLetteringSelection';
@@ -272,5 +272,19 @@ describe('previews and the cover title', () => {
       delete (document as unknown as { fonts?: unknown }).fonts;
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('clampIntoBounds (dual-screen: the floating inspector stays on one segment)', () => {
+  it('a panel placed right of a balloon on the left screen moves wholly onto the right segment; no bounds, no change', () => {
+    // fold5-dual: hinge at 441 px; the tools segment starts at 441 + gap.
+    const placed = placeInspector({ left: 300, top: 600, right: 420, bottom: 640 }, { w: 320, h: 400 }, { w: 884, h: 1104 });
+    expect(placed.left).toBeLessThan(441); // straddled the hinge before
+    const segment = { left: 447, top: 60, right: 884, bottom: 1104 };
+    const p = clampIntoBounds(placed, { w: 320, h: 400 }, segment);
+    expect(p.left).toBeGreaterThanOrEqual(segment.left + 8);
+    expect(p.left + 320).toBeLessThanOrEqual(segment.right - 8);
+    expect(p.top + 400).toBeLessThanOrEqual(segment.bottom - 8);
+    expect(clampIntoBounds(placed, { w: 320, h: 400 }, null)).toEqual(placed);
   });
 });

@@ -680,6 +680,9 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   slideRef.current = slide;
   /** Phones: the lettering sheet's height cap, so the page above it keeps at least MIN_STAGE_PX. */
   const [inspectorMaxH, setInspectorMaxH] = useState<number | undefined>(undefined);
+  /** Dual-screen: the floating inspector stays on the tools segment (never across the hinge, never clipped by the grid). */
+  const foldGridRef = useRef<HTMLDivElement>(null);
+  const [inspectorBounds, setInspectorBounds] = useState<Rect | null>(null);
   const ff = useFormFactor();
   const [coach, setCoach] = useState(() => ff.coarse && readFlag(COACH_KEY) !== '1');
   const { busyKey, fire } = useClickGuard(2500);
@@ -870,6 +873,21 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     }
     setAnchor((cur) => (cur && Math.abs(cur.left - next.left) < 0.5 && Math.abs(cur.top - next.top) < 0.5 && Math.abs(cur.right - next.right) < 0.5 && Math.abs(cur.bottom - next.bottom) < 0.5 ? cur : next));
   }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset, slide]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Dual-screen layouts: the floating inspector lives on the tools segment (the far side of the hinge from
+  // the page), inside the editor's grid — never across the fold, never clipped by the grid's edge.
+  const foldSplit = layout.kind === 'fold-book' || layout.kind === 'fold-tabletop' ? layout.split : undefined;
+  useLayoutEffect(() => {
+    const grid = foldGridRef.current;
+    if (!foldSplit || !grid || !inspectorOpen) {
+      setInspectorBounds((cur) => (cur === null ? cur : null));
+      return;
+    }
+    const r = grid.getBoundingClientRect();
+    const offset = foldSplit.first + foldSplit.gap;
+    const next: Rect = foldSplit.axis === 'rows' ? { left: r.left, top: r.top + offset, right: r.right, bottom: r.bottom } : { left: r.left + offset, top: r.top, right: r.right, bottom: r.bottom };
+    setInspectorBounds((cur) => (cur && cur.left === next.left && cur.top === next.top && cur.right === next.right && cur.bottom === next.bottom ? cur : next));
+  }, [foldSplit?.axis, foldSplit?.first, foldSplit?.gap, inspectorOpen, viewportTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
   // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
@@ -1199,7 +1217,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
 
   // Desktop / tablet mode row (today's position).
   const modeRow = (
-    <div className={cx('flex min-w-0 flex-wrap items-center gap-2 px-4 pt-3', layout.kind === 'fold-tabletop' && 'pb-2')} data-testid="editor-mode-row">
+    // gap-y-3: a wrapped line of chips keeps its 44 px ::after areas clear of the toolbar's above it.
+    <div className={cx('flex min-w-0 flex-wrap items-center gap-x-2 gap-y-3 px-4 pt-3', layout.kind === 'fold-tabletop' && 'pb-2')} data-testid="editor-mode-row">
       <Segmented<Mode>
         label="Editing mode"
         size="xs"
@@ -1251,17 +1270,27 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </div>
   );
 
-  // Phones: a slim row above the stage only when there is something to say.
-  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || (letteringEditable && lettering && (crowdedIds.length || overflowIds.length || dense.length)));
+  // Phones: a slim row above the stage when there is something to say. While lettering is editable the
+  // status chips (crowded / dense / overflow) get a line of their own with a FIXED height, kept even when
+  // empty: they come and go with every edit, and a line that appeared (or wrapped) under a just-dropped
+  // balloon re-fitted — shrank — the page, so the balloon no longer sat under the finger (iPhone 15: a
+  // 60 px drag measured 52 px). The chips never wrap there; they shrink and truncate instead.
+  const chipLine = letteringEditable && lettering;
+  const phoneRowNeeded = !!(languageRow || region || hint || lang || notice || coachInBanners || chipLine);
   const phoneRow = phoneRowNeeded ? (
-    <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3 pt-2" data-testid="editor-phone-row">
+    // pt-3 when chips can show: their 44 px ::after areas reach 10.5 px above them, clear of the header.
+    <div className={cx('flex min-w-0 shrink-0 flex-wrap items-center gap-1.5 px-3', chipLine ? 'pt-3' : 'pt-2')} data-testid="editor-phone-row">
       {languageRow}
       {region && (
         <GhostButton size="xs" onClick={clearRegion} className="tap-target">
           <X className="h-3 w-3" aria-hidden /> Clear mark
         </GhostButton>
       )}
-      {chips}
+      {chipLine && (
+        <div className="flex h-6 min-w-0 flex-1 basis-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-line">
+          {chips}
+        </div>
+      )}
       {hint && <p className="min-w-0 basis-full truncate text-[12px] text-[var(--ds-muted)]">{hint}</p>}
       {banners}
     </div>
@@ -1619,6 +1648,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         anchor={anchor}
         compact={layout.compactInspector}
         maxHeight={inspectorMaxH}
+        bounds={inspectorBounds}
         onClose={() => setInspectorClosed(true)}
       />
     </div>
@@ -1714,6 +1744,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     const rows = split.axis === 'rows';
     return (
       <div
+        ref={foldGridRef}
         className="grid min-h-0 min-w-0 flex-1 overflow-hidden"
         style={rows ? { gridTemplateRows: `minmax(0, ${split.first}px) ${split.gap}px minmax(0, 1fr)` } : { gridTemplateColumns: `minmax(0, ${split.first}px) ${split.gap}px minmax(0, 1fr)` }}
         data-layout={layout.kind}
