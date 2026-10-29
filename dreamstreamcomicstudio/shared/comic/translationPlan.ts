@@ -307,7 +307,8 @@ export function planTranslation(doc: ComicDoc, lang: string, opts?: { pageIds?: 
     // 1 · up to date
     if (current && !force) {
       plan.upToDate += 1;
-      if (entry.status === 'machine' && !entry.issue) plan.toReview!.push(line.id);
+      // The same rule as editionProgress.unreviewed: a line flagged MAJOR was judged and waits for the author.
+      if (entry.status === 'machine' && entry.issue?.severity !== 'major') plan.toReview!.push(line.id);
       continue;
     }
     // 7 (edited) · a punctuation-only source change keeps the author's text, refreshing only its hash.

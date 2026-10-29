@@ -235,6 +235,30 @@ describe('TranslationReview', () => {
   });
 });
 
+describe('an edition whose only open work is lines the review flagged', () => {
+  it('offers "Review 1 flagged" (the author decides), never a "Finish the review" run that would change nothing', async () => {
+    let doc = withTelugu();
+    const first = allLines(doc)[0];
+    doc = applyOps(doc, [{ op: 'translation', lang: 'te', lineId: first.id, patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+    const studio = makeFakeStudio({ doc });
+    render(<LanguagesTab studio={studio} />);
+    expect(screen.getByText('Draft')).toBeTruthy();
+    expect(screen.getByText('1 flagged')).toBeTruthy();
+    expect(screen.queryByText('1 unreviewed')).toBeNull();
+    expect(screen.getByText('1 line flagged by the review.')).toBeTruthy();
+    // Without the fix: "Finish the review · free" is rendered, and tapping it runs a translate that says
+    // "already up to date" — the row keeps offering it forever.
+    expect(screen.queryByRole('button', { name: /^(Translate missing|Finish the review)/ })).toBeNull();
+    expect(quoteMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Review 1 flagged' }));
+    expect(screen.getByText('Wrong meaning.')).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Looks right' }));
+    });
+    expect(studio.act).toHaveBeenCalledWith({ type: 'accept_translation_issue', lang: 'te', lineId: first.id, useSuggestion: false });
+  });
+});
+
 describe('a stale_edited line (the author edited it, then the original changed)', () => {
   function staleEdited() {
     let doc = withTelugu();

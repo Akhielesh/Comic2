@@ -319,8 +319,9 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
     p.flagged ? `${p.flagged} flagged` : ''
   ].filter(Boolean);
   const blocking = r.issues.filter((i) => i.blocking && i.code !== 'in_art_pages');
-  // Work only the author can settle (no translator, no reviewer): their own edits whose original changed.
-  const attention = [p.staleEdited ? `${p.staleEdited} changed` : ''].filter(Boolean);
+  // Work only the author can settle (no translator, no reviewer): lines the review flagged ("Looks right" /
+  // edit / use the suggestion) and their own edits whose original changed.
+  const attention = [p.flagged ? `${p.flagged} flagged` : '', p.staleEdited ? `${p.staleEdited} changed` : ''].filter(Boolean);
   return (
     <li className="min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">

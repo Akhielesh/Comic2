@@ -178,6 +178,15 @@ describe('planTranslation — the software-first paths', () => {
     expect(plan.tokens.input).toBe(0);
     expect(plan.tokens.reviewInput).toBeGreaterThan(0);
     expect(planIsFree(plan)).toBe(false);
+    // A line the review flagged MAJOR (no suggestion) was judged — it waits for the author, not for another
+    // review: the plan for an edition whose only open work is such lines is free and up to date.
+    const flagged = applyOps(translateAll(sixPages(), 'te'), [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { status: 'machine', issue: { severity: 'major', note: 'Wrong meaning.' } } }]);
+    expect(planTranslation(flagged, 'te').toReview).toEqual([]);
+    expect(editionProgress(flagged, 'te')).toMatchObject({ unreviewed: 0, flagged: 1 });
+    // …while a machine line with only a minor note is reviewed again (the same rule as editionProgress.unreviewed).
+    const minor = applyOps(translateAll(sixPages(), 'te'), [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { status: 'machine', issue: { severity: 'minor', note: 'Stiff.' } } }]);
+    expect(planTranslation(minor, 'te').toReview).toEqual(['l1']);
+    expect(editionProgress(minor, 'te').unreviewed).toBe(1);
   });
 
   it('token estimates are monotonic in lines and in the tokenFactor', () => {
