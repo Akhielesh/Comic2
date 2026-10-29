@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { applyGutterDelta } from '../../../studio/kit/ResizableSplit';
+import { RADIUS_PILL, SHADOW_SOFT, TRANSITION } from '../../../chat/studioDesign';
 import { defaultSplitFor, minPanePx, type FormFactor } from '../formFactor';
 import { isDoubleTap, type Tap } from '../touch/gestureMath';
 import { DualScreen } from './DualScreen';
@@ -125,32 +126,57 @@ export const SplitView: React.FC<{ left: React.ReactNode; right: React.ReactNode
       >
         {left}
       </div>
-      {both && (
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize conversation and board"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={leftPct}
-          tabIndex={0}
-          title="Drag to resize · double-click to reset"
-          onPointerDown={onPointerDown}
-          onKeyDown={onKeyDown}
-          onDoubleClick={reset}
-          data-hit-exempt={ff.coarse ? undefined : 'gutter: 8 px on fine pointers by design'}
-          className={cx(
-            'group relative z-10 flex shrink-0 cursor-col-resize touch-none items-stretch justify-center focus-visible:outline-none',
-            // Touch: a 24 px hit strip over a 1 px line (takes ~2 px of layout), with a visible grabber.
-            ff.coarse ? '-mx-[11px] w-6' : 'w-2'
-          )}
-        >
-          <span className="w-px bg-[var(--ds-hairline)] transition-colors group-hover:bg-[#D97757]/50 group-focus-visible:bg-[var(--ds-accent)]" />
-          {ff.coarse && (
-            <span aria-hidden className="absolute left-1/2 top-1/2 h-9 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--ds-muted)] opacity-50" />
-          )}
-        </div>
-      )}
+      {both &&
+        (ff.coarse ? (
+          // Touch: the gutter is a 24 px strip of its own (it never lies over a pane, so it steals no
+          // pane taps and the panes keep their edges) that drags anywhere along its line, and the
+          // focusable control is a 44 × 64 grab handle in its middle — clear of the notch and the
+          // home-indicator bands, and only 10 px over each pane, inside their own padding.
+          <div
+            data-split-gutter
+            onPointerDown={onPointerDown}
+            onDoubleClick={reset}
+            className="relative z-10 flex w-6 shrink-0 cursor-col-resize touch-none justify-center"
+          >
+            <span aria-hidden className="w-px bg-[var(--ds-hairline)]" />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize conversation and board"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={leftPct}
+              tabIndex={0}
+              title="Drag to resize · double-tap to reset"
+              onKeyDown={onKeyDown}
+              data-split-handle
+              className={`group absolute left-1/2 top-1/2 grid h-16 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center ${RADIUS_PILL} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}
+            >
+              <span
+                aria-hidden
+                className={`h-10 w-1.5 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] ${SHADOW_SOFT} ${TRANSITION} group-active:bg-[var(--ds-hover)]`}
+              />
+            </div>
+          </div>
+        ) : (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize conversation and board"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={leftPct}
+            tabIndex={0}
+            title="Drag to resize · double-click to reset"
+            onPointerDown={onPointerDown}
+            onKeyDown={onKeyDown}
+            onDoubleClick={reset}
+            data-hit-exempt="gutter: 8 px on fine pointers by design"
+            className="group relative z-10 flex w-2 shrink-0 cursor-col-resize touch-none items-stretch justify-center focus-visible:outline-none"
+          >
+            <span className={`w-px bg-[var(--ds-hairline)] ${TRANSITION} group-hover:bg-[var(--ds-muted)] group-focus-visible:bg-[var(--ds-ring)]`} />
+          </div>
+        ))}
       <div
         hidden={hideRight}
         inert={hideRight || undefined}
