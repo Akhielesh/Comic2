@@ -16,7 +16,7 @@
 // the advice when the model wrote none (modelAdviceReply), and checks the reply never claims a switch or a start
 // that did not happen (guardModelReply).
 
-import type { Card, ComicDoc, NextStep, QualityTier, RenderState, RenderTarget, Resolution } from '../../../../shared/comic/doc.js';
+import { isPageStale, type Card, type ComicDoc, type NextStep, type QualityTier, type RenderState, type RenderTarget, type Resolution } from '../../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import { IMAGE_MODELS, TIER_PRESETS, getImageModel, resolveImageJob, type ImageModelSpec, type ImageRoute } from '../../../../shared/comic/models.js';
 import { deriveLock, drawnTargets, modelFit, redrawQuote, redrawResolution, type DrawnTargets } from '../../../../shared/comic/modelLock.js';
@@ -105,16 +105,23 @@ export interface CurrentModel {
 export const currentImageModel = (doc: ComicDoc): CurrentModel => {
   const lock = deriveLock(doc);
   const job = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, lock);
-  const known = !lock || job.spec.id === lock.modelId;
+  const known = !lock || getImageModel(lock.modelId)?.id === job.spec.id;
   return { spec: job.spec, name: known ? job.spec.nickname : lock!.modelId, locked: !!lock, res: job.resolution };
 };
 
-/** The page with the most distinct cast above what `spec` keeps on model per image (models.md §3.8 trigger 1). */
-export const crowdedPage = (doc: ComicDoc, spec: ImageModelSpec): { n: number; count: number } | null => {
+/** A page the next drawing would (re)draw: not drawn yet, failed, or out of date. A drawn, current page was the user's call. */
+const pendingPage = (doc: ComicDoc, p: ComicDoc['pages'][number]): boolean => p.render.status !== 'ready' || isPageStale(doc, p);
+
+/**
+ * The page with the most distinct cast above what `spec` keeps on model per image (models.md §3.8 trigger 1).
+ * `pending`: only pages still to be drawn, so the studio does not bring it up again on every turn of a finished book.
+ */
+export const crowdedPage = (doc: ComicDoc, spec: ImageModelSpec, opts: { pending?: boolean } = {}): { n: number; count: number } | null => {
   const holds = spec.refs.characters;
   if (!(holds > 0)) return null;
   let worst: { n: number; count: number } | null = null;
   for (const p of doc.pages) {
+    if (opts.pending && !pendingPage(doc, p)) continue;
     const count = new Set(p.panels.flatMap((pn) => pn.castIds)).size;
     if (count > holds && (!worst || count > worst.count)) worst = { n: p.n, count };
   }
@@ -277,6 +284,8 @@ export interface ModelAdvice {
   currentName: string;
   locked: boolean;
   named?: ModelOptionFacts;
+  /** The user named the model the comic is already on. */
+  namedIsCurrent?: boolean;
   options: ModelOptionFacts[];
   tier?: TierFacts;
   crowd?: { n: number; count: number };
@@ -430,6 +439,7 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
       options = [...pool.filter(fits), ...pool.filter((f) => !fits(f))];
   }
   const named = input.named && input.named.id !== cur.spec.id ? factsOf(input.named) : undefined;
+  const namedIsCurrent = !!input.named && input.named.id === cur.spec.id;
   const crowd = crowdedPage(doc, cur.spec);
   const outage = recentOutageCard(doc, input.now ?? Date.now());
   return {
@@ -438,6 +448,7 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
     currentName: cur.name,
     locked: cur.locked,
     ...(named ? { named } : {}),
+    ...(namedIsCurrent ? { namedIsCurrent } : {}),
     options: options.slice(0, named ? MAX_MODEL_OPTIONS - 1 : MAX_MODEL_OPTIONS),
     ...((tier) => (tier ? { tier } : {}))(input.want === 'cheaper' ? cheaperTier(doc, cur, current, prices, ctx.keys) : undefined),
     ...(crowd ? { crowd } : {}),
@@ -504,6 +515,7 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
     lines.push(`SAME MODEL: ${a.currentName} is already at its cheapest setting for this comic (${cur.res}).`);
   }
   if (a.named) lines.push(`ASKED FOR: ${describeOption(a.named, a.drawn, c)}`);
+  if (a.namedIsCurrent) lines.push(`ASKED FOR: ${a.currentName}, which this comic already draws with — nothing to change.`);
   a.options.forEach((o, i) => lines.push(`OPTION ${i + 1}: ${describeOption(o, a.drawn, c)}`));
   if (!a.options.length && !a.named) {
     lines.push(
@@ -595,6 +607,10 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
     if (ranked[0]) out.push(`${ranked[0].nickname} is ${priceWords(ranked[0].perPageUsd, c)} a page, but it's a different model. ${consistency}`);
     if (unranked.length) out.push(`${joinList(unranked.map((o) => o.nickname))} cost${unranked.length === 1 ? 's' : ''} less, but no public leaderboard ranks ${unranked.length === 1 ? 'it' : 'them'}, so I can't vouch for the quality.`);
     if (a.options.length) steps.push(pickerStep('See models'));
+    return { text: out.join(' '), steps };
+  }
+  if (a.namedIsCurrent) {
+    out.push(`Your comic already draws with ${name}${cur.perPageUsd !== null ? ` (${c.approx(cur.perPageUsd)} a page at ${cur.res})` : ''}, so nothing needs to change.`);
     return { text: out.join(' '), steps };
   }
   const pick = a.named ?? a.options[0];
@@ -852,11 +868,17 @@ export const outageOptionsLine = (doc: ComicDoc, c: CostFormatter, now = Date.no
  * Model facts for the DOC SUMMARY tail (always considered, cheap): a page with more characters than the model holds
  * (§3.8 trigger 1), a locked model that can no longer draw (trigger 3) and the model_status fact (R5, outages).
  */
-export async function modelFactLines(ctx: StudioContext, doc: ComicDoc, userText: string, opts: { health?: ModelHealthPort; now?: number; waitMs?: number } = {}): Promise<string[]> {
+export async function modelFactLines(
+  ctx: StudioContext,
+  doc: ComicDoc,
+  userText: string,
+  opts: { health?: ModelHealthPort; now?: number; waitMs?: number; drawIntent?: DirectorTurn['drawIntent'] } = {}
+): Promise<string[]> {
   const lines: string[] = [];
   try {
     const cur = currentImageModel(doc);
-    const crowd = crowdedPage(doc, cur.spec);
+    // A drawn, current crowded page is only news again when the user asks to draw.
+    const crowd = crowdedPage(doc, cur.spec, { pending: (opts.drawIntent ?? 'none') === 'none' });
     if (crowd) {
       lines.push(
         `MODEL FIT: page ${crowd.n} has ${crowd.count} characters but ${cur.name} keeps up to ${cur.spec.refs.characters} on model per image. Before drawing it, say so and suggest a model that holds more (model_options, then the picker chip); never switch.`
@@ -960,7 +982,7 @@ export const modelsGroupWanted = (ctx: StudioContext, turn: DirectorTurn, now = 
   if (MODEL_HINT_RE.test(turn.userText || '')) return true;
   const doc = ctx.session.doc;
   const cur = currentImageModel(doc);
-  return !!crowdedPage(doc, cur.spec) || upstreamStreak(doc, now).count >= R5_FAILURES || !!recentOutageCard(doc, now) || !!lockUnusable(doc, ctx.caps ?? DEFAULT_CAPS);
+  return !!crowdedPage(doc, cur.spec, { pending: turn.drawIntent === 'none' }) || upstreamStreak(doc, now).count >= R5_FAILURES || !!recentOutageCard(doc, now) || !!lockUnusable(doc, ctx.caps ?? DEFAULT_CAPS);
 };
 
 /** Added to the system prompt when the group is active (models.md §3.8, verbatim rule + how to use the tools). */

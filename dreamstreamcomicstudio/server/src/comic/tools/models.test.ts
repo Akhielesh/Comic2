@@ -14,6 +14,7 @@ import { makeLakeComic, LAKE_NOW } from '../../../../shared/comic/__fixtures__/l
 import { costFormatter, costViewFor, DOLLAR_VIEW } from '../costText.js';
 import { DIRECTOR_SYSTEM_PROMPT, runDirectorTurn } from '../director.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
+import { drawIntentInContext } from '../replies.js';
 import { FAKE_BASE, FIXTURE_NOW, fakeOpenRouterFetch, memoryCatalogStore } from '../models/__fixtures__/catalogFakes.js';
 import { fakeModelHealth, type FakeModelHealth } from '../models/health.fakes.js';
 import { __setModelHealthForTests } from '../models/health.js';
@@ -55,7 +56,7 @@ const setup = (doc: ComicDoc, userText = 'the user message', opts: { caps?: Stud
   ctx.session.subscribe((e) => {
     if (e.type === 'ops') ops.push(...e.ops);
   });
-  turn = createDirectorTurn({ userText });
+  turn = createDirectorTurn({ userText, drawIntent: drawIntentInContext(doc, userText) });
   tools = new Map([...buildDirectorTools(ctx, turn), ...modelsToolGroup.tools(ctx, turn)].map((t) => [t.spec.function.name, t]));
 };
 
@@ -181,8 +182,15 @@ describe('the models tool group (registration, phase gate)', () => {
     expect(wanted(lakeLocked(), 'use GPT image for this comic')).toBe(true);
     expect(wanted(lakeLocked(), 'make it cheaper')).toBe(true);
     expect(wanted(lakeLocked(), 'is there a better model?')).toBe(true);
-    // 1: a page with more characters than the locked model keeps on model.
-    expect(wanted(lakeLocked((d) => d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle')), 'next')).toBe(true);
+    // 1: a page still to be drawn with more characters than the locked model keeps on model…
+    const crowdedUndrawn = (d: ComicDoc) => {
+      d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle');
+      d.pages[2].render = emptyRender();
+    };
+    expect(wanted(lakeLocked(crowdedUndrawn), 'next')).toBe(true);
+    // …or a drawn one the user asks to draw again; a drawn, current one is not brought up on every turn.
+    expect(wanted(lakeLocked((d) => d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle')), 'redraw page 3')).toBe(true);
+    expect(wanted(lakeLocked((d) => d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle')), 'next')).toBe(false);
     // 2: R5, three upstream failures in a row in the last 10 minutes.
     expect(wanted(lakeLocked((d) => withUpstreamFailures(d, Date.now())), 'hmm')).toBe(true);
     expect(wanted(lakeLocked((d) => withUpstreamFailures(d, Date.now(), 2)), 'hmm')).toBe(false);
@@ -298,6 +306,13 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     expect(governed).not.toMatch(/\$/);
     expect(governed).toMatch(/% of your usage per page at 1K/);
     expect(costViewFor(GOVERNED_CAPS).governed).toBe(true);
+  });
+
+  it('naming the model the comic is already on changes nothing and says so', async () => {
+    setup(lakeLocked(), 'use nano banana 2.1', { caps: BYOK_CAPS, keys: BYOK_KEYS });
+    const out = await call('model_options', { model: 'Nano Banana 2.1' });
+    expect(out).toContain('ASKED FOR: Nano Banana 2.1, which this comic already draws with — nothing to change.');
+    expect(modelAdviceReply(modelAdviceOf(turn)!, costFormatter(DOLLAR_VIEW)).text).toBe('Your comic already draws with Nano Banana 2.1 (≈ $0.04 a page at 1K), so nothing needs to change.');
   });
 
   it('unknown names are an error the model can correct; a catalog outage still answers from the dated price list', async () => {
@@ -417,7 +432,12 @@ describe('R5 and outages (reliability.md §2 Director)', () => {
   });
 
   it('model facts name a crowded page (trigger 1) and a locked model this plan can no longer use (trigger 3)', async () => {
-    setup(lakeLocked((d) => d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle')));
+    setup(
+      lakeLocked((d) => {
+        d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle');
+        d.pages[2].render = emptyRender();
+      })
+    );
     const health = fakeModelHealth();
     expect(await modelFactLines(ctx, ctx.session.doc, 'next', { health })).toEqual([
       'MODEL FIT: page 3 has 5 characters but Nano Banana 2.1 keeps up to 4 on model per image. Before drawing it, say so and suggest a model that holds more (model_options, then the picker chip); never switch.'
@@ -482,6 +502,7 @@ describe('director wiring (director.ts): rule, facts, history', () => {
       d.settings = { ...d.settings, quality: 'standard' };
       d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
       d.pages[2].panels[0].castIds.push('c_ducks', 'c_frog', 'c_turtle', 'c_owl');
+      d.pages[2].render = { ...d.pages[2].render, status: 'failed', error: 'Timed out.' };
     });
     const session = newSession(doc);
     const llm = scriptedLlm({ director: [{ text: 'Hi!' }] });
@@ -726,7 +747,7 @@ describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)'
       const doc = await goldenDoc(scenario, { health, keys, caps });
       for (const turn of scenario.turns) {
         if (!turn.say) continue;
-        const set = buildTurnToolset(testContext(newSession(doc), { caps, keys }), createDirectorTurn({ userText: turn.say }), toolGroups());
+        const set = buildTurnToolset(testContext(newSession(doc), { caps, keys }), createDirectorTurn({ userText: turn.say, drawIntent: drawIntentInContext(doc, turn.say) }), toolGroups());
         expect(set.tools.length).toBeLessThanOrEqual(30);
         const names = new Set(set.tools.map((t) => t.spec.function.name));
         for (const tool of turn.expectTools || []) {

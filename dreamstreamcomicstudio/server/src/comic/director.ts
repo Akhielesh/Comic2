@@ -598,7 +598,7 @@ async function directorTurnBody(
   const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
-  const modelLines = await modelFactLines(ctx, doc, userText);
+  const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
   const system = [
     prompt,
     summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost }),
