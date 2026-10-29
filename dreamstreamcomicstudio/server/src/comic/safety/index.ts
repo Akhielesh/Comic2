@@ -348,30 +348,42 @@ const DIALOGUE_OPS: ReadonlySet<string> = new Set(['line', 'translation', 'editi
 /** Keys that never hold free text (ids, paths, styles, enums the server validates). */
 const SKIP_KEYS: ReadonlySet<string> = new Set([
   'id', 'op', 'kind', 'lang', 'style', 'titleStyle', 'balloons', 'balloon', 'order', 'target', 'ref', 'refs', 'owner', 'at', 'status',
-  'sourceHash', 'model', 'gloss', 'issue', 'register', 'presetId', 'speakers', 'variants', 'crop', 'original', 'rating', 'quality', 'aspect'
+  'sourceHash', 'model', 'register', 'presetId', 'speakers', 'variants', 'crop', 'original', 'rating', 'quality', 'aspect'
 ]);
 const isSkipKey = (k: string) => SKIP_KEYS.has(k) || /(?:Id|Ids|path|Path)$/.test(k);
 /** Categories that make a dialogue line wait for a rewrite (409) when they go past the rating. */
 const DIALOGUE_STRICT: ReadonlySet<SafetyCategory> = new Set(['language', 'hate', 'harassment', 'sexual', 'nudity', 'graphic_gore', 'self_harm', 'minor_sexual']);
 
-/** Every free-text string inside one op (ids, paths and styles skipped; bounded). */
-export const opTexts = (op: DocOp): string[] => {
-  const out: string[] = [];
-  const walk = (value: unknown, key: string, depth: number) => {
+/**
+ * Free text that explains a translation rather than being its words: the linguist gloss and a
+ * review issue's note (a client may send both back, e.g. on Undo). Never published, so only a
+ * hard block refuses them; an issue's `suggestion` is offered as the line's words and is screened
+ * like dialogue.
+ */
+const isNoteKey = (key: string, parent: string) => key === 'gloss' || (key === 'note' && parent === 'issue');
+
+/** Every free-text string inside one op with whether it is a translation note (ids, paths and styles skipped; bounded). */
+const opTextParts = (op: DocOp): Array<{ text: string; note: boolean }> => {
+  const out: Array<{ text: string; note: boolean }> = [];
+  const walk = (value: unknown, key: string, parent: string, depth: number, note: boolean) => {
     if (out.length >= 400 || depth > 6 || value === null || value === undefined || isSkipKey(key)) return;
+    const isNote = note || isNoteKey(key, parent);
     if (typeof value === 'string') {
-      if (value.trim().length >= 2) out.push(value);
+      if (value.trim().length >= 2) out.push({ text: value, note: isNote });
       return;
     }
     if (Array.isArray(value)) {
-      for (const v of value.slice(0, 200)) walk(v, key, depth + 1);
+      for (const v of value.slice(0, 200)) walk(v, key, parent, depth + 1, isNote);
       return;
     }
-    if (typeof value === 'object') for (const [k, v] of Object.entries(value as Record<string, unknown>)) walk(v, k, depth + 1);
+    if (typeof value === 'object') for (const [k, v] of Object.entries(value as Record<string, unknown>)) walk(v, k, key, depth + 1, isNote);
   };
-  if (op && typeof op === 'object') for (const [k, v] of Object.entries(op as Record<string, unknown>)) walk(v, k, 0);
+  if (op && typeof op === 'object') for (const [k, v] of Object.entries(op as Record<string, unknown>)) walk(v, k, '', 0, false);
   return out;
 };
+
+/** Every free-text string inside one op (ids, paths and styles skipped; bounded). */
+export const opTexts = (op: DocOp): string[] => opTextParts(op).map((p) => p.text);
 
 const ceilingFor = (doc: ComicDoc, accountCeiling?: ContentRating): ContentRating => minRating(audienceCeiling(doc), accountCeiling ?? PLATFORM_CEILING);
 
@@ -390,14 +402,14 @@ export function screenOpsText(
   for (const op of ops || []) {
     if (!op || typeof op !== 'object') continue;
     const dialogue = DIALOGUE_OPS.has(op.op);
-    for (const text of opTexts(op)) {
+    for (const { text, note } of opTextParts(op)) {
       const d: PrefilterDetail = prefilterDetail(text, ctx.rating);
       if (d.decision === 'clear') continue;
       if (d.decision === 'block') {
         void recordDecision({ userId: ctx.userId ?? null, projectId: ctx.projectId ?? doc.id, surface: 'patch', layer: 'prefilter', decision: 'block', categories: d.categories, effective: ctx.rating, severity: d.severity, contentHash: contentHash(text) });
         throw new StudioError('CONTENT_POLICY', `That text doesn't fit DreamStream's content rules (${categoryWords(d.categories)}) — try different wording.`, { status: 422 });
       }
-      if (!dialogue) continue;
+      if (!dialogue || note) continue;
       const strict = d.categories.filter((c) => DIALOGUE_STRICT.has(c));
       if (!strict.length) continue;
       void recordDecision({ userId: ctx.userId ?? null, projectId: ctx.projectId ?? doc.id, surface: 'patch', layer: 'prefilter', decision: 'adapt', categories: strict, effective: ctx.rating, severity: 0, contentHash: contentHash(text) });
