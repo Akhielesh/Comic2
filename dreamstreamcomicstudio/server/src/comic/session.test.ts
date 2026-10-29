@@ -407,6 +407,63 @@ describe('back-compat F1: legacy spec hashes are accepted once per load (recover
     expect(() => recoveryOps(broken, { now: Date.now(), allInFlight: true })).not.toThrow();
   });
 
+  // The likely variants come first for EVERY outer order (brief or line field order): with 5+ cast whose looks need
+  // reordering, the 2^n look masks of the first outer order must not use up the bound before the others are tried.
+  const sixLooks = (n: number) =>
+    Array.from({ length: n }, (_, i): Character => ({
+      id: `c${i}`, name: `C${i}`, tier: 'support', refs: [], sheet: emptyRender(),
+      // Writer key order (CHARACTER_LOOK_KEYS), which a jsonb reload reorders.
+      look: writerOrder({ summary: `s${i}`, age: 'a', build: 'b', hair: 'h', outfit: 'o', palette: 'p', marks: 'm' })
+    }));
+
+  for (const nCast of [5, 6, 7]) {
+    for (const briefOrder of ['sanitizer', 'type'] as const) {
+      it(`${nCast} cast with writer-ordered looks and a ${briefOrder}-order brief: the plan input hash migrates`, () => {
+        const doc = createEmptyDoc('plan-legacy', 'T', 1);
+        doc.brief =
+          briefOrder === 'sanitizer'
+            ? { title: 'T', notes: ['n'], logline: 'L', premise: 'P', genre: 'G', tone: 'To', audience: 'A', setting: 'S' }
+            : ({ title: 'T', logline: 'L', premise: 'P', genre: 'G', tone: 'To', audience: 'A', setting: 'S', notes: ['n'] } as ComicDoc['brief']);
+        doc.cast = sixLooks(nCast);
+        doc.planInputHash = legacyPlanInputHashOf(doc);
+        const stored = reload(doc);
+        expect(Object.keys(stored.cast[0].look)).not.toEqual(Object.keys(doc.cast[0].look));
+        expect(stored.planInputHash).not.toBe(planInputHashOf(stored));
+        const ops = legacySpecHashOps(stored);
+        expect(ops).toContainEqual({ op: 'plan_input_hash', hash: planInputHashOf(stored) });
+      });
+    }
+  }
+
+  it('an in_art page with 6 reorder-needing cast and director-tool line order (id last) still migrates', () => {
+    const doc = createEmptyDoc('inart-legacy', 'T', 1);
+    doc.format = { ...doc.format, lettering: 'in_art', pageCount: 1 };
+    doc.cast = sixLooks(6);
+    const ids = doc.cast.map((c) => c.id);
+    doc.pages = [
+      {
+        id: 'pg_1', n: 1, summary: 'Beat', layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+        panels: [1, 2, 3].map((k) => ({
+          id: `pn_${k}`, n: k, size: k === 1 ? ('wide' as const) : ('medium' as const), shot: 'medium' as const, action: `Moment ${k}.`, castIds: ids,
+          // The director's tools build a line id-last: { kind, text, speakerId, id }.
+          lines: [{ kind: 'speech' as const, text: `Line ${k}`, speakerId: ids[k], id: `ln_${k}` }]
+        })),
+        render: { status: 'ready', history: [], asset: generated('u/x/p/inart/img/p1.webp'), aspect: '2:3', origin: 'render' },
+        balloons: []
+      }
+    ];
+    doc.pages[0].render.specHash = legacySpecHashFor(doc, { kind: 'page', id: 'pg_1' });
+    const stored = reload(doc);
+    expect(isPageStale(stored, stored.pages[0])).toBe(true);
+    const fixed = applyOps(stored, legacySpecHashOps(stored));
+    expect(isPageStale(fixed, fixed.pages[0])).toBe(false);
+    expect(fixed.pages[0].render.specHash).toBe(pageSpecHash(fixed, fixed.pages[0]));
+    // A real line edit on that page still matches no variant.
+    const edited = applyOps(stored, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_2', id: 'ln_2', patch: { text: 'Another line' } }]);
+    const fixed2 = applyOps(edited, legacySpecHashOps(edited));
+    expect(isPageStale(fixed2, fixed2.pages[0])).toBe(true);
+  });
+
   it('getStudioSession runs it on load and persists the canonical hashes (no false "Out of date", no false redraw quote)', async () => {
     __resetSessionsForTests();
     const store = fakeDocStore();

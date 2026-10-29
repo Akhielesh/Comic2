@@ -169,8 +169,8 @@ export const listRenderTargets = (doc: ComicDoc): { target: RenderTarget; render
 
 /** At most this many key-order variants are tried per target (and for the plan input hash), once per load. */
 export const LEGACY_HASH_MAX_VARIANTS = 64;
-/** Looks reordered one by one (2^n combinations) when at most this many differ from the writer's order; beyond it only
- *  "all as loaded" and "all in the writer's order" are tried. */
+/** Every combination of looks (2^n) is tried when at most this many differ from the writer's order; beyond it only
+ *  "all as loaded", "all in the writer's order" and each look alone are tried. */
 const LEGACY_LOOK_FLIPS = 6;
 /** Line field orders the studio has written (writer: id first; the director tools: id last; the type's order). */
 const LEGACY_LINE_ORDERS: readonly (readonly string[])[] = [
@@ -197,18 +197,45 @@ const withKeyOrder = <T>(value: T, order: readonly string[]): T => {
 const sameKeyOrder = (a: unknown, b: unknown): boolean =>
   isRecord(a) && isRecord(b) ? Object.keys(a).join('\u0000') === Object.keys(b).join('\u0000') : true;
 
-/** Sets of cast ids whose look is put in the writer's order, one set per variant (the empty set first). */
-const lookFlipSets = (doc: ComicDoc, castIds: readonly string[]): Set<string>[] => {
+/**
+ * Sets of cast ids whose look is put in the writer's order, in tiers of likelihood: [none, all] first (a doc loaded
+ * as it was saved, or a whole drawing session's looks in the writer's order), then each look alone, then the other
+ * combinations by size (only while at most LEGACY_LOOK_FLIPS looks differ). Callers try a tier for EVERY outer order
+ * (brief or line field order) before the next tier, so the likely variants are never crowded out by the bound.
+ */
+const lookFlipTiers = (doc: ComicDoc, castIds: readonly string[]): Set<string>[][] => {
   const ids = [...new Set(castIds)].filter((id) => {
     const c = doc.cast.find((x) => x.id === id);
     return !!c && !sameKeyOrder(c.look, withKeyOrder(c.look, CHARACTER_LOOK_KEYS));
   });
-  if (!ids.length) return [new Set()];
-  if (ids.length > LEGACY_LOOK_FLIPS) return [new Set(), new Set(ids)];
-  const out: Set<string>[] = [];
-  for (let mask = 0; mask < 1 << ids.length; mask += 1) out.push(new Set(ids.filter((_, i) => mask & (1 << i))));
-  return out;
+  if (!ids.length) return [[new Set()]];
+  const tiers: Set<string>[][] = [[new Set(), new Set(ids)]];
+  if (ids.length === 1) return tiers;
+  tiers.push(ids.map((id) => new Set([id])));
+  if (ids.length > LEGACY_LOOK_FLIPS) return tiers;
+  const rest: Set<string>[] = [];
+  const full = (1 << ids.length) - 1;
+  for (let mask = 1; mask < full; mask += 1) {
+    const flip = new Set(ids.filter((_, i) => mask & (1 << i)));
+    if (flip.size > 1) rest.push(flip);
+  }
+  tiers.push(rest.sort((a, b) => a.size - b.size));
+  return tiers;
 };
+
+/** Every (outer order, flip set) pair, tier by tier across all outer orders, at most LEGACY_HASH_MAX_VARIANTS. */
+function* boundedVariants<O>(outers: readonly O[], tiers: Set<string>[][]): Generator<[O, Set<string>]> {
+  let n = 0;
+  for (const tier of tiers) {
+    for (const outer of outers) {
+      for (const flip of tier) {
+        if (n >= LEGACY_HASH_MAX_VARIANTS) return;
+        n += 1;
+        yield [outer, flip];
+      }
+    }
+  }
+}
 
 /** The doc with the chosen looks in the writer's order, and (for one page) its lines in a given field order. */
 const variantDoc = (doc: ComicDoc, flip: Set<string>, lines?: { pageId: string; order: readonly string[] }, briefOrder?: readonly string[]): ComicDoc => ({
@@ -222,7 +249,7 @@ const variantDoc = (doc: ComicDoc, flip: Set<string>, lines?: { pageId: string; 
     : doc.pages
 });
 
-/** Every key-order variant to try for a target, as loaded first, at most LEGACY_HASH_MAX_VARIANTS. */
+/** Every key-order variant to try for a target, as loaded first, most likely first, at most LEGACY_HASH_MAX_VARIANTS. */
 function* targetVariants(doc: ComicDoc, target: RenderTarget): Generator<ComicDoc> {
   let castIds: string[] = [];
   let lineOrders: (readonly string[] | undefined)[] = [undefined];
@@ -233,13 +260,8 @@ function* targetVariants(doc: ComicDoc, target: RenderTarget): Generator<ComicDo
     if (doc.format.lettering === 'in_art' && page.panels.some((p) => p.lines.length)) lineOrders = [undefined, ...LEGACY_LINE_ORDERS];
   } else if (target.kind === 'sheet') castIds = [target.id];
   else if (target.kind === 'cover') castIds = coverCastOf(doc).map((c) => c.id);
-  let n = 0;
-  for (const order of lineOrders) {
-    for (const flip of lookFlipSets(doc, castIds)) {
-      if (n >= LEGACY_HASH_MAX_VARIANTS) return;
-      n += 1;
-      yield variantDoc(doc, flip, order && target.kind === 'page' ? { pageId: target.id, order } : undefined);
-    }
+  for (const [order, flip] of boundedVariants(lineOrders, lookFlipTiers(doc, castIds))) {
+    yield variantDoc(doc, flip, order && target.kind === 'page' ? { pageId: target.id, order } : undefined);
   }
 }
 
@@ -281,15 +303,11 @@ export const legacySpecHashOps = (doc: ComicDoc): DocOp[] => {
   return ops;
 };
 
-/** Whether a stored pre-F1 planInputHash matches this doc under some key-order variant (bounded). */
+/** Whether a stored pre-F1 planInputHash matches this doc under some key-order variant (bounded, most likely first). */
 const legacyPlanMatches = (doc: ComicDoc, stored: string): boolean => {
-  let n = 0;
-  for (const briefOrder of [undefined, ...LEGACY_BRIEF_ORDERS]) {
-    for (const flip of lookFlipSets(doc, doc.cast.map((c) => c.id))) {
-      if (n >= LEGACY_HASH_MAX_VARIANTS) return false;
-      n += 1;
-      if (legacyPlanInputHashOf(variantDoc(doc, flip, undefined, briefOrder)) === stored) return true;
-    }
+  const briefOrders: (readonly string[] | undefined)[] = [undefined, ...LEGACY_BRIEF_ORDERS];
+  for (const [briefOrder, flip] of boundedVariants(briefOrders, lookFlipTiers(doc, doc.cast.map((c) => c.id)))) {
+    if (legacyPlanInputHashOf(variantDoc(doc, flip, undefined, briefOrder)) === stored) return true;
   }
   return false;
 };
