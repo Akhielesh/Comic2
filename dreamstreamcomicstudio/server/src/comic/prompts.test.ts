@@ -432,6 +432,12 @@ describe('compilePage', () => {
     // In-art pages: the off-panel balloon's tail points out of the panel.
     const inArt = compilePage(baseDoc((d) => (d.format.lettering = 'in_art')), pg).prompt;
     expect(inArt).toContain('OFF-PANEL VOICE: ARJUN (do not draw) — 1 balloon; its tail points out of the panel.');
+    // A talking prop listed in the panel is drawn (Props), so it speaks on-panel.
+    const shell = baseDoc((d) => d.cast.push(character('shell', 'Magic Shell', 'support', { kind: 'object', look: { summary: 'A glowing pink conch' } })));
+    const talking = compilePage(shell, page(1, [panel(1, ['maya', 'shell'], { lines: [line('speech', 'Listen…', 'shell')] })])).prompt;
+    expect(talking).toContain('Props: MAGIC SHELL (Image 2 — glowing pink conch).');
+    expect(talking).toContain('Speaks: MAGIC SHELL — 1 balloon;');
+    expect(talking).not.toContain('OFF-PANEL VOICE: MAGIC SHELL');
   });
 
   it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {

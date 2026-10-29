@@ -9,10 +9,12 @@
 //  - The PAGE is the unit: one image per page with panels, gutters and lettering space.
 //  - Every reference image is LABELED by index in a legend whose order matches the
 //    attachment order exactly, and never exceeds the model's caps (refs in models.ts).
-//  - One source of truth per fact: a character's look is stated once (cast block);
-//    panels only name who is in them.
-//  - Lettering never leaks prompt text: overlay pages are text-free with room left for
-//    balloons; in-art pages letter the script's lines verbatim and nothing else.
+//  - One source of truth per fact: a character's full look is stated once (cast block);
+//    each panel block names who is in it with a short identity anchor (≤ 12 words) and the
+//    box it fills, what it must show, and who speaks or is heard off-panel (plan §4.2).
+//  - Lettering never leaks prompt text: overlay pages are text-free with open background
+//    beside each speaker (never blank bars); in-art pages letter the script's lines verbatim
+//    and nothing else.
 //  - Non-humans are first-class cast: animals, creatures, robots and groups ("DUCKLINGS ×3")
 //    get the same identity lock as people; recurring props get a PROPS lock.
 //  - Every image carries the comic's content rating (PG-13 ceiling, kids lower) as an art
@@ -1399,7 +1401,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const whoBody = [peopleText || (viewerText ? '' : 'no characters'), viewerText].filter(Boolean).join('; ');
   const who = `Who: ${whoBody}.${things.length ? ` Props: ${things.map((s) => describe(s.id)).join('; ')}.` : ''}`;
 
-  const drawn = new Set(people.map((s) => s.id));
+  const drawn = new Set(staged.map((s) => s.id)); // a talking prop listed under Props is drawn too
   const speaks = speaksLine(doc, panel, drawn, ctx);
 
   const mood = clean(panel.mood) ? `Mood: ${sentence(safeText(panel.mood!, opts))}` : '';
