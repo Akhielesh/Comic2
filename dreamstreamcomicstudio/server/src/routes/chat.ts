@@ -215,6 +215,14 @@ type PreparedChat = {
    * no paid agent meta-tools. Set only by freeModelsOnlyPlan().
    */
   freeModelsOnly?: boolean;
+  /**
+   * Free-only mode (the client's `X-Free-Only` header, on by default): the user asked for free
+   * models only, so the turn is offered no paid retry — not the provider-level `fallbackModel`
+   * and not the engine's own timeout / empty-answer retry (the provider request carries
+   * `freeOnly`). Set by prepareChat for OpenRouter turns; the budget re-plan (freeModelsOnly)
+   * stays separate because it also strips the paid web plugin and the paid agent meta-tools.
+   */
+  noPaidRetry?: boolean;
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -734,7 +742,26 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, temperature: chatTemperature, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments, userId: req.user?.id }
+    prepared: {
+      resolved,
+      messages,
+      model,
+      requestedModel,
+      reasoningLevel,
+      webSearch,
+      temperature: chatTemperature,
+      systemPrompt,
+      fallbackModels,
+      dreamstreamContextJson,
+      tools: [...builtinTools, ...metaTools, ...mcpTools],
+      clientContext,
+      customAgents,
+      attachments,
+      userId: req.user?.id,
+      // Free-only must mean no paid retry (services/freeOnlyMode.ts: "the server blocks rather than
+      // silently charging a paid fallback"). Only OpenRouter turns ever carry one.
+      ...(freeOnly && resolved.provider === 'openrouter' ? { noPaidRetry: true } : {})
+    }
   };
 };
 
@@ -781,12 +808,14 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
 
 /**
  * Every model a chat call may end up billed for (usage budget, P1-LIMITS): the OpenRouter
- * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which
- * runChatParams and the swarm always send on OpenRouter — even after a free-only chain).
- * reserveForOperation prices the hold at the most expensive of them, so a `:free` primary with a
- * paid fallback can never slip past an exhausted budget at $0. Exported for sibling routes that
- * reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid retry, so none is
- * priced.
+ * `models` chain plus the provider-level paid retry (`fallbackModel: TEXT_FALLBACK`, which the
+ * swarm and /api/recipes always send on OpenRouter, and runChatParams sends unless the turn is
+ * free-only). reserveForOperation prices the hold at the most expensive of them, so a `:free`
+ * primary with a paid fallback can never slip past an exhausted budget at $0. Exported for
+ * sibling routes that reuse prepareChat (e.g. /api/recipes). A free-models-only plan sends no paid
+ * retry, so none is priced. A free-only (X-Free-Only) turn keeps the paid net priced even though
+ * runChatParams no longer sends it: the same prepared chat feeds the swarm and the recipe routes,
+ * whose engines still carry it, and an over-held free turn is released at settle — never charged.
  */
 export const chatPricedModels = (p: {
   resolved: { provider: string };
@@ -825,10 +854,11 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
-  // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for it).
-  fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly ? TEXT_FALLBACK : undefined,
+  // The provider-level paid retry is never sent on a free-models-only plan (nothing reserved for
+  // it) nor on a free-only turn (the user asked for free models only).
+  fallbackModel: p.resolved.provider === 'openrouter' && !p.freeModelsOnly && !p.noPaidRetry ? TEXT_FALLBACK : undefined,
   // …and the engine's own timeout / empty-answer retry never switches to a paid model either.
-  noPaidRetry: Boolean(p.freeModelsOnly),
+  noPaidRetry: Boolean(p.freeModelsOnly || p.noPaidRetry),
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
   // Governed per-turn cap: no further tool round once the metered spend exceeds the hold.
@@ -1193,11 +1223,26 @@ const withFreeModelsNotice = <T extends { notices?: CapabilityNotice[] }>(
   payload: T,
   gate: ChatGate,
   servedModel: string | undefined,
-  opts: { swarm?: boolean } = {}
+  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
 ): T => {
-  const notice = freeModelsNotice(gate, servedModel, opts);
+  const notice = freeModelsNotice(gate, servedModel, opts) ?? (opts.freeOnlySwarm ? freeOnlySwarmNotice(servedModel) : null);
   return notice ? { ...payload, notices: [...(payload.notices || []), notice] } : payload;
 };
+
+/**
+ * A free-only (X-Free-Only) /swarm request is answered by one free model, because the agent team
+ * always keeps a paid retry. Said plainly, so the missing agent traces aren't a mystery.
+ */
+const freeOnlySwarmNotice = (servedModel: string | undefined): CapabilityNotice | null =>
+  servedModel && !hasFreeSuffix(servedModel)
+    ? null
+    : {
+        tool: 'free_only',
+        level: 'info',
+        message:
+          'Free-Only mode is on, so one free model answered instead of the agent team — the team keeps a paid model as its backup. Turn Free-Only mode off in Settings to use the agent team.',
+        at: new Date().toISOString()
+      };
 
 // ── Usage budget: background chat helpers ───────────────────────────────────────────────────────
 // Enhance / title / memory / follow-ups (and the server's auto-memory) run paid models on the
@@ -1993,13 +2038,14 @@ const startHeartbeat = (res: any) =>
 /**
  * One streamed chat turn on an already-reserved gate: `delta`/`reasoning`/`reset`/`agent_step`
  * events, then `final` (with billing) or `error`. Shared by /stream and by /swarm when the
- * usage budget re-planned the turn onto free models (the agent team needs paid models).
+ * usage budget re-planned the turn onto free models or the turn is free-only (the agent team
+ * always keeps a paid retry).
  */
 const streamChatTurn = async (
   req: any,
   res: any,
   gate: Extract<ChatGate, { ok: true }>,
-  opts: { swarm?: boolean } = {}
+  opts: { swarm?: boolean; freeOnlySwarm?: boolean } = {}
 ): Promise<void> => {
   const { p, reserve } = gate;
   const send = openEventStream(res);
@@ -2116,9 +2162,13 @@ chatRouter.post('/swarm', async (req, res, next) => {
     return next(err);
   }
 
-  // The agent team always keeps a paid retry, so a free-models-only turn is answered by one free
-  // model instead (same SSE events; the client renders a final without traces).
-  if (gate.p.freeModelsOnly) return streamChatTurn(req, res, gate, { swarm: true });
+  // The agent team always keeps a paid retry (runSwarm's TEXT_FALLBACK), so a free-models-only
+  // turn (the budget re-plan) and a free-only turn (X-Free-Only: no paid retry, ever) are answered
+  // by one free model instead (same SSE events; the client renders a final without traces, and the
+  // reply carries a note saying why).
+  if (gate.p.freeModelsOnly || gate.p.noPaidRetry) {
+    return streamChatTurn(req, res, gate, { swarm: true, freeOnlySwarm: !gate.p.freeModelsOnly });
+  }
 
   const { p, reserve } = gate;
   const send = openEventStream(res);

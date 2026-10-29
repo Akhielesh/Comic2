@@ -1,7 +1,10 @@
 // "Usage left" meter (P1-LIMITS). One calm pill — a small gauge and the percent left — that opens
 // the details: how much is left in friendly units ("about 150 standard comic pages left"), that it
 // is shared across every studio, that the user's own keys never use it, and — when it runs out —
-// the honest hard stop with the two real ways forward (a top-up, or their own key).
+// the honest hard stop with the two real ways forward (a top-up, or their own key). A personal key
+// already on file is never "added" again: the card says it is on file and what happens to it —
+// the consent action in 'ask' mode (same as the chat banner and Settings), that it is what runs
+// now in 'auto' mode, or that it is set to never be used in 'never' mode.
 //
 // Users never see dollars here. Admins and exempt accounts have no limit, so nothing renders.
 // Calm-studio glass: --ds-* tokens, tabular numbers, 44 px touch targets on coarse pointers,
@@ -13,6 +16,7 @@ import { Gauge, KeyRound } from 'lucide-react';
 import {
   USAGE_EXHAUSTED_COPY,
   formatPctLeft,
+  patchBillingPrefs,
   resetsLabel,
   showsUsageMeter,
   usageTone,
@@ -24,6 +28,28 @@ const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(
 
 /** Deep link into Settings → API keys (App.tsx restores ?view=settings&tab=settings). */
 export const API_KEYS_HREF = '/?view=settings&tab=settings';
+
+/** The exhausted-state sentence — honest about a personal key on file (never "add" a key they already added). */
+export const usageExhaustedCopy = (status: Pick<AllowanceStatus, 'resetsAt' | 'byokAvailable' | 'byokFallbackMode'>): string => {
+  const reset = resetsLabel(status.resetsAt);
+  if (!status.byokAvailable) {
+    return reset
+      ? `You've used all of this month's DreamStream usage. It comes back on ${reset} — or add your own API key in Settings → API keys to keep going now.`
+      : USAGE_EXHAUSTED_COPY;
+  }
+  const used = reset ? "You've used all of this month's DreamStream usage." : "You've used all of your DreamStream usage.";
+  const or = reset ? `It comes back on ${reset} — or` : "It doesn't reset on its own — ask us for a top-up, or";
+  if (status.byokFallbackMode === 'auto') {
+    return `${used} ${reset ? `It comes back on ${reset}; until then generation` : 'Generation now'} runs on your own key — its own limits apply.`;
+  }
+  if (status.byokFallbackMode === 'never') {
+    return `${used} ${or} switch to your own key — it's on file but set to never be used (change that in Settings → API keys).`;
+  }
+  return `${used} ${or} continue on your own key (it's on file)${reset ? ' now' : ''}. Its own limits still apply.`;
+};
+
+const CTA_CLASS =
+  'inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50 coarse:h-11';
 
 const TONE_STROKE: Record<ReturnType<typeof usageTone>, string> = {
   ok: 'text-emerald-600 dark:text-emerald-400',
@@ -130,6 +156,17 @@ UsageMeterPill.displayName = 'UsageMeterPill';
 export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => void }> = ({ status }) => {
   const tone = usageTone(status);
   const reset = resetsLabel(status.resetsAt);
+  const [saving, setSaving] = useState(false);
+  // A personal key on file: 'ask' → the consent action lives here too; 'auto' → it is what runs
+  // now; 'never' → it is on file but not used until the user changes that in Settings.
+  const ownKey = status.byokAvailable ? status.byokFallbackMode : null;
+  const consent = async () => {
+    if (saving) return;
+    setSaving(true);
+    // Publishes to the shared store: every meter and the chat banner follow at once.
+    await patchBillingPrefs({ byokFallbackMode: 'auto' });
+    setSaving(false);
+  };
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4 text-[var(--ds-ink)]">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
@@ -147,18 +184,29 @@ export const UsageDetails: React.FC<{ status: AllowanceStatus; onClose?: () => v
 
       {status.exhausted ? (
         <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] p-3" role="status">
-          <p className="text-[13px] leading-snug">
-            {reset
-              ? `You've used all of this month's DreamStream usage. It comes back on ${reset} — or add your own API key in Settings → API keys to keep going now.`
-              : USAGE_EXHAUSTED_COPY}
-          </p>
-          <p className="mt-1.5 text-[12px] text-[var(--ds-muted)]">Nothing more is spent until you choose one of these.</p>
-          <a
-            href={API_KEYS_HREF}
-            className="mt-2.5 inline-flex h-9 items-center gap-1.5 rounded-full bg-[var(--ds-accent)] px-3.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11"
-          >
-            <KeyRound className="h-4 w-4" aria-hidden /> Add your own key
-          </a>
+          <p className="text-[13px] leading-snug">{usageExhaustedCopy(status)}</p>
+          {ownKey !== 'auto' && (
+            <p className="mt-1.5 text-[12px] text-[var(--ds-muted)]">Nothing more is spent until you choose one of these.</p>
+          )}
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+            {ownKey === 'ask' ? (
+              <button type="button" onClick={() => void consent()} disabled={saving} className={CTA_CLASS}>
+                <KeyRound className="h-4 w-4" aria-hidden /> Continue with my key
+              </button>
+            ) : ownKey === null ? (
+              <a href={API_KEYS_HREF} className={CTA_CLASS}>
+                <KeyRound className="h-4 w-4" aria-hidden /> Add your own key
+              </a>
+            ) : null}
+            {ownKey !== null && (
+              <a
+                href={API_KEYS_HREF}
+                className="inline-flex h-9 items-center text-[12.5px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-colors hover:text-[var(--ds-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11"
+              >
+                API keys
+              </a>
+            )}
+          </div>
         </div>
       ) : (
         <p className="mt-3 text-[12.5px] leading-snug text-[var(--ds-muted)]">
