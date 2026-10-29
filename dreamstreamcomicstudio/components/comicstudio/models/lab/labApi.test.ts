@@ -8,7 +8,7 @@ const get = vi.fn();
 vi.mock('../../../../services/apiClient', async (orig) => ({ ...(await orig<typeof import('../../../../services/apiClient')>()), post: (...a: unknown[]) => post(...a), get: (...a: unknown[]) => get(...a) }));
 
 const { ApiError } = await import('../../../../services/apiClient');
-const { LabApiError, asBlindPair, asOverview, fetchLabOverview, formatLabUsd, newClickId, runLabCheck } = await import('./labApi');
+const { LabApiError, asBlindPair, asOverview, fetchLabOverview, formatLabUsd, newClickId, runLabCheck, voteBlindPair } = await import('./labApi');
 
 beforeEach(() => {
   post.mockReset();
@@ -28,8 +28,17 @@ describe('labApi', () => {
     const run = { id: 'r1', checkId: 'D4', status: 'ok', quotedUsd: 0.018, model: { id: 'qwen/qwen-image-2.1-turbo', nickname: 'Qwen 2.1 Turbo' }, facts: {} };
     const ready = asBlindPair({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'ready', a: { slot: 'A', imageUrl: 'https://x.example/a.webp', run }, b: { slot: 'B', imageUrl: 'javascript:alert(1)' } });
     expect(ready).toEqual({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'ready', a: { slot: 'A', imageUrl: 'https://x.example/a.webp' }, b: { slot: 'B' } });
-    const voted = asBlindPair({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'voted', pick: 'A', a: { slot: 'A', run }, b: { slot: 'B', run: { ...run, id: 'r2' } } });
+    const voted = asBlindPair({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'voted', pick: 'A', seen: 'abcdef0123456789abcdef01', a: { slot: 'A', run }, b: { slot: 'B', run: { ...run, id: 'r2' } } });
     expect(voted?.a?.run?.model.nickname).toBe('Qwen 2.1 Turbo');
+    expect(voted).not.toHaveProperty('seen'); // only a ready pair carries the tag of what is shown
+    expect(asBlindPair({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'ready', seen: 'abcdef0123456789abcdef01' })?.seen).toBe('abcdef0123456789abcdef01');
+    expect(asBlindPair({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'ready', seen: '<script>' })).not.toHaveProperty('seen');
+  });
+
+  it('a vote carries the tag of the drawings it was cast on', async () => {
+    post.mockResolvedValueOnce({ id: 'd4-sheet-1', label: 'Sheet 1', state: 'voted', pick: 'B' });
+    await voteBlindPair('d4-sheet-1', 'B', 'abcdef0123456789abcdef01');
+    expect(post).toHaveBeenCalledWith('/api/comic/models/lab/blind/d4-sheet-1/vote', { pick: 'B', seen: 'abcdef0123456789abcdef01' });
   });
 
   it('an item without a quote can never run; malformed checks and items are dropped', () => {

@@ -8,13 +8,13 @@ import type { BlindPair, LabOverview, LabRun, LabRunAnswer } from './labApi';
 
 const fetchOverview = vi.fn<() => Promise<LabOverview>>();
 const runCheck = vi.fn<(input: { itemId: string; idempotencyKey: string; quotedUsd: number }) => Promise<LabRunAnswer>>();
-const vote = vi.fn<(pairId: string, pick: string) => Promise<BlindPair>>();
+const vote = vi.fn<(pairId: string, pick: string, seen?: string) => Promise<BlindPair>>();
 const watermark = vi.fn<(runId: string, visible: boolean | null) => Promise<LabRun>>();
 vi.mock('./labApi', async (orig) => ({
   ...(await orig<typeof import('./labApi')>()),
   fetchLabOverview: () => fetchOverview(),
   runLabCheck: (input: { itemId: string; idempotencyKey: string; quotedUsd: number }) => runCheck(input),
-  voteBlindPair: (pairId: string, pick: string) => vote(pairId, pick),
+  voteBlindPair: (pairId: string, pick: string, seen?: string) => vote(pairId, pick, seen),
   setLabWatermark: (runId: string, visible: boolean | null) => watermark(runId, visible)
 }));
 
@@ -80,6 +80,7 @@ const readyPair: BlindPair = {
   id: 'd4-sheet-1',
   label: 'Sheet 1 · Maya',
   state: 'ready',
+  seen: '0123456789abcdef01234567',
   a: { slot: 'A', imageUrl: 'https://signed.example/u/a/p/model-lab/ref/1.webp' },
   b: { slot: 'B', imageUrl: 'https://signed.example/u/a/p/model-lab/ref/2.webp' }
 };
@@ -320,7 +321,7 @@ describe('ModelLabSection', () => {
     });
     fireEvent.click(within(pair).getByRole('button', { name: 'B is better' }));
     await act(async () => undefined);
-    expect(vote).toHaveBeenCalledWith('d4-sheet-1', 'B');
+    expect(vote).toHaveBeenCalledWith('d4-sheet-1', 'B', '0123456789abcdef01234567'); // tied to the drawings shown
     const after = document.querySelector('[data-blind-pair="d4-sheet-1"]') as HTMLElement;
     expect(after).toHaveTextContent('You picked B — Qwen 2.1 Turbo.');
     expect(after).toHaveTextContent('A · Seedream 5 Flash');

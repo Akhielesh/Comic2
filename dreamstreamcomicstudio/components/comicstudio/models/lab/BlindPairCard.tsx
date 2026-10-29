@@ -50,7 +50,7 @@ export const BlindPairCard: React.FC<{ pair: BlindPair; onChange?: (pair: BlindP
     setVoting(pick);
     setError(null);
     try {
-      const revealed = await voteBlindPair(current.id, pick);
+      const revealed = await voteBlindPair(current.id, pick, current.seen);
       setCurrent(revealed);
       onChange?.(revealed);
     } catch (err) {

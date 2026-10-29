@@ -136,6 +136,9 @@ export interface BlindPair {
   a?: BlindSide;
   b?: BlindSide;
   pick?: BlindPick;
+  /** A ready pair: the server's tag of the two drawings shown. The vote sends it back, so a vote always records the
+   *  pair the owner actually saw (the server answers PAIR_CHANGED otherwise). */
+  seen?: string;
 }
 
 export interface LabOverview {
@@ -297,6 +300,7 @@ export const asBlindPair = (v: unknown): BlindPair | undefined => {
   const state = v.state === 'ready' || v.state === 'voted' ? v.state : v.state === 'waiting' ? 'waiting' : undefined;
   if (!id || !label || !state) return undefined;
   const pick = v.pick === 'A' || v.pick === 'B' || v.pick === 'tie' ? v.pick : undefined;
+  const seen = state === 'ready' && typeof v.seen === 'string' && /^[0-9a-f]{8,64}$/.test(v.seen) ? v.seen : undefined;
   const a = asSide(v.a, 'A');
   const b = asSide(v.b, 'B');
   // Names never reach a pair before the vote, even if a server sent them.
@@ -308,7 +312,8 @@ export const asBlindPair = (v: unknown): BlindPair | undefined => {
     ...(Array.isArray(v.waitingFor) ? { waitingFor: v.waitingFor.map((w) => text(w, 80)).filter((w): w is string => !!w) } : {}),
     ...(a ? { a: blind(a) } : {}),
     ...(b ? { b: blind(b) } : {}),
-    ...(pick ? { pick } : {})
+    ...(pick ? { pick } : {}),
+    ...(seen ? { seen } : {})
   };
 };
 
@@ -415,9 +420,10 @@ export async function setLabWatermark(runId: string, visible: boolean | null): P
   }
 }
 
-export async function voteBlindPair(pairId: string, pick: BlindPick): Promise<BlindPair> {
+/** Vote on a ready pair; `seen` is the pair's tag as shown (BlindPair.seen), so the vote is tied to those drawings. */
+export async function voteBlindPair(pairId: string, pick: BlindPick, seen?: string): Promise<BlindPair> {
   try {
-    const pair = asBlindPair(await post<unknown, unknown>(`${MODEL_LAB_PATH}/blind/${encodeURIComponent(pairId)}/vote`, { pick }));
+    const pair = asBlindPair(await post<unknown, unknown>(`${MODEL_LAB_PATH}/blind/${encodeURIComponent(pairId)}/vote`, { pick, ...(seen ? { seen } : {}) }));
     if (!pair) throw new LabApiError("The vote was sent but its answer couldn't be read. Refresh the lab.", 502);
     return pair;
   } catch (err) {

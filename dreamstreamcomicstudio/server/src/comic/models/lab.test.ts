@@ -526,7 +526,29 @@ describe('D3 watermark and D4 blind test', () => {
     expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-page-1', { pick: 'A' }))).toBe('PAIR_NOT_READY');
     expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'C' }))).toBe('BAD_REQUEST');
 
-    const revealed: BlindPairView = await h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'B' });
+    // While a pair waits for its vote, neither side can be redrawn: one image would change and A/B would give it away.
+    const callsBefore = h.calls.length;
+    const sheetItem = o.checks.find((c) => c.id === 'D4')!.items.find((i) => i.id === 'd4-seedream-5-0-flash-sheet-1')!;
+    expect(sheetItem).toMatchObject({ canRun: false, reason: 'Vote on Sheet 1 · Maya first — a new drawing now would show which side is which model.' });
+    let redraw: unknown;
+    try {
+      await runItem(h, 'd4-seedream-5-0-flash-sheet-1');
+    } catch (e) {
+      redraw = e;
+    }
+    expect(isLabError(redraw) && redraw.labCode).toBe('NOT_RUNNABLE');
+    expect((redraw as Error).message).toBe('Vote on Sheet 1 · Maya first — a new drawing now would show which side is which model. Nothing was charged.');
+    expect(h.calls).toHaveLength(callsBefore);
+    // A side of a pair still waiting for the other model can be redrawn (no image is shown yet).
+    expect(o.checks.find((c) => c.id === 'D4')!.items.find((i) => i.id === 'd4-qwen-image-2.1-turbo-page-1')!.canRun).toBe(true);
+
+    // The vote names the drawings it was cast on: a stale or missing tag records nothing.
+    expect(pair.seen).toMatch(/^[0-9a-f]{24}$/);
+    expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'B' }))).toBe('PAIR_CHANGED');
+    expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'B', seen: '0'.repeat(24) }))).toBe('PAIR_CHANGED');
+    expect(h.store.voteRows).toEqual([]);
+
+    const revealed: BlindPairView = await h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'B', seen: pair.seen });
     expect(revealed.state).toBe('voted');
     expect(revealed.pick).toBe('B');
     const names = [revealed.a!.run!.model.nickname, revealed.b!.run!.model.nickname].sort();
@@ -534,11 +556,18 @@ describe('D3 watermark and D4 blind test', () => {
     // The image the owner saw as A is the run revealed as A.
     expect(revealed.a!.imageUrl).toBe(pair.a!.imageUrl);
     expect(revealed.a!.run!.facts).toMatchObject({ width: 150, height: 200, refsSent: 0 });
-    expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'A' }))).toBe('ALREADY_VOTED');
+    expect(await labCodeOf(h.lab.vote(ADMIN, 'd4-sheet-1', { pick: 'A', seen: pair.seen }))).toBe('ALREADY_VOTED');
     expect((await h.lab.setWatermark(ADMIN, sheetRun.id, { visible: false })).facts.watermark?.visible).toBe(false);
     // Other pairs stay blind.
     const after = await h.lab.overview(ADMIN);
     expect(after.blind.find((p) => p.id === 'd4-sheet-2')!.a!.run).toBeUndefined();
+    expect(after.blind.find((p) => p.id === 'd4-sheet-1')!.seen).toBeUndefined(); // only a ready pair carries a tag
+    // After the vote a side can be drawn again; the voted pair keeps the drawings the owner judged.
+    expect(after.checks.find((c) => c.id === 'D4')!.items.find((i) => i.id === 'd4-seedream-5-0-flash-sheet-1')!.canRun).toBe(true);
+    await runItem(h, 'd4-seedream-5-0-flash-sheet-1');
+    const stillVoted = (await h.lab.overview(ADMIN)).blind.find((p) => p.id === 'd4-sheet-1')!;
+    expect(stillVoted.a!.run!.id).toBe(revealed.a!.run!.id);
+    expect(stillVoted.b!.run!.id).toBe(revealed.b!.run!.id);
   });
 });
 

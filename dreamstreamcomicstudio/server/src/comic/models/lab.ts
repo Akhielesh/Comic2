@@ -28,7 +28,7 @@
 // PriceBook's observed costs learn from it) and a lab run row whose JSON holds every fact (pixel size, file size,
 // latency, provider-reported model version, what the transport actually sent, watermark yes/no).
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import type { AspectRatio, Resolution } from '../../../../shared/comic/doc.js';
 import type { HealthState, ModelHealth } from '../../../../shared/comic/modelHealth.js';
@@ -988,6 +988,9 @@ export interface BlindPairView {
   a?: BlindSideView;
   b?: BlindSideView;
   pick?: BlindPick;
+  /** A ready pair: an opaque tag of the two drawings shown (no model, run id or cost in it). The vote sends it back,
+   *  so a vote always records the pair the owner actually saw. */
+  seen?: string;
 }
 
 export interface LabOverview {
@@ -1040,7 +1043,8 @@ export type LabErrorCode =
   | 'NOT_FOUND'
   | 'PAIR_NOT_READY'
   | 'ALREADY_VOTED'
-  | 'NOT_DRAWN';
+  | 'NOT_DRAWN'
+  | 'PAIR_CHANGED';
 
 export type LabError = StudioError & { labCode: LabErrorCode; details?: Record<string, unknown> };
 
@@ -1130,6 +1134,13 @@ const imagesApiSkipNote = (item: LabItem, runs: LabRunRow[], now: number): strin
   if (!Number.isFinite(at) || now - at >= IMAGES_API_SKIP_MS) return undefined;
   return `OpenRouter's Images API answered ${last!.result.httpStatus ?? 404} for this model at ${hhmm(at)} UTC. Until about ${hhmm(at + IMAGES_API_SKIP_MS)} UTC our transport may skip it; if it does, the lab stops before sending this call and nothing is charged.`;
 };
+
+/** A D4 side whose pair is drawn and waiting for the vote: a redraw now would change one image and give A/B away. */
+const pairReadyCopy = (label: string): string => `Vote on ${label} first — a new drawing now would show which side is which model.`;
+
+/** The tag of a ready pair's two drawings, in A/B order (sha256 of their random preview paths). */
+const seenTag = (a: LabRunRow, b: LabRunRow): string =>
+  createHash('sha256').update(`${a.result.imagePath ?? a.id}|${b.result.imagePath ?? b.id}`).digest('hex').slice(0, 24);
 
 const capCopy = (spent: number, cap: number, quote: number): string =>
   `Today's lab budget can't cover this: ${money(spent)} of ${money(cap)} used (UTC day), and this check is quoted at ${money(quote)}. It resets at 00:00 UTC. ${NOTHING_CHARGED}`;
@@ -1301,7 +1312,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         const imageUrl = r.result.imagePath ? urls[r.result.imagePath] : undefined;
         return p.state === 'voted' ? { slot, ...(imageUrl ? { imageUrl } : {}), run: runView(r, now, urls) } : { slot, ...(imageUrl ? { imageUrl } : {}) };
       };
-      return { ...base, a: side('A', p.a!), b: side('B', p.b!), ...(p.vote ? { pick: p.vote.pick } : {}) };
+      return { ...base, a: side('A', p.a!), b: side('B', p.b!), ...(p.vote ? { pick: p.vote.pick } : {}), ...(p.state === 'ready' ? { seen: seenTag(p.a!, p.b!) } : {}) };
     });
   };
 
@@ -1323,6 +1334,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       await Promise.all(models.map(async (id) => [id, labModel(id) ? await healthOf(labModel(id)!, keys) : null] as const))
     );
 
+    const pairState = new Map(pairsOf(runs, votes).map((p) => [p.pair.id, p.state] as const));
+
     const itemView = (item: LabItem): LabItemView => {
       const spec = labModel(item.modelId);
       const refs = refsPlan(item, latest);
@@ -1333,6 +1346,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       if (item.unavailable) reason = item.unavailable;
       else if (!keys) reason = "The platform OpenRouter key isn't set on this server.";
       else if (!store || !deps.storage) reason = "Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep.";
+      else if (item.pair && pairState.get(item.pair.id) === 'ready') reason = pairReadyCopy(item.pair.label);
       else if (!quote) reason = `There's no price to quote for ${spec?.nickname ?? item.modelId} at ${item.res}, so the lab won't run it.`;
       else if (health?.state === 'down') reason = downCopy(spec?.nickname ?? item.modelId, health);
       else if (spentUsd + quote.usd > capUsd + 1e-9) reason = capCopy(spentUsd, capUsd, quote.usd);
@@ -1488,10 +1502,19 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     if (inflightKey) throw labError('LAB_BUSY', 409, `Another lab check is running. Wait for it to finish — one paid call at a time. ${NOTHING_CHARGED}`);
     inflightKey = input.key;
     try {
+      const recentRuns = item.pair || item.references === 'own_sheets' ? await store.recent(LAB_RECENT_LIMIT) : [];
+      // Blind test: while a pair waits for its vote, neither side may be redrawn (one image would change, and the
+      // re-sorted A/B would tell which side is which model). Checked while this click holds the in-flight slot, so no
+      // other run can complete the pair in between.
+      if (item.pair) {
+        const pair = pairsOf(recentRuns, await store.votes()).find((p) => p.pair.id === item.pair!.id);
+        if (pair?.state === 'ready') throw labError('NOT_RUNNABLE', 409, `${pairReadyCopy(item.pair.label)} ${NOTHING_CHARGED}`);
+      }
+
       const health = await healthOf(spec, keys);
       if (health?.state === 'down') throw labError('PROVIDER_DOWN', 503, downCopy(spec.nickname, health), { health });
 
-      const latest = item.references === 'own_sheets' ? latestOk(await store.recent(LAB_RECENT_LIMIT)) : new Map<string, LabRunRow>();
+      const latest = item.references === 'own_sheets' ? latestOk(recentRuns) : new Map<string, LabRunRow>();
       const references = await loadReferences(item, latest);
       const prices = await deps.prices(adminId).catch(() => null);
       const quote = quoteLabItem(item, prices, references.length);
@@ -1604,6 +1627,10 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     if (!pair) throw labError('NOT_FOUND', 404, 'There is no such blind pair.');
     if (pair.state === 'voted') throw labError('ALREADY_VOTED', 409, `You already voted on ${pair.pair.label}.`);
     if (pair.state !== 'ready' || !pair.a || !pair.b) throw labError('PAIR_NOT_READY', 409, `Both models need to draw ${pair.pair.label} before you can compare them.`);
+    // The vote names the drawings it was cast on: if the pair is not the one the owner saw, nothing is recorded.
+    if (typeof b.seen !== 'string' || b.seen !== seenTag(pair.a, pair.b)) {
+      throw labError('PAIR_CHANGED', 409, `The drawings for ${pair.pair.label} changed since you opened them, so this vote wasn't saved. Refresh the lab and vote on what you see.`);
+    }
     const recorded = await store.addVote({ pairId, adminId, pick: b.pick, aRunId: pair.a.id, bRunId: pair.b.id });
     if (recorded === 'exists') throw labError('ALREADY_VOTED', 409, `You already voted on ${pair.pair.label}.`);
     try {

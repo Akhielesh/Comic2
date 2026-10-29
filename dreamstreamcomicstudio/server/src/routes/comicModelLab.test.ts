@@ -206,10 +206,13 @@ describe('running checks over HTTP', () => {
     const pair = o.blind.find((p) => p.id === 'd4-sheet-2')!;
     expect(pair.state).toBe('ready');
     expect(JSON.stringify(pair)).not.toMatch(/seedream|qwen|Seedream|Qwen/);
-    const voted = await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'tie' } });
+    expect(pair.seen).toMatch(/^[0-9a-f]{24}$/);
+    // A vote without the tag of the drawings it was cast on records nothing.
+    expect(await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'tie' } })).toMatchObject({ status: 409, body: { error: { code: 'PAIR_CHANGED' } } });
+    const voted = await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'tie', seen: pair.seen } });
     expect(voted.status).toBe(200);
     expect([voted.body.a.run.model.nickname, voted.body.b.run.model.nickname].sort()).toEqual(['Qwen 2.1 Turbo', 'Seedream 5 Flash']);
-    expect(await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'A' } })).toMatchObject({ status: 409, body: { error: { code: 'ALREADY_VOTED' } } });
+    expect(await call('/api/comic/models/lab/blind/d4-sheet-2/vote', { method: 'POST', headers: admin, body: { pick: 'A', seen: pair.seen } })).toMatchObject({ status: 409, body: { error: { code: 'ALREADY_VOTED' } } });
     expect(await call('/api/comic/models/lab/blind/NOT_A_PAIR!/vote', { method: 'POST', headers: admin, body: { pick: 'A' } })).toMatchObject({ status: 404 });
   });
 
