@@ -1258,7 +1258,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         />
       )}
       {!(letteringEditable && lettering) && undoPill /* Undo / redo stay one tap away in every mode. */}
-      {chips}
+      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0) && (
+        // The status chips move as one line (they shrink and truncate, never stack): a chip wrapped under
+        // another put each one's 44 px area on its neighbour's (fold5 dense page).
+        <span className="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-group">
+          {chips}
+        </span>
+      )}
       {languageRow}
       <span className="ml-auto hidden text-[11px] text-[var(--ds-muted)] xl:inline">
         {hint ??
