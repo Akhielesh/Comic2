@@ -22,3 +22,7 @@ export * from './library.js';
 export * from './refRanking.js';
 export * from './textLayout.js';
 export * from './translationPlan.js';
+// W-M (models · reliability): the model lock, per-comic insights and provider health contracts
+export * from './modelHealth.js';
+export * from './modelLock.js';
+export * from './modelInsights.js';

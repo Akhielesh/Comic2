@@ -100,12 +100,16 @@ vi.mock('./library/index', async () => {
 
 import {
   BUILTIN_CARD_TYPES,
+  featureModules,
   registeredAdminSections,
   registeredCard,
   registeredCardTypes,
   registeredHeaderSlots,
   registeredTabs
 } from './features';
+import { feature as modelsFeature } from './models/index';
+import { feature as insightsFeature } from './insights/index';
+import { feature as reliabilityFeature } from './reliability/index';
 import { CardRenderer } from './conversation/cards/CardRenderer';
 import { BoardPane } from './board/BoardPane';
 import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
@@ -122,6 +126,17 @@ describe('features registry', () => {
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
     // Admin sections keep feature order: safety (real) before library (mock).
     expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library']);
+  });
+
+  it('W-M seams: models, insights and reliability are registered last (lowest precedence), valid and still empty', () => {
+    const mods = featureModules();
+    expect(mods.slice(-3)).toEqual([modelsFeature, insightsFeature, reliabilityFeature]);
+    for (const mod of [modelsFeature, insightsFeature, reliabilityFeature]) {
+      expect(mod).toEqual({}); // M1-* fill them; an empty module contributes nothing
+    }
+    // `model_outage` is not a built-in: the reliability feature may register its card without being ignored.
+    expect(BUILTIN_CARD_TYPES.has('model_outage')).toBe(false);
+    expect(registeredCard('model_outage')).toBeUndefined();
   });
 });
 

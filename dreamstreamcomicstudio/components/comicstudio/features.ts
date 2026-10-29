@@ -1,9 +1,11 @@
-// Feature registry (contract §13.2; created by P0-C; wave 2: P2-AMEND registered `usage`).
+// Feature registry (contract §13.2; created by P0-C; wave 2: P2-AMEND registered `usage`; W-M registered
+// `models`, `insights` and `reliability`).
 //
 // Imports the client feature indexes (the ten wave-0 folders plus `usage`, P1-LIMITS' "usage left"
-// meter at header order 220) and folds their `FeatureModule`s into the registries the hotspot files
-// read (CardRenderer, BoardPane, ComicStudio header, AdminConsole). A feature package fills its own
-// `<feature>/index.ts`; a NEW feature folder is added here once, at the end (lowest precedence).
+// meter at header order 220, plus the three W-M folders) and folds their `FeatureModule`s into the
+// registries the hotspot files read (CardRenderer, BoardPane, ComicStudio header, AdminConsole). A feature
+// package fills its own `<feature>/index.ts`; a NEW feature folder is added here once, at the end (lowest
+// precedence).
 //
 // The registries are built lazily on first read (not at import time), so a feature module
 // that imports a hotspot file — directly or through a component — never sees a
@@ -34,6 +36,9 @@ import { feature as immersive } from './immersive/index';
 import { feature as library } from './library/index';
 import { feature as mobile } from './mobile/index';
 import { feature as usage } from './usage/index';
+import { feature as models } from './models/index';
+import { feature as insights } from './insights/index';
+import { feature as reliability } from './reliability/index';
 
 export type {
   AdminSectionRegistration,
@@ -84,7 +89,7 @@ let cache: Registries | null = null;
 
 /** Every feature module, in precedence order. */
 export const featureModules = (): readonly FeatureModule[] =>
-  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage].map((m) => m || {});
+  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability].map((m) => m || {});
 
 const byOrder = <T extends { order: number }>(list: T[]): T[] =>
   list
