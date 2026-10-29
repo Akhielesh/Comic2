@@ -1,7 +1,8 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { forgetTabSession, getAuthRedirectUrl, isSessionExpiredByInactivity, isStoredSession, supabase, touchLastActivity } from '../services/supabase';
+import { dropStoredSession, forgetTabSession, getAuthRedirectUrl, isSessionExpiredByInactivity, isStoredSession, supabase, touchLastActivity } from '../services/supabase';
+import { clearCachedAuthToken } from '../services/apiClient';
 import { clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener, setChatSessionUser } from '../services/chatStorage';
@@ -40,6 +41,10 @@ export const OTHER_TAB_SIGN_IN_NOTICE =
  */
 export const SIGNED_IN_IN_OTHER_TAB_NOTICE =
     'Signed in in another tab. With “Remember me” off each tab signs in on its own — continue there, or sign in here.';
+
+/** Shown when a sign-out could not be told to the auth server: this device is signed out, nothing else is. */
+export const SIGN_OUT_SERVER_UNREACHABLE_NOTICE =
+    'Signed out on this device. The sign-in server couldn’t be reached, so the sign-out wasn’t recorded there — other devices stay signed in until you sign out on them.';
 
 /** A login sync whose read of the account snapshot failed is run again once after this pause. */
 const LOGIN_SYNC_RETRY_MS = 5_000;
@@ -188,12 +193,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             if (session && inactivitySignOutPending) {
                 applyAuthState(null);
                 setLoading(false);
-                void supabase.auth
-                    .signOut({ scope: 'local' })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        inactivitySignOutPending = false;
-                    });
+                void signOutSession('local').finally(() => {
+                    inactivitySignOutPending = false;
+                });
                 return;
             }
             inactivitySignOutPending = false;
@@ -321,14 +323,41 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         clearLocalOwner();
     }
 
+    /**
+     * Sign the session out at the auth server — and on this device whatever the server says.
+     * supabase.auth.signOut keeps the stored session when POST /logout fails with anything but
+     * 401/403/404 (offline, a flaky network): no SIGNED_OUT fires, its refresh timer keeps the
+     * session alive, and the next refresh tick or reload would sign the account straight back
+     * in after "Signed out" was shown — on a shared device, as the previous person, with the
+     * keys restored by the login sync. So on a failure this does what SIGNED_OUT would have:
+     * the stored session and the cached token go, the purge runs, and the person is told that
+     * the server did not record it. Never throws.
+     */
+    const signOutSession = async (scope: 'local' | 'global') => {
+        let failed = false;
+        try {
+            failed = Boolean((await supabase.auth.signOut({ scope })).error);
+        } catch {
+            failed = true;
+        }
+        if (!failed) return;
+        dropStoredSession();
+        clearCachedAuthToken();
+        userIdRef.current = null;
+        syncedUserRef.current = null;
+        cancelLoginSyncRetry();
+        clearLocalAuthState();
+        appStatus.report('warn', SIGN_OUT_SERVER_UNREACHABLE_NOTICE, { source: 'auth' });
+    };
+
     const signOut = async () => {
         clearLocalAuthState();
-        await supabase.auth.signOut({ scope: 'local' });
+        await signOutSession('local');
     };
 
     const signOutAll = async () => {
         clearLocalAuthState();
-        await supabase.auth.signOut({ scope: 'global' });
+        await signOutSession('global');
     };
 
     /** Sign out every session EXCEPT the current device — you stay logged in. */

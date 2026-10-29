@@ -4,7 +4,7 @@
 // tab of the origin (BroadcastChannel) without storing the session there; with "Remember me"
 // off each tab keeps its own session in sessionStorage.
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { forgetTabSession, isStoredSession, supabase } from './supabase';
+import { dropStoredSession, forgetTabSession, isStoredSession, supabase } from './supabase';
 
 const KEY = 'dreamstream_auth_token';
 const PERSIST = 'dreamstream_auth_persist'; // what AuthPage's "Remember me" writes: 'session' when unticked
@@ -57,6 +57,15 @@ describe('isStoredSession — is the announced session this tab’s?', () => {
 });
 
 describe('this tab’s stored session', () => {
+  it('dropStoredSession removes it from both storages — a reload or refresh tick finds nothing', () => {
+    localStorage.setItem(KEY, stored('remembered'));
+    sessionStorage.setItem(KEY, stored('not-remembered'));
+    dropStoredSession();
+    expect(localStorage.getItem(KEY)).toBeNull();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(isStoredSession({ access_token: 'remembered' })).toBe(true); // "Remember me" on: can't tell
+  });
+
   it('forgetTabSession touches only the per-tab store (a shared "Remember me" session is every tab’s)', () => {
     localStorage.setItem(KEY, stored('remembered'));
     sessionStorage.setItem(KEY, stored('not-remembered'));

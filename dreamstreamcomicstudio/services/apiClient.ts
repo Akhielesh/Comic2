@@ -34,6 +34,16 @@ supabase.auth.onAuthStateChange((event, session) => {
   cachedUserId = session?.user?.id;
 });
 
+/**
+ * Forget the cached bearer token. A sign-out the auth server could not be told about fires no
+ * SIGNED_OUT (contexts/AuthContext drops the stored session itself), so the token cached here
+ * would otherwise ride on every request until the page is closed.
+ */
+export const clearCachedAuthToken = (): void => {
+  cachedAccessToken = undefined;
+  cachedUserId = undefined;
+};
+
 const getGeminiKey = () => {
   if (typeof window === 'undefined') return null;
   try {

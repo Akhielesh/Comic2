@@ -217,6 +217,19 @@ export const forgetTabSession = (): void => {
     safeStorageRemove(window.sessionStorage, SUPABASE_AUTH_STORAGE_KEY);
 };
 
+/**
+ * Drop the session this device stores (both storages) — the local half of a sign-out, for when
+ * the auth server could not be told. supabase.auth.signOut keeps the stored session when POST
+ * /logout fails with anything but 401/403/404 (offline, a flaky network), fires no SIGNED_OUT,
+ * and its refresh timer keeps that session alive: the next refresh tick or reload signs the
+ * account straight back in. supabase-js reads the session from storage on every getSession and
+ * refresh, so once it is gone this device has none. Nothing is announced to other tabs.
+ */
+export const dropStoredSession = (): void => {
+    if (typeof window === 'undefined') return;
+    authStorage.removeItem(SUPABASE_AUTH_STORAGE_KEY);
+};
+
 /* ----------------------- session inactivity policy ----------------------- */
 
 const LAST_ACTIVITY_KEY = 'dreamstream_last_active_at';
