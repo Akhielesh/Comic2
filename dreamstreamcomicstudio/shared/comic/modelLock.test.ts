@@ -278,6 +278,22 @@ describe('modelFit: the price warning (models.md §5.1 acceptance "Nano Banana P
     // Never a dollar figure in the copy (governed users read it too).
     for (const r of modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, registryBook)) expect(r.text).not.toMatch(/\$/);
   });
+
+  it('warns at any ratio whose shown figure reads above 1.0× (no invented threshold); same-price models get none', () => {
+    const lake = makeLakeComic();
+    const current = 0.05;
+    /** Nano Banana Pro priced at `ratio` × the current model, whatever the resolution. */
+    const bookAt = (ratio: number): PriceBook => ({ unit: (id) => ({ usd: id === LAKE_MODEL ? current : current * ratio, basis: 'test' }), qcUsd: 0 });
+    const warnFor = (ratio: number) => priceOf(modelFit(getImageModel('nano-banana-pro')!, lake, paidCaps, bookAt(ratio)));
+    // Without the fix: [] (1.2× and 1.4× were under the 1.5× cut-off).
+    expect(warnFor(1.2)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.2× the price of Nano Banana 2.1 per page' }]);
+    expect(warnFor(1.4)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.4× the price of Nano Banana 2.1 per page' }]);
+    expect(warnFor(1.05)).toEqual([{ code: 'price', severity: 'warn', text: 'About 1.1× the price of Nano Banana 2.1 per page' }]);
+    // A ratio that would read "About 1×" says nothing new: no warning.
+    expect(warnFor(1)).toEqual([]);
+    expect(warnFor(1.04)).toEqual([]);
+    expect(warnFor(0.8)).toEqual([]);
+  });
 });
 
 describe('registry data (models.md §2.2)', () => {
