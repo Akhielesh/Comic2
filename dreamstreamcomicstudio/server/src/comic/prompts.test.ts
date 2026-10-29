@@ -177,13 +177,13 @@ const crowdedPage = () =>
 // ── References ───────────────────────────────────────────────────────────────
 
 describe('planPageReferences', () => {
-  it('caps characters at 4 on Nano Banana 2.1, ranked by panel appearances then tier, extras text-only', () => {
+  it('caps characters at 4 on Nano Banana 2.1, ranked by panel appearances then tier (an extra competes by presence)', () => {
     const doc = crowdedDoc('standard');
     const pg = crowdedPage();
     const spec = getImageModel('nano-banana-2.1')!;
     const refs = planPageReferences(doc, pg, spec);
     const chars = refs.filter((r) => r.slot === 'character');
-    // a: 5 panels, b: 3 (lead), c: 2, d: 2 (c first by cast order), e/f: 1 each.
+    // a: 5 panels, b: 3 (lead), c: 2, d: 2 (c first by cast order), x: 2 (extra: after the tied supports), e/f: 1 each.
     expect(chars.map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd']);
     expect(chars.every((r) => r.label.startsWith('CHARACTER SHEET: '))).toBe(true);
     expect(refs.some((r) => r.characterId === 'x')).toBe(false);
@@ -197,7 +197,8 @@ describe('planPageReferences', () => {
     const doc = crowdedDoc('pro');
     const spec = getImageModel('nano-banana-pro')!;
     const refs = planPageReferences(doc, crowdedPage(), spec);
-    expect(refs.filter((r) => r.slot === 'character').map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // Presence, not tier (plan C7): the extra x (2 panels, ready sheet) outranks e and f (1 panel each).
+    expect(refs.filter((r) => r.slot === 'character').map((r) => r.characterId)).toEqual(['a', 'b', 'c', 'd', 'x']);
     const style = refs.filter((r) => r.slot === 'style');
     expect(style.map((r) => r.path)).toEqual(['style/board.png', 'style/u1.png', 'style/u2.png']);
     expect(style.map((r) => r.label)).toEqual(['STYLE BOARD', 'STYLE REFERENCE 1', 'STYLE REFERENCE 2']);
@@ -234,6 +235,40 @@ describe('planPageReferences', () => {
     const refs = planPageReferences(doc, pg, spec, prev);
     expect(refs.map((r) => r.label)).toEqual(['CHARACTER SHEET: MAYA', 'CHARACTER SHEET: ARJUN', 'STYLE BOARD']);
     expect(refs.length).toBeLessThanOrEqual(spec.refs.total);
+  });
+
+  it('presence, not tier: any being on the page with a ready sheet is ranked into the character slots (plan C7)', () => {
+    const doc = baseDoc((d) => {
+      d.cast.push(
+        character('tot', 'Tot', 'extra', { kind: 'person', look: { summary: 'Toddler in a yellow raincoat' } }),
+        character('kite', 'Kite', 'extra', { kind: 'object', look: { summary: 'A red kite' } }),
+        character('crow', 'Crow', 'extra', { kind: 'animal', sheet: emptyRender(), look: { summary: 'A crow' } })
+      );
+    });
+    const pg = page(1, [
+      panel(1, ['tot', 'arjun', 'kite', 'crow']),
+      panel(2, ['tot', 'arjun']),
+      panel(3, ['tot', 'maya']),
+      panel(4, ['tot'])
+    ]);
+    const std = planPageReferences(doc, pg, getImageModel('nano-banana-2.1')!).filter((r) => r.slot === 'character');
+    // Tot (extra, 4 panels) leads; the extra prop and the sheetless crow never take a slot.
+    expect(std.map((r) => r.characterId)).toEqual(['tot', 'arjun', 'maya']);
+    expect(std[0]).toMatchObject({ label: 'CHARACTER SHEET: TOT', path: 'sheets/tot.png' });
+    // Tight slots (legacy: 2 characters): presence decides who is drawn from a sheet.
+    const legacy = getImageModel('nano-banana-legacy')!;
+    const tight = planPageReferences(doc, pg, legacy).filter((r) => r.slot === 'character');
+    expect(tight.map((r) => r.characterId)).toEqual(['tot', 'arjun']);
+    expect(tight.length).toBeLessThanOrEqual(legacy.refs.characters);
+    // The page prompt names Tot's image in the cast block and in every panel's Who line.
+    const prompt = compilePage(doc, pg).prompt;
+    expect(prompt).toContain('- TOT (Image 1): Toddler in a yellow raincoat.');
+    expect(prompt).toContain('Who: TOT (Image 1 — toddler in a yellow raincoat)');
+    // A blocked sheet is never attached, whatever the tier.
+    const blocked = baseDoc((d) => {
+      d.cast.push(character('tot', 'Tot', 'extra', { sheet: ready('sheets/tot.png', { asset: { path: 'sheets/tot.png', source: 'generated', at: 1, safety: { assessed: 'X', at: 1 } } }) }));
+    });
+    expect(planPageReferences(blocked, pg, getImageModel('nano-banana-2.1')!).some((r) => r.characterId === 'tot')).toBe(false);
   });
 
   it('uses no character references when the model has no character slots', () => {
@@ -296,7 +331,8 @@ describe('compilePage', () => {
   });
 
   it('lists every character once with a full visual lock, Image index or a text lock', () => {
-    const doc = baseDoc();
+    // The vendor has no sheet or photo: text-locked (an extra WITH one is attached by presence).
+    const doc = baseDoc((d) => (d.cast[2].sheet = emptyRender()));
     const pg = page(1, [
       panel(1, ['maya', 'vendor'], { placeId: 'market' }),
       panel(2, ['maya', 'arjun']),
@@ -604,7 +640,8 @@ describe('compilePage', () => {
     );
     const prev = page(1, [panel(1, ['maya'])], { render: ready('pages/p1.png') });
     const job = compilePage(doc, pg, { previousPage: prev });
-    expect(job.references).toHaveLength(5);
+    // Maya, Arjun, the vendor (an extra with a ready sheet joins by presence), the market, the board, the previous page.
+    expect(job.references).toHaveLength(6);
     expect(job.prompt.length).toBeLessThan(6000);
     expect(job.prompt.length).toBeLessThan(PAGE_PROMPT_CHAR_BUDGET);
     expect(job.prompt).toContain('CONTENT RATING PG-13');
@@ -827,7 +864,8 @@ describe('compileEdit', () => {
   it('without a region: names the panel, scopes sheets to its cast plus characters the instruction names', () => {
     const doc = baseDoc();
     const job = compileEdit(doc, rendered(doc), { instruction: 'Put Arjun behind the vendor', panelN: 3, hasRegion: false });
-    expect(job.references.map((r) => r.label)).toEqual(['CURRENT PAGE', 'CHARACTER SHEET: ARJUN']);
+    // The named vendor is an extra with a ready sheet: attached by presence, as on pages (plan C7).
+    expect(job.references.map((r) => r.label)).toEqual(['CURRENT PAGE', 'CHARACTER SHEET: ARJUN', 'CHARACTER SHEET: VENDOR']);
     expect(job.prompt).toContain('The change is in panel 3, which shows: Action of panel 3.');
     expect(job.prompt).not.toContain('red outline');
   });
@@ -896,7 +934,7 @@ const lakeDoc = () =>
   });
 
 describe('ranked references (refs.md §5)', () => {
-  it('docs without photos keep exactly today’s references (standard and pro)', () => {
+  it('docs without photos keep exactly today’s references (standard and pro; extras by presence, plan C7)', () => {
     const prev = page(0, [panel(1, ['a'])], { render: ready('pages/p0.png') });
     const std = planPageReferences(crowdedDoc('standard'), crowdedPage(), getImageModel('nano-banana-2.1')!, prev);
     expect(std.map((r) => [r.label, r.path])).toEqual([
@@ -915,7 +953,7 @@ describe('ranked references (refs.md §5)', () => {
       ['CHARACTER SHEET: BRAVO', 'sheets/b.png'],
       ['CHARACTER SHEET: CHARLIE', 'sheets/c.png'],
       ['CHARACTER SHEET: DELTA', 'sheets/d.png'],
-      ['CHARACTER SHEET: ECHO', 'sheets/e.png'],
+      ['CHARACTER SHEET: EXTRA GUY', 'sheets/x.png'],
       ['LOCATION: SPICE MARKET', 'places/market.png'],
       ['LOCATION: ROOFTOP', 'places/roof.png'],
       ['STYLE BOARD', 'style/board.png'],
@@ -1381,8 +1419,8 @@ describe('review: safety and reference-gate hardening', () => {
     expect(labelsOf(job.references)[0]).toBe('CHARACTER REFERENCE: BABY');
     expect(job.prompt).toContain('featuring BABY (Image 1)');
     expect(job.refPaths).toEqual(['uploads/baby.png']);
-    // Pages still text-lock extras.
-    expect(planPageReferences(doc, doc.pages[0], getImageModel('nano-banana-2.1')!).some((r) => r.characterId === 'baby')).toBe(false);
+    // Pages attach it too, by presence (plan C7): an on-page being with a photo or sheet is eligible whatever its tier.
+    expect(planPageReferences(doc, doc.pages[0], getImageModel('nano-banana-2.1')!).find((r) => r.characterId === 'baby')?.path).toBe('uploads/baby.png');
   });
 
   it('a group of people is "their" in the legend, whatever its gender', () => {

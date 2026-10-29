@@ -943,9 +943,10 @@ const likenessWanted = (c: Character, spare: number): boolean => {
  *  - pass 1: one ref each (sheet, else the best photo) — unchanged ordering and budget;
  *  - pass 2: spare slots add "PHOTO OF MAYA (likeness)" next to a photo-based character's sheet;
  *  - pass 3: spare slots add a second, different photo for characters that have no sheet.
- * Extras are text-locked on pages; a cover references whoever it features (coverCastOf only
- * features extras when the book has no leads, supports or companions). Counts against
- * characters AND total caps.
+ * On pages every BEING with a ready sheet or photo is eligible whatever its tier (an extra prop
+ * stays text-locked), in the page's rank order; a cover references whoever it features
+ * (coverCastOf only features extras when the book has no leads, supports or companions). Counts
+ * against characters AND total caps.
  */
 const castReferences = (
   cast: Character[],
@@ -958,7 +959,10 @@ const castReferences = (
   const groups: { c: Character; refs: PlannedReference[] }[] = [];
   for (const c of cast) {
     if (slots <= 0) break;
-    if (c.tier === 'extra' && purpose === 'page') continue;
+    // Presence, not tier (plan C7): on a page an extra competes like anyone else when it is a being
+    // with a ready, servable sheet or photo (the f8312c86 protagonist is an extra in 20 of 20 panels).
+    // The page's rank order (rankPageCast) decides who fits the model's character slots.
+    if (c.tier === 'extra' && purpose === 'page' && isProp(c)) continue;
     const ref = characterReference(c, ctxFor(c), purpose);
     if (!ref) continue;
     groups.push({ c, refs: [ref] });
@@ -1060,9 +1064,10 @@ const styleReferences = (doc: ComicDoc, spec: ImageModelSpec, budget: { total: n
  * Reference images for a page render, ordered exactly as they must be attached:
  * characters → locations → style → previous page.
  *
- * Budget priority (when caps bind): characters (≤ refs.characters, the page's lead/support
- * cast ranked by panel appearances; extras and overflow are text-locked only; spare slots
- * add a likeness photo or a second photo next to their character), then the style anchor,
+ * Budget priority (when caps bind): characters (≤ refs.characters, every being on the page with a
+ * ready sheet or photo — extras included — ranked by rankPageCast; overflow and extra props are
+ * text-locked only; spare slots add a likeness photo or a second photo next to their character),
+ * then the style anchor,
  * then location sheets by how many panels use them, then the previous page for continuity —
  * all within refs.objects and refs.total. Blocked images are never attached.
  */
@@ -1853,7 +1858,7 @@ export const compileEdit = (
   for (const c of candidates) {
     if (characterSlots <= 0 || total <= 0) break;
     if (scope && !scope.has(c.id)) continue;
-    if (c.tier === 'extra') continue;
+    if (c.tier === 'extra' && isProp(c)) continue; // presence, not tier (plan C7), as on pages
     const ref = characterReference(c, { effectiveRating: rating });
     if (!ref) continue;
     refs.push({ ...ref, instruction: `Keep ${possessive(c)} identity exactly as on this ${ref.kind === 'character' ? 'sheet' : 'reference'} wherever ${upperName(c.name)} is redrawn.` });
