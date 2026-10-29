@@ -13,6 +13,7 @@
 //   timeline    BookTimeline expanded and compact, the versions chat card
 //   art         procedural art: every style preset thumbnail, every empty-state illustration,
 //               layout glyphs and balloon previews (run it with theme=light and theme=dark)
+//   model-picker / model-confirm   the image-model picker, its rows and its confirms (qa/ModelScenes.tsx, M1-PICKER-UI)
 // Nothing here talks to the network or spends; the upload transport is a local fake.
 
 import React from 'react';
@@ -31,8 +32,9 @@ import { LayoutGlyph } from '../components/comicstudio/library/procedural/Layout
 import { BubblePreview } from '../components/comicstudio/library/procedural/BubblePreview';
 import { QA_NOW, qaAsset } from '../components/comicstudio/testing/qaFixtures';
 import { qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
+import { ModelConfirmScene, ModelPickerScene } from './ModelScenes';
 
-export const KIT_SCENES = ['breakdown', 'refs', 'refs-drawer', 'timeline', 'art'] as const;
+export const KIT_SCENES = ['breakdown', 'refs', 'refs-drawer', 'timeline', 'art', 'model-picker', 'model-confirm'] as const;
 export type KitScene = (typeof KIT_SCENES)[number];
 export const isKitScene = (v: unknown): v is KitScene => typeof v === 'string' && (KIT_SCENES as readonly string[]).includes(v);
 
@@ -272,6 +274,8 @@ export const KitSurface: React.FC<{ params: QaParams; scene: KitScene }> = ({ pa
       {scene === 'refs-drawer' && <RefsDrawerScene params={params} />}
       {scene === 'timeline' && <TimelineScene params={params} />}
       {scene === 'art' && <ArtScene params={params} />}
+      {scene === 'model-picker' && <ModelPickerScene params={params} />}
+      {scene === 'model-confirm' && <ModelConfirmScene params={params} />}
     </main>
   </div>
 );

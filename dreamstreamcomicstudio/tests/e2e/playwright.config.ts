@@ -119,9 +119,10 @@ const config: PlaywrightTestConfig = {
   projects: [
     // mobile.md §10.2: 14 device projects + WCAG reflow.
     ...COMIC_DEVICES.map((d) => projectFor(d, { testMatch: DEVICE_SPECS })),
-    projectFor(REFLOW_320, { testMatch: /(studio\.layout|public\.reader|kit\.scenes|a11y)\.spec\.ts$/ }),
+    projectFor(REFLOW_320, { testMatch: /(studio\.layout|public\.reader|kit\.scenes|models\.picker|a11y)\.spec\.ts$/ }),
     // visualqa.md §7: the per-PR layout smoke (4 viewports, light) + the component scenes (qa/KitScenes.tsx).
-    ...SMOKE_VIEWPORTS.map((d) => projectFor(d, { testMatch: /(layout\.smoke|kit\.scenes)\.spec\.ts$/ })),
+    // (+ the model picker scenes, M1-PICKER-UI: tests/e2e/models.picker.spec.ts.)
+    ...SMOKE_VIEWPORTS.map((d) => projectFor(d, { testMatch: /(layout\.smoke|kit\.scenes|models\.picker)\.spec\.ts$/ })),
     // Detector + allowlist self-tests (synthetic pages; proves every assertion can actually fail).
     { name: 'harness-selftest', testMatch: /harness\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],

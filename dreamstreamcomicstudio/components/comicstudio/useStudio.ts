@@ -39,6 +39,7 @@ import {
   type RenderTarget
 } from '../../shared/comic/doc';
 import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
+import { getImageModel } from '../../shared/comic/models';
 import type { PublicationOwnerView } from '../../shared/comic/publication';
 import type {
   BoardTab,
@@ -156,6 +157,10 @@ const MAX_FOCUS_LINES = 80;
 export const TYPED_UNDO_RE = /^\s*undo( that| it)?\s*[.!]?\s*$/i;
 /** Window event the Share sheet listens for (share/ShareButton.tsx OPEN_SHARE_EVENT). */
 const OPEN_SHARE_EVENT = 'ds:open-share';
+/** Window event the model picker host answers (models/openPicker.ts OPEN_MODEL_PICKER_EVENT; kept in sync by a test). */
+export const OPEN_MODEL_PICKER_REQUEST = 'ds:open-model-picker';
+/** A suggestion from a chip, the outage card or the banner: a registry id only (a route id maps to its registry id). */
+const pickerSuggestion = (value: unknown): string | undefined => (typeof value === 'string' && value ? getImageModel(value.slice(0, 160))?.id : undefined);
 /** Every board tab (an `open_tab` chip naming anything else is ignored). */
 const STUDIO_TABS: ReadonlySet<string> = new Set<BoardTab>(['story', 'cast', 'style', 'pages', 'media', 'languages', 'read']);
 
@@ -1040,6 +1045,19 @@ export function useStudio(projectId: string): ComicStudioController {
           if (!handled && section === 'keys' && typeof window !== 'undefined') window.location.assign(API_KEYS_HREF);
           return;
         }
+        case 'open_model_picker': {
+          // Chips, the reliability outage card and the status banner dispatch `{ type: 'open_model_picker',
+          // suggest: option.modelId }`. The mounted picker host opens with the suggestion highlighted; picking still
+          // goes through the change confirm ("consistency can be affected") — nothing here switches a model.
+          const suggest = pickerSuggestion((action as { suggest?: unknown }).suggest);
+          let handled = false;
+          if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+            handled = !window.dispatchEvent(new CustomEvent(OPEN_MODEL_PICKER_REQUEST, { cancelable: true, detail: suggest ? { suggest } : {} }));
+          }
+          // No picker mounted (a reader-only view): say how to get there instead of doing nothing.
+          if (!handled) say({ kind: 'info', text: 'The image models open from the studio — go back to the studio to see them.' });
+          return;
+        }
         case 'undo':
           historyStep('undo', true);
           return;
@@ -1050,7 +1068,7 @@ export function useStudio(projectId: string): ComicStudioController {
           return;
       }
     },
-    [setTab, openPage, historyStep, setMode]
+    [setTab, openPage, historyStep, setMode, say]
   );
 
   const runNextStep = useCallback(

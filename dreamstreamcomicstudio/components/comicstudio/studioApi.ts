@@ -10,10 +10,11 @@
 import { del, get, patch as apiPatch, post, postStream } from '../../services/apiClient';
 import { buildApiUrl } from '../../services/clientConfig';
 import { readSSEStream } from '../../services/sse';
-import { normalizeDoc, type ComicDoc, type QualityTier, type RefAsset, type RefLabel, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
+import { REDRAW_SCOPES, normalizeDoc, type ComicDoc, type QualityTier, type RedrawScope, type RefAsset, type RefLabel, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import { STREAM_EVENT_NAMES, type StreamRequest, type StudioEvent } from '../../shared/comic/events';
-import type { ImageModelSpec, TierPreset } from '../../shared/comic/models';
-import type { DocOp } from '../../shared/comic/ops';
+import { getImageModel, type ImageModelSpec, type TierPreset } from '../../shared/comic/models';
+import type { DocOp, StudioAction } from '../../shared/comic/ops';
+import type { StudioActOutcome } from './types';
 import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
 import { CONTENT_RATINGS, type ContentRating } from '../../shared/comic/safety';
 import { refOwnerKey } from '../../shared/comic/refs';
@@ -451,6 +452,47 @@ export async function signStudioUrls(id: string, paths: string[]): Promise<Recor
     throw toStudioApiError(err, 'project');
   }
   return out;
+}
+
+// ── Image model change (models.md §3.4 item 7, §3.6 C) ───────────────────────
+
+export type ChangeImageModelAction = Extract<StudioAction, { type: 'change_image_model' }>;
+
+export interface ChangeImageModelInput {
+  /** A registry id (a route id resolves to its registry id; anything else is refused here). */
+  modelId: string;
+  redraw: RedrawScope;
+  /** The redraw quote the user saw in the confirm (the server re-quotes on drift > 15% + $0.01). 0 for 'none'. */
+  quotedUsd: number;
+}
+
+/**
+ * The `change_image_model` action exactly as the confirm sends it: `ack: true` (the user confirmed the
+ * "consistency can be affected" dialog), a registry id, a known redraw scope and a finite, non-negative quote
+ * (rounded to 4 decimals; 'none' always quotes 0). Throws a calm StudioApiError for anything else, so a malformed
+ * switch never reaches the server. Only ModelChangeConfirm builds it — nothing switches a model without the confirm.
+ */
+export const buildChangeImageModelAction = (input: ChangeImageModelInput): ChangeImageModelAction => {
+  const spec = typeof input?.modelId === 'string' ? getImageModel(input.modelId) : undefined;
+  if (!spec) throw new StudioApiError('bad_request', "That model isn't available in Comic Studio — nothing was changed.");
+  if (!REDRAW_SCOPES.includes(input.redraw)) throw new StudioApiError('bad_request', 'Choose what should happen to the drawn images — nothing was changed.');
+  const quote = input.redraw === 'none' ? 0 : input.quotedUsd;
+  if (typeof quote !== 'number' || !Number.isFinite(quote) || quote < 0) {
+    throw new StudioApiError('bad_request', "This redraw can't be priced yet — nothing was changed.");
+  }
+  return { type: 'change_image_model', modelId: spec.id, redraw: input.redraw, quotedUsd: Math.round(quote * 10000) / 10000, ack: true };
+};
+
+/**
+ * Switch the comic's image model through the controller's `act` (the action streams like every other one, so its
+ * notice, gate or re-quote lands in the conversation). Resolves the action's outcome; rejects only when the input
+ * is invalid (buildChangeImageModelAction).
+ */
+export async function changeImageModel(
+  act: (action: StudioAction) => Promise<StudioActOutcome | void>,
+  input: ChangeImageModelInput
+): Promise<StudioActOutcome | void> {
+  return act(buildChangeImageModelAction(input));
 }
 
 export async function getStudioModels(): Promise<{ models: ImageModelSpec[]; tiers: Record<QualityTier, TierPreset> }> {
