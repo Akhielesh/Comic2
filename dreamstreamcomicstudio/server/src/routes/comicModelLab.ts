@@ -10,8 +10,8 @@
 //   POST /api/comic/models/lab/runs/:id/watermark     { visible: true | false | null } (the owner's checkbox)
 //   POST /api/comic/models/lab/blind/:pairId/vote     { pick: 'A' | 'B' | 'tie' } → the pair, revealed
 //
-// Every answer is `Cache-Control: private, no-store`. Errors: { error: { code, message, details? } } with the lab's
-// own code (ACK_REQUIRED, LAB_CAP_REACHED, QUOTE_CHANGED, PROVIDER_DOWN, …) and honest copy.
+// Every answer is `Cache-Control: private, no-store`. Errors: { error: { code, message, details: { code, … } } } with the
+// lab's own code (ACK_REQUIRED, LAB_CAP_REACHED, QUOTE_CHANGED, PROVIDER_DOWN, …) and honest copy.
 
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { logger } from '../lib/logger.js';
@@ -35,7 +35,8 @@ function sendError(res: Response, err: unknown, next: NextFunction): void {
   if (res.headersSent) return next(err);
   res.set('Cache-Control', 'private, no-store');
   if (isLabError(err)) {
-    res.status(err.status).json({ error: { code: err.labCode, message: err.userMessage, ...(err.details ? { details: err.details } : {}) } });
+    // `details.code` repeats the code: the shared web client keeps only `error.details` next to the message.
+    res.status(err.status).json({ error: { code: err.labCode, message: err.userMessage, details: { ...(err.details ?? {}), code: err.labCode } } });
     return;
   }
   if (err instanceof StudioError) {
