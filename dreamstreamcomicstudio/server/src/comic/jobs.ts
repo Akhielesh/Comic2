@@ -3766,7 +3766,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         if (!SPOKEN_KINDS.has(kindAfter) && 'speakerId' in patch) patch.speakerId = undefined;
         // Where a NEW line goes (Undo of a delete, a duplicate right after its original); applyOp ignores it on an update.
         const index = lineIndex(raw.index);
-        out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch, ...(index === undefined ? {} : { index }) });
+        const clean: DocOp = { op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch, ...(index === undefined ? {} : { index }) };
+        out.push(clean);
+        // A line this batch creates (Undo of a delete) exists for the feature ops after it: its translations and
+        // edition balloons come back in the same batch instead of failing it with "That line no longer exists."
+        if (!existing) working = applyOp(working, clean);
         break;
       }
       case 'line_move': {

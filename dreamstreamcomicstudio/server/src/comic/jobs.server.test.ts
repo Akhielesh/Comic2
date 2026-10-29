@@ -263,6 +263,25 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(full, [move], sctx)).toThrow(/already has/);
   });
 
+  it('Undo of deleting a translated line brings the line back with its translation and edition balloon (one batch)', () => {
+    const { session, sctx } = ctxFor();
+    const line = session.doc.pages[0].panels[1].lines[0];
+    const doc = applyOps(session.doc, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: { [line.id]: { text: 'పేజీ 1', status: 'machine', sourceHash: lineSourceHash(line), at: 1, gloss: 'Page 1' } } },
+      { op: 'edition_balloon', lang: 'te', lineId: line.id, patch: { x: 0.2, y: 0.3, w: 0.25, pinned: true } }
+    ]);
+    const del: DocOp[] = [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: line.id, patch: null }];
+    const after = applyOps(doc, del);
+    expect(i18nOf(after).editions.te.lines[line.id]).toBeUndefined();
+    const restored = applyOps(after, sanitizePatchOps(after, inverseOps(doc, del), sctx));
+    expect(restored.pages[0].panels[1].lines).toEqual(doc.pages[0].panels[1].lines);
+    expect(i18nOf(restored).editions.te.lines[line.id]).toMatchObject({ text: 'పేజీ 1', status: 'machine', gloss: 'Page 1', sourceHash: lineSourceHash(line) });
+    expect(i18nOf(restored).editions.te.balloons[line.id]).toEqual({ x: 0.2, y: 0.3, w: 0.25, pinned: true });
+    // A translation for a line nobody creates in the batch is still refused.
+    expect(() => sanitizePatchOps(after, [{ op: 'translation', lang: 'te', lineId: line.id, patch: { text: 'x' } }], sctx)).toThrow(/no longer exists/);
+  });
+
   it('several line_moves in one batch are counted together: a panel is never pushed past its line limit', () => {
     const { session, sctx } = ctxFor();
     const limit = DOC_LIMITS.linesPerPanel;
