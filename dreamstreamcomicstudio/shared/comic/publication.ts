@@ -57,8 +57,17 @@ export function parseShareParams(search: string | URLSearchParams): ShareLinkOpt
 
 export interface PublishRequest {
   visibility: 'unlisted' | 'public';
-  /** Published editions; each must be the source or pass editionReadiness().publishable. Default [format.language]. */
+  /**
+   * Published editions; each must pass editionReadiness().publishable. The source language is ALWAYS
+   * published, first (readers always get the original; i18n.md §11.1, sharing.md §3 languages[0]),
+   * whether or not it is named here. Default [format.language].
+   */
   languages?: string[];
+  /**
+   * The edition readers start in (one of the published languages). Absent: when `languages` leaves out
+   * the original, an edition it names (the live default if named, else the first); otherwise the live
+   * default if still published, else the original.
+   */
   defaultLang?: string;
   startPage?: number | null;
   allowDownload?: boolean; // default TRUE (addendum)
@@ -79,7 +88,13 @@ export interface PublishReadiness {
   missing: Array<{ kind: 'cover' | 'page'; n?: number; status: string }>;
   stalePages: number[];
   safety: { status: 'cleared' | 'needs_check' | 'blocked'; blockedPages: number[]; reasons: string[] };
-  languages: Array<{ lang: string; publishable: boolean; blocking: string[] }>;
+  /**
+   * Every edition the comic holds, not only the ones asked about: the requested (or published, else the
+   * source) languages first, then the doc's other editions, so the Share sheet can offer a finished
+   * translation that is not published yet. `requested` marks the entries this readiness was asked
+   * about; absent means requested (older views). `ok` considers requested entries only.
+   */
+  languages: Array<{ lang: string; publishable: boolean; blocking: string[]; requested?: boolean }>;
 }
 export interface PublicationOwnerView {
   visibility: Visibility;
@@ -103,7 +118,23 @@ export interface PublicationOwnerView {
   suspendedReason?: string;
   /** The rating the live publication was safety-checked under (frozen at publish time; P2-PUBLIC-PAYLOAD). */
   rating?: ContentRating;
+  /**
+   * Pages the owner left out of the live publication ("Publish without page N" consent) that publishing
+   * would still refuse (blocked now, or still an outside image). The Share sheet's Update resends them as
+   * `excludePageIds`, since the gate keeps a blocked verdict; a page redrawn since is not listed, so an
+   * Update publishes the redraw if the gate passes it.
+   */
+  excludedPageIds?: string[];
+  /**
+   * What link previews actually show (live rows): the FROZEN card's title and description in the
+   * default language, and the published cover copy (the og:image fallback). Not the live doc's text.
+   */
+  card?: { title: string; description: string; coverUrl?: string };
 }
+
+/** The preview text with the rating appended ("… · Rated PG-13"): what every link preview carries. */
+export const ratedDescription = (description: string, rating?: ContentRating): string =>
+  rating ? (description ? `${description} · Rated ${rating}` : `Rated ${rating}`) : description;
 /** doc.publication — server-written mirror for UI + the director context line. */
 export interface PublicationMirror {
   visibility: 'unlisted' | 'public';

@@ -2,9 +2,11 @@
 // REFUSE — drawn, but from an image outside the studio (publication.ts OUTSIDE_IMAGE_STATUS) — says so
 // in the readiness list, instead of 'No cover yet' while "Publish" then answers 422.
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { PublishReadiness } from '../../../shared/comic/publication';
+import type { ComicDoc } from '../../../shared/comic/doc';
+import { editionReadiness, lineSourceHash } from '../../../shared/comic/i18n';
+import type { PublicationOwnerView, PublishReadiness } from '../../../shared/comic/publication';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
 import { PublishPanel, readinessRows } from './PublishPanel';
 
@@ -43,6 +45,151 @@ describe('readinessRows — the cover line', () => {
     const rows = readinessRows(readiness([{ kind: 'page', n: 2, status: OUTSIDE_IMAGE_STATUS }]), makeSampleDoc());
     expect(rows.map((r) => r.text)).toContain(`Page 2: ${OUTSIDE_IMAGE_STATUS}`);
     expect(coverRow(readiness([{ kind: 'page', n: 2, status: OUTSIDE_IMAGE_STATUS }]))).toEqual({ ok: true, text: 'Cover ready' });
+  });
+});
+
+/** A complete, reviewed Hindi edition (what the server's editionReadiness() calls publishable). */
+const withHindi = (doc: ComicDoc): ComicDoc => {
+  doc.format = { ...doc.format, language: 'en', lettering: 'overlay' };
+  const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => l.text.trim());
+  const translated = Object.fromEntries(lines.map((l) => [l.id, { text: `HI:${l.text}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), at: 1 }]));
+  doc.i18n = { editions: { hi: { lang: 'hi', lines: translated, balloons: {}, register: 'everyday' } }, glossary: [] };
+  return doc;
+};
+
+/** GET /publication for a never-published comic: readiness lists EVERY edition the doc holds, requested or not. */
+const unpublishedView = (languages: PublishReadiness['languages']): PublicationOwnerView => ({
+  visibility: 'private',
+  status: null,
+  languages: ['en'],
+  allowDownload: true,
+  allowEmbed: true,
+  showCreator: false,
+  publishedRev: 0,
+  docRev: 3,
+  behind: false,
+  readiness: { ok: true, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'cleared', blockedPages: [], reasons: [] }, languages }
+});
+
+describe('PublishPanel language chips', () => {
+  it('offers a finished translation on the first publish (enabled, no "not ready"), and sends it when ticked', () => {
+    const doc = withHindi(makeSampleDoc());
+    expect(editionReadiness(doc, 'hi').publishable).toBe(true);
+    const onPublish = vi.fn();
+    const view = unpublishedView([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: true, blocking: [], requested: false }
+    ]);
+    render(<PublishPanel doc={doc} view={view} visibility="unlisted" onPublish={onPublish} />);
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).not.toBeDisabled();
+    expect(hindi.closest('label')?.textContent).not.toMatch(/not ready/);
+    fireEvent.click(hindi);
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ visibility: 'unlisted', languages: ['en', 'hi'] }));
+  });
+
+  it('the original is always published: its chip stays ticked and cannot be unticked, and the request lists it first even when an old row left it out', () => {
+    const doc = withHindi(makeSampleDoc());
+    const onPublish = vi.fn();
+    const view = { ...unpublishedView([{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: true }]), languages: ['hi'] };
+    render(<PublishPanel doc={doc} view={view} visibility="unlisted" onPublish={onPublish} />);
+    const english = screen.getByRole('checkbox', { name: /English/ });
+    expect(english).toBeChecked();
+    expect(english).toBeDisabled();
+    expect(english.closest('label')?.textContent).toMatch(/original/);
+    expect(screen.getByText(/Readers always get the original/)).toBeInTheDocument();
+    fireEvent.click(english);
+    expect(english).toBeChecked();
+    // Editions can still be unticked (the original keeps the publication valid on its own).
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeChecked();
+    expect(hindi).not.toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ languages: ['en', 'hi'] }));
+  });
+
+  it('an unfinished edition stays "not ready" and cannot be ticked', () => {
+    const doc = withHindi(makeSampleDoc());
+    const view = unpublishedView([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: false, blocking: ['2 lines waiting for review.'], requested: false }
+    ]);
+    render(<PublishPanel doc={doc} view={view} visibility="unlisted" onPublish={vi.fn()} />);
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeDisabled();
+    expect(hindi.closest('label')?.textContent).toMatch(/not ready/);
+  });
+});
+
+describe('PublishPanel — a published edition that went stale, and the readers\' default', () => {
+  /** A live bilingual publication whose Hindi edition changed since publishing (no longer publishable). */
+  const liveView = (over: Partial<PublicationOwnerView> = {}): PublicationOwnerView => ({
+    ...unpublishedView([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: false, blocking: ['3 lines changed since translating.'], requested: true }
+    ]),
+    visibility: 'unlisted',
+    status: 'live',
+    slug: 'Ab3dEf6hIj9kLm2nP',
+    languages: ['en', 'hi'],
+    defaultLang: 'en',
+    publishedRev: 3,
+    ...over
+  });
+
+  it('a ticked edition that is no longer ready can be unticked (never ticked back), and the panel says why', () => {
+    const doc = withHindi(makeSampleDoc());
+    const onPublish = vi.fn();
+    render(<PublishPanel doc={doc} view={liveView()} visibility="unlisted" onPublish={onPublish} />);
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeChecked();
+    expect(hindi).not.toBeDisabled();
+    expect(hindi.closest('label')?.textContent).toMatch(/not ready/);
+    expect(screen.getByText(/Hindi isn’t ready to publish: untick it to publish without it/)).toBeInTheDocument();
+    fireEvent.click(hindi);
+    expect(hindi).not.toBeChecked();
+    expect(hindi).toBeDisabled(); // not ready: it cannot be ticked again
+    expect(screen.queryByText(/isn’t ready to publish/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0][0].languages).toEqual(['en']);
+    expect(onPublish.mock.calls[0][0]).not.toHaveProperty('defaultLang');
+  });
+
+  it('"Readers start in" picks the default edition among the ticked languages (starts at the published default)', () => {
+    const doc = withHindi(makeSampleDoc());
+    const onPublish = vi.fn();
+    const ready = liveView({ defaultLang: 'hi', readiness: { ...liveView().readiness, languages: [{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: true }] } });
+    render(<PublishPanel doc={doc} view={ready} visibility="unlisted" onPublish={onPublish} />);
+    const startIn = screen.getByRole('combobox', { name: 'Readers start in' }) as HTMLSelectElement;
+    expect(startIn.value).toBe('hi');
+    expect([...startIn.options].map((o) => o.textContent)).toEqual(['English (original)', 'हिन्दी']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    expect(onPublish).toHaveBeenLastCalledWith(expect.objectContaining({ languages: ['en', 'hi'], defaultLang: 'hi' }));
+    fireEvent.change(startIn, { target: { value: 'en' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    expect(onPublish).toHaveBeenLastCalledWith(expect.objectContaining({ languages: ['en', 'hi'], defaultLang: 'en' }));
+    // Only the original left: nothing to choose, and no default is sent.
+    fireEvent.change(startIn, { target: { value: 'hi' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /हिन्दी/ }));
+    expect(screen.queryByRole('combobox', { name: 'Readers start in' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    expect(onPublish.mock.calls.at(-1)![0].languages).toEqual(['en']);
+    expect(onPublish.mock.calls.at(-1)![0]).not.toHaveProperty('defaultLang');
+  });
+
+  it('a first publish that ticks a translation can start readers in it', () => {
+    const doc = withHindi(makeSampleDoc());
+    const onPublish = vi.fn();
+    render(<PublishPanel doc={doc} view={unpublishedView([{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: true, blocking: [], requested: false }])} visibility="unlisted" onPublish={onPublish} />);
+    expect(screen.queryByRole('combobox', { name: 'Readers start in' })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: /हिन्दी/ }));
+    const startIn = screen.getByRole('combobox', { name: 'Readers start in' }) as HTMLSelectElement;
+    expect(startIn.value).toBe('en');
+    fireEvent.change(startIn, { target: { value: 'hi' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(onPublish).toHaveBeenCalledWith(expect.objectContaining({ languages: ['en', 'hi'], defaultLang: 'hi' }));
   });
 });
 

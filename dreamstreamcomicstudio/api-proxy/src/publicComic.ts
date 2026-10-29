@@ -258,6 +258,11 @@ export function oembedFor(card: ShareCardRpc, origin: string, maxwidth?: number,
     ...(rating && PUBLIC_RATINGS.has(rating) ? { content_rating: rating } : {})
   };
   if (og) Object.assign(out, { thumbnail_url: `${origin}/og/${og.path.slice('pub/'.length)}`, thumbnail_width: 1200, thumbnail_height: 630 });
+  else if (card.card.coverUrl) {
+    // No software-made card (its render failed at publish): the cover, as the share head's og:image
+    // falls back to it. coverUrl is the 1080-wide copy; oEmbed wants a size beside a thumbnail.
+    Object.assign(out, { thumbnail_url: card.card.coverUrl, thumbnail_width: 1080, thumbnail_height: Math.round(1080 * ASPECT_RATIO(card.card.aspect)) });
+  }
   if (card.allowEmbed) {
     out.width = width;
     out.height = height;

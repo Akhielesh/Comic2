@@ -92,6 +92,56 @@ function recordingAdmin(result: { data: unknown; error: unknown }) {
   return { admin: () => client as unknown as SupabaseClient, calls };
 }
 
+/** A PostgREST stand-in for upsert: update → the scripted hit; insert → recorded. */
+function fakeUpsertAdmin(existingId: string | null) {
+  const inserts: Record<string, unknown>[] = [];
+  const updates: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return {
+        update(patch: Record<string, unknown>) {
+          updates.push({ ...patch });
+          const q = { eq: () => q, select: async () => ({ data: existingId ? [{ id: existingId }] : [], error: null }) };
+          return q;
+        },
+        insert: async (payload: Record<string, unknown>) => {
+          inserts.push({ ...payload });
+          return { error: null };
+        }
+      };
+    }
+  };
+  return { admin: () => client as unknown as SupabaseClient, inserts, updates };
+}
+
+const MINTED = '3f2a9c6e-1b4d-4e8f-9a0b-5c6d7e8f9a0b';
+const liveRow = (id: string) =>
+  rowFromDb({ id, project_id: 'p-1', user_id: 'u-1', status: 'live', visibility: 'unlisted', slug: 'Ab3dEf6hIj9kLm2nP', asset_key: 'K'.repeat(22), languages: ['en'], snapshot: { id }, card: { v: 1 }, published_rev: 1, safety: {}, published_at: '2026-10-29T00:00:00Z', updated_at: '2026-10-29T00:00:00Z' });
+
+describe('upsert keeps the publish-minted row id (the snapshot’s doc.id)', () => {
+  it('a first row is inserted WITH the minted uuid; an update never sends id', async () => {
+    const first = fakeUpsertAdmin(null);
+    await createSupabasePublicationStore({ admin: first.admin }).upsert(liveRow(MINTED));
+    expect(first.updates).toHaveLength(1);
+    expect(first.updates[0]).not.toHaveProperty('id');
+    expect(first.inserts).toHaveLength(1);
+    expect(first.inserts[0].id).toBe(MINTED);
+    expect(first.inserts[0]).toMatchObject({ project_id: 'p-1', user_id: 'u-1', slug: 'Ab3dEf6hIj9kLm2nP' });
+
+    const later = fakeUpsertAdmin(MINTED);
+    await createSupabasePublicationStore({ admin: later.admin }).upsert(liveRow(MINTED));
+    expect(later.inserts).toHaveLength(0);
+    expect(later.updates[0]).not.toHaveProperty('id');
+  });
+
+  it('an id that is not a uuid is never sent (the column default mints one, as before)', async () => {
+    const first = fakeUpsertAdmin(null);
+    await createSupabasePublicationStore({ admin: first.admin }).upsert(liveRow('pub-1'));
+    expect(first.inserts).toHaveLength(1);
+    expect(first.inserts[0]).not.toHaveProperty('id');
+  });
+});
+
 describe('moderation maintenance reads (L11)', () => {
   it('suspendedKeys: suspended rows past the grace period, newest first, well-formed keys only', async () => {
     const { admin, calls } = recordingAdmin({ data: [{ asset_key: 'Ab3dEf6hIj9kLm2nOp5qRs' }, { asset_key: '../etc' }, { asset_key: null }], error: null });
