@@ -7,7 +7,8 @@
 //   - OBSERVED: what this container saw itself (`recordImageOutcome`): an in-memory ring per route+model shared
 //     across users. Only UPSTREAM failures count (429 / 5xx / network / timeout). Key-scoped failures (a key with
 //     limit 0, a rejected key, billing, a user's own integration key being throttled) are the caller's problem,
-//     not the model's, and are never counted. Neither are safety blocks, cancels or our own bad requests.
+//     not the model's, and are never counted. Neither are safety blocks, cancels, config errors or our own bad
+//     requests (`outcomeFromError` turns every non-retryable or 4xx answer into NOT_UPSTREAM_CODE).
 //   - The pure rules in shared/comic/modelHealth.ts turn both into a state; the breaker is "≥ 3 upstream failures
 //     in 5 min with no success since → down for 2 min → half-open (one call allowed, reported as degraded)".
 //
@@ -64,8 +65,12 @@ const MAX_TRACKED_ROUTES = 64;
 /** Switch options offered on an outage (the banner shows ≤ 3 buttons in all). */
 export const MAX_SWITCH_OPTIONS = 2;
 
-/** StudioError codes that mean the MODEL's serving path failed (never the user's key, content or our request). */
-export const UPSTREAM_FAILURE_CODES: ReadonlySet<string> = new Set(['RATE_LIMIT', 'PROVIDER_ERROR', 'TIMEOUT', 'NOT_AVAILABLE']);
+/** StudioError codes that mean the MODEL's serving path failed (never the user's key, content or our request).
+ *  NOT_AVAILABLE is left out on purpose: the studio raises it for its own configuration ("the platform image key
+ *  isn't configured"), never for a model failing. */
+export const UPSTREAM_FAILURE_CODES: ReadonlySet<string> = new Set(['RATE_LIMIT', 'PROVIDER_ERROR', 'TIMEOUT']);
+/** The outcome code `outcomeFromError` gives a failure that is about our request or a key, never the model. */
+export const NOT_UPSTREAM_CODE = 'NOT_UPSTREAM';
 const UPSTREAM_CODE_RE = /^(?:429|5\d\d|408|network|upstream)$/i;
 const ROUTE_LABEL: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemini: 'Gemini' };
 const IMAGE_ROUTES: readonly ImageRoute[] = ['openrouter', 'gemini'];
@@ -167,7 +172,7 @@ export const isUpstreamFailureCode = (code: string | undefined): boolean => {
 
 /** The studio's own key/billing sentences (imageClient.classifyImageError) and the providers' usual vocabulary. */
 const KEY_SCOPED_RE =
-  /key (?:was |is )?(?:rejected|invalid|not valid|missing|expired)|rejected the (?:platform |your )?key|api key not valid|invalid api key|limit:\s*0\b|key limit|no (?:image-generation )?quota|no billing|enable billing|insufficient (?:credits|funds|balance)|integrations?\b|check (?:it|that key) in settings/i;
+  /key (?:was |is )?(?:rejected|invalid|not valid|missing|expired)|rejected the (?:platform |your )?key|api key not valid|invalid api key|limit:\s*0\b|key limit|no (?:image-generation )?quota|no billing|enable billing|insufficient (?:credits|funds|balance)|integrations?\b|check (?:it|that key) in settings|shared image service is at capacity|out of credits|over its spending limit/i;
 /** An upstream throttle explicitly says the key is fine — never key-scoped, whatever else the sentence says. */
 const KEY_IS_FINE_RE = /your key and limits are fine/i;
 
@@ -188,7 +193,26 @@ export const isKeyScopedFailure = (err: unknown): boolean => {
   return KEY_SCOPED_RE.test(text);
 };
 
-/** One image outcome from a thrown error, ready for `recordImageOutcome` (route/model from the picked route). */
+/**
+ * Is a thrown image error about OUR request or a key rather than the model's serving path? imageClient's
+ * classifyImageError marks exactly those `retryable: false` (a 400/404/422 the model rejected, the platform key's
+ * "limit: 0", a 402 / capacity answer, a rejected key — all PROVIDER_ERROR), while 5xx, network, timeouts and
+ * RATE_LIMIT stay retryable. RATE_LIMIT and TIMEOUT are a throttle or a slow model whatever their flag (a StudioError
+ * built without options defaults to retryable: false). Any other 4xx the provider answered (except 408 timeout and
+ * 429 throttle) is ours too.
+ */
+export const isOwnSideFailure = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; retryable?: unknown; imageFailure?: { status?: unknown } };
+  if (e.retryable === false && e.code !== 'RATE_LIMIT' && e.code !== 'TIMEOUT') return true;
+  const status = Number(e.imageFailure?.status);
+  return Number.isFinite(status) && status >= 400 && status < 500 && status !== 408 && status !== 429;
+};
+
+/**
+ * One image outcome from a thrown error, ready for `recordImageOutcome` (route/model from the picked route).
+ * A failure about our request or a key gets the code NOT_UPSTREAM_CODE, so the breaker never counts it.
+ */
 export const outcomeFromError = (err: unknown, picked: { route: ImageRoute; model: string }, at?: number): ImageOutcome => {
   const code = (err as { code?: unknown } | null)?.code;
   const status = (err as { imageFailure?: { status?: unknown } } | null)?.imageFailure?.status;
@@ -196,7 +220,13 @@ export const outcomeFromError = (err: unknown, picked: { route: ImageRoute; mode
     route: picked.route,
     model: picked.model,
     ok: false,
-    code: typeof code === 'string' ? code : Number.isFinite(Number(status)) ? String(status) : 'PROVIDER_ERROR',
+    code: isOwnSideFailure(err)
+      ? NOT_UPSTREAM_CODE
+      : typeof code === 'string'
+        ? code
+        : Number.isFinite(Number(status))
+          ? String(status)
+          : 'PROVIDER_ERROR',
     keyScoped: isKeyScopedFailure(err),
     ...(at !== undefined ? { at } : {})
   };

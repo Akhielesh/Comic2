@@ -12,7 +12,9 @@ import { PLATFORM_MARKUP, getImageModel, imagePriceUsd } from '../../../../share
 import { drawnTargets, redrawQuote, redrawResolution } from '../../../../shared/comic/modelLock.js';
 import { fakeBilling, fakeImages } from '../orchestrator.fakes.js';
 import { StudioError, type StudioKeys } from '../types.js';
+import { classifyImageError } from '../imageClient.js';
 import {
+  NOT_UPSTREAM_CODE,
   PUBLIC_HEALTH_STALE_MAX_MS,
   PUBLIC_HEALTH_TIMEOUT_MS,
   PUBLIC_HEALTH_TTL_MS,
@@ -242,6 +244,74 @@ describe('breaker (observed outcomes)', () => {
     expect(isKeyScopedFailure(new StudioError('PROVIDER_ERROR', 'The image provider had a temporary problem. Please try again.', { status: 502, retryable: true }))).toBe(false);
     expect(outcomeFromError(upstream, { route: 'openrouter', model: OR_ID }, T0)).toEqual({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT', keyScoped: false, at: T0 });
     expect(outcomeFromError(byok429, { route: 'openrouter', model: OR_ID })).toMatchObject({ ok: false, code: 'RATE_LIMIT', keyScoped: true });
+  });
+});
+
+/** What imageClient throws for one provider answer: classifyImageError's StudioError plus the `imageFailure` facts
+ *  runOnRoute attaches (route + HTTP status; never a body or a key). */
+const thrownByImageClient = (status: number, providerMessage: string, ctx: { route: 'openrouter' | 'gemini'; byok: boolean }) =>
+  Object.assign(classifyImageError(Object.assign(new Error(providerMessage), { status }), { ...ctx, model: NB21.nickname }), {
+    imageFailure: { route: ctx.route, status }
+  });
+
+describe('breaker: what imageClient really throws', () => {
+  const ownSide = [
+    ['our own bad request (400)', 400, 'Invalid value for aspect_ratio', false],
+    ['an unprocessable request (422)', 422, 'Unprocessable: image size too large', false],
+    ["the platform key's limit: 0 (429, shared service at capacity)", 429, 'RESOURCE_EXHAUSTED quota free_tier_requests, limit: 0', false],
+    ['a 402 capacity answer on the platform key', 402, 'Payment required: insufficient credits', false],
+    ['a model id the route does not know (404)', 404, 'No endpoints found for this model', false],
+    ['a rejected platform key (401)', 401, 'Unauthorized', false]
+  ] as const;
+
+  for (const [name, status, message, byok] of ownSide) {
+    it(`never counts ${name}: three of them leave the route unknown with no breaker event`, () => {
+      const err = thrownByImageClient(status, message, { route: 'gemini', byok });
+      expect(err.retryable).toBe(false); // the classification this rule leans on
+      const outcome = outcomeFromError(err, { route: 'gemini', model: GEM_ID }, T0);
+      expect(outcome.code).toBe(NOT_UPSTREAM_CODE);
+      const h = createModelHealth({ now: () => T0 });
+      for (let i = 0; i < 3; i += 1) h.recordImageOutcome(outcome);
+      expect(h.routeState('gemini', GEM_ID).state).toBe('unknown');
+      expect(h.breakerEvents()).toEqual([]);
+    });
+  }
+
+  it("the platform key's limit: 0 never blocks a BYOK Gemini user on the same route + model", async () => {
+    const h = createModelHealth({ now: () => T0, fetch: (async () => new Response('x', { status: 500 })) as typeof fetch });
+    const err = thrownByImageClient(429, 'RESOURCE_EXHAUSTED quota free_tier_requests, limit: 0', { route: 'gemini', byok: false });
+    expect(err.userMessage).toMatch(/shared image service is at capacity/);
+    expect(isKeyScopedFailure(err)).toBe(true);
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome(outcomeFromError(err, { route: 'gemini', model: GEM_ID }, T0));
+    const byokGemini: StudioKeys = { gemini: { key: 'AIza-user', byok: true } };
+    expect(await h.preflightImageRun({ specs: [NB21], keys: byokGemini, doc: lockedDoc(), caps: resolveStudioCaps({ byok: true, isAdmin: false }) })).toEqual({
+      ok: true,
+      options: []
+    });
+  });
+
+  it('still counts real upstream failures (429 throttle, 5xx, 408 / 504 timeouts, network)', () => {
+    const upstream = [
+      thrownByImageClient(429, 'Provider returned error: upstream Google rate limited', { route: 'openrouter', byok: false }),
+      thrownByImageClient(503, 'Service Unavailable', { route: 'openrouter', byok: false }),
+      thrownByImageClient(504, 'Gateway Timeout', { route: 'openrouter', byok: false })
+    ];
+    for (const err of upstream) {
+      expect(err.retryable).toBe(true);
+      expect(outcomeFromError(err, { route: 'openrouter', model: OR_ID }).code).not.toBe(NOT_UPSTREAM_CODE);
+    }
+    const h = createModelHealth({ now: () => T0 });
+    for (const err of upstream) h.recordImageOutcome(outcomeFromError(err, { route: 'openrouter', model: OR_ID }, T0));
+    expect(h.routeState('openrouter', OR_ID).state).toBe('down');
+    expect(h.breakerEvents()).toHaveLength(1);
+  });
+
+  it('NOT_AVAILABLE (a studio config error such as a missing platform key) is not a model failure', () => {
+    const h = createModelHealth({ now: () => T0 });
+    const config = new StudioError('NOT_AVAILABLE', "The platform image key isn't configured.", { status: 503 });
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome(outcomeFromError(config, { route: 'openrouter', model: OR_ID }, T0));
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'NOT_AVAILABLE' });
+    expect(h.routeState('openrouter', OR_ID).state).toBe('unknown');
   });
 });
 
