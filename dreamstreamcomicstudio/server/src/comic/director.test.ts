@@ -10,7 +10,7 @@ import {
 } from './director.js';
 import { lakeBriefDoc, lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS } from './jobs.js';
-import { fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
+import { fakeBilling, fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { StudioError } from './types.js';
 import { costFormatter, costViewFor } from './costText.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
@@ -573,6 +573,30 @@ describe('runDirectorTurn — never silent (contract §12.2)', () => {
     const reply = session.doc.conversation[1];
     expect(reply.text).toMatch(/^Sorry — I couldn't finish that just now\./);
     expect(reply.nextSteps).toEqual([{ label: 'Try again', say: 'hello' }]);
+  });
+
+  it('a used-up allowance is said in the reply itself, with no "try again in a moment" and no Try-again chip', async () => {
+    // billing denies the director's text call (included usage exhausted): waiting changes nothing,
+    // so the honest reason is the message the user reads, not only a card under a generic apology.
+    const session = newSession(plannedDoc());
+    const llm = scriptedLlm({ director: [{ text: 'never reached' }] });
+    await runDirectorTurn(testContext(session, { llm, billing: fakeBilling(0) }), { text: 'make page 1 funnier', attachments: [] });
+    const reply = session.doc.conversation.at(-1)!;
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toBe("You've used this month's included generation allowance.");
+    expect(reply.text).not.toMatch(/try again in a moment/i);
+    expect(reply.nextSteps ?? []).not.toContainEqual(expect.objectContaining({ label: 'Try again' }));
+    expect(reply.cards).toBeUndefined(); // said once, not duplicated as a notice
+    expect(reply.suggestions).toBeUndefined();
+
+    // When the model already spoke before the denial, its words stay and the reason rides as the notice.
+    const spoke = newSession(plannedDoc());
+    const llm2 = scriptedLlm({ director: [{ text: 'Noting that.', toolCalls: [toolCall('n', 'add_notes', { notes: ['funnier'] })] }, { text: 'never reached' }] });
+    await runDirectorTurn(testContext(spoke, { llm: llm2, billing: fakeBilling(1) }), { text: 'make page 1 funnier', attachments: [] });
+    const partial = spoke.doc.conversation.at(-1)!;
+    expect(partial.text).toContain('Noting that.');
+    expect(partial.cards).toEqual([expect.objectContaining({ type: 'notice', tone: 'error', text: "You've used this month's included generation allowance." })]);
+    expect(partial.nextSteps ?? []).not.toContainEqual(expect.objectContaining({ label: 'Try again' }));
   });
 
   it('named IP: an IP NOTE steers to an original homage, said once', async () => {

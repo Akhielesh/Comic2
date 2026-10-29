@@ -52,6 +52,12 @@ export const MAX_TURN_IMAGES = 8;
 const PREVIEW_EDGE = 768;
 const SUMMARY_CHAR_BUDGET = 12_000;
 const MEMORY_MARKER = /\n?⟦through:([A-Za-z0-9_-]+)⟧\s*$/;
+/**
+ * Model-call failures that waiting does not fix and whose message already says what to do
+ * (usage used up / a limit / a cooldown): the reply IS that message, with no "try again in a
+ * moment" and no Try-again chip that would fail identically.
+ */
+const NOT_TRANSIENT_FAILURES: ReadonlySet<string> = new Set(['BILLING_DENIED', 'BUDGET_EXCEEDED', 'LIMIT', 'COOLDOWN']);
 
 // ── System prompt (§6.8, director.md §3.11) ──────────────────────────────────
 
@@ -624,17 +630,22 @@ async function directorTurnBody(
       allowCustom: true
     });
   }
-  if (failure) cards.push(noticeCard('error', failure.userMessage));
+  const notTransient = !!failure && NOT_TRANSIENT_FAILURES.has(failure.code);
+  // When the model said nothing, a not-transient reason is the reply itself (said once, not also as a card).
+  const reasonIsReply = notTransient && !text;
+  if (failure && !reasonIsReply) cards.push(noticeCard('error', failure.userMessage));
   if (!cancelled && !refused) {
     if (text) text = reconcileReply(withEarlyRecap(text, before, after, userText), { after, turn });
     else if (failure) {
       // Never claim work "keeps drawing" when it already failed (b4b5774f): say what really happened.
       const runLine = runFailureLine(after, runOutcome(after, turn));
-      text = runLine
-        ? `Sorry — I couldn't finish my reply. ${runLine}`
-        : turn.outcome === 'started'
-          ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
-          : "Sorry — I couldn't finish that just now. Try again in a moment.";
+      text = reasonIsReply
+        ? [failure.userMessage, runLine].filter(Boolean).join(' ')
+        : runLine
+          ? `Sorry — I couldn't finish my reply. ${runLine}`
+          : turn.outcome === 'started'
+            ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
+            : "Sorry — I couldn't finish that just now. Try again in a moment.";
     } else text = composeTurnReply({ before, after, turn, userText });
   }
   if (cancelled && !text && !cards.length) {
@@ -665,7 +676,8 @@ async function directorTurnBody(
   // Honest retry chips for renders this turn started that already failed.
   const run = runOutcome(after, turn);
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
-  if (failure && userText) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
+  // A Try-again chip only when trying again can work; a used-up allowance would fail the same way.
+  if (failure && userText && !notTransient) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
   const final: Msg = {
     id: msgId,
     role: 'assistant',
