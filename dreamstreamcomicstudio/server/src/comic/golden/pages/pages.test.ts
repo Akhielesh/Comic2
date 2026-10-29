@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { castKindOf, isPageStale, pageSpecHash, type ComicDoc, type Page } from '../../../../../shared/comic/doc.js';
 import { getImageModel, resolveImageJob } from '../../../../../shared/comic/models.js';
-import { LAYOUT_REFERENCE_PATH, compilePage, identityAnchor, planPageReferences, upperName } from '../../prompts.js';
+import { LAYOUT_REFERENCE_PATH, compilePage, drawnCastIds, identityAnchor, offPanelSpeakerIds, planPageReferences, upperName } from '../../prompts.js';
 import { pageFixture, pageFixtures, type PageFixture } from './fixtures.js';
 
 const compile = (f: PageFixture, extra: { layoutGuide?: boolean; safe?: boolean } = {}) =>
@@ -75,6 +75,11 @@ describe('golden page prompts (Ship 1)', () => {
           expect(who).toMatch(new RegExp(`${upperName(c.name)} \\((?:Images? [\\d, and]+ — )?${anchor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`));
         }
         if (!drawn.length && !viewer) expect(who).toBe('Who: no characters.');
+        // The exported rule QC reuses (vision wave note) matches what the block asks for.
+        expect(drawnCastIds(f.doc, f.page.panels[i])).toEqual(drawn.map((c) => c.id));
+        for (const id of offPanelSpeakerIds(f.doc, f.page.panels[i])) {
+          expect(block).toContain(`OFF-PANEL VOICE: ${upperName(f.doc.cast.find((c) => c.id === id)!.name)} (do not draw)`);
+        }
         expect(block, block).toMatch(/^(Speaks: |OFF-PANEL VOICE: )/m);
         // Every fixture panel has a mood: a Detail line closes every block, never a bare "Mood:" line.
         expect(lineOf(block, 'Detail: '), block).toBeTruthy();
@@ -89,6 +94,12 @@ describe('golden page prompts (Ship 1)', () => {
     const pov = blocks[5];
     expect(pov).toContain("seen through DEV's eyes (do not draw DEV; at most a hand at the frame edge)");
     expect(pov).toContain('Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it. OFF-PANEL VOICE: DEV (do not draw) — 1 balloon.');
+    // QC checks the art against the drawn cast and never reports the viewer missing.
+    const f = pageFixture('courier-p2');
+    const dev = f.doc.cast.find((c) => c.name === 'Dev')!.id;
+    expect(f.page.panels[5].castIds).toContain(dev);
+    expect(drawnCastIds(f.doc, f.page.panels[5])).not.toContain(dev);
+    expect(offPanelSpeakerIds(f.doc, f.page.panels[5])).toEqual([dev]);
     // A silent wide panel fills its frame (no bar for balloons that never come).
     expect(blocks[2]).toContain('Speaks: nobody (a silent panel); fill the panel with art to its borders.');
   });

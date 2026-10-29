@@ -32,14 +32,17 @@ import {
   compilePlaceSheet,
   compileStyleOption,
   PAGE_PROMPT_CHAR_BUDGET,
+  drawnCastIds,
   effectiveLayout,
   identityAnchor,
   harmonizePanelSizes,
   layoutConflicts,
   layoutPanelCount,
+  offPanelSpeakerIds,
   paletteWords,
   parseLayout,
   planPageReferences,
+  povViewerOf,
   quoteForPrompt,
   rankPageCast,
   stagePanel,
@@ -438,6 +441,46 @@ describe('compilePage', () => {
     expect(talking).toContain('Props: MAGIC SHELL (Image 2 — glowing pink conch).');
     expect(talking).toContain('Speaks: MAGIC SHELL — 1 balloon;');
     expect(talking).not.toContain('OFF-PANEL VOICE: MAGIC SHELL');
+  });
+
+  it('drawnCastIds / offPanelSpeakerIds / povViewerOf are the rule the panel block uses (exported for QC)', () => {
+    const doc = baseDoc((d) => d.cast.push(character('shell', 'Magic Shell', 'support', { kind: 'object', look: { summary: 'A glowing pink conch' } })));
+    const p1 = panel(1, ['maya'], { lines: [line('speech', 'Who goes there?', 'arjun'), line('speech', 'Me.', 'maya'), line('shout', 'Halt!'), line('whisper', 'Again?', 'arjun')] });
+    const p2 = panel(2, ['maya', 'arjun'], { shot: 'pov', action: "From Arjun's view, Maya backs away from the stall.", lines: [line('speech', 'Stop!', 'arjun')] });
+    const p3 = panel(3, ['maya', 'arjun'], { shot: 'pov', action: 'A blur of tarps and sacks.', lines: [line('speech', 'Left!', 'arjun')] });
+    const p4 = panel(4, ['maya', 'shell'], {
+      action: 'Through Maya’s eyes the conch glows.',
+      lines: [line('speech', 'Listen…', 'shell'), line('caption', 'Later.', 'vendor'), line('sfx', 'HUM', 'vendor'), line('speech', '  ', 'arjun'), line('speech', 'Psst.', 'ghost')]
+    });
+    const p5 = panel(5, ['maya', 'arjun'], { shot: 'pov', action: 'Arjun’s POV: Maya waves.', lines: [line('thought', 'Late again.', 'arjun')] });
+    // Panel 1: a speaker missing from castIds is off-panel (each once; unnamed lines have no id).
+    expect(drawnCastIds(doc, p1)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p1)).toEqual(['arjun']);
+    expect(povViewerOf(doc, p1)).toBeUndefined();
+    // Panel 2: the named POV viewer is heard, not drawn.
+    expect(povViewerOf(doc, p2)?.id).toBe('arjun');
+    expect(drawnCastIds(doc, p2)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p2)).toEqual(['arjun']);
+    // Panel 3: a POV shot naming nobody keeps its cast; panel 4: only a pov shot has a viewer.
+    expect(drawnCastIds(doc, p3)).toEqual(['maya', 'arjun']);
+    expect(offPanelSpeakerIds(doc, p3)).toEqual([]);
+    expect(povViewerOf(doc, p4)).toBeUndefined();
+    // Captions, SFX, blank lines and unknown speakers never make an off-panel voice; a listed talking prop is drawn.
+    expect(drawnCastIds(doc, p4)).toEqual(['maya', 'shell']);
+    expect(offPanelSpeakerIds(doc, p4)).toEqual([]);
+    expect(drawnCastIds(doc, p5)).toEqual(['maya']);
+    expect(offPanelSpeakerIds(doc, p5)).toEqual(['arjun']);
+    // The prompt says the same thing.
+    const prompt = compilePage(doc, page(1, [p1, p2, p3, p4, p5])).prompt;
+    for (const p of [p1, p2, p3, p4, p5]) {
+      const start = prompt.indexOf(`PANEL ${p.n} of 5`);
+      const end = prompt.indexOf(p.n < 5 ? `PANEL ${p.n + 1} of 5` : '\n\n', start);
+      const block = prompt.slice(start, end);
+      const who = block.split('\n').find((l) => l.startsWith('Who: '))!;
+      for (const id of drawnCastIds(doc, p)) expect(who, block).toContain(`${castLabel(doc.cast.find((c) => c.id === id)!)} (`);
+      for (const id of offPanelSpeakerIds(doc, p)) expect(block).toContain(`OFF-PANEL VOICE: ${castLabel(doc.cast.find((c) => c.id === id)!)} (do not draw)`);
+      expect(block.match(/OFF-PANEL VOICE: (?!unnamed)/g)?.length ?? 0, block).toBe(offPanelSpeakerIds(doc, p).length);
+    }
   });
 
   it('Must show is the first real sentence: a title or an initial never ends it, and a one-word exclamation is not split off', () => {

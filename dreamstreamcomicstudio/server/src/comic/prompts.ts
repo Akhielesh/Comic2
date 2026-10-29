@@ -1272,9 +1272,10 @@ const escapeName = (name: string) => clean(name).replace(/[.*+?^${}()|[\]\\]/g, 
 /**
  * The viewer of a point-of-view panel when the action names them ("From Kalyani's view…",
  * "through Ravi's eyes", "Ravi's POV"). They are heard, not seen: never in the drawn cast.
- * Old plans forced every speaker into the cast ("speakers are visible", writer R8).
+ * Old plans forced every speaker into the cast ("speakers are visible", writer R8). Names in
+ * scripts the pattern cannot match fail safe: the viewer stays drawn.
  */
-const povViewerOf = (doc: ComicDoc, panel: Panel): Character | undefined => {
+export const povViewerOf = (doc: ComicDoc, panel: Panel): Character | undefined => {
   if (panel.shot !== 'pov') return undefined;
   const action = clean(panel.action);
   if (!action) return undefined;
@@ -1287,6 +1288,32 @@ const povViewerOf = (doc: ComicDoc, panel: Panel): Character | undefined => {
       'iu'
     ).test(action);
   });
+};
+
+/**
+ * The cast ids the page prompt asks to be DRAWN in a panel: its castIds without a POV viewer the
+ * action names (the panel block's Who line). QC should check the art against these, not castIds,
+ * or correct art reads as "VIEWER missing" (plan §4.3; vision wave note).
+ */
+export const drawnCastIds = (doc: ComicDoc, panel: Panel): string[] => {
+  const viewer = povViewerOf(doc, panel);
+  return viewer ? panel.castIds.filter((id) => id !== viewer.id) : [...panel.castIds];
+};
+
+/**
+ * Cast ids the page prompt names as an "OFF-PANEL VOICE … (do not draw)": anyone with a balloon line
+ * (speech, thought, whisper, shout) in the panel who is not drawn there — a speaker missing from
+ * castIds, or the POV viewer. In first-line order, each once. QC must never report them as missing.
+ */
+export const offPanelSpeakerIds = (doc: ComicDoc, panel: Panel): string[] => {
+  const drawn = new Set(drawnCastIds(doc, panel));
+  const out: string[] = [];
+  for (const line of panel.lines) {
+    const id = line.speakerId;
+    if (!id || !clean(line.text) || !BALLOON_KINDS.has(line.kind) || drawn.has(id) || out.includes(id)) continue;
+    if (doc.cast.some((c) => c.id === id)) out.push(id);
+  }
+  return out;
 };
 
 /** "on the left" / "in the center" / "left of center" for a stagePanel position word. */
@@ -1418,7 +1445,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const mustShow = `Must show: ${sentence(first) || 'A quiet beat that continues the scene.'}`;
 
   const viewer = povViewerOf(doc, panel);
-  const drawnPanel = viewer ? { ...panel, castIds: panel.castIds.filter((id) => id !== viewer.id) } : panel;
+  const drawnPanel = viewer ? { ...panel, castIds: drawnCastIds(doc, panel) } : panel;
   const staged = stagePanel(page, drawnPanel).filter((s) => ctx.names.has(s.id));
   const people = staged.filter((s) => !ctx.props.has(s.id));
   const things = staged.filter((s) => ctx.props.has(s.id));
