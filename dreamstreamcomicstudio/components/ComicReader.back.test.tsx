@@ -85,10 +85,24 @@ const back = async () => {
   });
 };
 
+// The entry each test opens the reader from; its marker is unique, so landing one entry too far back is visible.
+let opening: Record<string, unknown> = {};
+let entryNo = 0;
+/** Wait long enough for any further traversal to land, then check the reader popped exactly its own entry. */
+const expectBackWhereOpened = async () => {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  expect(readerState()).toBeUndefined();
+  expect(window.history.state).toEqual(opening);
+  expect(window.location.search).toBe('?view=read&id=x');
+};
+
 beforeEach(() => {
   // Each test starts on a plain entry, as App leaves it after opening ?view=read&id=… (a push, so entries an
   // earlier test left "forward" of the current one are dropped and history.length counts are exact).
-  window.history.pushState({}, '', '/?view=read&id=x');
+  opening = { __testEntry: ++entryNo };
+  window.history.pushState(opening, '', '/?view=read&id=x');
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -129,38 +143,68 @@ describe('Back closes the classic reader', () => {
   it('the review prompt still closes through the history entry', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const h = handlers();
+    const before = window.history.length;
     render(<ComicReader project={project('c4')} {...h} isReadOnly />);
+    expect(readerState()).toBe('c4');
+    expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
     fireEvent.click(screen.getByRole('button', { name: 'Skip review' }));
     await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(1));
-    expect(readerState()).toBeUndefined();
+    await expectBackWhereOpened();
+    expect(window.history.length).toBe(before + 1); // the exit pushed nothing
+    expect(h.onClose).toHaveBeenCalledTimes(1);
   });
 
   it('leaving through Library, the site header or a legal link pops the entry before navigating', async () => {
     const h = handlers();
+    const before = window.history.length;
+    // The app navigates on the popped entry: the reader's own entry is gone by the time onNavigate runs.
+    let atNavigate: unknown = 'not called';
+    h.onNavigate.mockImplementation(() => {
+      atNavigate = readerState();
+    });
     render(<ComicReader project={project('c5')} {...h} />);
+    expect(readerState()).toBe('c5');
+    expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Library' }));
     await waitFor(() => expect(h.onNavigate).toHaveBeenCalledWith('gallery'));
-    expect(readerState()).toBeUndefined();
+    expect(atNavigate).toBeUndefined();
+    await expectBackWhereOpened();
+    expect(h.onNavigate).toHaveBeenCalledTimes(1);
     expect(h.onClose).not.toHaveBeenCalled();
   });
 
   it('a legal link in the footer also pops first', async () => {
     const h = handlers();
+    const before = window.history.length;
+    let atOpen: unknown = 'not called';
+    h.onOpenPrivacy.mockImplementation(() => {
+      atOpen = readerState();
+    });
     render(<ComicReader project={project('c6')} {...h} />);
+    expect(readerState()).toBe('c6');
+    expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Footer privacy' }));
     await waitFor(() => expect(h.onOpenPrivacy).toHaveBeenCalledTimes(1));
-    expect(readerState()).toBeUndefined();
+    expect(atOpen).toBeUndefined();
+    await expectBackWhereOpened();
     expect(h.onClose).not.toHaveBeenCalled();
   });
 
   it('a navigation the app ignores leaves the reader working: Close still closes', async () => {
     const h = handlers(); // onNavigate is a mock: the reader stays open, as if the app ignored the view
+    const before = window.history.length;
     render(<ComicReader project={project('c10')} {...h} />);
+    expect(readerState()).toBe('c10');
+    expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Library' }));
     await waitFor(() => expect(h.onNavigate).toHaveBeenCalledWith('gallery'));
+    await expectBackWhereOpened();
+    // The entry is already gone: Close closes at once and never traverses further back than the opening entry.
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
     await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(1));
+    await expectBackWhereOpened();
+    expect(window.history.length).toBe(before + 1);
   });
 
   it('StrictMode (mount, unmount, mount) adopts its entry instead of pushing twice or closing', async () => {
