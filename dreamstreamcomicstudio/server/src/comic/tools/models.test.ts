@@ -680,7 +680,7 @@ describe('golden: director model behaviour (models.md §5.1 M1-DIRECTOR-MODELS)'
               }));
               if (turn.outageDuringTurn) {
                 // The studio's preflight pauses a run while the model is still writing (jobs.ts commits the card).
-                const first = steps[0];
+                const first = steps[0] as Exclude<ScriptStep, (...args: never[]) => unknown>;
                 steps[0] = async () => {
                   const card = await preflightCard(health, session.doc, keys, caps, 'preflight');
                   session.commit([{ op: 'message', msg: { id: newId('msg'), role: 'assistant', text: 'The image provider is busy, so nothing was drawn.', at: Date.now(), cards: [card] } }]);
