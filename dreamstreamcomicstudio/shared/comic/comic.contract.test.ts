@@ -260,6 +260,14 @@ import {
   displayAssetPaths,
   hashString,
   isTargetStale,
+  legacyPlanInputHashOf,
+  legacySpecHashFor,
+  normalizeNoticeCard,
+  placeSpecHash,
+  planInputHashOf,
+  stableStringify,
+  type Card,
+  type QcReport,
   mapAssetRefs,
   parseTargetKey,
   renderTargetKey,
@@ -358,25 +366,56 @@ const ownerLiveDoc = (): ComicDoc => {
 
 const inArtSample = () => makeSampleDoc((x) => { x.format = { ...x.format, lettering: 'in_art' }; });
 
-describe('v5 §16.1 hash invariance (R2)', () => {
-  it('pins the sample fixture hashes (captured at HEAD before v5)', () => {
+/** What Postgres jsonb does to object key order on save: shorter keys first, then bytewise (comic_docs.doc is jsonb). */
+const jsonbOrder = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(jsonbOrder)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.keys(v as object)
+            .sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+            .map((k) => [k, jsonbOrder((v as Record<string, unknown>)[k])])
+        )
+      : v;
+/** A save + reload through jsonb, then the load path. */
+const jsonbReload = (doc: ComicDoc): ComicDoc => normalizeDoc(jsonbOrder(JSON.parse(JSON.stringify(doc))) as ComicDoc);
+
+describe('v5 §16.1 hash invariance (R2, after back-compat F1)', () => {
+  it('pins the sample fixture hashes: canonical (F1) and the pre-F1 serialisation kept for legacy acceptance', () => {
     const overlay = makeSampleDoc();
-    expect(overlay.pages.map((p) => pageSpecHash(overlay, p))).toEqual(Array(6).fill('65e6794f'));
+    // Captured at HEAD before v5 (the pre-F1 serialisation), then the canonical value (the cast looks' keys sorted).
+    expect(overlay.pages.map((p) => legacySpecHashFor(overlay, { kind: 'page', id: p.id }))).toEqual(Array(6).fill('65e6794f'));
+    expect(overlay.pages.map((p) => pageSpecHash(overlay, p))).toEqual(Array(6).fill('e14eb277'));
     const inArt = inArtSample();
-    expect(inArt.pages.map((p) => pageSpecHash(inArt, p))).toEqual(['5e8d87fe', 'ae4db5c3', 'bc65b954', '365ca7d9', '44c4315a', 'f1f9b257']);
-    // …and after normalizeDoc (the load path) the hashes are still identical.
+    // The pre-F1 serialisation (what stored renders carry) is still computable, byte for byte.
+    expect(inArt.pages.map((p) => legacySpecHashFor(inArt, { kind: 'page', id: p.id }))).toEqual(['5e8d87fe', 'ae4db5c3', 'bc65b954', '365ca7d9', '44c4315a', 'f1f9b257']);
+    expect(inArt.pages.map((p) => legacyPageSpecHash(inArt, p))).toEqual(['5e8d87fe', 'ae4db5c3', 'bc65b954', '365ca7d9', '44c4315a', 'f1f9b257']);
+    // The canonical hash (lines serialised with sorted keys).
+    const canonical = ['174ae924', '0c816205', '0aa93f1e', 'a6649a67', '2967d570', '7aeb7621'];
+    expect(inArt.pages.map((p) => pageSpecHash(inArt, p))).toEqual(canonical);
+    // …and after normalizeDoc (the load path) and a jsonb round trip the hashes are still identical.
     const norm = normalizeDoc(inArtSample());
-    expect(norm.pages.map((p) => pageSpecHash(norm, p))).toEqual(['5e8d87fe', 'ae4db5c3', 'bc65b954', '365ca7d9', '44c4315a', 'f1f9b257']);
+    expect(norm.pages.map((p) => pageSpecHash(norm, p))).toEqual(canonical);
+    const reloaded = jsonbReload(inArtSample());
+    expect(reloaded.pages.map((p) => pageSpecHash(reloaded, p))).toEqual(canonical);
   });
 
-  it('(a) owner live doc and (b) in_art 6-page speakers fixture: legacy hash === v5 hash after normalizeDoc', () => {
+  it('(a) owner live doc and (b) in_art 6-page speakers fixture: the legacy stamp is reproduced after normalizeDoc; the canonical hash survives jsonb', () => {
     for (const raw of [ownerLiveDoc(), inArtSample(), makeSampleDoc()]) {
       const legacy = raw.pages.map((p) => legacyPageSpecHash(raw, p));
       const doc = normalizeDoc(JSON.parse(JSON.stringify(raw)));
-      expect(doc.pages.map((p) => pageSpecHash(doc, p))).toEqual(legacy);
+      // normalizeDoc keeps key order: the "as loaded" variant of the load-time acceptance reproduces the stamp.
+      expect(doc.pages.map((p) => legacySpecHashFor(doc, { kind: 'page', id: p.id }))).toEqual(legacy);
+      const canonical = doc.pages.map((p) => pageSpecHash(doc, p));
+      const reloaded = jsonbReload(raw);
+      expect(reloaded.pages.map((p) => pageSpecHash(reloaded, p))).toEqual(canonical);
     }
+    // A canonical stamp never goes stale on reload; a pre-F1 stamp reads stale until session.ts recoveryOps migrates it.
     const live = normalizeDoc(ownerLiveDoc());
-    expect(isPageStale(live, live.pages[0])).toBe(false);
+    expect(isPageStale(live, live.pages[0])).toBe(live.pages[0].render.specHash !== pageSpecHash(live, live.pages[0]));
+    const stamped = applyOps(live, [{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { specHash: pageSpecHash(live, live.pages[0]) } }]);
+    const back = jsonbReload(stamped);
+    expect(isPageStale(back, back.pages[0])).toBe(false);
   });
 
   it('(c) style / lang / noTranslate on lines are never hashed', () => {
@@ -427,6 +466,99 @@ describe('v5 §16.1 hash invariance (R2)', () => {
     // overlay covers do not hash their (software) title
     const overlay = applyOps(ownerDoc, [{ op: 'cover', patch: { lettering: 'overlay' } }]);
     expect(coverSpecHash(applyOps(overlay, [{ op: 'cover', patch: { title: 'New title' } }]))).toBe(coverSpecHash(overlay));
+  });
+});
+
+describe('back-compat F1: key-order independent spec hashes (plan §5.1)', () => {
+  it('stableStringify sorts keys at every depth, keeps array order and serialises like JSON.stringify otherwise', () => {
+    expect(stableStringify({ b: 1, a: { d: [3, { z: 1, y: 2 }], c: 'x' } })).toBe('{"a":{"c":"x","d":[3,{"y":2,"z":1}]},"b":1}');
+    expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
+    expect(stableStringify([2, 1])).not.toBe(stableStringify([1, 2]));
+    // undefined object values are dropped and undefined array items become null, exactly as JSON.stringify does.
+    expect(stableStringify({ a: undefined, b: [undefined, null, 'é'] })).toBe(JSON.stringify({ b: [undefined, null, 'é'] }));
+    expect(stableStringify(['x', 1, true, null])).toBe(JSON.stringify(['x', 1, true, null]));
+  });
+
+  it('every spec hash and the writer-input hash survive a jsonb reorder; the pre-F1 serialisation does not', () => {
+    const doc = normalizeDoc(inArtSample());
+    // Writer-ordered looks (summary, age, build, hair, outfit…): jsonb puts the short keys first.
+    doc.cast = doc.cast.map((c) => ({ ...c, look: { summary: c.look.summary, age: '30s', build: 'lean', hair: 'black bob', outfit: 'red coat', palette: 'red, black', marks: 'scar' } }));
+    doc.brief = { title: doc.brief.title, notes: ['no gore'], logline: 'A heist.', genre: 'caper', tone: 'light', audience: 'teens' };
+    const reloaded = jsonbReload(doc);
+    for (const p of doc.pages) expect(pageSpecHash(reloaded, reloaded.pages.find((q) => q.id === p.id)!)).toBe(pageSpecHash(doc, p));
+    for (const c of doc.cast) expect(sheetSpecHash(reloaded, reloaded.cast.find((x) => x.id === c.id)!)).toBe(sheetSpecHash(doc, c));
+    for (const pl of doc.places) expect(placeSpecHash(reloaded, reloaded.places.find((x) => x.id === pl.id)!)).toBe(placeSpecHash(doc, pl));
+    expect(coverSpecHash(reloaded)).toBe(coverSpecHash(doc));
+    expect(planInputHashOf(reloaded)).toBe(planInputHashOf(doc));
+    // The bug F1 fixes: the old serialisation followed the key order.
+    const page = doc.pages.find((p) => p.panels.some((x) => x.castIds.length))!;
+    expect(legacySpecHashFor(reloaded, { kind: 'page', id: page.id })).not.toBe(legacySpecHashFor(doc, { kind: 'page', id: page.id }));
+    expect(legacyPlanInputHashOf(reloaded)).not.toBe(legacyPlanInputHashOf(doc));
+  });
+
+  it('a real edit still changes the canonical hash (action, look, in_art line)', () => {
+    const doc = normalizeDoc(inArtSample());
+    const page = doc.pages[0];
+    const h = pageSpecHash(doc, page);
+    const acted = applyOps(doc, [{ op: 'panel', pageId: page.id, id: page.panels[0].id, patch: { action: `${page.panels[0].action} (edited)` } }]);
+    expect(pageSpecHash(acted, acted.pages[0])).not.toBe(h);
+    const castId = page.panels.flatMap((p) => p.castIds)[0];
+    const looked = applyOps(doc, [{ op: 'character', id: castId, patch: { look: { summary: 'now with a hat' } } }]);
+    expect(pageSpecHash(looked, looked.pages[0])).not.toBe(h);
+    const line = page.panels.flatMap((p) => p.lines.map((l) => ({ panelId: p.id, id: l.id })))[0];
+    const lettered = applyOps(doc, [{ op: 'line', pageId: page.id, panelId: line.panelId, id: line.id, patch: { text: 'Different words' } }]);
+    expect(pageSpecHash(lettered, lettered.pages[0])).not.toBe(h);
+  });
+
+  it('legacySpecHashFor is the pre-F1 serialisation for every target kind (style options have none)', () => {
+    const doc = normalizeDoc(ownerLiveDoc());
+    expect(legacySpecHashFor(doc, { kind: 'page', id: 'pg_1' })).toBe(legacyPageSpecHash(doc, doc.pages[0]));
+    expect(legacySpecHashFor(doc, { kind: 'sheet', id: 'c_baby' })).toMatch(/^[0-9a-f]{8}$/);
+    expect(legacySpecHashFor(doc, { kind: 'cover' })).toMatch(/^[0-9a-f]{8}$/);
+    expect(legacySpecHashFor(doc, { kind: 'page', id: 'nope' })).toBeUndefined();
+    expect(legacySpecHashFor(doc, { kind: 'style_option', id: 'x' })).toBeUndefined();
+    // Looks with only `summary` have no order to lose: canonical === legacy for this sheet.
+    expect(sheetSpecHash(doc, doc.cast[0])).toBe(legacySpecHashFor(doc, { kind: 'sheet', id: 'c_baby' }));
+  });
+});
+
+describe('Ship 1 contract additions (plan §5.1)', () => {
+  it('QcReport carries the optional panel checks; old reports stay valid', () => {
+    const old: QcReport = { score: 0.9, issues: [], checkedAt: 1 };
+    const checked: QcReport = {
+      ...old,
+      beats: [1, 3, 2],
+      crosses: [],
+      drawnBoxes: [{ x: 0, y: 0, w: 1, h: 0.5 }],
+      missingSpeakers: [{ panel: 2, castId: 'c1' }],
+      boxesFrom: 'vision'
+    };
+    expect(normalizeDoc(JSON.parse(JSON.stringify({ ...baseDoc(), pages: [{ ...page('pg1', 1), render: { status: 'ready', history: [], qc: checked } }] }))).pages[0].render.qc).toEqual(checked);
+    // QC data is never hashed.
+    const doc = baseDoc();
+    const withQc = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg1' }, patch: { qc: checked } }]);
+    expect(pageSpecHash(withQc, withQc.pages[0])).toBe(pageSpecHash(doc, doc.pages[0]));
+  });
+
+  it('render_pages.drawOverfull is a typed, optional spend field', () => {
+    const action: StudioAction = { type: 'render_pages', drawOverfull: ['pg1'] };
+    expect(isSpendAction(action)).toBe(true);
+  });
+
+  it('notice cards keep well-formed fix chips and drop malformed ones on load', () => {
+    const fix = { label: 'Redraw page 2', free: false, action: { type: 'render_pages', pageIds: ['pg2'], force: true, quotedUsd: 0.07 } as StudioAction };
+    const free = { label: 'Make it a caption', free: true, action: { type: 'patch', ops: [] } as StudioAction };
+    const card: Card = { type: 'notice', id: 'n1', tone: 'warn', text: 'Check panels on page 2.', fixes: [free, fix] };
+    expect(normalizeNoticeCard(card as Extract<Card, { type: 'notice' }>)).toBe(card);
+    const bad = { ...card, fixes: [free, { label: '', free: true, action: { type: 'patch' } }, { label: 'x', free: 'yes', action: fix.action }, { label: 'y', free: true, action: { type: 'rm_rf' } }] } as never;
+    expect((normalizeNoticeCard(bad) as Extract<Card, { type: 'notice' }>).fixes).toEqual([free]);
+    const none = normalizeNoticeCard({ ...card, fixes: 'nope' } as never);
+    expect('fixes' in none).toBe(false);
+    const plain: Card = { type: 'notice', id: 'n2', tone: 'info', text: 'Saved.' };
+    expect(normalizeNoticeCard(plain as Extract<Card, { type: 'notice' }>)).toBe(plain);
+    // Through a stored message: the bad chips are gone after a load.
+    const doc = normalizeDoc({ ...baseDoc(), conversation: [{ id: 'm1', role: 'assistant', text: 'x', at: 1, cards: [bad] }] } as never);
+    expect((doc.conversation[0].cards?.[0] as Extract<Card, { type: 'notice' }>).fixes).toEqual([free]);
   });
 });
 

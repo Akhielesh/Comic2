@@ -216,8 +216,11 @@ type Quoted = { quotedUsd?: number };
 export type SpendAction =
   | ({ type: 'render_style_options'; directions?: { name: string; spec: string }[] } & Quoted)
   | ({ type: 'render_sheets'; characterIds?: string[]; force?: boolean } & Quoted)
-  /** force = explicit "Redraw" of ready pages (UI button or director redraw with explicit intent). */
-  | ({ type: 'render_pages'; pageIds?: string[]; force?: boolean; includeCover?: boolean; safe?: boolean } & Quoted)
+  /** force = explicit "Redraw" of ready pages (UI button or director redraw with explicit intent).
+   *  drawOverfull (plan §4.1, §5.1; decision PD-1): "Render all" (no pageIds, no force) holds back pages whose words
+   *  overfill a panel — left out of the run AND its quote, with free fixes first. The ids listed here are drawn
+   *  anyway ("Draw anyway"). The server keeps only this doc's page ids (planCheckGate.sanitizeDrawOverfull). */
+  | ({ type: 'render_pages'; pageIds?: string[]; force?: boolean; includeCover?: boolean; safe?: boolean; drawOverfull?: string[] } & Quoted)
   | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)

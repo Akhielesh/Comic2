@@ -22,7 +22,24 @@ import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
 import { DOC_LIMITS as SHARED_DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
-import { archiveOf, collectAssetPaths, mapAssetRefs, newId, refInboxOf, type AssetRef, type ComicDoc, type RenderState, type RenderTarget } from '../../../shared/comic/doc.js';
+import {
+  CHARACTER_LOOK_KEYS,
+  archiveOf,
+  collectAssetPaths,
+  coverCastOf,
+  findPage,
+  legacyPlanInputHashOf,
+  legacySpecHashFor,
+  mapAssetRefs,
+  newId,
+  planInputHashOf,
+  refInboxOf,
+  specHashFor,
+  type AssetRef,
+  type ComicDoc,
+  type RenderState,
+  type RenderTarget
+} from '../../../shared/comic/doc.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
 import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
@@ -138,10 +155,150 @@ export const listRenderTargets = (doc: ComicDoc): { target: RenderTarget; render
   return out;
 };
 
+// ── Back-compat F1: legacy spec hashes, accepted once per load ───────────────
+//
+// Spec hashes are canonical now (stableStringify: key order never matters). A render stamped before that carries
+// JSON.stringify of its tuple in the in-memory key order of the session that drew it, which a jsonb save/reload
+// reorders. At load, for every render whose stored hash is not the canonical one, the legacy hash is recomputed over
+// a few key-order variants of the doc (each look as loaded or in the writer's order; for in_art pages the line
+// field order too). A match proves the spec did not change: a server-only render patch writes the canonical hash
+// (the current one and every history version that matches). No match leaves the render stale, honestly — a real
+// edit (an action, a look, a line) matches no variant. The writer-input hash (planInputHash) is migrated the same
+// way. The investigation's corpus probe recovered 9/9 stored hashes with at most 15 variants and 0 false matches
+// after a real edit.
+
+/** At most this many key-order variants are tried per target (and for the plan input hash), once per load. */
+export const LEGACY_HASH_MAX_VARIANTS = 64;
+/** Looks reordered one by one (2^n combinations) when at most this many differ from the writer's order; beyond it only
+ *  "all as loaded" and "all in the writer's order" are tried. */
+const LEGACY_LOOK_FLIPS = 6;
+/** Line field orders the studio has written (writer: id first; the director tools: id last; the type's order). */
+const LEGACY_LINE_ORDERS: readonly (readonly string[])[] = [
+  ['id', 'kind', 'text', 'speakerId'],
+  ['kind', 'text', 'speakerId', 'id'],
+  ['id', 'kind', 'speakerId', 'text']
+];
+/** Brief field orders: a new doc's {title, notes} then the fields as the sanitizer adds them; the type's order. */
+const LEGACY_BRIEF_ORDERS: readonly (readonly string[])[] = [
+  ['title', 'notes', 'logline', 'premise', 'genre', 'tone', 'audience', 'setting', 'themes'],
+  ['title', 'logline', 'premise', 'genre', 'tone', 'audience', 'setting', 'themes', 'notes']
+];
+
+const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** The object with `order`'s keys first (those it has), then its other keys in their own order. */
+const withKeyOrder = <T>(value: T, order: readonly string[]): T => {
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const k of order) if (Object.prototype.hasOwnProperty.call(value, k)) out[k] = value[k];
+  for (const k of Object.keys(value)) if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = value[k];
+  return out as T;
+};
+const sameKeyOrder = (a: unknown, b: unknown): boolean =>
+  isRecord(a) && isRecord(b) ? Object.keys(a).join('\u0000') === Object.keys(b).join('\u0000') : true;
+
+/** Sets of cast ids whose look is put in the writer's order, one set per variant (the empty set first). */
+const lookFlipSets = (doc: ComicDoc, castIds: readonly string[]): Set<string>[] => {
+  const ids = [...new Set(castIds)].filter((id) => {
+    const c = doc.cast.find((x) => x.id === id);
+    return !!c && !sameKeyOrder(c.look, withKeyOrder(c.look, CHARACTER_LOOK_KEYS));
+  });
+  if (!ids.length) return [new Set()];
+  if (ids.length > LEGACY_LOOK_FLIPS) return [new Set(), new Set(ids)];
+  const out: Set<string>[] = [];
+  for (let mask = 0; mask < 1 << ids.length; mask += 1) out.push(new Set(ids.filter((_, i) => mask & (1 << i))));
+  return out;
+};
+
+/** The doc with the chosen looks in the writer's order, and (for one page) its lines in a given field order. */
+const variantDoc = (doc: ComicDoc, flip: Set<string>, lines?: { pageId: string; order: readonly string[] }, briefOrder?: readonly string[]): ComicDoc => ({
+  ...doc,
+  ...(briefOrder ? { brief: withKeyOrder(doc.brief, briefOrder) } : {}),
+  cast: flip.size ? doc.cast.map((c) => (flip.has(c.id) ? { ...c, look: withKeyOrder(c.look, CHARACTER_LOOK_KEYS) } : c)) : doc.cast,
+  pages: lines
+    ? doc.pages.map((p) =>
+        p.id === lines.pageId ? { ...p, panels: p.panels.map((panel) => ({ ...panel, lines: panel.lines.map((l) => withKeyOrder(l, lines.order)) })) } : p
+      )
+    : doc.pages
+});
+
+/** Every key-order variant to try for a target, as loaded first, at most LEGACY_HASH_MAX_VARIANTS. */
+function* targetVariants(doc: ComicDoc, target: RenderTarget): Generator<ComicDoc> {
+  let castIds: string[] = [];
+  let lineOrders: (readonly string[] | undefined)[] = [undefined];
+  if (target.kind === 'page') {
+    const page = findPage(doc, target.id);
+    if (!page) return;
+    castIds = page.panels.flatMap((p) => p.castIds);
+    if (doc.format.lettering === 'in_art' && page.panels.some((p) => p.lines.length)) lineOrders = [undefined, ...LEGACY_LINE_ORDERS];
+  } else if (target.kind === 'sheet') castIds = [target.id];
+  else if (target.kind === 'cover') castIds = coverCastOf(doc).map((c) => c.id);
+  let n = 0;
+  for (const order of lineOrders) {
+    for (const flip of lookFlipSets(doc, castIds)) {
+      if (n >= LEGACY_HASH_MAX_VARIANTS) return;
+      n += 1;
+      yield variantDoc(doc, flip, order && target.kind === 'page' ? { pageId: target.id, order } : undefined);
+    }
+  }
+}
+
+/**
+ * Back-compat F1: render patches that re-stamp legacy (pre-canonical) spec hashes whose spec is unchanged. Pure.
+ * Targets already canonical cost one hash each; only non-canonical ones are searched.
+ */
+export const legacySpecHashOps = (doc: ComicDoc): DocOp[] => {
+  const ops: DocOp[] = [];
+  for (const { target, render } of listRenderTargets(doc)) {
+    if (target.kind === 'style_option') continue;
+    const stored = [render.specHash, ...render.history.map((v) => v.specHash)].filter((h): h is string => typeof h === 'string' && !!h);
+    if (!stored.length) continue;
+    const canonical = specHashFor(doc, target);
+    if (!canonical) continue;
+    const wanted = new Set(stored.filter((h) => h !== canonical));
+    if (!wanted.size) continue;
+    const matched = new Set<string>();
+    for (const variant of targetVariants(doc, target)) {
+      const legacy = legacySpecHashFor(variant, target);
+      if (legacy && wanted.has(legacy)) {
+        matched.add(legacy);
+        if (matched.size === wanted.size) break;
+      }
+    }
+    if (!matched.size) continue;
+    const patch: Partial<RenderState> = {};
+    if (render.specHash && matched.has(render.specHash)) patch.specHash = canonical;
+    if (render.history.some((v) => v.specHash && matched.has(v.specHash))) {
+      patch.history = render.history.map((v) => (v.specHash && matched.has(v.specHash) ? { ...v, specHash: canonical } : v));
+    }
+    ops.push({ op: 'render', target, patch });
+  }
+  const plan = doc.planInputHash;
+  if (plan) {
+    const canonical = planInputHashOf(doc);
+    if (plan !== canonical && legacyPlanMatches(doc, plan)) ops.push({ op: 'plan_input_hash', hash: canonical });
+  }
+  return ops;
+};
+
+/** Whether a stored pre-F1 planInputHash matches this doc under some key-order variant (bounded). */
+const legacyPlanMatches = (doc: ComicDoc, stored: string): boolean => {
+  let n = 0;
+  for (const briefOrder of [undefined, ...LEGACY_BRIEF_ORDERS]) {
+    for (const flip of lookFlipSets(doc, doc.cast.map((c) => c.id))) {
+      if (n >= LEGACY_HASH_MAX_VARIANTS) return false;
+      n += 1;
+      if (legacyPlanInputHashOf(variantDoc(doc, flip, undefined, briefOrder)) === stored) return true;
+    }
+  }
+  return false;
+};
+
 /**
  * Ops that repair a freshly loaded doc: renders left queued/rendering by a previous
  * process (or for longer than INTERRUPTED_RENDER_MS) become failed so the user can
- * retry, and an open gate older than a day is declined.
+ * retry, an open gate older than a day is declined, and spec hashes stamped before the
+ * canonical serialisation are re-stamped when their spec is unchanged (back-compat F1).
  */
 export const recoveryOps = (doc: ComicDoc, opts: { now: number; allInFlight: boolean }): DocOp[] => {
   const ops: DocOp[] = [];
@@ -153,6 +310,12 @@ export const recoveryOps = (doc: ComicDoc, opts: { now: number; allInFlight: boo
   }
   if (doc.gate && doc.gate.status === 'open' && opts.now - (doc.gate.createdAt || 0) > GATE_EXPIRY_MS) {
     ops.push({ op: 'gate', gate: { ...doc.gate, status: 'declined' } });
+  }
+  try {
+    ops.push(...legacySpecHashOps(doc));
+  } catch (err) {
+    // Never block a load: without the migration a legacy page just reads "Out of date" (and costs nothing).
+    logger.warn('comic_legacy_hash_failed', { message: (err as Error)?.message });
   }
   return ops;
 };

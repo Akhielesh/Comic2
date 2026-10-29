@@ -36,6 +36,7 @@ import {
   mapAssetRefs,
   newId,
   normalizeErrorDetail,
+  planInputHashOf as sharedPlanInputHashOf,
   renderTargetKey,
   specHashFor,
   trashOf,
@@ -3693,19 +3694,10 @@ const hasArt = (p: Page) => !!p.render.asset?.path || p.render.history.length > 
 /**
  * R5: fingerprint of everything the writer reads for a full plan (brief + notes, cast names and
  * looks, places, the source script, the format). Unchanged + no instructions ⇒ the existing
- * plan is returned for free.
+ * plan is returned for free. Canonical (back-compat F1: key order never matters); it lives in
+ * shared/comic/doc.ts next to the spec hashes so session.ts can migrate a pre-F1 stamp at load.
  */
-export const planInputHashOf = (doc: ComicDoc): string =>
-  hashString(
-    JSON.stringify([
-      'plan/1',
-      doc.brief,
-      doc.cast.map((c) => [c.id, c.name, c.tier, c.look, c.kind ?? 'person', c.count ?? 1, c.role ?? '', c.personality ?? '', c.voice ?? '']),
-      doc.places.map((p) => [p.id, p.name, p.look]),
-      hashString(doc.source.script || ''),
-      doc.format
-    ])
-  );
+export const planInputHashOf = (doc: ComicDoc): string => sharedPlanInputHashOf(doc);
 
 /** The plan's input fingerprint, persisted on the doc by the server-only `plan_input_hash` op (survives a reload). */
 const knownPlanHash = (session: StudioSessionApi): string | undefined => session.doc.planInputHash;
