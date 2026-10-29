@@ -59,6 +59,9 @@ export interface LetteringInspectorProps extends Omit<LetteringPanelProps, 'line
 }
 
 const PANEL_W = 320;
+/** The warnings' one-tap free fixes: compact on a mouse, real 44 px boxes on touch (they sit side by side). */
+const WARN_BTN =
+  'inline-flex shrink-0 items-center justify-center rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11 coarse:min-w-11 coarse:px-3';
 
 export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => {
   const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, onClose } = props;
@@ -144,7 +147,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 <span className="min-w-0 flex-1">Too close to the page edge (outside the safe area).</span>
                 <button
                   type="button"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
+                  className={WARN_BTN}
                   onClick={() => apply(fixSafeAreaOps(doc, page, plans, H, placements.balloons, outside.map((p) => p.lineId)), { label: 'Move inside the safe area' })}
                 >
                   Fix
@@ -157,7 +160,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 <span className="min-w-0 flex-1">The text doesn’t fit — shorten it or widen the balloon.</span>
                 <button
                   type="button"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
+                  className={WARN_BTN}
                   onClick={() => apply(widenOps(doc, page, plans, overflow.map((p) => p.lineId), placements.balloons), { label: 'Widen balloon' })}
                 >
                   Widen
@@ -168,13 +171,13 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
               <li className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/[0.1] px-2 py-1.5 text-[11.5px] text-[var(--ds-ink)]">
                 <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
                 <span className="min-w-0 flex-1">Crowded panel — this balloon overlaps another.</span>
-                <button type="button" className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10" onClick={() => onEditText(one.id)}>
+                <button type="button" className={WARN_BTN} onClick={() => onEditText(one.id)}>
                   Shorten
                 </button>
                 <button
                   type="button"
                   title="Keep this balloon where it is (it may overlap); the editor stops moving it"
-                  className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
+                  className={WARN_BTN}
                   onClick={() => apply([balloonOp(page, one.id, { pinned: true }, placements.balloons)], { label: 'Keep balloon here' })}
                 >
                   Keep here
@@ -182,7 +185,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 {nextPanelFor(one.id) && (
                   <button
                     type="button"
-                    className="shrink-0 rounded-md px-1.5 py-0.5 font-semibold text-[var(--ds-accent)] hover:bg-[#D97757]/10"
+                    className={WARN_BTN}
                     onClick={() => apply(moveLineToPanelOps(page, one.id, nextPanelFor(one.id)!.id), { label: 'Move line to another panel' })}
                   >
                     Move to panel {nextPanelFor(one.id)!.n}

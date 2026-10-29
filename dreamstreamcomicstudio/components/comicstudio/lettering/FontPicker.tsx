@@ -77,7 +77,7 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
     const extra = spec && spec.script !== 'Latn' ? [...new Set([spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx])].filter((f) => !LATIN_FONTS.includes(f as LatinFontId)) : [];
     return [...extra, ...LATIN_FONTS];
   }, [spec]);
-  const shown = simple ? EASY_FONTS : options;
+  const shown = simple ? easyFontsFor(lang) : options;
 
   // Load the faces for the previews when the list is visible (free; files are cached).
   useEffect(() => {
@@ -109,21 +109,21 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
       <div className="min-w-0 space-y-1">
         <div role="radiogroup" aria-label={label} aria-describedby={scriptOnly ? `${id}-script` : undefined} className="flex flex-wrap gap-1.5">
           {chips.map((f) => (
-          <button
-            key={f}
-            type="button"
-            role="radio"
-            aria-checked={current === f}
-            title={`${labelOf(f)} — ${(ROLE as Record<string, string>)[f] ?? `${spec?.english ?? 'Script'} face`}`}
-            onClick={() => onChange(f)}
-            className={cx(
-              'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
-              current === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
-            )}
-            style={{ fontFamily: fontFamilyStack(f) }}
-          >
-            {labelOf(f)}
-          </button>
+            <button
+              key={f}
+              type="button"
+              role="radio"
+              aria-checked={current === f}
+              title={`${labelOf(f)} — ${(ROLE as Record<string, string>)[f] ?? `${spec?.english ?? 'Script'} face`}`}
+              onClick={() => onChange(f)}
+              className={cx(
+                'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
+                current === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+              )}
+              style={{ fontFamily: fontFamilyStack(f) }}
+            >
+              {labelOf(f)}
+            </button>
           ))}
         </div>
         {scriptOnly && (
