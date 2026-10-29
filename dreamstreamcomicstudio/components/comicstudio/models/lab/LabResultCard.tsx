@@ -23,7 +23,8 @@ export const StatusChip: React.FC<{ status: LabRunStatus }> = ({ status }) => (
 /** "Cost $0.0756 (provider) · quoted $0.113", or why there is no reported number. */
 export const costLine = (run: Pick<LabRun, 'costUsd' | 'quotedUsd' | 'status'> & { facts: Pick<LabFacts, 'costReported' | 'callMade'> }): string => {
   const quoted = `quoted ${formatLabUsd(run.quotedUsd)}`;
-  if (run.status === 'running' || run.status === 'interrupted') return `${quoted} · held against today's cap until it finishes`;
+  if (run.status === 'running') return `${quoted} · held against today's cap until it finishes`;
+  if (run.status === 'interrupted') return `${quoted} · the server stopped before the answer was recorded, so the quote keeps counting against today's cap`;
   if (run.costUsd === null) return `Cost not reported · ${quoted}, which keeps counting against today's cap`;
   if (!run.facts.callMade) return `No call was made · nothing was charged`;
   return run.facts.costReported ? `Cost ${formatLabUsd(run.costUsd)} (provider-reported) · ${quoted}` : `Cost ${formatLabUsd(run.costUsd)} (the provider answered with an error, so nothing was billed) · ${quoted}`;

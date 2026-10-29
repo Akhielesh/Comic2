@@ -404,6 +404,8 @@ export interface ProviderCapture {
   /** A non-2xx answer: what the provider said (sanitized), or the network error. */
   said?: string;
   networkError?: string;
+  /** Downloading an image the provider hosted (a GET, not a provider call) failed after a paid answer. */
+  downloadFailed?: boolean;
 }
 
 const oneCallStop = (): StudioError =>
@@ -441,23 +443,33 @@ const describeSent = (body: unknown): LabSentFacts | undefined => {
 const requestUrl = (input: RequestInfo | URL): string => (typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url);
 
 /**
- * Wrap the network the image transport uses so exactly ONE provider call leaves the server. The first POST to
- * OpenRouter goes out (its answer is read once and handed back, so nothing is fetched twice); any later provider
- * attempt — a 429 retry, the text-only nudge, the Images-API → chat fallback — is stopped with a marked error before
- * it is sent. GETs (downloading an image the provider hosted) are not provider calls and pass through.
+ * Wrap the network the image transport uses so exactly ONE provider call leaves the server. The first POST goes out
+ * (its answer is read once and handed back, so nothing is fetched twice); any later POST — a 429 retry, the
+ * text-only nudge, the Images-API → chat fallback, the other route — is stopped with a marked error before it is
+ * sent. Every POST counts, whatever its host: the image transport only ever POSTs to a provider. GETs (downloading
+ * an image the provider hosted) are not provider calls and pass through.
  */
 export const oneCallTransport = (network: typeof fetch, now: () => number = Date.now): { fetch: typeof fetch; capture: ProviderCapture } => {
   const capture: ProviderCapture = { calls: 0, stopped: 0 };
   const guarded = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = requestUrl(input);
-    const isProviderCall = (init?.method || 'GET').toUpperCase() === 'POST' && url.startsWith(OPENROUTER_BASE_URL);
-    if (!isProviderCall) return network(input, init);
+    const isProviderCall = (init?.method || (typeof input === 'object' && 'method' in input ? (input as Request).method : 'GET')).toUpperCase() !== 'GET';
+    if (!isProviderCall) {
+      try {
+        const res = await network(input, init);
+        if (!res.ok) capture.downloadFailed = true;
+        return res;
+      } catch (err) {
+        capture.downloadFailed = true;
+        throw err;
+      }
+    }
     if (capture.calls >= 1) {
       capture.stopped += 1;
       throw oneCallStop();
     }
     capture.calls = 1;
-    capture.endpoint = url.slice(OPENROUTER_BASE_URL.length).split('?')[0] || '/';
+    capture.endpoint = (url.startsWith(OPENROUTER_BASE_URL) ? url.slice(OPENROUTER_BASE_URL.length) : url.replace(/^[a-z]+:\/\/[^/]+/i, '')).split('?')[0] || '/';
     capture.sent = describeSent(init?.body);
     const started = now();
     let res: Response;
@@ -1090,6 +1102,7 @@ const factsView = (f: LabResultFacts): LabFactsView => {
 const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string } => {
   const stop = ' The studio would try once more; the lab stops after one call.';
   if (cap.networkError) return { code: 'PROVIDER_ERROR', message: `The request failed before any answer (${cap.networkError}).${stop}` };
+  if (cap.downloadFailed) return { code: 'PROVIDER_ERROR', message: `The image was made${cap.costUsd !== undefined ? ' and billed' : ''}, but downloading it from the provider failed.${stop}` };
   const status = cap.status ?? 0;
   if (status >= 200 && status < 300) return { code: 'NO_IMAGE', message: `The model answered without a picture.${stop}` };
   if ((status === 404 || status === 405) && cap.endpoint === '/images') {
@@ -1426,7 +1439,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       const health = await healthOf(spec, keys);
       if (health?.state === 'down') throw labError('PROVIDER_DOWN', 503, downCopy(spec.nickname, health), { health });
 
-      const latest = latestOk(await store.recent(LAB_RECENT_LIMIT));
+      const latest = item.references === 'own_sheets' ? latestOk(await store.recent(LAB_RECENT_LIMIT)) : new Map<string, LabRunRow>();
       const references = await loadReferences(item, latest);
       const prices = await deps.prices(adminId).catch(() => null);
       const quote = quoteLabItem(item, prices, references.length);
@@ -1487,12 +1500,11 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         }
       }
 
-      const finished = await store.finish(reserved.row.id, {
-        status: outcome.status,
-        costUsd: outcome.costUsd,
-        providerModel: outcome.providerModel,
-        result: facts,
-        finishedAt: new Date(deps.now()).toISOString()
+      const patch = { status: outcome.status, costUsd: outcome.costUsd, providerModel: outcome.providerModel, result: facts, finishedAt: new Date(deps.now()).toISOString() };
+      // The call is made and paid for: try twice to record it (a row left 'running' keeps holding its quote).
+      const finished = await store.finish(reserved.row.id, patch).catch((err) => {
+        logger.warn('comic_model_lab_finish_retry', { id: reserved.row.id, message: String((err as Error)?.message || err).slice(0, 200) });
+        return store.finish(reserved.row.id, patch);
       });
       try {
         await deps.audit?.({

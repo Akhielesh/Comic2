@@ -274,6 +274,20 @@ describe('running a check', () => {
     expect(h.calls.map((c) => c.url.replace(/^.*\/api\/v1/, ''))).toEqual(['/images']); // never /chat/completions
     expect(noImagesApi.facts).toMatchObject({ errorCode: 'IMAGES_API_UNAVAILABLE', httpStatus: 404, stoppedSecondCall: true });
     expect(noImagesApi.facts.message).toMatch(/Images API answered 404/);
+
+    // A paid answer whose hosted image cannot be downloaded: the money is recorded, the retry is stopped.
+    h.calls.length = 0;
+    h.setScript((url) =>
+      url.startsWith('https://cdn.example/')
+        ? new Response('gone', { status: 500 })
+        : new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/x.png' }], usage: { cost: 0.03 } }), { status: 200 })
+    );
+    const lostDownload = (await runItem(h, 'd3-seedream-5-pro-2k')).run as LabRunView;
+    expect(h.calls.map((c) => `${c.method} ${c.url.replace(/^.*\/api\/v1/, '')}`)).toEqual(['POST /images', 'GET https://cdn.example/x.png']);
+    expect(lostDownload).toMatchObject({ status: 'failed', costUsd: 0.03 });
+    expect(lostDownload.facts).toMatchObject({ errorCode: 'PROVIDER_ERROR', costReported: true, stoppedSecondCall: true });
+    expect(lostDownload.facts.message).toMatch(/made and billed, but downloading it from the provider failed/);
+    expect(h.store.imageCalls.at(-1)).toMatchObject({ outcome: 'failed', provider_cost_usd: 0.03 });
   });
 
   it('the transport wrapper itself: the first POST goes out, a second is refused unsent, GET downloads pass', async () => {
