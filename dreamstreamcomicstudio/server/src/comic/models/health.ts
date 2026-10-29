@@ -11,6 +11,10 @@
 //     requests (`outcomeFromError` turns every non-retryable or 4xx answer into NOT_UPSTREAM_CODE).
 //   - The pure rules in shared/comic/modelHealth.ts turn both into a state; the breaker is "≥ 3 upstream failures
 //     in 5 min with no success since → down for 2 min → half-open (one call allowed, reported as degraded)".
+//     `acquireRouteCall` enforces it: imageClient asks before EVERY provider attempt (each transient retry too);
+//     a down route says no, a half-open route says yes to exactly ONE caller (the probe) until that call's outcome
+//     is recorded or HALF_OPEN_PROBE_TIMEOUT_MS passes, and no to everyone else. A refused attempt makes no call
+//     and costs nothing (`routePausedError`).
 //
 // `preflightImageRun` is the money-safe check jobs.ts runs BEFORE reserving spend: no run starts on a model that is
 // down on every route the user can reach. The same model on the other route is used automatically only when its
@@ -46,7 +50,7 @@ import {
 import { drawnTargets, modelFit, redrawQuote, redrawResolution, type PriceBook } from '../../../../shared/comic/modelLock.js';
 import { logger } from '../../lib/logger.js';
 import { prefersGeminiDirect } from '../keys.js';
-import type { ResolvedKey, StudioKeys } from '../types.js';
+import { StudioError, type ResolvedKey, type StudioKeys } from '../types.js';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -62,6 +66,8 @@ export const OUTCOME_RING_SIZE = 50;
 export const BREAKER_EVENTS_KEPT = 200;
 /** Routes tracked at most (route+model pairs); the registry has far fewer. */
 const MAX_TRACKED_ROUTES = 64;
+/** A half-open route's single probe call is held this long; if its outcome is never recorded, another may probe. */
+export const HALF_OPEN_PROBE_TIMEOUT_MS = 60_000;
 /** Switch options offered on an outage (the banner shows ≤ 3 buttons in all). */
 export const MAX_SWITCH_OPTIONS = 2;
 
@@ -107,6 +113,13 @@ export interface BreakerEvent {
   failures: number;
 }
 
+/** May a provider call go out on this route right now (`acquireRouteCall`)? */
+export interface RouteCallPermit {
+  allowed: boolean;
+  /** The route's state when asked (half-open reads `degraded`). */
+  state: HealthState;
+}
+
 export interface PublicHealth {
   /** Absent = unknown (no data, fetch failed with nothing cached, or too stale). */
   providers?: ProviderHealth[];
@@ -145,6 +158,12 @@ export interface ModelHealthDeps {
 export interface ModelHealthPort {
   recordImageOutcome(outcome: ImageOutcome): void;
   routeState(route: ImageRoute, model: string, now?: number): RouteState;
+  /**
+   * Ask before EVERY provider attempt on a route (each transient retry too). false while the route is down; while
+   * it is half-open, true for exactly one caller (the probe) until an outcome is recorded on that route+model or
+   * HALF_OPEN_PROBE_TIMEOUT_MS passes, false for every other caller; true otherwise.
+   */
+  acquireRouteCall(route: ImageRoute, model: string, now?: number): RouteCallPermit;
   getModelHealth(spec: ImageModelSpec, opts?: { keys?: StudioKeys; now?: number }): Promise<ModelHealth>;
   preflightImageRun(input: PreflightInput): Promise<RunPreflight>;
   fetchPublicHealth(openrouterModelId: string, now?: number): Promise<PublicHealth>;
@@ -232,6 +251,34 @@ export const outcomeFromError = (err: unknown, picked: { route: ImageRoute; mode
   };
 };
 
+/** Marker on the error `routePausedError` builds (no provider call was made). */
+export const ROUTE_PAUSED_MARK = 'routePaused' as const;
+
+/**
+ * The error imageClient throws INSTEAD of calling the provider when `acquireRouteCall` refuses the route and no
+ * same-payer alternate is allowed either: a calm, classified upstream failure ("provider busy" on the tile) with
+ * `imageFailure` (route only: there was no HTTP answer) and `spentUsd: 0`. Not retryable, so the job runner ends
+ * the target (no retry loop, no re-queue) and ends the run with the outage card. Never record it with
+ * `recordImageOutcome`: nothing was called.
+ */
+export const routePausedError = (input: { route: ImageRoute; model: string; nickname?: string; reason?: string }): StudioError & {
+  imageFailure: { route: ImageRoute };
+  spentUsd: number;
+  routePaused: true;
+} => {
+  const name = input.nickname || 'This image model';
+  const why = input.reason ? ` (${input.reason.replace(/\.$/, '')})` : '';
+  const error = new StudioError(
+    'PROVIDER_ERROR',
+    `The image provider is busy with ${name} on ${ROUTE_LABEL[input.route]} right now${why}, so this image wasn't sent and nothing was charged for it.`,
+    { status: 503, retryable: false }
+  );
+  return Object.assign(error, { imageFailure: { route: input.route }, spentUsd: 0, [ROUTE_PAUSED_MARK]: true as const });
+};
+
+/** Was this error a breaker refusal (no provider call, nothing spent)? */
+export const isRoutePausedError = (err: unknown): boolean => !!err && typeof err === 'object' && (err as Record<string, unknown>)[ROUTE_PAUSED_MARK] === true;
+
 /** Parse OpenRouter's endpoints payload into ProviderHealth rows (tolerant; unknown fields ignored). */
 export const parseOpenRouterEndpoints = (payload: unknown): ProviderHealth[] | undefined => {
   const data = isObject(payload) && isObject(payload.data) ? payload.data : isObject(payload) ? payload : undefined;
@@ -315,6 +362,8 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
   const bootedAt = now();
 
   const rings = new Map<string, Sample[]>();
+  /** Half-open probes handed out: route+model → when (released by the next recorded outcome on that pair). */
+  const probes = new Map<string, number>();
   const events: BreakerEvent[] = [];
   const publicCache = new Map<string, PublicCacheEntry>();
   const inflight = new Map<string, Promise<PublicHealth>>();
@@ -375,11 +424,13 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
   const recordImageOutcome = (outcome: ImageOutcome): void => {
     if (!outcome || !IMAGE_ROUTES.includes(outcome.route) || typeof outcome.model !== 'string' || !outcome.model) return;
     const at = typeof outcome.at === 'number' && Number.isFinite(outcome.at) ? outcome.at : now();
+    const key = routeKey(outcome.route, outcome.model);
+    // Any answer on this route+model ends a half-open probe (counted or not: the probe call came back).
+    probes.delete(key);
     if (!outcome.ok) {
       if (outcome.keyScoped) return; // the caller's key, not the model
       if (!isUpstreamFailureCode(outcome.code)) return; // safety, cancel, our own bad request, …
     }
-    const key = routeKey(outcome.route, outcome.model);
     if (!rings.has(key) && rings.size >= MAX_TRACKED_ROUTES) rings.delete(rings.keys().next().value as string);
     const before = routeState(outcome.route, outcome.model, at).state;
     const ring = rings.get(key) || [];
@@ -392,6 +443,24 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
     } else if (outcome.ok && after.state === 'ok' && (before === 'down' || before === 'degraded')) {
       pushEvent({ at, route: outcome.route, model: outcome.model, event: 'closed', failures: 0 });
     }
+  };
+
+  const acquireRouteCall = (route: ImageRoute, model: string, at: number = now()): RouteCallPermit => {
+    const current = routeState(route, model, at);
+    if (current.state === 'down') return { allowed: false, state: 'down' };
+    if (deps.routeOverride?.(route, model)) return { allowed: true, state: current.state }; // forced (tests)
+    const obs = current.observed;
+    const halfOpen =
+      !!obs &&
+      obs.upstreamFailures >= HEALTH_THRESHOLDS.breakerFailures &&
+      typeof obs.lastFailureAt === 'number' &&
+      at - obs.lastFailureAt >= HEALTH_THRESHOLDS.breakerOpenMs;
+    if (!halfOpen) return { allowed: true, state: current.state };
+    const key = routeKey(route, model);
+    const claimedAt = probes.get(key);
+    if (claimedAt !== undefined && at - claimedAt < HALF_OPEN_PROBE_TIMEOUT_MS) return { allowed: false, state: current.state };
+    probes.set(key, at);
+    return { allowed: true, state: current.state };
   };
 
   const fetchOnce = async (openrouterModelId: string, at: number): Promise<PublicHealth> => {
@@ -590,6 +659,7 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
   return {
     recordImageOutcome,
     routeState,
+    acquireRouteCall,
     getModelHealth,
     preflightImageRun,
     fetchPublicHealth,
@@ -597,6 +667,7 @@ export function createModelHealth(deps: ModelHealthDeps = {}): ModelHealthPort {
     bootedAt,
     reset: () => {
       rings.clear();
+      probes.clear();
       events.length = 0;
       publicCache.clear();
       inflight.clear();
@@ -615,7 +686,9 @@ export const modelHealth = (): ModelHealthPort => instance;
 export const recordImageOutcome = (outcome: ImageOutcome): void => instance.recordImageOutcome(outcome);
 /** The breaker's view of one route+model right now (observed data only; cheap, synchronous). */
 export const routeState = (route: ImageRoute, model: string, now?: number): RouteState => instance.routeState(route, model, now);
-/** Public + observed health of one registry model (routes limited to the ones `keys` can reach). */
+/** Ask before EVERY provider attempt: false while the route is down; one probe at a time while it is half-open. */
+export const acquireRouteCall = (route: ImageRoute, model: string, now?: number): RouteCallPermit => instance.acquireRouteCall(route, model, now);
+/** Public + observed health of one registry model (routes limited to the ones a run with `keys` can take). */
 export const getModelHealth = (spec: ImageModelSpec, opts?: { keys?: StudioKeys; now?: number }): Promise<ModelHealth> => instance.getModelHealth(spec, opts);
 /** Money-safe check before any reservation: never starts a run on a model that is down everywhere the user can reach. */
 export const preflightImageRun = (input: PreflightInput): Promise<RunPreflight> => instance.preflightImageRun(input);

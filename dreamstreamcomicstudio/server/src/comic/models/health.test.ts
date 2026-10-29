@@ -14,20 +14,25 @@ import { fakeBilling, fakeImages } from '../orchestrator.fakes.js';
 import { StudioError, type StudioKeys } from '../types.js';
 import { classifyImageError } from '../imageClient.js';
 import {
+  HALF_OPEN_PROBE_TIMEOUT_MS,
   NOT_UPSTREAM_CODE,
   PUBLIC_HEALTH_STALE_MAX_MS,
   PUBLIC_HEALTH_TIMEOUT_MS,
   PUBLIC_HEALTH_TTL_MS,
   __setModelHealthForTests,
+  acquireRouteCall,
   createModelHealth,
   isKeyScopedFailure,
+  isRoutePausedError,
   openrouterEndpointsUrl,
   outcomeFromError,
   parseOpenRouterEndpoints,
   preflightImageRun,
   recordImageOutcome,
   registryPriceBook,
-  routeState
+  routePausedError,
+  routeState,
+  type ModelHealthPort
 } from './health.js';
 import { fakeModelHealth } from './health.fakes.js';
 
@@ -315,6 +320,125 @@ describe('breaker: what imageClient really throws', () => {
   });
 });
 
+/**
+ * A minimal stand-in for imageClient's runOnRoute as M1-LOCK-SERVER wires it (waveNotes item 1): ask
+ * acquireRouteCall before EVERY attempt (each transient retry too), record every answer, and throw the paused-route
+ * error without calling the provider when the route says no.
+ */
+const drawOnce = async (
+  h: ModelHealthPort,
+  provider: () => Promise<'ok' | 429>,
+  calls: { n: number },
+  at: () => number,
+  /** imageClient's ≥ 4 s RATE_LIMIT backoff before its one transient retry. */
+  backoff: () => Promise<void> = async () => undefined
+) => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) await backoff();
+    const permit = h.acquireRouteCall('openrouter', OR_ID, at());
+    if (!permit.allowed) throw routePausedError({ route: 'openrouter', model: OR_ID, nickname: NB21.nickname });
+    calls.n += 1;
+    const answer = await provider();
+    if (answer === 'ok') {
+      h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: true, at: at() });
+      return 'drawn';
+    }
+    h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT', at: at() });
+  }
+  throw new StudioError('RATE_LIMIT', 'busy', { status: 429, retryable: true });
+};
+
+describe('acquireRouteCall (half-open: one call is allowed)', () => {
+  it('16:52 shape: three parallel style jobs make zero calls once the breaker opens, then one probe at a time', async () => {
+    let t = T0;
+    const h = createModelHealth({ now: () => t });
+    const calls = { n: 0 };
+    let answer: 'ok' | 429 = 429;
+    const provider = async () => answer;
+    // Three parallel jobs; every call answers 429. The first attempts open the breaker; the retries (after the
+    // backoff) never call.
+    let endBackoff: () => void = () => undefined;
+    const backoffOver = new Promise<void>((resolve) => (endBackoff = resolve));
+    const jobs = [0, 1, 2].map(() => drawOnce(h, provider, calls, () => t, () => backoffOver));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.n).toBe(3);
+    expect(h.routeState('openrouter', OR_ID).state).toBe('down');
+    endBackoff();
+    const first = await Promise.allSettled(jobs);
+    expect(calls.n).toBe(3); // 12 calls in the incident; 3 here, and nothing after the breaker opened
+    for (const r of first) {
+      expect(r.status).toBe('rejected');
+      const err = (r as PromiseRejectedResult).reason;
+      expect(isRoutePausedError(err)).toBe(true);
+      expect(err).toMatchObject({ code: 'PROVIDER_ERROR', retryable: false, spentUsd: 0, imageFailure: { route: 'openrouter' } });
+    }
+    // Still down: nobody may call.
+    t = T0 + HEALTH_THRESHOLDS.breakerOpenMs - 1;
+    expect(h.acquireRouteCall('openrouter', OR_ID)).toEqual({ allowed: false, state: 'down' });
+    // Half-open: exactly one caller gets the probe; the others wait.
+    t = T0 + HEALTH_THRESHOLDS.breakerOpenMs + 1;
+    expect([h.acquireRouteCall('openrouter', OR_ID), h.acquireRouteCall('openrouter', OR_ID), h.acquireRouteCall('openrouter', OR_ID)]).toEqual([
+      { allowed: true, state: 'degraded' },
+      { allowed: false, state: 'degraded' },
+      { allowed: false, state: 'degraded' }
+    ]);
+    // The probe fails → down again for another breakerOpenMs, and nobody calls.
+    h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT' });
+    expect(h.acquireRouteCall('openrouter', OR_ID)).toEqual({ allowed: false, state: 'down' });
+    // Half-open again; the probe is never answered → after the probe timeout another caller may try.
+    const lastFail = t;
+    t = lastFail + HEALTH_THRESHOLDS.breakerOpenMs + 1;
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(true);
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(false);
+    t += HALF_OPEN_PROBE_TIMEOUT_MS;
+    const probeAt = t;
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(true);
+    // That probe succeeds → closed: everyone may call again.
+    answer = 'ok';
+    h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: true, at: probeAt });
+    expect(h.routeState('openrouter', OR_ID).state).toBe('ok');
+    expect([h.acquireRouteCall('openrouter', OR_ID), h.acquireRouteCall('openrouter', OR_ID)].every((p) => p.allowed)).toBe(true);
+    const before = calls.n;
+    expect(await drawOnce(h, provider, calls, () => t)).toBe('drawn');
+    expect(calls.n).toBe(before + 1);
+  });
+
+  it('a key-scoped answer to the probe releases it too (the call came back), without counting', () => {
+    let t = T0;
+    const h = createModelHealth({ now: () => t });
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT' });
+    t = T0 + HEALTH_THRESHOLDS.breakerOpenMs + 1;
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(true);
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(false);
+    h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT', keyScoped: true });
+    expect(h.routeState('openrouter', OR_ID).state).toBe('degraded'); // not counted
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(true); // the next probe
+  });
+
+  it('a fresh, ok or merely wary route lets every call through; routes are independent', () => {
+    const h = createModelHealth({ now: () => T0 });
+    expect(h.acquireRouteCall('gemini', GEM_ID)).toEqual({ allowed: true, state: 'unknown' });
+    h.recordImageOutcome({ route: 'gemini', model: GEM_ID, ok: false, code: 'RATE_LIMIT' });
+    expect([h.acquireRouteCall('gemini', GEM_ID), h.acquireRouteCall('gemini', GEM_ID)]).toEqual([
+      { allowed: true, state: 'degraded' },
+      { allowed: true, state: 'degraded' }
+    ]);
+    for (let i = 0; i < 3; i += 1) h.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: '503' });
+    expect(h.acquireRouteCall('openrouter', OR_ID).allowed).toBe(false);
+    expect(h.acquireRouteCall('gemini', GEM_ID).allowed).toBe(true);
+  });
+
+  it('the paused-route error reads as a calm provider pause and is never counted if recorded by mistake', () => {
+    const err = routePausedError({ route: 'gemini', model: GEM_ID, nickname: NB21.nickname, reason: 'Our last 3 calls failed (RATE_LIMIT).' });
+    expect(err.userMessage).toBe(
+      `The image provider is busy with ${NB21.nickname} on Gemini right now (Our last 3 calls failed (RATE_LIMIT)), so this image wasn't sent and nothing was charged for it.`
+    );
+    expect(isKeyScopedFailure(err)).toBe(false);
+    expect(outcomeFromError(err, { route: 'gemini', model: GEM_ID }).code).toBe(NOT_UPSTREAM_CODE);
+    expect(isRoutePausedError(new StudioError('PROVIDER_ERROR', 'x'))).toBe(false);
+  });
+});
+
 describe('getModelHealth', () => {
   it('combines public data with observations and limits routes to the keys the caller holds', async () => {
     const f = scriptedFetch();
@@ -505,5 +629,13 @@ describe('process-wide port + fake', () => {
     fake.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT', keyScoped: true });
     expect(fake.outcomes).toHaveLength(1);
     expect(fake.routeState('openrouter', OR_ID).state).toBe('unknown');
+    // The module-level acquireRouteCall goes through the fake and is recorded (forced down → refused).
+    fake.forceRoute('openrouter', OR_ID, 'down');
+    expect(acquireRouteCall('openrouter', OR_ID)).toEqual({ allowed: false, state: 'down' });
+    fake.forceRoute('openrouter', OR_ID, undefined);
+    for (let i = 0; i < 3; i += 1) fake.recordImageOutcome({ route: 'openrouter', model: OR_ID, ok: false, code: 'RATE_LIMIT' });
+    fake.setNow(T0 + HEALTH_THRESHOLDS.breakerOpenMs + 1);
+    expect([acquireRouteCall('openrouter', OR_ID).allowed, acquireRouteCall('openrouter', OR_ID).allowed]).toEqual([true, false]);
+    expect(fake.acquires.map((a) => a.allowed)).toEqual([false, true, false]);
   });
 });

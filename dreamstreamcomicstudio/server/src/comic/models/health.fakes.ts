@@ -7,7 +7,8 @@
 //     → OpenRouter says the model's only provider is failing (the 2026-10-22 16:52 outage);
 //   - record three 429s with `recordImageOutcome` and watch the breaker open on its own;
 //   - `forceRoute('openrouter', 'google/gemini-nano-banana-2.1', 'down')` to skip the setup entirely;
-//   - read `outcomes` / `preflights` / `fetches` to assert what the wiring did (and that no key was ever sent).
+//   - read `outcomes` / `preflights` / `acquires` / `fetches` to assert what the wiring did (every provider attempt
+//     asked `acquireRouteCall` first; refused ones made no call; no key was ever sent).
 // Test-only; never imported by app code.
 
 import type { ImageRoute } from '../../../../shared/comic/models.js';
@@ -18,6 +19,8 @@ export interface FakeModelHealth extends ModelHealthPort {
   /** Every recordImageOutcome call, counted or not (key-scoped ones included, so a test can assert they were ignored). */
   outcomes: ImageOutcome[];
   preflights: PreflightInput[];
+  /** Every acquireRouteCall answer, in order (allowed or refused). */
+  acquires: { route: ImageRoute; model: string; allowed: boolean; state: HealthState }[];
   /** Every public URL the real fetcher asked for, with the headers it sent (always none). */
   fetches: { url: string; headers: Record<string, string> }[];
   /** Script OpenRouter's endpoints answer for a model (undefined = the fetch fails → unknown, or stale if cached). */
@@ -36,6 +39,7 @@ export function fakeModelHealth(opts: { now?: number } = {}): FakeModelHealth {
   const fetches: FakeModelHealth['fetches'] = [];
   const outcomes: ImageOutcome[] = [];
   const preflights: PreflightInput[] = [];
+  const acquires: FakeModelHealth['acquires'] = [];
 
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
@@ -61,6 +65,7 @@ export function fakeModelHealth(opts: { now?: number } = {}): FakeModelHealth {
   return {
     outcomes,
     preflights,
+    acquires,
     fetches,
     bootedAt: clock,
     setPublic: (id, providers) => void scripted.set(id, providers),
@@ -75,6 +80,11 @@ export function fakeModelHealth(opts: { now?: number } = {}): FakeModelHealth {
       real.recordImageOutcome(outcome);
     },
     routeState: (route, model, now) => real.routeState(route, model, now),
+    acquireRouteCall: (route, model, now) => {
+      const permit = real.acquireRouteCall(route, model, now);
+      acquires.push({ route, model, ...permit });
+      return permit;
+    },
     getModelHealth: (spec, o) => real.getModelHealth(spec, o),
     preflightImageRun: (input) => {
       preflights.push(input);
@@ -86,6 +96,7 @@ export function fakeModelHealth(opts: { now?: number } = {}): FakeModelHealth {
       real.reset();
       outcomes.length = 0;
       preflights.length = 0;
+      acquires.length = 0;
       fetches.length = 0;
       scripted.clear();
       forced.clear();
