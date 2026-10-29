@@ -20,6 +20,8 @@
 // status has loaded; admins and comics on the user's own key read dollars.
 // Easy shows the filmstrip and ONE primary action (details one tap away); Pro adds the view
 // switcher, expanded details, word counts and QC.
+// The Cost view is ../insights/CostInsights (models.md §4.1: the cost card, its Overview · Pages · Models ·
+// Trends tabs — inline for Pro, "More details" for Easy — and the lock line).
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
@@ -28,7 +30,6 @@ import {
   Coins,
   Image as ImageIcon,
   LayoutTemplate,
-  Lock,
   MessageCircle,
   MessageSquare,
   Pencil,
@@ -48,8 +49,6 @@ import {
   type Page,
   type QualityTier
 } from '../../../shared/comic/doc';
-import { MAX_SPEND_ENTRIES } from '../../../shared/comic/limits';
-import { getImageModel } from '../../../shared/comic/models';
 import {
   LOW_QC_SCORE,
   coverNeedsDraw,
@@ -64,7 +63,6 @@ import { effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict
 import {
   SHOT_LABEL,
   SIZE_LABEL,
-  SPEND_KIND_LABEL,
   byokFromDoc,
   cssAspect,
   initials,
@@ -78,6 +76,7 @@ import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
 import { PageWireframe } from './PageWireframe';
+import { CostInsights } from '../insights/CostInsights';
 
 export type BreakdownCardData = Extract<Card, { type: 'breakdown' }>;
 /** The pre-v5 plan card payload; rendered by this component with defaults. */
@@ -301,120 +300,6 @@ const Thumb: React.FC<{
         </span>
       )}
     </div>
-  );
-};
-
-// ── Cost panel (view === 'cost'): real numbers only ──────────────────────────
-
-/** "3 pages $0.21" / "1 character sheet ≈1% of your usage" from an estimate line. */
-const lineText = (l: { label: string; count: number; usd: number }, cost: CostFormat) =>
-  `${l.count} ${l.count === 1 ? l.label.replace(/s$/, '') : l.label} ${amountInSentence(cost.exact(l.usd))}`;
-
-const CostRow: React.FC<{ label: React.ReactNode; value: React.ReactNode; note?: React.ReactNode }> = ({ label, value, note }) => (
-  <div className="flex min-w-0 items-baseline justify-between gap-3 py-1">
-    <span className="min-w-0">
-      <span className="block text-[12px] text-[var(--ds-ink)]">{label}</span>
-      {note && <span className="block break-words text-[11px] text-[var(--ds-muted)]">{note}</span>}
-    </span>
-    <span className="shrink-0 text-[12.5px] font-semibold tabular-nums text-[var(--ds-ink)]">{value}</span>
-  </div>
-);
-
-const CostPanel: React.FC<{ doc: ComicDoc; book: BookSummary; quote: ReturnType<typeof quoteRenderPages>; byok: boolean; pro: boolean; cost: CostFormat }> = ({
-  doc,
-  book,
-  quote,
-  byok,
-  pro,
-  cost
-}) => {
-  /** A narrow cell (bars, per-model rows): "$0.12" or "≈1%"; "—" when a governed share isn't known yet. */
-  const cell = (usd: number) => shortCost(cost, usd, 'spent') ?? '—';
-  const kinds = Object.entries(doc.spend.byKind || {})
-    .filter(([, usd]) => typeof usd === 'number' && usd > 0)
-    .sort((a, b) => (b[1] as number) - (a[1] as number)) as [keyof typeof SPEND_KIND_LABEL, number][];
-  const maxKind = kinds.length ? kinds[0][1] : 0;
-  const byModel = useMemo(() => {
-    const m = new Map<string, { usd: number; count: number }>();
-    for (const e of doc.spend.entries) {
-      if (!e.model || !(e.usd > 0)) continue;
-      const name = getImageModel(e.model)?.nickname || e.model;
-      const cur = m.get(name) ?? { usd: 0, count: 0 };
-      cur.usd += e.usd;
-      cur.count += 1;
-      m.set(name, cur);
-    }
-    return [...m.entries()].sort((a, b) => b[1].usd - a[1].usd).slice(0, 4);
-  }, [doc.spend.entries]);
-  const capped = doc.spend.entries.length >= MAX_SPEND_ENTRIES;
-  const pricing = book.pricing;
-  const coverSpent = book.cover.spentUsd;
-  const coverLine =
-    isDrawnStatus(book.cover.status) ? (coverSpent ? cost.exact(coverSpent) : 'Drawn') : book.cover.quoteUsd ? cost.badge(book.cover.quoteUsd) : STATUS_LABEL[book.cover.status];
-  return (
-    <section aria-label="Cost breakdown" className="mt-3 min-w-0 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)] px-3 py-2">
-      <div className="divide-y divide-[var(--ds-hairline-soft)]">
-        <CostRow
-          label="Spent on this comic"
-          value={doc.spend.totalUsd > 0 ? amountInSentence(cost.exact(doc.spend.totalUsd), 'Some of your usage') : 'Nothing yet'}
-          note={byok ? 'Images on your own key — tracked so you see the real cost.' : cost.governed ? 'Shown as a share of your usage.' : undefined}
-        />
-        {book.totals.savedUsd > 0 && (
-          <CostRow label="Saved by software" value={cost.exact(book.totals.savedUsd)} note="Free — done by the editor, no AI cost." />
-        )}
-        <CostRow
-          label="To draw now"
-          value={quote.nothing ? 'Nothing' : cost.badge(quote.usd)}
-          note={quote.nothing ? 'Every page here is drawn and up to date.' : quote.lines.map((l) => lineText(l, cost)).join(' · ')}
-        />
-        <CostRow label="Cover" value={coverLine} />
-        {pricing && (
-          <CostRow
-            label={
-              <span className="inline-flex items-center gap-1">
-                Next pages draw on {pricing.model}
-                {pricing.locked && (
-                  <Lock className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" role="img" aria-label="Your chosen model for this comic" />
-                )}
-              </span>
-            }
-            value={`${shortCost(cost, pricing.pageUsd, 'quote') ?? 'a little'}/page`}
-            note={`${pricing.locked ? 'Your pick for this comic' : `${TIER_LABEL[pricing.tier] ?? pricing.tier} quality`} · a page ${cost.badge(pricing.pageUsd)} · cover ${cost.badge(pricing.coverUsd)} · prices from the model price list${pricing.byok ? ', no markup on your key' : ''}`}
-          />
-        )}
-      </div>
-      {kinds.length > 0 && (
-        <div className="mt-2">
-          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Where it went{cost.governed ? ' · share of your usage' : ''}</div>
-          <ul className="space-y-1">
-            {kinds.map(([kind, usd]) => (
-              <li key={kind} className="flex min-w-0 items-center gap-2 text-[11.5px]">
-                <span className="w-24 shrink-0 truncate text-[var(--ds-muted)]">{SPEND_KIND_LABEL[kind] ?? kind}</span>
-                <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-[var(--ds-well)]" aria-hidden>
-                  <span className="block h-full rounded-full bg-[#D97757]/60" style={{ width: `${Math.max(4, Math.round((usd / (maxKind || 1)) * 100))}%` }} />
-                </span>
-                <span className="w-14 shrink-0 text-right tabular-nums text-[var(--ds-ink)]">{cell(usd)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {pro && byModel.length > 0 && (
-        <div className="mt-2">
-          <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">By model{capped ? ' (recent)' : ''}</div>
-          <ul className="space-y-0.5">
-            {byModel.map(([name, v]) => (
-              <li key={name} className="flex min-w-0 items-baseline justify-between gap-2 text-[11.5px]">
-                <span className="min-w-0 truncate text-[var(--ds-ink)]">{name}</span>
-                <span className="shrink-0 tabular-nums text-[var(--ds-muted)]">
-                  {plural(v.count, 'call')} · {cell(v.usd)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </section>
   );
 };
 
@@ -807,7 +692,26 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         <p className="mb-2 text-[12px] text-[var(--ds-muted)]">The pages this card showed are no longer in the book — here is the whole book.</p>
       )}
       {strip}
-      {view === 'cost' && <CostPanel doc={doc} book={book} quote={quote} byok={byok} pro={pro} cost={cost} />}
+      {view === 'cost' && (
+        <CostInsights
+          doc={doc}
+          book={book}
+          quote={quote}
+          byok={byok}
+          pro={pro}
+          cost={cost}
+          coverLine={
+            isDrawnStatus(book.cover.status)
+              ? book.cover.spentUsd
+                ? cost.exact(book.cover.spentUsd)
+                : 'Drawn'
+              : book.cover.quoteUsd
+                ? cost.badge(book.cover.quoteUsd)
+                : STATUS_LABEL[book.cover.status]
+          }
+          runClientAction={studio.runClientAction}
+        />
+      )}
       {detail}
       {(primary || (!inGate && pro)) && (
         <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
