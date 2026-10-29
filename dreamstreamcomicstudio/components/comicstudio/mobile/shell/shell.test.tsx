@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { formFactorFor } from '../useFormFactor';
 import { StudioLayout, readSplit, SPLIT_STORAGE_KEY } from './StudioLayout';
-import { DISABLED_HINT_MS, MobileTabBar, type StudioNavItem } from './MobileTabBar';
+import { DISABLED_HINT_MS, MobileTabBar, navItemName, type StudioNavItem } from './MobileTabBar';
+import { NavigationRail } from './NavigationRail';
+import { labelInName } from '../testing/labelInName';
 import { PaneSwitcher, readPaneMode, writePaneMode } from './PaneSwitcher';
 import { DualScreen, segmentSizes } from './DualScreen';
 import { CompactHeaderMenu } from './CompactHeaderMenu';
@@ -174,7 +176,7 @@ describe('MobileTabBar', () => {
     render(
       <MobileTabBar
         items={nav({
-          board: { badge: '2/5', badgeLabel: '2 of 5 pages ready', dot: 'pulse' },
+          board: { badge: '2 of 5', badgeLabel: '2 of 5 pages ready', dot: 'pulse' },
           read: { disabled: true, disabledReason: 'Read opens once a page is drawn' },
           chat: { dot: 'amber' }
         })}
@@ -187,6 +189,27 @@ describe('MobileTabBar', () => {
     expect(screen.getByRole('button', { name: 'Board, 2 of 5 pages ready, drawing' })).toBeInTheDocument();
     const read = screen.getByRole('button', { name: /^Read, Read opens once a page is drawn/ });
     expect(read).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('every item’s accessible name contains exactly what it shows, label then badge (mobile-tabbar-names, WCAG 2.5.3)', () => {
+    const items = nav({
+      board: { badge: '6 of 12', badgeLabel: '6 of 12 pages ready', dot: 'pulse' },
+      read: { disabled: true, disabledReason: 'Read opens once a page is drawn' },
+      chat: { dot: 'accent' }
+    });
+    const { unmount } = render(<MobileTabBar items={items} />);
+    for (const b of screen.getAllByRole('button')) {
+      const r = labelInName(b);
+      expect(r.ok, `"${r.visible}" ⊄ "${r.name}"`).toBe(true);
+    }
+    // The spoken badge is not repeated when it already begins with the visible one.
+    expect(screen.getByRole('button', { name: 'Board, 6 of 12 pages ready, drawing' })).toBeInTheDocument();
+    unmount();
+    // A terse visible badge ("6/12") still lands in the name, ahead of its spoken meaning.
+    render(<NavigationRail items={nav({ board: { badge: '6/12', badgeLabel: '6 of 12 pages ready' } })} onBack={vi.fn()} />);
+    const board = document.querySelector('[data-nav="board"]')!;
+    expect(labelInName(board).ok).toBe(true);
+    expect(navItemName({ label: 'Board', badge: '6/12', badgeLabel: '6 of 12 pages ready' })).toBe('Board 6/12, 6 of 12 pages ready');
   });
 
   it('a tap on an unavailable item says why (touch has no tooltips) and never selects it', () => {

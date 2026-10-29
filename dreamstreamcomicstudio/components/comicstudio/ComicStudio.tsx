@@ -1045,7 +1045,8 @@ export const ComicStudioShell: React.FC<{ studio: ComicStudioController; onBack:
       id: 'board',
       label: 'Board',
       icon: <LayoutGrid className="h-5 w-5" aria-hidden />,
-      badge: progress.total ? `${progress.ready}/${progress.total}` : undefined,
+      // Shown as words ("6 of 12"), so the spoken name starts with exactly what the tab shows.
+      badge: progress.total ? `${progress.ready} of ${progress.total}` : undefined,
       badgeLabel: progress.total ? `${progress.ready} of ${plural(progress.total, 'page')} ready` : undefined,
       dot: pagesRendering > 0 ? 'pulse' : undefined,
       current: view === 'board' && !readerOpen,

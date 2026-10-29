@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { RADIUS_PILL } from '../../../chat/studioDesign';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
@@ -65,6 +66,27 @@ const DisabledHint: React.FC<{ text: string; rect: DOMRect; orientation: 'bar' |
   );
 };
 
+/** Lower-case words, as WCAG 2.5.3 tools compare names ("6/12" → "6 12"). */
+const words = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
+/**
+ * The item's accessible name. It starts with exactly what the item shows — the label, then the badge —
+ * so a voice-control user can say what they see (WCAG 2.5.3 label in name), then adds what the badge and
+ * the dot mean ("Board, 6 of 12 pages ready, drawing"). When the spoken badge already begins with the
+ * visible one ("6 of 12" → "6 of 12 pages ready") it is not repeated.
+ */
+export const navItemName = (item: Pick<StudioNavItem, 'label' | 'badge' | 'badgeLabel' | 'dot' | 'disabled' | 'disabledReason'>): string => {
+  const badgeSpoken = !!item.badge && !!item.badgeLabel && words(item.badgeLabel).startsWith(words(item.badge));
+  const head = item.badge && !badgeSpoken ? `${item.label} ${item.badge}` : item.label;
+  return [head, item.badgeLabel, item.dot === 'amber' ? 'waiting for your approval' : item.dot === 'accent' ? 'new reply' : item.dot === 'pulse' ? 'drawing' : null, item.disabled ? item.disabledReason : null]
+    .filter(Boolean)
+    .join(', ');
+};
+
 export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' | 'rail' }> = ({ item, orientation }) => {
   const [hint, setHint] = useState<DOMRect | null>(null);
   useEffect(() => {
@@ -72,9 +94,7 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
     const t = setTimeout(() => setHint(null), DISABLED_HINT_MS);
     return () => clearTimeout(t);
   }, [hint]);
-  const spoken = [item.label, item.badgeLabel, item.dot === 'amber' ? 'waiting for your approval' : item.dot === 'accent' ? 'new reply' : item.dot === 'pulse' ? 'drawing' : null, item.disabled ? item.disabledReason : null]
-    .filter(Boolean)
-    .join(', ');
+  const spoken = navItemName(item);
   return (
     <button
       type="button"
@@ -109,9 +129,13 @@ export const NavItemButton: React.FC<{ item: StudioNavItem; orientation: 'bar' |
         {item.icon}
         {item.dot && <span className={cx('absolute right-3 top-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--ds-surface-strong)]', DOT_CLS[item.dot])} />}
       </span>
-      <span aria-hidden className={cx('flex max-w-full items-center gap-1', orientation === 'rail' && '[html.kb-open_&]:hidden')}>
-        <span className="truncate">{item.label}</span>
-        {item.badge && <span className="rounded-full bg-[var(--ds-well-strong)] px-1 py-px text-[9.5px] font-semibold tabular-nums text-[var(--ds-muted)]">{item.badge}</span>}
+      {/* The rail is 56 px wide: the badge goes under the label there instead of squeezing it to "B…".
+          The space between label and badge keeps them two words for the accessible-name check. */}
+      <span aria-hidden className={cx('flex max-w-full items-center gap-1', orientation === 'rail' && 'flex-col gap-0.5 [html.kb-open_&]:hidden')}>
+        <span className="max-w-full truncate">{item.label}</span>{' '}
+        {item.badge && (
+          <span className={`whitespace-nowrap ${RADIUS_PILL} bg-[var(--ds-well-strong)] px-1 py-px text-[9.5px] font-semibold tabular-nums text-[var(--ds-muted)]`}>{item.badge}</span>
+        )}
       </span>
       {hint && item.disabledReason && <DisabledHint text={item.disabledReason} rect={hint} orientation={orientation} />}
     </button>
