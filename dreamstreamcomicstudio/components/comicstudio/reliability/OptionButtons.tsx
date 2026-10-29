@@ -30,7 +30,9 @@ const BTN = `inline-flex min-h-9 max-w-full min-w-0 items-center gap-1.5 rounded
 export const optionText = (option: OutageOption, cost: CostFormat): { label: string; price?: string; detail?: string } => {
   switch (option.kind) {
     case 'wait_and_retry':
-      return { label: 'Wait and retry automatically', price: 'Free', ...(option.etaHint ? { detail: `usually ${option.etaHint}` } : {}) };
+      // etaHint is when the server's breaker lets the next call try the model ("about 2 min") — not a promise
+      // of recovery, so it is said as such.
+      return { label: 'Wait and retry automatically', price: 'Free', ...(option.etaHint ? { detail: `checks again in ${option.etaHint}` } : {}) };
     case 'other_route':
       return { label: option.label, price: 'Same model' };
     case 'add_key':

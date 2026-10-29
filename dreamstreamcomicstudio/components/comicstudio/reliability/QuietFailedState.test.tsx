@@ -14,20 +14,21 @@ const throttled = {
 };
 
 describe('QuietFailedState', () => {
-  it('reads "Paused — rate limited" for a provider refusal, with Details collapsed', () => {
+  it('reads "Paused — provider busy" for a provider refusal, with Details collapsed', () => {
     expect(isProviderPause(throttled)).toBe(true);
-    expect(quietCaption(throttled)).toBe('Paused — rate limited');
+    expect(quietCaption(throttled)).toBe('Paused — provider busy');
     render(<QuietFailedState render={throttled} label="Page 3" now={NOW} />);
-    expect(screen.getByRole('group', { name: 'Page 3: Paused — rate limited' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Page 3: Paused — provider busy' })).toBeInTheDocument();
     const details = screen.getByRole('button', { name: /Details/ });
     expect(details).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText('Who refused')).toBeNull();
   });
 
-  it('Details reveals who refused, the provider’s own words and when', () => {
+  it('Details reveals why, who refused, the provider’s own words and when', () => {
     render(<QuietFailedState render={throttled} label="Page 3" now={NOW} />);
     fireEvent.click(screen.getByRole('button', { name: /Details/ }));
     expect(screen.getByRole('button', { name: /Details/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Why').nextSibling).toHaveTextContent('Rate limited');
     expect(screen.getByText('Who refused').nextSibling).toHaveTextContent('OpenRouter · Google · 429');
     expect(screen.getByText('They said').nextSibling).toHaveTextContent('“Resource has been exhausted (e.g. check quota).”');
     expect(screen.getByText('When').nextSibling).toHaveTextContent('16:52');
@@ -46,9 +47,13 @@ describe('QuietFailedState', () => {
     expect(onTile).not.toHaveBeenCalled();
   });
 
-  it('busy, timeout and network are pauses; safety, limits and stops are not', () => {
+  it('busy, throttled, timeout and network all read "Paused — provider busy"; safety, limits and stops do not', () => {
     expect(quietCaption({ error: 'The image provider had a temporary problem (503).' })).toBe('Paused — provider busy');
-    expect(quietCaption({ error: 'It took longer than 120s and was stopped.' })).toBe('Paused — timed out');
+    expect(quietCaption({ error: 'It took longer than 120s and was stopped.' })).toBe('Paused — provider busy');
+    expect(quietCaption({ error: 'fetch failed: ECONNRESET' })).toBe('Paused — provider busy');
+    render(<QuietFailedState render={{ error: 'It took longer than 120s and was stopped.', updatedAt: AT }} label="Cover" now={NOW} />);
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText('Why').nextSibling).toHaveTextContent('Timed out');
     expect(isProviderPause({ error: 'Held by the PG-13 safety check.' })).toBe(false);
     expect(quietCaption({ error: 'Held by the PG-13 safety check.' })).toBe("Didn't finish — held by the safety check");
     expect(quietCaption({ error: "You've used all of your usage this month." })).toBe("Didn't finish — usage limit reached");

@@ -1,8 +1,9 @@
 // The quiet failed-tile state (reliability.md §3): a style option, page, sheet or cover that a provider refused
-// reads "Paused — provider busy · Details · Retry" instead of red text. Details reveals exactly what happened:
-// who refused (the sanitized `errorDetail.provider` + code), the provider's own words, and when. Failures that are
-// not the provider's (a safety hold, a usage limit, a stop) keep an honest "Didn't finish — …" line instead of
-// "Paused", because waiting would not fix them.
+// reads "Paused — provider busy · Details · Retry" instead of red text — the same words for a throttle, a busy
+// provider, a timeout or a dropped connection. Details reveals exactly what happened: why (rate limited, timed
+// out, …), who refused (the sanitized `errorDetail.provider` + code), the provider's own words, and when. Failures
+// that are not the provider's (a safety hold, a usage limit, a stop) keep an honest "Didn't finish — …" line
+// instead of "Paused", because waiting would not fix them.
 //
 // Tile owners (board/ui.tsx, conversation/cards/renderTile.tsx, CastTab, StyleTab) render this inside their
 // tile frame for `render.status === 'failed'`; it fills its container and never overflows it.
@@ -29,11 +30,13 @@ export const isProviderPause = (render: FailedRenderLike | null | undefined): bo
   return PROVIDER_KINDS.has(failureKind(facts.error));
 };
 
+/** The tile caption for every provider pause (reliability.md §3); the specific reason lives in Details. */
+export const PROVIDER_PAUSE_CAPTION = 'Paused — provider busy';
+
 /** "Paused — provider busy" for provider failures; "Didn't finish — held by the safety check" otherwise. */
 export const quietCaption = (render: FailedRenderLike | null | undefined): string => {
-  const facts = failureFacts(render);
-  const reason = failureReason(facts.error);
-  return isProviderPause(render) ? `Paused — ${reason}` : `Didn't finish — ${reason}`;
+  if (isProviderPause(render)) return PROVIDER_PAUSE_CAPTION;
+  return `Didn't finish — ${failureReason(failureFacts(render).error)}`;
 };
 
 export interface QuietFailedStateProps {
@@ -56,18 +59,20 @@ export const QuietFailedState: React.FC<QuietFailedStateProps> = ({ render, labe
   const detailsId = useId();
   const facts = failureFacts(render);
   const caption = quietCaption(render);
+  const pause = isProviderPause(render);
+  const why = pause ? failureReason(facts.error) : undefined;
   const detail = render.errorDetail && typeof render.errorDetail === 'object' ? (render.errorDetail as { provider?: unknown; code?: unknown; text?: unknown }) : undefined;
   const who = typeof detail?.provider === 'string' && detail.provider ? detail.provider : 'The image provider';
   const code = typeof detail?.code === 'string' && detail.code ? detail.code : undefined;
   const words = (typeof detail?.text === 'string' && detail.text) || render.error || '';
   const when = formatFailedAt(facts.at, now ?? Date.now());
-  const hasDetails = !!(words || detail || when);
+  const hasDetails = !!(words || detail || when || why);
 
   return (
     <div
       role="group"
       aria-label={`${label}: ${caption}`}
-      data-quiet-failed={isProviderPause(render) ? 'provider' : 'other'}
+      data-quiet-failed={pause ? 'provider' : 'other'}
       className={cx(
         'flex h-full w-full min-w-0 flex-col items-center justify-[safe_center] gap-1.5 overflow-y-auto overscroll-contain bg-[var(--ds-surface-soft)] text-center',
         compact ? 'p-1.5' : 'p-3',
@@ -106,6 +111,12 @@ export const QuietFailedState: React.FC<QuietFailedStateProps> = ({ render, labe
           id={detailsId}
           className="w-full min-w-0 max-w-[34ch] space-y-1 rounded-[var(--ds-radius-sm)] border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 py-2 text-left text-[11.5px] leading-snug"
         >
+          {why && (
+            <div className="flex min-w-0 gap-1.5">
+              <dt className="shrink-0 text-[var(--ds-muted)]">Why</dt>
+              <dd className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{why.charAt(0).toUpperCase() + why.slice(1)}</dd>
+            </div>
+          )}
           <div className="flex min-w-0 gap-1.5">
             <dt className="shrink-0 text-[var(--ds-muted)]">Who refused</dt>
             <dd className="min-w-0 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{code ? `${who} · ${code}` : who}</dd>
