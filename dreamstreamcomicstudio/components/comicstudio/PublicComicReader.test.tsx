@@ -385,7 +385,8 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     api.loadPublicComicBySlug.mockResolvedValue(payload());
     render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
     await waitFor(() => expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({ type: 'view', channel: 'whatsapp' })));
-    expect(window.location.search).toBe('');
+    // The channel tag is gone from the address (the reader's own page sync may add ?p= meanwhile).
+    expect(new URLSearchParams(window.location.search).has('via')).toBe(false);
   });
 
   it('counts "complete" only after reading through to the end, never for a link that opens on the last page', async () => {
