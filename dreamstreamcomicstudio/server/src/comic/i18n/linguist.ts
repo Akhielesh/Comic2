@@ -15,6 +15,7 @@ import type { ComicDoc, EditionTextField, TextTranslation, TranslationRegister }
 import { i18nOf, lineSourceHash, normalizeSource, textSourceHash } from '../../../../shared/comic/i18n.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import type { ContentRating } from '../../../../shared/comic/safety.js';
+import { languageSpec } from '../../../../shared/comic/languages.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, linesInOrder, REVIEW_CHUNK_LINES } from '../../../../shared/comic/translationPlan.js';
 import { StudioError, type LlmClient } from '../types.js';
@@ -168,8 +169,10 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     // from a line software accepts under that voice objects to the voice itself — a difference of taste, kept
     // as a one-tap suggestion, never an auto-correction. Decided by what the suggestion changes, never by the
     // issue's wording: a change to any other word (the meaning) or a new English word is a real correction.
+    // A Latin-script edition (Spanish, …) has no script line between its words and English ones: no guard.
     const voiceClash =
       register === 'code_mixed' &&
+      languageSpec(lang)?.script !== 'Latn' &&
       v.severity === 'major' &&
       !!suggestion &&
       onlyDropsEnglish(cur.text, suggestion) &&

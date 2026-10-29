@@ -364,6 +364,15 @@ describe('the linguist review (always)', () => {
     expect(lines.l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
     expect(lines.l2).toMatchObject({ text: 'टर्र टर्र, bro!', status: 'reviewed', issue: { severity: 'minor', suggestion: 'टर्र टर्र!' } });
     expect(out.autoFixed).toBe(1);
+
+    // A Latin-script edition cannot tell its own words from English ones: dropping "No" is a meaning fix.
+    const es = applyOps(sixPageKidsDoc(), [
+      { op: 'edition', lang: 'es', patch: { register: 'code_mixed' } },
+      { op: 'translations', lang: 'es', lines: { l1: { text: 'No quiero ir, bro.', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 } } }
+    ]);
+    const esOut = applyReview(es, 'es', new Map([v('l1', 'Wrong meaning: the source does not say "not".', 'Quiero ir, bro.', 'No quiero ir, bro.')]), 'PG', 2);
+    expect(esOut.autoFixed).toBe(1);
+    expect((esOut.ops[0] as Extract<(typeof esOut.ops)[number], { op: 'translations' }>).lines.l1).toMatchObject({ text: 'Quiero ir, bro.', issue: { suggestion: 'No quiero ir, bro.' } });
   });
 
   it('applyReview leaves a line alone when its text is no longer the one the linguist was shown, or the author wrote it', () => {
