@@ -337,6 +337,44 @@ describe('memory folding', () => {
     expect(session.doc.spend.entries[0]).toMatchObject({ kind: 'chat', label: 'Conversation memory' });
   });
 
+  it('runs after the turn, outside the turn lock: the next message is not refused while the fold is out', async () => {
+    const doc = plannedDoc();
+    doc.conversation = Array.from({ length: 45 }, (_, i): Msg => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `msg ${i}`, at: i }));
+    const session = newSession(doc);
+    let releaseFold!: () => void;
+    const foldHeld = new Promise<void>((r) => (releaseFold = r));
+    let folds = 0;
+    const llm = scriptedLlm({
+      director: [
+        { text: 'Noted.' },
+        async () => {
+          folds += 1;
+          await foldHeld;
+          return { text: '- Prefers short pages.' };
+        },
+        { text: 'Still here.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    // The route runs the turn under the session lock (routes/comic.ts runMessage).
+    const turn = session.runExclusive(() => runDirectorTurn(ctx, { text: 'keep pages short', attachments: [] }));
+    const first = await Promise.race([turn.then(() => 'released'), new Promise((r) => setTimeout(() => r('held'), 200))]);
+    // Before: the fold's model call ran inside the lock, so the turn (and the lock) waited for it.
+    expect(first).toBe('released');
+    expect(folds).toBe(1);
+    expect(session.turnRunning).toBe(false);
+    expect(session.doc.conversation[session.doc.conversation.length - 1].text).toBe('Noted.');
+    // A second turn ends while the first fold is still out: no second fold (one per session at a time).
+    await session.runExclusive(() => runDirectorTurn(ctx, { text: 'and bright colors', attachments: [] }));
+    expect(folds).toBe(1);
+    expect(llm.calls).toHaveLength(3);
+    releaseFold();
+    // The request's stream stays open for the fold (ctx.track), and the memory lands.
+    await ctx.settled();
+    expect(session.doc.memory).toMatch(/^- Prefers short pages\.\n⟦through:m\d+⟧$/);
+    expect(session.doc.spend.entries.some((e) => e.label === 'Conversation memory')).toBe(true);
+  });
+
   it('is fail-soft', async () => {
     const doc = plannedDoc();
     doc.conversation = Array.from({ length: 45 }, (_, i): Msg => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `msg ${i}`, at: i }));

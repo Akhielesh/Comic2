@@ -775,7 +775,27 @@ async function directorTurnBody(
   }
   recordTextSpend(ctx, tracker, 'chat', 'Director');
 
-  if (!cancelled) await maybeFoldMemory(ctx).catch(() => undefined);
+  if (!cancelled) foldMemoryAfterTurn(ctx);
+}
+
+/** The memory fold in flight per session (one at a time: the next fold picks up from its ⟦through⟧ marker). */
+const foldsInFlight = new WeakMap<StudioContext['session'], Promise<boolean>>();
+
+/**
+ * The fold runs after the turn, NOT inside it: the reply is committed, so the turn lock is released
+ * and the user's next message is accepted while the fold's model call is still out (a fold inside
+ * the lock answered a follow-up with BUSY every ~10th message of a long project). The request's
+ * stream stays open for it (ctx.track: the session is retained, `done` counts its spend), it only
+ * writes doc.memory, and a fold already running for this session covers the next turn too.
+ */
+function foldMemoryAfterTurn(ctx: StudioContext): void {
+  const session = ctx.session;
+  if (foldsInFlight.has(session)) return;
+  const work = maybeFoldMemory(ctx)
+    .catch(() => false)
+    .finally(() => foldsInFlight.delete(session));
+  foldsInFlight.set(session, work);
+  void ctx.track(work);
 }
 
 // ── Memory ───────────────────────────────────────────────────────────────────

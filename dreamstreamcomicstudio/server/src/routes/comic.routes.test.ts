@@ -350,6 +350,38 @@ describe('POST /projects/:id/stream', () => {
     expect(store.docs.get('proj-1')!.doc.conversation.map((m) => m.text)).toEqual(['one', 'First done.']);
   });
 
+  it('a follow-up sent while the conversation memory folds is accepted: the fold runs after the turn lock', async () => {
+    const doc = plannedDoc();
+    doc.conversation = Array.from({ length: 45 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? ('assistant' as const) : ('user' as const), text: `msg ${i}`, at: i }));
+    seed(doc);
+    let releaseFold!: () => void;
+    const foldHeld = new Promise<void>((r) => (releaseFold = r));
+    let markFolding!: () => void;
+    const folding = new Promise<void>((r) => (markFolding = r));
+    llm.script.director = [
+      { text: 'Noted.' },
+      async () => {
+        markFolding();
+        await foldHeld;
+        return { text: '- Likes short pages.' };
+      },
+      { text: 'Busier it is.' }
+    ];
+    const first = stream('proj-1', { kind: 'message', text: 'keep pages short' });
+    await folding;
+    // The reply has landed (the client unlocks the composer); the fold's model call is still out.
+    const second = await stream('proj-1', { kind: 'message', text: 'Make the market busier.' });
+    // Before: the fold ran inside the turn lock and this was refused with BUSY.
+    expect(second.events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(second.events.some((e) => e.type === 'delta' && e.text === 'Busier it is.')).toBe(true);
+    releaseFold();
+    const firstResult = await first;
+    expect(firstResult.events[firstResult.events.length - 1].type).toBe('done');
+    const saved = store.docs.get('proj-1')!.doc;
+    expect(saved.conversation.slice(-4).map((m) => m.text)).toEqual(['keep pages short', 'Noted.', 'Make the market busier.', 'Busier it is.']);
+    expect(saved.memory).toMatch(/^- Likes short pages\.\n⟦through:m\d+⟧$/);
+  });
+
   it('a client disconnect is not a Stop: the director turn finishes, commits its reply and persists', async () => {
     seed();
     let markWaiting!: () => void;
