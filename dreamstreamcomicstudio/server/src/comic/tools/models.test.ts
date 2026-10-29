@@ -673,7 +673,8 @@ describe('reply guards: never a switch, never a start that did not happen', () =
       'No drawing has started.',
       'Want me to start them once it is back?',
       'Redrawing them to match would cost about the same.',
-      "It'll start again once Google lets it through."
+      "It'll start again once Google lets it through.",
+      'Pages 3 to 5 start again when it is back.'
     ]) {
       expect(guardModelReply(honest, { doc, outages: [outageCard()], queued: 0, cost: dollars }).text, honest).toBe(`${line} ${honest}`);
     }

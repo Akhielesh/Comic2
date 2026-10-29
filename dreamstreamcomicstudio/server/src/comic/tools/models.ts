@@ -876,7 +876,8 @@ const claimsStart = (sentence: string): boolean => {
     const before = s.slice(0, m.index);
     const after = s.slice(m.index + m[0].length);
     if (NEGATED_BEFORE_RE.test(before) || OFFER_BEFORE_RE.test(before)) continue;
-    if (FUTURE_BEFORE_RE.test(before) && CONDITION_AFTER_RE.test(after)) continue;
+    // "It'll start once it's back", "pages start again when it's back": later, on a condition — not a start now.
+    if ((FUTURE_BEFORE_RE.test(before) || /^(?:will|starts?)\b/i.test(m[0])) && CONDITION_AFTER_RE.test(after)) continue;
     if (/ing\b/i.test(m[0]) && NOUN_AFTER_RE.test(after)) continue;
     return true;
   }
