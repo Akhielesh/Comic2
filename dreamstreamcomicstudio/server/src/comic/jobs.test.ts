@@ -1728,6 +1728,37 @@ describe('planPages (v5)', () => {
     expect(session.doc.pages[0].render.asset?.path).toBe('p1.webp');
   });
 
+  it('a plan click at the budget cap never runs the paid writer; under the cap it still plans', async () => {
+    const atCap = plannedDoc();
+    atCap.settings = { ...atCap.settings, budgetUsd: 0.05 };
+    atCap.spend = { ...atCap.spend, totalUsd: 0.09 };
+    const session = newSession(atCap);
+    const llm = scriptedLlm({ writer: [{ text: '{}' }] });
+    const ctx = testContext(session, { llm });
+    // The UI's "Plan the pages" / "Re-plan" button posts plan_pages as a confirmed click.
+    const outcome = await startAction(ctx, { type: 'plan_pages', instructions: 'make it funnier' }, { confirmed: true, origin: 'user' });
+    expect(outcome.outcome).toMatchObject({ status: 'blocked', code: 'BUDGET_EXCEEDED' });
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
+    expect(llm.calls.filter((c) => c.role === 'writer')).toHaveLength(0);
+    expect(ctx.billingFake.reserves.filter((r) => r.stage === 'plan')).toHaveLength(0);
+    expect(session.doc.spend.totalUsd).toBe(0.09);
+    const last = session.doc.conversation.at(-1)!;
+    expect(last.text).toContain('at its budget cap');
+    expect(last.text).toContain('Nothing was spent.');
+    expect(last.cards).toContainEqual(expect.objectContaining({ type: 'notice', tone: 'info' }));
+
+    // Under the cap the same click plans as before.
+    const under = plannedDoc();
+    under.settings = { ...under.settings, budgetUsd: 1 };
+    under.spend = { ...under.spend, totalUsd: 0.09 };
+    const session2 = newSession(under);
+    const ctx2 = testContext(session2);
+    writerReturns((doc) => doc.pages);
+    await startAction(ctx2, { type: 'plan_pages', instructions: 'make it funnier' }, { confirmed: true, origin: 'user' });
+    expect(vi.mocked(writePagePlan)).toHaveBeenCalledTimes(1);
+    expect(ctx2.billingFake.reserves.filter((r) => r.stage === 'plan')).toHaveLength(1);
+  });
+
   it('a page that got art while planning and is dropped by the new plan goes to the trash, never lost', async () => {
     const doc = plannedDoc();
     doc.format.pageCount = 2;

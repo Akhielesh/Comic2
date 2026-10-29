@@ -3058,6 +3058,15 @@ export async function planPages(
     return { status: 'done', message: `${planHeadline(before)} (unchanged inputs — returned the existing plan, $0)`, nextSteps: steps };
   }
 
+  // The budget cap governs the writer like it governs image clicks (a click is the confirmation,
+  // the cap still applies): at or past it, nothing is written and nothing is spent.
+  const budget = budgetOf(before.settings);
+  if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
+    const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
+    deliver(ctx, runOpts, text, [noticeCard('info', text)], nextStepsFor(before, { byok }));
+    return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
+  }
+
   const drawn = before.pages.filter(hasArt);
   let rewroteAll = false;
   if (!pageIds && drawn.length) {
