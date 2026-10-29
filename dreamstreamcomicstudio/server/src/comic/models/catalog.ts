@@ -144,7 +144,7 @@ export interface UptimeLogRow {
   fetchedAt: string;
 }
 
-/** Persistence for the caches and the trend history (Supabase in index.ts; memory in fakes.ts). Every method may throw; callers degrade. */
+/** Persistence for the caches and the trend history (Supabase in index.ts; memory in __fixtures__/catalogFakes.ts). Every method may throw; callers degrade. */
 export interface CatalogStore {
   loadCache(source: string): Promise<CachedPayload[]>;
   saveCache(source: string, rows: CachedPayload[]): Promise<void>;
