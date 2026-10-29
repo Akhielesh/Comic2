@@ -7,6 +7,8 @@
 //   major + valid suggestion→ the suggestion is applied (status 'reviewed'); the issue keeps the ORIGINAL
 //                             as its suggestion ("Auto-corrected by review: …") so the author can revert
 //   major, no suggestion    → status stays 'machine' with a major issue (blocks publishing until handled)
+//   major in a code_mixed edition whose suggestion only drops English words
+//                           → treated as minor (the voice the author chose; the suggestion stays one tap away)
 //   no verdict              → unchanged ('machine', i.e. "waiting for review"; the next run reviews it)
 
 import type { ComicDoc, EditionTextField, TextTranslation, TranslationRegister } from '../../../../shared/comic/doc.js';
@@ -108,6 +110,26 @@ export async function reviewTranslations(llm: LlmClient, doc: ComicDoc, lang: st
   return run;
 }
 
+/** The text without its Latin-script words, spaces and punctuation. */
+const withoutLatin = (s: string) => normalizeSource(s).replace(/\p{Script=Latin}+/gu, ' ').replace(/[\s\p{P}]+/gu, '');
+const latinWords = (s: string) => (normalizeSource(s).match(/\p{Script=Latin}+/gu) ?? []).map((w) => w.toLowerCase());
+
+/**
+ * True when `suggestion` is `text` with one or more English (Latin-script) words dropped and nothing else
+ * changed (spaces and punctuation aside): the reviewer removing the "mixed with English" voice, not fixing
+ * the line. Any other change — a different non-Latin word, or an English word that was not there — is false.
+ */
+const onlyDropsEnglish = (text: string, suggestion: string): boolean => {
+  if (withoutLatin(text) !== withoutLatin(suggestion)) return false;
+  const left = latinWords(text);
+  for (const w of latinWords(suggestion)) {
+    const i = left.indexOf(w);
+    if (i < 0) return false;
+    left.splice(i, 1);
+  }
+  return left.length > 0;
+};
+
 export interface ReviewOutcome {
   ops: DocOp[];
   reviewed: number;
@@ -142,12 +164,15 @@ export function applyReview(doc: ComicDoc, lang: string, verdicts: Map<string, R
     const g = glossaryNeeds(doc, lang, source);
     const suggestion = v.suggestion && v.suggestion !== cur.text ? v.suggestion : '';
     const usable = !!suggestion && !checkLine(lang, register, { id: 'x', source, maxChars: 9999, forms: g.forms, keep: g.keep }, suggestion, rating, sourceLang).problem;
-    // "Mixed with English" is the author's choice: a reviewer objecting to the English words / script of a
-    // line that software accepts under that voice is a difference of taste, never an auto-correction.
+    // "Mixed with English" is the author's choice: a MAJOR verdict whose suggestion only drops English words
+    // from a line software accepts under that voice objects to the voice itself — a difference of taste, kept
+    // as a one-tap suggestion, never an auto-correction. Decided by what the suggestion changes, never by the
+    // issue's wording: a change to any other word (the meaning) or a new English word is a real correction.
     const voiceClash =
       register === 'code_mixed' &&
       v.severity === 'major' &&
-      /\bscript\b|\benglish\b|\blatin\b|\broman/i.test(v.issue) &&
+      !!suggestion &&
+      onlyDropsEnglish(cur.text, suggestion) &&
       !checkLine(lang, register, { id: 'x', source, maxChars: 9999, forms: g.forms, keep: g.keep }, cur.text, rating, sourceLang).problem;
     if (v.severity === 'major' && !voiceClash) {
       if (usable) {

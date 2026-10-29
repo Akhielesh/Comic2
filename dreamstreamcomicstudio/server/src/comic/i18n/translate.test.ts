@@ -303,6 +303,59 @@ describe('the linguist review (always)', () => {
     expect(editionReadiness(session.doc, 'hi').publishable).toBe(true);
   });
 
+  it('"Mixed with English": a MAJOR wrong-meaning verdict is still auto-corrected, whatever its note says about English', async () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    const WRONG = 'सूरज कहाँ गया, bro?'; // "where did the SUN go, bro?" — passes the code-mixed script check
+    const RIGHT = 'चाँद कहाँ गया, bro?';
+    const session = newSession(doc);
+    const tr = fakeTranslator({ text: (id, lang) => (id === 'l1' && lang === 'hi' ? WRONG : undefined) });
+    // The linguist writes its note in the source language, so a code-mixed note often names "English".
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Wrong meaning: the English source says moon, not sun.', suggestion: RIGHT } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, tr.step), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T({ languages: ['hi'] }), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    const l1 = i18nOf(session.doc).editions.hi.lines.l1;
+    // Without the fix: l1 keeps 'सूरज…' as 'reviewed' with a minor note — a wrong-meaning line that can be published.
+    expect(l1.text).toBe(RIGHT);
+    expect(l1.status).toBe('reviewed');
+    expect(l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
+    expect(l1.issue?.suggestion).toBe(WRONG); // the original, to revert
+  });
+
+  it('"Mixed with English": only a suggestion that merely DROPS English words is the voice; a swapped English word is a real fix', () => {
+    const base = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    const [l1, l2] = base.pages[0].panels[0].lines;
+    const doc = applyOps(base, [
+      {
+        op: 'translations',
+        lang: 'hi',
+        lines: {
+          l1: { text: 'देखो, sun कहाँ गया?', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 },
+          l2: { text: 'टर्र टर्र, bro!', status: 'machine', sourceHash: lineSourceHash(l2), at: 1 }
+        }
+      }
+    ]);
+    const v = (id: string, issue: string, suggestion: string, reviewed: string) => [id, { id, gloss: 'g', verdict: 'fix' as const, severity: 'major' as const, issue, suggestion, reviewed }] as const;
+    const out = applyReview(
+      doc,
+      'hi',
+      new Map([
+        // The English word itself carries the wrong meaning: another English word fixes it (a real correction).
+        v('l1', 'Wrong meaning: the English source says moon, not sun.', 'देखो, moon कहाँ गया?', 'देखो, sun कहाँ गया?'),
+        // Dropping the English word is the reviewer objecting to the voice the author chose.
+        v('l2', 'Wrong script: English word in a Hindi line.', 'टर्र टर्र!', 'टर्र टर्र, bro!')
+      ]),
+      'PG',
+      2
+    );
+    const lines = (out.ops.find((o) => o.op === 'translations') as Extract<(typeof out.ops)[number], { op: 'translations' }>).lines;
+    expect(lines.l1).toMatchObject({ text: 'देखो, moon कहाँ गया?', status: 'reviewed', issue: { severity: 'minor', suggestion: 'देखो, sun कहाँ गया?' } });
+    expect(lines.l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
+    expect(lines.l2).toMatchObject({ text: 'टर्र टर्र, bro!', status: 'reviewed', issue: { severity: 'minor', suggestion: 'टर्र टर्र!' } });
+    expect(out.autoFixed).toBe(1);
+  });
+
   it('applyReview leaves a line alone when its text is no longer the one the linguist was shown, or the author wrote it', () => {
     const first = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
     const l1 = first.pages[0].panels[0].lines[0];
