@@ -319,6 +319,11 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
     p.flagged ? `${p.flagged} flagged` : ''
   ].filter(Boolean);
   const blocking = r.issues.filter((i) => i.blocking && i.code !== 'in_art_pages');
+  // Work only the author can settle (no translator, no reviewer) that BLOCKS publishing: lines the review
+  // flagged MAJOR ("Looks right" / edit / use the suggestion) and their own edits whose original changed.
+  // Minor notes never block, so they stay in the chips only — the button points at what holds the edition.
+  const majors = r.issues.find((i) => i.code === 'major_issue')?.count ?? 0;
+  const attention = [majors ? `${majors} flagged` : '', p.staleEdited ? `${p.staleEdited} changed` : ''].filter(Boolean);
   return (
     <li className="min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3">
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
@@ -367,6 +372,11 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
             {p.missing || p.stale ? 'Translate missing' : 'Finish the review'}
             {quote ? ` · ${cost.approx(quote.usd)}` : ''}
           </PrimaryButton>
+        )}
+        {!r.publishable && attention.length > 0 && (
+          <GhostButton size="sm" className="coarse:h-11" onClick={onReview}>
+            Review {attention.join(' · ')}
+          </GhostButton>
         )}
         <label className="inline-flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--ds-muted)]">
           <span className="shrink-0">Voice</span>

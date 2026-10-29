@@ -73,7 +73,18 @@ export async function verifySecuritySignature(secret: string | undefined, header
   return { ok: false, reason: 'bad-signature' };
 }
 
+/**
+ * What happened: a new sign-in (the access-token hook), or a change to two-step sign-in made from
+ * a signed-in session (server/sql/live_security_v2.sql live_mfa_activate / live_mfa_recover) —
+ * switched on, another authenticator added, or switched off with a recovery code. Each carries
+ * its own one-time "Not you?" token: securing the account from it also removes an authenticator
+ * an intruder switched on, so a stolen password can't lock the parent out.
+ */
+export type SecurityAlertKind = 'sign_in' | 'mfa_on' | 'mfa_added' | 'mfa_recovered';
+const ALERT_KINDS: readonly string[] = ['sign_in', 'mfa_on', 'mfa_added', 'mfa_recovered'];
+
 export interface SignInAlert {
+  kind: SecurityAlertKind;
   email: string;
   name: string | null;
   /** When, epoch ms. */
@@ -98,13 +109,13 @@ export function parseSignInAlert(p: string): SignInAlert | null {
   } catch {
     return null;
   }
-  if (!d || typeof d !== 'object' || d.v !== 1 || d.kind !== 'sign_in') return null;
+  if (!d || typeof d !== 'object' || d.v !== 1 || typeof d.kind !== 'string' || !ALERT_KINDS.includes(d.kind)) return null;
   const email = typeof d.email === 'string' ? d.email.trim() : '';
   if (!email || email.length > 320 || !EMAIL_RE.test(email)) return null;
   const token = typeof d.token === 'string' && /^[A-Za-z0-9_-]{20,128}$/.test(d.token) ? d.token : null;
   const at = typeof d.at === 'number' && Number.isFinite(d.at) && d.at > 0 ? d.at : null;
   if (!token || at == null) return null;
-  return { email, name: str(d.name, 40), at, ua: str(d.ua, 300), ip: maskIp(str(d.ip, 64)), method: str(d.method, 40), token };
+  return { kind: d.kind as SecurityAlertKind, email, name: str(d.name, 40), at, ua: str(d.ua, 300), ip: maskIp(str(d.ip, 64)), method: str(d.method, 40), token };
 }
 
 /** Never show a whole address: IPv4 → a.b.c.x, IPv6 → first three groups + /48. */
@@ -207,6 +218,7 @@ export interface SignInAlertOptions {
 }
 
 export function renderSignInAlert(a: SignInAlert, brand: BrandConfig, opts: SignInAlertOptions = {}): RenderedSecurityEmail {
+  if (a.kind && a.kind !== 'sign_in') return renderMfaAlert(a, brand, opts);
   const device = describeDevice(a.ua);
   const when = formatWhen(a.at);
   const how = describeMethod(a.method);
@@ -265,6 +277,85 @@ export function renderSignInAlert(a: SignInAlert, brand: BrandConfig, opts: Sign
     "If this was you, there's nothing to do.",
     '',
     ...ifNotText,
+    '',
+    `This is a required ${brand.productName} account notification.`,
+  ].join('\n');
+  return { subject, html, text };
+}
+
+/** The words for each two-step sign-in change. */
+const MFA_COPY: Record<Exclude<SecurityAlertKind, 'sign_in'>, { subject: (p: string) => string; heading: string; intro: (p: string) => string; ok: string; secure: string }> = {
+  mfa_on: {
+    subject: (p) => `Two-step sign-in was turned on for your ${p} account`,
+    heading: 'Two-step sign-in turned on',
+    intro: (p) => `two-step sign-in was just turned on for your ${p} account. From now on, signing in on a new device asks for a code from an authenticator app.`,
+    ok: '<strong>If this was you</strong>, there’s nothing to do — keep your recovery codes somewhere safe. Devices that were already signed in stay signed in.',
+    secure:
+      '<strong>If it wasn’t</strong>, someone may have your password. Secure your account now: it signs you out on every device (yours included), switches off the two-step sign-in they just turned on, and emails you a link to choose a new password.',
+  },
+  mfa_added: {
+    subject: (p) => `An authenticator was added to your ${p} account`,
+    heading: 'Authenticator added',
+    intro: (p) => `another authenticator app was just added to two-step sign-in on your ${p} account. Codes from it now work for signing in.`,
+    ok: '<strong>If this was you</strong>, there’s nothing to do.',
+    secure:
+      '<strong>If it wasn’t</strong>, secure your account now: it signs you out on every device (yours included), removes the authenticator that was just added, and emails you a link to choose a new password.',
+  },
+  mfa_recovered: {
+    subject: (p) => `Two-step sign-in was switched off on your ${p} account`,
+    heading: 'Two-step sign-in switched off',
+    intro: (p) => `a recovery code was just used to get into your ${p} account, which switches two-step sign-in off. Signing in now needs only the password.`,
+    ok: '<strong>If this was you</strong>, turn two-step sign-in on again with your new phone (Settings → Security) — you’ll get new recovery codes.',
+    secure:
+      '<strong>If it wasn’t</strong>, secure your account now: it signs you out on every device (yours included) and emails you a link to choose a new password. Then turn two-step sign-in on again.',
+  },
+};
+
+const plain = (html: string): string => html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&');
+
+/** A change to two-step sign-in, with the same one-time "Not you?" link as a sign-in alert. */
+export function renderMfaAlert(a: SignInAlert, brand: BrandConfig, opts: SignInAlertOptions = {}): RenderedSecurityEmail {
+  const copy = MFA_COPY[a.kind as Exclude<SecurityAlertKind, 'sign_in'>] ?? MFA_COPY.mfa_on;
+  const device = describeDevice(a.ua);
+  const when = formatWhen(a.at);
+  const hi = a.name ? `Hi ${a.name},` : 'Hi,';
+  const subject = copy.subject(brand.productName);
+  const intro = copy.intro(brand.productName);
+  const rows: [string, string][] = [
+    ['From', device],
+    ['When', when],
+    ...(a.ip ? ([['Network', `${a.ip} (approximate — not a location)`]] as [string, string][]) : []),
+  ];
+  const secure = opts.securePage === true;
+  const link = secure ? secureAccountUrl(a.token, brand.appUrl) : null;
+  const support = brand.supportEmail || 'support@dreamstreamstudio.ai';
+  // Without the "Not you?" page there's no safe self-serve undo: signing out everywhere could
+  // leave the parent facing a code only the intruder has. Support can — so say exactly that.
+  const notYouHtml = link
+    ? paragraph(copy.secure) + button('Not you? Secure my account', link, 'blue') + linkFallback(link)
+    : paragraph(
+        `<strong>If it wasn’t</strong>, email <a href="mailto:${escapeHtml(support)}">${escapeHtml(support)}</a> from this address straight away and we’ll secure your account with you. Don’t sign out of your other devices first.`,
+      );
+  const content =
+    heading(copy.heading) +
+    paragraph(`${escapeHtml(hi)} ${escapeHtml(intro)}`) +
+    infoBox(rows.map(([k, v]) => `<strong>${escapeHtml(k)}:</strong> ${escapeHtml(v)}`).join('<br/>')) +
+    paragraph(copy.ok) +
+    notYouHtml +
+    muted(link ? 'The link works once, for 7 days. We will never ask for your password or a code by email.' : 'We will never ask for your password or a code by email.');
+  const html = wrapHtml({ brand, preheader: `${device} · ${when}. If this was you, there’s nothing to do.`, content, essential: true, noReply: true });
+  const text = [
+    subject,
+    '',
+    `${hi} ${intro}`,
+    '',
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+    '',
+    plain(copy.ok),
+    '',
+    ...(link
+      ? [plain(copy.secure), link, '', 'The link works once, for 7 days. We will never ask for your password or a code by email.']
+      : [`If it wasn't, email ${support} from this address straight away and we'll secure your account with you. Don't sign out of your other devices first.`]),
     '',
     `This is a required ${brand.productName} account notification.`,
   ].join('\n');

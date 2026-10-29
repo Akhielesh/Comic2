@@ -3,9 +3,9 @@
 // writer-class translator per chunk, validation + one repair round, the safety hook, the linguist
 // review (always), duplicates copied for free, spend, the appended completion message, gating.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { editionReadiness, editionProgress, i18nOf } from '../../../../shared/comic/i18n.js';
+import { editionReadiness, editionProgress, i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps, type StudioAction } from '../../../../shared/comic/ops.js';
-import { AUTO_CORRECTED_NOTE, planTranslation } from '../../../../shared/comic/translationPlan.js';
+import { AUTO_CORRECTED_NOTE, editionTextEntry, planTranslation } from '../../../../shared/comic/translationPlan.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { GOLDEN_DOCS } from '../golden/fixtures.js';
 import { JOB_TIMINGS, startAction } from '../jobs.js';
@@ -15,8 +15,11 @@ import type { Card, Msg } from '../../../../shared/comic/doc.js';
 import { costViewFor } from '../costText.js';
 import { TEXT_ROLE_DEFAULTS } from '../textModels.js';
 import { completionMessage, estimateTranslation, quoteTranslation, resetTranslationCalibration, resolveLanguage, resolveLanguages, runTranslation, translationRunning } from './index.js';
+import { applyReview } from './linguist.js';
+import { linguistSystemPrompt } from './prompts.js';
 import { checkLine, readTranslatorOutput, scriptShare } from './translate.js';
 import { fakeLinguist, fakeTranslator, requestedItems, sixPageKidsDoc, times } from './testing.js';
+import type { LlmRequest } from '../types.js';
 
 vi.mock('../safety/index.js', async (orig) => {
   const real = await orig<typeof import('../safety/index.js')>();
@@ -122,6 +125,46 @@ describe('software first: caching and misses', () => {
     const second = await run(doc, { translator: times(2, fakeTranslator().step), linguist: times(2, fakeLinguist()) });
     expect(roles(second.ctx, 'translator')).toHaveLength(0);
     expect(i18nOf(second.session.doc).editions.te.lines.l1).toMatchObject({ text: 'చంద్రుడు ఎటు పోయాడు?', status: 'edited' });
+  });
+
+  it('edits the author makes WHILE the run is going survive: a later chunk and the review never overwrite them', async () => {
+    const session = newSession(sixPageKidsDoc());
+    const tr = fakeTranslator();
+    const lineOf = (id: string) => session.doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).find((l) => l.id === id)!;
+    const edit = (id: string, text: string) =>
+      session.commit([{ op: 'translation', lang: 'te', lineId: id, patch: { text, status: 'edited', sourceHash: lineSourceHash(lineOf(id)), at: Date.now() } }], { origin: 'user', label: 'Edit translation' });
+    let calls = 0;
+    const translator = (req: LlmRequest) => {
+      calls += 1;
+      // Chunk 1 (pages 1–3) is with the model: the author types the Telugu for l9 (page 5 → chunk 2), and
+      // their own Telugu title (the title rides in chunk 1's extras, so chunk 1's commit is the one to beat).
+      if (calls === 1) {
+        edit('l9', 'నా స్వంత అనువాదం తొమ్మిది');
+        session.commit([{ op: 'edition_text', lang: 'te', field: 'brief.title', value: { text: 'నా శీర్షిక', status: 'edited', sourceHash: textSourceHash(session.doc.brief.title), at: Date.now() } }], { origin: 'user', label: 'Edit translation' });
+      }
+      // Chunk 2 is with the model: the author rewrites l1 (committed as machine text by chunk 1).
+      if (calls === 2) edit('l1', 'నా స్వంత అనువాదం ఒకటి');
+      return tr.step(req);
+    };
+    // The linguist would "fix" l1 (major, with a suggestion) — but it is the author's line now.
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Meaning is off.', suggestion: 'చంద్రుడు ఎక్కడ?' } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, translator), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T(), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    const e = i18nOf(session.doc).editions.te;
+    // Without the fix: l9 = chunk 2's machine text ('reviewed'); l1 = the linguist's suggestion, 'Auto-corrected'.
+    expect(e.lines.l9).toMatchObject({ text: 'నా స్వంత అనువాదం తొమ్మిది', status: 'edited' });
+    expect(e.lines.l1).toMatchObject({ text: 'నా స్వంత అనువాదం ఒకటి', status: 'edited' });
+    expect(e.lines.l1.issue).toBeUndefined();
+    // Without the fix the title is chunk 1's machine text, then reviewed.
+    expect(editionTextEntry(session.doc, 'te', 'brief.title')).toMatchObject({ text: 'నా శీర్షిక', status: 'edited' });
+    // The author's lines and title were not sent to the linguist either (their words are not up for review).
+    const reviewed = String(roles(ctx, 'linguist')[0].messages[1].content);
+    expect(reviewed).not.toContain('"id":"l1"');
+    expect(reviewed).not.toContain('"id":"l9"');
+    expect(reviewed).not.toContain('"id":"brief.title"');
+    expect(editionReadiness(session.doc, 'te').publishable).toBe(true);
   });
 
   it('several languages run with concurrency ≤ 3; one chunk per ≤ 40 lines', async () => {
@@ -235,6 +278,119 @@ describe('the linguist review (always)', () => {
     expect(last.text).toContain('1 line flagged for a look');
   });
 
+  it('"Mixed with English": the linguist is told about the voice and a valid Hinglish line survives its review', async () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    // The prompt names the voice (without the fix it only says "the wrong script" is major and asks for spoken Hindi).
+    const mixed = linguistSystemPrompt(doc, 'hi');
+    expect(mixed).toMatch(/code-mixed|mixed with English|English words/i);
+    expect(mixed).not.toContain('or the wrong script');
+    // …in both spellings the translator may use: Devanagari (as the translator prompt asks) or Latin letters.
+    expect(mixed).toContain('common English words, written in Devanagari script or in Latin letters, are correct here');
+    expect(mixed).toContain('a script other than Devanagari (English words excepted)');
+    expect(linguistSystemPrompt(doc, 'hi', 'code_mixed')).toBe(mixed); // the edition's own voice is the default
+    expect(linguistSystemPrompt(sixPageKidsDoc(), 'hi')).toContain('or the wrong script');
+    expect(linguistSystemPrompt(doc, 'hi', 'formal')).toContain('polished written Hindi');
+
+    // Natural Hinglish (Devanagari + an English word) that software accepts under the code-mixed threshold.
+    const HINGLISH = 'चाँद कहाँ गया, bro?';
+    const session = newSession(doc);
+    const tr = fakeTranslator({ text: (id, lang) => (id === 'l1' && lang === 'hi' ? HINGLISH : undefined) });
+    // A reviewer that still objects to the English words (as the old prompt told it to) and offers pure Hindi.
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Wrong script: English words in a Hindi line.', suggestion: 'चाँद कहाँ गया?' } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, tr.step), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T({ languages: ['hi'] }), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    // The review call carried the edition's voice.
+    expect(String(roles(ctx, 'linguist')[0].messages[0].content)).toMatch(/mixed with English/);
+    const l1 = i18nOf(session.doc).editions.hi.lines.l1;
+    // Without the fix: l1.text === 'चाँद कहाँ गया?' with "Auto-corrected by review: Wrong script…".
+    expect(l1.text).toBe(HINGLISH);
+    expect(l1.status).toBe('reviewed');
+    // The reviewer's wording stays available as a one-tap suggestion, never applied over the author's voice.
+    expect(l1.issue).toMatchObject({ severity: 'minor', suggestion: 'चाँद कहाँ गया?' });
+    expect(l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(false);
+    expect(editionReadiness(session.doc, 'hi').publishable).toBe(true);
+  });
+
+  it('"Mixed with English": a MAJOR wrong-meaning verdict is still auto-corrected, whatever its note says about English', async () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    const WRONG = 'सूरज कहाँ गया, bro?'; // "where did the SUN go, bro?" — passes the code-mixed script check
+    const RIGHT = 'चाँद कहाँ गया, bro?';
+    const session = newSession(doc);
+    const tr = fakeTranslator({ text: (id, lang) => (id === 'l1' && lang === 'hi' ? WRONG : undefined) });
+    // The linguist writes its note in the source language, so a code-mixed note often names "English".
+    const linguist = fakeLinguist((id) => (id === 'l1' ? { verdict: 'fix', severity: 'major', issue: 'Wrong meaning: the English source says moon, not sun.', suggestion: RIGHT } : undefined));
+    const ctx = testContext(session, { llm: scriptedLlm({ translator: times(4, tr.step), linguist: times(2, linguist) }) });
+    const started = await runTranslation(ctx, T({ languages: ['hi'] }), { confirmed: true, origin: 'user' });
+    await started.done;
+    await ctx.settled();
+    const l1 = i18nOf(session.doc).editions.hi.lines.l1;
+    // Without the fix: l1 keeps 'सूरज…' as 'reviewed' with a minor note — a wrong-meaning line that can be published.
+    expect(l1.text).toBe(RIGHT);
+    expect(l1.status).toBe('reviewed');
+    expect(l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
+    expect(l1.issue?.suggestion).toBe(WRONG); // the original, to revert
+  });
+
+  it('"Mixed with English": only a suggestion that merely DROPS English words is the voice; a swapped English word is a real fix', () => {
+    const base = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'hi', patch: { register: 'code_mixed' } }]);
+    const [l1, l2] = base.pages[0].panels[0].lines;
+    const doc = applyOps(base, [
+      {
+        op: 'translations',
+        lang: 'hi',
+        lines: {
+          l1: { text: 'देखो, sun कहाँ गया?', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 },
+          l2: { text: 'टर्र टर्र, bro!', status: 'machine', sourceHash: lineSourceHash(l2), at: 1 }
+        }
+      }
+    ]);
+    const v = (id: string, issue: string, suggestion: string, reviewed: string) => [id, { id, gloss: 'g', verdict: 'fix' as const, severity: 'major' as const, issue, suggestion, reviewed }] as const;
+    const out = applyReview(
+      doc,
+      'hi',
+      new Map([
+        // The English word itself carries the wrong meaning: another English word fixes it (a real correction).
+        v('l1', 'Wrong meaning: the English source says moon, not sun.', 'देखो, moon कहाँ गया?', 'देखो, sun कहाँ गया?'),
+        // Dropping the English word is the reviewer objecting to the voice the author chose.
+        v('l2', 'Wrong script: English word in a Hindi line.', 'टर्र टर्र!', 'टर्र टर्र, bro!')
+      ]),
+      'PG',
+      2
+    );
+    const lines = (out.ops.find((o) => o.op === 'translations') as Extract<(typeof out.ops)[number], { op: 'translations' }>).lines;
+    expect(lines.l1).toMatchObject({ text: 'देखो, moon कहाँ गया?', status: 'reviewed', issue: { severity: 'minor', suggestion: 'देखो, sun कहाँ गया?' } });
+    expect(lines.l1.issue?.note.startsWith(AUTO_CORRECTED_NOTE)).toBe(true);
+    expect(lines.l2).toMatchObject({ text: 'टर्र टर्र, bro!', status: 'reviewed', issue: { severity: 'minor', suggestion: 'टर्र टर्र!' } });
+    expect(out.autoFixed).toBe(1);
+
+    // A Latin-script edition cannot tell its own words from English ones: dropping "No" is a meaning fix.
+    const es = applyOps(sixPageKidsDoc(), [
+      { op: 'edition', lang: 'es', patch: { register: 'code_mixed' } },
+      { op: 'translations', lang: 'es', lines: { l1: { text: 'No quiero ir, bro.', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 } } }
+    ]);
+    const esOut = applyReview(es, 'es', new Map([v('l1', 'Wrong meaning: the source does not say "not".', 'Quiero ir, bro.', 'No quiero ir, bro.')]), 'PG', 2);
+    expect(esOut.autoFixed).toBe(1);
+    expect((esOut.ops[0] as Extract<(typeof esOut.ops)[number], { op: 'translations' }>).lines.l1).toMatchObject({ text: 'Quiero ir, bro.', issue: { suggestion: 'No quiero ir, bro.' } });
+  });
+
+  it('applyReview leaves a line alone when its text is no longer the one the linguist was shown, or the author wrote it', () => {
+    const first = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const l1 = first.pages[0].panels[0].lines[0];
+    const doc = applyOps(first, [
+      { op: 'translations', lang: 'te', lines: { l1: { text: 'రచయిత మాట', status: 'machine', sourceHash: lineSourceHash(l1), at: 1 }, l2: { text: 'నా మాట', status: 'edited', sourceHash: lineSourceHash(first.pages[0].panels[0].lines[1]), at: 1 } } }
+    ]);
+    const verdicts = new Map([
+      // The review call went out with the machine text; the author rewrote l1 before the verdict came back.
+      ['l1', { id: 'l1', gloss: 'g', verdict: 'fix' as const, severity: 'major' as const, issue: 'Off.', suggestion: 'చంద్రుడు ఎక్కడ?', reviewed: 'యంత్ర మాట' }],
+      ['l2', { id: 'l2', gloss: 'g', verdict: 'ok' as const, severity: 'none' as const, issue: '', suggestion: '', reviewed: 'నా మాట' }]
+    ]);
+    const out = applyReview(doc, 'te', verdicts, 'PG', 2);
+    expect(out.ops).toEqual([]);
+    expect(out.reviewed + out.autoFixed + out.flagged).toBe(0);
+  });
+
   it('a review that fails leaves lines "waiting for review"; the next run reviews them without re-translating', async () => {
     const first = await run(sixPageKidsDoc(), { translator: times(4, fakeTranslator().step), linguist: [new Error('boom')] });
     expect(editionProgress(first.session.doc, 'te').unreviewed).toBeGreaterThan(5);
@@ -264,6 +420,32 @@ describe('money: quote, gate, BYOK, cancel, keys', () => {
     const session = newSession(doc);
     const ctx = testContext(session);
     expect((await estimateTranslation(ctx, T({ languages: ['Telugu', 'Hindi'] }))).usd).toBe(platform.estimate.usd);
+  });
+
+  it('the quote learns from the bill (a repair round and the review included): a run billed above its plan raises the next quote, bounded', async () => {
+    const doc = sixPageKidsDoc();
+    const keys = { openrouter: { key: 'sk-or-test', byok: false } };
+    const before = quoteTranslation(doc, keys, { languages: ['te'] }).perLanguage[0].usd;
+    // Chunk 1 needs a repair round (a script failure on the first answer): three translator calls for two chunks.
+    const tr = fakeTranslator({ text: (id, _l, attempt) => (id === 'l3' && attempt === 1 ? 'Look up there!' : undefined) });
+    // Every call bills far above its share of the plan while reporting almost no completion tokens: the old
+    // output-token calibration would LOWER the next quote (ratio clamped to 0.5 → factor 0.85).
+    const pricey = (req: LlmRequest) => ({ ...tr.step(req), costUsd: 0.05, completionTokens: 1 });
+    const { ctx, session } = await run(doc, { translator: times(6, pricey), linguist: times(2, fakeLinguist()) }, T(), keys);
+    expect(roles(ctx, 'translator')).toHaveLength(3);
+    const billed = session.doc.spend.entries.find((s) => s.kind === 'translate')!.usd;
+    expect(billed).toBeGreaterThan(before);
+    const after = quoteTranslation(sixPageKidsDoc(), keys, { languages: ['te'] }).perLanguage[0].usd;
+    expect(after).toBeGreaterThan(before);
+    expect(after).toBeCloseTo(before * 1.3, 3); // one EMA step: 0.7 × 1 + 0.3 × (ratio clamped at 2)
+    // A stopped run billed less than it planned: it does not pull the calibration down.
+    const s2 = newSession(sixPageKidsDoc());
+    const tr2 = fakeTranslator();
+    const ctx2 = testContext(s2, { keys, llm: scriptedLlm({ translator: [(req) => { s2.abort.abort(); return tr2.step(req); }, tr2.step], linguist: times(2, fakeLinguist()) }) });
+    const stopped = await runTranslation(ctx2, T(), { confirmed: true, origin: 'user' });
+    await stopped.done;
+    await ctx2.settled();
+    expect(quoteTranslation(sixPageKidsDoc(), keys, { languages: ['te'] }).perLanguage[0].usd).toBe(after);
   });
 
   it('confirm "always" and an over-budget quote open a gate (nothing runs until approved)', async () => {

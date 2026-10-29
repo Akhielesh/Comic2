@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { applyOps } from '../../../shared/comic/ops';
+import { i18nOf, lineSourceHash, translationStatus } from '../../../shared/comic/i18n';
+import { inverseOps } from '../../../shared/comic/undo';
 import { estimateMeasure, planLettering } from '../../../shared/comic/lettering/layout';
 import { resolveLetterStyle } from '../../../shared/comic/lettering/style';
 import { resolvePlacements } from './useLetterPlans';
@@ -13,6 +15,7 @@ import {
   distributeOps,
   duplicateLineOps,
   easyShapeOps,
+  findLineRef,
   fixSafeAreaOps,
   isLinked,
   linkOps,
@@ -245,11 +248,50 @@ describe('lines', () => {
 
   it('moves a crowded line to another panel and commits inline text', () => {
     const { page } = ctx();
+    // One structural move (never a delete + create); the speaker is re-picked only when the new panel lacks them.
     expect(moveLineToPanelOps(page, 'pg_1_l4', 'pg_1_p2')).toEqual([
-      { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', id: 'pg_1_l4', patch: null },
-      { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p2', id: 'pg_1_l4', patch: { kind: 'speech', speakerId: 'ch_maya', text: 'You owe me an explanation, Maya.' }, index: 0 }
+      { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l4', toPanelId: 'pg_1_p2', index: 0 },
+      { op: 'line', pageId: 'pg_1', panelId: 'pg_1_p2', id: 'pg_1_l4', patch: { speakerId: 'ch_maya' } }
     ]);
+    expect(moveLineToPanelOps(page, 'pg_1_l4', 'pg_1_p3')).toEqual([]);
     expect(textEditOps(page, 'pg_1_l4', 'You owe me an explanation, Maya.')).toEqual([]);
     expect(textEditOps(page, 'pg_1_l4', 'Talk.')).toEqual([{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p3', id: 'pg_1_l4', patch: { text: 'Talk.' } }]);
+  });
+
+  it('"Move to panel N" keeps the line’s translations, their review state and the edition balloon; Undo puts it back', () => {
+    const { doc, page } = ctx((d) => {
+      const line = d.pages[0].panels[1].lines[0]; // pg_1_l2, Maya's whisper
+      d.i18n = {
+        glossary: [],
+        editions: {
+          te: {
+            lang: 'te',
+            register: 'everyday',
+            lines: { pg_1_l2: { text: 'ఇంకొక్కటే…', status: 'reviewed', sourceHash: lineSourceHash(line), at: 1, gloss: 'Just one more' } },
+            balloons: { pg_1_l2: { x: 0.1, y: 0.5, w: 0.22, pinned: true } }
+          }
+        }
+      };
+    });
+    const ops = moveLineToPanelOps(page, 'pg_1_l2', 'pg_1_p3');
+    // The line travels whole; its stored balloon is released so the placer sets it in panel 3. Nothing is deleted.
+    expect(ops).toEqual([
+      { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l2', toPanelId: 'pg_1_p3', index: 0 },
+      { op: 'balloons', pageId: 'pg_1', balloons: page.balloons.filter((b) => b.lineId !== 'pg_1_l2') }
+    ]);
+    const after = applyOps(doc, ops);
+    const moved = findLineRef(after.pages[0], 'pg_1_l2')!;
+    expect(moved.panel.id).toBe('pg_1_p3');
+    expect(moved.index).toBe(0);
+    expect(moved.line).toBe(findLineRef(page, 'pg_1_l2')!.line);
+    // The reviewed Telugu line and the edition's own balloon survive, exactly as they were (paid, reviewed work).
+    expect(i18nOf(after).editions.te.lines.pg_1_l2).toEqual({ text: 'ఇంకొక్కటే…', status: 'reviewed', sourceHash: lineSourceHash(moved.line), at: 1, gloss: 'Just one more' });
+    expect(i18nOf(after).editions.te.balloons.pg_1_l2).toEqual({ x: 0.1, y: 0.5, w: 0.22, pinned: true });
+    expect(translationStatus(after, 'te', moved.line)).toBe('reviewed');
+    // Undo: back in panel 2 with its stored balloon.
+    const undone = applyOps(after, inverseOps(doc, ops));
+    expect(undone.pages[0].panels.map((p) => p.lines.map((l) => l.id))).toEqual(page.panels.map((p) => p.lines.map((l) => l.id)));
+    expect(undone.pages[0].balloons).toEqual(page.balloons);
+    expect(i18nOf(undone)).toEqual(i18nOf(doc));
   });
 });

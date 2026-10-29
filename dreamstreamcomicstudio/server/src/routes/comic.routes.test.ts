@@ -4,7 +4,7 @@ import express from 'express';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { emptyRender, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
+import { emptyRender, type Card, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
 import type { StudioUsage } from '../../../shared/comic/capabilities.js';
@@ -42,6 +42,7 @@ import {
   isCostlyRequest,
   legacyImportOps,
   parseFocus,
+  parseOptionAnswer,
   parseStreamRequest,
   rehomeLegacyRefs,
   restrictedRefusal
@@ -350,18 +351,55 @@ describe('POST /projects/:id/stream', () => {
     expect(store.docs.get('proj-1')!.doc.conversation.map((m) => m.text)).toEqual(['one', 'First done.']);
   });
 
-  it('a client disconnect aborts the director loop (not the session) and still persists', async () => {
+  it('a follow-up sent while the conversation memory folds is accepted: the fold runs after the turn lock', async () => {
+    const doc = plannedDoc();
+    doc.conversation = Array.from({ length: 45 }, (_, i) => ({ id: `m${i}`, role: i % 2 ? ('assistant' as const) : ('user' as const), text: `msg ${i}`, at: i }));
+    seed(doc);
+    let releaseFold!: () => void;
+    const foldHeld = new Promise<void>((r) => (releaseFold = r));
+    let markFolding!: () => void;
+    const folding = new Promise<void>((r) => (markFolding = r));
+    llm.script.director = [
+      { text: 'Noted.' },
+      async () => {
+        markFolding();
+        await foldHeld;
+        return { text: '- Likes short pages.' };
+      },
+      { text: 'Busier it is.' }
+    ];
+    const first = stream('proj-1', { kind: 'message', text: 'keep pages short' });
+    await folding;
+    // The reply has landed (the client unlocks the composer); the fold's model call is still out.
+    const second = await stream('proj-1', { kind: 'message', text: 'Make the market busier.' });
+    // Before: the fold ran inside the turn lock and this was refused with BUSY.
+    expect(second.events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(second.events.some((e) => e.type === 'delta' && e.text === 'Busier it is.')).toBe(true);
+    releaseFold();
+    const firstResult = await first;
+    expect(firstResult.events[firstResult.events.length - 1].type).toBe('done');
+    const saved = store.docs.get('proj-1')!.doc;
+    expect(saved.conversation.slice(-4).map((m) => m.text)).toEqual(['keep pages short', 'Noted.', 'Make the market busier.', 'Busier it is.']);
+    expect(saved.memory).toMatch(/^- Likes short pages\.\n⟦through:m\d+⟧$/);
+  });
+
+  it('a client disconnect is not a Stop: the director turn finishes, commits its reply and persists', async () => {
     seed();
     let markWaiting!: () => void;
     const waiting = new Promise<void>((r) => (markWaiting = r));
-    let sawAbort!: () => void;
-    const aborted = new Promise<void>((r) => (sawAbort = r));
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let abortedDuringCall = false;
     llm.script.director = [
       async (req) => {
         markWaiting();
-        await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
-        sawAbort();
-        return new StudioError('CANCELLED', 'Cancelled.');
+        // Like the real client: an aborted signal ends the call; otherwise the answer arrives.
+        await Promise.race([held, new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }))]);
+        if (req.signal!.aborted) {
+          abortedDuringCall = true;
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+        return { text: 'Here is the plan.' };
       }
     ];
     const client = new AbortController();
@@ -372,13 +410,138 @@ describe('POST /projects/:id/stream', () => {
       signal: client.signal
     }).then((r) => r.text()).catch(() => 'closed');
     await waiting;
+    // The phone's network blinks (or the app is backgrounded): the socket closes mid-turn.
     client.abort();
-    await aborted;
     await pending;
     await new Promise((r) => setTimeout(r, 30));
+    // Before the fix this was a Stop: the model call was cancelled and no reply was ever committed.
+    expect(abortedDuringCall).toBe(false);
+    release();
+    const docOf = () => store.docs.get('proj-1')!.doc;
+    for (let i = 0; i < 100 && docOf().conversation.length < 2; i += 1) await new Promise((r) => setTimeout(r, 20));
     const session = peekStudioSession('proj-1')!;
-    expect(session.abort.signal.aborted).toBe(false);
-    expect(store.docs.get('proj-1')!.doc.conversation.map((m) => m.role)).toEqual(['user']);
+    expect(session.abort.signal.aborted).toBe(false); // the session was never stopped
+    expect(docOf().conversation.map((m) => m.text)).toEqual(['draw something', 'Here is the plan.']);
+    expect(docOf().conversation[1].text).not.toContain('(stopped)');
+  });
+
+  describe('Stop is scoped to what it says it stops', () => {
+    /** Four planned pages with their sheets drawn: while page 1's image is held, pages 2–4 wait in the queue. */
+    const fourPageDoc = () => {
+      const doc = plannedDoc();
+      doc.planStatus = 'approved';
+      const p3 = doc.pages[2];
+      doc.pages.push({
+        ...p3,
+        id: 'pg_4',
+        n: 4,
+        summary: 'Page 4 beat',
+        panels: p3.panels.map((p) => ({
+          ...p,
+          id: p.id.replace('pn_3', 'pn_4'),
+          action: `Action 4.${p.n}`,
+          lines: p.lines.map((l) => ({ ...l, id: l.id.replace('ln_3', 'ln_4'), text: 'Line on page 4' }))
+        })),
+        render: emptyRender(),
+        balloons: []
+      });
+      doc.format = { ...doc.format, pageCount: 4 };
+      // Sheets already drawn: the run goes straight to the pages.
+      const drawn = (path: string) => ({ ...emptyRender(), status: 'ready' as const, asset: { path, source: 'generated' as const, at: 1 } });
+      doc.cast = doc.cast.map((c) => ({ ...c, sheet: drawn(`u/user-1/p/proj-1/img/${c.id}.webp`) }));
+      doc.places = doc.places.map((p) => ({ ...p, sheet: drawn(`u/user-1/p/proj-1/img/${p.id}.webp`) }));
+      return doc;
+    };
+    const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+    const live = () => peekStudioSession('proj-1')!.doc;
+    const statuses = (doc: ComicDoc) => doc.pages.map((p) => p.render.status);
+
+    /** Turn 1 asks the director to draw every page; images are held, so pages 2–4 stay queued after the reply. */
+    const drawEverything = async () => {
+      seed(fourPageDoc());
+      let releaseImages!: () => void;
+      const imagesHeld = new Promise<void>((r) => (releaseImages = r));
+      images.behave = async () => {
+        await imagesHeld;
+        return undefined;
+      };
+      llm.script.director = [{ toolCalls: [{ id: 'r', name: 'render_pages', arguments: '{}' }] }, { text: 'Drawing all four pages.' }];
+      const drawing = stream('proj-1', { kind: 'message', text: 'draw all the pages' });
+      for (let i = 0; i < 300 && !(images.calls.length >= 1 && live().conversation.some((m) => m.text === 'Drawing all four pages.')); i += 1) await tick();
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      return { drawing, releaseImages };
+    };
+
+    it('"Stop the director" during turn 2 stops turn 2 only: pages turn 1 queued keep drawing', async () => {
+      const { drawing, releaseImages } = await drawEverything();
+      let markWaiting!: () => void;
+      const waiting = new Promise<void>((r) => (markWaiting = r));
+      let directorStopped = false;
+      llm.script.director = [
+        async (req) => {
+          markWaiting();
+          await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
+          directorStopped = true;
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+      ];
+      const turn2 = stream('proj-1', { kind: 'message', text: 'Make Maya taller.' });
+      await waiting;
+      expect(await (await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} })).json()).toEqual({ ok: true });
+      await turn2;
+      expect(directorStopped).toBe(true);
+      // Before: one session-wide abort — the pages turn 1 queued were dropped by turn 2's Stop.
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      releaseImages();
+      await drawing;
+      expect(statuses(store.docs.get('proj-1')!.doc)).toEqual(['ready', 'ready', 'ready', 'ready']);
+      expect(images.calls).toHaveLength(4);
+    });
+
+    it('"Stop the director" still stops what that turn itself queued', async () => {
+      seed(fourPageDoc());
+      let releaseImages!: () => void;
+      const imagesHeld = new Promise<void>((r) => (releaseImages = r));
+      images.behave = async () => {
+        await imagesHeld;
+        return undefined;
+      };
+      let markWaiting!: () => void;
+      const waiting = new Promise<void>((r) => (markWaiting = r));
+      llm.script.director = [
+        { toolCalls: [{ id: 'r', name: 'render_pages', arguments: '{}' }] },
+        async (req) => {
+          markWaiting();
+          await new Promise<void>((r) => req.signal!.addEventListener('abort', () => r(), { once: true }));
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+      ];
+      const turn = stream('proj-1', { kind: 'message', text: 'draw all the pages' });
+      await waiting;
+      for (let i = 0; i < 300 && images.calls.length < 1; i += 1) await tick();
+      expect(statuses(live())).toEqual(['rendering', 'queued', 'queued', 'queued']);
+      await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} });
+      releaseImages();
+      await turn;
+      const saved = statuses(store.docs.get('proj-1')!.doc);
+      expect(saved[0]).toBe('ready');
+      expect(saved.slice(1).some((s) => s === 'ready' || s === 'queued' || s === 'rendering')).toBe(false);
+      expect(images.calls).toHaveLength(1);
+    });
+
+    it('with no director turn in flight, Stop is "Stop drawing": queued pages are dropped, the one drawing is kept', async () => {
+      const { drawing, releaseImages } = await drawEverything();
+      // The reply has landed; the next message came and went (its controller replaced turn 1's).
+      llm.script.director = [{ text: 'Sure.' }];
+      await stream('proj-1', { kind: 'message', text: 'Make Maya taller.' });
+      expect(await (await api('/api/comic/projects/proj-1/cancel', { user: 'user-1', body: {} })).json()).toEqual({ ok: true });
+      releaseImages();
+      await drawing;
+      const saved = statuses(store.docs.get('proj-1')!.doc);
+      expect(saved[0]).toBe('ready');
+      expect(saved.slice(1).some((s) => s === 'ready' || s === 'queued' || s === 'rendering')).toBe(false);
+      expect(images.calls).toHaveLength(1);
+    });
   });
 
   it('stores image attachments and turns a long text file into the source script', async () => {
@@ -657,6 +820,15 @@ describe('parseStreamRequest', () => {
     }
     for (const type of ['translate', 'render_pages', 'render_cover']) expect(() => parseStreamRequest({ kind: 'action', action: { type } })).not.toThrow();
     for (const type of ['', '__proto__', 'constructor', 'render_everything', 'restore_render ']) expect(() => parseStreamRequest({ kind: 'action', action: { type } })).toThrow('Unknown action');
+  });
+
+  it('parseOptionAnswer keeps a valid card reference and drops anything malformed (never failing the message)', () => {
+    expect(parseOptionAnswer({ id: 'card_1', choiceIds: ['opt_1', 'opt_1', 'bad id!', 4, 'opt_2'] })).toEqual({ id: 'card_1', choiceIds: ['opt_1', 'opt_2'] });
+    expect(parseOptionAnswer({ id: 'card_1', custom: '  half   of it ' })).toEqual({ id: 'card_1', custom: 'half of it' });
+    expect(parseOptionAnswer({ id: 'card_1', choiceIds: Array.from({ length: 40 }, (_, i) => `o${i}`) })!.choiceIds).toHaveLength(24);
+    for (const raw of [undefined, 'card_1', { id: '<x>', choiceIds: ['a'] }, { id: 'card_1' }, { id: 'card_1', choiceIds: [], custom: '   ' }]) expect(parseOptionAnswer(raw)).toBeUndefined();
+    // The shared request shape is untouched: the reference rides beside it.
+    expect(parseStreamRequest({ kind: 'message', text: 'Yes', card: { id: 'card_1', choiceIds: ['opt_1'] } })).toEqual({ kind: 'message', text: 'Yes' });
   });
 
   it('passes focus through, keeping only valid parts', () => {
@@ -998,6 +1170,56 @@ describe('message pipeline: screen → intent router → director', () => {
     llm.script.director = [{ text: 'Sure.' }];
     await stream('proj-1', { kind: 'message', text: 'make Maya taller' });
     expect(runDirectorTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a tapped option is recorded on its card even when the free intent router answers it (no director turn)', async () => {
+    const doc = plannedDoc();
+    doc.conversation = [
+      {
+        id: 'a0',
+        role: 'assistant',
+        text: 'What next?',
+        at: 1,
+        cards: [{ type: 'options', id: 'card_next', question: 'What next?', choices: [{ id: 'opt_pages', label: 'See the pages', reply: 'Show me the pages' }, { id: 'opt_draw', label: 'Draw page 1' }] }]
+      }
+    ];
+    seed(doc);
+    intent = (text) => (/show me the pages/i.test(text) ? { kind: 'show_pages', reply: '3 pages, 9 panels.', cards: [], nextSteps: [] } : null);
+    await stream('proj-1', { kind: 'message', text: 'Show me the pages' });
+    expect(runDirectorTurn).not.toHaveBeenCalled();
+    const card = store.docs.get('proj-1')!.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>;
+    // Before: only the director recorded answers, so a chip the router answered stayed open after a reload.
+    expect(card.answered).toEqual(['opt_pages']);
+  });
+
+  it('the client can name the card it answers: the tapped card among same labels, and a typed custom answer', async () => {
+    const yesNo = (id: string): Card => ({
+      type: 'options',
+      id,
+      question: 'Keep it?',
+      choices: [
+        { id: `${id}_y`, label: 'Yes' },
+        { id: `${id}_n`, label: 'No' }
+      ],
+      allowCustom: true
+    });
+    const doc = plannedDoc();
+    doc.conversation = [
+      { id: 'a0', role: 'assistant', text: 'Keep the market?', at: 1, cards: [yesNo('card_old')] },
+      { id: 'a1', role: 'assistant', text: 'Keep the chase?', at: 2, cards: [yesNo('card_new')] }
+    ];
+    seed(doc);
+    llm.script.director = [{ text: 'Keeping the market.' }, { text: 'Half the chase, then.' }];
+    await stream('proj-1', { kind: 'message', text: 'Yes', card: { id: 'card_old', choiceIds: ['card_old_y'] } });
+    const answered = (id: string) =>
+      (store.docs.get('proj-1')!.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.id === id) as Extract<Card, { type: 'options' }>).answered;
+    // The text alone ("Yes") would have answered the newest card.
+    expect(answered('card_old')).toEqual(['card_old_y']);
+    expect(answered('card_new')).toBeUndefined();
+    await stream('proj-1', { kind: 'message', text: 'Only the first half', card: { id: 'card_new', custom: 'Only the first half' } });
+    expect(answered('card_new')).toEqual(['Only the first half']);
+    // The director's turn did not record a second time (the route already matched the message).
+    expect(vi.mocked(runDirectorTurn).mock.calls.every(([, input]) => input.optionAnswerHandled === true)).toBe(true);
   });
 
   it('the real intent hook makes no LLM call for "show me the pages"', async () => {

@@ -73,6 +73,7 @@ const {
   getAllowanceStatus,
   isUsageExemptAdmin,
   listUsageBudgets,
+  ownKeyPath,
   parseBudgetStatus,
   setUsageBudgetRpc,
   standardPageProviderUsd,
@@ -288,6 +289,60 @@ describe('user-facing messages (PERCENT only, honest hard stop)', () => {
     expect(partial.message).toContain('about 4% left');
     const down = buildAllowanceExhaustedDetails({ pctLeft: 100, canFallbackToByok: false, byokFallbackMode: 'never', unavailable: true });
     expect(down).toMatchObject({ reason: 'usage_budget_unavailable', message: USAGE_UNAVAILABLE_MESSAGE });
+  });
+
+  it('a user whose own key is already on file is never told to add one — the sentence says the key is on file and what happens to it', () => {
+    // Without the fix every sentence ended with "add your own API key in Settings → API keys".
+    const ask = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'ask' });
+    expect(ask.message).not.toMatch(/add your own API key/i);
+    expect(ask.message).toContain("continue on your own key (it's on file) in Settings → API keys");
+    expect(ask.message).toContain('top-up');
+    const never = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'never' });
+    expect(never.message).toMatch(/set to never be used/);
+    expect(never.message).toContain('Settings → API keys');
+    const auto = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'auto' });
+    expect(auto.message).toMatch(/takes over/);
+    expect(auto.message).not.toMatch(/add your own API key/i);
+    const partial = buildAllowanceExhaustedDetails({ pctLeft: 4, canFallbackToByok: true, byokFallbackMode: 'ask' });
+    expect(partial.message).toContain('about 4% left');
+    expect(partial.message).toContain("continue on your own key (it's on file)");
+    // During an outage the key cannot take over on its own (the status is unreadable): the way
+    // forward is the explicit switch in Settings, whatever the mode.
+    const down = buildAllowanceExhaustedDetails({ pctLeft: 100, canFallbackToByok: true, byokFallbackMode: 'auto', unavailable: true });
+    expect(down.message).toContain('nothing was spent');
+    expect(down.message).toContain("switch to your own key (it's on file) in Settings → API keys");
+    expect(down.message).not.toMatch(/takes over|add your own API key/i);
+    for (const d of [ask, never, auto, partial, down]) expect(d.message).not.toMatch(MONEY);
+    // No key on file: the contract copy is unchanged.
+    expect(buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: false, byokFallbackMode: 'auto' }).message).toContain(
+      'add your own API key in Settings → API keys'
+    );
+    expect(allowanceExhaustedMessage('2026-11-01T00:00:00.000Z', { canFallbackToByok: true, byokFallbackMode: 'ask' })).toContain(
+      "November 1 — or continue on your own key (it's on file) in Settings → API keys to keep going now."
+    );
+  });
+
+  it("'auto' with usage still left never claims the key takes over now — it does only once the usage is fully used up", () => {
+    // The account keys inject the stored key only when the status reads exhausted (used >= budget),
+    // so with 4% left the next request runs on the platform key again and is refused again.
+    const notEnough = buildAllowanceExhaustedDetails({ pctLeft: 4, canFallbackToByok: true, byokFallbackMode: 'auto' });
+    expect(notEnough.message).toContain('about 4% left');
+    expect(notEnough.message).not.toMatch(/takes over from here/);
+    expect(notEnough.message).toMatch(/fully used up/);
+    // The way to use it now is real: with DreamStream usage off, the stored key is what runs.
+    expect(notEnough.message).toContain('turning DreamStream usage off in Settings → API keys');
+    expect(notEnough.message).not.toMatch(MONEY);
+    expect(usageNotEnoughMessage(4, { canFallbackToByok: true, byokFallbackMode: 'auto' })).not.toMatch(/takes over from here/);
+    // Used up: the key does take over from here, in both the monthly and the lifetime sentence.
+    expect(buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'auto' }).message).toMatch(
+      /takes over from here/
+    );
+    expect(allowanceExhaustedMessage('2026-11-01T00:00:00.000Z', { canFallbackToByok: true, byokFallbackMode: 'auto' })).toMatch(
+      /takes over from here/
+    );
+    // ownKeyPath on its own (as the comic denial card may use it) defaults to the conservative sentence.
+    expect(ownKeyPath({ canFallbackToByok: true, byokFallbackMode: 'auto' })).not.toMatch(/takes over from here/);
+    expect(ownKeyPath({ canFallbackToByok: true, byokFallbackMode: 'auto' }, true)).toMatch(/takes over from here/);
   });
 
   it('emits info notices at 30/70, warn at 90, nothing for 100 — in percent', () => {

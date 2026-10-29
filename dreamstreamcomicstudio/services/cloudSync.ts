@@ -21,8 +21,15 @@
 // in the browser with a hardcoded secret shipped in the public bundle — decryptable
 // by anyone — and rode direct Supabase table access. Legacy rows are decrypted by
 // the server on read and re-encrypted properly on the next push.
+//
+// A read that FAILS is never "no snapshot". Right after a sign-out → sign-in (or an account
+// switch) the local state has just been purged, so seeding the account from it would replace
+// the account's keys, model choices, chat memory and custom agents with nothing. When the read
+// fails, nothing is applied or pushed — pushes stay off until a read succeeds — and the login
+// sync is run again (contexts/AuthContext).
 
 import { get, put } from './apiClient';
+import { appStatus } from './appStatus';
 import {
   listKeys,
   replaceAllKeys,
@@ -170,16 +177,48 @@ const applySnapshot = (snap: CloudSnapshot, userId: string) => {
   }
 };
 
-/** Read the cloud snapshot for the signed-in user. Null if none / unreadable. */
-export const pullCloudSnapshot = async (): Promise<CloudSnapshot | null> => {
+/** What a read of the account snapshot found: a snapshot, nothing (an account new to the cloud), or no answer. */
+export type CloudRead =
+  | { kind: 'snapshot'; snapshot: CloudSnapshot }
+  | { kind: 'none' }
+  | { kind: 'failed'; reason: string };
+
+/**
+ * Read the account snapshot. 'none' ONLY for a good answer that holds no snapshot and gives
+ * no `reason` — the account has never synced. Everything else is 'failed': a request that did
+ * not get through (status 0), a non-2xx answer (a proxy's 502/503 while the backend wakes, a
+ * 429), a `reason` from the server (a row it cannot read — `unreadable` —, no storage), or a
+ * snapshot version this build does not know. A failed read is never "no snapshot".
+ */
+export const readCloudSnapshot = async (): Promise<CloudRead> => {
+  let res: { ok?: boolean; data?: CloudSnapshot | null; reason?: string } | null | undefined;
   try {
-    const res = await get<{ ok: boolean; data: CloudSnapshot | null }>('/api/account/settings');
-    const snap = res?.data;
-    return snap && (snap.version === 1 || snap.version === 2) ? snap : null;
-  } catch {
-    return null;
+    res = await get<{ ok: boolean; data: CloudSnapshot | null; reason?: string }>('/api/account/settings');
+  } catch (err) {
+    const status = (err as { status?: unknown } | null)?.status;
+    return { kind: 'failed', reason: typeof status === 'number' && status > 0 ? `http_${status}` : 'network' };
   }
+  if (typeof res?.reason === 'string' && res.reason) return { kind: 'failed', reason: res.reason };
+  if (!res?.ok) return { kind: 'failed', reason: 'not_ok' };
+  const snap = res.data;
+  if (snap == null) return { kind: 'none' };
+  if (typeof snap !== 'object' || (snap.version !== 1 && snap.version !== 2)) {
+    return { kind: 'failed', reason: 'unsupported_snapshot' };
+  }
+  return { kind: 'snapshot', snapshot: snap };
 };
+
+/** Read the cloud snapshot for the signed-in user. Null if none / unreadable (readCloudSnapshot tells the two apart). */
+export const pullCloudSnapshot = async (): Promise<CloudSnapshot | null> => {
+  const read = await readCloudSnapshot();
+  return read.kind === 'snapshot' ? read.snapshot : null;
+};
+
+// A push replaces the account's whole snapshot, so it is allowed only once this page has read
+// the account's copy and merged it in: the account whose snapshot the login sync read (or found
+// absent) in this page's life. Until then a local change stays local — the next successful
+// login sync merges and pushes it — instead of overwriting a copy this device never saw.
+let cloudReadFor: string | null = null;
 
 /** Push the current local config to the account (server encrypts at rest). */
 export const pushCloudSnapshot = async (userId: string): Promise<void> => {
@@ -187,6 +226,7 @@ export const pushCloudSnapshot = async (userId: string): Promise<void> => {
   // queued for an account that has since signed out or been switched away from would
   // otherwise upload one account's keys / chat memory with the next account's token.
   if (!isLocalOwner(userId)) return;
+  if (cloudReadFor !== userId.toLowerCase()) return;
   try {
     const snapshot = buildLocalSnapshot(userId);
     await put('/api/account/settings', { data: snapshot });
@@ -205,27 +245,46 @@ const refreshAccountKeyMeta = async (userId: string): Promise<void> => {
   }
 };
 
+export type LoginSyncOutcome = 'synced' | 'failed' | 'skipped';
+
+/** Shown when the account snapshot could not be read at sign-in (nothing was changed). */
+export const CLOUD_SYNC_READ_FAILED_NOTICE =
+  'Couldn’t load your account settings, so nothing was changed. They’ll load on the next try — or reload the page.';
+
 /**
  * Full login-time reconciliation: pull cloud, merge with local, apply, push back.
  * Makes every device converge on the same union of keys + the latest settings.
+ * 'failed': the account's snapshot could not be read, so nothing was applied or pushed (the
+ * account keeps its copy, this device its local state, pushes stay off) — the caller runs it
+ * again. 'skipped': this device's data isn't this account's, nothing to reconcile.
  */
-export const syncOnLogin = async (userId: string): Promise<void> => {
+export const reconcileOnLogin = async (userId: string): Promise<LoginSyncOutcome> => {
   try {
-    if (!isLocalOwner(userId)) return;
+    if (!isLocalOwner(userId)) return 'skipped';
+    cloudReadFor = null;
     void refreshAccountKeyMeta(userId);
 
-    const cloud = await pullCloudSnapshot();
+    const read = await readCloudSnapshot();
     // The pull is a network round trip: the device may have signed out or switched accounts
     // meanwhile. Then this account's snapshot must not be written into local storage (it
     // would sit there with no owner, or under someone else's), nor local data pushed to it.
-    if (!isLocalOwner(userId)) return;
+    if (!isLocalOwner(userId)) return 'skipped';
+    if (read.kind === 'failed') {
+      // A backend without account storage has nothing to load and nothing to lose: no notice.
+      if (read.reason !== 'storage_disabled') {
+        appStatus.report('warn', CLOUD_SYNC_READ_FAILED_NOTICE, { detail: read.reason, source: 'cloud-sync' });
+      }
+      return 'failed';
+    }
+    cloudReadFor = userId.toLowerCase();
     const local = buildLocalSnapshot(userId);
 
-    if (!cloud) {
+    if (read.kind === 'none') {
       // First time on the cloud: seed it from whatever this device has locally.
       await pushCloudSnapshot(userId);
-      return;
+      return 'synced';
     }
+    const cloud = read.snapshot;
 
     const merged: CloudSnapshot = {
       version: 2,
@@ -248,9 +307,16 @@ export const syncOnLogin = async (userId: string): Promise<void> => {
     // Push the converged result so other devices pick up anything new this device had
     // (and legacy client-encrypted rows get re-encrypted server-side).
     await pushCloudSnapshot(userId);
+    return 'synced';
   } catch (err) {
     console.error('Cloud sync (login) failed', err);
+    return 'failed';
   }
+};
+
+/** reconcileOnLogin for callers that don't act on the outcome. */
+export const syncOnLogin = async (userId: string): Promise<void> => {
+  await reconcileOnLogin(userId);
 };
 
 // ---- Debounced push wiring -----------------------------------------------------

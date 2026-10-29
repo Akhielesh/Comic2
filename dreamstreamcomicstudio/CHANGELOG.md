@@ -376,6 +376,39 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Two-step sign-in, "Not you?" and your signed-in devices (2026-10-29, ADR 0006 Phase 0):**
+  **Settings → Security** turns on two-step sign-in with any authenticator app. It asks for your
+  password again first (with a Forgot password link), gives you 10 one-time recovery codes for a
+  lost phone, and accepts a code from any authenticator you've added. Devices already signed in,
+  the nursery camera included, keep watching; only admin actions (inviting, removing people,
+  share links) ask for the code. The same panel lists your signed-in devices with **Sign out**
+  for each, and **Sign out everywhere**: every device has to sign in again (it warns that a
+  nursery camera stops watching too) and open monitors and calls disconnect. A device only
+  shows as signed out once the server confirms it; otherwise you get **Finish signing out**.
+  Every new sign-in emails a **Not you?** link: it signs every device out, removes
+  any authenticator or recovery codes added since, closes what the intruder had open and starts
+  a password reset. Signing out also closes baby alerts left on screen, so **I'm on it** can't
+  answer for a signed-out parent, and tapping it twice counts once. Two-step sign-in and the
+  sign-in emails switch on once the database update is applied; until then the panel says
+  "isn't switched on for DreamStream accounts yet" and nothing changes on your account.
+- **End-to-end encrypted baby monitor relay, ready in the app (2026-10-29, ADR 0006 Phase 0):**
+  the camera and viewer can now seal video that passes through our server, and the call set-up
+  messages, with the nursery's own key, so the server forwards bytes it can't read. It switches
+  on with the nursery room update that comes next; until then the monitor works exactly as
+  before. Built so a security feature never costs the picture or sound: a device without the
+  key keeps asking and the camera falls back rather than going dark, a wrong clock on a phone
+  doesn't block direct calls, and repeated alerts are merged only when they're the same alert
+  from the same camera and zone. With it come a Devices list and a Security log per nursery
+  for parents.
+- **Live server hardening (2026-10-29, ADR 0006 Phase 0):** the live server accepts requests only
+  from DreamStream's own sites, rate-limits sign-in-heavy and guest routes (a bad share-link
+  attempt from one address can no longer use up a nursery's guest slots), reports a member
+  removal as done only when the nursery confirmed it, and keeps signed-out devices off push
+  alerts. Admin → Costs → Stream Studio gains **Baby monitor health** (7-day medians against the
+  Phase 0 budgets, in the units Cloudflare actually measures) and security signals (browser
+  policy reports, sign-in alerts, kicks, refused two-step attempts). Most of this waits on the
+  database update and live server settings in `docs/infrastructure/phase0-owner-checklist.md`;
+  until then the app says plainly when it couldn't confirm something.
 - **Account and session protections for the baby monitor (2026-10-28, ADR 0006 Phase 0):** the
   live server now checks sign-in tokens itself (faster, and a revoked session stops working
   everywhere), people who turned on two-step verification must use it for nursery actions, and

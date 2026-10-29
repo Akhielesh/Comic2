@@ -51,6 +51,9 @@ begin
   fn := 'live_device_list';      r := public.live_device_list();                                return next;
   fn := 'live_device_revoke';    r := public.live_device_revoke(v_dev);                         return next;
   fn := 'live_security_events';  r := public.live_security_events(5);                           return next;
+  fn := 'live_mfa_status';       r := public.live_mfa_status();                                 return next;
+  fn := 'live_mfa_activate';     r := public.live_mfa_activate(nullif(current_setting('t.factor', true), '')::uuid); return next;
+  fn := 'live_mfa_codes_regenerate'; r := public.live_mfa_codes_regenerate();                   return next;
   fn := 'monitor_delete';        r := public.monitor_delete(p_spare);                           return next;
 end $$;
 grant execute on function pg_temp.member_rpcs(uuid, uuid, uuid) to authenticated;
@@ -80,6 +83,7 @@ begin
             and user_id = 'bbbbbbbb-0000-0000-0000-00000000000b') = 'viewer', p_why || ': Bob''s role changed or he was removed';
   assert (select display_name from public.live_profiles where user_id = 'aaaaaaaa-0000-0000-0000-00000000000a') = 'Ada', p_why || ': profile renamed';
   assert not exists (select 1 from public.live_devices), p_why || ': a device was enrolled';
+  assert not exists (select 1 from public.live_mfa_recovery_codes), p_why || ': recovery codes were made';
 end $$;
 
 -- Run every member RPC as the current claims and expect each to refuse with p_error.
@@ -94,7 +98,7 @@ begin
     assert coalesce(x.r->>'ok', 'false') = 'false', format('%s said ok while refusing: %s', x.fn, x.r);
     assert coalesce(x.r->>'member', 'false') = 'false', format('%s still says member: %s', x.fn, x.r);
   end loop;
-  assert n = 17, n::text;
+  assert n = 20, n::text;
 end $$;
 grant execute on function pg_temp.expect_all_refused(text) to authenticated;
 
@@ -128,8 +132,12 @@ select pg_temp.expect_all_refused('session_revoked');
 reset role;
 select pg_temp.assert_untouched('another person''s session');
 
--- 5. Ada turns on two-step sign-in. Her password alone (aal1) — e.g. phished — gets nothing.
-insert into auth.mfa_factors (user_id, status) values ('aaaaaaaa-0000-0000-0000-00000000000a', 'verified');
+-- 5. Ada turns on two-step sign-in (switched on here a day ago, so this session was signed in
+-- after it). Her password alone (aal1) — e.g. phished — gets nothing.
+insert into auth.mfa_factors (id, user_id, status) values ('fafafafa-0000-0000-0000-00000000000f', 'aaaaaaaa-0000-0000-0000-00000000000a', 'verified');
+insert into public.live_mfa_factors (factor_id, user_id, activated_at) values ('fafafafa-0000-0000-0000-00000000000f', 'aaaaaaaa-0000-0000-0000-00000000000a', now() - interval '1 day');
+insert into public.live_mfa_on (user_id, since) values ('aaaaaaaa-0000-0000-0000-00000000000a', now() - interval '1 day');
+select set_config('t.factor', 'fafafafa-0000-0000-0000-00000000000f', false);
 select pg_temp.as_user('aaaaaaaa-0000-0000-0000-00000000000a', '11111111-0000-0000-0000-000000000001', 'aal1');
 set role authenticated;
 select pg_temp.expect_all_refused('mfa_required');
@@ -141,6 +149,27 @@ set role authenticated;
 select pg_temp.expect_all_refused('mfa_required');
 reset role;
 select pg_temp.assert_untouched('no aal claim with a verified factor');
+
+-- 5b. The lost-phone path serves exactly the session that still owes the code — and nothing else
+-- about a refused session: a dead one gets nothing, a wrong code changes nothing.
+select pg_temp.as_user('aaaaaaaa-0000-0000-0000-00000000000a', '11111111-0000-0000-0000-000000000001', 'aal1');
+set role authenticated;
+do $$ declare r jsonb; begin
+  r := public.live_mfa_recover('wxyz-wxyz-wxyz');
+  assert r->>'error' = 'invalid_code', r::text;
+end $$;
+reset role;
+select pg_temp.as_user('aaaaaaaa-0000-0000-0000-00000000000a', '99999999-0000-0000-0000-000000000009', 'aal1');
+set role authenticated;
+do $$ declare r jsonb; begin
+  r := public.live_mfa_recover('wxyz-wxyz-wxyz');
+  assert r->>'error' = 'session_revoked', r::text;
+end $$;
+reset role;
+delete from public.live_mfa_attempts;
+do $$ begin
+  assert exists (select 1 from auth.mfa_factors where id = 'fafafafa-0000-0000-0000-00000000000f'), 'a refused recovery removed the authenticator';
+end $$;
 
 -- 6. The same calls with her second factor (aal2) all work.
 select pg_temp.as_user('aaaaaaaa-0000-0000-0000-00000000000a', '11111111-0000-0000-0000-000000000001', 'aal2');
@@ -207,7 +236,10 @@ begin
   covered := array['live_me', 'live_join', 'live_update_profile', 'live_search_people', 'monitor_list', 'monitor_create',
                    'monitor_update', 'monitor_people', 'monitor_member_ids', 'monitor_my_role', 'monitor_set_member',
                    'monitor_remove_member', 'live_device_enroll', 'live_device_list', 'live_device_revoke',
-                   'live_security_events', 'monitor_delete'];
+                   'live_security_events', 'live_mfa_status', 'live_mfa_activate', 'live_mfa_codes_regenerate',
+                   'monitor_delete',
+                   -- serves a session that still owes the code (step 5b), refuses an ended one
+                   'live_mfa_recover'];
   for f in
     select p.proname, p.prosrc
     from pg_proc p

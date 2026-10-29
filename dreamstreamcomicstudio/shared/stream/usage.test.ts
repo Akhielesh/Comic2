@@ -17,6 +17,9 @@ import {
   monthBounds,
   monthKey,
   monthsBefore,
+  NIGHT_SIM,
+  PHASE0_BILLED_REQUESTS,
+  PHASE0_DO_INVOCATIONS,
   prevMonthKey,
   PROJECTION_MIN_DAYS,
   projectMonthEnd,
@@ -267,6 +270,35 @@ describe('stream usage — alerts', () => {
       containerAwakeHours: 21
     }).map((a) => a.id);
     expect(ids.sort()).toEqual(['container_awake', 'email_near_free', 'r2_near_free', 'relay_creep', 'write_diet']);
+  });
+
+  it('checks the request budget (ADR 0006) only after Phase 0, in the invocations Cloudflare measures', () => {
+    expect(evaluateStreamAlerts({ nowMs: now, doInvocationsPerNurseryDay: 40_000 })).toEqual([]);
+    expect(evaluateStreamAlerts({ nowMs: now, phase0Shipped: true, doInvocationsPerNurseryDay: ALERT_THRESHOLDS.doInvocationsPerNurseryDay })).toEqual([]);
+    const fired = evaluateStreamAlerts({ nowMs: now, phase0Shipped: true, doInvocationsPerNurseryDay: ALERT_THRESHOLDS.doInvocationsPerNurseryDay + 1 });
+    expect(fired).toEqual([expect.objectContaining({ id: 'request_diet', severity: 'warning', title: 'MonitorRoom request budget exceeded' })]);
+    expect(fired[0].cause).toMatch(/invocations per active nursery-day, as Cloudflare's analytics count them/);
+    expect(fired[0].cause).toMatch(/1,000 billed requests/);
+  });
+
+  it('converts the billed budget (1,000, messages 20:1) to measured invocations (messages 1:1) at the simulated night’s mix', () => {
+    const invocations = NIGHT_SIM.alarms + NIGHT_SIM.upgrades + NIGHT_SIM.delivered;
+    const billed = NIGHT_SIM.alarms + NIGHT_SIM.upgrades + (NIGHT_SIM.delivered + NIGHT_SIM.autoAnsweredPings) / 20;
+    expect(Math.round(billed)).toBe(NIGHT_SIM.billedRequests); // the recorded night is self-consistent
+    expect(invocations).toBe(1434);
+    expect(PHASE0_BILLED_REQUESTS).toBe(1000);
+    expect(PHASE0_DO_INVOCATIONS).toBe(2600);
+    expect(ALERT_THRESHOLDS.doInvocationsPerNurseryDay).toBe(PHASE0_DO_INVOCATIONS);
+    // The night that meets the billed budget is inside the measured one; the same mix at the billed
+    // budget is at (just above, before rounding down) the measured one.
+    expect(invocations).toBeLessThan(PHASE0_DO_INVOCATIONS);
+    expect((invocations * PHASE0_BILLED_REQUESTS) / NIGHT_SIM.billedRequests).toBeGreaterThanOrEqual(PHASE0_DO_INVOCATIONS);
+    expect((invocations * PHASE0_BILLED_REQUESTS) / NIGHT_SIM.billedRequests).toBeLessThan(PHASE0_DO_INVOCATIONS + 100);
+  });
+
+  it('meters Durable Object storage against the included 5 GB as a level', () => {
+    const { meters } = allocateOverage({ doStoredGb: 6 }, {}, { doStoredGb: 1 });
+    expect(meters).toEqual([expect.objectContaining({ id: 'doStoredGb', allowance: 5, overage: 1, overageUsd: 0.2, productUsd: 0.2 })]);
   });
 
   it('never fires on missing inputs', () => {

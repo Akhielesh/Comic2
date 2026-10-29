@@ -1,0 +1,325 @@
+{
+  "$comment": "Public leaderboard snapshot for Comic Studio image models (models.md §1.2, §4.5 S5/S6). Seeded from the 2026-10-22 research pull (LMArena Hugging Face dataset, CC BY 4.0; Artificial Analysis Image Arena v2.1 page data). The history (trend T4) holds one point per LMArena publish date per tracked model and board for the 90 days before 2026-10-22, read from the dataset's full split at 2026-10-22T17:53Z with the server's own matching rules (quality.ts lmarenaHistoryFromRows); 'name' is the leaderboard entry each point is. Refreshed only by the owner-run `node scripts/models-quality-refresh.mjs` (LMArena from the Hugging Face datasets-server, AA/Design Arena from OpenRouter's benchmarks API when it serves image models) and, for LMArena, on demand with a 24 h TTL. Keys are OpenRouter ids. Never edit a number by hand without a source and date.",
+  "generatedAt": "2026-10-22T17:51:00Z",
+  "aliases": {
+    "google/gemini-nano-banana-2.1": ["gemininanobanana21", "nanobanana21", "gemininanobanana212k"],
+    "google/gemini-3-pro-image": ["gemini3proimage", "gemini3proimage2k", "nanobananapro2k"],
+    "google/gemini-3.1-flash-image": ["gemini31flashimage", "nanobanana2", "gemini31flashimagewebsearch"],
+    "google/gemini-3.1-flash-lite-image": ["gemini31flashliteimage", "nanobanana2lite", "nanobananalite"],
+    "openai/gpt-image-2.5-sunburst": ["gptimage25sunburst", "gptimage25sunburstmax"],
+    "openai/gpt-image-2.5-flare": ["gptimage25flare", "gptimage25flaremax"],
+    "black-forest-labs/flux-3-image": ["flux3image", "flux3"],
+    "bytedance-seed/seedream-5-0-pro": ["seedream50pro", "seedream5pro"],
+    "google/gemini-2.5-flash-image": ["gemini25flashimage", "nanobanana", "gemini25flashimagepreview"]
+  },
+  "boards": {
+    "lmarena_t2i": {
+      "asOf": "2026-10-07",
+      "of": 82,
+      "category": "overall",
+      "source": "LMArena leaderboard-dataset (Hugging Face, CC BY 4.0), text_to_image · latest split, published 2026-10-07",
+      "entries": {
+        "google/gemini-nano-banana-2.1": { "rank": 6, "score": 1327.8, "name": "gemini-nano-banana-2.1" },
+        "google/gemini-3-pro-image": { "rank": 16, "score": 1247.9, "name": "gemini-3-pro-image (2K)" },
+        "google/gemini-3.1-flash-image": { "rank": 11, "score": 1261.8, "name": "gemini-3.1-flash-image (web-search variant)" },
+        "google/gemini-3.1-flash-lite-image": { "rank": 15, "score": 1250.2, "name": "gemini-3.1-flash-lite-image" },
+        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1424.6, "name": "gpt-image-2.5-sunburst" },
+        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1397.6, "name": "gpt-image-2.5-flare" },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 12, "score": 1255.5, "name": "seedream-5.0-pro" },
+        "google/gemini-2.5-flash-image": { "rank": 34, "score": 1150.3, "name": "gemini-2.5-flash-image" }
+      }
+    },
+    "lmarena_edit": {
+      "asOf": "2026-10-20",
+      "of": 60,
+      "category": "overall",
+      "source": "LMArena leaderboard-dataset (Hugging Face, CC BY 4.0), image_edit · latest split, published 2026-10-20",
+      "entries": {
+        "google/gemini-nano-banana-2.1": { "rank": 5, "score": 1426.2, "name": "Gemini Nano Banana 2.1" },
+        "google/gemini-3-pro-image": { "rank": 13, "score": 1390.2, "name": "Gemini 3 Pro Image (2K)" },
+        "google/gemini-3.1-flash-image": { "rank": 14, "score": 1387.0, "name": "Gemini 3.1 Flash Image" },
+        "google/gemini-3.1-flash-lite-image": { "rank": 25, "score": 1312.7, "name": "Gemini 3.1 Flash Lite Image" },
+        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1514.4, "name": "GPT-Image-2.5 Sunburst" },
+        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1480.7, "name": "GPT-Image-2.5 Flare" },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 11, "score": 1391.3, "name": "Seedream 5.0 Pro" },
+        "google/gemini-2.5-flash-image": { "rank": 32, "score": 1291.0, "name": "Gemini 2.5 Flash Image" }
+      }
+    },
+    "lmarena_multi_image": {
+      "asOf": "2026-10-20",
+      "of": 45,
+      "category": "multi_image_edit",
+      "source": "LMArena leaderboard-dataset (Hugging Face, CC BY 4.0), image_edit · latest split, category multi_image_edit, published 2026-10-20",
+      "entries": {
+        "google/gemini-nano-banana-2.1": { "rank": 5, "score": 1431.7 },
+        "google/gemini-3-pro-image": { "rank": 10, "score": 1363.0 },
+        "google/gemini-3.1-flash-image": { "rank": 8, "score": 1367.3 },
+        "google/gemini-3.1-flash-lite-image": { "rank": 19, "score": 1289.0 },
+        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1518.1 },
+        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1478.5 },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 6, "score": 1411.7 },
+        "google/gemini-2.5-flash-image": { "rank": 26, "score": 1234.6 }
+      }
+    },
+    "aa_t2i": {
+      "asOf": "2026-10-22T17:51:00Z",
+      "of": 105,
+      "source": "Artificial Analysis Image Arena v2.1, text-to-image leaderboard (artificialanalysis.ai), page data 2026-10-22T17:51Z — research pull; refreshed only by the owner-run script",
+      "entries": {
+        "google/gemini-nano-banana-2.1": { "rank": 4, "score": 1176, "ci": [1164, 1188] },
+        "google/gemini-3-pro-image": { "rank": 11, "score": 1118, "ci": [1108, 1128] },
+        "google/gemini-3.1-flash-image": { "rank": 7, "score": 1140, "ci": [1130, 1150] },
+        "google/gemini-3.1-flash-lite-image": { "rank": 15, "score": 1107, "ci": [1097, 1117] },
+        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1222, "ci": [1212, 1232] },
+        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1207, "ci": [1197, 1217] },
+        "black-forest-labs/flux-3-image": { "rank": 13, "score": 1117, "ci": [1105, 1129] },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 16, "score": 1100, "ci": [1089, 1111] },
+        "google/gemini-2.5-flash-image": { "rank": 58, "score": 985, "ci": [973, 997] }
+      }
+    },
+    "aa_edit": {
+      "asOf": "2026-10-22T17:51:00Z",
+      "of": 74,
+      "source": "Artificial Analysis Image Arena v2.1, image editing leaderboard (artificialanalysis.ai), page data 2026-10-22T17:51Z — research pull; refreshed only by the owner-run script",
+      "entries": {
+        "google/gemini-nano-banana-2.1": { "rank": 4, "score": 1152, "ci": [1139, 1165] },
+        "google/gemini-3-pro-image": { "rank": 16, "score": 1108, "ci": [1096, 1120] },
+        "google/gemini-3.1-flash-image": { "rank": 12, "score": 1124, "ci": [1112, 1136] },
+        "google/gemini-3.1-flash-lite-image": { "rank": 32, "score": 1054, "ci": [1041, 1067] },
+        "openai/gpt-image-2.5-sunburst": { "rank": 1, "score": 1200, "ci": [1189, 1211] },
+        "openai/gpt-image-2.5-flare": { "rank": 2, "score": 1183, "ci": [1172, 1194] },
+        "bytedance-seed/seedream-5-0-pro": { "rank": 8, "score": 1132, "ci": [1119, 1145] },
+        "google/gemini-2.5-flash-image": { "rank": 53, "score": 984, "ci": [970, 998] }
+      }
+    },
+    "design_arena": {
+      "asOf": "2026-10-22T17:51:00Z",
+      "source": "Design Arena via OpenRouter model pages (undocumented page data; production reads only OpenRouter's benchmarks API, which listed no image task on 2026-10-22) — no registry model is listed",
+      "entries": {}
+    }
+  },
+  "history": {
+    "google/gemini-3-pro-image": {
+      "lmarena_t2i": [
+        { "asOf": "2026-08-04", "rank": 10, "score": 1245.4, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-08-07", "rank": 10, "score": 1245.6, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-04", "rank": 12, "score": 1246.3, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-08", "rank": 14, "score": 1246.2, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-22", "rank": 14, "score": 1246.3, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-24", "rank": 14, "score": 1247.4, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-05", "rank": 15, "score": 1247.7, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-06", "rank": 16, "score": 1247.8, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-07", "rank": 16, "score": 1247.9, "name": "gemini-3-pro-image-2k (nano-banana-pro)" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-07-28", "rank": 5, "score": 1389.3, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-08-07", "rank": 7, "score": 1389.1, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-08-18", "rank": 8, "score": 1389.6, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-04", "rank": 9, "score": 1389.7, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-08", "rank": 9, "score": 1390, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-22", "rank": 9, "score": 1390.1, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-30", "rank": 10, "score": 1390.2, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-05", "rank": 11, "score": 1389.9, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-06", "rank": 12, "score": 1390, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-20", "rank": 13, "score": 1390.2, "name": "Gemini 3 Pro Image (nano-banana-pro, 2K)" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-07-28", "rank": 6, "score": 1363.8, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-08", "rank": 8, "score": 1362.7, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-09-22", "rank": 8, "score": 1363, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-06", "rank": 9, "score": 1364.1, "name": "gemini-3-pro-image-2k (nano-banana-pro)" },
+        { "asOf": "2026-10-20", "rank": 10, "score": 1363, "name": "Gemini 3 Pro Image (nano-banana-pro, 2K)" }
+      ]
+    },
+    "google/gemini-3.1-flash-image": {
+      "lmarena_t2i": [
+        { "asOf": "2026-08-04", "rank": 6, "score": 1262, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-08-07", "rank": 5, "score": 1263.1, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-04", "rank": 7, "score": 1260.8, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-08", "rank": 9, "score": 1260.7, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-22", "rank": 9, "score": 1260.2, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-24", "rank": 9, "score": 1261.2, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-05", "rank": 10, "score": 1261.1, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-06", "rank": 11, "score": 1261.1, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-07", "rank": 11, "score": 1261.8, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-07-28", "rank": 10, "score": 1383.2, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-08-07", "rank": 9, "score": 1385.1, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-08-18", "rank": 10, "score": 1386.3, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-04", "rank": 10, "score": 1387.7, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-08", "rank": 12, "score": 1387.5, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-22", "rank": 12, "score": 1388.2, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-30", "rank": 12, "score": 1387.4, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-05", "rank": 13, "score": 1387.3, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-06", "rank": 14, "score": 1387.4, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-20", "rank": 14, "score": 1387, "name": "Gemini 3.1 Flash Image (nano-banana-2, Web Search)" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-07-28", "rank": 5, "score": 1364.8, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-08", "rank": 6, "score": 1367.8, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-09-22", "rank": 6, "score": 1369.2, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-06", "rank": 7, "score": 1369.5, "name": "gemini-3.1-flash-image (nano-banana-2) [web-search]" },
+        { "asOf": "2026-10-20", "rank": 8, "score": 1367.3, "name": "Gemini 3.1 Flash Image (nano-banana-2, Web Search)" }
+      ]
+    },
+    "google/gemini-3.1-flash-lite-image": {
+      "lmarena_t2i": [
+        { "asOf": "2026-08-04", "rank": 9, "score": 1250.8, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-08-07", "rank": 9, "score": 1250.9, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-04", "rank": 11, "score": 1250.4, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-08", "rank": 13, "score": 1250.4, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-22", "rank": 13, "score": 1250.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-24", "rank": 13, "score": 1250, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-05", "rank": 14, "score": 1250.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-06", "rank": 15, "score": 1250.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-07", "rank": 15, "score": 1250.2, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-07-28", "rank": 16, "score": 1313.9, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-08-07", "rank": 16, "score": 1314, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-08-18", "rank": 17, "score": 1314.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-04", "rank": 17, "score": 1314.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-08", "rank": 19, "score": 1314.3, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-22", "rank": 21, "score": 1314.4, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-30", "rank": 22, "score": 1313.6, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-05", "rank": 23, "score": 1313.5, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-06", "rank": 24, "score": 1313.5, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-20", "rank": 25, "score": 1312.7, "name": "Gemini 3.1 Flash-Lite Image (nano-banana-2-lite)" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-07-28", "rank": 14, "score": 1285.8, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-08", "rank": 14, "score": 1289.4, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-09-22", "rank": 14, "score": 1289.4, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-06", "rank": 17, "score": 1289.5, "name": "gemini-3.1-flash-lite-image (nano-banana-2-lite)" },
+        { "asOf": "2026-10-20", "rank": 19, "score": 1289, "name": "Gemini 3.1 Flash-Lite Image (nano-banana-2-lite)" }
+      ]
+    },
+    "bytedance-seed/seedream-5-0-pro": {
+      "lmarena_t2i": [
+        { "asOf": "2026-08-04", "rank": 7, "score": 1256.8, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-08-07", "rank": 7, "score": 1256.9, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-04", "rank": 8, "score": 1258.3, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-08", "rank": 10, "score": 1257.1, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-22", "rank": 10, "score": 1256.4, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-24", "rank": 10, "score": 1256.2, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-05", "rank": 11, "score": 1255.7, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-06", "rank": 12, "score": 1255.7, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-07", "rank": 12, "score": 1255.5, "name": "seedream-5.0-pro" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-07-28", "rank": 8, "score": 1384.8, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-08-07", "rank": 4, "score": 1392.6, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-08-18", "rank": 6, "score": 1394, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-04", "rank": 6, "score": 1394.1, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-08", "rank": 8, "score": 1394.5, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-22", "rank": 8, "score": 1393.5, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-30", "rank": 8, "score": 1393.7, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-05", "rank": 9, "score": 1393.6, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-06", "rank": 10, "score": 1393.6, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-20", "rank": 11, "score": 1391.3, "name": "Seedream 5.0 Pro" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-07-28", "rank": 2, "score": 1413.8, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-08", "rank": 4, "score": 1413.7, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-09-22", "rank": 4, "score": 1413.8, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-06", "rank": 5, "score": 1412, "name": "seedream-5.0-pro" },
+        { "asOf": "2026-10-20", "rank": 6, "score": 1411.7, "name": "Seedream 5.0 Pro" }
+      ]
+    },
+    "google/gemini-2.5-flash-image": {
+      "lmarena_t2i": [
+        { "asOf": "2026-08-04", "rank": 29, "score": 1150.3, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-08-07", "rank": 29, "score": 1150.3, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-04", "rank": 30, "score": 1149.7, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-08", "rank": 32, "score": 1149.9, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-22", "rank": 33, "score": 1149.8, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-24", "rank": 32, "score": 1150.2, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-05", "rank": 33, "score": 1150.3, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-06", "rank": 34, "score": 1150.3, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-07", "rank": 34, "score": 1150.3, "name": "gemini-2.5-flash-image-preview (nano-banana)" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-07-28", "rank": 23, "score": 1294.8, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-08-07", "rank": 23, "score": 1294.1, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-08-18", "rank": 24, "score": 1293.4, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-04", "rank": 25, "score": 1293.5, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-08", "rank": 27, "score": 1293.4, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-22", "rank": 28, "score": 1292.9, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-30", "rank": 29, "score": 1293.1, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-05", "rank": 30, "score": 1293.2, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-06", "rank": 31, "score": 1293.2, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-20", "rank": 32, "score": 1291, "name": "Gemini 2.5 Flash Image Preview (nano-banana)" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-07-28", "rank": 21, "score": 1234.5, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-08", "rank": 23, "score": 1234.2, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-09-22", "rank": 23, "score": 1234.6, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-06", "rank": 25, "score": 1235.5, "name": "gemini-2.5-flash-image-preview (nano-banana)" },
+        { "asOf": "2026-10-20", "rank": 26, "score": 1234.6, "name": "Gemini 2.5 Flash Image Preview (nano-banana)" }
+      ]
+    },
+    "openai/gpt-image-2.5-sunburst": {
+      "lmarena_t2i": [
+        { "asOf": "2026-09-08", "rank": 1, "score": 1420.7, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-09-22", "rank": 1, "score": 1423.2, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-09-24", "rank": 1, "score": 1423.6, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-05", "rank": 1, "score": 1424.9, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-06", "rank": 1, "score": 1424.6, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-07", "rank": 1, "score": 1424.6, "name": "gpt-image-2.5-sunburst" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-09-08", "rank": 1, "score": 1520.4, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-09-22", "rank": 1, "score": 1526, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-09-30", "rank": 1, "score": 1522.4, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-05", "rank": 1, "score": 1523.6, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-06", "rank": 1, "score": 1523.6, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-20", "rank": 1, "score": 1514.4, "name": "GPT-Image-2.5 Sunburst" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-09-08", "rank": 1, "score": 1535.1, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-09-22", "rank": 1, "score": 1526.7, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-06", "rank": 1, "score": 1526.5, "name": "gpt-image-2.5-sunburst" },
+        { "asOf": "2026-10-20", "rank": 1, "score": 1518.1, "name": "GPT-Image-2.5 Sunburst" }
+      ]
+    },
+    "openai/gpt-image-2.5-flare": {
+      "lmarena_t2i": [
+        { "asOf": "2026-09-08", "rank": 2, "score": 1399, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-09-22", "rank": 2, "score": 1401.3, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-09-24", "rank": 2, "score": 1400.9, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-05", "rank": 2, "score": 1397.1, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-06", "rank": 2, "score": 1398.5, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-07", "rank": 2, "score": 1397.6, "name": "gpt-image-2.5-flare" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-09-08", "rank": 2, "score": 1490.6, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-09-22", "rank": 2, "score": 1481.8, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-09-30", "rank": 2, "score": 1478.5, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-05", "rank": 2, "score": 1480.7, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-06", "rank": 2, "score": 1481, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-20", "rank": 2, "score": 1480.7, "name": "GPT-Image-2.5 Flare" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-09-08", "rank": 2, "score": 1500.8, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-09-22", "rank": 2, "score": 1478, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-06", "rank": 2, "score": 1476.3, "name": "gpt-image-2.5-flare" },
+        { "asOf": "2026-10-20", "rank": 2, "score": 1478.5, "name": "GPT-Image-2.5 Flare" }
+      ]
+    },
+    "google/gemini-nano-banana-2.1": {
+      "lmarena_t2i": [
+        { "asOf": "2026-10-06", "rank": 5, "score": 1328.1, "name": "gemini-nano-banana-2.1" },
+        { "asOf": "2026-10-07", "rank": 6, "score": 1327.8, "name": "gemini-nano-banana-2.1" }
+      ],
+      "lmarena_edit": [
+        { "asOf": "2026-10-06", "rank": 6, "score": 1428.1, "name": "gemini-nano-banana-2.1" },
+        { "asOf": "2026-10-20", "rank": 5, "score": 1426.2, "name": "Gemini Nano Banana 2.1" }
+      ],
+      "lmarena_multi_image": [
+        { "asOf": "2026-10-06", "rank": 4, "score": 1431.4, "name": "gemini-nano-banana-2.1" },
+        { "asOf": "2026-10-20", "rank": 5, "score": 1431.7, "name": "Gemini Nano Banana 2.1" }
+      ]
+    }
+  }
+}

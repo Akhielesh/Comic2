@@ -232,6 +232,45 @@ describe('POST /security (new sign-in alert)', () => {
     expect(await verifySecuritySignature(undefined, 't=1,v1=00', '{}')).toEqual({ ok: false, reason: 'no-secret' });
   });
 
+  it('two-step sign-in turned on: says so, and its own “Not you?” link undoes it (a stolen password can’t lock the parent out)', async () => {
+    const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK, SECURE_ACCOUNT_PAGE: 'on' });
+    expect((await security(env, pgPayload({ kind: 'mfa_on', method: null }))).status).toBe(200);
+    const m = sent[0];
+    expect(m.subject).toBe('Two-step sign-in was turned on for your DreamStream Studio account');
+    const link = `${APP}/live#/secure/${TOKEN}`;
+    for (const body of [m.html!, m.text!]) {
+      expect(body).toContain(link);
+      expect(body).toContain('Chrome on macOS');
+      expect(body).toMatch(/switches off the two-step sign-in they just turned on/);
+      expect(body).toMatch(/Devices that were already signed in stay signed in/);
+      expect(body).not.toMatch(/new sign-in/);
+    }
+    expect(m.html).toContain('Not you? Secure my account');
+  });
+
+  it('another authenticator, and a recovery code used: each with the one-time link', async () => {
+    const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK, SECURE_ACCOUNT_PAGE: 'on' });
+    expect((await security(env, pgPayload({ kind: 'mfa_added' }))).status).toBe(200);
+    expect((await security(env, pgPayload({ kind: 'mfa_recovered' }))).status).toBe(200);
+    expect(sent[0].subject).toBe('An authenticator was added to your DreamStream Studio account');
+    expect(sent[0].text).toMatch(/removes the authenticator that was just added/);
+    expect(sent[1].subject).toBe('Two-step sign-in was switched off on your DreamStream Studio account');
+    expect(sent[1].text).toMatch(/recovery code was just used/);
+    expect(sent[1].text).toMatch(/turn two-step sign-in on again/);
+    for (const m of sent) expect(m.text).toContain(`#/secure/${TOKEN}`);
+  });
+
+  it('without the “Not you?” page, a two-step change points to support — never to signing out everywhere, which could strand the parent', async () => {
+    const { env, sent } = makeEnv({ SECURITY_HOOK_SECRET: HOOK });
+    expect((await security(env, pgPayload({ kind: 'mfa_on' }))).status).toBe(200);
+    for (const body of [sent[0].html!, sent[0].text!]) {
+      expect(body).toContain('support@dreamstreamstudio.ai');
+      expect(body).toMatch(/Don.t sign out of your other devices first/);
+      expect(body).not.toContain('#/secure');
+      expect(body).not.toContain(TOKEN);
+    }
+  });
+
   it('reports a failed send', async () => {
     const { env } = makeEnv({ SECURITY_HOOK_SECRET: HOOK });
     env.EMAIL = { send: async () => Promise.reject(new Error('mail down')) } as unknown as Env['EMAIL'];

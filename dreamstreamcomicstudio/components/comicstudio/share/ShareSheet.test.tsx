@@ -190,6 +190,100 @@ describe('ShareSheet', () => {
     expect(screen.queryByText('Embed on a website')).toBeNull();
   });
 
+  it('Update resends the page exclusion the owner consented to, and offers nothing else when no new page is blocked', async () => {
+    const blockedReadiness = { ok: false, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'blocked' as const, blockedPages: [3], reasons: ['violence'] }, languages: [{ lang: 'en', publishable: true, blocking: [] }] };
+    const studio = studioWith(view({ behind: true, excludedPageIds: ['pg_3'], readiness: blockedReadiness }));
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Publish without page/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
+  });
+
+  it('an excluded page that was redrawn clean goes back in: Update sends no exclusion for it, even from a stale view', async () => {
+    // The server stops listing it; an older view that still does must not keep the fix out forever.
+    const studio = studioWith(view({ behind: true, excludedPageIds: ['pg_3'] }));
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Publish without page/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'] }));
+  });
+
+  it('a page blocked since publishing: Update is refused with the honest 422 and the sheet offers "Publish without page N"', async () => {
+    const blockedReadiness = { ok: false, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'blocked' as const, blockedPages: [3], reasons: ['violence'] }, languages: [{ lang: 'en', publishable: true, blocking: [] }] };
+    const studio = studioWith(view({ behind: true, readiness: blockedReadiness }));
+    vi.mocked(api.publishComic).mockRejectedValueOnce(new Error("Page 3 doesn't fit the content rules. Publish without it, or redraw it first."));
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'] }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Page 3 doesn't fit/);
+    vi.mocked(api.publishComic).mockResolvedValueOnce(view({ excludedPageIds: ['pg_3'] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish without page 3' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenLastCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
+  });
+
+  it('once live, downloads / embedding / username change in place (one PATCH field each), and languages open the panel in update mode', async () => {
+    const studio = studioWith(view());
+    studio.doc!.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    vi.mocked(api.updatePublication).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Update published version/ })).toBeNull();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow embedding/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { allowEmbed: false }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Show my username/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { showCreator: true }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Readers can download/ }));
+    await waitFor(() => expect(api.updatePublication).toHaveBeenLastCalledWith(studio.doc!.id, { allowDownload: false }));
+    expect(api.updatePublication).toHaveBeenCalledTimes(3);
+    expect(api.publishComic).not.toHaveBeenCalled();
+    // Languages need a republish (the snapshot must carry the edition): the panel, in update mode.
+    fireEvent.click(screen.getByRole('button', { name: /Edit languages/ }));
+    expect(screen.getByRole('checkbox', { name: /हिन्दी/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update published version' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('button', { name: 'Update published version' })).toBeNull();
+  });
+
+  it('a published translation that went stale can be dropped from the sheet: "Edit languages…", untick it, Update publishes the original alone', async () => {
+    const studio = studioWith(
+      view({
+        behind: true,
+        languages: ['en', 'hi'],
+        readiness: { ...view().readiness, ok: false, languages: [{ lang: 'en', publishable: true, blocking: [], requested: true }, { lang: 'hi', publishable: false, blocking: ['3 lines changed since translating.'], requested: true }] }
+      })
+    );
+    studio.doc!.i18n = { editions: { hi: { lang: 'hi', lines: {}, balloons: {}, register: 'everyday' } }, glossary: [] };
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Edit languages/ }));
+    const hindi = screen.getByRole('checkbox', { name: /हिन्दी/ });
+    expect(hindi).toBeChecked();
+    expect(hindi).not.toBeDisabled();
+    fireEvent.click(hindi);
+    fireEvent.click(screen.getByRole('button', { name: 'Update published version' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.publishComic).mock.calls[0][1]).toMatchObject({ visibility: 'unlisted', languages: ['en'] });
+  });
+
+  it('the preview mock shows the FROZEN card with its rating (what chat apps render), never the live, unpublished text', () => {
+    const previewFigure = () => screen.getByText('This is what people see before they tap.').closest('figure') as HTMLElement;
+    const studio = studioWith(view({ behind: true, rating: 'PG', card: { title: 'The Saffron Thief', description: 'A courier races through a spice market.' } }));
+    studio.doc!.brief.title = 'Brand new title nobody has seen';
+    studio.doc!.brief.logline = 'A logline that is not published yet.';
+    const { unmount } = render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(previewFigure()).toHaveTextContent('The Saffron Thief');
+    expect(previewFigure()).toHaveTextContent('A courier races through a spice market. · Rated PG');
+    expect(previewFigure()).not.toHaveTextContent('Brand new title nobody has seen');
+    expect(previewFigure()).not.toHaveTextContent('A logline that is not published yet.');
+    expect(previewFigure().querySelector('img')?.getAttribute('src')).toBe(view().ogImageUrl);
+    unmount();
+    // No software-made card (its render failed): the cover, as og:image falls back to it.
+    const COVER = `https://bdjfmxfmhqhzvgrhbbzm.supabase.co/storage/v1/object/public/comic-assets/pub/K1234567890abcdefghijk/cover-abc-w1080.webp`;
+    render(<ShareSheet studio={studioWith(view({ ogImageUrl: undefined, card: { title: 'T', description: '', coverUrl: COVER } }))} open onClose={vi.fn()} />);
+    expect(previewFigure().querySelector('img')?.getAttribute('src')).toBe(COVER);
+  });
+
   it('a long title at 360 px never forces horizontal scroll (truncating title, min-w-0 rows)', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
     setViewport(true);

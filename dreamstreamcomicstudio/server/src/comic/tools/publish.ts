@@ -106,8 +106,8 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       type: 'object',
       properties: {
         visibility: { type: 'string', enum: ['unlisted', 'public'] },
-        languages: { type: 'array', items: { type: 'string' }, description: 'Editions to publish (source language and/or finished translations).' },
-        default_language: { type: 'string' },
+        languages: { type: 'array', items: { type: 'string' }, description: 'Editions to publish: finished translations beside the original, which is always published.' },
+        default_language: { type: 'string', description: 'The edition readers start in. Omitted: languages that leave out the original start readers in an edition they name (the live default if named, else the first); otherwise the live default stays, else the original.' },
         start_page: { type: 'integer', minimum: 1 },
         allow_download: { type: 'boolean' }
       },
@@ -142,7 +142,8 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       const busy = d.pages.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering').map((p) => p.n);
       const blockers: string[] = [];
       if (busy.length) blockers.push(`page ${busy.join(', ')} still drawing`);
-      for (const l of readiness.languages.filter((x) => !x.publishable)) blockers.push(`${langName(l.lang)}: ${l.blocking[0] || 'not finished'}`);
+      // Only the editions this card would publish can block it (readiness lists every edition the doc holds).
+      for (const l of readiness.languages.filter((x) => x.requested !== false && !x.publishable)) blockers.push(`${langName(l.lang)}: ${l.blocking[0] || 'not finished'}`);
       if (readiness.safety.blockedPages.length) blockers.push(`page ${readiness.safety.blockedPages.join(', ')} blocked by the content rules (the card can publish without ${readiness.safety.blockedPages.length === 1 ? 'it' : 'them'})`);
       const mode = isLive(d) ? 'update' : 'publish';
       turn.cards.push(publishCard(mode, request));
@@ -194,7 +195,7 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
   const updatePublicationTool = defineTool(
     'update_publication',
     'free',
-    'Show a card that changes publication settings (visibility, default language, start page, downloads) or gets a NEW link (regenerate_link: the old link stops working). Nothing changes until the user taps.',
+    'Show a card that changes publication settings (visibility, default language, start page, downloads, embedding, showing the username) or gets a NEW link (regenerate_link: the old link stops working). Nothing changes until the user taps.',
     {
       type: 'object',
       properties: {
@@ -202,6 +203,8 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
         default_language: { type: 'string' },
         start_page: { type: 'integer', minimum: 1 },
         allow_download: { type: 'boolean' },
+        allow_embed: { type: 'boolean', description: 'Whether websites may show the comic in a frame.' },
+        show_creator: { type: 'boolean', description: 'Whether readers see the public username (false keeps the author anonymous).' },
         regenerate_link: { type: 'boolean' }
       }
     },
@@ -220,9 +223,14 @@ function tools(ctx: StudioContext, turn: DirectorTurn): DirectorTool[] {
       if (start !== undefined) request.startPage = Math.max(1, Math.min(500, start));
       const allowDownload = bool(args.allow_download);
       if (allowDownload !== undefined) request.allowDownload = allowDownload;
-      if (Object.keys(request).length <= 2 && request.visibility === m.visibility) return 'Nothing to change. Settings: visibility, default_language, start_page, allow_download, regenerate_link.';
+      const allowEmbed = bool(args.allow_embed);
+      if (allowEmbed !== undefined) request.allowEmbed = allowEmbed;
+      const showCreator = bool(args.show_creator);
+      if (showCreator !== undefined) request.showCreator = showCreator;
+      if (Object.keys(request).length <= 2 && request.visibility === m.visibility) return 'Nothing to change. Settings: visibility, default_language, start_page, allow_download, allow_embed, show_creator, regenerate_link.';
       turn.cards.push(publishCard('update', request));
-      return `Update card shown (${request.visibility}${request.allowDownload === false ? ', downloads off' : ''}). Tapping Update republishes the current version with these settings, so any edits made since publishing go live too (after the safety check) — tell the user that plainly. Nothing changes until the user taps.`;
+      const changes = [request.allowDownload === false ? 'downloads off' : '', request.allowEmbed === false ? 'embedding off' : '', request.showCreator === true ? 'username shown' : request.showCreator === false ? 'username hidden' : ''].filter(Boolean);
+      return `Update card shown (${[request.visibility, ...changes].join(', ')}). Tapping Update republishes the current version with these settings, so any edits made since publishing go live too (after the safety check) — tell the user that plainly. Nothing changes until the user taps.`;
     }
   );
 

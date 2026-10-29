@@ -12,18 +12,18 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ExternalLink, Link2Off, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
-import type { PublicationOwnerView, PublishRequest } from '../../../shared/comic/publication';
+import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } from 'lucide-react';
+import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
-import { PublishPanel } from './PublishPanel';
+import { PublishPanel, Toggle } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
-import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, shareLinkFor, statusLine } from './shareModel';
+import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, pageIdsFor, shareLinkFor, statusLine } from './shareModel';
 
 export interface ShareSheetProps {
   studio: StudioController;
@@ -176,6 +176,8 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const status = statusLine(view);
   const url = shareLinkFor(view) || '';
   const current: 'private' | 'unlisted' | 'public' = live || suspended ? (view!.visibility as 'unlisted' | 'public') : 'private';
+  // Languages can only change through a republish (the snapshot must carry the edition): the panel.
+  const hasEditions = Object.keys(doc.i18n?.editions || {}).length > 0 || (view?.languages.length ?? 0) > 1;
 
   const choose = (v: 'private' | 'unlisted' | 'public') => {
     setError(null);
@@ -191,7 +193,27 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     void run(() => updatePublication(doc.id, { visibility: v }));
   };
   const publish = (request: PublishRequest) => void run(() => publishComic(doc.id, request));
-  const updateNow = () => view && void run(() => publishComic(doc.id, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages }));
+  // Pages the owner already left out (consented exclusions) stay out of an Update while publishing would
+  // still refuse them (blocked, or listed as not publishable): the gate keeps a blocked verdict. A page
+  // redrawn since (clean or not checked yet) goes back in, and the gate decides on the redraw.
+  const stillOutNs = new Set([...(view?.readiness.safety.blockedPages || []), ...(view?.readiness.missing || []).flatMap((m) => (m.kind === 'page' && typeof m.n === 'number' ? [m.n] : []))]);
+  const excluded = (view?.excludedPageIds || []).filter((id) => doc.pages.some((p) => p.id === id && stillOutNs.has(p.n)));
+  // Pages blocked since publishing (not yet excluded): the honest next step is "Publish without page N".
+  const newlyBlockedIds = live && view?.readiness.safety.status === 'blocked' ? pageIdsFor(doc, view.readiness.safety.blockedPages).filter((id) => !excluded.includes(id)) : [];
+  const newlyBlockedNs = doc.pages.filter((p) => newlyBlockedIds.includes(p.id)).map((p) => p.n);
+  const updateRequest = (alsoExclude: string[] = []): PublishRequest | null => {
+    if (!view) return null;
+    const excludePageIds = [...new Set([...excluded, ...alsoExclude])];
+    return { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, ...(excludePageIds.length ? { excludePageIds } : {}) };
+  };
+  const updateNow = () => {
+    const request = updateRequest();
+    if (request) void run(() => publishComic(doc.id, request));
+  };
+  const updateWithout = () => {
+    const request = updateRequest(newlyBlockedIds);
+    if (request) void run(() => publishComic(doc.id, request));
+  };
 
   const frame =
     layout === 'bottom'
@@ -313,8 +335,15 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     </div>
   );
 
+  // "This is what people see before they tap": the FROZEN card (title, description, rating, cover
+  // fallback), never the live doc's text — edits stay private until Update (functions/_shared/shareHead.ts).
   const preview = live && view && (
-    <LinkPreviewMock title={title} description={doc.brief?.logline || doc.cover?.tagline || undefined} imageUrl={view.ogImageUrl} url={url} />
+    <LinkPreviewMock
+      title={view.card?.title || title}
+      description={ratedDescription(view.card ? view.card.description : doc.brief?.logline || doc.cover?.tagline || '', view.rating) || undefined}
+      imageUrl={view.ogImageUrl || view.card?.coverUrl}
+      url={url}
+    />
   );
 
   const controls = (
@@ -331,13 +360,46 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view?.behind && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
               <span className="min-w-0">You’ve made changes since publishing. Readers still see the published version.</span>
-              <button type="button" disabled={busy} onClick={updateNow} className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50">
-                {busy ? 'Updating…' : 'Update'}
-              </button>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {newlyBlockedNs.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={busy || doc.pages.length <= excluded.length + newlyBlockedIds.length}
+                    onClick={updateWithout}
+                    className="min-h-[44px] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-45"
+                  >
+                    Publish without page {newlyBlockedNs.join(', ')}
+                  </button>
+                )}
+                <button type="button" disabled={busy} onClick={updateNow} className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50">
+                  {busy ? 'Updating…' : 'Update'}
+                </button>
+              </div>
             </div>
           )}
           {live && view && <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />}
           {fallback}
+          {live && view && (
+            // Settings the server changes in place (PATCH): the link, the snapshot and readers' places stay.
+            <section aria-label="Link settings" className="min-w-0">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Link settings</div>
+              <div className="divide-y divide-[var(--ds-hairline-soft)]">
+                <Toggle label="Readers can download" hint="PDF and page images of the published version" checked={view.allowDownload} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowDownload: v }))} />
+                <Toggle label="Allow embedding" hint="Lets websites show it in a frame" checked={view.allowEmbed} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowEmbed: v }))} />
+                <Toggle label="Show my username" hint="Off keeps you anonymous to readers" checked={view.showCreator} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { showCreator: v }))} />
+              </div>
+              {hasEditions && current !== 'private' && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setPublishAs(current)}
+                  className="mt-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-1 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-50"
+                >
+                  <Languages className="h-4 w-4" aria-hidden /> Edit languages…
+                </button>
+              )}
+            </section>
+          )}
           {!live && !suspended && (
             <p className="m-0 text-[13px] text-[var(--ds-muted)]">Only you can see this comic. Choose “Anyone with link” to get a read-only link people can open on any device.</p>
           )}

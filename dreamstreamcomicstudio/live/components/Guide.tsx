@@ -394,7 +394,7 @@ export const GUIDES: HowTo[] = [
     steps: [
       { title: 'Turned on for this device?', body: 'Watch → Alerts on this device must be on. iPhone: only from the Home Screen app.' },
       { title: 'Send a test', body: 'If the test doesn’t arrive, check Focus / Do Not Disturb and your browser’s notification settings.' },
-      { title: 'Is the camera running?', body: 'Alerts come from the nursery phone. If it stops, everyone gets “camera offline” within a minute.' },
+      { title: 'Is the camera running?', body: 'Alerts come from the nursery phone. If it stops, everyone gets “camera offline” within two minutes.' },
     ],
   },
 ];
@@ -472,7 +472,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'How does sound detection work?', a: 'The camera phone runs an AI sound model (Google’s YAMNet, on the phone itself) plus a pitch-and-rhythm cry analyser and a smoke/CO alarm pattern detector. It recognizes crying, fussing, coughing, alarms, bangs, babbling, laughing, voices, music/TV and dogs — the audio never leaves the phone. Parents can set sensitivity while watching.', tags: 'cry detection ai model cough alarm' },
       { q: 'Talk and video call like FaceTime', a: 'While watching: tap Talk to open your mic (or press and hold to talk while holding). Tap Video to show your face on the nursery phone. Echo cancellation keeps it clear both ways.', tags: 'two-way audio facetime call' },
       { q: 'Alerts when my phone is locked', a: 'Turn on “Alerts on this device” while watching. Android and computers work right away. iPhone: Share → Add to Home Screen, open it from the Home Screen, then turn alerts on.', tags: 'notifications push iphone' },
-      { q: 'Camera offline alert', a: 'If the camera phone loses Wi-Fi, runs out of battery or the page is closed, everyone with alerts gets “camera offline” within about a minute.' },
+      { q: 'Camera offline alert', a: 'If the camera phone loses Wi-Fi, runs out of battery or the page is closed, everyone with alerts gets “camera offline”: about 20 seconds after the page closes, and within two minutes when the phone just goes silent.' },
       { q: 'Roles', a: 'Parent: everything incl. managing people. Caregiver: watch, talk, soothe, run a camera, log. Viewer: watch and get alerts. Each person can also have a name like Grandma or Nanny.' },
       { q: 'Soothing sounds', a: 'Soothe plays shush, white noise, rain, ocean or a heartbeat on the camera phone for 15–60 minutes. Sound detection ignores it.' },
       { q: 'Privacy pause', a: 'On the camera phone, Privacy pauses the video for everyone (for example while you change the baby) — sound monitoring and alerts keep running.' },

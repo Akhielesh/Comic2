@@ -18,6 +18,7 @@ import { StackedDailyChart } from './costs/StackedDailyChart';
 import { BudgetMeter, CategoryBreakdown, CostDelta, KpiTile, PeakDay, SkeletonBlock, SourceBadge } from './costs/CostBits';
 import { CloudflareCard } from './costs/CloudflareCard';
 import { StreamCard } from './costs/StreamCard';
+import { SecurityCard } from './costs/SecurityCard';
 import { COST_PALETTE_CLASS, CATEGORY_SHORT_LABEL, STACK_ORDER } from './costs/costPalette';
 import { fmtCount, fmtDay, fmtTime, fmtUsd, pctChange } from './costs/costFormat';
 import { UsageBudgetsPanel } from '../usage/UsageBudgetsPanel';
@@ -34,7 +35,7 @@ const LABEL_TO_DAYS: Record<RangeLabel, CostRangeDays> = { '7d': 7, '30d': 30, '
 const DAYS_TO_LABEL: Record<CostRangeDays, RangeLabel> = { 7: '7d', 30: '30d', 90: '90d' };
 const RANGE_STORAGE_KEY = 'ds.admin.costs.days';
 
-const MAIN_TABS = ['Products', 'Stream Studio', 'AI', 'Connectors', 'Fixed costs', 'Revenue'] as const;
+const MAIN_TABS = ['Products', 'Stream Studio', 'Security', 'AI', 'Connectors', 'Fixed costs', 'Revenue'] as const;
 type MainTab = (typeof MAIN_TABS)[number];
 const AI_TABS = ['By model', 'By user', 'By operation'] as const;
 type AiTab = (typeof AI_TABS)[number];
@@ -359,6 +360,17 @@ export const CostCentre: React.FC = () => {
             {report!.stream!.errors.length > 0 && `${report!.stream!.alerts.length > 0 ? ' · ' : 'Stream Studio: '}couldn’t measure ${report!.stream!.errors.length} ${report!.stream!.errors.length === 1 ? 'dataset' : 'datasets'}`}
           </button>
         )}
+        {(report?.security?.alerts.length ?? 0) > 0 && (
+          <button
+            type="button"
+            onClick={() => setTab('Security')}
+            className="inline-flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+            data-testid="security-alert-badge"
+          >
+            <TriangleAlert className="h-3.5 w-3.5" style={{ color: report!.security!.alerts.some((a) => a.severity === 'critical') ? '#d03b3b' : '#fab219' }} aria-hidden />
+            {`${report!.security!.alerts.length} security ${report!.security!.alerts.length === 1 ? 'alert' : 'alerts'}`}
+          </button>
+        )}
         <span className="text-[11px] text-[var(--ds-muted)]" aria-live="polite">
           {report ? `As of ${fmtTime(report.generatedAt)}` : loading ? 'Loading…' : ''}
         </span>
@@ -520,6 +532,8 @@ export const CostCentre: React.FC = () => {
             )}
 
             {tab === 'Stream Studio' && <StreamCard stream={report.stream} days={report.range.days} />}
+
+            {tab === 'Security' && <SecurityCard security={report.security} days={report.range.days} />}
 
             {tab === 'AI' && (
               <div className="space-y-2">

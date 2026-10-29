@@ -69,6 +69,7 @@ import {
 import { RING_MS, type CallRecord } from './familyCalls';
 import { callRpc, verifyMember, type SupabaseEnv } from './supabaseAuth';
 import { isAllowedPushEndpoint, sendWebPush, type PushSubscriptionJSONLike, type VapidKeys } from './webpush';
+import { replacedEndpoint, storeReplacing } from './pushReplace';
 import { UsageMeter, type SocketUsage } from './usageMeter';
 import { FAIR_USE, isUsageKind, sanitizeUsage, type UsageMonth } from '../../shared/stream/usage';
 
@@ -749,8 +750,11 @@ export class UserLine {
     if (!sub || typeof sub.endpoint !== 'string' || !sub.keys?.p256dh || !sub.keys?.auth) return;
     if (!isAllowedPushEndpoint(sub.endpoint) || sub.endpoint.length > 1024) return this.send(ws, { t: 'call_err', error: 'push' });
     const rec: PushRec = { sub: { endpoint: sub.endpoint, keys: { p256dh: clip(sub.keys.p256dh, 200), auth: clip(sub.keys.auth, 64) } }, at: Date.now() };
-    const all = ((await this.get<PushRec[]>('push')) ?? []).filter((r) => r.sub.endpoint !== rec.sub.endpoint);
-    await this.state.storage.put('push', [...all, rec].slice(-PUSH_SUBS_CAP));
+    // `was`: this browser's old dreamstreamstudio.ai/live subscription (pushReplace.ts) — this line
+    // is one account's, so every record here is theirs.
+    const was = replacedEndpoint(sub, rec.sub.endpoint);
+    const all = storeReplacing((await this.get<PushRec[]>('push')) ?? [], rec, was, () => true);
+    await this.state.storage.put('push', all.slice(-PUSH_SUBS_CAP));
   }
 
   private async onPushOff(msg: Record<string, unknown>): Promise<void> {

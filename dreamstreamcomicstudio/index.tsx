@@ -3,8 +3,14 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AuthProvider } from './contexts/AuthContext';
 import { initTelemetry } from './services/telemetry';
+import { bootDsSkin } from './services/dsSkin';
 
 import { BrowserRouter } from 'react-router-dom';
+
+// Design skin first, synchronously, before anything renders: on the comics host <html> gets
+// `data-ds-skin="atlas"` (plus the font preloads and the token registration the theme cross-fade
+// needs); on the apex nothing changes (docs/design/atlas-skin.md).
+bootDsSkin({ document });
 
 // Start capturing uncaught errors / unhandled rejections + batch-flush telemetry
 // as early as possible, so crashes during initial render are still recorded.

@@ -23,7 +23,12 @@
     "COMPANY_NAME": "DreamStream Studio",
     "COMPANY_ADDRESS": "",
     "LOGO_URL": "",
-    "SUPABASE_VERIFY_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co"
+    "SUPABASE_VERIFY_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
+    // New-sign-in alerts (POST /security) carry the one-time "Not you? Secure my account" button
+    // only when this is "on": the page it opens (#/secure, live/views/account/SecureAccount.tsx)
+    // ships with it (ADR 0006 WS-5). Anything else → the email points to Settings → Security.
+    // Keep it here, not in the dashboard: `wrangler deploy` replaces dashboard vars.
+    "SECURE_ACCOUNT_PAGE": "on"
   }
 
   // No public route needed — the backend reaches this Worker on its *.workers.dev URL,

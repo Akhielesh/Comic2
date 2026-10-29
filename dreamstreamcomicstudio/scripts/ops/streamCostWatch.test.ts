@@ -67,10 +67,10 @@ describe('stream cost watch — fails safe when Cloudflare data is missing', () 
   });
 
   it('a revoked token (every dataset failing) opens the issue instead of reporting nothing', () => {
-    const all = (['requests', 'periodic', 'r2', 'turn', 'ae'] as const).map((d) => gap(d, 'HTTP 403: Authentication error'));
+    const all = (['requests', 'periodic', 'storage', 'r2', 'turn', 'ae'] as const).map((d) => gap(d, 'HTTP 403: Authentication error'));
     const plan = planIssueAction(null, [], ctx(...all));
     expect(plan.kind).toBe('open');
-    expect(readState(plan.body)).toHaveLength(5);
+    expect(readState(plan.body)).toHaveLength(6);
     expect(plan.body).toContain('R2 operations + storage: HTTP 403: Authentication error');
   });
 
@@ -142,7 +142,7 @@ describe('stream cost watch — run', () => {
     });
     const out = await main({ CF_ANALYTICS_API_TOKEN: 't0k', CLOUDFLARE_ACCOUNT_ID: 'acct-123', GITHUB_TOKEN: 'g', GITHUB_REPOSITORY: 'o/r' });
     expect(out).toMatchObject({ plan: 'update', exitCode: 1 });
-    expect(out.unmeasured).toHaveLength(5);
+    expect(out.unmeasured).toHaveLength(6);
     expect(writes.some((w) => w.body.state === 'closed')).toBe(false);
     const patched = writes.find((w) => w.method === 'PATCH')!;
     expect(readState(String(patched.body.body))).toContain('turn_leak:critical');
@@ -161,7 +161,7 @@ describe('stream cost watch — run', () => {
         : new Response(JSON.stringify({ data: { viewer: { accounts: [] } } }), { status: 200 })
     );
     const out = await main({ CF_ANALYTICS_API_TOKEN: 't', CLOUDFLARE_ACCOUNT_ID: 'wrong' });
-    expect(out).toMatchObject({ exitCode: 1, unmeasured: ['requests', 'periodic', 'r2', 'turn'] });
+    expect(out).toMatchObject({ exitCode: 1, unmeasured: ['requests', 'periodic', 'storage', 'r2', 'turn'] });
   });
 });
 
@@ -170,5 +170,6 @@ function healthyAccount(body: string, turnBytes = 0): Record<string, unknown> {
   if (body.includes('callsTurnUsageAdaptiveGroups')) return { callsTurnUsageAdaptiveGroups: [{ sum: { egressBytes: turnBytes } }] };
   if (body.includes('durableObjectsInvocationsAdaptiveGroups')) return { workersInvocationsAdaptive: [], durableObjectsInvocationsAdaptiveGroups: [] };
   if (body.includes('durableObjectsPeriodicGroups')) return { durableObjectsPeriodicGroups: [] };
+  if (body.includes('durableObjectsStorageGroups')) return { durableObjectsStorageGroups: [] };
   return { r2OperationsAdaptiveGroups: [], r2StorageAdaptiveGroups: [] };
 }

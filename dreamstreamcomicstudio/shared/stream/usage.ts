@@ -312,8 +312,8 @@ export const STREAM_ALLOWANCES = {
 } as const;
 
 /** Metered dimensions with a free allowance and a unit price beyond it. */
-export type MeterId = 'doRequests' | 'doGbSeconds' | 'doRowsWritten' | 'r2StoredGb' | 'r2ClassA' | 'r2ClassB' | 'turnGb' | 'workerRequests';
-export const METER_IDS: readonly MeterId[] = ['doRequests', 'doGbSeconds', 'doRowsWritten', 'r2StoredGb', 'r2ClassA', 'r2ClassB', 'turnGb', 'workerRequests'];
+export type MeterId = 'doRequests' | 'doGbSeconds' | 'doRowsWritten' | 'doStoredGb' | 'r2StoredGb' | 'r2ClassA' | 'r2ClassB' | 'turnGb' | 'workerRequests';
+export const METER_IDS: readonly MeterId[] = ['doRequests', 'doGbSeconds', 'doRowsWritten', 'doStoredGb', 'r2StoredGb', 'r2ClassA', 'r2ClassB', 'turnGb', 'workerRequests'];
 
 export interface MeterSpec {
   label: string;
@@ -327,6 +327,8 @@ export const STREAM_METERS: Readonly<Record<MeterId, MeterSpec>> = {
   doRequests: { label: 'Durable Object requests', unit: 'requests', allowance: STREAM_ALLOWANCES.doRequests, usdPerUnit: STREAM_UNIT_PRICES.doReqPerM / 1e6 },
   doGbSeconds: { label: 'Durable Object duration', unit: 'GB-s', allowance: STREAM_ALLOWANCES.doGbSeconds, usdPerUnit: STREAM_UNIT_PRICES.gbSecPerM / 1e6 },
   doRowsWritten: { label: 'Durable Object rows written', unit: 'rows', allowance: STREAM_ALLOWANCES.doRowsWritten, usdPerUnit: STREAM_UNIT_PRICES.rowsPerM / 1e6 },
+  // A level, not a running total (like R2 storage): the latest day's stored bytes, all Durable Objects on the account.
+  doStoredGb: { label: 'Durable Object storage', unit: 'GB-month', allowance: STREAM_ALLOWANCES.doStoredGb, usdPerUnit: STREAM_UNIT_PRICES.doStoredGbMonth },
   r2StoredGb: { label: 'R2 storage', unit: 'GB-month', allowance: STREAM_ALLOWANCES.r2StoredGb, usdPerUnit: STREAM_UNIT_PRICES.r2GbMonth },
   r2ClassA: { label: 'R2 Class A operations', unit: 'operations', allowance: STREAM_ALLOWANCES.r2ClassA, usdPerUnit: STREAM_UNIT_PRICES.r2APerM / 1e6 },
   r2ClassB: { label: 'R2 Class B operations', unit: 'operations', allowance: STREAM_ALLOWANCES.r2ClassB, usdPerUnit: STREAM_UNIT_PRICES.r2BPerM / 1e6 },
@@ -566,6 +568,31 @@ export function projectMonthEnd(monthToDate: number, nowMs: number, limit?: numb
 
 // ─── Alerts (pure; the Cost centre badge and the daily GitHub watch use the same rules) ──
 
+/**
+ * The simulated 12 h night that meets ADR 0006's Phase 0 budgets: one camera and two viewers,
+ * live-worker/src/monitorRoom.night.test.ts (`NIGHT_OUT=<file> npx vitest run …night.test.ts`, re-run
+ * 2026-10-29). Billed requests (Cloudflare pricing) = alarms + upgrades + incoming messages ÷ 20, with
+ * the app's auto-answered pings counted too (the conservative reading) = 542.
+ */
+export const NIGHT_SIM = { alarms: 216, upgrades: 6, delivered: 1212, autoAnsweredPings: 5180, billedRequests: 542 } as const;
+
+/** ADR 0006 Phase 0: ≤ 1,000 BILLED Durable Object requests per active nursery-day (incoming WebSocket messages 20:1). */
+export const PHASE0_BILLED_REQUESTS = 1000;
+
+/**
+ * The same budget in the unit Cloudflare's analytics MEASURE. `durableObjectsInvocationsAdaptiveGroups`
+ * counts alarms, upgrades and every incoming message on a hibernatable socket 1:1 ("the 20:1 ratio does
+ * not affect Durable Object metrics and analytics, which reflect actual usage" — DO pricing page), and
+ * it can't split messages from alarms. So the billed budget is converted at the simulated night's mix:
+ * that night is 216 + 6 + 1,212 = 1,434 invocations for 542 billed, so 1,000 billed ≈ 2,646
+ * invocations, rounded down to 2,600. (Auto-answered pings wake nothing, so they are not invocations.)
+ *
+ * The mix matters: at 2,600 invocations a night whose extra traffic is all messages bills ≈ 340
+ * requests, one whose extra is all alarms or reconnects ≈ 1,450. Alarm loops also re-arm (a row
+ * written each), so `write_diet` and `hibernation` catch those first.
+ */
+export const PHASE0_DO_INVOCATIONS = Math.floor(((NIGHT_SIM.alarms + NIGHT_SIM.upgrades + NIGHT_SIM.delivered) * PHASE0_BILLED_REQUESTS) / NIGHT_SIM.billedRequests / 100) * 100;
+
 export type StreamAlertSeverity = 'warning' | 'critical';
 
 export interface StreamAlert {
@@ -597,8 +624,13 @@ export interface StreamAlertInput {
   turnTopIdentifierGbDay?: number | null;
   /** DO GB-s per active nursery-day, oldest first (last few days). */
   gbSecPerNurseryDay?: number[] | null;
-  /** DO rows written per active nursery-day, latest (applies after ADR 0006 Phase 0 ships). */
+  /** DO rows written per active nursery-day — the 7-day median when known, else month to date (applies after ADR 0006 Phase 0 ships). */
   rowsPerNurseryDay?: number | null;
+  /**
+   * DO INVOCATIONS per active nursery-day as Cloudflare's analytics count them (every incoming WebSocket
+   * message 1:1, not the billed 20:1) — the 7-day median (applies after ADR 0006 Phase 0 ships).
+   */
+  doInvocationsPerNurseryDay?: number | null;
   phase0Shipped?: boolean;
   /** Our-server share (0–1) of monitor viewer-minutes over the last 7 days. */
   serverShare7d?: number | null;
@@ -617,6 +649,8 @@ export const ALERT_THRESHOLDS = {
   gbSecPerNurseryDay: 40,
   gbSecDaysInARow: 2,
   rowsPerNurseryDay: 1800,
+  /** ADR 0006 Phase 0 budget in measured invocations per active nursery-day (7-day median): PHASE0_DO_INVOCATIONS. */
+  doInvocationsPerNurseryDay: PHASE0_DO_INVOCATIONS,
   turnIdentifierGbDay: 20,
   turnGbBeforeThe15th: 500,
   serverShare7d: 0.1,
@@ -702,6 +736,15 @@ export function evaluateStreamAlerts(input: StreamAlertInput): StreamAlert[] {
       severity: 'warning',
       title: 'MonitorRoom write diet regressed',
       cause: `${fmtNum(input.rowsPerNurseryDay)} rows written per active nursery-day (budget ${fmtNum(t.rowsPerNurseryDay)}).`
+    });
+  }
+
+  if (input.phase0Shipped && input.doInvocationsPerNurseryDay != null && input.doInvocationsPerNurseryDay > t.doInvocationsPerNurseryDay) {
+    out.push({
+      id: 'request_diet',
+      severity: 'warning',
+      title: 'MonitorRoom request budget exceeded',
+      cause: `${fmtNum(input.doInvocationsPerNurseryDay)} Durable Object invocations per active nursery-day, as Cloudflare's analytics count them (each incoming WebSocket message once; the bill counts 20 as one request). Budget ${fmtNum(t.doInvocationsPerNurseryDay)} — the ADR's ${fmtNum(PHASE0_BILLED_REQUESTS)} billed requests at the simulated night's mix. Look for a chatty client: status sent more often than on change, a reconnect loop, or relay frames to hidden viewers.`
     });
   }
 

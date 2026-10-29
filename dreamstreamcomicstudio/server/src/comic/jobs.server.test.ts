@@ -5,6 +5,8 @@
 // activity cost badges. Fakes only at the network edge; $0.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, pageSpecHash, type CharacterLook, type ComicDoc } from '../../../shared/comic/doc.js';
+import { editionReadiness, i18nOf, lineSourceHash } from '../../../shared/comic/i18n.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import { inverseOps } from '../../../shared/comic/undo.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
@@ -151,6 +153,158 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(session.doc, tooMany, sctx)).toThrow(/Too many changes/);
     const translations = Array.from({ length: 2001 }, (): unknown => ({ op: 'translation', lang: 'hi', lineId: 'ln_1_2', patch: { text: 'x' } }));
     expect(() => sanitizePatchOps(session.doc, translations, sctx)).toThrow(/Too many changes/);
+  });
+
+  it('Undo of a removed edition is accepted as one batch: the edition is re-created first, then its lines, titles and balloons — 300 lines included', () => {
+    const { session, sctx } = ctxFor();
+    const base = session.doc;
+    const linesFor = (n: number, k: number) => Array.from({ length: 34 }, (_, i) => ({ id: `ln_${n}_${k}_${i}`, kind: 'speech' as const, speakerId: 'c_maya', text: `Line ${n}.${k}.${i}` }));
+    const big: ComicDoc = {
+      ...base,
+      cover: { ...base.cover, title: 'Spice Run', tagline: 'Fast.' },
+      pages: base.pages.map((p) => ({ ...p, panels: p.panels.map((pn) => ({ ...pn, lines: linesFor(p.n, pn.n) })) }))
+    };
+    const all = big.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    expect(all.length).toBeGreaterThanOrEqual(300);
+    const te = Object.fromEntries(all.map((l) => [l.id, { text: `తెలుగు ${l.id}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), at: 1, gloss: 'g' }]));
+    const before = applyOps(big, [
+      { op: 'edition', lang: 'te', patch: { register: 'formal' } },
+      { op: 'translations', lang: 'te', lines: te },
+      { op: 'edition_text', lang: 'te', field: 'cover.title', value: { text: 'మసాలా పరుగు', status: 'edited', sourceHash: 'h', at: 1 } },
+      { op: 'edition_balloon', lang: 'te', lineId: all[0].id, patch: { x: 0.2, y: 0.3, w: 0.25, pinned: true } }
+    ]);
+    const remove: DocOp[] = [{ op: 'edition', lang: 'te', patch: null }];
+    const after = applyOps(before, remove);
+    expect(i18nOf(after).editions.te).toBeUndefined();
+    const inverse = inverseOps(before, remove);
+    expect(inverse[0]).toEqual({ op: 'edition', lang: 'te', patch: { register: 'formal' } });
+    expect(inverse.length).toBeGreaterThan(300);
+    const restored = applyOps(after, sanitizePatchOps(after, inverse, sctx));
+    const e = i18nOf(restored).editions.te;
+    expect(e.register).toBe('formal');
+    expect(Object.keys(e.lines)).toHaveLength(all.length);
+    expect(e.lines[all[5].id]).toMatchObject({ text: `తెలుగు ${all[5].id}`, gloss: 'g', sourceHash: lineSourceHash(all[5]) });
+    expect(e.cover?.title).toMatchObject({ text: 'మసాలా పరుగు' });
+    expect(e.balloons[all[0].id]).toEqual({ x: 0.2, y: 0.3, w: 0.25, pinned: true });
+    // The allowance is for that undo alone: the same batch padded with any other op is an ordinary (≤ 200) edit.
+    expect(() => sanitizePatchOps(after, [...inverse, { op: 'note_add', text: 'x' }], sctx)).toThrow(/Too many changes/);
+    // And a translation for an edition nobody re-creates in the batch is still refused.
+    expect(() => sanitizePatchOps(after, [inverse[1]], sctx)).toThrow(/no Telugu translation yet/);
+  });
+
+  it('Undo of a removed edition never lifts its publish block: an unreviewed AI draft comes back "waiting for review"', () => {
+    const { session, sctx } = ctxFor();
+    const base: ComicDoc = { ...session.doc, format: { ...session.doc.format, lettering: 'overlay' } };
+    const all = base.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    expect(all.length).toBeGreaterThan(1);
+    const machine = all[1];
+    const te = Object.fromEntries(
+      all.map((l) => [l.id, { text: `తెలుగు ${l.id}`, status: l.id === machine.id ? ('machine' as const) : ('reviewed' as const), sourceHash: lineSourceHash(l), at: 1 }])
+    );
+    const before = applyOps(base, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: te }
+    ]);
+    expect(editionReadiness(before, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'unreviewed', count: 1 })] });
+    const remove: DocOp[] = [{ op: 'edition', lang: 'te', patch: null }];
+    const after = applyOps(before, remove);
+    const restored = applyOps(after, sanitizePatchOps(after, inverseOps(before, remove), sctx));
+    expect(i18nOf(restored).editions.te.lines[machine.id]).toMatchObject({ text: `తెలుగు ${machine.id}`, status: 'machine' });
+    expect(i18nOf(restored).editions.te.lines[all[0].id]).toMatchObject({ status: 'edited' }); // never re-minted 'reviewed'
+    expect(editionReadiness(restored, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'unreviewed', count: 1 })] });
+  });
+
+  it('a line create keeps its position and its style through the sanitizer (⌘D and Undo of a delete land where the client put them)', () => {
+    const { session, sctx } = ctxFor();
+    const doc = applyOps(session.doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { kind: 'speech', speakerId: 'c_maya', text: 'Second', style: { textCase: 'upper' } } }]);
+    const order = (d: ComicDoc) => d.pages[0].panels[1].lines.map((l) => l.id);
+    const styleOf = (d: ComicDoc, id: string) => d.pages[0].panels[1].lines.find((l) => l.id === id)?.style;
+    // ⌘D: the copy sits right after its original, with the same style (lettering.md §7.5).
+    const copy: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_copy', patch: { kind: 'speech', speakerId: 'c_maya', text: 'Line on page 1', style: { textCase: 'upper' } }, index: 1 };
+    const clean = sanitizePatchOps(doc, [copy], sctx);
+    expect(clean).toEqual([copy]);
+    expect(order(applyOps(doc, clean))).toEqual(['ln_1_2', 'ln_copy', 'ln_1_2b']);
+    expect(styleOf(applyOps(doc, clean), 'ln_copy')).toEqual({ textCase: 'upper' });
+    // Undo of a delete puts the line back where it was.
+    const del: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: null };
+    const deleted = applyOps(doc, [del]);
+    const undone = applyOps(deleted, sanitizePatchOps(deleted, inverseOps(doc, [del]), sctx));
+    expect(order(undone)).toEqual(['ln_1_2', 'ln_1_2b']);
+    expect(undone.pages[0].panels[1].lines).toEqual(doc.pages[0].panels[1].lines);
+    // Bounds (contract §5.4 `line`): index an integer ≥ 0, style ≤ 2 KB; null clears a style on an update.
+    expect(() => sanitizePatchOps(doc, [{ ...copy, index: -1 }], sctx)).toThrow(/index/);
+    expect(() => sanitizePatchOps(doc, [{ ...copy, index: 1.5 }], sctx)).toThrow(/index/);
+    const huge: unknown = { ...copy, patch: { kind: 'speech', text: 'x', style: { fontFamily: 'x'.repeat(2100) } } };
+    expect(() => sanitizePatchOps(doc, [huge], sctx)).toThrow(/too large/);
+    const cleared = sanitizePatchOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { style: null } as never }], sctx);
+    expect(styleOf(applyOps(doc, cleared), 'ln_1_2b')).toBeUndefined();
+  });
+
+  it('line_move ("Move to panel N") settles exactly as the client showed it and never prunes a translation; Undo goes through the same door', () => {
+    const { session, sctx } = ctxFor();
+    const line = session.doc.pages[0].panels[1].lines[0];
+    const doc = applyOps(session.doc, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: { ln_1_2: { text: 'పేజీ 1', status: 'reviewed', sourceHash: lineSourceHash(line), at: 1 } } }
+    ]);
+    const move: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3', index: 0 };
+    const clean = sanitizePatchOps(doc, [move], sctx);
+    expect(clean).toEqual([move]);
+    const after = applyOps(doc, clean);
+    expect(after.pages[0].panels.map((p) => p.lines.map((l) => l.id))).toEqual([[], [], ['ln_1_2']]);
+    expect(i18nOf(after).editions.te.lines.ln_1_2).toEqual(i18nOf(doc).editions.te.lines.ln_1_2);
+    expect(sanitizePatchOps(after, inverseOps(doc, clean), sctx)).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_2', index: 0 }]);
+    // No index = last. A bad index, an unknown line or panel, or a full panel rejects the batch.
+    expect(sanitizePatchOps(doc, [{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3' }], sctx)).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3' }]);
+    expect(() => sanitizePatchOps(doc, [{ ...move, index: -1 }], sctx)).toThrow(/index/);
+    expect(() => sanitizePatchOps(doc, [{ ...move, id: 'ghost' }], sctx)).toThrow(/no longer on the page/);
+    expect(() => sanitizePatchOps(doc, [{ ...move, toPanelId: 'ghost' }], sctx)).toThrow(/panel/);
+    const full = applyOps(doc, Array.from({ length: DOC_LIMITS.linesPerPanel }, (_, i): DocOp => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_3', id: `ln_full_${i}`, patch: { kind: 'caption', text: `c${i}` } })));
+    expect(() => sanitizePatchOps(full, [move], sctx)).toThrow(/already has/);
+  });
+
+  it('Undo of deleting a translated line brings the line back with its translation and edition balloon (one batch)', () => {
+    const { session, sctx } = ctxFor();
+    const line = session.doc.pages[0].panels[1].lines[0];
+    const doc = applyOps(session.doc, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: { [line.id]: { text: 'పేజీ 1', status: 'machine', sourceHash: lineSourceHash(line), at: 1, gloss: 'Page 1' } } },
+      { op: 'edition_balloon', lang: 'te', lineId: line.id, patch: { x: 0.2, y: 0.3, w: 0.25, pinned: true } }
+    ]);
+    const del: DocOp[] = [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: line.id, patch: null }];
+    const after = applyOps(doc, del);
+    expect(i18nOf(after).editions.te.lines[line.id]).toBeUndefined();
+    const restored = applyOps(after, sanitizePatchOps(after, inverseOps(doc, del), sctx));
+    expect(restored.pages[0].panels[1].lines).toEqual(doc.pages[0].panels[1].lines);
+    expect(i18nOf(restored).editions.te.lines[line.id]).toMatchObject({ text: 'పేజీ 1', status: 'machine', gloss: 'Page 1', sourceHash: lineSourceHash(line) });
+    expect(i18nOf(restored).editions.te.balloons[line.id]).toEqual({ x: 0.2, y: 0.3, w: 0.25, pinned: true });
+    // A translation for a line nobody creates in the batch is still refused.
+    expect(() => sanitizePatchOps(after, [{ op: 'translation', lang: 'te', lineId: line.id, patch: { text: 'x' } }], sctx)).toThrow(/no longer exists/);
+  });
+
+  it('several line_moves in one batch are counted together: a panel is never pushed past its line limit', () => {
+    const { session, sctx } = ctxFor();
+    const limit = DOC_LIMITS.linesPerPanel;
+    const caption = (panelId: string, lineId: string): DocOp => ({ op: 'line', pageId: 'pg_1', panelId, id: lineId, patch: { kind: 'caption', text: lineId } });
+    // pn_1_3 one short of the limit; two lines waiting in pn_1_1.
+    const doc = applyOps(session.doc, [
+      ...Array.from({ length: limit - 1 }, (_, i) => caption('pn_1_3', `ln_full_${i}`)),
+      caption('pn_1_1', 'ln_a'),
+      caption('pn_1_1', 'ln_b')
+    ]);
+    const moveA: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_a', toPanelId: 'pn_1_3' };
+    const moveB: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_3' };
+    expect(sanitizePatchOps(doc, [moveA], sctx)).toEqual([moveA]);
+    expect(() => sanitizePatchOps(doc, [moveA, moveB], sctx)).toThrow(/already has/);
+    // A create in the same batch counts too…
+    expect(() => sanitizePatchOps(doc, [caption('pn_1_3', 'ln_new'), moveA], sctx)).toThrow(/already has/);
+    // …and a delete or a move out frees room (no false refusal).
+    const freed = [caption('pn_1_3', 'ln_full_0'), moveA, moveB].map((op, i) => (i === 0 ? { ...op, patch: null } : op)) as DocOp[];
+    expect(sanitizePatchOps(doc, freed, sctx)).toHaveLength(3);
+    const outThenIn: DocOp[] = [{ op: 'line_move', pageId: 'pg_1', id: 'ln_full_1', toPanelId: 'pn_1_2' }, moveA, moveB];
+    expect(sanitizePatchOps(doc, outThenIn, sctx)).toHaveLength(3);
+    const settled = applyOps(doc, sanitizePatchOps(doc, outThenIn, sctx));
+    expect(settled.pages[0].panels[2].lines).toHaveLength(limit);
   });
 });
 

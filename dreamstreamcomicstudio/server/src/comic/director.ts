@@ -52,6 +52,18 @@ export const MAX_TURN_IMAGES = 8;
 const PREVIEW_EDGE = 768;
 const SUMMARY_CHAR_BUDGET = 12_000;
 const MEMORY_MARKER = /\n?⟦through:([A-Za-z0-9_-]+)⟧\s*$/;
+/**
+ * Model-call failures that waiting does not fix and whose message already says what to do
+ * (usage used up / a limit / a cooldown): the reply IS that message, with no "try again in a
+ * moment" and no Try-again chip that would fail identically.
+ */
+const NOT_TRANSIENT_FAILURES: ReadonlySet<string> = new Set(['BILLING_DENIED', 'BUDGET_EXCEEDED', 'LIMIT', 'COOLDOWN']);
+/**
+ * The end of a streamed chunk that may still be growing into a dollar amount ("$0." + "12",
+ * "≈ " + "$5"): held back until the next chunk or the end of the round completes it, so a
+ * governed user's live draft is governed the same way as the committed message.
+ */
+const GROWING_AMOUNT_RE = /(?:[≈~]\s?)?<?\$[\d.,]*$|[≈~<]\s?$/;
 
 // ── System prompt (§6.8, director.md §3.11) ──────────────────────────────────
 
@@ -114,6 +126,13 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
  * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected.
+ *
+ * The summary has a body (story, cast, places, pages) and a tail (feature lines, the user's
+ * focus, the money settings and spend — with the governed "never in dollars" instruction —
+ * the open approval and the open question). The tail is what the model must never lose, so it
+ * is built first and never clipped: when a big book overflows SUMMARY_CHAR_BUDGET, only the body
+ * shrinks — notes to the last 6, cast lines to name/id/tier and page lines to number/status —
+ * and is hard-cut last.
  */
 export function summarizeDocForDirector(
   doc: ComicDoc,
@@ -123,6 +142,32 @@ export function summarizeDocForDirector(
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
+
+  const tail: string[] = [];
+  for (const extra of extraLines) if (extra) tail.push(clip(extra, 400));
+  const focus = focusLine(doc, opts.focus);
+  if (focus) tail.push(focus);
+  const set = doc.settings;
+  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
+  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
+  tail.push(
+    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
+  );
+  tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
+  if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
+  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
+  if (open) tail.push(open);
+  const tailText = tail.join('\n');
+
+  const room = SUMMARY_CHAR_BUDGET - tailText.length - 1;
+  let body = summaryBody(doc, false);
+  if (body.length > room) body = summaryBody(doc, true);
+  if (body.length > room) body = `${body.slice(0, Math.max(0, room - 1)).trimEnd()}…`;
+  return `${body}\n${tailText}`;
+}
+
+/** The clippable part of the DOC SUMMARY; `compact` is the shorter form used when the book overflows the budget. */
+function summaryBody(doc: ComicDoc, compact: boolean): string {
   const b = doc.brief;
   const f = doc.format;
   const lines: string[] = [`DOC SUMMARY (rev ${doc.rev})`];
@@ -133,7 +178,7 @@ export function summarizeDocForDirector(
     .join('; ');
   if (facts) lines.push(`Story: ${facts}`);
   if (b.themes?.length) lines.push(`Themes: ${b.themes.slice(0, 8).map((t) => clip(t, 60)).join(', ')}`);
-  if (b.notes.length) lines.push(`Notes:\n${b.notes.slice(-14).map((n) => `- ${clip(n, 200)}`).join('\n')}`);
+  if (b.notes.length) lines.push(`Notes:\n${b.notes.slice(compact ? -6 : -14).map((n) => `- ${clip(n, 200)}`).join('\n')}`);
   const sourceWords = (doc.source.script?.match(/\S+/g) || []).length;
   lines.push(`Source: ${sourceWords ? `${sourceWords.toLocaleString('en-US')} words of the user's script/story are saved` : 'none'}`);
   lines.push(
@@ -150,7 +195,9 @@ export function summarizeDocForDirector(
     lines.push(`Cast (${doc.cast.length}):`);
     for (const c of doc.cast.slice(0, 24)) {
       lines.push(
-        `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
+        compact
+          ? `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}`
+          : `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
       );
     }
     if (doc.cast.length > 24) lines.push(`- …and ${doc.cast.length - 24} more`);
@@ -166,7 +213,8 @@ export function summarizeDocForDirector(
     for (const p of [...doc.pages].sort((a, b) => a.n - b.n).slice(0, 40)) {
       const a = p.render.status === 'ready' ? p.render.asset : undefined;
       const shape = a && !aspectMatches(f.pageAspect, a.w, a.h) && a.w && a.h ? `, drawn ${aspectFromSize(a.w, a.h)}` : '';
-      lines.push(`- p${p.n} [${renderWord(p.render.status, isPageStale(doc, p))}${shape}${typeof p.render.qc?.score === 'number' ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}] ${clip(p.summary, 110)} (${p.panels.length} panels)`);
+      const status = `[${renderWord(p.render.status, isPageStale(doc, p))}${shape}${typeof p.render.qc?.score === 'number' ? `, qc ${p.render.qc.score.toFixed(2)}` : ''}]`;
+      lines.push(compact ? `- p${p.n} ${status}` : `- p${p.n} ${status} ${clip(p.summary, 110)} (${p.panels.length} panels)`);
     }
   } else {
     lines.push('Plan: none yet');
@@ -174,22 +222,7 @@ export function summarizeDocForDirector(
   lines.push(
     `Cover: ${renderWord(doc.cover.render.status)}${doc.cover.title ? ` (title “${clip(doc.cover.title, 80)}”)` : ''}${(doc.cover.lettering ?? 'in_art') === 'overlay' ? ', title lettered on top (free edits)' : ''}`
   );
-  for (const extra of extraLines) if (extra) lines.push(clip(extra, 400));
-  const focus = focusLine(doc, opts.focus);
-  if (focus) lines.push(focus);
-
-  const set = doc.settings;
-  const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride);
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok }).usd;
-  lines.push(
-    `Settings: ${set.quality} quality (${spec.nickname} ${resolution}, ${c.approx(tierPagePrice(set.quality, byok))}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
-  );
-  lines.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
-  if (doc.gate?.status === 'open') lines.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
-  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
-  if (open) lines.push(open);
-  const out = lines.join('\n');
-  return out.length <= SUMMARY_CHAR_BUDGET ? out : `${out.slice(0, SUMMARY_CHAR_BUDGET - 1)}…`;
+  return lines.join('\n');
 }
 
 // ── Conversation window ──────────────────────────────────────────────────────
@@ -198,7 +231,7 @@ export function summarizeDocForDirector(
 const cardText = (card: Card, cardDoc?: ComicDoc): string => {
   switch (card.type) {
     case 'options':
-      return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${card.answered.join(', ')}` : ''}]`;
+      return `[asked: ${clip(card.question, 160)} — options: ${card.choices.map((c) => clip(c.label, 40)).join(' / ')}${card.answered?.length ? `; answered: ${answeredLabels(card).join(', ')}` : ''}]`;
     case 'style_choice':
       return '[showed style options to pick from]';
     case 'cast':
@@ -348,6 +381,108 @@ const withEarlyRecap = (text: string, before: ComicDoc, after: ComicDoc, userTex
   return recap ? `Got it — ${recap}. ${text}` : text;
 };
 
+// ── Option-card answers ──────────────────────────────────────────────────────
+
+type OptionsCard = Extract<Card, { type: 'options' }>;
+
+/** `answered` holds choice ids (what the OptionsCard locks on); the model reads the labels. */
+const answeredLabels = (card: OptionsCard): string[] => (card.answered || []).map((a) => card.choices.find((c) => c.id === a)?.label ?? a);
+
+const normalizeAnswer = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** The choice ids the user's text picks on an options card (none when it is free text). */
+function pickedChoices(card: OptionsCard, userText: string): string[] {
+  const want = normalizeAnswer(userText);
+  if (!want) return [];
+  const byText = (s: string) => card.choices.find((c) => normalizeAnswer(c.reply || c.label) === s || normalizeAnswer(c.label) === s);
+  const one = byText(want);
+  if (one) return [one.id];
+  if (!card.multi) return [];
+  // A multi-select card sends its picks as "A, B and C" (OptionsCard.joinChoices).
+  const parts = want.split(/\s*,\s*|\s+and\s+/).filter(Boolean);
+  const ids = parts.map((p) => byText(p)?.id);
+  return parts.length > 1 && ids.every((id): id is string => !!id) ? [...new Set(ids)] : [];
+}
+
+/**
+ * The options card a message answers, as the client knows it (OptionsCard): the card's id and the
+ * picked choice ids, or `custom` for an answer typed into the card's own field. Optional: without
+ * it the message's text is matched against the open cards.
+ */
+export interface OptionAnswerRef {
+  id: string;
+  choiceIds?: string[];
+  custom?: string;
+}
+
+/** Longest custom answer kept on a card (the message itself keeps the full text). */
+const CUSTOM_ANSWER_CHARS = 500;
+
+/** Write `answered` on the card `cardId` of message `m` (one 'message' op: it upserts by id). */
+function commitAnswer(session: StudioContext['session'], m: Msg, cardId: string, answered: string[]): void {
+  const cards = (m.cards || []).map((c) => (c.type === 'options' && c.id === cardId ? { ...c, answered } : c));
+  session.commit([{ op: 'message', msg: { ...m, cards } }]);
+}
+
+/**
+ * Answer the card the client named: 'answered', 'kept' (the card is already answered, or the answer
+ * does not fit it — nothing is written: the client said which card, so no other card is guessed), or
+ * 'unknown' (no such card in the conversation: fall back to the text).
+ */
+function answerByRef(session: StudioContext['session'], userText: string, ref: OptionAnswerRef): 'answered' | 'kept' | 'unknown' {
+  const conv = session.doc.conversation;
+  for (let i = conv.length - 1; i >= 0; i -= 1) {
+    const m = conv[i];
+    if (m.role !== 'assistant') continue;
+    const card = m.cards?.find((c): c is OptionsCard => c.type === 'options' && c.id === ref.id);
+    if (!card) continue;
+    if (card.answered?.length) return 'kept';
+    const ids = [...new Set(ref.choiceIds || [])];
+    if (ids.length) {
+      const known = ids.every((id) => card.choices.some((c) => c.id === id));
+      if (!known || (!card.multi && ids.length !== 1)) return 'kept';
+      commitAnswer(session, m, card.id, ids);
+      return 'answered';
+    }
+    // A typed answer is the message itself: recorded only when the card takes one and it is what was sent.
+    const custom = normalizeAnswer(ref.custom || '');
+    if (!card.allowCustom || !custom || custom !== normalizeAnswer(userText)) return 'kept';
+    commitAnswer(session, m, card.id, [userText.replace(/\s+/g, ' ').trim().slice(0, CUSTOM_ANSWER_CHARS)]);
+    return 'answered';
+  }
+  return 'unknown';
+}
+
+/**
+ * A tapped option (the client sends the choice's reply as the user's message) is recorded on its
+ * card before the message is routed, so a reload or another device shows the question answered and
+ * the model's history reads "answered: …" (cardText). With the client's card reference (`ref`) the
+ * named card is answered — a typed custom answer too, and the right card when two share labels;
+ * without one (or when the named card is not in the conversation) the text is matched: free text
+ * that matches no choice leaves the cards as they are, and the most recent unanswered card in the
+ * director's window wins.
+ * Returns whether a card was answered. The route calls it for every message (fast paths included).
+ */
+export function recordOptionAnswer(session: StudioContext['session'], userText: string, ref?: OptionAnswerRef): boolean {
+  if (ref) {
+    const byRef = answerByRef(session, userText, ref);
+    if (byRef !== 'unknown') return byRef === 'answered';
+  }
+  const conv = session.doc.conversation;
+  for (let i = conv.length - 1; i >= Math.max(0, conv.length - HISTORY_WINDOW); i -= 1) {
+    const m = conv[i];
+    if (m.role !== 'assistant' || !m.cards?.length) continue;
+    for (const card of m.cards) {
+      if (card.type !== 'options' || card.answered?.length) continue;
+      const answered = pickedChoices(card, userText);
+      if (!answered.length) continue;
+      commitAnswer(session, m, card.id, answered);
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface DirectorTurnInput {
   text: string;
   attachments: AssetRef[];
@@ -356,6 +491,8 @@ export interface DirectorTurnInput {
   focus?: StudioFocus;
   /** SAFETY/IP NOTE from screenTurnInput (adapt decisions), appended to the user turn. */
   safetyNote?: string;
+  /** The route already matched this message against the open option cards (recordOptionAnswer), answered or not. */
+  optionAnswerHandled?: boolean;
 }
 
 /**
@@ -376,6 +513,11 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     at: startedAt,
     ...(attachments.length ? { attachments } : {})
   };
+  try {
+    if (!input.optionAnswerHandled) recordOptionAnswer(session, userText);
+  } catch (err) {
+    logger.warn('comic_director_answer_record_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
+  }
   session.commit([{ op: 'message', msg: userMsg }]);
   const msgId = newId('msg');
   try {
@@ -493,11 +635,34 @@ async function directorTurnBody(
 
   const spoken: string[] = [];
   let streamedChars = 0;
+  const emitDelta = (text: string) => session.emit({ type: 'delta', msgId, text });
+  // Governed users never see a dollar amount, not even in the live draft (the committed message
+  // goes through governDollars below): their stream is governed chunk by chunk, holding back a
+  // tail that may still be growing into an amount. A dollar view streams the model's text as is.
+  let held = '';
+  const flushHeld = (final: boolean) => {
+    if (!held) return;
+    let out = held;
+    held = '';
+    if (!final) {
+      const growing = GROWING_AMOUNT_RE.exec(out);
+      if (growing) {
+        held = out.slice(growing.index);
+        out = out.slice(0, growing.index);
+      }
+    }
+    if (out && !ctx.signal.aborted) emitDelta(governDollars(out, cost.view));
+  };
   const onDelta = (t: string) => {
     if (!t || ctx.signal.aborted) return;
-    if (streamedChars === 0 && spoken.length) session.emit({ type: 'delta', msgId, text: '\n\n' });
+    if (streamedChars === 0 && spoken.length) emitDelta('\n\n');
     streamedChars += t.length;
-    session.emit({ type: 'delta', msgId, text: t });
+    if (!cost.governed) {
+      emitDelta(t);
+      return;
+    }
+    held += t;
+    flushHeld(false);
   };
 
   let failure: StudioError | null = null;
@@ -521,6 +686,7 @@ async function directorTurnBody(
         onDelta,
         signal: ctx.signal
       });
+      flushHeld(true);
       const said = (result.text || '').trim();
       if (said) spoken.push(said);
       const calls = allowTools ? result.toolCalls || [] : [];
@@ -579,6 +745,7 @@ async function directorTurnBody(
       logger.warn('comic_director_turn_failed', { projectId: ctx.projectId, code: error.code, message: (err as Error)?.message });
     }
   } finally {
+    flushHeld(true);
     unwatch();
   }
 
@@ -602,17 +769,22 @@ async function directorTurnBody(
       allowCustom: true
     });
   }
-  if (failure) cards.push(noticeCard('error', failure.userMessage));
+  const notTransient = !!failure && NOT_TRANSIENT_FAILURES.has(failure.code);
+  // When the model said nothing, a not-transient reason is the reply itself (said once, not also as a card).
+  const reasonIsReply = notTransient && !text;
+  if (failure && !reasonIsReply) cards.push(noticeCard('error', failure.userMessage));
   if (!cancelled && !refused) {
     if (text) text = reconcileReply(withEarlyRecap(text, before, after, userText), { after, turn });
     else if (failure) {
       // Never claim work "keeps drawing" when it already failed (b4b5774f): say what really happened.
       const runLine = runFailureLine(after, runOutcome(after, turn));
-      text = runLine
-        ? `Sorry — I couldn't finish my reply. ${runLine}`
-        : turn.outcome === 'started'
-          ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
-          : "Sorry — I couldn't finish that just now. Try again in a moment.";
+      text = reasonIsReply
+        ? [failure.userMessage, runLine].filter(Boolean).join(' ')
+        : runLine
+          ? `Sorry — I couldn't finish my reply. ${runLine}`
+          : turn.outcome === 'started'
+            ? "Sorry — I couldn't finish my reply, but what I already started keeps drawing."
+            : "Sorry — I couldn't finish that just now. Try again in a moment.";
     } else text = composeTurnReply({ before, after, turn, userText });
   }
   if (cancelled && !text && !cards.length) {
@@ -643,7 +815,8 @@ async function directorTurnBody(
   // Honest retry chips for renders this turn started that already failed.
   const run = runOutcome(after, turn);
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
-  if (failure && userText) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
+  // A Try-again chip only when trying again can work; a used-up allowance would fail the same way.
+  if (failure && userText && !notTransient) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
   const final: Msg = {
     id: msgId,
     role: 'assistant',
@@ -662,7 +835,27 @@ async function directorTurnBody(
   }
   recordTextSpend(ctx, tracker, 'chat', 'Director');
 
-  if (!cancelled) await maybeFoldMemory(ctx).catch(() => undefined);
+  if (!cancelled) foldMemoryAfterTurn(ctx);
+}
+
+/** The memory fold in flight per session (one at a time: the next fold picks up from its ⟦through⟧ marker). */
+const foldsInFlight = new WeakMap<StudioContext['session'], Promise<boolean>>();
+
+/**
+ * The fold runs after the turn, NOT inside it: the reply is committed, so the turn lock is released
+ * and the user's next message is accepted while the fold's model call is still out (a fold inside
+ * the lock answered a follow-up with BUSY every ~10th message of a long project). The request's
+ * stream stays open for it (ctx.track: the session is retained, `done` counts its spend), it only
+ * writes doc.memory, and a fold already running for this session covers the next turn too.
+ */
+function foldMemoryAfterTurn(ctx: StudioContext): void {
+  const session = ctx.session;
+  if (foldsInFlight.has(session)) return;
+  const work = maybeFoldMemory(ctx)
+    .catch(() => false)
+    .finally(() => foldsInFlight.delete(session));
+  foldsInFlight.set(session, work);
+  void ctx.track(work);
 }
 
 // ── Memory ───────────────────────────────────────────────────────────────────
