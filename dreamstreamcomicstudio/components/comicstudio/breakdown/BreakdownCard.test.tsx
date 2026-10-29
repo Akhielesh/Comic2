@@ -350,10 +350,14 @@ describe('views', () => {
     expect(within(panel).getByText('Free — done by the editor, no AI cost.')).toBeInTheDocument();
     expect(within(panel).getByText('Pages')).toBeInTheDocument();
     expect(within(panel).getByText('Character sheets')).toBeInTheDocument();
-    expect(within(panel).getByText(/2 calls · \$0\.42/)).toBeInTheDocument();
+    // The lock line (models.md §3.6 A): nothing drawn on a recorded model yet → the model the first image locks.
     const per = unitPrice(doc, 'page', { byok: false });
-    expect(within(panel).getByText(new RegExp(`Next pages draw on ${per.model}`))).toBeInTheDocument();
+    expect(within(panel).getByText(`Will draw with ${per.model} · locks when the first image is drawn`)).toBeInTheDocument();
     expect(within(panel).getByText(`≈${formatUsd(per.usd)}/page`)).toBeInTheDocument();
+    // Pro sees the insights tabs inline (models.md §4.1 L2); per-model figures live in the Models tab now.
+    const tabs = screen.getByRole('tablist', { name: 'Cost details' });
+    expect(within(tabs).getAllByRole('tab').map((t) => t.textContent)).toEqual(['Overview', 'Pages', 'Models', 'Trends']);
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Spent on this comic$0.42');
     // the drawn page's tile shows what was really spent on it
     expect(screen.getByRole('button', { name: /^Page 1, \$0\.30 spent, drawn, 2 panels/ })).toBeInTheDocument();
   });
