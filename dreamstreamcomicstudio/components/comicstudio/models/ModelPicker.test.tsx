@@ -63,8 +63,8 @@ const listRows = () => within(screen.getByRole('list', { name: 'Image models' })
 
 const axeViolations = async (el: HTMLElement) => {
   const res = await axe.run(el, {
-    runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'best-practice'] },
-    rules: { 'color-contrast': { enabled: false }, region: { enabled: false } }
+    runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice', 'experimental'] },
+    rules: { 'color-contrast': { enabled: false }, region: { enabled: false }, 'label-content-name-mismatch': { enabled: true } }
   });
   return res.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.failureSummary).join(' | ')}`);
 };
@@ -129,11 +129,13 @@ describe('picking', () => {
   it('a pickable row opens the confirm; disabled rows and the current model never do, and say why', () => {
     const { onPick } = panel({ caps: DEFAULT_CAPS });
     const pro = rowOf('nano-banana-pro');
+    // The pick button's name is the visible name (+ badges); its lines and reasons describe it.
     const main = within(pro).getByRole('button', { name: 'Nano Banana Pro' });
+    expect(main).toHaveAccessibleDescription(/Needs a paid plan or your own key/);
     expect(main).toHaveAttribute('aria-disabled', 'true');
     expect(within(pro).getByText('Needs a paid plan or your own key')).toBeInTheDocument();
     fireEvent.click(main);
-    fireEvent.click(within(rowOf('nano-banana-2.1')).getByRole('button', { name: 'Nano Banana 2.1' }));
+    fireEvent.click(within(rowOf('nano-banana-2.1')).getByRole('button', { name: /^Nano Banana 2\.1/ }));
     expect(within(rowOf('nano-banana-2.1')).getByText('This comic already uses it.')).toBeInTheDocument();
     expect(onPick).not.toHaveBeenCalled();
   });

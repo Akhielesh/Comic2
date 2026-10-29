@@ -316,7 +316,8 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
                     RADIUS_CONTROL,
                     HAIRLINE,
                     TRANSITION,
-                    on ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]',
+                    // Hover strengthens the border, never the fill: the muted sub-line keeps its 4.5:1 contrast.
+                    on ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-surface-soft)] hover:border-[var(--ds-muted)]',
                     c.disabled && 'cursor-not-allowed opacity-70',
                     'focus-within:ring-2 focus-within:ring-[var(--ds-ring)]'
                   )}

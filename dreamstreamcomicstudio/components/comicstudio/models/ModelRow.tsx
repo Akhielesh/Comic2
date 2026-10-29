@@ -12,7 +12,7 @@ import React, { useId } from 'react';
 import { AlertTriangle, Ban, Info } from 'lucide-react';
 import type { ModelHealth } from '../../../shared/comic/modelHealth';
 import { formatUsd, PLATFORM_MARKUP } from '../../../shared/comic/models';
-import { TONE_TEXT } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, HAIRLINE, RADIUS_CONTROL, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import type { CostFormat } from '../conversation/cost';
 import { ModelHealthDot } from '../reliability';
 import {
@@ -39,8 +39,7 @@ import {
 } from './copy';
 import type { PickerRowModel } from './pickerRows';
 import type { ClientPriceBook } from './priceBook';
-import { BTN_ICON, Badge, FOCUS, cx } from './ui';
-import { RADIUS_CONTROL, TRANSITION, HAIRLINE, ACCENT_SOFT_BG } from '../../chat/studioDesign';
+import { BTN_ICON, Badge, cx } from './ui';
 import type { Resolution } from '../../../shared/comic/doc';
 
 export interface ModelRowProps {
@@ -79,7 +78,6 @@ export const leaderboardText = (model: PickerRowModel, live: boolean): string =>
 const LINE = 'block min-w-0 text-[12px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]';
 
 export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed, live, prices, health, now, onPick, onDetails }) => {
-  const nameId = useId();
   const linesId = useId();
   const reasonsId = useId();
   const actionable = !model.disabled && !model.current;
@@ -119,45 +117,49 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
       data-current={model.current || undefined}
       data-suggested={model.suggested || undefined}
     >
+      {/* The card is one click target (the name button's ::after stretches over it, so its accessible name stays the
+          visible name + badges); the lines describe it; Details and the health dot sit above the stretch. */}
       <div
         className={cx(
-          'flex min-w-0 items-start gap-1',
+          'relative flex min-w-0 items-start gap-1',
           RADIUS_CONTROL,
           HAIRLINE,
           TRANSITION,
           model.current ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]',
           model.suggested && 'ring-2 ring-[var(--ds-ring)]',
-          actionable && 'hover:bg-[var(--ds-hover)]'
+          // Hover strengthens the border, never the fill (the muted lines keep their contrast).
+          actionable && 'hover:border-[var(--ds-muted)]',
+          model.disabled && 'opacity-80'
         )}
       >
-        <button
-          type="button"
-          aria-labelledby={nameId}
-          aria-describedby={`${linesId}${reasons.length || model.current ? ` ${reasonsId}` : ''}`}
-          aria-disabled={actionable ? undefined : true}
-          data-autofocus={model.suggested || undefined}
-          onClick={() => {
-            if (actionable) onPick(model.id);
-          }}
-          className={cx(
-            'min-h-11 min-w-0 flex-1 px-3 py-2.5 text-left',
-            RADIUS_CONTROL,
-            FOCUS,
-            actionable ? 'cursor-pointer' : 'cursor-default',
-            model.disabled && 'opacity-80'
-          )}
-        >
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span id={nameId} className="min-w-0 text-[13.5px] font-semibold text-[var(--ds-ink)] [overflow-wrap:anywhere]">
-              {model.nickname}
-            </span>
-            {model.current && <Badge tone="current">{BADGE.current}</Badge>}
-            {model.isDefault && <Badge tone="default">{BADGE.default}</Badge>}
-            {model.experimental && <Badge tone="experimental">{BADGE.experimental}</Badge>}
-            {model.suggested && <Badge tone="suggested">{BADGE.suggested}</Badge>}
-            {health && <ModelHealthDot health={health} label={model.nickname} hideLabel={health.state === 'ok' || health.state === 'unknown'} now={now} className="ml-auto" />}
-          </span>
-          <span id={linesId} className="mt-1 block min-w-0 space-y-0.5">
+        <div className="min-w-0 flex-1 px-3 py-1.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2">
+            <button
+              type="button"
+              aria-describedby={`${linesId}${reasons.length || model.current ? ` ${reasonsId}` : ''}`}
+              aria-disabled={actionable ? undefined : true}
+              data-autofocus={model.suggested || undefined}
+              data-row-pick
+              onClick={() => {
+                if (actionable) onPick(model.id);
+              }}
+              className={cx(
+                "inline-flex min-h-11 min-w-0 max-w-full flex-wrap items-center gap-x-2 gap-y-1 text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded-[var(--ds-radius-control)] after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-[var(--ds-ring)]",
+                actionable ? 'cursor-pointer after:cursor-pointer' : 'cursor-default after:cursor-default'
+              )}
+            >
+              <span className="min-w-0 text-[13.5px] font-semibold text-[var(--ds-ink)] [overflow-wrap:anywhere]">{model.nickname}</span>
+              {/* The spaces keep the accessible name readable ("Nano Banana Pro Suggested"); flex layout ignores them. */}
+              {model.current && <> <Badge tone="current">{BADGE.current}</Badge></>}
+              {model.isDefault && <> <Badge tone="default">{BADGE.default}</Badge></>}
+              {model.experimental && <> <Badge tone="experimental">{BADGE.experimental}</Badge></>}
+              {model.suggested && <> <Badge tone="suggested">{BADGE.suggested}</Badge></>}
+            </button>
+            {health && (
+              <ModelHealthDot health={health} label={model.nickname} hideLabel={health.state === 'ok' || health.state === 'unknown'} now={now} className="relative z-[1] ml-auto" />
+            )}
+          </div>
+          <div id={linesId} className="min-w-0 space-y-0.5 pb-1">
             <span className={cx(LINE, 'text-[12.5px] font-medium tabular-nums text-[var(--ds-ink)]')} data-line="price">
               {priceText(model, cost)}
               {basisNote && <span className="font-normal text-[var(--ds-muted)]"> · {basisNote}</span>}
@@ -189,9 +191,9 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
                 {reliabilityLine(rel.calls, rel.failed, rel.rateLimited, rel.scope)}
               </span>
             )}
-          </span>
-        </button>
-        <button type="button" onClick={() => onDetails(model.id)} aria-label={detailsFor(model.nickname)} className={cx(BTN_ICON, 'mr-0.5 mt-0.5')}>
+          </div>
+        </div>
+        <button type="button" onClick={() => onDetails(model.id)} aria-label={detailsFor(model.nickname)} className={cx(BTN_ICON, 'relative z-[1] mr-0.5 mt-0.5')}>
           <Info className="h-4 w-4" aria-hidden />
         </button>
       </div>

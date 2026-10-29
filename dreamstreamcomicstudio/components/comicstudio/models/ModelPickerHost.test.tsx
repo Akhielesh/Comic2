@@ -84,7 +84,7 @@ describe('ModelPickerHost', () => {
     // Nothing switched yet.
     expect(studio.act).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'change_image_model' }));
 
-    fireEvent.click(within(pro).getByRole('button', { name: 'Nano Banana Pro' }));
+    fireEvent.click(within(pro).getByRole('button', { name: 'Nano Banana Pro Suggested' }));
     const confirm = screen.getByRole('alertdialog', { name: 'Switch this comic to Nano Banana Pro?' });
     expect(confirm).toHaveTextContent('character consistency can be affected');
     await act(async () => fireEvent.click(within(confirm).getByRole('button', { name: 'Switch to Nano Banana Pro' })));
@@ -101,7 +101,7 @@ describe('ModelPickerHost', () => {
       requestOpenModelPicker();
     });
     await act(async () => undefined);
-    fireEvent.click(within(screen.getByRole('dialog', { name: 'Image model' })).getByRole('button', { name: 'Nano Banana Pro' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Image model' })).getByRole('button', { name: /^Nano Banana Pro/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Keep Nano Banana 2.1' }));
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(screen.getByRole('dialog', { name: 'Image model' })).toBeInTheDocument();

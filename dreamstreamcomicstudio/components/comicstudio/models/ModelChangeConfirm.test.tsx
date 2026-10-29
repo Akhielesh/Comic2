@@ -209,7 +209,7 @@ describe('D — before the lock', () => {
 describe('a11y and layout', () => {
   it('axe clean; every control a 44 px target; a real modal alert', async () => {
     const { dialog } = open({ mode: 'pro' });
-    const res = await axe.run(dialog, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'best-practice'] }, rules: { 'color-contrast': { enabled: false }, region: { enabled: false } } });
+    const res = await axe.run(dialog, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice', 'experimental'] }, rules: { 'color-contrast': { enabled: false }, region: { enabled: false }, 'label-content-name-mismatch': { enabled: true } } });
     expect(res.violations.map((v) => v.id)).toEqual([]);
     for (const el of dialog.querySelectorAll<HTMLElement>('button, summary')) expect(el.className).toMatch(/(^|\s)min-h-11(\s|$)/);
     for (const label of dialog.querySelectorAll<HTMLElement>('label[data-scope]')) expect(label.className).toMatch(/(^|\s)min-h-11(\s|$)/);
