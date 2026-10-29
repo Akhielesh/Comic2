@@ -43,7 +43,10 @@ const OUT = path.resolve(APP, opt('--out', path.join(QA_ARTIFACTS, 'atlas-skin')
 const DIST = path.join(QA_ARTIFACTS, 'atlas-skin', 'dist-qa');
 const PORT = Number(process.env.QA_PORT || 4181);
 const BASE = `http://127.0.0.1:${PORT}`;
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+// vite is run through its own entry with this Node, not via `npx`: a spawned npx wrapper exits on
+// `kill()` and leaves the preview server itself running (a stale server on QA_PORT then answers the
+// next run's readiness probe, which `--strictPort` cannot detect).
+const VITE = path.join(APP, 'node_modules', 'vite', 'bin', 'vite.js');
 const env = {
   ...process.env,
   VITE_SUPABASE_URL: process.env.VITE_SUPABASE_URL || 'https://placeholder.supabase.co',
@@ -107,13 +110,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const buildQa = () => {
   const t0 = Date.now();
   log(`▶ QA build (QA_BUILD=1 vite build → ${path.relative(APP, DIST)})`);
-  const res = spawnSync(npx, ['vite', 'build', '--outDir', DIST, '--emptyOutDir'], { cwd: APP, stdio: 'inherit', env: { ...env, QA_BUILD: '1' } });
+  const res = spawnSync(process.execPath, [VITE, 'build', '--outDir', DIST, '--emptyOutDir'], { cwd: APP, stdio: 'inherit', env: { ...env, QA_BUILD: '1' } });
   log(`  build: exit ${res.status ?? res.signal} in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
   if (res.status !== 0) process.exit(res.status ?? 1);
 };
 
 const startServer = async () => {
-  const child = spawn(npx, ['vite', 'preview', '--outDir', DIST, '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: APP, env, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(process.execPath, [VITE, 'preview', '--outDir', DIST, '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'], { cwd: APP, env, stdio: ['ignore', 'ignore', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', (d) => {
     stderr += String(d);
