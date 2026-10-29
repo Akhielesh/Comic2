@@ -14,9 +14,11 @@ for each. No production data: names, looks and paths (`u/golden/…`) are invent
   back-compat F1's canonical one).
 - `*.prompt.txt` — the golden prompts (`courier-p2.guide.prompt.txt` is the same page with the layout
   guide attached). Ship 2 (B5) must compile a doc without new data to these byte for byte.
-- `pages.test.ts` — the Ship 1 checks: no blank-bar wording, one block per panel (box N, Must show, Who
-  with an identity anchor, Speaks or OFF-PANEL VOICE), the extra's sheet within the character slots,
-  the layout guide as Image 1, and `pageSpecHash` unchanged.
+- `pages.test.ts` — the Ship 1 checks: no blank-bar wording (plan §4.2's lettering sentences verbatim),
+  one block per panel (box N, Must show, Who with an identity anchor, Speaks or OFF-PANEL VOICE, and a
+  closing Detail line: the rest of the action, then the mood), `drawnCastIds` / `offPanelSpeakerIds`
+  agreeing with each block (QC reuses them), the extra's sheet within the character slots, the layout
+  guide as Image 1, and `pageSpecHash` unchanged.
 
 Changing the page prompt changes these files on purpose: run
 `npx vitest run server/src/comic/golden/pages -u`, then read the diff like code before committing.
