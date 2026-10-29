@@ -143,6 +143,20 @@ describe('F. notice after a switch', () => {
     expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 5, true)).toBe(
       'Switched to Nano Banana Pro. 5 pages and the cover were drawn with Nano Banana 2.1 and stay as they are.'
     );
+    // One image reads in the singular (a single page, or the cover alone).
+    expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 1, false)).toBe(
+      'Switched to Nano Banana Pro. 1 page was drawn with Nano Banana 2.1 and stays as it is.'
+    );
+    expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 0, true)).toBe(
+      'Switched to Nano Banana Pro. The cover was drawn with Nano Banana 2.1 and stays as it is.'
+    );
+    expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 2, false)).toBe(
+      'Switched to Nano Banana Pro. 2 pages were drawn with Nano Banana 2.1 and stay as they are.'
+    );
+    expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 1, true)).toBe(
+      'Switched to Nano Banana Pro. 1 page and the cover were drawn with Nano Banana 2.1 and stay as they are.'
+    );
+    expect(copy.switchedNotice('Nano Banana Pro', 'Nano Banana 2.1', 0, false)).toBe('Switched to Nano Banana Pro.');
     expect(copy.switchedRedrawingNotice('Nano Banana Pro', 5, true, '≈$1.07')).toBe('Switched to Nano Banana Pro. Redrawing 5 pages and the cover (≈$1.07)…');
     expect(copy.redrawThemChip('≈$1.07')).toBe('Redraw them · ≈$1.07');
     expect(copy.switchBackChip('Nano Banana 2.1')).toBe('Switch back to Nano Banana 2.1');

@@ -226,9 +226,11 @@ export const tierUseButton = (tier: string) => `Use ${tier}`;
 
 // ── F. Notice after a switch (posted by the server; the chip labels live here so both sides agree) ──────────
 
+/** §3.6 F. One image (a single page, or the cover alone) "stays as it is"; more "stay as they are". */
 export const switchedNotice = (next: string, current: string, pages: number, cover: boolean) => {
   const what = pages && cover ? `${plural(pages, 'page')} and the cover were` : pages ? `${plural(pages, 'page')} ${pages === 1 ? 'was' : 'were'}` : cover ? 'The cover was' : '';
-  return what ? `Switched to ${next}. ${what} drawn with ${current} and ${pages + (cover ? 1 : 0) === 1 ? 'stays' : 'stay'} as they are.` : `Switched to ${next}.`;
+  const one = pages + (cover ? 1 : 0) === 1;
+  return what ? `Switched to ${next}. ${what} drawn with ${current} and ${one ? 'stays as it is' : 'stay as they are'}.` : `Switched to ${next}.`;
 };
 export const switchedRedrawingNotice = (next: string, pages: number, cover: boolean, price: string) => {
   const what = pages && cover ? `${plural(pages, 'page')} and the cover` : pages ? plural(pages, 'page') : 'the cover';
