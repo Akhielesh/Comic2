@@ -499,6 +499,7 @@ describe('D3 watermark and D4 blind test', () => {
       expect(blindRun.checkId).toBe('D4');
       expect(blindRun).not.toHaveProperty('imageUrl'); // judged blind, not on the click answer
       expect(blindRun).not.toHaveProperty('facts');
+      expect(blindRun).toMatchObject({ status: 'ok', callMade: true, costReported: true });
     }
     // Pages: 4 sheets of the SAME model go in as references.
     await runItem(h, 'd4-qwen-image-2.1-turbo-page-1');
@@ -568,6 +569,16 @@ describe('D3 watermark and D4 blind test', () => {
     const stillVoted = (await h.lab.overview(ADMIN)).blind.find((p) => p.id === 'd4-sheet-1')!;
     expect(stillVoted.a!.run!.id).toBe(revealed.a!.run!.id);
     expect(stillVoted.b!.run!.id).toBe(revealed.b!.run!.id);
+  });
+});
+
+describe('the D4 click answer', () => {
+  it('says whether a call was made and whether its cost was reported — a $0 HTTP failure is not a provider-reported cost — with no image or facts that could tie it to a side', async () => {
+    const h = harness();
+    h.setScript(() => new Response(JSON.stringify({ error: { message: 'Provider returned error', metadata: { provider_name: 'Alibaba' } } }), { status: 429 }));
+    const failed = (await runItem(h, 'd4-qwen-image-2.1-turbo-sheet-1')).run as LabBlindRunView;
+    expect(failed).toMatchObject({ status: 'failed', costUsd: 0, callMade: true, costReported: false });
+    expect(Object.keys(failed).sort()).toEqual(['callMade', 'checkId', 'costReported', 'costUsd', 'id', 'itemId', 'message', 'pair', 'quotedUsd', 'status']);
   });
 });
 

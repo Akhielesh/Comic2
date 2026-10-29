@@ -361,6 +361,29 @@ describe('ModelLabSection', () => {
     expect(document.querySelector('[data-lab-run="run-d3"]')).not.toHaveTextContent('Not drawn at quality max');
   });
 
+  it('a D4 click answer words a $0 HTTP failure as unbilled, and only a reported cost as provider-reported', async () => {
+    fetchOverview.mockReset().mockResolvedValue(overview({ blind: [] }));
+    const d4 = { id: 'r-d4', checkId: 'D4' as const, itemId: 'd4-seedream-5-0-flash-sheet-1', pair: { id: 'd4-sheet-1', label: 'Sheet 1 · Maya' }, quotedUsd: 0.018 };
+    runCheck
+      .mockReset()
+      .mockResolvedValueOnce({ replayed: false, spentUsd: 0.31, remainingUsd: 1.69, run: { ...d4, status: 'failed', costUsd: 0, callMade: true, costReported: false, message: 'The image provider is busy right now.' } })
+      .mockResolvedValueOnce({ replayed: false, spentUsd: 0.328, remainingUsd: 1.672, run: { ...d4, id: 'r-d4-2', status: 'ok', costUsd: 0.018, callMade: true, costReported: true, message: null } });
+    await open();
+    fireEvent.click(runButton(/Run Seedream 5 Flash · Sheet 1 · Maya/));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Run — $0.018' }));
+    await act(async () => undefined);
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Cost $0 (the provider answered with an error, so nothing was billed) · quoted $0.018');
+    expect(dialog).not.toHaveTextContent('provider-reported');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+    fireEvent.click(runButton(/Run Seedream 5 Flash · Sheet 1 · Maya/));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Run — $0.018' }));
+    await act(async () => undefined);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('Cost $0.018 (provider-reported) · quoted $0.018');
+  });
+
   it('no timers: one read on open, one per Refresh', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
     render(<ModelLabSection />);

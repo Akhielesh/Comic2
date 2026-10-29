@@ -148,7 +148,7 @@ export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentU
                       ? `Drawn. It joins the blind comparison for ${answer.run.pair.label} once both models have drawn it — the image stays hidden until then.`
                       : answer.run.message || 'It did not draw.'}
                   </p>
-                  <p className="tabular-nums text-[12.5px]">{costLine({ ...answer.run, facts: { callMade: answer.run.status !== 'running', costReported: answer.run.costUsd !== null } })}</p>
+                  <p className="tabular-nums text-[12.5px]">{costLine({ ...answer.run, facts: { callMade: answer.run.callMade, costReported: answer.run.costReported } })}</p>
                 </div>
               ) : (
                 <LabResultCard run={answer.run} headingLevel="h3" />

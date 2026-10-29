@@ -20,8 +20,10 @@ describe('labApi', () => {
     post.mockResolvedValueOnce({ replayed: false, spentUsd: 0.1, remainingUsd: 1.9, run: { id: 'r', checkId: 'D4', itemId: 'x', status: 'ok', pair: { id: 'd4-sheet-1', label: 'Sheet 1' }, quotedUsd: 0.018, costUsd: 0.018 } });
     const out = await runLabCheck({ itemId: 'd4-x', idempotencyKey: 'lab-0123456789abcdef', quotedUsd: 0.018 });
     expect(post).toHaveBeenCalledWith('/api/comic/models/lab/runs', { itemId: 'd4-x', idempotencyKey: 'lab-0123456789abcdef', ack: true, quotedUsd: 0.018 });
-    expect(out.run).toMatchObject({ checkId: 'D4', pair: { id: 'd4-sheet-1' } });
+    expect(out.run).toMatchObject({ checkId: 'D4', pair: { id: 'd4-sheet-1' }, callMade: false, costReported: false }); // absent → never "reported"
     expect(out.run).not.toHaveProperty('facts');
+    post.mockResolvedValueOnce({ replayed: false, spentUsd: 0.1, remainingUsd: 1.9, run: { id: 'r', checkId: 'D4', itemId: 'x', status: 'failed', pair: { id: 'd4-sheet-1', label: 'Sheet 1' }, quotedUsd: 0.018, costUsd: 0, callMade: true, costReported: false } });
+    expect((await runLabCheck({ itemId: 'd4-x', idempotencyKey: 'lab-0123456789abcdef', quotedUsd: 0.018 })).run).toMatchObject({ status: 'failed', costUsd: 0, callMade: true, costReported: false });
   });
 
   it('a pair never carries names before its vote, even if a server sent them', () => {

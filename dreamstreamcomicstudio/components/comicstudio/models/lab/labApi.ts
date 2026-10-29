@@ -118,6 +118,9 @@ export interface LabBlindRun {
   pair: { id: string; label: string };
   quotedUsd: number;
   costUsd: number | null;
+  /** A request reached the provider / the provider reported usage.cost (a $0 HTTP failure is not a reported cost). */
+  callMade: boolean;
+  costReported: boolean;
   message?: string | null;
 }
 
@@ -283,7 +286,18 @@ const asBlindRun = (v: unknown): LabBlindRun | undefined => {
   const pair = asPair(v.pair);
   const quotedUsd = num(v.quotedUsd);
   if (!id || !pair || quotedUsd === undefined) return undefined;
-  return { id, checkId: 'D4', itemId: text(v.itemId, 80) ?? '', status: v.status as LabRunStatus, pair, quotedUsd, costUsd: num(v.costUsd) ?? null, message: text(v.message, 600) ?? null };
+  return {
+    id,
+    checkId: 'D4',
+    itemId: text(v.itemId, 80) ?? '',
+    status: v.status as LabRunStatus,
+    pair,
+    quotedUsd,
+    costUsd: num(v.costUsd) ?? null,
+    callMade: v.callMade === true,
+    costReported: v.costReported === true,
+    message: text(v.message, 600) ?? null
+  };
 };
 
 const asSide = (v: unknown, slot: 'A' | 'B'): BlindSide | undefined => {

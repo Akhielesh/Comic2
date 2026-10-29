@@ -1015,6 +1015,10 @@ export interface LabBlindRunView {
   pair: { id: string; label: string };
   quotedUsd: number;
   costUsd: number | null;
+  /** A request reached the provider, and whether it reported usage.cost: so a $0 HTTP failure is never read as a
+   *  provider-reported cost. Neither says which side or model this is. */
+  callMade: boolean;
+  costReported: boolean;
   message?: string | null;
 }
 
@@ -1263,6 +1267,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       pair: item?.pair ?? { id: r.itemId, label: r.itemId },
       quotedUsd: r.quotedUsd,
       costUsd: r.costUsd,
+      callMade: r.result.callMade === true,
+      costReported: r.result.costReported === true,
       message: r.result.message ?? null
     };
   };
