@@ -16,7 +16,7 @@ import { resolveLetteringFont, fontCoversLanguage } from '../../../shared/comic/
 import { keepDrawnSizeOps, keptSizes, sameBalloons, tidyOps } from './styleOps';
 import { FontPicker, easyFontsFor, EASY_FONTS } from './FontPicker';
 import { BalloonLayer, balloonHitRect, handlePositions } from '../board/BalloonLayer';
-import { inspectorSheetMaxHeight, MIN_SHEET_PX, PHONE_SHEET_OPEN_MIN_H, toolsSheetOpenAtStart } from '../board/PageEditor';
+import { inspectorSheetMaxHeight, MIN_SHEET_PX, PHONE_SHEET_OPEN_MIN_H, selectionSlide, toolsSheetOpenAtStart } from '../board/PageEditor';
 
 const ASPECT = 2 / 3;
 
@@ -150,6 +150,17 @@ describe('page tools sheet at start', () => {
     expect(toolsSheetOpenAtStart(null, 'phone', PHONE_SHEET_OPEN_MIN_H)).toBe(true);
     expect(toolsSheetOpenAtStart('closed', 'phone', 900)).toBe(false);
     expect(toolsSheetOpenAtStart(null, 'tablet-portrait', 600)).toBe(true);
+  });
+});
+
+describe('phone lettering sheet: the page holds still under the finger', () => {
+  it('no slide when the selection is already above the sheet; just enough (12 px clear) when it is covered', () => {
+    expect(selectionSlide({ top: 150, bottom: 190 }, 100, 400)).toBe(0);
+    expect(selectionSlide({ top: 350, bottom: 420 }, 100, 400)).toBe(32);
+  });
+  it('never slides the selection’s own top out of the stage', () => {
+    expect(selectionSlide({ top: 130, bottom: 520 }, 100, 400)).toBe(22);
+    expect(selectionSlide({ top: Number.NaN, bottom: 1 }, 0, 0)).toBe(0);
   });
 });
 

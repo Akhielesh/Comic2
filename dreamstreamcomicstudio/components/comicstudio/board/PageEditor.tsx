@@ -151,6 +151,19 @@ export const toolsSheetOpenAtStart = (flag: string | null, kind: EditorLayout['k
   return kind !== 'phone' || !(viewportHeight > 0) || viewportHeight >= PHONE_SHEET_OPEN_MIN_H;
 };
 
+/**
+ * Phones: how far (px) the page slides up so a selection (viewport px, measured without any slide) ends
+ * 12 px above the lettering sheet's top — 0 when it already does (the page holds still), and never so far
+ * that the selection's own top would leave the stage (8 px margin). Pure; tested.
+ */
+export const selectionSlide = (sel: { top: number; bottom: number }, stageTop: number, sheetTop: number): number => {
+  if (![sel.top, sel.bottom, stageTop, sheetTop].every(Number.isFinite)) return 0;
+  const need = sel.bottom + 12 - sheetTop;
+  if (need <= 0) return 0;
+  const room = Math.max(0, sel.top - stageTop - 8);
+  return Math.round(Math.min(need, room));
+};
+
 /** The least stage height (px) the phone lettering sheet leaves above itself (a 2:3 page ≈ 145 px wide). */
 export const MIN_STAGE_PX = 240;
 /** …and at least this share of the viewport's height: the page and its balloons stay big enough to tap. */
@@ -661,6 +674,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const [zoomReset, setZoomReset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [coverInset, setCoverInset] = useState(0);
+  /** Phones: how far (px) the page slides up so the selection clears the lettering sheet (0 = holds still). */
+  const [slide, setSlide] = useState(0);
+  const slideRef = useRef(0);
+  slideRef.current = slide;
   /** Phones: the lettering sheet's height cap, so the page above it keeps at least MIN_STAGE_PX. */
   const [inspectorMaxH, setInspectorMaxH] = useState<number | undefined>(undefined);
   const ff = useFormFactor();
@@ -847,7 +864,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
       return;
     }
     setAnchor((cur) => (cur && Math.abs(cur.left - next.left) < 0.5 && Math.abs(cur.top - next.top) < 0.5 && Math.abs(cur.right - next.right) < 0.5 && Math.abs(cur.bottom - next.bottom) < 0.5 ? cur : next));
-  }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [plans, selectionKey, H, viewportTick, pageWidth, stage.width, stage.height, zoom, coverInset, slide]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Phones: the lettering inspector is a bottom sheet over the stage's foot. Shrink the stage by what it
   // covers, so the whole page — and the selected balloon — stays above it. The sheet itself is capped so
@@ -856,6 +873,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   useLayoutEffect(() => {
     if (!compactInspectorOpen) {
       setCoverInset(0);
+      setSlide(0);
       setInspectorMaxH(undefined);
       return;
     }
@@ -865,8 +883,15 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     if (!sheet || !stageBox) return;
     const measureCover = () => {
       const stageRect = stageBox.getBoundingClientRect();
+      const sheetTop = sheet.getBoundingClientRect().top;
       setInspectorMaxH(inspectorSheetMaxHeight(stageRect.top, window.innerHeight));
-      setCoverInset(coveredByBottomSheet(stageRect.bottom, sheet.getBoundingClientRect().top));
+      setCoverInset(coveredByBottomSheet(stageRect.bottom - restingInsetRef.current, sheetTop));
+      // Measured where the page would be without the slide (the selection rect includes the current one).
+      const sel = selectionRect();
+      if (!sel) return;
+      const top0 = sel.top + slideRef.current;
+      const bottom0 = sel.bottom + slideRef.current;
+      setSlide(selectionSlide({ top: top0, bottom: bottom0 }, stageRect.top, sheetTop));
     };
     measureCover();
     if (typeof ResizeObserver === 'undefined') return;
@@ -1032,7 +1057,12 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // Phones may close the sheet (the toolbar reopens it); tablets have no toolbar, so theirs always shows.
   const sheetShown = layout.tools === 'sheet' && (tools.open || layout.kind !== 'phone') && !compactInspectorOpen;
   const sheetInset = sheetShown ? sheetHeights[tools.detent] : 0;
-  const stageInset = Math.max(sheetInset, coverInset);
+  // Phones: the lettering sheet OVERLAYS the stage. The page holds still under the finger that selected a
+  // balloon (no re-fit, no re-centre — the finger's next move is a drag of that balloon); it only slides
+  // up (`slide`) when the selection would sit under the sheet. The stage keeps the inset it had before.
+  const restingInsetRef = useRef(0);
+  if (!compactInspectorOpen) restingInsetRef.current = sheetInset;
+  const stageInset = compactInspectorOpen ? restingInsetRef.current : sheetInset;
   // The image variant follows the page's size with NO sheet over the stage: opening the lettering
   // inspector or moving the tools sheet between detents never swaps in (and downloads) a smaller file.
   const restingPageWidth = fitPageToStage({ w: restingStage.width, h: restingStage.height }, aspect, 0);
@@ -1113,9 +1143,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // Landscape phones: the stage is short (the page is height-bound), so the coach moves to the top of the
   // open side sheet instead of costing the page a third of its height.
   const coachInSide = layout.kind === 'phone-landscape' && tools.side;
-  const coachInBanners = coach && !compactInspectorOpen && !coachInSide;
-  // Shown in the phone row, or (landscape) at the top of the side sheet; hidden while a balloon is selected
-  // on a phone — the user just did what it teaches, and the page needs the room above the lettering sheet.
+  // Never toggled by a selection: a banner appearing or vanishing above the stage would move the page
+  // under the finger that just selected a balloon (and is about to drag it).
+  const coachInBanners = coach && !coachInSide;
+  // Shown in the phone row, or (landscape) at the top of the side sheet.
   const coachEl = (
     <div data-testid="editor-coach" className={cx('flex min-w-0 basis-full items-center gap-2 border border-[var(--ds-hairline)] px-2.5 py-1.5', RADIUS_PANEL, ACCENT_SOFT_BG)}>
       <p className="min-w-0 flex-1 text-[12px] leading-snug text-[var(--ds-ink)]">Tap a balloon to select, drag to move, pinch to zoom, long-press for more.</p>
@@ -1231,7 +1262,13 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     <div ref={stageBoxRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden" data-testid="editor-canvas-box">
       {/* Touch: 24 px of stage around the page, so a balloon's or a handle's 44 px target at the page edge is never clipped. */}
       <div ref={restingStageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-resting-stage" />
-      <div ref={canvasAreaRef} className="absolute inset-x-0 top-0" style={{ bottom: stageInset }} data-testid="editor-canvas-area">
+      <div
+        ref={canvasAreaRef}
+        className={cx('absolute inset-x-0 top-0', TRANSITION, 'motion-reduce:transition-none')}
+        style={{ bottom: stageInset, ...(slide ? { transform: `translateY(${-slide}px)` } : {}) }}
+        data-slide={slide || undefined}
+        data-testid="editor-canvas-area"
+      >
         {/* Measured, never transformed: the fit box for the page. */}
         <div ref={stageRef} aria-hidden className="pointer-events-none absolute inset-3 coarse:inset-6 sm:inset-6" data-testid="editor-stage-content" />
         <TouchCanvas
@@ -1286,13 +1323,18 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             </div>
           </div>
         </TouchCanvas>
-        {phone && compactInspectorOpen && (
-          // The inspector sheet covers the toolbar: keep undo / redo one tap away above it.
-          <div className="absolute bottom-2 left-2 z-[5] rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 shadow-[0_2px_10px_rgba(0,0,0,0.12)]" data-no-canvas-gesture>
-            {undoPill}
-          </div>
-        )}
       </div>
+      {phone && compactInspectorOpen && (
+        // The inspector sheet covers the toolbar: keep undo / redo one tap away just above it.
+        <div
+          className="absolute left-2 z-[5] rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 shadow-[0_2px_10px_rgba(0,0,0,0.12)]"
+          style={{ bottom: stageInset + coverInset + 8 }}
+          data-no-canvas-gesture
+          data-testid="editor-undo-float"
+        >
+          {undoPill}
+        </div>
+      )}
     </div>
   );
 
