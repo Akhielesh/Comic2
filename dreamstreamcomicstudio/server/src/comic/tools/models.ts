@@ -946,7 +946,10 @@ const claimsSwitch = (sentence: string, currentId: string): boolean => {
   for (let v = SWITCH_VERB_RE.exec(s); v; v = SWITCH_VERB_RE.exec(s)) {
     const rest = s.slice(v.index + v[0].length);
     const t = new RegExp(String.raw`^((?:[^.!?]|\.(?=\d))*?)\b(?:to|onto|over to)\s+${TARGET}`, 'i').exec(rest);
-    if (!t || !aboutModel(v[1], t[1]) || !free(s.slice(0, v.index))) continue;
+    const before = s.slice(0, v.index);
+    // "Switching to X costs…" is an offer; "I'm switching your comic to X" is a claim.
+    if (/ing$/i.test(v[1]) && !/(?:\b(?:am|are|is|now)|'m|'re|'s)\s+$/i.test(before)) continue;
+    if (!t || !aboutModel(v[1], t[1]) || !free(before)) continue;
     if (otherModel(t[2], currentId)) return true;
   }
   for (const re of NOW_CLAIM_RES) {

@@ -611,6 +611,8 @@ describe('reply guards: never a switch, never a start that did not happen', () =
     // Not claims: a suggestion, other things set "to" a name, a scene.
     expect(claims("Nano Banana Pro is the model I'd suggest for five characters.")).toEqual([]);
     expect(claims('Now the frog is on the dock.')).toEqual([]);
+    expect(claims('Switching to Nano Banana Pro costs about $0.14 a page.')).toEqual([]);
+    expect(claims("I'm switching your comic to Nano Banana Pro now.")).toHaveLength(1);
     expect(claims("I changed the hero's name to Gemini.")).toEqual([]);
     expect(falseSwitchClaims('I changed the title to Nano Banana Days.', 'nano-banana-pro')).toEqual([]);
     expect(falseSwitchClaims('I set the font to Flux Sans.', 'nano-banana-pro')).toEqual([]);
