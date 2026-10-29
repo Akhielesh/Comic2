@@ -54,6 +54,7 @@ vi.mock('../services/emailStore.js', async (importOriginal) => ({
 }));
 
 const { authEmailRouter, breachedPasswordCheckOn, pwnedPasswordCount, setPwnedFetcher, BREACHED_PASSWORD_MESSAGE } = await import('./authEmail.js');
+const { setLiveKickFetcher } = await import('../services/liveKick.js');
 
 const app = express();
 app.use(express.json());
@@ -77,7 +78,11 @@ beforeEach(() => {
   h.rpc.mockClear();
   h.verifyTurnstile.mockClear();
 });
-afterEach(() => setPwnedFetcher());
+afterEach(() => {
+  setPwnedFetcher();
+  setLiveKickFetcher();
+  vi.stubEnv('SECURITY_HOOK_SECRET', '');
+});
 
 const post = async (path: string, body: unknown) => {
   const res = await fetch(`${base}/api/auth/email${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -169,7 +174,18 @@ describe('sign-up refuses breached passwords', () => {
 
 describe('POST /secure (“Not you? Secure my account”)', () => {
   const TOKEN = 'Q2hhbmdlIG1lIHBsZWFzZSBub3cgMTIz';
-  const secured = { ok: true, sessions_ended: 3, devices_revoked: [{ id: 'd1', thumb: 't' }], email: 'ada@example.com', user_id: 'u-1', email_hint: 'a•••@example.com' };
+  const UID = '0a0a0a0a-1111-4222-8333-444455556666';
+  const NID = '9d9d9d9d-1111-4222-8333-444455556666';
+  const secured = {
+    ok: true,
+    sessions_ended: 3,
+    devices_revoked: [{ id: 'd1', thumb: 't' }],
+    factors_removed: 1,
+    email: 'ada@example.com',
+    user_id: UID,
+    email_hint: 'a•••@example.com',
+    nurseries: [NID, 'not-a-uuid']
+  };
 
   it('ends every session, then emails a password-reset link — and says exactly that', async () => {
     h.state.rpc.data = secured;
@@ -177,7 +193,8 @@ describe('POST /secure (“Not you? Secure my account”)', () => {
     const res = await post('/secure', { token: TOKEN });
     expect(res).toEqual({
       status: 200,
-      json: { ok: true, sessionsEnded: 3, signedOutEverywhere: true, devicesRevoked: 1, resetEmail: 'sent', emailHint: 'a•••@example.com' }
+      // No kick secret on this backend: open sockets aren't confirmed closed, and it says so.
+      json: { ok: true, sessionsEnded: 3, signedOutEverywhere: true, devicesRevoked: 1, factorsRemoved: 1, kicked: false, resetEmail: 'sent', emailHint: 'a•••@example.com' }
     });
     expect(h.rpc).toHaveBeenCalledWith('live_secure_account', { p_token: TOKEN });
     expect(h.generateLink).toHaveBeenCalledWith(expect.objectContaining({ type: 'recovery', email: 'ada@example.com' }));
@@ -186,6 +203,40 @@ describe('POST /secure (“Not you? Secure my account”)', () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain(TOKEN);
     expect(JSON.stringify(log.mock.calls)).not.toContain('ada@example.com');
     log.mockRestore();
+  });
+
+  it('closes what the intruder has open — with its own signed credential, since every session just ended', async () => {
+    vi.stubEnv('SECURITY_HOOK_SECRET', 'old-secret|kick-secret');
+    const seen: { url: string; init: RequestInit }[] = [];
+    setLiveKickFetcher((async (url: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(url), init: init ?? {} });
+      return new Response(JSON.stringify({ ok: true, rooms: 1 }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch);
+    h.state.rpc.data = secured;
+    const res = await post('/secure', { token: TOKEN });
+    expect(res.json).toMatchObject({ ok: true, kicked: true, factorsRemoved: 1 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe(`https://dreamstreamstudio.ai/live-api/x/user/${UID}/kick`);
+    const p = JSON.parse(String(seen[0].init.body)).p as string;
+    expect(JSON.parse(p)).toMatchObject({ v: 1, kind: 'kick', uid: UID, why: 'secured', nids: [NID] });
+    const sig = (seen[0].init.headers as Record<string, string>)['x-ds-signature'];
+    const [, t, v1] = sig.match(/^t=(\d+),v1=([0-9a-f]{64})$/)!;
+    // Signed with the newest secret (the one after "|"), over "<t>.<p>" — the Worker's notify contract.
+    expect(v1).toBe(crypto.createHmac('sha256', 'kick-secret').update(`${t}.${p}`).digest('hex'));
+    expect(String(seen[0].init.body)).not.toContain(TOKEN);
+  });
+
+  it('a Worker without the route (or one room that didn’t confirm) is reported as not kicked — the account is still secured', async () => {
+    vi.stubEnv('SECURITY_HOOK_SECRET', 'kick-secret');
+    h.state.rpc.data = secured;
+    setLiveKickFetcher((async () => new Response('not found', { status: 404 })) as typeof fetch);
+    expect((await post('/secure', { token: TOKEN })).json).toMatchObject({ ok: true, signedOutEverywhere: true, kicked: false });
+    setLiveKickFetcher((async () => new Response(JSON.stringify({ ok: false, unconfirmed: 1 }), { status: 200 })) as typeof fetch);
+    expect((await post('/secure', { token: TOKEN })).json).toMatchObject({ ok: true, kicked: false });
+    setLiveKickFetcher((async () => {
+      throw new TypeError('fetch failed');
+    }) as typeof fetch);
+    expect((await post('/secure', { token: TOKEN })).json).toMatchObject({ ok: true, kicked: false, resetEmail: 'sent' });
   });
 
   it('is honest when the reset email can’t go out, or sessions couldn’t be ended', async () => {

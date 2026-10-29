@@ -231,18 +231,38 @@ export interface ReviewItem {
   text: string;
 }
 
-export function linguistSystemPrompt(doc: ComicDoc, lang: string): string {
+/** The voice the reviewer judges against — the same register the translator was asked for (§8.5 REGISTER). */
+const LINGUIST_REGISTER: Record<TranslationRegister, (target: string, script: string) => { voice: string; wrongScript: string; note: string }> = {
+  everyday: (t) => ({ voice: `natural spoken ${t}`, wrongScript: 'the wrong script', note: '' }),
+  formal: (t) => ({
+    voice: `polished written ${t}`,
+    wrongScript: 'the wrong script',
+    note: `\nThis edition is written in polished, formal ${t}: judge it against that register, not against casual speech.`
+  }),
+  // The translator is told English words "may stay (written in <script> script)"; models also keep them in
+  // Latin letters, which the code-mixed script check accepts. The reviewer is told both are the voice.
+  code_mixed: (t, s) => ({
+    voice: `natural code-mixed ${t} as urban speakers talk`,
+    wrongScript: `a script other than ${s} (English words excepted)`,
+    note: `\nThis edition is deliberately code-mixed ${t} ("mixed with English"), the voice the author chose: common English words, written in ${s} script or in Latin letters, are correct here, not a wrong script. Judge meaning, grammar, speaker fit and safety only; never "correct" the English words into pure ${t}.`
+  })
+};
+
+/** Built by linguistSystemPrompt(doc, lang, register?) — §8.7; the register defaults to the edition's own voice. */
+export function linguistSystemPrompt(doc: ComicDoc, lang: string, register: TranslationRegister = i18nOf(doc).editions[lang]?.register ?? 'everyday'): string {
   const target = languageSpec(lang);
   const source = languageSpec(doc.format.language);
   const t = target?.english || lang;
   const s = source?.english || doc.format.language;
+  const script = target ? scriptName(target) : lang;
+  const voice = (LINGUIST_REGISTER[register] || LINGUIST_REGISTER.everyday)(t, script);
   const kids = isKidsAudience(doc) ? ' The readers are children: anything rude, crude or scarier than the source is a major issue.' : '';
   return `You are a native ${t} editor reviewing a comic translated from ${s}. For EVERY line:
 - gloss: a short, literal back-meaning of the FINAL ${t} text (your suggestion when you give one), written in ${s}, so an author who cannot read ${t} sees what it really says.
-- verdict "ok" when it is correct, natural spoken ${t} and fits the character; otherwise "fix".
-- severity "major" for: wrong or missing meaning, wrong speaker gender agreement or honorific, unsafe or rude wording for the audience, or the wrong script. "minor" for: unnatural phrasing, a better word, typography. "none" when the verdict is ok.
+- verdict "ok" when it is correct, ${voice.voice} and fits the character; otherwise "fix".
+- severity "major" for: wrong or missing meaning, wrong speaker gender agreement or honorific, unsafe or rude wording for the audience, or ${voice.wrongScript}. "minor" for: unnatural phrasing, a better word, typography. "none" when the verdict is ok.
 - issue: one short sentence in ${s} (empty when ok). suggestion: the corrected ${t} line (empty when ok, or when you can't do better).
-Never rewrite a line that is fine. Keep names exactly as in the glossary.${kids}
+Never rewrite a line that is fine. Keep names exactly as in the glossary.${kids}${voice.note}
 JSON only, matching the schema; every id exactly once.`;
 }
 
@@ -270,7 +290,16 @@ export const REVIEW_SCHEMA = strict({
   }
 });
 
-export type ReviewVerdict = { id: string; gloss: string; verdict: 'ok' | 'fix'; severity: 'none' | 'minor' | 'major'; issue: string; suggestion: string };
+export type ReviewVerdict = {
+  id: string;
+  gloss: string;
+  verdict: 'ok' | 'fix';
+  severity: 'none' | 'minor' | 'major';
+  issue: string;
+  suggestion: string;
+  /** The translation text the linguist was shown (a line rewritten by the author meanwhile is not this text). */
+  reviewed?: string;
+};
 
 /** The previous translation of a stale line ("small source edits produce small target edits"). */
 export const previousText = (t?: TextTranslation): string | undefined => (t && t.text ? t.text : undefined);

@@ -59,8 +59,8 @@ describe('Comic Studio v4 pricing rows', () => {
     }
     expect(find('openrouter', 'google/gemini-nano-banana-2.1')?.imagePerOutputUsd).toBe(0.0504);
     expect(find('gemini', 'gemini-nano-banana-2.1')?.imagePerOutputUsd).toBe(0.0504);
-    expect(find('openrouter', 'google/gemini-3-pro-image')?.imagePerOutputUsd).toBe(0.134);
-    expect(find('gemini', 'gemini-3-pro-image')?.imagePerOutputUsd).toBe(0.134);
+    expect(find('openrouter', 'google/gemini-3-pro-image')?.imagePerOutputUsd).toBe(0.1344); // registry list price (1120 tokens × $120/M)
+    expect(find('gemini', 'gemini-3-pro-image')?.imagePerOutputUsd).toBe(0.1344);
   });
 
   it('keeps one row per provider:model and the shape of the existing rows', () => {

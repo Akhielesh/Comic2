@@ -253,7 +253,7 @@ async function handleSecurity(req: Request, env: Env): Promise<Response> {
   try {
     const messageId = await dispatch(env, alert.email, rendered, { from });
     // Never the token or the whole address in logs.
-    console.log(`[security] sign-in alert → ${maskEmail(alert.email)} (${messageId})`);
+    console.log(`[security] ${alert.kind === 'sign_in' ? 'sign-in' : alert.kind} alert → ${maskEmail(alert.email)} (${messageId})`);
     return json({ ok: true, messageId });
   } catch (err) {
     console.error(`[security] send failed → ${maskEmail(alert.email)}: ${(err as Error)?.message || err}`);

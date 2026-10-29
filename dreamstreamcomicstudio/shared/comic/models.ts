@@ -8,10 +8,13 @@
 // OpenRouter's /api/v1/images/models refresh caps for an existing one).
 //
 // Facts below were verified 2026-10-21 against Google's Gemini API docs + pricing page
-// and OpenRouter's live /api/v1/images/models listing (see docs/features/comic-studio-v4.md
-// §Models). Prices are provider list prices in USD per output image (before markup).
+// and OpenRouter's live /api/v1/images/models listing, and re-checked 2026-10-22 (models.md §1,
+// `factsAsOf` per entry). Prices are provider list prices in USD per output image (before markup).
+// Quality grades cite a public board (`gradeSources`) or say "our judgement" — never a guess
+// dressed as a fact. Entries are never deleted (a comic may be locked to one); they are hidden
+// with `pickable: false`.
 
-import type { AspectRatio, LetteringMode, QualityTier, Resolution } from './doc.js';
+import type { AspectRatio, ImageModelLock, LetteringMode, QualityTier, Resolution } from './doc.js';
 
 export type ImageRoute = 'openrouter' | 'gemini';
 export type Quality4 = 'none' | 'basic' | 'good' | 'excellent';
@@ -46,6 +49,22 @@ export interface ImageModelSpec {
   /** Request parameters the model rejects — stripped before sending. */
   unsupported?: string[];
   blurb: string;
+  // ── models.md §3.3 (2026-10-22) ──
+  /** Shown in the picker. Hidden entries stay resolvable for comics locked to them. */
+  pickable: boolean;
+  /** Transport per route; absent = 'chat' (today's /chat/completions path). 'images' = OpenRouter's Images API. */
+  api?: Partial<Record<ImageRoute, 'chat' | 'images'>>;
+  /** Models billed per quality level are pinned to the level the boards measured. */
+  fixedQuality?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Vendor charge per reference image sent (USD). Absent = unpublished / UNVERIFIED (never 0 by assumption). */
+  perRefUsd?: number;
+  /** What `priceUsd` is: a published per-image price, a vendor tokens-per-image table × token price, derived
+   *  from megapixels, or unverified (shown as "price list from {factsAsOf}"). */
+  priceBasis: 'per_image' | 'per_token_table' | 'per_megapixel' | 'unverified';
+  /** ISO date the prices and caps were last checked against the vendor / OpenRouter. */
+  factsAsOf: string;
+  /** Where each quality grade comes from (a board + rank, or "our judgement"). */
+  gradeSources?: Partial<Record<'text' | 'pages' | 'edit', string>>;
 }
 
 const GEMINI_ASPECTS_FULL: AspectRatio[] = ['1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'];
@@ -62,10 +81,18 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     refs: { total: 14, characters: 4, objects: 10, style: 0 },
     aspects: GEMINI_ASPECTS_FULL,
     resolutions: ['1K', '2K', '4K'],
+    // AA text rendering #5, AA Edit #4, LMArena edit #5 (2026-10-22). Pages: no board measures page composition.
     text: 'good',
     pages: 'good',
     edit: 'excellent',
+    gradeSources: { text: 'AA text rendering #5 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #4 · LMArena edit #5 (2026-10-22)' },
+    // Google pricing page: 1120 / 1680 tokens × $30/M. 4K is $0.113 on one Google page and $0.076 on another; we
+    // quote the higher (models.md §1.6). Reference input is billed per token; tokens per reference UNVERIFIED.
     priceUsd: { '1K': 0.0336, '2K': 0.0504, '4K': 0.113 },
+    priceBasis: 'per_token_table',
+    factsAsOf: '2026-10-22',
+    pickable: true,
+    api: { openrouter: 'chat', gemini: 'chat' },
     latencySec: 20,
     timeoutMs: 150_000,
     unsupported: ['seed', 'temperature'],
@@ -81,14 +108,24 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     refs: { total: 14, characters: 5, objects: 6, style: 3 },
     aspects: GEMINI_ASPECTS_PRO,
     resolutions: ['1K', '2K', '4K'],
-    text: 'excellent',
-    pages: 'excellent',
-    edit: 'excellent',
-    priceUsd: { '1K': 0.134, '2K': 0.134, '4K': 0.24 },
+    // Ranks below Nano Banana 2.1 on every board in models.md §1.2 (AA text rendering #12 vs #5), so it is no
+    // longer rated above it. Its edge is capacity: 5 characters + a separate style-reference class.
+    text: 'good',
+    pages: 'good',
+    edit: 'good',
+    gradeSources: { text: 'AA text rendering #12 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #16 · LMArena edit #13 (2026-10-22)' },
+    // Google pricing page: 1120 tokens × $120/M = $0.1344 at 1K and 2K (models.md §1.1 #2); observed
+    // $0.134–0.138 (§1.3). The list figure is stored unrounded so a quote never under-reads it (§2.3).
+    priceUsd: { '1K': 0.1344, '2K': 0.1344, '4K': 0.24 },
+    priceBasis: 'per_token_table',
+    perRefUsd: 0.0011, // 560 tokens per reference image [G]
+    factsAsOf: '2026-10-22',
+    pickable: true,
+    api: { openrouter: 'chat', gemini: 'chat' },
     latencySec: 35,
     timeoutMs: 210_000,
     unsupported: ['seed', 'temperature'],
-    blurb: 'Best page composition and lettering, 5 characters on model, 2K at the 1K price.'
+    blurb: 'Holds 5 characters per image, plus style references. 2K at the 1K price; about 2.7× the cost of Nano Banana 2.1.'
   },
   {
     id: 'nano-banana-2',
@@ -104,7 +141,11 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     text: 'good',
     pages: 'good',
     edit: 'good',
+    gradeSources: { text: 'AA text rendering #11 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #12 · LMArena edit #14 (2026-10-22)' },
     priceUsd: { '512': 0.045, '1K': 0.067, '2K': 0.101, '4K': 0.151 },
+    priceBasis: 'per_token_table',
+    factsAsOf: '2026-10-21',
+    pickable: false, // existing comics only
     latencySec: 20,
     timeoutMs: 150_000,
     unsupported: ['seed', 'temperature'],
@@ -124,7 +165,11 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     text: 'basic',
     pages: 'basic',
     edit: 'basic',
+    gradeSources: { text: 'AA text rendering #14 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #32 (2026-10-22)' },
     priceUsd: { '1K': 0.0336 },
+    priceBasis: 'per_token_table',
+    factsAsOf: '2026-10-21',
+    pickable: false, // not used by any default
     latencySec: 10,
     timeoutMs: 90_000,
     unsupported: ['seed', 'temperature'],
@@ -138,15 +183,53 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     routes: { openrouter: 'openai/gpt-image-2.5-sunburst' },
     lifecycle: 'experimental',
     refs: { total: 16, characters: 4, objects: 12, style: 0 },
+    // No 4:5 through OpenRouter (models.md §1.1 #5).
+    aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'],
+    // The transport takes no resolution parameter: output is a fixed size per aspect (1024² / 1024×1536).
+    resolutions: [],
+    text: 'excellent',
+    pages: 'good',
+    edit: 'excellent',
+    gradeSources: { text: 'AA text rendering #2 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #1 · LMArena edit #1 (2026-10-22)' },
+    // Pinned to quality 'max' — the level the boards measured. $0.2107 per 1024² image in output tokens (OpenAI
+    // calculator, matched by AA's $210.72/1k). 2:3 at 1024×1536 is ≈$0.1646 (output only; reference input unpriced).
+    // Basis: OpenAI calculator token factor (max = 96) × $30/M output tokens — a token table, not a published
+    // per-image price; reference input is unpriced, so totals are estimates (models.md §1.6 #1, §3.5 ex. 3, §3.6 C).
+    priceUsd: { '1K': 0.2107 },
+    priceBasis: 'per_token_table',
+    fixedQuality: 'max',
+    factsAsOf: '2026-10-22',
+    // Hidden until the Images-API transport exists and the owner's smoke test (models.md §2.6 D2) passes.
+    pickable: false,
+    api: { openrouter: 'images' },
+    latencySec: 24,
+    timeoutMs: 240_000,
+    blurb: 'Quality leader on every public board. Slow, about 6× the price, and no 4:5 pages. Experimental in Comic Studio.'
+  },
+  {
+    id: 'gpt-image-2.5-flare',
+    label: 'OpenAI GPT Image 2.5 Flare',
+    nickname: 'GPT Image 2.5 Flare',
+    vendor: 'openai',
+    routes: { openrouter: 'openai/gpt-image-2.5-flare' },
+    lifecycle: 'experimental',
+    refs: { total: 16, characters: 4, objects: 12, style: 0 },
     aspects: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'],
     resolutions: [],
     text: 'excellent',
     pages: 'good',
-    edit: 'good',
-    priceUsd: { '1K': 0.06, '2K': 0.06 },
-    latencySec: 70,
+    edit: 'excellent',
+    gradeSources: { text: 'AA text rendering #3 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #2 · LMArena edit #2 (2026-10-22)' },
+    // Same basis as Sunburst: OpenAI calculator, output tokens only; reference input unpriced → totals are estimates.
+    priceUsd: { '1K': 0.2107 },
+    priceBasis: 'per_token_table',
+    fixedQuality: 'max',
+    factsAsOf: '2026-10-22',
+    pickable: false, // same gating as Sunburst (D2)
+    api: { openrouter: 'images' },
+    latencySec: 15,
     timeoutMs: 240_000,
-    blurb: 'Excellent lettering, slow (up to 2 min per page). Experimental in Comic Studio.'
+    blurb: '#2 on every public board and faster than Sunburst (p50 15 s). Same price and limits. Experimental in Comic Studio.'
   },
   {
     id: 'flux-3',
@@ -157,11 +240,19 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     lifecycle: 'experimental',
     refs: { total: 10, characters: 4, objects: 6, style: 0 },
     aspects: ['21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16'],
-    resolutions: ['1K', '2K', '4K'],
+    // No 4K: the provider caps output at 4,194,304 px whenever references are sent (models.md §1.4 #16/17, §1.6 #7),
+    // and every comic image carries references. nearestResolution snaps a 4K tier request to 2K instead of failing.
+    resolutions: ['1K', '2K'],
     text: 'good',
     pages: 'basic',
     edit: 'good',
-    priceUsd: { '1K': 0.048, '2K': 0.1, '4K': 0.607 },
+    gradeSources: { text: 'AA text rendering #10 (2026-10-22)', pages: 'our judgement', edit: 'our judgement (not on an edit board, 2026-10-22)' },
+    priceUsd: { '1K': 0.048, '2K': 0.1 },
+    priceBasis: 'per_image',
+    factsAsOf: '2026-10-22',
+    // Removed from the picker (models.md §2.2): unpinnable `latest`, ≤ 4 MP with references, and BFL's service
+    // terms allow training on inputs and outputs. The entry stays so any comic drawn with it still resolves.
+    pickable: false,
     latencySec: 25,
     timeoutMs: 150_000,
     blurb: 'Painterly, cinematic frames. Weaker at multi-panel pages. Experimental.'
@@ -173,16 +264,23 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     vendor: 'bytedance',
     routes: { openrouter: 'bytedance-seed/seedream-5-0-pro' },
     lifecycle: 'experimental',
-    refs: { total: 14, characters: 4, objects: 10, style: 0 },
+    refs: { total: 10, characters: 4, objects: 6, style: 0 }, // vendor cap 10 (models.md §1.1 #13)
     aspects: ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9'],
     resolutions: ['1K', '2K'],
-    text: 'good',
+    text: 'basic',
     pages: 'good',
     edit: 'good',
-    priceUsd: { '1K': 0.05, '2K': 0.06 },
-    latencySec: 25,
+    gradeSources: { text: 'AA text rendering #17 (2026-10-22)', pages: 'our judgement', edit: 'AA Edit #8 · LMArena multi-image edit #6 (2026-10-22)' },
+    // OpenRouter endpoint price: $0.045 at 1K. 2K is omitted until the "high_resolution" variant mapping is verified
+    // (quotes for 2K have no number). Hidden until the watermark check (models.md §2.6 D3) passes.
+    priceUsd: { '1K': 0.045 },
+    priceBasis: 'per_image',
+    perRefUsd: 0.003,
+    factsAsOf: '2026-10-22',
+    pickable: false,
+    latencySec: 58,
     timeoutMs: 150_000,
-    blurb: 'Strong manga/anime rendering and multi-reference. Experimental.'
+    blurb: 'Strong manga/anime rendering and multi-reference. Slow (p50 58 s). Experimental.'
   },
   {
     id: 'nano-banana-legacy',
@@ -191,6 +289,8 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     vendor: 'google',
     routes: { openrouter: 'google/gemini-2.5-flash-image', gemini: 'gemini-2.5-flash-image' },
     lifecycle: 'deprecated',
+    // Google names Lite as the replacement, but Lite cannot hold characters. `replacement` is DISPLAY-ONLY: no
+    // code path may resolve a locked id to its replacement (models.md §3.4 item 7.2).
     replacement: 'nano-banana-2.1',
     refs: { total: 3, characters: 2, objects: 1, style: 0 },
     aspects: GEMINI_ASPECTS_PRO,
@@ -198,12 +298,19 @@ export const IMAGE_MODELS: ImageModelSpec[] = [
     text: 'basic',
     pages: 'basic',
     edit: 'good',
+    gradeSources: { text: 'AA text rendering #56 (2026-10-22)', pages: 'our judgement', edit: 'our judgement (AA Edit #53; edits of old projects still work)' },
     priceUsd: { '1K': 0.039 },
+    priceBasis: 'per_token_table',
+    factsAsOf: '2026-10-21',
+    pickable: false, // existing comics only
     latencySec: 12,
     timeoutMs: 90_000,
     blurb: 'Legacy model (3 references max). Kept only so old projects can be re-edited.'
   }
 ];
+
+/** Models a user may pick (hidden entries stay resolvable for the comics locked to them). */
+export const pickableImageModels = (): ImageModelSpec[] => IMAGE_MODELS.filter((m) => m.pickable);
 
 export const getImageModel = (id?: string): ImageModelSpec | undefined =>
   id ? IMAGE_MODELS.find((m) => m.id === id || Object.values(m.routes).includes(id)) : undefined;
@@ -223,7 +330,15 @@ export interface TierPreset {
   lettering: LetteringMode;
 }
 
-export const TIER_PRESETS: Record<QualityTier, TierPreset> = {
+/**
+ * Owner decision 2026-10-22 (models.md §2.1): the Pro tier becomes Nano Banana 2.1 at 4K for pages and the cover
+ * (2K sheets) — it ranks above Nano Banana Pro on every board and costs less. Off until the owner's real 4K check
+ * (§2.6 D1: cost, pixel size, latency, storage) passes; while off, Pro stays Nano Banana Pro at 2K as today.
+ * Flip here only (PROD STEPS); tierPresetsFor() exists so both shapes stay tested.
+ */
+export const PRO_TIER_4K = false;
+
+export const tierPresetsFor = (pro4k: boolean): Record<QualityTier, TierPreset> => ({
   draft: {
     tier: 'draft',
     label: 'Draft',
@@ -246,19 +361,34 @@ export const TIER_PRESETS: Record<QualityTier, TierPreset> = {
     coverRes: '2K',
     lettering: 'overlay'
   },
-  pro: {
-    tier: 'pro',
-    label: 'Pro',
-    blurb: 'Nano Banana Pro: best composition and in-art lettering, up to 5 characters per page.',
-    model: 'nano-banana-pro',
-    pageRes: '2K',
-    sheetRes: '2K',
-    coverModel: 'nano-banana-pro',
-    coverRes: '2K',
-    // v5: overlay by default (in_art is an explicit opt-in). Existing docs keep their own format.lettering.
-    lettering: 'overlay'
-  }
-};
+  pro: pro4k
+    ? {
+        tier: 'pro',
+        label: 'Pro',
+        blurb: 'Nano Banana 2.1 at 4K for pages and the cover (2K character sheets) — the same model, the sharpest print size.',
+        model: 'nano-banana-2.1',
+        pageRes: '4K',
+        sheetRes: '2K',
+        coverModel: 'nano-banana-2.1',
+        coverRes: '4K',
+        lettering: 'overlay'
+      }
+    : {
+        tier: 'pro',
+        label: 'Pro',
+        // Honest copy: Pro holds 5 characters and a style-reference class; the boards rank Nano Banana 2.1 above it.
+        blurb: 'Nano Banana Pro: holds up to 5 characters per page plus style references, at about 2.7× the price.',
+        model: 'nano-banana-pro',
+        pageRes: '2K',
+        sheetRes: '2K',
+        coverModel: 'nano-banana-pro',
+        coverRes: '2K',
+        // v5: overlay by default (in_art is an explicit opt-in). Existing docs keep their own format.lettering.
+        lettering: 'overlay'
+      }
+});
+
+export const TIER_PRESETS: Record<QualityTier, TierPreset> = tierPresetsFor(PRO_TIER_4K);
 
 /** Style exploration is always cheap: small swatch boards on the everyday model. */
 export const STYLE_OPTION_MODEL = 'nano-banana-2.1';
@@ -271,7 +401,7 @@ export interface ResolvedImageJob {
   resolution: Resolution;
 }
 
-const nearestResolution = (spec: ImageModelSpec, want: Resolution): Resolution => {
+export const nearestResolution = (spec: ImageModelSpec, want: Resolution): Resolution => {
   if (!spec.resolutions.length) return want;
   if (spec.resolutions.includes(want)) return want;
   const order: Resolution[] = ['512', '1K', '2K', '4K'];
@@ -281,10 +411,22 @@ const nearestResolution = (spec: ImageModelSpec, want: Resolution): Resolution =
   );
 };
 
-/** Which model + resolution a job runs on for a tier (an explicit override wins when it is usable). */
-export const resolveImageJob = (kind: ImageJobKind, tier: QualityTier, override?: string): ResolvedImageJob => {
+/**
+ * Which model + resolution a job runs on for a tier (an explicit override wins when it is usable).
+ * With a lock (models.md §3.4 item 1) the spec is the locked model for EVERY kind, style swatches included;
+ * the tier and the override only pick the resolution. A lock whose id the registry no longer knows falls
+ * through to the unlocked resolution — the server's invariant (spec.id === doc.imageModel.modelId) then
+ * refuses the job with MODEL_LOCKED before any provider call, so nothing is ever drawn on another model.
+ */
+export const resolveImageJob = (kind: ImageJobKind, tier: QualityTier, override?: string, lock?: ImageModelLock): ResolvedImageJob => {
   const preset = TIER_PRESETS[tier] || TIER_PRESETS.standard;
   const overrideSpec = getImageModel(override);
+  const locked = lock ? getImageModel(lock.modelId) : undefined;
+  if (locked) {
+    const want: Resolution =
+      kind === 'style_option' ? STYLE_OPTION_RES : kind === 'cover' ? preset.coverRes : kind === 'page' || kind === 'edit' ? preset.pageRes : preset.sheetRes;
+    return { spec: locked, resolution: nearestResolution(locked, want) };
+  }
   if (kind === 'style_option') {
     const spec = getImageModel(STYLE_OPTION_MODEL)!;
     return { spec, resolution: nearestResolution(spec, STYLE_OPTION_RES) };
@@ -342,13 +484,13 @@ export interface SpendEstimate {
 export const estimateJobs = (
   jobs: { kind: ImageJobKind; count: number; label?: string }[],
   tier: QualityTier,
-  opts: { override?: string; byok?: boolean } = {}
+  opts: { override?: string; byok?: boolean; lock?: ImageModelLock } = {}
 ): SpendEstimate => {
   const markup = opts.byok ? 1 : PLATFORM_MARKUP;
   const lines = jobs
     .filter((j) => j.count > 0)
     .map((j) => {
-      const { spec, resolution } = resolveImageJob(j.kind, tier, opts.override);
+      const { spec, resolution } = resolveImageJob(j.kind, tier, opts.override, opts.lock);
       const per = imagePriceUsd(spec, resolution) + (j.kind === 'page' || j.kind === 'edit' ? QC_USD_PER_PAGE : 0);
       return {
         label: j.label || j.kind,
@@ -363,7 +505,7 @@ export const estimateJobs = (
   return {
     usd,
     imageCount,
-    model: (primary as { model?: string } | undefined)?.model || resolveImageJob('page', tier, opts.override).spec.nickname,
+    model: (primary as { model?: string } | undefined)?.model || resolveImageJob('page', tier, opts.override, opts.lock).spec.nickname,
     lines: lines.map(({ label, count, usd: u }) => ({ label, count, usd: u }))
   };
 };

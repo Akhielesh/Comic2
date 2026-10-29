@@ -4,7 +4,7 @@
 // safety-blocked pages need an explicit "Publish without page N" tap, and nothing about the
 // comic changes until the server confirms.
 
-import React, { useMemo, useState } from 'react';
+import React, { useId, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide-react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
@@ -35,13 +35,14 @@ const Row: React.FC<{ ok: boolean | 'warn'; children: React.ReactNode }> = ({ ok
   </li>
 );
 
-const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; onChange(v: boolean): void }> = ({ label, hint, checked, onChange }) => (
-  <label className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 rounded-xl px-1 text-[13px] text-[var(--ds-ink)]">
+/** A labelled switch row (also the Share sheet's live "Link settings"). */
+export const Toggle: React.FC<{ label: string; hint?: string; checked: boolean; disabled?: boolean; onChange(v: boolean): void }> = ({ label, hint, checked, disabled, onChange }) => (
+  <label className={cx('flex min-h-[44px] items-center justify-between gap-3 rounded-xl px-1 text-[13px] text-[var(--ds-ink)]', disabled ? 'opacity-60' : 'cursor-pointer')}>
     <span className="min-w-0">
       <span className="block font-medium">{label}</span>
       {hint && <span className="block text-[12px] text-[var(--ds-muted)]">{hint}</span>}
     </span>
-    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[#D97757]" />
+    <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5 shrink-0 accent-[#D97757]" />
   </label>
 );
 
@@ -77,7 +78,13 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
   const editions = useMemo(() => Object.keys(doc.i18n?.editions || {}), [doc.i18n]);
   const readiness = view?.readiness;
   const publishable = new Set((readiness?.languages || []).filter((l) => l.publishable).map((l) => l.lang));
-  const [languages, setLanguages] = useState<string[]>(view?.languages?.length ? view.languages : [source]);
+  // The original is always published (readers always get it; the server adds it even when left out).
+  const [languages, setLanguages] = useState<string[]>(() => {
+    const chosen = view?.languages?.length ? view.languages : [];
+    return [source, ...chosen.filter((l) => l !== source)];
+  });
+  // The edition readers start in (offered once more than one language is ticked); an unticked choice falls back to the original.
+  const [defaultLang, setDefaultLang] = useState<string>(() => (view?.defaultLang && languages.includes(view.defaultLang) ? view.defaultLang : source));
   const [allowDownload, setAllowDownload] = useState(view?.allowDownload ?? true);
   const [allowEmbed, setAllowEmbed] = useState(view?.allowEmbed ?? true);
   const [showCreator, setShowCreator] = useState(view?.showCreator ?? false);
@@ -85,9 +92,16 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
   const live = !!view?.slug && view.status === 'live';
   const drawn = readiness?.drawnPages ?? 0;
 
+  const startInId = useId();
+  const sent = [source, ...languages.filter((l) => l !== source)];
+  const startIn = sent.includes(defaultLang) ? defaultLang : source;
+  // A ticked edition that is no longer ready (changed since it was published): publishing would refuse it.
+  const unready = readiness ? sent.filter((l) => l !== source && !publishable.has(l)) : [];
+
   const request = (exclude?: number[]): PublishRequest => ({
     visibility,
-    languages,
+    languages: sent,
+    ...(sent.length > 1 ? { defaultLang: startIn } : {}),
     allowDownload,
     allowEmbed,
     showCreator,
@@ -116,9 +130,12 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         <fieldset className="m-0 min-w-0 border-0 p-0">
           <legend className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Languages</legend>
           <div className="flex flex-wrap gap-2">
-            {[source, ...editions.filter((e) => e !== source)].map((lang) => {
-              const ready = lang === source || publishable.has(lang);
-              const on = languages.includes(lang);
+            {/* Every edition, plus a ticked language whose edition is gone (so it can still be unticked). */}
+            {[source, ...editions.filter((e) => e !== source), ...languages.filter((l) => l !== source && !editions.includes(l))].map((lang) => {
+              const isSource = lang === source;
+              const ready = isSource || publishable.has(lang);
+              const on = isSource || languages.includes(lang);
+              // An unready edition can be unticked (a published one that went stale) but never ticked.
               return (
                 <label
                   key={lang}
@@ -127,21 +144,47 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
                     on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
                     !ready && 'opacity-60'
                   )}
-                  title={ready ? undefined : 'Finish and review this translation first'}
+                  title={isSource ? 'The original is always published' : ready ? undefined : on ? 'Not ready any more: untick it to publish without it, or finish and review it first' : 'Finish and review this translation first'}
                 >
                   <input
                     type="checkbox"
                     checked={on}
-                    disabled={!ready || (on && languages.length === 1)}
-                    onChange={(e) => setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)))}
+                    disabled={isSource || (!ready && !on)}
+                    onChange={(e) => !isSource && setLanguages((cur) => (e.target.checked ? [...cur, lang] : cur.filter((l) => l !== lang)))}
                     className="h-4 w-4 accent-[#D97757]"
                   />
                   {languageSpec(lang)?.endonym || lang}
+                  {isSource && <span className="text-[11px] text-[var(--ds-muted)]">original</span>}
                   {!ready && <span className="text-[11px] text-[var(--ds-muted)]">not ready</span>}
                 </label>
               );
             })}
           </div>
+          <p className="m-0 mt-1.5 text-[12px] text-[var(--ds-muted)]">Readers always get the original and can switch to any language you publish.</p>
+          {unready.length > 0 && (
+            <p className="m-0 mt-1.5 text-[12px] text-amber-700 dark:text-amber-300">
+              {unready.map((l) => languageSpec(l)?.english || l).join(', ')} {unready.length === 1 ? 'isn’t' : 'aren’t'} ready to publish: untick {unready.length === 1 ? 'it' : 'them'} to publish without {unready.length === 1 ? 'it' : 'them'}, or finish the translation first.
+            </p>
+          )}
+          {sent.length > 1 && (
+            <div className="mt-2 flex min-h-[44px] min-w-0 items-center justify-between gap-3 text-[13px] text-[var(--ds-ink)]">
+              <label htmlFor={startInId} className="min-w-0 font-medium">
+                Readers start in
+              </label>
+              <select
+                id={startInId}
+                value={startIn}
+                onChange={(e) => setDefaultLang(e.target.value)}
+                className="min-h-[44px] min-w-0 max-w-[60%] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+              >
+                {sent.map((l) => (
+                  <option key={l} value={l}>
+                    {`${languageSpec(l)?.endonym || l}${l === source ? ' (original)' : ''}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </fieldset>
       )}
       <div className="divide-y divide-[var(--ds-hairline-soft)]">

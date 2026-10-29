@@ -32,7 +32,10 @@
 //    dictated segment). "Auto-send when I stop talking" sends the transcript on stop.
 //  - Gemini-style option chips (format · style · quality) open anchored panels above the
 //    composer; changes there are instant doc patches.
-//  - While a director turn streams the send button becomes Stop.
+//  - While a director turn streams the send button becomes Stop ("Stop the director"). Once its
+//    reply lands Send comes back while the pages it started keep drawing; their Stop is the
+//    activity line's ("Stop drawing") above the docked composer, and beside Send in the phone
+//    sheet, which has no activity line.
 //  - A selection in the page editor shows as a focus chip ("Page 3 · 2 balloons ×"); the next
 //    message is about it (`focus: 'selection'`) unless the chip is dismissed.
 
@@ -416,6 +419,8 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
   // Photos still uploading hold Send (the server only takes inbox paths that exist).
   const uploadsBusy = attachments.some((a) => a.kind === 'image' && isUploadBusy(a.upload));
   const canSend = ready && hasContent && !messageBusy && !uploadsBusy;
+  // The phone sheet has no activity line: renders still drawing after the reply get their Stop here.
+  const stopDrawing = inSheet && ready && !messageBusy && studio.renderingTotal > 0;
 
   // The page-editor selection rides along as the message's focus ("Page 3 · 2 balloons") until the
   // user dismisses the chip; a new selection brings the chip back.
@@ -1517,6 +1522,22 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
             )}
           </div>
 
+          {stopDrawing && (
+            <button
+              type="button"
+              onClick={() => void studio.cancel()}
+              disabled={cancelling}
+              aria-label={cancelling ? 'Stopping' : 'Stop drawing'}
+              title={cancelling ? 'Stopping…' : 'Stop drawing (images already drawing finish and are kept)'}
+              className={cx(
+                `inline-flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-full border border-[var(--ds-hairline)] text-[12px] font-medium text-[var(--ds-ink)] ${TRANSITION} hover:bg-[var(--ds-hover)] disabled:opacity-50 coarse:h-11 coarse:min-w-11`,
+                roomy ? 'px-3' : 'px-0'
+              )}
+            >
+              <Square className="h-3 w-3 shrink-0 fill-current" aria-hidden />
+              {roomy && <span className="whitespace-nowrap">{cancelling ? 'Stopping…' : 'Stop drawing'}</span>}
+            </button>
+          )}
           {messageBusy ? (
             <button
               type="button"

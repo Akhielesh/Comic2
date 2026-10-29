@@ -366,7 +366,13 @@ describe('signed URLs', () => {
       act(() => {
         img.dispatchEvent(new Event('error'));
       });
-      if (i < 3) await waitFor(() => expect(api.signStudioUrls.mock.calls.length).toBe(calls + 1), { timeout: 2000 });
+      if (i < 3) {
+        await waitFor(() => expect(api.signStudioUrls.mock.calls.length).toBe(calls + 1), { timeout: 4000 });
+        // A browser only reports the next error after it loaded the renewed URL, so wait until the round
+        // has merged it; firing on the stale src matches no tracked path and the re-sign never happens.
+        const failed = img.src;
+        await waitFor(() => expect(result.current.urlFor(asset, { width: 300 })).not.toBe(failed), { timeout: 4000 });
+      }
     }
     img.remove();
     await act(async () => {

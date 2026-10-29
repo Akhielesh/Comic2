@@ -9,8 +9,10 @@
 //     /api/comic/admin/library    admin library console   — before /api/comic
 //     /api/comic/admin/storage    storage maintenance     — before /api/comic
 //     /api/moderation/comic-cases moderator queue         — before /api/moderation
-//     /api/comic                  feature owner routers (publication, refs, i18n, safety appeal)
-//     /api/comic                  the studio (existing, text rate limit)
+//     /api/comic/models/lab       Model Lab (W-M)         — requireAdmin + admin rate limit, before the owner model routes
+//     /api/comic/models/*         model status + catalog  — W-M routers, text rate limit on their exact paths only
+//     /api/comic                  feature owner routers (publication, refs, i18n, safety appeal, models, model status, lab)
+//     /api/comic                  the studio (existing, text rate limit; also serves the static GET /models)
 //
 // Feature routers answer ONLY their own paths, so everything else falls through to the
 // studio router untouched. Per-route limits (contract §14.3) are mounted on the exact
@@ -28,6 +30,9 @@ import { logger } from '../lib/logger.js';
 import { requireActiveUser } from '../comic/safety/index.js';
 import { comicI18nRouter } from './comicI18n.js';
 import { comicLibraryAdminRouter, comicLibraryPublicRouter } from './comicLibrary.js';
+import { comicModelLabRouter } from './comicModelLab.js';
+import { comicModelStatusRouter } from './comicModelStatus.js';
+import { comicModelsRouter } from './comicModels.js';
 import { comicPublicationRouter } from './comicPublication.js';
 import { comicRefsRouter } from './comicRefs.js';
 import { comicModerationRouter, comicReportRouter, comicSafetyRouter } from './comicSafety.js';
@@ -79,7 +84,8 @@ const EARLY_REFUSALS: ReadonlySet<number> = new Set([401, 429]);
 const STATIC_SEGMENTS: ReadonlySet<string> = new Set([
   'api', 'comic', 'moderation', 'comic-cases', 'public', 'library', 's', 'report', 'admin', 'storage', 'migrate-refs', 'projects',
   'stream', 'publication', 'regenerate', 'refs', 'inbox', 'crop', 'translation-quote', 'safety-review', 'urls', 'cancel', 'runs',
-  'step', 'quote', 'assets', 'reject', 'publish', 'manifest', 'appeal', 'og', 'embed', 'tail'
+  'step', 'quote', 'assets', 'reject', 'publish', 'manifest', 'appeal', 'og', 'embed', 'tail',
+  'models', 'catalog', 'trends', 'status', 'lab'
 ]);
 const MAX_PATTERN_SEGMENTS = 8;
 
@@ -158,6 +164,15 @@ export const onlyWrites =
     step();
   };
 
+/** The text limiter for /api/comic/models/*, skipping the bare list (the studio limits it) and the admin-limited lab. */
+export const modelRoutesTextLimit =
+  (textRateLimit: RequestHandler): RequestHandler =>
+  (req, res, next) => {
+    const path = req.path.split('?')[0];
+    if (path === '/' || path === '' || path === '/lab' || path.startsWith('/lab/')) return next();
+    return textRateLimit(req, res, next);
+  };
+
 /** Mount the public comic routes. Call BEFORE the global requireAuth. */
 export function mountComicPublicRoutes(app: Express, deps: ComicPublicMountDeps): void {
   // Observe every comic request (public and owner) from here on, so the global requireAuth 401 and the
@@ -185,7 +200,12 @@ export function mountComicOwnerRoutes(app: Express, deps: ComicOwnerMountDeps): 
   app.use('/api/comic/projects/:id/publication', requireActive, deps.textRateLimit, onlyWrites(deps.limits.publish));
   app.use('/api/comic/projects/:id/translation-quote', deps.textRateLimit, ...deps.limits.translateQuote);
   app.use('/api/comic/projects/:id/safety-review', deps.textRateLimit);
-  app.use('/api/comic', ...(deps.featureRouters ?? [comicPublicationRouter, comicRefsRouter, comicI18nRouter, comicSafetyRouter]));
+  // W-M model routes. The Model Lab is admin-only (its guards sit on the exact prefix, before anything else can
+  // answer); status, catalog, trends and :id take the text limiter on their exact paths. The bare /models path is
+  // the studio router's static list and keeps the studio's own limiter, so no request is ever counted twice.
+  app.use('/api/comic/models/lab', deps.adminRateLimit, deps.requireAdmin);
+  app.use('/api/comic/models', modelRoutesTextLimit(deps.textRateLimit));
+  app.use('/api/comic', ...(deps.featureRouters ?? [comicPublicationRouter, comicRefsRouter, comicI18nRouter, comicSafetyRouter, comicModelLabRouter, comicModelStatusRouter, comicModelsRouter]));
 
   // Comic Studio (conversational studio) — auth'd, text-tier rate limited; renders are
   // billed per image inside the job runner.

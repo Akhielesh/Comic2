@@ -87,6 +87,12 @@ insert into auth.mfa_factors (user_id, status) values ('aaaaaaaa-0000-0000-0000-
 select pg_temp.as_user('aaaaaaaa-0000-0000-0000-00000000000a', '11111111-0000-0000-0000-000000000001');
 do $$ begin assert public.live_me()->>'member' = 'true', 'unverified factor must not count'; end $$;
 update auth.mfa_factors set status = 'verified';
+-- Verified in Supabase but never switched on here (e.g. added straight through the auth API by
+-- a stolen session): it changes nothing for the account.
+do $$ begin assert public.live_me()->>'member' = 'true', 'an authenticator never switched on here must not count'; end $$;
+-- Switched on a day ago: this session signed in after that.
+insert into public.live_mfa_factors (factor_id, user_id, activated_at) select id, user_id, now() - interval '1 day' from auth.mfa_factors;
+insert into public.live_mfa_on (user_id, since) values ('aaaaaaaa-0000-0000-0000-00000000000a', now() - interval '1 day');
 do $$ declare r jsonb; begin
   r := public.live_me();
   assert r->>'error' = 'mfa_required' and r->>'mfa_required' = 'true' and r->>'member' = 'false', r::text;

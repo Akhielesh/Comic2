@@ -652,6 +652,31 @@ describe('StudioComposer — phones and the sheet variant', () => {
     expect(await screen.findByRole('dialog', { name: 'Quality' })).toBeInTheDocument();
   });
 
+  it('the sheet (no activity line) puts "Stop drawing" beside Send while pages still draw after the reply', () => {
+    const at = (studio: ComicStudioController) => (
+      <FormFactorProvider value={PHONE}>
+        <StudioComposer studio={studio} variant="sheet" />
+      </FormFactorProvider>
+    );
+    const drawing = makeFakeStudio({ busy: true, messageBusy: false, renderingTotal: 2 });
+    const { rerender } = render(at(drawing));
+    fireEvent.change(textarea(), { target: { value: 'Darker sky' } });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    const stop = screen.getByRole('button', { name: 'Stop drawing' });
+    expect(stop).toHaveAttribute('title', 'Stop drawing (images already drawing finish and are kept)');
+    fireEvent.click(stop);
+    expect(drawing.cancel).toHaveBeenCalledTimes(1);
+    // Stopping: disabled until the streams close.
+    rerender(at(makeFakeStudio({ busy: true, messageBusy: false, renderingTotal: 2, cancelling: true })));
+    expect(screen.getByRole('button', { name: 'Stopping' })).toBeDisabled();
+    // While the director works it is the director's Stop; with nothing drawing there is no Stop drawing.
+    rerender(at(makeFakeStudio({ busy: true, messageBusy: true, renderingTotal: 2 })));
+    expect(screen.queryByRole('button', { name: 'Stop drawing' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
+    rerender(at(makeFakeStudio()));
+    expect(screen.queryByRole('button', { name: /^Stop/ })).toBeNull();
+  });
+
   it('the sheet variant ignores the composer bus and ⌘K, and reports a send', () => {
     const onSent = vi.fn();
     renderAt(PHONE, makeFakeStudio(), { variant: 'sheet', onSent, placeholder: 'Ask about this board' });

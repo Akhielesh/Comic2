@@ -87,8 +87,9 @@ removed, which is what prompted the move. Railway stays configured as a dormant 
 | R2 buckets | **1**: `dreamstream-live` (ENAM, Standard) — live-stream segments only |
 | D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
-| Durable Objects | `EventRoom` + `MonitorRoom` (live-worker), `Backend` (api-proxy, container-backed) — all SQLite |
-| Pages | `dreamstreamstudio.ai` (frontend). `comic2.pages.dev` (the production alias) and `www.` only **301** to it, keeping path + query (2026-10-22: one host, one sign-in — sessions are per host); preview/branch deploys (`<hash>.comic2.pages.dev`) still serve. **Pages Functions:** one middleware (`functions/_middleware.ts`) — those host redirects, then the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. **Static AI model:** `/models/yamnet/yamnet-v1.onnx` (16 MB, Apache-2.0, cached `immutable`) + ONNX Runtime WASM in `/assets` (13 MB / 24 MB, under Pages' 25 MiB file limit) — the baby monitor's on-device sound model (`docs/features/baby-monitor.md`). |
+| Durable Objects | `EventRoom`, `MonitorRoom`, `UserLine`, `CallRoom` (live-worker), `Backend` (api-proxy, container-backed) — all SQLite |
+| Analytics Engine | `stream_usage` (live-worker binding `STREAM_USAGE`: room usage points, daily activity marks, privacy-safe signal counts); `csp_reports` (Pages binding `CSP_REPORTS`, added by the owner — ADR 0006 owner checklist §6c). Read by Admin → Costs with the read-only analytics token |
+| Pages | `dreamstreamstudio.ai` (frontend). `comic2.pages.dev` (the production alias) and `www.` only **301** to it, keeping path + query (2026-10-22: one host, one sign-in — sessions are per host); preview/branch deploys (`<hash>.comic2.pages.dev`) still serve. **Pages Functions:** the middleware (`functions/_middleware.ts`) — those host redirects, the page half of the AI-agent gate, and (ADR 0006 WS-1) the security headers on every page: HSTS, nosniff, Referrer-Policy, Permissions-Policy, and a Content-Security-Policy that is Report-Only everywhere until `ENFORCE_LIVE` enforces it on Stream Studio; `public/_routes.json` keeps it off static assets so it only runs on page loads (static assets get their headers from `public/_headers`). Plus `functions/csp-report.ts` (`POST /csp-report`): counts CSP violation reports by app, directive and blocked origin — never a URL — into the optional `CSP_REPORTS` Analytics Engine binding. **Static AI model:** `/models/yamnet/yamnet-v1.onnx` (16 MB, Apache-2.0, cached `immutable`) + ONNX Runtime WASM in `/assets` (13 MB / 24 MB, under Pages' 25 MiB file limit) — the baby monitor's on-device sound model (`docs/features/baby-monitor.md`). |
 
 ---
 
@@ -101,8 +102,8 @@ All 4 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 | Worker | Repo dir | Route | Bindings | Purpose |
 |---|---|---|---|---|
 | **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*`, `stream.dreamstreamstudio.ai/api/*` (+ `dreamstream-api.akhieleshsrirangam.workers.dev`) | **Container** `Backend` via DO `BACKEND`; D1 `BACKEND_ENV` → `dreamstream-backend-env` (secrets); D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only); vars `BACKEND_TARGET` (`container`\|`origin`), `BACKEND_ORIGIN` (Railway, dormant) + the backend's non-secret config | Same-origin front door **and host** of the Express backend: forwards `/api/*` to the single `Backend` container instance (`src/backend.ts`; boots on demand, sleeps after 15 min idle); sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); retryable 503 JSON while the container starts or if it can't. Every string var/secret on the Worker (except `BACKEND_*`) becomes container env, merged over the D1 rows (`src/backendEnv.ts`). Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake the backend. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
-| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*`, `stream.dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), DO `MONITOR_ROOM` (`MonitorRoom`), DO `USER_LINE` (`UserLine`), DO `CALL_ROOM` (`CallRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), vars `ALLOWED_ORIGINS`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`; optional secrets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling; creating an event requires a signed-in Live member (Supabase RPC check). MonitorRoom DO = the **baby monitor** (2026-10): P2P WebRTC signaling between a camera device and viewers (video goes device to device and is never recorded; only when P2P can't connect does a low-rate relay picture pass through the DO's memory, never stored), family calls (2026-10: lines per nursery, plus `UserLine` per member and `CallRoom` per direct call — DO migration v3), sound/vision/offline alerts, incidents with on-duty routing + escalation, sleep tracking, Web Push (VAPID keys generated and kept in the DO), history in the DO's own SQLite (events 90 d, per-minute sound/motion rows 31 d, incidents, sleep sessions) and `GET /api/monitor/:nid/export` (CSV, bearer token); every socket is authorised against `monitor_my_role` in Supabase. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
-| **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET`, vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig). Caps live in backend config (200/day, 2500/mo). |
+| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*`, `stream.dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), DO `MONITOR_ROOM` (`MonitorRoom`), DO `USER_LINE` (`UserLine`), DO `CALL_ROOM` (`CallRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), Analytics Engine `STREAM_USAGE` (`stream_usage`), vars `ALLOWED_ORIGINS`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`; optional secrets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` (set since 2026-10-22), `TURN_TAG_SALT`; ADR 0006 Phase 0 (each feature dormant until set): `DEVICE_TOKEN_JWK`, `ACT_TOKEN_KEY`, `SECURITY_HOOK_SECRET`, `OPS_KEY`, later `APNS_*` / `FCM_SA_JSON`; rate-limit bindings `RL_WS` / `RL_GUEST` / `RL_GUEST_NID` / `RL_EVENT` (WS-7). Secrets and rotation: `live-security-runbook.md` §1 | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling; creating an event requires a signed-in Live member (Supabase RPC check). MonitorRoom DO = the **baby monitor** (2026-10): P2P WebRTC signaling between a camera device and viewers (video goes device to device and is never recorded; only when P2P can't connect does a low-rate relay picture pass through the DO's memory, never stored), family calls (2026-10: lines per nursery, plus `UserLine` per member and `CallRoom` per direct call — DO migration v3), sound/vision/offline alerts, incidents with on-duty routing + escalation, sleep tracking, Web Push (VAPID keys generated and kept in the DO), history in the DO's own SQLite (events 90 d, per-minute sound/motion rows 31 d, incidents, sleep sessions) and `GET /api/monitor/:nid/export` (CSV, bearer token); every socket is authorised against `monitor_my_role` in Supabase. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
+| **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET` + `SECURITY_HOOK_SECRET` (ADR 0006), vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/`SECURE_ACCOUNT_PAGE`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig; also the security notifications — password / email changed, MFA added or removed, identity linked); `POST /security` = new-sign-in alerts from the Supabase access-token hook via `pg_net` (`x-ds-signature`, ±5 min; 503 without the secret). Caps live in backend config (200/day, 2500/mo). |
 | **dreamstream-data-egress** | `data-egress/` | `dreamstreamstudio.ai/egress/*` | optional secret `EGRESS_SHARED_SECRET` | HTTPS GET relay for **exactly 3 allowlisted hosts** (Yahoo Finance, Stooq, Treasury FiscalData) when the backend's datacenter IP is blocked. `x-egress-key` equality gate. Load-bearing for finance widgets. |
 
 > **`dreamstream-studio` is retired** (Code Studio's sandbox Worker: `*.dreamstreamstudio.ai/*`
@@ -145,15 +146,42 @@ sign-in handoff: `docs/features/accounts-and-access.md` § One address per app.
    keeps GoTrue from falling back to the Site URL for any `redirectTo`). If Turnstile's widget
    lists hostnames explicitly, make sure the host is covered.
 4. Lead: `npm run ops:live-smoke:stream-host` — all PASS (app shell, bundle, `/live.html?e=` →
-   `/?e=`, live worker JSON, API health). **Blocker before the flip:** devices that turned alerts on
-   at `dreamstreamstudio.ai/live` keep that subscription, so turning alerts on again at the new
-   host would deliver each alert twice, and signing out on the new host wouldn't stop the old
-   one. Ship the de-duplication first (the server replaces an account's older subscription from
-   the same device, or the new host clears the old `/live` registration on enable and sign-out).
+   `/?e=`, live worker JSON, API health). Then open `https://dreamstreamstudio.ai/stream-alerts-bridge`
+   once: a blank page (it has no UI) with `Content-Security-Policy: … frame-ancestors
+   https://stream.dreamstreamstudio.ai` and no `X-Frame-Options`.
+   *The former blocker — the same alert twice once a device turns alerts on at both addresses —
+   is resolved (ADR 0006 WS-5, 2026-10-29), see "Alerts across the two addresses" below.*
 5. Lead: set `STREAM_HOST_ON = true` in `shared/streamHost.ts`, ship (Pages + backend +
    email Worker redeploy from the same push), then `npm run ops:live-smoke` (now includes the
    host and expects the apex 301s).
 Undo: set it back to `false` and ship; browsers forget the apex 301 within a day.
+
+**Alerts across the two addresses (the flip blocker, resolved 2026-10-29 — ADR 0006 WS-5).** A
+push subscription belongs to the origin that made it, so a device that turned alerts on at
+`dreamstreamstudio.ai/live` and again at the new host would get every alert twice, and signing
+out on the new host wouldn't stop the old one. Three pieces make it one alert per device:
+- **A same-site bridge page on the apex**, `public/stream-alerts-bridge.html` + `.js` (outside
+  `/live`, so the apex's 301 and frame block never touch it). The middleware gives it its own
+  enforced CSP (one same-origin script, `frame-ancestors https://stream.dreamstreamstudio.ai`,
+  nothing else) and the Stream Studio CSP may frame exactly that URL (`frame-src`), so it keeps
+  working once either policy is enforced (`tests/edge/alertsBridge.test.ts`). It answers only
+  the stream host (message origin + source checked), only in a frame, and never acts for
+  another account (`uid` must match the apex's `ds-live-owner`).
+- **The new host asks it** (`live/monitor/push.ts`, hidden iframe): the old subscription's
+  endpoint goes to the rooms with the new subscription as `sub.was`; MonitorRoom (alerts and
+  nursery call rings) and UserLine (direct-call rings) drop that endpoint **for the same
+  account only** when they store the new one (`live-worker/src/pushReplace.ts`). The old
+  subscription itself is unsubscribed (`retire`) only once this host covers *everything* it
+  alerted for — every nursery with alerts on at the old address, and call ringing — so no
+  nursery ever goes quiet on the device mid-move. Checked when alerts are turned on and at
+  start-up (start-up skips the frame for a week after the old address was found empty).
+- **Signing out on the new host** (this device or everywhere, `live/sync.ts`) also retires the
+  old subscription and wipes that account's Stream Studio data on the apex, as signing out
+  there would have. An unsubscribed endpoint answers 410 at its next push and every room drops
+  it, so the server side is clean even where `was` never arrived.
+Limits, stated honestly: where a browser isolates the frame's storage (some privacy modes and
+extensions) or an iPhone Home Screen app (its own storage), the bridge sees nothing and nothing
+changes — no worse than before; those devices turn alerts off at the old address themselves.
 
 Known limits: one handoff runs per page (`services/liveLink.ts` `once`), because each handoff
 link replaces the account's previous one-time token — so a handoff also cancels a password-reset
@@ -324,6 +352,13 @@ See the diagram in §0. Notable cross-service calls:
 - `live-worker` → EventRoom DO + R2 for live segments; → MonitorRoom DO for the baby monitor;
   → Supabase RPCs (`live_me`, `monitor_my_role`) with the caller's JWT.
 - Supabase Auth "Send Email Hook" → `email-worker` `/auth-hook`.
+- Supabase Auth "Customize Access Token" hook (`public.live_access_token_hook`, once
+  `server/sql/live_security_v2.sql` is applied and the hook switched on) → `pg_net` →
+  `email-worker` `/security` (HMAC with the Vault secret `SECURITY_HOOK_SECRET`) for new-sign-in
+  alerts. The hook never blocks a sign-in.
+- Browsers → Pages `/csp-report` → Analytics Engine `csp_reports`; rooms → Analytics Engine
+  `stream_usage`; the backend's Admin → Costs and the daily `stream-cost-watch` job read both with
+  the read-only analytics token (never the other way round).
 
 ---
 
@@ -369,10 +404,11 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 
 The `docs/ventures/**` specs describe a rich Workers + Workflows + KV + D1 +
 Hyperdrive + Queues platform. **None of that is live** (the move off Railway happened, but
-as a straight container lift, not that redesign). As of 2026-10-22 DreamStream uses: **4
-Workers, 1 Container (`Backend`), 1 R2 bucket, 3 Durable Object classes, 1
-DreamStream-owned D1 (`dreamstream-backend-env`, secrets only), Supabase Postgres** (plus the
-shared agent-log D1 tables above). There is **no KV, no Hyperdrive, no Queues, no Workflows,
+as a straight container lift, not that redesign). As of 2026-10-29 DreamStream uses: **4
+Workers, 1 Container (`Backend`), 1 R2 bucket, 5 Durable Object classes (`EventRoom`,
+`MonitorRoom`, `UserLine`, `CallRoom`, `Backend`), Analytics Engine datasets (`stream_usage`, and
+`csp_reports` once bound), 1 DreamStream-owned D1 (`dreamstream-backend-env`, secrets only),
+Supabase Postgres** (plus the shared agent-log D1 tables above). There is **no KV, no Hyperdrive, no Queues, no Workflows,
 no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 
 ---
@@ -389,3 +425,5 @@ no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 | 2026-10-21 | Baby monitor v3: MonitorRoom moved its log from KV-style storage to its SQLite (`monitorStore.ts`: events, minutes, incidents, sleep; one-time migration of the old log), DO alarm drives incident escalation + retention purge, new `/api/monitor/:nid/export` route, `public/keep-awake.mp4` (2 KB) for the screen-on fallback. No new paid resources (DO SQLite storage is within the plan's included storage). |
 | 2026-10-22 | **Stream Studio host** `stream.dreamstreamstudio.ai` prepared (§2a): middleware serves it, Worker routes `stream.dreamstreamstudio.ai/api/*` + `/live-api/*`, CORS/`ALLOWED_ORIGINS`, `POST /api/auth/handoff`; apex `/live*` 301 behind `STREAM_HOST_ON` (off until the domain is attached). No new paid resources. |
 | 2026-10-22 | **Code Studio retired** (ADR 0005): `dreamstream-studio` Worker (Container `Sandbox`, `standard-3`, `*.dreamstreamstudio.ai/*`) removed from the repo with its deploy workflow and `STUDIO_WORKER_URL`; owner deletes the deployed Worker + route + `STUDIO_HMAC_SECRET`. Ventures set admin-only with no tick loop (`VENTURES_ENABLED`/`VENTURES_PILOT_INLINE` = `false`). Workers Paid stays (backend container). |
+| 2026-10-29 | **Stream host flip blocker resolved** (§2a, ADR 0006 WS-5): apex page `/stream-alerts-bridge` (own enforced CSP, framable by the stream host only; its script excluded from Pages Functions in `_routes.json`), Stream Studio CSP `frame-src` gains that one URL, rooms drop the replaced `/live` subscription (`sub.was`, same account only). No new paid resources. |
+| 2026-10-29 | **ADR 0006 Phase 0 inventory** (WS-8): Pages security headers + `functions/csp-report.ts` and the optional `CSP_REPORTS` Analytics Engine binding; the live Worker's Phase 0 secrets and rate-limit bindings; the email Worker's `/security` route and the Supabase access-token hook → `pg_net` flow; the live Worker's signal counts in `stream_usage`; DO class list corrected (5, not 3). Operations: `live-security-runbook.md`; owner steps: `phase0-owner-checklist.md`. No new paid resources. |

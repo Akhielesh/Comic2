@@ -130,6 +130,17 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     expect(screen.getByRole('link', { name: /Go to DreamStream/ })).toHaveAttribute('href', '/');
   });
 
+  it('/c/<slug>/embed with embedding turned off: shows the same "This link isn’t active" the server answered, not the comic', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}/embed`);
+    setBoot({ notFound: true }); // what functions/c/[[path]].ts injects for /embed when allowEmbed is false
+    api.loadPublicComicBySlug.mockResolvedValue(payload({ allowEmbed: false }));
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG, embed: true }} />);
+    expect(await screen.findByText('This link isn’t active')).toBeInTheDocument();
+    expect(screen.queryByTestId('comic-reader')).toBeNull();
+    expect(api.loadPublicComicBySlug).not.toHaveBeenCalled();
+    expect(document.title).not.toMatch(/Saffron/);
+  });
+
   it('treats a malformed slug as the same dead link without asking the server', async () => {
     render(<PublicComicReader source={{ kind: 'slug', slug: '' }} />);
     expect(await screen.findByText('This link isn’t active')).toBeInTheDocument();
@@ -367,6 +378,15 @@ describe('PublicComicReader — share link (/c/<slug>)', () => {
     rerender(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} identityReady />);
     await waitFor(() => expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({ type: 'view' })));
     expect(api.trackPublicEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('a link opened from a share action (?via=) counts its view under that channel and keeps a clean address', async () => {
+    window.history.replaceState(null, '', `/c/${SLUG}?via=whatsapp`);
+    api.loadPublicComicBySlug.mockResolvedValue(payload());
+    render(<PublicComicReader source={{ kind: 'slug', slug: SLUG }} />);
+    await waitFor(() => expect(api.trackPublicEvent).toHaveBeenCalledWith(SLUG, expect.objectContaining({ type: 'view', channel: 'whatsapp' })));
+    // The channel tag is gone from the address (the reader's own page sync may add ?p= meanwhile).
+    expect(new URLSearchParams(window.location.search).has('via')).toBe(false);
   });
 
   it('counts "complete" only after reading through to the end, never for a link that opens on the last page', async () => {

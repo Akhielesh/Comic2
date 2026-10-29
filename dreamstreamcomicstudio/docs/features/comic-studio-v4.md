@@ -126,8 +126,12 @@ client (components/comicstudio)                 server (server/src/comic, routes
   started settle (keeps the container sleepable — no idle open streams, no polling).
 - **Interrupted jobs**: on session load, renders stuck in `queued/rendering` for >3 min
   become `failed` ("Interrupted — retry").
-- **Cancel**: `POST /cancel` aborts the session's current AbortController (director
-  loop + not-yet-started renders). In-flight image calls finish and are kept (paid).
+- **Cancel**: `POST /cancel` is scoped to what it says it stops. Each message request runs
+  its turn on its own session AbortController (renders capture the controller current when
+  they start). While a director turn is in flight it is "Stop the director": that turn's loop
+  and the not-yet-started renders it queued stop, and renders an earlier request queued keep
+  drawing. With no turn in flight it is "Stop drawing": every not-yet-started render of the
+  session stops. In-flight image calls finish and are kept (paid).
 
 ### Transport & events
 `POST /api/comic/projects/:id/stream`, body `StreamRequest` (`shared/comic/events.ts`).

@@ -24,7 +24,8 @@ Rules:
 |---|-------|--------|
 | 0001 | OpenRouter gateway + BYOK as the AI control plane | Accepted |
 | 0002 | Remove pricing/billing UI; keep billing backend dormant | Accepted |
-| 0003 | Multi-key API configuration + per-key usage limits | Proposed |
+| 0003 | Multi-key API configuration + per-key usage limits | Accepted |
+| 0004 | [Consolidate on the classic comic engine; remove ComicForge and Test Lab](0004-consolidate-comic-engine-remove-comicforge-testlab.md) | Accepted |
 | 0005 | Retire Code Studio (and the Ventures build stage with it) | Accepted |
-| 0006 | [Native apps, watch companions, local-first, and security](0006-native-apps-watch-local-first-security.md) | Proposed |
+| 0006 | [Native apps, watch companions, local-first, and security](0006-native-apps-watch-local-first-security.md) — Phase 0 in progress; operations in [`live-security-runbook.md`](../infrastructure/live-security-runbook.md), owner steps in [`phase0-owner-checklist.md`](../infrastructure/phase0-owner-checklist.md) | Proposed |
 | 0007 | [Stream Studio cost transparency and frugality](0007-stream-studio-cost-transparency-and-frugality.md) | Proposed |

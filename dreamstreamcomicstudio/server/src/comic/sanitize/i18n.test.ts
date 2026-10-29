@@ -4,6 +4,8 @@ import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { i18nOf, lineSourceHash, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { applyOps, type DocOp } from '../../../../shared/comic/ops.js';
+import { inverseOps } from '../../../../shared/comic/undo.js';
+import { editionReadiness } from '../../../../shared/comic/i18n.js';
 import type { SanitizeCtx } from '../extensions.js';
 import { sixPageKidsDoc } from '../i18n/testing.js';
 import { sanitizePatchOps } from '../jobs.js';
@@ -31,12 +33,15 @@ describe('i18n sanitizers (contract §5.4)', () => {
     for (const op of ['edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term']) expect(opSanitizerFor(op)).toBe(I18N_SANITIZERS.find((s) => s.op === op));
   });
 
-  it('translation: forced {edited, now, current sourceHash}; gloss/issue/model cleared; bounds', () => {
+  it('translation: forced {edited, now, current sourceHash}; model cleared; a sent gloss kept, an unsent one cleared; bounds', () => {
     const doc = withTe();
     const op = sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: '  కొత్తది  ', status: 'reviewed', sourceHash: 'forged', at: 5, gloss: 'x', model: 'y' } }, CTX);
-    expect(op.patch).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: undefined, issue: undefined, model: undefined });
+    expect(op.patch).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: 'x', issue: undefined, model: undefined });
     const next = applyOps(doc, [op]);
-    expect(i18nOf(next).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]) });
+    expect(i18nOf(next).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]), gloss: 'x' });
+    // A plain edit (no gloss sent) clears the old gloss, issue and model: they described a different text.
+    const plain = applyOps(doc, [sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'కొత్తది' } }, CTX)]);
+    expect(i18nOf(plain).editions.te.lines.l1).toEqual({ text: 'కొత్తది', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(doc.pages[0].panels[0].lines[0]) });
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x'.repeat(601) } }, CTX), 400);
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: '   ' } }, CTX), 400);
     expectCode(() => sanitizeTranslation.sanitize(doc, { op: 'translation', lang: 'hi', lineId: 'l1', patch: { text: 'x' } }, CTX), 400); // no edition
@@ -87,10 +92,80 @@ describe('i18n sanitizers (contract §5.4)', () => {
     expectCode(() => sanitizeGlossaryTerm.sanitize(full, { op: 'glossary_term', id: 'g_new', patch: { term: 'one more' } }, CTX), 409);
   });
 
+  it('Undo of a translation edit restores the gloss and the review flag, so a review-blocked edition stays blocked', () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const entries: Record<string, { text: string; status: 'reviewed' | 'machine'; sourceHash: string; at: number; gloss?: string; issue?: { severity: 'major'; note: string; suggestion?: string } }> = {};
+    for (const l of lines) entries[l.id] = { text: `తెలుగు ${l.id}`, status: 'reviewed', sourceHash: lineSourceHash(l), at: 1, gloss: `Means: ${l.text}` };
+    entries.l3 = { ...entries.l3, status: 'machine', gloss: undefined, issue: { severity: 'major', note: 'Wrong meaning.', suggestion: 'చూడు, అక్కడ!' } };
+    const before = applyOps(doc, [{ op: 'translations', lang: 'te', lines: entries }]);
+    expect(editionReadiness(before, 'te').publishable).toBe(false); // l3 is flagged (and unreviewed)
+    const edits = sanitizePatchOps(before, [
+      { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'కొత్త l1' } },
+      { op: 'translation', lang: 'te', lineId: 'l3', patch: { text: 'కొత్త l3' } }
+    ], CTX);
+    const edited = applyOps(before, edits);
+    expect(i18nOf(edited).editions.te.lines.l3.issue).toBeUndefined();
+    // Undo: the client inverse carries the full previous entries; the server keeps gloss + issue, forces the rest.
+    const undone = applyOps(edited, sanitizePatchOps(edited, inverseOps(before, edits), CTX));
+    expect(i18nOf(undone).editions.te.lines.l1).toEqual({ text: 'తెలుగు l1', status: 'edited', at: CTX.now, sourceHash: lineSourceHash(lines[0]), gloss: 'Means: Where did the moon go?' });
+    // l1 was 'reviewed': the client never mints that back ('edited' — both publishable). l3 was an unreviewed AI draft: 'machine' again.
+    expect(i18nOf(undone).editions.te.lines.l3).toEqual({ text: 'తెలుగు l3', status: 'machine', at: CTX.now, sourceHash: lineSourceHash(lines[2]), issue: { severity: 'major', note: 'Wrong meaning.', suggestion: 'చూడు, అక్కడ!' } });
+    expect(editionReadiness(undone, 'te').publishable).toBe(editionReadiness(before, 'te').publishable);
+    expect(editionReadiness(undone, 'te').issues.map((i) => i.code)).toContain('major_issue');
+    // Bounds: gloss and note are clipped, a malformed issue is dropped, nothing lets the client mint "reviewed".
+    const long = sanitizeTranslation.sanitize(before, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x', gloss: 'g'.repeat(400), issue: { severity: 'minor', note: 'n'.repeat(400), suggestion: 's'.repeat(700) } } }, CTX);
+    expect(long.patch).toMatchObject({ status: 'edited', gloss: 'g'.repeat(300), issue: { severity: 'minor', note: 'n'.repeat(300), suggestion: 's'.repeat(600) } });
+    const bad = sanitizeTranslation.sanitize(before, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x', gloss: '   ', issue: { severity: 'fatal', note: 'n' } as never } }, CTX);
+    expect(bad.patch).toMatchObject({ status: 'edited', gloss: undefined, issue: undefined });
+  });
+
+  it('Undo of an edit to an unreviewed AI draft (no issue) puts it back to "waiting for review": the publish block is not lifted', () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const entries: Record<string, { text: string; status: 'reviewed' | 'machine'; sourceHash: string; at: number }> = {};
+    for (const l of lines) entries[l.id] = { text: `తెలుగు ${l.id}`, status: 'reviewed', sourceHash: lineSourceHash(l), at: 1 };
+    entries.l3 = { ...entries.l3, status: 'machine' };
+    const before = applyOps(doc, [{ op: 'translations', lang: 'te', lines: entries }]);
+    expect(editionReadiness(before, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'unreviewed', count: 1 })] });
+    const edits = sanitizePatchOps(before, [{ op: 'translation', lang: 'te', lineId: 'l3', patch: { text: 'కొత్త l3' } }], CTX);
+    const edited = applyOps(before, edits);
+    expect(editionReadiness(edited, 'te').publishable).toBe(true); // the author's own edit counts as done
+    const undone = applyOps(edited, sanitizePatchOps(edited, inverseOps(before, edits), CTX));
+    expect(i18nOf(undone).editions.te.lines.l3).toMatchObject({ text: 'తెలుగు l3', status: 'machine' });
+    expect(editionReadiness(undone, 'te').publishable).toBe(false);
+  });
+
+  it('Undo of a fix to a line that had changed since translating puts it back to stale (never stamps it current)', () => {
+    const doc = applyOps(sixPageKidsDoc(), [{ op: 'edition', lang: 'te', patch: {} }]);
+    const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines));
+    const entries: Record<string, { text: string; status: 'reviewed'; sourceHash: string; at: number }> = {};
+    for (const l of lines) entries[l.id] = { text: `తెలుగు ${l.id}`, status: 'reviewed', sourceHash: lineSourceHash(l), at: 1 };
+    entries.l1 = { ...entries.l1, sourceHash: lineSourceHash({ ...lines[0], text: 'An older line.' }) };
+    const before = applyOps(doc, [{ op: 'translations', lang: 'te', lines: entries }]);
+    expect(editionReadiness(before, 'te').issues.map((i) => i.code)).toEqual(['stale']);
+    const edits = sanitizePatchOps(before, [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'కొత్త l1' } }], CTX);
+    const edited = applyOps(before, edits);
+    expect(editionReadiness(edited, 'te').publishable).toBe(true);
+    const undone = applyOps(edited, sanitizePatchOps(edited, inverseOps(before, edits), CTX));
+    expect(i18nOf(undone).editions.te.lines.l1.sourceHash).toBe(entries.l1.sourceHash);
+    expect(editionReadiness(undone, 'te')).toMatchObject({ publishable: false, issues: [expect.objectContaining({ code: 'stale' })] });
+    // A malformed hash, or the current one, is stamped current as before.
+    for (const sourceHash of ['not-a-hash', 'ABCDEF12', lineSourceHash(lines[0]), 42]) {
+      const op = sanitizeTranslation.sanitize(before, { op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'x', sourceHash } as never }, CTX);
+      expect(op.patch?.sourceHash).toBe(lineSourceHash(lines[0]));
+    }
+  });
+
   it('through sanitizePatchOps: a client can never mark its own translation "reviewed"', () => {
     const doc = withTe();
     const out = sanitizePatchOps(doc, [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'చంద్రుడు', status: 'reviewed' } }], CTX);
     expect(out[0]).toMatchObject({ op: 'translation', patch: { status: 'edited' } });
+    // 'machine' is the one status a client may send (it only adds "waiting for review"); anything else is 'edited'.
+    for (const status of ['machine', 'edited', 'stale', 'REVIEWED', undefined]) {
+      const one = sanitizePatchOps(doc, [{ op: 'translation', lang: 'te', lineId: 'l1', patch: { text: 'చంద్రుడు', status } as never }], CTX);
+      expect(one[0]).toMatchObject({ patch: { status: status === 'machine' ? 'machine' : 'edited' } });
+    }
     expect(() => sanitizePatchOps(doc, [{ op: 'translations', lang: 'te', lines: {} } as DocOp], CTX)).toThrow();
   });
 });

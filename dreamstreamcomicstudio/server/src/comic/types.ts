@@ -274,6 +274,8 @@ export interface BillingHooks {
     resolution?: Resolution;
     inputTokens?: number;
     outputTokens?: number;
+    /** Text calls: every model the call may be served by (the route's fallback chain, primary first). The hold covers the dearest. */
+    models?: string[];
   }): Promise<BillingReserveResult>;
 }
 

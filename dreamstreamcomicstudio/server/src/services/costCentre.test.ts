@@ -315,3 +315,22 @@ describe('cost centre — Cloudflare analytics', () => {
     expect(section.error).not.toContain('SECRET-TOKEN-123');
   });
 });
+
+describe('Cost centre — ADR 0006 Phase 0 observability (WS-8)', () => {
+  it('always ships a Security section, honest about what was not read', () => {
+    const report = buildCostCentreReport(emptyRows(), { days: 7, now: NOW, budgetFor: () => null });
+    expect(report.security).toBeDefined();
+    expect(report.security?.range.days).toBe(7);
+    expect(report.security?.csp).toMatchObject({ measured: false, total: null });
+    expect(report.security?.signIns).toMatchObject({ measured: false, newSessions: null });
+    expect(report.security?.signals).toMatchObject({ measured: false, counted: false });
+    expect(report.security?.alerts).toEqual([]);
+  });
+
+  it('passes the Phase 0 budgets and the 7-day median shape through the Stream Studio section', () => {
+    const report = buildCostCentreReport(emptyRows(), { days: 30, now: NOW, budgetFor: () => null });
+    expect(report.stream?.kpis.budgets).toEqual({ doRequests: 2600, rowsWritten: 1800, gbSeconds: 40 });
+    expect(report.stream?.kpis.median7d).toEqual({ days: 0, doRequests: null, rowsWritten: null, gbSeconds: null });
+    expect(report.stream?.kpis.status).toEqual({ doRequests: 'unknown', rowsWritten: 'unknown', gbSeconds: 'unknown' });
+  });
+});

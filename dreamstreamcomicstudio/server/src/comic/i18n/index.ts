@@ -105,7 +105,12 @@ export const supportedLanguagesText = (doc: ComicDoc): string =>
 // ── Quote (§8.4) ─────────────────────────────────────────────────────────────
 
 const UNKNOWN_PRICE = { input: 1, output: 5 };
-/** In-memory output-token calibration per language (EMA of actual ÷ estimated). Logged, never persisted. */
+/**
+ * In-memory price calibration per language: an EMA of what a finished run was BILLED ÷ what its plan priced
+ * (translator + review). The plan already carries an expected repair round per chunk (REPAIR_SHARE, §8.6);
+ * the real repair rate and every token-count drift show up here and correct the next quote. Logged, never
+ * persisted — so a cold process quotes with the allowance alone.
+ */
 const calibration = new Map<string, number>();
 export const resetTranslationCalibration = () => calibration.clear();
 const calibrated = (lang: string) => calibration.get(lang) ?? 1;
@@ -114,11 +119,20 @@ const calibrate = (lang: string, estimated: number, actual: number) => {
   const ratio = Math.min(2, Math.max(0.5, actual / estimated));
   const next = round4(0.7 * calibrated(lang) + 0.3 * ratio);
   calibration.set(lang, next);
-  logger.info('comic_translate_calibration', { lang, estimated, actual, factor: next });
+  logger.info('comic_translate_calibration', { lang, estimatedUsd: estimated, billedUsd: actual, factor: next });
 };
 
 const modelPriceUsd = (model: string, input: number, output: number): number =>
   estimateTextCostUsd(model, input, output) ?? (input * UNKNOWN_PRICE.input + output * UNKNOWN_PRICE.output) / 1_000_000;
+
+/** The uncalibrated price of one language plan (translator + review) in the user's terms: markup unless BYOK. */
+const planUsd = (plan: TranslationPlan, keys: StudioKeys): number => {
+  const markup = spendIsByok(keys) ? 1 : PLATFORM_MARKUP;
+  const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
+  const lnModel = resolveTextRoute('linguist', keys)?.model ?? TEXT_ROLE_DEFAULTS.linguist.models[0];
+  const raw = (plan.calls ? modelPriceUsd(trModel, plan.tokens.input, plan.tokens.output) : 0) + (plan.reviewCalls ? modelPriceUsd(lnModel, plan.tokens.reviewInput, plan.tokens.reviewOutput) : 0);
+  return raw * markup;
+};
 
 /** Friendly model name for the gate ("Claude Sonnet 5.5 + review"). */
 const MODEL_NAMES: Record<string, string> = {
@@ -152,18 +166,15 @@ export interface TranslationQuote {
 /** Pure quote for languages that are already resolved codes (no ctx: the quote route uses it too). */
 export function quoteTranslation(doc: ComicDoc, keys: StudioKeys, action: Pick<TranslateAction, 'languages' | 'pageIds' | 'force' | 'overwriteEdits'>): TranslationQuote {
   const byok = spendIsByok(keys);
-  const markup = byok ? 1 : PLATFORM_MARKUP;
   const trModel = resolveTextRoute('translator', keys)?.model ?? TEXT_ROLE_DEFAULTS.translator.models[0];
-  const lnModel = resolveTextRoute('linguist', keys)?.model ?? TEXT_ROLE_DEFAULTS.linguist.models[0];
   const plans: TranslationPlan[] = [];
   const perLanguage: LanguageQuote[] = [];
   const lines: SpendEstimate['lines'] = [];
   for (const lang of action.languages) {
     const plan = planTranslation(doc, lang, { pageIds: action.pageIds, force: action.force, overwriteEdits: action.overwriteEdits });
     plans.push(plan);
-    const out = plan.tokens.output * calibrated(lang);
-    const raw = (plan.calls ? modelPriceUsd(trModel, plan.tokens.input, out) : 0) + (plan.reviewCalls ? modelPriceUsd(lnModel, plan.tokens.reviewInput, plan.tokens.reviewOutput) : 0);
-    const usd = round4(raw * markup);
+    const out = plan.tokens.output;
+    const usd = round4(planUsd(plan, keys) * calibrated(lang));
     const translated = planLineCount(plan);
     const free = plan.freeLines.length + (plan.deferred?.length || 0);
     const chunks = chunkTranslation(plan.toTranslate).length || (plan.calls ? 1 : 0);
@@ -279,8 +290,8 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   const extras = extrasFor(ctx.session.doc, plan.coverTexts);
   if (!chunks.length && extras.length) chunks.push([]);
   const translatedIds: string[] = [];
-  let estimatedOut = 0;
-  let actualOut = 0;
+  // What this plan priced before calibration; the bill of a finished run is compared to it (calibrate).
+  const quoted = planUsd(plan, ctx.keys);
   try {
     for (const [i, chunk] of chunks.entries()) {
       if (cancelled(signal)) {
@@ -297,15 +308,20 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
         // No abort signal on the call itself: Stop takes effect AFTER the current chunk (a started call is
         // paid for, so its lines are kept), exactly like a render that is already drawing.
         const result = await translateChunk(llmT, { doc, lang, pages, extras: i === 0 ? extras : [], rating });
+        // Ops against the doc as it is NOW (the author may have edited lines while the chunk was out).
         const ops = chunkOps(ctx.session.doc, lang, result, Date.now(), result.model);
         if (ops.length) ctx.session.commit(ops, { origin: 'job' });
-        translatedIds.push(...Object.keys(result.lines), ...Object.keys(result.extras));
-        res.translated += Object.keys(result.lines).length;
+        // Only what the commit actually wrote goes to the review; an author's edit made meanwhile is theirs.
+        const written = new Set<string>();
+        for (const op of ops) {
+          if (op.op === 'translations') for (const id of Object.keys(op.lines)) written.add(id);
+          else if (op.op === 'edition_text') written.add(op.field);
+        }
+        translatedIds.push(...[...Object.keys(result.lines), ...Object.keys(result.extras)].filter((id) => written.has(id)));
+        res.translated += Object.keys(result.lines).filter((id) => written.has(id)).length;
         res.failed += result.failed.length;
         res.unsafe += result.unsafe.length;
         res.tooLong += Object.values(result.lines).filter((l) => l.tooLong).length;
-        estimatedOut += plan.tokens.output / Math.max(1, chunks.length);
-        actualOut += result.completionTokens;
         end(true);
       } catch (err) {
         end(false);
@@ -346,7 +362,8 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
     recordTextSpend(ctx, tracker, 'translate', `Translate · ${spec.english}`);
     res.usd = tracker.usd;
     res.byok = tracker.byok;
-    calibrate(lang, estimatedOut, actualOut);
+    // Only a run that did all its work is a fair comparison (a stopped or failed one billed less than planned).
+    if (!res.cancelled && !res.error) calibrate(lang, quoted, tracker.usd);
   }
   return res;
 }

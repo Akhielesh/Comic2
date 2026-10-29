@@ -232,6 +232,18 @@ describe('GET /api/comic/oembed', () => {
     const res = await call(`/api/comic/oembed?url=${encodeURIComponent(`https://comics.dreamstreamstudio.ai/c/${SLUG}`)}`);
     expect(res.status).toBe(404);
   });
+
+  it('without a software-made OG card the thumbnail is the cover (as the share head’s og:image); the OG card wins when present', () => {
+    const COVER = `${SUPA}/storage/v1/object/public/comic-assets/pub/${KEY}/cover-0123456789ab-w1080.webp`;
+    const origin = 'https://comics.dreamstreamstudio.ai';
+    const noOg = validateShareCardRpc(publication({ card: { ...publication().card, og: {}, coverUrl: COVER } }))!;
+    expect(noOg.card.coverUrl).toBe(COVER);
+    expect(oembedFor(noOg, origin)).toMatchObject({ type: 'rich', thumbnail_url: COVER, thumbnail_width: 1080, thumbnail_height: 1620 });
+    const withOg = validateShareCardRpc(publication({ card: { ...publication().card, coverUrl: COVER } }))!;
+    expect(oembedFor(withOg, origin)).toMatchObject({ thumbnail_url: `${origin}/og/${KEY}/og-en-0123456789ab.jpg`, thumbnail_width: 1200, thumbnail_height: 630 });
+    const neither = validateShareCardRpc(publication({ card: { ...publication().card, og: {} } }))!;
+    expect(oembedFor(neither, origin).thumbnail_url).toBeUndefined();
+  });
 });
 
 describe('content rating on the public payload (P2-PUBLIC-PAYLOAD)', () => {

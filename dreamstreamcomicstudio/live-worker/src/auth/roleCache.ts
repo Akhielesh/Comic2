@@ -8,7 +8,9 @@
  *      told membership changed (`drop`), and every 6 hours.
  *   3. Two-step sign-in is enforced for anyone with a verified factor: an aal1 token is refused
  *      with 4003 (`mfa_required`), from the token's `ds_mfa` claim or, without the hook, from the
- *      role check's `mfa` answer (live_security_v2.sql). The cache never refuses on its own: a
+ *      role check's `mfa` answer (live_security_v2.sql) — except a session signed in BEFORE it
+ *      was switched on (`ds_mfa_grace` / `mfa_grace`), which keeps watching: turning two-step
+ *      sign-in on from one phone never takes the nursery camera off the air. The cache never refuses on its own: a
  *      fresh claim beats it, and a cached "has a factor" against an aal1 token only sends the
  *      question back to Supabase — so someone who turned two-step sign-in off isn't locked out
  *      for up to 6 hours by the room's memory.
@@ -21,7 +23,7 @@
  */
 
 import type { SqlExec } from '../monitorStore';
-import { EXPIRY_GRACE_MS, callRpc, mfaProblem, verifyAccessToken, type AccessIdentity, type SupabaseEnv } from '../supabaseAuth';
+import { EXPIRY_GRACE_MS, callRpc, verifyAccessToken, watchProblem, type AccessIdentity, type SupabaseEnv } from '../supabaseAuth';
 
 export type MonRole = 'parent' | 'caregiver' | 'viewer';
 
@@ -167,25 +169,29 @@ export async function admitMember(o: AdmitOptions): Promise<Admission> {
   if (v.ok === false) return fail(v.reason === 'malformed' ? 'invalid' : v.reason);
   const id = v.id;
   if (o.expectUid && id.uid !== o.expectUid.toLowerCase()) return fail('mismatch');
-  if (mfaProblem(id)) return fail('mfa_required');
+  // Watching, not administering: a session signed in before two-step sign-in was switched on
+  // keeps its socket on aal1 (the nursery camera must not go dark) — the claim says so.
+  if (watchProblem(id)) return fail('mfa_required');
 
   const cached = o.store.get(id.uid);
-  const ok = (e: RoleEntry, checked: 'cache' | 'rpc' | 'stale'): Admission => {
+  const ok = (e: RoleEntry, checked: 'cache' | 'rpc' | 'stale', rpcGrace = false): Admission => {
     // Supabase's answer just now is the truth; otherwise the token's signed claim beats our
     // memory of it (they may have turned two-step sign-in off since), and the cache only fills
     // in when the hook is off.
     const mfa = checked === 'rpc' ? e.mfa : (id.mfa ?? e.mfa);
-    // Without the token claim (hook off), Supabase's own answer still demands aal2.
-    if (mfa && id.aal !== 'aal2') return fail('mfa_required');
-    return { ok: true, id: { ...id, mfa }, role: e.role, label: e.label, name: e.name, mfa, checked, closeAt: closeAtFor(id.exp) };
+    const grace = id.mfaGrace === true || rpcGrace;
+    // Without the token claim (hook off), Supabase's own answer still demands aal2 — unless it
+    // says this session predates two-step sign-in.
+    if (mfa && id.aal !== 'aal2' && !grace) return fail('mfa_required');
+    return { ok: true, id: { ...id, mfa, mfaGrace: grace }, role: e.role, label: e.label, name: e.name, mfa, checked, closeAt: closeAtFor(id.exp) };
   };
   // A cached "has a second factor" against an aal1 token is never a reason to refuse on its own
   // (the claim already said no, or there is none): it only means "ask Supabase", which knows.
   // So a stale cache can cost a round trip, never lock someone out.
-  const doubt = (e: RoleEntry): boolean => e.mfa && id.aal !== 'aal2';
+  const doubt = (e: RoleEntry): boolean => e.mfa && id.aal !== 'aal2' && id.mfaGrace !== true;
   if (cached && !o.recheck && now - cached.at < ROLE_TTL_MS && !doubt(cached)) return ok(cached, 'cache');
 
-  const res = await callRpc<{ ok?: boolean; error?: string; user_id?: string; role?: string; label?: string | null; display_name?: string | null; mfa?: boolean }>(
+  const res = await callRpc<{ ok?: boolean; error?: string; user_id?: string; role?: string; label?: string | null; display_name?: string | null; mfa?: boolean; mfa_grace?: boolean }>(
     o.env,
     o.token,
     'monitor_my_role',
@@ -219,5 +225,6 @@ export async function admitMember(o: AdmitOptions): Promise<Admission> {
     at: now,
   };
   o.store.put(entry);
-  return ok(entry, 'rpc');
+  // (Grace is per session, never cached: it's asked again with each session's token.)
+  return ok(entry, 'rpc', d.mfa_grace === true);
 }

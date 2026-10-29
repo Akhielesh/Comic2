@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, fallbackLineIds, lineSourceHash, localizeDoc } from '../../../../shared/comic/i18n.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
-import { effectiveRating, publishableText, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { effectiveRating, publishableText, safetyStatusOf, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { __resetSharpSlotPeakForTests, sharpSlotStats, withSharpSlot } from '../imageMeasure.js';
 import { fakeAssetStore, newSession, plannedDoc, testContext, type FakeAssetStore, type TestContext } from '../orchestrator.fakes.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
@@ -105,6 +105,15 @@ function richDoc(): ComicDoc {
   return doc;
 }
 
+/** A complete, reviewed, current edition of every spoken line: what editionReadiness() calls publishable. */
+function withReviewedEdition(doc: ComicDoc, lang: string): ComicDoc {
+  doc.format = { ...doc.format, lettering: 'overlay' };
+  const lines = doc.pages.flatMap((p) => p.panels.flatMap((pn) => pn.lines)).filter((l) => l.text.trim());
+  const translated = Object.fromEntries(lines.map((l) => [l.id, { text: `${lang.toUpperCase()}:${l.text}`, status: 'reviewed' as const, sourceHash: lineSourceHash(l), at: 1 }]));
+  doc.i18n = { editions: { ...(doc.i18n?.editions || {}), [lang]: { lang, lines: translated, balloons: {}, register: 'everyday' } }, glossary: doc.i18n?.glossary || [] };
+  return doc;
+}
+
 const gateFor =
   (statuses: Record<string, SafetyStatus> = {}, overall?: PublishGateResult['status'], rating: PublishGateResult['rating'] = 'PG') =>
   async (_ctx: unknown, _doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
@@ -121,6 +130,14 @@ const gateFor =
       costUsd: 0
     };
   };
+
+/** A gate that judges the asset it is handed (verdict → status), like the real one minus the network. */
+const judgingGate = async (_ctx: unknown, doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
+  const statusOf = (a?: AssetRef): SafetyStatus => (safetyStatusOf(a?.safety, 'PG') === 'pass' ? 'pass' : 'blocked');
+  const pages = Object.fromEntries(opts.pageIds.map((id) => [id, { status: statusOf(doc.pages.find((p) => p.id === id)?.render.asset), reasons: [] }]));
+  const anyBad = Object.values(pages).some((p) => p.status === 'blocked');
+  return { status: anyBad ? 'blocked' : 'cleared', rating: 'PG', pages, cover: opts.includeCover ? { status: statusOf(doc.cover.render.asset), reasons: [] } : null, text: { status: 'pass', reasons: [] }, checkedHash: 'h2', costUsd: 0 };
+};
 
 const fakeOg = async () => ({ jpeg: Buffer.from('fake-jpeg'), w: 1200 as const, h: 630 as const, themeColor: '#123456' });
 
@@ -312,6 +329,62 @@ describe('publish', () => {
     expect(view.status).toBe('live');
   });
 
+  it('a consented exclusion survives an Update: the owner view carries it and the Share sheet resends it (blocked stays blocked)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const doc = richDoc();
+    doc.pages[2].render = ready('p3', { safety: { assessed: 'X', at: 1, categories: ['graphic_gore'] } });
+    setup(doc, { pg_3: 'blocked' });
+    const first = await publishWithOutcome(ctx, { visibility: 'unlisted', excludePageIds: ['pg_3'] });
+    expect(first.view.status).toBe('live');
+    expect(first.view.excludedPageIds).toEqual(['pg_3']);
+    expect(store.rpcPayload(first.view.slug!)!.doc!.pages.map((p) => p.n)).toEqual([1, 2]);
+
+    // The owner edits the logline: "You've made changes since publishing — Update".
+    ctx.session.commit([{ op: 'brief', patch: { logline: 'A courier races through a spice market — now with a twist.' } }], { origin: 'user' });
+    const view = await getPublicationView(ctx);
+    expect(view.behind).toBe(true);
+    expect(view.excludedPageIds).toEqual(['pg_3']);
+    // Readiness still names the blocked page (it is excluded, not cleared): the sheet knows it is already out.
+    expect(view.readiness.safety).toMatchObject({ status: 'blocked', blockedPages: [3] });
+
+    // What the sheet's Update sends: visibility + languages + the exclusions it was told about.
+    const rev = ctx.session.doc.rev;
+    const updated = await publish(ctx, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, excludePageIds: view.excludedPageIds });
+    expect(updated).toMatchObject({ status: 'live', slug: first.view.slug, publishedRev: rev, behind: false, excludedPageIds: ['pg_3'] });
+    expect(store.rpcPayload(updated.slug!)!.doc!.brief.logline).toMatch(/now with a twist/);
+    // Without them the gate refuses again, as before (the verdict is kept).
+    await expect(publish(ctx, { visibility: 'unlisted', languages: view.languages })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
+  it('an excluded page redrawn clean goes back in: the owner view stops listing it, so the sheet\'s Update publishes the fix (a blocked redraw is still refused)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const doc = richDoc();
+    doc.pages[2].render = ready('p3', { safety: { assessed: 'X', at: 1, categories: ['graphic_gore'] } });
+    setup(doc);
+    restore();
+    restore = configurePublication({ store, gate: judgingGate as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    const first = await publish(ctx, { visibility: 'unlisted', excludePageIds: ['pg_3'] });
+    expect(first.excludedPageIds).toEqual(['pg_3']);
+    expect(store.rpcPayload(first.slug!)!.doc!.pages).toHaveLength(2);
+
+    // The owner redraws page 3 and it comes back clean.
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-clean') } }], { origin: 'job' });
+    const view = await getPublicationView(ctx);
+    expect(view.behind).toBe(true);
+    expect(view.readiness.safety.status).toBe('cleared');
+    expect(view.excludedPageIds).toBeUndefined();
+    // Exactly what the sheet's Update sends: the fixed page goes live.
+    const updated = await publish(ctx, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, ...(view.excludedPageIds ? { excludePageIds: view.excludedPageIds } : {}) });
+    expect(store.rpcPayload(updated.slug!)!.doc!.pages.map((p) => p.id)).toEqual(['pg_1', 'pg_2', 'pg_3']);
+    expect(updated.excludedPageIds).toBeUndefined();
+
+    // A redraw that is blocked again: listed as blocked and not excluded, so the gate refuses and the sheet offers "Publish without page 3".
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-again', { safety: { assessed: 'X', at: 3, categories: ['graphic_gore'] } }) } }], { origin: 'job' });
+    const again = await getPublicationView(ctx);
+    expect([again.readiness.safety.blockedPages, again.excludedPageIds]).toEqual([[3], undefined]);
+    await expect(publish(ctx, { visibility: 'unlisted', languages: again.languages })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
   it('unchecked content is never published (503, fail closed)', async () => {
     setup(richDoc(), { pg_1: 'unchecked' });
     // Contract §12.6: needs_check → 503 NOT_AVAILABLE (the route sends `reason` as the wire code; the client retries it).
@@ -457,6 +530,38 @@ describe('publish', () => {
     expect(second.publishedRev).toBeGreaterThan(first.publishedRev);
   });
 
+  it('the owner view carries the frozen card (default-language title, description, cover copy), unchanged by edits made since', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const view = await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    expect(view.card).toEqual({ title: 'Spice Run', description: expect.any(String), coverUrl: (row.card as ShareCard).coverUrl });
+    expect(view.card!.coverUrl).toMatch(/^https:\/\/cdn\.test\/pub\//);
+    ctx.session.commit([{ op: 'brief', patch: { title: 'Brand new title nobody has seen', logline: 'Not published yet.' } }], { origin: 'user' });
+    const later = await getPublicationView(ctx);
+    expect(later.behind).toBe(true);
+    expect(later.card).toEqual(view.card);
+    // A paused link's copies are taken down: the card text stays, the cover goes.
+    store.forcePrivate('proj-1');
+    const paused = await getPublicationView(ctx);
+    expect(paused.status).toBe('suspended');
+    expect(paused.card).toEqual({ title: 'Spice Run', description: view.card!.description });
+    await unpublish(ctx);
+    expect((await getPublicationView(ctx)).card).toBeUndefined();
+  });
+
+  it('the public snapshot’s doc.id is the stored row id and survives an update (readers key their place and the intro on it)', async () => {
+    const first = await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    const firstDoc = store.rpcPayload(first.slug!)!.doc!;
+    expect(firstDoc.id).toBe(row.id);
+    expect(firstDoc.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    ctx.session.commit([{ op: 'brief', patch: { logline: 'edited' } }], { origin: 'user' });
+    clock += 1000;
+    const second = await publish(ctx, { visibility: 'unlisted' });
+    expect(second.slug).toBe(first.slug);
+    expect(store.rpcPayload(second.slug!)!.doc!.id).toBe(firstDoc.id);
+  });
+
   it('regenerate: new slug + new key, old link dead at once, old objects deleted', async () => {
     const first = await publish(ctx, { visibility: 'unlisted' });
     const oldKey = store.rows.get('proj-1')!.assetKey!;
@@ -522,6 +627,24 @@ describe('publish', () => {
     await expect(updatePublication(ctx, { languages: ['en'] } as never)).rejects.toMatchObject({ status: 400 });
   });
 
+  it('"Make it public" gates the PUBLISHED art: a page redrawn since (not yet updated) does not block it, while publishing that redraw still does', async () => {
+    restore();
+    restore = configurePublication({ store, gate: judgingGate as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    await publish(ctx, { visibility: 'unlisted' });
+    // Page 3 is redrawn into something the check blocks; the owner has not tapped Update, so readers still see the cleared art.
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-redrawn', { safety: { assessed: 'X', at: 2, categories: ['graphic_gore'] } }) } }], { origin: 'job' });
+    expect(ctx.session.doc.pages[2].render.history[0].path).toMatch(/\/p3\.webp$/); // the published version is still in the doc
+    const view = await updatePublication(ctx, { visibility: 'public' });
+    expect([view.visibility, view.behind]).toEqual(['public', true]);
+    expect(store.projects.get('proj-1')!.isPublic).toBe(true);
+    // …and the redraw itself cannot be published as it is.
+    await expect(publish(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+    // A published version that has left the doc entirely falls back to gating the current render (as before).
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { history: [] } }], { origin: 'job' });
+    await updatePublication(ctx, { visibility: 'unlisted' });
+    await expect(updatePublication(ctx, { visibility: 'public' })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
   it('going public when the published pages are gone from the live doc: blocked words say so (422), an outage is 503', async () => {
     await publish(ctx, { visibility: 'unlisted' });
     const row = store.rows.get('proj-1')!;
@@ -556,6 +679,68 @@ describe('publish', () => {
     expect(r.missing).toEqual([{ kind: 'page', n: 1, status: 'not drawn yet' }]);
     expect(r.stalePages).toEqual([2]);
     expect(r.safety).toMatchObject({ status: 'blocked', blockedPages: [3] });
+  });
+
+  it('readiness lists every edition the comic holds: a finished one is publishable before it is published (the sheet can offer it); an unfinished one never blocks a publish that does not ask for it', async () => {
+    const { getPublicationView } = await import('./index.js');
+    // richDoc's Hindi edition is one machine line with a stale hash: listed, not publishable, not requested.
+    const partial = await getReadiness(ctx, richDoc());
+    expect(partial.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: false, blocking: expect.arrayContaining([expect.any(String)]), requested: false }
+    ]);
+    expect(partial.ok).toBe(true);
+    // Asked for, the same edition blocks (and says why).
+    expect((await getReadiness(ctx, richDoc(), { visibility: 'unlisted', languages: ['en', 'hi'] })).ok).toBe(false);
+
+    const doc = withReviewedEdition(richDoc(), 'hi');
+    expect(editionReadiness(doc, 'hi').publishable).toBe(true);
+    setup(doc);
+    const before = await getPublicationView(ctx);
+    expect(before.readiness.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: true, blocking: [], requested: false }
+    ]);
+    await publish(ctx, { visibility: 'unlisted', languages: ['en'] });
+    const after = await getPublicationView(ctx);
+    expect(after.languages).toEqual(['en']);
+    expect(after.readiness.languages).toEqual([
+      { lang: 'en', publishable: true, blocking: [], requested: true },
+      { lang: 'hi', publishable: true, blocking: [], requested: false }
+    ]);
+    // …and adding it later is a plain update of the same link.
+    const both = await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'] });
+    expect([both.slug, both.languages]).toEqual([after.slug, ['en', 'hi']]);
+    expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
+  });
+
+  it('the original is always published, first: a request naming only an edition still publishes the source (readers, downloads and the card agree)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    setup(withReviewedEdition(richDoc(), 'hi'));
+    const view = await publish(ctx, { visibility: 'unlisted', languages: ['hi'], defaultLang: 'hi' });
+    expect(view.languages).toEqual(['en', 'hi']);
+    expect(view.defaultLang).toBe('hi'); // the author's choice of default edition stands
+    const payload = store.rpcPayload(view.slug!)!;
+    expect(payload.publication.languages).toEqual(['en', 'hi']);
+    expect(Object.keys((payload.publication.card as ShareCard).i18n)).toEqual(['en', 'hi']);
+    expect((await getReadiness(ctx, ctx.session.doc, { visibility: 'unlisted', languages: ['hi'] })).languages.map((l) => l.lang)).toEqual(['en', 'hi']);
+    expect((await getPublicationView(ctx)).readiness.languages.map((l) => [l.lang, l.requested])).toEqual([['en', true], ['hi', true]]);
+  });
+
+  it('"publish it in Hindi": a request naming only editions starts readers in the first one named, though the original is published too', async () => {
+    setup(withReviewedEdition(richDoc(), 'hi'));
+    const first = await publish(ctx, { visibility: 'unlisted', languages: ['hi'] });
+    expect([first.languages, first.defaultLang]).toEqual([['en', 'hi'], 'hi']);
+    // The sheet's Update resends the published list (the original named): the live default stands.
+    const update = await publish(ctx, { visibility: 'unlisted', languages: first.languages });
+    expect(update.defaultLang).toBe('hi');
+    // Dropping the default edition falls back to the original.
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en'] })).defaultLang).toBe('en');
+    // A first publish naming the original starts readers in it, unless the request picks another.
+    await unpublish(ctx);
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'] })).defaultLang).toBe('en');
+    expect((await publish(ctx, { visibility: 'unlisted', languages: ['en', 'hi'], defaultLang: 'hi' })).defaultLang).toBe('hi');
+    expect(store.rows.get('proj-1')!.defaultLang).toBe('hi');
   });
 
   it('card patch ops update only the publish card in its message', () => {
@@ -761,6 +946,8 @@ describe('S6: only art the server wrote to a lane clients cannot rewrite is publ
     const row = store.rows.get('proj-1')!;
     expect(row.snapshot!.pages).toHaveLength(2);
     expect(assets.copies.some((c) => c.src === `${USER}/x.png`)).toBe(false);
+    // Still an outside image: the owner view keeps the exclusion, so the sheet's Update resends it.
+    expect((await (await import('./index.js')).getPublicationView(ctx)).excludedPageIds).toEqual(['pg_2']);
   });
 
   it('server-made art publishes: an uploaded photo in the private ref lane, a derived crop, a library image (regression guard)', async () => {

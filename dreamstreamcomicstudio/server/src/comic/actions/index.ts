@@ -8,6 +8,7 @@ import { createKeyedRegistry, type ActionHandler } from '../extensions.js';
 import { BREAKDOWN_ACTIONS } from './breakdown.js';
 import { I18N_ACTIONS } from './i18n.js';
 import { LIBRARY_ACTIONS } from './library.js';
+import { MODELS_ACTIONS } from './models.js';
 import { PUBLISH_ACTIONS } from './publish.js';
 import { REFS_ACTIONS } from './refs.js';
 import { SAFETY_ACTIONS } from './safety.js';
@@ -24,7 +25,7 @@ const registry = createKeyedRegistry<ActionHandler>({
   what: 'action',
   keyOf: (h) => h.type,
   reserved: CORE_ACTION_TYPES,
-  lists: () => [TIMELINE_ACTIONS, BREAKDOWN_ACTIONS, SAFETY_ACTIONS, PUBLISH_ACTIONS, I18N_ACTIONS, REFS_ACTIONS, LIBRARY_ACTIONS]
+  lists: () => [TIMELINE_ACTIONS, BREAKDOWN_ACTIONS, SAFETY_ACTIONS, PUBLISH_ACTIONS, I18N_ACTIONS, REFS_ACTIONS, LIBRARY_ACTIONS, MODELS_ACTIONS]
 });
 
 /** type → handler for every feature action (null-prototype object). */

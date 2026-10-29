@@ -1,16 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type Msg } from '../../../shared/comic/doc.js';
+import { createEmptyDoc, emptyRender, type Card, type Msg, type Page } from '../../../shared/comic/doc.js';
 import {
   DIRECTOR_SYSTEM_PROMPT,
   HISTORY_WINDOW,
   conversationForDirector,
   maybeFoldMemory,
+  recordOptionAnswer,
   runDirectorTurn,
   summarizeDocForDirector
 } from './director.js';
 import { lakeBriefDoc, lakeDrawnDoc } from './golden/fixtures.js';
 import { JOB_TIMINGS } from './jobs.js';
-import { fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
+import { fakeBilling, fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { StudioError } from './types.js';
 import { costFormatter, costViewFor } from './costText.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
@@ -56,6 +57,85 @@ describe('runDirectorTurn', () => {
     // Director spend is recorded as chat.
     expect(doc.spend.entries[0]).toMatchObject({ kind: 'chat', label: 'Director', estimated: false });
     expect(ctx.billingFake.reserves[0]).toMatchObject({ operation: 'comic.text.director', stage: 'chat' });
+  });
+
+  it('a tapped option is recorded on its card (reload-safe) and the model history reads "answered: …"', async () => {
+    const session = newSession(createEmptyDoc('q-1'));
+    const llm = scriptedLlm({
+      director: [
+        { text: 'What tone?', toolCalls: [toolCall('q1', 'ask_user', { question: 'What tone?', options: [{ label: 'Funny', reply: 'Make it funny' }, { label: 'Tense' }] })] },
+        { text: 'Funny it is.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'A story about a cat.', attachments: [] });
+    const asked = session.doc.conversation.at(-1)!;
+    const card = asked.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    expect(card.answered).toBeUndefined();
+    // The OptionsCard sends the choice's reply as the user's next message.
+    await runDirectorTurn(ctx, { text: 'Make it funny', attachments: [] });
+    const after = session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    // Without the fix nothing ever wrote `answered`: after a reload the chips were live again.
+    expect(after.answered).toEqual([card.choices[0].id]);
+    expect(session.doc.conversation.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    // The model's history carries the answer by label, not by id.
+    expect(JSON.stringify(llm.calls[1].messages)).toContain('[asked: What tone? — options: Funny / Tense; answered: Funny]');
+  });
+
+  it('option answers: free text that matches no choice leaves the card open; a multi-select "A and B" records both', async () => {
+    const session = newSession(createEmptyDoc('q-2'));
+    const llm = scriptedLlm({
+      director: [
+        { text: 'Which pets?', toolCalls: [toolCall('q1', 'ask_user', { question: 'Which pets?', options: [{ label: 'Cats' }, { label: 'Dogs' }, { label: 'Birds' }], multi: true })] },
+        { text: 'Noted.' },
+        { text: 'Both then.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    await runDirectorTurn(ctx, { text: 'pets?', attachments: [] });
+    const asked = session.doc.conversation.at(-1)!;
+    const cardOf = () => session.doc.conversation.find((m) => m.id === asked.id)!.cards!.find((c) => c.type === 'options') as Extract<Card, { type: 'options' }>;
+    await runDirectorTurn(ctx, { text: 'Something else entirely', attachments: [] });
+    expect(cardOf().answered).toBeUndefined();
+    await runDirectorTurn(ctx, { text: 'Cats and Birds', attachments: [] });
+    expect(cardOf().answered).toEqual([cardOf().choices[0].id, cardOf().choices[2].id]);
+  });
+
+  it('option answers named by the card: a typed answer, the right card among same labels, and no guessing past a named card', () => {
+    const doc = createEmptyDoc('q-3');
+    const yesNo = (id: string): Card => ({
+      type: 'options',
+      id,
+      question: 'Keep it?',
+      choices: [
+        { id: `${id}_y`, label: 'Yes' },
+        { id: `${id}_n`, label: 'No' }
+      ],
+      allowCustom: true
+    });
+    doc.conversation = [
+      { id: 'a0', role: 'assistant', text: 'First?', at: 1, cards: [yesNo('c_old')] },
+      { id: 'a1', role: 'assistant', text: 'Second?', at: 2, cards: [yesNo('c_new')] }
+    ];
+    const session = newSession(doc);
+    const answeredOf = (cardId: string) =>
+      (session.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.id === cardId) as Extract<Card, { type: 'options' }>).answered;
+    // Two live cards share "Yes": the text alone answers the newest; the named card is the one tapped.
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_old', choiceIds: ['c_old_y'] })).toBe(true);
+    expect(answeredOf('c_old')).toEqual(['c_old_y']);
+    expect(answeredOf('c_new')).toBeUndefined();
+    // Named but already answered (or an id the card does not have): nothing is written, no other card is guessed.
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_old', choiceIds: ['c_old_n'] })).toBe(false);
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_new', choiceIds: ['nope'] })).toBe(false);
+    expect(answeredOf('c_new')).toBeUndefined();
+    // A typed answer in the card's own field: recorded when it is what was sent.
+    expect(recordOptionAnswer(session, 'Only  the first half', { id: 'c_new', custom: 'something else' })).toBe(false);
+    expect(recordOptionAnswer(session, 'Only  the first half', { id: 'c_new', custom: 'only the first half' })).toBe(true);
+    expect(answeredOf('c_new')).toEqual(['Only the first half']);
+    // An unknown card id falls back to the text.
+    const s2 = newSession({ ...doc, id: 'q-4', conversation: [{ id: 'a2', role: 'assistant', text: 'Third?', at: 3, cards: [yesNo('c_3')] }] });
+    expect(recordOptionAnswer(s2, 'No', { id: 'c_gone', choiceIds: ['x'] })).toBe(true);
+    expect((s2.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>).answered).toEqual(['c_3_n']);
   });
 
   it('runs a multi-round tool loop with OpenRouter-native tool messages', async () => {
@@ -222,6 +302,49 @@ describe('summaries', () => {
     expect(s.length).toBeLessThan(12_000);
   });
 
+  it('a big book clips the body, never the tail: settings, spend, the open approval, the focus and the feature lines survive', () => {
+    // At DOC_LIMITS (40 pages × 4 panels, 24 cast with full looks, 14 long notes, 8 places) the full
+    // summary is ~17k chars; without compaction the end — exactly the money/gate/focus lines — was cut.
+    const doc = createEmptyDoc('big-1', 'The Long Voyage');
+    doc.brief = { ...doc.brief, logline: 'A crew of friends sails across a sea of islands to find a lost lighthouse.', premise: 'Lorem ipsum '.repeat(50), notes: Array.from({ length: 14 }, (_, i) => `Note ${i + 1}: ${'keep the tone warm and the jokes gentle, '.repeat(4)}`) };
+    doc.cast = Array.from({ length: 24 }, (_, i) => ({
+      id: `c_${i}`, name: `Crew Member ${i + 1}`, tier: i < 2 ? ('lead' as const) : ('support' as const), role: 'deckhand with a secret past and a loud laugh',
+      look: { summary: `A ${['tall', 'short', 'wiry', 'round'][i % 4]} sailor with ${['braided', 'cropped', 'curly', 'long'][i % 4]} hair, a weathered coat, brass buttons, a scar on the left cheek and bright eyes` },
+      refs: [], sheet: emptyRender()
+    }));
+    doc.places = Array.from({ length: 8 }, (_, i) => ({ id: `pl_${i}`, name: `Island ${i + 1}`, look: 'Rocky shore, a crooked pier, fishing huts and gulls everywhere', refs: [], sheet: emptyRender() }));
+    const page = (n: number): Page => ({
+      id: `pg_${n}`, n, summary: `Page ${n}: the crew lands on island ${n} and meets someone new who changes the plan in a surprising way`, layout: '', balloons: [], render: emptyRender(),
+      panels: [1, 2, 3, 4].map((k) => ({ id: `pn_${n}_${k}`, n: k, size: 'medium' as const, shot: 'medium' as const, action: `Action ${n}.${k}`, castIds: ['c_0'], lines: [{ id: `ln_${n}_${k}`, kind: 'speech' as const, speakerId: 'c_0', text: `Line ${n}.${k}` }] }))
+    });
+    doc.pages = Array.from({ length: 40 }, (_, i) => page(i + 1));
+    doc.planStatus = 'approved';
+    doc.gate = { id: 'gate_1', action: { type: 'render_pages' }, title: 'Draw pages 1–40?', summary: '', estimateUsd: 2.4, imageCount: 40, model: 'Nano Banana 2.1', createdAt: Date.now(), status: 'open', reason: 'policy' };
+    const governed = costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } }));
+    const out = summarizeDocForDirector(doc, false, ['Undo available: restyle 3 balloons'], {
+      userText: 'make these red',
+      focus: { pageId: 'pg_40', lineIds: ['ln_40_1', 'ln_40_2'], surface: 'page_editor' },
+      cost: governed
+    });
+    expect(out.length).toBeLessThanOrEqual(12_000);
+    // Without the fix these four (and the governed instruction) were sliced off the end.
+    expect(out).toContain('Settings:');
+    expect(out).toContain('Spend so far');
+    expect(out).toContain('never in dollars');
+    expect(out).toContain('Waiting on approval: Draw pages 1–40?');
+    expect(out).toContain('Focus: the user is looking at page 40; selected balloons — p40 panel 1: “Line 40.1” (speech); p40 panel 2: “Line 40.2” (speech)');
+    expect(out).toContain('Undo available: restyle 3 balloons');
+    // The tail is last, and the body was compacted rather than cut mid-line: every page and cast id is still there.
+    expect(out.indexOf('Settings:')).toBeGreaterThan(out.indexOf('- p40 '));
+    expect(out).toContain('- p40 [not drawn]');
+    expect(out).not.toContain('- p40 [not drawn] Page 40');
+    expect(out).toContain('- CREW MEMBER 24 [c_23] support');
+    expect(out).not.toContain('- Note 1:');
+    expect(out).toContain('- Note 14:');
+    // A small book is untouched by the compaction.
+    expect(summarizeDocForDirector(plannedDoc())).toContain('- p1 [not drawn] Page 1 beat (3 panels)');
+  });
+
   it('conversationForDirector merges same-role turns, summarizes cards and starts with the user', () => {
     const conv: Msg[] = [
       { id: 'a0', role: 'assistant', text: 'Welcome!', at: 0 },
@@ -250,6 +373,44 @@ describe('memory folding', () => {
     expect(await maybeFoldMemory(ctx)).toBe(false);
     expect(llm.calls).toHaveLength(1);
     expect(session.doc.spend.entries[0]).toMatchObject({ kind: 'chat', label: 'Conversation memory' });
+  });
+
+  it('runs after the turn, outside the turn lock: the next message is not refused while the fold is out', async () => {
+    const doc = plannedDoc();
+    doc.conversation = Array.from({ length: 45 }, (_, i): Msg => ({ id: `m${i}`, role: i % 2 ? 'assistant' : 'user', text: `msg ${i}`, at: i }));
+    const session = newSession(doc);
+    let releaseFold!: () => void;
+    const foldHeld = new Promise<void>((r) => (releaseFold = r));
+    let folds = 0;
+    const llm = scriptedLlm({
+      director: [
+        { text: 'Noted.' },
+        async () => {
+          folds += 1;
+          await foldHeld;
+          return { text: '- Prefers short pages.' };
+        },
+        { text: 'Still here.' }
+      ]
+    });
+    const ctx = testContext(session, { llm });
+    // The route runs the turn under the session lock (routes/comic.ts runMessage).
+    const turn = session.runExclusive(() => runDirectorTurn(ctx, { text: 'keep pages short', attachments: [] }));
+    const first = await Promise.race([turn.then(() => 'released'), new Promise((r) => setTimeout(() => r('held'), 200))]);
+    // Before: the fold's model call ran inside the lock, so the turn (and the lock) waited for it.
+    expect(first).toBe('released');
+    expect(folds).toBe(1);
+    expect(session.turnRunning).toBe(false);
+    expect(session.doc.conversation[session.doc.conversation.length - 1].text).toBe('Noted.');
+    // A second turn ends while the first fold is still out: no second fold (one per session at a time).
+    await session.runExclusive(() => runDirectorTurn(ctx, { text: 'and bright colors', attachments: [] }));
+    expect(folds).toBe(1);
+    expect(llm.calls).toHaveLength(3);
+    releaseFold();
+    // The request's stream stays open for the fold (ctx.track), and the memory lands.
+    await ctx.settled();
+    expect(session.doc.memory).toMatch(/^- Prefers short pages\.\n⟦through:m\d+⟧$/);
+    expect(session.doc.spend.entries.some((e) => e.label === 'Conversation memory')).toBe(true);
   });
 
   it('is fail-soft', async () => {
@@ -532,6 +693,30 @@ describe('runDirectorTurn — never silent (contract §12.2)', () => {
     expect(reply.nextSteps).toEqual([{ label: 'Try again', say: 'hello' }]);
   });
 
+  it('a used-up allowance is said in the reply itself, with no "try again in a moment" and no Try-again chip', async () => {
+    // billing denies the director's text call (included usage exhausted): waiting changes nothing,
+    // so the honest reason is the message the user reads, not only a card under a generic apology.
+    const session = newSession(plannedDoc());
+    const llm = scriptedLlm({ director: [{ text: 'never reached' }] });
+    await runDirectorTurn(testContext(session, { llm, billing: fakeBilling(0) }), { text: 'make page 1 funnier', attachments: [] });
+    const reply = session.doc.conversation.at(-1)!;
+    expect(reply.role).toBe('assistant');
+    expect(reply.text).toBe("You've used this month's included generation allowance.");
+    expect(reply.text).not.toMatch(/try again in a moment/i);
+    expect(reply.nextSteps ?? []).not.toContainEqual(expect.objectContaining({ label: 'Try again' }));
+    expect(reply.cards).toBeUndefined(); // said once, not duplicated as a notice
+    expect(reply.suggestions).toBeUndefined();
+
+    // When the model already spoke before the denial, its words stay and the reason rides as the notice.
+    const spoke = newSession(plannedDoc());
+    const llm2 = scriptedLlm({ director: [{ text: 'Noting that.', toolCalls: [toolCall('n', 'add_notes', { notes: ['funnier'] })] }, { text: 'never reached' }] });
+    await runDirectorTurn(testContext(spoke, { llm: llm2, billing: fakeBilling(1) }), { text: 'make page 1 funnier', attachments: [] });
+    const partial = spoke.doc.conversation.at(-1)!;
+    expect(partial.text).toContain('Noting that.');
+    expect(partial.cards).toEqual([expect.objectContaining({ type: 'notice', tone: 'error', text: "You've used this month's included generation allowance." })]);
+    expect(partial.nextSteps ?? []).not.toContainEqual(expect.objectContaining({ label: 'Try again' }));
+  });
+
   it('named IP: an IP NOTE steers to an original homage, said once', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const llm = scriptedLlm({
@@ -672,6 +857,36 @@ describe('P2-SERVER director wiring', () => {
     const reply = session.doc.conversation.at(-1)!;
     expect(reply.text).not.toMatch(/\$/);
     expect(reply.text).toMatch(/^A new page costs about ≈?<?[\d.]+% of your usage\.$/);
+  });
+
+  it('…nor in the live stream: the deltas are governed too, even when an amount is split across chunks', async () => {
+    const session = newSession(plannedDoc());
+    const caps = { ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } };
+    const llm = scriptedLlm({
+      director: [
+        (req) => {
+          // The provider streams "$0." and "12" in separate chunks (the fake then re-emits the full text).
+          req.onDelta?.('The cover would be about $0.');
+          req.onDelta?.('12 — want it?');
+          return { text: 'The cover would be about $0.12 — want it?' };
+        }
+      ]
+    });
+    const ctx = testContext(session, { llm, caps });
+    await runDirectorTurn(ctx, { text: 'how much is the cover?', attachments: [] });
+    const deltas = ctx.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text);
+    // Without the fix the stream carried the raw "$0.12" until the final message replaced the draft.
+    expect(deltas.join('')).not.toMatch(/\$/);
+    expect(deltas.join('')).toContain('% of your usage — want it?');
+    expect(deltas[0]).toBe('The cover would be about '); // the growing "$0." was held back, not shown
+    const final = session.doc.conversation.at(-1)!.text;
+    expect(final).not.toMatch(/\$/);
+    expect(final).toMatch(/^The cover would be about ≈?<?[\d.]+% of your usage — want it\?$/);
+    // An admin's stream passes through as is, chunk by chunk.
+    const admin = newSession(plannedDoc());
+    const actx = testContext(admin, { llm: scriptedLlm({ director: [{ text: 'About $0.12.' }] }), caps: { ...DEFAULT_CAPS, admin: true } });
+    await runDirectorTurn(actx, { text: 'how much?', attachments: [] });
+    expect(actx.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text)).toEqual(['About $0.12.']);
   });
 
   it('…nor on the cards: an ask_user question with prices in its options reads in usage', async () => {

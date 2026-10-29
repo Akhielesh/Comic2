@@ -149,6 +149,13 @@ export interface AccessIdentity {
    * room's role check, which knows.
    */
   mfa: boolean | null;
+  /**
+   * This session was signed in BEFORE two-step sign-in was switched on (the `ds_mfa_grace` claim,
+   * or `mfa_grace` on the RPC path): it may keep WATCHING on aal1 — a nursery camera or bedside
+   * monitor doesn't go dark because a parent turned it on from another room — but admin actions
+   * still need aal2 (`stepUpNeeded` ignores it). null/absent = not known.
+   */
+  mfaGrace?: boolean | null;
   /** How it was verified. */
   via: 'jwks' | 'rpc';
 }
@@ -170,12 +177,27 @@ export const mfaProblem = (id: Pick<AccessIdentity, 'mfa' | 'aal'>): boolean => 
  */
 export const stepUpNeeded = (id: Pick<AccessIdentity, 'mfa' | 'aal'>): boolean => mfaProblem(id);
 
-function claimsOf(payload: Record<string, unknown>): { uid: string; sid: string | null; exp: number; aal: Aal; mfa: boolean | null } | null {
+/**
+ * May this identity hold a WATCHING socket (monitor, call line, glance)? Like `mfaProblem`, except
+ * a session signed in before two-step sign-in was switched on keeps watching on aal1
+ * (`mfaGrace`). Never use it for admin actions — those use `stepUpNeeded`.
+ */
+export const watchProblem = (id: Pick<AccessIdentity, 'mfa' | 'aal' | 'mfaGrace'>): boolean => mfaProblem(id) && id.mfaGrace !== true;
+
+function claimsOf(payload: Record<string, unknown>): { uid: string; sid: string | null; exp: number; aal: Aal; mfa: boolean | null; mfaGrace?: boolean } | null {
   const uid = typeof payload.sub === 'string' && UUID_RE.test(payload.sub) ? payload.sub.toLowerCase() : null;
   const exp = typeof payload.exp === 'number' && Number.isFinite(payload.exp) ? Math.floor(payload.exp) : null;
   if (!uid || exp == null) return null;
   const sid = typeof payload.session_id === 'string' && UUID_RE.test(payload.session_id) ? payload.session_id.toLowerCase() : null;
-  return { uid, sid, exp, aal: payload.aal === 'aal2' ? 'aal2' : 'aal1', mfa: typeof payload.ds_mfa === 'boolean' ? payload.ds_mfa : null };
+  return {
+    uid,
+    sid,
+    exp,
+    aal: payload.aal === 'aal2' ? 'aal2' : 'aal1',
+    mfa: typeof payload.ds_mfa === 'boolean' ? payload.ds_mfa : null,
+    // Only when the hook says so (absent = not known), so identities without it look as before.
+    ...(typeof payload.ds_mfa_grace === 'boolean' ? { mfaGrace: payload.ds_mfa_grace } : {}),
+  };
 }
 
 /**
@@ -217,7 +239,7 @@ export async function verifyAccessToken(
   }
 
   // Legacy HS256 or JWKS unavailable: Supabase verifies the token (and the session) for us.
-  const res = await callRpc<{ signed_in?: boolean; user_id?: string; error?: string; mfa?: boolean }>(env, token, 'live_me', {}, fetcher);
+  const res = await callRpc<{ signed_in?: boolean; user_id?: string; error?: string; mfa?: boolean; mfa_grace?: boolean }>(env, token, 'live_me', {}, fetcher);
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) return { ok: false, reason: 'invalid' };
     return { ok: false, reason: 'unavailable' };
@@ -226,5 +248,8 @@ export async function verifyAccessToken(
   if (d.error === 'session_revoked') return { ok: false, reason: 'revoked', uid: claims.uid };
   if (typeof d.user_id !== 'string' || d.user_id.toLowerCase() !== claims.uid) return { ok: false, reason: 'invalid' };
   if (d.error === 'mfa_required') return { ok: false, reason: 'mfa_required', uid: claims.uid };
-  return { ok: true, id: { ...claims, mfa: typeof d.mfa === 'boolean' ? d.mfa : claims.mfa, via: 'rpc' } };
+  return {
+    ok: true,
+    id: { ...claims, mfa: typeof d.mfa === 'boolean' ? d.mfa : claims.mfa, ...(typeof d.mfa_grace === 'boolean' ? { mfaGrace: d.mfa_grace } : {}), via: 'rpc' },
+  };
 }

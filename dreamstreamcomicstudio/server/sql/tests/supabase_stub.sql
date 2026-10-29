@@ -33,7 +33,9 @@ create table auth.mfa_factors (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users on delete cascade,
   status auth.factor_status,
-  factor_type text default 'totp'
+  factor_type text default 'totp',
+  friendly_name text,
+  created_at timestamptz default now()
 );
 create table auth.sessions (
   id uuid primary key,

@@ -1,0 +1,18 @@
+<!doctype html>
+<!--
+  Stream Studio alerts bridge (ADR 0006 WS-5; docs/infrastructure/INFRA_MAP.md §2a).
+  Served on dreamstreamstudio.ai and loaded in a hidden frame by https://stream.dreamstreamstudio.ai
+  only, to end this browser's old alert subscription from dreamstreamstudio.ai/live once the new
+  address covers it (and when someone signs out there). Outside /live on purpose: the apex's
+  /live redirect and frame block don't apply to it. No UI, no inline script.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Stream Studio alerts</title>
+    <script src="/stream-alerts-bridge.js" defer></script>
+  </head>
+  <body></body>
+</html>

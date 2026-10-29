@@ -16,7 +16,7 @@ import { TIMELINE_SANITIZERS } from './timeline.js';
 /** Ops whose client patches jobs.ts sanitizes itself (P1-JOBS extends their new fields there). */
 export const CORE_PATCH_OPS: ReadonlySet<string> = new Set([
   'brief', 'note_add', 'format', 'settings', 'source', 'style', 'character', 'character_remove', 'place',
-  'place_remove', 'page', 'panel', 'line', 'balloons', 'balloon', 'cover', 'plan_status'
+  'place_remove', 'page', 'panel', 'line', 'line_move', 'balloons', 'balloon', 'cover', 'plan_status'
 ]);
 
 const registry = createKeyedRegistry<OpSanitizer>({

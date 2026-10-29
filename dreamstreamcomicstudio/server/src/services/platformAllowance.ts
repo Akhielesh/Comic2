@@ -526,17 +526,53 @@ export const formatPctLeft = (pctLeft: number): string => (pctLeft < 1 ? 'less t
 
 const OWN_KEY_PATH = 'add your own API key in Settings → API keys';
 
+/** What the gate knows about the user's own key: whether one is on file, and the fallback mode they chose. */
+export type OwnKeyHint = { canFallbackToByok: boolean; byokFallbackMode: ByokFallbackMode };
+
+/**
+ * The own-key way forward, told truthfully. A user whose key is already on file is never told to
+ * add one: in 'ask' mode the consent lives in Settings (and the chat banner / usage meter), in
+ * 'never' mode the key is on file but will not be used until they change that, and in 'auto' mode
+ * it takes over once the usage is used up — the gate re-reads the usage after a refusal, so the
+ * next call runs on it.
+ *
+ * `usageUsedUp`: the refusal is the used-up stop (allowanceExhaustedMessage). Without it — some
+ * usage is left but not enough for this call — an 'auto' key does NOT take over yet: the account
+ * keys inject it only once the status reads exhausted (middleware/accountKeys.ts), so the honest
+ * way to use it now is turning DreamStream usage off. Defaults to the conservative sentence.
+ */
+export const ownKeyPath = (hint?: OwnKeyHint, usageUsedUp = false): string => {
+  if (!hint?.canFallbackToByok) return OWN_KEY_PATH;
+  if (hint.byokFallbackMode === 'auto') {
+    return usageUsedUp
+      ? "use your own key (it's on file and takes over from here)"
+      : "switch to your own key now by turning DreamStream usage off in Settings → API keys (it's on file, and takes over by itself once your usage is fully used up)";
+  }
+  if (hint.byokFallbackMode === 'never') return "switch to your own key (it's on file, but set to never be used) in Settings → API keys";
+  return "continue on your own key (it's on file) in Settings → API keys";
+};
+
 /** The honest hard stop. Lifetime budgets don't reset; monthly ones name the reset date. */
-export const allowanceExhaustedMessage = (resetsAt?: string | null): string =>
+export const allowanceExhaustedMessage = (resetsAt?: string | null, ownKey?: OwnKeyHint): string =>
   resetsAt
-    ? `You've used all of this month's DreamStream usage. It comes back on ${formatResetDate(resetsAt)} — or ${OWN_KEY_PATH} to keep going now.`
-    : `You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or ${OWN_KEY_PATH} to keep going.`;
+    ? `You've used all of this month's DreamStream usage. It comes back on ${formatResetDate(resetsAt)} — or ${ownKeyPath(ownKey, true)} to keep going now.`
+    : `You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or ${ownKeyPath(ownKey, true)} to keep going.`;
 
 /** Some usage is left, but not enough for this particular call. */
-export const usageNotEnoughMessage = (pctLeft: number): string =>
-  `This needs a bit more than the usage you have left (${formatPctLeft(pctLeft)} left). Try something lighter — like Draft quality or a shorter request — ask us for a top-up, or ${OWN_KEY_PATH}.`;
+export const usageNotEnoughMessage = (pctLeft: number, ownKey?: OwnKeyHint): string =>
+  `This needs a bit more than the usage you have left (${formatPctLeft(pctLeft)} left). Try something lighter — like Draft quality or a shorter request — ask us for a top-up, or ${ownKeyPath(ownKey)}.`;
 
 export const USAGE_UNAVAILABLE_MESSAGE = `We couldn't check your usage just now, so nothing was spent. Please try again in a moment — or ${OWN_KEY_PATH}.`;
+
+/**
+ * The usage could not be checked. A key on file cannot take over on its own here — the account
+ * keys stay on the platform key while the status is unreadable (middleware/accountKeys.ts), in
+ * every mode — so the way forward is the explicit switch in Settings.
+ */
+export const usageUnavailableMessage = (ownKey?: OwnKeyHint): string =>
+  ownKey?.canFallbackToByok
+    ? `We couldn't check your usage just now, so nothing was spent. Please try again in a moment — or switch to your own key (it's on file) in Settings → API keys.`
+    : USAGE_UNAVAILABLE_MESSAGE;
 
 const stubUsage = (resetAt: string) => ({
   planTier: 'free' as const,
@@ -561,11 +597,12 @@ export const buildAllowanceExhaustedDetails = (input: {
   const resetAt = input.resetsAt || '';
   const pctLeft = clampPct(input.pctLeft);
   const exhausted = pctLeft < 0.5;
+  const ownKey: OwnKeyHint = { canFallbackToByok: input.canFallbackToByok, byokFallbackMode: input.byokFallbackMode };
   const message = input.unavailable
-    ? USAGE_UNAVAILABLE_MESSAGE
+    ? usageUnavailableMessage(ownKey)
     : exhausted
-      ? allowanceExhaustedMessage(input.resetsAt)
-      : usageNotEnoughMessage(pctLeft);
+      ? allowanceExhaustedMessage(input.resetsAt, ownKey)
+      : usageNotEnoughMessage(pctLeft, ownKey);
   return {
     reason: input.unavailable ? 'usage_budget_unavailable' : 'usage_budget_exhausted',
     requiredCt: 0,

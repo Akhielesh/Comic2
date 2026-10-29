@@ -25,6 +25,7 @@ import { normalizeI18n } from './i18n.js';
 import { isPublicationMirror } from './publication.js';
 import { hashString } from './hash.js';
 import { DOC_LIMITS } from './limits.js';
+import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
 export { hashString } from './hash.js';
 export { MAX_RENDER_HISTORY, MAX_SPEND_ENTRIES, MAX_CONVERSATION, MAX_ARCHIVE, MAX_TRASH } from './limits.js';
 
@@ -551,6 +552,34 @@ export interface DocSafety {
 
 // ── Settings, spend, gate ────────────────────────────────────────────────────
 
+// ── Image model lock (models.md §3) ──────────────────────────────────────────
+
+export type RedrawScope = 'none' | 'pages_cover' | 'all';
+export interface ImageModelChange { from: string; to: string; at: number; redraw: RedrawScope; quotedUsd: number }
+/**
+ * SERVER-ONLY. The image model this comic is drawn with. Set at the first comic image (sheet, place, page,
+ * cover or edit — style swatches never lock); changed only by the `change_image_model` action after the
+ * user's confirm. Absent = nothing drawn yet, or a legacy doc not yet migrated (modelLock.ts deriveLock).
+ * normalizeDoc keeps a well-formed lock even when the registry no longer lists its id: a comic is never
+ * silently re-pointed at another model.
+ */
+export interface ImageModelLock {
+  /** Registry id, e.g. 'nano-banana-2.1' (kept even if the registry hides it). */
+  modelId: string;
+  /** Request id at lock time, e.g. 'google/gemini-nano-banana-2.1'. */
+  providerModel?: string;
+  /** Audit only, e.g. 'google/gemini-nano-banana-2.1-20261006'. */
+  canonicalSlug?: string;
+  lockedAt: number;
+  origin: 'first_render' | 'migrated' | 'user_change';
+  /** Newest first, cap DOC_LIMITS.modelChanges. */
+  changes?: ImageModelChange[];
+}
+export const LOCK_ORIGINS: readonly ImageModelLock['origin'][] = ['first_render', 'migrated', 'user_change'];
+export const REDRAW_SCOPES: readonly RedrawScope[] = ['none', 'pages_cover', 'all'];
+/** Longest model / provider id a lock stores (registry ids and OpenRouter slugs are far shorter). */
+export const LOCK_ID_MAX = 120;
+
 export interface Settings {
   quality: QualityTier;
   confirm: ConfirmPolicy;
@@ -558,7 +587,8 @@ export interface Settings {
   bigSpendUsd: number;
   /** Hard cap for the whole project; nothing auto-spends past it. */
   budgetUsd?: number;
-  /** Advanced: force a specific registry image model id. */
+  /** Advanced: force a specific registry image model id. PRE-LOCK preference only: ignored once
+   *  doc.imageModel exists (the server rejects changes with MODEL_LOCKED; models.md §3.4 item 5). */
   imageModelOverride?: string;
   /** The rating the author chose; clamped at use by effectiveRating() (audience + account ceilings). */
   rating?: ContentRating;
@@ -585,7 +615,20 @@ export interface SpendEntry {
   /** Honest "saved by software" amount: a reuse of an identical render, or a FREE step the user picked
    *  over a quoted PAID one in the same message (amount = that quote). usd is 0 for such entries. */
   savedUsd?: number;
+  // ── models.md §3.3: what the attempt actually requested (image calls; absent on legacy entries) ──
+  /** Resolution actually requested. */
+  res?: Resolution;
+  route?: 'openrouter' | 'gemini';
+  /** Absent = 'ok' (legacy). A failed attempt is recorded with the cost the provider reported (usually 0). */
+  outcome?: 'ok' | 'failed';
+  /** List price at the time (observed-vs-list in Insights). */
+  listUsd?: number;
+  /** Reference images sent. */
+  refs?: number;
 }
+
+/** Per-model running total (images = successful image calls; failed = attempts with outcome 'failed'). */
+export interface SpendModelTotal { usd: number; images: number; failed: number }
 
 export interface Spend {
   totalUsd: number;
@@ -594,6 +637,12 @@ export interface Spend {
   entries: SpendEntry[];
   /** Running total of SpendEntry.savedUsd. */
   savedUsd?: number;
+  // ── models.md §3.3 running totals: exact, NOT subject to the MAX_SPEND_ENTRIES cap. Kept by the `spend` op
+  //    from the moment the doc's entry history is complete (modelInsights.ts rebuilds older docs from entries). ──
+  byModel?: Record<string, SpendModelTotal>;
+  /** renderTargetKey → usd. */
+  byTarget?: Record<string, number>;
+  failed?: { count: number; usd: number };
 }
 
 /** A spend the studio is waiting on the user to approve. */
@@ -624,7 +673,9 @@ export type ClientAction =
   | { type: 'open_tab'; tab: StudioTab }
   | { type: 'open_share' }
   | { type: 'undo' }
-  | { type: 'set_mode'; mode: StudioMode };
+  | { type: 'set_mode'; mode: StudioMode }
+  /** Open the image-model picker (models.md §3.8), optionally pre-highlighting a registry id. */
+  | { type: 'open_model_picker'; suggest?: string };
 
 /** A tappable chip. Exactly ONE of say | action | client (validated by normalizeDoc + server). */
 export interface NextStep {
@@ -674,7 +725,27 @@ export type Card =
       result?: { url?: string; error?: string; blockers?: SafetyBlocker[] };
     }
   | { type: 'share'; id: string }
-  | { type: 'translation'; id: string; languages: string[] };
+  | { type: 'translation'; id: string; languages: string[] }
+  /** reliability.md: a provider outage became a calm card with real options; `blockedAction` is the spend
+   *  the preflight refused (re-sent once by "wait and retry" when the model is ok again). normalizeOutageCard
+   *  keeps it only when its `type` is a known StudioAction type; the server validates the whole action when the
+   *  client re-sends it, exactly as it does for every action it receives. */
+  | { type: 'model_outage'; id: string; modelId: string; options: OutageOption[]; blockedAction?: import('./ops.js').StudioAction };
+
+/** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
+export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
+  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
+]);
+/** Moved from routes/comic.ts:47 (single source for client + server). */
+export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
+  'approve_gate', 'decline_gate', 'pick_style', 'plan_pages', 'approve_plan', 'patch', 'restore_render',
+  'relayout_balloons', 'cancel',
+  'fit_render', 'show_breakdown', 'use_preset', 'ref_crop',
+  'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
+  'safety_recheck', 'swap_source_language', 'accept_translation_issue',
+  'library_save', 'library_use', 'import_classic_cast',
+  'change_image_model'
+]);
 
 export type RenderTarget =
   | { kind: 'page'; id: string }
@@ -736,6 +807,8 @@ export interface ComicDoc {
   publication?: PublicationMirror;
   /** Writer input fingerprint (free re-plan when unchanged). */
   planInputHash?: string;
+  /** SERVER-ONLY. The locked image model (models.md §3); read through imageModelOf(). Never in public snapshots. */
+  imageModel?: ImageModelLock;
 }
 
 export const emptyRender = (): RenderState => ({ status: 'none', history: [] });
@@ -874,15 +947,116 @@ export const isValidNextStep = (s: unknown): s is NextStep =>
   !!s.label.trim() &&
   [s.say !== undefined, s.action !== undefined, s.client !== undefined].filter(Boolean).length <= 1;
 
+const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const lockId = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() && v.length <= LOCK_ID_MAX ? v : undefined);
+
+/** A well-formed ImageModelChange or undefined (quotedUsd clamped at 0; a negative quote is not a quote). */
+export const normalizeImageModelChange = (value: unknown): ImageModelChange | undefined => {
+  if (!isObject(value)) return undefined;
+  const from = lockId(value.from);
+  const to = lockId(value.to);
+  if (!from || !to || !isFiniteNum(value.at)) return undefined;
+  if (!REDRAW_SCOPES.includes(value.redraw as RedrawScope)) return undefined;
+  const quotedUsd = isFiniteNum(value.quotedUsd) ? Math.max(0, value.quotedUsd) : 0;
+  return { from, to, at: value.at, redraw: value.redraw as RedrawScope, quotedUsd };
+};
+
+/**
+ * A well-formed ImageModelLock or undefined. Keeps the lock even when the registry no longer lists its
+ * id (a comic is never re-pointed on read); drops malformed changes and keeps the newest
+ * DOC_LIMITS.modelChanges. Idempotent; null optional fields (the wire turns undefined into null) are dropped.
+ */
+export const normalizeImageModelLock = (value: unknown): ImageModelLock | undefined => {
+  if (!isObject(value)) return undefined;
+  const modelId = lockId(value.modelId);
+  if (!modelId || !isFiniteNum(value.lockedAt)) return undefined;
+  if (!LOCK_ORIGINS.includes(value.origin as ImageModelLock['origin'])) return undefined;
+  const out: ImageModelLock = { modelId, lockedAt: value.lockedAt, origin: value.origin as ImageModelLock['origin'] };
+  const providerModel = lockId(value.providerModel);
+  if (providerModel) out.providerModel = providerModel;
+  const canonicalSlug = lockId(value.canonicalSlug);
+  if (canonicalSlug) out.canonicalSlug = canonicalSlug;
+  if (Array.isArray(value.changes)) {
+    const changes = value.changes.map(normalizeImageModelChange).filter((c): c is ImageModelChange => !!c).slice(0, DOC_LIMITS.modelChanges);
+    if (changes.length) out.changes = changes;
+  }
+  return out;
+};
+
+/** A StudioAction type name the server knows (spend or not). */
+const isStudioActionType = (type: unknown): type is string => typeof type === 'string' && (SPEND_ACTION_TYPES.has(type) || NON_SPEND_ACTION_TYPES.has(type));
+
+/**
+ * A well-formed `model_outage` card (malformed options dropped; no valid option → undefined). A `blockedAction`
+ * whose `type` is not a StudioAction type is dropped (the card stays): the client re-sends it as the "wait and
+ * retry" action, and the server validates the full action on receipt like every other action.
+ */
+export const normalizeOutageCard = (value: unknown): Extract<Card, { type: 'model_outage' }> | undefined => {
+  if (!isObject(value) || value.type !== 'model_outage') return undefined;
+  if (typeof value.id !== 'string' || !value.id || typeof value.modelId !== 'string' || !value.modelId) return undefined;
+  const options = (Array.isArray(value.options) ? value.options : []).map(normalizeOutageOption).filter((o): o is OutageOption => !!o);
+  if (!options.length) return undefined;
+  const out: Extract<Card, { type: 'model_outage' }> = { type: 'model_outage', id: value.id, modelId: value.modelId, options };
+  if (isObject(value.blockedAction) && isStudioActionType(value.blockedAction.type)) out.blockedAction = value.blockedAction as never;
+  return out;
+};
+
+/** Cards of a message: `model_outage` cards are validated (dropped when malformed); every other card is kept
+ *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
+const normalizeCards = (cards: unknown): Card[] | undefined => {
+  if (!Array.isArray(cards)) return undefined;
+  let changed = false;
+  const out: Card[] = [];
+  for (const card of cards as Card[]) {
+    if (isObject(card) && card.type === 'model_outage') {
+      const next = normalizeOutageCard(card);
+      if (!next) {
+        changed = true;
+        continue;
+      }
+      out.push(next);
+      if (JSON.stringify(next) !== JSON.stringify(card)) changed = true;
+    } else out.push(card);
+  }
+  return changed ? out : (cards as Card[]);
+};
+
 const normalizeMsg = (m: Msg): Msg => {
   const msg: Msg = { ...m };
   if (m.attachments !== undefined) msg.attachments = normalizeRefs(m.attachments);
+  if (m.cards !== undefined) {
+    const cards = normalizeCards(m.cards);
+    if (cards === undefined) delete msg.cards;
+    else if (cards !== m.cards) msg.cards = cards;
+  }
   if (m.nextSteps !== undefined) {
     const steps = asArray<NextStep>(m.nextSteps).filter(isValidNextStep).slice(0, DOC_LIMITS.nextSteps);
     if (steps.length) msg.nextSteps = steps;
     else delete msg.nextSteps;
   }
   return msg;
+};
+
+/** The §3.3 running totals of a stored spend, kept only when well-formed and non-empty (legacy docs stay as is). */
+const normalizeSpendTotals = (spend: Partial<Spend>): Pick<Spend, 'byModel' | 'byTarget' | 'failed'> => {
+  const out: Pick<Spend, 'byModel' | 'byTarget' | 'failed'> = {};
+  if (isObject(spend.byModel)) {
+    const byModel: Record<string, SpendModelTotal> = {};
+    for (const [id, t] of Object.entries(spend.byModel)) {
+      if (!id || !isObject(t) || !isFiniteNum(t.usd) || !isFiniteNum(t.images) || !isFiniteNum(t.failed)) continue;
+      byModel[id] = { usd: t.usd, images: t.images, failed: t.failed };
+    }
+    if (Object.keys(byModel).length) out.byModel = byModel;
+  }
+  if (isObject(spend.byTarget)) {
+    const byTarget: Record<string, number> = {};
+    for (const [key, usd] of Object.entries(spend.byTarget)) if (key && isFiniteNum(usd)) byTarget[key] = usd;
+    if (Object.keys(byTarget).length) out.byTarget = byTarget;
+  }
+  if (isObject(spend.failed) && isFiniteNum(spend.failed.count) && spend.failed.count > 0 && isFiniteNum(spend.failed.usd)) {
+    out.failed = { count: spend.failed.count, usd: spend.failed.usd };
+  }
+  return out;
 };
 
 /** Validate book settings (also used by the `book` op). */
@@ -970,7 +1144,8 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
     totalUsd: typeof spend.totalUsd === 'number' ? spend.totalUsd : 0,
     byKind: { ...(spend.byKind || {}) },
     entries: asArray<SpendEntry>(spend.entries),
-    ...(Number.isFinite(spend.savedUsd) && (spend.savedUsd as number) > 0 ? { savedUsd: spend.savedUsd } : {})
+    ...(Number.isFinite(spend.savedUsd) && (spend.savedUsd as number) > 0 ? { savedUsd: spend.savedUsd } : {}),
+    ...normalizeSpendTotals(spend)
   };
   doc.gate = input.gate || null;
   doc.conversation = asArray<Msg>(input.conversation).map(normalizeMsg);
@@ -993,6 +1168,9 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   if (!isObject(input.safety)) delete doc.safety;
   if (!isPublicationMirror(input.publication)) delete doc.publication;
   if (typeof input.planInputHash !== 'string') delete doc.planInputHash;
+  const lock = normalizeImageModelLock(input.imageModel);
+  if (lock) doc.imageModel = lock;
+  else delete doc.imageModel; // legacy docs: no key at all (deriveLock reads them; the next image commit persists)
   return doc;
 };
 
@@ -1005,6 +1183,8 @@ export const archiveOf = (doc: ComicDoc): ArchivedVersion[] => doc.archive ?? []
 export const trashOf = (doc: ComicDoc): TrashedPage[] => doc.trash ?? [];
 export const refInboxOf = (doc: ComicDoc): RefAsset[] => doc.refInbox ?? [];
 export const safetyOf = (doc: ComicDoc): DocSafety => doc.safety ?? {};
+/** The persisted lock only (undefined until the first comic image, or on a legacy doc: see modelLock.ts). */
+export const imageModelOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel;
 // i18nOf lives in i18n.ts (re-exported by index.ts).
 
 // ── Cast helpers ─────────────────────────────────────────────────────────────

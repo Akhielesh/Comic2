@@ -143,6 +143,9 @@ export function rowFromDb(r: Record<string, unknown>): PublicationRow {
   };
 }
 
+/** comic_publications.id is a uuid: only an id of that shape is sent on insert (anything else lets the default mint one). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function rowToDb(row: PublicationRow): Record<string, unknown> {
   return {
     project_id: row.projectId,
@@ -210,7 +213,10 @@ export function createSupabasePublicationStore(opts: { admin?: () => SupabaseCli
         throw unavailable(error, 'save');
       }
       if (Array.isArray(hit) && hit.length > 0) return;
-      const { error: insertError } = await db.from('comic_publications').insert(payload);
+      // A first row keeps the id the publish minted: it is frozen into the snapshot as doc.id, which
+      // readers key their resume position and the once-per-session intro on, so the DB must not mint
+      // its own (the next update would then rewrite doc.id). Updates never send `id`.
+      const { error: insertError } = await db.from('comic_publications').insert(typeof row.id === 'string' && UUID_RE.test(row.id) ? { ...payload, id: row.id } : payload);
       if (insertError) {
         if (collision(insertError)) throw new SlugTakenError();
         if (pgCode(insertError) === '23505') throw new StudioError('FORBIDDEN', "You don't have access to this comic.", { status: 403, cause: insertError });

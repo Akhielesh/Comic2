@@ -86,14 +86,6 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
   const saved = entry?.text ?? '';
   React.useEffect(() => setDraft(saved), [saved]);
   const sourceLang = studio.doc?.format.language || 'en';
-  const commit = () => {
-    const v = draft.trim();
-    if (!v || v === saved) {
-      setDraft(saved);
-      return;
-    }
-    onSave(v);
-  };
   const accept = async (useSuggestion: boolean) => {
     setBusy(true);
     try {
@@ -101,6 +93,18 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
     } finally {
       setBusy(false);
     }
+  };
+  /** "Keep my wording": the author's edit still fits the changed original — re-hashed, free, still theirs. */
+  const keepWording = () => void accept(false);
+  const commit = (viaEnter = false) => {
+    const v = draft.trim();
+    if (!v || v === saved) {
+      setDraft(saved);
+      // Enter on your own unchanged wording after the original changed means "yes, it still fits".
+      if (viaEnter && v === saved && status === 'stale_edited') keepWording();
+      return;
+    }
+    onSave(v);
   };
   const issue = entry?.issue;
   const auto = !!issue?.note.startsWith(AUTO_CORRECTED_NOTE);
@@ -125,11 +129,11 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
         lang={lang}
         dir={dirOf(lang)}
         onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onBlur={() => commit()}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            commit();
+            commit(true);
             onNavigate(id, 1);
           } else if (e.key === 'Escape') {
             e.preventDefault();
@@ -191,6 +195,17 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
             <Check className="h-3.5 w-3.5" aria-hidden />
             Mark reviewed
           </GhostButton>
+        </div>
+      )}
+      {status === 'stale_edited' && (
+        <div className="mt-2 rounded-lg border border-[#D97757]/45 bg-[#D97757]/10 px-2.5 py-2 text-[12.5px]">
+          <p className="leading-snug">The original changed after you wrote this. If your wording still fits, keep it — a translation run never touches your edits — or change it above.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <GhostButton size="xs" busy={busy} onClick={keepWording} className="coarse:h-11">
+              <Check className="h-3.5 w-3.5" aria-hidden />
+              Keep my wording
+            </GhostButton>
+          </div>
         </div>
       )}
     </li>

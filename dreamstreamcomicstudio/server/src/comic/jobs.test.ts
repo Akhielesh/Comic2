@@ -14,29 +14,37 @@ import {
 } from '../../../shared/comic/doc.js';
 import type { SpendAction } from '../../../shared/comic/ops.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, estimateJobs, imagePriceUsd, resolveImageJob, type SpendEstimate } from '../../../shared/comic/models.js';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, TIER_PRESETS, estimateJobs, imagePriceUsd, resolveImageJob, type SpendEstimate } from '../../../shared/comic/models.js';
 import { logger } from '../lib/logger.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { ActionHandler } from './extensions.js';
+import { getImageModel } from '../../../shared/comic/models.js';
+import { pickImageRoute } from './imageClient.js';
+import { resolveTextRoute } from './textModels.js';
 import {
   JOB_TIMINGS,
+  billedLlm,
   estimateSpendAction,
   gateDecision,
+  imageRouteFor,
+  newTextSpendTracker,
   nextStepsFor,
   pickDefaultPreset,
   planPages,
   runAction,
   runFeatureAction,
   sanitizePatchOps,
+  spendActionIsByok,
+  spendIsByok,
   startAction,
   suggestNextSteps,
   type RunActionOptions
 } from './jobs.js';
-import { KEYS, fakeBilling, fakeImages, lakeDoc, newSession, opsOf, plannedDoc, scriptedLlm, testContext, TINY_PNG, type TestContext } from './orchestrator.fakes.js';
+import { KEYS, fakeBilling, fakeImages, lakeDoc, newSession, opsOf, plannedDoc, scriptedLlm, testContext, TINY_PNG, type FakeBilling, type TestContext } from './orchestrator.fakes.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import type { StudioSession } from './session.js';
-import { StudioError } from './types.js';
+import { StudioError, type StudioKeys } from './types.js';
 import { analyzePageRender } from './vision.js';
 import { proposeStyleDirections, writePagePlan } from './writer.js';
 
@@ -490,6 +498,50 @@ describe('spend gating', () => {
     expect(ctx.imagesFake.calls).toHaveLength(0);
     expect(session.doc.gate?.id).not.toBe(first.id);
     expect(session.doc.gate).toMatchObject({ status: 'open', model: 'Nano Banana Pro' });
+  });
+
+  it('under confirm "big" (the default) a stale approval re-quotes with a fresh card instead of running the pricier spend', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'big', bigSpendUsd: 0.5 };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    // The director quoted the cover without draw intent (a forced gate), at Standard quality.
+    const quoted = await startAction(ctx, { type: 'render_cover' }, { confirmed: false, forceGate: 'no_intent' });
+    expect(quoted.outcome.status).toBe('gated');
+    const first = session.doc.gate!;
+    expect(first).toMatchObject({ status: 'open', reason: 'no_intent', model: 'Nano Banana 2.1' });
+    // The user switches quality to Pro (still under bigSpendUsd), then taps Approve on the old card.
+    session.commit([{ op: 'settings', patch: { quality: 'pro' } }], { origin: 'user' });
+    const proUsd = estimateSpendAction(session.doc, { type: 'render_cover' }, false).usd;
+    expect(proUsd).toBeLessThan(0.5);
+    await runAction(ctx, { type: 'approve_gate', gateId: first.id }, { confirmed: true, origin: 'user' });
+    // Nothing drawn, nothing spent: a NEW open gate at the Pro price that says the price changed.
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.spend.totalUsd).toBe(0);
+    const gate = session.doc.gate!;
+    expect(gate.id).not.toBe(first.id);
+    expect(gate).toMatchObject({ status: 'open', reason: 'policy', model: 'Nano Banana Pro', estimateUsd: proUsd });
+    expect(session.doc.conversation.at(-1)!.text).toContain(`The price changed since that button was shown: the cover is now ≈ $${proUsd.toFixed(2)} (was $${first.estimateUsd.toFixed(2)})`);
+    expect(cardsOf(session.doc)).toContainEqual(expect.objectContaining({ type: 'gate', gateId: gate.id }));
+  });
+
+  it('approving a gate whose page was deleted meanwhile closes the gate and says which page is gone — never "Approved — drawing now."', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    for (const c of doc.cast) c.sheet = { ...c.sheet, status: 'ready', asset: { path: `${c.id}.webp`, source: 'generated', at: 1 } };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages', pageIds: ['pg_3'] }, { confirmed: false });
+    const gate = session.doc.gate!;
+    expect(gate.status).toBe('open');
+    // The user deletes page 3 in the timeline, then taps Approve on the still-visible card.
+    session.commit([{ op: 'page_delete', id: 'pg_3', deletedAt: Date.now() }], { origin: 'user' });
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true, origin: 'user' });
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+    const last = session.doc.conversation.at(-1)!;
+    expect(last.text).toMatch(/^Page 3 is no longer in the plan\./);
+    expect(last.text).toContain('Nothing was spent.');
   });
 
   it('an open-ended render gate is pinned to the pages it quoted', async () => {
@@ -1677,6 +1729,37 @@ describe('planPages (v5)', () => {
     expect(session.doc.pages[0].render.asset?.path).toBe('p1.webp');
   });
 
+  it('a plan click at the budget cap never runs the paid writer; under the cap it still plans', async () => {
+    const atCap = plannedDoc();
+    atCap.settings = { ...atCap.settings, budgetUsd: 0.05 };
+    atCap.spend = { ...atCap.spend, totalUsd: 0.09 };
+    const session = newSession(atCap);
+    const llm = scriptedLlm({ writer: [{ text: '{}' }] });
+    const ctx = testContext(session, { llm });
+    // The UI's "Plan the pages" / "Re-plan" button posts plan_pages as a confirmed click.
+    const outcome = await startAction(ctx, { type: 'plan_pages', instructions: 'make it funnier' }, { confirmed: true, origin: 'user' });
+    expect(outcome.outcome).toMatchObject({ status: 'blocked', code: 'BUDGET_EXCEEDED' });
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
+    expect(llm.calls.filter((c) => c.role === 'writer')).toHaveLength(0);
+    expect(ctx.billingFake.reserves.filter((r) => r.stage === 'plan')).toHaveLength(0);
+    expect(session.doc.spend.totalUsd).toBe(0.09);
+    const last = session.doc.conversation.at(-1)!;
+    expect(last.text).toContain('at its budget cap');
+    expect(last.text).toContain('Nothing was spent.');
+    expect(last.cards).toContainEqual(expect.objectContaining({ type: 'notice', tone: 'info' }));
+
+    // Under the cap the same click plans as before.
+    const under = plannedDoc();
+    under.settings = { ...under.settings, budgetUsd: 1 };
+    under.spend = { ...under.spend, totalUsd: 0.09 };
+    const session2 = newSession(under);
+    const ctx2 = testContext(session2);
+    writerReturns((doc) => doc.pages);
+    await startAction(ctx2, { type: 'plan_pages', instructions: 'make it funnier' }, { confirmed: true, origin: 'user' });
+    expect(vi.mocked(writePagePlan)).toHaveBeenCalledTimes(1);
+    expect(ctx2.billingFake.reserves.filter((r) => r.stage === 'plan')).toHaveLength(1);
+  });
+
   it('a page that got art while planning and is dropped by the new plan goes to the trash, never lost', async () => {
     const doc = plannedDoc();
     doc.format.pageCount = 2;
@@ -1855,4 +1938,153 @@ it('fakes stay honest: TINY_PNG is a valid data URL and KEYS route via OpenRoute
   expect(TINY_PNG.startsWith('data:image/png;base64,')).toBe(true);
   expect(KEYS.openrouter?.byok).toBe(false);
   expect(scriptedLlm).toBeTypeOf('function');
+});
+
+// ── Text holds cover the fallback chain ──────────────────────────────────────
+
+describe('billedLlm reserves', () => {
+  it('names every model of the route’s fallback chain, so the hold is priced at the dearest, not the primary', async () => {
+    const session = newSession(plannedDoc());
+    const seen: { model: string; models?: string[] }[] = [];
+    const base = fakeBilling();
+    const billing: FakeBilling = {
+      ...base,
+      async reserve(args) {
+        seen.push({ model: args.model, models: args.models });
+        return base.reserve(args);
+      }
+    };
+    const ctx = testContext(session, { billing });
+    const route = resolveTextRoute('director', ctx.keys)!;
+    expect(route.models.length).toBeGreaterThan(1);
+    await billedLlm(ctx, { stage: 'chat', operation: 'comic.text.director', tracker: newTextSpendTracker() }).complete({ role: 'director', messages: [{ role: 'user', content: 'hi' }] });
+    expect(seen).toEqual([{ model: route.model, models: route.models }]);
+  });
+});
+
+// ── BYOK image routing (the user's own Gemini key beside the platform OpenRouter key) ──
+
+describe('own Gemini key beside the platform OpenRouter key', () => {
+  /** Production shape: the platform OpenRouter key from env plus the user's own Gemini key. */
+  const OWN_GEMINI: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-own', byok: true } };
+  const OWN_BOTH: StudioKeys = { openrouter: { key: 'sk-or-own', byok: true }, gemini: { key: 'AIza-own', byok: true } };
+  const spec = getImageModel('nano-banana-2.1')!;
+
+  /** Billing hooks that remember which provider each reserve was made for (the fake keeps only the model). */
+  const billingRecordingProvider = (allow: (provider: string) => boolean = () => true) => {
+    const reserves: { provider: string; model: string; operation: string }[] = [];
+    const base = fakeBilling();
+    const billing: FakeBilling = {
+      ...base,
+      async reserve(args) {
+        reserves.push({ provider: args.provider, model: args.model, operation: args.operation });
+        if (!allow(args.provider)) return { ok: false, code: 'BILLING_DENIED', message: "You've used all of your DreamStream usage." };
+        return base.reserve(args);
+      }
+    };
+    return { billing, reserves };
+  };
+
+  it('imageRouteFor is the image client’s own pick, so the reserve names the key that draws; spendIsByok stays keys-level', () => {
+    for (const keys of [KEYS, OWN_GEMINI, OWN_BOTH, { gemini: { key: 'AIza-own', byok: true } } as StudioKeys]) {
+      const drawn = pickImageRoute(spec, keys);
+      expect(imageRouteFor(spec, keys)).toEqual({ route: drawn.route, model: drawn.model, byok: drawn.key.byok });
+    }
+    // The own-Gemini-key user draws on Gemini direct — their own key, not the platform's.
+    expect(imageRouteFor(spec, OWN_GEMINI)).toEqual({ route: 'gemini', model: spec.routes.gemini, byok: true });
+    // …but at the keys level they are still a usage user: their text (OpenRouter-first) and OpenRouter-only
+    // images run on the platform key, so caps, the cost view and text quotes stay governed.
+    expect(spendIsByok(OWN_GEMINI)).toBe(false);
+    expect(spendIsByok(OWN_BOTH)).toBe(true);
+    expect(spendIsByok(KEYS)).toBe(false);
+    expect(spendIsByok({ gemini: { key: 'AIza-own', byok: true } })).toBe(true);
+    expect(imageRouteFor(spec, KEYS)).toMatchObject({ route: 'openrouter', byok: false });
+    expect(imageRouteFor(spec, {})).toBeNull();
+    // An OpenRouter-only model still goes through the platform key for that user (platform spend).
+    const orOnly = getImageModel('flux-3')!;
+    expect(orOnly.routes.gemini).toBeUndefined();
+    expect(imageRouteFor(orOnly, OWN_GEMINI)).toMatchObject({ route: 'openrouter', byok: false });
+  });
+
+  it('a cover drawn on the user’s own Gemini key is reserved on the Gemini route as BYOK, quoted without the platform markup, and recorded as their own spend', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    const { billing, reserves } = billingRecordingProvider();
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: spec.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing });
+    const quote = estimateSpendAction(session.doc, { type: 'render_cover' }, imageRouteFor(spec, OWN_GEMINI)!.byok);
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(images.calls).toHaveLength(1);
+    expect(reserves).toEqual([{ provider: 'gemini', model: spec.routes.gemini, operation: 'comic.image.cover' }]);
+    // Own key: the registry price, no platform markup — the same figure the ledger sees.
+    expect(quote.usd).toBeCloseTo(imagePriceUsd(spec, '2K'), 6);
+    expect(session.doc.spend.entries).toEqual([expect.objectContaining({ label: 'Cover', byok: true, usd: quote.usd })]);
+    expect(session.doc.cover.render.status).toBe('ready');
+  });
+
+  it('usage used up: the cover still draws on the user’s own Gemini key (the platform key would be refused)', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    // The real enforcer never budget-checks a BYOK call; a platform-key call of an exhausted user is refused.
+    const { billing, reserves } = billingRecordingProvider((provider) => provider === 'gemini');
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: spec.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing });
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(reserves.map((r) => r.provider)).toEqual(['gemini']);
+    expect(images.calls).toHaveLength(1);
+    expect(session.doc.cover.render.status).toBe('ready');
+    expect(session.doc.conversation.at(-1)?.text).not.toMatch(/used all of your DreamStream usage/);
+  });
+
+  it('an approval re-prices like with like: the page re-check on the vision (text) route’s key, a drawing on its model’s route', async () => {
+    const doc = onePage(plannedDoc());
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 }, qc: { score: 0.9, issues: [], checkedAt: 1 } };
+    const session = newSession(doc);
+    const ctx = testContext(session, { keys: OWN_GEMINI });
+    const recheck: SpendAction = { type: 'recheck_page', pageId: 'pg_1' };
+    // Text routes are OpenRouter-first: this user's re-check runs on the platform key; their cover on their own Gemini key.
+    expect(resolveTextRoute('vision', OWN_GEMINI)?.key.byok).toBe(false);
+    expect(spendActionIsByok(session.doc, recheck, OWN_GEMINI)).toBe(false);
+    expect(spendActionIsByok(session.doc, { type: 'render_cover' }, OWN_GEMINI)).toBe(true);
+    const gated = await startAction(ctx, recheck, { confirmed: false, forceGate: 'policy' });
+    expect(gated.outcome.status).toBe('gated');
+    const gate = session.doc.gate!;
+    // The approval's re-estimate is the gate's own quote (platform price with the markup), not the own-key price.
+    expect(estimateSpendAction(session.doc, gate.action as SpendAction, spendActionIsByok(session.doc, gate.action as SpendAction, OWN_GEMINI)).usd).toBe(gate.estimateUsd);
+    expect(gate.estimateUsd).toBeCloseTo(estimateSpendAction(session.doc, recheck, false).usd, 6);
+  });
+
+  it('governed caps: an OpenRouter-only override is still refused (platform key), while Pro on their own Gemini key draws', async () => {
+    // FLUX has no Gemini route: for this user it would draw on the PLATFORM key, so the plan's caps apply.
+    const flux = plannedDoc();
+    flux.settings = { ...flux.settings, confirm: 'never', imageModelOverride: 'flux-3' };
+    const fluxSession = newSession(flux);
+    const blockedRun = billingRecordingProvider();
+    const fluxImages = fakeImages();
+    const fluxCtx = testContext(fluxSession, { keys: OWN_GEMINI, images: fluxImages, billing: blockedRun.billing, caps: DEFAULT_CAPS });
+    const refused = await startAction(fluxCtx, { type: 'render_cover' }, { confirmed: true });
+    await refused.done;
+    expect(refused.outcome).toMatchObject({ status: 'blocked' });
+    expect(refused.outcome.message).toMatch(/FLUX/i);
+    expect(blockedRun.reserves).toHaveLength(0);
+    expect(fluxImages.calls).toHaveLength(0);
+    expect(fluxSession.doc.cover.render.status).not.toBe('ready');
+
+    // Pro (Nano Banana Pro) reaches their own Gemini key: plan limits govern the platform key only.
+    const pro = getImageModel(TIER_PRESETS.pro.coverModel)!;
+    expect(pro.routes.gemini).toBeDefined();
+    expect(DEFAULT_CAPS.qualityTiers).not.toContain('pro');
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never', quality: 'pro' };
+    const session = newSession(doc);
+    const { billing, reserves } = billingRecordingProvider();
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: pro.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing, caps: DEFAULT_CAPS });
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(images.calls).toHaveLength(1);
+    expect(reserves).toEqual([{ provider: 'gemini', model: pro.routes.gemini, operation: 'comic.image.cover' }]);
+    expect(session.doc.cover.render.status).toBe('ready');
+  });
 });

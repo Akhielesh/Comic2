@@ -14,7 +14,7 @@ import type { ContentRating } from '../../../../shared/comic/safety.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { hashString } from '../../../../shared/comic/hash.js';
 import { graphemes } from '../../../../shared/comic/textLayout.js';
-import { editionTextSource, glossaryForm, translationBudget } from '../../../../shared/comic/translationPlan.js';
+import { editionTextEntry, editionTextSource, glossaryForm, translationBudget } from '../../../../shared/comic/translationPlan.js';
 import type { ChatMessage } from '../../ai/providers/types.js';
 import { prefilterText } from '../safety/index.js';
 import { StudioError, type LlmClient, type LlmResult } from '../types.js';
@@ -270,11 +270,17 @@ export async function translateChunk(llm: LlmClient, req: ChunkRequest): Promise
 
 // ── Ops from a chunk ─────────────────────────────────────────────────────────
 
-/** `translations` + `edition_text` + glossary ops for one chunk (status 'machine' until the linguist reviews). */
+/**
+ * `translations` + `edition_text` + glossary ops for one chunk (status 'machine' until the linguist reviews).
+ * `doc` is the doc at COMMIT time: a line or title the author wrote themselves while the chunk was with the
+ * model ('edited') keeps their words — machine text never overwrites an author's edit.
+ */
 export function chunkOps(doc: ComicDoc, lang: string, chunk: ChunkResult, now: number, model?: string): DocOp[] {
   const ops: DocOp[] = [];
+  const edition = i18nOf(doc).editions[lang];
   const lines: Record<string, TextTranslation> = {};
   for (const [id, r] of Object.entries(chunk.lines)) {
+    if (edition?.lines[id]?.status === 'edited') continue;
     const t: TextTranslation = { text: r.text, status: 'machine', sourceHash: r.sourceHash, at: now };
     if (r.issue) t.issue = r.issue;
     if (model) t.model = model;
@@ -291,6 +297,7 @@ export function chunkOps(doc: ComicDoc, lang: string, chunk: ChunkResult, now: n
   }
   for (const [field, r] of Object.entries(extras) as [EditionTextField, ChunkLineResult][]) {
     if (!editionTextSource(doc, field)) continue;
+    if (editionTextEntry(doc, lang, field)?.status === 'edited') continue;
     const value: TextTranslation = { text: r.text, status: 'machine', sourceHash: r.sourceHash, at: now };
     if (r.issue) value.issue = r.issue;
     if (model) value.model = model;
