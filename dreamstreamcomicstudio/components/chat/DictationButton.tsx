@@ -7,7 +7,7 @@ import {
   type DictationEngine
 } from '../../hooks/useDictation';
 import type { WhisperModelSize } from '../../services/dictation/whisperEngine';
-import { GLASS_STRONG, HAIRLINE, MENU, MUTED, LABEL, TRANSITION, SHADOW_SOFT, ACCENT_TEXT } from './studioDesign';
+import { GLASS_STRONG, HAIRLINE, MENU, MUTED, LABEL, TRANSITION, SHADOW_SOFT, ACCENT_TEXT, ACCENT_SOFT_BG, ON_ACCENT_TEXT, RADIUS_CONTROL, RADIUS_PANEL } from './studioDesign';
 
 // Voice dictation control for the composer. Idle: a quiet mic button (long-press the
 // chevron area / right-click for engine settings). Recording: a floating glass bar
@@ -112,6 +112,9 @@ const Waveform: React.FC<{ level: number }> = ({ level }) => {
   );
 };
 
+/** The recording bar's small square actions: 28 px with a mouse, 44 px on touch. */
+const RECORD_BTN = `grid h-7 w-7 shrink-0 place-items-center ${RADIUS_CONTROL} coarse:h-11 coarse:w-11 ${TRANSITION}`;
+
 export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPartial, onFinal, onStart }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -143,7 +146,8 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             <button
               key={o.id}
               onClick={() => setSettings({ ...settings, engine: o.id })}
-              className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${settings.engine === o.id ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
+              aria-pressed={settings.engine === o.id}
+              className={`flex w-full items-start gap-2 px-3 py-2 text-left coarse:min-h-11 ${TRANSITION} ${settings.engine === o.id ? ACCENT_SOFT_BG : 'hover:bg-[var(--ds-hover)]'}`}
             >
               <span className={`mt-0.5 ${settings.engine === o.id ? ACCENT_TEXT : MUTED}`}>{o.icon}</span>
               <span className="min-w-0">
@@ -161,9 +165,10 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                     key={m.id}
                     onClick={() => setSettings({ ...settings, model: m.id })}
                     title={m.hint}
-                    className={`flex-1 rounded-lg border px-1.5 py-1 text-[11px] font-semibold ${TRANSITION} ${
+                    aria-pressed={settings.model === m.id}
+                    className={`flex-1 ${RADIUS_CONTROL} border px-1.5 py-1 text-[11px] font-semibold coarse:min-h-11 ${TRANSITION} ${
                       settings.model === m.id
-                        ? 'border-transparent bg-[var(--ds-accent)] text-white'
+                        ? `border-transparent bg-[var(--ds-accent)] ${ON_ACCENT_TEXT}`
                         : `border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`
                     }`}
                   >
@@ -179,7 +184,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
       {/* Recording / transcribing bar floats above the composer row. */}
       {busy && (
         <div
-          className={`absolute bottom-full right-0 z-30 mb-2 flex w-[min(21rem,80vw)] items-center gap-3 ${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl px-3.5 py-2 animate-fade-in`}
+          className={`absolute bottom-full right-0 z-30 mb-2 flex w-[min(21rem,80vw)] items-center gap-3 ${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} px-3.5 py-2 animate-fade-in`}
         >
           {status === 'transcribing' ? (
             <>
@@ -195,8 +200,8 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                 </span>
                 <span className={`block text-[10px] ${MUTED}`}>One-time download, then it's instant & offline</span>
               </span>
-              <button onClick={cancel} className={`rounded-lg p-1.5 ${MUTED} hover:bg-[var(--ds-hover)] ${TRANSITION}`} title="Cancel">
-                <X className="h-4 w-4" />
+              <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Cancel" aria-label="Cancel the download">
+                <X className="h-4 w-4" aria-hidden />
               </button>
             </>
           ) : (
@@ -210,19 +215,17 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
               <span className={`hidden text-[10px] sm:block ${MUTED}`}>
                 {settings.engine === 'whisper' ? 'on-device' : 'browser'}
               </span>
-              <button
-                onClick={cancel}
-                className={`rounded-lg p-1.5 ${MUTED} hover:bg-[var(--ds-hover)] ${TRANSITION}`}
-                title="Discard recording"
-              >
-                <X className="h-4 w-4" />
+              <button type="button" onClick={cancel} className={`${RECORD_BTN} ${MUTED} hover:bg-[var(--ds-hover)]`} title="Discard recording" aria-label="Discard recording">
+                <X className="h-4 w-4" aria-hidden />
               </button>
               <button
+                type="button"
                 onClick={stop}
-                className={`rounded-lg bg-[var(--ds-accent)] p-1.5 text-white hover:bg-[var(--ds-accent-hover)] ${TRANSITION}`}
+                className={`${RECORD_BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}
                 title="Finish and insert text"
+                aria-label="Finish and insert text"
               >
-                <Check className="h-4 w-4" />
+                <Check className="h-4 w-4" aria-hidden />
               </button>
             </>
           )}
@@ -237,8 +240,11 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
         </div>
       )}
 
-      <div className={`flex items-stretch ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] ${TRANSITION} ${busy ? 'ring-1 ring-[#D97757]/40' : ''}`}>
+      {/* Split control: the mic and its settings caret. Each is its own target — ≥ 24 px with a mouse
+          (WCAG 2.5.8; the caret was 21 px) and 44 px on touch (the mic was 36, the caret 21–26). */}
+      <div className={`flex items-stretch ${HAIRLINE} ${RADIUS_CONTROL} bg-[var(--ds-surface-soft)] ${TRANSITION} ${busy ? 'ring-1 ring-[var(--ds-ring)]' : ''}`}>
         <button
+          type="button"
           onClick={() => {
             if (busy) {
               stop();
@@ -249,20 +255,24 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             }
           }}
           disabled={disabled && !busy}
-          className={`p-2.5 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[var(--ds-ink)]`}`}
+          className={`grid place-items-center p-2.5 coarse:min-h-11 coarse:min-w-11 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[var(--ds-ink)]`}`}
           title={busy ? 'Finish dictation' : 'Dictate with your voice (on-device)'}
           aria-label={busy ? 'Finish dictation' : 'Start voice dictation'}
         >
-          <Mic className={`h-4 w-4 ${status === 'recording' ? 'animate-pulse' : ''}`} />
+          <Mic className={`h-4 w-4 ${status === 'recording' ? 'animate-pulse motion-reduce:animate-none' : ''}`} aria-hidden />
         </button>
         <button
+          type="button"
           onClick={() => setMenuOpen((v) => !v)}
           disabled={busy}
-          className={`border-l border-[var(--ds-hairline-soft)] px-1 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
+          aria-haspopup="true"
+          aria-expanded={menuOpen}
+          className={`grid min-w-6 place-items-center border-l border-[var(--ds-hairline-soft)] px-1.5 coarse:min-h-11 coarse:min-w-11 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
           title="Dictation settings"
           aria-label="Dictation settings"
+          data-dictation-settings
         >
-          <ChevronDown className="h-3 w-3" />
+          <ChevronDown className="h-3 w-3" aria-hidden />
         </button>
       </div>
     </div>
