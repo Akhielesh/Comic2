@@ -9,6 +9,8 @@ const getMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../services/apiClient', () => ({ get: getMock }));
 
 import { getImageModel, QC_USD_PER_PAGE } from '../../../shared/comic/models';
+import { redrawQuote } from '../../../shared/comic/modelLock';
+import { byTarget } from '../../../shared/comic/modelInsights';
 import { LAKE_MODEL, makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic';
 import { DOLLAR_CONTEXT } from '../../../services/costDisplay';
 import { costFormat } from '../conversation/cost';
@@ -41,8 +43,29 @@ describe('Pages tab', () => {
     expect(row('Page 2')).toHaveTextContent('Redraw now on Nano Banana 2.1: ≈$0.05');
     const spec = getImageModel(LAKE_MODEL)!;
     expect(document.body).toHaveTextContent(`from our price list, ${spec.factsAsOf}`);
-    const book = insightsPriceBook(makeLakeComic(), null);
-    expect(book.unit(LAKE_MODEL, '2K', 'sheet')).toEqual({ usd: spec.priceUsd['2K'], basis: 'registry' }); // no sheet calls at 2K → list
+    // Standard draws sheets at 2K whatever size is asked: no sheet calls at 2K → the list price.
+    const book = insightsPriceBook(makeLakeComic((d) => { d.settings.quality = 'standard'; }), null);
+    expect(book.unit(LAKE_MODEL, '1K', 'sheet')).toEqual({ usd: spec.priceUsd['2K'], basis: 'registry' });
+  });
+
+  it('a redraw is priced at the size this comic’s tier draws now, not the size the old image was drawn at', () => {
+    // Draft draws at 1K: page 1 (drawn at 2K) redraws at 1K like the others.
+    render(<PagesTab doc={makeLakeComic()} money={dollars} byok />);
+    expect(row('Page 1')).toHaveTextContent('Redraw now on Nano Banana 2.1: ≈$0.05');
+    expect(within(row('Page 1')).getByText('2K')).toBeInTheDocument(); // the badge still says how it was drawn
+  });
+
+  it('pages drawn at 1K under a tier raised to Standard are quoted at 2K, matching redrawQuote', () => {
+    const doc = makeLakeComic((d) => {
+      d.settings.quality = 'standard';
+    });
+    render(<PagesTab doc={doc} money={dollars} byok />);
+    // 2K pages: observed median $0.06 (n = 6) beats the $0.0504 list → $0.06 + QC $0.003.
+    expect(row('Page 2')).toHaveTextContent('Redraw now on Nano Banana 2.1: ≈$0.063');
+    const book = insightsPriceBook(doc, null);
+    const pages = byTarget(doc, book).filter((r) => r.target.kind === 'page');
+    const quoted = redrawQuote(doc, LAKE_MODEL, 'pages_cover', book, true).lines.find((l) => l.label === 'Pages')!.usd!;
+    expect(pages.reduce((s, r) => s + (r.redrawUsd ?? 0), 0)).toBeCloseTo(quoted, 4);
   });
 
   it('an older-model page and mixed sizes get quiet badges; held catalog rows price the redraw', () => {

@@ -18,18 +18,47 @@ import { Badge, Section, Source, WRAP } from './ui';
 
 const KIND_OF: Record<string, ImageJobKind> = { page: 'page', cover: 'cover', sheet: 'sheet', place: 'place', style_option: 'style_option' };
 
+const priced = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && n >= 0;
+
+/** One new image of `kind` on a model for this comic: its provider price, where it comes from, and the size. */
+export interface InsightsUnit {
+  /** Provider $ per image (no QC, no markup); null when there is no basis at all ("can't price yet"). */
+  usd: number | null;
+  /** observed: this comic's own median (n ≥ 3) — used when it is above the list or there is no list;
+   *  catalog: a catalog row already held; registry: the dated price list; none: nothing to price with. */
+  basis: 'observed' | 'catalog' | 'registry' | 'none';
+  /** The size it draws at NOW: `kind` on that model at this comic's tier (redrawResolution) — never the size an
+   *  older image happened to be drawn at. */
+  res: Resolution;
+  /** Calls behind an observed figure. */
+  n?: number;
+}
+
 /**
- * A client PriceBook for redraw quotes: the live catalog price when held, else the registry's list price; raised to
- * the comic's own observed cost when it has ≥ 3 real calls there (never under what the user really paid).
+ * The server's quote rule on the client (models.md §2.3, AT-6; server/src/comic/models/pricing.ts): the list price is
+ * the held catalog row's, else the registry's; this comic's own observed median (n ≥ 3, the last ≤ 20 calls at that
+ * size) wins when it is higher or when there is no list — never under what the user really paid.
+ */
+export const insightsUnit = (doc: ComicDoc, rows: readonly ModelCatalogRow[] | null, modelId: string, kind: ImageJobKind): InsightsUnit => {
+  const res = redrawResolution(doc, modelId, kind);
+  const live = rowFor(rows, modelId)?.price[res]?.usd;
+  const reg = getImageModel(modelId)?.priceUsd[res];
+  const list = priced(live) ? live : priced(reg) ? reg : null;
+  const obs = observedCost(doc.spend.entries, (e) => KIND_OF[e.kind] === kind && e.model === modelId && e.res === res);
+  if (obs && obs.n >= OBSERVED_MIN_N && (list === null || obs.medianUsd >= list)) return { usd: obs.medianUsd, basis: 'observed', res, n: obs.n };
+  if (list === null) return { usd: null, basis: 'none', res };
+  return { usd: list, basis: priced(live) ? 'catalog' : 'registry', res };
+};
+
+/**
+ * A client PriceBook for redraw quotes (insightsUnit per image, QC per page). The `res` argument is ignored on
+ * purpose: shared byTarget passes the size each image WAS drawn at, but a redraw draws at the size this comic's tier
+ * draws now — exactly what redrawQuote and the change-model confirm price (models.md §3.5).
  */
 export const insightsPriceBook = (doc: ComicDoc, rows: readonly ModelCatalogRow[] | null): PriceBook => ({
-  unit(modelId: string, res: Resolution, kind: ImageJobKind) {
-    const live = rowFor(rows, modelId)?.price[res]?.usd;
-    const list = typeof live === 'number' ? live : getImageModel(modelId)?.priceUsd[res];
-    if (typeof list !== 'number' || !Number.isFinite(list)) return { usd: null, basis: 'none' };
-    const obs = observedCost(doc.spend.entries, (e) => KIND_OF[e.kind] === kind && e.model === modelId && e.res === res);
-    const usd = obs && obs.n >= OBSERVED_MIN_N ? Math.max(list, obs.medianUsd) : list;
-    return { usd, basis: typeof live === 'number' ? 'catalog' : 'registry' };
+  unit(modelId: string, _drawnAt: Resolution, kind: ImageJobKind) {
+    const u = insightsUnit(doc, rows, modelId, kind);
+    return { usd: u.usd, basis: u.basis };
   },
   qcUsd: QC_USD_PER_PAGE
 });
