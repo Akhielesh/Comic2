@@ -72,6 +72,8 @@ describe('ComicStudio shell', () => {
     const loading = makeFakeStudio({ doc: null, loading: true });
     const { rerender, onBack } = mount(loading);
     expect(screen.getByLabelText('Opening your comic')).toHaveAttribute('aria-busy', 'true');
+    // The page keeps exactly one main landmark while the comic loads (studio-loading-no-main).
+    expect(screen.getAllByRole('main')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Back to your projects' }));
     expect(onBack).toHaveBeenCalled();
 
@@ -88,6 +90,7 @@ describe('ComicStudio shell', () => {
     const studio = makeFakeStudio({ doc: null, loading: false, loadError: "This comic doesn't exist or you don't have access to it." });
     const { onBack } = mount(studio);
     expect(screen.getByRole('alert')).toHaveTextContent("Couldn’t open this comic");
+    expect(screen.getAllByRole('main')).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
     expect(studio.refresh).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Back/ }));
