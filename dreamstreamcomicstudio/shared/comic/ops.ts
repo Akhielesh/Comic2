@@ -135,6 +135,10 @@ export type DocOp =
   /** Upsert (patch) or delete (patch: null) one line. `index` (0-based) re-inserts a NEW line at that position
    *  (undo of a delete keeps order). */
   | { op: 'line'; pageId: string; panelId: string; id: string; patch: Partial<Line> | null; index?: number }
+  /** Move one line to `toPanelId` on the same page (or re-order it within its panel), inserted at `index` (0-based;
+   *  default: last). The Line object travels whole (style, noTranslate); `page.balloons` and every edition's
+   *  translations and balloons stay — a move never prunes. Unknown page, line or panel: no-op. */
+  | { op: 'line_move'; pageId: string; id: string; toPanelId: string; index?: number }
   | { op: 'balloons'; pageId: string; balloons: Balloon[] }
   | { op: 'balloon'; pageId: string; lineId: string; patch: Partial<Balloon> }
   /** Patch a render state. Setting a NEW `asset` snapshots the outgoing one into history (§5.3.1). */
@@ -273,7 +277,7 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
   'brief', 'note_add', 'format', 'settings', 'source', 'style', 'character', 'character_remove', 'place',
   'place_remove', 'page', 'panel', 'line', 'balloons', 'balloon', 'cover', 'plan_status',
   // v5
-  'letter_style', 'line_style',
+  'letter_style', 'line_style', 'line_move',
   'pages_reorder', 'page_insert', 'page_duplicate', 'page_delete', 'page_restore', 'book', 'reader',
   'render_use', 'version_star',
   'ref_add', 'ref_patch', 'ref_move', 'ref_remove', 'ref_transfer',
@@ -907,6 +911,25 @@ const applyLine = (doc: ComicDoc, op: Extract<DocOp, { op: 'line' }>): ComicDoc 
   return op.patch === null ? pruneLineFromEditions(next, op.id) : next;
 };
 
+/** Move a line between panels of one page (or re-order it): the same Line object, balloons and editions untouched. */
+const applyLineMove = (doc: ComicDoc, op: Extract<DocOp, { op: 'line_move' }>): ComicDoc => {
+  const page = findPageById(doc, op.pageId);
+  if (!page) return doc;
+  const from = page.panels.find((panel) => panel.lines.some((l) => l.id === op.id));
+  const to = page.panels.find((panel) => panel.id === op.toPanelId);
+  if (!from || !to) return doc;
+  const line = from.lines.find((l) => l.id === op.id) as Line;
+  const panels = page.panels.map((panel) => {
+    if (panel.id !== from.id && panel.id !== to.id) return panel;
+    const lines = panel.id === from.id ? panel.lines.filter((l) => l.id !== op.id) : panel.lines.slice();
+    if (panel.id === to.id) lines.splice(clampInt(op.index ?? lines.length, 0, lines.length, lines.length), 0, line);
+    return { ...panel, lines };
+  });
+  const same = (a: readonly Line[], b: readonly Line[]) => a.length === b.length && a.every((l, i) => l === b[i]);
+  if (panels.every((panel, i) => same(panel.lines, page.panels[i].lines))) return doc;
+  return { ...doc, pages: mapPage(doc, op.pageId, (p) => ({ ...p, panels })) };
+};
+
 const applyRefOp = (doc: ComicDoc, op: Extract<DocOp, { op: 'ref_add' | 'ref_patch' | 'ref_move' | 'ref_remove' | 'ref_transfer' }>): ComicDoc => {
   switch (op.op) {
     case 'ref_add': {
@@ -1273,6 +1296,8 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       };
     case 'line':
       return applyLine(doc, op);
+    case 'line_move':
+      return applyLineMove(doc, op);
     case 'balloons':
       return { ...doc, pages: mapPage(doc, op.pageId, (p) => ({ ...p, balloons: op.balloons })) };
     case 'balloon':

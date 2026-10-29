@@ -1,4 +1,4 @@
-// Probe: lettering-editor (pure ops). A FAILING assertion here = a confirmed defect; passing ones are
+// Probe: lettering-editor (pure ops). P1 (LE-1, Move to panel N) moved to components/comicstudio/lettering/styleOps.test.ts and removed here. A FAILING assertion here = a confirmed defect; passing ones are
 // context checks that pin the realistic path down. Nothing here touches the network or the server.
 import { describe, expect, it, vi } from 'vitest';
 // The worktree's symlinked node_modules makes Vite deny the @fontsource `?url` asset imports; the loader
@@ -9,7 +9,7 @@ import { applyOps } from '../../shared/comic/ops';
 import { editionReadiness, i18nOf, lineSourceHash, translationStatus } from '../../shared/comic/i18n';
 import { estimateMeasure, planLettering } from '../../shared/comic/lettering/layout';
 import { resolvePlacements } from '../../components/comicstudio/lettering/useLetterPlans';
-import { easyShapeOps, findLineRef, linkOps, lockOps, moveLineToPanelOps, tidyOps, zOrderOps } from '../../components/comicstudio/lettering/styleOps';
+import { easyShapeOps, findLineRef, linkOps, lockOps, tidyOps, zOrderOps } from '../../components/comicstudio/lettering/styleOps';
 import { editionOps, editionViewDoc } from '../../components/comicstudio/mobile/editor/editorModel';
 import type { ComicDoc } from '../../shared/comic/doc';
 
@@ -32,23 +32,6 @@ const withTelugu = (mutate?: (d: ComicDoc) => void) =>
     };
     mutate?.(d);
   });
-
-describe('P1 — inspector "Move to panel N" (crowded-panel fix) and translations', () => {
-  it('keeps the line’s reviewed translation and its edition balloon when the text did not change', () => {
-    const doc = withTelugu();
-    const page = doc.pages[0];
-    const ops = moveLineToPanelOps(page, 'pg_1_l2', 'pg_1_p3');
-    expect(ops.map((o) => o.op)).toEqual(['line', 'line']);
-    const after = applyOps(doc, ops);
-    const moved = findLineRef(after.pages[0], 'pg_1_l2')!;
-    expect(moved.panel.id).toBe('pg_1_p3');
-    // The source hash is unchanged, so the stored translation is still exactly right for this line…
-    expect(lineSourceHash(moved.line)).toBe(lineSourceHash(findLineRef(page, 'pg_1_l2')!.line));
-    // …but it is gone, together with the edition's own balloon position (data loss; re-translating costs AI).
-    expect(i18nOf(after).editions.te.lines['pg_1_l2']).toBeDefined();
-    expect(i18nOf(after).editions.te.balloons['pg_1_l2']).toBeDefined();
-  });
-});
 
 describe('P2 — Easy "Balloon type" and translations', () => {
   it('whisper → speech (same text, same speaker) does not invalidate a reviewed translation or block publishing', () => {

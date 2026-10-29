@@ -5,6 +5,8 @@
 // activity cost badges. Fakes only at the network edge; $0.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyRender, pageSpecHash, type CharacterLook, type ComicDoc } from '../../../shared/comic/doc.js';
+import { i18nOf, lineSourceHash } from '../../../shared/comic/i18n.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
 import { inverseOps } from '../../../shared/comic/undo.js';
 import { canServeToOwner } from '../../../shared/comic/safety.js';
@@ -177,6 +179,29 @@ describe('patch sanitizer (P2-SERVER)', () => {
     expect(() => sanitizePatchOps(doc, [huge], sctx)).toThrow(/too large/);
     const cleared = sanitizePatchOps(doc, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2b', patch: { style: null } as never }], sctx);
     expect(styleOf(applyOps(doc, cleared), 'ln_1_2b')).toBeUndefined();
+  });
+
+  it('line_move ("Move to panel N") settles exactly as the client showed it and never prunes a translation; Undo goes through the same door', () => {
+    const { session, sctx } = ctxFor();
+    const line = session.doc.pages[0].panels[1].lines[0];
+    const doc = applyOps(session.doc, [
+      { op: 'edition', lang: 'te', patch: {} },
+      { op: 'translations', lang: 'te', lines: { ln_1_2: { text: 'పేజీ 1', status: 'reviewed', sourceHash: lineSourceHash(line), at: 1 } } }
+    ]);
+    const move: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3', index: 0 };
+    const clean = sanitizePatchOps(doc, [move], sctx);
+    expect(clean).toEqual([move]);
+    const after = applyOps(doc, clean);
+    expect(after.pages[0].panels.map((p) => p.lines.map((l) => l.id))).toEqual([[], [], ['ln_1_2']]);
+    expect(i18nOf(after).editions.te.lines.ln_1_2).toEqual(i18nOf(doc).editions.te.lines.ln_1_2);
+    expect(sanitizePatchOps(after, inverseOps(doc, clean), sctx)).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_2', index: 0 }]);
+    // No index = last. A bad index, an unknown line or panel, or a full panel rejects the batch.
+    expect(sanitizePatchOps(doc, [{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3' }], sctx)).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'ln_1_2', toPanelId: 'pn_1_3' }]);
+    expect(() => sanitizePatchOps(doc, [{ ...move, index: -1 }], sctx)).toThrow(/index/);
+    expect(() => sanitizePatchOps(doc, [{ ...move, id: 'ghost' }], sctx)).toThrow(/no longer on the page/);
+    expect(() => sanitizePatchOps(doc, [{ ...move, toPanelId: 'ghost' }], sctx)).toThrow(/panel/);
+    const full = applyOps(doc, Array.from({ length: DOC_LIMITS.linesPerPanel }, (_, i): DocOp => ({ op: 'line', pageId: 'pg_1', panelId: 'pn_1_3', id: `ln_full_${i}`, patch: { kind: 'caption', text: `c${i}` } })));
+    expect(() => sanitizePatchOps(full, [move], sctx)).toThrow(/already has/);
   });
 });
 

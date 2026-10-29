@@ -137,6 +137,12 @@ const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
       if ('style' in op.patch) restore.push({ op: 'line_style', pageId: op.pageId, lineIds: [op.id], mode: 'replace', patch: hit.line.style ?? null });
       return restore;
     }
+    case 'line_move': {
+      // Back to the panel it came from, at its old position (the panel minus the line is what it was).
+      const from = findPage(doc, op.pageId)?.panels.find((p) => p.lines.some((l) => l.id === op.id));
+      if (!from) return [];
+      return [{ op: 'line_move', pageId: op.pageId, id: op.id, toPanelId: from.id, index: from.lines.findIndex((l) => l.id === op.id) }];
+    }
     case 'line_style': {
       const page = findPage(doc, op.pageId);
       if (!page) return [];
@@ -336,6 +342,7 @@ const LABELS: Partial<Record<DocOp['op'], [string, string?]>> = {
   page: ['edit a page', 'edit {n} pages'],
   panel: ['edit a panel', 'edit {n} panels'],
   line: ['edit a line', 'edit {n} lines'],
+  line_move: ['move a line to another panel', 'move {n} lines to other panels'],
   balloons: ['rearrange balloons'],
   balloon: ['move a balloon', 'move {n} balloons'],
   cover: ['edit the cover'],

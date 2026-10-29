@@ -3730,6 +3730,21 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         out.push({ op: 'line', pageId: p.id, panelId: panel.id, id: lineId, patch, ...(index === undefined ? {} : { index }) });
         break;
       }
+      case 'line_move': {
+        // "Move to panel N": the line travels whole (its translations, review state and edition balloons stay),
+        // so the only checks are that everything named exists and that the new panel has room.
+        const p = page(raw.pageId);
+        const lineId = id(raw.id, 'line');
+        const from = p.panels.find((x) => x.lines.some((l) => l.id === lineId));
+        if (!from) throw badRequest('That line is no longer on the page.');
+        const target = panelOf(p, raw.toPanelId);
+        if (target.id !== from.id && target.lines.length >= DOC_LIMITS.linesPerPanel) {
+          throw badRequest(`Panel ${target.n} already has ${DOC_LIMITS.linesPerPanel} lines — move the line to another panel.`);
+        }
+        const index = lineIndex(raw.index);
+        out.push({ op: 'line_move', pageId: p.id, id: lineId, toPanelId: target.id, ...(index === undefined ? {} : { index }) });
+        break;
+      }
       case 'balloons': {
         const p = page(raw.pageId);
         if (!Array.isArray(raw.balloons) || raw.balloons.length > 80) throw badRequest('Invalid balloons.');
