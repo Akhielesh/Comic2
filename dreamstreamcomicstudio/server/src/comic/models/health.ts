@@ -25,7 +25,8 @@
 // Sleepable: no timers survive a call (the fetch timeout is cleared in `finally`); nothing refreshes on its own.
 // jobs.ts / imageClient.ts import this file directly (never a models/index.ts).
 
-import type { ComicDoc } from '../../../../shared/comic/doc.js';
+import type { ComicDoc, RenderTarget } from '../../../../shared/comic/doc.js';
+import type { StudioAction } from '../../../../shared/comic/ops.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../../shared/comic/capabilities.js';
 import {
   HEALTH_THRESHOLDS,
@@ -278,6 +279,51 @@ export const routePausedError = (input: { route: ImageRoute; model: string; nick
 
 /** Was this error a breaker refusal (no provider call, nothing spent)? */
 export const isRoutePausedError = (err: unknown): boolean => !!err && typeof err === 'object' && (err as Record<string, unknown>)[ROUTE_PAUSED_MARK] === true;
+
+/**
+ * The `blockedAction` a MID-RUN outage card may carry: the run's action narrowed to the targets that FAILED, so
+ * "Wait and retry" / "Try again now" never redraw — and never charge again for — what was already drawn
+ * (render_style_options always redraws every direction it is given). Every other field (force, safe, quotedUsd —
+ * a narrower run costs less, so its quote never goes stale) is kept. undefined when the failures can't be
+ * expressed by the action (the card then carries no blockedAction and offers no re-send).
+ */
+export const narrowBlockedAction = (action: StudioAction, failed: readonly RenderTarget[], doc: ComicDoc): StudioAction | undefined => {
+  if (!failed.length) return undefined;
+  const idsOf = (...kinds: RenderTarget['kind'][]): string[] => [
+    ...new Set(failed.flatMap((t) => (kinds.includes(t.kind) && 'id' in t ? [t.id] : [])))
+  ];
+  const coverFailed = failed.some((t) => t.kind === 'cover');
+  switch (action.type) {
+    case 'render_pages': {
+      const pageIds = idsOf('page');
+      const includeCover = coverFailed && !!action.includeCover;
+      if (pageIds.length) {
+        const { includeCover: _drop, ...rest } = action;
+        return { ...rest, pageIds, ...(includeCover ? { includeCover: true } : {}) };
+      }
+      if (includeCover) return { type: 'render_cover', ...(action.safe ? { safe: true } : {}), ...(action.quotedUsd !== undefined ? { quotedUsd: action.quotedUsd } : {}) };
+      // Only sheets the pages needed failed: re-send just those (the pages themselves were drawn).
+      const sheetIds = idsOf('sheet', 'place');
+      return sheetIds.length ? { type: 'render_sheets', characterIds: sheetIds, ...(action.quotedUsd !== undefined ? { quotedUsd: action.quotedUsd } : {}) } : undefined;
+    }
+    case 'render_cover':
+      return coverFailed ? action : undefined;
+    case 'edit_page':
+      return failed.some((t) => t.kind === 'page' && t.id === action.pageId) ? action : undefined;
+    case 'render_sheets': {
+      const characterIds = idsOf('sheet', 'place');
+      return characterIds.length ? { ...action, characterIds } : undefined;
+    }
+    case 'render_style_options': {
+      const wanted = idsOf('style_option');
+      const directions = doc.style.options.filter((o) => wanted.includes(o.id)).map((o) => ({ name: o.name, spec: o.spec }));
+      // Every failed option must be found (else the re-send would be incomplete): no partial guess.
+      return wanted.length && directions.length === wanted.length ? { ...action, directions } : undefined;
+    }
+    default:
+      return undefined;
+  }
+};
 
 /** Parse OpenRouter's endpoints payload into ProviderHealth rows (tolerant; unknown fields ignored). */
 export const parseOpenRouterEndpoints = (payload: unknown): ProviderHealth[] | undefined => {

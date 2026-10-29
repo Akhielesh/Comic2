@@ -24,6 +24,7 @@ import {
   createModelHealth,
   isKeyScopedFailure,
   isRoutePausedError,
+  narrowBlockedAction,
   openrouterEndpointsUrl,
   outcomeFromError,
   parseOpenRouterEndpoints,
@@ -436,6 +437,39 @@ describe('acquireRouteCall (half-open: one call is allowed)', () => {
     expect(isKeyScopedFailure(err)).toBe(false);
     expect(outcomeFromError(err, { route: 'gemini', model: GEM_ID }).code).toBe(NOT_UPSTREAM_CODE);
     expect(isRoutePausedError(new StudioError('PROVIDER_ERROR', 'x'))).toBe(false);
+  });
+});
+
+describe('narrowBlockedAction (a mid-run card re-sends only what failed)', () => {
+  const doc = lockedDoc();
+  doc.style.options = [
+    { id: 'so_1', name: 'Ink wash', spec: 'loose ink', render: emptyRender() },
+    { id: 'so_2', name: 'Cel', spec: 'flat cel', render: emptyRender() },
+    { id: 'so_3', name: 'Pulp', spec: 'halftone pulp', render: emptyRender() }
+  ];
+
+  it('style tests: only the failed directions (render_style_options redraws every direction it is given)', () => {
+    const action = { type: 'render_style_options' as const, quotedUsd: 0.13 };
+    expect(narrowBlockedAction(action, [{ kind: 'style_option', id: 'so_2' }], doc)).toEqual({ type: 'render_style_options', quotedUsd: 0.13, directions: [{ name: 'Cel', spec: 'flat cel' }] });
+    // A failed option the doc doesn't know can't be re-sent faithfully: no partial guess.
+    expect(narrowBlockedAction(action, [{ kind: 'style_option', id: 'so_2' }, { kind: 'style_option', id: 'so_gone' }], doc)).toBeUndefined();
+  });
+
+  it('pages: only the failed pages (cover only if it failed); flags and the quote are kept', () => {
+    const action = { type: 'render_pages' as const, pageIds: ['pg_1', 'pg_2', 'pg_3'], includeCover: true, force: true, quotedUsd: 0.4 };
+    expect(narrowBlockedAction(action, [{ kind: 'page', id: 'pg_2' }], doc)).toEqual({ type: 'render_pages', pageIds: ['pg_2'], force: true, quotedUsd: 0.4 });
+    expect(narrowBlockedAction(action, [{ kind: 'page', id: 'pg_3' }, { kind: 'cover' }], doc)).toEqual({ type: 'render_pages', pageIds: ['pg_3'], includeCover: true, force: true, quotedUsd: 0.4 });
+    expect(narrowBlockedAction(action, [{ kind: 'cover' }], doc)).toEqual({ type: 'render_cover', quotedUsd: 0.4 });
+    expect(narrowBlockedAction(action, [{ kind: 'sheet', id: 'c_1' }], doc)).toEqual({ type: 'render_sheets', characterIds: ['c_1'], quotedUsd: 0.4 });
+  });
+
+  it('sheets, cover and edits: only when their target failed; nothing failed → no action', () => {
+    expect(narrowBlockedAction({ type: 'render_sheets', quotedUsd: 0.2 }, [{ kind: 'sheet', id: 'c_2' }, { kind: 'place', id: 'pl_1' }], doc)).toEqual({ type: 'render_sheets', characterIds: ['c_2', 'pl_1'], quotedUsd: 0.2 });
+    expect(narrowBlockedAction({ type: 'render_cover', quotedUsd: 0.05 }, [{ kind: 'cover' }], doc)).toEqual({ type: 'render_cover', quotedUsd: 0.05 });
+    expect(narrowBlockedAction({ type: 'render_cover', quotedUsd: 0.05 }, [{ kind: 'page', id: 'pg_1' }], doc)).toBeUndefined();
+    expect(narrowBlockedAction({ type: 'edit_page', pageId: 'pg_1', instruction: 'brighter' }, [{ kind: 'page', id: 'pg_1' }], doc)).toEqual({ type: 'edit_page', pageId: 'pg_1', instruction: 'brighter' });
+    expect(narrowBlockedAction({ type: 'render_pages', quotedUsd: 0.1 }, [], doc)).toBeUndefined();
+    expect(narrowBlockedAction({ type: 'translate', languages: ['te'] }, [{ kind: 'page', id: 'pg_1' }], doc)).toBeUndefined();
   });
 });
 
