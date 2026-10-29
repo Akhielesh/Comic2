@@ -48,7 +48,6 @@ import {
   writeLayoutPref,
   writePosition,
   writePrefs,
-  writeReaderLang,
   type ReaderPrefs
 } from './readerPrefs';
 import { createUrlSync } from './readerUrl';
@@ -578,7 +577,10 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     if (firstItem !== undefined && items[firstItem]) writePosition(doc.id, { key: items[firstItem].key, at: Date.now(), ...(state.guided.on ? { panel: state.guided.stop } : {}) });
     if (props.syncUrl) {
       const panelOrdinal = state.guided.on ? stops.slice(0, state.guided.stop + 1).filter((s) => s.panelIndex >= 0).length : 0;
-      urlSync.schedule({ p: n, lang: language?.current, guided: state.guided.on, panel: panelOrdinal || undefined });
+      // ?lang= only for an edition other than the comic's own language — like the inline reader, the
+      // language switch (syncLangToUrl) and the canonical share links (publish-share-reader-08).
+      const lang = language?.current && !sameLanguage(language.current, doc.format.language) ? language.current : undefined;
+      urlSync.schedule({ p: n, lang, guided: state.guided.on, panel: panelOrdinal || undefined });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, state.motion.kind, state.guided.on, state.guided.stop, state.phase, language?.current]);
@@ -608,13 +610,14 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     if (resume && view !== 0) setResume(null);
   }, [view, resume]);
 
-  // Language: keep the page; load the script's fonts; remember the choice.
+  // Language: keep the page; load the script's fonts. Remembering the choice is the HOST's call, through
+  // its slot's onChange (useReaderLanguage persists only where it should — a share link; never the studio
+  // preview, whose draft editions must not become every share link's default in this browser: T11).
   const prevLang = useRef(language?.current);
   useEffect(() => {
     const lang = language?.current;
     if (!lang || lang === prevLang.current) return;
     prevLang.current = lang;
-    writeReaderLang(lang);
     // Lettering crossfades into the new language; the page, panel and zoom stay put.
     if (!reduced && bookEl && typeof bookEl.animate === 'function') bookEl.animate([{ opacity: 0.8 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' });
     const sample = items.slice(0, 3).flatMap((i) => i.page?.panels.flatMap((p) => p.lines.map((l) => l.text)) ?? []).join(' ').slice(0, 400);

@@ -10,6 +10,8 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { ImmersiveReader, pdfDownloadFailedNote, pdfDownloadNote, readerExportOptions } from './ImmersiveReader';
 import { ExportError } from '../export/errors';
 import { pageImageCache } from './pageImageCache';
+import { LANG_KEY } from './readerPrefs';
+import type { ReaderLanguageSlot } from '../i18n/ReaderLanguagePicker';
 
 const pdfMock = vi.hoisted(() => ({ exportComicPdf: vi.fn() }));
 vi.mock('../export/pdfExport', () => pdfMock);
@@ -370,6 +372,51 @@ describe('ImmersiveReader', () => {
     expect(document.activeElement).toBe(close);
     fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
     expect(document.activeElement).toBe(scrubber);
+  });
+
+  it('a language switch never writes the reader\'s stored language: the host\'s slot decides (T11, studio preview persist:false)', () => {
+    reduce = true;
+    const doc = drawnDoc();
+    const slot = (current: string): ReaderLanguageSlot => ({
+      current,
+      options: [
+        { code: doc.format.language, label: 'English', status: 'ready' },
+        { code: 'te', label: 'Telugu', percent: 40 } // a DRAFT edition: the studio preview only
+      ],
+      onChange: () => undefined
+    });
+    const view = render(<ImmersiveReader doc={doc} urlFor={fakeUrlFor} intro={false} language={slot(doc.format.language)} onExit={() => undefined} />);
+    view.rerender(<ImmersiveReader doc={doc} urlFor={fakeUrlFor} intro={false} language={slot('te')} onExit={() => undefined} />);
+    expect(window.localStorage.getItem(LANG_KEY)).toBeNull();
+  });
+
+  describe('?lang= in the address bar (publish-share-reader-08)', () => {
+    const slot = (current: string): ReaderLanguageSlot => ({
+      current,
+      options: [
+        { code: 'en', label: 'English', status: 'ready' },
+        { code: 'hi', label: 'Hindi', status: 'ready' }
+      ],
+      onChange: () => undefined
+    });
+    beforeEach(() => window.history.replaceState(null, '', '/c/AbCdEfGhIjKlMnOpQ'));
+    afterEach(() => window.history.replaceState(null, '', '/'));
+
+    it('a page turn in the comic\'s own language writes ?p= but never ?lang=', async () => {
+      reduce = true;
+      render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} syncUrl language={slot('en')} onExit={() => undefined} />);
+      press('ArrowRight');
+      await waitFor(() => expect(window.location.search).toContain('p=1'), { timeout: 2000 });
+      expect(window.location.search).not.toMatch(/lang=/);
+    });
+
+    it('another edition keeps its ?lang=', async () => {
+      reduce = true;
+      render(<ImmersiveReader doc={drawnDoc()} urlFor={fakeUrlFor} intro={false} syncUrl language={slot('hi')} onExit={() => undefined} />);
+      press('ArrowRight');
+      await waitFor(() => expect(window.location.search).toContain('p=1'), { timeout: 2000 });
+      expect(window.location.search).toContain('lang=hi');
+    });
   });
 
   it('nothing drawn yet: an honest empty state', () => {
