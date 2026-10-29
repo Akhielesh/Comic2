@@ -50,6 +50,6 @@ Who: MINA (Images 1 and 2 — short curly auburn hair, yellow raincoat over stri
 Speaks: nobody (narration only); fill the panel with art to its borders.
 Detail: A yellow butterfly flutters behind them. Mood: giggly, golden light.
 
-LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons and captions are added later by software. Where a panel's Speaks line names someone, compose open background (sky, wall, floor or shadow) beside that speaker's head. Never draw blank boxes, empty bars or white strips inside a panel.
+LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
 
 Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them).

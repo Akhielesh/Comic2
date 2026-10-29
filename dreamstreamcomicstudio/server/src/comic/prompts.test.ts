@@ -539,14 +539,16 @@ describe('compilePage', () => {
     // The blank-bar wording (panels challenge R4) is gone; open background beside the speaker replaces it.
     expect(prompt).not.toContain('Leave natural empty space');
     expect(prompt).not.toContain('keep faces and key action out of that space');
-    expect(prompt).toContain("Balloons and captions are added later by software. Where a panel's Speaks line names someone, compose open background (sky, wall, floor or shadow) beside that speaker's head.");
-    expect(prompt).toContain('Never draw blank boxes, empty bars or white strips inside a panel.');
+    // Plan §4.2's three sentences, verbatim.
+    expect(prompt).toContain(
+      "Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips."
+    );
     expect(prompt).not.toContain('SECRET-DIALOGUE-ONE');
     expect(prompt).not.toContain('SECRET-CAPTION');
     expect(prompt).not.toContain('Spell every line');
     // A wordless overlay page still forbids empty shapes (b4b5774f p5's bar sat on a panel with no lines).
     const wordless = compilePage(doc, page(2, [panel(1, ['maya']), panel(2, ['arjun'])])).prompt;
-    expect(wordless).toContain('This page is wordless. Never draw blank boxes, empty bars or white strips inside a panel.');
+    expect(wordless).toContain('This page is wordless. Never draw blank boxes, empty bars or white strips.');
   });
 
   it('in-art lettering: every line verbatim per panel with speaker and kind, quotes escaped', () => {
@@ -568,7 +570,7 @@ describe('compilePage', () => {
     expect(prompt).toContain('Panel 2 — SFX: "KRAK!"');
     expect(prompt).toContain('Panel 3 — MAYA (shout): "MOVE!"');
     expect(prompt).toContain('Panel 3 — ARJUN (thought): "Too slow…"');
-    expect(prompt).toContain('No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips inside a panel.');
+    expect(prompt).toContain('No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips.');
     expect(prompt).toContain('UPPERCASE');
     expect(prompt).toContain('spiky burst balloons');
     expect(prompt).not.toContain('Do not draw any text');

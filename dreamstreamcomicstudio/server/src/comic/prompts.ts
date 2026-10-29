@@ -1443,11 +1443,12 @@ const stripCaseWords = (hint: string): string =>
  * The no-blank-bars rule (plan §4.2; panels challenge R4): the old "leave natural empty space near the
  * top of each panel" produced flat white bars that balloons never filled — even on panels with no
  * lines. Overlay pages now ask for open BACKGROUND beside each speaker (the panel's Speaks line) and
- * forbid empty shapes inside panels; "inside a panel" keeps the white gutters the layout asks for.
+ * forbid empty shapes. Both sentences are the plan's words verbatim (§4.2, design §3.4(d)); the white
+ * gutters are asked for separately, by name, in the PAGE LAYOUT block.
  */
-export const NO_BLANK_SHAPES = 'Never draw blank boxes, empty bars or white strips inside a panel.';
+export const NO_BLANK_SHAPES = 'Never draw blank boxes, empty bars or white strips.';
 const OVERLAY_BALLOONS =
-  "Balloons and captions are added later by software. Where a panel's Speaks line names someone, compose open background (sky, wall, floor or shadow) beside that speaker's head.";
+  "Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head.";
 
 const letteringBlock = (doc: ComicDoc, page: Page): string => {
   const lettered = page.panels.filter((p) => p.lines.some((l) => clean(l.text)));
@@ -1487,7 +1488,7 @@ const letteringBlock = (doc: ComicDoc, page: Page): string => {
   return [
     `LETTERING: Letter the page like a professional comic: ${joinList(shapes)}. ${font}${language} Place balloons in ${order} reading order within each panel and never over faces. Spell every line exactly as written:`,
     ...lines,
-    'No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips inside a panel.'
+    'No other text anywhere on the page. Never draw empty balloons, blank boxes, empty bars or white strips.'
   ].join('\n');
 };
 

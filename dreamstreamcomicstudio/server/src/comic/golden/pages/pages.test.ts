@@ -45,6 +45,10 @@ describe('golden page prompts (Ship 1)', () => {
       expect(job.prompt).not.toContain('Leave natural empty space');
       expect(job.prompt).not.toMatch(/empty space near the top/i);
       expect(job.prompt).toContain('Never draw blank boxes');
+      // Plan §4.2's replacement for the blank-bar wording, verbatim.
+      expect(job.prompt).toContain(
+        "Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips."
+      );
       await expect(job.prompt).toMatchFileSnapshot(`./${key}.prompt.txt`);
     });
 
