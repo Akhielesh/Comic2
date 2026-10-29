@@ -1,0 +1,110 @@
+# ADR 0006 Phase 0: the APNs HTTP/2 probe, run from Cloudflare's production network.
+#
+# APNs only speaks HTTP/2. workerd has no HTTP/2 client, but production Worker fetch leaves
+# through Cloudflare's proxy, which reportedly upgrades (workerd#4841). This job settles it:
+#   1. a control: HTTP/2 to APNs from this runner (Node), to show APNs itself answers;
+#   2. deploys a THROWAWAY Worker (dreamstream-apns-probe: its own config, workers.dev only,
+#      no routes, no bindings — it never touches dreamstream-live) with a random OPS_KEY;
+#   3. asks it to POST https://api.sandbox.push.apple.com/3/device/<64 hex> with no provider
+#      token, and records the answer (job summary + log);
+#   4. deletes the Worker, whatever happened.
+# Pass = APNs' JSON error WITH an apns-id header (only an HTTP/2 APNs response carries one)
+# → "send to APNs directly". Anything else → "FCM for iOS" (router PUSH_IOS_VIA=fcm).
+# No Apple account or key is needed. Paste the printed line under ADR 0006 D3.
+#
+# Manual only. Uses the existing deploy secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit)
+# and CLOUDFLARE_ACCOUNT_ID. The JSON records (control + decision) are kept as the run's
+# "apns-probe" artifact as well as in the job summary.
+
+name: APNs HTTP/2 probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: APNs environment to probe
+        type: choice
+        options: [sandbox, production]
+        default: sandbox
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apns-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deploy secrets belong to this Environment (ADR 0006 owner action #7).
+    environment: production-deploy
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio/live-worker
+    env:
+      PROBE_WORKER: dreamstream-apns-probe
+      PROBE_CONFIG: src/push/probe.wrangler.jsonc
+      PROBE_HOST: ${{ inputs.host }}
+      # Pinned (never @latest), the same version the other Worker deploys use.
+      WRANGLER: wrangler@4.151.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # wrangler 4.98+ requires Node >= 22.
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # Nothing to install up front: the probe script is plain Node (no dependencies), and
+      # the pinned wrangler below (npx) bundles and deploys the Worker.
+
+      - name: Control — HTTP/2 to APNs from this runner (not the decision)
+        continue-on-error: true
+        run: node scripts/apnsProbe.mjs --direct --host "$PROBE_HOST" --out "$RUNNER_TEMP/apns-probe-control.json"
+
+      - name: Deploy the throwaway probe Worker (workers.dev only, no routes)
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          grep -q "\"name\": \"$PROBE_WORKER\"" "$PROBE_CONFIG"   # never deploy any other Worker by mistake
+          key="$(openssl rand -hex 24)"
+          echo "::add-mask::$key"
+          echo "OPS_KEY=$key" >> "$GITHUB_ENV"
+          secrets="$RUNNER_TEMP/probe-secrets.env"
+          umask 077
+          printf 'OPS_KEY=%s\n' "$key" > "$secrets"
+          npx --yes "$WRANGLER" deploy -c "$PROBE_CONFIG" --name "$PROBE_WORKER" --secrets-file "$secrets" | tee "$RUNNER_TEMP/deploy.log"
+          rm -f "$secrets"
+          url="$(grep -oE "https://$PROBE_WORKER\.[a-z0-9-]+\.workers\.dev" "$RUNNER_TEMP/deploy.log" | head -n1 || true)"
+          if [ -z "$url" ]; then echo "::error::Could not find the probe Worker's workers.dev URL in the deploy output."; exit 1; fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Probe APNs from Cloudflare production
+        env:
+          PROBE_URL: ${{ steps.deploy.outputs.url }}
+        run: node scripts/apnsProbe.mjs --url "$PROBE_URL/probe" --host "$PROBE_HOST" --out "$RUNNER_TEMP/apns-probe-result.json"
+
+      - name: Delete the probe Worker
+        if: always()
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes "$WRANGLER" delete "$PROBE_WORKER" -c "$PROBE_CONFIG" --force || echo "::warning::Delete $PROBE_WORKER by hand (Workers & Pages) if it is still listed."
+
+      - name: Keep the probe records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: apns-probe
+          path: ${{ runner.temp }}/apns-probe-*.json
+          if-no-files-found: ignore
+          retention-days: 90

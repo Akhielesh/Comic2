@@ -1,0 +1,83 @@
+{
+  "about": "TEST KEYS ONLY — published on purpose so every platform can reproduce the vectors. Never use them for anything else.",
+  "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+  "nmk": {
+    "1": "Uvbs4Sw4tzmzrly-wHk1-04galwvVY3RT1DjcpecD3o",
+    "2": "p7wflkF6zWMpJGFTs306YyijuR4rUu4uwTymbl0BG6I"
+  },
+  "devices": {
+    "camera": {
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "yKjLF6DtGbU8Muk7wbWd7hmmmcM_GL1KprPK4oo_KRs",
+        "y": "SpWJPdcULiM052-byaswfayTSsgXWpRu9sqd9OdZmPg",
+        "d": "vB51YU21dA7Xf-dioNgpf4nqYmCABVHqFnGDbP7p5V0"
+      },
+      "ecdh": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "sC87BCqsV3zVWNLuoyBf-Yg59wDp3T02ORNTU3OQF7E",
+        "y": "FkR1GXnencK8ndOazhcqtHFCiTLnSifX_i4XsvBSzS8",
+        "d": "tMva_KO8PYoK0NJfhpkdkFQ_vTeCq9xkVcEnqMrYXn4"
+      },
+      "sigPub": "BMioyxeg7Rm1PDLpO8G1ne4ZppnDPxi9SqazyuKKPykbSpWJPdcULiM052-byaswfayTSsgXWpRu9sqd9OdZmPg",
+      "ecdhPub": "BLAvOwQqrFd81VjS7qMgX_mIOfcA6d09NjkTU1NzkBexFkR1GXnencK8ndOazhcqtHFCiTLnSifX_i4XsvBSzS8",
+      "devId": "Pc-8NnpwUqWczWkTBOEIP5"
+    },
+    "viewer": {
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "H0POEdqlIR6O38F06fhSV2Ss7dYSwh1t4s6RKPlcc8M",
+        "y": "BmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+        "d": "21pLBo2ZwniNtxAgIV55Gx5BcC8kiI9o2F9BasLRaTo"
+      },
+      "ecdh": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "UdHVSO89AvwKr_JqS-zWX381zhIP002u5vN_KzZwCoQ",
+        "y": "5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+        "d": "ijYCsMA53g3cjlK5Srw1TrG0VODhhatyKdUqaEFrVkA"
+      },
+      "sigPub": "BB9DzhHapSEejt_BdOn4UldkrO3WEsIdbeLOkSj5XHPDBmdwdmaMSdCq0cN6cLlVxMfJ8UzyW7CjH1qODZV6MrA",
+      "ecdhPub": "BFHR1UjvPQL8Cq_yakvs1l9_Nc4SD9NNrubzfys2cAqE5y13byFQUaftqy1EtphowUOFduIij1YAnAXsgo3coSI",
+      "devId": "iVdpLzUw2Cgkmr30usGh8Z"
+    },
+    "watch": {
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "f4XG8ym4KDKBRLPS8SSDzhRPK-8bjNP9lrcEdhmXHvw",
+        "y": "rYgkHIufPT8-eF-lyTraDFu3jvsxY3vlDyLR7mzaYRQ",
+        "d": "2smQ-P_6bRKClfCpunLuS9FJdOdB8Wfz15KtrZlq3Vs"
+      },
+      "ecdh": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "N-05HLxgLOMkMtgqAP7DqhYKEjp1VcIPr8ONdVYBNLg",
+        "y": "jarGFFPEa_gk5A-EJOY56UY2rVTxwh3TIVkjkdyU2lg",
+        "d": "kfCfQt4qwsOitcKWXwD0lkmTuA2Be388UHu_SK70Dpo"
+      },
+      "sigPub": "BH-FxvMpuCgygUSz0vEkg84UTyvvG4zT_Za3BHYZlx78rYgkHIufPT8-eF-lyTraDFu3jvsxY3vlDyLR7mzaYRQ",
+      "ecdhPub": "BDftORy8YCzjJDLYKgD-w6oWChI6dVXCD6_DjXVWATS4jarGFFPEa_gk5A-EJOY56UY2rVTxwh3TIVkjkdyU2lg",
+      "devId": "xChXvGvKV1QBh75jW_7Btb"
+    }
+  },
+  "ephemeral": [
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "QXE9GM0QrM-5B6xPaSzvuubSRKZuegG6rrvKoNQepaQ",
+      "y": "Z35KPEeeUJ8MsdfNFzT_3KRMu1WG8zGK20ojv_6qoU8",
+      "d": "Rk_WutSQqetLdAAOgIIlraEvBcfj-TaLuOro5QJWsrs"
+    },
+    {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "ySVej6UW9boWWt5OYnGkkODuvVnPPRonHeN7S48sQcE",
+      "y": "3zwYTYOkCY-D33ZtixmIFHVNon_EC7Asnek76M073r0",
+      "d": "GkdvZ5Gd_0HT3-lZDh9arTqGeg2pR1_OSh890A6y3Gk"
+    }
+  ]
+}

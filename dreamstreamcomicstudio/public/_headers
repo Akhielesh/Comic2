@@ -1,22 +1,19 @@
-# App-wide security headers (Comic Studio v5, contract §14.2).
-# The CSP ships REPORT-ONLY first: the SPA still has an inline importmap and inline
-# scripts, and third-party surfaces (maps, embeds, model CDNs) must be inventoried from
-# real violation reports before anything is enforced. The share/reader route /c/* gets
-# an ENFORCED CSP from its Pages Function (_headers never applies to Function responses).
-# Violations are reported to /api/csp-report, which the dreamstream-api Worker answers AT
-# THE EDGE (api-proxy/src/cspReport.ts: sampled, sanitized log; rate-limited; it never reaches
-# or wakes the backend container — CLAUDE.md "keep it sleepable").
-# Allowed third parties, by purpose: Cloudflare Web Analytics (static.cloudflareinsights.com
-# script, cloudflareinsights.com beacon) and Turnstile (challenges.cloudflare.com script +
-# frame) are injected by Cloudflare/our auth forms; cdn.jsdelivr.net serves Pyodide (and its
-# wasm, hence 'wasm-unsafe-eval'); *.workers.dev is the Live studio's Worker (https + wss);
-# Hugging Face serves on-device model files; nominatim does geocoding; the frames are the
-# video/map embeds and the Sandpack playground. img-src/media-src allow any https source
-# because chat shows images and media from the open web (search results, news, maps).
+# Baseline security headers for STATIC files (ADR 0006 WS-1): /assets/*, /live-sw.js,
+# /models/*, manifests, icons. Cloudflare doesn't promise to apply this file to a Pages
+# Function's response, and every page load (/, /live, the Stream Studio host) runs through
+# functions/_middleware.ts — so the pages' CSP, Permissions-Policy, COOP and framing rules
+# are set THERE, per app (Stream Studio vs the comic / chat app), overriding anything from
+# here, with reports going to the /csp-report Function (never /api/*, so the backend
+# container stays asleep).
+#
+# No CSP here on purpose: a module worker (the YAMNet sound model at /assets/yamnet.worker-*.js)
+# takes its CSP from its own script response, so a policy on /* would reach inside the worker.
+# HSTS has no `preload` until the owner confirms every subdomain serves HTTPS (owner action #6).
 /*
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com https://static.cloudflareinsights.com https://challenges.cloudflare.com https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://cloudflareinsights.com https://challenges.cloudflare.com https://*.workers.dev wss://*.workers.dev https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://nominatim.openstreetmap.org; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com https://www.google.com https://*.codesandbox.io; worker-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'; report-uri /api/csp-report
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: payment=(), usb=(), serial=(), hid=()
 
 # Sign-in links land on these pages (the main app's /auth/callback, Stream Studio at /live).
 # Another site must never frame them: a framed "Finish signing in?" step could hide a disguised

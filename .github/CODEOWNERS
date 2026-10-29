@@ -1,0 +1,21 @@
+# Code owners (ADR 0006 WS-1). A change to any path below needs the owner's review once branch
+# protection on the default branch requires code-owner reviews (ADR 0006 owner action #7).
+# These are the paths where one bad line ships to production or weakens what protects it.
+
+# CI/CD: workflows, Dependabot, this file.
+/.github/                                              @Akhielesh
+
+# Edge security: page headers and CSP, the report endpoint, static headers, security.txt.
+/dreamstreamcomicstudio/functions/                     @Akhielesh
+/dreamstreamcomicstudio/public/_headers                @Akhielesh
+/dreamstreamcomicstudio/public/_routes.json            @Akhielesh
+/dreamstreamcomicstudio/public/.well-known/            @Akhielesh
+
+# Dependencies (lockfiles decide what code runs in the browser, the Workers and the backend).
+/dreamstreamcomicstudio/package.json                   @Akhielesh
+/dreamstreamcomicstudio/package-lock.json              @Akhielesh
+/dreamstreamcomicstudio/*/package-lock.json            @Akhielesh
+
+# Worker configuration (routes, bindings, public vars) and the database schema.
+/dreamstreamcomicstudio/*/wrangler.jsonc               @Akhielesh
+/dreamstreamcomicstudio/server/sql/                    @Akhielesh

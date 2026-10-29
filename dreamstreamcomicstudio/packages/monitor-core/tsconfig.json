@@ -1,0 +1,24 @@
+{
+  // The purity guard: the shipped sources compile against the ECMAScript library ONLY —
+  // no DOM, no Node, no Workers types. Anything platform-specific (WebCrypto, randomness)
+  // is reached through a small structural interface in sealed.ts, so the same files build
+  // in the browser, in the live Worker and, from Phase 1, in React Native.
+  // Tests (*.test.ts) and scripts/ use Node and vitest; the app's root tsconfig checks them.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "types": [],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

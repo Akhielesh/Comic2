@@ -43,21 +43,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Bundle the backend exactly as the image does and boot it on the image's Node before
+  # anything rolls out: a server that can't start (a dependency that needs a newer Node
+  # than the image, an import the runtime stage can't satisfy) stops here instead of
+  # crash-looping every container. No secrets, no Environment (server-boot.yml).
+  server-boot:
+    uses: ./.github/workflows/server-boot.yml
+
   deploy-worker:
+    needs: server-boot
     runs-on: ubuntu-latest
+    # Deploy secrets belong to this Environment (ADR 0006 owner action #7).
+    environment: production-deploy
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # wrangler 4.98+ requires Node >= 22.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
+      # No install scripts in a job that is about to hold the Cloudflare token. (The
+      # backend image does its own install inside Dockerfile.cloudflare.)
       - name: Install worker dependencies
         working-directory: dreamstreamcomicstudio/api-proxy
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Typecheck worker
         working-directory: dreamstreamcomicstudio/api-proxy

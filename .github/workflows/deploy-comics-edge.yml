@@ -33,19 +33,23 @@ concurrency:
 jobs:
   deploy-worker:
     runs-on: ubuntu-latest
+    # The job that holds the Cloudflare token runs in the production-deploy Environment (ADR 0006 WS-1).
+    environment: production-deploy
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # wrangler 4.98+ requires Node >= 22.
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       - name: Install worker dependencies
         working-directory: dreamstreamcomicstudio/comics-edge
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Typecheck worker
         working-directory: dreamstreamcomicstudio/comics-edge

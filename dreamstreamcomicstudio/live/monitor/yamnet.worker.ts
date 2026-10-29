@@ -2,15 +2,17 @@
  * Web Worker: runs Google's YAMNet sound classifier (ONNX, Apache-2.0) on the
  * nursery camera, off the main thread. Audio never leaves the phone.
  *
- * The model (16 MB) is served from our own origin and cached by the browser;
- * the Hugging Face copy is a fallback. Either way the bytes must match the
- * pinned SHA-256 before they're executed.
+ * The model (16 MB) is served from our own origin only and cached by the
+ * browser; the bytes must match the pinned SHA-256 before they're executed.
+ * There is deliberately no third-party fallback (ADR 0006 WS-1): the page CSP
+ * keeps connect-src to our own hosts, and a nursery's sound model never depends
+ * on, or reveals the camera to, another company's CDN.
  */
 import * as ort from 'onnxruntime-web/wasm';
 import { YAMNET_CLASSES, scoreRows } from './soundClasses';
 
+/** Same-origin and hash-pinned (tests/edge/supplyChain.test.ts keeps it that way). */
 const MODEL_URL = '/models/yamnet/yamnet-v1.onnx';
-const FALLBACK_URL = 'https://huggingface.co/audiomagic/yamnet-onnx/resolve/main/yamnet.onnx';
 const MODEL_SHA256 = 'd3835ffbbd4a1bb3e777f0ca217b5007907f5171dd5d17c4236b95b2af8f908e';
 const CACHE_NAME = 'ds-monitor-models-v1';
 
@@ -71,15 +73,17 @@ async function modelBytes(): Promise<Uint8Array> {
   } catch {
     cache = null; // Cache API unavailable (private mode) — HTTP cache still helps
   }
-  for (const url of [MODEL_URL, FALLBACK_URL]) {
+  // Two tries at our own copy: a dropped connection mid-download (16 MB on a
+  // phone) is the common failure, and the second try is usually served warm.
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const b = await download(url);
+      const b = await download(MODEL_URL);
       if (!b || (await sha256Hex(b)) !== MODEL_SHA256) continue;
       try {
         await cache?.put(MODEL_URL, new Response(b, { headers: { 'content-type': 'application/octet-stream' } }));
       } catch { /* quota — fine */ }
       return b;
-    } catch { /* try the next source */ }
+    } catch { /* retry once */ }
   }
   throw new Error('The sound model could not be downloaded.');
 }

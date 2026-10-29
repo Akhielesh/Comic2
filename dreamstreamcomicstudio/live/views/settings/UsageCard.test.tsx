@@ -315,6 +315,9 @@ describe('a nursery’s Usage (parents)', () => {
   });
 
   it('Nursery settings: last night’s receipt straight away; the month is asked for only when opened', async () => {
+    // "Last night" is read against the clock, so the clock is the test's (the test broke once the real date moved on).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
     addNightSegment('n1', 'direct', NOW - 14 * 3_600_000, NOW - 4 * 3_600_000);
     const q = nurseryQuery({ t: 'r', id: 'q1', q: 'usage', usage: month({}, 'nursery'), allowances: { relayDataGb: 10, serverPictureHoursPerDay: 16 } });
     // Pin the clock: the receipt is "last night" relative to `now`, and the segment above sits in

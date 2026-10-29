@@ -22,6 +22,10 @@
   </head>
   <body style="margin:0">
     <div id="live-root"></div>
+    <!-- No inline scripts and no on* attributes here, ever: this page runs under an
+         enforceable CSP with script-src 'self' (functions/_middleware.ts). Anything that
+         must run before the bundle goes in a file under /assets, or gets a hash in the
+         policy. tests/edge/liveCsp.built.test.ts checks the BUILT page against the header. -->
     <script type="module" src="/live/main.tsx"></script>
   </body>
 </html>

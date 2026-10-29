@@ -131,34 +131,16 @@ describe('public/_headers and public/_routes.json', () => {
     return out.join('\n');
   };
 
-  it('ships the app-wide CSP as REPORT-ONLY with the contract directives', () => {
+  it('gives static files the baseline headers and leaves page CSPs to the middleware (ADR 0006 WS-1)', () => {
     const all = block('/*');
-    expect(all).toMatch(/^Content-Security-Policy-Report-Only: /m);
-    expect(all).not.toMatch(/^Content-Security-Policy: /m);
-    const csp = all.match(/^Content-Security-Policy-Report-Only: (.+)$/m)![1];
-    for (const d of [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://aistudiocdn.com",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-      "font-src 'self' data: https://fonts.gstatic.com",
-      "img-src 'self' data: blob: https:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
-      "worker-src 'self' blob:",
-      "frame-ancestors 'self'",
-      "base-uri 'self'",
-      "object-src 'none'",
-    ]) expect(csp).toContain(d);
-    // Third parties the live app really loads (seen as report-only violations in production):
-    // Cloudflare Web Analytics, Turnstile (script + frame) and the beacon endpoint.
-    for (const allowed of [
-      'https://static.cloudflareinsights.com',
-      'https://challenges.cloudflare.com',
-      'https://cloudflareinsights.com',
-      "frame-src 'self' https://challenges.cloudflare.com"
-    ]) expect(csp).toContain(allowed);
-    expect(csp).not.toMatch(/(?:^|;\s*)script-src[^;]*\shttps:(?:\s|;|$)/); // never a blanket https: for scripts
+    // Page policies (Stream Studio enforced-ready, the comic app Report-Only) live in
+    // functions/_middleware.ts and are tested in tests/edge/. A CSP here would also reach
+    // inside the YAMNet module worker, whose policy comes from its own script response.
+    expect(all).not.toMatch(/^Content-Security-Policy/m);
+    expect(all).toContain('Strict-Transport-Security: max-age=63072000; includeSubDomains');
     expect(all).toContain('X-Content-Type-Options: nosniff');
     expect(all).toContain('Referrer-Policy: strict-origin-when-cross-origin');
+    expect(all).toMatch(/^Permissions-Policy: /m);
   });
 
   it('never lets another site frame the sign-in link pages (a framed "Continue" could be disguised)', () => {

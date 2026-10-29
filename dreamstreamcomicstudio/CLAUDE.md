@@ -166,6 +166,10 @@ Cloudflare account are *not* DreamStream.)
 - **New server dependency?** If it ships native binaries or loads files from its package
   directory at runtime, add it to the `--external:` list *and* the generated
   `package.json` in `Dockerfile.cloudflare`; otherwise esbuild bundles it automatically.
+  The backend runs **Node 22** everywhere (both Dockerfiles, `.nvmrc`, engines, every
+  workflow); a dependency that needs a newer Node fails the `server-boot` job (it boots the
+  bundle on the image's Node, in CI and before every API deploy) and
+  `tests/edge/nodeRuntime.test.ts`, not production.
 
 The Railway MCP (`.mcp.json`) needs an **Account/Team** token (railway.com/account/tokens)
 in `RAILWAY_API_TOKEN` — a Project token (36-char UUID) fails account-level calls.

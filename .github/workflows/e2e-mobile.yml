@@ -57,13 +57,15 @@ jobs:
       QA_WEBKIT: ${{ inputs.webkit && '1' || '' }}
       QA_SCREENSHOTS: ${{ inputs.screenshots && '1' || '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: dreamstreamcomicstudio/package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Install WebKit
@@ -82,7 +84,7 @@ jobs:
           node scripts/layout-smoke.mjs "${args[@]}" "${extra[@]}"
       - name: Upload report and findings
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-mobile-report
           path: |
@@ -94,7 +96,7 @@ jobs:
           retention-days: 14
       - name: Upload screenshot baselines
         if: ${{ always() && inputs.screenshots }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-mobile-baselines
           path: dreamstreamcomicstudio/tests/e2e/__screenshots__

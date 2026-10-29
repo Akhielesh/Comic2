@@ -11,8 +11,17 @@
 #
 # The original `Dockerfile` (+ railway.json) is untouched so the Railway path
 # still works for a future return.
+#
+# Node 22 in BOTH stages, and esbuild targets it: @supabase/supabase-js ≥ 2.118 requires
+# Node ≥ 22 (realtime-js throws at import when Node has no native WebSocket, and the
+# server creates its Supabase client at module load), so on Node 20 every instance would
+# crash-loop. The `server-boot` job (.github/workflows/server-boot.yml →
+# scripts/ci/bootServerBundle.mjs, run by ci.yml and before every rollout by
+# deploy-api-proxy.yml) reads the Node major and the esbuild command from THIS file,
+# bundles the server the same way and boots it on that Node; keep the FROM lines and
+# --target in step (the job fails if they disagree).
 
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
 # --ignore-scripts: skip postinstall downloads of frontend-only native deps.
@@ -20,13 +29,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund && node_modules/.bin/esbuild --version
 COPY . .
 RUN node_modules/.bin/esbuild server/src/index.ts \
-      --bundle --platform=node --format=esm --target=node20 \
+      --bundle --platform=node --format=esm --target=node22 \
       --external:sharp --external:pyodide --external:sql.js \
       --outfile=/out/server.mjs --log-level=warning \
       "--banner:js=import { createRequire as __cr } from 'node:module'; import { fileURLToPath as __fu } from 'node:url'; import { dirname as __dn } from 'node:path'; const require = __cr(import.meta.url); const __filename = __fu(import.meta.url); const __dirname = __dn(__filename);" \
  && node -e "const l=require('./package-lock.json');const v=(p)=>l.packages['node_modules/'+p].version;const r=require('./package.json');require('fs').writeFileSync('/out/package.json',JSON.stringify({name:'dreamstream-backend',version:r.version||'0.0.0',private:true,type:'module',dependencies:{sharp:v('sharp'),pyodide:v('pyodide'),'sql.js':v('sql.js')}},null,2))"
 
-FROM node:20-slim
+FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=8080 \

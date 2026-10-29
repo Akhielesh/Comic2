@@ -376,6 +376,21 @@ All notable user-facing changes. Format loosely follows
   dormant fallback.
 
 ### Security
+- **Account and session protections for the baby monitor (2026-10-28, ADR 0006 Phase 0):** the
+  live server now checks sign-in tokens itself (faster, and a revoked session stops working
+  everywhere), people who turned on two-step verification must use it for nursery actions, and
+  removing a guest ends only that guest's pass (the parents' log says the removed person still
+  knows the link, and a new passcode keeps them out). Ready to switch on once the database update
+  is applied: "there was a new sign-in" emails, every nursery action refusing a signed-out or
+  revoked session, and per-device sign-in tokens for the coming phone and watch apps. Passwords
+  found in known breaches are refused at sign-up.
+- **Stricter browser protections and a newer runtime (2026-10-28, ADR 0006 Phase 0):** Stream
+  Studio pages now send HSTS, nosniff, a strict referrer policy, a permissions policy, COOP and
+  no-framing headers, plus a Content Security Policy in report-only mode (switched to enforced
+  after 48 clean hours; the main app gets a report-only one). Reports go to `/csp-report`, which
+  keeps counts only. `/.well-known/security.txt` says how to report a vulnerability. The backend
+  moved to Node 22 (Node 20 is out of support) with an up-to-date Supabase client, every GitHub
+  Action is pinned to an exact commit, and CI now boots the bundled backend before any deploy.
 - **Relay logins are personal and short-lived (2026-10-23):** the relay that connects phones on
   strict networks now gets its own login per person and room — at most 4 hours for members,
   2 hours for guests and never past their pass — renewed before it runs out (an overnight

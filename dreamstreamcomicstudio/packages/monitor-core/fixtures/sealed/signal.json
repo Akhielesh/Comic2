@@ -1,0 +1,101 @@
+{
+  "about": "sealSignal / openSignal. key = HKDF-SHA256(NMK_e, salt = empty, info = \"sig\", 32); ct = AES-256-GCM(key, iv, UTF-8(plaintext), aad = UTF-8(aad)). Ports encrypt `plaintext` byte for byte (their JSON key order may differ) and must get `sealed.ct`; on open they compare from/to/ts after parsing.",
+  "keyHex": "3e68a0fc8b5288023e67886ad56f6fb69af85106368139961957dc9dc0e8498c",
+  "cases": [
+    {
+      "name": "viewer-offer-to-camera",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "e": 1,
+      "fromDev": "iVdpLzUw2Cgkmr30usGh8Z",
+      "toDev": "Pc-8NnpwUqWczWkTBOEIP5",
+      "ts": 1792609260000,
+      "d": {
+        "sdp": {
+          "type": "offer",
+          "sdp": "v=0\r\no=- 46117317 2 IN IP4 127.0.0.1\r\ns=-\r\na=fingerprint:sha-256 AB:CD:EF\r\n"
+        },
+        "pc": "p1",
+        "vid": "v1",
+        "q": "hd"
+      },
+      "plaintext": "{\"d\":{\"sdp\":{\"type\":\"offer\",\"sdp\":\"v=0\\r\\no=- 46117317 2 IN IP4 127.0.0.1\\r\\ns=-\\r\\na=fingerprint:sha-256 AB:CD:EF\\r\\n\"},\"pc\":\"p1\",\"vid\":\"v1\",\"q\":\"hd\"},\"from\":\"iVdpLzUw2Cgkmr30usGh8Z\",\"to\":\"Pc-8NnpwUqWczWkTBOEIP5\",\"ts\":1792609260000}",
+      "aad": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f|iVdpLzUw2Cgkmr30usGh8Z|Pc-8NnpwUqWczWkTBOEIP5",
+      "sealed": {
+        "e": 1,
+        "iv": "oKGio6Slpqeoqaqr",
+        "ct": "MWegesOdvu-y-CFsMdCB8ar75jZBbTV8QCMS96G27Idwn63kJ7vNGIU6hs0lb9Jt6iCO-Bj4sF3xrhvn9XtO_o1fS-4Y9oNROrkGh97AdiriE6W6n_kfm-WaXEt6yv0i83jWx4tJsj9Gbnd_-zx-KdBGDqHYOiLm9jG5HwqGk7BCyNN3sAr5KQV9iT4JDTWKqfCi-Hnsesz-l_3ORW2NUaWtV7HbGj_3KbUPhcWJk4eTV44D7j6Vmnr1M-Qot3Yc7Zo3lrwxBY3q0x89kSkz0z19Sdl7aBJ5gRo9_kHL08EMnvx2U0gPRqkCz4HX_sxuGNiWO-v_jAWH",
+        "f": "iVdpLzUw2Cgkmr30usGh8Z"
+      }
+    },
+    {
+      "name": "camera-candidates-to-viewer",
+      "nid": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f",
+      "e": 1,
+      "fromDev": "Pc-8NnpwUqWczWkTBOEIP5",
+      "toDev": "iVdpLzUw2Cgkmr30usGh8Z",
+      "ts": 1792609260300,
+      "d": {
+        "ice": {
+          "candidate": "candidate:1 1 udp 2122260223 192.168.1.20 54321 typ host",
+          "sdpMid": "0",
+          "sdpMLineIndex": 0
+        },
+        "pc": "p1"
+      },
+      "plaintext": "{\"d\":{\"ice\":{\"candidate\":\"candidate:1 1 udp 2122260223 192.168.1.20 54321 typ host\",\"sdpMid\":\"0\",\"sdpMLineIndex\":0},\"pc\":\"p1\"},\"from\":\"Pc-8NnpwUqWczWkTBOEIP5\",\"to\":\"iVdpLzUw2Cgkmr30usGh8Z\",\"ts\":1792609260300}",
+      "aad": "7d0c2a8e-5b1f-4c3a-9e6d-1a2b3c4d5e6f|Pc-8NnpwUqWczWkTBOEIP5|iVdpLzUw2Cgkmr30usGh8Z",
+      "sealed": {
+        "e": 1,
+        "iv": "sLGys7S1tre4ubq7",
+        "ct": "OCt--etTYRKfBzA98zb-CmhRHXi-VEOwVPYRg2--u-c5FWeEjKw5SqAhVhhIM7GjFpkML2ueXzGbTmaJOUV5q7PQRRUeDceXOesvhHPNwF04b5_SqnQFLkGPxEpEaw9M5EnXcy0K1faei62Z9oQdnSI9KFbj8NzAqV5q1wgOZHQ41Krsv1Bo1hYhv__T0LioCSGCSXfs_e_sB3VIrkPcyqtKmvn6u5GZJMJlQzG2kp2AeYZfhp6XuouDe6YbMD6skTby5H07dBcFt3JzxSAPEnkCUVlouFJISCqtrjpWfXM",
+        "f": "Pc-8NnpwUqWczWkTBOEIP5"
+      }
+    }
+  ],
+  "reject": [
+    {
+      "name": "addressed-to-someone-else",
+      "sealed": {
+        "e": 1,
+        "iv": "oKGio6Slpqeoqaqr",
+        "ct": "MWegesOdvu-y-CFsMdCB8ar75jZBbTV8QCMS96G27Idwn63kJ7vNGIU6hs0lb9Jt6iCO-Bj4sF3xrhvn9XtO_o1fS-4Y9oNROrkGh97AdiriE6W6n_kfm-WaXEt6yv0i83jWx4tJsj9Gbnd_-zx-KdBGDqHYOiLm9jG5HwqGk7BCyNN3sAr5KQV9iT4JDTWKqfCi-Hnsesz-l_3ORW2NUaWtV7HbGj_3KbUPhcWJk4eTV44D7j6Vmnr1M-Qot3Yc7Zo3lrwxBY3q0x89kSkz0z19Sdl7aBJ5gRo9_kHL08EMnvx2U0gPRqkCz4HX_sxuGNiWO-v_jAWH",
+        "f": "iVdpLzUw2Cgkmr30usGh8Z"
+      },
+      "toDev": "xChXvGvKV1QBh75jW_7Btb",
+      "reason": "auth"
+    },
+    {
+      "name": "sender-relabelled",
+      "sealed": {
+        "e": 1,
+        "iv": "oKGio6Slpqeoqaqr",
+        "ct": "MWegesOdvu-y-CFsMdCB8ar75jZBbTV8QCMS96G27Idwn63kJ7vNGIU6hs0lb9Jt6iCO-Bj4sF3xrhvn9XtO_o1fS-4Y9oNROrkGh97AdiriE6W6n_kfm-WaXEt6yv0i83jWx4tJsj9Gbnd_-zx-KdBGDqHYOiLm9jG5HwqGk7BCyNN3sAr5KQV9iT4JDTWKqfCi-Hnsesz-l_3ORW2NUaWtV7HbGj_3KbUPhcWJk4eTV44D7j6Vmnr1M-Qot3Yc7Zo3lrwxBY3q0x89kSkz0z19Sdl7aBJ5gRo9_kHL08EMnvx2U0gPRqkCz4HX_sxuGNiWO-v_jAWH",
+        "f": "xChXvGvKV1QBh75jW_7Btb"
+      },
+      "toDev": "Pc-8NnpwUqWczWkTBOEIP5",
+      "reason": "auth"
+    },
+    {
+      "name": "ciphertext-flipped",
+      "sealed": {
+        "e": 1,
+        "iv": "oKGio6Slpqeoqaqr",
+        "ct": "MWege8Odvu-y-CFsMdCB8ar75jZBbTV8QCMS96G27Idwn63kJ7vNGIU6hs0lb9Jt6iCO-Bj4sF3xrhvn9XtO_o1fS-4Y9oNROrkGh97AdiriE6W6n_kfm-WaXEt6yv0i83jWx4tJsj9Gbnd_-zx-KdBGDqHYOiLm9jG5HwqGk7BCyNN3sAr5KQV9iT4JDTWKqfCi-Hnsesz-l_3ORW2NUaWtV7HbGj_3KbUPhcWJk4eTV44D7j6Vmnr1M-Qot3Yc7Zo3lrwxBY3q0x89kSkz0z19Sdl7aBJ5gRo9_kHL08EMnvx2U0gPRqkCz4HX_sxuGNiWO-v_jAWH",
+        "f": "iVdpLzUw2Cgkmr30usGh8Z"
+      },
+      "toDev": "Pc-8NnpwUqWczWkTBOEIP5",
+      "reason": "auth"
+    },
+    {
+      "name": "epoch-relabelled",
+      "sealed": {
+        "e": 2,
+        "iv": "oKGio6Slpqeoqaqr",
+        "ct": "MWegesOdvu-y-CFsMdCB8ar75jZBbTV8QCMS96G27Idwn63kJ7vNGIU6hs0lb9Jt6iCO-Bj4sF3xrhvn9XtO_o1fS-4Y9oNROrkGh97AdiriE6W6n_kfm-WaXEt6yv0i83jWx4tJsj9Gbnd_-zx-KdBGDqHYOiLm9jG5HwqGk7BCyNN3sAr5KQV9iT4JDTWKqfCi-Hnsesz-l_3ORW2NUaWtV7HbGj_3KbUPhcWJk4eTV44D7j6Vmnr1M-Qot3Yc7Zo3lrwxBY3q0x89kSkz0z19Sdl7aBJ5gRo9_kHL08EMnvx2U0gPRqkCz4HX_sxuGNiWO-v_jAWH",
+        "f": "iVdpLzUw2Cgkmr30usGh8Z"
+      },
+      "toDev": "Pc-8NnpwUqWczWkTBOEIP5",
+      "reason": "auth"
+    }
+  ]
+}

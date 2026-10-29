@@ -9,6 +9,11 @@
  * Used by the baby monitor to wake parents' phones on a cry even when the
  * monitor tab is closed. Keys are generated once and kept in a Durable Object,
  * so there are no secrets to manage.
+ *
+ * The two primitives are exported for the native push transports (./push/**):
+ * `encryptPayload` seals the end-to-end envelope native apps decrypt (RFC 8291
+ * to a key the device made), and `signJwtES256` signs the APNs provider token
+ * (ADR 0006 D3). The Web Push path itself is unchanged.
  */
 
 export interface VapidKeys {
@@ -38,7 +43,7 @@ export function unb64url(s: string): Uint8Array {
   return out;
 }
 
-function concat(...parts: Uint8Array[]): Uint8Array {
+export function concat(...parts: Uint8Array[]): Uint8Array {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let o = 0;
   for (const p of parts) {
@@ -55,21 +60,43 @@ export async function generateVapidKeys(): Promise<VapidKeys> {
   return { publicKey: b64url(raw as ArrayBuffer), privateJwk: jwk };
 }
 
+/**
+ * A compact ES256 JWT: `b64url(header).b64url(claims).b64url(r‖s)`. The header and
+ * claims are serialised in the order given. `key` is a P-256 private key — a JWK
+ * (VAPID keeps one) or an imported CryptoKey (the APNs .p8, see push/apns.ts).
+ * WebCrypto's ECDSA signature is already the raw r‖s form JWS wants.
+ */
+export async function signJwtES256(header: Record<string, unknown>, claims: Record<string, unknown>, key: JsonWebKey | CryptoKey): Promise<string> {
+  const unsigned = `${b64url(enc.encode(JSON.stringify(header)))}.${b64url(enc.encode(JSON.stringify(claims)))}`;
+  const signer = isCryptoKey(key)
+    ? key
+    : await crypto.subtle.importKey('jwk', { ...key, key_ops: ['sign'] }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, signer, enc.encode(unsigned));
+  return `${unsigned}.${b64url(sig as ArrayBuffer)}`;
+}
+
+function isCryptoKey(k: JsonWebKey | CryptoKey): k is CryptoKey {
+  return typeof (k as CryptoKey).algorithm === 'object' && typeof (k as CryptoKey).type === 'string';
+}
+
 /** `vapid t=…, k=…` for one push service origin. */
 export async function vapidAuthorization(endpoint: string, keys: VapidKeys, subject: string, nowSec = Math.floor(Date.now() / 1000)): Promise<string> {
   const aud = new URL(endpoint).origin;
-  const header = b64url(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
-  const claims = b64url(enc.encode(JSON.stringify({ aud, exp: nowSec + 12 * 3600, sub: subject })));
-  const unsigned = `${header}.${claims}`;
-  const key = await crypto.subtle.importKey('jwk', { ...keys.privateJwk, key_ops: ['sign'] }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(unsigned));
-  return `vapid t=${unsigned}.${b64url(sig as ArrayBuffer)}, k=${keys.publicKey}`;
+  const jwt = await signJwtES256({ typ: 'JWT', alg: 'ES256' }, { aud, exp: nowSec + 12 * 3600, sub: subject }, keys.privateJwk);
+  return `vapid t=${jwt}, k=${keys.publicKey}`;
 }
 
 async function hkdf(salt: Uint8Array, ikm: Uint8Array, info: Uint8Array, bytes: number): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt, info }, key, bytes * 8);
   return new Uint8Array(bits);
+}
+
+/** Pins the sender's ephemeral key and salt — test vectors only (RFC 8291 Appendix A, fixtures). */
+export interface FixedEphemeral {
+  asPrivateJwk: JsonWebKey;
+  asPublicRaw: Uint8Array;
+  salt: Uint8Array;
 }
 
 /**
@@ -80,8 +107,25 @@ export async function encryptPushPayload(
   plaintext: Uint8Array,
   p256dh: string,
   authSecret: string,
-  fixed?: { asPrivateJwk: JsonWebKey; asPublicRaw: Uint8Array; salt: Uint8Array },
+  fixed?: FixedEphemeral,
 ): Promise<Uint8Array> {
+  return encryptPayload(p256dh, authSecret, plaintext, { fixed });
+}
+
+/**
+ * RFC 8291 + RFC 8188 "aes128gcm": one record to the receiver's `p256dh`/`auth`
+ * (base64url). `padTo` (optional) zero-pads the record plaintext to that many bytes
+ * (RFC 8188 §2: delimiter 0x02, then zeros) so the ciphertext length doesn't reveal
+ * which message it is; receivers strip it. Without it the output is exactly what
+ * Web Push has always sent.
+ */
+export async function encryptPayload(
+  p256dh: string,
+  authSecret: string,
+  plaintext: Uint8Array,
+  opts: { fixed?: FixedEphemeral; padTo?: number } = {},
+): Promise<Uint8Array> {
+  const { fixed } = opts;
   const uaPublic = unb64url(p256dh);
   const auth = unb64url(authSecret);
   const uaKey = await crypto.subtle.importKey('raw', uaPublic, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
@@ -107,7 +151,9 @@ export async function encryptPushPayload(
   const nonce = await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
 
   const aesKey = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
-  const padded = concat(plaintext, new Uint8Array([2])); // 0x02 = final record, no padding
+  // 0x02 = final record; then zeros up to `padTo` (none by default).
+  const padLen = Math.max(0, (opts.padTo ?? 0) - plaintext.length - 1);
+  const padded = concat(plaintext, new Uint8Array([2]), new Uint8Array(padLen));
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aesKey, padded));
 
   const rs = new Uint8Array([0, 0, 16, 0]); // record size 4096

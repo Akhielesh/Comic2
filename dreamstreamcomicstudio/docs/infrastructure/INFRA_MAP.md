@@ -170,6 +170,15 @@ follows a path on the same site or, with the switch on, Stream Studio's address
   one `server.mjs`**; only `sharp`, `pyodide` and `sql.js` (native / WASM assets) are installed
   in the runtime stage. ≈450 MB image, ~50 MB of dependencies (vs 1.2 GB for the repo-wide
   `npm ci`), boots in ~1 s at ~90 MB RSS. Runs as the `node` user on port 8080.
+- **Node 22** (`node:22-slim` in both stages, esbuild `--target=node22`), the same major as
+  the Railway `Dockerfile`, `.nvmrc` / `.node-version` (Pages builds), `package.json` engines and
+  every workflow: `@supabase/supabase-js` ≥ 2.118 requires it (on Node 20 realtime-js throws at
+  import and the container crash-loops). The `server-boot` job (`.github/workflows/server-boot.yml`
+  → `scripts/ci/bootServerBundle.mjs`) reads the Node major and the esbuild command from
+  `Dockerfile.cloudflare`, bundles the server the same way, boots it on that Node and waits for
+  `GET /api/health`. `ci.yml` runs it on every PR and push; `deploy-api-proxy.yml` runs it first
+  and only rolls out if it passes. `tests/edge/nodeRuntime.test.ts` keeps the pins in step and
+  checks every locked package's `engines`. To move Node, change all of them in one PR.
 - **Instance:** `basic` (1/4 vCPU, 1 GiB, 4 GB disk), placed near its Durable Object, one instance (the proxy
   always addresses `primary`), `max_instances: 2` for rollouts. `sleepAfter: 15m`.
 - **Env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in D1
@@ -329,7 +338,8 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 - **4 Workers** → GitHub Actions in **root** `.github/workflows/deploy-*.yml`, triggered on
   push to `Dreamstrream-v1` (path-filtered) + `workflow_dispatch`; secrets
   `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`.
-- **CI** (`ci.yml`): PR typecheck + build + tests (fake Supabase env).
+- **CI** (`ci.yml`): PR typecheck + build + tests (fake Supabase env), plus `server-boot`
+  (`server-boot.yml`: the bundled backend boots on the image's Node; the API deploy waits for it).
 - **Scheduled (GitHub cron, not Railway):** root mirrors `refresh-model-catalog` (hourly :30)
   + `probe-nvidia-availability` (daily 06:15).
 
