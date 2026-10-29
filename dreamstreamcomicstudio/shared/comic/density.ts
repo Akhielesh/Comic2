@@ -18,6 +18,9 @@ import { emptyRender, type Box, type ComicDoc, type Line, type Page, type Panel 
 import { estimateMeasure, letteringAspect, letteringSizer, type Measure } from './lettering/layout.js';
 import { resolveLetterStyle, type BubbleShape } from './lettering/style.js';
 import { PANEL_LIMITS } from './panelRules.js';
+// The word budget (the speech oracle) lives in panelRules.ts so the lettering engine can import it without a
+// cycle through this file; re-exported here unchanged.
+export { BALLOON_BASE, WORD_COST, wordBudget } from './panelRules.js';
 import { isKidsAudience } from './safety.js';
 import { estimateWidthForText, normalizeLetteringText } from './textLayout.js';
 
@@ -27,9 +30,6 @@ import { estimateWidthForText, normalizeLetteringText } from './textLayout.js';
  * fit table, or every page reads 15% fuller than the thresholds were measured for.
  */
 export const NEED_SCALE = 1;
-/** Speech-balloon oracle used for word budgets (page fractions). */
-export const BALLOON_BASE = 0.0029;
-export const WORD_COST = 0.0014;
 /** The placer's inset inside a panel (lettering/place.ts PAD): the widest a balloon starts is the panel minus this twice. */
 const PLACE_PAD = 0.012;
 /** Elliptical outlines fill π/4 of their box; boxy ones fill all of it. */
@@ -81,7 +81,7 @@ export function needMeter(doc: ComicDoc, opts: Omit<NeedOptions, 'box'> = {}): N
   return { line, panel: (lines, box) => r4((lines || []).reduce((sum, l) => sum + line(l, box), 0)) };
 }
 
-/** Page area (fraction) one line's balloon needs, stroke and tail included. 0 for an empty line. */
+/** Page area (fraction) one line's balloon needs: its outline area (planLettering geometry; stroke and tail excluded, see NEED_SCALE). 0 for an empty line. */
 export function lineNeed(line: Line, doc: ComicDoc, opts: NeedOptions = {}): number {
   return needMeter(doc, opts).line(line, opts.box);
 }
@@ -109,17 +109,6 @@ export function fitState(fit: number, hard: number = PANEL_LIMITS.fitHard): FitS
   if (fit <= PANEL_LIMITS.fitTarget) return 'fits';
   if (fit <= hard) return 'tight';
   return 'overfull';
-}
-
-/**
- * Words a panel of this area holds in `balloons` balloons at the target fit:
- * ⌊(0.22·area − 0.0029·balloons) / 0.0014⌋, never below 0, capped at 40.
- */
-export function wordBudget(area: number, balloons = 1): number {
-  if (!(area > 0)) return 0;
-  const b = Math.max(1, Math.round(Number.isFinite(balloons) ? balloons : 1));
-  const raw = (PANEL_LIMITS.fitTarget * area - BALLOON_BASE * b) / WORD_COST;
-  return Math.max(0, Math.min(PANEL_LIMITS.wordsCap, Math.floor(raw + 1e-9)));
 }
 
 /** Lettered balloons in a panel (every non-empty line is one balloon or caption box). */

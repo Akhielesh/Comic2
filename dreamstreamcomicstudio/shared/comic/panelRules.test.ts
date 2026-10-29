@@ -7,13 +7,23 @@ import {
   PLAN_POLICY,
   QUIET_SHOTS,
   RECURRING,
+  BALLOON_BASE,
+  WORD_COST,
+  countText,
   minAreaFor,
   pageWords,
   panelCountNote,
   panelCountProblem,
   panelCountRule,
-  panelWords
+  panelWords,
+  revisionPanelLimit,
+  scaledLimit,
+  textBudget,
+  textUnitFor,
+  unitCount,
+  wordBudget
 } from './panelRules';
+import * as density from './density';
 
 const line = (text: string, kind: Line['kind'] = 'speech'): Line => ({ id: `ln_${text.length}_${kind}`, kind, text });
 const panels = (n: number, lines: Line[] = []): Pick<Panel, 'lines'>[] => Array.from({ length: n }, (_, i) => ({ lines: i === 0 ? lines : [] }));
@@ -90,5 +100,64 @@ describe('minAreaFor / words', () => {
     expect(minAreaFor({ shot: 'medium', lines: [] })).toBe(0.15);
     expect(panelWords({ lines: [line('Two words'), line('Three more words', 'caption'), line('BANG', 'sfx')] })).toBe(5);
     expect(pageWords([{ lines: [line('a b')] }, { lines: [line('c')] }])).toBe(3);
+  });
+});
+
+describe('word budget home (no density.ts ↔ lettering/layout.ts cycle)', () => {
+  it('wordBudget and its oracle live in panelRules and density re-exports the very same bindings', () => {
+    expect(density.wordBudget).toBe(wordBudget);
+    expect(density.BALLOON_BASE).toBe(BALLOON_BASE);
+    expect(density.WORD_COST).toBe(WORD_COST);
+    expect([0.084, 0.144, 0.221, 0.451].map((a) => wordBudget(a))).toEqual([11, 20, 32, 40]);
+  });
+});
+
+describe('text units (Japanese and Chinese count characters)', () => {
+  // Synthetic lines (no production text).
+  const JA_27 = 'この荷台にはナンバーがない。朝から誰も降ろしていない。'; // 27 non-space characters
+  const ZH = '你好，世界';
+
+  it('counts graphemes for char-unit languages and scales the English limits by perLine ÷ 25', () => {
+    const ja = textUnitFor('ja');
+    expect(ja).toMatchObject({ unit: 'chars', noun: 'character', k: 1.6 });
+    expect(textUnitFor('zh-Hans')).toMatchObject({ unit: 'chars', k: 1.2 });
+    expect(textUnitFor('en')).toMatchObject({ unit: 'words', noun: 'word', k: 1 });
+    expect(textUnitFor(undefined)).toMatchObject({ unit: 'words', k: 1 });
+    expect(countText(JA_27, ja)).toBe(27);
+    expect(countText('朝 から', ja)).toBe(3); // whitespace is not a character on the page
+    expect(countText(ZH, textUnitFor('zh-Hans'))).toBe(5);
+    expect(countText(JA_27)).toBe(1); // the English word count sees one "word" — the bug the unit fixes
+    expect(scaledLimit(PANEL_LIMITS.quietShotMaxWords, ja)).toBe(19);
+    expect(scaledLimit(PANEL_LIMITS.fastSequenceWords)).toBe(12);
+    expect(textBudget(0.084, 1, ja)).toBe(17);
+    expect(textBudget(0.451, 1, ja)).toBe(64);
+    expect(textBudget(0.221)).toBe(32);
+    expect(unitCount(1, ja)).toBe('1 character');
+    expect(unitCount(29)).toBe('29 words');
+    expect(panelWords({ lines: [line(JA_27), line('ドン', 'sfx')] }, ja)).toBe(27);
+  });
+
+  it('the fast-sequence exception binds in characters: 5 Japanese panels with 27 characters are flagged', () => {
+    const auto = { kind: 'comic' as const, panelsPerPage: 'auto' as const };
+    const ja = textUnitFor('ja');
+    // Before units: one "word" on the page, so 5 panels always passed.
+    expect(panelCountProblem(auto, panels(5, [line(JA_27)]))).toBeUndefined();
+    expect(panelCountProblem(auto, panels(5, [line(JA_27)]), { unit: ja })).toMatchObject({ max: 4, words: 27, fastWords: 19 });
+    expect(panelCountProblem(auto, panels(5, [line('走れ！')]), { unit: ja })).toBeUndefined();
+    expect(pageWords([{ lines: [line(JA_27)] }, { lines: [line('走れ！')] }], ja)).toBe(30);
+  });
+});
+
+describe('revisionPanelLimit (PD-2: the storybook clamp is for new pages)', () => {
+  it('lets an existing storybook page keep up to its own count, never above the format', () => {
+    const story4 = { kind: 'storybook' as const, panelsPerPage: 4 };
+    expect(revisionPanelLimit(story4)).toBe(3);
+    expect(revisionPanelLimit(story4, 2)).toBe(3);
+    expect(revisionPanelLimit(story4, 4)).toBe(4);
+    expect(revisionPanelLimit(story4, 7)).toBe(4);
+    expect(revisionPanelLimit({ kind: 'comic', panelsPerPage: 4 }, 6)).toBe(4); // no clamp: the author's count holds
+    expect(panelCountProblem(story4, panels(4), { existing: 4 })).toBeUndefined();
+    expect(panelCountProblem(story4, panels(5), { existing: 4 })).toMatchObject({ max: 4 });
+    expect(panelCountProblem(story4, panels(4))).toMatchObject({ max: 3 }); // a new page is still clamped
   });
 });
