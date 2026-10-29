@@ -35,6 +35,7 @@ import {
   runAction,
   runFeatureAction,
   sanitizePatchOps,
+  spendActionIsByok,
   spendIsByok,
   startAction,
   suggestNextSteps,
@@ -2035,6 +2036,24 @@ describe('own Gemini key beside the platform OpenRouter key', () => {
     expect(images.calls).toHaveLength(1);
     expect(session.doc.cover.render.status).toBe('ready');
     expect(session.doc.conversation.at(-1)?.text).not.toMatch(/used all of your DreamStream usage/);
+  });
+
+  it('an approval re-prices like with like: the page re-check on the vision (text) route’s key, a drawing on its model’s route', async () => {
+    const doc = onePage(plannedDoc());
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'p1.webp', source: 'generated', at: 1 }, qc: { score: 0.9, issues: [], checkedAt: 1 } };
+    const session = newSession(doc);
+    const ctx = testContext(session, { keys: OWN_GEMINI });
+    const recheck: SpendAction = { type: 'recheck_page', pageId: 'pg_1' };
+    // Text routes are OpenRouter-first: this user's re-check runs on the platform key; their cover on their own Gemini key.
+    expect(resolveTextRoute('vision', OWN_GEMINI)?.key.byok).toBe(false);
+    expect(spendActionIsByok(session.doc, recheck, OWN_GEMINI)).toBe(false);
+    expect(spendActionIsByok(session.doc, { type: 'render_cover' }, OWN_GEMINI)).toBe(true);
+    const gated = await startAction(ctx, recheck, { confirmed: false, forceGate: 'policy' });
+    expect(gated.outcome.status).toBe('gated');
+    const gate = session.doc.gate!;
+    // The approval's re-estimate is the gate's own quote (platform price with the markup), not the own-key price.
+    expect(estimateSpendAction(session.doc, gate.action as SpendAction, spendActionIsByok(session.doc, gate.action as SpendAction, OWN_GEMINI)).usd).toBe(gate.estimateUsd);
+    expect(gate.estimateUsd).toBeCloseTo(estimateSpendAction(session.doc, recheck, false).usd, 6);
   });
 
   it('governed caps: an OpenRouter-only override is still refused (platform key), while Pro on their own Gemini key draws', async () => {

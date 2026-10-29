@@ -328,6 +328,14 @@ export const spendIsByok = (keys: StudioKeys): boolean =>
 const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
   imageRouteFor(modelLabel(doc, describeSpend(doc, action).kind).spec, keys)?.byok ?? spendIsByok(keys);
 
+/**
+ * BYOK-ness of a spend action for the key that will run it — what its gate was quoted with, so an approval
+ * re-prices like with like: the page re-check is one vision TEXT call (startRecheck prices it on the vision
+ * route's key; text routes are OpenRouter-first), everything else is an image drawn on its model's route.
+ */
+export const spendActionIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
+  action.type === 'recheck_page' ? (resolveTextRoute('vision', keys)?.key.byok ?? spendIsByok(keys)) : imageSpendIsByok(doc, action, keys);
+
 /** Spend in the same unit as estimates: provider cost, plus platform markup unless BYOK. */
 const chargedUsd = (providerUsd: number, byok: boolean) => round4(Math.max(0, providerUsd) * (byok ? 1 : PLATFORM_MARKUP));
 
@@ -837,7 +845,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, imageSpendIsByok(doc, gate.action, ctx.keys));
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys));
   const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
