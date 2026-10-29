@@ -940,12 +940,12 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
         </div>
       )}
 
-      {readingMode && (!phoneUi || chromeHidden) && (
-        // The reading mode's way out: always on screen while the chrome is away (the bar's own toggle takes over
-        // when the chrome is showing).
+      {((readingMode && (!phoneUi || chromeHidden)) || (nativeFullscreen && phoneUi && chromeHidden)) && (
+        // The way out of full screen (the reading mode, or native full screen on a phone): always on screen while the
+        // chrome is away (the bar's own toggle takes over when the chrome is showing).
         <button
           type="button"
-          onClick={exitReadingMode}
+          onClick={toggleFullscreen}
           aria-label="Exit full screen"
           className="absolute z-40 inline-flex h-11 min-w-[44px] items-center justify-center gap-1.5 rounded-full bg-black/60 px-3 text-[13px] font-semibold text-white backdrop-blur-md hover:bg-black/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
           style={{ top: 'calc(var(--sa-top) + 8px)', right: 'calc(var(--sa-right) + 8px)' }}

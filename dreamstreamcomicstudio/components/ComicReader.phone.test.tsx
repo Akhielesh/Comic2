@@ -262,6 +262,25 @@ describe('Full screen always does something', () => {
     expect(screen.getByRole('button', { name: 'Full' })).toBeInTheDocument();
   });
 
+  it('native full screen on a phone: the chrome steps aside, and a 44 px Exit stays on screen', () => {
+    setPhone(true);
+    (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(() => Promise.resolve());
+    const exit = vi.fn(() => Promise.resolve());
+    (document as unknown as Record<string, unknown>).exitFullscreen = exit;
+    renderReader();
+    fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { value: reader(), configurable: true });
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+    expect(reader()).toHaveAttribute('data-chrome', 'hidden');
+    const pill = screen.getByRole('button', { name: 'Exit full screen' });
+    expect(pill.className).toMatch(/\bh-11\b/);
+    fireEvent.click(pill);
+    expect(exit).toHaveBeenCalledTimes(1);
+    delete (document as unknown as Record<string, unknown>).exitFullscreen;
+  });
+
   it('desktop without the API: reading mode hides header, toolbar and footer; Esc leaves the reading mode, not the comic', () => {
     setPhone(false);
     const p = renderReader();
