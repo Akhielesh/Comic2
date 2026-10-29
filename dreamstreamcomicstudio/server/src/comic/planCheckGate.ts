@@ -4,9 +4,13 @@
 //
 // Pure: no I/O, no clock, no money. The decision itself lives in shared/comic/pagePlanCheck.ts (splitHeldBack),
 // so the breakdown card's quote (summarizeBook / quoteRenderPages with `holdBack`) and the server's run agree.
-// Wiring (K1): jobs.ts render_pages calls planCheckGate on its targets before the quote and the run.
+// Scope (plan §4.1): the gate is for "Render all" only. Wiring (K1): jobs.ts render_pages calls planCheckGate on
+// its targets before the quote and the run ONLY when the action names no pageIds and is not forced; explicit
+// single-page draws and forced new takes pass through unchanged (the user priced and approved that page). As a
+// second guard, a drawn, current page (or a busy one) is never held back here either — the same set summarizeBook
+// exempts.
 
-import type { ComicDoc } from '../../../shared/comic/doc.js';
+import type { ComicDoc, Page } from '../../../shared/comic/doc.js';
 import { splitHeldBack, type HeldBackPage } from '../../../shared/comic/pagePlanCheck.js';
 
 export type { HeldBackPage } from '../../../shared/comic/pagePlanCheck.js';
@@ -50,11 +54,17 @@ export function sanitizeDrawOverfull(raw: unknown, doc: Pick<ComicDoc, 'pages'>)
 
 /**
  * Split the pages a run would draw into the ones it draws and the overfull ones it holds back. Pages listed in
- * `drawOverfull` are drawn as planned. Unknown ids pass through (the caller's own target logic drops them).
+ * `drawOverfull` are drawn as planned, and so are drawn, current pages (a forced new take) and pages
+ * `opts.exempt` names. Unknown ids pass through (the caller's own target logic drops them).
  */
-export function planCheckGate(doc: ComicDoc, pageIds: string[], drawOverfull?: readonly string[]): PlanGateResult {
+export function planCheckGate(
+  doc: ComicDoc,
+  pageIds: string[],
+  drawOverfull?: readonly string[],
+  opts: { exempt?: (page: Page) => boolean } = {}
+): PlanGateResult {
   const anyway = sanitizeDrawOverfull(drawOverfull ?? [], doc);
-  const { draw, heldBack } = splitHeldBack(doc, Array.isArray(pageIds) ? pageIds : [], anyway);
+  const { draw, heldBack } = splitHeldBack(doc, Array.isArray(pageIds) ? pageIds : [], anyway, { exempt: opts.exempt });
   const notice = heldBackNotice(heldBack);
   return { pageIds: draw, heldBack, ...(notice ? { notice } : {}) };
 }

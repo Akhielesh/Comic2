@@ -10,11 +10,23 @@
 // Pure and shared: the writer's validator, the render gate (planCheckGate), the breakdown card, the editor and
 // the director all read the same verdict. Costs $0 (CPU only, milliseconds per page).
 
-import type { Box, ComicDoc, Page, PanelSize } from './doc.js';
-import { balloonCount, boxArea, fitState, hardFitLimit, needMeter, panelFit, wordBudget, type FitState, type NeedMeter } from './density.js';
+import { isPageStale, type Box, type ComicDoc, type Page, type PanelSize } from './doc.js';
+import { balloonCount, boxArea, fitState, hardFitLimit, needMeter, panelFit, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect, type Measure } from './lettering/layout.js';
 import { estimatePanelBoxes, layoutPanelCount, panelBoxesFor, parseLayout } from './pageGeometry.js';
-import { minAreaFor, PANEL_LIMITS, PLAN_POLICY, QUIET_SHOTS, panelCountProblem, panelWords } from './panelRules.js';
+import {
+  minAreaFor,
+  PANEL_LIMITS,
+  panelCountProblem,
+  panelCountRule,
+  panelWords,
+  PLAN_POLICY,
+  QUIET_SHOTS,
+  scaledLimit,
+  textBudget,
+  textUnitFor,
+  unitCount
+} from './panelRules.js';
 
 export interface PanelFitCheck {
   /** 1-based reading order. */
@@ -28,10 +40,10 @@ export interface PanelFitCheck {
   /** need ÷ area. */
   fit: number;
   state: FitState;
-  /** Words in balloons and captions (sound effects excluded). */
+  /** Words in balloons and captions (sound effects excluded); characters for Japanese and Chinese (`unit`). */
   words: number;
   balloons: number;
-  /** Words this panel holds at the target fit with its balloon count. */
+  /** What this panel holds at the target fit with its balloon count, in the same unit as `words`. */
   budget: number;
   /** The smallest area this panel should have (0.15, or 0.08 for a silent insert or close-up). */
   minArea: number;
@@ -73,6 +85,8 @@ export interface PagePlanCheck {
   worstPanel?: number;
   /** The overfull line used (0.25 for children's books, else 0.30). */
   hard: number;
+  /** What `words` and `budget` count: words, or characters for Japanese and Chinese (lineLengthRule). */
+  unit: 'words' | 'chars';
   panels: PanelFitCheck[];
   issues: PlanIssue[];
   /** Overfull pages only: the blueprint that fits, when one exists. */
@@ -88,11 +102,15 @@ export interface PlanCheckOptions {
   meter?: NeedMeter;
   /** Look for a layout that fits when the page is overfull (default true). */
   fixLayout?: boolean;
+  /** Re-planning an existing page that had this many panels: under a storybook clamp (new pages only, PD-2) it
+   *  may keep up to its own count. */
+  existingPanels?: number;
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const pct = (area: number) => `${Math.max(1, Math.round(area * 100))}% of the page`;
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const nounOf = (unit: PagePlanCheck['unit'] | undefined) => (unit === 'chars' ? 'character' : 'word');
 const BIG_SIZES: ReadonlySet<PanelSize> = new Set<PanelSize>(['wide', 'large', 'tall', 'splash']);
 /** A box at least this wide spans the page (the content width is 0.96). */
 const FULL_WIDTH = 0.9;
@@ -111,6 +129,7 @@ const sizeWord = (area: number): string => (area < 0.11 ? 'small' : area < 0.2 ?
 export function checkPagePlan(doc: ComicDoc, page: Page, opts: PlanCheckOptions = {}): PagePlanCheck {
   const meter = meterFor(doc, page, opts);
   const hard = hardFitLimit(doc);
+  const unit = textUnitFor(doc.format.language);
   const boxes = opts.boxes && opts.boxes.length === page.panels.length ? opts.boxes : planBoxes(doc, page);
   const panels: PanelFitCheck[] = page.panels.map((panel, i) => {
     const box = boxes[i] ?? { x: 0, y: 0, w: 1, h: 1 };
@@ -126,9 +145,9 @@ export function checkPagePlan(doc: ComicDoc, page: Page, opts: PlanCheckOptions 
       need,
       fit,
       state: fitState(fit, hard),
-      words: panelWords(panel),
+      words: panelWords(panel, unit),
       balloons,
-      budget: wordBudget(area, Math.max(1, balloons)),
+      budget: textBudget(area, Math.max(1, balloons), unit),
       minArea: minAreaFor(panel)
     };
   });
@@ -140,18 +159,20 @@ export function checkPagePlan(doc: ComicDoc, page: Page, opts: PlanCheckOptions 
       worstPanel = p.n;
     }
   }
-  const check: PagePlanCheck = { pageId: page.id, n: page.n, state: fitState(worst, hard), worst: r4(worst), hard, panels, issues: [] };
+  const check: PagePlanCheck = { pageId: page.id, n: page.n, state: fitState(worst, hard), worst: r4(worst), hard, unit: unit.unit, panels, issues: [] };
   if (worstPanel !== undefined) check.worstPanel = worstPanel;
   const label = `Page ${page.n}`;
 
-  const count = panelCountProblem(doc.format, page.panels);
+  const count = panelCountProblem(doc.format, page.panels, { unit, existing: opts.existingPanels });
   if (count) {
     const rule = count.rule;
     const text =
       rule.exact !== undefined
-        ? `${label} has ${page.panels.length} panels; plan exactly ${rule.exact}${rule.clampedFrom !== undefined ? ` (storybook pages hold at most ${PANEL_LIMITS.storybookMax})` : ''}.`
+        ? count.max > rule.exact
+          ? `${label} has ${page.panels.length} panels; keep at most ${count.max} (a page planned before the ${PANEL_LIMITS.storybookMax}-panel storybook limit keeps up to its own count).`
+          : `${label} has ${page.panels.length} panels; plan exactly ${rule.exact}${rule.clampedFrom !== undefined ? ` (storybook pages hold at most ${PANEL_LIMITS.storybookMax})` : ''}.`
         : rule.fast
-          ? `${label} has ${page.panels.length} panels; plan ${rule.min}–${rule.max} big panels (usually ${rule.typical}). ${rule.fast.panels} only for a fast, nearly silent sequence of ${rule.fast.maxWords} words or fewer on the page — combine moments or move one to another page.`
+          ? `${label} has ${page.panels.length} panels; plan ${rule.min}–${rule.max} big panels (usually ${rule.typical}). ${rule.fast.panels} only for a fast, nearly silent sequence of ${unitCount(count.fastWords ?? scaledLimit(rule.fast.maxWords, unit), unit)} or fewer on the page — combine moments or move one to another page.`
           : `${label} has ${page.panels.length} panels; plan ${rule.min}–${rule.max} (usually ${rule.typical}) — combine moments or move one to another page.`;
     check.issues.push({ kind: 'count', severity: 'repair', text });
   }
@@ -168,22 +189,23 @@ export function checkPagePlan(doc: ComicDoc, page: Page, opts: PlanCheckOptions 
       severity: fix ? 'note' : 'repair',
       panel: p.n,
       text: fix
-        ? `${label}, panel ${p.n}: ${plural(p.words, 'word')} in a ${sizeWord(p.area)} panel (${pct(p.area)}; ${holds}). This layout fits it: ${fix.layout}`
-        : `${label}, panel ${p.n}: ${plural(p.words, 'word')} in a ${sizeWord(p.area)} panel (${pct(p.area)}; ${holds}) — give it a full-width row, ${move}, or trim it.`
+        ? `${label}, panel ${p.n}: ${unitCount(p.words, unit)} in a ${sizeWord(p.area)} panel (${pct(p.area)}; ${holds}). This layout fits it: ${fix.layout}`
+        : `${label}, panel ${p.n}: ${unitCount(p.words, unit)} in a ${sizeWord(p.area)} panel (${pct(p.area)}; ${holds}) — give it a full-width row, ${move}, or trim it.`
     });
   }
 
+  const quietMax = scaledLimit(PANEL_LIMITS.quietShotMaxWords, unit);
   page.panels.forEach((panel, i) => {
     if (!QUIET_SHOTS.has(panel.shot)) return;
     const lines = balloonCount(panel);
-    const words = panelWords(panel);
-    if (lines <= PANEL_LIMITS.quietShotMaxLines && words <= PANEL_LIMITS.quietShotMaxWords) return;
+    const words = panels[i].words;
+    if (lines <= PANEL_LIMITS.quietShotMaxLines && words <= quietMax) return;
     const shot = panel.shot === 'pov' ? 'a point-of-view' : 'an insert';
     check.issues.push({
       kind: 'quiet_shot',
       severity: 'repair',
       panel: i + 1,
-      text: `${label}, panel ${i + 1} is ${shot} shot with ${plural(lines, 'line')} (${plural(words, 'word')}); a pov or insert panel carries at most ${PANEL_LIMITS.quietShotMaxLines} line of ${PANEL_LIMITS.quietShotMaxWords} words or fewer — move the conversation to a panel that shows the speakers.`
+      text: `${label}, panel ${i + 1} is ${shot} shot with ${plural(lines, 'line')} (${unitCount(words, unit)}); a pov or insert panel carries at most ${PANEL_LIMITS.quietShotMaxLines} line of ${unitCount(quietMax, unit)} or fewer — move the conversation to a panel that shows the speakers.`
     });
   });
 
@@ -364,10 +386,12 @@ const isSplashPage = (page: Pick<Page, 'panels' | 'layout'>): boolean =>
 
 /**
  * The splash rule over a run of pages in reading order: at most one splash page per `splashEvery` pages, never two
- * in a row (comics and manga; storybooks, strips and webtoons are exempt). One repair issue per offending page.
+ * in a row (comics and manga; storybooks, strips and webtoons are exempt, and so is a format fixed at one panel per
+ * page — the author chose single-panel pages). One repair issue per offending page.
  */
 export function splashIssues(doc: Pick<ComicDoc, 'format'>, pages: Pick<Page, 'id' | 'n' | 'panels' | 'layout'>[]): { pageId: string; issue: PlanIssue }[] {
   if (doc.format.kind !== 'comic' && doc.format.kind !== 'manga') return [];
+  if (panelCountRule(doc.format).exact === 1) return [];
   const out: { pageId: string; issue: PlanIssue }[] = [];
   let last: Pick<Page, 'n'> | undefined;
   for (const page of [...pages].sort((a, b) => a.n - b.n)) {
@@ -432,15 +456,28 @@ export interface HeldBackPage {
 }
 
 /**
+ * Can the hold-back apply to this page? Only to a page "Render all" would draw: one with panels that is not busy
+ * and is undrawn, failed or stale (plan.ts pageTargets without force). A drawn, current page — reachable only by a
+ * forced new take the user priced and approved — and a queued or rendering page are never held back, the same set
+ * summarizeBook exempts.
+ */
+export function holdBackApplies(doc: ComicDoc, page: Page): boolean {
+  const status = page.render?.status;
+  if (!page.panels.length || status === 'queued' || status === 'rendering') return false;
+  return status !== 'ready' || isPageStale(doc, page);
+}
+
+/**
  * Split the pages about to be drawn into the ones to draw and the overfull ones held back (decision PD-1: held
  * back from "Render all" with free fixes and "Draw anyway"; never refused). `drawOverfull` lists pages the
- * user chose to draw anyway. Unknown ids pass through untouched. Order is kept.
+ * user chose to draw anyway. Pages the hold-back does not apply to (holdBackApplies: drawn and current, or busy)
+ * and pages `opts.exempt` names pass through. Unknown ids pass through untouched. Order is kept.
  */
 export function splitHeldBack(
   doc: ComicDoc,
   pageIds: string[],
   drawOverfull: readonly string[] = [],
-  opts: { meter?: NeedMeter; fixLayout?: boolean } = {}
+  opts: { meter?: NeedMeter; fixLayout?: boolean; exempt?: (page: Page) => boolean } = {}
 ): { draw: string[]; heldBack: HeldBackPage[] } {
   const ids = Array.isArray(pageIds) ? pageIds.filter((id): id is string => typeof id === 'string') : [];
   if (!PLAN_POLICY.holdBackOverfull) return { draw: [...ids], heldBack: [] };
@@ -451,7 +488,7 @@ export function splitHeldBack(
   const heldBack: HeldBackPage[] = [];
   for (const id of ids) {
     const page = byId.get(id);
-    if (!page || anyway.has(id) || !page.panels.length) {
+    if (!page || anyway.has(id) || !holdBackApplies(doc, page) || opts.exempt?.(page)) {
       draw.push(id);
       continue;
     }
@@ -470,7 +507,7 @@ export function heldBackOf(check: PagePlanCheck): HeldBackPage {
   const p = check.panels[(check.worstPanel ?? 1) - 1];
   const fixes = [check.layoutFix ? 'use the layout that fits' : '', 'split the page', 'move a line', 'make it a caption'].filter(Boolean).join(', ');
   const text = p
-    ? `Page ${check.n} is held back: panel ${p.n} has ${plural(p.words, 'word')} in ${pct(p.area)} (it holds about ${p.budget}). Free fixes: ${fixes} — or draw it anyway.`
+    ? `Page ${check.n} is held back: panel ${p.n} has ${plural(p.words, nounOf(check.unit))} in ${pct(p.area)} (it holds about ${p.budget}). Free fixes: ${fixes} — or draw it anyway.`
     : `Page ${check.n} is held back: too much text for its panels. Free fixes: ${fixes} — or draw it anyway.`;
   return {
     pageId: check.pageId,
@@ -490,7 +527,7 @@ export function panelBudgetSentence(doc: ComicDoc, page: Page, panelIndex: numbe
   const check = checkPagePlan(doc, page, { fixLayout: false, boxes: panelBoxesFor(doc, page) });
   const p = check.panels[panelIndex];
   if (!p) return undefined;
-  const base = `That makes panel ${p.n} about ${plural(p.words, 'word')}; it holds about ${p.budget}.`;
+  const base = `That makes panel ${p.n} about ${plural(p.words, nounOf(check.unit))}; it holds about ${p.budget}.`;
   return p.state === 'overfull' ? `${base} That's too much text for this panel.` : base;
 }
 

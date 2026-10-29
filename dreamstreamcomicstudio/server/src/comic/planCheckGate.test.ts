@@ -83,6 +83,19 @@ describe('planCheckGate', () => {
     expect(sanitizeDrawOverfull(undefined, doc)).toEqual([]);
   });
 
+  it('never holds back a forced new take of a drawn, current page (the user priced and approved it); a stale page still is', () => {
+    const drawn = overfull(1);
+    drawn.render = { status: 'ready', history: [], asset: { path: 'u/x/p1.webp', source: 'generated', at: 1 } };
+    const stale = overfull(2);
+    stale.render = { status: 'ready', history: [], specHash: 'an-older-plan', asset: { path: 'u/x/p2.webp', source: 'generated', at: 1 } };
+    const doc = docOf(drawn, stale, overfull(3));
+    const gate = planCheckGate(doc, ['pg_1', 'pg_2', 'pg_3']);
+    expect(gate.pageIds).toEqual(['pg_1']);
+    expect(gate.heldBack.map((h) => h.pageId)).toEqual(['pg_2', 'pg_3']);
+    // A caller may exempt more pages (e.g. an explicit single-page draw), and they pass through unchanged.
+    expect(planCheckGate(doc, ['pg_2', 'pg_3'], [], { exempt: (p) => p.id === 'pg_3' })).toMatchObject({ pageIds: ['pg_3'] });
+  });
+
   it('says nothing when nothing is held back; never mentions money', () => {
     expect(heldBackNotice([])).toBeUndefined();
     const gate = planCheckGate(docOf(overfull(1)), ['pg_1']);

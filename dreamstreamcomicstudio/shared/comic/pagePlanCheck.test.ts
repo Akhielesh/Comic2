@@ -3,7 +3,7 @@
 // cell) — no production text.
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Line, type Page, type Panel } from './doc';
-import { candidateLayouts, checkBookPlan, checkPagePlan, chooseLayout, heldBackOf, panelBudgetSentence, planBoxes, splitHeldBack } from './pagePlanCheck';
+import { candidateLayouts, checkBookPlan, checkPagePlan, chooseLayout, heldBackOf, holdBackApplies, panelBudgetSentence, planBoxes, splashIssues, splitHeldBack } from './pagePlanCheck';
 import { parseLayout, layoutPanelCount } from './pageGeometry';
 
 const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight'.split(' ');
@@ -202,5 +202,99 @@ describe('splitHeldBack / heldBackOf / panelBudgetSentence', () => {
     const boxes = drawn.panels.map((_, i) => (i === 5 ? { x: 0.02, y: 0.5, w: 0.96, h: 0.48 } : { x: 0.02, y: 0.02 + i * 0.08, w: 0.3, h: 0.07 }));
     drawn.render = { status: 'ready', history: [], qc: { model: 'x', score: 1, issues: [], checkedAt: 1, panelBoxes: boxes } } as Page['render'];
     expect(panelBudgetSentence(docWith(drawn), drawn, 5)).toBe('That makes panel 6 about 29 words; it holds about 40.');
+  });
+});
+
+describe('splash rule — a format fixed at one panel per page', () => {
+  it('raises nothing when the author chose single-panel pages, while auto comics keep the rule', () => {
+    const one = (n: number): Page => ({ ...p2Shaped(), id: `pg_${n}`, n, layout: 'One full-page splash panel.', panels: [panel(1, { size: 'splash', shot: 'wide' })] });
+    const pages = [one(1), one(2), one(3)];
+    const fixed = docWith(...pages);
+    fixed.format.panelsPerPage = 1;
+    expect(splashIssues(fixed, pages)).toEqual([]);
+    expect(checkBookPlan(fixed).flatMap((c) => c.issues.filter((i) => i.severity === 'repair'))).toEqual([]);
+    const manga = docWith(...pages);
+    manga.format.kind = 'manga';
+    manga.format.panelsPerPage = 1;
+    expect(splashIssues(manga, pages)).toEqual([]);
+    const auto = docWith(...pages);
+    expect(splashIssues(auto, pages).map((s) => s.pageId)).toEqual(['pg_2', 'pg_3']);
+    const two = docWith(...pages);
+    two.format.panelsPerPage = 2; // a fixed count above 1 keeps the rule for its splash pages
+    expect(splashIssues(two, pages)).toHaveLength(2);
+  });
+});
+
+describe('char-unit languages (Japanese): counts, limits and sentences in characters', () => {
+  // Synthetic Japanese lines (no production text).
+  const JA = ['この荷台にはナンバーがない。', '朝から誰も降ろしていない。', '誰かが見張らせたいんだ。', '今夜はずっと見ていよう。'];
+  const ja = (id: string, i: number, who = 'c_meera'): Line => ({ id, kind: 'speech', speakerId: who, text: JA[i] });
+
+  it('a pov panel with one 27-character line breaks the quiet-shot limit (19 characters), said in characters', () => {
+    const page: Page = {
+      ...p2Shaped(),
+      layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+      panels: [
+        panel(1, { size: 'wide', shot: 'establishing' }),
+        panel(2, { shot: 'pov', castIds: ['c_kal'], lines: [{ id: 'j1', kind: 'speech', speakerId: 'c_meera', text: JA[0] + JA[1] }] }),
+        panel(3, { castIds: ['c_kal'] })
+      ]
+    };
+    const doc = docWith(page);
+    doc.format.language = 'ja';
+    const check = checkPagePlan(doc, page);
+    expect(check.unit).toBe('chars');
+    expect(check.panels[1].words).toBe(27);
+    const quiet = check.issues.find((i) => i.kind === 'quiet_shot')!;
+    expect(quiet).toMatchObject({ severity: 'repair', panel: 2 });
+    expect(quiet.text).toBe(
+      'Page 2, panel 2 is a point-of-view shot with 1 line (27 characters); a pov or insert panel carries at most 1 line of 19 characters or fewer — move the conversation to a panel that shows the speakers.'
+    );
+    // The same page in English counting would have seen one "word" and passed.
+    expect(checkPagePlan({ ...doc, format: { ...doc.format, language: 'en' } }, page).issues.some((i) => i.kind === 'quiet_shot')).toBe(false);
+  });
+
+  it('5 panels carrying 40 characters is not a "nearly silent" fast sequence; held-back and budget sentences say characters', () => {
+    const page: Page = {
+      ...p2Shaped(),
+      layout: 'Row 1: two equal panels. Row 2: one wide panel. Row 3: two equal panels.',
+      panels: [panel(1, { lines: [ja('a', 0)] }), panel(2, { lines: [ja('b', 1)] }), panel(3, { size: 'wide' }), panel(4, {}), panel(5, {})]
+    };
+    const doc = docWith(page);
+    doc.format.language = 'ja';
+    const count = checkPagePlan(doc, page).issues.find((i) => i.kind === 'count')!;
+    expect(count.text).toContain('5 only for a fast, nearly silent sequence of 19 characters or fewer on the page');
+
+    // A crowded small Japanese panel: the held-back sentence and the director's budget line count characters.
+    const crowded = p2Shaped();
+    crowded.panels[5] = { ...crowded.panels[5], lines: [ja('c', 0), ja('d', 1, 'c_kal'), ja('e', 2), ja('f', 3, 'c_kal')].slice(0, 3) };
+    const jdoc = docWith(crowded);
+    jdoc.format.language = 'ja';
+    const c = checkPagePlan(jdoc, crowded);
+    expect(c.panels[5].words).toBe(14 + 13 + 12);
+    expect(c.panels[5].budget).toBe(Math.floor(c.panels[5].budget)); // whole characters
+    if (c.state === 'overfull') {
+      const held = heldBackOf(c);
+      expect(held.text).toMatch(/^Page 2 is held back: panel \d has \d+ characters in \d+% of the page \(it holds about \d+\)/);
+    }
+    expect(panelBudgetSentence(jdoc, crowded, 5)).toMatch(/^That makes panel 6 about 39 characters; it holds about \d+\./);
+  });
+});
+
+describe('hold-back scope: only pages "Render all" would draw', () => {
+  it('never holds back a drawn, current page (a forced new take) or a busy one; a stale one is held back; exempt pages pass', () => {
+    const current = p2Shaped();
+    current.render = { status: 'ready', history: [], asset: { path: 'u/x/p2.webp', source: 'generated', at: 1 } };
+    const stale = { ...p2Shaped(), id: 'pg_3', n: 3 };
+    stale.render = { status: 'ready', history: [], specHash: 'an-older-plan', asset: { path: 'u/x/p3.webp', source: 'generated', at: 1 } };
+    const busy = { ...p2Shaped(), id: 'pg_4', n: 4 };
+    busy.render = { status: 'rendering', history: [] };
+    const fresh = { ...p2Shaped(), id: 'pg_5', n: 5 };
+    const doc = docWith(current, stale, busy, fresh);
+    expect([current, stale, busy, fresh].map((p) => holdBackApplies(doc, p))).toEqual([false, true, false, true]);
+    const split = splitHeldBack(doc, ['pg_2', 'pg_3', 'pg_4', 'pg_5']);
+    expect(split.draw).toEqual(['pg_2', 'pg_4']);
+    expect(split.heldBack.map((h) => h.pageId)).toEqual(['pg_3', 'pg_5']);
+    expect(splitHeldBack(doc, ['pg_3', 'pg_5'], [], { exempt: (p) => p.id === 'pg_5' }).draw).toEqual(['pg_5']);
   });
 });
