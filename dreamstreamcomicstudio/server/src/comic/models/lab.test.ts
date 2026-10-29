@@ -20,6 +20,7 @@ import {
   labItems,
   labPrompt,
   labRunFromDb,
+  firstAnswerCopy,
   oneCallTransport,
   quoteLabItem,
   type BlindPairView,
@@ -259,7 +260,7 @@ describe('running a check', () => {
     expect(JSON.stringify([h.store.runs, h.store.imageCalls, answer])).not.toContain('sk-or-platform-test');
   });
 
-  it('one provider call per click: a 429 is not retried, the text-only nudge and the Images-API → chat fallback are stopped before they leave', async () => {
+  it('one provider call per click: a 429 is not retried, the text-only nudge is stopped before it leaves, and a 404 on /images is the only call (no chat fallback exists)', async () => {
     const h = harness();
     h.setScript(() => new Response(JSON.stringify({ error: { message: 'Provider returned error', metadata: { provider_name: 'Google AI Studio' } } }), { status: 429 }));
     const limited = (await runItem(h, 'd1-nano-banana-2.1-4k')).run as LabRunView;
@@ -368,6 +369,15 @@ describe('running a check', () => {
     expect(sent).toEqual([]);
     expect(t.capture).toMatchObject({ calls: 0, stopped: 2, skippedTransport: '/chat/completions' });
     expect(t.capture.endpoint).toBeUndefined();
+    // The answer names what the lab saw, never a chat fallback the studio no longer has (models.md §3.4 item 8).
+    expect(firstAnswerCopy(t.capture)).toEqual({
+      code: 'IMAGES_API_SKIPPED',
+      message: "This check tests OpenRouter's Images API, but the transport tried /chat/completions instead, so the lab stopped the call before it was sent. Nothing was charged."
+    });
+    expect(firstAnswerCopy({ calls: 1, stopped: 1, endpoint: '/images', status: 405 })).toEqual({
+      code: 'IMAGES_API_UNAVAILABLE',
+      message: "OpenRouter's Images API answered 405 for this model. The transport tried a second call, and the lab stopped it before it was sent."
+    });
   });
 
   it('the transport wrapper itself: the first POST goes out, a second is refused unsent, GET downloads pass', async () => {

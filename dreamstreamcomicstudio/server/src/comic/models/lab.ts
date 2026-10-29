@@ -14,9 +14,10 @@
 //     outside the registry, the dated number from models.md §1.1 / §2.6 with that label. No quote → no run.
 //   * Nothing runs without an explicit click whose request carries `ack: true` and the quote it showed; a changed
 //     price answers QUOTE_CHANGED with the new number instead of spending.
-//   * One provider call per click. The studio's own transport (imageClient.ts, unchanged) normally retries a 429,
-//     nudges a text-only answer and falls back from the Images API to chat; here its network is wrapped so the first
-//     provider POST goes out and any second one is stopped before it leaves the server. The result says so.
+//   * One provider call per click. The studio's own transport (imageClient.ts, unchanged) normally retries a 429 and
+//     nudges a text-only answer (an Images-API model never falls back to chat: models.md §3.4 item 8); here its
+//     network is wrapped so the first provider POST goes out and any second one is stopped before it leaves the
+//     server. The result says so.
 //   * One idempotency key per click: a repeated submit returns the stored result and never calls again.
 //   * A hard cap of $2 per UTC day, enforced on the server before any call: the quote is reserved atomically with the
 //     key (server/sql/comic_model_lab.sql comic_model_lab_reserve), a running call holds its quote, a finished one
@@ -417,8 +418,9 @@ export interface ProviderCapture {
   networkError?: string;
   /** Downloading an image the provider hosted (a GET, not a provider call) failed after a paid answer. */
   downloadFailed?: boolean;
-  /** The check requires one endpoint, and the transport's first POST was headed elsewhere (e.g. the studio skipping
-   *  OpenRouter's Images API for 15 minutes after a 404): that endpoint. Nothing was sent (`calls` stays 0). */
+  /** The check requires one endpoint, and the transport's first POST was headed elsewhere: that endpoint. Nothing was
+   *  sent (`calls` stays 0). A guard only: the studio never sends an Images-API model anywhere but /images
+   *  (models.md §3.4 item 8), and inside its 15-minute skip after a 404/405 it sends nothing at all. */
   skippedTransport?: string;
 }
 
@@ -468,8 +470,7 @@ const endpointOf = (url: string): string =>
 /**
  * Wrap the network the image transport uses so exactly ONE provider call leaves the server. The first POST goes out
  * (its answer is read once and handed back, so nothing is fetched twice); any later POST — a 429 retry, the
- * text-only nudge, the Images-API → chat fallback, the other route — is stopped with a marked error before it is
- * sent. Every POST counts, whatever its host: the image transport only ever POSTs to a provider. GETs (downloading
+ * text-only nudge, the other route — is stopped with a marked error before it is sent. Every POST counts, whatever its host: the image transport only ever POSTs to a provider. GETs (downloading
  * an image the provider hosted) are not provider calls and pass through.
  * With `requirePath`, a first POST to any other endpoint is stopped unsent too (and so is everything after it): a
  * check that tests one transport is never paid through another.
@@ -1141,8 +1142,8 @@ const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16);
 
 /**
  * A D2 item whose Images API answered 404/405 in the last 15 minutes: say so before the click. Not a refusal — the
- * transport's skip lives in this process only (a restart clears it), and the one-call guard stops a skipped click
- * unsent anyway — but the owner should know a click now may come back "not sent".
+ * transport's skip lives in this process only (a restart clears it), and inside it the transport itself refuses a
+ * click unsent — but the owner should know a click now may come back "not sent".
  */
 const imagesApiSkipNote = (item: LabItem, runs: LabRunRow[], now: number): string | undefined => {
   if (item.transport !== '/images') return undefined;
@@ -1171,12 +1172,15 @@ const factsView = (f: LabResultFacts): LabFactsView => {
 };
 
 /** The provider's first answer, in words, when the lab stopped the transport's second attempt — or, for a check tied
- *  to one endpoint, why its only call was stopped before it was sent (nothing reached the provider). */
-const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string } => {
+ *  to one endpoint, why its only call was stopped before it was sent (nothing reached the provider). The studio
+ *  never sends an Images-API model to chat (models.md §3.4 item 8): a 404/405 on /images ends the transport's attempt
+ *  and its 15-minute skip refuses unsent, both answered in callOnce. The two Images-API branches here are guards for
+ *  a transport that ever tried a second call or another endpoint, and they say only what the lab saw. */
+export const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string } => {
   if (cap.skippedTransport !== undefined) {
     return {
       code: 'IMAGES_API_SKIPPED',
-      message: `Our transport is skipping OpenRouter's Images API for this model for up to 15 minutes after its last 404 or 405, so the lab didn't send this D2 call to chat. ${NOTHING_CHARGED}`
+      message: `This check tests OpenRouter's Images API, but the transport tried ${cap.skippedTransport} instead, so the lab stopped the call before it was sent. ${NOTHING_CHARGED}`
     };
   }
   const stop = ' The studio would try once more; the lab stops after one call.';
@@ -1185,7 +1189,7 @@ const firstAnswerCopy = (cap: ProviderCapture): { code: string; message: string 
   const status = cap.status ?? 0;
   if (status >= 200 && status < 300) return { code: 'NO_IMAGE', message: `The model answered without a picture.${stop}` };
   if ((status === 404 || status === 405) && cap.endpoint === '/images') {
-    return { code: 'IMAGES_API_UNAVAILABLE', message: `OpenRouter's Images API answered ${status} for this model. The studio would fall back to its chat route; the lab stops after one call.` };
+    return { code: 'IMAGES_API_UNAVAILABLE', message: `OpenRouter's Images API answered ${status} for this model. The transport tried a second call, and the lab stopped it before it was sent.` };
   }
   const classified = classifyImageError(Object.assign(new Error(cap.said || `HTTP ${status}`), { status }), { route: 'openrouter', byok: false });
   return { code: classified.code, message: `${classified.userMessage}${classified.retryable ? stop : ''}` };
