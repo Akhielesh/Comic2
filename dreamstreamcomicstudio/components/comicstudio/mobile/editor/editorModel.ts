@@ -164,6 +164,24 @@ const findLine = (doc: ComicDoc, pageId: string, lineId: string): Line | undefin
   return undefined;
 };
 
+/** The source's stored balloon of a line (undefined for a software-placed line). */
+const storedBalloon = (doc: ComicDoc, pageId: string, lineId: string): Balloon | undefined =>
+  doc.pages.find((p) => p.id === pageId)?.balloons.find((b) => b.lineId === lineId);
+
+/**
+ * The shared keys this patch CHANGES against the stored source balloon (every present one for a line
+ * with none). Ops that send the whole balloon (Reset position, Tail on) carry the stored z / linkTo /
+ * locked unchanged — that is not the user asking to restack, lock or link.
+ */
+const sharedChanges = (patch: Partial<Balloon>, src: Balloon | undefined): Partial<Balloon> => {
+  const out: Partial<Balloon> = {};
+  for (const k of SHARED_BALLOON_KEYS) {
+    if (!(k in patch) || patch[k] === src?.[k]) continue;
+    (out as Record<string, unknown>)[k] = patch[k];
+  }
+  return out;
+};
+
 const geometryOf = (patch: Partial<Balloon>): BalloonGeometryOverride => {
   const out: BalloonGeometryOverride = {};
   for (const k of GEOMETRY_KEYS) {
@@ -187,12 +205,18 @@ export function translationEditOp(doc: ComicDoc, lang: string, pageId: string, l
 
 /**
  * Rewrite lettering ops made on an edition's view so they land in that edition:
- *  - `balloon` geometry (x, y, w, tail, pinned: a drag, a nudge, "Keep here") → `edition_balloon`;
- *  - a `balloon` change to a SHARED key (stacking `z`, `locked`, `linkTo`) is the user's whole intent:
- *    it goes to the shared source balloon when that is stored, and is dropped (counted) when it is not —
- *    inventing a default source balloon would move the original. Geometry riding along with it (the full
- *    resolved balloon `balloonOp` carries for a software-placed line, Lock's implied pin) is NEVER written
- *    into the edition: that would freeze the balloon there as a side effect (bug hunt LE-3);
+ *  - "Link to previous" (a `balloon` op that CHANGES `linkTo`) drops the whole batch, counted: the
+ *    connector belongs to the original, like Unlink below — and the batch's pin of the previous balloon
+ *    must not freeze that balloon in the edition either;
+ *  - `balloon` geometry (x, y, w, tail, pinned: a drag, a nudge, "Keep here", Reset position, Tail on)
+ *    → `edition_balloon`;
+ *  - a `balloon` that CHANGES a SHARED key (stacking `z`, `locked`) is the user's whole intent: it goes to
+ *    the shared source balloon when that is stored, and is dropped (counted) when it is not — inventing a
+ *    default source balloon would move the original. Geometry riding along with it (the full resolved
+ *    balloon `balloonOp` carries for a software-placed line, Lock's implied pin) is NEVER written into the
+ *    edition: that would freeze the balloon there as a side effect (bug hunt LE-3). A shared key that is
+ *    merely carried with its stored value (Reset position and Tail on send the whole balloon) is no
+ *    intent: the geometry is the change, and it lands in the edition;
  *  - `balloons` (a whole-page replace) → one `edition_balloon` per balloon whose geometry differs from what
  *    the edition draws now (Tidy on this language). A replace that only changes shared keys (Unlink) moves
  *    nothing and is counted as dropped, so the editor says the connector belongs to the original (LE-4);
@@ -201,21 +225,26 @@ export function translationEditOp(doc: ComicDoc, lang: string, pageId: string, l
  *  - `line_style` / `letter_style` pass through: style is shared by every language.
  */
 export function editionOps(ops: readonly DocOp[], lang: string, sourceDoc: ComicDoc, now = Date.now()): { ops: DocOp[]; dropped: number } {
+  // "Link to previous": the connector belongs to the original (as Unlink does). Nothing of the batch is
+  // written — not the link on the original, not the previous balloon's pin into this edition.
+  if (ops.some((o) => o.op === 'balloon' && !!o.patch && 'linkTo' in sharedChanges(o.patch, storedBalloon(sourceDoc, o.pageId, o.lineId)))) return { ops: [], dropped: 1 };
   const out: DocOp[] = [];
   let dropped = 0;
   for (const op of ops) {
     switch (op.op) {
       case 'balloon': {
         const patch = op.patch || {};
-        const shared: Partial<Balloon> = {};
-        for (const k of SHARED_BALLOON_KEYS) if (k in patch) (shared as Record<string, unknown>)[k] = (patch as Record<string, unknown>)[k];
+        const src = storedBalloon(sourceDoc, op.pageId, op.lineId);
+        const shared = sharedChanges(patch, src);
         if (Object.keys(shared).length) {
-          const stored = sourceDoc.pages.find((p) => p.id === op.pageId)?.balloons.some((b) => b.lineId === op.lineId);
-          if (stored) out.push({ op: 'balloon', pageId: op.pageId, lineId: op.lineId, patch: shared });
+          if (src) out.push({ op: 'balloon', pageId: op.pageId, lineId: op.lineId, patch: shared });
           else dropped += 1;
           break;
         }
         const geo = geometryOf(patch);
+        // Shared keys carried at their stored values with no position, size or tail (Lock on a balloon
+        // that is already locked: only its implied pin is left) move nothing in this edition.
+        if (SHARED_BALLOON_KEYS.some((k) => k in patch) && !GEOMETRY_KEYS.some((k) => k in geo)) break;
         if (Object.keys(geo).length) out.push({ op: 'edition_balloon', lang, lineId: op.lineId, patch: geo });
         else dropped += 1;
         break;

@@ -13,7 +13,7 @@ import { applyOps } from '../../../../shared/comic/ops';
 import { i18nOf, lineSourceHash } from '../../../../shared/comic/i18n';
 import { estimateMeasure, planLettering } from '../../../../shared/comic/lettering/layout';
 import { resolvePlacements } from '../../lettering/useLetterPlans';
-import { linkOps, lockOps, tidyOps, zOrderOps } from '../../lettering/styleOps';
+import { linkOps, lockOps, resetPositionOps, tailToggleOps, tidyOps, zOrderOps } from '../../lettering/styleOps';
 import { SAMPLE_NOW, makeSampleDoc } from '../../board/__fixtures__/sampleDoc';
 import { editionOps, editionViewDoc } from './editorModel';
 
@@ -128,5 +128,93 @@ describe('editionOps: Unlink and Tidy in an edition (LE-4)', () => {
       expect(!prev || prev.x !== op.patch.x || prev.y !== op.patch.y || prev.w !== op.patch.w).toBe(true);
     }
     expect(applyOps(doc, r.ops).pages[0].balloons).toEqual(doc.pages[0].balloons);
+  });
+});
+
+describe('editionOps: whole-balloon ops carry the stored shared keys unchanged — they still move the balloon here', () => {
+  const sourceOps = (ops: readonly DocOp[]) => ops.filter((o) => o.op === 'balloon');
+
+  it('"Reset position" on a stored balloon that was brought to front (z: 5) re-places it in the edition, and writes nothing to the original', () => {
+    const { doc, vDoc, page } = setup((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l1' ? { ...b, z: 5, x: 0.6, y: 0.7 } : b));
+    });
+    const ops = resetPositionOps(vDoc, page, ['pg_1_l1'], ASPECT, estimateMeasure);
+    expect(ops).toHaveLength(1);
+    // The placer hands back the whole balloon, the stored z included…
+    expect(ops[0].op === 'balloon' && ops[0].patch?.z).toBe(5);
+    const r = editionOps(ops, 'te', doc);
+    expect(r.dropped).toBe(0);
+    // …which is no restack: only the edition's position is written, unpinned (it follows the placer again).
+    expect(sourceOps(r.ops)).toEqual([]);
+    const written = editionBalloons(r.ops);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatchObject({ op: 'edition_balloon', lang: 'te', lineId: 'pg_1_l1', patch: { pinned: false } });
+    const p = (written[0] as Extract<DocOp, { op: 'edition_balloon' }>).patch!;
+    expect(typeof p.x === 'number' && typeof p.y === 'number' && typeof p.w === 'number').toBe(true);
+    expect('z' in p).toBe(false);
+    expect(applyOps(doc, r.ops).pages[0].balloons).toEqual(doc.pages[0].balloons);
+  });
+
+  it('"Reset position" on a stored balloon that carries a connector re-places it here and keeps the connector untouched', () => {
+    const { doc, vDoc, page } = setup((d) => {
+      d.pages[0].balloons.push({ lineId: 'pg_1_l4', x: 0.5, y: 0.6, w: 0.2, linkTo: 'pg_1_l3' });
+    });
+    const ops = resetPositionOps(vDoc, page, ['pg_1_l4'], ASPECT, estimateMeasure);
+    expect(ops[0].op === 'balloon' && ops[0].patch?.linkTo).toBe('pg_1_l3');
+    const r = editionOps(ops, 'te', doc);
+    expect(r.dropped).toBe(0);
+    expect(sourceOps(r.ops)).toEqual([]);
+    expect(editionBalloons(r.ops)).toHaveLength(1);
+    expect(editionBalloons(r.ops)[0]).toMatchObject({ lineId: 'pg_1_l4', patch: { pinned: false } });
+  });
+
+  it('"Tail on" for a stored caption with a connector and a stacking order gives it a tail tip in the edition', () => {
+    const { doc, vDoc, page, placements } = setup((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l1' ? { ...b, z: 7, linkTo: 'pg_1_l2' } : b));
+    });
+    const ops = tailToggleOps(vDoc, page, ['pg_1_l1'], true, placements.balloons, 1000 / ASPECT);
+    const tip = ops.find((o) => o.op === 'balloon');
+    expect(tip && tip.op === 'balloon' && tip.patch?.linkTo).toBe('pg_1_l2');
+    const r = editionOps(ops, 'te', doc);
+    expect(r.dropped).toBe(0);
+    // The tail style is shared (every language draws a tail)…
+    expect(r.ops.filter((o) => o.op === 'line_style')).toHaveLength(1);
+    // …and the tip lands in this edition; the original's balloon is not rewritten.
+    expect(sourceOps(r.ops)).toEqual([]);
+    const written = editionBalloons(r.ops);
+    expect(written).toHaveLength(1);
+    const p = (written[0] as Extract<DocOp, { op: 'edition_balloon' }>).patch!;
+    expect(typeof p.tailX).toBe('number');
+    expect(typeof p.tailY).toBe('number');
+    expect(i18nOf(applyOps(doc, r.ops)).editions.te.balloons.pg_1_l1).toMatchObject({ tailX: p.tailX, tailY: p.tailY });
+  });
+
+  it('"Lock" on a stored balloon that is already locked moves nothing (its implied pin alone is no edition move)', () => {
+    const { doc, page, placements } = setup((d) => {
+      d.pages[0].balloons = d.pages[0].balloons.map((b) => (b.lineId === 'pg_1_l1' ? { ...b, locked: true } : b));
+    });
+    expect(editionOps(lockOps(page, ['pg_1_l1'], true, placements.balloons), 'te', doc)).toEqual({ ops: [], dropped: 0 });
+  });
+});
+
+describe('editionOps: "Link to previous" in an edition belongs to the original', () => {
+  it('drops the whole batch: no connector on the original, and the previous (software-placed) balloon is not pinned here', () => {
+    const { doc, page, placements } = setup();
+    expect(doc.pages[0].balloons.some((b) => b.lineId === 'pg_1_l4')).toBe(false);
+    const ops = linkOps(page, 'pg_1_l5', true, placements.balloons);
+    // The batch pins pg_1_l4 (software-placed) and links pg_1_l5 to it.
+    expect(ops.map((o) => (o.op === 'balloon' ? o.lineId : o.op))).toEqual(['pg_1_l4', 'pg_1_l5']);
+    const r = editionOps(ops, 'te', doc);
+    expect(r).toEqual({ ops: [], dropped: 1 });
+    const after = applyOps(doc, r.ops);
+    expect(i18nOf(after).editions.te.balloons.pg_1_l4).toBeUndefined();
+    expect(after.pages[0].balloons.find((b) => b.lineId === 'pg_1_l5')?.linkTo).toBeUndefined();
+  });
+
+  it('linking two stored balloons is dropped too, as Unlink is (the connector is shared by every language)', () => {
+    const { doc, page, placements } = setup((d) => d.pages[0].balloons.push({ lineId: 'pg_1_l4', x: 0.5, y: 0.6, w: 0.2 }));
+    const link = linkOps(page, 'pg_1_l5', true, placements.balloons);
+    expect(link).toEqual([{ op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l5', patch: { linkTo: 'pg_1_l4' } }]);
+    expect(editionOps(link, 'te', doc)).toEqual({ ops: [], dropped: 1 });
   });
 });
