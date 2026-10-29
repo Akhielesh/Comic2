@@ -253,12 +253,19 @@ describe('network (no timers; AT-8)', () => {
   it('one catalog request and one status request when it opens; an hour later, still none more', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'Date', 'requestAnimationFrame', 'cancelAnimationFrame'] });
     vi.setSystemTime(NOW);
+    // The comic's model reads as DOWN: useModelStatus re-checks every minute while a watched model is in trouble,
+    // so only the picker's read-once status (poll: false) keeps this at one request.
+    __setStatusFetcherForTests(async (ids) => {
+      statusFetches.push([...ids]);
+      return ids.map((id) => (id === 'nano-banana-2.1' ? { ...okHealth(id), state: 'down' as const } : okHealth(id)));
+    });
     const doc = lakeDoc();
     const { rerender } = render(<ModelPicker open onClose={() => undefined} doc={doc} caps={PAID} byok={false} mode="easy" onPick={() => undefined} />);
     await act(async () => undefined);
     expect(catalogFetch).toHaveBeenCalledTimes(1);
     expect(catalogFetch).toHaveBeenCalledWith('proj_lake');
     expect(statusFetches).toHaveLength(1);
+    expect(statusFetches[0]).toContain('nano-banana-2.1');
     await act(async () => {
       vi.advanceTimersByTime(60 * 60_000);
     });
