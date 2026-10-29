@@ -26,6 +26,7 @@ import type {
 import type { FitReason } from '../../../shared/comic/modelLock';
 import { IMAGE_MODELS, type ImageModelSpec } from '../../../shared/comic/models';
 import { PRICE_UNPUBLISHED, fromPriceList } from './copy';
+import { QC_SERVED_MAX_USD, type ServedCatalogRow } from './priceBook';
 
 export const MODEL_CATALOG_PATH = '/api/comic/models/catalog';
 export const modelDetailPath = (id: string) => `/api/comic/models/${encodeURIComponent(id)}`;
@@ -125,8 +126,8 @@ const asFit = (v: unknown): FitReason | undefined => {
   return t ? { code: v.code as FitReason['code'], severity: v.severity, text: t } : undefined;
 };
 
-/** A well-formed catalog row, or undefined. Pure. */
-export const asCatalogRow = (v: unknown): ModelCatalogRow | undefined => {
+/** A well-formed catalog row (with the served QC per page when present and sane), or undefined. Pure. */
+export const asCatalogRow = (v: unknown): ServedCatalogRow | undefined => {
   if (!isObject(v)) return undefined;
   const id = typeof v.id === 'string' && ID_RE.test(v.id) ? v.id : undefined;
   const nickname = text(v.nickname, 80);
@@ -152,6 +153,7 @@ export const asCatalogRow = (v: unknown): ModelCatalogRow | undefined => {
       ? { currentId: pvc.currentId, ratio, res: pvc.res as Resolution }
       : undefined;
   const perRef = v.perRefUsd === null ? null : num(v.perRefUsd);
+  const qc = num(v.qcUsd);
   return {
     id,
     nickname,
@@ -171,7 +173,8 @@ export const asCatalogRow = (v: unknown): ModelCatalogRow | undefined => {
     ...(priceVsCurrent ? { priceVsCurrent } : {}),
     fetchedAt,
     stale: v.stale === true,
-    ...(typeof v.qualityStale === 'boolean' ? { qualityStale: v.qualityStale } : {})
+    ...(typeof v.qualityStale === 'boolean' ? { qualityStale: v.qualityStale } : {}),
+    ...(qc !== undefined && qc >= 0 && qc <= QC_SERVED_MAX_USD ? { qcUsd: qc } : {})
   };
 };
 

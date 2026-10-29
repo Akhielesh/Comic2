@@ -38,6 +38,12 @@ describe('asCatalogRow', () => {
     expect(row).not.toHaveProperty('extra');
   });
 
+  it('keeps the QC per page the server serves (qcUsd) when it is sane, and drops it otherwise', () => {
+    expect(asCatalogRow({ ...catalogRows()[0], qcUsd: 0.0049 })).toMatchObject({ qcUsd: 0.0049 });
+    expect(asCatalogRow({ ...catalogRows()[0], qcUsd: 0 })).toMatchObject({ qcUsd: 0 });
+    for (const bad of [-0.001, 5, 'x', null, Number.NaN]) expect(asCatalogRow({ ...catalogRows()[0], qcUsd: bad })).not.toHaveProperty('qcUsd');
+  });
+
   it('a detail keeps its facts and history', () => {
     const d = asCatalogDetail({
       ...catalogRows()[1],

@@ -6,8 +6,9 @@
 //   2. reference cost (perRefUsd × refs) is added to the LIST basis only;
 //   3. observed median (n ≥ 3, the user's own before the platform's) of page/sheet/cover calls;
 //   4. unit = max(list + refs, observed) — never under-quotes; null = no basis at all ("can't price yet").
-// QC is the default per-page figure (the rows carry no QC medians; the server may use its observed QC at n ≥ 5,
-// a fraction of a cent, well inside the re-quote tolerance).
+// QC per page: the figure the server's own PriceBook uses (its observed QC median at n ≥ 5, else QC_USD_PER_PAGE)
+// when the catalog serves it on its rows (`qcUsd`, see ServedCatalogRow), else QC_USD_PER_PAGE — so a quote the
+// user agrees to equals the server's recomputation instead of sitting a fraction of a cent per page under it.
 //
 // `basis` labels never name a dollar amount, so they are safe to show to a governed user as they are
 // ("Prices: OpenRouter, 5 min ago"); the dollar detail (observed range, list figure) is worded by the caller
@@ -21,6 +22,23 @@ import { ago, asOfCouldntRefresh, fromPriceList } from './copy';
 
 /** Observed medians are used from this many calls (models.md §2.3 step 2). */
 export const OBSERVED_MIN_N = 3;
+/** Sanity ceiling for a served QC figure (a vision check costs fractions of a cent; anything above is not QC). */
+export const QC_SERVED_MAX_USD = 0.1;
+
+/**
+ * A catalog row as GET /api/comic/models/catalog may serve it: the shared wire row plus `qcUsd`, the QC per page
+ * the server's PriceBook uses for this user (AMENDMENT queued: `ModelCatalogRow.qcUsd?: number`).
+ */
+export type ServedCatalogRow = ModelCatalogRow & { qcUsd?: number };
+
+/** The QC per page the catalog served (the first well-formed `qcUsd` on the rows), or undefined. */
+export const servedQcUsd = (rows: readonly ModelCatalogRow[] | null | undefined): number | undefined => {
+  for (const r of rows ?? []) {
+    const q = (r as ServedCatalogRow).qcUsd;
+    if (isNum(q) && q >= 0 && q <= QC_SERVED_MAX_USD) return q;
+  }
+  return undefined;
+};
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -69,8 +87,10 @@ const liveLabel = (row: ModelCatalogRow, now: number): string => {
   return row.stale ? `OpenRouter ${asOfCouldntRefresh(when)}` : `OpenRouter, ${when}`;
 };
 
-export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefined, opts: { now?: number } = {}): ClientPriceBook => {
+export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefined, opts: { now?: number; qcUsd?: number } = {}): ClientPriceBook => {
   const now = opts.now ?? Date.now();
+  // QC per page: an explicit figure, else the server's (served on the rows), else the default.
+  const qcUsd = isNum(opts.qcUsd) && opts.qcUsd >= 0 ? opts.qcUsd : servedQcUsd(rows) ?? QC_USD_PER_PAGE;
   const byId = new Map((rows ?? []).map((r) => [r.id, r] as const));
   const rowFor = (modelId: string) => byId.get(getImageModel(modelId)?.id ?? modelId) ?? byId.get(modelId);
 
@@ -141,11 +161,11 @@ export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefi
       const q = quote(modelId, res, kind, refs);
       return { usd: q.usd, basis: q.label };
     },
-    qcUsd: QC_USD_PER_PAGE,
+    qcUsd,
     quote,
     pagePrice: (modelId, res, byok) => {
       const q = quote(modelId, res, 'page');
-      return q.usd === null ? null : round4((q.usd + QC_USD_PER_PAGE) * (byok ? 1 : PLATFORM_MARKUP));
+      return q.usd === null ? null : round4((q.usd + qcUsd) * (byok ? 1 : PLATFORM_MARKUP));
     },
     row: rowFor
   };

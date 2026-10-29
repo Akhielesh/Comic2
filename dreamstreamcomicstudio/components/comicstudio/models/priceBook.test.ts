@@ -71,6 +71,24 @@ describe('clientPriceBook', () => {
     expect(redrawQuote(standard, 'gpt-image-2.5', 'pages_cover', book, false).usd).toBeNull();
   });
 
+  it('uses the QC per page the server serves, so the confirm quote equals the server’s (§3.5 Example 1, observed QC)', () => {
+    const doc = lakeDoc();
+    // The server's PriceBook quotes QC at the observed median ($0.0049, n = 7) and serves it on the catalog rows.
+    const served = catalogRows().map((r) => ({ ...r, qcUsd: 0.0049 }));
+    const book = clientPriceBook(served, { now: NOW });
+    expect(book.qcUsd).toBe(0.0049);
+    // 6 × 0.1344 + 5 × 0.0049 = $0.83 (BYOK); × 1.3 = $1.08 (§3.5). The server recomputes with the same shared
+    // redrawQuote (models.md §3.4 item 7.7), which rounds each line: 0.9054 + 0.1747 = 1.0801.
+    expect(redrawQuote(doc, 'nano-banana-pro', 'pages_cover', book, true).usd).toBe(0.8309);
+    expect(redrawQuote(doc, 'nano-banana-pro', 'pages_cover', book, false).usd).toBe(1.0801);
+    expect(book.pagePrice('nano-banana-2.1', '1K', true)).toBe(0.0385); // 0.0336 + 0.0049
+    // Without a served figure (or a malformed one): the default.
+    expect(clientPriceBook(catalogRows(), { now: NOW }).qcUsd).toBe(QC_USD_PER_PAGE);
+    expect(clientPriceBook(catalogRows().map((r) => ({ ...r, qcUsd: -1 })), { now: NOW }).qcUsd).toBe(QC_USD_PER_PAGE);
+    // An explicit figure wins.
+    expect(clientPriceBook(served, { now: NOW, qcUsd: 0.004 }).qcUsd).toBe(0.004);
+  });
+
   it('the registry rows give the same prices as the registry fallback', () => {
     const book = clientPriceBook(registryCatalogRows(), { now: NOW });
     expect(book.quote('nano-banana-pro', '2K', 'page')).toMatchObject({ usd: 0.1344, source: 'registry' });

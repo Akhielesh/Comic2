@@ -105,6 +105,14 @@ describe('C — after the lock', () => {
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
+  it('quotes QC at the figure the server serves, so the quote sent equals the server’s recomputation', async () => {
+    const { act: send } = open({ rows: catalogRows().map((r) => ({ ...r, qcUsd: 0.0049 })) });
+    expect(priceOf('pages_cover')).toBe('≈$1.08');
+    fireEvent.click(radio(/Redraw the pages and cover/));
+    await act(async () => fireEvent.click(primary()));
+    expect(send).toHaveBeenCalledWith({ type: 'change_image_model', modelId: 'nano-banana-pro', redraw: 'pages_cover', quotedUsd: 1.0801, ack: true });
+  });
+
   it('"keep" switches for free', async () => {
     const { act: send } = open();
     await act(async () => fireEvent.click(primary()));
