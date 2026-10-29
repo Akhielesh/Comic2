@@ -74,7 +74,8 @@ import {
   type StyleBible,
   type VersionMeta
 } from '../../../shared/comic/doc.js';
-import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, layoutFixOps, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import { checkPagePlan } from '../../../shared/comic/pagePlanCheck.js';
 import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHealth.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
@@ -129,7 +130,7 @@ import { recordImageCall } from './billing.js';
 import { planCheckGate, sanitizeDrawOverfull, type HeldBackPage, type PlanGateResult } from './planCheckGate.js';
 import { identityNoticesEnabled, qcNoticeFor } from './qcNotice.js';
 import { LAYOUT_REFERENCE_PATH, layoutGuideEnabled, tryRenderPageLayoutGuide, type LayoutGuideImage } from './panelize/wireframe.js';
-import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
+import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
 import { estimateTextCostUsd, resolveTextRoute } from './textModels.js';
@@ -706,22 +707,55 @@ export const drawTargets = (doc: ComicDoc, action: RenderPagesAction): Page[] =>
 };
 
 /**
- * Fix chips for held-back pages, free first: "Use the layout that fits" (a free page patch; the page is not drawn
- * or is out of date already, so nothing goes falsely stale) and "Draw page N anyway" (that page alone, at its quote).
+ * The free "Use the layout that fits" fix for a held-back page, applied the way the writer's validator applies it
+ * (shared ops.layoutFixOps: the blueprint plus panel sizes that agree with it), or null. It is offered only when the
+ * page prompt would really draw that blueprint (prompts.ts effectiveLayout rejects a layout whose sizes contradict it
+ * and falls back to the old one) AND the page is no longer overfull on it — a fix that lets the gate through while the
+ * page is drawn on the old, cramped layout would be a paid surprise. The page is undrawn or out of date already, so
+ * nothing goes falsely stale.
  */
-const heldBackFixes = (doc: ComicDoc, heldBack: HeldBackPage[], byok: boolean, prices?: PriceBook): NoticeFix[] => {
+export const heldBackLayoutFixOps = (doc: ComicDoc, pageId: string, layout: string | undefined): DocOp[] | null => {
+  const page = findPage(doc, pageId);
+  if (!page || !layout) return null;
+  const ops = layoutFixOps(doc, page, layout);
+  if (!ops.length) return null;
+  const fitted = ops.reduce(applyOp, doc);
+  const fittedPage = findPage(fitted, pageId);
+  if (!fittedPage || effectiveLayout(fittedPage, fitted.format) !== fittedPage.layout) return null;
+  return checkPagePlan(fitted, fittedPage, { fixLayout: false }).state === 'overfull' ? null : ops;
+};
+
+/**
+ * Fix chips for held-back pages, free first: "Use the layout that fits" (heldBackLayoutFixOps) and "Draw page N
+ * anyway". Beside an open "Render all" gate (`pending`: the action that gate was raised for), "Draw anyway" is that
+ * same Render all with the page added to drawOverfull (plan §4.1), re-quoted as a whole — a single-page draw there
+ * would retire the gate and silently drop the other pages' approval. Elsewhere (the run started, or nothing else was
+ * left to draw) it is that page alone, at its quote.
+ */
+const heldBackFixes = (doc: ComicDoc, heldBack: HeldBackPage[], byok: boolean, prices?: PriceBook, pending?: RenderPagesAction): NoticeFix[] => {
   const free: NoticeFix[] = [];
   const paid: NoticeFix[] = [];
   for (const h of heldBack.slice(0, 2)) {
-    if (h.layoutFix) {
+    const ops = heldBackLayoutFixOps(doc, h.pageId, h.layoutFix);
+    if (ops) {
       free.push({
         label: heldBack.length > 1 ? `Use the layout that fits page ${h.n}` : 'Use the layout that fits',
         free: true,
-        action: { type: 'patch', ops: [{ op: 'page', id: h.pageId, patch: { layout: h.layoutFix } }] }
+        action: { type: 'patch', ops }
       });
     }
-    const anyway: SpendAction = { type: 'render_pages', pageIds: [h.pageId] };
-    paid.push({ label: `Draw page ${h.n} anyway`, free: false, action: { ...anyway, quotedUsd: quoteOf(doc, anyway, byok, prices) } });
+    if (pending) {
+      const anyway: SpendAction = {
+        type: 'render_pages',
+        drawOverfull: sanitizeDrawOverfull([...(pending.drawOverfull ?? []), h.pageId], doc),
+        ...(pending.includeCover ? { includeCover: true } : {}),
+        ...(pending.safe ? { safe: true } : {})
+      };
+      paid.push({ label: `Draw page ${h.n} anyway (with the rest)`, free: false, action: { ...anyway, quotedUsd: quoteOf(doc, anyway, byok, prices) } });
+    } else {
+      const anyway: SpendAction = { type: 'render_pages', pageIds: [h.pageId] };
+      paid.push({ label: `Draw page ${h.n} anyway`, free: false, action: { ...anyway, quotedUsd: quoteOf(doc, anyway, byok, prices) } });
+    }
   }
   return [...free, ...paid].slice(0, NOTICE_FIXES_MAX);
 };
@@ -731,11 +765,14 @@ const heldBackNote = (gate: PlanGateResult): string =>
   `Held back (not drawn, not in this price): ${gate.heldBack.map((h) => `page ${h.n}`).join(', ')} — too many words for a panel. ` +
   'The notice offers the free fixes first (a layout that fits, split the page, move a line, make it a caption) or "Draw anyway". Tell the user in one line.';
 
-/** The notice card for held-back pages: the gate's sentence (or each page's own when one) with its fix chips. */
-const heldBackNotice = (doc: ComicDoc, gate: PlanGateResult, byok: boolean, prices?: PriceBook): Card | null => {
+/**
+ * The notice card for held-back pages: the gate's sentence (or each page's own when one) with its fix chips.
+ * `pending` = the "Render all" an open gate is waiting on (createGate), so "Draw anyway" extends that gate's run.
+ */
+const heldBackNotice = (doc: ComicDoc, gate: PlanGateResult, byok: boolean, prices?: PriceBook, pending?: RenderPagesAction): Card | null => {
   if (!gate.heldBack.length || !gate.notice) return null;
   const text = gate.heldBack.length === 1 ? gate.heldBack[0].text : gate.notice;
-  const fixes = heldBackFixes(doc, gate.heldBack, byok, prices);
+  const fixes = heldBackFixes(doc, gate.heldBack, byok, prices, pending);
   return { ...noticeCard('info', text), ...(fixes.length ? { fixes } : {}) };
 };
 
@@ -1234,10 +1271,12 @@ const gateModelName = (doc: ComicDoc, action: SpendAction, estimate: SpendEstima
 export const bindSpendAction = (doc: ComicDoc, action: SpendAction): SpendAction => {
   switch (action.type) {
     case 'render_pages': {
-      if (action.pageIds?.length) return action;
-      // "Render all" binds to what it really draws (held-back pages left out); drawOverfull is moot once bound.
+      // drawOverfull is moot once pages are named (the gate applies to "Render all" only): never store a client's raw
+      // list in doc.gate.
       const { drawOverfull: _anyway, ...rest } = action;
       void _anyway;
+      if (action.pageIds?.length) return rest;
+      // "Render all" binds to what it really draws (held-back pages left out, drawOverfull pages in).
       return { ...rest, pageIds: drawTargets(doc, action).map((p) => p.id) };
     }
     case 'render_sheets': {
@@ -1310,7 +1349,7 @@ function createGate(
   }
   // "Render all" held overfull pages back (they are not in this quote): say so beside the gate, with free fixes first.
   const held = rawAction.type === 'render_pages' ? renderAllGate(doc, rawAction) : null;
-  const heldCard = held ? heldBackNotice(doc, held, spendActionIsByok(doc, action, ctx.keys), extra.prices) : null;
+  const heldCard = held && rawAction.type === 'render_pages' ? heldBackNotice(doc, held, spendActionIsByok(doc, action, ctx.keys), extra.prices, rawAction) : null;
   if (heldCard) cards.push(heldCard);
   cards.push({ type: 'gate', id: newId('card'), gateId: gate.id });
   commitAs(ctx, [{ op: 'gate', gate }], originOf(opts));
@@ -1664,6 +1703,21 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Sp
   });
 };
 
+/**
+ * Whether starting `next` makes the open gate's action moot: the same kind of spend and, for pages, one that draws
+ * every page the gate would still draw (and the cover when the gate has it). A single-page draw beside a pending
+ * "Render all" leaves that gate open: the other pages keep their approval card instead of silently losing it.
+ */
+export const gateMootedBy = (doc: ComicDoc, gated: StudioAction, next: SpendAction): boolean => {
+  if (gated.type !== next.type) return false;
+  if (gated.type !== 'render_pages' || next.type !== 'render_pages') return true;
+  const waiting = Array.isArray(gated.pageIds) ? (gated.pageIds.length ? pageTargets(doc, gated) : []) : drawTargets(doc, gated);
+  const drawing = new Set(drawTargets(doc, next).map((p) => p.id));
+  if (waiting.some((p) => !drawing.has(p.id))) return false;
+  if (gated.includeCover && coverWanted(doc, gated.force) && !(next.includeCover && coverWanted(doc, next.force))) return false;
+  return true;
+};
+
 async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
   // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
   if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
@@ -1679,9 +1733,9 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   const { plan, spec, byok, estimate } = go;
   const doc = ctx.session.doc;
 
-  // Proceeding: retire any open gate for the same kind of spend (it is now moot).
+  // Proceeding: retire an open gate this spend makes moot (the same kind of spend covering everything it would draw).
   const open = doc.gate;
-  if (open?.status === 'open' && open.action.type === action.type) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
+  if (open?.status === 'open' && gateMootedBy(doc, open.action, action)) commitAs(ctx, [{ op: 'gate', gate: { ...open, status: 'declined' } }], 'job');
 
   // "Render all" left overfull pages out of this run and its quote: say so now, with free fixes first.
   const held = action.type === 'render_pages' ? renderAllGate(doc, action) : null;
@@ -3861,9 +3915,11 @@ export async function planPages(
   // the cap still applies): at or past it, nothing is written and nothing is spent.
   const budget = budgetOf(before.settings);
   if (budget !== undefined && round4(before.spend.totalUsd + pendingUsdOf(ctx.session)) >= budget - 1e-9) {
-    const text = 'This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again. Nothing was spent.';
+    // A whole plan says what it costs, honestly bounded (one writer pass; up to two if the plan check sends it back).
+    const price = pageIds ? '' : ` (planning is ${planPagesQuoteText(before, costOf(ctx), byok)})`;
+    const text = `This comic is at its budget cap, so I won’t run the writer — raise the budget in Settings to plan again${price}. Nothing was spent.`;
     deliver(ctx, runOpts, text, [noticeCard('info', text)], [RAISE_BUDGET_STEP, ...nextStepsFor(before, { byok, prices: await priceBookWithin(ctx) })]);
-    return { status: 'blocked', message: 'The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings. Nothing was spent.', code: 'BUDGET_EXCEEDED' };
+    return { status: 'blocked', message: `The comic is at its budget cap — the writer did not run. Ask the user to raise the budget in Settings${price}. Nothing was spent.`, code: 'BUDGET_EXCEEDED' };
   }
 
   const drawn = before.pages.filter(hasArt);
@@ -4766,17 +4822,18 @@ const publicationBehind = (doc: ComicDoc): boolean => {
 };
 
 /**
- * The "Plan the pages" estimate: the writer's text for every page — about $0.016 a page billed — which is UP TO one
- * writer repair (the plan check sends a page's count, overfull or quiet-shot problems back once; most plans need
- * none). planPagesQuoteText says it in words.
+ * The "Plan the pages" estimate: one writer pass for every page — about $0.016 a page billed. The plan check can send
+ * a page's count, overfull or quiet-shot problems back for ONE repair round, which is another writer pass (plan §7),
+ * so the honest bound is twice this; most plans need none. planPagesQuoteText says it in words.
  */
 export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
   round4(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP));
 
-/** "≈ $0.10 (6 pages, up to one writer repair)" in the user's cost terms (usage words for governed users). */
+/** "≈ $0.10 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
 export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
-  return `${cost.approx(planPagesUsd(doc, byok))} (${plural(pages, 'page')}, up to one writer repair)`;
+  const usd = planPagesUsd(doc, byok);
+  return `${cost.approx(usd)} for ${plural(pages, 'page')} (up to ${cost.approx(round4(2 * usd))} if the plan needs its one writer repair)`;
 };
 
 /**
@@ -4815,12 +4872,25 @@ export function nextStepsFor(doc: ComicDoc, opts: { byok?: boolean; prices?: Pri
   if (doc.pages.length && !pagesBusy) {
     const undrawn = doc.pages.filter((p) => p.render.status !== 'ready' && p.panels.length);
     const stale = doc.pages.filter((p) => isPageStale(doc, p));
+    // "Render all" holds overfull pages back (plan §4.1): the chip names what it really draws, at the price it shows.
+    const drawable = (doc.planStatus === 'draft' || doc.planStatus === 'approved') && (undrawn.length > 0 || stale.length > 0);
+    const held = drawable ? renderAllGate(doc, { type: 'render_pages' }) : null;
+    const heldBack = held?.heldBack ?? [];
+    const drawing = held?.pageIds.length ?? 0;
+    const every = undrawn.length === doc.pages.length;
+    const label = (verb: string, plain: string) => (heldBack.length ? `${verb} ${plural(drawing, 'page')} (${pagesPhrase(heldBack)} held back)` : plain);
     if (doc.planStatus === 'draft') {
-      add(spend(undrawn.length === doc.pages.length ? 'Approve & draw all' : 'Approve & draw the rest', { type: 'render_pages' }));
+      add(spend(label('Approve & draw', every ? 'Approve & draw all' : 'Approve & draw the rest'), { type: 'render_pages' }));
       add(say('Make page 1 more dramatic'));
     } else if (doc.planStatus === 'approved') {
-      if (undrawn.length) add(spend(undrawn.length === doc.pages.length ? 'Draw all pages' : 'Draw the remaining pages', { type: 'render_pages' }));
-      else if (stale.length) add(spend('Redraw the out-of-date pages', { type: 'render_pages' }));
+      if (undrawn.length) add(spend(label('Draw', every ? 'Draw all pages' : 'Draw the remaining pages'), { type: 'render_pages' }));
+      else if (stale.length) add(spend(label('Redraw', 'Redraw the out-of-date pages'), { type: 'render_pages' }));
+    }
+    // Every page left to draw is held back: no draw chip ($0 to draw), so point at the free fix instead.
+    if (heldBack.length && !drawing) {
+      const h = heldBack[0];
+      const ops = heldBackLayoutFixOps(doc, h.pageId, h.layoutFix);
+      add(ops ? { label: `Use the layout that fits page ${h.n}`, action: { type: 'patch', ops }, usd: 0 } : say(`Make page ${h.n}'s words fit its panels`));
     }
   }
   const page1 = doc.pages.find((p) => p.n === 1);

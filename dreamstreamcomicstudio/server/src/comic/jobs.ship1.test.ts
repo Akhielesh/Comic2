@@ -18,13 +18,17 @@ import {
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
-import { checkPagePlan } from '../../../shared/comic/pagePlanCheck.js';
-import { applyOps } from '../../../shared/comic/ops.js';
+import { candidateLayouts, checkPagePlan } from '../../../shared/comic/pagePlanCheck.js';
+import { applyOps, layoutFixOps, type DocOp } from '../../../shared/comic/ops.js';
 import { costFormatterFor } from './costText.js';
 import {
   JOB_TIMINGS,
+  bindSpendAction,
   drawTargets,
   estimateSpendAction,
+  gateMootedBy,
+  heldBackLayoutFixOps,
+  nextStepsFor,
   planGateApplies,
   planPagesQuoteText,
   planPagesUsd,
@@ -33,7 +37,7 @@ import {
   suggestNextSteps
 } from './jobs.js';
 import { KEYS, newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
-import { LAYOUT_GUIDE_LABEL } from './prompts.js';
+import { LAYOUT_GUIDE_LABEL, effectiveLayout, harmonizePanelSizes, parseLayout } from './prompts.js';
 import { tryRenderPageLayoutGuide } from './panelize/wireframe.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import { StudioError } from './types.js';
@@ -251,6 +255,222 @@ describe('render_pages → planCheckGate: held-back pages leave the run and its 
   });
 });
 
+// ── The held-back fixes do what they say ─────────────────────────────────────
+
+const patchOps = (fix: NoticeFix | undefined): DocOp[] => (fix?.action as Extract<NoticeFix['action'], { type: 'patch' }>).ops;
+const heldNotice = (doc: ComicDoc, n: number) => notices(doc).find((c) => new RegExp(`Page ${n} is held back`).test(c.text));
+
+/** plannedDoc with page 1's last panel overfilled: its first panel is "wide", and the layout that fits puts panel 1
+ *  in a shared row — a layout the prompt rejects unless the sizes change with it. */
+const wideFirstDoc = (): ComicDoc => {
+  const doc = plannedDoc();
+  readySheets(doc);
+  doc.planStatus = 'approved';
+  doc.pages[0].panels[2].lines = [{ id: 'ln_long', kind: 'speech', speakerId: 'c_maya', text: LONG(70) }];
+  return doc;
+};
+
+describe('"Use the layout that fits" puts the page on the layout it is drawn on', () => {
+  it('fixture: the fitting blueprint shares panel 1\'s row, so the layout alone would be drawn as the old, overfull one', () => {
+    const doc = wideFirstDoc();
+    const check = checkPagePlan(doc, doc.pages[0]);
+    expect(check.state).toBe('overfull');
+    expect(doc.pages[0].panels.map((p) => p.size)).toEqual(['wide', 'medium', 'medium']);
+    const layout = check.layoutFix!.layout;
+    expect(layout).toBe('Row 1: two equal panels. Row 2: one large panel.');
+    // The bug: a layout-only patch passes the gate, but the prompt rejects it (a wide panel in a shared row).
+    const layoutOnly = applyOps(doc, [{ op: 'page', id: 'pg_1', patch: { layout } }]);
+    expect(checkPagePlan(layoutOnly, layoutOnly.pages[0]).state).not.toBe('overfull');
+    expect(effectiveLayout(layoutOnly.pages[0], layoutOnly.format)).not.toBe(layout);
+    const asDrawn = { ...layoutOnly.pages[0], layout: effectiveLayout(layoutOnly.pages[0], layoutOnly.format) };
+    expect(checkPagePlan(layoutOnly, asDrawn).state).toBe('overfull');
+  });
+
+  it('the notice chip harmonizes the sizes: the prompt draws exactly that layout, and the page fits on it', async () => {
+    const session = newSession(wideFirstDoc());
+    const ctx = testContext(session);
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    await ctx.settled();
+    expect(session.doc.pages.map((p) => p.render.status)).toEqual(['none', 'ready', 'ready']);
+    const fix = heldNotice(session.doc, 1)!.fixes!.find((f) => f.free)!;
+    expect(fix.label).toBe('Use the layout that fits');
+    const ops = patchOps(fix);
+    expect(ops).toContainEqual({ op: 'panel', pageId: 'pg_1', id: 'pn_1_1', patch: { size: 'medium' } });
+    const fixed = applyOps(session.doc, ops);
+    const page = fixed.pages[0];
+    expect(effectiveLayout(page, fixed.format)).toBe(page.layout);
+    expect(page.layout).toBe('Row 1: two equal panels. Row 2: one large panel.');
+    expect(checkPagePlan(fixed, page).state).not.toBe('overfull');
+    // The chip is the same op set the shared helper gives the breakdown card (one implementation).
+    expect(ops).toEqual(layoutFixOps(session.doc, session.doc.pages[0], page.layout!));
+    // Applied through the real patch path, the next "Render all" draws page 1 on that layout.
+    await runAction(ctx, fix.action, { confirmed: true });
+    const calls = ctx.imagesFake.calls.length;
+    await runAction(ctx, { type: 'render_pages' }, { confirmed: true });
+    await ctx.settled();
+    expect(session.doc.pages[0].render.status).toBe('ready');
+    const drawn = ctx.imagesFake.calls.slice(calls).find((c) => /Action 1\.1/.test(c.prompt))!;
+    expect(drawn.prompt).toContain('Row 1: two equal panels. Row 2: one large panel.');
+  });
+
+  it('no chip when the page would still be overfull on the layout it is drawn on', () => {
+    const doc = wideFirstDoc();
+    // A blueprint that parses but is not what fits (the page stays overfull on it): never offered as the free fix.
+    expect(heldBackLayoutFixOps(doc, 'pg_1', 'Row 1: one wide panel. Row 2: two equal panels.')).toBeNull();
+    // Another panel count, or a row grid on a webtoon: the blueprint cannot be drawn as given.
+    expect(layoutFixOps(doc, doc.pages[0], 'Row 1: two equal panels.')).toEqual([]);
+    expect(layoutFixOps({ format: { ...doc.format, kind: 'webtoon' } }, doc.pages[0], 'Row 1: two equal panels. Row 2: one large panel.')).toEqual([]);
+    expect(heldBackLayoutFixOps(doc, 'pg_1', 'Row 1: two equal panels. Row 2: one large panel.')).not.toBeNull();
+  });
+
+  it("parity: layoutFixOps sizes every candidate blueprint as prompts.ts harmonizePanelSizes does, and the prompt keeps it", () => {
+    const sizeSets: Page['panels'][number]['size'][][] = [['wide', 'medium', 'medium', 'small', 'tall', 'large'], ['medium', 'wide', 'small', 'large', 'medium', 'splash'], ['tall', 'small', 'wide', 'medium', 'wide', 'medium']];
+    let checked = 0;
+    for (const kind of ['comic', 'manga', 'storybook', 'webtoon'] as const) {
+      for (const readingDirection of ['ltr', 'rtl'] as const) {
+        const doc = plannedDoc();
+        doc.format = { ...doc.format, kind, readingDirection };
+        for (let n = 1; n <= 6; n += 1) {
+          for (const layout of candidateLayouts(doc, n)) {
+            for (const sizes of sizeSets) {
+              const page: Page = { ...doc.pages[0], panels: Array.from({ length: n }, (_, i) => ({ ...doc.pages[0].panels[0], id: `pn_${i}`, n: i + 1, size: sizes[i] })) };
+              const ops = layoutFixOps(doc, page, layout);
+              const parsed = parseLayout(layout)!;
+              const expected = harmonizePanelSizes(page.panels, parsed, readingDirection === 'rtl').map((p) => p.size);
+              const d2 = { ...doc, pages: [page] };
+              const fixed = applyOps(d2, ops).pages[0];
+              if (kind === 'webtoon' && parsed.mode !== 'stack') {
+                expect(ops).toEqual([]);
+                continue;
+              }
+              expect(fixed.panels.map((p) => p.size)).toEqual(expected);
+              expect(fixed.layout).toBe(layout);
+              expect(effectiveLayout(fixed, doc.format)).toBe(layout);
+              checked += 1;
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+});
+
+describe('"Draw anyway" beside an open "Render all" gate extends that gate; it never silently cancels it', () => {
+  const gatedDoc = () => {
+    const doc = overfullDoc(true);
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    return doc;
+  };
+
+  it('the chip is the same Render all with the page added (drawOverfull), quoted as a whole; a tap draws pages 1, 2 and 3', async () => {
+    const session = newSession(gatedDoc());
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages' }, { confirmed: false });
+    const gate = session.doc.gate!;
+    expect(gate.action).toEqual({ type: 'render_pages', pageIds: ['pg_1', 'pg_3'] });
+    const chip = heldNotice(session.doc, 2)!.fixes!.find((f) => !f.free)!;
+    expect(chip.label).toBe('Draw page 2 anyway (with the rest)');
+    const all = { type: 'render_pages' as const, drawOverfull: ['pg_2'] };
+    expect(chip.action).toEqual({ ...all, quotedUsd: estimateSpendAction(session.doc, all, false).usd });
+    expect(estimateSpendAction(session.doc, all, false).imageCount).toBe(3);
+    const out = await startAction(ctx, chip.action, { confirmed: true });
+    expect(out.outcome.status).toBe('started');
+    await out.done;
+    await ctx.settled();
+    expect(session.doc.pages.map((p) => p.render.status)).toEqual(['ready', 'ready', 'ready']);
+    // The old gate is moot (its pages were drawn by this run), so it is retired, not left dangling.
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'declined' });
+  });
+
+  it('the pending Render all carries its cover into the chip', async () => {
+    const session = newSession(gatedDoc());
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages', includeCover: true }, { confirmed: false });
+    const chip = heldNotice(session.doc, 2)!.fixes!.find((f) => !f.free)!;
+    expect(chip.action).toMatchObject({ type: 'render_pages', drawOverfull: ['pg_2'], includeCover: true });
+    expect((chip.action as { pageIds?: string[] }).pageIds).toBeUndefined();
+  });
+
+  it('backstop: a single-page draw beside the gate leaves the gate open; approving it later draws the other pages', async () => {
+    const session = newSession(gatedDoc());
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages' }, { confirmed: false });
+    const gate = session.doc.gate!;
+    const quoted = estimateSpendAction(session.doc, { type: 'render_pages', pageIds: ['pg_2'] }, false).usd;
+    const out = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: quoted }, { confirmed: true });
+    expect(out.outcome.status).toBe('started');
+    await out.done;
+    await ctx.settled();
+    expect(session.doc.gate).toMatchObject({ id: gate.id, status: 'open' });
+    expect(session.doc.pages.map((p) => p.render.status)).toEqual(['none', 'ready', 'none']);
+    await runAction(ctx, { type: 'approve_gate', gateId: gate.id }, { confirmed: true });
+    await ctx.settled();
+    expect(session.doc.pages.map((p) => p.render.status)).toEqual(['ready', 'ready', 'ready']);
+  });
+
+  it('gateMootedBy: covered pages (and the cover) retire a gate; partial ones and other kinds do not', () => {
+    const doc = overfullDoc(true);
+    const gated = { type: 'render_pages' as const, pageIds: ['pg_1', 'pg_3'] };
+    expect(gateMootedBy(doc, gated, { type: 'render_pages' })).toBe(true);
+    expect(gateMootedBy(doc, gated, { type: 'render_pages', pageIds: ['pg_1', 'pg_3'] })).toBe(true);
+    expect(gateMootedBy(doc, gated, { type: 'render_pages', pageIds: ['pg_2'] })).toBe(false);
+    expect(gateMootedBy(doc, gated, { type: 'render_pages', pageIds: ['pg_1'] })).toBe(false);
+    expect(gateMootedBy(doc, { ...gated, includeCover: true }, { type: 'render_pages' })).toBe(false);
+    expect(gateMootedBy(doc, { ...gated, includeCover: true }, { type: 'render_pages', includeCover: true })).toBe(true);
+    expect(gateMootedBy(doc, gated, { type: 'render_cover' })).toBe(false);
+    expect(gateMootedBy(doc, { type: 'render_sheets' }, { type: 'render_sheets' })).toBe(true);
+  });
+});
+
+describe('bindSpendAction never stores a raw drawOverfull', () => {
+  it('explicit pageIds drop drawOverfull (it is meaningless there); a gate never saves it', async () => {
+    const doc = overfullDoc(true);
+    const junk = Array.from({ length: 500 }, (_, i) => `x${i}`);
+    expect(bindSpendAction(doc, { type: 'render_pages', pageIds: ['pg_1'], drawOverfull: junk })).toEqual({ type: 'render_pages', pageIds: ['pg_1'] });
+    expect(bindSpendAction(doc, { type: 'render_pages', drawOverfull: ['pg_2'] })).toEqual({ type: 'render_pages', pageIds: ['pg_1', 'pg_2', 'pg_3'] });
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], drawOverfull: junk }, { confirmed: false });
+    expect(session.doc.gate?.action).toEqual({ type: 'render_pages', pageIds: ['pg_1'] });
+  });
+});
+
+describe('next-step chips name what "Render all" really draws', () => {
+  it('some pages held back: the chip says how many it draws and which page waits, at that price', () => {
+    const doc = overfullDoc(true);
+    const steps = nextStepsFor(doc);
+    const draw = steps.find((s) => /^Draw /.test(s.label))!;
+    expect(draw.label).toBe('Draw 2 pages (page 2 held back)');
+    expect(draw.usd).toBe(estimateSpendAction(doc, { type: 'render_pages' }, false).usd);
+    expect(suggestNextSteps(doc)).not.toContain('Draw all pages');
+    // A draft plan says the same on its approve chip.
+    doc.planStatus = 'draft';
+    expect(suggestNextSteps(doc)).toContain('Approve & draw 2 pages (page 2 held back)');
+  });
+
+  it('every page left to draw held back: no draw chip, the free layout fix instead (the ops that make it fit)', () => {
+    const doc = wideFirstDoc();
+    doc.pages = [doc.pages[0]];
+    doc.format.pageCount = 1;
+    const steps = nextStepsFor(doc);
+    expect(steps.some((s) => /^Draw /.test(s.label))).toBe(false);
+    const fix = steps.find((s) => s.label === 'Use the layout that fits page 1')!;
+    expect(fix).toMatchObject({ usd: 0, action: { type: 'patch' } });
+    const fixed = applyOps(doc, (fix.action as Extract<NoticeFix['action'], { type: 'patch' }>).ops);
+    expect(effectiveLayout(fixed.pages[0], fixed.format)).toBe(fixed.pages[0].layout);
+    expect(checkPagePlan(fixed, fixed.pages[0]).state).not.toBe('overfull');
+    expect(suggestNextSteps(fixed)).toContain('Draw all pages');
+    // No layout fits: a said chip points the director at the free fixes (split, move a line, caption).
+    const none = overfullDoc(false);
+    none.pages = [none.pages[1]];
+    none.pages[0].n = 1;
+    none.format.pageCount = 1;
+    expect(suggestNextSteps(none)).toContain("Make page 1's words fit its panels");
+  });
+});
+
 // ── letterPage → qcNoticeFor (plan §3 C14) ───────────────────────────────────
 
 describe('the page-check notice path calls qcNoticeFor', () => {
@@ -403,12 +623,30 @@ describe('plan_pages surfaces the plan-fit notes; the estimate says "up to one w
     expect(session.doc.conversation.at(-1)!.text).toContain(note);
   });
 
-  it('the "Plan the pages" price is per page and the words say up to one writer repair', () => {
+  it('the "Plan the pages" price is per page, and the words bound it honestly (the repair is a second pass, not included)', () => {
     const doc = plannedDoc();
     doc.format.pageCount = 6;
     expect(planPagesUsd(doc, true)).toBeCloseTo(0.072, 4);
     const session = newSession(doc);
     const ctx = testContext(session, { keys: KEYS });
-    expect(planPagesQuoteText(doc, costFormatterFor(ctx), false)).toMatch(/6 pages, up to one writer repair/);
+    const cost = costFormatterFor(ctx);
+    const usd = planPagesUsd(doc, false);
+    expect(planPagesQuoteText(doc, cost, false)).toBe(`${cost.approx(usd)} for 6 pages (up to ${cost.approx(Math.round(2 * usd * 10000) / 10000)} if the plan needs its one writer repair)`);
+    expect(planPagesQuoteText(doc, cost, false)).not.toMatch(/pages, up to one writer repair/);
+  });
+
+  it('a whole plan refused at the budget cap says what planning costs, with the repair bound', async () => {
+    const doc = plannedDoc();
+    doc.format.pageCount = 6;
+    doc.settings = { ...doc.settings, budgetUsd: 1 };
+    doc.spend = { ...doc.spend, totalUsd: 1 };
+    const session = newSession(doc);
+    const ctx = testContext(session, { keys: KEYS });
+    const out = await startAction(ctx, { type: 'plan_pages', instructions: 'tighter' }, { confirmed: true });
+    expect(out.outcome).toMatchObject({ status: 'blocked', code: 'BUDGET_EXCEEDED' });
+    const price = planPagesQuoteText(doc, costFormatterFor(ctx), false);
+    expect(out.outcome.message).toContain(`planning is ${price}`);
+    expect(session.doc.conversation.at(-1)!.text).toContain(`(planning is ${price})`);
+    expect(vi.mocked(writePagePlan)).not.toHaveBeenCalled();
   });
 });

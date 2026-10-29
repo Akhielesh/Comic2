@@ -61,6 +61,7 @@ import {
   type Msg,
   type Page,
   type Panel,
+  type PanelSize,
   type Place,
   type ReaderSettings,
   type RefAsset,
@@ -93,6 +94,7 @@ import {
 import { capFor, refsOf, refOwnerKey } from './refs.js';
 import { i18nOf, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextTranslation } from './i18n.js';
 import { languageSpec, sameLanguage } from './languages.js';
+import { layoutPanelCount, parseLayout, type LayoutCell, type ParsedLayout } from './pageGeometry.js';
 import { isPublicationMirror, type PublishRequest, type PublicationMirror, type PublicationSettingsPatch } from './publication.js';
 import type { SafetyVerdict } from './safety.js';
 
@@ -1485,4 +1487,75 @@ export const clampBalloonPatch = (patch: Partial<Balloon>): Partial<Balloon> => 
   }
   if (typeof out.z === 'number') out.z = clampInt(out.z, -100, 100, 0);
   return out;
+};
+
+// ── The free "Use the layout that fits" fix (plan §4.1; decision PD-1) ──────
+//
+// A re-chosen blueprint is applied the way the writer's validator applies it (server writer.ts fitPage): the panel
+// sizes are harmonized to the blueprint first. A layout alone is not enough: the page prompt (server prompts.ts
+// effectiveLayout) rejects a blueprint whose panel sizes contradict it (a "wide" panel in a shared row) and draws a
+// layout synthesized from the sizes instead — the old, overfull one — while the plan check measures the blueprint.
+// The size rules mirror server prompts.ts harmonizePanelSizes / layoutConflicts (jobs.ship1.test.ts pins the parity
+// over every candidate blueprint); prompts.ts can re-export these once its owner moves them here.
+
+const FIT_FULL_WIDTH_SIZES: ReadonlySet<PanelSize> = new Set<PanelSize>(['wide', 'large', 'splash']);
+const cleanLayout = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+
+/** Index (into the page's panels) of the tall panel of a span row, by reading order. */
+const fitTallIndex = (row: LayoutCell, rtl: boolean): number => {
+  const startSide = rtl ? 'right' : 'left';
+  return row.span?.tallSide === startSide ? row.panels[0] : (row.panels[1] ?? row.panels[0]);
+};
+
+/** Panel sizes that agree with a parsed blueprint (full-width single rows wide, shared rows never wide/large/splash,
+ *  a span row's tall panel tall, a single panel a splash). */
+const sizesForBlueprint = (panels: readonly Pick<Panel, 'size'>[], parsed: ParsedLayout, rtl: boolean): PanelSize[] => {
+  const out = panels.map((p) => p.size);
+  const set = (i: number, size: PanelSize) => {
+    if (i >= 0 && i < out.length) out[i] = size;
+  };
+  if (parsed.mode === 'single') {
+    set(0, 'splash');
+    return out;
+  }
+  if (parsed.mode === 'stack') return out;
+  for (const row of parsed.rows) {
+    if (row.span) {
+      const tall = fitTallIndex(row, rtl);
+      for (const i of row.panels) {
+        if (i === tall) set(i, 'tall');
+        else if (i < out.length && out[i] !== 'small' && out[i] !== 'medium') set(i, 'medium');
+      }
+    } else if (row.panels.length > 1) {
+      for (const i of row.panels) if (i < out.length && FIT_FULL_WIDTH_SIZES.has(out[i])) set(i, 'medium');
+    } else {
+      const i = row.panels[0];
+      if (i < out.length && (out[i] === 'small' || out[i] === 'medium')) set(i, 'wide');
+    }
+  }
+  return out;
+};
+
+/** True when a size contradicts its row (a wide/large/splash panel sharing a row). */
+const sizesConflict = (parsed: ParsedLayout, sizes: readonly PanelSize[]): boolean =>
+  parsed.mode === 'rows' && parsed.rows.some((r) => !r.span && r.panels.length > 1 && r.panels.some((i) => FIT_FULL_WIDTH_SIZES.has(sizes[i])));
+
+/**
+ * The ops that put a page on `layout` so it is DRAWN on that blueprint: the page's layout plus a size patch for every
+ * panel whose size contradicted it. One implementation for the server's held-back notice chip, the next-step chip and
+ * the breakdown card's "Use the layout that fits" (summarizeBook planFit.layoutFix). Pure; [] when the blueprint
+ * cannot be drawn as given (it does not parse, has another panel count, or is not a vertical stack on a webtoon).
+ * The caller still checks the fitted page (pagePlanCheck) before offering it: the fix is a fix only when it fits.
+ */
+export const layoutFixOps = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'id' | 'panels'>, layout: string): DocOp[] => {
+  const text = cleanLayout(layout);
+  const parsed = text ? parseLayout(text) : null;
+  if (!parsed || layoutPanelCount(parsed) !== page.panels.length) return [];
+  if (doc.format.kind === 'webtoon' && parsed.mode !== 'stack') return [];
+  const sizes = sizesForBlueprint(page.panels, parsed, doc.format.readingDirection === 'rtl');
+  if (sizesConflict(parsed, sizes)) return [];
+  const resized: DocOp[] = page.panels.flatMap((p, i): DocOp[] =>
+    sizes[i] !== p.size ? [{ op: 'panel', pageId: page.id, id: p.id, patch: { size: sizes[i] } }] : []
+  );
+  return [{ op: 'page', id: page.id, patch: { layout: text } }, ...resized];
 };
