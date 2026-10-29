@@ -33,6 +33,18 @@ export const EASY_FONTS: LatinFontId[] = ['comic-neue', 'andika', 'patrick-hand'
 
 const labelOf = (id: FontId) => FONT_REGISTRY[id]?.label ?? id;
 
+/**
+ * The Easy chips for a lettering language: the friendly six for Latin-script languages; otherwise every
+ * face that really letters the language — its own script faces (dialogue, legible, SFX) and any registry
+ * face that covers the script (Kalam writes Devanagari) — in that order, no duplicates.
+ */
+export const easyFontsFor = (lang: string): FontId[] => {
+  const spec = languageSpec(lang);
+  if (!spec || spec.script === 'Latn') return EASY_FONTS;
+  const own: FontId[] = [spec.fonts.dialogue, spec.fonts.legible, spec.fonts.sfx];
+  return [...new Set<FontId>([...own, ...LATIN_FONTS.filter((f) => fontCoversLanguage(f, lang))])];
+};
+
 export interface FontPickerProps {
   value: FontId | undefined;
   onChange(id: FontId): void;
@@ -87,25 +99,38 @@ export const FontPicker: React.FC<FontPickerProps> = ({ value, onChange, lang, s
   };
 
   if (simple) {
+    // A non-Latin comic (Hindi, Telugu, …): Latin-only faces would never be used for its text (the resolver
+    // falls back to the script's own face), so the Easy chips are the faces that CAN letter it, the one in
+    // use is the one checked, and a visible line says why (never a tooltip-only hint — LE-10).
+    const chips = easyFontsFor(lang);
+    const scriptOnly = !!spec && spec.script !== 'Latn';
+    const current = scriptOnly && value ? resolveLetteringFont(value, 'speech', lang).fontId : value;
     return (
-      <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1.5">
-        {EASY_FONTS.map((f) => (
+      <div className="min-w-0 space-y-1">
+        <div role="radiogroup" aria-label={label} aria-describedby={scriptOnly ? `${id}-script` : undefined} className="flex flex-wrap gap-1.5">
+          {chips.map((f) => (
           <button
             key={f}
             type="button"
             role="radio"
-            aria-checked={value === f}
-            title={`${labelOf(f)} — ${ROLE[f as LatinFontId]}${note(f) ? ` (${note(f)})` : ''}`}
+            aria-checked={current === f}
+            title={`${labelOf(f)} — ${(ROLE as Record<string, string>)[f] ?? `${spec?.english ?? 'Script'} face`}`}
             onClick={() => onChange(f)}
             className={cx(
               'rounded-full border px-2.5 py-1 text-[13px] leading-none transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/50 coarse:min-h-11 coarse:px-3.5 coarse:text-[14px]',
-              value === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
+              current === f ? 'border-[#D97757]/60 bg-[#D97757]/10 text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
             )}
             style={{ fontFamily: fontFamilyStack(f) }}
           >
             {labelOf(f)}
           </button>
-        ))}
+          ))}
+        </div>
+        {scriptOnly && (
+          <p id={`${id}-script`} data-testid="font-script-note" className="text-[11px] leading-snug text-[var(--ds-muted)]">
+            Only faces that can write {spec!.english} are shown — Latin-only faces (Bangers, Comic Neue…) would never be used for its text.
+          </p>
+        )}
       </div>
     );
   }
