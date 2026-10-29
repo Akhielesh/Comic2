@@ -101,7 +101,8 @@ describe('Pages tab', () => {
   });
 
   // Two columns from the named `medium` screen (600 px): arbitrary `min-[…]:` screens throw in this Tailwind config
-  // (tailwind.config.cjs screens note; layoutLint.test.ts rule 2).
+  // (tailwind.config.cjs screens note; layoutLint.test.ts rule 2). models.md §4.7 said 480 px; the lead accepted the
+  // 600 px step (docs/features/comic-studio-v4.md §5): rows stay stacked from 480 to 599 px, the safe direction.
   it('rows stack below the medium screen (one column) and long words wrap', () => {
     render(<PagesTab doc={makeLakeComic()} money={dollars} byok />);
     for (const li of within(screen.getByRole('list', { name: 'Spend per page' })).getAllByRole('listitem')) {

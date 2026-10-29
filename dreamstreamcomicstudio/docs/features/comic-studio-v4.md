@@ -201,6 +201,12 @@ Reference budget per page job (from `refs` caps):
   previous page (continuity) last.
 - total ≤ `refs.total`.
 
+Cost & model insights (v5, `components/comicstudio/insights/`): the Pages tab lists every drawn
+image as a stacked row and switches to two columns at the named `medium` screen (600 px). The
+spec said 480 px; the lead accepted 600 px (2026-10-29) because arbitrary `min-[…]:` screens do
+not work in this Tailwind config and the ordered screen list (`tests/config/appShell.test.ts`)
+has no 480 px step. Between 480 and 599 px the rows stay stacked, which never overflows.
+
 ## 6. Prompts (the craft)
 
 All prompts are compiled server-side from the doc (`prompts.ts`, pure, unit-tested).
