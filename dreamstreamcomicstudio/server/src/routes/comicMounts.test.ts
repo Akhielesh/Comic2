@@ -138,15 +138,18 @@ describe('owner mounts', () => {
     expect(active.hits).toHaveLength(3); // refs + both publication calls
   });
 
-  it('W-M model routes: status/catalog/trends/:id answer 501 on their own paths (text-limited once), the lab is admin-only, the static /models list still reaches the studio', async () => {
+  it('W-M model routes: status/catalog/trends/:id answer on their own paths (text-limited once), the lab is admin-only, the static /models list still reaches the studio', async () => {
     text.hits.length = 0;
     // The existing static list is untouched: it is the studio router's route, counted by the studio's limiter once.
     expect(await call('/api/comic/models', { headers: user })).toEqual({ status: 200, body: { route: 'studio', path: '/models' } });
     expect(text.hits).toEqual(['GET /api/comic/models']);
     text.hits.length = 0;
-    for (const path of ['/api/comic/models/status?ids=nano-banana-2.1', '/api/comic/models/catalog?projectId=p1', '/api/comic/models/trends?range=30d', '/api/comic/models/nano-banana-2.1']) {
+    expect(await call('/api/comic/models/status?ids=nano-banana-2.1', { headers: user })).toEqual({ status: 501, body: { error: 'not built yet' } });
+    // The real catalog router (M1-CATALOG) answers its own paths. This harness's stand-in auth sets no req.user,
+    // so the router's own sign-in guard answers — before any catalog work, and never the studio.
+    for (const path of ['/api/comic/models/catalog?projectId=p1', '/api/comic/models/trends?range=30d', '/api/comic/models/nano-banana-2.1']) {
       const r = await call(path, { headers: user });
-      expect(r, path).toEqual({ status: 501, body: { error: 'not built yet' } });
+      expect(r, path).toEqual({ status: 401, body: { error: { message: 'Sign in to use the comic studio.', code: 'FORBIDDEN' } } });
     }
     expect(text.hits).toEqual([
       'GET /api/comic/models/status?ids=nano-banana-2.1',
