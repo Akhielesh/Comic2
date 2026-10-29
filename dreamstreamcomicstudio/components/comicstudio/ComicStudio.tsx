@@ -40,7 +40,7 @@ import { PLATFORM_MARKUP, TIER_PRESETS } from '../../shared/comic/models';
 import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, HAIRLINE, RADIUS_CONTROL, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
@@ -695,6 +695,9 @@ const PctField: React.FC<{
   );
 };
 
+/** The Atlas small radius (4 px) — the radio's focus ring inside its bordered row. */
+const RADIUS_SM = 'rounded-[var(--ds-radius-sm)]';
+
 export const SettingsPanel: React.FC<{
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
@@ -717,16 +720,19 @@ export const SettingsPanel: React.FC<{
               <div
                 key={o.value}
                 className={cx(
-                  'rounded-xl border px-3 py-2.5 transition-colors',
-                  on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
+                  `${RADIUS_CONTROL} border px-3 py-1 ${TRANSITION}`,
+                  on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
                 )}
               >
+                {/* The whole row height is the radio (44 px on touch, the row's padding inside the target
+                    instead of around it), with a visible keyboard focus ring. */}
                 <button
                   type="button"
                   role="radio"
                   aria-checked={on}
                   onClick={() => !on && setSettings({ confirm: o.value })}
-                  className="flex w-full items-start gap-2.5 text-left focus-visible:outline-none coarse:min-h-11"
+                  className={`flex min-h-10 w-full items-start gap-2.5 ${RADIUS_SM} py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-11`}
+                  data-confirm-option={o.value}
                 >
                   <span
                     aria-hidden
@@ -786,8 +792,8 @@ export const SettingsPanel: React.FC<{
                 aria-checked={on}
                 onClick={() => !on && void patch([{ op: 'format', patch: { lettering: o.value } }])}
                 className={cx(
-                  'rounded-xl border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
-                  on ? 'border-[#D97757]/45 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+                  `${RADIUS_CONTROL} border px-3 py-2.5 text-left ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`,
+                  on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
                 )}
               >
                 <span className="block text-[13px] font-semibold text-[var(--ds-ink)]">{o.title}</span>

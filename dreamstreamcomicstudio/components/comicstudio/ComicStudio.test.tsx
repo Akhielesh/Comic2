@@ -434,6 +434,22 @@ describe('ComicStudio on phones (single)', () => {
     expect(screen.getByRole('dialog', { name: 'Comic settings' })).toHaveAttribute('data-sheet', 'bottom');
   });
 
+  it('Confirm spending: each radio is the whole 44 px row on touch, with a visible focus ring (settings-confirm-spending-rows)', () => {
+    mountAt(PHONE, makeFakeStudio());
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Settings/ }));
+    const group = screen.getByRole('radiogroup', { name: 'Confirm spending' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.length).toBeGreaterThanOrEqual(2);
+    for (const r of radios) {
+      expect(r.className).toContain('coarse:min-h-11');
+      expect(r.className).toContain('focus-visible:ring-2');
+      // The bordered row adds no vertical padding of its own around the 44 px target (it was 37 px inside py-2.5).
+      expect(r.parentElement!.className).not.toMatch(/\bpy-2\.5\b/);
+    }
+    expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(1);
+  });
+
   it('below 360 px the spend chip moves into the ⋯ menu so the title keeps its room', () => {
     mountAt(FOLD_COVER, makeFakeStudio());
     const header = screen.getByRole('banner');
