@@ -43,6 +43,12 @@ const fakeDatasets = () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('models-quality-refresh.mjs', () => {
+  it('is the owner command `npm run models:quality:refresh` (models.md §4.5 S5)', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8'));
+    expect(pkg.scripts['models:quality:refresh']).toBe('tsx scripts/models-quality-refresh.mjs');
+    expect(pkg.devDependencies.tsx).toBeTruthy();
+  });
+
   it('importing it touches no network and runs nothing', async () => {
     const spy = vi.fn();
     vi.stubGlobal('fetch', spy);

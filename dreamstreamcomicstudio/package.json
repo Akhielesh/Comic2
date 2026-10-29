@@ -25,6 +25,7 @@
     "validate:sources": "node scripts/source-model-validate.mjs",
     "bench:models": "node scripts/model-bench.mjs",
     "catalog:refresh": "tsx server/src/jobs/refreshModelCatalog.ts",
+    "models:quality:refresh": "tsx scripts/models-quality-refresh.mjs",
     "nvidia:probe": "tsx server/src/jobs/probeNvidiaAvailability.ts",
     "pricing:sync": "tsx server/src/jobs/dailyPricingSync.ts",
     "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
