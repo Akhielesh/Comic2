@@ -6,7 +6,6 @@ import {
   __resetImageClientForTests,
   classifyImageError,
   planImagesApi,
-  type ImageRequestPlus,
   createImageGenerator,
   imageFailureDetail,
   imageFailureInfo,
@@ -662,7 +661,7 @@ describe('Images-API transport (api.openrouter === images)', () => {
     expect(body.input_references).toHaveLength(Math.min(8, GPT.refs.total)); // OpenRouter lists 8, the vendor 16
     expect(body.resolution).toBeUndefined(); // fixed-size model
     // Who served it and the version the provider reported are kept for the call record (models.md §2.5).
-    expect(result as ImageRequestPlus & typeof result).toMatchObject({ costUsd: 0.1646, providerName: 'OpenAI', modelVersion: 'openai/gpt-image-2.5-sunburst-2026-09-08' });
+    expect(result).toMatchObject({ costUsd: 0.1646, providerName: 'OpenAI', modelVersion: 'openai/gpt-image-2.5-sunburst-2026-09-08' });
   });
 
   it('pins provider.only to endpoints that list the requested resolution, and sends the resolution only when one does', () => {
@@ -681,7 +680,7 @@ describe('Images-API transport (api.openrouter === images)', () => {
 
   it('endpoint data but none within the quote: NO call, a classified non-retryable refusal with the H reason', async () => {
     const { generate, fetchMock } = imagesSetup([endpoint('OpenAI', 0.2107), endpoint('Azure', 0.31)], [gptOk()]);
-    const err = await generate({ ...baseReq({ spec: GPT, aspect: '2:3' }), maxUsd: 0.15 } as ImageRequestPlus).catch((e) => e);
+    const err = await generate({ ...baseReq({ spec: GPT, aspect: '2:3' }), maxUsd: 0.15 }).catch((e) => e);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(err).toBeInstanceOf(StudioError);
     expect(err).toMatchObject({ code: 'PROVIDER_ERROR', status: 422, retryable: false });
@@ -799,11 +798,11 @@ describe('provider-health breaker wiring', () => {
   it('preferRoute is honoured only for the same model with a key of the same payer', async () => {
     const generateContent = vi.fn().mockResolvedValue(geminiImage());
     const same = setup(PLATFORM_BOTH, [], { generateContent });
-    await expect(same.generate({ ...baseReq(), preferRoute: 'gemini' } as ImageRequestPlus)).resolves.toMatchObject({ route: 'gemini' });
+    await expect(same.generate({ ...baseReq(), preferRoute: 'gemini' })).resolves.toMatchObject({ route: 'gemini' });
     expect(same.fetchMock).not.toHaveBeenCalled();
     // The user's own Gemini key draws first; the platform OpenRouter key is another payer — that hint is ignored.
     const mixed = setup({ openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-mine', byok: true } }, [imagesOk()], { generateContent });
-    await expect(mixed.generate({ ...baseReq(), preferRoute: 'openrouter' } as ImageRequestPlus)).resolves.toMatchObject({ route: 'gemini', byok: true });
+    await expect(mixed.generate({ ...baseReq(), preferRoute: 'openrouter' })).resolves.toMatchObject({ route: 'gemini', byok: true });
     expect(mixed.fetchMock).not.toHaveBeenCalled();
   });
 

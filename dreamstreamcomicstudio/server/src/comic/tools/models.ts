@@ -24,7 +24,7 @@ import type { HealthState, ModelHealth, OutageOption } from '../../../../shared/
 import type { ModelCatalogRow, QualityBoard } from '../../../../shared/comic/modelCatalog.js';
 import { logger } from '../../lib/logger.js';
 import { costFormatterFor, type CostFormatter } from '../costText.js';
-import { defineTool, toolArgError, type DirectorTool, type ToolGroup, type ToolGroupId } from '../extensions.js';
+import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
 import { imageRouteFor, spendIsByok } from '../jobs.js';
 import { planPageReferences } from '../prompts.js';
 import { createPriceBook, modelCatalog, type QuoteBasis, type ServerPriceBook } from '../models/index.js';
@@ -1242,11 +1242,8 @@ The image model is locked per comic. Never say you switched it and never call a 
 - Cheaper first on the same model: a lower quality tier keeps the look (suggest_model tier). Never call an unranked model as good as the current one.
 - Suggest without being asked only when a page has more characters than the model holds, the provider keeps failing (suggest waiting first), or the model can no longer draw. Never on price alone.`;
 
-const MODELS_GROUP_ID: string = 'models';
-
 export const modelsToolGroup: ToolGroup = {
-  // 'models' is this group's id; ToolGroupId (extensions.ts, frozen) gains it through the lead's amendment.
-  id: MODELS_GROUP_ID as ToolGroupId,
+  id: 'models',
   priority: 12,
   when: (ctx, turn) => modelsGroupWanted(ctx, turn),
   tools: (ctx, turn) => [modelOptionsTool(ctx, turn), suggestModelTool(ctx, turn)],
