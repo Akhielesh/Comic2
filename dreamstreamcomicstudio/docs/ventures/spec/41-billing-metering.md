@@ -321,6 +321,17 @@ token_ledger_entries (CREDIT_PURCHASE, OVERAGE_CAPTURE)   Stripe paymentIntents 
               --strict  →  throw if any drift  (CI / alerting gate)
 ```
 
+**Stranded usage holds (✅ 2026-10-29).** Before the Stripe tie-out the job settles usage-budget holds that a
+failed settle left `RESERVED` (`jobs/strandedHolds.ts`): `generation_cost_events` rows of the comic studio
+(`metadata.surface = 'comic_studio_v4'`), `/api/text` (`text.*`) and `/api/image` (`image.*`) older than 20 minutes
+and inside a 7-day look-back (`BILLING_SWEEP_MAX_AGE_HOURS`; older ones are counted and reported, not settled).
+A hold whose settle already wrote its `SETTLE` ledger entry settles at that real cost; one whose release wrote
+`RELEASE` is released (never charged); any other settles at its held `provider_cost_usd` (`status 'SETTLED'`,
+`metadata.settledBy 'sweep'`, plus the `SETTLE` ledger entry a usage-budget settle writes, `walletSkipped`). Every
+write is a compare-and-set on `status = 'RESERVED'`, so a second run settles nothing and the usage budget counts each
+hold exactly once. Wallet (non-usage-budget) holds are never touched. The count is logged
+(`billing_stranded_hold_sweep`) and returned as `strandedHolds`; a failed sweep fails `--check`; `--no-sweep` skips it.
+
 **Autopilot extension (◐, the A7 task):** add a *third* leg — per-venture compute. The job should
 cross-check, per `venture_id`:
 
