@@ -112,7 +112,8 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
 import type { ActionHandler, SanitizeCtx } from './extensions.js';
-import { imageFailureDetail, imageFailureInfo } from './imageClient.js';
+import { imageFailureDetail, imageFailureInfo, pickImageRoute } from './imageClient.js';
+import { prefersGeminiDirect } from './keys.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -296,16 +297,32 @@ const governMsg = (ctx: StudioContext, msg: Msg): Msg => {
   return { ...msg, text: governDollars(msg.text, view), ...(cards ? { cards } : {}) };
 };
 
-/** Which transport an image model will use with these keys (mirrors the image client). */
+/**
+ * Which transport an image model will use with these keys — the image client's OWN choice
+ * (pickImageRoute), never a second opinion: the billing reserve is made for this route, so a
+ * user's own Gemini key draws AND is billed as their own key (BYOK never touches usage), while
+ * the platform key is reserved against usage. Null when no key reaches the model.
+ */
 export const imageRouteFor = (spec: ImageModelSpec, keys: StudioKeys): { route: ImageRoute; model: string; byok: boolean } | null => {
-  if (keys.openrouter?.key && spec.routes.openrouter) return { route: 'openrouter', model: spec.routes.openrouter, byok: keys.openrouter.byok };
-  if (keys.gemini?.key && spec.routes.gemini) return { route: 'gemini', model: spec.routes.gemini, byok: keys.gemini.byok };
-  return null;
+  try {
+    const picked = pickImageRoute(spec, keys);
+    return { route: picked.route, model: picked.model, byok: picked.key.byok };
+  } catch (err) {
+    if (err instanceof StudioError && err.code === 'NO_IMAGE_KEY') return null;
+    throw err;
+  }
 };
 
-/** Whether spend will run on the user's own key (OpenRouter preferred, else Gemini). */
+/**
+ * Whether spend will run on the user's own key: their Gemini key when the image client prefers
+ * it (own Gemini key, no own OpenRouter key — prefersGeminiDirect), else OpenRouter's, else Gemini's.
+ */
 export const spendIsByok = (keys: StudioKeys): boolean =>
-  keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok);
+  prefersGeminiDirect(keys) || (keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok));
+
+/** BYOK-ness of an image spend: the key of the route that will draw ITS model (an OpenRouter-only model stays platform spend for an own-Gemini-key user). */
+const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
+  imageRouteFor(modelLabel(doc, describeSpend(doc, action).kind).spec, keys)?.byok ?? spendIsByok(keys);
 
 /** Spend in the same unit as estimates: provider cost, plus platform markup unless BYOK. */
 const chargedUsd = (providerUsd: number, byok: boolean) => round4(Math.max(0, providerUsd) * (byok ? 1 : PLATFORM_MARKUP));
@@ -812,7 +829,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendIsByok(ctx.keys));
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, imageSpendIsByok(doc, gate.action, ctx.keys));
   const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
@@ -1167,7 +1184,8 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
   if (!ctx.keys.openrouter?.key && !ctx.keys.gemini?.key) {
     return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to draw images.', 'error');
   }
-  if (!imageRouteFor(spec, ctx.keys)) {
+  const picked = imageRouteFor(spec, ctx.keys);
+  if (!picked) {
     return blocked(ctx, opts, `${spec.nickname} needs ${spec.routes.openrouter ? 'an OpenRouter' : 'a Gemini'} key. Add one in Settings → API keys.`, 'error');
   }
   const denied = qualityProblem(ctx, opts, spec);
@@ -1177,7 +1195,8 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
     ]);
   }
 
-  const byok = spendIsByok(ctx.keys);
+  // Priced for the key that will draw (the quote, the markup and the reserve agree).
+  const byok = picked.byok;
   const estimate = estimateSpendAction(doc, action, byok);
   if (estimate.imageCount <= 0) {
     // Everything requested is ready and current (R1): $0, with what exists and what's next.
@@ -1252,9 +1271,11 @@ async function startRecheck(ctx: StudioContext, action: Extract<SpendAction, { t
   if (!canServeToOwner(asset)) {
     return blocked(ctx, opts, `Page ${page.n}'s current take didn't pass the content check, so it can't be re-checked — redraw it safer instead.`, 'warn');
   }
-  if (!resolveTextRoute('vision', ctx.keys)) return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to re-check pages.', 'error');
+  const visionRoute = resolveTextRoute('vision', ctx.keys);
+  if (!visionRoute) return blocked(ctx, opts, 'Connect a Gemini or OpenRouter key in Settings → API keys to re-check pages.', 'error');
 
-  const byok = spendIsByok(ctx.keys);
+  // A text spend: priced for the key the vision call runs on (text routes OpenRouter-first).
+  const byok = visionRoute.key.byok;
   const estimate = estimateSpendAction(doc, action, byok);
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(doc, estimate, opts.confirmed && !stale, {

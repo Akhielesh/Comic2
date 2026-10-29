@@ -19,24 +19,28 @@ import { logger } from '../lib/logger.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { ActionHandler } from './extensions.js';
+import { getImageModel } from '../../../shared/comic/models.js';
+import { pickImageRoute } from './imageClient.js';
 import {
   JOB_TIMINGS,
   estimateSpendAction,
   gateDecision,
+  imageRouteFor,
   nextStepsFor,
   pickDefaultPreset,
   planPages,
   runAction,
   runFeatureAction,
   sanitizePatchOps,
+  spendIsByok,
   startAction,
   suggestNextSteps,
   type RunActionOptions
 } from './jobs.js';
-import { KEYS, fakeBilling, fakeImages, lakeDoc, newSession, opsOf, plannedDoc, scriptedLlm, testContext, TINY_PNG, type TestContext } from './orchestrator.fakes.js';
+import { KEYS, fakeBilling, fakeImages, lakeDoc, newSession, opsOf, plannedDoc, scriptedLlm, testContext, TINY_PNG, type FakeBilling, type TestContext } from './orchestrator.fakes.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
 import type { StudioSession } from './session.js';
-import { StudioError } from './types.js';
+import { StudioError, type StudioKeys } from './types.js';
 import { analyzePageRender } from './vision.js';
 import { proposeStyleDirections, writePagePlan } from './writer.js';
 
@@ -1855,4 +1859,76 @@ it('fakes stay honest: TINY_PNG is a valid data URL and KEYS route via OpenRoute
   expect(TINY_PNG.startsWith('data:image/png;base64,')).toBe(true);
   expect(KEYS.openrouter?.byok).toBe(false);
   expect(scriptedLlm).toBeTypeOf('function');
+});
+
+// ── BYOK image routing (the user's own Gemini key beside the platform OpenRouter key) ──
+
+describe('own Gemini key beside the platform OpenRouter key', () => {
+  /** Production shape: the platform OpenRouter key from env plus the user's own Gemini key. */
+  const OWN_GEMINI: StudioKeys = { openrouter: { key: 'sk-or-platform', byok: false }, gemini: { key: 'AIza-own', byok: true } };
+  const OWN_BOTH: StudioKeys = { openrouter: { key: 'sk-or-own', byok: true }, gemini: { key: 'AIza-own', byok: true } };
+  const spec = getImageModel('nano-banana-2.1')!;
+
+  /** Billing hooks that remember which provider each reserve was made for (the fake keeps only the model). */
+  const billingRecordingProvider = (allow: (provider: string) => boolean = () => true) => {
+    const reserves: { provider: string; model: string; operation: string }[] = [];
+    const base = fakeBilling();
+    const billing: FakeBilling = {
+      ...base,
+      async reserve(args) {
+        reserves.push({ provider: args.provider, model: args.model, operation: args.operation });
+        if (!allow(args.provider)) return { ok: false, code: 'BILLING_DENIED', message: "You've used all of your DreamStream usage." };
+        return base.reserve(args);
+      }
+    };
+    return { billing, reserves };
+  };
+
+  it('imageRouteFor is the image client’s own pick (and spendIsByok agrees), so the reserve names the key that draws', () => {
+    for (const keys of [KEYS, OWN_GEMINI, OWN_BOTH, { gemini: { key: 'AIza-own', byok: true } } as StudioKeys]) {
+      const drawn = pickImageRoute(spec, keys);
+      expect(imageRouteFor(spec, keys)).toEqual({ route: drawn.route, model: drawn.model, byok: drawn.key.byok });
+      expect(spendIsByok(keys)).toBe(drawn.key.byok);
+    }
+    // The own-Gemini-key user draws on Gemini direct — their own key, not the platform's.
+    expect(imageRouteFor(spec, OWN_GEMINI)).toEqual({ route: 'gemini', model: spec.routes.gemini, byok: true });
+    expect(imageRouteFor(spec, KEYS)).toMatchObject({ route: 'openrouter', byok: false });
+    expect(imageRouteFor(spec, {})).toBeNull();
+    // An OpenRouter-only model still goes through the platform key for that user (platform spend).
+    const orOnly = getImageModel('flux-3')!;
+    expect(orOnly.routes.gemini).toBeUndefined();
+    expect(imageRouteFor(orOnly, OWN_GEMINI)).toMatchObject({ route: 'openrouter', byok: false });
+  });
+
+  it('a cover drawn on the user’s own Gemini key is reserved on the Gemini route as BYOK, quoted without the platform markup, and recorded as their own spend', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    const { billing, reserves } = billingRecordingProvider();
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: spec.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing });
+    const quote = estimateSpendAction(session.doc, { type: 'render_cover' }, spendIsByok(OWN_GEMINI));
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(images.calls).toHaveLength(1);
+    expect(reserves).toEqual([{ provider: 'gemini', model: spec.routes.gemini, operation: 'comic.image.cover' }]);
+    // Own key: the registry price, no platform markup — the same figure the ledger sees.
+    expect(quote.usd).toBeCloseTo(imagePriceUsd(spec, '2K'), 6);
+    expect(session.doc.spend.entries).toEqual([expect.objectContaining({ label: 'Cover', byok: true, usd: quote.usd })]);
+    expect(session.doc.cover.render.status).toBe('ready');
+  });
+
+  it('usage used up: the cover still draws on the user’s own Gemini key (the platform key would be refused)', async () => {
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    // The real enforcer never budget-checks a BYOK call; a platform-key call of an exhausted user is refused.
+    const { billing, reserves } = billingRecordingProvider((provider) => provider === 'gemini');
+    const images = fakeImages(() => ({ route: 'gemini', byok: true, model: spec.routes.gemini, costUsd: undefined }));
+    const ctx = testContext(session, { keys: OWN_GEMINI, images, billing });
+    await runAction(ctx, { type: 'render_cover' }, { confirmed: true });
+    expect(reserves.map((r) => r.provider)).toEqual(['gemini']);
+    expect(images.calls).toHaveLength(1);
+    expect(session.doc.cover.render.status).toBe('ready');
+    expect(session.doc.conversation.at(-1)?.text).not.toMatch(/used all of your DreamStream usage/);
+  });
 });
