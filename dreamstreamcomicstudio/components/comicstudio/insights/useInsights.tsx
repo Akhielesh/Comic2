@@ -6,10 +6,14 @@
 //     concurrent asks share one in-flight request (single-flight);
 //   - NO timer, interval or timeout anywhere — a stale answer is refreshed the next time someone opens the tab;
 //   - a failed refresh keeps the last answer and marks it stale ("as of {time} · couldn't refresh", §4.6); a
-//     failure with nothing cached reports the error (the tab then shows the registry's dated facts).
+//     failure with nothing cached reports the error (the tab then shows the registry's dated facts);
+//   - answers belong to the signed-in account ("your calls", your observed costs, this comic's fit): when the
+//     account changes (sign-out, sign-in, a switch on the same tab) every held answer is dropped, and a tab that is
+//     open asks again for the new account. A token refresh for the same account keeps them.
 
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import type { ModelCatalogRow, ModelTrends, TrendRange } from '../../../shared/comic/modelCatalog';
+import { supabase } from '../../../services/supabase';
 import { fetchInsightsCatalog, fetchInsightsTrends } from './insightsApi';
 
 /** Reuse an answer this long before asking again (on the next open; never on a timer). */
@@ -40,6 +44,8 @@ interface Entry {
 const cache = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 let version = 0;
+/** Bumped whenever the cache is dropped: a mounted tab then asks again (its effect depends on it). */
+let generation = 0;
 
 const emit = () => {
   version += 1;
@@ -92,19 +98,45 @@ export const loadInsights = (key: string, fetcher: () => Promise<unknown>, force
   return e.inflight;
 };
 
+const dropAll = (): void => {
+  cache.clear();
+  generation += 1;
+  emit();
+};
+
+let signedInAs: string | null | undefined;
+
+/**
+ * The account auth reports for this tab (null when signed out). A different account than the last one drops every
+ * held answer — a second account signing in on the same tab never sees the first one's calls or costs.
+ */
+export const noteInsightsUser = (userId: string | null): void => {
+  if (signedInAs !== undefined && userId !== signedInAs) dropAll();
+  signedInAs = userId;
+};
+
+// Like services/productAccess.ts: follow the auth state for the page's life. INITIAL_SESSION / SIGNED_IN /
+// SIGNED_OUT / USER_UPDATED with another user drop the cache; TOKEN_REFRESHED for the same user changes nothing.
+try {
+  supabase.auth.onAuthStateChange((_event, session) => noteInsightsUser(session?.user?.id ?? null));
+} catch {
+  // No auth client in this environment: nothing to scope by.
+}
+
 /** Tests: forget every answer. */
 export const __resetInsightsCacheForTests = (): void => {
-  cache.clear();
-  emit();
+  dropAll();
 };
 
 const useResource = <T,>(key: string | null, fetcher: () => Promise<T>, enabled: boolean): Loadable<T> => {
   useSyncExternalStore(subscribe, snapshot, snapshot);
+  const gen = generation;
   useEffect(() => {
     if (enabled && key) void loadInsights(key, fetcher);
-    // The fetcher is derived from the key; asking again only when the key or `enabled` changes.
+    // The fetcher is derived from the key; asking again only when the key or `enabled` changes, or when the held
+    // answers were dropped (another account signed in) while this tab is open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, enabled]);
+  }, [key, enabled, gen]);
   const refresh = useCallback(() => {
     if (key) void loadInsights(key, fetcher, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

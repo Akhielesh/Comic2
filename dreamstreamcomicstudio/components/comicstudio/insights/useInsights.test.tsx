@@ -7,9 +7,21 @@ import { act, render, screen } from '@testing-library/react';
 
 const getMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../services/apiClient', () => ({ get: getMock }));
+// The auth state the insights cache follows (services/supabase), driven by the tests.
+const auth = vi.hoisted(() => ({ cb: null as null | ((event: string, session: unknown) => void) }));
+vi.mock('../../../services/supabase', () => ({
+  supabase: {
+    auth: {
+      onAuthStateChange: (cb: (event: string, session: unknown) => void) => {
+        auth.cb = cb;
+        return { data: { subscription: { unsubscribe: () => undefined } } };
+      }
+    }
+  }
+}));
 
 import { asCatalogRow, asTrends, fetchInsightsCatalog, fetchInsightsTrends } from './insightsApi';
-import { INSIGHTS_FRESH_MS, __resetInsightsCacheForTests, useInsightsCatalog, useInsightsTrends } from './useInsights';
+import { INSIGHTS_FRESH_MS, __resetInsightsCacheForTests, useHeldCatalog, useInsightsCatalog, useInsightsTrends } from './useInsights';
 
 const row = (over: Record<string, unknown> = {}) => ({
   id: 'nano-banana-2.1',
@@ -134,6 +146,46 @@ describe('useInsightsCatalog (on demand, no timers)', () => {
     expect(getMock).toHaveBeenCalledTimes(2);
     third.unmount();
     now.mockRestore();
+  });
+
+  it('answers belong to the signed-in account: another account on the same tab never sees them; an open tab asks again', async () => {
+    const authEvent = (event: string, userId: string | null) =>
+      act(async () => {
+        auth.cb!(event, userId ? { user: { id: userId }, access_token: `tok-${userId}` } : null);
+      });
+    expect(auth.cb).toBeTypeOf('function');
+    await authEvent('SIGNED_IN', 'user-a');
+    getMock.mockResolvedValue([row()]);
+    const Held: React.FC = () => <div data-testid="held">{useHeldCatalog('p5')?.map((r) => r.id).join(',') ?? 'none'}</div>;
+    render(
+      <>
+        <Probe projectId="p5" />
+        <Held />
+      </>
+    );
+    await act(async () => {});
+    expect(getMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('held')).toHaveTextContent('nano-banana-2.1');
+
+    // A token refresh for the same account keeps the answer (no request).
+    await authEvent('TOKEN_REFRESHED', 'user-a');
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // Another account signs in on this tab within the 5 minutes: user A's rows are gone, the open tab asks again.
+    let answer!: (rows: unknown) => void;
+    getMock.mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+    await authEvent('SIGNED_IN', 'user-b');
+    expect(screen.getByTestId('held')).toHaveTextContent('none');
+    expect(screen.getByTestId('probe')).toHaveTextContent('loading|none|fresh|');
+    expect(getMock).toHaveBeenCalledTimes(2);
+    await act(async () => answer([row({ id: 'nano-banana-pro', nickname: 'Nano Banana Pro' })]));
+    expect(screen.getByTestId('probe')).toHaveTextContent('idle|nano-banana-pro|fresh|');
+
+    // Signing out drops it too (the open tab's new ask is refused without a session: nothing is shown).
+    getMock.mockRejectedValueOnce(Object.assign(new Error('Sign in again.'), { status: 401 }));
+    await authEvent('SIGNED_OUT', null);
+    expect(screen.getByTestId('held')).toHaveTextContent('none');
+    expect(screen.getByTestId('probe')).toHaveTextContent(/idle\|none\|fresh\|.*sign in again/i);
   });
 
   it('trends are keyed by range', async () => {
