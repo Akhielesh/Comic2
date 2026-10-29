@@ -506,7 +506,8 @@
    that every accent text / text-bearing fill utility in the tree has a rule here. Until the
    components spell ACCENT_TEXT / ACCENT_FILL (studioDesign.ts) themselves, these rules keep the
    brand terracotta for decoration and give text the readable variants:
-   - accent-coloured TEXT (and the icons that inherit it) → --ds-accent-text;
+   - accent-coloured TEXT (and the icons that inherit it) → --ds-accent-text, including the literal
+     hover terracotta #c2643f (3.84:1 on the paper; no shim rule competes, so it is ink in the skin);
    - a solid accent fill that carries white / on-accent text → --ds-accent-fill (+ -fill-hover).
      `:not(:disabled)` leaves a component's own disabled styling (disabled:bg-…, opacity) alone.
    Under the Atlas skin the three tokens are the ink accent, so nothing changes there; the skin's
@@ -517,6 +518,7 @@
    utility, and the fills are compound selectors (utility + its text colour) that outrank both. */
 .text-\[var\(--ds-accent\)\],
 .text-\[\#D97757\],
+.text-\[\#c2643f\],
 .hover\:text-\[var\(--ds-accent\)\].hover\:text-\[var\(--ds-accent\)\]:hover,
 .hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover,
 .group:hover .group-hover\:text-\[var\(--ds-accent\)\].group-hover\:text-\[var\(--ds-accent\)\],

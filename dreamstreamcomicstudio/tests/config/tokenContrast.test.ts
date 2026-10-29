@@ -272,14 +272,47 @@ function utilitySelector(cls: string, compound = '', double = false): string {
   return `${prefix}${own}${double && parts.length ? own : ''}${compound}${suffix}`;
 }
 
+/** `[variant:]*` prefixes: plain (`hover:`, `group-hover/icon:`) and bracketed (`[@media(pointer:coarse)]:`). */
+const VARIANTS = String.raw`(?:(?:[\w/-]+|\[[^\]\s"'\u0060]*\]):)*`;
+/** The accent colours a text / fill utility can spell: the two tokens and the two literal terracottas, any case. */
+const ACCENT = String.raw`(?:var\(--ds-accent(?:-hover)?\)|#(?:D97757|c2643f))`;
+/** Accent text utilities, with any opacity modifier (which the routing cannot honour — the test fails on one). */
+const ACCENT_TEXT_UTILITY = new RegExp(String.raw`(?<![\w-])${VARIANTS}text-\[${ACCENT}\](?:\/[\w.[\]]+)?(?![\w[-])`, 'gi');
+/** Accent background utilities, with their opacity modifier. */
+const ACCENT_FILL_UTILITY = new RegExp(String.raw`(?<![\w-])${VARIANTS}bg-\[${ACCENT}\](?:\/(?:\d{1,3}|\[[\d.]+\]))?(?![\w[-])`, 'gi');
+/** The opacity a `/NN` or `/[0.NN]` modifier applies (1 without one). */
+const alphaOf = (cls: string): number => {
+  const m = /\/(\[[\d.]+\]|\d{1,3})$/.exec(cls);
+  if (!m) return 1;
+  return m[1].startsWith('[') ? parseFloat(m[1].slice(1, -1)) : Number(m[1]) / 100;
+};
+/** A tint (≤ 35 %) is a surface that text sits on; anything denser is a fill. */
+const isTint = (cls: string) => alphaOf(cls) <= 0.35;
+
 describe('token contrast — the accent utilities paint the readable tokens', () => {
   it('every accent TEXT utility in the tree is routed to --ds-accent-text', () => {
-    const found = classTokens(/(?<![\w-])(?:[\w/-]+:)*text-\[(?:var\(--ds-accent(?:-hover)?\)|#D97757)\](?![\w/[-])/g);
+    const found = classTokens(ACCENT_TEXT_UTILITY);
     expect(found).toContain('text-[var(--ds-accent)]');
     expect(found).toContain('text-[#D97757]');
+    expect(found).toContain('text-[#c2643f]'); // TranslationReview's overflow fit label (3.84:1 on the paper as a literal)
+    // An opacity-modified accent text utility cannot be routed (and `/NN` on a var() colour is invalid CSS anyway).
+    expect(found.filter((c) => /\]\//.test(c)), 'use ACCENT_TEXT (fade the element with opacity-* if it must)').toEqual([]);
     for (const cls of found) {
       expect(bodiesFor(utilitySelector(cls, '', true)), cls).toContain('color: var(--ds-accent-text);');
     }
+  });
+
+  it('the scanners see every spelling: any case, opacity modifiers and bracketed variants', () => {
+    const scan = (re: RegExp, text: string) => [...text.matchAll(re)].map((m) => m[0]);
+    expect(scan(ACCENT_TEXT_UTILITY, 'a text-[#d97757] b text-[#C2643F] c')).toEqual(['text-[#d97757]', 'text-[#C2643F]']);
+    expect(scan(ACCENT_TEXT_UTILITY, '"text-[var(--ds-accent)]/80"')).toEqual(['text-[var(--ds-accent)]/80']);
+    expect(scan(ACCENT_TEXT_UTILITY, ' [@media(pointer:coarse)]:text-[var(--ds-accent)] ')).toEqual(['[@media(pointer:coarse)]:text-[var(--ds-accent)]']);
+    expect(() => utilitySelector('[@media(pointer:coarse)]:text-[var(--ds-accent)]')).toThrow(/no selector mapping/);
+    expect(scan(ACCENT_FILL_UTILITY, 'bg-[#d97757]/[0.9] text-white')).toEqual(['bg-[#d97757]/[0.9]']);
+    expect(scan(ACCENT_FILL_UTILITY, 'bg-[var(--ds-accent-soft)] bg-[var(--ds-accent-fill)]')).toEqual([]);
+    // Tints are parsed numerically: ≤ 35 % is a surface, anything denser is a fill.
+    for (const c of ['bg-[#D97757]/15', 'bg-[#D97757]/35', 'bg-[#D97757]/[0.12]', 'bg-[#D97757]/[.3]']) expect(isTint(c), c).toBe(true);
+    for (const c of ['bg-[#D97757]', 'bg-[#D97757]/36', 'bg-[#D97757]/85', 'bg-[#D97757]/[0.5]', 'bg-[#D97757]/[0.9]', 'bg-[#D97757]/[1]']) expect(isTint(c), c).toBe(false);
   });
 
   /**
@@ -302,10 +335,9 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     'bg-[#D97757]/60': 'comicstudio/breakdown/BreakdownCard.tsx: a cost bar',
     'bg-[#D97757]/70': 'i18n/LanguageSwitch.tsx, chat/ChatSettingsModal.tsx: a draft dot and a swatch bar'
   };
-  const isTint = (cls: string) => /\/(?:[0-9]|[12][0-9]|3[0-5]|\[0?\.[0-3]?\d*\])$/.test(cls);
 
   it('every solid accent fill in the tree is either routed (when it carries text) or a documented mark', () => {
-    const found = classTokens(/(?<![\w-])(?:[\w/-]+:)*bg-\[(?:var\(--ds-accent(?:-hover)?\)|#D97757)\](?:\/(?:\d{1,3}|\[0?\.\d+\]))?(?![\w[-])/g);
+    const found = classTokens(ACCENT_FILL_UTILITY);
     expect(found).toContain('bg-[var(--ds-accent)]');
     const unclassified = found.filter((c) => !isTint(c) && !(c in TEXT_BEARING) && !(c in DECORATIVE));
     expect(unclassified, 'classify a new accent fill: TEXT_BEARING (gets a rule) or DECORATIVE (never carries text)').toEqual([]);
