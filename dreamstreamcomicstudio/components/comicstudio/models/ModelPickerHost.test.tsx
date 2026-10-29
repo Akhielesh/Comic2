@@ -116,4 +116,27 @@ describe('ModelPickerHost', () => {
     await act(async () => undefined);
     expect(document.querySelector('li[data-suggested]')).toBeNull();
   });
+
+  it('"Switch back to {Current}" (the model just switched away from) opens its confirm at once, "Free now" preselected', async () => {
+    const studio = studioFor();
+    const doc = lakeDoc({ model: 'nano-banana-pro' });
+    doc.imageModel = { modelId: 'nano-banana-pro', lockedAt: NOW, origin: 'user_change', changes: [{ from: 'nano-banana-2.1', to: 'nano-banana-pro', at: NOW, redraw: 'none', quotedUsd: 0 }] };
+    studio.doc = doc;
+    render(<ModelPickerHost studio={studio} />);
+    act(() => {
+      requestOpenModelPicker({ suggest: 'nano-banana-2.1' });
+    });
+    await act(async () => undefined);
+    const confirm = screen.getByRole('alertdialog', { name: 'Switch this comic to Nano Banana 2.1?' });
+    expect(within(confirm).getByRole('radio', { name: /Keep them as they are/ })).toBeChecked();
+    // After the sheet underneath has focused itself (next frame), focus is back on the confirm's safe choice.
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    });
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Keep Nano Banana Pro' }));
+    expect(within(confirm).getByText('Free now')).toBeInTheDocument();
+    // Keep returns to the picker, which stays open underneath.
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Keep Nano Banana Pro' }));
+    expect(screen.getByRole('dialog', { name: 'Image model' })).toBeInTheDocument();
+  });
 });

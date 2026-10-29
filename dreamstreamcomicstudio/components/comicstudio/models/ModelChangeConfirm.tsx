@@ -144,7 +144,13 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
   useBackLayer(open && modal, cancel, 'model-change-confirm');
   // Default focus: "Keep {Current}" (the safe choice), every time the dialog opens or the target changes.
   useEffect(() => {
-    if (open && modal) keepRef.current?.focus({ preventScroll: true });
+    if (!open || !modal) return undefined;
+    keepRef.current?.focus({ preventScroll: true });
+    // A sheet opening underneath in the same commit focuses its own content on the next frame: take focus back after
+    // it, so focus never sits behind this modal.
+    if (typeof requestAnimationFrame !== 'function') return undefined;
+    const raf = requestAnimationFrame(() => keepRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(raf);
   }, [open, modal, targetId]);
   useEffect(() => {
     setScope(initialScope);
