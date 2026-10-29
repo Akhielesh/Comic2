@@ -145,7 +145,7 @@ function AuthSheet({
 
   const title = { signin: 'Sign in', create: 'Create your account', code: 'Enter your welcome code', reset: 'Reset your password' }[mode];
   const sub = {
-    signin: 'Pick up where you left off — events, recordings and your baby monitor follow your account.',
+    signin: 'Your DreamStream account — the same one as Comic Studio and Chat Studio. Events, recordings and your baby monitor follow it.',
     create: 'New accounts need a welcome code. Viewers never need an account — just a name.',
     code: 'Your account is signed in. Enter the welcome code you were given to unlock hosting and the baby monitor.',
     reset: 'We’ll email you a secure link.',

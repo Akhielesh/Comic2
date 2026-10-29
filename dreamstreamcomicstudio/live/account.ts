@@ -221,15 +221,24 @@ export async function refreshAccount(): Promise<LiveAccount> {
   }
   let session;
   try {
-    session = (await sb.auth.getSession()).data.session;
+    const got = await sb.auth.getSession();
+    session = got.data.session;
+    // The stored session needed a refresh and the auth server couldn't be reached (a reload while
+    // the internet is down, the home Wi-Fi still up): Supabase keeps the session for a retryable
+    // failure, so this is no answer — never "signed out", and nothing of the account's is wiped.
+    // (A refresh token the server REJECTED comes back without a session and another error: that one
+    // is signed out.)
+    if (!session && unreachable(got.error)) return stayIn();
   } catch {
-    set({ status: 'offline' });
-    return current;
+    return stayIn();
   }
   if (!session) {
     // Nobody signed in: the last account's name, events and nursery data go too.
     if (claimDevice(null)) notifyPurged();
-    set({ status: 'signed_out' });
+    // Two checks can overlap (every screen asks on mount): one that finds the session already
+    // ended elsewhere signs it out, and the other then finds none — it keeps "why", so the
+    // "you were signed out" notice isn't lost.
+    set(current.status === 'signed_out' && current.ended ? { status: 'signed_out', ended: current.ended } : { status: 'signed_out' });
     return current;
   }
   if (claimDevice(session.user.id)) notifyPurged();
@@ -301,6 +310,20 @@ export async function refreshAccount(): Promise<LiveAccount> {
     }
   }
   set({ status: 'needs_code', userId: session.user.id, email, suggestedName: me.data.suggested_name });
+  return current;
+}
+
+/** supabase-js's "couldn't reach the auth server" (network down, 502/503/504) — not an answer. */
+const unreachable = (e: unknown): boolean => !!e && typeof e === 'object' && (e as { name?: unknown }).name === 'AuthRetryableFetchError';
+
+/**
+ * The session couldn't be read just now. A member stays a member — a running nursery camera or
+ * monitor is never signed out of its screen (or gated out of Stream Studio) by a blip — and
+ * anyone else is 'offline' (let through, as before), never "signed out".
+ */
+function stayIn(): LiveAccount {
+  if (current.status === 'member') return current;
+  set({ status: 'offline', ...(current.userId ? { userId: current.userId, email: current.email } : {}) });
   return current;
 }
 

@@ -101,6 +101,19 @@ describe('a session ended elsewhere', () => {
     expect(h.auth.signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(localStorage.getItem('ds-live-my-events')).toBeNull(); // host keys never outlive the session
   });
+
+  it('a second check that overlaps it (and then finds no session) keeps the reason — the notice isn’t lost', async () => {
+    h.state.me = { signed_in: false, member: false, error: 'session_revoked' };
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out', ended: 'revoked' });
+    // The other screen's check, a moment later: the session is gone now.
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out', ended: 'revoked' });
+    // A sign-in and an ordinary sign-out later, there's no reason left to tell.
+    h.state.session = { access_token: 'tok-2', expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u1', email: 'ada@example.com', user_metadata: {} } };
+    h.state.me = { member: true, profile: { display_name: 'Ada' } };
+    expect((await account.refreshAccount()).status).toBe('member');
+    await account.signOutThisDevice();
+    expect(await account.refreshAccount()).toEqual({ status: 'signed_out' });
+  });
 });
 
 describe('two-step sign-in at sign-in', () => {
@@ -147,6 +160,31 @@ describe('two-step sign-in at sign-in', () => {
     vi.resetModules();
     account = await import('./account');
     expect((await account.refreshAccount()).status).toBe('offline');
+  });
+
+  it('a reload while the internet is down (the stored session can’t be refreshed) is never "signed out", and wipes nothing', async () => {
+    // Stream Studio's sign-in gate shows the sign-in screen only for a definite "signed out": a camera
+    // phone reloaded during an outage must not land there, nor lose its nursery data.
+    localStorage.setItem('ds-live-owner', 'u1');
+    localStorage.setItem('ds-monitor-zones-n1', '[{"x":1}]');
+    const unreachable = Object.assign(new Error('Failed to fetch'), { name: 'AuthRetryableFetchError', status: 0 });
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+    expect((await account.refreshAccount()).status).toBe('offline');
+    expect(localStorage.getItem('ds-live-owner')).toBe('u1');
+    expect(localStorage.getItem('ds-monitor-zones-n1')).toBe('[{"x":1}]');
+    // Back online: in, as before.
+    expect((await account.refreshAccount()).status).toBe('member');
+    // Already in: a failed session read (unreachable, or thrown) keeps the member.
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: unreachable } as never);
+    expect((await account.refreshAccount()).status).toBe('member');
+    h.auth.getSession.mockRejectedValueOnce(new Error('storage unavailable'));
+    expect((await account.refreshAccount()).status).toBe('member');
+  });
+
+  it('a refresh token the server rejected IS signed out (the session is gone)', async () => {
+    const rejected = Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), { name: 'AuthApiError', status: 400 });
+    h.auth.getSession.mockResolvedValueOnce({ data: { session: null }, error: rejected } as never);
+    expect((await account.refreshAccount()).status).toBe('signed_out');
   });
 
   it('picks up changes made elsewhere: after a token refresh and when the code was given in another tab', async () => {

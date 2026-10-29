@@ -236,8 +236,8 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
             <>
               <div className="set-head"><h2 className="serif">Account &amp; sync</h2></div>
               <p className="set-intro">
-                Watching never needs an account. Hosting and the baby monitor do — sign in (or create an account with
-                your welcome code) right here, and your events, recaps and settings follow you to every device.
+                Stream Studio uses your DreamStream account — the same one as Comic Studio and Chat Studio — and your
+                events, recaps and settings follow it to every device. Watching from a link someone sent never needs an account.
               </p>
               {live.status === 'loading' ? (
                 <div className="skeleton" style={{ height: 56 }} aria-label="Loading account" />
@@ -306,8 +306,10 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                     </Row>
                   )}
                 </>
+              ) : live.status === 'offline' ? (
+                <div className="banner warn"><Icon name="wifi" size={15} />Can’t reach your account right now — check your connection. Your settings are kept on this device meanwhile.</div>
               ) : (
-                <Row title="Not signed in" desc="Settings and events stay on this device only until you sign in. New accounts need a welcome code.">
+                <Row title="Not signed in" desc="Sign in with your DreamStream account to use Stream Studio. New accounts need a welcome code.">
                   <div className="row" style={{ gap: 8 }}>
                     <Btn variant="ghost" size="sm" onClick={() => openAuth('signin')}>Sign in</Btn>
                     <Btn variant="solid" size="sm" onClick={() => openAuth('create')}>Create account</Btn>
