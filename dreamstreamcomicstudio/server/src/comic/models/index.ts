@@ -7,9 +7,10 @@
 //   createSupabaseCatalogStore / createSupabaseImageCallsDb   the persistence behind it (service role)
 //
 // Tables (server/sql/comic_model_catalog.sql, server/sql/comic_image_calls.sql): model_catalog_cache (existing;
-// sources 'openrouter_images' and 'openrouter_images_endpoints'), model_pricing_snapshots, model_uptime_daily,
-// comic_image_calls and the security-definer comic_image_model_stats(p_since). Every read is bounded and every
-// failure degrades to "no data" — the catalog then shows the §4.6 copy instead of a number.
+// sources 'openrouter_images', 'openrouter_images_endpoints' and 'lmarena_snapshot'), comic_model_price_changes,
+// comic_model_uptime_daily, comic_image_calls and the security-definer comic_image_model_stats(p_since). Every
+// read is bounded and every failure degrades to "no data" — the catalog then shows the §4.6 copy instead of a
+// number. The billing table model_pricing_snapshots (token billing's live prices) is never read or written here.
 
 import type { Resolution } from '../../../../shared/comic/doc.js';
 import { logger } from '../../lib/logger.js';
@@ -32,6 +33,16 @@ export * from './catalog.js';
 export * from './observed.js';
 export * from './pricing.js';
 export * from './quality.js';
+
+/**
+ * The tables this package reads and writes (server/sql/comic_model_catalog.sql). Every name is comic_-prefixed
+ * except the shared cache: token billing owns public.model_pricing_snapshots, which must never receive catalog rows.
+ */
+export const CATALOG_TABLES = {
+  cache: 'model_catalog_cache',
+  priceChanges: 'comic_model_price_changes',
+  uptimeDaily: 'comic_model_uptime_daily'
+} as const;
 
 /** Upper bound for one database read on a request path. */
 export const DB_READ_TIMEOUT_MS = 5_000;
@@ -64,7 +75,7 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
   const db = () => getSupabaseAdmin();
   return {
     async loadCache(source) {
-      const { data, error } = await db().from('model_catalog_cache').select('model_id, payload, last_seen_at').eq('source', source).abortSignal(timeout());
+      const { data, error } = await db().from(CATALOG_TABLES.cache).select('model_id, payload, last_seen_at').eq('source', source).abortSignal(timeout());
       if (error) throw new Error(error.message);
       return (data ?? [])
         .map((r: Record<string, unknown>): CachedPayload | null => (str(r.model_id) && str(r.last_seen_at) ? { modelId: r.model_id as string, payload: r.payload, fetchedAt: r.last_seen_at as string } : null))
@@ -73,7 +84,7 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
     async saveCache(source, rows) {
       if (!rows.length) return;
       const { error } = await db()
-        .from('model_catalog_cache')
+        .from(CATALOG_TABLES.cache)
         .upsert(
           rows.map((r) => ({ source, model_id: r.modelId, payload: r.payload, supports_image_output: true, is_free: false, last_seen_at: r.fetchedAt })),
           { onConflict: 'source,model_id' }
@@ -82,7 +93,7 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
     },
     async latestPriceSnapshots() {
       // Change-only rows are few (one per price change); the newest per (model, res) wins.
-      const { data, error } = await db().from('model_pricing_snapshots').select('model_id, res, usd, basis, note, provider, fetched_at').order('fetched_at', { ascending: false }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
+      const { data, error } = await db().from(CATALOG_TABLES.priceChanges).select('model_id, res, usd, basis, note, provider, fetched_at').order('fetched_at', { ascending: false }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
       if (error) throw new Error(error.message);
       const latest = new Map<string, PriceSnapshotRow>();
       for (const raw of data ?? []) {
@@ -94,17 +105,17 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
     async insertPriceSnapshots(rows) {
       if (!rows.length) return;
       const { error } = await db()
-        .from('model_pricing_snapshots')
+        .from(CATALOG_TABLES.priceChanges)
         .insert(rows.map((r) => ({ model_id: r.modelId, res: r.res, usd: r.usd, basis: r.basis, note: r.note ? r.note.slice(0, 500) : null, provider: r.provider ?? null, fetched_at: r.fetchedAt })));
       if (error) throw new Error(error.message);
     },
     async priceSnapshotsSince(sinceIso) {
-      const { data, error } = await db().from('model_pricing_snapshots').select('model_id, res, usd, basis, note, provider, fetched_at').gte('fetched_at', sinceIso).order('fetched_at', { ascending: true }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
+      const { data, error } = await db().from(CATALOG_TABLES.priceChanges).select('model_id, res, usd, basis, note, provider, fetched_at').gte('fetched_at', sinceIso).order('fetched_at', { ascending: true }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
       if (error) throw new Error(error.message);
       return (data ?? []).map((r) => snapshotFromDb(r as Record<string, unknown>)).filter((r): r is PriceSnapshotRow => !!r);
     },
     async firstPriceSnapshotAt() {
-      const { data, error } = await db().from('model_pricing_snapshots').select('fetched_at').order('fetched_at', { ascending: true }).limit(1).abortSignal(timeout());
+      const { data, error } = await db().from(CATALOG_TABLES.priceChanges).select('fetched_at').order('fetched_at', { ascending: true }).limit(1).abortSignal(timeout());
       if (error) throw new Error(error.message);
       const at = str((data?.[0] as Record<string, unknown> | undefined)?.fetched_at);
       return at ? new Date(at).toISOString() : null;
@@ -112,7 +123,7 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
     async logUptime(rows) {
       if (!rows.length) return;
       const { error } = await db()
-        .from('model_uptime_daily')
+        .from(CATALOG_TABLES.uptimeDaily)
         .upsert(
           rows.map((r) => ({ model_id: r.modelId, provider: r.provider.slice(0, 120), day: r.day, uptime_1d: r.uptime1d, uptime_30m: r.uptime30m, fetched_at: r.fetchedAt })),
           { onConflict: 'model_id,provider,day' }
@@ -120,7 +131,7 @@ export const createSupabaseCatalogStore = (): CatalogStore | null => {
       if (error) throw new Error(error.message);
     },
     async uptimeSince(sinceIso) {
-      const { data, error } = await db().from('model_uptime_daily').select('model_id, provider, day, uptime_1d, uptime_30m, fetched_at').gte('day', sinceIso.slice(0, 10)).order('day', { ascending: true }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
+      const { data, error } = await db().from(CATALOG_TABLES.uptimeDaily).select('model_id, provider, day, uptime_1d, uptime_30m, fetched_at').gte('day', sinceIso.slice(0, 10)).order('day', { ascending: true }).limit(SNAPSHOT_READ_LIMIT).abortSignal(timeout());
       if (error) throw new Error(error.message);
       return (data ?? [])
         .map((r: Record<string, unknown>): UptimeLogRow | null =>

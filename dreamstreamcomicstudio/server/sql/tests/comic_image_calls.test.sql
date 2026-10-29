@@ -4,14 +4,59 @@
 --   * comic_image_model_stats(p_since) drops groups with fewer than 5 distinct users, reports a cost only when
 --     5 distinct users have a priced call, and is not executable by clients;
 --   * the route / outcome checks hold; the 180-day purge deletes only old rows;
---   * the catalog history tables are service-role only.
+--   * the catalog history tables are service-role only;
+--   * the billing table public.model_pricing_snapshots (token billing, in production) is never touched: same
+--     columns, same signed-in read policy and privilege after both files applied twice.
 \set ON_ERROR_STOP 1
 set client_min_messages = warning;
+
+-- The billing table exactly as token_billing_foundation.sql creates it, with its signed-in read policy. Production
+-- has it; a catalog file that reused its name would fail (no column "res") or strip that policy's privilege.
+create table public.model_pricing_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null,
+  model_id text not null,
+  input_per_1k numeric(12, 6) not null default 0,
+  output_per_1k numeric(12, 6) not null default 0,
+  image_per_output numeric(12, 6) not null default 0,
+  other_billable_per_unit numeric(12, 6) not null default 0,
+  currency text not null default 'USD',
+  source_url text,
+  status text not null default 'ACTIVE',
+  parser_confidence numeric(5, 4) not null default 1,
+  fetched_at timestamptz not null default now(),
+  effective_from timestamptz not null default now(),
+  raw_payload jsonb not null default '{}'::jsonb
+);
+alter table public.model_pricing_snapshots enable row level security;
+create policy model_pricing_snapshots_read on public.model_pricing_snapshots for select to authenticated using (true);
+grant select on table public.model_pricing_snapshots to authenticated;
+insert into public.model_pricing_snapshots (provider, model_id, image_per_output) values ('openrouter', 'google/gemini-nano-banana-2.1', 0.0336);
+create temporary table billing_shape as
+  select string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' order by ordinal_position) as cols
+    from information_schema.columns where table_schema = 'public' and table_name = 'model_pricing_snapshots';
 
 \ir ../comic_image_calls.sql
 \ir ../comic_image_calls.sql
 \ir ../comic_model_catalog.sql
 \ir ../comic_model_catalog.sql
+
+do $$
+declare
+  n int;
+begin
+  assert (select cols from billing_shape) = (select string_agg(column_name || ':' || data_type || ':' || is_nullable, ',' order by ordinal_position)
+                                               from information_schema.columns where table_schema = 'public' and table_name = 'model_pricing_snapshots'),
+    'the billing table model_pricing_snapshots must keep its columns';
+  assert has_table_privilege('authenticated', 'public.model_pricing_snapshots', 'select'), 'signed-in users keep their billing read privilege';
+  select count(*) into n from pg_policies where tablename = 'model_pricing_snapshots' and policyname = 'model_pricing_snapshots_read';
+  assert n = 1, 'the billing read policy is untouched';
+  select count(*) into n from public.model_pricing_snapshots;
+  assert n = 1, 'no catalog row lands in the billing table';
+  select count(*) into n from pg_constraint where conrelid = 'public.model_pricing_snapshots'::regclass and contype = 'c';
+  assert n = 0, 'no catalog check constraint lands on the billing table';
+  assert to_regclass('public.comic_model_price_changes') is not null and to_regclass('public.comic_model_uptime_daily') is not null, 'the catalog tables exist';
+end $$;
 
 -- ------------------------------------------------------------------ fixtures (synthetic)
 insert into auth.users (id, email)
@@ -108,12 +153,12 @@ begin
   exception when insufficient_privilege then null;
   end;
   begin
-    perform 1 from public.model_pricing_snapshots;
+    perform 1 from public.comic_model_price_changes;
     raise exception 'price snapshots are service-role only';
   exception when insufficient_privilege then null;
   end;
   begin
-    perform 1 from public.model_uptime_daily;
+    perform 1 from public.comic_model_uptime_daily;
     raise exception 'uptime history is service-role only';
   exception when insufficient_privilege then null;
   end;
@@ -133,9 +178,9 @@ reset role;
 
 -- ------------------------------------------------------------------ the service role writes; retention
 set role service_role;
-insert into public.model_pricing_snapshots (model_id, res, usd, basis, note) values ('google/gemini-nano-banana-2.1', '1K', 0.0336, 'vendor_table', 'test');
-insert into public.model_uptime_daily (model_id, provider, day, uptime_1d) values ('google/gemini-nano-banana-2.1', 'Google AI Studio', current_date, 97.7221);
-insert into public.model_uptime_daily (model_id, provider, day, uptime_1d) values ('google/gemini-nano-banana-2.1', 'Google AI Studio', current_date - 200, 99.0);
+insert into public.comic_model_price_changes (model_id, res, usd, basis, note) values ('google/gemini-nano-banana-2.1', '1K', 0.0336, 'vendor_table', 'test');
+insert into public.comic_model_uptime_daily (model_id, provider, day, uptime_1d) values ('google/gemini-nano-banana-2.1', 'Google AI Studio', current_date, 97.7221);
+insert into public.comic_model_uptime_daily (model_id, provider, day, uptime_1d) values ('google/gemini-nano-banana-2.1', 'Google AI Studio', current_date - 200, 99.0);
 insert into public.comic_image_calls (user_id, model_id, route, kind, res, outcome, provider_cost_usd)
 values ('00000000-0000-0000-0000-000000000007', 'nano-banana-2.1', 'gemini', 'sheet', '1K', 'ok', 0.0373);
 do $$
@@ -154,12 +199,12 @@ reset role;
 do $$
 begin
   begin
-    insert into public.model_pricing_snapshots (model_id, res, usd, basis) values ('x/y', '8K', 1, 'vendor_table');
+    insert into public.comic_model_price_changes (model_id, res, usd, basis) values ('x/y', '8K', 1, 'vendor_table');
     raise exception 'res check missing';
   exception when check_violation then null;
   end;
   begin
-    insert into public.model_uptime_daily (model_id, provider, day, uptime_1d) values ('x/y', 'p', current_date, 120);
+    insert into public.comic_model_uptime_daily (model_id, provider, day, uptime_1d) values ('x/y', 'p', current_date, 120);
     raise exception 'uptime range check missing';
   exception when check_violation then null;
   end;
