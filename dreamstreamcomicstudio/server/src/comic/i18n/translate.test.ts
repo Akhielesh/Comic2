@@ -350,6 +350,32 @@ describe('money: quote, gate, BYOK, cancel, keys', () => {
     expect((await estimateTranslation(ctx, T({ languages: ['Telugu', 'Hindi'] }))).usd).toBe(platform.estimate.usd);
   });
 
+  it('the quote learns from the bill (a repair round and the review included): a run billed above its plan raises the next quote, bounded', async () => {
+    const doc = sixPageKidsDoc();
+    const keys = { openrouter: { key: 'sk-or-test', byok: false } };
+    const before = quoteTranslation(doc, keys, { languages: ['te'] }).perLanguage[0].usd;
+    // Chunk 1 needs a repair round (a script failure on the first answer): three translator calls for two chunks.
+    const tr = fakeTranslator({ text: (id, _l, attempt) => (id === 'l3' && attempt === 1 ? 'Look up there!' : undefined) });
+    // Every call bills far above its share of the plan while reporting almost no completion tokens: the old
+    // output-token calibration would LOWER the next quote (ratio clamped to 0.5 → factor 0.85).
+    const pricey = (req: LlmRequest) => ({ ...tr.step(req), costUsd: 0.05, completionTokens: 1 });
+    const { ctx, session } = await run(doc, { translator: times(6, pricey), linguist: times(2, fakeLinguist()) }, T(), keys);
+    expect(roles(ctx, 'translator')).toHaveLength(3);
+    const billed = session.doc.spend.entries.find((s) => s.kind === 'translate')!.usd;
+    expect(billed).toBeGreaterThan(before);
+    const after = quoteTranslation(sixPageKidsDoc(), keys, { languages: ['te'] }).perLanguage[0].usd;
+    expect(after).toBeGreaterThan(before);
+    expect(after).toBeCloseTo(before * 1.3, 3); // one EMA step: 0.7 × 1 + 0.3 × (ratio clamped at 2)
+    // A stopped run billed less than it planned: it does not pull the calibration down.
+    const s2 = newSession(sixPageKidsDoc());
+    const tr2 = fakeTranslator();
+    const ctx2 = testContext(s2, { keys, llm: scriptedLlm({ translator: [(req) => { s2.abort.abort(); return tr2.step(req); }, tr2.step], linguist: times(2, fakeLinguist()) }) });
+    const stopped = await runTranslation(ctx2, T(), { confirmed: true, origin: 'user' });
+    await stopped.done;
+    await ctx2.settled();
+    expect(quoteTranslation(sixPageKidsDoc(), keys, { languages: ['te'] }).perLanguage[0].usd).toBe(after);
+  });
+
   it('confirm "always" and an over-budget quote open a gate (nothing runs until approved)', async () => {
     for (const settings of [{ confirm: 'always' as const }, { budgetUsd: 0.0001 }]) {
       const doc = sixPageKidsDoc();
