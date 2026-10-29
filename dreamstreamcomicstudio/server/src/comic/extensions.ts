@@ -42,7 +42,7 @@ export interface DirectorTool {
   execute(args: Record<string, unknown>): Promise<string>;
 }
 
-export type ToolGroupId = 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader';
+export type ToolGroupId = 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader' | 'models';
 
 export interface ToolGroup {
   id: ToolGroupId;

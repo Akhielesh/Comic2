@@ -52,8 +52,8 @@ describe('AdminConsole feature sections', () => {
   it('appends registered sections for admins and renders the active one', async () => {
     render(<AdminConsole isAdmin isModerator={false} adminAccess={null} />);
     const labels = rail().getAllByRole('tab').map((t) => t.textContent);
-    // Feature order: the library (mocked here) before the W-M reliability feature's Provider status.
-    expect(labels.slice(-2)).toEqual(['Comic library', 'Provider status']);
+    // Feature order: the library (mocked here), then the W-M models feature's Model Lab, then reliability's Provider status.
+    expect(labels.slice(-3)).toEqual(['Comic library', 'Model Lab', 'Provider status']);
     expect(labels).not.toContain('Fake users');
 
     fireEvent.click(rail().getByRole('tab', { name: 'Comic library' }));

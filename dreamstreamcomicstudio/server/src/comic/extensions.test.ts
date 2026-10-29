@@ -44,7 +44,7 @@ const group = (g: Partial<ToolGroup> & Pick<ToolGroup, 'id' | 'priority'>): Tool
 describe('tool registry', () => {
   it('registers every feature group exactly once and never core', () => {
     const ids = toolGroups().map((g) => g.id);
-    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'publish', 'reader', 'refs', 'safety', 'timeline']);
+    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'models', 'publish', 'reader', 'refs', 'safety', 'timeline']);
     expect(TOOL_GROUPS).toBe(toolGroups());
     expect(toolGroupById('core')).toBeUndefined();
     expect(toolGroupById('constructor')).toBeUndefined();

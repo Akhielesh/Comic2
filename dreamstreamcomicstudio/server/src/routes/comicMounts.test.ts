@@ -157,11 +157,13 @@ describe('owner mounts', () => {
       'GET /api/comic/models/nano-banana-2.1'
     ]); // each counted exactly once; never the studio
     expect((await call('/api/comic/models/status', { headers: { ...user, 'x-limit': '1' } })).status).toBe(429);
-    // The lab: role-gated before anything answers, admin-limited, never text-limited; the stub answers 501 with the role.
+    // The lab: role-gated before anything answers, admin-limited, never text-limited. Past the role gate the real
+    // M1-MODEL-LAB router answers with its own sign-in guard (this harness's stand-in auth sets no req.user).
     text.hits.length = 0;
     expect((await call('/api/comic/models/lab/checks', { headers: user })).status).toBe(403);
-    expect(await call('/api/comic/models/lab/checks', { headers: { ...user, 'x-admin': '1' } })).toEqual({ status: 501, body: { error: 'not built yet' } });
-    expect(await call('/api/comic/models/lab', { method: 'POST', headers: { ...user, 'x-admin': '1' }, body: {} })).toEqual({ status: 501, body: { error: 'not built yet' } });
+    const signIn = { status: 401, body: { error: { message: 'Sign in to use the comic studio.', code: 'FORBIDDEN' } } };
+    expect(await call('/api/comic/models/lab/checks', { headers: { ...user, 'x-admin': '1' } })).toEqual(signIn);
+    expect(await call('/api/comic/models/lab', { method: 'POST', headers: { ...user, 'x-admin': '1' }, body: {} })).toEqual(signIn);
     expect(text.hits).toEqual([]);
     // Unauthenticated: the global requireAuth refuses first.
     for (const path of ['/api/comic/models/status', '/api/comic/models/catalog', '/api/comic/models/lab/checks']) expect((await call(path)).status, path).toBe(401);

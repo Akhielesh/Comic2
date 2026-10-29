@@ -12,11 +12,14 @@
 
 import type { FeatureModule } from '../extensions';
 import { MODEL_PICKER_SLOT_ORDER, ModelPickerHost } from './ModelPickerHost';
+import { labAdminSection } from './lab';
 
 // One `feature` object for the whole folder. M1-MODEL-LAB's admin section joins THIS object
 // (`adminSections: [labAdminSection]`, imported from './lab') — never a second `feature` export.
 export const feature: FeatureModule = {
-  headerSlots: [{ id: 'model-picker', order: MODEL_PICKER_SLOT_ORDER, Component: ModelPickerHost }]
+  headerSlots: [{ id: 'model-picker', order: MODEL_PICKER_SLOT_ORDER, Component: ModelPickerHost }],
+  // M1-MODEL-LAB: the admin-only Model Lab (lazy-loaded; the admin console shows it to admins only).
+  adminSections: [labAdminSection]
 };
 
 export { ModelPickerHost, MODEL_PICKER_SLOT_ORDER } from './ModelPickerHost';

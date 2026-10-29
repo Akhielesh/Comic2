@@ -123,19 +123,21 @@ describe('features registry', () => {
     expect(BUILTIN_CARD_TYPES.has('recap')).toBe(true);
     expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media']);
     // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250).
-    // …and M1-RELIABILITY's model-status banner (1000) after every header control.
-    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share', 'model-status']);
+    // …then M1-RELIABILITY's model-status banner (1000) and M1-PICKER-UI's picker host (1010) after every header control.
+    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share', 'model-status', 'model-picker']);
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
     // Admin sections keep feature order: safety (real) before library (mock).
-    expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'provider-status']);
+    expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
   });
 
-  it('W-M seams: models, insights and reliability are registered last (lowest precedence); models and insights are still empty, reliability is real', () => {
+  it('W-M seams: models, insights and reliability are registered last (lowest precedence) with their real registrations', () => {
     const mods = featureModules();
     expect(mods.slice(-3)).toEqual([modelsFeature, insightsFeature, reliabilityFeature]);
-    for (const mod of [modelsFeature, insightsFeature]) {
-      expect(mod).toEqual({}); // M1-PICKER-UI / M1-INSIGHTS-UI fill them; an empty module contributes nothing
-    }
+    // M1-PICKER-UI: the picker host under the header; M1-MODEL-LAB: the admin Model Lab. Insights lives inside the
+    // Cost card and the Spending sheet, so it registers nothing.
+    expect(modelsFeature.headerSlots?.map((h) => h.id)).toEqual(['model-picker']);
+    expect(modelsFeature.adminSections?.map((a) => a.id)).toEqual(['model-lab']);
+    expect(insightsFeature).toEqual({});
     // M1-RELIABILITY: the outage card, the status banner under the header and the admin Provider status section.
     expect(reliabilityFeature.cards?.map((c) => c.type)).toEqual(['model_outage']);
     expect(reliabilityFeature.headerSlots?.map((h) => h.id)).toEqual(['model-status']);

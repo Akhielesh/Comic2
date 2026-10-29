@@ -46,8 +46,8 @@ describe('feature registries (real wave-1 modules)', () => {
     expect(registeredTabs().map((t) => [t.id, t.order])).toEqual([['media', 500], ['languages', 800]]);
     // share 10 → mode 60 → savings 210 → usage 220 (P1-LIMITS' meter, registered by P2-AMEND).
     // … → model-status 1000 (M1-RELIABILITY's one-line banner sits after every header control).
-    expect(registeredHeaderSlots().map((h) => [h.id, h.order])).toEqual([['share', 10], ['mode', 60], ['savings', 210], ['usage', 220], ['model-status', 1000]]);
-    expect(registeredAdminSections().map((a) => a.id)).toEqual(['comic-safety', 'library', 'provider-status']);
+    expect(registeredHeaderSlots().map((h) => [h.id, h.order])).toEqual([['share', 10], ['mode', 60], ['savings', 210], ['usage', 220], ['model-status', 1000], ['model-picker', 1010]]);
+    expect(registeredAdminSections().map((a) => a.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
     for (const reg of [...registeredTabs(), ...registeredHeaderSlots(), ...registeredAdminSections()]) expect(typeof reg.Component).toBe('function');
   });
 });
