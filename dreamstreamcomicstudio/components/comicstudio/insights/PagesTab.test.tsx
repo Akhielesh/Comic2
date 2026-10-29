@@ -100,10 +100,13 @@ describe('Pages tab', () => {
     expect(row('Page 2')).toHaveTextContent(/Redraw now on Nano Banana 2\.1: (≈[\d.]+%|<0\.1%) of your usage/);
   });
 
-  it('rows stack below 480 px (one column) and long words wrap', () => {
+  // Two columns from the named `medium` screen (600 px): arbitrary `min-[…]:` screens throw in this Tailwind config
+  // (tailwind.config.cjs screens note; layoutLint.test.ts rule 2).
+  it('rows stack below the medium screen (one column) and long words wrap', () => {
     render(<PagesTab doc={makeLakeComic()} money={dollars} byok />);
     for (const li of within(screen.getByRole('list', { name: 'Spend per page' })).getAllByRole('listitem')) {
-      expect(li.className).toContain('min-[480px]:grid-cols-');
+      expect(li.className).toContain('medium:grid-cols-');
+      expect(li.className).not.toMatch(/(?:min|max)-\[/);
       expect(li.className).not.toMatch(/(^|\s)grid-cols-/);
     }
   });

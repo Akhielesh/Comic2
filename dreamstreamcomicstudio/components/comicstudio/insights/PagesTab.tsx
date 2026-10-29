@@ -103,7 +103,7 @@ export const PagesTab: React.FC<PagesTabProps> = ({ doc, money, byok, rows = nul
           ].filter(Boolean);
           const redraw = typeof r.redrawUsd === 'number' ? money.quote(r.redrawUsd * (byok ? 1 : PLATFORM_MARKUP)) : r.redrawUsd === null ? 'can’t price yet' : undefined;
           return (
-            <li key={r.key} data-target={r.key} aria-label={r.label} className="grid min-w-0 gap-x-3 gap-y-0.5 py-2 min-[480px]:grid-cols-[minmax(0,1fr)_auto]">
+            <li key={r.key} data-target={r.key} aria-label={r.label} className="grid min-w-0 gap-x-3 gap-y-0.5 py-2 medium:grid-cols-[minmax(0,1fr)_auto]">
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                   <span className={cx('min-w-0 text-[12.5px] font-medium text-[var(--ds-ink)]', WRAP)}>{r.label}</span>
@@ -115,7 +115,7 @@ export const PagesTab: React.FC<PagesTabProps> = ({ doc, money, byok, rows = nul
                 </div>
                 <div className={cx('text-[11px] text-[var(--ds-muted)]', WRAP)}>{meta.join(' · ')}</div>
               </div>
-              <div className="min-w-0 min-[480px]:text-right">
+              <div className="min-w-0 medium:text-right">
                 <div className={cx('text-[12.5px] font-semibold tabular-nums text-[var(--ds-ink)]', WRAP)}>
                   {r.spentUsd > 0 ? money.spent(r.spentUsd) : '—'} <span className="font-normal text-[var(--ds-muted)]">spent</span>
                 </div>
