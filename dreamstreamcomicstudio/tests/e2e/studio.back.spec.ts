@@ -11,9 +11,11 @@ test.describe('Back closes the top layer', () => {
   test('page editor closes on Back, the studio stays', async ({ qa, page }) => {
     await qa.open({ surface: 'studio', fixture: 'heist-12p', tab: 'pages' });
     await qa.toBoard();
-    const open = page.getByRole('button', { name: /open page 1 in the editor/i }).first();
-    // Every layout shows the Pages grid here: a missing page card is a regression, never a skip.
-    await expect(open, 'page 1 has an "open in the editor" control').toBeVisible();
+    const open = page.getByRole('button', { name: /^(edit|open) page 1$/i }).first();
+    // Every layout shows the Pages grid here: a missing page card is a regression, never a skip. The
+    // card's own control is "Edit page 1" ("Open page 1" while undrawn) — wave 2 removed the wrapping
+    // "Open page n in the editor" button (nested-interactive), and PagesTab.test keeps it gone.
+    await expect(open, 'page 1 has an "Edit / Open page 1" control').toBeVisible();
     await open.click({ timeout: 10_000 });
     const editor = page.getByRole('dialog', { name: /page 1 editor/i });
     await expect(editor).toBeVisible();
@@ -32,8 +34,8 @@ test.describe('Back closes the top layer', () => {
     expect(await stillInStudio(page)).toBe(true);
     // Second layer: the editor, opened after the sheet closed, is the new top layer.
     await qa.toBoard();
-    const open = page.getByRole('button', { name: /open page 1 in the editor/i }).first();
-    await expect(open, 'page 1 has an "open in the editor" control').toBeVisible();
+    const open = page.getByRole('button', { name: /^(edit|open) page 1$/i }).first();
+    await expect(open, 'page 1 has an "Edit / Open page 1" control').toBeVisible();
     await open.click({ timeout: 10_000 });
     const editor = page.getByRole('dialog', { name: /page 1 editor/i });
     await expect(editor).toBeVisible();
