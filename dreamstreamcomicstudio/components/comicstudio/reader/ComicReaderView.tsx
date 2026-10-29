@@ -93,6 +93,11 @@ export interface ComicReaderViewProps {
    * full-screen room; inline, the host's own notice is the one on screen.
    */
   onDownload?(): Promise<string | void> | string | void;
+  /**
+   * Show the browser full-screen button (default true). A host whose own "Read full screen" sits in
+   * `toolbarExtra` (the studio Read tab at a compact height) turns it off: one Expand icon, not two.
+   */
+  fullscreenControl?: boolean;
 }
 
 /** Reader ink on paper (same in both themes, like the immersive reading room). */
@@ -260,7 +265,8 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   rating,
   ratingReason,
   onReport,
-  onDownload
+  onDownload,
+  fullscreenControl = true
 }) => {
   // ── Document (keyed on the language CODE: a host's inline slot object must not re-localize) ──
   const lang = language?.current;
@@ -289,6 +295,9 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // ── Device, prefs ─────────────────────────────────────────────────────────
   const ff = useFormFactor();
   const reduced = usePrefersReducedMotion() || ff.reducedMotion;
+  // Phone landscape: the host pane is ~100 px tall, so the toolbar is one dense row (icon-only
+  // segments, no wrapping) — ui-findings 2026-10-29, board/read at 734×343.
+  const compactH = ff.heightClass === 'compact';
   const eff = useMemo(() => effectiveReader(creator, readPrefs(), kind), [creator, kind]);
   const net = useMemo(() => connectionHints(), []);
   const img = useMemo<SlotImage>(
@@ -302,15 +311,42 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     const stored = readLayoutPref();
     return stored !== 'auto' ? stored : hostLayout ?? 'auto';
   });
+  const rootRef = useRef<HTMLDivElement>(null);
   const [rootSizeRef, rootSize] = useElementSize<HTMLDivElement>();
   const [stageRef, stage] = useElementSize<HTMLDivElement>();
   const winW = typeof window !== 'undefined' ? window.innerWidth : 1024;
   const winH = typeof window !== 'undefined' ? window.innerHeight : 768;
   const boxW = rootSize.width || winW;
   const boxH = rootSize.height || winH;
+  // Where this box sits on the screen (ui-findings 2026-10-29): a dual-screen hinge matters only when
+  // the box actually spans the fold (the studio's board pane sits on ONE segment; the public reader
+  // spans both), and the home-indicator inset only when the box ends at the screen's bottom edge (a
+  // split pane on a tablet / foldable — the public reader and the phone studio already pad for it).
+  const [frame, setFrame] = useState({ left: 0, flushBottom: false });
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return;
+    const measure = () => {
+      const el = rootRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const next = { left: r.left, flushBottom: r.height > 0 && r.bottom >= window.innerHeight - 1 };
+      setFrame((prev) => (prev.left === next.left && prev.flushBottom === next.flushBottom ? prev : next));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [rootSize.width, rootSize.height, ff.segments]);
+  /** The fold in THIS box's coordinates, when the box spans it with room on both sides. */
+  const hingeX = useMemo(() => {
+    const s = ff.segments;
+    if (s.count !== 2 || s.axis !== 'horizontal' || !s.hinge) return null;
+    const start = s.hinge.start - frame.left;
+    const end = s.hinge.end - frame.left;
+    return start >= 80 && end <= boxW - 80 ? { start, end } : null;
+  }, [ff.segments, frame.left, boxW]);
   const decision = useMemo(
-    () => decideLayout({ vw: boxW, vh: boxH, kind, pref, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass }),
-    [boxW, boxH, kind, pref, trim, ff.widthClass, ff.heightClass]
+    () => decideLayout({ vw: boxW, vh: boxH, kind, pref, pageAspect: trim, widthClass: ff.widthClass, heightClass: ff.heightClass, segments: hingeX ? ff.segments : undefined }),
+    [boxW, boxH, kind, pref, trim, ff.widthClass, ff.heightClass, hingeX, ff.segments]
   );
   const layout = decision.layout;
   const viewLayout = layout === 'spread' ? 'spread' : 'single';
@@ -383,9 +419,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // ── Zoom ──────────────────────────────────────────────────────────────────
   const zoomRef = useRef(1);
   const canZoom = zoomable && layout !== 'scroll' && decision.fit !== 'width';
+  // Dual-screen: one canvas per segment, so the effective zoom is the largest of them.
+  const paneZoom = useRef<Record<string, number>>({});
+  const setPaneZoom = (id: string, s: number) => {
+    paneZoom.current[id] = s;
+    zoomRef.current = Math.max(1, ...Object.values(paneZoom.current));
+  };
 
   // ── Navigation ────────────────────────────────────────────────────────────
-  const rootRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const swipe = useRef<{ x: number; y: number; id: number } | null>(null);
   // Swipes and taps pause while zoomed (a drag pans the page instead; the stage handlers check
@@ -580,13 +621,40 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
   // ── Geometry + polite preloading ──────────────────────────────────────────
   const stageW = stage.width || boxW;
   const stageH = stage.height || Math.max(1, boxH - (autoHide ? 0 : 48));
-  const geo = useMemo(
-    () =>
-      currentView && layout !== 'scroll'
-        ? bookGeometry({ view: currentView, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass })
-        : null,
-    [currentView, layout, stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, ff.widthClass]
+  // Dual-screen, one page at a time: the page lays on ONE segment (the recto: right for LTR, left for
+  // RTL), never across the fold. Spreads put one page per segment through the geometry's hinge.
+  const singleSeg = useMemo(
+    () => (hingeX && layout !== 'scroll' && !decision.perSegment ? (rtl ? { x: 0, w: hingeX.start } : { x: hingeX.end, w: Math.max(1, stageW - hingeX.end) }) : null),
+    [hingeX, layout, decision.perSegment, rtl, stageW]
   );
+  const geo = useMemo(() => {
+    if (!currentView || layout === 'scroll') return null;
+    if (singleSeg) {
+      const g = bookGeometry({ view: currentView, stage: { w: singleSeg.w, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass });
+      return { ...g, book: { ...g.book, x: g.book.x + singleSeg.x } };
+    }
+    return bookGeometry({ view: currentView, stage: { w: stageW, h: stageH }, layout: viewLayout, rtl, aspectOf, pageAspect: trim, fit: decision.fit, widthClass: ff.widthClass, hinge: decision.perSegment && hingeX ? hingeX : undefined });
+  }, [currentView, layout, stageW, stageH, viewLayout, rtl, aspectOf, trim, decision.fit, decision.perSegment, ff.widthClass, hingeX, singleSeg]);
+  /** The zoomable canvases: one over the stage, or one per segment on a dual-screen device. */
+  const panes = useMemo(() => {
+    if (!geo) return [];
+    const all = geo.slots.map((_, i) => i);
+    if (hingeX && decision.perSegment) {
+      const side = (s: 'left' | 'right') => all.filter((i) => geo.slots[i].side === s);
+      return [
+        { id: 'left', label: 'Zoomable left page', x: 0, w: hingeX.start, slots: side('left') },
+        { id: 'right', label: 'Zoomable right page', x: hingeX.end, w: Math.max(1, stageW - hingeX.end), slots: side('right') }
+      ].filter((p) => p.slots.some((i) => geo.slots[i].content.kind !== 'blank'));
+    }
+    if (singleSeg) return [{ id: 'page', label: 'Zoomable page', x: singleSeg.x, w: singleSeg.w, slots: all }];
+    return [{ id: 'page', label: 'Zoomable page', x: 0, w: stageW, slots: all }];
+  }, [geo, hingeX, decision.perSegment, singleSeg, stageW]);
+  const paneIds = panes.map((p) => p.id).join('|');
+  useEffect(() => {
+    // Canvases snap back to fit on a turn (resetKey); forget zooms of canvases that are gone.
+    paneZoom.current = {};
+    zoomRef.current = 1;
+  }, [currentView?.key, paneIds]);
   useEffect(() => {
     if (layout === 'scroll' || !geo || immersiveOn || typeof window === 'undefined') return;
     const sourceOf = (i: number) => {
@@ -676,14 +744,14 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     kind === 'webtoon'
       ? []
       : [
-          { value: 'scroll' as const, label: (<><Rows3 className="h-3 w-3" aria-hidden /> {t('scroll')}</>), title: 'One long vertical scroll' },
-          { value: 'page' as const, label: (<><Square className="h-3 w-3" aria-hidden /> {t('page')}</>), title: 'One page at a time' },
+          { value: 'scroll' as const, label: (<><Rows3 className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('scroll')}</span></>), title: 'One long vertical scroll' },
+          { value: 'page' as const, label: (<><Square className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('page')}</span></>), title: 'One page at a time' },
           // Facing pages need room — where they can't fit the option is left out rather than shown dead.
           ...(kind !== 'strip' && (decision.allowSpread || layout === 'spread')
-            ? [{ value: 'spread' as const, label: (<><Columns2 className="h-3 w-3" aria-hidden /> {t('spread')}</>), title: 'Facing pages' }]
+            ? [{ value: 'spread' as const, label: (<><Columns2 className="h-3 w-3" aria-hidden /> <span className={cx(compactH && 'sr-only')}>{t('spread')}</span></>), title: 'Facing pages' }]
             : [])
         ];
-  const narrow = boxW < 560;
+  const narrow = boxW < 560 || compactH;
   const currentPageN = layout === 'scroll' ? pageNOf(items[itemIdx]) : pageNOfView(views, items, viewIdx);
   const menuItems = [
     ...(allowDownload || onDownload
@@ -715,7 +783,10 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       data-shown={chromeShown ? 'true' : 'false'}
       onFocus={() => pokeChrome(true)}
       className={cx(
-        'flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--ds-hairline)] px-3 py-2',
+        'flex shrink-0 items-center gap-2 border-b border-[var(--ds-hairline)] px-3',
+        // Compact height: ONE row — the host pane may be ~100 px tall, and a wrapped second row would
+        // run under it (ui-findings 2026-10-29, iPhone 15 landscape).
+        compactH ? 'flex-nowrap py-1' : 'flex-wrap py-2',
         autoHide && 'absolute inset-x-0 top-0 z-20 bg-[var(--ds-surface-strong)] backdrop-blur-md',
         autoHide && !reduced && 'transition-[opacity,transform] duration-200 ease-out',
         autoHide && !chromeShown && 'pointer-events-none -translate-y-full opacity-0'
@@ -727,7 +798,7 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
           <IconButton label={prevLabel} onClick={() => go(rtl ? 1 : -1)} disabled={rtl ? viewIdx >= views.length - 1 : viewIdx <= 0}>
             <ChevronLeft className="h-4 w-4" />
           </IconButton>
-          <span className="min-w-[5.5rem] text-center text-[12px] tabular-nums text-[var(--ds-muted)] sm:min-w-[7rem]" aria-live="polite" data-testid="reader-counter">
+          <span className={cx('text-center text-[12px] tabular-nums text-[var(--ds-muted)]', compactH ? 'min-w-[4.5rem]' : 'min-w-[5.5rem] sm:min-w-[7rem]')} aria-live="polite" data-testid="reader-counter">
             {counter}
           </span>
           <IconButton label={nextLabel} onClick={() => go(rtl ? -1 : 1)} disabled={rtl ? viewIdx <= 0 : viewIdx >= views.length - 1}>
@@ -766,11 +837,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             <Expand className="h-4 w-4" aria-hidden />
             <span className={cx(narrow && 'sr-only')}>{t('fullScreen')}</span>
           </button>
-        ) : (
+        ) : fullscreenControl ? (
           <IconButton label={fullscreen ? t('exitFullScreen') : t('fullScreen')} onClick={() => void toggleFullscreen()}>
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </IconButton>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -806,49 +877,99 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
     </div>
   );
 
-  const book = geo && currentView && (
-    <div
-      className="absolute"
-      style={{ left: geo.book.x, top: geo.book.y, width: geo.book.w, height: geo.book.h }}
-      data-testid="reader-book"
-      data-layout={viewLayout}
-      role="region"
-      aria-roledescription="book"
-      aria-label={localized.cover.title || localized.brief.title || 'Comic'}
-    >
-      {geo.slots.map((slot) => {
-        const c = slot.content;
-        if (c.kind === 'blank') return null;
-        const item = c.kind === 'item' ? items[c.index] : undefined;
-        const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: drawnPages })) : undefined;
-        return (
-          <div
-            key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
-            className={cx('absolute overflow-hidden', PAGE_SHADOW)}
-            style={{ left: slot.x, top: slot.y, width: slot.w, height: slot.h, background: 'var(--ds-reader-paper-back)', contain: 'layout paint', ...READER_INK }}
-            data-side={slot.side}
-            {...(item ? { 'data-testid': 'reader-page', 'data-key': item.key, role: 'group', 'aria-roledescription': 'page', 'aria-label': label } : {})}
-          >
-            <SlotContentView
-              doc={localized}
-              content={c}
-              items={items}
-              width={slot.w}
-              height={slot.h}
-              contentAspect={slot.contentAspect}
-              img={img}
-              prio="now"
-              paper={eff.paper}
-              letteringAriaHidden={false}
-              onImageError={onImageError}
-              onExpired={onImageError}
-              dedication={creator.dedication}
-              endCard={endNode}
-            />
-          </div>
-        );
-      })}
+  const bookLabel = localized.cover.title || localized.brief.title || 'Comic';
+  const bookRegion = { 'data-testid': 'reader-book', role: 'region', 'aria-roledescription': 'book', 'aria-label': bookLabel } as const;
+  /** The book (these slots of it) placed in a pane that starts `dx` px into the stage. */
+  const bookAt = (slotIdx: number[], dx: number, region: boolean) =>
+    geo &&
+    currentView && (
+      <div className="absolute" style={{ left: geo.book.x - dx, top: geo.book.y, width: geo.book.w, height: geo.book.h }} data-layout={viewLayout} {...(region ? bookRegion : {})}>
+        {slotIdx.map((i) => geo.slots[i]).map((slot) => {
+          const c = slot.content;
+          if (c.kind === 'blank') return null;
+          const item = c.kind === 'item' ? items[c.index] : undefined;
+          const label = item ? (item.kind === 'cover' ? t('cover') : t('pageOf', { n: item.page!.n, total: drawnPages })) : undefined;
+          return (
+            <div
+              key={c.kind === 'item' ? `i${c.index}` : c.kind === 'endpaper' ? `ep-${c.side}` : c.kind}
+              className={cx('absolute overflow-hidden', PAGE_SHADOW)}
+              style={{ left: slot.x, top: slot.y, width: slot.w, height: slot.h, background: 'var(--ds-reader-paper-back)', contain: 'layout paint', ...READER_INK }}
+              data-side={slot.side}
+              {...(item ? { 'data-testid': 'reader-page', 'data-key': item.key, role: 'group', 'aria-roledescription': 'page', 'aria-label': label } : {})}
+            >
+              <SlotContentView
+                doc={localized}
+                content={c}
+                items={items}
+                width={slot.w}
+                height={slot.h}
+                contentAspect={slot.contentAspect}
+                img={img}
+                prio="now"
+                paper={eff.paper}
+                letteringAriaHidden={false}
+                onImageError={onImageError}
+                onExpired={onImageError}
+                dedication={creator.dedication}
+                endCard={endNode}
+              />
+            </div>
+          );
+        })}
+      </div>
+    );
+  /** A zoomable canvas (or the fit-to-width scroller / plain box) around a pane's book. */
+  const zoomWrap = (id: string, label: string, child: React.ReactNode) =>
+    canZoom ? (
+      <TouchCanvas
+        label={label}
+        resetKey={currentView?.key}
+        oneFingerPan="whenZoomed"
+        onZoomChange={(s) => setPaneZoom(id, s)}
+        onEdgeOverscroll={(dir) => {
+          zoomRef.current = 1;
+          go(rtl ? -dir : dir);
+        }}
+      >
+        <div className="relative h-full w-full">{child}</div>
+      </TouchCanvas>
+    ) : decision.fit === 'width' && geo ? (
+      // Fit to width (phone landscape) scrolls the page vertically inside the stage box. The PAGE is
+      // the focusable content of that scroller (arrow keys scroll it from here) — axe
+      // `scrollable-region-focusable`, ui-findings 2026-10-29 public/axe-public. The page, not the
+      // box: in a ~100 px tall pane the box itself would be a sub-44 px "control".
+      <div
+        className="relative w-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/40"
+        style={{ height: geo.book.y + geo.book.h + 12 }}
+        tabIndex={0}
+        role="region"
+        aria-label={shownLabel}
+        data-testid="reader-page-scroller"
+      >
+        {child}
+      </div>
+    ) : (
+      child
+    );
+  // Dual-screen (ui-findings 2026-10-29, fold5-dual): one canvas per segment — a spread's left page in
+  // the left one, its right page in the right one (an empty side gets no canvas); a single page on the
+  // recto segment. Nothing interactive ever spans the fold. Elsewhere one canvas covers the stage.
+  const stageContent = !geo ? null : hingeX && decision.perSegment ? (
+    <div className="absolute inset-0" data-layout={viewLayout} {...bookRegion}>
+      {panes.map((p) => (
+        <div key={p.id} data-pane={p.id} className="absolute inset-y-0" style={{ left: p.x, width: p.w }}>
+          {zoomWrap(p.id, p.label, bookAt(p.slots, p.x, false))}
+        </div>
+      ))}
     </div>
+  ) : hingeX ? (
+    panes.map((p) => (
+      <div key={p.id} data-pane={p.id} className="absolute inset-y-0" style={{ left: p.x, width: p.w }}>
+        {zoomWrap(p.id, p.label, bookAt(p.slots, p.x, true))}
+      </div>
+    ))
+  ) : (
+    zoomWrap('page', 'Zoomable page', bookAt(panes[0]?.slots ?? [], 0, true))
   );
 
   return (
@@ -888,9 +1009,11 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
         </div>
       ) : (
         <div
-          ref={stageRef}
           data-testid="reader-stage"
-          className={cx('relative min-h-0 flex-1 select-none', decision.fit === 'width' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden', !canZoom && 'touch-pan-y')}
+          className="relative min-h-0 flex-1 select-none"
+          // Flush with the screen's bottom edge: the home-indicator inset is kept clear (--sa-bottom-eff
+          // collapses while a keyboard is up). The inner box is what the geometry measures.
+          style={frame.flushBottom ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
           onPointerDown={(e) => {
             swipe.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
           }}
@@ -919,56 +1042,41 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
             swipe.current = null;
           }}
         >
-          {canZoom ? (
-            <TouchCanvas
-              label="Zoomable page"
-              resetKey={currentView?.key}
-              oneFingerPan="whenZoomed"
-              onZoomChange={(s) => {
-                zoomRef.current = s;
-              }}
-              onEdgeOverscroll={(dir) => {
-                zoomRef.current = 1;
-                go(rtl ? -dir : dir);
-              }}
-            >
-              <div className="relative h-full w-full">{book}</div>
-            </TouchCanvas>
-          ) : decision.fit === 'width' && geo ? (
-            <div className="relative w-full" style={{ height: geo.book.y + geo.book.h + 12 }}>
-              {book}
+          <div
+            ref={stageRef}
+            data-testid="reader-stage-box"
+            className={cx('relative h-full w-full', decision.fit === 'width' ? 'overflow-y-auto overflow-x-hidden' : 'overflow-hidden', !canZoom && 'touch-pan-y')}
+          >
+            {stageContent}
+            {/* Mouse-only click zones on the page edges (the resize cursor is their affordance). Touch
+                devices never get invisible buttons: there the outer thirds turn through the stage's
+                own tap handler, and the toolbar arrows are always visible. */}
+            {!ff.coarse && (
+              <>
+                <button
+                  type="button"
+                  aria-label={prevLabel}
+                  data-zone="prev"
+                  tabIndex={-1}
+                  onClick={() => go(rtl ? 1 : -1)}
+                  className="absolute inset-y-0 left-0 z-[6] hidden w-[12%] cursor-w-resize opacity-0 md:block coarse:hidden"
+                />
+                <button
+                  type="button"
+                  aria-label={nextLabel}
+                  data-zone="next"
+                  tabIndex={-1}
+                  onClick={() => go(rtl ? -1 : 1)}
+                  className="absolute inset-y-0 right-0 z-[6] hidden w-[12%] cursor-e-resize opacity-0 md:block coarse:hidden"
+                />
+              </>
+            )}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[7] h-0.5 bg-[var(--ds-well-strong)]" aria-hidden>
+              <div
+                className={cx('h-full bg-[var(--ds-accent)]', !reduced && 'transition-[width] duration-300')}
+                style={{ width: `${views.length > 1 ? (viewIdx / (views.length - 1)) * 100 : 100}%`, marginLeft: rtl ? 'auto' : undefined }}
+              />
             </div>
-          ) : (
-            book
-          )}
-          {/* Mouse-only click zones on the page edges (the resize cursor is their affordance). Touch
-              devices never get invisible buttons: there the outer thirds turn through the stage's
-              own tap handler, and the toolbar arrows are always visible. */}
-          {!ff.coarse && (
-            <>
-              <button
-                type="button"
-                aria-label={prevLabel}
-                data-zone="prev"
-                tabIndex={-1}
-                onClick={() => go(rtl ? 1 : -1)}
-                className="absolute inset-y-0 left-0 z-[6] hidden w-[12%] cursor-w-resize opacity-0 md:block coarse:hidden"
-              />
-              <button
-                type="button"
-                aria-label={nextLabel}
-                data-zone="next"
-                tabIndex={-1}
-                onClick={() => go(rtl ? -1 : 1)}
-                className="absolute inset-y-0 right-0 z-[6] hidden w-[12%] cursor-e-resize opacity-0 md:block coarse:hidden"
-              />
-            </>
-          )}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[7] h-0.5 bg-[var(--ds-well-strong)]" aria-hidden>
-            <div
-              className={cx('h-full bg-[var(--ds-accent)]', !reduced && 'transition-[width] duration-300')}
-              style={{ width: `${views.length > 1 ? (viewIdx / (views.length - 1)) * 100 : 100}%`, marginLeft: rtl ? 'auto' : undefined }}
-            />
           </div>
         </div>
       )}

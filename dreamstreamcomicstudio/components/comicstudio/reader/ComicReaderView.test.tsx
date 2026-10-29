@@ -412,3 +412,112 @@ describe('ComicReaderView', () => {
     expect(onImmersiveChange).toHaveBeenLastCalledWith(false);
   });
 });
+
+// Device-matrix follow-ups (ui-findings 2026-10-29, P2-READER-PUBLIC / P2-BOARD): on a dual-screen
+// foldable the zoomable page straddled the hinge; in a split pane the stage ran into the home-indicator
+// inset; the phone-landscape (fit-to-width) scroller had no keyboard access; the toolbar wrapped to two
+// rows in a 99 px tall landscape pane.
+describe('ComicReaderView on devices', () => {
+  const segments = (w: number, h: number) => {
+    const rect = (x: number, width: number) => ({ x, y: 0, left: x, top: 0, width, height: h, right: x + width, bottom: h, toJSON: () => ({}) }) as DOMRectReadOnly;
+    return { count: 2 as const, axis: 'horizontal' as const, rects: [rect(0, w / 2), rect(w / 2, w / 2)], hinge: { start: w / 2, end: w / 2 } };
+  };
+  const size = (w: number, h: number) => {
+    Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+    Object.defineProperty(window, 'innerHeight', { value: h, configurable: true });
+  };
+  const paneOf = (el: HTMLElement) => el.closest('[data-pane]')!.getAttribute('style') || '';
+
+  it('dual-screen spread: each page sits in its own segment with its own zoomable canvas; nothing spans the fold', () => {
+    size(882, 1104);
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 882, h: 1104, coarse: true, segments: segments(882, 1104) })}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} />
+      </FormFactorProvider>
+    );
+    expect(reader()).toHaveAttribute('data-layout', 'spread');
+    // The cover alone on the right: no canvas is rendered for the empty left side.
+    expect(screen.queryByRole('group', { name: 'Zoomable page' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Zoomable left page' })).toBeNull();
+    expect(paneOf(screen.getByRole('group', { name: 'Zoomable right page' }))).toMatch(/left: 441px/);
+    press('ArrowRight');
+    expect(shownKeys()).toEqual(['pg_1']);
+    const left = screen.getByRole('group', { name: 'Zoomable left page' });
+    expect(paneOf(left)).toMatch(/width: 441px/);
+    expect(paneOf(left)).toMatch(/left: 0px/);
+    expect(paneOf(screen.getByRole('group', { name: 'Zoomable right page' }))).toMatch(/left: 441px/);
+  });
+
+  it('dual-screen, one page at a time: the page lays on the recto segment, never across the fold', () => {
+    size(882, 1104);
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 882, h: 1104, coarse: true, segments: segments(882, 1104) })}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />
+      </FormFactorProvider>
+    );
+    expect(reader()).toHaveAttribute('data-layout', 'single');
+    const pane = paneOf(screen.getByRole('group', { name: 'Zoomable page' }));
+    expect(pane).toMatch(/left: 441px/);
+    expect(pane).toMatch(/width: 441px/);
+  });
+
+  it('phone landscape: the fit-to-width page scroller is keyboard-focusable (a named region)', () => {
+    size(734, 343);
+    const { unmount } = render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />
+      </FormFactorProvider>
+    );
+    const box = screen.getByTestId('reader-stage-box');
+    expect(box.className).toContain('overflow-y-auto');
+    // The page inside the scroller is the focusable content (the box itself can be ~40 px tall in a
+    // landscape studio pane; the page is always ≥ 44 px).
+    const page = within(box).getByTestId('reader-page-scroller');
+    expect(page).toHaveAttribute('tabindex', '0');
+    expect(page).toHaveAttribute('role', 'region');
+    expect(page.getAttribute('aria-label')).toBeTruthy();
+    expect(page).toContainElement(screen.getByTestId('reader-book'));
+    unmount();
+    size(1280, 800);
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.getByTestId('reader-stage-box')).not.toHaveAttribute('tabindex');
+    expect(screen.queryByTestId('reader-page-scroller')).toBeNull();
+  });
+
+  it('pads the stage by the bottom safe area only when the reader ends at the viewport bottom', () => {
+    size(1280, 800);
+    const rect = (flush: boolean) => ({ x: 0, y: 0, left: 0, top: 0, width: 1280, height: 800, right: 1280, bottom: flush ? 800 : 0, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return rect(this.dataset?.testid === 'comic-reader');
+    });
+    const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.getByTestId('reader-stage').style.paddingBottom).toBe('var(--sa-bottom-eff, 0px)');
+    unmount();
+    spy.mockImplementation(() => rect(false));
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.getByTestId('reader-stage').style.paddingBottom).toBe('');
+  });
+
+  it('fullscreenControl={false} leaves the browser full-screen button out (the host has its own)', () => {
+    size(1280, 800);
+    const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" fullscreenControl={false} />);
+    expect(screen.queryByRole('button', { name: 'Full screen' })).toBeNull();
+    unmount();
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
+    expect(screen.getByRole('button', { name: 'Full screen' })).toBeInTheDocument();
+  });
+
+  it('compact height: one toolbar row — segment labels go icon-only (still named) and the row never wraps', () => {
+    size(734, 343);
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 734, h: 343, coarse: true })}>
+        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />
+      </FormFactorProvider>
+    );
+    const toolbar = screen.getByTestId('reader-toolbar');
+    expect(toolbar.className).toContain('flex-nowrap');
+    expect(toolbar.className).not.toContain('flex-wrap');
+    const scroll = within(toolbar).getByRole('radio', { name: 'Scroll' });
+    expect(scroll.querySelector('.sr-only')).toHaveTextContent('Scroll');
+  });
+});
