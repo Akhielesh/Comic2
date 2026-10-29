@@ -48,7 +48,7 @@ export const DS_COLOR_TOKENS: ReadonlyArray<{ name: string; initialValue: string
   { name: '--ds-faint', initialValue: 'rgba(0,0,0,0.28)' },
   { name: '--ds-accent', initialValue: '#D97757' },
   { name: '--ds-accent-hover', initialValue: '#c2643f' },
-  { name: '--ds-on-accent', initialValue: '#ffffff' },
+  { name: '--ds-on-accent', initialValue: '#1a1915' },
   { name: '--ds-accent-soft', initialValue: 'rgba(217,119,87,0.10)' },
   { name: '--ds-active', initialValue: 'rgba(0,0,0,0.07)' },
   { name: '--ds-success', initialValue: '#16a34a' },

@@ -33,7 +33,9 @@ import {
   over,
   parseRules,
   ratio,
+  compareSpecificity,
   resolveColor,
+  specificity,
   tokenBlocks,
   topLevelSplit,
   withAlpha
@@ -178,10 +180,13 @@ describe('token contrast — every text token on every surface it is used on (WC
     // accent-text-contrast: #D97757 text on #fefefe (3.09) and on the #f7efe8 tint (2.74) → the readable accent.
     expect(ratio(token('--ds-accent-text', 'default light'), hexColor('#fefefe'))).toBeGreaterThanOrEqual(4.5);
     expect(ratio(token('--ds-accent-text', 'default light'), hexColor('#f7efe8'))).toBeGreaterThanOrEqual(4.5);
-    // accent-text-contrast: white (3.12) and white at 90 % (2.81) on the #D97757 fill → the text-bearing fill.
+    // accent-text-contrast: white (3.12) and white at 90 % (2.81) on the #D97757 fill. The text-bearing fill
+    // and its label are what the routed utilities paint now.
+    expect(ratio(hexColor('#ffffff'), hexColor(BRAND))).toBeLessThan(4.5);
     const fill = token('--ds-accent-fill', 'default light');
-    expect(ratio(hexColor('#ffffff'), fill)).toBeGreaterThanOrEqual(4.5);
-    expect(ratio(over(withAlpha(hexColor('#ffffff'), 0.9), fill), fill)).toBeGreaterThanOrEqual(4.5);
+    const on = token('--ds-on-accent', 'default light');
+    expect(ratio(on, fill)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(over(withAlpha(on, 0.9), fill), fill)).toBeGreaterThanOrEqual(4.5);
     // muted-text-contrast / the NEW segmented-label rows (#6e6a60 on #f0e5df 4.36, on #e9e8e4 4.39). The
     // DEFAULT light token is what chat, settings, home and every sheet that portals to <body> outside the
     // [data-ds-skin] root paint (PageEditor, ShareSheet, Bottom/Side/PopSheet on the apex host), so it
@@ -221,6 +226,21 @@ describe('token contrast — every text token on every surface it is used on (WC
     const dm = luminance(token('--ds-muted', 'default dark'));
     expect(dm - luminance(hexColor('#a8a29a'))).toBeLessThan(0.1);
     expect(ratio(token('--ds-ink', 'default dark'), token('--ds-muted', 'default dark'))).toBeGreaterThan(1.5);
+  });
+
+  /**
+   * The spec: give text its own token "rather than darkening the brand accent used for buttons". So a
+   * fill that carries a label stays the brand terracotta and the LABEL adapts (--ds-on-accent, ink).
+   * (The other option — a deeper fill under white — is a token swap the matrix above would measure
+   * just the same; it would flip this test, on purpose.)
+   */
+  it('buttons keep the brand: the text-bearing fill is the brand terracotta and only its label adapts', () => {
+    for (const ctx of ['default light', 'default dark'] as const) {
+      expect(token('--ds-accent-fill', ctx), ctx).toEqual(hexColor(BRAND));
+      // The hover stays a hair from the brand (same hue — above — and a small luminance step).
+      expect(Math.abs(luminance(token('--ds-accent-fill-hover', ctx)) - luminance(hexColor(BRAND))), ctx).toBeLessThan(0.08);
+      expect(ratio(token('--ds-on-accent', ctx), token('--ds-ink', 'default light')), `${ctx}: the label is the ink`).toBeLessThan(1.1);
+    }
   });
 
   it('the helper is right (white/black 21, #767676 ≈ 4.54, oklch and color-mix)', () => {
@@ -289,6 +309,41 @@ const alphaOf = (cls: string): number => {
 /** A tint (≤ 35 %) is a surface that text sits on; anything denser is a fill. */
 const isTint = (cls: string) => alphaOf(cls) <= 0.35;
 
+const ATLAS_PREFIX = '[data-ds-skin="atlas"] ';
+const unescapeCss = (s: string) => s.replace(/\\(.)/g, '$1');
+const CLASS = /\.((?:\\.|[\w-])+)/g;
+/** One complex selector: its ancestor part (as written) and its subject compound's classes and pseudo-classes. */
+function parseItem(item: string): { ancestors: string; classes: string[]; pseudos: string[] } {
+  const parts = item.trim().split(/\s+/);
+  const subject = parts.pop()!;
+  const classes = [...subject.matchAll(CLASS)].map((m) => unescapeCss(m[1]));
+  const pseudos = [...subject.replace(CLASS, '').matchAll(/:[\w-]+(?:\([^)]*\))?/g)].map((m) => m[0]);
+  return { ancestors: parts.join(' '), classes, pseudos };
+}
+const declarations = (body: string) =>
+  new Map(body.split(';').flatMap((d) => {
+    const m = /^\s*([\w-]+)\s*:\s*([\s\S]+?)\s*$/.exec(d);
+    return m ? [[m[1], m[2]] as [string, string]] : [];
+  }));
+/** What a compound's own utility paints for `prop` (text-white, text-[X], bg-[X], bg-[X]/NN). */
+function ownValue(prop: string, classes: string[]): string | null {
+  for (const c of classes) {
+    const util = c.split(':').pop()!;
+    if (prop === 'color') {
+      if (util === 'text-white') return '#ffffff';
+      const m = /^text-\[(.+)\]$/.exec(util);
+      if (m) return m[1];
+    }
+    if (prop === 'background-color') {
+      const m = /^bg-\[(.+)\](?:\/(\d+))?$/.exec(util);
+      if (m) return m[2] ? `color-mix(in srgb, ${m[1]} ${m[2]}%, transparent)` : m[1];
+    }
+  }
+  return null;
+}
+/** The shim's convention for a utility with no skin rule: terracotta → the skin accent, white on an accent fill → on-accent. */
+const skinOwn = (prop: string, own: string) => (prop === 'color' && own === '#ffffff' ? 'var(--ds-on-accent)' : own.replace(/#(?:D97757|c2643f)/gi, 'var(--ds-accent)'));
+
 describe('token contrast — the accent utilities paint the readable tokens', () => {
   it('every accent TEXT utility in the tree is routed to --ds-accent-text', () => {
     const found = classTokens(ACCENT_TEXT_UTILITY);
@@ -344,11 +399,16 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     for (const cls of Object.keys(DECORATIVE)) expect(found, `${cls} is still used (drop it from DECORATIVE when it is not)`).toContain(cls);
     for (const [cls, kind] of Object.entries(TEXT_BEARING)) {
       if (!found.includes(cls)) continue;
-      const want = kind === 'fill' ? 'background-color: var(--ds-accent-fill);' : 'background-color: var(--ds-accent-fill-hover);';
-      // The pairing with the white / on-accent text it carries, never when disabled (the component's own disabled style wins).
+      const want = kind === 'fill' ? 'var(--ds-accent-fill)' : 'var(--ds-accent-fill-hover)';
+      // The pairing with the white / on-accent text it carries, never when disabled (the component's own
+      // disabled style wins): the fill token AND its label token, so the pair the matrix measures is
+      // exactly what paints (and the fill / label choice stays a token swap).
       for (const text of ['.text-white', ...(cls.includes('#') || cls.startsWith('group-') ? [] : ['.text-\\[var\\(--ds-on-accent\\)\\]'])]) {
         const sel = utilitySelector(cls, text) + ':not(:disabled)';
-        expect(bodiesFor(sel), sel).toContain(want);
+        const bodies = bodiesFor(sel).map(declarations);
+        expect(bodies.length, sel).toBe(1);
+        expect(bodies[0].get('background-color'), sel).toBe(want);
+        expect(bodies[0].get('color'), sel).toBe('var(--ds-on-accent)');
       }
     }
   });
@@ -358,10 +418,67 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
     expect(bodiesFor('.bg-\\[\\#D97757\\]')).toEqual([]);
   });
 
-  it('the block sits before the Atlas skin, so the skin and its shim still win inside it', () => {
-    const block = css.indexOf('.text-\\[var\\(--ds-accent\\)\\],');
-    expect(block).toBeGreaterThan(css.indexOf('@tailwind utilities'));
-    expect(block).toBeLessThan(css.indexOf('[data-ds-skin="atlas"] {'));
+  /**
+   * Inside the Atlas skin the block must change nothing the skin decides. Specificity, not source
+   * order, decides who wins, so for every selector in the block and every property it sets, this
+   * finds the skin-scoped rules that style the same element and property. Where the block's rule
+   * wins, it must paint what the strongest of those would — or, with none, what the utility itself
+   * paints under the skin (a literal terracotta → the skin accent, white on an accent fill → the
+   * skin's on-accent: the shim's own convention). Compared as colours in Atlas light and dark.
+   */
+  it('inside the Atlas skin the block paints exactly what the skin and its shim paint (rule by rule, by specificity)', () => {
+    const blockCss = css.slice(css.indexOf('/* ---- Accent contrast'), css.indexOf('Device & layout tokens'));
+    const block = parseRules(blockCss).filter((r) => r.selector);
+    expect(block.length).toBeGreaterThanOrEqual(3);
+    const indexOf = (r: { selector: string; body: string }) => rules.findIndex((x) => x.selector === r.selector && x.body === r.body);
+    const skinItems = rules.flatMap((r, idx) => topLevelSplit(r.selector).filter((i) => i.startsWith(ATLAS_PREFIX)).map((item) => ({ item, idx, decls: declarations(r.body) })));
+    let blockWins = 0;
+    const problems: string[] = [];
+    for (const r of block) {
+      const idx = indexOf(r);
+      expect(idx, r.selector).toBeGreaterThanOrEqual(0);
+      for (const item of topLevelSplit(r.selector)) {
+        const me = parseItem(item);
+        for (const [prop, value] of declarations(r.body)) {
+          const rivals = skinItems
+            .filter((c) => c.decls.has(prop))
+            .map((c) => ({ ...c, parsed: parseItem(c.item.slice(ATLAS_PREFIX.length)) }))
+            .filter((c) => c.parsed.ancestors === me.ancestors && c.parsed.classes.every((k) => me.classes.includes(k)) && c.parsed.pseudos.every((p) => me.pseudos.includes(p)));
+          const beats = (a: { item: string; idx: number }, bItem: string, bIdx: number) => {
+            const d = compareSpecificity(specificity(a.item), specificity(bItem));
+            return d > 0 || (d === 0 && a.idx > bIdx);
+          };
+          if (rivals.some((c) => beats(c, item, idx))) continue; // the skin's own rule paints it
+          blockWins += 1;
+          const strongest = rivals.sort((a, b) => (beats(a, b.item, b.idx) ? -1 : 1))[0];
+          const own = ownValue(prop, me.classes);
+          const expected = strongest ? strongest.decls.get(prop)! : own === null ? null : skinOwn(prop, own);
+          if (expected === null) {
+            problems.push(`${item} { ${prop} } — cannot tell what the utility paints`);
+            continue;
+          }
+          for (const ctx of ['atlas light', 'atlas dark'] as const) {
+            const [got, want] = [resolve(value, ctx), resolve(expected, ctx)];
+            const same = (['r', 'g', 'b', 'a'] as const).every((k) => Math.abs(got[k] * (k === 'a' ? 255 : 1) - want[k] * (k === 'a' ? 255 : 1)) < 1);
+            if (!same) problems.push(`${ctx}: ${item} { ${prop}: ${value} } paints ${JSON.stringify(got)}, the skin paints ${expected} = ${JSON.stringify(want)}`);
+          }
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+    expect(blockWins, 'the check compared real winners').toBeGreaterThan(5);
+    // The 85 % badge: the block makes it solid, so the skin section restores the shim's own 85 %.
+    expect(bodiesFor('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85.text-white:not(:disabled)')).toEqual(bodiesFor('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85'));
+  });
+
+  it('the specificity counter is right', () => {
+    expect(specificity('.a')).toEqual([0, 1, 0]);
+    expect(specificity('[data-ds-skin="atlas"] .bg-\\[\\#D97757\\]\\/85')).toEqual([0, 2, 0]);
+    expect(specificity('.bg-\\[\\#D97757\\]\\/85.text-white:not(:disabled)')).toEqual([0, 3, 0]);
+    expect(specificity('.hover\\:text-\\[var\\(--ds-accent\\)\\].hover\\:text-\\[var\\(--ds-accent\\)\\]:hover')).toEqual([0, 3, 0]);
+    expect(specificity(':where([data-ds-skin="atlas"]) :focus-visible')).toEqual([0, 1, 0]);
+    expect(specificity('#x .y::selection')).toEqual([1, 1, 1]);
+    expect(specificity('html[data-ds-skin="atlas"] :is(.a, #b)')).toEqual([1, 1, 1]);
   });
 });
 
@@ -380,8 +497,10 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
 
   it('the inline-style hex escape hatches equal the light tokens', () => {
     expect(design.ACCENT_HEX).toBe(lookup('--ds-accent', 'default light'));
-    expect(design.ACCENT_TEXT_HEX.toLowerCase()).toBe(lookup('--ds-accent-text', 'default light').toLowerCase());
-    expect(design.ACCENT_FILL_HEX.toLowerCase()).toBe(lookup('--ds-accent-fill', 'default light').toLowerCase());
+    expect(hexColor(design.ACCENT_TEXT_HEX)).toEqual(token('--ds-accent-text', 'default light'));
+    expect(hexColor(design.ACCENT_FILL_HEX)).toEqual(token('--ds-accent-fill', 'default light'));
+    // Light-theme values only: the readable accent text is far too dark for the dark canvas.
+    expect(ratio(hexColor(design.ACCENT_TEXT_HEX), token('--ds-canvas', 'default dark'))).toBeLessThan(4.5);
   });
 
   it('every text constant reads a token this matrix measures', () => {

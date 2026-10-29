@@ -60,20 +60,24 @@ export const INK = 'text-[var(--ds-ink)]';
 export const MUTED = 'text-[var(--ds-muted)]';
 
 /**
- * Terracotta accent hex values (for the rare inline-style need). The brand accent is DECORATIVE
- * (~3:1 on paper): never use it for text or under text — ACCENT_TEXT_HEX / ACCENT_FILL_HEX are the
- * readable values (= the light-theme --ds-accent-text / --ds-accent-fill in index.css).
+ * Terracotta accent hex values for the rare inline-style need. LIGHT THEME ONLY, and they never
+ * follow the dark theme or a skin — prefer the var() utilities below (ACCENT_TEXT, ACCENT_FILL, …)
+ * whenever a class can do it. The brand accent measures ~3:1 on the paper: it is never text.
+ * ACCENT_TEXT_HEX is the light --ds-accent-text (readable accent text; 2.5:1 on the DARK canvas, so
+ * not for dark surfaces); ACCENT_FILL_HEX is the light --ds-accent-fill (= the brand), which carries
+ * an ink label (--ds-on-accent), never white.
  */
 export const ACCENT_HEX = '#D97757';
 export const ACCENT_HOVER_HEX = '#c2643f';
 export const ACCENT_TEXT_HEX = '#A0472A';
-export const ACCENT_FILL_HEX = '#AE5132';
+export const ACCENT_FILL_HEX = '#D97757';
 
 /**
  * Accent utilities (terracotta by default; ink under the Atlas skin). ACCENT_BG is the brand fill
  * for marks that carry no text (dots, bars, toggle tracks); a fill that carries a label or a glyph
- * uses ACCENT_FILL (+ ACCENT_FILL_HOVER) with ON_ACCENT_TEXT, which is ≥ 4.5:1 in both themes
- * (index.css routes the older `bg-[var(--ds-accent)] text-white` pairing there too).
+ * uses ACCENT_FILL (+ ACCENT_FILL_HOVER) with ON_ACCENT_TEXT — by default the same brand terracotta
+ * under an ink label, ≥ 4.5:1 in both themes (index.css routes the older
+ * `bg-[var(--ds-accent)] text-white` pairing there too).
  */
 export const ACCENT_BG = 'bg-[var(--ds-accent)]';
 export const ACCENT_BG_HOVER = 'hover:bg-[var(--ds-accent-hover)]';
@@ -82,7 +86,7 @@ export const ACCENT_TEXT = 'text-[var(--ds-accent-text)]';
 /** Solid accent fill that carries text (primary buttons, badges, chips). */
 export const ACCENT_FILL = 'bg-[var(--ds-accent-fill)]';
 export const ACCENT_FILL_HOVER = 'hover:bg-[var(--ds-accent-fill-hover)]';
-/** Text on a solid accent fill (white by default; paper on ink in the dark Atlas skin). */
+/** Text on a solid accent fill (ink on the terracotta by default; white on ink in Atlas light, ink on paper in Atlas dark). */
 export const ON_ACCENT_TEXT = 'text-[var(--ds-on-accent)]';
 /** Soft accent tint for active/selected rows (= the old bg-[#D97757]/10 by default). */
 export const ACCENT_SOFT_BG = 'bg-[var(--ds-accent-soft)]';

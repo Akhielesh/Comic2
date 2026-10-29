@@ -142,7 +142,7 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
   });
 });
 
-describe('Atlas skin — (b) the defaults reproduce today’s look outside the skin', () => {
+describe('Atlas skin — (b) the defaults reproduce today’s look outside the skin (contrast fixes aside)', () => {
   it('defines every new semantic token in :root (brief item 1)', () => {
     expect(NEW_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
   });
@@ -156,7 +156,9 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(ROOT_TOKENS.get('--ds-ease')).toBe('cubic-bezier(0.4, 0, 0.2, 1)'); // tailwind's default curve
     expect(ROOT_TOKENS.get('--ds-surface-blur')).toBe('12px'); // backdrop-blur-md
     expect(ROOT_TOKENS.get('--ds-motion-theme')).toBe('0ms'); // no cross-fade outside a skin
-    expect(ROOT_TOKENS.get('--ds-on-accent')).toBe('#ffffff'); // text-white
+    // The one deliberate change: the label on a solid accent fill is ink (5.6:1 on the brand
+    // terracotta; the old text-white measured 3.1:1). tests/config/tokenContrast.test.ts.
+    expect(ROOT_TOKENS.get('--ds-on-accent')).toBe('#1a1915');
     expect(ROOT_TOKENS.get('--ds-accent-soft')).toBe('rgba(217,119,87,0.10)'); // bg-[#D97757]/10
     expect(ROOT_TOKENS.get('--ds-font-sans')).toBe('Inter, sans-serif'); // font-sans
     expect(ROOT_TOKENS.get('--ds-font-display')).toBe('Inter, sans-serif'); // headings inherit
