@@ -142,7 +142,26 @@ export interface SheetPlacement {
   width?: number;
   maxHeight: number;
   placement: 'above' | 'below';
+  /** Set when the sheet is confined to one screen of a dual-screen device: the most it may grow to. */
+  maxWidth?: number;
 }
+
+/** A horizontal span the sheet must stay inside (one screen of a dual-screen device). */
+export interface SheetBounds {
+  left: number;
+  right: number;
+}
+
+/**
+ * Dual-screen devices (side-by-side viewport segments): the screen that holds the anchor — a popover
+ * never straddles the fold (mobile.md §3.6; P1-QA sheets-span-the-fold). Null on a single screen.
+ */
+export const segmentBoundsFor = (anchor: { left: number; right: number }, segments: readonly { left: number; right: number }[] | null | undefined): SheetBounds | null => {
+  if (!segments || segments.length !== 2) return null;
+  const cx = (anchor.left + anchor.right) / 2;
+  const hit = segments.find((r) => cx >= r.left && cx < r.right) ?? (cx < segments[0].right ? segments[0] : segments[1]);
+  return { left: hit.left, right: hit.right };
+};
 
 /**
  * Where a fixed popover goes: aligned to the anchor (start/end/stretch), clamped horizontally,
@@ -155,14 +174,19 @@ export const placeSheet = (
   placement: 'above' | 'below' = 'below',
   align: 'start' | 'end' | 'stretch' = 'end',
   gap = 8,
-  gutter = SHEET_GUTTER
+  gutter = SHEET_GUTTER,
+  bounds: SheetBounds | null = null
 ): SheetPlacement => {
   const vw = Math.max(0, viewport.width);
   const vh = Math.max(0, viewport.height);
-  const width = align === 'stretch' ? Math.min(anchor.right - anchor.left, vw - gutter * 2) : Math.min(sheet.width, vw - gutter * 2);
+  // The span the sheet lives in: the viewport, or one screen of a dual-screen device.
+  const lo = bounds ? Math.max(0, bounds.left) : 0;
+  const hi = bounds ? Math.min(vw, bounds.right) : vw;
+  const span = Math.max(0, hi - lo - gutter * 2);
+  const width = align === 'stretch' ? Math.min(anchor.right - anchor.left, span) : Math.min(sheet.width, span);
   let left: number;
-  if (align === 'end') left = clampSheetX(anchor.right, width, vw, gutter);
-  else left = Math.round(Math.max(gutter, Math.min(anchor.left, vw - width - gutter)));
+  if (align === 'end') left = Math.round(Math.max(lo + gutter, Math.min(anchor.right - width, hi - width - gutter)));
+  else left = Math.round(Math.max(lo + gutter, Math.min(anchor.left, hi - width - gutter)));
   const roomBelow = vh - anchor.bottom - gap - gutter;
   const roomAbove = anchor.top - gap - gutter;
   let side = placement;
@@ -171,7 +195,14 @@ export const placeSheet = (
   const room = Math.max(120, side === 'below' ? roomBelow : roomAbove);
   const height = Math.min(sheet.height, room);
   const top = side === 'below' ? anchor.bottom + gap : Math.max(gutter, anchor.top - gap - height);
-  return { left, top: Math.round(top), ...(align === 'stretch' ? { width: Math.round(width) } : {}), maxHeight: Math.round(room), placement: side };
+  return {
+    left,
+    top: Math.round(top),
+    ...(align === 'stretch' || (bounds && sheet.width > width) ? { width: Math.round(width) } : {}),
+    maxHeight: Math.round(room),
+    placement: side,
+    ...(bounds ? { maxWidth: Math.round(span) } : {})
+  };
 };
 
 // ── PopSheet ─────────────────────────────────────────────────────────────────
@@ -189,6 +220,11 @@ export interface PopSheetProps {
   children: React.ReactNode;
   /** 'absolute' (default): relative to the positioned parent. 'fixed': portalled, viewport-clamped (needs anchorRef). */
   strategy?: 'absolute' | 'fixed';
+  /**
+   * 'fixed' only: the viewport's side-by-side segments (a dual-screen device). The sheet stays on the
+   * screen that holds its anchor instead of straddling the fold.
+   */
+  segments?: readonly { left: number; right: number }[] | null;
 }
 
 const SHEET_SURFACE = `max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain rounded-2xl ${HAIRLINE} ${SHADOW_SOFT} bg-[var(--ds-surface-strong)] backdrop-blur-xl animate-scale-in focus:outline-none`;
@@ -203,11 +239,16 @@ export const PopSheet: React.FC<PopSheetProps> = ({
   align = 'stretch',
   className,
   children,
-  strategy = 'absolute'
+  strategy = 'absolute',
+  segments
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const fixed = strategy === 'fixed' && !!anchorRef;
   const [pos, setPos] = useState<SheetPlacement | null>(null);
+  // Read at placement time (a new array each render must not re-run the placement effect).
+  const segRef = useRef(segments);
+  segRef.current = segments;
+  const segKey = segments && segments.length === 2 ? segments.map((r) => `${Math.round(r.left)}-${Math.round(r.right)}`).join('|') : '';
   useSheetBehaviour(open, onClose, ref, anchorRef);
 
   useLayoutEffect(() => {
@@ -219,9 +260,10 @@ export const PopSheet: React.FC<PopSheetProps> = ({
       const r = anchor.getBoundingClientRect();
       const vv = window.visualViewport;
       const viewport = { width: vv?.width || window.innerWidth, height: vv?.height || window.innerHeight };
-      const next = placeSheet(r, { width: el.offsetWidth || 320, height: el.scrollHeight || el.offsetHeight || 240 }, viewport, placement, align);
+      const bounds = segmentBoundsFor(r, segRef.current);
+      const next = placeSheet(r, { width: el.offsetWidth || 320, height: el.scrollHeight || el.offsetHeight || 240 }, viewport, placement, align, 8, SHEET_GUTTER, bounds);
       setPos((cur) =>
-        cur && cur.left === next.left && cur.top === next.top && cur.maxHeight === next.maxHeight && cur.width === next.width ? cur : next
+        cur && cur.left === next.left && cur.top === next.top && cur.maxHeight === next.maxHeight && cur.width === next.width && cur.maxWidth === next.maxWidth ? cur : next
       );
     };
     place();
@@ -233,7 +275,7 @@ export const PopSheet: React.FC<PopSheetProps> = ({
       window.removeEventListener('scroll', place, true);
       window.visualViewport?.removeEventListener('resize', place);
     };
-  }, [open, fixed, anchorRef, placement, align]);
+  }, [open, fixed, anchorRef, placement, align, segKey]);
 
   if (!open) return null;
 
@@ -248,7 +290,13 @@ export const PopSheet: React.FC<PopSheetProps> = ({
         className={cx(`fixed z-[86] ${SHEET_SURFACE}`, className)}
         style={
           pos
-            ? { left: pos.left, top: pos.top, maxHeight: `min(${pos.maxHeight}px, 560px)`, ...(pos.width ? { width: pos.width } : {}), maxWidth: `calc(100vw - ${SHEET_GUTTER * 2}px)` }
+            ? {
+                left: pos.left,
+                top: pos.top,
+                maxHeight: `min(${pos.maxHeight}px, 560px)`,
+                ...(pos.width ? { width: pos.width } : {}),
+                maxWidth: pos.maxWidth !== undefined ? pos.maxWidth : `calc(100vw - ${SHEET_GUTTER * 2}px)`
+              }
             : { left: SHEET_GUTTER, top: -9999, visibility: 'hidden', maxWidth: `calc(100vw - ${SHEET_GUTTER * 2}px)` }
         }
       >

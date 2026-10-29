@@ -90,8 +90,10 @@ export const AdaptiveSheet: React.FC<AdaptiveSheetProps> = ({
       </SideSheet>
     );
   }
-  // Anchored popovers are portalled and viewport-clamped unless the caller pinned a strategy.
-  return <PopSheet {...popSheet} strategy={popSheet.strategy ?? (anchorRef ? 'fixed' : 'absolute')} />;
+  // Anchored popovers are portalled and viewport-clamped unless the caller pinned a strategy; on a
+  // dual-screen device they stay on the screen that holds their anchor (never across the fold).
+  const sideBySide = ff.segments.count === 2 && ff.segments.axis === 'horizontal' ? ff.segments.rects : null;
+  return <PopSheet {...popSheet} strategy={popSheet.strategy ?? (anchorRef ? 'fixed' : 'absolute')} segments={popSheet.segments ?? sideBySide} />;
 };
 
 export default AdaptiveSheet;
