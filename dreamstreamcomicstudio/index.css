@@ -940,8 +940,6 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/30 { background-color: color-mix(in srgb, var(--ds-accent) 30%, transparent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/35 { background-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/5 { background-color: var(--ds-accent-soft); }
-[data-ds-skin="atlas"] .bg-\[\#D97757\]\/60 { background-color: color-mix(in srgb, var(--ds-accent) 60%, transparent); }
-[data-ds-skin="atlas"] .bg-\[\#D97757\]\/60.text-white { color: var(--ds-on-accent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/70 { background-color: color-mix(in srgb, var(--ds-accent) 70%, transparent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/70.text-white { color: var(--ds-on-accent); }
 [data-ds-skin="atlas"] .bg-\[\#D97757\]\/85 { background-color: color-mix(in srgb, var(--ds-accent) 85%, transparent); }
