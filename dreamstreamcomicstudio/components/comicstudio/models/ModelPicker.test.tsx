@@ -98,7 +98,7 @@ describe('Easy', () => {
     expect(nb.querySelector('[data-line="uptime"]')).toHaveTextContent('1 provider · 97.7% up (24 h) · OpenRouter, 5 min ago');
     expect(nb.querySelector('[data-line="leaderboards"]')).toHaveTextContent('Leaderboards: LMArena edit #5 · AA edit #4');
     const pro = rowOf('nano-banana-pro');
-    expect(pro.querySelector('[data-line="uptime"]')).toHaveTextContent('3 providers · 99.1% up (24 h)');
+    expect(pro.querySelector('[data-line="uptime"]')).toHaveTextContent('2 providers · 100% up (24 h)');
     expect(within(pro).getByText('About 4× the price of Nano Banana 2.1 per page')).toBeInTheDocument();
     expect(screen.getByText('Prices: OpenRouter, 5 min ago · Rankings: LMArena (Oct 20, 2026), Artificial Analysis (Oct 22, 2026)')).toBeInTheDocument();
   });
@@ -240,7 +240,7 @@ describe('detail (L3) in place', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Details for Nano Banana Pro' }));
     await act(async () => undefined);
     const root = document.querySelector('[data-model-detail="nano-banana-pro"]') as HTMLElement;
-    expect(within(root).getByText('Google Vertex: 98.4% up (24 h)')).toBeInTheDocument();
+    expect(within(root).getByText('Google Vertex: 100% up (24 h)')).toBeInTheDocument();
     expect(within(root).getByText(/LMArena edit #13 of 60/)).toBeInTheDocument();
     expect(within(root).getByText('Holds 5 characters per image · up to 14 reference images')).toBeInTheDocument();
     fireEvent.click(within(root).getByRole('button', { name: 'Back to the models' }));

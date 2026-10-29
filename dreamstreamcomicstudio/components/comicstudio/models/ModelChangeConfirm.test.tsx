@@ -81,7 +81,7 @@ describe('C — after the lock', () => {
     expect(priceOf('none')).toBe('Free now');
     expect(priceOf('pages_cover')).toBe('≈$1.07');
     expect(priceOf('all')).toBe('≈$1.77');
-    expect(screen.getByText('Nano Banana Pro: ≈$0.18 per page at 1K · holds up to 5 characters per image · 3 providers · 99.1% up (24 h)')).toBeInTheDocument();
+    expect(screen.getByText('Nano Banana Pro: ≈$0.18 per page at 1K · holds up to 5 characters per image · 2 providers · 100% up (24 h)')).toBeInTheDocument();
     expect(screen.getByText('Nano Banana 2.1: ≈$0.05 per page at 1K')).toBeInTheDocument();
     expect(document.querySelector('[data-confirm="fineprint"]')).toHaveTextContent('Prices: OpenRouter, 5 min ago. You can switch back the same way.');
   });

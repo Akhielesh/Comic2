@@ -26,7 +26,7 @@ describe('buildPickerRows', () => {
     const pro = rows.find((r) => r.id === 'nano-banana-pro')!;
     const gpt = rows.find((r) => r.id === 'gpt-image-2.5')!;
     expect(nb).toMatchObject({ current: true, isDefault: true, disabled: false, providers: 1, uptime1d: 97.72, pageRes: '1K' });
-    expect(pro).toMatchObject({ current: false, suggested: true, disabled: false, providers: 3, characters: 5 });
+    expect(pro).toMatchObject({ current: false, suggested: true, disabled: false, providers: 2, characters: 5 });
     // The price warning against the comic's model (shared modelFit with the price book).
     expect(pro.warns.map((w) => w.text)).toContain('About 4× the price of Nano Banana 2.1 per page');
     expect(gpt.disabled).toBe(true);

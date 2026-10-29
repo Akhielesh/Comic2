@@ -1,11 +1,17 @@
-// Synthetic fixtures for the model picker tests and the QA scenes (no real user data). The catalog rows reuse the
-// public 2026-10-22 research figures (models.md §1: OpenRouter list prices, Google's token table, the LMArena and
-// Artificial Analysis edit boards) so the numbers on screen are the real public ones, labelled with their dates.
+// Synthetic fixtures for the model picker tests and the QA scenes (no real user data). The catalog rows are
+// SYNTHETIC, shaped like the 2026-10-22 research data (models.md §1). Where a row carries a public figure it is the
+// one §1 records (OpenRouter list prices and 24 h uptime per endpoint, Google's token table, the LMArena and
+// Artificial Analysis edit boards), so nothing on a QA screen contradicts the research. Some fields are made up or
+// emptied on purpose to exercise a UI state, and are not facts:
+//   - Nano Banana 2.1 `reliability` (12 calls · 1 failed · 1 rate-limited) and any `observed` costs a test passes in;
+//   - Seedream 5 Pro has no endpoints and no board entries here (§1 lists 1 endpoint at 99.47% and AA edit #8), so the
+//     §4.6 "No uptime data right now" and "Not ranked on public leaderboards yet" states render;
+//   - `uptime30m` is null throughout (§1 records only the 24 h figure).
 //
 //   lakeDoc()      f8312c86-shaped: 5 drawn pages, 4 character sheets and a cover on Nano Banana 2.1, Draft (1K),
 //                  4:5 pages, locked at the first render.
 //   freshDoc()     nothing drawn yet (unlocked), Standard (2K), 2:3 pages.
-//   catalogRows()  Nano Banana 2.1 (1 provider), Nano Banana Pro (3 providers), GPT Image 2.5 (hidden, 4:5 blocked),
+//   catalogRows()  Nano Banana 2.1 (1 provider), Nano Banana Pro (2 providers), GPT Image 2.5 (hidden, 4:5 blocked),
 //                  Seedream 5 Pro (hidden, no 2K price) — as GET /api/comic/models/catalog serves them.
 
 import { createEmptyDoc, emptyRender, type Character, type ComicDoc, type Page, type RenderState } from '../../../../shared/comic/doc';
@@ -117,6 +123,7 @@ export const catalogRows = (opts: CatalogOptions = {}): ModelCatalogRow[] => {
         '4K': { usd: 0.113, basis: 'vendor_table' }
       },
       perRefUsd: null,
+      // §1.1 #1: 1 endpoint · Google AI Studio 97.72%. §1.2 #1: LMArena edit #5 · 1426.2, AA Edit #4 · 1152 ±13.
       endpoints: [{ provider: 'Google AI Studio', uptime1d: 97.72, uptime30m: null }],
       quality: [
         { board: 'lmarena_edit', rank: 5, of: 60, score: 1426.2, asOf: '2026-10-20', source: LMA_SOURCE },
@@ -141,10 +148,10 @@ export const catalogRows = (opts: CatalogOptions = {}): ModelCatalogRow[] => {
         '4K': { usd: 0.24, basis: 'vendor_table' }
       },
       perRefUsd: null,
+      // §1.1 #2: 2 endpoints · AI Studio 98.33%, Vertex 100%.
       endpoints: [
-        { provider: 'Google AI Studio', uptime1d: 99.1, uptime30m: 100 },
-        { provider: 'Google Vertex', uptime1d: 98.4, uptime30m: null },
-        { provider: 'Google Vertex (global)', uptime1d: 97.9, uptime30m: null }
+        { provider: 'Google AI Studio', uptime1d: 98.33, uptime30m: null },
+        { provider: 'Google Vertex', uptime1d: 100, uptime30m: null }
       ],
       quality: [
         { board: 'lmarena_edit', rank: 13, of: 60, score: 1390.2, asOf: '2026-10-20', source: LMA_SOURCE },
@@ -162,10 +169,11 @@ export const catalogRows = (opts: CatalogOptions = {}): ModelCatalogRow[] => {
       lifecycle: 'experimental',
       price: { '1K': { usd: 0.2107, basis: 'registry', note: 'from our price list, 2026-10-22' } },
       perRefUsd: null,
-      endpoints: [{ provider: 'OpenAI', uptime1d: 99.6, uptime30m: null }],
+      // §1.1 #5: 1 endpoint · OpenAI 100%. §1.2 #5: LMArena edit #1 · 1514.4, AA Edit #1 · 1200 ±11.
+      endpoints: [{ provider: 'OpenAI', uptime1d: 100, uptime30m: null }],
       quality: [
-        { board: 'lmarena_edit', rank: 1, of: 60, score: 1502, asOf: '2026-10-20', source: LMA_SOURCE },
-        { board: 'aa_edit', rank: 1, of: 74, score: 1251, asOf: '2026-10-22T17:51:00Z', source: AA_SOURCE }
+        { board: 'lmarena_edit', rank: 1, of: 60, score: 1514.4, asOf: '2026-10-20', source: LMA_SOURCE },
+        { board: 'aa_edit', rank: 1, of: 74, score: 1200, ci: [1189, 1211], asOf: '2026-10-22T17:51:00Z', source: AA_SOURCE }
       ],
       observed: [],
       fetchedAt: at,
