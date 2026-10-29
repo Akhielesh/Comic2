@@ -87,8 +87,25 @@ import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
 
+/**
+ * The option card a message answers, named by the card (OptionsCard: `send(reply, { card: { id,
+ * choiceIds } })`, or `custom` with a typed answer): the server records the answer on THAT card —
+ * a typed answer too, and the right card when two share labels. Without it the server matches the
+ * text against the open cards. (Additive request field `card`; see routes/comic.ts parseOptionAnswer.)
+ */
+export interface OptionCardAnswer {
+  id: string;
+  choiceIds?: string[];
+  custom?: string;
+}
+
+/** send()'s options: SendOptions plus the option card the message answers. */
+export type MessageSendOptions = SendOptions & { card?: OptionCardAnswer };
+
 /** Extra state the conversation pane uses on top of the shared StudioController contract. */
 export interface ComicStudioController extends StudioController {
+  /** As StudioController's, plus the option card the message answers (MessageSendOptions.card). */
+  send(text: string, opts?: MessageSendOptions | PendingAttachment[]): Promise<void>;
   /** A director turn is streaming (the composer waits; actions may still run). */
   messageBusy: boolean;
   /** The user's message, shown until the server records it (or marked failed). */
@@ -638,9 +655,9 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Messages ───────────────────────────────────────────────────────────────
 
   const send = useCallback(
-    async (text: string, opts?: SendOptions | PendingAttachment[]) => {
+    async (text: string, opts?: MessageSendOptions | PendingAttachment[]) => {
       // Overloaded: the legacy (text, PendingAttachment[]) form stays valid.
-      const o: SendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
+      const o: MessageSendOptions = Array.isArray(opts) ? { attachments: opts } : opts || {};
       const clean = (typeof text === 'string' ? text : '').trim();
       const files = (o.attachments || []).filter((a) => a && typeof a.dataUrl === 'string' && a.dataUrl);
       const inbox = [...new Set((o.inboxPaths || []).filter((p) => typeof p === 'string' && p))].slice(0, MAX_INBOX_ATTACHMENTS);
@@ -655,6 +672,7 @@ export function useStudio(projectId: string): ComicStudioController {
       messageInFlightRef.current = streamId;
       const targets = Array.isArray(o.attachmentTargets) && o.attachmentTargets.length ? o.attachmentTargets : undefined;
       const focus = o.focus === 'selection' ? focusFromSelection(selectionRef.current) : o.focus;
+      const card = o.card && typeof o.card.id === 'string' && o.card.id ? o.card : undefined;
       dispatch({
         type: 'message_pending',
         message: {
@@ -665,6 +683,7 @@ export function useStudio(projectId: string): ComicStudioController {
           ...(inbox.length ? { inboxPaths: inbox } : {}),
           ...(targets ? { attachmentTargets: targets } : {}),
           ...(focus ? { focus } : {}),
+          ...(card ? { card } : {}),
           at: Date.now(),
           status: 'sending',
           streamId
@@ -672,18 +691,16 @@ export function useStudio(projectId: string): ComicStudioController {
       });
       const attachments = [...files, ...inbox.map((inboxPath) => ({ inboxPath }))];
       const generation = generationRef.current;
+      const request: StreamRequest & { card?: OptionCardAnswer } = {
+        kind: 'message',
+        text: clean,
+        ...(attachments.length ? { attachments } : {}),
+        ...(targets ? { attachmentTargets: targets } : {}),
+        ...(focus ? { focus } : {}),
+        ...(card ? { card } : {})
+      };
       try {
-        await runStream(
-          'message',
-          {
-            kind: 'message',
-            text: clean,
-            ...(attachments.length ? { attachments } : {}),
-            ...(targets ? { attachmentTargets: targets } : {}),
-            ...(focus ? { focus } : {})
-          },
-          { streamId }
-        );
+        await runStream('message', request, { streamId });
       } finally {
         // Only this stream's own marker: a later message may already be in flight (see below).
         if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
@@ -700,7 +717,8 @@ export function useStudio(projectId: string): ComicStudioController {
       attachments: pending.attachments,
       ...(pending.inboxPaths?.length ? { inboxPaths: pending.inboxPaths } : {}),
       ...(pending.attachmentTargets?.length ? { attachmentTargets: pending.attachmentTargets } : {}),
-      ...(pending.focus ? { focus: pending.focus } : {})
+      ...(pending.focus ? { focus: pending.focus } : {}),
+      ...(pending.card ? { card: pending.card } : {})
     });
   }, [send]);
 

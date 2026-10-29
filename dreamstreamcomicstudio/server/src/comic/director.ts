@@ -405,12 +405,69 @@ function pickedChoices(card: OptionsCard, userText: string): string[] {
 }
 
 /**
- * A tapped option (the client sends the choice's reply as the user's message) is recorded on its
- * card before the turn runs, so a reload or another device shows the question answered and the
- * model's history reads "answered: …" (cardText). Free text that matches no choice leaves the card
- * as it is. The most recent unanswered card in the director's window wins.
+ * The options card a message answers, as the client knows it (OptionsCard): the card's id and the
+ * picked choice ids, or `custom` for an answer typed into the card's own field. Optional: without
+ * it the message's text is matched against the open cards.
  */
-function recordOptionAnswer(session: StudioContext['session'], userText: string): void {
+export interface OptionAnswerRef {
+  id: string;
+  choiceIds?: string[];
+  custom?: string;
+}
+
+/** Longest custom answer kept on a card (the message itself keeps the full text). */
+const CUSTOM_ANSWER_CHARS = 500;
+
+/** Write `answered` on the card `cardId` of message `m` (one 'message' op: it upserts by id). */
+function commitAnswer(session: StudioContext['session'], m: Msg, cardId: string, answered: string[]): void {
+  const cards = (m.cards || []).map((c) => (c.type === 'options' && c.id === cardId ? { ...c, answered } : c));
+  session.commit([{ op: 'message', msg: { ...m, cards } }]);
+}
+
+/**
+ * Answer the card the client named: 'answered', 'kept' (the card is already answered, or the answer
+ * does not fit it — nothing is written: the client said which card, so no other card is guessed), or
+ * 'unknown' (no such card in the conversation: fall back to the text).
+ */
+function answerByRef(session: StudioContext['session'], userText: string, ref: OptionAnswerRef): 'answered' | 'kept' | 'unknown' {
+  const conv = session.doc.conversation;
+  for (let i = conv.length - 1; i >= 0; i -= 1) {
+    const m = conv[i];
+    if (m.role !== 'assistant') continue;
+    const card = m.cards?.find((c): c is OptionsCard => c.type === 'options' && c.id === ref.id);
+    if (!card) continue;
+    if (card.answered?.length) return 'kept';
+    const ids = [...new Set(ref.choiceIds || [])];
+    if (ids.length) {
+      const known = ids.every((id) => card.choices.some((c) => c.id === id));
+      if (!known || (!card.multi && ids.length !== 1)) return 'kept';
+      commitAnswer(session, m, card.id, ids);
+      return 'answered';
+    }
+    // A typed answer is the message itself: recorded only when the card takes one and it is what was sent.
+    const custom = normalizeAnswer(ref.custom || '');
+    if (!card.allowCustom || !custom || custom !== normalizeAnswer(userText)) return 'kept';
+    commitAnswer(session, m, card.id, [userText.replace(/\s+/g, ' ').trim().slice(0, CUSTOM_ANSWER_CHARS)]);
+    return 'answered';
+  }
+  return 'unknown';
+}
+
+/**
+ * A tapped option (the client sends the choice's reply as the user's message) is recorded on its
+ * card before the message is routed, so a reload or another device shows the question answered and
+ * the model's history reads "answered: …" (cardText). With the client's card reference (`ref`) the
+ * named card is answered — a typed custom answer too, and the right card when two share labels;
+ * without one (or when the named card is not in the conversation) the text is matched: free text
+ * that matches no choice leaves the cards as they are, and the most recent unanswered card in the
+ * director's window wins.
+ * Returns whether a card was answered. The route calls it for every message (fast paths included).
+ */
+export function recordOptionAnswer(session: StudioContext['session'], userText: string, ref?: OptionAnswerRef): boolean {
+  if (ref) {
+    const byRef = answerByRef(session, userText, ref);
+    if (byRef !== 'unknown') return byRef === 'answered';
+  }
   const conv = session.doc.conversation;
   for (let i = conv.length - 1; i >= Math.max(0, conv.length - HISTORY_WINDOW); i -= 1) {
     const m = conv[i];
@@ -419,10 +476,11 @@ function recordOptionAnswer(session: StudioContext['session'], userText: string)
       if (card.type !== 'options' || card.answered?.length) continue;
       const answered = pickedChoices(card, userText);
       if (!answered.length) continue;
-      session.commit([{ op: 'message', msg: { ...m, cards: m.cards.map((c) => (c === card ? { ...c, answered } : c)) } }]);
-      return;
+      commitAnswer(session, m, card.id, answered);
+      return true;
     }
   }
+  return false;
 }
 
 export interface DirectorTurnInput {
@@ -433,6 +491,8 @@ export interface DirectorTurnInput {
   focus?: StudioFocus;
   /** SAFETY/IP NOTE from screenTurnInput (adapt decisions), appended to the user turn. */
   safetyNote?: string;
+  /** The route already matched this message against the open option cards (recordOptionAnswer), answered or not. */
+  optionAnswerHandled?: boolean;
 }
 
 /**
@@ -454,7 +514,7 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
     ...(attachments.length ? { attachments } : {})
   };
   try {
-    recordOptionAnswer(session, userText);
+    if (!input.optionAnswerHandled) recordOptionAnswer(session, userText);
   } catch (err) {
     logger.warn('comic_director_answer_record_failed', { projectId: ctx.projectId, message: (err as Error)?.message });
   }

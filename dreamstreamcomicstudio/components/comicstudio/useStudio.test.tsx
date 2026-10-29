@@ -160,6 +160,17 @@ describe('useStudio — director turns', () => {
     expect(result.current.doc?.conversation.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'a2']);
   });
 
+  it('a tapped option names its card on the request, and "Try again" re-sends it', async () => {
+    const { result } = await setup();
+    const card = { id: 'card_1', choiceIds: ['opt_1'] };
+    act(() => void result.current.send('Make it funny', { card }));
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'Make it funny', card });
+    await act(async () => lastStream().reject(new StudioApiError('billing', 'Out of credit.', { status: 402 })));
+    expect(result.current.pendingMessage).toMatchObject({ status: 'failed', card });
+    act(() => result.current.retryPendingMessage());
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'Make it funny', card });
+  });
+
   it('sends images as attachments', async () => {
     const { result } = await setup();
     const att = { name: 'maya.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAA' };

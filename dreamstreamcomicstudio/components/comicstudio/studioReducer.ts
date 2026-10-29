@@ -126,6 +126,8 @@ export interface PendingUserMessage {
   inboxPaths?: string[];
   attachmentTargets?: AttachmentTarget[];
   focus?: StudioFocus;
+  /** The option card the message answers (OptionCardAnswer in useStudio), re-sent by "Try again". */
+  card?: { id: string; choiceIds?: string[]; custom?: string };
 }
 
 export interface OptimisticPatch {

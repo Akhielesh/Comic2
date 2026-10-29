@@ -48,7 +48,7 @@ import { checkQualityAccess, studioCapsFor, type StudioCapsDeps } from '../comic
 import { createSupabaseAssetStore, isOwnedAssetPath } from '../comic/assets.js';
 import { createStudioContext, signAssetPaths, type OrchestratorContext, type StudioContextDeps } from '../comic/context.js';
 import { costFormatterFor, governCard, governDollars, standardPageProviderUsd } from '../comic/costText.js';
-import { runDirectorTurn } from '../comic/director.js';
+import { recordOptionAnswer, runDirectorTurn, type OptionAnswerRef } from '../comic/director.js';
 import { canFastPath, parseIntent, routeIntent } from '../comic/intents.js';
 import { ASPECT_RATIOS, runAction, spendIsByok, suggestNextSteps } from '../comic/jobs.js';
 import { studioKeysFromRequest } from '../comic/keys.js';
@@ -437,6 +437,25 @@ const parseTarget = (raw: unknown, bad: (m: string) => StudioError): AttachmentT
   }
 };
 
+/** Choice ids one option-card answer may name (cards carry a handful of choices). */
+const MAX_ANSWER_CHOICES = 24;
+
+/**
+ * The option card a message answers (`card` on a message request; additive — OptionsCard names
+ * the card and its picked choice ids, or `custom` for a typed answer). A hint like focus: the
+ * valid parts are kept and anything malformed is dropped, never failing the message; the card
+ * and its choices are checked against the doc when the answer is recorded (recordOptionAnswer).
+ */
+export function parseOptionAnswer(raw: unknown): OptionAnswerRef | undefined {
+  if (!isObject(raw) || typeof raw.id !== 'string' || !DOC_ID.test(raw.id)) return undefined;
+  const choiceIds = Array.isArray(raw.choiceIds)
+    ? [...new Set(raw.choiceIds.filter((c): c is string => typeof c === 'string' && DOC_ID.test(c)))].slice(0, MAX_ANSWER_CHOICES)
+    : [];
+  const custom = typeof raw.custom === 'string' ? raw.custom.replace(/\s+/g, ' ').trim().slice(0, MAX_MESSAGE_CHARS) : '';
+  if (!choiceIds.length && !custom) return undefined;
+  return { id: raw.id, ...(choiceIds.length ? { choiceIds } : {}), ...(custom ? { custom } : {}) };
+}
+
 /** Validate the body of POST /stream. Throws BAD_REQUEST with a user-safe message. */
 export function parseStreamRequest(body: unknown): StreamRequest {
   const bad = (message: string) => new StudioError('BAD_REQUEST', message, { status: 400 });
@@ -535,6 +554,8 @@ interface PreparedMessage {
   focus?: StudioFocus;
   /** The long text saved as the source script, for the safety screen. */
   sourceText?: string;
+  /** The option card this message answers, when the client names it (parseOptionAnswer). */
+  answer?: OptionAnswerRef;
 }
 
 /** Message text longer than this is treated as a pasted script (saved to source.script). */
@@ -1196,7 +1217,11 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         });
         // Attachments are validated (and legacy images stored) before the stream opens, so a
         // bad file or a stale inbox path is a plain 400 with nothing persisted.
-        if (request.kind === 'message') prepared = await prepareMessage(request, ctx);
+        if (request.kind === 'message') {
+          prepared = await prepareMessage(request, ctx);
+          const answer = parseOptionAnswer(isObject(req.body) ? req.body.card : undefined);
+          if (answer) prepared.answer = answer;
+        }
       } catch (err) {
         stops.close();
         throw err;
@@ -1363,6 +1388,14 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       return;
     }
 
+    // A tapped option is recorded on its card before the message is routed, so the free paths
+    // (intent router, fast intents) record it as well as the director (DIR-8).
+    try {
+      recordOptionAnswer(session, prepared.text, prepared.answer);
+    } catch (err) {
+      logger.warn('comic_answer_record_failed', { requestId: req.requestId, projectId: ctx.projectId, message: (err as Error)?.message });
+    }
+
     const attachments = prepared.attachments.filter((a) => !blockedPaths.has(a.path));
     const ops: DocOp[] = [...inboxRemovals(() => true), ...prepared.ops];
     let text = prepared.text;
@@ -1414,7 +1447,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       attachments,
       sourceSaved: prepared.ops.some((o) => o.op === 'source'),
       ...(prepared.focus ? { focus: prepared.focus } : {}),
-      ...(screened.note ? { safetyNote: screened.note } : {})
+      ...(screened.note ? { safetyNote: screened.note } : {}),
+      optionAnswerHandled: true
     });
   }
 

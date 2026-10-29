@@ -4,7 +4,7 @@ import express from 'express';
 import sharp from 'sharp';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StudioEvent } from '../../../shared/comic/events.js';
-import { emptyRender, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
+import { emptyRender, type Card, type ComicDoc, type RefAsset } from '../../../shared/comic/doc.js';
 import { NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload, PublicPublicationInfo } from '../../../shared/comic/publication.js';
 import type { StudioUsage } from '../../../shared/comic/capabilities.js';
@@ -42,6 +42,7 @@ import {
   isCostlyRequest,
   legacyImportOps,
   parseFocus,
+  parseOptionAnswer,
   parseStreamRequest,
   rehomeLegacyRefs,
   restrictedRefusal
@@ -821,6 +822,15 @@ describe('parseStreamRequest', () => {
     for (const type of ['', '__proto__', 'constructor', 'render_everything', 'restore_render ']) expect(() => parseStreamRequest({ kind: 'action', action: { type } })).toThrow('Unknown action');
   });
 
+  it('parseOptionAnswer keeps a valid card reference and drops anything malformed (never failing the message)', () => {
+    expect(parseOptionAnswer({ id: 'card_1', choiceIds: ['opt_1', 'opt_1', 'bad id!', 4, 'opt_2'] })).toEqual({ id: 'card_1', choiceIds: ['opt_1', 'opt_2'] });
+    expect(parseOptionAnswer({ id: 'card_1', custom: '  half   of it ' })).toEqual({ id: 'card_1', custom: 'half of it' });
+    expect(parseOptionAnswer({ id: 'card_1', choiceIds: Array.from({ length: 40 }, (_, i) => `o${i}`) })!.choiceIds).toHaveLength(24);
+    for (const raw of [undefined, 'card_1', { id: '<x>', choiceIds: ['a'] }, { id: 'card_1' }, { id: 'card_1', choiceIds: [], custom: '   ' }]) expect(parseOptionAnswer(raw)).toBeUndefined();
+    // The shared request shape is untouched: the reference rides beside it.
+    expect(parseStreamRequest({ kind: 'message', text: 'Yes', card: { id: 'card_1', choiceIds: ['opt_1'] } })).toEqual({ kind: 'message', text: 'Yes' });
+  });
+
   it('passes focus through, keeping only valid parts', () => {
     const lineIds = Array.from({ length: 90 }, (_, i) => `ln_${i}`);
     const parsed = parseStreamRequest({ kind: 'message', text: 'make these red', focus: { pageId: 'pg_2', lineIds: [...lineIds, 'bad id!', 4], panelN: 3, surface: 'page_editor', extra: 'x' } });
@@ -1160,6 +1170,56 @@ describe('message pipeline: screen → intent router → director', () => {
     llm.script.director = [{ text: 'Sure.' }];
     await stream('proj-1', { kind: 'message', text: 'make Maya taller' });
     expect(runDirectorTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a tapped option is recorded on its card even when the free intent router answers it (no director turn)', async () => {
+    const doc = plannedDoc();
+    doc.conversation = [
+      {
+        id: 'a0',
+        role: 'assistant',
+        text: 'What next?',
+        at: 1,
+        cards: [{ type: 'options', id: 'card_next', question: 'What next?', choices: [{ id: 'opt_pages', label: 'See the pages', reply: 'Show me the pages' }, { id: 'opt_draw', label: 'Draw page 1' }] }]
+      }
+    ];
+    seed(doc);
+    intent = (text) => (/show me the pages/i.test(text) ? { kind: 'show_pages', reply: '3 pages, 9 panels.', cards: [], nextSteps: [] } : null);
+    await stream('proj-1', { kind: 'message', text: 'Show me the pages' });
+    expect(runDirectorTurn).not.toHaveBeenCalled();
+    const card = store.docs.get('proj-1')!.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>;
+    // Before: only the director recorded answers, so a chip the router answered stayed open after a reload.
+    expect(card.answered).toEqual(['opt_pages']);
+  });
+
+  it('the client can name the card it answers: the tapped card among same labels, and a typed custom answer', async () => {
+    const yesNo = (id: string): Card => ({
+      type: 'options',
+      id,
+      question: 'Keep it?',
+      choices: [
+        { id: `${id}_y`, label: 'Yes' },
+        { id: `${id}_n`, label: 'No' }
+      ],
+      allowCustom: true
+    });
+    const doc = plannedDoc();
+    doc.conversation = [
+      { id: 'a0', role: 'assistant', text: 'Keep the market?', at: 1, cards: [yesNo('card_old')] },
+      { id: 'a1', role: 'assistant', text: 'Keep the chase?', at: 2, cards: [yesNo('card_new')] }
+    ];
+    seed(doc);
+    llm.script.director = [{ text: 'Keeping the market.' }, { text: 'Half the chase, then.' }];
+    await stream('proj-1', { kind: 'message', text: 'Yes', card: { id: 'card_old', choiceIds: ['card_old_y'] } });
+    const answered = (id: string) =>
+      (store.docs.get('proj-1')!.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.id === id) as Extract<Card, { type: 'options' }>).answered;
+    // The text alone ("Yes") would have answered the newest card.
+    expect(answered('card_old')).toEqual(['card_old_y']);
+    expect(answered('card_new')).toBeUndefined();
+    await stream('proj-1', { kind: 'message', text: 'Only the first half', card: { id: 'card_new', custom: 'Only the first half' } });
+    expect(answered('card_new')).toEqual(['Only the first half']);
+    // The director's turn did not record a second time (the route already matched the message).
+    expect(vi.mocked(runDirectorTurn).mock.calls.every(([, input]) => input.optionAnswerHandled === true)).toBe(true);
   });
 
   it('the real intent hook makes no LLM call for "show me the pages"', async () => {

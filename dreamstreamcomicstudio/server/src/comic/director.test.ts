@@ -5,6 +5,7 @@ import {
   HISTORY_WINDOW,
   conversationForDirector,
   maybeFoldMemory,
+  recordOptionAnswer,
   runDirectorTurn,
   summarizeDocForDirector
 } from './director.js';
@@ -98,6 +99,43 @@ describe('runDirectorTurn', () => {
     expect(cardOf().answered).toBeUndefined();
     await runDirectorTurn(ctx, { text: 'Cats and Birds', attachments: [] });
     expect(cardOf().answered).toEqual([cardOf().choices[0].id, cardOf().choices[2].id]);
+  });
+
+  it('option answers named by the card: a typed answer, the right card among same labels, and no guessing past a named card', () => {
+    const doc = createEmptyDoc('q-3');
+    const yesNo = (id: string): Card => ({
+      type: 'options',
+      id,
+      question: 'Keep it?',
+      choices: [
+        { id: `${id}_y`, label: 'Yes' },
+        { id: `${id}_n`, label: 'No' }
+      ],
+      allowCustom: true
+    });
+    doc.conversation = [
+      { id: 'a0', role: 'assistant', text: 'First?', at: 1, cards: [yesNo('c_old')] },
+      { id: 'a1', role: 'assistant', text: 'Second?', at: 2, cards: [yesNo('c_new')] }
+    ];
+    const session = newSession(doc);
+    const answeredOf = (cardId: string) =>
+      (session.doc.conversation.flatMap((m) => m.cards || []).find((c) => c.id === cardId) as Extract<Card, { type: 'options' }>).answered;
+    // Two live cards share "Yes": the text alone answers the newest; the named card is the one tapped.
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_old', choiceIds: ['c_old_y'] })).toBe(true);
+    expect(answeredOf('c_old')).toEqual(['c_old_y']);
+    expect(answeredOf('c_new')).toBeUndefined();
+    // Named but already answered (or an id the card does not have): nothing is written, no other card is guessed.
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_old', choiceIds: ['c_old_n'] })).toBe(false);
+    expect(recordOptionAnswer(session, 'Yes', { id: 'c_new', choiceIds: ['nope'] })).toBe(false);
+    expect(answeredOf('c_new')).toBeUndefined();
+    // A typed answer in the card's own field: recorded when it is what was sent.
+    expect(recordOptionAnswer(session, 'Only  the first half', { id: 'c_new', custom: 'something else' })).toBe(false);
+    expect(recordOptionAnswer(session, 'Only  the first half', { id: 'c_new', custom: 'only the first half' })).toBe(true);
+    expect(answeredOf('c_new')).toEqual(['Only the first half']);
+    // An unknown card id falls back to the text.
+    const s2 = newSession({ ...doc, id: 'q-4', conversation: [{ id: 'a2', role: 'assistant', text: 'Third?', at: 3, cards: [yesNo('c_3')] }] });
+    expect(recordOptionAnswer(s2, 'No', { id: 'c_gone', choiceIds: ['x'] })).toBe(true);
+    expect((s2.doc.conversation[0].cards![0] as Extract<Card, { type: 'options' }>).answered).toEqual(['c_3_n']);
   });
 
   it('runs a multi-round tool loop with OpenRouter-native tool messages', async () => {
