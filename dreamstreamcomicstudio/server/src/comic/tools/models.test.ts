@@ -214,6 +214,9 @@ describe('model names', () => {
     expect(id('seedream')).toBe('seedream-5-pro');
     expect(id('flux')).toBe('flux-3');
     expect(id('midjourney v9')).toBeUndefined();
+    // Imagen is not Nano Banana: never an invented equivalence (the tool answers with the available list).
+    expect(id('Imagen 4')).toBeUndefined();
+    expect(id('use imagen')).toBeUndefined();
     expect(id('')).toBeUndefined();
   });
 });
@@ -344,6 +347,7 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
   it('unknown names are an error the model can correct; a catalog outage still answers from the dated price list', async () => {
     setup(lakeLocked(), 'use midjourney', { caps: BYOK_CAPS, keys: BYOK_KEYS });
     expect(await call('model_options', { model: 'midjourney' })).toMatch(/^Error: No image model called "midjourney"\. Available: Nano Banana 2\.1, Nano Banana Pro\.$/);
+    expect(await call('model_options', { model: 'Imagen' })).toMatch(/^Error: No image model called "Imagen"\. Available: Nano Banana 2\.1, Nano Banana Pro\.$/);
     setModelCatalog({ ...fixtureCatalog(), rows: async () => Promise.reject(new Error('catalog down')), priceSources: async () => Promise.reject(new Error('catalog down')) });
     const out = await call('model_options', { want: 'characters' });
     expect(out).toContain('Live catalog data was unavailable');
@@ -488,6 +492,26 @@ describe('reply guards: never a switch, never a start that did not happen', () =
     expect(claims("I haven't switched to GPT Image.")).toEqual([]);
     expect(claims('I set the budget to $5. I changed the title to Nano Banana Days.')).toEqual([]);
     expect(claims('Your comic stays on Nano Banana 2.1; I set it to Nano Banana 2.1 at 1K.')).toEqual([]);
+    // More ways to claim it: "updated the model", "is now your comic's model", "from now on it draws with",
+    // a "no" elsewhere in the sentence, a second verb, a model the studio doesn't offer, and the bare "Switched!".
+    expect(claims("Done, I've updated the model to GPT Image 2.5.")).toEqual(["Done, I've updated the model to GPT Image 2.5."]);
+    expect(claims("GPT Image 2.5 is now your comic's model.")).toEqual(["GPT Image 2.5 is now your comic's model."]);
+    expect(claims('Switched! From now on it draws with Nano Banana Pro.')).toEqual(['Switched!', 'From now on it draws with Nano Banana Pro.']);
+    expect(claims('No problem, I’ve switched it to Nano Banana Pro.')).toHaveLength(1);
+    expect(claims('I set the budget to $5 and moved it to Nano Banana Pro.')).toHaveLength(1);
+    expect(claims("Okay, your comic's model is now Nano Banana Pro.")).toHaveLength(1);
+    expect(claims('I switched it to Imagen 4.')).toHaveLength(1);
+    // Not claims: a suggestion, other things set "to" a name, a scene.
+    expect(claims("Nano Banana Pro is the model I'd suggest for five characters.")).toEqual([]);
+    expect(claims('Now the frog is on the dock.')).toEqual([]);
+    expect(claims("I changed the hero's name to Gemini.")).toEqual([]);
+    expect(falseSwitchClaims('I changed the title to Nano Banana Days.', 'nano-banana-pro')).toEqual([]);
+    expect(falseSwitchClaims('I set the font to Flux Sans.', 'nano-banana-pro')).toEqual([]);
+  });
+
+  it('a title that starts like a model name is left alone on a comic locked to another model', () => {
+    const doc = lakeLocked((d) => (d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' }));
+    expect(guardModelReply('I changed the title to Nano Banana Days.', { doc, outages: [], queued: 0, cost: dollars })).toEqual({ text: 'I changed the title to Nano Banana Days.', steps: [] });
   });
 
   it('replaces a false switch claim with the lock line', () => {

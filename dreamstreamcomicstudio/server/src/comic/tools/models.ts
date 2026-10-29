@@ -252,7 +252,7 @@ const MODEL_ALIASES: [RegExp, string][] = [
   [/\bflux\b/, 'flux-3'],
   [/\b(?:nano ?banana|gemini|banana)\b.*\bpro\b|\bpro\b.*\b(?:nano ?banana|gemini)\b/, 'nano-banana-pro'],
   [/\b(?:nano ?banana|gemini)\b.*\blite\b/, 'nano-banana-lite'],
-  [/\b(?:nano ?banana|gemini|banana|imagen)\b/, 'nano-banana-2.1']
+  [/\b(?:nano ?banana|gemini|banana)\b/, 'nano-banana-2.1']
 ];
 
 const BY_NAME_LENGTH = [...IMAGE_MODELS].sort((a, b) => b.nickname.length - a.nickname.length);
@@ -816,15 +816,39 @@ const claimsStart = (sentence: string): boolean => {
 
 const PAUSE_ACK_RE = /\b(?:paused|isn'?t drawing|not drawing|nothing (?:was|is) (?:started|drawn|charged)|wasn'?t (?:drawn|started|charged)|unavailable|rate-?limit\w*|busy|down right now|couldn'?t (?:draw|start))\b/i;
 
-/** "switched it to X", "now using X", "I'll switch to X": the X a sentence claims the comic is (or will be) on. */
-const SWITCH_TARGET_RES: { re: RegExp; promise: boolean }[] = [
-  { re: /\b(?:switched|changed|moved|swapped|set|put)\b(?:[^.!?]|\.(?=\d))*?\b(?:to|onto|over to)\s+((?:[^.!?,;:]|\.(?=\d))+)/i, promise: false },
-  { re: /\b(?:now|from now on)\s+(?:using|uses|drawing with|draws with|drawn with|on|running on)\s+((?:[^.!?,;:]|\.(?=\d))+)/i, promise: false },
-  { re: /\bI(?:'ll| will| am going to|'m going to)\s+(?:switch|change|move|swap)\b(?:[^.!?]|\.(?=\d))*?\bto\s+((?:[^.!?,;:]|\.(?=\d))+)/i, promise: true }
+// The model a claim's object/target names. A claim counts only when it is about the image model: "switched your
+// comic / the model / it to X" (or plain "switched to X"), never "changed the title to Nano Banana Days".
+const TARGET = String.raw`((?:[^.!?,;:]|\.(?=\d))+)`;
+/** "switched it to X", "updated the model to X", "made the switch to X". */
+const SWITCH_VERB_RE = /\b(switched|changed|moved|swapped|set|put|updated|made the switch|switching|changing|moving|swapping|updating)\b/gi;
+/** Verbs that need no object to be about the model ("switched to X"). */
+const INTRANSITIVE_RE = /^(?:switch\w*|mov\w*|swap\w*|made the switch)$/i;
+/** The object of a transitive claim that makes it about the image model. */
+const MODELISH_RE = /\b(?:image models?|models?|comics?|comic'?s|books?|story|it|this|images?|drawings?|art|artwork|pages?|generator|engine|everything|the rest|things over|over)\b/i;
+/** "now using X", "from now on it draws with X", "your comic's model is now X", "the comic now uses X". */
+const NOW_CLAIM_RES: RegExp[] = [
+  new RegExp(String.raw`\b(?:now|from now on),?\s+(?:on|using)\s+${TARGET}`, 'gi'),
+  new RegExp(
+    String.raw`\b(?:now|from now on),?\s+(?:[\w']+\s+){0,3}?(?:using|uses|use|drawing with|draws with|draw with|drawn with|running on|runs on|run on|it'?s on|is on|are on|'re on)\s+${TARGET}`,
+    'gi'
+  ),
+  new RegExp(String.raw`\bmodel\s+(?:is|'s)\s+now\s+${TARGET}`, 'gi')
 ];
-const CONDITIONAL_RE = /\b(?:if|could|can|would|want|wish|should|may|might|whether|only you|picker|confirm)\b/i;
-const NOT_RE = /\b(?:not|never|no)\b|n't\b/i;
-const MODEL_LEAD_RE = /^(?:the |a |an )?(?:gpt|openai|chatgpt|dall ?e|flux|seedream|bytedance|nano ?banana|gemini|imagen)\b/;
+/** "I'll switch it to X" (a promise: the whole sentence is its context). */
+const PROMISE_RE = new RegExp(String.raw`\bI(?:'ll| will| am going to|'m going to)\s+(switch|change|move|swap|update|set)\b((?:[^.!?]|\.(?=\d))*?)\b(?:to|onto|over to)\s+${TARGET}`, 'gi');
+/** "X is now your comic's model" (the subject is the claim's target). */
+const SUBJECT_CLAIM_RE =
+  /^((?:[^.!?]|\.(?=\d))+?)\s+(?:is|'s|will be)\s+(?:now\s+(?:your|the|this)|your|this comic'?s|the comic'?s|the book'?s)\s+(?:comic'?s\s+|book'?s\s+)?(?:new\s+)?(?:image\s+)?model\b/i;
+/** A bare "Switched!" next to a claim. */
+const SWITCH_FRAGMENT_RE = /^(?:(?:done|ok(?:ay)?|all set|great)[,!.\s—–-]*)?(?:switched|swapped|changed)(?: it)?(?: over)?[!.]*$/i;
+/** An offer or a condition just before the claim ("if you want, I can switch it to X"). */
+const CLAIM_OFFER_RE = /\b(?:if|could|can|would|want|wish|should|shall|may|might|whether|only you|picker|confirm|ready to)\b[^.!?;:—–]{0,40}$/i;
+const CLAIM_CONDITIONAL_RE = /\b(?:if|could|can|would|want|wish|should|may|might|whether|only you|picker|confirm)\b/i;
+/** A negation just before the claim, in the same clause ("I haven't switched…"). */
+const CLAIM_NEGATED_RE = /\b(?:not|never|nothing|didn'?t|did not|haven'?t|hasn'?t|won'?t|can'?t|cannot|couldn'?t|wouldn'?t|isn'?t|wasn'?t|don'?t|doesn'?t)\b[^.!?:;,—–]{0,20}$/i;
+const MODEL_LEAD_RE = /^(?:the |a |an )?(?:gpt|openai|chatgpt|dall ?e|flux|seedream|bytedance|nano ?banana|gemini)\b/;
+/** Image models the studio does not offer: a claim of a switch to one is still false (no tool can switch). */
+const FOREIGN_MODEL_RE = /^(?:the |a |an )?(?:imagen|midjourney|stable diffusion|sdxl|sd ?3|ideogram|recraft|leonardo|firefly|kandinsky|playground|hidream|qwen image|grok image|aurora|reve|dall ?e)\b/;
 
 /** The model a claim's target text starts with ("GPT Image for the rest" → GPT Image 2.5), else undefined. */
 const modelAtStart = (target: string): ImageModelSpec | undefined => {
@@ -835,19 +859,51 @@ const modelAtStart = (target: string): ImageModelSpec | undefined => {
   return MODEL_LEAD_RE.test(t) ? resolveModelName(t.split(' ').slice(0, 5).join(' ')) : undefined;
 };
 
+/** Does the claim's target name a model other than the comic's (a registry model, or one the studio doesn't offer)? */
+const otherModel = (rawTarget: string, currentId: string): boolean => {
+  const target = rawTarget.replace(/^\s*(?:use|using|draw with|drawing with|run on|running on)\s+/i, '');
+  const spec = modelAtStart(target);
+  if (spec) return spec.id !== currentId;
+  return FOREIGN_MODEL_RE.test(normName(target));
+};
+
+/** One sentence: does it claim the comic is (or will be) on another model? */
+const claimsSwitch = (sentence: string, currentId: string): boolean => {
+  const s = sentence.replace(/[’‘]/g, "'");
+  const free = (before: string) => !CLAIM_OFFER_RE.test(before) && !CLAIM_NEGATED_RE.test(before);
+  const aboutModel = (verb: string, object: string) => (object.trim() ? MODELISH_RE.test(object) : INTRANSITIVE_RE.test(verb.trim()));
+  SWITCH_VERB_RE.lastIndex = 0;
+  for (let v = SWITCH_VERB_RE.exec(s); v; v = SWITCH_VERB_RE.exec(s)) {
+    const rest = s.slice(v.index + v[0].length);
+    const t = new RegExp(String.raw`^((?:[^.!?]|\.(?=\d))*?)\b(?:to|onto|over to)\s+${TARGET}`, 'i').exec(rest);
+    if (!t || !aboutModel(v[1], t[1]) || !free(s.slice(0, v.index))) continue;
+    if (otherModel(t[2], currentId)) return true;
+  }
+  for (const re of NOW_CLAIM_RES) {
+    re.lastIndex = 0;
+    for (let m = re.exec(s); m; m = re.exec(s)) if (free(s.slice(0, m.index)) && otherModel(m[1], currentId)) return true;
+  }
+  PROMISE_RE.lastIndex = 0;
+  for (let m = PROMISE_RE.exec(s); m; m = PROMISE_RE.exec(s)) {
+    // "I'll switch it to X if you like": a promise is an offer when anything in the sentence makes it conditional.
+    if (CLAIM_CONDITIONAL_RE.test(s) || CLAIM_NEGATED_RE.test(s.slice(0, m.index)) || !aboutModel(m[1], m[2])) continue;
+    if (otherModel(m[3], currentId)) return true;
+  }
+  const subject = SUBJECT_CLAIM_RE.exec(s);
+  if (subject) {
+    const lead = subject[1].split(/[,—–:]\s*/).pop() || '';
+    if (!CLAIM_CONDITIONAL_RE.test(subject[1]) && otherModel(lead, currentId)) return true;
+  }
+  return false;
+};
+
 /** Sentences that claim a model switch the director never made (any model other than the comic's). */
-export const falseSwitchClaims = (text: string, currentId: string): string[] =>
-  sentencesOf(text).filter((s) =>
-    SWITCH_TARGET_RES.some(({ re, promise }) => {
-      const m = re.exec(s);
-      if (!m) return false;
-      // "If you want, I've…" / "I haven't switched…": the words before the claim (a promise: the whole sentence).
-      const context = promise ? s : s.slice(0, m.index);
-      if (CONDITIONAL_RE.test(context) || NOT_RE.test(context)) return false;
-      const target = modelAtStart(m[1]);
-      return !!target && target.id !== currentId;
-    })
-  );
+export const falseSwitchClaims = (text: string, currentId: string): string[] => {
+  const sentences = sentencesOf(text);
+  const claims = sentences.filter((s) => claimsSwitch(s, currentId));
+  // "Switched!" on its own is part of the same false claim.
+  return claims.length ? sentences.filter((s) => claims.includes(s) || SWITCH_FRAGMENT_RE.test(s.trim())) : [];
+};
 
 export interface ReplyGuardInput {
   doc: ComicDoc;
