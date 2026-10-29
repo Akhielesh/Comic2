@@ -76,6 +76,10 @@ describe('golden page prompts (Ship 1)', () => {
         }
         if (!drawn.length && !viewer) expect(who).toBe('Who: no characters.');
         expect(block, block).toMatch(/^(Speaks: |OFF-PANEL VOICE: )/m);
+        // Every fixture panel has a mood: a Detail line closes every block, never a bare "Mood:" line.
+        expect(lineOf(block, 'Detail: '), block).toBeTruthy();
+        expect(block.split('\n').at(-1)!.startsWith('Detail: '), block).toBe(true);
+        expect(block, block).not.toMatch(/^Mood: /m);
       });
     });
   }

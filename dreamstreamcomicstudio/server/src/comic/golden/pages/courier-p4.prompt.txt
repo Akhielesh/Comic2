@@ -30,25 +30,25 @@ Camera: medium shot (waist up), eye level. Place: EAST GATE.
 Must show: Isha and Dev duck behind stacked crates inside the dark depot.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
 Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.
-Mood: dusty, dim.
+Detail: dusty, dim.
 PANEL 2 of 4 — box 2 in the layout (rows 2–3, left; 42% wide × 63% tall).
 Camera: full shot (figures head to toe), low angle. Place: EAST GATE.
 Must show: The parcel in Dev’s satchel glows through the canvas.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar), on the left; DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves), on the right.
 Speaks: nobody (narration only); fill the panel with art to its borders.
-Detail: Shadows stretch up the depot wall. Mood: eerie amber glow.
+Detail: Shadows stretch up the depot wall; eerie amber glow.
 PANEL 3 of 4 — box 3 in the layout (row 2, right; 52% wide × 30% tall).
 Camera: close-up (head and shoulders), eye level. Place: EAST GATE.
 Must show: Dev stares at the glow, goggles pushed up in shock.
 Who: DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
 Speaks: DEV — 1 balloon; compose open background (sky, wall, floor or shadow) beside his head for it.
-Mood: alarmed.
+Detail: alarmed.
 PANEL 4 of 4 — box 4 in the layout (row 3, right; 52% wide × 30% tall).
 Camera: insert shot (close detail of an object), top-down. Place: EAST GATE.
 Must show: The satchel buckle snaps open by itself.
 Who: no characters.
 Speaks: nobody (sound effects only); fill the panel with art to its borders.
-Mood: sudden.
+Detail: sudden.
 
 LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
 

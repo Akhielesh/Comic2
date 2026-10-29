@@ -34,37 +34,37 @@ Camera: wide shot, eye level. Place: NIGHT BAZAAR.
 Must show: Isha and Dev weave between lantern-lit stalls while the gate guard blocks the lane ahead.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves); GATE GUARD (bamboo staff).
 Speaks: GATE GUARD — 1 balloon; compose open background (sky, wall, floor or shadow) beside his head for it.
-Detail: Crowds part around them. Mood: busy, warm lantern light.
+Detail: Crowds part around them; busy, warm lantern light.
 PANEL 2 of 6 — box 2 in the layout guide (row 1, right; 47% wide × 32% tall).
 Camera: medium shot (waist up), low angle. Place: NIGHT BAZAAR.
 Must show: Dev kneels and pries open a rusted drain cover with a copper lever.
 Who: DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
 Speaks: nobody (sound effects only); fill the panel with art to its borders.
-Mood: focused.
+Detail: focused.
 PANEL 3 of 6 — box 3 in the layout guide (row 2, full width; 96% wide × 32% tall).
 Camera: wide shot, high angle. Place: EAST GATE.
 Must show: The two couriers slip along the canal path below the market.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar), on the left; DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves), on the right.
 Speaks: nobody (a silent panel); fill the panel with art to its borders.
-Detail: Lantern reflections ripple on the water. Mood: hushed, blue night.
+Detail: Lantern reflections ripple on the water; hushed, blue night.
 PANEL 4 of 6 — box 4 in the layout guide (row 3, left; 31% wide × 27% tall).
 Camera: insert shot (close detail of an object), top-down. Place: EAST GATE.
 Must show: Isha's brass wrist compass spins and then points at the depot.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar).
 Speaks: nobody (sound effects only); fill the panel with art to its borders.
-Mood: tense.
+Detail: tense.
 PANEL 5 of 6 — box 5 in the layout guide (row 3, center; 31% wide × 27% tall).
 Camera: close-up (head and shoulders), high angle. Place: EAST GATE.
 Must show: Isha crouches by the archway, squinting at a fresh tyre track in the mud.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar).
 Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.
-Mood: worried, cold blue.
+Detail: worried, cold blue.
 PANEL 6 of 6 — box 6 in the layout guide (row 3, right; 31% wide × 27% tall).
 Camera: point-of-view shot, eye level. Place: EAST GATE.
 Must show: From Dev's view, a sleek unmarked delivery van idles behind the flower stalls with its headlights off.
 Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); seen through DEV's eyes (do not draw DEV; at most a hand at the frame edge).
 Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it. OFF-PANEL VOICE: DEV (do not draw) — 1 balloon.
-Mood: suspicious, dim.
+Detail: suspicious, dim.
 
 LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
 

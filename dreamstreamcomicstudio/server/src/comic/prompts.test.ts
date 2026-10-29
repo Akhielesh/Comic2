@@ -378,7 +378,7 @@ describe('compilePage', () => {
         'Must show: Maya sprints into the market.',
         'Who: MAYA (Image 1 — black bun with a pencil through it, faded red kurta, thin scar).',
         'Speaks: nobody (a silent panel); fill the panel with art to its borders.',
-        'Detail: Shoppers scatter. Mood: frantic dawn.'
+        'Detail: Shoppers scatter; frantic dawn.'
       ].join('\n')
     );
     expect(prompt).toContain(
@@ -468,6 +468,29 @@ describe('compilePage', () => {
     expect(mustShow('Maya sprints into the market. Shoppers scatter.')).toBe('Must show: Maya sprints into the market.');
     expect(mustShow('Is it him? 3 shadows answer.')).toBe('Must show: Is it him?');
     expect(mustShow('The lock clicks… “Now,” she breathes.')).toBe('Must show: The lock clicks…');
+  });
+
+  it('every block with more action or a mood has one Detail line: the rest of the action, then the mood (plan §4.2)', () => {
+    const detailOf = (action: string, mood?: string): string | undefined => {
+      const prompt = compilePage(baseDoc(), page(1, [panel(1, ['maya'], { action, ...(mood ? { mood } : {}) })])).prompt;
+      const start = prompt.indexOf('PANEL 1 of 1');
+      const block = prompt.slice(start, prompt.indexOf('\n\n', start));
+      // The mood never sits on a bare line of its own.
+      expect(block).not.toMatch(/^Mood: /m);
+      return block.split('\n').find((l) => l.startsWith('Detail: '));
+    };
+    // One-sentence action (A1's "begin with the one thing the panel must show"): the mood still has its Detail.
+    expect(detailOf('Dev kneels by the drain.', 'focused')).toBe('Detail: focused.');
+    expect(detailOf('Dev kneels by the drain.', 'Worried, cold blue')).toBe('Detail: worried, cold blue.');
+    expect(detailOf('Dev kneels by the drain.', 'LED glow')).toBe('Detail: LED glow.');
+    // The rest of the action, then the mood.
+    expect(detailOf('Isha and Dev weave between stalls. Crowds part around them.', 'busy, warm lantern light')).toBe(
+      'Detail: Crowds part around them; busy, warm lantern light.'
+    );
+    expect(detailOf('Dr. Rao opens the vault. Gold spills out!', 'tense')).toBe('Detail: Gold spills out! Tense.');
+    expect(detailOf('Isha and Dev weave between stalls. Crowds part around them.')).toBe('Detail: Crowds part around them.');
+    // Neither: no Detail line at all.
+    expect(detailOf('Dev kneels by the drain.')).toBeUndefined();
   });
 
   it('identity anchors: ≤ 12 words from hair, outfit, marks and props (people) or what it is, markings and colours (non-humans)', () => {
@@ -1437,7 +1460,7 @@ describe('content rating in every image prompt (safety.md §3.2)', () => {
     const panelText = safe.prompt.slice(start, safe.prompt.indexOf('\n\n', start));
     expect(start).toBeGreaterThan(0);
     expect(panelText).toContain('Maya lunges at the thug');
-    expect(panelText).toContain('Mood: chaos.');
+    expect(panelText).toContain('Detail: chaos.');
     expect(panelText).not.toMatch(/\bstabs\b|\bblood\b|\bbloody\b/);
     const edit = compileEdit(baseDoc(), page(3, [panel(1, ['maya'])], { render: ready('pages/p3.png') }), { instruction: 'add a corpse on the floor', hasRegion: false, safe: true });
     expect(edit.prompt).toContain('Change only this: add a fallen figure on the floor.');

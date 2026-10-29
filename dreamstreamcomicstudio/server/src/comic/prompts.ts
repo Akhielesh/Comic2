@@ -1323,6 +1323,22 @@ const splitAction = (text: string): { first: string; rest: string } => {
   return { first: t, rest: '' };
 };
 
+/**
+ * "Detail: <the rest of the action>; <mood>." (plan §4.2: "Detail: her face is worried …; anxious, cold
+ * blue light."). Every block with either part has one, so a one-sentence action still carries its
+ * mood ("Detail: focused."); '' only when the panel has neither.
+ */
+const detailLine = (rest: string, mood: string): string => {
+  const body = stripEnd(clean(rest));
+  const feel = stripEnd(clean(mood)).replace(/^\p{Lu}(?=\p{Ll})/u, (ch) => ch.toLowerCase());
+  if (!body && !feel) return '';
+  if (!feel) return `Detail: ${sentence(body)}`;
+  if (!body) return `Detail: ${sentence(feel)}`;
+  // "Gold spills out!" keeps its own ending; the mood follows as its own sentence.
+  if (/[!?…]["'”’)\]]*$/.test(body)) return `Detail: ${body} ${sentence(feel[0].toUpperCase() + feel.slice(1))}`;
+  return `Detail: ${body}; ${sentence(feel)}`;
+};
+
 interface PanelBlockContext {
   names: Map<string, string>;
   props: ReadonlySet<string>;
@@ -1386,7 +1402,7 @@ const speaksLine = (doc: ComicDoc, panel: Panel, drawn: ReadonlySet<string>, ctx
  *   Must show: <the action's first sentence>
  *   Who: MEERA (Image 3 — <identity anchor>), on the left.
  *   Speaks: MEERA — 1 balloon; compose open background … beside her head for it.
- *   Detail: <the rest of the action> Mood: <mood>
+ *   Detail: <the rest of the action>; <mood>.
  */
 const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: PanelBlockContext, opts: CompileOptions = {}): string => {
   const count = page.panels.length;
@@ -1422,8 +1438,7 @@ const panelBlock = (doc: ComicDoc, page: Page, panel: Panel, i: number, ctx: Pan
   const drawn = new Set(staged.map((s) => s.id)); // a talking prop listed under Props is drawn too
   const speaks = speaksLine(doc, panel, drawn, ctx);
 
-  const mood = clean(panel.mood) ? `Mood: ${sentence(safeText(panel.mood!, opts))}` : '';
-  const detail = rest ? `Detail: ${sentence(rest)}${mood ? ` ${mood}` : ''}` : mood;
+  const detail = detailLine(rest, clean(panel.mood) ? safeText(panel.mood!, opts) : '');
 
   return [head, camera, mustShow, who, speaks, detail].filter(Boolean).join('\n');
 };
