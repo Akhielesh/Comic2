@@ -60,9 +60,33 @@ describe('models-quality-refresh.mjs', () => {
     expect(r.snapshot.generatedAt).toBe('2026-10-29T09:00:00.000Z');
     expect(r.snapshot.boards.lmarena_edit.entries['google/gemini-nano-banana-2.1']).toMatchObject({ rank: 2 });
     expect(r.changes.join('\n')).toContain('~ google/gemini-nano-banana-2.1 #5 · 1426.2 → #2 · 1500');
-    expect(r.snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit.map((p: { asOf: string }) => p.asOf)).toEqual(['2026-10-20', '2026-10-27']);
+    expect(r.snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit.map((p: { asOf: string }) => p.asOf)).toEqual(['2026-10-06', '2026-10-20', '2026-10-27']);
     // AA boards are untouched by the LMArena refresh.
     expect(r.snapshot.boards.aa_t2i).toEqual(quality.bundledQualitySnapshot.boards.aa_t2i);
+  });
+
+  it('pulls the T4 history from the full split (one point per publish date, last N days) through /filter', async () => {
+    const { refreshQualitySnapshot } = await import(SCRIPT);
+    const ds = fakeDatasets();
+    const full = [lm('Gemini Nano Banana 2.1', 1, 1440, 'overall', '2026-09-01'), lm('Gemini Nano Banana 2.1', 3, 1420, 'overall', '2026-10-24'), lm('Gemini Nano Banana 2.1', 8, 1300, 'overall', '2026-05-01')];
+    const fetch = vi.fn(async (url: string) => {
+      const u = new URL(url);
+      if (u.pathname === '/splits') return Response.json({ splits: [{ config: 'text_to_image', split: 'latest' }, { config: 'image_edit', split: 'latest' }, { config: 'image_edit', split: 'full' }] });
+      if (u.pathname === '/filter') {
+        const since = /'(\d{4}-\d{2}-\d{2})'/.exec(u.searchParams.get('where') ?? '')![1];
+        const rows = full.filter((r) => r.leaderboard_publish_date >= since);
+        return Response.json({ rows: rows.map((row) => ({ row })), num_rows_total: rows.length });
+      }
+      return ds.fetch(url);
+    });
+    const snapshot = JSON.parse(JSON.stringify(quality.bundledQualitySnapshot));
+    const r = await refreshQualitySnapshot({ snapshot, fetchImpl: fetch, quality, now: () => Date.parse('2026-10-29T09:00:00Z'), historyDays: 90 });
+    const points = r.snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit.map((p: { asOf: string; rank: number }) => `${p.asOf}#${p.rank}`);
+    expect(points).toEqual(['2026-09-01#1', '2026-10-06#6', '2026-10-20#5', '2026-10-24#3', '2026-10-27#2']);
+    expect(r.historyAdded).toBe(2); // 09-01 and 10-24 from the full split (10-27 comes with the latest board)
+    expect(r.changes.some((l: string) => l.startsWith('history lmarena_edit:'))).toBe(true);
+    const { moves } = quality.rankMovesFor('google/gemini-nano-banana-2.1', '2026-07-31', r.snapshot);
+    expect(moves.find((m) => m.board === 'lmarena_edit')).toMatchObject({ from: { rank: 1 }, to: { rank: 2 }, delta: -1 });
   });
 
   it('a dry run fetches LMArena only and writes nothing', async () => {
@@ -87,6 +111,8 @@ describe('models-quality-refresh.mjs', () => {
     await expect(saveBenchmarks({ fetchImpl: f, key: '', outPath: '/dev/null' })).rejects.toThrow('OPENROUTER_API_KEY');
     expect(f).not.toHaveBeenCalled();
     expect(() => parseArgs(['--write-everything'])).toThrow('Unknown argument');
-    expect(parseArgs(['--dry-run', '--benchmarks-out', 'x.json'])).toEqual({ dryRun: true, benchmarksOut: 'x.json', help: false });
+    expect(parseArgs(['--dry-run', '--benchmarks-out', 'x.json'])).toEqual({ dryRun: true, benchmarksOut: 'x.json', help: false, historyDays: 90 });
+    expect(parseArgs(['--history-days', '30']).historyDays).toBe(30);
+    expect(() => parseArgs(['--history-days', '0'])).toThrow('--history-days');
   });
 });

@@ -345,9 +345,16 @@ describe('our own facts in the rows and trends (S7, AT-9)', () => {
     expect(t.t2.source.yours).toContain('comic_image_calls');
     expect(t.t3.trackingSince).toBe('2026-10-22T17:51:00.000Z');
     expect(t.t3.note).toBe('Tracking since 2026-10-22T17:51:00.000Z');
-    // T4: one dated point per board so far → no move is invented.
-    expect(t.t4.moves).toEqual([]);
-    expect(t.t4.trackingSince).toBe('2026-10-07');
+    // T4: real moves from the committed LMArena full-split history (one point per publish date), nothing invented.
+    expect(t.t4.moves).toContainEqual({
+      modelId: 'nano-banana-pro',
+      board: 'lmarena_edit',
+      from: { asOf: '2026-09-22', rank: 9, score: 1390.1, name: 'gemini-3-pro-image-2k (nano-banana-pro)' },
+      to: { asOf: '2026-10-20', rank: 13, score: 1390.2, name: 'Gemini 3 Pro Image (nano-banana-pro, 2K)' },
+      delta: -4
+    });
+    expect(t.t4.moves.every((m) => m.from.asOf >= '2026-09-22' && m.to.asOf > m.from.asOf && m.delta === (m.from.rank as number) - (m.to.rank as number))).toBe(true);
+    expect(t.t4.trackingSince).toBe('2026-07-28');
     // T5: created in the last 30 days (Nano Banana 2.1 launched 2026-10-06).
     expect(t.t5.models.map((m) => m.id)).toContain('google/gemini-nano-banana-2.1');
     expect(t.t5.models.every((m) => Date.parse(m.created) >= FIXTURE_NOW - 30 * 86_400_000)).toBe(true);
@@ -358,6 +365,8 @@ describe('our own facts in the rows and trends (S7, AT-9)', () => {
     expect(t.t7.available).toBe(false);
     const t90 = await catalog.trends('90d', { userId: 'user-a' });
     expect(t90.t5.models.length).toBeGreaterThanOrEqual(t.t5.models.length);
+    // 90 days reaches back to the first point we hold: Nano Banana Pro on edit #5 (2026-07-28) → #13.
+    expect(t90.t4.moves.find((m) => m.modelId === 'nano-banana-pro' && m.board === 'lmarena_edit')).toMatchObject({ from: { asOf: '2026-07-28', rank: 5 }, to: { rank: 13 }, delta: -8 });
   });
 
   it('a failing calls database degrades to "no data", never an error', async () => {

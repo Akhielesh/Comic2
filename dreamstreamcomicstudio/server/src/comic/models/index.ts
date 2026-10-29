@@ -27,7 +27,7 @@ import {
 } from './catalog.js';
 import type { ImageCallRow, MonthlyUsageRow, PlatformStatRow } from './observed.js';
 import { priceBookFromSources, type PriceBookSources, type ServerPriceBook } from './pricing.js';
-import { createQualitySource } from './quality.js';
+import { createQualitySource, qualityStoreFromCatalogStore } from './quality.js';
 
 export * from './catalog.js';
 export * from './observed.js';
@@ -227,11 +227,13 @@ let processCatalog: ModelCatalog | null = null;
 export const modelCatalog = (): ModelCatalog => {
   if (!processCatalog) {
     const fetchImpl = typeof globalThis.fetch === 'function' ? (globalThis.fetch.bind(globalThis) as unknown as import('./catalog.js').CatalogFetch) : undefined;
+    const store = createSupabaseCatalogStore();
     processCatalog = createModelCatalog({
       fetch: fetchImpl,
-      store: createSupabaseCatalogStore(),
+      store,
       calls: createSupabaseImageCallsDb(),
-      quality: createQualitySource({ fetch: fetchImpl ?? null })
+      // The LMArena refresh is persisted next to the catalog cache, so its 24 h TTL and the T4 history survive sleeps.
+      quality: createQualitySource({ fetch: fetchImpl ?? null, store: store ? qualityStoreFromCatalogStore(store) : null })
     });
   }
   return processCatalog;

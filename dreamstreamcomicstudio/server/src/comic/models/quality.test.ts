@@ -5,11 +5,15 @@ import type { CatalogFetch } from './catalog.js';
 import {
   HF_DATASETS_SERVER,
   NOT_RANKED_COPY,
+  QUALITY_CACHE_SOURCE,
   bundledQualitySnapshot,
   createQualitySource,
   fetchLmarenaBoards,
+  fetchLmarenaHistory,
   lmarenaRowsToBoard,
   mergeLmarenaBoards,
+  mergeLmarenaHistory,
+  qualityStoreFromCatalogStore,
   nameKeys,
   qualityEntriesFor,
   rankMovesFor,
@@ -89,9 +93,9 @@ describe('merging a refresh', () => {
     expect(kept).toContain('lmarena_t2i');
     expect(snapshot.boards.lmarena_t2i).toEqual(snap.boards.lmarena_t2i);
     const nbHist = snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit!;
-    expect(nbHist.map((p) => p.asOf)).toEqual(['2026-10-20', '2026-10-27']);
-    const { moves } = rankMovesFor('google/gemini-nano-banana-2.1', '2026-09-28', snapshot);
-    expect(moves).toEqual([{ board: 'lmarena_edit', from: { asOf: '2026-10-20', rank: 5, score: 1426.2 }, to: expect.objectContaining({ asOf: '2026-10-27', rank: 7 }), delta: -2 }]);
+    expect(nbHist.map((p) => p.asOf)).toEqual(['2026-10-06', '2026-10-20', '2026-10-27']);
+    const { moves } = rankMovesFor('google/gemini-nano-banana-2.1', '2026-10-15', snapshot);
+    expect(moves).toEqual([{ board: 'lmarena_edit', from: expect.objectContaining({ asOf: '2026-10-20', rank: 5, score: 1426.2 }), to: expect.objectContaining({ asOf: '2026-10-27', rank: 7 }), delta: -2 }]);
   });
 
   it('keeps the dated snapshot when a pull matches too few tracked models (an upstream rename never wipes the ranks)', () => {
@@ -208,5 +212,143 @@ describe('the LMArena pull (documented datasets-server endpoints)', () => {
   it('fetch: null never fetches (the bundled snapshot only)', async () => {
     const q = createQualitySource({ fetch: null });
     expect((await q.get({ wait: true })).snapshot).toBe(bundledQualitySnapshot);
+  });
+});
+
+/** A datasets-server stand-in with latest AND full splits and the documented /filter endpoint (where on date + category). */
+const historyServer = (data: { latest: Record<string, LmarenaRow[]>; full: Record<string, LmarenaRow[]> }, opts: { filter?: boolean } = {}) => {
+  const calls: string[] = [];
+  const page = (rows: LmarenaRow[], u: URL) => {
+    const offset = Number(u.searchParams.get('offset'));
+    const length = Number(u.searchParams.get('length'));
+    return { ok: true, status: 200, json: async () => ({ rows: rows.slice(offset, offset + length).map((row) => ({ row })), num_rows_total: rows.length }) };
+  };
+  const fetch: CatalogFetch = async (url) => {
+    calls.push(url);
+    const u = new URL(url);
+    const split = u.searchParams.get('split');
+    const config = u.searchParams.get('config')!;
+    if (u.pathname === '/splits') {
+      return { ok: true, status: 200, json: async () => ({ splits: [...Object.keys(data.latest).map((config) => ({ config, split: 'latest' })), ...Object.keys(data.full).map((config) => ({ config, split: 'full' }))] }) };
+    }
+    const rows = (split === 'full' ? data.full : data.latest)[config] ?? [];
+    if (u.pathname === '/rows') return page(rows, u);
+    if (u.pathname === '/filter' && opts.filter !== false) {
+      const where = u.searchParams.get('where') ?? '';
+      const since = /"leaderboard_publish_date">='(\d{4}-\d{2}-\d{2})'/.exec(where)?.[1];
+      const category = /"category"='([^']+)'/.exec(where)?.[1];
+      return page(rows.filter((r) => (!since || r.leaderboard_publish_date >= since) && (!category || r.category === category)), u);
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  return { fetch, calls };
+};
+
+const emptyHistory = (): QualitySnapshot => ({ ...smallSnap(), history: {} });
+
+describe('T4 history from the full split (models.md §4.4: rank over the last 90 days)', () => {
+  const full = () => ({
+    text_to_image: [
+      lm('Gemini Nano Banana 2.1', 1, 1440, 'overall', '2026-08-07'),
+      lm('Gemini Nano Banana 2.1', 3, 1420, 'overall', '2026-10-20'),
+      lm('Gemini Nano Banana 2.1', 2, 1430, 'art', '2026-10-20'), // another category: not the overall board
+      lm('Gemini Nano Banana 2.1', 9, 1300, 'overall', '2026-03-01') // older than the window
+    ],
+    image_edit: [lm('GPT-Image-2.5 Sunburst', 1, 1510, 'overall', '2026-09-08'), lm('GPT-Image-2.5 Sunburst', 1, 1514, 'overall', '2026-10-20'), lm('GPT-Image-2.5 Sunburst', 2, 1500, 'multi_image_edit', '2026-10-20')]
+  });
+
+  it('two dated points in the full split give a real move (#1 → #3), read through /filter with the window server-side', async () => {
+    const ds = historyServer({ latest: {}, full: full() });
+    const history = await fetchLmarenaHistory(ds.fetch, bundledQualitySnapshot.aliases, { sinceDate: '2026-07-24' });
+    expect(history.lmarena_t2i!['google/gemini-nano-banana-2.1']).toEqual([
+      { asOf: '2026-08-07', rank: 1, score: 1440, name: 'Gemini Nano Banana 2.1' },
+      { asOf: '2026-10-20', rank: 3, score: 1420, name: 'Gemini Nano Banana 2.1' }
+    ]);
+    expect(history.lmarena_multi_image!['openai/gpt-image-2.5-sunburst']).toEqual([expect.objectContaining({ asOf: '2026-10-20', rank: 2 })]);
+    const { snapshot, added } = mergeLmarenaHistory(emptyHistory(), history, '2026-10-22T00:00:00Z');
+    expect(added).toBe(5);
+    const { moves } = rankMovesFor('google/gemini-nano-banana-2.1', '2026-07-24', snapshot);
+    expect(moves).toEqual([{ board: 'lmarena_t2i', from: expect.objectContaining({ asOf: '2026-08-07', rank: 1 }), to: expect.objectContaining({ asOf: '2026-10-20', rank: 3 }), delta: -2 }]);
+    const filters = ds.calls.filter((u) => u.includes('/filter?'));
+    expect(filters.length).toBe(2);
+    expect(filters.every((u) => u.includes('split=full'))).toBe(true);
+    expect(decodeURIComponent(filters.find((u) => u.includes('config=text_to_image'))!)).toContain(`"leaderboard_publish_date">='2026-07-24' AND "category"='overall'`);
+    expect(ds.calls.some((u) => u.includes('/rows?'))).toBe(false);
+  });
+
+  it('without /filter the server pull fails (bounded); the owner script falls back to paging /rows and filters itself', async () => {
+    const ds = historyServer({ latest: {}, full: full() }, { filter: false });
+    await expect(fetchLmarenaHistory(ds.fetch, bundledQualitySnapshot.aliases, { sinceDate: '2026-07-24' })).rejects.toThrow('404');
+    const history = await fetchLmarenaHistory(ds.fetch, bundledQualitySnapshot.aliases, { sinceDate: '2026-07-24', fallbackToRows: true });
+    expect(history.lmarena_t2i!['google/gemini-nano-banana-2.1'].map((p) => p.rank)).toEqual([1, 3]);
+    await expect(fetchLmarenaHistory(ds.fetch, {}, { sinceDate: "2026-07-24' OR 1=1" })).rejects.toThrow('YYYY-MM-DD');
+  });
+
+  it('merging prunes points older than the keep window and replaces a date we already hold', () => {
+    const snap = emptyHistory();
+    snap.history['google/gemini-nano-banana-2.1'] = { lmarena_t2i: [{ asOf: '2026-03-01', rank: 9, score: 1300 }, { asOf: '2026-10-20', rank: 4, score: 1400 }] };
+    const { snapshot } = mergeLmarenaHistory(snap, { lmarena_t2i: { 'google/gemini-nano-banana-2.1': [{ asOf: '2026-10-20', rank: 3, score: 1420 }] } }, '2026-10-22T00:00:00Z');
+    expect(snapshot.history['google/gemini-nano-banana-2.1'].lmarena_t2i).toEqual([{ asOf: '2026-10-20', rank: 3, score: 1420 }]);
+  });
+});
+
+describe('the committed history (qualitySnapshot.json, LMArena full split of 2026-10-22)', () => {
+  it('ends, for every tracked model and board, exactly at the dated board entry, and stays inside 90 days', () => {
+    const snap = bundledQualitySnapshot;
+    for (const board of ['lmarena_t2i', 'lmarena_edit', 'lmarena_multi_image'] as const) {
+      const b = snap.boards[board]!;
+      for (const [orId, e] of Object.entries(b.entries)) {
+        const points = snap.history[orId]?.[board] ?? [];
+        expect(points.length, `${board} ${orId}`).toBeGreaterThan(0);
+        expect(points.at(-1), `${board} ${orId}`).toMatchObject({ asOf: b.asOf, rank: e.rank, score: e.score });
+        expect(points.every((p) => p.asOf >= '2026-07-24' && typeof p.name === 'string')).toBe(true);
+      }
+    }
+  });
+
+  it('gives real T4 moves, e.g. Nano Banana Pro on edit #9 → #13 in the 30 days to 2026-10-22', () => {
+    const { moves, trackingSince } = rankMovesFor('google/gemini-3-pro-image', '2026-09-22');
+    expect(moves.find((m) => m.board === 'lmarena_edit')).toMatchObject({ from: { asOf: '2026-09-22', rank: 9 }, to: { asOf: '2026-10-20', rank: 13 }, delta: -4 });
+    expect(trackingSince).toBe('2026-07-28');
+  });
+});
+
+describe('the on-demand refresh is persisted (TTL and history survive a sleeping container)', () => {
+  const latest = () => tracked();
+  it('a cold process starts from the persisted refresh: newer boards, the history it gained, no fetch inside the TTL', async () => {
+    const { memoryCatalogStore } = await import('./__fixtures__/catalogFakes.js');
+    const cache = memoryCatalogStore();
+    const store = qualityStoreFromCatalogStore(cache);
+    let t = Date.parse('2026-10-29T10:00:00Z');
+    // The full split also has a publish date (10-24) newer than anything held that the latest split no longer shows.
+    const ds = historyServer({ latest: { text_to_image: latest().text_to_image, image_edit: latest().image_edit }, full: { image_edit: [lm('Gemini Nano Banana 2.1', 4, 1430, 'overall', '2026-10-24')] } });
+    const warm = createQualitySource({ fetch: ds.fetch, now: () => t, snapshot: smallSnap(), store });
+    const refreshed = await warm.get({ wait: true });
+    expect(refreshed.snapshot.boards.lmarena_edit!.asOf).toBe('2026-10-27');
+    expect(refreshed.snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit!.map((p) => p.asOf)).toEqual(['2026-10-06', '2026-10-20', '2026-10-24', '2026-10-27']);
+    expect(ds.calls.filter((u) => u.includes('/splits')).length).toBe(1); // one splits read serves boards and history
+    expect(cache.cache.get(QUALITY_CACHE_SOURCE)).toHaveLength(1);
+
+    t += 3_600_000; // the container slept and woke up
+    const spy: CatalogFetch = async () => {
+      throw new Error('must not fetch inside the TTL');
+    };
+    const cold = createQualitySource({ fetch: spy, now: () => t, snapshot: smallSnap(), store });
+    const s = await cold.get({ wait: true });
+    expect(s.stale).toBe(false);
+    expect(s.fetchedAt).toBe('2026-10-29T10:00:00.000Z');
+    expect(s.snapshot.boards.lmarena_edit!.asOf).toBe('2026-10-27');
+    expect(s.snapshot.boards.aa_t2i).toEqual(bundledQualitySnapshot.boards.aa_t2i); // AA stays bundled
+    expect(s.snapshot.history['google/gemini-nano-banana-2.1'].lmarena_edit!.map((p) => p.asOf)).toContain('2026-10-24');
+  });
+
+  it('a malformed persisted payload is ignored (never trusted as is)', async () => {
+    const { memoryCatalogStore } = await import('./__fixtures__/catalogFakes.js');
+    const cache = memoryCatalogStore();
+    await cache.saveCache(QUALITY_CACHE_SOURCE, [{ modelId: 'lmarena-ai/leaderboard-dataset', payload: { boards: { lmarena_edit: { asOf: 7 } }, history: { x: { lmarena_edit: [{ asOf: '2026-10-28' }] } } }, fetchedAt: 'not a time' }]);
+    const q = createQualitySource({ fetch: null, snapshot: smallSnap(), store: qualityStoreFromCatalogStore(cache) });
+    const s = await q.get();
+    expect(s.snapshot.boards.lmarena_edit).toEqual(bundledQualitySnapshot.boards.lmarena_edit);
+    expect(s.fetchedAt).toBeUndefined();
   });
 });

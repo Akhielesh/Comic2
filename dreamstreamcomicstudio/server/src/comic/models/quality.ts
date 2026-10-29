@@ -10,13 +10,18 @@
 // A model missing from a board is simply absent (the UI shows NOT_RANKED_COPY); a refresh that matches too few
 // of the models we track keeps the dated snapshot instead of wiping it, so a naming change upstream can never
 // turn into "Not ranked" for everyone.
+//
+// T4 (leaderboard movement) reads `history`: one dated point per LMArena publish date per tracked model and
+// board, taken from the dataset's FULL split (every publish date, not just the latest) by the owner-run script
+// and committed; the on-demand refresh adds each newer date it sees and is persisted (model_catalog_cache,
+// source 'lmarena_snapshot') so the TTL and the history survive a sleeping container.
 
 // The server tsconfig compiles with module Node16, which rejects import attributes (TS2823), yet Node 22 ESM,
 // tsx, vitest and the esbuild bundle all need `with { type: 'json' }`; tsc still emits it and copies the JSON.
 // @ts-ignore TS2823
 import snapshotJson from './qualitySnapshot.json' with { type: 'json' };
 import { logger } from '../../lib/logger.js';
-import type { CatalogFetch } from './catalog.js';
+import type { CatalogFetch, CatalogStore } from './catalog.js';
 
 export type QualityBoard = 'lmarena_t2i' | 'lmarena_edit' | 'lmarena_multi_image' | 'aa_t2i' | 'aa_edit' | 'design_arena';
 export const QUALITY_BOARDS: QualityBoard[] = ['lmarena_t2i', 'lmarena_edit', 'lmarena_multi_image', 'aa_t2i', 'aa_edit', 'design_arena'];
@@ -34,6 +39,14 @@ export const HF_REQUEST_TIMEOUT_MS = 6_000;
 export const LMARENA_PULL_TIMEOUT_MS = 30_000;
 /** After a failed pull, try again after this long (not a whole TTL; never a hot loop either). */
 export const QUALITY_FAIL_RETRY_MS = 3_600_000;
+/** Days of dated rank history a full-split pull asks for (T4's longest range). */
+export const LMARENA_HISTORY_DAYS = 90;
+/** History points older than this before the snapshot's generatedAt are dropped on merge (bounds the file). */
+export const HISTORY_KEEP_DAYS = 120;
+/** model_catalog_cache source and row id that persist the on-demand LMArena refresh. */
+export const QUALITY_CACHE_SOURCE = 'lmarena_snapshot';
+/** Paged /rows over a full split is the slow fallback when /filter is unavailable (owner-run script only). */
+const MAX_FULL_PAGES = 300;
 const PAGE = 100;
 const MAX_PAGES = 40;
 
@@ -69,6 +82,8 @@ export interface QualityHistoryPoint {
   asOf: string;
   rank?: number;
   score: number;
+  /** The leaderboard entry this point is (a model's variants change over time, e.g. preview → GA). */
+  name?: string;
 }
 
 export interface QualitySnapshot {
@@ -85,14 +100,17 @@ export const bundledQualitySnapshot: QualitySnapshot = snapshotJson as unknown a
 export const normalizeName = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
- * Every normalised form a leaderboard name can match on: the whole name, the name without a trailing
- * parenthetical, and the parenthetical itself. LMArena writes "Gemini 3.1 Flash-Lite Image (nano-banana-2-lite)",
- * "Gemini 3 Pro Image (2K)" and "Grok Imagine Image 2.0 (20260801)".
+ * Every normalised form a leaderboard name can match on: the whole name, the name without trailing [tags], the
+ * name without a trailing parenthetical, and the parenthetical itself. LMArena writes "Gemini 3.1 Flash-Lite
+ * Image (nano-banana-2-lite)", "Gemini 3 Pro Image (2K)", "Grok Imagine Image 2.0 (20260801)" and
+ * "gemini-3.1-flash-image (nano-banana-2) [web-search]".
  */
 export const nameKeys = (s: unknown): string[] => {
   const raw = String(s ?? '');
   const keys = new Set<string>([normalizeName(raw)]);
-  const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(raw);
+  const untagged = raw.replace(/(\s*\[[^\]]*\])+\s*$/, '');
+  keys.add(normalizeName(untagged));
+  const m = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(untagged);
   if (m) {
     keys.add(normalizeName(m[1]));
     keys.add(normalizeName(m[2]));
@@ -237,12 +255,73 @@ export const mergeLmarenaBoards = (snap: QualitySnapshot, boards: Partial<Record
     for (const [orId, e] of Object.entries(fresh.entries)) {
       const hist = { ...(next.history[orId] ?? {}) };
       const points = [...(hist[board] ?? [])];
-      if (!points.some((p) => p.asOf === fresh.asOf)) points.push({ asOf: fresh.asOf, ...(typeof e.rank === 'number' ? { rank: e.rank } : {}), score: e.score });
+      if (!points.some((p) => p.asOf === fresh.asOf)) points.push({ asOf: fresh.asOf, ...(typeof e.rank === 'number' ? { rank: e.rank } : {}), score: e.score, ...(e.name ? { name: e.name } : {}) });
       hist[board] = points.sort((a, b) => a.asOf.localeCompare(b.asOf));
       next.history[orId] = hist;
     }
   }
+  next.history = pruneHistory(next.history, generatedAt);
   return { snapshot: next, replaced, kept };
+};
+
+/** Drops history points older than HISTORY_KEEP_DAYS before `generatedAt` (pure). */
+export const pruneHistory = (history: QualitySnapshot['history'], generatedAt: string): QualitySnapshot['history'] => {
+  const at = Date.parse(generatedAt);
+  if (!Number.isFinite(at)) return history;
+  const cutoff = new Date(at - HISTORY_KEEP_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const out: QualitySnapshot['history'] = {};
+  for (const [orId, boards] of Object.entries(history)) {
+    const kept: Partial<Record<QualityBoard, QualityHistoryPoint[]>> = {};
+    for (const [board, points] of Object.entries(boards ?? {}) as [QualityBoard, QualityHistoryPoint[]][]) {
+      const recent = (points ?? []).filter((p) => typeof p.asOf === 'string' && p.asOf.slice(0, 10) >= cutoff);
+      if (recent.length) kept[board] = recent;
+    }
+    if (Object.keys(kept).length) out[orId] = kept;
+  }
+  return out;
+};
+
+/** Dated points per tracked OpenRouter id for one board. */
+export type LmarenaHistory = Partial<Record<QualityBoard, Record<string, QualityHistoryPoint[]>>>;
+
+/**
+ * Full-split rows of one category → one point per publish date per tracked id (the best-ranked alias match
+ * that day, with the leaderboard's own name), from `sinceDate` on. Nothing is interpolated.
+ */
+export const lmarenaHistoryFromRows = (rows: LmarenaRow[], opts: { category: string; aliases: Record<string, string[]>; sinceDate: string }): Record<string, QualityHistoryPoint[]> => {
+  const byDate = new Map<string, LmarenaRow[]>();
+  for (const r of rows) {
+    if (r.category !== opts.category || !r.leaderboard_publish_date || r.leaderboard_publish_date < opts.sinceDate) continue;
+    byDate.set(r.leaderboard_publish_date, [...(byDate.get(r.leaderboard_publish_date) ?? []), r]);
+  }
+  const out: Record<string, QualityHistoryPoint[]> = {};
+  for (const date of [...byDate.keys()].sort()) {
+    const board = lmarenaRowsToBoard(byDate.get(date) as LmarenaRow[], { category: opts.category, aliases: opts.aliases, configLabel: '' });
+    for (const [orId, e] of Object.entries(board?.entries ?? {})) {
+      (out[orId] ??= []).push({ asOf: date, ...(typeof e.rank === 'number' ? { rank: e.rank } : {}), score: e.score, ...(e.name ? { name: e.name } : {}) });
+    }
+  }
+  return out;
+};
+
+/** Merges dated points into a snapshot's history (a point for a date we hold is replaced) and prunes (pure). */
+export const mergeLmarenaHistory = (snap: QualitySnapshot, history: LmarenaHistory, generatedAt: string): { snapshot: QualitySnapshot; added: number } => {
+  const next: QualitySnapshot = { ...snap, history: { ...snap.history } };
+  let added = 0;
+  for (const board of LMARENA_BOARDS) {
+    for (const [orId, points] of Object.entries(history[board] ?? {})) {
+      const hist = { ...(next.history[orId] ?? {}) };
+      const byDate = new Map((hist[board] ?? []).map((p) => [p.asOf, p] as const));
+      for (const p of points) {
+        if (!byDate.has(p.asOf)) added += 1;
+        byDate.set(p.asOf, p);
+      }
+      hist[board] = [...byDate.values()].sort((a, b) => a.asOf.localeCompare(b.asOf));
+      next.history[orId] = hist;
+    }
+  }
+  next.history = pruneHistory(next.history, generatedAt);
+  return { snapshot: next, added };
 };
 
 const encode = (s: string) => encodeURIComponent(s);
@@ -250,6 +329,8 @@ const encode = (s: string) => encodeURIComponent(s);
 /** How a pull talks to datasets-server: its base URL, a per-request timeout and an overall deadline (epoch ms). */
 export interface PullOptions {
   base?: string;
+  /** The dataset's configs/splits when the caller already fetched them (saves a request). */
+  splits?: { config: string; split: string }[];
   requestMs?: number;
   /** Wall-clock time (Date.now()) after which no further request starts and a running one is cut short. */
   deadline?: number;
@@ -307,10 +388,78 @@ export const fetchLmarenaRows = async (fetchImpl: CatalogFetch, config: string, 
   return rows;
 };
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Rows of one config of the FULL split matching `where`, through the documented /filter endpoint (the dataset
+ * viewer runs the predicate server-side, so a 90-day window is a few pages instead of the whole history). With
+ * `fallbackToRows` (the owner-run script) a failing /filter falls back to paging /rows and filtering here.
+ */
+const fetchFilteredRows = async (
+  fetchImpl: CatalogFetch,
+  config: string,
+  split: string,
+  where: string,
+  keep: (r: LmarenaRow) => boolean,
+  o: PullOptions & { fallbackToRows?: boolean }
+): Promise<LmarenaRow[]> => {
+  const base = o.base ?? HF_DATASETS_SERVER;
+  const page = async (path: 'filter' | 'rows', offset: number) => {
+    const q = `dataset=${encode(LMARENA_DATASET)}&config=${encode(config)}&split=${encode(split)}${path === 'filter' ? `&where=${encode(where)}` : ''}&offset=${offset}&length=${PAGE}`;
+    return (await hfJson(fetchImpl, `${base}/${path}?${q}`, o, path)) as { rows?: { row?: unknown }[]; num_rows_total?: number };
+  };
+  const pageAll = async (path: 'filter' | 'rows', maxPages: number) => {
+    const rows: LmarenaRow[] = [];
+    let offset = 0;
+    for (let i = 0; i < maxPages; i += 1) {
+      const body = await page(path, offset);
+      rows.push(...(body?.rows ?? []).map((r) => asRow(r?.row)).filter((r): r is LmarenaRow => !!r && keep(r)));
+      offset += body?.rows?.length ?? 0;
+      if (!body?.rows?.length || typeof body.num_rows_total !== 'number' || offset >= body.num_rows_total) break;
+    }
+    return rows;
+  };
+  try {
+    return await pageAll('filter', MAX_PAGES);
+  } catch (err) {
+    if (!o.fallbackToRows) throw err;
+    return pageAll('rows', MAX_FULL_PAGES);
+  }
+};
+
+/**
+ * T4 history from the dataset's FULL split: one point per publish date since `sinceDate` per tracked id, for
+ * text_to_image (overall) and image_edit (overall + multi-image). A config without a full split gives nothing.
+ */
+export const fetchLmarenaHistory = async (
+  fetchImpl: CatalogFetch,
+  aliases: Record<string, string[]>,
+  opts: PullOptions & { sinceDate: string; fallbackToRows?: boolean }
+): Promise<LmarenaHistory> => {
+  if (!ISO_DATE.test(opts.sinceDate)) throw new Error(`sinceDate must be YYYY-MM-DD, got ${opts.sinceDate}`);
+  const since = opts.sinceDate;
+  const splits = opts.splits ?? (await fetchLmarenaSplits(fetchImpl, opts));
+  const full = (needle: string) => splits.find((s) => s.config.includes(needle) && s.split === 'full');
+  const out: LmarenaHistory = {};
+  const t2i = full('text_to_image');
+  if (t2i) {
+    const rows = await fetchFilteredRows(fetchImpl, t2i.config, t2i.split, `"leaderboard_publish_date">='${since}' AND "category"='overall'`, (r) => r.leaderboard_publish_date >= since && r.category === 'overall', opts);
+    out.lmarena_t2i = lmarenaHistoryFromRows(rows, { category: 'overall', aliases, sinceDate: since });
+  }
+  const edit = full('image_edit');
+  if (edit) {
+    const rows = await fetchFilteredRows(fetchImpl, edit.config, edit.split, `"leaderboard_publish_date">='${since}'`, (r) => r.leaderboard_publish_date >= since, opts);
+    out.lmarena_edit = lmarenaHistoryFromRows(rows, { category: 'overall', aliases, sinceDate: since });
+    const multi = pickCategory(rows.filter((r) => r.category.includes('multi')), 'multi_image_edit');
+    if (multi) out.lmarena_multi_image = lmarenaHistoryFromRows(rows, { category: multi, aliases, sinceDate: since });
+  }
+  return out;
+};
+
 /** The three LMArena boards from the live dataset (null for a board whose config/split is missing). */
 export const fetchLmarenaBoards = async (fetchImpl: CatalogFetch, aliases: Record<string, string[]>, opts?: string | PullOptions): Promise<Partial<Record<QualityBoard, QualityBoardSnapshot | null>>> => {
   const base = pullOptions(opts);
-  const splits = await fetchLmarenaSplits(fetchImpl, base);
+  const splits = base.splits ?? (await fetchLmarenaSplits(fetchImpl, base));
   const find = (needle: string) => splits.find((s) => s.config.includes(needle) && s.split === 'latest') ?? splits.find((s) => s.config.includes(needle));
   const t2i = find('text_to_image');
   const edit = find('image_edit');
@@ -330,6 +479,83 @@ export const fetchLmarenaBoards = async (fetchImpl: CatalogFetch, aliases: Recor
   return out;
 };
 
+// ── Persistence of the on-demand refresh (model_catalog_cache, source 'lmarena_snapshot') ──
+
+/** What the on-demand refresh persists: LMArena boards and the dated history (AA boards and aliases stay bundled). */
+export interface PersistedQuality {
+  fetchedAt: string;
+  generatedAt: string;
+  boards: Partial<Record<QualityBoard, QualityBoardSnapshot>>;
+  history: QualitySnapshot['history'];
+}
+
+export interface QualityStore {
+  load(): Promise<PersistedQuality | null>;
+  save(p: PersistedQuality): Promise<void>;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** A persisted payload, validated field by field; anything malformed is dropped (never trusted as is). */
+export const asPersistedQuality = (raw: unknown, fetchedAt: string): PersistedQuality | null => {
+  if (!isObj(raw) || !Number.isFinite(Date.parse(fetchedAt))) return null;
+  const boards: PersistedQuality['boards'] = {};
+  for (const board of LMARENA_BOARDS) {
+    const b = isObj(raw.boards) ? raw.boards[board] : undefined;
+    if (isObj(b) && typeof b.asOf === 'string' && typeof b.source === 'string' && isObj(b.entries)) boards[board] = b as unknown as QualityBoardSnapshot;
+  }
+  const history: QualitySnapshot['history'] = {};
+  for (const [orId, perBoard] of Object.entries(isObj(raw.history) ? raw.history : {})) {
+    if (!isObj(perBoard)) continue;
+    for (const board of LMARENA_BOARDS) {
+      const points = perBoard[board];
+      if (!Array.isArray(points)) continue;
+      const ok = points.filter((p): p is QualityHistoryPoint => isObj(p) && typeof p.asOf === 'string' && typeof p.score === 'number');
+      if (ok.length) (history[orId] ??= {})[board] = ok;
+    }
+  }
+  return { fetchedAt, generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : fetchedAt, boards, history };
+};
+
+/** The quality store on top of the catalog's cache table (one row: source 'lmarena_snapshot', the dataset id). */
+export const qualityStoreFromCatalogStore = (store: Pick<CatalogStore, 'loadCache' | 'saveCache'>): QualityStore => ({
+  async load() {
+    const row = (await store.loadCache(QUALITY_CACHE_SOURCE)).find((r) => r.modelId === LMARENA_DATASET);
+    return row ? asPersistedQuality(row.payload, row.fetchedAt) : null;
+  },
+  async save(p) {
+    await store.saveCache(QUALITY_CACHE_SOURCE, [{ modelId: LMARENA_DATASET, payload: p, fetchedAt: p.fetchedAt }]);
+  }
+});
+
+/** The bundled snapshot with a persisted refresh laid over it: newer LMArena boards win, history is the union (pure). */
+export const withPersistedQuality = (snap: QualitySnapshot, p: PersistedQuality): QualitySnapshot => {
+  const boards = { ...snap.boards };
+  for (const board of LMARENA_BOARDS) {
+    const fresh = p.boards[board];
+    if (fresh && (!boards[board] || fresh.asOf >= (boards[board] as QualityBoardSnapshot).asOf)) boards[board] = fresh;
+  }
+  const asHistory: LmarenaHistory = {};
+  for (const [orId, perBoard] of Object.entries(p.history)) {
+    for (const [board, points] of Object.entries(perBoard ?? {}) as [QualityBoard, QualityHistoryPoint[]][]) (asHistory[board] ??= {})[orId] = points;
+  }
+  const generatedAt = p.generatedAt > snap.generatedAt ? p.generatedAt : snap.generatedAt;
+  return mergeLmarenaHistory({ ...snap, boards, generatedAt }, asHistory, generatedAt).snapshot;
+};
+
+/** The newest LMArena publish date the snapshot holds (boards or history), or undefined. */
+export const newestLmarenaDate = (snap: QualitySnapshot): string | undefined => {
+  const dates: string[] = [];
+  for (const board of LMARENA_BOARDS) {
+    const b = snap.boards[board];
+    if (b?.asOf) dates.push(b.asOf.slice(0, 10));
+  }
+  for (const perBoard of Object.values(snap.history)) for (const board of LMARENA_BOARDS) for (const p of perBoard?.[board] ?? []) dates.push(p.asOf.slice(0, 10));
+  return dates.filter((d) => ISO_DATE.test(d)).sort().at(-1);
+};
+
+const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
 // ── On-demand source (24 h TTL, single-flight, stale-while-error, no timers) ──
 
 export interface QualitySourceDeps {
@@ -341,6 +567,8 @@ export interface QualitySourceDeps {
   base?: string;
   /** Overrides for HF_REQUEST_TIMEOUT_MS / LMARENA_PULL_TIMEOUT_MS / QUALITY_FAIL_RETRY_MS (tests). */
   timeouts?: { requestMs?: number; pullMs?: number; failRetryMs?: number };
+  /** Where the on-demand refresh is persisted, so the TTL and the history survive a sleeping container. */
+  store?: QualityStore | null;
 }
 
 export interface QualityState {
@@ -374,16 +602,49 @@ export const createQualitySource = (deps: QualitySourceDeps = {}): QualitySource
   let refreshedAt = 0;
   let failedAt = 0;
   let inflight: Promise<QualityState> | null = null;
+  let booted: Promise<void> | null = null;
+
+  /** Once per process: lay the persisted refresh over the bundled snapshot; its time keeps the TTL across sleeps. */
+  const boot = () =>
+    (booted ??= (async () => {
+      if (!deps.store) return;
+      try {
+        const p = await deps.store.load();
+        if (!p) return;
+        state = { ...state, snapshot: withPersistedQuality(state.snapshot, p), fetchedAt: p.fetchedAt };
+        const at = Date.parse(p.fetchedAt);
+        if (Number.isFinite(at) && at > refreshedAt) refreshedAt = at;
+      } catch (err) {
+        logger.warn('comic_model_quality_bootstrap_failed', { message: (err as Error)?.message });
+      }
+    })());
 
   const refresh = async (): Promise<QualityState> => {
     try {
       // Every request is bounded and no request starts after the deadline, so this always settles.
-      const boards = await fetchLmarenaBoards(fetchImpl as CatalogFetch, state.snapshot.aliases, { base: deps.base, requestMs, deadline: Date.now() + pullMs });
+      const o: PullOptions = { base: deps.base, requestMs, deadline: Date.now() + pullMs };
+      const held = newestLmarenaDate(state.snapshot); // before this pull: the dates after it are what a sleep may have missed
+      o.splits = await fetchLmarenaSplits(fetchImpl as CatalogFetch, o);
+      const boards = await fetchLmarenaBoards(fetchImpl as CatalogFetch, state.snapshot.aliases, o);
       const at = new Date(now()).toISOString();
-      const merged = mergeLmarenaBoards(state.snapshot, boards, at);
-      state = { snapshot: merged.snapshot, fetchedAt: at, stale: false };
+      let snapshot = mergeLmarenaBoards(state.snapshot, boards, at).snapshot;
+      // Best effort: publish dates newer than what we held that a sleeping container missed (full split, /filter).
+      try {
+        const floor = new Date(now() - LMARENA_HISTORY_DAYS * 86_400_000).toISOString().slice(0, 10);
+        const since = held && addDays(held, 1) > floor ? addDays(held, 1) : floor;
+        const history = await fetchLmarenaHistory(fetchImpl as CatalogFetch, snapshot.aliases, { ...o, sinceDate: since });
+        snapshot = mergeLmarenaHistory(snapshot, history, at).snapshot;
+      } catch (err) {
+        logger.warn('comic_model_quality_history_gap_fill_failed', { message: (err as Error)?.message });
+      }
+      state = { snapshot, fetchedAt: at, stale: false };
       refreshedAt = now();
       failedAt = 0;
+      if (deps.store) {
+        const lmBoards: PersistedQuality['boards'] = {};
+        for (const board of LMARENA_BOARDS) if (snapshot.boards[board]) lmBoards[board] = snapshot.boards[board];
+        await deps.store.save({ fetchedAt: at, generatedAt: at, boards: lmBoards, history: snapshot.history }).catch((err) => logger.warn('comic_model_quality_persist_failed', { message: (err as Error)?.message }));
+      }
     } catch (err) {
       state = { ...state, stale: true };
       failedAt = now();
@@ -395,6 +656,7 @@ export const createQualitySource = (deps: QualitySourceDeps = {}): QualitySource
   return {
     current: () => state,
     get: async (opts = {}) => {
+      await boot();
       if (!fetchImpl) return state;
       const t = now();
       if (failedAt && t - failedAt < failRetryMs) return state; // a recent failure: the dated snapshot, marked stale
