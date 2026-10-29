@@ -114,8 +114,10 @@ export interface PublicationOwnerView {
   /** The rating the live publication was safety-checked under (frozen at publish time; P2-PUBLIC-PAYLOAD). */
   rating?: ContentRating;
   /**
-   * Pages the owner left out of the live publication ("Publish without page N" consent). The Share
-   * sheet's Update resends them as `excludePageIds`, since the gate keeps a blocked verdict.
+   * Pages the owner left out of the live publication ("Publish without page N" consent) that publishing
+   * would still refuse (blocked now, or still an outside image). The Share sheet's Update resends them as
+   * `excludePageIds`, since the gate keeps a blocked verdict; a page redrawn since is not listed, so an
+   * Update publishes the redraw if the gate passes it.
    */
   excludedPageIds?: string[];
   /**

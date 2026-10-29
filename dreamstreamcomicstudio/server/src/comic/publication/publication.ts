@@ -480,8 +480,16 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
       // A suspended link's copies are taken down: no broken cover either.
       if (row.status === 'live' && typeof card.coverUrl === 'string' && /^https:\/\//.test(card.coverUrl)) view.card.coverUrl = card.coverUrl;
     }
-    // The consented exclusions, so an Update from the sheet can resend them (a blocked verdict stays blocked).
-    const excluded = Array.isArray(row.safety?.excludedPageIds) ? (row.safety.excludedPageIds as unknown[]).filter((id): id is string => typeof id === 'string' && PAGE_ID_RE.test(id)) : [];
+    // The consented exclusions that still apply, so an Update from the sheet can resend them (a blocked
+    // verdict stays blocked). Only pages publishing would still refuse: blocked now (readiness is computed
+    // without the exclusion) or still an outside image. A page redrawn since drops out, and the gate decides
+    // on the redraw (a blocked redraw gets "Publish without page N" again) instead of staying out forever.
+    const stillOut = new Set(
+      (doc.pages || []).filter((p) => readiness.safety.blockedPages.includes(p.n) || (hasPublishableArt(p.render) && !isServerArt(p.render.asset))).map((p) => p.id)
+    );
+    const excluded = Array.isArray(row.safety?.excludedPageIds)
+      ? (row.safety.excludedPageIds as unknown[]).filter((id): id is string => typeof id === 'string' && PAGE_ID_RE.test(id) && stillOut.has(id))
+      : [];
     if (excluded.length) view.excludedPageIds = excluded;
   }
   if (row?.defaultLang) view.defaultLang = row.defaultLang;

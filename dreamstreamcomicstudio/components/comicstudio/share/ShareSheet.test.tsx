@@ -200,6 +200,16 @@ describe('ShareSheet', () => {
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
   });
 
+  it('an excluded page that was redrawn clean goes back in: Update sends no exclusion for it, even from a stale view', async () => {
+    // The server stops listing it; an older view that still does must not keep the fix out forever.
+    const studio = studioWith(view({ behind: true, excludedPageIds: ['pg_3'] }));
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Publish without page/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'] }));
+  });
+
   it('a page blocked since publishing: Update is refused with the honest 422 and the sheet offers "Publish without page N"', async () => {
     const blockedReadiness = { ok: false, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'blocked' as const, blockedPages: [3], reasons: ['violence'] }, languages: [{ lang: 'en', publishable: true, blocking: [] }] };
     const studio = studioWith(view({ behind: true, readiness: blockedReadiness }));

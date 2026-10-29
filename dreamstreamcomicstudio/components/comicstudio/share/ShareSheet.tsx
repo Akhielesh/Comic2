@@ -193,9 +193,11 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     void run(() => updatePublication(doc.id, { visibility: v }));
   };
   const publish = (request: PublishRequest) => void run(() => publishComic(doc.id, request));
-  // Pages the owner already left out (consented exclusions) stay out of an Update: the gate keeps a
-  // blocked verdict, so resending them is the only way the published version stays updatable.
-  const excluded = view?.excludedPageIds || [];
+  // Pages the owner already left out (consented exclusions) stay out of an Update while publishing would
+  // still refuse them (blocked, or listed as not publishable): the gate keeps a blocked verdict. A page
+  // redrawn since (clean or not checked yet) goes back in, and the gate decides on the redraw.
+  const stillOutNs = new Set([...(view?.readiness.safety.blockedPages || []), ...(view?.readiness.missing || []).flatMap((m) => (m.kind === 'page' && typeof m.n === 'number' ? [m.n] : []))]);
+  const excluded = (view?.excludedPageIds || []).filter((id) => doc.pages.some((p) => p.id === id && stillOutNs.has(p.n)));
   // Pages blocked since publishing (not yet excluded): the honest next step is "Publish without page N".
   const newlyBlockedIds = live && view?.readiness.safety.status === 'blocked' ? pageIdsFor(doc, view.readiness.safety.blockedPages).filter((id) => !excluded.includes(id)) : [];
   const newlyBlockedNs = doc.pages.filter((p) => newlyBlockedIds.includes(p.id)).map((p) => p.n);

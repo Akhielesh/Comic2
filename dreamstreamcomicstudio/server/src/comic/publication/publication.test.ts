@@ -131,6 +131,14 @@ const gateFor =
     };
   };
 
+/** A gate that judges the asset it is handed (verdict → status), like the real one minus the network. */
+const judgingGate = async (_ctx: unknown, doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
+  const statusOf = (a?: AssetRef): SafetyStatus => (safetyStatusOf(a?.safety, 'PG') === 'pass' ? 'pass' : 'blocked');
+  const pages = Object.fromEntries(opts.pageIds.map((id) => [id, { status: statusOf(doc.pages.find((p) => p.id === id)?.render.asset), reasons: [] }]));
+  const anyBad = Object.values(pages).some((p) => p.status === 'blocked');
+  return { status: anyBad ? 'blocked' : 'cleared', rating: 'PG', pages, cover: opts.includeCover ? { status: statusOf(doc.cover.render.asset), reasons: [] } : null, text: { status: 'pass', reasons: [] }, checkedHash: 'h2', costUsd: 0 };
+};
+
 const fakeOg = async () => ({ jpeg: Buffer.from('fake-jpeg'), w: 1200 as const, h: 630 as const, themeColor: '#123456' });
 
 let store: MemoryPublicationStore;
@@ -346,6 +354,35 @@ describe('publish', () => {
     expect(store.rpcPayload(updated.slug!)!.doc!.brief.logline).toMatch(/now with a twist/);
     // Without them the gate refuses again, as before (the verdict is kept).
     await expect(publish(ctx, { visibility: 'unlisted', languages: view.languages })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
+  it('an excluded page redrawn clean goes back in: the owner view stops listing it, so the sheet\'s Update publishes the fix (a blocked redraw is still refused)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const doc = richDoc();
+    doc.pages[2].render = ready('p3', { safety: { assessed: 'X', at: 1, categories: ['graphic_gore'] } });
+    setup(doc);
+    restore();
+    restore = configurePublication({ store, gate: judgingGate as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    const first = await publish(ctx, { visibility: 'unlisted', excludePageIds: ['pg_3'] });
+    expect(first.excludedPageIds).toEqual(['pg_3']);
+    expect(store.rpcPayload(first.slug!)!.doc!.pages).toHaveLength(2);
+
+    // The owner redraws page 3 and it comes back clean.
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-clean') } }], { origin: 'job' });
+    const view = await getPublicationView(ctx);
+    expect(view.behind).toBe(true);
+    expect(view.readiness.safety.status).toBe('cleared');
+    expect(view.excludedPageIds).toBeUndefined();
+    // Exactly what the sheet's Update sends: the fixed page goes live.
+    const updated = await publish(ctx, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, ...(view.excludedPageIds ? { excludePageIds: view.excludedPageIds } : {}) });
+    expect(store.rpcPayload(updated.slug!)!.doc!.pages.map((p) => p.id)).toEqual(['pg_1', 'pg_2', 'pg_3']);
+    expect(updated.excludedPageIds).toBeUndefined();
+
+    // A redraw that is blocked again: listed as blocked and not excluded, so the gate refuses and the sheet offers "Publish without page 3".
+    ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-again', { safety: { assessed: 'X', at: 3, categories: ['graphic_gore'] } }) } }], { origin: 'job' });
+    const again = await getPublicationView(ctx);
+    expect([again.readiness.safety.blockedPages, again.excludedPageIds]).toEqual([[3], undefined]);
+    await expect(publish(ctx, { visibility: 'unlisted', languages: again.languages })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
   });
 
   it('unchecked content is never published (503, fail closed)', async () => {
@@ -591,15 +628,8 @@ describe('publish', () => {
   });
 
   it('"Make it public" gates the PUBLISHED art: a page redrawn since (not yet updated) does not block it, while publishing that redraw still does', async () => {
-    // A gate that judges the asset it is handed (verdict → status), like the real one minus the network.
-    const judging = async (_ctx: unknown, doc: ComicDoc, opts: { pageIds: string[]; includeCover: boolean }): Promise<PublishGateResult> => {
-      const statusOf = (a?: AssetRef): SafetyStatus => (safetyStatusOf(a?.safety, 'PG') === 'pass' ? 'pass' : 'blocked');
-      const pages = Object.fromEntries(opts.pageIds.map((id) => [id, { status: statusOf(doc.pages.find((p) => p.id === id)?.render.asset), reasons: [] }]));
-      const anyBad = Object.values(pages).some((p) => p.status === 'blocked');
-      return { status: anyBad ? 'blocked' : 'cleared', rating: 'PG', pages, cover: opts.includeCover ? { status: statusOf(doc.cover.render.asset), reasons: [] } : null, text: { status: 'pass', reasons: [] }, checkedHash: 'h2', costUsd: 0 };
-    };
     restore();
-    restore = configurePublication({ store, gate: judging as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+    restore = configurePublication({ store, gate: judgingGate as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
     await publish(ctx, { visibility: 'unlisted' });
     // Page 3 is redrawn into something the check blocks; the owner has not tapped Update, so readers still see the cleared art.
     ctx.session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: asset('p3-redrawn', { safety: { assessed: 'X', at: 2, categories: ['graphic_gore'] } }) } }], { origin: 'job' });
@@ -900,6 +930,8 @@ describe('S6: only art the server wrote to a lane clients cannot rewrite is publ
     const row = store.rows.get('proj-1')!;
     expect(row.snapshot!.pages).toHaveLength(2);
     expect(assets.copies.some((c) => c.src === `${USER}/x.png`)).toBe(false);
+    // Still an outside image: the owner view keeps the exclusion, so the sheet's Update resends it.
+    expect((await (await import('./index.js')).getPublicationView(ctx)).excludedPageIds).toEqual(['pg_2']);
   });
 
   it('server-made art publishes: an uploaded photo in the private ref lane, a derived crop, a library image (regression guard)', async () => {
