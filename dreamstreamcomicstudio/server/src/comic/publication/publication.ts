@@ -468,6 +468,9 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     if (row.publishedAt) view.publishedAt = row.publishedAt;
     if (row.startPage !== undefined) view.startPage = row.startPage ?? null;
     if (publishedRating) view.rating = publishedRating;
+    // The consented exclusions, so an Update from the sheet can resend them (a blocked verdict stays blocked).
+    const excluded = Array.isArray(row.safety?.excludedPageIds) ? (row.safety.excludedPageIds as unknown[]).filter((id): id is string => typeof id === 'string' && PAGE_ID_RE.test(id)) : [];
+    if (excluded.length) view.excludedPageIds = excluded;
   }
   if (row?.defaultLang) view.defaultLang = row.defaultLang;
   if (row?.firstPublishedAt) view.firstPublishedAt = row.firstPublishedAt;

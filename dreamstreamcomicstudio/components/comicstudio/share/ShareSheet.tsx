@@ -23,7 +23,7 @@ import { PublishPanel } from './PublishPanel';
 import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
-import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, shareLinkFor, statusLine } from './shareModel';
+import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, pageIdsFor, shareLinkFor, statusLine } from './shareModel';
 
 export interface ShareSheetProps {
   studio: StudioController;
@@ -191,7 +191,25 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     void run(() => updatePublication(doc.id, { visibility: v }));
   };
   const publish = (request: PublishRequest) => void run(() => publishComic(doc.id, request));
-  const updateNow = () => view && void run(() => publishComic(doc.id, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages }));
+  // Pages the owner already left out (consented exclusions) stay out of an Update: the gate keeps a
+  // blocked verdict, so resending them is the only way the published version stays updatable.
+  const excluded = view?.excludedPageIds || [];
+  // Pages blocked since publishing (not yet excluded): the honest next step is "Publish without page N".
+  const newlyBlockedIds = live && view?.readiness.safety.status === 'blocked' ? pageIdsFor(doc, view.readiness.safety.blockedPages).filter((id) => !excluded.includes(id)) : [];
+  const newlyBlockedNs = doc.pages.filter((p) => newlyBlockedIds.includes(p.id)).map((p) => p.n);
+  const updateRequest = (alsoExclude: string[] = []): PublishRequest | null => {
+    if (!view) return null;
+    const excludePageIds = [...new Set([...excluded, ...alsoExclude])];
+    return { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, ...(excludePageIds.length ? { excludePageIds } : {}) };
+  };
+  const updateNow = () => {
+    const request = updateRequest();
+    if (request) void run(() => publishComic(doc.id, request));
+  };
+  const updateWithout = () => {
+    const request = updateRequest(newlyBlockedIds);
+    if (request) void run(() => publishComic(doc.id, request));
+  };
 
   const frame =
     layout === 'bottom'
@@ -331,9 +349,21 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view?.behind && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
               <span className="min-w-0">You’ve made changes since publishing. Readers still see the published version.</span>
-              <button type="button" disabled={busy} onClick={updateNow} className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50">
-                {busy ? 'Updating…' : 'Update'}
-              </button>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                {newlyBlockedNs.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={busy || doc.pages.length <= excluded.length + newlyBlockedIds.length}
+                    onClick={updateWithout}
+                    className="min-h-[44px] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-45"
+                  >
+                    Publish without page {newlyBlockedNs.join(', ')}
+                  </button>
+                )}
+                <button type="button" disabled={busy} onClick={updateNow} className="min-h-[44px] rounded-xl bg-[var(--ds-accent)] px-3 font-semibold text-white disabled:opacity-50">
+                  {busy ? 'Updating…' : 'Update'}
+                </button>
+              </div>
             </div>
           )}
           {live && view && <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />}

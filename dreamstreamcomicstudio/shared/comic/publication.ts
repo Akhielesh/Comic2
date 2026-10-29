@@ -109,6 +109,11 @@ export interface PublicationOwnerView {
   suspendedReason?: string;
   /** The rating the live publication was safety-checked under (frozen at publish time; P2-PUBLIC-PAYLOAD). */
   rating?: ContentRating;
+  /**
+   * Pages the owner left out of the live publication ("Publish without page N" consent). The Share
+   * sheet's Update resends them as `excludePageIds`, since the gate keeps a blocked verdict.
+   */
+  excludedPageIds?: string[];
 }
 /** doc.publication — server-written mirror for UI + the director context line. */
 export interface PublicationMirror {

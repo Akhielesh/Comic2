@@ -190,6 +190,29 @@ describe('ShareSheet', () => {
     expect(screen.queryByText('Embed on a website')).toBeNull();
   });
 
+  it('Update resends the page exclusion the owner consented to, and offers nothing else when no new page is blocked', async () => {
+    const blockedReadiness = { ok: false, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'blocked' as const, blockedPages: [3], reasons: ['violence'] }, languages: [{ lang: 'en', publishable: true, blocking: [] }] };
+    const studio = studioWith(view({ behind: true, excludedPageIds: ['pg_3'], readiness: blockedReadiness }));
+    vi.mocked(api.publishComic).mockResolvedValue(view());
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Publish without page/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
+  });
+
+  it('a page blocked since publishing: Update is refused with the honest 422 and the sheet offers "Publish without page N"', async () => {
+    const blockedReadiness = { ok: false, drawnPages: 3, plannedPages: 3, missing: [], stalePages: [], safety: { status: 'blocked' as const, blockedPages: [3], reasons: ['violence'] }, languages: [{ lang: 'en', publishable: true, blocking: [] }] };
+    const studio = studioWith(view({ behind: true, readiness: blockedReadiness }));
+    vi.mocked(api.publishComic).mockRejectedValueOnce(new Error("Page 3 doesn't fit the content rules. Publish without it, or redraw it first."));
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'] }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Page 3 doesn't fit/);
+    vi.mocked(api.publishComic).mockResolvedValueOnce(view({ excludedPageIds: ['pg_3'] }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish without page 3' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenLastCalledWith(studio.doc!.id, { visibility: 'unlisted', languages: ['en'], excludePageIds: ['pg_3'] }));
+  });
+
   it('a long title at 360 px never forces horizontal scroll (truncating title, min-w-0 rows)', () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 360 });
     setViewport(true);

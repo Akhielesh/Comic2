@@ -321,6 +321,33 @@ describe('publish', () => {
     expect(view.status).toBe('live');
   });
 
+  it('a consented exclusion survives an Update: the owner view carries it and the Share sheet resends it (blocked stays blocked)', async () => {
+    const { getPublicationView } = await import('./index.js');
+    const doc = richDoc();
+    doc.pages[2].render = ready('p3', { safety: { assessed: 'X', at: 1, categories: ['graphic_gore'] } });
+    setup(doc, { pg_3: 'blocked' });
+    const first = await publishWithOutcome(ctx, { visibility: 'unlisted', excludePageIds: ['pg_3'] });
+    expect(first.view.status).toBe('live');
+    expect(first.view.excludedPageIds).toEqual(['pg_3']);
+    expect(store.rpcPayload(first.view.slug!)!.doc!.pages.map((p) => p.n)).toEqual([1, 2]);
+
+    // The owner edits the logline: "You've made changes since publishing — Update".
+    ctx.session.commit([{ op: 'brief', patch: { logline: 'A courier races through a spice market — now with a twist.' } }], { origin: 'user' });
+    const view = await getPublicationView(ctx);
+    expect(view.behind).toBe(true);
+    expect(view.excludedPageIds).toEqual(['pg_3']);
+    // Readiness still names the blocked page (it is excluded, not cleared): the sheet knows it is already out.
+    expect(view.readiness.safety).toMatchObject({ status: 'blocked', blockedPages: [3] });
+
+    // What the sheet's Update sends: visibility + languages + the exclusions it was told about.
+    const rev = ctx.session.doc.rev;
+    const updated = await publish(ctx, { visibility: view.visibility === 'public' ? 'public' : 'unlisted', languages: view.languages, excludePageIds: view.excludedPageIds });
+    expect(updated).toMatchObject({ status: 'live', slug: first.view.slug, publishedRev: rev, behind: false, excludedPageIds: ['pg_3'] });
+    expect(store.rpcPayload(updated.slug!)!.doc!.brief.logline).toMatch(/now with a twist/);
+    // Without them the gate refuses again, as before (the verdict is kept).
+    await expect(publish(ctx, { visibility: 'unlisted', languages: view.languages })).rejects.toMatchObject({ status: 422, reason: 'SAFETY_BLOCKED' });
+  });
+
   it('unchecked content is never published (503, fail closed)', async () => {
     setup(richDoc(), { pg_1: 'unchecked' });
     // Contract §12.6: needs_check → 503 NOT_AVAILABLE (the route sends `reason` as the wire code; the client retries it).
