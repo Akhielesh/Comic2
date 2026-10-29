@@ -175,6 +175,11 @@ describe('BookTimeline', () => {
     setup();
     for (const o of options()) expect(o.querySelector('button, [tabindex]:not([tabindex="-1"]), a[href], input')).toBeNull();
     expect(document.querySelector('.bg-red-600\\/90')).toBeNull();
+    // The failed badge: red-700 (white text 6.5:1) at a readable 10 px, never the old 8.5 px.
+    const badge = document.querySelector('[data-clip-badge="failed"]') as HTMLElement;
+    expect(badge).not.toBeNull();
+    expect(badge.className).toContain('bg-red-700');
+    expect(badge.className).toContain('text-[10px]');
   });
 
   it('collapses below lg by default (phones keep the board), remembers the choice, hides in Read', () => {
