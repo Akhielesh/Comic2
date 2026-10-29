@@ -11,7 +11,7 @@ import {
   type ComicDoc,
   type Page
 } from './doc';
-import { applyOps, isSpendAction, CLIENT_PATCHABLE_OPS } from './ops';
+import { applyOps, isSpendAction, layoutFixOps, CLIENT_PATCHABLE_OPS } from './ops';
 import {
   IMAGE_MODELS,
   TIER_PRESETS,
@@ -543,6 +543,27 @@ describe('Ship 1 contract additions (plan §5.1)', () => {
   it('render_pages.drawOverfull is a typed, optional spend field', () => {
     const action: StudioAction = { type: 'render_pages', drawOverfull: ['pg1'] };
     expect(isSpendAction(action)).toBe(true);
+  });
+
+  it('layoutFixOps puts a page on a blueprint with sizes that agree with it (client-patchable ops, one implementation)', () => {
+    const doc = baseDoc();
+    const pg: Page = {
+      ...page('pg1', 1),
+      layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+      panels: [1, 2, 3].map((k) => ({ id: `pn${k}`, n: k, size: k === 1 ? ('wide' as const) : ('medium' as const), shot: 'medium' as const, action: `a${k}`, castIds: [], lines: [] }))
+    };
+    const ops = layoutFixOps(doc, pg, '  Row 1: two equal panels.   Row 2: one large panel. ');
+    // The wide panel moves into a shared row, so it becomes medium; the single bottom row's medium panel becomes wide.
+    expect(ops).toEqual([
+      { op: 'page', id: 'pg1', patch: { layout: 'Row 1: two equal panels. Row 2: one large panel.' } },
+      { op: 'panel', pageId: 'pg1', id: 'pn1', patch: { size: 'medium' } },
+      { op: 'panel', pageId: 'pg1', id: 'pn3', patch: { size: 'wide' } }
+    ]);
+    expect(ops.every((o) => CLIENT_PATCHABLE_OPS.has(o.op))).toBe(true);
+    // Unparsed, another panel count, or a row grid on a webtoon: nothing to apply.
+    expect(layoutFixOps(doc, pg, 'make it nice')).toEqual([]);
+    expect(layoutFixOps(doc, pg, 'Row 1: two equal panels.')).toEqual([]);
+    expect(layoutFixOps({ format: { ...doc.format, kind: 'webtoon' } }, pg, 'Row 1: two equal panels. Row 2: one large panel.')).toEqual([]);
   });
 
   it('notice cards keep well-formed fix chips and drop malformed ones on load', () => {
