@@ -149,10 +149,15 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
 
     // The studio's own price for THIS call (registry image price at the resolution it renders;
     // text list price for its token budget) — the usage budget never holds less than this, so
-    // parallel page renders can't each under-reserve against a stale catalog row.
+    // parallel page renders can't each under-reserve against a stale catalog row. A text call
+    // on a fallback chain may be served by any of its models: the floor is the dearest of them.
+    const textModels = isImage ? [] : [args.model, ...(args.models || [])].filter((m, i, all) => !!m && all.indexOf(m) === i);
     const estimateFloorUsd = isImage
       ? registryImageCostUsd(args.model, args.resolution, args.imageUnits || 0)
-      : estimateTextCostUsd(args.model, args.inputTokens || 0, args.outputTokens || 0);
+      : textModels.reduce<number | undefined>((best, m) => {
+          const usd = estimateTextCostUsd(m, args.inputTokens || 0, args.outputTokens || 0);
+          return usd === undefined ? best : best === undefined || usd > best ? usd : best;
+        }, undefined);
 
     let reserved: Awaited<ReturnType<typeof reserveForOperation>>;
     try {
@@ -161,6 +166,7 @@ export function createBillingHooks(req: Request, projectId: string, deps: Billin
         operation: args.operation,
         provider: args.provider,
         fallbackModel: args.model,
+        ...(textModels.length > 1 ? { pricedModels: textModels } : {}),
         imageUnits: args.imageUnits ?? 0,
         resolution: toLedgerResolution(args.resolution),
         inputTokens: args.inputTokens,

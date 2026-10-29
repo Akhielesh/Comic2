@@ -454,6 +454,8 @@ export function billedLlm(ctx: StudioContext, args: { stage: SpendKind; operatio
           operation: args.operation,
           provider: route.route,
           model: route.model,
+          // OpenRouter may serve any model of the chain: the hold is priced at the dearest.
+          models: route.models,
           stage: args.stage,
           inputTokens: approxPrompt,
           outputTokens: req.maxTokens

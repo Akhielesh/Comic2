@@ -21,11 +21,14 @@ import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { ActionHandler } from './extensions.js';
 import { getImageModel } from '../../../shared/comic/models.js';
 import { pickImageRoute } from './imageClient.js';
+import { resolveTextRoute } from './textModels.js';
 import {
   JOB_TIMINGS,
+  billedLlm,
   estimateSpendAction,
   gateDecision,
   imageRouteFor,
+  newTextSpendTracker,
   nextStepsFor,
   pickDefaultPreset,
   planPages,
@@ -1859,6 +1862,28 @@ it('fakes stay honest: TINY_PNG is a valid data URL and KEYS route via OpenRoute
   expect(TINY_PNG.startsWith('data:image/png;base64,')).toBe(true);
   expect(KEYS.openrouter?.byok).toBe(false);
   expect(scriptedLlm).toBeTypeOf('function');
+});
+
+// ── Text holds cover the fallback chain ──────────────────────────────────────
+
+describe('billedLlm reserves', () => {
+  it('names every model of the route’s fallback chain, so the hold is priced at the dearest, not the primary', async () => {
+    const session = newSession(plannedDoc());
+    const seen: { model: string; models?: string[] }[] = [];
+    const base = fakeBilling();
+    const billing: FakeBilling = {
+      ...base,
+      async reserve(args) {
+        seen.push({ model: args.model, models: args.models });
+        return base.reserve(args);
+      }
+    };
+    const ctx = testContext(session, { billing });
+    const route = resolveTextRoute('director', ctx.keys)!;
+    expect(route.models.length).toBeGreaterThan(1);
+    await billedLlm(ctx, { stage: 'chat', operation: 'comic.text.director', tracker: newTextSpendTracker() }).complete({ role: 'director', messages: [{ role: 'user', content: 'hi' }] });
+    expect(seen).toEqual([{ model: route.model, models: route.models }]);
+  });
 });
 
 // ── BYOK image routing (the user's own Gemini key beside the platform OpenRouter key) ──

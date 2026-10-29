@@ -113,6 +113,24 @@ describe('createBillingHooks', () => {
     expect(reserve.mock.calls[3][0]).not.toHaveProperty('estimateFloorUsd');
   });
 
+  it('prices a text hold at the dearest model of its fallback chain and hands the chain to the ledger', async () => {
+    const { hooks, reserve } = setup();
+    const chain = ['google/gemini-3.8-flash', 'anthropic/claude-sonnet-5.5', 'openai/gpt-6-luna'];
+    await hooks.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: chain[0], models: chain, stage: 'chat', inputTokens: 20_000, outputTokens: 2_500 });
+    const input = reserve.mock.calls[0][0];
+    // Sonnet 5.5 is the dearest member: (20k × $2 + 2.5k × $10) / 1M, not the flash primary's $0.0268.
+    expect(input.estimateFloorUsd).toBeCloseTo(0.065, 6);
+    expect(input.pricedModels).toEqual(chain);
+    expect(input.fallbackModel).toBe(chain[0]);
+    // A single-model call carries no chain (the ledger prices the model it is given).
+    await hooks.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: chain[0], models: [chain[0]], stage: 'chat', inputTokens: 20_000, outputTokens: 2_500 });
+    expect(reserve.mock.calls[1][0]).not.toHaveProperty('pricedModels');
+    expect(reserve.mock.calls[1][0].estimateFloorUsd).toBeCloseTo(0.026813, 6);
+    // An unpriced fallback never lowers the floor below a priced member.
+    await hooks.reserve({ operation: 'comic.text.director', provider: 'openrouter', model: chain[0], models: [chain[0], 'unknown/text-model'], stage: 'chat', inputTokens: 20_000, outputTokens: 2_500 });
+    expect(reserve.mock.calls[2][0].estimateFloorUsd).toBeCloseTo(0.026813, 6);
+  });
+
   it('maps a 512 swatch to the ledger 1K price point', async () => {
     const { hooks, reserve } = setup();
     await hooks.reserve({ ...pageArgs, resolution: '512' });
