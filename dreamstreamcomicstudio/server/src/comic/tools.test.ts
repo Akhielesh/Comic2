@@ -388,6 +388,21 @@ describe('spend tools', () => {
     expect(ctx.session.doc.pages.every((p) => p.render.status === 'ready')).toBe(true);
   });
 
+  it('render_pages: "Render all" holds an overfull page back (said in the result); draw_anyway draws it', async () => {
+    const doc = plannedDoc();
+    doc.pages[1].panels[2].lines = [1, 2, 3].map((k) => ({ id: `ln_long${k}`, kind: 'speech' as const, speakerId: 'c_maya', text: Array.from({ length: 60 }, () => 'spice').join(' ') }));
+    setup(doc, [], { userText: 'draw all the pages', drawIntent: 'explicit' });
+    const out = await call('render_pages', {});
+    expect(out).toMatch(/^Started drawing/);
+    expect(out).toMatch(/Held back \(not drawn, not in this price\): page 2/);
+    await ctx.settled();
+    expect(ctx.session.doc.pages.map((p) => p.render.status)).toEqual(['ready', 'none', 'ready']);
+    const again = await call('render_pages', { draw_anyway: [2] });
+    expect(again).toMatch(/^Started drawing page 2/);
+    await ctx.settled();
+    expect(ctx.session.doc.pages[1].render.status).toBe('ready');
+  });
+
   it('edit_page requires a drawn page; render_character_sheets resolves names', async () => {
     expect(await call('edit_page', { page: 1, instruction: 'night' })).toMatch(/^Error: Page 1 isn't drawn yet/);
     expect(await call('render_character_sheets', { names: ['Ghost'] })).toMatch(/^Error: Unknown: Ghost/);

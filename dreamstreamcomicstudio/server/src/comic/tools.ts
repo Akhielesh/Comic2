@@ -1325,7 +1325,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         pages: A({ type: 'integer' }, 'Limit to these pages.'),
         redraw: B('New take of current pages.'),
         include_cover: B('Also draw a missing cover.'),
-        safe: B('A tamer take.')
+        safe: B('A tamer take.'),
+        draw_anyway: A({ type: 'integer' }, 'Pages held back for too many words to draw anyway (only when the user says so).')
       }),
       (args) => {
         const d = doc();
@@ -1338,6 +1339,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const numbers = intList(args.pages);
         const pages = numbers.length ? pagesByNumbers(d, numbers) : [];
         const ids = pages.map((p) => p.id);
+        const anyway = pagesByNumbers(d, intList(args.draw_anyway)).map((p) => p.id);
         const safe = args.safe === true;
         const wantsRedraw = args.redraw === true;
         const redraw = wantsRedraw && state.drawIntent === 'redraw';
@@ -1369,7 +1371,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             ...(ids.length ? { pageIds: ids } : {}),
             ...(redraw || saferRedraw ? { force: true } : {}),
             ...(coverToo ? { includeCover: true } : {}),
-            ...(safe ? { safe: true } : {})
+            ...(safe ? { safe: true } : {}),
+            // "Render all" holds back overfull pages (plan §4.1, PD-1); the user's "draw it anyway" names them.
+            ...(!ids.length && anyway.length ? { drawOverfull: anyway } : {})
           },
           forcedGateReason(d, state, 'pages', { redraw: redraw || (saferRedraw && current.some((p) => targets.includes(p))) })
         );
