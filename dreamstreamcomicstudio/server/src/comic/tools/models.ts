@@ -137,6 +137,36 @@ const renderStates = (doc: ComicDoc): { target: RenderTarget; render: RenderStat
   ...doc.style.options.map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }))
 ];
 
+/** How many drawn pages were drawn at one resolution (null = no record of it). */
+export interface ResCount {
+  res: Resolution | null;
+  n: number;
+}
+
+const RES_ORDER: Resolution[] = ['4K', '2K', '1K', '512'];
+
+/** The resolution a render was drawn at: its own record (VersionMeta.resolution), else its pixel size (long edge). */
+const resOfRender = (r: RenderState): Resolution | null => {
+  if (r.resolution && RES_ORDER.includes(r.resolution)) return r.resolution;
+  const dims = [r.asset?.w, r.asset?.h].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!dims.length) return null;
+  const long = Math.max(...dims);
+  return long <= 768 ? '512' : long <= 1600 ? '1K' : long <= 3200 ? '2K' : '4K';
+};
+
+/** The comic's drawn (generated) pages grouped by the resolution each was really drawn at, sharpest first. */
+export const drawnPageResolutions = (doc: ComicDoc): ResCount[] => {
+  const drawn = new Set(drawnTargets(doc).pages);
+  const counts = new Map<Resolution | null, number>();
+  for (const p of doc.pages) {
+    if (!drawn.has(p.id)) continue;
+    const res = resOfRender(p.render);
+    counts.set(res, (counts.get(res) || 0) + 1);
+  }
+  const rank = (r: Resolution | null) => (r === null ? RES_ORDER.length : RES_ORDER.indexOf(r));
+  return [...counts.entries()].map(([res, n]) => ({ res, n })).sort((a, b) => rank(a.res) - rank(b.res));
+};
+
 export interface UpstreamStreak {
   /** Upstream failures (429 / 5xx / timeout) since the last image that drew, inside R5_WINDOW_MS. */
   count: number;
@@ -290,6 +320,8 @@ export interface ModelAdvice {
   tier?: TierFacts;
   crowd?: { n: number; count: number };
   drawn: DrawnTargets;
+  /** The drawn pages by the resolution each was drawn at (what a tier change leaves as it is, §3.6 E). */
+  drawnRes: ResCount[];
   streak: UpstreamStreak;
   outage?: OutageCard;
   /** The live catalog answered (else prices are the dated registry list and uptime/ranks are unknown). */
@@ -453,6 +485,7 @@ export async function buildModelAdvice(ctx: StudioContext, input: { want: ModelW
     ...((tier) => (tier ? { tier } : {}))(input.want === 'cheaper' ? cheaperTier(doc, cur, current, prices, ctx.keys) : undefined),
     ...(crowd ? { crowd } : {}),
     drawn: drawnTargets(doc),
+    drawnRes: drawnPageResolutions(doc),
     streak: upstreamStreak(doc, input.now ?? Date.now()),
     ...(outage ? { outage: outage.card } : {}),
     live: !!rows
@@ -474,6 +507,31 @@ const drawnWords = (d: DrawnTargets): string =>
   joinList([d.pages.length ? plural(d.pages.length, 'page') : '', d.sheets.length ? plural(d.sheets.length, 'character sheet') : '', d.places.length ? plural(d.places.length, 'place sheet') : '', d.cover ? 'the cover' : ''].filter(Boolean));
 
 const drawnCount = (d: DrawnTargets) => d.pages.length + d.sheets.length + d.places.length + (d.cover ? 1 : 0);
+
+/**
+ * What a cheaper tier leaves as it is (§3.6 E with real per-page data): the drawn pages keep the resolution each was
+ * drawn at. `matches` = every drawn page is already at the new resolution.
+ */
+const drawnStay = (groups: ResCount[], newRes: Resolution): { matches: boolean; reply: string; tool: string } => {
+  const total = groups.reduce((n, g) => n + g.n, 0);
+  if (!total) return { matches: false, reply: '', tool: ' nothing drawn changes.' };
+  const one = total === 1;
+  const only = groups.length === 1 ? groups[0].res : undefined;
+  if (only === newRes) return { matches: true, reply: '', tool: ` the ${plural(total, 'drawn page')} ${one ? 'is' : 'are'} already at ${newRes}, which matches.` };
+  if (only) {
+    return {
+      matches: false,
+      reply: ` Your ${plural(total, 'drawn page')} stay${one ? 's' : ''} at ${only} unless you redraw ${one ? 'it' : 'them'}.`,
+      tool: ` the ${plural(total, 'page')} already drawn stay${one ? 's' : ''} at ${only} unless redrawn.`
+    };
+  }
+  const list = groups.map((g) => `${g.n} at ${g.res ?? 'an unrecorded size'}`).join(', ');
+  return {
+    matches: false,
+    reply: ` Your ${plural(total, 'drawn page')} ${groups.length > 1 ? `(${list}) ` : ''}stay${one ? 's' : ''} as ${one ? 'it is' : 'they are'} unless you redraw ${one ? 'it' : 'them'}.`,
+    tool: ` the ${plural(total, 'page')} already drawn keep${one ? 's its' : ' their'} resolution unless redrawn${groups.length > 1 ? ` (${list})` : ''}.`
+  };
+};
 
 const priceWords = (usd: number | null, c: CostFormatter): string => (usd === null ? "a price that isn't published yet" : c.approx(usd));
 
@@ -509,7 +567,7 @@ export function describeModelAdvice(a: ModelAdvice, c: CostFormatter): string {
   }
   if (a.tier) {
     lines.push(
-      `SAME MODEL, CHEAPER: ${a.tier.label} draws new pages with ${a.currentName} at ${a.tier.res} for ${c.approx(a.tier.perPageUsd)} per page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}. Characters stay consistent;${a.drawn.pages.length ? ` the ${plural(a.drawn.pages.length, 'page')} already drawn stay at ${a.tier.currentRes} unless redrawn.` : ' nothing drawn changes.'} Offer it with suggest_model tier "${a.tier.tier}" (the user taps to confirm).`
+      `SAME MODEL, CHEAPER: ${a.tier.label} draws new pages with ${a.currentName} at ${a.tier.res} for ${c.approx(a.tier.perPageUsd)} per page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}. Characters stay consistent;${drawnStay(a.drawnRes, a.tier.res).tool} Offer it with suggest_model tier "${a.tier.tier}" (the user taps to confirm).`
     );
   } else if (a.want === 'cheaper') {
     lines.push(`SAME MODEL: ${a.currentName} is already at its cheapest setting for this comic (${cur.res}).`);
@@ -595,8 +653,9 @@ export function modelAdviceReply(a: ModelAdvice, c: CostFormatter): { text: stri
   }
   if (a.want === 'cheaper') {
     if (a.tier) {
+      const stay = drawnStay(a.drawnRes, a.tier.res);
       out.push(
-        `The cheapest way that keeps your characters consistent is ${a.tier.label}: the same ${name} at ${a.tier.res}, ${c.approx(a.tier.perPageUsd)} a page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}.${a.drawn.pages.length ? ` The ${plural(a.drawn.pages.length, 'page')} already drawn stay at ${a.tier.currentRes} unless you redraw them.` : ''}`
+        `The cheapest way that keeps your characters consistent is ${a.tier.label}: the same ${name} at ${a.tier.res}${stay.matches ? ', which matches your drawn pages' : ''}, ${c.approx(a.tier.perPageUsd)} a page instead of ${c.approx(a.tier.currentPerPageUsd)} at ${a.tier.currentRes}.${stay.reply}`
       );
       steps.push(tierStep(a.tier));
     } else {

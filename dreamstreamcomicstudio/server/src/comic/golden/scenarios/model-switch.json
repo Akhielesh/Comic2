@@ -49,7 +49,7 @@
       ],
       "expect": {
         "toolResultIncludes": { "model_options": ["SAME MODEL, CHEAPER: Draft draws new pages with Nano Banana 2.1 at 1K for ≈ $0.04 per page instead of ≈ $0.05 at 2K."] },
-        "reply": "The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K. The 5 pages already drawn stay at 2K unless you redraw them.",
+        "reply": "The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K. Your 5 drawn pages (1 at 2K, 4 at 1K) stay as they are unless you redraw them.",
         "replyExcludes": ["equal", "as good as"],
         "nextSteps": [{ "label": "Use Draft for new pages", "action": { "type": "patch", "ops": [{ "op": "settings", "patch": { "quality": "draft" } }] }, "usd": 0 }],
         "imageModel": "nano-banana-2.1",

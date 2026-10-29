@@ -245,14 +245,40 @@ describe('model_options: real numbers from the catalog, read-only (models.md §3
     const out = await call('model_options', { want: 'cheaper' });
     // Standard 2K = $0.0504 + QC → ≈ $0.05; Draft 1K = $0.0336 + QC → ≈ $0.04.
     expect(out).toContain('SAME MODEL, CHEAPER: Draft draws new pages with Nano Banana 2.1 at 1K for ≈ $0.04 per page instead of ≈ $0.05 at 2K.');
-    expect(out).toContain('the 5 pages already drawn stay at 2K unless redrawn');
+    // The lake pages were really drawn at 2K (page 1) and 1K (pages 2–5): the words say so, never the tier's 2K.
+    expect(out).toContain('the 5 pages already drawn keep their resolution unless redrawn (1 at 2K, 4 at 1K)');
     expect(out).toContain('suggest_model tier "draft"');
     expect(out).toContain('No other available model draws this comic for less.');
     const reply = modelAdviceReply(modelAdviceOf(turn)!, costFormatter(DOLLAR_VIEW));
     expect(reply.text).toBe(
-      'The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K. The 5 pages already drawn stay at 2K unless you redraw them.'
+      'The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K. Your 5 drawn pages (1 at 2K, 4 at 1K) stay as they are unless you redraw them.'
     );
     expect(reply.steps).toEqual([{ label: 'Use Draft for new pages', action: { type: 'patch', ops: [{ op: 'settings', patch: { quality: 'draft' } }] }, usd: 0 }]);
+  });
+
+  it('"make it cheaper": the drawn pages\' own resolutions (render record, else pixel size), never the current tier\'s', async () => {
+    const cheaper = async (mutate: (d: ComicDoc) => void) => {
+      setup(lakeLocked((d) => ((d.settings = { ...d.settings, quality: 'standard' }), mutate(d))), 'make it cheaper', { caps: BYOK_CAPS, keys: BYOK_KEYS });
+      const out = await call('model_options', { want: 'cheaper' });
+      return { out, reply: modelAdviceReply(modelAdviceOf(turn)!, costFormatter(DOLLAR_VIEW)).text };
+    };
+    // Every drawn page is already at Draft's 1K.
+    const same = await cheaper((d) => d.pages.forEach((p) => (p.render.resolution = '1K')));
+    expect(same.reply).toBe('The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, which matches your drawn pages, ≈ $0.04 a page instead of ≈ $0.05 at 2K.');
+    expect(same.out).toContain('the 5 drawn pages are already at 1K, which matches.');
+    // Every drawn page at 2K; page 1's record is missing, so its 1856×2304 pixels say 2K.
+    const sharp = await cheaper((d) =>
+      d.pages.forEach((p) => {
+        p.render.resolution = '2K';
+        if (p.n === 1) delete p.render.resolution;
+      })
+    );
+    expect(sharp.reply).toContain('Your 5 drawn pages stay at 2K unless you redraw them.');
+    expect(sharp.out).toContain('the 5 pages already drawn stay at 2K unless redrawn.');
+    // Nothing drawn yet: nothing to keep.
+    const none = await cheaper((d) => d.pages.forEach((p) => (p.render = emptyRender())));
+    expect(none.out).toContain('Characters stay consistent; nothing drawn changes.');
+    expect(none.reply).toBe('The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K.');
   });
 
   it('a cheaper model no public board ranks is never called as good: "can\'t vouch for the quality"', async () => {
