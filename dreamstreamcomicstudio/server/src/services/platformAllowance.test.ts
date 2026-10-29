@@ -290,6 +290,37 @@ describe('user-facing messages (PERCENT only, honest hard stop)', () => {
     expect(down).toMatchObject({ reason: 'usage_budget_unavailable', message: USAGE_UNAVAILABLE_MESSAGE });
   });
 
+  it('a user whose own key is already on file is never told to add one — the sentence says the key is on file and what happens to it', () => {
+    // Without the fix every sentence ended with "add your own API key in Settings → API keys".
+    const ask = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'ask' });
+    expect(ask.message).not.toMatch(/add your own API key/i);
+    expect(ask.message).toContain("continue on your own key (it's on file) in Settings → API keys");
+    expect(ask.message).toContain('top-up');
+    const never = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'never' });
+    expect(never.message).toMatch(/set to never be used/);
+    expect(never.message).toContain('Settings → API keys');
+    const auto = buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: true, byokFallbackMode: 'auto' });
+    expect(auto.message).toMatch(/takes over/);
+    expect(auto.message).not.toMatch(/add your own API key/i);
+    const partial = buildAllowanceExhaustedDetails({ pctLeft: 4, canFallbackToByok: true, byokFallbackMode: 'ask' });
+    expect(partial.message).toContain('about 4% left');
+    expect(partial.message).toContain("continue on your own key (it's on file)");
+    // During an outage the key cannot take over on its own (the status is unreadable): the way
+    // forward is the explicit switch in Settings, whatever the mode.
+    const down = buildAllowanceExhaustedDetails({ pctLeft: 100, canFallbackToByok: true, byokFallbackMode: 'auto', unavailable: true });
+    expect(down.message).toContain('nothing was spent');
+    expect(down.message).toContain("switch to your own key (it's on file) in Settings → API keys");
+    expect(down.message).not.toMatch(/takes over|add your own API key/i);
+    for (const d of [ask, never, auto, partial, down]) expect(d.message).not.toMatch(MONEY);
+    // No key on file: the contract copy is unchanged.
+    expect(buildAllowanceExhaustedDetails({ pctLeft: 0, canFallbackToByok: false, byokFallbackMode: 'auto' }).message).toContain(
+      'add your own API key in Settings → API keys'
+    );
+    expect(allowanceExhaustedMessage('2026-11-01T00:00:00.000Z', { canFallbackToByok: true, byokFallbackMode: 'ask' })).toContain(
+      "November 1 — or continue on your own key (it's on file) in Settings → API keys to keep going now."
+    );
+  });
+
   it('emits info notices at 30/70, warn at 90, nothing for 100 — in percent', () => {
     const notices = allowanceCrossingNotices([30, 70, 90, 100]);
     expect(notices.map((n) => n.level)).toEqual(['info', 'info', 'warn']);

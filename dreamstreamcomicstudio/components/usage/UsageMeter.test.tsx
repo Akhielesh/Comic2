@@ -7,7 +7,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 const api = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), put: vi.fn() }));
 vi.mock('../../services/apiClient', () => api);
 
-import { __resetAllowanceStore, normalizeAllowanceStatus, publishAllowanceStatus, type AllowanceStatus } from '../../services/usageAllowance';
+import { __resetAllowanceStore, getLastAllowanceStatus, normalizeAllowanceStatus, publishAllowanceStatus, type AllowanceStatus } from '../../services/usageAllowance';
 import { UsageMeter, UsageMeterPill, UsageDetails, clampPopover, usageAriaLabel } from './UsageMeter';
 import { feature } from '../comicstudio/usage/index';
 import { UsageSlot, USAGE_SLOT_ORDER } from '../comicstudio/usage/UsageSlot';
@@ -86,6 +86,52 @@ describe('UsageDetails', () => {
     expect(container).toHaveTextContent('Nothing more is spent');
     const link = screen.getByRole('link', { name: /add your own key/i });
     expect(link).toHaveAttribute('href', '/?view=settings&tab=settings');
+    expect(container.textContent).not.toMatch(MONEY);
+  });
+});
+
+describe('UsageDetails — usage used up while a personal key is already on file (360 px)', () => {
+  const keyed = (byokFallbackMode: 'ask' | 'auto' | 'never') =>
+    status({ pctUsed: 100, pctLeft: 0, exhausted: true, crossed: [30, 70, 90, 100], byokAvailable: true, byokFallbackMode });
+
+  it("'ask': offers the consent action instead of telling the user to add a key they already added", async () => {
+    api.patch.mockResolvedValue({ ...RAW, pctUsed: 100, pctLeft: 0, exhausted: true, crossed: [30, 70, 90, 100], byokAvailable: true, byokFallbackMode: 'auto' });
+    const { container } = render(<UsageDetails status={keyed('ask')} />);
+    expect(container).toHaveTextContent("You've used all of your DreamStream usage");
+    expect(container).toHaveTextContent('on file');
+    // Without the fix: the "Add your own key" link and no consent action.
+    expect(screen.queryByText(/add your own key/i)).toBeNull();
+    const consent = screen.getByRole('button', { name: /continue with my key/i });
+    expect(consent.className).toMatch(/coarse:h-11/);
+    expect(screen.getByRole('link', { name: /api keys/i })).toHaveAttribute('href', '/?view=settings&tab=settings');
+    expect(container.textContent).not.toMatch(MONEY);
+    expect((container.firstChild as HTMLElement).className).toContain('w-[min(20rem,calc(100vw-2rem))]');
+    await act(async () => {
+      fireEvent.click(consent);
+    });
+    expect(api.patch).toHaveBeenCalledTimes(1);
+    expect(api.patch.mock.calls[0][0]).toBe('/api/account/billing-prefs');
+    expect(api.patch.mock.calls[0][1]).toEqual({ byokFallbackMode: 'auto' });
+    // The consent lands in the shared store, so every meter and the chat banner follow at once.
+    expect(getLastAllowanceStatus()?.byokFallbackMode).toBe('auto');
+  });
+
+  it("'auto': says the key is what is used now — no 'add' link, no consent button", () => {
+    const { container } = render(<UsageDetails status={keyed('auto')} />);
+    expect(container).toHaveTextContent(/runs on your own key/i);
+    expect(screen.queryByText(/add your own key/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /continue with my key/i })).toBeNull();
+    expect(screen.getByRole('link', { name: /api keys/i })).toHaveAttribute('href', '/?view=settings&tab=settings');
+    expect(container.textContent).not.toMatch(MONEY);
+  });
+
+  it("'never': says why the key on file is not used and where to change that", () => {
+    const { container } = render(<UsageDetails status={keyed('never')} />);
+    expect(container).toHaveTextContent(/set to never be used/i);
+    expect(container).toHaveTextContent('Nothing more is spent');
+    expect(screen.queryByText(/add your own key/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /continue with my key/i })).toBeNull();
+    expect(screen.getByRole('link', { name: /api keys/i })).toHaveAttribute('href', '/?view=settings&tab=settings');
     expect(container.textContent).not.toMatch(MONEY);
   });
 });
