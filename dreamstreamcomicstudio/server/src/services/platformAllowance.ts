@@ -533,11 +533,21 @@ export type OwnKeyHint = { canFallbackToByok: boolean; byokFallbackMode: ByokFal
  * The own-key way forward, told truthfully. A user whose key is already on file is never told to
  * add one: in 'ask' mode the consent lives in Settings (and the chat banner / usage meter), in
  * 'never' mode the key is on file but will not be used until they change that, and in 'auto' mode
- * it takes over — the gate re-reads the usage after a refusal, so the next call runs on it.
+ * it takes over once the usage is used up — the gate re-reads the usage after a refusal, so the
+ * next call runs on it.
+ *
+ * `usageUsedUp`: the refusal is the used-up stop (allowanceExhaustedMessage). Without it — some
+ * usage is left but not enough for this call — an 'auto' key does NOT take over yet: the account
+ * keys inject it only once the status reads exhausted (middleware/accountKeys.ts), so the honest
+ * way to use it now is turning DreamStream usage off. Defaults to the conservative sentence.
  */
-export const ownKeyPath = (hint?: OwnKeyHint): string => {
+export const ownKeyPath = (hint?: OwnKeyHint, usageUsedUp = false): string => {
   if (!hint?.canFallbackToByok) return OWN_KEY_PATH;
-  if (hint.byokFallbackMode === 'auto') return "use your own key (it's on file and takes over from here)";
+  if (hint.byokFallbackMode === 'auto') {
+    return usageUsedUp
+      ? "use your own key (it's on file and takes over from here)"
+      : "switch to your own key now by turning DreamStream usage off in Settings → API keys (it's on file, and takes over by itself once your usage is fully used up)";
+  }
   if (hint.byokFallbackMode === 'never') return "switch to your own key (it's on file, but set to never be used) in Settings → API keys";
   return "continue on your own key (it's on file) in Settings → API keys";
 };
@@ -545,8 +555,8 @@ export const ownKeyPath = (hint?: OwnKeyHint): string => {
 /** The honest hard stop. Lifetime budgets don't reset; monthly ones name the reset date. */
 export const allowanceExhaustedMessage = (resetsAt?: string | null, ownKey?: OwnKeyHint): string =>
   resetsAt
-    ? `You've used all of this month's DreamStream usage. It comes back on ${formatResetDate(resetsAt)} — or ${ownKeyPath(ownKey)} to keep going now.`
-    : `You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or ${ownKeyPath(ownKey)} to keep going.`;
+    ? `You've used all of this month's DreamStream usage. It comes back on ${formatResetDate(resetsAt)} — or ${ownKeyPath(ownKey, true)} to keep going now.`
+    : `You've used all of your DreamStream usage. It doesn't reset on its own — ask us for a top-up, or ${ownKeyPath(ownKey, true)} to keep going.`;
 
 /** Some usage is left, but not enough for this particular call. */
 export const usageNotEnoughMessage = (pctLeft: number, ownKey?: OwnKeyHint): string =>
