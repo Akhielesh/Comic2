@@ -154,6 +154,35 @@ describe('ComicReaderView', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Reading mode' })).toBeNull();
   });
 
+  // Review 2026-10-29 (axe scrollable-region-focusable on the studio Read tab): without an End card the
+  // scroller holds nothing focusable, so it must be keyboard-reachable itself — a named region.
+  it('the scroll-mode scroller is keyboard-reachable on its own: tabindex 0, a named region', () => {
+    const { unmount } = render(<ComicReaderView doc={drawnDoc((d) => (d.format.kind = 'webtoon'))} urlFor={fakeUrlFor} />);
+    const scroller = screen.getByTestId('reader-scroll');
+    expect(scroller).toHaveAttribute('tabindex', '0');
+    expect(scroller).toHaveAttribute('role', 'region');
+    expect(scroller).toHaveAccessibleName('The Saffron Thief — Scroll');
+    // Nothing else inside it is focusable (the studio passes no End card): the scroller is the stop.
+    expect(scroller.querySelector('button, a[href], input, [tabindex="0"]')).toBeNull();
+    unmount();
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="scroll" />);
+    expect(screen.getByRole('region', { name: 'The Saffron Thief — Scroll' })).toBe(screen.getByTestId('reader-scroll'));
+  });
+
+  it('keyboard in scroll mode: Home/End jump through the scroller; Space and the arrows stay native', () => {
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="scroll" />);
+    const scroller = screen.getByTestId('reader-scroll');
+    Object.defineProperty(scroller, 'scrollHeight', { value: 6000, configurable: true });
+    scroller.focus();
+    expect(document.activeElement).toBe(scroller);
+    fireEvent.keyDown(scroller, { key: 'End' });
+    expect(scroller.scrollTop).toBe(6000);
+    fireEvent.keyDown(scroller, { key: 'Home' });
+    expect(scroller.scrollTop).toBe(0);
+    // Native keys are left alone (not prevented), so the focused scroller scrolls itself.
+    for (const key of [' ', 'PageDown', 'ArrowDown']) expect(fireEvent.keyDown(scroller, { key })).toBe(true);
+  });
+
   it('reads only what is drawn, and says so', () => {
     render(<ComicReaderView doc={makeSampleDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     expect(shownKeys()).toEqual(['pg_1']);

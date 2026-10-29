@@ -1002,7 +1002,21 @@ export const ComicReaderView: React.FC<ComicReaderViewProps> = ({
       {!autoHide && notices}
 
       {layout === 'scroll' ? (
-        <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-testid="reader-scroll">
+        // The scroller is itself keyboard-reachable — a named region (axe `scrollable-region-focusable`):
+        // in the studio Read tab it holds nothing focusable (no End card), so without this a keyboard
+        // user could not scroll a webtoon. Space / PageUp / PageDown / ↑↓ scroll it natively; ←/→ and
+        // Home/End go through onKeyDown. Flush with the screen's bottom edge it keeps the home-indicator
+        // inset clear, like the page stage.
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          tabIndex={0}
+          role="region"
+          aria-label={`${bookLabel} — ${t('scroll')}`}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)]"
+          style={frame.flushBottom ? { marginBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
+          data-testid="reader-scroll"
+        >
           <div className={cx('mx-auto flex max-w-[860px] flex-col items-stretch px-3 py-4', kind === 'webtoon' ? 'gap-0' : 'gap-5', autoHide && 'pt-14')}>
             {items.map((item, i) => (
               <ScrollPage key={item.key} doc={localized} item={item} img={img} paper={eff.paper} eager={i < 2} onImageError={onImageError} />
