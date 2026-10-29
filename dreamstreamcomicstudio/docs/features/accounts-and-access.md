@@ -156,17 +156,34 @@ hidden frame — `docs/infrastructure/INFRA_MAP.md` §2a "Alerts across the two 
 ## Account security in Stream Studio (ADR 0006 WS-5, 2026-10-29)
 
 Settings → **Security** (`live/views/account/SecurityPanel.tsx`; also in the account menu):
-- **Two-step sign-in** (TOTP, Supabase MFA): add an authenticator app with a QR code or the
-  setup key, confirm with its first code; remove it (needs the code). Once it's on, signing in
-  with the password leaves the account `needs_mfa` until the code is given (`StepUp.tsx`), and
-  admin actions — share links, adding people, export, approving or revoking a device, changing
-  two-step sign-in — ask for the code first when this session hasn't given it
-  (`ensureStepUp(reason)`, exported for the monitor screens). A nudge after creating a nursery
-  suggests turning it on (`MfaNudge.tsx`). The server enforces it (`mfa_required`, socket close
-  4003) once `server/sql/live_security_v2.sql` is applied; until then the app still reads the
-  session's level from Supabase, and the lists below say "Not switched on yet" (a missing RPC).
-- **Your devices** (`live_device_list`, Revoke → `DELETE /live-api/api/devices/:id` with the RPC
-  as fallback) and **recent security events** (`live_security_events`).
+- **Two-step sign-in** (TOTP, Supabase MFA; `views/account/TwoStep.tsx`). Built so a parent is
+  never locked out, and never loses the nursery camera, because of it:
+  - *Turning it on* first says what changes and lists the devices signed in right now (they
+    stay signed in — a nursery camera included), then asks for the password again (a sign-in
+    in the last 10 minutes skips it; "Forgot password" for anyone without one), then the QR
+    code or setup key and its first code, then **ten single-use recovery codes** that must be
+    saved before it's done. The server only counts an authenticator switched on this way
+    (`live_mfa_activate`: the first one needs a password or email link used in the last 30
+    minutes), so a stolen session can't switch it on; it emails the person with a "Not you?"
+    link that removes it again.
+  - *Once it's on*, a NEW sign-in leaves the account `needs_mfa` until the code is given
+    (`StepUp.tsx`; any of the account's authenticators works). Devices signed in **before** it
+    was switched on keep watching without the code until they sign out (`mfa_grace`), and
+    admin actions — share links, adding people, export, approving or revoking a device,
+    recovery codes, changing two-step sign-in — ask every session for the code
+    (`ensureStepUp(reason)`, exported for the monitor screens). Only the server decides
+    (`mfa_required`, socket close 4003); the app never shuts a screen on its own reading.
+  - *Lost phone:* "Lost your phone? → Use a recovery code" on the code sheet switches two-step
+    sign-in off (`live_mfa_recover`: single use, 5 wrong tries per 15 minutes, emailed) so the
+    parent gets in and sets it up again. The Security panel shows how many codes are left and
+    makes a new set (with the code).
+  - A nudge after creating a nursery suggests turning it on (`MfaNudge.tsx`). Until
+    `server/sql/live_security_v2.sql` is applied it can't be turned on ("isn't switched on for
+    DreamStream accounts yet"), and the lists below say "Not switched on yet".
+- **Your devices** (`live_device_list`, Revoke → `DELETE /live-api/api/devices/:id`; the plain
+  RPC only where that route is missing, and any other failure says "try again" and changes
+  nothing; a sign-out not every nursery heard keeps a **Finish signing out** button) and
+  **recent security events** (`live_security_events`, two-step sign-in changes included).
 - **Sign out of this device** and **Sign out everywhere**. Everywhere = `POST
   /live-api/api/me/kick` (closes every open monitor, call line and admin socket of the account;
   contract: 2xx `{ok: true}` only when every room confirmed) → `signOut({scope:'global'})` →
@@ -182,9 +199,15 @@ Settings → **Security** (`live/views/account/SecurityPanel.tsx`; also in the a
 **"Not you? Secure my account"** — `#/secure/<token>` (`live/views/account/SecureAccount.tsx`),
 the link in the new-sign-in email (`email-worker/src/securityAlert.ts`). The token is read once
 and taken out of the address bar; one tap posts it to `POST /api/auth/email/secure`, which ends
-every session of the account, signs out devices added since that sign-in and emails a
-password-reset link. If this browser was signed in to that account it is signed out too, and
-its open sockets are closed.
+every session of the account, signs out devices added since that sign-in, removes
+authenticators added or switched on since then (so an intruder can't lock the parent out with
+two-step sign-in; the parent's earlier ones stay), asks the live Worker to close the account's
+open monitors and calls and drop their alert subscriptions — signed with the backend's own
+`SECURITY_HOOK_SECRET` (`server/src/services/liveKick.ts`), since the account's tokens just died
+— and emails a password-reset link. The page says exactly what happened, including when the
+Worker couldn't confirm the sockets closed (then: sign in and use "Sign out everywhere"). If
+this browser was signed in to that account it is signed out too. The same link comes in the
+emails about two-step sign-in being turned on, an authenticator added, or a recovery code used.
 
 **The flip — `SECURE_ACCOUNT_PAGE`.** The email Worker sends the "Not you?" button only when its
 var `SECURE_ACCOUNT_PAGE` is `on`; otherwise the email points to Settings → Security. It is set

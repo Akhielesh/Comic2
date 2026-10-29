@@ -185,8 +185,10 @@ export async function signOut(scope: 'local' | 'global' = 'local'): Promise<{ ok
       } catch { /* already gone */ }
     }
   }
-  // Name, events, nursery data, alert subscription: nothing personal stays behind.
+  // Name, events, nursery data, alert subscription: nothing personal stays behind — nor alerts
+  // already on screen, whose "I'm on it" would still act as the person who signed out.
   purgeLiveAccountData();
+  await import('./monitor/push').then((m) => m.closeAlertNotifications()).catch(() => undefined);
   // In the background (a hidden frame on the old address; the page stays open after signing out).
   void import('./monitor/push').then((m) => m.retireLegacyAlerts('signout', uid)).catch(() => undefined);
   return { ok: scope === 'local' ? true : ok };

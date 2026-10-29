@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   needed: false,
   stepUp: vi.fn(async (_code: string) => ({ ok: true }) as { ok: true } | { ok: false; code: string; error: string }),
   signOut: vi.fn(async () => undefined),
+  recover: vi.fn(async (_code: string) => ({ ok: true, removed: 1 }) as { ok: true; removed: number } | { ok: false; code: string; error: string }),
   secondStep: null as null | (() => void),
 }));
 
@@ -19,6 +20,7 @@ vi.mock('../../account', () => ({
   stepUpNeeded: vi.fn(async () => h.needed),
   stepUp: h.stepUp,
   signOutThisDevice: h.signOut,
+  recoverWithCode: h.recover,
   registerSecondStepOpener: (fn: (() => void) | null) => {
     h.secondStep = fn;
   },
@@ -139,7 +141,42 @@ describe('finishing a sign-in', () => {
     render(<StepUpHost push={push} />);
     await screen.findByRole('dialog');
     fireEvent.click(screen.getByRole('button', { name: 'Lost your phone?' }));
-    expect(screen.getByText(/setup key you saved/)).toBeInTheDocument();
+    expect(screen.getByText(/recovery codes/)).toBeInTheDocument();
+    expect(screen.getByText(/saved the setup key in a password manager/)).toBeInTheDocument();
     expect(screen.getByText(/A new password alone won’t switch two-step sign-in off/)).toBeInTheDocument();
+  });
+
+  it('lost phone: a recovery code gets the parent back in, says two-step sign-in is now off, and opens Security to set it up again', async () => {
+    h.account = { status: 'needs_mfa', email: 'ada@example.com' };
+    location.hash = '#/monitor';
+    render(<StepUpHost push={push} />);
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: 'Lost your phone?' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use a recovery code' }));
+    const input = screen.getByLabelText('Recovery code');
+    expect(document.getElementById('stepup-recovery-help')).toHaveTextContent(/switches two-step sign-in off so you can get back in/);
+    // A wrong code is explained; the sheet stays.
+    h.recover.mockResolvedValueOnce({ ok: false, code: 'recovery_invalid', error: 'That recovery code didn’t work.' });
+    fireEvent.change(input, { target: { value: 'abcd-efgh-jkmn' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
+    });
+    await flush();
+    expect(screen.getByRole('alert')).toHaveTextContent('That recovery code didn’t work.');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Use recovery code' }));
+    });
+    await flush();
+    expect(h.recover).toHaveBeenLastCalledWith('abcd-efgh-jkmn');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(push).toHaveBeenCalledWith(expect.stringMatching(/back in\. Two-step sign-in is off — set it up again/), expect.objectContaining({ icon: 'shield' }));
+    expect(location.hash).toBe('#/settings?s=security');
+  });
+
+  it('says any authenticator works', async () => {
+    h.account = { status: 'needs_mfa' };
+    render(<StepUpHost push={push} />);
+    await screen.findByRole('dialog');
+    expect(screen.getByText(/Any of your authenticator apps works/)).toBeInTheDocument();
   });
 });

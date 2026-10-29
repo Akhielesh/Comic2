@@ -11,6 +11,7 @@
   padding: 10px 12px; min-height: 52px;
 }
 .stepup-err { margin-top: 10px; }
+.stepup-code.stepup-recovery { font-size: 20px; letter-spacing: .08em; text-transform: lowercase; }
 .stepup-help { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
 .stepup-help a { color: var(--accent-ink); }
 
@@ -31,6 +32,17 @@
 .sec-verify { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
 .sec-verify .input { width: 150px; font-size: 18px; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; }
 .sec-keep { margin-top: 10px; }
+.sec-setup-wide { grid-template-columns: 1fr; }
+.sec-setup-title { display: block; font-size: 14px; margin-bottom: 4px; }
+.sec-points { margin: 6px 0 10px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; line-height: 1.5; }
+.sec-points li::marker { color: var(--accent-ink); }
+.sec-signed-in { display: grid; gap: 4px; margin: 4px 0 6px; }
+.sec-signed-in > small { color: var(--muted); font-size: 12px; }
+.sec-codes { margin: 0; padding: 10px 12px 10px 32px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 16px; border-radius: var(--r-md); background: var(--panel); border: 1px solid var(--line); }
+.sec-codes li { font-size: 12px; color: var(--muted); }
+.sec-codes code { font-size: 14px; letter-spacing: .06em; color: var(--text); font-variant-numeric: tabular-nums; }
+.sec-saved { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; cursor: pointer; min-height: 44px; }
+.sec-saved input { width: 18px; height: 18px; flex: none; }
 @media (max-width: 560px) {
   .sec-setup { grid-template-columns: 1fr; justify-items: start; }
 }

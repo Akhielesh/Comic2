@@ -19,8 +19,40 @@ const isAppPage = (u) => new URL(u).pathname.startsWith(new URL(self.registratio
  * monitor or a ringing call would drop its connection). */
 const appUrl = (hash) => new URL(hash, self.registration.scope).href;
 
+/* Signed out on this device (or another account took it over): the alerts on screen go, and an
+ * alert that arrived before now can't act any more — its "I'm on it" token speaks for the person
+ * who just signed out (live/monitor/push.ts closeAlertNotifications). Kept in Cache Storage, so it
+ * holds while this worker is stopped; alerts that arrive after the next sign-in act as normal. */
+const SIGNED_OUT_KEY = '/__ds/signed-out';
+
+async function signedOutAt() {
+  try {
+    const hit = await (await caches.open(STATE_CACHE)).match(SIGNED_OUT_KEY);
+    return hit ? Number(await hit.text()) || 0 : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 self.addEventListener('message', (event) => {
   const d = event.data || {};
+  if (d.t === 'ds-signed-out') {
+    event.waitUntil(
+      (async () => {
+        try {
+          await (await caches.open(STATE_CACHE)).put(SIGNED_OUT_KEY, new Response(String(Date.now())));
+        } catch (e) {
+          /* the page closes what it can see too */
+        }
+        try {
+          for (const n of await self.registration.getNotifications()) n.close();
+        } catch (e) {
+          /* nothing shown */
+        }
+      })(),
+    );
+    return;
+  }
   if (d.t !== 'ds-camera') return;
   event.waitUntil(
     caches.open(STATE_CACHE).then((c) => (d.on ? c.put(CAMERA_KEY, new Response(String(Date.now()))) : c.delete(CAMERA_KEY))).catch(() => undefined),
@@ -65,10 +97,19 @@ function canAct(data) {
   );
 }
 
-/** The acknowledgement request for a notification's data, or null when it can't be made. */
+/** A fresh acknowledgement id: one per ALERT (made when it arrives), reused by every retry. */
+const newActId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+const ACT_ID_RE = /^[0-9a-f]{24}$/;
+
+/**
+ * The acknowledgement request for a notification's data, or null when it can't be made. The id is
+ * the alert's own (`aid`), so a retry after a lost answer is the same acknowledgement — the room
+ * dedupes it ("/act with the same id twice gives one acknowledgement") instead of refusing the
+ * now-spent token and telling the parent it failed when everyone else was told they're on it.
+ */
 function actRequest(d) {
   if (!canAct(d)) return null;
-  const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+  const id = typeof d.aid === 'string' && ACT_ID_RE.test(d.aid) ? d.aid : newActId();
   return {
     url: new URL(`/live-api/api/monitor/${d.nid}/act`, self.location.origin).href,
     init: {
@@ -83,6 +124,22 @@ function actRequest(d) {
 
 async function onIt(n) {
   const d = (n && n.data) || {};
+  const out = await signedOutAt();
+  if (out && !(typeof d.got === 'number' && d.got > out)) {
+    // Signed out here since this alert arrived: never act for whoever signed out.
+    return self.registration.showNotification('Baby monitor', {
+      tag: n.tag || d.tag,
+      icon: '/stream-studio.svg',
+      badge: '/stream-studio.svg',
+      timestamp: Date.now(),
+      renotify: false,
+      silent: true,
+      requireInteraction: false,
+      body: 'You’re signed out on this device — sign in to check the monitor.',
+      data: { url: d.url },
+      actions: [],
+    });
+  }
   const req = actRequest(d);
   let status = 0;
   let body = null;
@@ -180,7 +237,11 @@ self.addEventListener('push', (event) => {
         badge: '/stream-studio.svg',
         timestamp: data.at || Date.now(),
         // What "I'm on it" needs to acknowledge — and to put the alert back if it can't.
-        data: onit ? { url, nid: data.nid, inc: data.inc, act: data.act, kind, tag, title: data.title || 'Baby monitor', fullTitle: title, body, urgent } : { url },
+        // `aid`: this alert's one acknowledgement id (every retry reuses it); `got`: when it
+        // arrived, so a sign-out after it switches its button off.
+        data: onit
+          ? { url, nid: data.nid, inc: data.inc, act: data.act, aid: newActId(), got: Date.now(), kind, tag, title: data.title || 'Baby monitor', fullTitle: title, body, urgent }
+          : { url },
         actions:
           kind === 'call' ? [{ action: 'answer', title: 'Answer' }]
           : kind === 'call_missed' ? [{ action: 'calls', title: 'Call back' }]

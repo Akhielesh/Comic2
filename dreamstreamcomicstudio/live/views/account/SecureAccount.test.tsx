@@ -46,11 +46,27 @@ describe('SecureAccount', () => {
     expect(screen.getByRole('heading', { name: 'Your account is secured' })).toBeInTheDocument();
     expect(screen.getByText(/Every device was signed out \(3 sessions\)\. This browser is signed out too\./)).toBeInTheDocument();
     expect(screen.getByText(/One phone or watch added since that sign-in was signed out/)).toBeInTheDocument();
-    // The kick didn't happen: never claimed.
-    expect(screen.getByText(/may stay connected until it reconnects/)).toBeInTheDocument();
+    // The kick wasn't confirmed: never claimed — and the parent is told how to stop alerts for certain.
+    expect(screen.getByText(/couldn’t confirm that monitors and calls open on other devices were disconnected/)).toBeInTheDocument();
+    expect(screen.getByText(/baby alerts can keep reaching it/)).toBeInTheDocument();
+    expect(screen.getByText(/use “Sign out everywhere” in Settings → Security/)).toBeInTheDocument();
     expect(screen.getByText(/emailed a link to choose a new password to a•••@example\.com/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(h.openAuth).toHaveBeenCalledWith('signin');
+  });
+
+  it('says when two-step sign-in an intruder turned on was switched off, and that open monitors were closed', async () => {
+    h.secure.mockResolvedValue({ ok: true, signedOutEverywhere: true, sessionsEnded: 2, devicesRevoked: 0, factorsRemoved: 1, resetEmail: 'sent', emailHint: null, thisDevice: false, kicked: true });
+    render(<SecureAccount token={TOKEN} nav={nav} />);
+    expect(screen.getByText(/switch off two-step sign-in if someone else turned it on — so they can’t lock you out/)).toBeInTheDocument();
+    expect(screen.getByText(/stop their baby alerts/)).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Secure my account' }));
+    });
+    await flush();
+    // Honest whether or not two-step sign-in stays on (the parent's own authenticators from before stay).
+    expect(screen.getByText(/An authenticator added after that sign-in was removed, so whoever added it can’t use two-step sign-in to lock you out\. Any you had before stay\. If it was yours, add it again/)).toBeInTheDocument();
+    expect(screen.getByText(/were disconnected, and their baby alerts stopped/)).toBeInTheDocument();
   });
 
   it('never claims every device was signed out when the database couldn’t', async () => {
@@ -91,7 +107,7 @@ describe('SecureAccount', () => {
     });
     await flush();
     expect(h.secure).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/Monitors and calls that were open were disconnected/)).toBeInTheDocument();
+    expect(screen.getByText(/Monitors and calls that were open on other devices were disconnected/)).toBeInTheDocument();
   });
 
   it('"It was me" leaves everything as it is', () => {

@@ -18,8 +18,9 @@ vi.mock('../account', () => ({
   signOutEverywhereMessage: (r: { kicked: boolean }) => (r.kicked ? 'Signed out everywhere — open monitors and calls on your other devices were disconnected.' : 'Signed out everywhere.'),
   // Settings → Security (views/account/SecurityPanel.tsx)
   failed: (r: { ok: boolean }) => r.ok === false,
-  mfaStatus: vi.fn(async () => ({ ok: true, on: false, factors: [], aal: 'aal1' })),
+  mfaStatus: vi.fn(async () => ({ ok: true, on: false, factors: [], aal: 'aal1', available: true, codesLeft: null, grace: false })),
   listMyDevices: vi.fn(async () => ({ ok: true, devices: [] })),
+  unconfirmedRevokes: () => [],
   listSecurityEvents: vi.fn(async () => ({ ok: true, events: [] })),
   stepUpNeeded: vi.fn(async () => false),
   registerSecondStepOpener: vi.fn(),

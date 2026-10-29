@@ -41,10 +41,11 @@ export function SecureAccount({ token, nav }: { token: string; nav: Nav }) {
         ) : stage.kind === 'ask' || stage.kind === 'working' ? (
           <>
             <h1 className="serif">Secure your account?</h1>
-            <p className="lead">We emailed you about a new sign-in to your DreamStream account. If it wasn’t you, securing your account will:</p>
+            <p className="lead">We emailed you about a new sign-in, or a change to two-step sign-in, on your DreamStream account. If it wasn’t you, securing your account will:</p>
             <ul className="secure-list">
               <li>Sign out every device and browser signed in to your account — including this one, and a phone running as a nursery camera (sign in on it again afterwards).</li>
-              <li>Sign out any phone or watch added since that sign-in.</li>
+              <li>Disconnect monitors and calls open on other devices, and stop their baby alerts.</li>
+              <li>Sign out any phone or watch added since then, and switch off two-step sign-in if someone else turned it on — so they can’t lock you out.</li>
               <li>Email you a link to choose a new password.</li>
             </ul>
             <p className="lead">If it was you, there’s nothing to do — you can close this page.</p>
@@ -87,8 +88,12 @@ function Done({ r, nav }: { r: SecureAccountResult; nav: Nav }) {
         ? `Every device was signed out (${r.sessionsEnded} ${r.sessionsEnded === 1 ? 'session' : 'sessions'}).`
         : 'Every device was signed out.';
   const sockets = r.kicked
-    ? 'Monitors and calls that were open were disconnected.'
-    : 'A monitor or call already open on another device may stay connected until it reconnects — if you see one you don’t recognise, remove that person from the nursery.';
+    ? 'Monitors and calls that were open on other devices were disconnected, and their baby alerts stopped.'
+    : 'We couldn’t confirm that monitors and calls open on other devices were disconnected — one may stay connected for a few minutes, and baby alerts can keep reaching it. To stop them for certain, sign in with your new password and use “Sign out everywhere” in Settings → Security.';
+  const factors =
+    r.factorsRemoved && r.factorsRemoved > 0
+      ? `${r.factorsRemoved === 1 ? 'An authenticator added after that sign-in was' : `${r.factorsRemoved} authenticators added after that sign-in were`} removed, so whoever added ${r.factorsRemoved === 1 ? 'it' : 'them'} can’t use two-step sign-in to lock you out. Any you had before stay. If ${r.factorsRemoved === 1 ? 'it was' : 'one was'} yours, add it again in Settings → Security once you’re back in.`
+      : null;
   const reset =
     r.resetEmail === 'sent'
       ? `We emailed a link to choose a new password${r.emailHint ? ` to ${r.emailHint}` : ''}.`
@@ -101,6 +106,7 @@ function Done({ r, nav }: { r: SecureAccountResult; nav: Nav }) {
       <ul className="secure-list">
         <li>{sessions}{r.thisDevice ? ' This browser is signed out too.' : ''}</li>
         {r.devicesRevoked > 0 && <li>{r.devicesRevoked === 1 ? 'One phone or watch' : `${r.devicesRevoked} phones or watches`} added since that sign-in {r.devicesRevoked === 1 ? 'was' : 'were'} signed out.</li>}
+        {factors && <li>{factors}</li>}
         <li>{sockets}</li>
         <li>{reset}</li>
       </ul>

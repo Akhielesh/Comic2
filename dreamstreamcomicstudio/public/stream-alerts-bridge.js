@@ -24,7 +24,7 @@
   var OWNER = 'ds-live-owner';
   // What a Stream Studio account leaves on a device — the same lists as live/accountPurge.ts
   // (a test keeps them in step).
-  var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-owner'];
+  var EXACT = ['ds-live-prefs', 'ds-live-prefs-saved-at', 'ds-live-my-events', 'ds-live-my-recordings', 'ds-call-ring', 'ds-calls-seen', 'ds-live-welcome-ticket', 'ds-live-unconfirmed-revokes', 'ds-live-owner'];
   var PREFIXES = ['ds-monitor-push-', 'ds-monitor-setup-', 'ds-monitor-zones-', 'ds-monitor-stats-', 'ds-monitor-silent-', 'ds-monitor-cam-', 'ds-track-queue-', 'ds-usage-'];
 
   function storage() {

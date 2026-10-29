@@ -21,6 +21,7 @@ const EXACT = [
   'ds-call-ring',
   'ds-calls-seen',
   'ds-live-welcome-ticket', // a one-time welcome ticket: redeemed by whoever signs in next
+  'ds-live-unconfirmed-revokes', // device sign-outs still to confirm with the nurseries
   OWNER_KEY,
 ];
 /**

@@ -18,15 +18,33 @@ function loadSW(fetchImpl: (url: string, init: RequestInit) => Promise<Response>
   const listeners: Record<string, (e: unknown) => void> = {};
   const shown: Shown[] = [];
   const opened: string[] = [];
+  const closed: string[] = [];
   const fetchMock = vi.fn(fetchImpl);
   const self = {
     addEventListener: (t: string, fn: (e: unknown) => void) => void (listeners[t] = fn),
     clients: { matchAll: async () => [], openWindow: async (u: string) => void opened.push(u), claim: async () => undefined },
     location: { origin: new URL(scope).origin },
-    registration: { scope, showNotification: async (title: string, opts: Shown['opts']) => void shown.push({ title, opts }) },
+    registration: {
+      scope,
+      showNotification: async (title: string, opts: Shown['opts']) => void shown.push({ title, opts }),
+      // What's on screen now: the latest notification per tag.
+      getNotifications: async () => {
+        const byTag = new Map<string, Shown>();
+        for (const n of shown) byTag.set(String(n.opts.tag), n);
+        return [...byTag.values()].map((n) => ({ tag: n.opts.tag, data: n.opts.data, close: () => void closed.push(String(n.opts.tag)) }));
+      },
+    },
     skipWaiting: () => undefined,
   };
-  const caches = { open: async () => ({ match: async () => undefined, put: async () => undefined, delete: async () => true, keys: async () => [] }) };
+  const store = new Map<string, string>();
+  const caches = {
+    open: async () => ({
+      match: async (k: string) => (store.has(k) ? new Response(store.get(k)!) : undefined),
+      put: async (k: string, r: Response) => void store.set(k, await r.text()),
+      delete: async (k: string) => store.delete(k),
+      keys: async () => [],
+    }),
+  };
   new Function('self', 'caches', 'fetch', SW)(self, caches, fetchMock);
   const push = async (data: Record<string, unknown>) => {
     let done: Promise<unknown> = Promise.resolve();
@@ -40,7 +58,12 @@ function loadSW(fetchImpl: (url: string, init: RequestInit) => Promise<Response>
     await done;
     return shown.at(-1)!;
   };
-  return { push, click, shown, opened, fetchMock };
+  const message = async (data: Record<string, unknown>) => {
+    let done: Promise<unknown> = Promise.resolve();
+    listeners.message({ data, waitUntil: (p: Promise<unknown>) => void (done = p) });
+    await done;
+  };
+  return { push, click, message, shown, opened, closed, fetchMock };
 }
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -93,13 +116,30 @@ describe('"I’m on it" on an alert notification', () => {
     expect(after.opts.body).toMatch(/Crying in the Nursery — marked as yours/);
   });
 
-  it('a new tap is a new request id (and the same tap is never sent twice)', async () => {
-    const sw = loadSW(async () => json({ ok: true }));
+  it('one alert, one acknowledgement id: a retry after a lost answer is recognised by the room, never reported as a failure', async () => {
+    // The first POST reached the room but the answer was lost; the retry must carry the SAME id
+    // so the room answers "already marked" instead of refusing the spent token.
+    let first = true;
+    const sw = loadSW(async () => {
+      if (first) {
+        first = false;
+        throw new TypeError('Failed to fetch');
+      }
+      return json({ ok: true, already: true });
+    });
     const n = await sw.push(CRY);
-    await sw.click('onit', n);
-    await sw.click('onit', n);
+    const back = await sw.click('onit', n);
+    expect(back.opts.actions.map((a) => a.action)).toContain('onit');
+    const after = await sw.click('onit', back);
     const ids = sw.fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init.body)).id);
-    expect(new Set(ids).size).toBe(2);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^[0-9a-f]{24}$/);
+    expect(ids[1]).toBe(ids[0]);
+    expect(after.title).toBe('✅ You’re on it');
+    // A different alert gets its own id.
+    const other = await sw.push({ ...CRY, inc: 'inc-43', tag: 'other' });
+    await sw.click('onit', other);
+    expect(JSON.parse(String(sw.fetchMock.mock.calls[2][1].body)).id).not.toBe(ids[0]);
   });
 
   it('offline: the alert comes straight back, still urgent, with "I’m on it" to try again', async () => {
@@ -132,6 +172,31 @@ describe('"I’m on it" on an alert notification', () => {
     await sw.click('watch', n);
     expect(sw.fetchMock).not.toHaveBeenCalled();
     expect(sw.opened).toEqual([`https://stream.dreamstreamstudio.ai/#/monitor/${NID}/watch`]);
+  });
+});
+
+describe('signing out on this device', () => {
+  it('closes the alerts on screen, and “I’m on it” on one that arrived before can no longer act for the signed-out parent', async () => {
+    const sw = loadSW(async () => json({ ok: true }));
+    const n = await sw.push(CRY);
+    await sw.message({ t: 'ds-signed-out' });
+    expect(sw.closed).toContain(`${NID}-cry`);
+    // (A notification that somehow stayed — e.g. shown on another screen — is tapped.)
+    const after = await sw.click('onit', n);
+    expect(sw.fetchMock).not.toHaveBeenCalled();
+    expect(after.opts.body).toMatch(/signed out on this device/);
+    expect(after.opts.actions).toEqual([]);
+    expect(JSON.stringify(after.opts.data)).not.toContain(ACT); // the token isn't carried on
+  });
+
+  it('after signing in again, a new alert acts as normal', async () => {
+    const sw = loadSW(async () => json({ ok: true }));
+    await sw.message({ t: 'ds-signed-out' });
+    await new Promise((r) => setTimeout(r, 5));
+    const n = await sw.push(CRY);
+    const after = await sw.click('onit', n);
+    expect(sw.fetchMock).toHaveBeenCalledOnce();
+    expect(after.title).toBe('✅ You’re on it');
   });
 });
 

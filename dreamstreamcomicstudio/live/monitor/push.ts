@@ -419,6 +419,20 @@ export async function subscribe(vapidPublicKey: string): Promise<LivePushJSON | 
   return json;
 }
 
+/**
+ * Signed out on this device (or another account took it over): close the alerts and call rings
+ * on screen, and tell the service worker so "I'm on it" on any alert that arrived before now can't
+ * act for the person who just signed out (public/live-sw.js `ds-signed-out`). Never throws.
+ */
+export async function closeAlertNotifications(): Promise<void> {
+  try {
+    const reg = await navigator.serviceWorker?.getRegistration(SW_SCOPE);
+    if (!reg) return;
+    (reg.active ?? reg.waiting ?? reg.installing)?.postMessage({ t: 'ds-signed-out' });
+    for (const n of await reg.getNotifications()) n.close();
+  } catch { /* no service worker, or nothing shown */ }
+}
+
 /** Local-only notification (page open, e.g. tab in background). */
 export async function localNotify(title: string, body: string, tag: string, url: string): Promise<void> {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;

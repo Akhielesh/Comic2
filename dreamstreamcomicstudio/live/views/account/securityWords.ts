@@ -93,13 +93,29 @@ export function describeEvent(e: SecurityEvent): { title: string; detail: string
     }
     case 'secured': {
       const n = typeof e.detail?.sessions === 'number' && e.detail.sessions >= 0 ? e.detail.sessions : null;
+      const f = typeof e.detail?.factors === 'number' && e.detail.factors > 0 ? e.detail.factors : 0;
       return {
         title: 'Account secured from a “Not you?” email',
-        detail: `${n == null ? 'Every session was asked to end' : `Every session was signed out (${n})`} · ${formatWhen(e.at)}`,
+        detail: `${n == null ? 'Every session was asked to end' : `Every session was signed out (${n})`}${f ? ` · ${f === 1 ? 'an authenticator' : `${f} authenticators`} removed` : ''} · ${formatWhen(e.at)}`,
         icon: 'shield',
         warn: true,
       };
     }
+    case 'mfa_on':
+      return { title: 'Two-step sign-in turned on', detail: `${describeBrowser(e.ua)} · ${formatWhen(e.at)}`, icon: 'shield' };
+    case 'mfa_added':
+      return { title: 'Authenticator added', detail: `${describeBrowser(e.ua)} · ${formatWhen(e.at)}`, icon: 'phone' };
+    case 'mfa_removed':
+      return { title: 'Authenticator removed', detail: formatWhen(e.at), icon: 'phone' };
+    case 'mfa_codes':
+      return { title: 'New recovery codes made', detail: `The old ones stopped working · ${formatWhen(e.at)}`, icon: 'lock' };
+    case 'mfa_recovered':
+      return {
+        title: 'Two-step sign-in switched off with a recovery code',
+        detail: `${describeBrowser(e.ua)} · ${formatWhen(e.at)}`,
+        icon: 'alert',
+        warn: true,
+      };
     case 'device_added':
       return { title: `Device added${name ? `: ${name}` : ''}`, detail: formatWhen(e.at), icon: 'plus' };
     case 'device_revoked':
