@@ -10,7 +10,7 @@
 //                            #/calls, #/call/NURSERY/CALL or #/call/d/CALL (a call notification → Calls),
 //                            #/secure/TOKEN ("Not you? Secure my account" from a new-sign-in email)
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { consumeAuthReturn, hasAuthReturn, openAuth, signOutThisDevice, useAccount, type AuthReturn, type AuthReturnConfirm } from './account';
+import { consumeAuthReturn, hasAuthReturn, openAuth, refreshAccount, signOutThisDevice, useAccount, type AuthReturn, type AuthReturnConfirm } from './account';
 import { OWNER_KEY as LIVE_OWNER_KEY } from './accountPurge';
 import { getEvent } from './api';
 import { AuthSheetHost } from './components/AuthSheet';
@@ -50,6 +50,8 @@ import { askForCode, StepUpHost } from './views/account/StepUp';
 import { confirmAndSignOutEverywhere } from './views/account/SecurityPanel';
 import { SecureAccount } from './views/account/SecureAccount';
 import { MfaNudge } from './views/account/MfaNudge';
+import { SignInGate } from './views/account/SignInGate';
+import { gateFor, holdsGuestPass, statusForGate } from './accessGate';
 import { reconcileLegacyAlerts } from './monitor/push';
 
 export type Route =
@@ -270,6 +272,29 @@ export function LiveApp() {
   const [authPending, setAuthPending] = useState(hasAuthReturn);
   const account = useAccount();
   const calls = useCalls();
+  // Stream Studio needs a signed-in DreamStream account; links people were sent stay open, and
+  // only a definite answer gates (accessGate.ts). 'open' renders the screen as before. A nursery
+  // share-link guest's pass opens its watch page — read once per address (the join form saves the
+  // pass, then navigates there).
+  const guestPass = useMemo(() => holdsGuestPass(route), [route]);
+  const gateStatus = statusForGate(account.status, { authPending });
+  // The address whose screen is up: a running host studio is gated on entry only (an account change
+  // in another tab never cuts a live broadcast; the gate applies once they leave it — accessGate.ts).
+  const openedRoute = useRef<Route | null>(null);
+  const gate = gateFor(route, gateStatus, { guestPass, running: openedRoute.current === route });
+  useEffect(() => {
+    openedRoute.current = gate === 'open' ? route : null;
+  }, [gate, route]);
+  // Kept up for that reason: say so, once — the stream is theirs to end.
+  const heldFor = gate === 'open' ? gateFor(route, gateStatus, { guestPass }) : 'open';
+  useEffect(() => {
+    if (heldFor === 'sign-in') {
+      push('You’re signed out — this stream keeps going until you end it. Then sign in to get back to Stream Studio.', { icon: 'info', duration: 8000 });
+    } else if (heldFor === 'needs-code' || heldFor === 'needs-mfa') {
+      push('Your account needs one more step before Stream Studio opens again — this stream keeps going until you end it.', { icon: 'info', duration: 8000 });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldFor]);
   // The "Not you?" token: read once from the link, then kept only in memory (the address bar,
   // history and any later copy of the URL never carry it).
   const secureToken = useRef<string | null>(route.view === 'secure' ? route.token : null);
@@ -342,7 +367,9 @@ export function LiveApp() {
       setLinkConfirm(r);
       return;
     }
-    setAuthPending(false);
+    // Signed in by the link: the splash holds until the account is read, so "Sign in" never flashes.
+    if ('confirmed' in r) void refreshAccount().finally(() => setAuthPending(false));
+    else setAuthPending(false);
     setRoute(parseRoute());
     if ('confirmed' in r) push(r.handoff ? 'Signed in with your DreamStream account' : 'Email confirmed — you’re signed in', { icon: 'sparkles' });
     else if (r.error === 'framed') {
@@ -361,13 +388,15 @@ export function LiveApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // A link straight to Invite (help, notifications): the hub, then the sheet.
+  // A link straight to Invite (help, notifications): the hub, then the sheet — once the hub opens
+  // (signed in), so the link still works after signing in.
   useEffect(() => {
+    if (gate !== 'open') return;
     const inv = location.hash.match(/^#\/monitor\/([0-9a-f-]{36})\/invite$/);
     if (!inv) return;
     history.replaceState(null, '', `${location.pathname}${location.search}#/monitor/${inv[1]}`);
     openInvite(inv[1]);
-  }, [route]);
+  }, [route, gate]);
 
   const nav: Nav = useMemo(() => {
     const navigate = (search: string, hash: string) => {
@@ -434,7 +463,7 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join', 'secure'].includes(route.view);
+  const fullBleed = gate !== 'open' || ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch', 'monitor-join', 'secure'].includes(route.view);
   const activeNav =
     route.view === 'create' ? 'create'
     : route.view === 'settings' ? 'settings'
@@ -505,7 +534,11 @@ export function LiveApp() {
       )}
 
       <div className={cx('content', !fullBleed && 'has-tabbar')} style={fullBleed ? { minHeight: '100vh' } : undefined}>
-        <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 140 }} aria-label="Loading" /></div>}>{screen()}</Suspense>
+        {gate !== 'open' ? (
+          <SignInGate gate={gate} view={route.view} finishing={authPending} push={push} />
+        ) : (
+          <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 140 }} aria-label="Loading" /></div>}>{screen()}</Suspense>
+        )}
       </div>
 
       {/* Phones: compact top bar (brand + account) and a thumb-reach bottom tab bar. */}
@@ -529,7 +562,7 @@ export function LiveApp() {
         </nav>
       )}
 
-      {route.view === 'dashboard' && <WelcomeTour ready={!authPending && !linkConfirm} />}
+      {gate === 'open' && route.view === 'dashboard' && <WelcomeTour ready={!authPending && !linkConfirm} />}
       <CallHost push={push} suspended={route.view === 'monitor-camera'} />
       <AuthSheetHost push={push} />
       <StepUpHost push={push} />

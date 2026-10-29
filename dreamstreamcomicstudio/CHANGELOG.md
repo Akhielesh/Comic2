@@ -92,6 +92,17 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Changed
+- **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
+  shows one screen — sign in or create your DreamStream account, the same one as Comic Studio
+  and Chat Studio — instead of the whole studio. Nothing sits behind it: no dashboard, events,
+  settings or tour. Signed in without a welcome code, you get a "one more step" screen to enter
+  it; with two-step sign-in pending, the code prompt. Links people were sent still open with
+  just a name: watching a stream, a meeting guest seat, a nursery share link (and the watch
+  page it opens, with its passcode), and the "Not you?" page from a sign-in email. A signed-in
+  parent is never shut out of a camera or monitor by a dropped connection, a slow check or a
+  reload while the internet is down, and signing out in another tab doesn't cut a stream or
+  meeting that's already running. Also fixed: reloading while the sign-in service was unreachable could
+  wipe a device's Stream Studio data as if it had signed out.
 - **The baby monitor is lighter on our servers and your battery (2026-10-23):** a phone
   whose screen is off or hidden keeps the sound and alerts but stops receiving the picture
   until it's looked at again (picture-in-picture counts as looking); a picture sent through
