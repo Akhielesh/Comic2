@@ -931,28 +931,24 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   }
 }
 
-/* ---- Theme cross-fade (Atlas's mechanism) ----
-   The colour tokens above are registered as typed <color> properties — from the boot code
-   (services/dsSkin.ts → CSS.registerProperty, comics host only) rather than a CSS @property block,
-   because a registration is document-wide and this Chromium animates registered properties under
-   `transition: all`, which would have given every `transition-all` element outside the skin a
-   theme cross-fade. Registered, the tokens glide to their new values over --ds-motion-theme when
-   `.dark` toggles and every surface follows in step. <html> gets the transition only once the
-   boot code has let the first style pass settle (data-ds-skin-fade, two frames later): adding
-   an attribute that both declares a transition and changes the tokens would animate the boot
-   itself. The apex roots mount with the attribute (nothing to animate from) and, with no
-   registration there, the declaration is inert. Off under reduced motion. */
-@media (prefers-reduced-motion: no-preference) {
-  html[data-ds-skin="atlas"][data-ds-skin-fade],
-  :not(html)[data-ds-skin="atlas"] {
-    transition-property:
-      --ds-canvas, --ds-sidebar, --ds-surface, --ds-surface-soft, --ds-surface-strong, --ds-raised,
-      --ds-ink, --ds-muted, --ds-hairline, --ds-hairline-soft, --ds-well, --ds-well-strong,
-      --ds-hover, --ds-faint, --ds-accent, --ds-accent-hover, --ds-on-accent, --ds-accent-soft,
-      --ds-active, --ds-success, --ds-warning, --ds-danger, --ds-info, --ds-ring;
-    transition-duration: var(--ds-motion-theme);
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  }
+/* ---- Theme switch (Atlas wave 5: one cross-fade of the whole page, not a transition per element) ----
+   services/dsSkin.ts switchDsTheme flips `.dark` inside document.startViewTransition: the root
+   snapshot cross-fades over --ds-motion-theme on the compositor, and `ds-no-transitions` holds every
+   element's own transition for that one style change, so the hundreds of TRANSITION colour fades
+   never start. Under reduced motion, without the API, for a boot sync or a system-theme correction
+   the theme simply switches (still with transitions held). Only on the comics host, where <html>
+   carries the skin; the apex roots switch at once as before. The tokens are plain custom
+   properties on purpose: registered and transitioned (D0) they restyled every element per frame. */
+html[data-ds-skin="atlas"].ds-theme-transition::view-transition-old(root),
+html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
+  animation-duration: var(--ds-motion-theme);
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-ds-skin="atlas"].ds-no-transitions,
+[data-ds-skin="atlas"].ds-no-transitions *,
+[data-ds-skin="atlas"].ds-no-transitions *::before,
+[data-ds-skin="atlas"].ds-no-transitions *::after {
+  transition: none !important;
 }
 
 /* ---- Base rules under the skin (Atlas @layer base, scoped) ---- */

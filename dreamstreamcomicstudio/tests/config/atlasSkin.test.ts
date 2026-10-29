@@ -11,14 +11,14 @@
  *       accent fill, the readable status text);
  *   (c) ink and muted text stay ≥ 4.5:1 on canvas, surface, surface-soft and well in both Atlas
  *       themes;
- *   plus the fonts, the cross-fade mechanism (registered tokens = :root defaults) and the base rules.
+ *   plus the fonts, the theme switch (one view-transition cross-fade, Atlas wave 5) and the base rules.
  * (d), the transitional shim's coverage, lives in atlasSkinShim.test.ts.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
-import { ATLAS_PRELOAD_FONTS, DS_COLOR_TOKENS } from '../../services/dsSkin';
+import { ATLAS_PRELOAD_FONTS, DS_NO_TRANSITIONS_CLASS, DS_THEME_TRANSITION_CLASS } from '../../services/dsSkin';
 import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, tokenBlocks } from './cssTokens';
 
 const ROOT = APP_ROOT;
@@ -230,11 +230,6 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(ROOT_TOKENS.get('--ds-ease')).toBe('cubic-bezier(0.4, 0, 0.2, 1)');
   });
 
-  it('registers exactly the :root defaults as the cross-fade’s initial values', () => {
-    for (const { name, initialValue } of DS_COLOR_TOKENS) {
-      expect(ROOT_TOKENS.get(name), name).toBe(initialValue);
-    }
-  });
 });
 
 describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
@@ -443,14 +438,28 @@ describe('Atlas skin — base rules and the cross-fade', () => {
     expect(rules.some((r) => r.selector === '.ds-press')).toBe(false);
   });
 
-  it('cross-fades every registered colour token over --ds-motion-theme, off under reduced motion, gated on <html>', () => {
-    const fade = skinRule((r) => r.selector === 'html[data-ds-skin="atlas"][data-ds-skin-fade], :not(html)[data-ds-skin="atlas"]');
-    expect(fade?.parents).toEqual(['@media (prefers-reduced-motion: no-preference)']);
-    expect(fade?.body).toContain('transition-duration: var(--ds-motion-theme)');
-    const props = /transition-property:\s*([^;]+)/.exec(fade!.body)![1].split(',').map((s) => s.trim());
-    expect(props.sort()).toEqual(DS_COLOR_TOKENS.map((t) => t.name).sort());
-    // No document-wide @property block: registration is done at boot on the comics host only.
+  it('theme switch (wave 5): one view-transition cross-fade of the page over --ds-motion-theme, on <html> under the skin only', () => {
+    const vt = rules.filter((r) => r.selector.includes('::view-transition-'));
+    expect(vt.map((r) => r.selector)).toEqual([
+      `html[data-ds-skin="atlas"].${DS_THEME_TRANSITION_CLASS}::view-transition-old(root), html[data-ds-skin="atlas"].${DS_THEME_TRANSITION_CLASS}::view-transition-new(root)`
+    ]);
+    expect(vt[0].body).toContain('animation-duration: var(--ds-motion-theme)');
+    expect(vt[0].body).toContain('animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1)');
+  });
+
+  it('theme switch: element transitions are held for the one frame that flips the theme (skin-scoped)', () => {
+    const hold = rules.find((r) => r.selector.includes(`.${DS_NO_TRANSITIONS_CLASS}`));
+    expect(hold?.selector).toBe(
+      [``, ` *`, ` *::before`, ` *::after`].map((tail) => `[data-ds-skin="atlas"].${DS_NO_TRANSITIONS_CLASS}${tail}`).join(', ')
+    );
+    expect(hold?.body).toBe('transition: none !important;');
+    expect(hold?.parents).toEqual([]);
+  });
+
+  it('theme switch: no registered or transitioned colour tokens any more (they restyled every element per frame)', () => {
     expect(css).not.toMatch(/@property\s+--ds-/);
+    expect(css).not.toMatch(/data-ds-skin-fade/);
+    for (const r of rules) expect(r.body, r.selector).not.toMatch(/transition-property:[^;]*--ds-/);
   });
 
   it('nothing in the skin section targets html by element, and the reader room stays content', () => {
