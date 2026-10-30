@@ -26,6 +26,8 @@ import { requestOpenHistory } from './openHistory';
 import { HistoryBrowser, HistoryPanel, type HistoryOpenRequest } from './HistoryPanel';
 import { HISTORY_MOMENT_GONE, HISTORY_UNAVAILABLE } from './historyApi';
 import { MomentRow } from './MomentRow';
+import { claimUndoToast, UndoToast, useTimelineEdit } from '../timeline/UndoToast';
+import { RestoredToast } from './ui';
 import { gitWordsIn } from './historyModel';
 import { beforeRestoreId } from './historyActions';
 import { historyFixture } from './__scenes__/historyFixtures';
@@ -603,5 +605,61 @@ describe('rows of a version you removed (H1 FIX note 4)', () => {
     const card = document.querySelector<HTMLElement>('[data-history-card="undo_ai"]')!;
     expect(card.textContent).toContain(aiRow.label);
     expect(card.textContent).not.toContain('AI revised page 2');
+  });
+});
+
+describe('one toast slot: a restore toast and a timeline Undo toast never stack (claimUndoToast)', () => {
+  /** A timeline surface (its own Undo toast) and the History restore toast, side by side as in the studio. */
+  const Studio: React.FC<{ m: Mounted }> = ({ m }) => {
+    const edit = useTimelineEdit(m.studio);
+    const [restored, setRestored] = React.useState<string | null>(null);
+    const n = React.useRef(0);
+    return (
+      <>
+        <button type="button" onClick={() => edit.commit([{ op: 'page_delete', id: m.studio.doc!.pages[(n.current++) % 3].id, deletedAt: NOW }], `Page ${n.current} deleted`)}>
+          Delete a page
+        </button>
+        <button type="button" onClick={() => setRestored('Page 3 restored from Tue 10:42')}>
+          Restore page 3
+        </button>
+        <UndoToast entry={edit.toast} onUndo={edit.undo} onDismiss={edit.dismiss} />
+        <RestoredToast message={restored} onUndo={() => undefined} onDismiss={() => setRestored(null)} />
+      </>
+    );
+  };
+  const undoButtons = () => screen.queryAllByRole('button', { name: 'Undo' });
+
+  it('the restore toast takes the slot from a timeline toast, and a newer timeline edit takes it back', () => {
+    const m = historySetup();
+    mountWith(m, <Studio m={m} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    expect(screen.getByText('Page 1 deleted')).toBeInTheDocument();
+    expect(undoButtons()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore page 3' }));
+    expect(document.querySelector('[data-history-toast]')).toHaveTextContent('Page 3 restored from Tue 10:42');
+    expect(screen.queryByText('Page 1 deleted')).toBeNull();
+    expect(undoButtons()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    expect(screen.getByText('Page 2 deleted')).toBeInTheDocument();
+    expect(document.querySelector('[data-history-toast]')).toBeNull();
+    expect(undoButtons()).toHaveLength(1);
+  });
+
+  it('claimUndoToast is additive: it returns a fresh claim each time and a timeline toast still shows when newest', () => {
+    const a = claimUndoToast();
+    const lost = vi.fn();
+    const b = claimUndoToast(lost);
+    expect(b).toBeGreaterThan(a);
+    expect(lost).not.toHaveBeenCalled();
+    claimUndoToast();
+    expect(lost).toHaveBeenCalledTimes(1);
+    claimUndoToast();
+    expect(lost).toHaveBeenCalledTimes(1); // told once
+    const m = historySetup();
+    mountWith(m, <Studio m={m} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete a page' }));
+    expect(screen.getByText('Page 1 deleted')).toBeInTheDocument();
   });
 });
