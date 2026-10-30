@@ -241,13 +241,13 @@
         "files": ["qa/fonts/bangers-latin.woff2", "qa/fonts/comic-neue-*-latin.woff2", "qa/fonts/inter-latin.woff2"],
         "licence": "OFL-1.1",
         "scope": "qa",
-        "terms": "SIL Open Font License 1.1: used only by the QA harness build (dist-qa), which is never deployed; not sold on their own. The copyright holders are the lines under 'copyright' (read from each font's name table, ID 0). The licenceFile is used for the OFL-1.1 text only: its first line names the Noto authors, not these families, until qa/fonts/OFL.txt with these three lines lands (wave note) and this record points at it.",
+        "terms": "SIL Open Font License 1.1: used only by the QA harness build (dist-qa), which is never deployed; not sold on their own. The copyright holders are the lines under 'copyright' (read from each font's name table, ID 0); qa/fonts/OFL.txt carries them and the OFL-1.1 text.",
         "copyright": [
           "Copyright 2010 The Bangers Project Authors (https://github.com/googlefonts/bangers)",
           "Copyright 2014 The Comic Neue Project Authors (https://github.com/crozynski/comicneue)",
           "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)"
         ],
-        "licenceFile": "server/assets/fonts/OFL.txt",
+        "licenceFile": "qa/fonts/OFL.txt",
         "source": "https://fonts.google.com/ (Bangers, Comic Neue, Inter: OFL-1.1 families)"
       },
       {

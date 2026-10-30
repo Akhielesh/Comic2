@@ -36,6 +36,7 @@ import {
   isQuarantinePath
 } from './storagePaths.js';
 import { MAX_INPUT_PIXELS, MAX_SOURCE_EDGE, SHARP_INPUT, withSharpSlot } from './imageMeasure.js';
+import { sniffImageType } from '../services/sharpGuard.js';
 import { fitToAspect as deriveFitToAspect } from './derive.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -376,41 +377,8 @@ export const outlineRegionDataUrl = async (dataUrl: string, box: { x: number; y:
 
 // ── Upload validation (magic bytes first, then sharp) ────────────────────────
 
-export type SniffedImageType = 'png' | 'jpeg' | 'gif' | 'webp' | 'avif' | 'heic' | 'svg' | 'html' | 'unknown';
-
-const AVIF_BRANDS = new Set(['avif', 'avis']);
-const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1', 'mif2']);
-
-/**
- * Identify an image by its first bytes — never by the declared Content-Type or file name.
- * ISO-BMFF files are AVIF only when an `avif`/`avis` brand is present; any other HEIF brand is
- * HEIC. Text starting with `<` is markup (SVG/HTML) and is never an image here.
- */
-export function sniffImageType(buf: Buffer): SniffedImageType {
-  if (!Buffer.isBuffer(buf) || buf.byteLength < 4) return 'unknown';
-  if (buf.byteLength >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpeg';
-  const head6 = buf.subarray(0, 6).toString('latin1');
-  if (head6 === 'GIF87a' || head6 === 'GIF89a') return 'gif';
-  if (buf.byteLength >= 12 && buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
-  if (buf.byteLength >= 12 && buf.subarray(4, 8).toString('latin1') === 'ftyp') {
-    const boxSize = Math.min(buf.readUInt32BE(0) || 0, buf.byteLength, 256);
-    const brands: string[] = [buf.subarray(8, 12).toString('latin1')];
-    for (let i = 16; i + 4 <= boxSize; i += 4) brands.push(buf.subarray(i, i + 4).toString('latin1'));
-    if (brands.some((b) => AVIF_BRANDS.has(b))) return 'avif';
-    if (brands.some((b) => HEIC_BRANDS.has(b))) return 'heic';
-    return 'unknown';
-  }
-  // Markup: skip a UTF-8 BOM and leading whitespace.
-  let i = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf ? 3 : 0;
-  while (i < Math.min(buf.byteLength, 1024) && /\s/.test(String.fromCharCode(buf[i]))) i += 1;
-  if (buf[i] === 0x3c /* < */) {
-    const text = buf.subarray(i, i + 512).toString('utf8').toLowerCase();
-    if (text.includes('<svg') || text.startsWith('<?xml')) return 'svg';
-    return 'html';
-  }
-  return 'unknown';
-}
+// One byte sniffer for every upload and conversion path (services/sharpGuard.ts).
+export { sniffImageType, type SniffedImageType } from '../services/sharpGuard.js';
 
 /** Lower-case a Content-Type, drop parameters and fold the JPEG aliases. */
 export const normalizeUploadMime = (mime: unknown): string => {

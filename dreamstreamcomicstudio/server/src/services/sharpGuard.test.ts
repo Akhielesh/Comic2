@@ -229,55 +229,12 @@ describe('sharp guard: magic-byte sniff and allowlist', () => {
     ];
     for (const [name, buf, want] of fixtures) {
       expect(sniffImageType(buf), name).toBe(want);
-      expect(assetsSniffImageType(buf), `${name} (assets.ts parity)`).toBe(want);
     }
     expect(sniffImageType('not a buffer' as unknown as Buffer)).toBe('unknown');
   });
 
-  it('agrees with comic/assets.ts on every branch: a seeded sweep of header pieces (drift guard until one sniffer remains)', () => {
-    // Deterministic PRNG (mulberry32) so a failure names a reproducible case.
-    let seed = 0x5eed1010;
-    const rand = () => {
-      seed = (seed + 0x6d2b79f5) | 0;
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
-    const bytes = (n: number) => Buffer.from(Array.from({ length: n }, () => Math.floor(rand() * 256)));
-    const NEUTRAL = ['isom', 'mp42', 'crx ', 'jp2 ', 'qt  '];
-    const BRANDS = ['avif', 'avis', 'heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1', 'mif2', ...NEUTRAL];
-    const ftypBox = () => {
-      // Neutral filler, then one brand that may decide: it lands anywhere from byte 16 to past the 256-byte window.
-      const filler = Array.from({ length: Math.floor(rand() * 80) }, () => pick(NEUTRAL)).join('');
-      const major = rand() < 0.5 ? pick(NEUTRAL) : pick(BRANDS);
-      const box = Buffer.concat([Buffer.alloc(4), Buffer.from(`ftyp${major}\0\0\0\0${filler}${pick(BRANDS)}`, 'latin1')]);
-      box.writeUInt32BE(pick([0, 8, 12, 16, 20, box.byteLength, box.byteLength, 300, 0xffffffff]), 0); // 0, short, true, oversized
-      return box;
-    };
-    const pieces: (() => Buffer)[] = [
-      () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a]),
-      () => Buffer.from([0xff, 0xd8, 0xff]),
-      () => Buffer.from([0xff, 0xd8]),
-      () => Buffer.from(pick(['GIF87a', 'GIF89a', 'GIF8', 'GIF90a']), 'latin1'),
-      () => Buffer.concat([Buffer.from('RIFF', 'latin1'), bytes(4), Buffer.from(pick(['WEBP', 'WAVE', 'WEB']), 'latin1')]),
-      ftypBox,
-      () => Buffer.from([0xef, 0xbb, 0xbf]),
-      () => Buffer.from(' \t\r\n'.repeat(pick([1, 3, 100, 300])), 'latin1'), // up to 1,200 bytes of whitespace
-      () => Buffer.from(pick(['<svg', '<SVG width="1">', '<?xml version="1.0"?>', '<!doctype html>', '<html>', '<', '<p>x</p><svg']), 'latin1'),
-      () => bytes(Math.floor(rand() * 24))
-    ];
-    const seen = new Set<string>();
-    for (let n = 0; n < 3000; n += 1) {
-      const parts = Array.from({ length: 1 + Math.floor(rand() * 4) }, () => pick(pieces)());
-      const buf = Buffer.concat([...parts, bytes(Math.floor(rand() * 40))]);
-      const ours = sniffImageType(buf);
-      expect(ours, `case ${n}: ${buf.subarray(0, 48).toString('hex')}`).toBe(assetsSniffImageType(buf));
-      seen.add(ours);
-    }
-    // The sweep reaches every verdict, so no branch goes unchecked.
-    expect([...seen].sort()).toEqual(['avif', 'gif', 'heic', 'html', 'jpeg', 'png', 'svg', 'unknown', 'webp']);
+  it('comic/assets.ts uses this one sniffer (no second copy to drift)', () => {
+    expect(assetsSniffImageType).toBe(sniffImageType);
   });
 
   it('admits only JPEG, PNG, WebP and GIF, and says why anything else is refused', async () => {

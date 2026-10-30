@@ -15,6 +15,7 @@
 /dreamstreamcomicstudio/package.json                   @Akhielesh
 /dreamstreamcomicstudio/package-lock.json              @Akhielesh
 /dreamstreamcomicstudio/*/package-lock.json            @Akhielesh
+/dreamstreamcomicstudio/scripts/licence-policy.json        @Akhielesh
 
 # Worker configuration (routes, bindings, public vars) and the database schema.
 /dreamstreamcomicstudio/*/wrangler.jsonc               @Akhielesh
