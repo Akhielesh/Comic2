@@ -264,9 +264,9 @@ describe('a restore\'s beforeVersionId reaches the act outcome and the History a
     const { result } = await setup(ON);
     for (const done of [{}, { beforeVersionId: '' }, { beforeVersionId: 7 }]) {
       restoreStream(done);
-      let outcome: Record<string, unknown> | undefined;
+      let outcome: unknown;
       await act(async () => {
-        outcome = (await result.current.act({ ...RESTORE, versionId: `ver_${JSON.stringify(done).length}` })) as Record<string, unknown>;
+        outcome = await result.current.act({ ...RESTORE, versionId: `ver_${JSON.stringify(done).length}` });
       });
       expect(outcome, JSON.stringify(done)).toEqual({ ok: true, aborted: false, retryable: false, gated: false });
     }
