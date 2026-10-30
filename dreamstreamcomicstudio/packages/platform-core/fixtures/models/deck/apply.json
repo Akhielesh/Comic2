@@ -1,0 +1,1182 @@
+{
+  "note": "Golden apply and undo cases: `before` and `ops` (inline or a {\"$ref\"} to another fixture) go through apply*Ops(before, ops, options); the call must give exactly `applied` (op ids, in order), `rejected` (index, opId, code; messages are for people and may change) and `after`. `undo` is invert*Ops(before, applied, {baseRev: after.rev, id: op => \"undo-\" + op.id}); applying it to `after` gives `before` back (apart from rev).",
+  "cases": [
+    {
+      "name": "add, add, update and theme on the minimal deck",
+      "before": {
+        "$ref": "contract/deck/minimal.json"
+      },
+      "ops": [
+        {
+          "op": "add_slide",
+          "id": "op-1",
+          "baseRev": 0,
+          "index": 1,
+          "slide": {
+            "id": "sl2",
+            "layout": "content",
+            "elements": []
+          }
+        },
+        {
+          "op": "add_slide",
+          "id": "op-2",
+          "baseRev": 0,
+          "slide": {
+            "id": "sl3",
+            "layout": "end",
+            "notes": "Thanks",
+            "elements": []
+          }
+        },
+        {
+          "op": "update_slide",
+          "id": "op-3",
+          "baseRev": 0,
+          "slideId": "sl1",
+          "slide": {
+            "id": "sl1",
+            "layout": "section",
+            "elements": []
+          }
+        },
+        {
+          "op": "set_theme",
+          "id": "op-6",
+          "baseRev": 0,
+          "theme": {
+            "preset": "dark",
+            "accent": "#22C55E"
+          }
+        }
+      ],
+      "applied": [
+        "op-1",
+        "op-2",
+        "op-3",
+        "op-6"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "title": "Untitled deck",
+        "size": "16:9",
+        "theme": {
+          "preset": "dark",
+          "accent": "#22C55E"
+        },
+        "slides": [
+          {
+            "id": "sl1",
+            "layout": "section",
+            "elements": []
+          },
+          {
+            "id": "sl2",
+            "layout": "content",
+            "elements": []
+          },
+          {
+            "id": "sl3",
+            "layout": "end",
+            "notes": "Thanks",
+            "elements": []
+          }
+        ],
+        "rev": 1
+      },
+      "undo": [
+        {
+          "op": "set_theme",
+          "id": "undo-op-6",
+          "baseRev": 1,
+          "theme": {
+            "preset": "light"
+          }
+        },
+        {
+          "op": "update_slide",
+          "id": "undo-op-3",
+          "baseRev": 1,
+          "slideId": "sl1",
+          "slide": {
+            "id": "sl1",
+            "layout": "title",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "t1",
+                "rect": [
+                  0.1,
+                  0.35,
+                  0.8,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "title",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Hello"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "op": "remove_slide",
+          "id": "undo-op-2",
+          "baseRev": 1,
+          "slideId": "sl3"
+        },
+        {
+          "op": "remove_slide",
+          "id": "undo-op-1",
+          "baseRev": 1,
+          "slideId": "sl2"
+        }
+      ]
+    },
+    {
+      "name": "move the end slide first, then remove a slide; the undo puts both back",
+      "before": {
+        "$ref": "contract/deck/full.json"
+      },
+      "ops": [
+        {
+          "op": "move_slide",
+          "id": "op-mv",
+          "baseRev": 2,
+          "slideId": "sl-end",
+          "index": 0
+        },
+        {
+          "op": "remove_slide",
+          "id": "op-rm",
+          "baseRev": 2,
+          "slideId": "sl-two"
+        }
+      ],
+      "applied": [
+        "op-mv",
+        "op-rm"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "rev": 3,
+        "title": "The Lighthouse Keeper — pitch",
+        "size": "16:9",
+        "theme": {
+          "preset": "brand",
+          "background": "#0F172A",
+          "text": "#F8FAFC",
+          "accent": "#D97757"
+        },
+        "slides": [
+          {
+            "id": "sl-end",
+            "layout": "end",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "thanks",
+                "rect": [
+                  0.1,
+                  0.4,
+                  0.8,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "quote",
+                "align": "right",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Thank you"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-title",
+            "layout": "title",
+            "notes": "Open with the storm.",
+            "elements": [
+              {
+                "kind": "shape",
+                "id": "bg",
+                "rect": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "layer": "background",
+                "shape": "rect",
+                "fill": "#0F172A"
+              },
+              {
+                "kind": "text",
+                "id": "title",
+                "rect": [
+                  0.08,
+                  0.3,
+                  0.84,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "title",
+                "align": "center",
+                "fontSize": 54,
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "The Lighthouse Keeper"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "text",
+                "id": "sub",
+                "rect": [
+                  0.08,
+                  0.55,
+                  0.84,
+                  0.1
+                ],
+                "layer": "content",
+                "role": "subtitle",
+                "align": "center",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "An all-ages mystery in 24 pages"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-section",
+            "layout": "section",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "sec",
+                "rect": [
+                  0.1,
+                  0.4,
+                  0.8,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "title",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "The story"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-content",
+            "layout": "content",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "c-head",
+                "rect": [
+                  0.06,
+                  0.06,
+                  0.88,
+                  0.12
+                ],
+                "layer": "content",
+                "role": "title",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Why now"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "text",
+                "id": "c-body",
+                "rect": [
+                  0.06,
+                  0.22,
+                  0.88,
+                  0.6
+                ],
+                "layer": "content",
+                "role": "body",
+                "align": "left",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Cozy mysteries are "
+                      },
+                      {
+                        "text": "growing",
+                        "marks": [
+                          "b"
+                        ]
+                      }
+                    ],
+                    "bullet": true
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Read the market note",
+                        "link": {
+                          "href": "https://example.com/market"
+                        }
+                      }
+                    ],
+                    "bullet": true,
+                    "indent": 1
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Quote: the light never lies.",
+                        "marks": [
+                          "i"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "shape",
+                "id": "rule",
+                "rect": [
+                  0.06,
+                  0.86,
+                  0.88,
+                  0
+                ],
+                "layer": "content",
+                "shape": "line",
+                "stroke": "#D97757"
+              }
+            ]
+          },
+          {
+            "id": "sl-image",
+            "layout": "image-full",
+            "elements": [
+              {
+                "kind": "image",
+                "id": "cover",
+                "rect": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "layer": "background",
+                "fit": "cover",
+                "alt": "Cover art",
+                "ref": {
+                  "kind": "data",
+                  "dataUri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q=="
+                }
+              },
+              {
+                "kind": "text",
+                "id": "cover-cap",
+                "rect": [
+                  0.05,
+                  0.85,
+                  0.9,
+                  0.1
+                ],
+                "layer": "content",
+                "role": "caption",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Cover, final"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-charts",
+            "layout": "content",
+            "elements": [
+              {
+                "kind": "chart",
+                "id": "line",
+                "rect": [
+                  0.05,
+                  0.1,
+                  0.42,
+                  0.8
+                ],
+                "layer": "content",
+                "chart": "line",
+                "categories": [
+                  "Q1",
+                  "Q2"
+                ],
+                "series": [
+                  {
+                    "name": "A",
+                    "values": [
+                      1,
+                      2
+                    ]
+                  },
+                  {
+                    "name": "B",
+                    "values": [
+                      2.5,
+                      1.5
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "chart",
+                "id": "pie",
+                "rect": [
+                  0.53,
+                  0.1,
+                  0.42,
+                  0.8
+                ],
+                "layer": "content",
+                "chart": "pie",
+                "categories": [
+                  "Print",
+                  "Digital"
+                ],
+                "series": [
+                  {
+                    "name": "Share",
+                    "values": [
+                      40,
+                      60
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "undo": [
+        {
+          "op": "add_slide",
+          "id": "undo-op-rm",
+          "baseRev": 3,
+          "index": 5,
+          "slide": {
+            "id": "sl-two",
+            "layout": "two-col",
+            "elements": [
+              {
+                "kind": "table",
+                "id": "tbl",
+                "rect": [
+                  0.05,
+                  0.15,
+                  0.42,
+                  0.7
+                ],
+                "layer": "content",
+                "header": true,
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "Issue"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "Pages"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "#1"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "24"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "chart",
+                "id": "ch",
+                "rect": [
+                  0.53,
+                  0.15,
+                  0.42,
+                  0.7
+                ],
+                "layer": "content",
+                "chart": "bar",
+                "title": "Readers by month",
+                "categories": [
+                  "Jan",
+                  "Feb",
+                  "Mar"
+                ],
+                "series": [
+                  {
+                    "name": "Readers",
+                    "values": [
+                      120,
+                      340,
+                      910
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "image",
+                "id": "logo",
+                "rect": [
+                  0.9,
+                  0.02,
+                  0.08,
+                  0.08
+                ],
+                "layer": "content",
+                "fit": "contain",
+                "alt": "Logo",
+                "ref": {
+                  "kind": "asset",
+                  "id": "brand/logo.webp"
+                }
+              },
+              {
+                "kind": "shape",
+                "id": "badge",
+                "rect": [
+                  0.02,
+                  0.02,
+                  0.06,
+                  0.06
+                ],
+                "layer": "content",
+                "shape": "ellipse",
+                "fill": "#D97757"
+              },
+              {
+                "kind": "shape",
+                "id": "frame",
+                "rect": [
+                  0.02,
+                  0.9,
+                  0.2,
+                  0.06
+                ],
+                "layer": "content",
+                "shape": "roundRect",
+                "stroke": "#F8FAFC"
+              }
+            ]
+          }
+        },
+        {
+          "op": "move_slide",
+          "id": "undo-op-mv",
+          "baseRev": 3,
+          "slideId": "sl-end",
+          "index": 6
+        }
+      ]
+    },
+    {
+      "name": "refusals: a slide id in use, an element off the slide, a move past the last slide, not-found",
+      "before": {
+        "$ref": "contract/deck/full.json"
+      },
+      "ops": [
+        {
+          "op": "add_slide",
+          "id": "op-dup",
+          "baseRev": 2,
+          "slide": {
+            "id": "sl-end",
+            "layout": "end",
+            "elements": []
+          }
+        },
+        {
+          "op": "add_slide",
+          "id": "op-off",
+          "baseRev": 2,
+          "slide": {
+            "id": "sl-new",
+            "layout": "content",
+            "elements": [
+              {
+                "kind": "shape",
+                "id": "x",
+                "rect": [
+                  0.8,
+                  0,
+                  0.3,
+                  0.1
+                ],
+                "layer": "content",
+                "shape": "rect"
+              }
+            ]
+          }
+        },
+        {
+          "op": "move_slide",
+          "id": "op-far",
+          "baseRev": 2,
+          "slideId": "sl-end",
+          "index": 7
+        },
+        {
+          "op": "remove_slide",
+          "id": "op-gone",
+          "baseRev": 2,
+          "slideId": "nope"
+        }
+      ],
+      "applied": [],
+      "rejected": [
+        {
+          "index": 0,
+          "opId": "op-dup",
+          "code": "invalid"
+        },
+        {
+          "index": 1,
+          "opId": "op-off",
+          "code": "invalid"
+        },
+        {
+          "index": 2,
+          "opId": "op-far",
+          "code": "invalid"
+        },
+        {
+          "index": 3,
+          "opId": "op-gone",
+          "code": "not-found"
+        }
+      ],
+      "after": {
+        "v": 1,
+        "rev": 2,
+        "title": "The Lighthouse Keeper — pitch",
+        "size": "16:9",
+        "theme": {
+          "preset": "brand",
+          "background": "#0F172A",
+          "text": "#F8FAFC",
+          "accent": "#D97757"
+        },
+        "slides": [
+          {
+            "id": "sl-title",
+            "layout": "title",
+            "notes": "Open with the storm.",
+            "elements": [
+              {
+                "kind": "shape",
+                "id": "bg",
+                "rect": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "layer": "background",
+                "shape": "rect",
+                "fill": "#0F172A"
+              },
+              {
+                "kind": "text",
+                "id": "title",
+                "rect": [
+                  0.08,
+                  0.3,
+                  0.84,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "title",
+                "align": "center",
+                "fontSize": 54,
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "The Lighthouse Keeper"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "text",
+                "id": "sub",
+                "rect": [
+                  0.08,
+                  0.55,
+                  0.84,
+                  0.1
+                ],
+                "layer": "content",
+                "role": "subtitle",
+                "align": "center",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "An all-ages mystery in 24 pages"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-section",
+            "layout": "section",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "sec",
+                "rect": [
+                  0.1,
+                  0.4,
+                  0.8,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "title",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "The story"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-content",
+            "layout": "content",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "c-head",
+                "rect": [
+                  0.06,
+                  0.06,
+                  0.88,
+                  0.12
+                ],
+                "layer": "content",
+                "role": "title",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Why now"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "text",
+                "id": "c-body",
+                "rect": [
+                  0.06,
+                  0.22,
+                  0.88,
+                  0.6
+                ],
+                "layer": "content",
+                "role": "body",
+                "align": "left",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Cozy mysteries are "
+                      },
+                      {
+                        "text": "growing",
+                        "marks": [
+                          "b"
+                        ]
+                      }
+                    ],
+                    "bullet": true
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Read the market note",
+                        "link": {
+                          "href": "https://example.com/market"
+                        }
+                      }
+                    ],
+                    "bullet": true,
+                    "indent": 1
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Quote: the light never lies.",
+                        "marks": [
+                          "i"
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "shape",
+                "id": "rule",
+                "rect": [
+                  0.06,
+                  0.86,
+                  0.88,
+                  0
+                ],
+                "layer": "content",
+                "shape": "line",
+                "stroke": "#D97757"
+              }
+            ]
+          },
+          {
+            "id": "sl-image",
+            "layout": "image-full",
+            "elements": [
+              {
+                "kind": "image",
+                "id": "cover",
+                "rect": [
+                  0,
+                  0,
+                  1,
+                  1
+                ],
+                "layer": "background",
+                "fit": "cover",
+                "alt": "Cover art",
+                "ref": {
+                  "kind": "data",
+                  "dataUri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q=="
+                }
+              },
+              {
+                "kind": "text",
+                "id": "cover-cap",
+                "rect": [
+                  0.05,
+                  0.85,
+                  0.9,
+                  0.1
+                ],
+                "layer": "content",
+                "role": "caption",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Cover, final"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-two",
+            "layout": "two-col",
+            "elements": [
+              {
+                "kind": "table",
+                "id": "tbl",
+                "rect": [
+                  0.05,
+                  0.15,
+                  0.42,
+                  0.7
+                ],
+                "layer": "content",
+                "header": true,
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "Issue"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "Pages"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "#1"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "24"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "chart",
+                "id": "ch",
+                "rect": [
+                  0.53,
+                  0.15,
+                  0.42,
+                  0.7
+                ],
+                "layer": "content",
+                "chart": "bar",
+                "title": "Readers by month",
+                "categories": [
+                  "Jan",
+                  "Feb",
+                  "Mar"
+                ],
+                "series": [
+                  {
+                    "name": "Readers",
+                    "values": [
+                      120,
+                      340,
+                      910
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "image",
+                "id": "logo",
+                "rect": [
+                  0.9,
+                  0.02,
+                  0.08,
+                  0.08
+                ],
+                "layer": "content",
+                "fit": "contain",
+                "alt": "Logo",
+                "ref": {
+                  "kind": "asset",
+                  "id": "brand/logo.webp"
+                }
+              },
+              {
+                "kind": "shape",
+                "id": "badge",
+                "rect": [
+                  0.02,
+                  0.02,
+                  0.06,
+                  0.06
+                ],
+                "layer": "content",
+                "shape": "ellipse",
+                "fill": "#D97757"
+              },
+              {
+                "kind": "shape",
+                "id": "frame",
+                "rect": [
+                  0.02,
+                  0.9,
+                  0.2,
+                  0.06
+                ],
+                "layer": "content",
+                "shape": "roundRect",
+                "stroke": "#F8FAFC"
+              }
+            ]
+          },
+          {
+            "id": "sl-charts",
+            "layout": "content",
+            "elements": [
+              {
+                "kind": "chart",
+                "id": "line",
+                "rect": [
+                  0.05,
+                  0.1,
+                  0.42,
+                  0.8
+                ],
+                "layer": "content",
+                "chart": "line",
+                "categories": [
+                  "Q1",
+                  "Q2"
+                ],
+                "series": [
+                  {
+                    "name": "A",
+                    "values": [
+                      1,
+                      2
+                    ]
+                  },
+                  {
+                    "name": "B",
+                    "values": [
+                      2.5,
+                      1.5
+                    ]
+                  }
+                ]
+              },
+              {
+                "kind": "chart",
+                "id": "pie",
+                "rect": [
+                  0.53,
+                  0.1,
+                  0.42,
+                  0.8
+                ],
+                "layer": "content",
+                "chart": "pie",
+                "categories": [
+                  "Print",
+                  "Digital"
+                ],
+                "series": [
+                  {
+                    "name": "Share",
+                    "values": [
+                      40,
+                      60
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "sl-end",
+            "layout": "end",
+            "elements": [
+              {
+                "kind": "text",
+                "id": "thanks",
+                "rect": [
+                  0.1,
+                  0.4,
+                  0.8,
+                  0.2
+                ],
+                "layer": "content",
+                "role": "quote",
+                "align": "right",
+                "paragraphs": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Thank you"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "undo": []
+    }
+  ]
+}

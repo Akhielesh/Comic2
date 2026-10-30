@@ -1,0 +1,1162 @@
+{
+  "note": "Golden apply and undo cases: `before` and `ops` (inline or a {\"$ref\"} to another fixture) go through apply*Ops(before, ops, options); the call must give exactly `applied` (op ids, in order), `rejected` (index, opId, code; messages are for people and may change) and `after`. `undo` is invert*Ops(before, applied, {baseRev: after.rev, id: op => \"undo-\" + op.id}); applying it to `after` gives `before` back (apart from rev).",
+  "cases": [
+    {
+      "name": "every contract op in one call: rev goes from absent (0) to 1",
+      "before": {
+        "$ref": "contract/richdoc/minimal.json"
+      },
+      "ops": {
+        "$ref": "contract/richdoc/ops.json"
+      },
+      "applied": [
+        "op-1",
+        "op-2",
+        "op-3",
+        "op-4",
+        "op-5",
+        "op-6",
+        "op-7"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "title": "Notes, revised",
+        "sections": [
+          {
+            "id": "s1",
+            "pageBreakBefore": false,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h-new",
+                "level": 2,
+                "runs": [
+                  {
+                    "text": "Summary"
+                  }
+                ]
+              },
+              {
+                "type": "divider",
+                "id": "d-new"
+              }
+            ]
+          }
+        ],
+        "rev": 1
+      },
+      "undo": [
+        {
+          "op": "insert_section",
+          "id": "undo-op-7",
+          "baseRev": 1,
+          "index": 1,
+          "section": {
+            "id": "s2",
+            "pageBreakBefore": true,
+            "blocks": []
+          }
+        },
+        {
+          "op": "set_title",
+          "id": "undo-op-6",
+          "baseRev": 1,
+          "title": "Notes"
+        },
+        {
+          "op": "remove_section",
+          "id": "undo-op-5",
+          "baseRev": 1,
+          "sectionId": "s2"
+        },
+        {
+          "op": "insert_block",
+          "id": "undo-op-4",
+          "baseRev": 1,
+          "sectionId": "s1",
+          "index": 1,
+          "block": {
+            "type": "paragraph",
+            "id": "p1",
+            "style": "body",
+            "runs": [
+              {
+                "text": "Hello again."
+              }
+            ]
+          }
+        },
+        {
+          "op": "update_block",
+          "id": "undo-op-3",
+          "baseRev": 1,
+          "blockId": "p1",
+          "block": {
+            "type": "paragraph",
+            "id": "p1",
+            "runs": [
+              {
+                "text": "Hello."
+              }
+            ]
+          }
+        },
+        {
+          "op": "remove_block",
+          "id": "undo-op-2",
+          "baseRev": 1,
+          "blockId": "d-new"
+        },
+        {
+          "op": "remove_block",
+          "id": "undo-op-1",
+          "baseRev": 1,
+          "blockId": "h-new"
+        }
+      ]
+    },
+    {
+      "name": "remove a section; its undo inserts it back at its old index",
+      "before": {
+        "$ref": "contract/richdoc/full.json"
+      },
+      "ops": [
+        {
+          "op": "remove_section",
+          "id": "op-rm",
+          "baseRev": 3,
+          "sectionId": "s-intro"
+        },
+        {
+          "op": "remove_block",
+          "id": "op-rb",
+          "baseRev": 3,
+          "blockId": "sc2"
+        }
+      ],
+      "applied": [
+        "op-rm",
+        "op-rb"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "rev": 4,
+        "title": "The Lighthouse Keeper — pitch and script",
+        "meta": {
+          "author": "Sample Creator",
+          "subject": "Comic pitch",
+          "keywords": [
+            "comic",
+            "pitch"
+          ],
+          "lang": "en"
+        },
+        "sections": [
+          {
+            "id": "s-script",
+            "pageBreakBefore": true,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h2",
+                "level": 2,
+                "runs": [
+                  {
+                    "text": "Page 1"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc1",
+                "kind": "scene",
+                "runs": [
+                  {
+                    "text": "EXT. LIGHTHOUSE — NIGHT"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc3",
+                "kind": "dialogue",
+                "speaker": "MARA",
+                "runs": [
+                  {
+                    "text": "Someone's out there."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc4",
+                "kind": "caption",
+                "speaker": "NARRATOR",
+                "runs": [
+                  {
+                    "text": "She was right."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc5",
+                "kind": "sfx",
+                "runs": [
+                  {
+                    "text": "KRAKOOM"
+                  }
+                ]
+              },
+              {
+                "type": "heading",
+                "id": "h3",
+                "level": 3,
+                "runs": [
+                  {
+                    "text": "Notes"
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img2",
+                "ref": {
+                  "kind": "asset",
+                  "id": "user-0001/assets/cover-v2.png"
+                },
+                "alt": "Cover, second pass"
+              }
+            ]
+          }
+        ]
+      },
+      "undo": [
+        {
+          "op": "insert_block",
+          "id": "undo-op-rb",
+          "baseRev": 4,
+          "sectionId": "s-script",
+          "index": 2,
+          "block": {
+            "type": "script",
+            "id": "sc2",
+            "kind": "panel",
+            "runs": [
+              {
+                "text": "Waves smash the rocks. A lamp turns."
+              }
+            ]
+          }
+        },
+        {
+          "op": "insert_section",
+          "id": "undo-op-rm",
+          "baseRev": 4,
+          "index": 0,
+          "section": {
+            "id": "s-intro",
+            "pageBreakBefore": false,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h1",
+                "level": 1,
+                "runs": [
+                  {
+                    "text": "The Lighthouse Keeper"
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-lead",
+                "style": "lead",
+                "runs": [
+                  {
+                    "text": "A 24-page "
+                  },
+                  {
+                    "text": "all-ages",
+                    "marks": [
+                      "b",
+                      "i"
+                    ]
+                  },
+                  {
+                    "text": " mystery. Read the "
+                  },
+                  {
+                    "text": "full outline",
+                    "link": {
+                      "href": "https://example.com/outline#part-1"
+                    }
+                  },
+                  {
+                    "text": " or write to "
+                  },
+                  {
+                    "text": "the author",
+                    "link": {
+                      "href": "mailto:author@example.com?subject=Pitch"
+                    }
+                  },
+                  {
+                    "text": "."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-body",
+                "runs": [
+                  {
+                    "text": "Run "
+                  },
+                  {
+                    "text": "npm test",
+                    "marks": [
+                      "code"
+                    ]
+                  },
+                  {
+                    "text": " before you print."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-quote",
+                "style": "quote",
+                "runs": [
+                  {
+                    "text": "The light never lies.",
+                    "marks": [
+                      "u"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-caption",
+                "style": "caption",
+                "runs": [
+                  {
+                    "text": "Figure 1: the coast."
+                  }
+                ]
+              },
+              {
+                "type": "list",
+                "id": "l1",
+                "ordered": true,
+                "items": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Act one: the storm"
+                      }
+                    ]
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "The keeper finds the map"
+                      }
+                    ],
+                    "indent": 1
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Act two: the island"
+                      }
+                    ],
+                    "indent": 0
+                  }
+                ]
+              },
+              {
+                "type": "table",
+                "id": "t1",
+                "header": true,
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "Issue"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "Pages"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "#1"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "24",
+                            "marks": [
+                              "b"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img1",
+                "ref": {
+                  "kind": "data",
+                  "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                },
+                "alt": "A lighthouse at night",
+                "caption": "Cover sketch",
+                "width": 0.5
+              },
+              {
+                "type": "divider",
+                "id": "d1"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "refusals: stale, not-found, a block id in use, a position past the end, a malformed op, a repeated op id",
+      "before": {
+        "$ref": "contract/richdoc/full.json"
+      },
+      "ops": [
+        {
+          "op": "set_title",
+          "id": "op-stale",
+          "baseRev": 2,
+          "title": "Old"
+        },
+        {
+          "op": "remove_block",
+          "id": "op-missing",
+          "baseRev": 3,
+          "blockId": "nope"
+        },
+        {
+          "op": "insert_block",
+          "id": "op-dup-block",
+          "baseRev": 3,
+          "sectionId": "s-script",
+          "block": {
+            "type": "divider",
+            "id": "d1"
+          }
+        },
+        {
+          "op": "insert_block",
+          "id": "op-past-end",
+          "baseRev": 3,
+          "sectionId": "s-script",
+          "index": 9,
+          "block": {
+            "type": "divider",
+            "id": "d9"
+          }
+        },
+        {
+          "op": "insert_block",
+          "id": "op-bad",
+          "baseRev": 3,
+          "sectionId": "s-script",
+          "block": {
+            "type": "html",
+            "id": "x",
+            "html": "<b>"
+          }
+        },
+        {
+          "op": "set_title",
+          "id": "op-ok",
+          "baseRev": 3,
+          "title": "Applied once"
+        },
+        {
+          "op": "set_title",
+          "id": "op-ok",
+          "baseRev": 3,
+          "title": "Never applied"
+        }
+      ],
+      "applied": [
+        "op-ok"
+      ],
+      "rejected": [
+        {
+          "index": 0,
+          "opId": "op-stale",
+          "code": "stale"
+        },
+        {
+          "index": 1,
+          "opId": "op-missing",
+          "code": "not-found"
+        },
+        {
+          "index": 2,
+          "opId": "op-dup-block",
+          "code": "invalid"
+        },
+        {
+          "index": 3,
+          "opId": "op-past-end",
+          "code": "invalid"
+        },
+        {
+          "index": 4,
+          "opId": "op-bad",
+          "code": "invalid"
+        },
+        {
+          "index": 6,
+          "opId": "op-ok",
+          "code": "duplicate"
+        }
+      ],
+      "after": {
+        "v": 1,
+        "rev": 4,
+        "title": "Applied once",
+        "meta": {
+          "author": "Sample Creator",
+          "subject": "Comic pitch",
+          "keywords": [
+            "comic",
+            "pitch"
+          ],
+          "lang": "en"
+        },
+        "sections": [
+          {
+            "id": "s-intro",
+            "pageBreakBefore": false,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h1",
+                "level": 1,
+                "runs": [
+                  {
+                    "text": "The Lighthouse Keeper"
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-lead",
+                "style": "lead",
+                "runs": [
+                  {
+                    "text": "A 24-page "
+                  },
+                  {
+                    "text": "all-ages",
+                    "marks": [
+                      "b",
+                      "i"
+                    ]
+                  },
+                  {
+                    "text": " mystery. Read the "
+                  },
+                  {
+                    "text": "full outline",
+                    "link": {
+                      "href": "https://example.com/outline#part-1"
+                    }
+                  },
+                  {
+                    "text": " or write to "
+                  },
+                  {
+                    "text": "the author",
+                    "link": {
+                      "href": "mailto:author@example.com?subject=Pitch"
+                    }
+                  },
+                  {
+                    "text": "."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-body",
+                "runs": [
+                  {
+                    "text": "Run "
+                  },
+                  {
+                    "text": "npm test",
+                    "marks": [
+                      "code"
+                    ]
+                  },
+                  {
+                    "text": " before you print."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-quote",
+                "style": "quote",
+                "runs": [
+                  {
+                    "text": "The light never lies.",
+                    "marks": [
+                      "u"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-caption",
+                "style": "caption",
+                "runs": [
+                  {
+                    "text": "Figure 1: the coast."
+                  }
+                ]
+              },
+              {
+                "type": "list",
+                "id": "l1",
+                "ordered": true,
+                "items": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Act one: the storm"
+                      }
+                    ]
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "The keeper finds the map"
+                      }
+                    ],
+                    "indent": 1
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Act two: the island"
+                      }
+                    ],
+                    "indent": 0
+                  }
+                ]
+              },
+              {
+                "type": "table",
+                "id": "t1",
+                "header": true,
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "Issue"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "Pages"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "#1"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "24",
+                            "marks": [
+                              "b"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img1",
+                "ref": {
+                  "kind": "data",
+                  "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                },
+                "alt": "A lighthouse at night",
+                "caption": "Cover sketch",
+                "width": 0.5
+              },
+              {
+                "type": "divider",
+                "id": "d1"
+              }
+            ]
+          },
+          {
+            "id": "s-script",
+            "pageBreakBefore": true,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h2",
+                "level": 2,
+                "runs": [
+                  {
+                    "text": "Page 1"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc1",
+                "kind": "scene",
+                "runs": [
+                  {
+                    "text": "EXT. LIGHTHOUSE — NIGHT"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc2",
+                "kind": "panel",
+                "runs": [
+                  {
+                    "text": "Waves smash the rocks. A lamp turns."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc3",
+                "kind": "dialogue",
+                "speaker": "MARA",
+                "runs": [
+                  {
+                    "text": "Someone's out there."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc4",
+                "kind": "caption",
+                "speaker": "NARRATOR",
+                "runs": [
+                  {
+                    "text": "She was right."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc5",
+                "kind": "sfx",
+                "runs": [
+                  {
+                    "text": "KRAKOOM"
+                  }
+                ]
+              },
+              {
+                "type": "heading",
+                "id": "h3",
+                "level": 3,
+                "runs": [
+                  {
+                    "text": "Notes"
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img2",
+                "ref": {
+                  "kind": "asset",
+                  "id": "user-0001/assets/cover-v2.png"
+                },
+                "alt": "Cover, second pass"
+              }
+            ]
+          }
+        ]
+      },
+      "undo": [
+        {
+          "op": "set_title",
+          "id": "undo-op-ok",
+          "baseRev": 4,
+          "title": "The Lighthouse Keeper — pitch and script"
+        }
+      ]
+    },
+    {
+      "name": "an op id the host already logged is a duplicate, even with a fresh baseRev",
+      "before": {
+        "$ref": "contract/richdoc/full.json"
+      },
+      "ops": [
+        {
+          "op": "set_title",
+          "id": "op-1",
+          "baseRev": 3,
+          "title": "Retried"
+        }
+      ],
+      "options": {
+        "seenOpIds": [
+          "op-1"
+        ]
+      },
+      "applied": [],
+      "rejected": [
+        {
+          "index": 0,
+          "opId": "op-1",
+          "code": "duplicate"
+        }
+      ],
+      "after": {
+        "v": 1,
+        "rev": 3,
+        "title": "The Lighthouse Keeper — pitch and script",
+        "meta": {
+          "author": "Sample Creator",
+          "subject": "Comic pitch",
+          "keywords": [
+            "comic",
+            "pitch"
+          ],
+          "lang": "en"
+        },
+        "sections": [
+          {
+            "id": "s-intro",
+            "pageBreakBefore": false,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h1",
+                "level": 1,
+                "runs": [
+                  {
+                    "text": "The Lighthouse Keeper"
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-lead",
+                "style": "lead",
+                "runs": [
+                  {
+                    "text": "A 24-page "
+                  },
+                  {
+                    "text": "all-ages",
+                    "marks": [
+                      "b",
+                      "i"
+                    ]
+                  },
+                  {
+                    "text": " mystery. Read the "
+                  },
+                  {
+                    "text": "full outline",
+                    "link": {
+                      "href": "https://example.com/outline#part-1"
+                    }
+                  },
+                  {
+                    "text": " or write to "
+                  },
+                  {
+                    "text": "the author",
+                    "link": {
+                      "href": "mailto:author@example.com?subject=Pitch"
+                    }
+                  },
+                  {
+                    "text": "."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-body",
+                "runs": [
+                  {
+                    "text": "Run "
+                  },
+                  {
+                    "text": "npm test",
+                    "marks": [
+                      "code"
+                    ]
+                  },
+                  {
+                    "text": " before you print."
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-quote",
+                "style": "quote",
+                "runs": [
+                  {
+                    "text": "The light never lies.",
+                    "marks": [
+                      "u"
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "paragraph",
+                "id": "p-caption",
+                "style": "caption",
+                "runs": [
+                  {
+                    "text": "Figure 1: the coast."
+                  }
+                ]
+              },
+              {
+                "type": "list",
+                "id": "l1",
+                "ordered": true,
+                "items": [
+                  {
+                    "runs": [
+                      {
+                        "text": "Act one: the storm"
+                      }
+                    ]
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "The keeper finds the map"
+                      }
+                    ],
+                    "indent": 1
+                  },
+                  {
+                    "runs": [
+                      {
+                        "text": "Act two: the island"
+                      }
+                    ],
+                    "indent": 0
+                  }
+                ]
+              },
+              {
+                "type": "table",
+                "id": "t1",
+                "header": true,
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "Issue"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "Pages"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "runs": [
+                          {
+                            "text": "#1"
+                          }
+                        ]
+                      },
+                      {
+                        "runs": [
+                          {
+                            "text": "24",
+                            "marks": [
+                              "b"
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img1",
+                "ref": {
+                  "kind": "data",
+                  "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+                },
+                "alt": "A lighthouse at night",
+                "caption": "Cover sketch",
+                "width": 0.5
+              },
+              {
+                "type": "divider",
+                "id": "d1"
+              }
+            ]
+          },
+          {
+            "id": "s-script",
+            "pageBreakBefore": true,
+            "blocks": [
+              {
+                "type": "heading",
+                "id": "h2",
+                "level": 2,
+                "runs": [
+                  {
+                    "text": "Page 1"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc1",
+                "kind": "scene",
+                "runs": [
+                  {
+                    "text": "EXT. LIGHTHOUSE — NIGHT"
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc2",
+                "kind": "panel",
+                "runs": [
+                  {
+                    "text": "Waves smash the rocks. A lamp turns."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc3",
+                "kind": "dialogue",
+                "speaker": "MARA",
+                "runs": [
+                  {
+                    "text": "Someone's out there."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc4",
+                "kind": "caption",
+                "speaker": "NARRATOR",
+                "runs": [
+                  {
+                    "text": "She was right."
+                  }
+                ]
+              },
+              {
+                "type": "script",
+                "id": "sc5",
+                "kind": "sfx",
+                "runs": [
+                  {
+                    "text": "KRAKOOM"
+                  }
+                ]
+              },
+              {
+                "type": "heading",
+                "id": "h3",
+                "level": 3,
+                "runs": [
+                  {
+                    "text": "Notes"
+                  }
+                ]
+              },
+              {
+                "type": "image",
+                "id": "img2",
+                "ref": {
+                  "kind": "asset",
+                  "id": "user-0001/assets/cover-v2.png"
+                },
+                "alt": "Cover, second pass"
+              }
+            ]
+          }
+        ]
+      },
+      "undo": []
+    }
+  ]
+}

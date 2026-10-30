@@ -393,6 +393,59 @@ describe('data: images', () => {
   });
 });
 
+// ── Golden apply / undo cases (fixtures/models/<model>/apply.json: the op rules by example) ─────────────────────
+
+interface GoldenCase {
+  name: string;
+  before: unknown;
+  ops: unknown;
+  options?: { seenOpIds?: string[] };
+  applied: string[];
+  rejected: { index: number; opId?: string; code: string }[];
+  after: { rev?: number };
+  undo: unknown[];
+}
+
+/** A `{"$ref": "path"}` names another fixture; anything else is inline. */
+const resolveRef = (v: unknown): unknown =>
+  v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { $ref?: unknown }).$ref === 'string' ? fixture((v as { $ref: string }).$ref) : v;
+
+type AnyApply = (doc: never, ops: never, options?: { seenOpIds?: string[] }) => { doc: { rev?: number }; applied: { id: string }[]; rejected: { index: number; opId?: string; code: string }[] };
+type AnyInvert = (before: never, applied: never, meta: { baseRev: number; id: (op: { id: string }) => string }) => unknown[] | null;
+
+const GOLDEN: [string, AnyApply, AnyInvert][] = [
+  ['richdoc', applyDocOps as unknown as AnyApply, invertDocOps as unknown as AnyInvert],
+  ['deck', applyDeckOps as unknown as AnyApply, invertDeckOps as unknown as AnyInvert],
+  ['email', applyEmailOps as unknown as AnyApply, invertEmailOps as unknown as AnyInvert],
+];
+
+const withoutRev = (doc: unknown): unknown => {
+  const out = { ...(doc as Record<string, unknown>) };
+  delete out.rev;
+  return out;
+};
+
+describe('golden apply and undo cases', () => {
+  for (const [model, apply, invert] of GOLDEN) {
+    const file = fixture<{ cases: GoldenCase[] }>(`models/${model}/apply.json`);
+    for (const c of file.cases) {
+      it(`${model}: ${c.name}`, () => {
+        const before = resolveRef(c.before);
+        const r = apply(before as never, resolveRef(c.ops) as never, c.options);
+        expect(r.applied.map((o) => o.id)).toEqual(c.applied);
+        expect(r.rejected.map(({ index, opId, code }) => (opId === undefined ? { index, code } : { index, opId, code }))).toEqual(c.rejected);
+        expect(r.doc).toEqual(c.after);
+        if (!c.applied.length) expect(r.doc).toBe(before);
+        const undo = invert(before as never, r.applied as never, { baseRev: r.doc.rev ?? 0, id: (op) => `undo-${op.id}` });
+        expect(undo).toEqual(c.undo);
+        const back = apply(r.doc as never, undo as never);
+        expect(back.rejected).toEqual([]);
+        expect(withoutRev(back.doc)).toEqual(withoutRev(before));
+      });
+    }
+  }
+});
+
 // ── JSON Schema projections (W1.4 projects these into tool inputs) ───────────────────────────────────────────────
 
 describe('JSON Schema projections', () => {
