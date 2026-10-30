@@ -25,6 +25,7 @@ import {
 } from './bookModel';
 import { MediaPreview } from './MediaPreview';
 import { UndoToast, useTimelineEdit } from './UndoToast';
+import { OVERLINE } from '../../chat/studioDesign';
 import { Badge, BlockedTile, cx, FOCUS_RING, TimelineDialog, useInView } from './ui';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
@@ -60,9 +61,18 @@ const MediaTile: React.FC<{ item: MediaItem; studio: StudioController; onOpen():
       </span>
       {(item.archived || item.role === 'deleted_page' || item.stale) && (
         <span className="absolute left-1 top-1 flex gap-0.5">
-          {item.role === 'deleted_page' && <Badge tone="danger">Deleted</Badge>}
-          {item.archived && <Badge>Archived</Badge>}
-          {item.stale && item.current && <Badge tone="warn">Out of date</Badge>}
+          {/* Over the thumbnail: opaque tone surfaces (TONE_CHIP_ON_ART), readable on any art. */}
+          {item.role === 'deleted_page' && (
+            <Badge tone="danger" onArt>
+              Deleted
+            </Badge>
+          )}
+          {item.archived && <Badge onArt>Archived</Badge>}
+          {item.stale && item.current && (
+            <Badge tone="warn" onArt>
+              Out of date
+            </Badge>
+          )}
         </span>
       )}
     </button>
@@ -223,7 +233,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
                   type="button"
                   aria-expanded={!isClosed}
                   onClick={() => toggle(g.key)}
-                  className={cx('tap-target flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] hover:text-[var(--ds-ink)]', FOCUS_RING)}
+                  className={cx('tap-target flex w-full min-w-0 items-center gap-1.5 rounded-lg py-1 text-left hover:text-[var(--ds-ink)]', OVERLINE, FOCUS_RING)}
                 >
                   <ChevronDown className={cx('h-3.5 w-3.5 shrink-0 transition-transform motion-reduce:transition-none', isClosed && '-rotate-90')} aria-hidden />
                   <span className="min-w-0 truncate">{g.label}</span>
@@ -244,7 +254,7 @@ export const MediaBin: React.FC<MediaBinProps> = ({ studio, initialFilter = 'all
 
       {filter === 'all' && !query && examples.length > 0 && (
         <section className="min-w-0" aria-label="Examples from the library">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Examples from the library</h3>
+          <h3 className={OVERLINE}>Examples from the library</h3>
           <p className="mb-1.5 text-[12px] text-[var(--ds-muted)]">For inspiration — shared DreamStream examples, not part of your comic.</p>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(88px,1fr))] gap-2">
             {examples.map((a) => (

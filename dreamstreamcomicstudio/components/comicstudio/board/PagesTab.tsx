@@ -39,6 +39,7 @@ import { PageScript } from './PageScript';
 import { aspectNumber, pageAspectOf } from './balloonGeometry';
 import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -289,7 +290,7 @@ export const PageCard: React.FC<{
       )}
 
       {status === 'ready' && page.render.error && !compact && (
-        <p className="mt-1.5 px-0.5 text-[11px] text-amber-700 dark:text-amber-300 [overflow-wrap:anywhere]">{page.render.error}</p>
+        <p className={cx('mt-1.5 px-0.5 text-[11px] [overflow-wrap:anywhere]', TONE_TEXT.warning)}>{page.render.error}</p>
       )}
 
       <footer className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 px-0.5">

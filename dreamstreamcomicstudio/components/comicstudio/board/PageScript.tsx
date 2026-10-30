@@ -8,6 +8,7 @@ import { castNoun, findCharacter, type ComicDoc, type Line, type Page } from '..
 import { checkPagePlan, fitBoxesFor, type FitState } from '../../../shared/comic/pagePlanCheck';
 import { textUnitFor, unitCount } from '../../../shared/comic/panelRules';
 import { LINE_KIND_LABEL, SHOT_LABEL, SIZE_LABEL, castName, placeName } from './boardModel';
+import { OVERLINE } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 /** Who is in a panel, groups by their count ("three Ducklings"). */
@@ -47,7 +48,7 @@ export const PageScript: React.FC<{ doc: ComicDoc; page: Page; className?: strin
   const fits = React.useMemo(() => panelWordFits(doc, page), [doc, page]);
   return (
     <div className={cx('min-w-0 space-y-2.5 text-[12.5px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]', className)}>
-      {page.chapterTitle && <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{page.chapterTitle}</p>}
+      {page.chapterTitle && <p className={OVERLINE}>{page.chapterTitle}</p>}
       {page.summary && <p className="text-[13px] font-medium leading-snug">{page.summary}</p>}
       {!page.panels.length && <p className="text-[var(--ds-muted)]">No panels yet.</p>}
       <ol className="space-y-2">

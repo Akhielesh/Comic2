@@ -21,6 +21,7 @@ import {
 } from '../../../../shared/comic/doc';
 import type { SpendAction } from '../../../../shared/comic/ops';
 import { ImageDevelop } from '../../../studio/kit/streamMotion';
+import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import { cx } from '../ui';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
 
@@ -154,7 +155,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         className="flex h-full w-full flex-col items-center justify-[safe_center] gap-1 bg-[var(--ds-surface-soft)] p-1.5 text-center"
       >
         <span className="sr-only">{spokenFailure}</span>
-        <CircleAlert className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden />
+        <CircleAlert className={cx('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
         {!iconOnly && (
           <span aria-hidden className="line-clamp-2 text-[10.5px] font-medium leading-snug text-[var(--ds-muted)] first-letter:uppercase">
             {reason}
@@ -198,10 +199,10 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         {!busy && ((stale && hasImage) || (status === 'ready' && render?.error)) && (
           <span className="absolute left-1.5 top-1.5 flex max-w-[calc(100%-0.75rem)] flex-wrap items-center gap-1">
             {stale && hasImage && (
-              <span className="min-w-0 truncate rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[9.5px] font-semibold text-white">Out of date</span>
+              <span className={`min-w-0 truncate rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${TONE_CHIP_ON_ART.warning}`}>Out of date</span>
             )}
             {status === 'ready' && render?.error && (
-              <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-amber-500/90 text-white" title={render.error} role="img" aria-label={render.error}>
+              <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border ${TONE_CHIP_ON_ART.warning}`} title={render.error} role="img" aria-label={render.error}>
                 <AlertTriangle className="h-3 w-3" aria-hidden />
               </span>
             )}

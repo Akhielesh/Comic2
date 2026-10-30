@@ -4,6 +4,7 @@
 
 import React, { useId, useMemo } from 'react';
 import { DEFAULT_BOOK, type ComicDoc } from '../../../shared/comic/doc';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { PLATE_COLORS, PLATE_FONTS, plateLayout, type PlateKind, type PlateLayout } from './plates';
 
 export interface PlateViewProps {
@@ -123,7 +124,7 @@ export const PlateEditor: React.FC<{
             <span className="font-medium">Credits</span>
             <span className="block text-[12px] text-[var(--ds-muted)]">One line each, up to 8 lines of 120 characters.</span>
             <textarea rows={5} value={credits} onChange={(e) => setCredits(e.target.value)} className={field} aria-invalid={tooMany || undefined} />
-            {tooMany && <span className="text-[12px] text-red-600 dark:text-red-300">Up to 8 lines of 120 characters.</span>}
+            {tooMany && <span className={`text-[12px] ${TONE_TEXT.danger}`}>Up to 8 lines of 120 characters.</span>}
           </label>
         )}
         {kind === 'back_cover' && (

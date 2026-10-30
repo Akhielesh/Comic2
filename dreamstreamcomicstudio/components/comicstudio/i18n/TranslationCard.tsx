@@ -8,6 +8,7 @@ import type { Card } from '../../../shared/comic/doc';
 import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { CardProps } from '../extensions';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, plural } from '../conversation/ui';
 
 type TranslationCardData = Extract<Card, { type: 'translation' }>;
@@ -51,7 +52,7 @@ export const TranslationCard: React.FC<CardProps<TranslationCardData>> = ({ card
             </div>
             <p className="mt-1 text-[12px] leading-snug text-[var(--ds-muted)]">
               {r.publishable ? (
-                <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300"><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Translated and reviewed — ready to publish</span>
+                <span className={`inline-flex items-center gap-1 ${TONE_TEXT.success}`}><CheckCircle2 className="h-3.5 w-3.5" aria-hidden />Translated and reviewed — ready to publish</span>
               ) : blocking.length ? (
                 blocking[0].text
               ) : (

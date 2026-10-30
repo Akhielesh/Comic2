@@ -13,6 +13,8 @@ import React from 'react';
 import { Cloud, Eye, EyeOff, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../../shared/comic/doc';
 
+import { TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
+
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
 export type EditorMode = 'move' | 'markup';
@@ -86,16 +88,16 @@ const BarButton: React.FC<{
       data-testid={testId}
       onClick={onClick}
       className={cx(
-        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl text-[var(--ds-muted)] transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
+        'press relative flex shrink-0 select-none flex-col items-center justify-center gap-0.5 rounded-xl transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
         vertical ? 'h-11 w-11' : 'h-12 min-w-[44px] flex-1 px-1',
-        on ? 'bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
+        on ? 'bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]',
         FOCUS
       )}
     >
       {icon}
       {!vertical && <span className="max-w-full truncate text-[10.5px] font-medium leading-none">{short ?? label}</span>}
       {!!badge && badge > 0 && (
-        <span aria-hidden className="absolute right-1 top-1 grid h-4 min-w-[16px] place-items-center rounded-full bg-amber-500 px-1 text-[9.5px] font-semibold tabular-nums text-white">
+        <span aria-hidden className={`absolute right-1 top-1 grid h-4 min-w-[16px] place-items-center rounded-full border px-1 text-[9.5px] font-semibold tabular-nums ${TONE_CHIP_ON_ART.warning}`}>
           {badge > 9 ? '9+' : badge}
         </span>
       )}
@@ -125,7 +127,7 @@ const TrayButton: React.FC<{ label: string; short: string; icon: React.ReactNode
       'press inline-flex h-11 shrink-0 items-center justify-center gap-1 rounded-xl border text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
       vertical ? 'w-11' : 'px-3',
       pressed ? 'border-[#D97757]/50 bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
-      tone === 'warn' ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--ds-ink)]',
+      tone === 'warn' ? TONE_TEXT.warning : 'text-[var(--ds-ink)]',
       FOCUS
     )}
   >

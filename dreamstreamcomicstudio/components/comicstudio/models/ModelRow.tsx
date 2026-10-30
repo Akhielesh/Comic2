@@ -87,7 +87,9 @@ export const leaderboardText = (model: PickerRowModel, live: boolean): string =>
   return cited && /#\d/.test(cited) ? leaderboardsLine([cited]) : NOT_RANKED;
 };
 
-const LINE = 'block min-w-0 text-[12px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]';
+/** A detail line's shape; LINE is the muted line. A line in another ink starts from LINE_SHAPE (`cx` does not merge). */
+const LINE_SHAPE = 'block min-w-0 text-[12px] leading-snug [overflow-wrap:anywhere]';
+const LINE = `${LINE_SHAPE} text-[var(--ds-muted)]`;
 
 export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed, live, prices, health, now, onPick, onDetails }) => {
   const linesId = useId();
@@ -183,7 +185,7 @@ export const ModelRow: React.FC<ModelRowProps> = ({ model, cost, byok, detailed,
             )}
           </div>
           <div id={linesId} className="min-w-0 space-y-0.5 pb-1">
-            <span className={cx(LINE, 'text-[12.5px] font-medium tabular-nums text-[var(--ds-ink)]')} data-line="price">
+            <span className={cx(LINE_SHAPE, 'text-[12.5px] font-medium tabular-nums text-[var(--ds-ink)]')} data-line="price">
               {priceText(model, cost)}
               {basisNote && <span className="font-normal text-[var(--ds-muted)]"> · {basisNote}</span>}
             </span>

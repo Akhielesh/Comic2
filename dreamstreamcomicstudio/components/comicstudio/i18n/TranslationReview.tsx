@@ -16,6 +16,7 @@ import { graphemes } from '../../../shared/comic/textLayout';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, translationBudget } from '../../../shared/comic/translationPlan';
 import { textSourceHash } from '../../../shared/comic/i18n';
 import { ComicPageView } from '../board/ComicPageView';
+import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { GhostButton, Segmented, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { LanguageSwitch } from './LanguageSwitch';
@@ -44,7 +45,7 @@ const STATUS_TONE: Partial<Record<DerivedStatus, string>> = {
   stale: 'border-[#D97757]/40 text-[var(--ds-ink)]',
   stale_edited: 'border-[#D97757]/40 text-[var(--ds-ink)]',
   machine: 'border-[var(--ds-hairline)] text-[var(--ds-muted)]',
-  reviewed: 'border-emerald-600/30 text-emerald-700 dark:text-emerald-300',
+  reviewed: `${STATUS_EDGE.healthy} ${TONE_TEXT.success}`,
   edited: 'border-[var(--ds-hairline)] text-[var(--ds-ink)]'
 };
 
@@ -113,7 +114,7 @@ function ReviewRow({ studio, lang, id, speaker, kindLabel, where, source, entry,
   return (
     <li className="min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-3" data-line-id={id} onFocusCapture={onFocusRow}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="min-w-0 truncate text-[11.5px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">
+        <span className={cx('min-w-0 truncate', OVERLINE)}>
           {speaker ? `${speaker} · ` : ''}
           {kindLabel}
         </span>
@@ -336,7 +337,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
         <div className="min-w-0 space-y-4">
           {titleFields.length > 0 && filter === 'all' && (
             <section aria-label="Titles">
-              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Titles</h4>
+              <h4 className={cx('mb-2', OVERLINE)}>Titles</h4>
               <ul className="space-y-2">
                 {titleFields.map((field) => {
                   const entry = editionTextEntry(doc, lang, field);
@@ -368,7 +369,7 @@ export const TranslationReview: React.FC<TranslationReviewProps> = ({ studio, la
             return (
               <section key={page.id} aria-label={`Page ${page.n}`}>
                 <div className="mb-2 flex items-center gap-2">
-                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Page {page.n}</h4>
+                  <h4 className={OVERLINE}>Page {page.n}</h4>
                   <button
                     type="button"
                     onClick={() => setPreviewId(page.id)}

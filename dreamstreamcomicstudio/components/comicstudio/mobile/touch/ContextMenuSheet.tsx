@@ -3,6 +3,7 @@
 // Home/End jump, Esc closes; a danger item is visually distinct; disabled items say why (hint).
 
 import React, { useEffect, useMemo, useRef } from 'react';
+import { TONE_TEXT } from '../../../chat/studioDesign';
 import { AdaptiveSheet } from '../sheets/AdaptiveSheet';
 
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -73,7 +74,7 @@ export const ContextMenuSheet: React.FC<ContextMenuSheetProps> = ({ open, onClos
               }}
               className={cx(
                 'press flex min-h-[44px] w-full items-center gap-3 rounded-xl px-3 text-left text-[14px] transition-colors hover:bg-[var(--ds-hover)] focus-visible:bg-[var(--ds-hover)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[48px]',
-                it.danger ? 'text-red-600 dark:text-red-300' : 'text-[var(--ds-ink)]'
+                it.danger ? TONE_TEXT.danger : 'text-[var(--ds-ink)]'
               )}
             >
               {it.icon && (

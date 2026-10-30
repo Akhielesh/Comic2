@@ -138,6 +138,41 @@ describe('LibraryConsole', () => {
     confirmSpy.mockRestore();
   });
 
+  it('the status pill over an entry\'s art is an opaque tone surface (readable on any image), the page chips stay tints', async () => {
+    const failed = {
+      ...manifest().entries[0],
+      row: { status: 'failed' as const, score: 0, rev: 1, attempts: 1, costUsd: 0.04, issues: [], upToDate: true, candidates: [] }
+    };
+    api.getLibraryManifest.mockResolvedValue(manifest({ entries: [failed, manifest().entries[1]] }));
+    render(<LibraryConsole />);
+    await screen.findByRole('checkbox', { name: 'Select style.noir-ink' });
+    const pills = [...document.querySelectorAll<HTMLElement>('[data-status-pill]')];
+    expect(pills.map((p) => p.textContent)).toEqual(['Failed', 'Not built']);
+    const [failedPill, notBuilt] = pills;
+    // TONE_CHIP_ON_ART: the 10 % tint mixed into the opaque raised surface, not into transparency.
+    expect(failedPill.className).toContain('bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,var(--ds-raised))]');
+    expect(failedPill.className).toContain('text-[var(--ds-danger-text)]');
+    expect(failedPill.className).not.toMatch(/_10%,transparent\)|backdrop-blur/);
+    expect(notBuilt.className).toContain('bg-[var(--ds-raised)]');
+    expect(notBuilt.className).not.toContain('well-strong');
+  });
+
+  it('the stat labels wrap instead of being cut off, and the values line up along the bottom of each cell', async () => {
+    render(<LibraryConsole />);
+    await screen.findByText('Platform asset library');
+    const stats = document.querySelector<HTMLElement>('[data-library-stats]')!;
+    // As many columns as fit a 5.75rem cell (three from about 350 px, two on the narrowest phones), never a squeezed third.
+    expect(stats.className).toContain('grid-cols-[repeat(auto-fit,minmax(5.75rem,1fr))]');
+    expect(stats.className).not.toMatch(/(^| )grid-cols-3( |$)/);
+    const labels = [...stats.querySelectorAll('dt')];
+    expect(labels.map((dt) => dt.textContent)).toEqual(['Published', 'Needs review', 'Spent (all builds)']);
+    for (const dt of labels) {
+      expect(dt.className).not.toContain('truncate');
+      expect(dt.parentElement!.className).toContain('flex-col');
+      expect(dt.nextElementSibling!.className).toContain('mt-auto');
+    }
+  });
+
   it('shows a load error with a retry', async () => {
     api.getLibraryManifest.mockRejectedValueOnce(new Error('Admins only.'));
     render(<LibraryConsole />);

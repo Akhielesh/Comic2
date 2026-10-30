@@ -21,7 +21,7 @@ import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { deriveLock } from '../../../shared/comic/modelLock';
 import type { BookSummary, quoteRenderPages } from '../../../shared/comic/plan';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
-import { LABEL, RADIUS_CONTROL, SEGMENTED_ACTIVE, TRANSITION } from '../../chat/studioDesign';
+import { OVERLINE, RADIUS_CONTROL, SEGMENTED_ACTIVE, TRANSITION } from '../../chat/studioDesign';
 import type { CostFormat } from '../conversation/cost';
 import { cx, plural } from '../conversation/ui';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
@@ -291,7 +291,16 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
         </div>
         {summary.kinds.length > 0 && (
           <div className="mt-2">
-            <div className={cx(LABEL, 'mb-1 text-[10.5px]')}>Where it went{cost.governed ? ' · share of your usage' : ''}</div>
+            <div className={cx('mb-1', OVERLINE)}>
+              Where it went
+              {/* On a narrow phone the suffix moves to its own line whole, never "USAGE" alone. */}
+              {cost.governed && (
+                <>
+                  {' '}
+                  <span className="whitespace-nowrap">· share of your usage</span>
+                </>
+              )}
+            </div>
             <SpendByKindList rows={summary.kinds} format={cell} label="Where it went" bars />
           </div>
         )}

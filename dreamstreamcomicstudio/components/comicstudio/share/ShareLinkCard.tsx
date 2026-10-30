@@ -8,6 +8,7 @@ import type { PublicationOwnerView } from '../../../shared/comic/publication';
 import { languageSpec } from '../../../shared/comic/languages';
 import { shareLinkFor } from './shareModel';
 import { useShareCapabilities } from './useShareCapabilities';
+import { OVERLINE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 
 export interface ShareLinkCardProps {
@@ -44,7 +45,7 @@ export const ShareLinkCard: React.FC<ShareLinkCardProps> = ({ view, title, descr
 
   return (
     <div className="min-w-0 space-y-2">
-      <label htmlFor="ds-share-url" className="block text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+      <label htmlFor="ds-share-url" className={cx('block', OVERLINE)}>
         Read-only link
       </label>
       <input

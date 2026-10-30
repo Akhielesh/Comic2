@@ -26,6 +26,7 @@ import {
   type LibraryStepView
 } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
+import { ACCENT_TEXT, OVERLINE, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT } from '../../../chat/studioDesign';
 import {
   cancelLibraryRun,
   getLibraryManifest,
@@ -70,10 +71,24 @@ const STATUS_CLASS: Record<LibraryAssetStatus, string> = {
   pending: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
   generating: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
   analyzing: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
-  needs_review: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+  needs_review: TONE_CHIP.warning,
+  published: TONE_CHIP.success,
   rejected: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
-  failed: 'bg-red-500/12 text-red-700 dark:text-red-300'
+  failed: TONE_CHIP.danger
+};
+/**
+ * The same states as a pill drawn OVER an entry's art: opaque surfaces (TONE_CHIP_ON_ART, the raised
+ * surface for the neutral and working states), so the words read on any image — the translucent page
+ * chips above vanish over a dark or busy thumbnail.
+ */
+const STATUS_ON_ART: Record<LibraryAssetStatus, string> = {
+  pending: TONE_CHIP_ON_ART.neutral,
+  generating: `bg-[var(--ds-raised)] ${ACCENT_TEXT}`,
+  analyzing: `bg-[var(--ds-raised)] ${ACCENT_TEXT}`,
+  needs_review: TONE_CHIP_ON_ART.warning,
+  published: TONE_CHIP_ON_ART.success,
+  rejected: TONE_CHIP_ON_ART.neutral,
+  failed: TONE_CHIP_ON_ART.danger
 };
 
 const btn =
@@ -359,7 +374,7 @@ export const LibraryConsole: React.FC = () => {
   if (!manifest) {
     return (
       <div className={cx(panel, 'flex flex-wrap items-center gap-3 text-[13px] text-[var(--ds-ink)]')} role="alert">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+        <AlertTriangle className={cx('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{loadError}</span>
         <button type="button" className={ghost} onClick={() => void load()}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry
@@ -393,15 +408,18 @@ export const LibraryConsole: React.FC = () => {
             {!manifest.tableReady && <span className={cx('rounded-full px-2 py-1', STATUS_CLASS.needs_review)}>Tables not installed</span>}
           </div>
         </div>
-        <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+        {/* Three columns while a cell fits its longest one-word label ("Published" as an overline, 5.75rem cells: from
+            about 350 px); on the narrowest phones two, the third below. Labels wrap at spaces, never cut off,
+            and the values line up along the bottom of each row. */}
+        <dl className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(5.75rem,1fr))] gap-2 text-center" data-library-stats="">
           {[
             ['Published', `${totals.published}/${manifest.entries.filter((e) => !e.optional).length}`],
             ['Needs review', String(totals.review)],
             ['Spent (all builds)', usd(totals.spent)]
           ].map(([k, v]) => (
-            <div key={k} className="min-w-0 rounded-xl bg-[var(--ds-well)] px-2 py-2">
-              <dt className="truncate text-[10.5px] uppercase tracking-wide text-[var(--ds-muted)]">{k}</dt>
-              <dd className="mt-0.5 text-[16px] font-semibold tabular-nums">{v}</dd>
+            <div key={k} className="flex min-w-0 flex-col rounded-xl bg-[var(--ds-well)] px-2 py-2">
+              <dt className={cx('mb-0.5 break-words', OVERLINE)}>{k}</dt>
+              <dd className="mt-auto text-[16px] font-semibold tabular-nums">{v}</dd>
             </div>
           ))}
         </dl>
@@ -601,7 +619,7 @@ export const LibraryConsole: React.FC = () => {
                   <button type="button" onClick={() => setOpenId(openId === e.id ? null : e.id)} className="block w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]/45" aria-expanded={openId === e.id}>
                     <span className="relative block aspect-[4/3] w-full overflow-hidden bg-[var(--ds-well)] text-[var(--ds-muted)]">
                       <EntryArt entry={e} url={row?.thumb || row?.published?.thumb} />
-                      <span className={cx('absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold backdrop-blur', STATUS_CLASS[status])}>
+                      <span data-status-pill="" className={cx('absolute left-1.5 top-1.5 rounded-full px-1.5 py-0.5 text-[10.5px] font-semibold', STATUS_ON_ART[status])}>
                         {row ? STATUS_LABEL[status] : 'Not built'}
                       </span>
                       {row && !row.upToDate && <span className="absolute bottom-1.5 left-1.5 rounded-full bg-[var(--ds-surface-strong)] px-1.5 py-0.5 text-[10px]">Prompt changed</span>}

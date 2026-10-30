@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { FlaskConical, Loader2 } from 'lucide-react';
-import { TONE_TEXT } from '../../../chat/studioDesign';
+import { DIALOG_TITLE_FROM_SM, TONE_TEXT } from '../../../chat/studioDesign';
 import { cx } from '../../conversation/ui';
 import { LabResultCard, costLine } from './LabResultCard';
 import { LabApiError, formatLabUsd, newClickId, runLabCheck, type LabAbRun, type LabBlindRun, type LabItem, type LabQuote, type LabRunAnswer } from './labApi';
@@ -105,8 +105,8 @@ export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentU
         className={cx(LAB_PANEL, 'relative flex max-h-[min(92dvh,860px)] w-full min-w-0 flex-col overflow-hidden sm:max-w-[560px]')}
       >
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
-          <h2 id={titleId} className={cx('flex items-start gap-2 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]', WRAP)}>
-            <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-accent)]" aria-hidden />
+          <h2 id={titleId} className={cx('flex items-start gap-2 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]', DIALOG_TITLE_FROM_SM, WRAP)}>
+            <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-accent)] sm:mt-1.5" aria-hidden />
             <span className="min-w-0">
               {item.check} · {item.title}
             </span>

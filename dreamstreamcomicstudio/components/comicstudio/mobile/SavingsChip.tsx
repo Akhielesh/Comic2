@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Leaf } from 'lucide-react';
+import { OVERLINE, STATUS_CHIP_TONE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { compactUsageShare } from '../../../services/costDisplay';
@@ -66,8 +67,8 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = 
   const headline = cost.governed ? cost.saved(total) : cost.exact(total);
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
-        <Leaf className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> Saved by software
+      <div className={cx('flex items-center gap-1.5', OVERLINE)}>
+        <Leaf className={cx('h-3.5 w-3.5', TONE_TEXT.success)} aria-hidden /> Saved by software
       </div>
       <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[18px]' : 'text-[22px]')}>{headline}</div>
       <p className="mt-1 text-[12.5px] leading-snug text-[var(--ds-muted)]">
@@ -82,7 +83,7 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = 
               </span>
               {(() => {
                 const v = shortShare(cost, e.savedUsd || 0);
-                return v ? <span className="shrink-0 tabular-nums text-emerald-700 dark:text-emerald-300">−{v}</span> : null;
+                return v ? <span className={cx('shrink-0 tabular-nums', TONE_TEXT.success)}>−{v}</span> : null;
               })()}
             </li>
           ))}
@@ -110,14 +111,14 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { c
     return createPortal(
       <div
         role="status"
-        className="pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border border-emerald-500/25 bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal"
+        className={`pointer-events-none fixed left-1/2 z-[60] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-full border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12.5px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md studio-reveal`}
         // Portalled to <body>, outside the shell root that sets the phone chrome sizes: apply them here
         // too, so the toast sits 8 px under the header it belongs to (44 px in phone portrait).
         style={{ ...phoneChromeVars(ff.layout), top: 'calc(var(--sa-top, 0px) + var(--header-h, 48px) + 8px)' }}
         data-savings-toast
       >
         <span className="flex items-center gap-1.5">
-          <Leaf className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden />
+          <Leaf className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />
           <span className="truncate">{SAVINGS_COPY}</span>
         </span>
       </div>,
@@ -138,8 +139,9 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { c
         aria-label={`${spoken} by software — ${SAVINGS_COPY}`}
         title={SAVINGS_COPY}
         className={cx(
-          'inline-flex h-8 items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/[0.07] px-2.5 text-[12px] font-medium tabular-nums text-emerald-800 transition-colors hover:bg-emerald-500/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 dark:text-emerald-200 coarse:h-11 coarse:px-3',
-          flash && 'ring-2 ring-emerald-500/25'
+          'inline-flex h-8 items-center gap-1 rounded-full border px-2.5 text-[12px] font-medium tabular-nums transition-colors hover:bg-[color:color-mix(in_srgb,var(--ds-success)_10%,transparent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:h-11 coarse:px-3',
+          STATUS_CHIP_TONE.healthy,
+          flash && 'ring-2 ring-[color:color-mix(in_srgb,var(--ds-success)_25%,transparent)]'
         )}
       >
         <Leaf className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -152,7 +154,7 @@ export const SavingsChip: React.FC<{ studio: Pick<StudioController, 'doc'> & { c
       {flash && !open && (
         <span
           aria-hidden
-          className="pointer-events-none absolute right-0 top-full z-30 mt-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-emerald-500/25 bg-[var(--ds-surface-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] studio-reveal"
+          className={`pointer-events-none absolute right-0 top-full z-30 mt-2 w-max max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border ${STATUS_EDGE.healthy} bg-[var(--ds-surface-strong)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] studio-reveal`}
         >
           {SAVINGS_COPY}
         </span>

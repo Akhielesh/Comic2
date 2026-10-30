@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { X } from 'lucide-react';
+import { DIALOG_TITLE } from '../../chat/studioDesign';
 import { SHORTCUTS } from './readerInput';
 import { HudButton } from './ReaderHud';
 
@@ -23,7 +24,7 @@ export const ReaderShortcuts: React.FC<{ open: boolean; onClose(): void }> = ({ 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-[15px] font-semibold">Keyboard shortcuts</h2>
+          <h2 className={DIALOG_TITLE}>Keyboard shortcuts</h2>
           <HudButton label="Close shortcuts" onClick={onClose}>
             <X className="h-5 w-5" aria-hidden />
           </HudButton>

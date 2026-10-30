@@ -26,7 +26,7 @@ import type { StudioCaps } from '../../../shared/comic/capabilities';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
 import type { BoardTab, StudioController, StudioTab } from '../types';
 import { BUILTIN_TAB_ORDER, registeredTabs, type BoardTabRegistration } from '../features';
-import { ACCENT_SOFT_BG, HAIRLINE, RADIUS_PANEL } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, HAIRLINE, OVERLINE, RADIUS_PANEL } from '../../chat/studioDesign';
 import { Skeleton } from '../../studio/kit/Shimmer';
 import { CastTab } from './CastTab';
 import { PageEditor } from './PageEditor';
@@ -315,7 +315,7 @@ export const BoardPane: React.FC<{ studio: StudioController }> = ({ studio }) =>
     <div ref={rootRef} className="flex h-full min-h-0 min-w-0 flex-col" data-board data-board-frozen={focused ? 'true' : undefined}>
       <FrozenWhileEditing frozen={!!focused}>
         <div className={cx('flex shrink-0 items-center gap-2 border-x-0 border-t-0 px-2 sm:px-4', denseChrome ? 'py-0.5' : 'py-1.5 sm:py-2', HAIRLINE)} data-board-tabs={denseChrome ? 'dense' : undefined}>
-          <span className="hidden text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] md:inline">Board</span>
+          <span className={cx('hidden md:inline', OVERLINE)}>Board</span>
           <div
             ref={stripRef}
             role="tablist"

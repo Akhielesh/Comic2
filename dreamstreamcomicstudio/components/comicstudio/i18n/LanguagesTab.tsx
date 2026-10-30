@@ -20,6 +20,7 @@ import { estimateDocJobs } from '../../../shared/comic/plan';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
+import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { EmptyHint, GhostButton, PrimaryButton, SectionTitle, Surface, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { GlossaryDrawer } from './GlossaryDrawer';
@@ -81,7 +82,7 @@ function LanguagePicker({ doc, exclude, onPick }: { doc: ComicDoc; exclude: Set<
   const group = (title: string, list: LanguageSpec[]) =>
     list.length ? (
       <div>
-        <p className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{title}</p>
+        <p className={cx('mb-1 px-1', OVERLINE)}>{title}</p>
         <div className="flex flex-wrap gap-1.5">
           {list.map((l) => (
             <button
@@ -346,7 +347,7 @@ function EditionRow({ studio, doc, lang, quote, quoteLoading, onReview }: { stud
       </div>
       <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[12px]">
         {r.publishable ? (
-          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-600/30 px-2 py-0.5 font-medium text-emerald-700 dark:text-emerald-300">
+          <span className={cx('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium', STATUS_EDGE.healthy, TONE_TEXT.success)}>
             <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
             Ready to publish
           </span>

@@ -25,6 +25,7 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { VersionStack } from '../timeline/VersionStack';
 import { TimelineDialog } from '../timeline/ui';
 import { isFreshRender } from './boardModel';
+import { OVERLINE, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { GhostButton, cx } from './ui';
 
 // ── Variant sources (contract §13.4) ─────────────────────────────────────────
@@ -231,7 +232,8 @@ export const FrameBadge: React.FC<{ children: React.ReactNode; tone?: 'warn' | '
     data-frame-badge=""
     className={cx(
       'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 text-[10px] font-semibold leading-none shadow-sm',
-      tone === 'warn' ? 'bg-amber-500/90 text-white' : 'bg-[var(--ds-surface-strong)] text-[var(--ds-ink)]'
+      // Over the art: warn is the opaque warning surface (TONE_CHIP_ON_ART; white on amber was 2.15:1).
+      tone === 'warn' ? `border ${TONE_CHIP_ON_ART.warning}` : 'bg-[var(--ds-surface-strong)] text-[var(--ds-ink)]'
     )}
   >
     <span className="min-w-0 truncate py-0.5">{children}</span>
@@ -327,7 +329,7 @@ export const VersionStrip: React.FC<{
   if (versions.length < 2) return null;
   return (
     <div className={className}>
-      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{label}</p>
+      <p className={cx('mb-1.5', OVERLINE)}>{label}</p>
       <ul className="flex gap-2 overflow-x-auto overscroll-x-contain pb-1">
         {versions.map((v) => {
           const u = v.blocked ? undefined : urlFor(v.path);

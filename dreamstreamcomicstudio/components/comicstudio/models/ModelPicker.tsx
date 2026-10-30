@@ -17,7 +17,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
 import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { getImageModel, pickableImageModels } from '../../../shared/comic/models';
-import { CONTROL_BTN, LABEL } from '../../chat/studioDesign';
+import { CONTROL_BTN, OVERLINE } from '../../chat/studioDesign';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { useCostFormat } from '../conversation/cost';
 import { useModelStatus } from '../reliability';
@@ -141,7 +141,7 @@ export const ModelPickerPanel: React.FC<ModelPickerPanelProps> = ({ doc, caps, b
 
       {showAll && (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <label htmlFor={sortId} className={LABEL}>
+          <label htmlFor={sortId} className={OVERLINE}>
             {SORT_LABEL}
           </label>
           <select

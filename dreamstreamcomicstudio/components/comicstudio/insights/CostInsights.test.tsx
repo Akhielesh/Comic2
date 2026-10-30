@@ -55,6 +55,14 @@ describe('L1 — the cost card', () => {
     expect(within(where).getByText('$0.02')).toBeInTheDocument();
   });
 
+  it('a governed viewer\'s "Where it went" overline keeps "· share of your usage" whole (it breaks at the dot on a phone, never mid-phrase)', () => {
+    mount(makeLakeComic((d) => { d.spend.byKind.translate = 0.02; }), { governed: true });
+    const suffix = within(card()).getByText('· share of your usage');
+    expect(suffix.tagName).toBe('SPAN');
+    expect(suffix).toHaveClass('whitespace-nowrap');
+    expect(suffix.parentElement).toHaveTextContent(/^Where it went · share of your usage$/);
+  });
+
   it('the failed-attempts row is hidden at 0 and shows "{n} · {$}" when there were failures', () => {
     const { unmount } = mount();
     expect(within(card()).queryByText('Failed attempts')).toBeNull();

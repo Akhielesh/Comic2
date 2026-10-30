@@ -22,6 +22,7 @@ import type { ComicStudioController } from '../useStudio';
 import { CARD_TYPES, CardRenderer } from './cards/CardRenderer';
 import { registeredCard } from '../features';
 import { NextStepChips, chipsFor } from './cards/NextStepChips';
+import { STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 const CLAMP_CHARS = 700;
@@ -227,9 +228,9 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
       {text && (
         <div
           className={cx(
-            'max-w-full rounded-2xl rounded-br-md border border-[var(--ds-hairline-soft)] bg-[var(--ds-raised)] px-3.5 py-2.5 text-[14px] leading-relaxed text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]',
+            'max-w-full rounded-2xl rounded-br-md border bg-[var(--ds-raised)] px-3.5 py-2.5 text-[14px] leading-relaxed text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]',
             status === 'sending' && 'opacity-80',
-            status === 'failed' && 'border-red-500/30'
+            status === 'failed' ? STATUS_EDGE.error : 'border-[var(--ds-hairline-soft)]'
           )}
         >
           <p className={cx('whitespace-pre-wrap break-words', long && !expanded && 'line-clamp-[10]')}>{text}</p>
@@ -248,7 +249,7 @@ export const UserBubble: React.FC<UserBubbleProps> = ({ text, attachments = [], 
       {status === 'failed' && (
         // Reason on its own line, actions together under it — never a lone ✕ wrapping onto a row.
         <div role="alert" className="flex max-w-full flex-col items-end gap-1 text-[12px]">
-          <span className="inline-flex max-w-[92%] items-start gap-1 text-right text-red-600 dark:text-red-300">
+          <span className={cx('inline-flex max-w-[92%] items-start gap-1 text-right', TONE_TEXT.danger)}>
             <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
             Not sent{error ? ` — ${error}` : ''}
           </span>

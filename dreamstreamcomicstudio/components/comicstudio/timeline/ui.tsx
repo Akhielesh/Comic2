@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { DIALOG_TITLE_FROM_SM, TONE_CHIP, TONE_CHIP_ON_ART } from '../../chat/studioDesign';
 import { useFocusTrap } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -152,7 +153,7 @@ export const TimelineDialog: React.FC<{
         style={{ paddingBottom: 'var(--sa-bottom-eff, 0px)' }}
       >
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-4 py-3">
-          <h2 id={titleId} className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">
+          <h2 id={titleId} className={cx('min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]', DIALOG_TITLE_FROM_SM)}>
             {title}
           </h2>
           <button
@@ -178,28 +179,34 @@ export const TimelineDialog: React.FC<{
  * `text-overflow` never applies to it and a long badge ("4:5, not 3:2") on a narrow card would be clipped
  * mid-word with no ellipsis (layoutLint `flex-truncate`).
  */
-export const Badge: React.FC<{ children: React.ReactNode; tone?: 'default' | 'accent' | 'warn' | 'danger' | 'ok'; className?: string; title?: string }> = ({
-  children,
-  tone = 'default',
-  className,
-  title
-}) => (
-  <span
-    title={title}
-    data-badge=""
-    className={cx(
-      'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
-      tone === 'accent' && 'bg-[#D97757]/15 text-[var(--ds-ink)]',
-      tone === 'warn' && 'bg-amber-500/15 text-amber-800 dark:text-amber-200',
-      tone === 'danger' && 'bg-red-500/15 text-red-700 dark:text-red-300',
-      tone === 'ok' && 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200',
-      tone === 'default' && 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
-      className
-    )}
-  >
-    <span className="min-w-0 truncate">{children}</span>
-  </span>
-);
+export const Badge: React.FC<{
+  children: React.ReactNode;
+  tone?: 'default' | 'accent' | 'warn' | 'danger' | 'ok';
+  /** Drawn over an image (a thumbnail): an opaque tone surface (TONE_CHIP_ON_ART), readable over any art. */
+  onArt?: boolean;
+  className?: string;
+  title?: string;
+}> = ({ children, tone = 'default', onArt = false, className, title }) => {
+  const chip = onArt ? TONE_CHIP_ON_ART : TONE_CHIP;
+  return (
+    <span
+      title={title}
+      data-badge=""
+      data-on-art={onArt ? '' : undefined}
+      className={cx(
+        'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
+        tone === 'accent' && (onArt ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)]' : 'bg-[#D97757]/15 text-[var(--ds-ink)]'),
+        tone === 'warn' && chip.warning,
+        tone === 'danger' && chip.danger,
+        tone === 'ok' && chip.success,
+        tone === 'default' && (onArt ? TONE_CHIP_ON_ART.neutral : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'),
+        className
+      )}
+    >
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  );
+};
 
 /** A neutral tile for an image the content check blocked: never an <img>. */
 export const BlockedTile: React.FC<{ className?: string; compact?: boolean }> = ({ className, compact }) => (

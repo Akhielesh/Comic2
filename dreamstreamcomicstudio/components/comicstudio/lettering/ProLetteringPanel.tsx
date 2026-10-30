@@ -39,7 +39,7 @@ import {
 import { measureForGeneration } from './measure';
 import { fontLoadGeneration } from './fontLoader';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 import { LINE_KIND_LABEL, castName } from '../board/boardModel';
 
@@ -52,8 +52,11 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'apply', label: 'Apply' }
 ];
 const LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
-const BTN =
-  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
+// The button's shape without an ink (`cx` does not merge: a tone stacked on the neutral ink loses to
+// it). BTN is the neutral button; Delete is BTN_SHAPE + TONE_TEXT.danger (statusInkGuard.test.ts).
+const BTN_SHAPE =
+  'inline-flex h-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3';
+const BTN = `${BTN_SHAPE} text-[var(--ds-ink)]`;
 const CASES: { value: TextCase; label: string }[] = [
   { value: 'upper', label: 'UPPER' },
   { value: 'as_typed', label: 'As typed' },
@@ -419,7 +422,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               )}
               <button
                 type="button"
-                className={cx(BTN, 'text-red-600 dark:text-red-400')}
+                className={cx(BTN_SHAPE, TONE_TEXT.danger)}
                 onClick={() => {
                   run(deleteLinesOps(page, ids), lines.length > 1 ? 'Delete balloons' : 'Delete balloon');
                   onDeselect();

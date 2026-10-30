@@ -12,6 +12,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Check, Copy, Loader2, RotateCw, ShieldAlert, X } from 'lucide-react';
+import { STATUS_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { UploadItem } from './useRefUpload';
 import { isActiveUpload } from './useRefUpload';
@@ -92,14 +93,14 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
               className={cx(
                 ROW,
                 rejected
-                  ? 'border-red-300/60 bg-red-50/70 dark:border-red-400/30 dark:bg-red-950/30'
+                  ? STATUS_SURFACE.error
                   : warn
                     ? 'border-[#D97757]/35 bg-[#D97757]/[0.06]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]'
               )}
               data-state={item.state}
             >
-              {rejected ? <ShieldAlert className="h-5 w-5 shrink-0 text-red-600 dark:text-red-400" aria-hidden /> : <Thumb item={item} />}
+              {rejected ? <ShieldAlert className={cx('h-5 w-5 shrink-0', TONE_TEXT.danger)} aria-hidden /> : <Thumb item={item} />}
               <div className="min-w-0 flex-1 basis-32">
                 <p className="truncate text-[13px] font-medium text-[var(--ds-ink)]" title={item.name}>
                   {item.name}
@@ -136,7 +137,7 @@ export const UploadQueue: React.FC<UploadQueueProps> = ({ items, onCancel, onRet
                   </p>
                 )}
                 {(warn || rejected) && (
-                  <p className={cx('mt-0.5 text-[12px] leading-snug', rejected ? 'text-red-700 dark:text-red-300' : 'text-[var(--ds-ink)]')} role="status">
+                  <p className={cx('mt-0.5 text-[12px] leading-snug', rejected ? TONE_TEXT.danger : 'text-[var(--ds-ink)]')} role="status">
                     {warn && <AlertTriangle className="mr-1 inline h-3 w-3 align-[-1px] text-[#D97757]" aria-hidden />}
                     {item.message}
                     {rejected && (

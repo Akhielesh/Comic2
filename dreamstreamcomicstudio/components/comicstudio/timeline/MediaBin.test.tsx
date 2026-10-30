@@ -53,6 +53,21 @@ describe('MediaBin', () => {
     expect(screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))).toEqual(['Deleted page 4', 'Deleted page 9']);
   });
 
+  it('badges over a thumbnail are opaque tone surfaces, readable on any art (TONE_CHIP_ON_ART)', () => {
+    setup();
+    const overArt = [...document.querySelectorAll<HTMLElement>('[data-badge][data-on-art]')];
+    const words = new Set(overArt.map((b) => b.textContent));
+    expect(words.has('Deleted')).toBe(true);
+    expect(words.has('Archived')).toBe(true);
+    for (const b of overArt) {
+      // Mixed into the raised surface (or the raised surface itself), never a tint over transparency.
+      expect(b.className, b.textContent!).toMatch(/var\(--ds-raised\)/);
+      expect(b.className, b.textContent!).not.toMatch(/_10%,transparent\)|well-strong/);
+    }
+    const deleted = overArt.find((b) => b.textContent === 'Deleted')!;
+    expect(deleted.className).toContain('text-[var(--ds-danger-text)]');
+  });
+
   it('search narrows by owner; an empty result says so', () => {
     setup();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'maya' } });

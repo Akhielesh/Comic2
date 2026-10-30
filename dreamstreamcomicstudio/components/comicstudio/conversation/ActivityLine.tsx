@@ -15,7 +15,7 @@ import type { ComicStudioController } from '../useStudio';
 import { activeActivities } from '../studioReducer';
 import { useCostFormat } from './cost';
 import { cx, plural } from './ui';
-import { RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
+import { RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
 
 export type ActivityCost = 'free' | 'text' | 'image';
 
@@ -35,7 +35,7 @@ const COST_BADGE: Record<ActivityCost, { text: string; title: string; cls: strin
   free: {
     text: 'Free',
     title: 'Free — done by the editor, no AI cost',
-    cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    cls: TONE_CHIP.success
   },
   text: {
     text: 'AI',
@@ -153,7 +153,7 @@ export const ActivityLine: React.FC<ActivityLineProps> = ({ studio, className, o
         {cost && <CostBadge cost={cost} governed={fmt.governed} />}
         {saved > 0 && (
           <span
-            className="shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-px text-[10.5px] font-medium leading-4 text-emerald-700 dark:text-emerald-300"
+            className={`shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-medium leading-4 ${TONE_CHIP.success}`}
             title="Free — done by the editor, no AI cost"
           >
             {fmt.saved(saved)}

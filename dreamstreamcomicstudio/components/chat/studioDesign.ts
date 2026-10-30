@@ -150,6 +150,21 @@ export const TONE_CHIP: Record<StatusTone, string> = {
   neutral: `${TONE_SURFACE.neutral} ${TONE_TEXT.neutral}`
 };
 
+/**
+ * TONE_CHIP for a pill drawn OVER ART (a status badge on a thumbnail or a library tile): the same
+ * 10 % tint mixed into the opaque raised surface instead of into transparency, so whatever the image
+ * underneath, the pill is the measured "tone surface on raised" pairing (tokenContrast.test.ts,
+ * ≥ 4.5:1 in every context). The translucent TONE_CHIP is tuned for page surfaces; over a dark panel
+ * its light-theme ink vanished (1.4–2.3:1). Neutral is the raised surface and the muted ink.
+ */
+export const TONE_CHIP_ON_ART: Record<StatusTone, string> = {
+  success: `border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,var(--ds-raised))] ${TONE_TEXT.success}`,
+  warning: `border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,var(--ds-raised))] ${TONE_TEXT.warning}`,
+  danger: `border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,var(--ds-raised))] ${TONE_TEXT.danger}`,
+  info: `border-[color:color-mix(in_srgb,var(--ds-info)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-info)_10%,var(--ds-raised))] ${TONE_TEXT.info}`,
+  neutral: `border-[var(--ds-hairline)] bg-[var(--ds-raised)] ${TONE_TEXT.neutral}`
+};
+
 // ---------------------------------------------------------------------------
 // Motion
 // ---------------------------------------------------------------------------
@@ -229,6 +244,23 @@ export const SCRIM = 'bg-[var(--ds-scrim)]';
 /** The small uppercase label above a heading or a group of controls (Atlas `.atlas-overline`). */
 export const OVERLINE = 'text-[11px] font-semibold leading-4 tracking-[0.12em] uppercase text-[var(--ds-muted)]';
 
+/**
+ * The title of a CENTRED modal dialog (Atlas wave 8: DialogTitle / AlertDialogTitle default to 20 px
+ * semibold, `text-xl`). The leading is the alert-dialog title's 1.75rem (text-xl's own, what Atlas's
+ * titles rendered before the type-scale change): Atlas's DialogTitle restates leading-none, which here
+ * would clip descenders in the one-line truncating dialog headers and crowd a title that wraps on a
+ * phone. No colour: it inherits the dialog's ink (the immersive reader's shortcuts dialog is white on
+ * its dark glass). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM for a dialog
+ * that docks to the bottom as a sheet on phones.
+ */
+export const DIALOG_TITLE = `text-xl font-semibold leading-7 tracking-normal ${FONT_DISPLAY}`;
+/**
+ * DIALOG_TITLE from `sm` up, for a dialog that is a bottom sheet below `sm` and a centred dialog above
+ * (the timeline dialog, the model-change and lab-run confirmations): the element keeps its sheet-header
+ * size on phones and becomes the dialog title once it is centred. Pair it with that phone size.
+ */
+export const DIALOG_TITLE_FROM_SM = 'sm:text-xl sm:font-semibold sm:leading-7 sm:tracking-normal';
+
 /** A neutral chip (Atlas MetaChip) — status meaning uses STATUS_CHIP. Add one CHIP_VARIANT. */
 export const CHIP = `inline-flex max-w-full items-center gap-1 whitespace-nowrap ${RADIUS_PILL} border px-2 py-0.5 text-[11px] font-medium leading-4`;
 export const CHIP_VARIANT = {
@@ -255,14 +287,25 @@ export const STATUS_INK: Record<StatusState, string> = {
   attention: TONE_TEXT.warning,
   error: TONE_TEXT.danger
 };
+/**
+ * A status's edge colour alone (Atlas wave 8): for a neutral surface that only borders in the state's
+ * colour (a toast or a hint bubble beside a status chip). STATUS_SURFACE is this edge plus the tint.
+ */
+export const STATUS_EDGE: Record<StatusState, string> = {
+  healthy: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)]',
+  active: 'border-[color:color-mix(in_srgb,var(--ds-ink)_15%,transparent)]',
+  waiting: 'border-[var(--ds-hairline)]',
+  attention: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)]',
+  error: 'border-[var(--ds-status-error-edge)]'
+};
 /** Border and tint for a status chip, callout or row. */
 export const STATUS_SURFACE: Record<StatusState, string> = {
-  healthy: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_6%,transparent)]',
-  active: 'border-[color:color-mix(in_srgb,var(--ds-ink)_15%,transparent)] bg-[var(--ds-well)]',
-  waiting: 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)]',
-  attention: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,transparent)]',
+  healthy: `${STATUS_EDGE.healthy} bg-[color:color-mix(in_srgb,var(--ds-success)_6%,transparent)]`,
+  active: `${STATUS_EDGE.active} bg-[var(--ds-well)]`,
+  waiting: `${STATUS_EDGE.waiting} bg-[var(--ds-canvas)]`,
+  attention: `${STATUS_EDGE.attention} bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,transparent)]`,
   /** Atlas: destructive at 35 % / 6 % in light, the brighter mark at 40 % / 8 % in dark (the tokens carry both). */
-  error: 'border-[var(--ds-status-error-edge)] bg-[var(--ds-status-error-tint)]'
+  error: `${STATUS_EDGE.error} bg-[var(--ds-status-error-tint)]`
 };
 /** The solid dot of a status (always beside its words), a toast's edge and time-left bar. */
 export const STATUS_DOT: Record<StatusState, string> = {

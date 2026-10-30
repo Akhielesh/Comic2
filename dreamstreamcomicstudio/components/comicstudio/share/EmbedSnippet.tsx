@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Check, Copy } from 'lucide-react';
+import { OVERLINE } from '../../chat/studioDesign';
 import { embedSnippet } from './shareModel';
 import { copyText } from './useShareCapabilities';
 
@@ -10,7 +11,7 @@ export const EmbedSnippet: React.FC<{ url: string; title: string; aspect?: strin
   const [copied, setCopied] = useState(false);
   return (
     <div className="min-w-0">
-      <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]" htmlFor="ds-embed-code">
+      <label className={`mb-1.5 block ${OVERLINE}`} htmlFor="ds-embed-code">
         Embed on a website
       </label>
       <div className="flex min-w-0 items-stretch gap-2">

@@ -23,6 +23,7 @@ import { KIND_LABEL, plural } from './boardModel';
 import { spendSummary } from '../insights/insightsModel';
 import { SpendByKindList } from '../insights/OverviewTab';
 import { useCostFormat, type CostFormat } from './costFormat';
+import { OVERLINE } from '../../chat/studioDesign';
 import { Chip, InlineField, SectionTitle, Surface, cx } from './ui';
 
 const SCRIPT_PREVIEW_LINES = 14;
@@ -255,7 +256,7 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat; caps?:
       )}
       {entries.length > 0 && (
         <div>
-          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Recent</p>
+          <p className={cx('mb-1', OVERLINE)}>Recent</p>
           <ul className="divide-y divide-[var(--ds-hairline-soft)]" aria-label="Recent spend">
             {entries.map((e) => (
               <li key={e.id} className="flex min-w-0 items-center gap-2 py-1.5 text-[12px]">

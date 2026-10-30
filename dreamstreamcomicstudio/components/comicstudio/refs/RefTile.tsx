@@ -14,6 +14,7 @@ import { GripVertical, Star, Trash2, Crop, Undo2, ArrowRightLeft } from 'lucide-
 import type { ContentRating } from '../../../shared/comic/safety';
 import type { RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { REF_LIMITS, refOwnerKey } from '../../../shared/comic/refs';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { labelText, labelsFor, type RefUsage } from './refsModel';
@@ -165,8 +166,11 @@ export interface RefActionsProps {
   busy?: boolean;
 }
 
-const ACTION_BTN =
-  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium text-[var(--ds-ink)] transition-colors motion-reduce:transition-none hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-45';
+// The action button's shape without an ink (`cx` does not merge: a tone stacked on the neutral ink
+// loses to it). ACTION_BTN is the neutral action; Remove is ACTION_BTN_SHAPE + TONE_TEXT.danger.
+const ACTION_BTN_SHAPE =
+  'inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 text-[13px] font-medium transition-colors motion-reduce:transition-none hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45 disabled:opacity-45';
+const ACTION_BTN = `${ACTION_BTN_SHAPE} text-[var(--ds-ink)]`;
 const FIELD =
   'min-h-[44px] w-full min-w-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 text-[16px] sm:text-[13px] text-[var(--ds-ink)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/45';
 
@@ -253,7 +257,7 @@ export const RefActions: React.FC<RefActionsProps> = ({ refAsset: ref, index, ow
             </select>
           </label>
         )}
-        <button type="button" className={cx(ACTION_BTN, 'text-red-700 dark:text-red-300')} onClick={onRemove} disabled={busy}>
+        <button type="button" className={cx(ACTION_BTN_SHAPE, TONE_TEXT.danger)} onClick={onRemove} disabled={busy}>
           <Trash2 className="h-4 w-4" aria-hidden /> Remove
         </button>
       </div>

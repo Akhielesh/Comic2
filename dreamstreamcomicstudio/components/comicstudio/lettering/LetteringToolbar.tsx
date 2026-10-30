@@ -7,7 +7,7 @@ import React from 'react';
 import { Cloud, MessageCircle, Redo2, Sparkles, Square, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../shared/comic/doc';
 import type { StudioMode } from '../../../shared/comic/capabilities';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 
 export interface LetteringToolbarProps {
@@ -38,8 +38,11 @@ const ADD: { kind: LineKind; label: string; icon: React.ReactNode }[] = [
 
 // Touch: real 44 px buttons (a 30x28 button's ::after hit area overlapped its neighbours' — P1-QA
 // lettering-toolbar-small-add); fine pointers keep the compact 28 px row.
-const BTN =
-  'inline-flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11.5px] font-medium text-[var(--ds-muted)] transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none coarse:h-11 coarse:min-w-11 coarse:px-2.5 coarse:text-[12.5px]';
+// The button's shape without its resting ink (`cx` does not merge: a tone stacked on the muted ink
+// competes with it in stylesheet order). BTN is the quiet button; Fix edges is BTN_SHAPE + the tone.
+const BTN_SHAPE =
+  'inline-flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11.5px] font-medium transition-colors duration-150 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:cursor-not-allowed disabled:opacity-40 motion-reduce:transition-none coarse:h-11 coarse:min-w-11 coarse:px-2.5 coarse:text-[12.5px]';
+const BTN = `${BTN_SHAPE} text-[var(--ds-muted)]`;
 
 export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
   addKind,
@@ -69,7 +72,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
           // The name contains the visible words ("+ Sound effect" → "Add a sound effect"; WCAG 2.5.3).
           aria-label={a.kind === 'sfx' ? 'Add a sound effect' : `Add ${a.label.toLowerCase()} balloon`}
           onClick={() => onAddKind(addKind === a.kind ? null : a.kind)}
-          className={cx(BTN, addKind === a.kind && SEGMENTED_ACTIVE)}
+          className={cx(BTN_SHAPE, addKind === a.kind ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)]')}
         >
           {a.icon}
           <span aria-hidden className="hidden sm:inline">
@@ -88,7 +91,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
       <Wand2 className="h-3.5 w-3.5" aria-hidden /> Tidy
     </button>
     {outsideCount > 0 && (
-      <button type="button" className={cx(BTN, 'text-amber-700 dark:text-amber-300')} disabled={disabled} onClick={onFixEdges} title="Move balloons that hug the page edge back inside the safe area (free)">
+      <button type="button" className={cx(BTN_SHAPE, TONE_TEXT.warning)} disabled={disabled} onClick={onFixEdges} title="Move balloons that hug the page edge back inside the safe area (free)">
         <Sparkles className="h-3.5 w-3.5" aria-hidden /> Fix edges ({outsideCount})
       </button>
     )}

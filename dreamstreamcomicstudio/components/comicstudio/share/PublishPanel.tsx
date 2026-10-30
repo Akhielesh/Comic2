@@ -9,6 +9,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
 import type { PublicationOwnerView, PublishReadiness, PublishRequest } from '../../../shared/comic/publication';
+import { OVERLINE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx, plural } from '../conversation/ui';
 import { pageIdsFor } from './shareModel';
 
@@ -25,9 +26,9 @@ export interface PublishPanelProps {
 const Row: React.FC<{ ok: boolean | 'warn'; children: React.ReactNode }> = ({ ok, children }) => (
   <li className="flex min-w-0 items-start gap-2 text-[13px] leading-snug text-[var(--ds-ink)]">
     {ok === true ? (
-      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="Ready" />
+      <CheckCircle2 className={cx('mt-0.5 h-4 w-4 shrink-0', TONE_TEXT.success)} aria-label="Ready" />
     ) : ok === 'warn' ? (
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-label="Needs attention" />
+      <AlertTriangle className={cx('mt-0.5 h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-label="Needs attention" />
     ) : (
       <CircleDashed className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-label="Not ready" />
     )}
@@ -128,7 +129,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
       </ul>
       {(editions.length > 0 || languages.length > 1) && (
         <fieldset className="m-0 min-w-0 border-0 p-0">
-          <legend className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Languages</legend>
+          <legend className={cx('mb-1.5', OVERLINE)}>Languages</legend>
           <div className="flex flex-wrap gap-2">
             {/* Every edition, plus a ticked language whose edition is gone (so it can still be unticked). */}
             {[source, ...editions.filter((e) => e !== source), ...languages.filter((l) => l !== source && !editions.includes(l))].map((lang) => {
@@ -162,7 +163,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
           </div>
           <p className="m-0 mt-1.5 text-[12px] text-[var(--ds-muted)]">Readers always get the original and can switch to any language you publish.</p>
           {unready.length > 0 && (
-            <p className="m-0 mt-1.5 text-[12px] text-amber-700 dark:text-amber-300">
+            <p className={cx('m-0 mt-1.5 text-[12px]', TONE_TEXT.warning)}>
               {unready.map((l) => languageSpec(l)?.english || l).join(', ')} {unready.length === 1 ? 'isn’t' : 'aren’t'} ready to publish: untick {unready.length === 1 ? 'it' : 'them'} to publish without {unready.length === 1 ? 'it' : 'them'}, or finish the translation first.
             </p>
           )}

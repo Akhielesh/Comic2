@@ -26,14 +26,20 @@ import {
   tailToggleOps
 } from './styleOps';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../board/ui';
 
 const ROW = 'space-y-1.5';
 const ROW_LABEL = 'text-[11.5px] font-medium text-[var(--ds-muted)]';
 // Touch (coarse pointers): every control is a REAL 44 px box (not a 32 px box with an ::after hit area —
 // neighbouring ::after areas overlapped and stole each other's taps; P1-QA easy-lettering-small-targets).
-const SMALL_BTN =
-  'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]';
+// The button's shape without an ink: `cx` joins class strings and does not merge them, so a tone
+// stacked on a base that already has `text-[var(--ds-ink)]` loses to it (Tailwind emits the danger
+// ink first). The ink is CHOSEN: SMALL_BTN for the neutral button, SMALL_BTN_SHAPE + TONE_TEXT.danger
+// for Delete (tests/config/statusInkGuard.test.ts).
+const SMALL_BTN_SHAPE =
+  'inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 text-[12px] font-medium hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] disabled:opacity-40 coarse:h-11 coarse:min-w-11 coarse:px-3 coarse:text-[13px]';
+const SMALL_BTN = `${SMALL_BTN_SHAPE} text-[var(--ds-ink)]`;
 
 type SeeThrough = 'solid' | 'soft' | 'see' | 'clear';
 const SEE_ALPHA: Record<Exclude<SeeThrough, 'clear'>, number> = { solid: 1, soft: 0.85, see: 0.6 };
@@ -195,7 +201,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
         )}
         <button
           type="button"
-          className={cx(SMALL_BTN, 'text-red-600 dark:text-red-400')}
+          className={cx(SMALL_BTN_SHAPE, TONE_TEXT.danger)}
           onClick={() => {
             run(deleteLinesOps(page, ids), lines.length > 1 ? 'Delete balloons' : 'Delete balloon');
             onDeselect();

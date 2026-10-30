@@ -21,6 +21,7 @@ import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
 import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
 import { costFormat, useCostFormat, usageSafeSpendText, type CostFormat } from '../cost';
+import { TONE_CHIP, TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, plural } from '../ui';
 import { useAction } from './useAction';
 
@@ -157,7 +158,7 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
       icon={<Coins className="h-4 w-4" />}
       right={
         overBudget ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONE_CHIP.warning}`}>
             <TriangleAlert className="h-3 w-3" aria-hidden /> Over budget
           </span>
         ) : undefined
@@ -200,7 +201,7 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
           </GhostButton>
         </div>
       ) : gate.status === 'approved' ? (
-        <p className="mt-3 flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-700 dark:text-emerald-300">
+        <p className={`mt-3 flex items-center gap-1.5 text-[12.5px] font-medium ${TONE_TEXT.success}`}>
           <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden /> {approvedCopy(gate)}
         </p>
       ) : (

@@ -129,14 +129,26 @@ function accentTextSurfaces(ctx: ContextName): Map<string, Rgba> {
 }
 
 const TONES = ['success', 'warning', 'danger', 'info'] as const;
-/** Status text: the page, the glass, hover rows, and its own TONE_SURFACE (10 % of the hue). */
+/**
+ * Where status text sits once Comic Studio's raw hue text moved onto the readable tokens (Atlas wave 8,
+ * "readable status ink"; tests/config/statusInkGuard.test.ts): the page, a card, the soft glass, a
+ * raised overlay (menus, sheets, popovers) and its highlighted / hovered rows — the danger rows of the
+ * clip and context menus — on top of the hover rows the matrix measured before.
+ */
+const STATUS_TEXT_BASES = [
+  'canvas', 'sidebar', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'raised',
+  'well on canvas', 'hover on canvas', 'hover on surface/canvas', 'hover on raised', 'overlay-hover on raised'
+];
+/** …and its own tint (a chip, a banner, a hover tint) over the page, a card, the soft glass and an overlay. */
+const STATUS_TINT_BASES = ['canvas', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'raised'];
+/** Status text: the surfaces above, and its own TONE_SURFACE (10 % of the hue) over each tint base. */
 function statusSurfaces(ctx: ContextName, tone: (typeof TONES)[number]): Map<string, Rgba> {
   const all = surfaces(ctx);
   const s = new Map<string, Rgba>();
-  for (const k of ['canvas', 'sidebar', 'surface/canvas', 'surface-strong/canvas', 'well on canvas', 'hover on canvas', 'hover on surface/canvas']) s.set(k, all.get(k)!);
+  for (const k of STATUS_TEXT_BASES) s.set(k, all.get(k)!);
   // TONE_SURFACE's tint: the hue at 10 % (danger reads the danger mark, the brighter red in Atlas dark).
   const tint = withAlpha(token(tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`, ctx), 0.1);
-  for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
+  for (const base of STATUS_TINT_BASES) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
   return s;
 }
 
@@ -549,11 +561,11 @@ describe('token contrast — the status vocabulary (healthy / active / waiting /
     }
   });
 
-  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card and a raised overlay) in every context', () => {
+  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card, the soft glass and a raised overlay) in every context', () => {
     const failing: string[] = [];
     for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
       const s = surfaces(ctx);
-      for (const base of ['canvas', 'surface/canvas', 'raised', 'surface-strong/canvas']) {
+      for (const base of ['canvas', 'surface/canvas', 'surface-soft/canvas', 'raised', 'surface-strong/canvas']) {
         for (const [state, text, surface] of STATES) {
           const bg = surface(ctx, s.get(base)!);
           const r = ratio(over(token(text, ctx), bg), bg);
@@ -567,10 +579,59 @@ describe('token contrast — the status vocabulary (healthy / active / waiting /
   it('the danger tone surface (TONE_SURFACE) on its mark tint keeps the readable danger text ≥ 4.5:1', () => {
     for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
       const s = surfaces(ctx);
-      for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) {
+      for (const base of STATUS_TINT_BASES) {
         const bg = over(withAlpha(token('--ds-danger-mark', ctx), 0.1), s.get(base)!);
         expect(ratio(over(token('--ds-danger-text', ctx), bg), bg), `${ctx} ${base}`).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+});
+
+/** OKLCH chroma of an opaque sRGB colour (Björn Ottosson's OKLab). */
+function chroma({ r, g, b }: Rgba): number {
+  const lin = (v: number) => {
+    const c = v / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const [R, G, B] = [lin(r), lin(g), lin(b)];
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B);
+  const m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B);
+  const s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const Bb = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  return Math.hypot(A, Bb);
+}
+
+describe('token contrast — status hue and status pills over art', () => {
+  it('the danger text reads as a red, not as the muted grey, in every context (Atlas dark derives it from the brighter mark)', () => {
+    // Atlas dark mixed the deep fill red 50 % into the ink to clear 4.5:1: rgb(190,137,138), chroma
+    // 0.065 beside the muted grey's 0, so the danger menu rows read as dim secondary items. The brighter
+    // mark (Atlas's destructive-foreground) at 65 % is rgb(250,116,123), chroma ≈ 0.16.
+    expect(lookup('--ds-danger-text', 'atlas dark')).toBe('color-mix(in srgb, var(--ds-danger-mark) 65%, var(--ds-ink))');
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const danger = chroma(token('--ds-danger-text', ctx));
+      expect(danger, `${ctx} danger text chroma`).toBeGreaterThanOrEqual(0.1);
+      expect(danger - chroma(token('--ds-muted', ctx)), `${ctx} danger text vs muted`).toBeGreaterThanOrEqual(0.08);
+    }
+  });
+
+  it('TONE_CHIP_ON_ART mixes the tone into the opaque raised surface, and its words are ≥ 4.5:1 on it in every context', () => {
+    for (const tone of TONES) {
+      const src = tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`;
+      expect(design.TONE_CHIP_ON_ART[tone]).toContain(`bg-[color:color-mix(in_srgb,var(${src})_10%,var(--ds-raised))]`);
+      expect(design.TONE_CHIP_ON_ART[tone]).toContain(design.TONE_TEXT[tone]);
+    }
+    expect(design.TONE_CHIP_ON_ART.neutral).toBe(`border-[var(--ds-hairline)] bg-[var(--ds-raised)] ${design.TONE_TEXT.neutral}`);
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const raised = token('--ds-raised', ctx);
+      // Opaque, so the pill is the same colour over any image (a mix of two opaque colours is opaque).
+      expect(raised.a, `${ctx} --ds-raised is opaque`).toBe(1);
+      for (const tone of TONES) {
+        const bg = over(withAlpha(token(tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`, ctx), 0.1), raised);
+        expect(ratio(over(token(`--ds-${tone}-text`, ctx), bg), bg), `${ctx} ${tone}`).toBeGreaterThanOrEqual(4.5);
+      }
+      expect(ratio(token('--ds-muted', ctx), raised), `${ctx} neutral`).toBeGreaterThanOrEqual(4.5);
+      expect(ratio(token('--ds-accent-text', ctx), raised), `${ctx} working (accent text)`).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

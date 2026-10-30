@@ -10,6 +10,7 @@ import { PenLine, Sparkles } from 'lucide-react';
 import { type Card, type Character } from '../../../../shared/comic/doc';
 import type { ComicStudioController } from '../../useStudio';
 import { composeInStudio } from '../composerBus';
+import { OVERLINE } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, cx } from '../ui';
 import { FormatPanel } from '../panels/FormatPanel';
 import { StylePanel } from '../panels/StylePanel';
@@ -35,7 +36,7 @@ const MAX_CAST_CHIPS = 8;
 //   ROW_VALUE never narrower than its content allows (min-w-0) and never under 12rem beside a label.
 const ROW = 'flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1';
 const ROW_MAIN = 'flex min-w-0 flex-[1_1_12rem] flex-wrap items-start gap-x-3 gap-y-0.5';
-const ROW_LABEL = 'block w-[4.25rem] shrink-0 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]';
+const ROW_LABEL = `block w-[4.25rem] shrink-0 ${OVERLINE}`;
 const ROW_VALUE = 'block min-w-0 max-w-full flex-[1_1_12rem]';
 
 export const RecapCard: React.FC<{ card: RecapCardData; studio: ComicStudioController }> = ({ studio }) => {

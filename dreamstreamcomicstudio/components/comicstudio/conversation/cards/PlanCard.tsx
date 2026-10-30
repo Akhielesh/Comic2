@@ -17,6 +17,7 @@ import { registeredCard } from '../../features';
 import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import { TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx, plural } from '../ui';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
@@ -41,10 +42,10 @@ export const estimatePlanRender = (doc: ComicDoc, byok: boolean): { pages: Page[
 
 const PageStatus: React.FC<{ doc: ComicDoc; page: Page }> = ({ doc, page }) => {
   const s = page.render.status;
-  if (s === 'ready' && isPageStale(doc, page)) return <span className="text-[11px] font-medium text-amber-600 dark:text-amber-300">Out of date</span>;
+  if (s === 'ready' && isPageStale(doc, page)) return <span className={cx('text-[11px] font-medium', TONE_TEXT.warning)}>Out of date</span>;
   if (s === 'ready')
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">
+      <span className={cx('inline-flex items-center gap-1 text-[11px] font-medium', TONE_TEXT.success)}>
         <Check className="h-3 w-3" aria-hidden /> Drawn
       </span>
     );
@@ -55,7 +56,7 @@ const PageStatus: React.FC<{ doc: ComicDoc; page: Page }> = ({ doc, page }) => {
         <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden /> Drawing
       </span>
     );
-  if (s === 'failed') return <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300">Didn’t finish</span>;
+  if (s === 'failed') return <span className={cx('text-[11px] font-medium', TONE_TEXT.warning)}>Didn’t finish</span>;
   return null;
 };
 
@@ -185,7 +186,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           </GhostButton>
         )}
       </div>
-      <p className={cx('mt-2 text-[11.5px] text-[var(--ds-muted)] [overflow-wrap:anywhere]', drawing > 0 && 'text-[var(--ds-ink)]')}>
+      <p className={cx('mt-2 text-[11.5px] [overflow-wrap:anywhere]', drawing > 0 ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>
         {drawing > 0
           ? `Drawing ${plural(drawing, 'page')} — they appear on the board as they finish.`
           : allDrawn

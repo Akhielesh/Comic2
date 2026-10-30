@@ -16,7 +16,7 @@ import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } fro
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { DIALOG_TITLE, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
@@ -383,7 +383,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view && (
             // Settings the server changes in place (PATCH): the link, the snapshot and readers' places stay.
             <section aria-label="Link settings" className="min-w-0">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Link settings</div>
+              <div className={cx('mb-1', OVERLINE)}>Link settings</div>
               <div className="divide-y divide-[var(--ds-hairline-soft)]">
                 <Toggle label="Readers can download" hint="PDF and page images of the published version" checked={view.allowDownload} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowDownload: v }))} />
                 <Toggle label="Allow embedding" hint="Lets websites show it in a frame" checked={view.allowEmbed} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowEmbed: v }))} />
@@ -412,7 +412,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view?.allowEmbed && <EmbedSnippet url={url} title={title} aspect={doc.format?.pageAspect} />}
           {live && (
             <section aria-label="Reader stats" className="min-w-0">
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Readers</div>
+              <div className={cx('mb-1.5', OVERLINE)}>Readers</div>
               <ShareStats stats={view?.stats} />
             </section>
           )}
@@ -435,7 +435,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
                     <RefreshCw className="h-4 w-4" aria-hidden /> Get a new link
                   </button>
                 )}
-                <button type="button" onClick={() => setConfirm('unpublish')} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-red-600 hover:bg-red-500/[0.08] dark:text-red-400">
+                <button type="button" onClick={() => setConfirm('unpublish')} className={`inline-flex min-h-[44px] items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium ${TONE_TEXT.danger} hover:bg-[var(--ds-status-error-tint)]`}>
                   <Link2Off className="h-4 w-4" aria-hidden /> Unpublish
                 </button>
               </div>
@@ -507,13 +507,13 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
         )}
         <header className="flex shrink-0 items-start justify-between gap-3 px-4 pb-2 pt-3 sm:px-5">
           <div className="min-w-0">
-            <h2 id="ds-share-title" className="m-0 truncate text-[16px] font-semibold text-[var(--ds-ink)]">
+            <h2 id="ds-share-title" className={cx('m-0 truncate text-[var(--ds-ink)]', layout === 'dialog' || layout === 'wide' ? DIALOG_TITLE : 'text-[16px] font-semibold')}>
               Share “{title}”
             </h2>
             <p
               className={cx(
                 'm-0 mt-0.5 truncate text-[12px]',
-                status.tone === 'public' ? 'text-emerald-700 dark:text-emerald-400' : status.tone === 'unlisted' ? 'text-sky-700 dark:text-sky-400' : status.tone === 'warn' ? 'text-amber-700 dark:text-amber-400' : 'text-[var(--ds-muted)]'
+                status.tone === 'public' ? TONE_TEXT.success : status.tone === 'unlisted' ? TONE_TEXT.info : status.tone === 'warn' ? TONE_TEXT.warning : 'text-[var(--ds-muted)]'
               )}
             >
               {status.label}

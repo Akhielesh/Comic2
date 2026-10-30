@@ -52,7 +52,7 @@ import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { voiceInputSupported } from '../../../hooks/useDictation';
-import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
+import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import type { PendingAttachment, SendOptions } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { COMPOSE_EVENT, type ComposeRequest } from './composerBus';
@@ -1338,7 +1338,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                       )}
                       {busy && <UploadRing name={a.name} state={a.upload} progress={a.progress} />}
                       {a.upload === 'failed' && (
-                        <span className="absolute bottom-1 left-1 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-white shadow" title={a.error} aria-hidden>
+                        <span className={`absolute bottom-1 left-1 grid h-5 w-5 place-items-center rounded-full border shadow ${TONE_CHIP_ON_ART.warning}`} title={a.error} aria-hidden>
                           <AlertTriangle className="h-3 w-3" />
                         </span>
                       )}
@@ -1413,7 +1413,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
           )}
 
           {notice && (
-            <div role="status" className="order-first mb-1.5 flex basis-full items-start gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[11.5px] text-amber-700 dark:text-amber-300">
+            <div role="status" className={cx('order-first mb-1.5 flex basis-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-[11.5px]', TONE_CHIP.warning)}>
               <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{notice}</span>
               <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="tap-target shrink-0 opacity-70 hover:opacity-100">
                 <X className="h-3.5 w-3.5" />

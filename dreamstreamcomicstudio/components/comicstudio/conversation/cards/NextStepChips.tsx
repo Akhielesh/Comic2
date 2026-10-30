@@ -17,6 +17,7 @@ import { SPEND_ACTION_TYPES } from '../../../../shared/comic/ops';
 import type { ComicStudioController } from '../../useStudio';
 import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
 import { costFormat, useCostFormat, type CostFormat } from '../cost';
+import { TONE_CHIP } from '../../../chat/studioDesign';
 import { ChipButton, cx } from '../ui';
 import { hasRecap } from './recap';
 
@@ -205,7 +206,7 @@ export const NextStepChips: React.FC<{ chips: ChipModel[]; studio: ComicStudioCo
               <span
                 className={cx(
                   'shrink-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
-                  badge === 'Free' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
+                  badge === 'Free' ? TONE_CHIP.success : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
                 )}
                 title={
                   badge === 'Free'
