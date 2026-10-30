@@ -16,7 +16,8 @@
 // canvases and Pango text. Untrusted SVG never reaches sharp: every upload path sniffs it out first.
 //
 // server/src/index.ts imports this module once at boot, before any route module; importing it installs
-// the guard (idempotent). libvips' loader lookup skips blocked loaders, so a blocked format surfaces from
+// the guard (idempotent). If it can't be installed, boot logs "[sharpGuard] loader block NOT installed: …"
+// with console.warn. libvips' loader lookup skips blocked loaders, so a blocked format surfaces from
 // sharp as "Input buffer contains unsupported image format" (or "Input file …"), not as the word "blocked".
 
 import sharp from 'sharp';
@@ -52,21 +53,27 @@ type SharpBlockApi = { block?: (options: { operation: string[] }) => void };
 
 let status: SharpGuardStatus = { installed: false, blocked: [] };
 
+/** The guard is down: record why and say so in the server log (boot output names every dormant layer). */
+const notInstalled = (reason: string): SharpGuardStatus => {
+  console.warn(`[sharpGuard] loader block NOT installed: ${reason}`);
+  return { installed: false, blocked: [], reason };
+};
+
 /**
  * Block the risky libvips loaders for this process. Safe to call more than once. Never throws: a
- * build without `sharp.block` is reported in the returned status, and `convert_image` still refuses
- * every non-allowlisted type by its bytes.
+ * build without `sharp.block` (or a block() that throws) is logged with console.warn and reported in
+ * the returned status, and `convert_image` still refuses every non-allowlisted type by its bytes.
  */
 export function installSharpGuard(lib: SharpBlockApi = sharp as unknown as SharpBlockApi): SharpGuardStatus {
   if (typeof lib.block !== 'function') {
-    status = { installed: false, blocked: [], reason: 'sharp.block is not available in this sharp build' };
+    status = notInstalled('sharp.block is not available in this sharp build');
     return status;
   }
   try {
     lib.block({ operation: [...SHARP_BLOCKED_LOADERS] });
     status = { installed: true, blocked: SHARP_BLOCKED_LOADERS };
   } catch (err) {
-    status = { installed: false, blocked: [], reason: `sharp.block failed: ${err instanceof Error ? err.message : String(err)}` };
+    status = notInstalled(`sharp.block failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   return status;
 }
@@ -147,7 +154,7 @@ export function checkImageBytes(buf: Buffer, allowed: readonly AllowedImageType[
       return {
         ok: false,
         type,
-        reason: `HEIC photos aren't supported here. Export the photo as JPEG (on iPhone: Settings › Camera › Formats › Most Compatible), or use ${allowedImageWords(allowed)}`
+        reason: `HEIC photos aren't supported here. Export the photo as JPEG, or on iPhone choose “Most Compatible” in Settings › Camera › Formats for new photos. ${use}`
       };
     case 'unknown':
       return { ok: false, type, reason: `its contents aren't ${allowedImageWords(allowed)} (the type is read from the bytes, not from the name or the declared type)` };

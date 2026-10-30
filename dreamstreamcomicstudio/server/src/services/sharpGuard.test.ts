@@ -1,7 +1,7 @@
 // @vitest-environment node
 // W1.10: the process-wide sharp guard. Importing the module installs it (server/src/index.ts does that
 // at boot), so these tests run with the guard on, as production does.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -120,9 +120,11 @@ describe('sharp guard: process-wide loader block', () => {
     expect(loadable).toContain('tiff');
   });
 
-  it('never throws at boot: a sharp without block() or a failing block() is reported, not thrown', () => {
+  it('never throws at boot: a sharp without block() or a failing block() is reported and logged, not thrown', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       expect(installSharpGuard({})).toEqual({ installed: false, blocked: [], reason: 'sharp.block is not available in this sharp build' });
+      expect(warn).toHaveBeenLastCalledWith('[sharpGuard] loader block NOT installed: sharp.block is not available in this sharp build');
       expect(
         installSharpGuard({
           block: () => {
@@ -130,11 +132,33 @@ describe('sharp guard: process-wide loader block', () => {
           }
         })
       ).toMatchObject({ installed: false, reason: 'sharp.block failed: nope' });
+      expect(warn).toHaveBeenLastCalledWith('[sharpGuard] loader block NOT installed: sharp.block failed: nope');
+      expect(warn).toHaveBeenCalledTimes(2);
       // libvips ignores names its build lacks (most of the list, with the prebuilt binaries).
       expect(() => sharp.block({ operation: ['VipsForeignLoadNotInThisBuild'] })).not.toThrow();
     } finally {
       expect(installSharpGuard().installed).toBe(true);
+      // A working install is silent.
+      expect(warn).toHaveBeenCalledTimes(2);
+      warn.mockRestore();
     }
+  });
+
+  it('a boot whose sharp has no block() says so in the server log (the import itself warns)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.resetModules();
+    vi.doMock('sharp', () => ({ default: {} }));
+    try {
+      const booted = await import('./sharpGuard.js');
+      expect(booted.sharpGuardStatus()).toMatchObject({ installed: false, reason: 'sharp.block is not available in this sharp build' });
+      expect(warn).toHaveBeenCalledWith('[sharpGuard] loader block NOT installed: sharp.block is not available in this sharp build');
+    } finally {
+      vi.doUnmock('sharp');
+      vi.resetModules();
+      warn.mockRestore();
+    }
+    // The module instance the rest of this file uses (and production's) still has the guard on.
+    expect(sharpGuardStatus().installed).toBe(true);
   });
 
   it("the server's own image paths still work with the guard on: SVG composite (assets.ts Mark-up), SVG render, AVIF, text, raw", async () => {
@@ -210,6 +234,52 @@ describe('sharp guard: magic-byte sniff and allowlist', () => {
     expect(sniffImageType('not a buffer' as unknown as Buffer)).toBe('unknown');
   });
 
+  it('agrees with comic/assets.ts on every branch: a seeded sweep of header pieces (drift guard until one sniffer remains)', () => {
+    // Deterministic PRNG (mulberry32) so a failure names a reproducible case.
+    let seed = 0x5eed1010;
+    const rand = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(rand() * xs.length)];
+    const bytes = (n: number) => Buffer.from(Array.from({ length: n }, () => Math.floor(rand() * 256)));
+    const NEUTRAL = ['isom', 'mp42', 'crx ', 'jp2 ', 'qt  '];
+    const BRANDS = ['avif', 'avis', 'heic', 'heix', 'hevc', 'hevx', 'heim', 'heis', 'hevm', 'hevs', 'mif1', 'msf1', 'mif2', ...NEUTRAL];
+    const ftypBox = () => {
+      // Neutral filler, then one brand that may decide: it lands anywhere from byte 16 to past the 256-byte window.
+      const filler = Array.from({ length: Math.floor(rand() * 80) }, () => pick(NEUTRAL)).join('');
+      const major = rand() < 0.5 ? pick(NEUTRAL) : pick(BRANDS);
+      const box = Buffer.concat([Buffer.alloc(4), Buffer.from(`ftyp${major}\0\0\0\0${filler}${pick(BRANDS)}`, 'latin1')]);
+      box.writeUInt32BE(pick([0, 8, 12, 16, 20, box.byteLength, box.byteLength, 300, 0xffffffff]), 0); // 0, short, true, oversized
+      return box;
+    };
+    const pieces: (() => Buffer)[] = [
+      () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a]),
+      () => Buffer.from([0xff, 0xd8, 0xff]),
+      () => Buffer.from([0xff, 0xd8]),
+      () => Buffer.from(pick(['GIF87a', 'GIF89a', 'GIF8', 'GIF90a']), 'latin1'),
+      () => Buffer.concat([Buffer.from('RIFF', 'latin1'), bytes(4), Buffer.from(pick(['WEBP', 'WAVE', 'WEB']), 'latin1')]),
+      ftypBox,
+      () => Buffer.from([0xef, 0xbb, 0xbf]),
+      () => Buffer.from(' \t\r\n'.repeat(pick([1, 3, 100, 300])), 'latin1'), // up to 1,200 bytes of whitespace
+      () => Buffer.from(pick(['<svg', '<SVG width="1">', '<?xml version="1.0"?>', '<!doctype html>', '<html>', '<', '<p>x</p><svg']), 'latin1'),
+      () => bytes(Math.floor(rand() * 24))
+    ];
+    const seen = new Set<string>();
+    for (let n = 0; n < 3000; n += 1) {
+      const parts = Array.from({ length: 1 + Math.floor(rand() * 4) }, () => pick(pieces)());
+      const buf = Buffer.concat([...parts, bytes(Math.floor(rand() * 40))]);
+      const ours = sniffImageType(buf);
+      expect(ours, `case ${n}: ${buf.subarray(0, 48).toString('hex')}`).toBe(assetsSniffImageType(buf));
+      seen.add(ours);
+    }
+    // The sweep reaches every verdict, so no branch goes unchecked.
+    expect([...seen].sort()).toEqual(['avif', 'gif', 'heic', 'html', 'jpeg', 'png', 'svg', 'unknown', 'webp']);
+  });
+
   it('admits only JPEG, PNG, WebP and GIF, and says why anything else is refused', async () => {
     for (const [fmt, buf] of [
       ['jpeg', await canvas().jpeg().toBuffer()],
@@ -225,6 +295,10 @@ describe('sharp guard: magic-byte sniff and allowlist', () => {
     const heic = checkImageBytes(await heicBytes());
     expect(heic).toMatchObject({ ok: false, type: 'heic' });
     expect(!heic.ok && heic.reason).toMatch(/^HEIC photos aren't supported here/);
+    // Exporting fixes this photo; the iPhone setting only changes how new photos are saved.
+    expect(!heic.ok && heic.reason).toBe(
+      "HEIC photos aren't supported here. Export the photo as JPEG, or on iPhone choose “Most Compatible” in Settings › Camera › Formats for new photos. Use a JPG, PNG, WebP or GIF image"
+    );
     expect(checkImageBytes(await canvas().avif().toBuffer())).toMatchObject({ ok: false, type: 'avif', reason: "AVIF images can't be used here. Use a JPG, PNG, WebP or GIF image" });
     expect(checkImageBytes(await tiffBytes())).toMatchObject({ ok: false, type: 'unknown' });
     // A narrower allowlist narrows the verdict and the wording.
