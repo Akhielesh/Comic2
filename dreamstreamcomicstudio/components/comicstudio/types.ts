@@ -98,7 +98,18 @@ export interface StudioSelection {
   lineIds: string[];
   panelN?: number;
   surface: 'page_editor' | 'board';
+  // --- Ship 2 (pro plan §4.5; K2b registration, C1 fills them): the pro editor's selected panels (frames) and overlays
+  //     ('ly_…') on pageId. A director focus derived from the selection carries them (StudioFocus.panelIds / layerIds). ---
+  panelIds?: string[];
+  layerIds?: string[];
 }
+
+/**
+ * Ship 2 (pro plan §4.6 "Never lose work"; K2b registration, C3 fills it): where the editor's edits are. 'saved' = on the
+ * server; 'saving' = sending; 'local' = saved on this device, will sync; 'offline' = waiting for the network; 'error' =
+ * the server refused one (rolled back, with its sentence).
+ */
+export type StudioSaveState = 'saved' | 'saving' | 'local' | 'offline' | 'error';
 
 export interface SendOptions {
   /** Legacy data URLs (still accepted). */
@@ -208,4 +219,9 @@ export interface StudioController {
   errorCode?: string | null;
   /** True while the owner's publication view is being fetched. */
   publicationLoading?: boolean;
+
+  // ── Ship 2 (pro plan §4.6; optional: C3 fills it, absent = today's behaviour) ─────────────────────────────
+
+  /** The save pill's state (always visible in the pro editor once C3 ships). */
+  saveState?: StudioSaveState;
 }

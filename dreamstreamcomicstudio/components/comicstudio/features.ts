@@ -41,6 +41,12 @@ import { feature as insights } from './insights/index';
 import { feature as reliability } from './reliability/index';
 // --- history (versions plan §8; H0 stub, H5 fills it) ---
 import { feature as history } from './history/index';
+// --- Ship 2/3 (pro plan §10; K2b stubs: C7 editor, C4 confidence, C5 consistency, C3 save, C6 guide fill them) ---
+import { feature as editor } from './editor/index';
+import { feature as confidence } from './confidence/index';
+import { feature as consistency } from './consistency/index';
+import { feature as save } from './save/index';
+import { feature as guide } from './guide/index';
 
 export type {
   AdminSectionRegistration,
@@ -95,7 +101,10 @@ export const featureModules = (): readonly FeatureModule[] =>
     breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability,
     // Comic History (versions plan §8), last = lowest precedence. Listed once it registers something (H5): the H0 stub
     // registers nothing, so the registries — and this list — are exactly what they were without it.
-    ...(hasRegistrations(history) ? [history] : [])
+    ...(hasRegistrations(history) ? [history] : []),
+    // The pro editor and its companions (pro plan §10 Waves 3), after History. Each is listed once it registers
+    // something: the K2b stubs register nothing, so the registries are exactly what they were without them.
+    ...[editor, confidence, consistency, save, guide].filter(hasRegistrations)
   ].map((m) => m || {});
 
 /** A feature module that contributes at least one registration. */
