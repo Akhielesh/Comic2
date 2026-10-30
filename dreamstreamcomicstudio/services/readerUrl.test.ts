@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { clearReaderUrlParams, setReaderUrlParams } from './readerUrl';
+import { clearReaderUrlParams, readerDeepLinkId, setReaderUrlParams } from './readerUrl';
 
 describe('reader URL entries', () => {
   beforeEach(() => window.history.replaceState({}, '', '/'));
@@ -36,5 +36,15 @@ describe('reader URL entries', () => {
     window.history.replaceState({}, '', '/?board=1');
     setReaderUrlParams('p1');
     expect(new URLSearchParams(window.location.search).has('board')).toBe(false);
+  });
+});
+
+describe('readerDeepLinkId', () => {
+  it('names the comic of a shared reader link and nothing else', () => {
+    expect(readerDeepLinkId('?view=read&id=abc')).toBe('abc');
+    expect(readerDeepLinkId('?id=abc&view=read&lang=te')).toBe('abc');
+    expect(readerDeepLinkId('?view=read')).toBeNull();
+    expect(readerDeepLinkId('?view=gallery&id=abc')).toBeNull();
+    expect(readerDeepLinkId('')).toBeNull();
   });
 });
