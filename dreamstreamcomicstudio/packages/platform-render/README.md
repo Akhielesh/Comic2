@@ -20,6 +20,8 @@ Every refusal is a `RenderError` with a stable `code`: `blocked`, `overlap`, `in
   the host's `resolveAsset(id)`, which answers with a `data:` URI from the host's own storage. Anything else
   (`path:`, `http:`, `https:`, `file:`, SVG) throws `blocked`. WebP is re-encoded by the host's `transcode` (the
   browser passes a canvas one) or refused as `unsupported`, because not every Word and PowerPoint reader takes it.
+  Before any decode its header is measured: over 12,000 px a side or 50 megapixels (plan §9) is `too-large`, and a
+  size that cannot be read is `unsupported`, so a tiny file declaring a gigapixel canvas never reaches the canvas.
 - **The vendored PptxGenJS refuses the same things itself** (`src/vendor/pptxgenjs/PATCHES.md`, P0–P8): no `path`,
   no URL or SVG image, no media, no background path, `https:`/`mailto:` hyperlinks only, no `node:fs`, `node:https`,
   `XMLHttpRequest` or `writeFile`. P8 fixes an upstream bug (one `<a:pPr>` per paragraph).

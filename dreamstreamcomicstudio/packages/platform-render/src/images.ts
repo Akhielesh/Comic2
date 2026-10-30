@@ -162,6 +162,14 @@ export const imageSize = (b: Uint8Array, mime: ImageMime): { width: number; heig
  */
 export const TRANSCODED_MAX_BYTES = 4 * SCHEMA_LIMITS.assetDataMaxBytes;
 
+/**
+ * The most a WebP image may declare before it is decoded for transcoding (plan §9's normalize limits): 12,000 px on a
+ * side and 50 megapixels. A few kilobytes of WebP can declare 16,383 × 16,383 px, about 1 GiB of pixels on a canvas,
+ * which would crash a phone's tab long before any byte cap applied.
+ */
+export const IMAGE_MAX_SIDE = 12000;
+export const IMAGE_MAX_PIXELS = 50000000;
+
 // ── Preparing one image ─────────────────────────────────────────────────────────────────────────────────────────
 
 const DATA_REF = s.assetRef();
@@ -204,6 +212,15 @@ export const imagePreparer = (opts: ImageOptions): ((ref: AssetRef, where: strin
     let { mime, bytes } = readDataImage(dataUri, where);
     if (mime === 'image/webp') {
       if (!opts.transcode) throw new RenderError('unsupported', `${where}: WebP images need converting to PNG or JPEG first`);
+      // Measure from the header before anything decodes it: refuse what would not fit in memory.
+      const declared = imageSize(bytes, mime);
+      if (!declared) throw new RenderError('unsupported', `${where}: the WebP image's size could not be read, so it is not converted`);
+      if (declared.width > IMAGE_MAX_SIDE || declared.height > IMAGE_MAX_SIDE || declared.width * declared.height > IMAGE_MAX_PIXELS) {
+        throw new RenderError(
+          'too-large',
+          `${where}: the image is ${declared.width.toLocaleString('en-US')} × ${declared.height.toLocaleString('en-US')} px, over the ${IMAGE_MAX_SIDE.toLocaleString('en-US')} px a side or ${IMAGE_MAX_PIXELS / 1000000} megapixels that can be converted`,
+        );
+      }
       const out = await opts.transcode({ bytes, mime });
       const real = out && out.bytes instanceof Uint8Array ? sniffImage(out.bytes) : null;
       if (!real || real === 'image/webp' || real !== out.mime) throw new RenderError('unsupported', `${where}: the WebP image could not be converted`);

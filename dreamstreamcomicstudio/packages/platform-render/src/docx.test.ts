@@ -206,6 +206,35 @@ describe('renderDocx: images are data: images we hold, never a path or a URL', (
     expect((await refusal(renderDocx(doc, { transcode: async () => ({ bytes: huge, mime: 'image/png' as const }) }))).code).toBe('too-large');
   });
 
+  it('a WebP is measured from its header before the transcoder decodes it: over 12,000 px a side or 50 MP is too-large', async () => {
+    /** A 30-byte extended WebP (VP8X) declaring `w` × `h`: tiny on disk, huge on a canvas. */
+    const vp8x = (w: number, h: number): string => {
+      const b = new Uint8Array(30);
+      b.set([0x52, 0x49, 0x46, 0x46, 22, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x58, 10, 0, 0, 0]);
+      b.set([(w - 1) & 0xff, ((w - 1) >> 8) & 0xff, ((w - 1) >> 16) & 0xff, (h - 1) & 0xff, ((h - 1) >> 8) & 0xff, ((h - 1) >> 16) & 0xff], 24);
+      return `data:image/webp;base64,${Buffer.from(b).toString('base64')}`;
+    };
+    const transcode = vi.fn(fakeTranscode);
+    for (const [w, h] of [
+      [16000, 16000], // the forged header: about 1 GiB of RGBA
+      [12001, 100], // one side over 12,000 px
+      [8000, 8000], // 64 MP
+    ]) {
+      const err = await refusal(renderDocx(imageDoc(vp8x(w, h)), { transcode }));
+      expect(err.code).toBe('too-large');
+      expect(err.message).toContain(`${w.toLocaleString('en-US')} × ${h.toLocaleString('en-US')} px`);
+    }
+    expect(transcode).not.toHaveBeenCalled();
+    // At the limits it is handed to the transcoder: 12,000 px on a side and 4,000 px is 48 MP.
+    await renderDocx(imageDoc(vp8x(12000, 4000)), { transcode });
+    expect(transcode).toHaveBeenCalledTimes(1);
+    // A WebP whose size cannot be read is not decoded either.
+    const unreadable = new Uint8Array(30);
+    unreadable.set([0x52, 0x49, 0x46, 0x46, 22, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x41, 0x4c, 0x50, 0x48]); // 'ALPH' first
+    expect((await refusal(renderDocx(imageDoc(`data:image/webp;base64,${Buffer.from(unreadable).toString('base64')}`), { transcode }))).code).toBe('unsupported');
+    expect(transcode).toHaveBeenCalledTimes(1);
+  });
+
   it('a data: image over 5 MB is too-large', async () => {
     const big = new Uint8Array(5000001);
     big.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

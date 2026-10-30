@@ -18,7 +18,7 @@ export { richdocFromMarkdown, MARKDOWN_MAX_CHARS } from './markdown.js';
 export type { MarkdownOptions } from './markdown.js';
 export { RenderError, isRenderError, RENDER_ERROR_CODES } from './errors.js';
 export type { RenderErrorCode, SlideOverlap } from './errors.js';
-export { decodeBase64, encodeBase64, imageSize, sniffImage } from './images.js';
+export { IMAGE_MAX_PIXELS, IMAGE_MAX_SIDE, decodeBase64, encodeBase64, imageSize, sniffImage } from './images.js';
 export type { AssetResolver, ImageMime, ImageOptions, ImageTranscoder, PreparedImage } from './images.js';
 export { DEFAULT_RENDER_BRAND, fontFamilyOf } from './style.js';
 export type { FontFamilyResolver, RenderBrand, RenderDeckTheme, RenderDocStyles } from './style.js';
