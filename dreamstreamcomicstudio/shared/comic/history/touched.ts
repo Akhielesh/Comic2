@@ -250,6 +250,15 @@ export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pag
 /** Panel ops the server writes as free software when no action names the batch. */
 const EDITOR_JOB_OPS: ReadonlySet<string> = new Set(['page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'finding', 'continuity']);
 
+/** The render fields a job writes around a drawing without making one: its status, error, attempts, QC report and a
+ *  safety withhold. A render patch made only of these changes nothing in the book ('system', §4.2). */
+const RENDER_BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(['status', 'error', 'errorDetail', 'attempts', 'updatedAt', 'qc', 'withheld']);
+const isRenderBookkeeping = (op: DocOp): boolean => {
+  if (op.op !== 'render') return false;
+  const patch = (op as { patch?: unknown }).patch;
+  return !!patch && typeof patch === 'object' && Object.keys(patch).every((k) => RENDER_BOOKKEEPING_KEYS.has(k));
+};
+
 /** Render origins that are AI drawings (a `derived` image is the editor's free fit). */
 const AI_RENDER_ORIGINS = new Set(['render', 'edit', 'variation']);
 /** Job ops that are AI work by themselves (§4.2). */
@@ -260,9 +269,11 @@ const AI_JOB_OPS = new Set(['pages', 'page_panels', 'translations', 'style_optio
  * director content ops → ai; job renders that set an AI image, and job pages/panels/translations/style options/
  * model switches → ai; a derived image (fit_render) and balloon re-fits (relayout_balloons) → editor ("no AI cost").
  * `action` (the StudioAction type that produced the batch, when the recorder knows it: jobs.ts startAction passes it)
- * decides first: EDITOR_ACTIONS (panelize_page, flatten_page, rebind_panels, apply_finding, fit_render,
- * relayout_balloons) → editor; AI_ACTIONS (fix_panel, enrich_pages, plan_pages) → ai. Server panel ops without one are
- * the editor's.
+ * decides who made a change: EDITOR_ACTIONS (panelize_page, flatten_page, rebind_panels, apply_finding, fit_render,
+ * relayout_balloons) → editor; AI_ACTIONS (fix_panel, enrich_pages, plan_pages) → ai. It never re-attributes what a job
+ * writes around the work: a render's status, error or QC report stays 'system' (no change: no row, no clock, no run)
+ * and the software's balloon placement after a check stays the editor's, so a late check never opens an AI run. Server
+ * panel ops without an action are the editor's.
  */
 export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc, action?: string): HistoryActor | null => {
   if (!op || typeof op !== 'object') return null;
@@ -272,7 +283,12 @@ export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc
   if (!touchedKeys(op, doc).length && op.op !== 'pages_reorder') return null;
   // A derived image (fit_render's free fit) is the editor's whoever asked (§4.2), before the origin decides.
   if ((op.op === 'render' || op.op === 'render_use') && (op as { patch?: { origin?: unknown } }).patch?.origin === 'derived') return 'editor';
-  // Ship 2: the action that produced the batch decides first (panelize/flatten/rebind/apply a fix → editor; a panel
+  // What a job writes around the action's own work is never the action's: a render's status, error or QC report is
+  // 'system' and the software's balloon placement after a check is the editor's, as without an action (§4.2). An action
+  // scope reaches every commit of its background renders, so without this a late check would open an AI run.
+  if (origin === 'job' && isRenderBookkeeping(op)) return 'system';
+  if (origin === 'job' && (op.op === 'balloons' || op.op === 'balloon')) return 'editor';
+  // Ship 2: the action that produced the batch decides next (panelize/flatten/rebind/apply a fix → editor; a panel
   // fix or "Add detail" → ai), whoever clicked it.
   if (typeof action === 'string' && EDITOR_ACTIONS.has(action)) return 'editor';
   if (typeof action === 'string' && AI_ACTIONS.has(action)) return 'ai';

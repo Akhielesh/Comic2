@@ -2296,7 +2296,10 @@ describe('Ship 2 contract (K2a)', () => {
     expect(opActor(frames, 'job', doc)).toBe('editor');
     expect(opActor({ op: 'page_panels', id: p2.id, panels: p2.panels }, 'job', doc)).toBe('ai'); // the writer, as before
     for (const a of EDITOR_ACTIONS) expect(opActor({ op: 'page_panels', id: p2.id, panels: p2.panels }, 'job', doc, a), a).toBe('editor');
-    for (const a of AI_ACTIONS) expect(opActor({ op: 'render', target: { kind: 'page', id: p2.id }, patch: {} }, 'job', doc, a), a).toBe('ai');
+    const drawing: DocOp = { op: 'render', target: { kind: 'page', id: p2.id }, patch: { status: 'ready', asset: { path: 'x.webp', source: 'generated', at: 1 } } };
+    for (const a of AI_ACTIONS) expect(opActor(drawing, 'job', doc, a), a).toBe('ai');
+    // …but a render status or QC report the job writes around it is no change ('system'), whatever the action.
+    for (const a of [...AI_ACTIONS, ...EDITOR_ACTIONS]) expect(opActor({ op: 'render', target: { kind: 'page', id: p2.id }, patch: { status: 'queued' } }, 'job', doc, a), a).toBe('system');
     expect(opActor({ op: 'message', msg: { id: 'm', role: 'user', text: 'x', at: 1 } }, 'job', doc, 'panelize_page')).toBeNull();
     // Words (pro plan §5.6).
     const you = panelMomentsOfOps([{ op: 'panels_order', pageId: p2.id, order: [] }], 'you', doc);

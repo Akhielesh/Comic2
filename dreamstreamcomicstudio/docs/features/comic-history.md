@@ -356,6 +356,10 @@ Code: `server/src/comic/history/{recorder,policy}.ts` (the session's `HistoryHoo
     `fit_render` (a fitted image) and `relayout_balloons` (balloon re-fits).
   - `AI_ACTIONS` → the AI: `fix_panel` (its words name the panel: "AI redrew panel 3 on page 1"), `enrich_pages` and
     `plan_pages` ("Plan the pages" clicked in the UI is the writer's rewrite, never "You edited").
+- The action decides who made the work, never what a job writes around it: a render's status, error or QC report
+  stays `system` and the job's balloon placement after a page check stays the editor's, whatever the action. So a
+  panel fix's run starts at its drawing (not at "queued"), and a check that lands after a change of yours never opens
+  a second AI run or a second "Before the AI…" row.
 - A derived image (`render` with `origin: 'derived'`) is the editor's whoever asked.
 - Without an action: your clicks are yours, the director's changes are the AI's, job renders that set an AI image and
   the writer's pages, panels, translations, style options and model switches are the AI's, server panel ops and

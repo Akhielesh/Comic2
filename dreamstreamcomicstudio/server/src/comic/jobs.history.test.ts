@@ -9,8 +9,11 @@ import { emptyRender, pageSpecHash, type AssetRef, type ComicDoc, type PanelCuts
 import type { OpsOrigin } from '../../../shared/comic/events.js';
 import type { DocOp, StudioAction } from '../../../shared/comic/ops.js';
 import type { PanelMomentAction } from '../../../shared/comic/history/describe.js';
+import type { HistoryActor } from '../../../shared/comic/history/types.js';
+import { opActor } from '../../../shared/comic/history/touched.js';
 import { compileFixPanel, finishFixPanel, fixPanelMeta, fixPanelProblem } from './actions/panelFix.js';
 import { NOOP_HISTORY_HOOKS } from './history/hooks.js';
+import { classifyBatch } from './history/policy.js';
 import { currentHistoryAction } from './history/recorder.js';
 import { createFakeHistoryStore, type FakeHistoryStore } from './history/store.fake.js';
 import { __setHistoryStoreForTests } from './history/store.js';
@@ -94,8 +97,16 @@ const fillPanelFix = () => {
 
 let fake: FakeHistoryStore;
 let docs: FakeDocStore;
-/** What the recorder was handed at each commit: the action in scope, the ops and the origin. */
-let seen: { action: PanelMomentAction | undefined; ops: string[]; origin: OpsOrigin | undefined }[];
+/** What the recorder was handed at each commit: the action in scope, the ops, the origin, and how policy.ts classified
+ *  it (the batch's actor; whether it set a drawing; the actor of its QC report alone). */
+let seen: {
+  action: PanelMomentAction | undefined;
+  ops: string[];
+  origin: OpsOrigin | undefined;
+  actor: HistoryActor | null;
+  drawing: boolean;
+  qcActor?: HistoryActor | null;
+}[];
 
 const open = async (doc: ComicDoc) => {
   docs.docs.set(doc.id, { userId: USER, doc });
@@ -103,7 +114,17 @@ const open = async (doc: ComicDoc) => {
   const hooks = session.history;
   const onCommit = hooks.onCommit.bind(hooks);
   (hooks as { onCommit: typeof hooks.onCommit }).onCommit = (before, next, ops, origin, label) => {
-    seen.push({ action: currentHistoryAction(), ops: ops.map((o) => o.op), origin });
+    const action = currentHistoryAction();
+    const patchOf = (o: DocOp) => (o as { patch?: { asset?: unknown; qc?: unknown } }).patch;
+    const qc = ops.find((o) => o.op === 'render' && patchOf(o)?.qc && !patchOf(o)?.asset);
+    seen.push({
+      action,
+      ops: ops.map((o) => o.op),
+      origin,
+      actor: classifyBatch(ops, origin, before, next, action?.type, label).actor,
+      drawing: ops.some((o) => o.op === 'render' && !!patchOf(o)?.asset),
+      ...(qc ? { qcActor: opActor(qc, origin, next, action?.type) } : {})
+    });
     onCommit(before, next, ops, origin, label);
   };
   await session.flush();
@@ -188,6 +209,47 @@ describe('with COMIC_HISTORY on, each action reaches the recorder with its commi
     const rows = rowsOf(session);
     expect(rows.map((r) => r.kind)).toEqual(['start', 'ai']);
     expect(rows[1]).toMatchObject({ actor: 'ai', label: 'AI redrew panel 2 on page 1', parentId: rows[0].id });
+  });
+
+  it('fix_panel once B8 fills the hooks: render statuses and the QC report stay "system", the run starts at the drawing, and a late check after your edit opens no AI run', async () => {
+    fillPanelFix();
+    // The page check is held until your edit has landed (a slow vision reply).
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let checking!: () => void;
+    const checkStarted = new Promise<void>((resolve) => (checking = resolve));
+    vi.mocked(analyzePageRender).mockImplementation(async () => {
+      checking();
+      await held;
+      return { qc: { ...QC }, balloons: [] } as never;
+    });
+    const session = await open(drawnDoc());
+    const ctx = testContext(session);
+    const running = runAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix', instruction: 'Red scarf' }, { confirmed: true, origin: 'user' });
+    await checkStarted;
+    // Your edit, made outside the action while its page is being checked: it closes the AI run.
+    session.commit([{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_1_2', patch: { text: 'My line while it checks' } }], { origin: 'user' });
+    release();
+    await running;
+    await ctx.settled();
+    await session.flush({ final: true });
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    const fix = seen.filter((s) => s.action?.type === 'fix_panel');
+    // 'queued' and 'rendering' (and every other status-only commit) carry the action and stay 'system'.
+    const statuses = fix.filter((s) => s.ops.join() === 'render' && !s.drawing);
+    expect(statuses.length).toBeGreaterThanOrEqual(2);
+    expect(statuses.every((s) => s.actor === 'system')).toBe(true);
+    // The run starts at the drawing (its before_ai is taken there), not at the 'queued' commit.
+    expect(fix.find((s) => s.actor === 'ai')).toMatchObject({ drawing: true });
+    // The late check: its QC report is 'system' and the free balloon placement the editor's; nothing in it is the AI's.
+    const check = fix.find((s) => s.qcActor !== undefined)!;
+    expect(check).toMatchObject({ qcActor: 'system', actor: 'editor' });
+    expect(seen.find((s) => s.ops.includes('line') && s.origin === 'user')).toMatchObject({ action: undefined, actor: 'you' });
+    // One AI run, closed by your edit; no second "Before the AI…" row for the late check; then where you left off.
+    const rows = rowsOf(session);
+    expect(rows.map((r) => r.kind)).toEqual(['start', 'ai', 'edits']);
+    expect(rows[1]).toMatchObject({ actor: 'ai', label: 'AI redrew panel 2 on page 1' });
+    expect(rows.filter((r) => r.kind === 'before_ai')).toEqual([]);
   });
 
   it('an approved fix_panel gate: the run carries the gated action, not approve_gate', async () => {
