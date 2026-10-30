@@ -242,10 +242,11 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
 };
 
 // --- Ship 2 (K2a; pro plan §5.6): who made a panels change ---
-/** Free software actions: their batches are the editor's ("no AI cost"). */
-export const EDITOR_ACTIONS: ReadonlySet<string> = new Set(['panelize_page', 'flatten_page', 'rebind_panels', 'apply_finding']);
-/** Paid actions: their batches are the AI's. */
-export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages']);
+/** Free software actions: their batches are the editor's ("no AI cost"), whoever asked: the Ship 2 panel actions, a
+ *  fitted image (fit_render, derived art) and balloon re-fits (relayout_balloons) (§4.2). */
+export const EDITOR_ACTIONS: ReadonlySet<string> = new Set(['panelize_page', 'flatten_page', 'rebind_panels', 'apply_finding', 'fit_render', 'relayout_balloons']);
+/** Paid actions: their batches are the AI's, whoever clicked them ("Plan the pages" runs the writer; §4.2, §4.3 #1). */
+export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages', 'plan_pages']);
 /** Panel ops the server writes as free software when no action names the batch. */
 const EDITOR_JOB_OPS: ReadonlySet<string> = new Set(['page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'finding', 'continuity']);
 
@@ -258,9 +259,10 @@ const AI_JOB_OPS = new Set(['pages', 'page_panels', 'translations', 'style_optio
  * Who made this change (§4.2), or null when the op touches no section (forward-only records). user → you;
  * director content ops → ai; job renders that set an AI image, and job pages/panels/translations/style options/
  * model switches → ai; a derived image (fit_render) and balloon re-fits (relayout_balloons) → editor ("no AI cost").
- * Ship 2: `action` (the StudioAction type that produced the batch, when the recorder knows it) puts panelize_page,
- * flatten_page, rebind_panels and apply_finding batches on the editor and fix_panel / enrich_pages on the AI; server
- * panel ops without one are the editor's.
+ * `action` (the StudioAction type that produced the batch, when the recorder knows it: jobs.ts startAction passes it)
+ * decides first: EDITOR_ACTIONS (panelize_page, flatten_page, rebind_panels, apply_finding, fit_render,
+ * relayout_balloons) → editor; AI_ACTIONS (fix_panel, enrich_pages, plan_pages) → ai. Server panel ops without one are
+ * the editor's.
  */
 export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc, action?: string): HistoryActor | null => {
   if (!op || typeof op !== 'object') return null;
@@ -268,6 +270,8 @@ export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc
   if (op.op === 'image_model') return 'ai';
   if (CAPTURE_NEUTRAL_OPS.has(op.op)) return null;
   if (!touchedKeys(op, doc).length && op.op !== 'pages_reorder') return null;
+  // A derived image (fit_render's free fit) is the editor's whoever asked (§4.2), before the origin decides.
+  if ((op.op === 'render' || op.op === 'render_use') && (op as { patch?: { origin?: unknown } }).patch?.origin === 'derived') return 'editor';
   // Ship 2: the action that produced the batch decides first (panelize/flatten/rebind/apply a fix → editor; a panel
   // fix or "Add detail" → ai), whoever clicked it.
   if (typeof action === 'string' && EDITOR_ACTIONS.has(action)) return 'editor';

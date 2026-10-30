@@ -56,22 +56,16 @@ export const HISTORY_MOMENT_BATCHES_MAX = 200;
 
 /**
  * Free software actions whose batches are the editor's whoever asked (§4.2: "fit_render (derived art),
- * relayout_balloons → editor, no AI cost"). K2a's panel actions (panelize, flatten, rebind, apply a fix) are
- * already in touched.ts EDITOR_ACTIONS and reach opActor as its 4th argument.
+ * relayout_balloons → editor, no AI cost"). touched.ts EDITOR_ACTIONS lists them (with K2a's panel actions), so opActor
+ * decides them from its 4th argument; kept for importers.
  */
 export const EDITOR_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set(['fit_render', 'relayout_balloons']);
 
 /**
- * Paid AI actions whose batches are the AI's whoever clicked them (§4.2, §4.3 #1). "Plan the pages" from the UI runs
- * the writer and commits its pages with origin 'user'; it is still the AI's rewrite (a `before_ai` + `ai` pair, with
- * the writer's spend). touched.ts AI_ACTIONS (fix_panel, enrich_pages) reach opActor as its 4th argument already.
- */
-export const AI_PAID_ACTIONS: ReadonlySet<string> = new Set(['plan_pages']);
-
-/**
- * Until jobs.ts passes the action to History (withHistoryAction; REQUIRED before COMIC_HISTORY=1), the commit labels
- * planPages gives the writer's ops name the batch instead: one of these labels with a `pages` or `character` op is the
- * AI's. The labels are set by the server only (a client 'patch' commits without a label).
+ * The writer's batch by its commit label, for a commit made without its action (jobs.ts startAction passes the action
+ * through withHistoryAction, so "Plan the pages" is named by touched.ts AI_ACTIONS; this covers anything outside it):
+ * one of these labels with a `pages` or `character` op is the AI's. The labels are set by the server only (a client
+ * 'patch' commits without a label).
  */
 export const AI_WRITER_LABELS: ReadonlySet<string> = new Set(['Plan pages', 'Revise pages', 'Add cast']);
 const AI_WRITER_OPS: ReadonlySet<string> = new Set(['pages', 'character']);
@@ -129,8 +123,9 @@ export const pageIdOfKey = (key: string): string | undefined => {
 };
 
 /**
- * One op's actor (§4.2): opActor, then a paid AI action (or the writer's labelled batch) is the AI's, then the editor
- * rule for fitted images and balloon re-fits.
+ * One op's actor (§4.2): opActor (the action, the derived-image editor rule, the origin). Two batch-level rules remain
+ * for a commit made without its action: the writer's labelled batch is the AI's, and a fitted image's batch (its
+ * remapped balloons included) is the editor's.
  */
 export const actorOf = (
   op: DocOp,
@@ -142,8 +137,8 @@ export const actorOf = (
 ): HistoryActor | null => {
   const base = opActor(op, origin, doc, action);
   if (base === null) return null;
-  if (aiBatch || (typeof action === 'string' && AI_PAID_ACTIONS.has(action))) return 'ai';
-  if (fittedBatch || isDerivedRender(op) || (typeof action === 'string' && EDITOR_SOFTWARE_ACTIONS.has(action))) return 'editor';
+  if (aiBatch) return 'ai';
+  if (fittedBatch) return 'editor';
   return base;
 };
 

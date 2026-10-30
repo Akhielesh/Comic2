@@ -6,7 +6,7 @@ import { historyV5Doc } from './__fixtures__/books';
 import { changeItemsFromDiff, describeChanges, pageRangeText } from './describe';
 import { diffBooks } from './diff';
 import { sectionSignatures } from './sections';
-import { CAPTURE_NEUTRAL_OPS, opActor, touchedKeys } from './touched';
+import { AI_ACTIONS, CAPTURE_NEUTRAL_OPS, EDITOR_ACTIONS, opActor, touchedKeys } from './touched';
 
 const v5 = () => normalizeDoc(historyV5Doc());
 
@@ -51,6 +51,24 @@ describe('touchedKeys', () => {
     expect(opActor({ op: 'translations', lang: 'te', lines: { pg_3_l1: { text: 't', status: 'machine', sourceHash: 'h', at: 1 } } }, 'job', doc)).toBe('ai');
     expect(opActor({ op: 'image_model', lock: { modelId: 'm', lockedAt: 1, origin: 'user_change' } }, 'job', doc)).toBe('ai');
     expect(opActor({ op: 'spend', entry: { id: 's', at: 1, kind: 'page', label: 'x', usd: 1, byok: false, estimated: false } }, 'job', doc)).toBeNull();
+  });
+
+  it('H2 wave amendments: a derived image is the editor’s whoever asked; plan_pages is the AI’s; fit and re-fit actions the editor’s', () => {
+    const doc = v5();
+    const derived: DocOp = { op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: 'f.webp', source: 'derived', at: 1 }, origin: 'derived' } };
+    // A UI click (origin user) or the director: the fitted image is still the editor's free work (§4.2).
+    for (const origin of ['user', 'director', 'job'] as const) expect(opActor(derived, origin, doc), origin).toBe('editor');
+    expect(EDITOR_ACTIONS.has('fit_render') && EDITOR_ACTIONS.has('relayout_balloons')).toBe(true);
+    expect(AI_ACTIONS.has('plan_pages')).toBe(true);
+    const balloons: DocOp = { op: 'balloons', pageId: 'pg_1', balloons: [] };
+    const line: DocOp = { op: 'line', pageId: 'pg_2', panelId: 'pg_2_p2', id: 'pg_2_l2', patch: { text: 'x' } };
+    for (const action of ['fit_render', 'relayout_balloons']) expect(opActor(balloons, 'user', doc, action), action).toBe('editor');
+    // "Plan the pages" clicked in the UI is the writer's rewrite: the AI's, by its action alone.
+    expect(opActor({ op: 'pages', pages: doc.pages }, 'user', doc, 'plan_pages')).toBe('ai');
+    expect(opActor(line, 'user', doc, 'plan_pages')).toBe('ai');
+    // Without an action nothing else moved: your own edits stay yours.
+    expect(opActor(balloons, 'user', doc)).toBe('you');
+    expect(opActor({ op: 'pages', pages: doc.pages }, 'user', doc)).toBe('you');
   });
 });
 
