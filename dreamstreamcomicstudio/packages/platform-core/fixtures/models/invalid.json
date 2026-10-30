@@ -1,0 +1,58 @@
+{
+  "note": "Hostile and malformed documents, each ONE change to a contract fixture (`bases`), refused by the model's check (checkRichDoc / checkDeckSpec / checkEmailDoc) with exactly one error at `path` with `code`. Documents carry no URL to fetch, no script and no way to send: links are https: or mailto: only, images are sniffed data: URIs or host asset ids.",
+  "bases": {
+    "richdoc": "contract/richdoc/full.json",
+    "deck": "contract/deck/full.json",
+    "email": "contract/email/full.json"
+  },
+  "cases": [
+    { "name": "javascript: link on a run", "model": "richdoc", "at": ["sections", 0, "blocks", 1, "runs", 3, "link", "href"], "value": "javascript:alert(1)", "path": "sections[0].blocks[1].runs[3].link.href", "code": "link" },
+    { "name": "data: link on a run", "model": "richdoc", "at": ["sections", 0, "blocks", 1, "runs", 3, "link", "href"], "value": "data:text/html,<script>alert(1)</script>", "path": "sections[0].blocks[1].runs[3].link.href", "code": "link" },
+    { "name": "http: link on a run", "model": "richdoc", "at": ["sections", 0, "blocks", 1, "runs", 3, "link", "href"], "value": "http://example.com/outline", "path": "sections[0].blocks[1].runs[3].link.href", "code": "link" },
+    { "name": "mailto: link that adds a bcc", "model": "richdoc", "at": ["sections", 0, "blocks", 1, "runs", 5, "link", "href"], "value": "mailto:author@example.com?bcc=spy@example.net", "path": "sections[0].blocks[1].runs[5].link.href", "code": "link" },
+    { "name": "image by URL", "model": "richdoc", "at": ["sections", 0, "blocks", 7, "ref"], "value": { "kind": "url", "url": "https://example.com/cover.png" }, "path": "sections[0].blocks[7].ref.kind", "code": "tag" },
+    { "name": "image with a src field", "model": "richdoc", "at": ["sections", 0, "blocks", 7, "src"], "value": "https://example.com/cover.png", "path": "sections[0].blocks[7].src", "code": "unknown-key" },
+    { "name": "image ref carrying a URL in dataUri", "model": "richdoc", "at": ["sections", 0, "blocks", 7, "ref", "dataUri"], "value": "https://example.com/cover.png", "path": "sections[0].blocks[7].ref.dataUri", "code": "asset" },
+    { "name": "image ref with a url field next to its id", "model": "richdoc", "at": ["sections", 1, "blocks", 7, "ref", "url"], "value": "https://example.com/cover.png", "path": "sections[1].blocks[7].ref.url", "code": "unknown-key" },
+    { "name": "SVG data: image", "model": "richdoc", "at": ["sections", 0, "blocks", 7, "ref", "dataUri"], "value": "data:image/svg+xml;base64,PHN2Zz48c2NyaXB0PmFsZXJ0KDEpPC9zY3JpcHQ+PC9zdmc+", "path": "sections[0].blocks[7].ref.dataUri", "code": "asset" },
+    { "name": "PNG MIME on JPEG bytes", "model": "richdoc", "at": ["sections", 0, "blocks", 7, "ref", "dataUri"], "value": "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q==", "path": "sections[0].blocks[7].ref.dataUri", "code": "asset" },
+    { "name": "host asset id that climbs out of its folder", "model": "richdoc", "at": ["sections", 1, "blocks", 7, "ref", "id"], "value": "user-0001/../../etc/passwd", "path": "sections[1].blocks[7].ref.id", "code": "asset" },
+    { "name": "title with a line break", "model": "richdoc", "at": ["title"], "value": "Pitch\nBcc: spy@example.net", "path": "title", "code": "single-line" },
+    { "name": "bidi override in a run", "model": "richdoc", "at": ["sections", 0, "blocks", 2, "runs", 0, "text"], "value": "invoice‮fdp.exe", "path": "sections[0].blocks[2].runs[0].text", "code": "bad-char" },
+    { "name": "script block of an unknown kind", "model": "richdoc", "at": ["sections", 1, "blocks", 1, "kind"], "value": "html", "path": "sections[1].blocks[1].kind", "code": "enum" },
+
+    { "name": "javascript: link in a deck paragraph", "model": "deck", "at": ["slides", 2, "elements", 1, "paragraphs", 1, "runs", 0, "link", "href"], "value": "javascript:alert(1)", "path": "slides[2].elements[1].paragraphs[1].runs[0].link.href", "code": "link" },
+    { "name": "deck image by URL", "model": "deck", "at": ["slides", 4, "elements", 2, "ref"], "value": { "kind": "url", "url": "https://example.com/logo.png" }, "path": "slides[4].elements[2].ref.kind", "code": "tag" },
+    { "name": "deck image with a path field", "model": "deck", "at": ["slides", 4, "elements", 2, "path"], "value": "/etc/passwd", "path": "slides[4].elements[2].path", "code": "unknown-key" },
+    { "name": "element runs off the right edge", "model": "deck", "at": ["slides", 0, "elements", 1, "rect"], "value": [0.5, 0.3, 0.6, 0.2], "path": "slides[0].elements[1].rect[2]", "code": "above-max" },
+    { "name": "element runs off the bottom edge", "model": "deck", "at": ["slides", 0, "elements", 2, "rect"], "value": [0.08, 0.55, 0.84, 0.5], "path": "slides[0].elements[2].rect[3]", "code": "above-max" },
+    { "name": "chart series with fewer values than categories", "model": "deck", "at": ["slides", 4, "elements", 1, "series", 0, "values"], "value": [120, 340], "path": "slides[4].elements[1].series[0].values", "code": "too-few" },
+    { "name": "chart series with more values than categories", "model": "deck", "at": ["slides", 5, "elements", 1, "series", 0, "values"], "value": [40, 60, 1], "path": "slides[5].elements[1].series[0].values", "code": "too-many" },
+    { "name": "rect fraction above 1", "model": "deck", "at": ["slides", 1, "elements", 0, "rect"], "value": [0.1, 0.4, 1.5, 0.2], "path": "slides[1].elements[0].rect[2]", "code": "above-max" },
+
+    { "name": "javascript: button", "model": "email", "at": ["blocks", 4, "href"], "value": "javascript:alert(1)", "path": "blocks[4].href", "code": "link" },
+    { "name": "data: button", "model": "email", "at": ["blocks", 4, "href"], "value": "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "path": "blocks[4].href", "code": "link" },
+    { "name": "javascript: link inside columns", "model": "email", "at": ["blocks", 7, "columns", 1, "blocks", 1, "runs", 1, "link", "href"], "value": "javascript:alert(document.cookie)", "path": "blocks[7].columns[1].blocks[1].runs[1].link.href", "code": "link" },
+    { "name": "mailto: button that adds a cc", "model": "email", "at": ["blocks", 7, "columns", 1, "blocks", 2, "href"], "value": "mailto:creator@example.com?cc=spy@example.net", "path": "blocks[7].columns[1].blocks[2].href", "code": "link" },
+    { "name": "email image by URL", "model": "email", "at": ["blocks", 8, "ref"], "value": { "kind": "url", "url": "https://tracker.example.net/pixel.gif" }, "path": "blocks[8].ref.kind", "code": "tag" },
+    { "name": "email image with a src field inside columns", "model": "email", "at": ["blocks", 7, "columns", 0, "blocks", 0, "src"], "value": "https://tracker.example.net/pixel.gif", "path": "blocks[7].columns[0].blocks[0].src", "code": "unknown-key" },
+    { "name": "recipient with a display name in the address", "model": "email", "at": ["to", 0, "address"], "value": "Sam Editor <editor@example.com>", "path": "to[0].address", "code": "email" },
+    { "name": "recipient that smuggles a header", "model": "email", "at": ["cc", 0, "address"], "value": "agent@example.org\r\nBcc: spy@example.net", "path": "cc[0].address", "code": "email" },
+    { "name": "two recipients in one address", "model": "email", "at": ["to", 0, "address"], "value": "editor@example.com,spy@example.net", "path": "to[0].address", "code": "email" },
+    { "name": "subject with a header line", "model": "email", "at": ["subject"], "value": "Hello\r\nBcc: spy@example.net", "path": "subject", "code": "single-line" },
+    { "name": "a send mode", "model": "email", "at": ["mode"], "value": "send", "path": "mode", "code": "enum" },
+    { "name": "a send flag", "model": "email", "at": ["send"], "value": true, "path": "send", "code": "unknown-key" },
+    { "name": "a pptx attachment that carries a doc", "model": "email", "at": ["attachments", 0, "kind"], "value": "pptx", "path": "attachments[0].spec.type", "code": "tag" },
+    { "name": "an attached deck whose element runs off the slide", "model": "email", "at": ["attachments", 1, "spec", "deck", "slides", 0, "elements"], "value": [{ "kind": "shape", "id": "s", "rect": [0.9, 0, 0.2, 0.1], "layer": "content", "shape": "rect" }], "path": "attachments[1].spec.deck.slides[0].elements[0].rect[2]", "code": "above-max" },
+    { "name": "a sixth attachment", "model": "email", "at": ["attachments"], "value": [
+      { "id": "a1", "name": "One", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "1", "sections": [] } } },
+      { "id": "a2", "name": "Two", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "2", "sections": [] } } },
+      { "id": "a3", "name": "Three", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "3", "sections": [] } } },
+      { "id": "a4", "name": "Four", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "4", "sections": [] } } },
+      { "id": "a5", "name": "Five", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "5", "sections": [] } } },
+      { "id": "a6", "name": "Six", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "6", "sections": [] } } }
+    ], "path": "attachments", "code": "too-many" },
+    { "name": "a third column", "model": "email", "at": ["blocks", 7, "columns", 2], "value": { "blocks": [] }, "path": "blocks[7].columns", "code": "too-many" },
+    { "name": "columns inside columns", "model": "email", "at": ["blocks", 7, "columns", 0, "blocks", 0], "value": { "type": "columns", "id": "nested", "columns": [] }, "path": "blocks[7].columns[0].blocks[0].type", "code": "tag" }
+  ]
+}
