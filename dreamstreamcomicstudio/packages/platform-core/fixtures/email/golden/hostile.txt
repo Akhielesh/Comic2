@@ -12,6 +12,8 @@ VB
 
 [Image: a PNG header lie]
 
+[Image: cover" onerror="alert(1)" x="]
+
 [Image: path traversal]
 
 > line one

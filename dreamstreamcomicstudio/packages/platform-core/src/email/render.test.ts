@@ -140,7 +140,7 @@ describe('untrusted text is escaped, unsafe links are dropped', () => {
   it('<img onerror> in a heading stays text', () => {
     expect(html).toContain('<h1 style="margin:0 0 16px;font-family:\'Inter\'');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;</h1>');
-    expect(html).not.toMatch(/<img[^>]*onerror/i);
+    for (const t of tagsOf(html)) for (const a of t.attrs) expect(a.name).not.toBe('onerror');
   });
 
   it('the subject, preheader, cite, signature and labels are escaped', () => {
@@ -171,8 +171,9 @@ describe('untrusted text is escaped, unsafe links are dropped', () => {
     expect(html).not.toMatch(/[\u0000\u0007\u001b‮]/);
   });
 
-  it('SVG, URL, lying and path-traversal images become their alt text; nested columns and unknown blocks vanish', () => {
-    expect(attrValues(html, 'src')).toEqual([]);
+  it('SVG, URL, lying and path-traversal images become their alt text, a real one keeps a quote-breaking alt inside its attribute; nested columns and unknown blocks vanish', () => {
+    expect(attrValues(html, 'src')).toEqual([PNG_1PX]); // only the real PNG, its alt escaped inside the attribute
+    expect(html).toContain('alt="cover&quot; onerror=&quot;alert(1)&quot; x=&quot;" width="534"');
     expect(html).toContain('[Image: &quot; onerror=&quot;alert(1)]');
     expect(html).toContain('[Image: pixel]');
     expect(html).toContain('[Image: a PNG header lie]');

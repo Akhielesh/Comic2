@@ -24,6 +24,7 @@
     { "type": "image", "id": "i1", "ref": { "kind": "data", "dataUri": "data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+" }, "alt": "\" onerror=\"alert(1)" },
     { "type": "image", "id": "i2", "ref": { "kind": "url", "url": "http://tracker.example.com/pixel.gif" }, "alt": "pixel" },
     { "type": "image", "id": "i3", "ref": { "kind": "data", "dataUri": "data:image/png;base64,PHNjcmlwdD4=" }, "alt": "a PNG header lie" },
+    { "type": "image", "id": "i5", "ref": { "kind": "data", "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" }, "alt": "cover\" onerror=\"alert(1)\" x=\"", "width": 9999 },
     { "type": "image", "id": "i4", "ref": { "kind": "asset", "id": "../../etc/passwd" }, "alt": "path traversal" },
     { "type": "quote", "id": "q1", "runs": [{ "text": "line one\r\nline two" }], "cite": "<i>someone</i>" },
     { "type": "script", "id": "s1", "code": "alert(1)" },
