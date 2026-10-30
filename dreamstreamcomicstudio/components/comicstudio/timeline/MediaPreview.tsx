@@ -71,9 +71,9 @@ export const pageArtRefusal = (item: Pick<MediaItem, 'path' | 'role' | 'source'>
 };
 
 /** A panel's own picture a restore archived: not page or cover art. */
-export const PANEL_PICTURE_LINE = "This was a panel's own picture, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference or download it.";
+export const PANEL_PICTURE_LINE = "This was a panel's own picture, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference, star it or download it.";
 /** An overlay a restore archived: not page or cover art. */
-export const OVERLAY_LINE = "This was an overlay on the page, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference or download it.";
+export const OVERLAY_LINE = "This was an overlay on the page, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference, star it or download it.";
 const PANEL_SOURCE_LINE: Record<PanelSourceWhat, string> = { 'panel picture': PANEL_PICTURE_LINE, overlay: OVERLAY_LINE };
 const PANEL_SOURCE_WHAT: Record<PanelSourceWhat, string> = { 'panel picture': 'Panel picture', overlay: 'Overlay' };
 
@@ -348,7 +348,8 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
             </>
           )}
           <div className="flex flex-wrap gap-2">
-            {item.role !== 'deleted_page' && item.role !== 'style_board' && (
+            {/* A panel picture or overlay is not page art: as the style board every later drawing would follow it. */}
+            {item.role !== 'deleted_page' && item.role !== 'style_board' && !item.panelSource && (
               <button type="button" className={btn} disabled={doc.style.board?.path === item.path} onClick={() => setBoard()}>
                 Set as style board
               </button>

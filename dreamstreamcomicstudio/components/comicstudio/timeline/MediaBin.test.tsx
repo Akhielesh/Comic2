@@ -320,7 +320,11 @@ describe('MediaPreview — a panel picture or overlay a restore archived is not 
     expect(within(dialog).queryByRole('button', { name: 'Use as cover' })).toBeNull();
     expect(within(dialog).queryByLabelText('Page to put this image on')).toBeNull();
     expect(within(dialog).queryByRole('button', { name: /Compare with current/ })).toBeNull();
+    // Nor the style board: every later drawing would follow an overlay (the calm line names only what is offered).
+    expect(within(dialog).queryByRole('button', { name: 'Set as style board' })).toBeNull();
     expect(within(dialog).getByTestId('page-art-refusal')).toHaveTextContent(OVERLAY_LINE);
+    expect(OVERLAY_LINE).toMatch(/use it as a reference, star it or download it\.$/);
+    expect(PANEL_PICTURE_LINE).toMatch(/use it as a reference, star it or download it\.$/);
     // Shown by its label; its facts say only what is known (source 'upload' recorded that nothing was).
     expect(within(dialog).getByRole('img', { name: 'Page 1 overlay · date not recorded' })).toBeInTheDocument();
     expect(within(dialog).getByText("Overlay · not a version of the page's drawing", { selector: 'dd' })).toBeInTheDocument();
@@ -337,6 +341,7 @@ describe('MediaPreview — a panel picture or overlay a restore archived is not 
     setup(withPanelSources());
     fireEvent.click(tile(/^Page 2, Page 2 panel picture/));
     expect(within(screen.getByRole('dialog')).getByTestId('page-art-refusal')).toHaveTextContent(PANEL_PICTURE_LINE);
+    expect(within(screen.getByRole('dialog')).queryByRole('button', { name: 'Set as style board' })).toBeNull();
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
     fireEvent.click(tile(/^Deleted page 4, Deleted page 4 overlay/));
     const dialog = screen.getByRole('dialog', { name: 'Deleted page 4' });
