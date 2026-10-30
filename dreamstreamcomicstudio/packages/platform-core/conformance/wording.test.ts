@@ -53,7 +53,11 @@ describe('governed usage wording', () => {
     expect(costLabel(0.5, { governed: true, pctPerUsd: 40 })).toBe('≈20% of your usage');
     expect(costLabel(0, { governed: true, pctPerUsd: 40 })).toBe('Free');
     expect(costLabel(0.05, { governed: false })).toBe('$0.05');
-    expect(formatUsd(1250.5)).toBe('$1,250.50');
+    expect(formatUsd(1250.5)).toBe('$1250.50');
+    expect(costLabel(0, { governed: false })).toBe('$0.00');
+    expect(costLabel(0.05, { governed: true })).toBe('uses a little of your usage');
+    expect(costLabel(50, { governed: true, pctPerUsd: 40 })).toBe('≈2000% of your usage');
+    expect(governText('That is $0.05.', { governed: true })).toBe('That is a little of your usage.');
     expect(formatUsd(0.004)).toBe('<$0.01');
     expect(governText('That is $0.05.', { governed: false })).toBe('That is $0.05.');
     expect(governText('That is $0.05.', { governed: true, pctPerUsd: 40 })).toBe('That is ≈2% of your usage.');

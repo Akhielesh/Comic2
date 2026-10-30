@@ -3,8 +3,10 @@
  * key) never see a dollar sign: what is left reads "93% usage left", a price reads "≈2% of your usage". Admins and
  * own-key calls see dollars. Server-to-server costs travel only as `X-Platform-Cost-Micros`.
  *
- * The same formula as the host's own wording, so a chip, a card and a sentence agree. A property test runs 1,000
- * seeded amounts (negative, zero, tiny, huge, NaN, Infinity) through every governed path and finds no `$`.
+ * `costLabel` is DreamStream's own `formatCostForUser` (services/costDisplay.ts) word for word, and `formatUsd` its
+ * `formatUsd` (shared/comic/models.ts), so a chip, a card and a sentence agree; src/cost/wording.test.ts checks the
+ * parity over 1,000 seeded amounts and every kind of share. A property test runs the same amounts (negative, zero,
+ * tiny, huge, NaN, Infinity) through every governed path and finds no `$`.
  */
 
 /** How to word money for one user. `pctPerUsd`: percent of their usage one provider-cost dollar takes. */
@@ -54,25 +56,32 @@ export const usageLabel = (input: UsageLabelInput): string => {
   return governed ? noDollars(label) : label;
 };
 
-/** "$1,250.50" / "<$0.01" / "$0.00" (en-US, two decimals). Only ever for ungoverned users. */
+/** "$1250.50" / "<$0.01" / "$0.00" (two decimals, the host's `formatUsd`). Only ever for ungoverned users. */
 export const formatUsd = (usd: number): string => {
   if (!finite(usd) || usd <= 0) return '$0.00';
   if (usd < 0.01) return '<$0.01';
-  const [whole, cents] = usd.toFixed(2).split('.');
-  return `$${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${cents}`;
+  return `$${usd.toFixed(2)}`;
 };
 
-/** A price for this user: "≈2% of your usage" / "<0.1% of your usage" / "Free" when governed; "$0.05" otherwise. */
+/** What a governed price reads while the user's share is unknown (fail closed): the host's `UNKNOWN_USAGE_SHARE`. */
+export const UNKNOWN_USAGE_SHARE = 'uses a little of your usage';
+
+/** The same inside a sentence ("costs a little of your usage"): the host's `amountInSentence` noun phrase. */
+export const UNKNOWN_USAGE_SHARE_IN_SENTENCE = 'a little of your usage';
+
+/**
+ * A price for this user, exactly as the host's `formatCostForUser` words it: "≈2% of your usage" / "<0.1% of your
+ * usage" / "Free" / `UNKNOWN_USAGE_SHARE` when governed; "$0.05" / "$0.00" otherwise.
+ */
 export const costLabel = (usd: number, view: UsageView): string => {
   const amount = finite(usd) && usd > 0 ? usd : 0;
-  if (!view || !view.governed) return amount === 0 ? 'Free' : formatUsd(amount);
+  if (!view || !view.governed) return formatUsd(amount);
   if (amount === 0) return 'Free';
   const perUsd = view.pctPerUsd;
-  if (!(finite(perUsd) && perUsd > 0)) return 'a little of your usage';
+  if (!(typeof perUsd === 'number' && perUsd > 0)) return UNKNOWN_USAGE_SHARE;
   const pct = amount * perUsd;
   if (pct < 0.1) return '<0.1% of your usage';
   if (pct < 10) return `≈${trimZero(pct.toFixed(1))}% of your usage`;
-  if (pct > 1000) return 'more than all of your usage';
   return `≈${Math.round(pct)}% of your usage`;
 };
 
@@ -85,7 +94,10 @@ const DOLLARS = /(?:[≈~]\s?)?(<)?\$\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d
 export const governText = (text: string, view: UsageView): string => {
   if (typeof text !== 'string') return '';
   if (!view || !view.governed || text.indexOf('$') === -1) return text;
-  const worded = text.replace(DOLLARS, (_m: string, lt: string | undefined, num: string) => costLabel(lt ? 0.005 : Number(num.replace(/,/g, '')), view));
+  const worded = text.replace(DOLLARS, (_m: string, lt: string | undefined, num: string) => {
+    const label = costLabel(lt ? 0.005 : Number(num.replace(/,/g, '')), view);
+    return label === UNKNOWN_USAGE_SHARE ? UNKNOWN_USAGE_SHARE_IN_SENTENCE : label; // it reads inside a sentence
+  });
   return worded.replace(/\$/g, '');
 };
 

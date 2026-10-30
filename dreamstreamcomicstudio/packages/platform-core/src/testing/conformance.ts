@@ -21,8 +21,8 @@ import { PLATFORM_TOOLS } from '../tools/registry.js';
 import { toolsForProduct } from '../tools/projections.js';
 import type { PlatformWave } from '../tools/types.js';
 import { CURRENT_WAVE } from '../tools/types.js';
-import { runFlow } from '../flows/run.js';
-import type { FlowDefinition, FlowPorts } from '../flows/types.js';
+import { cancelPlan, runFlow } from '../flows/run.js';
+import type { FlowDefinition, FlowPorts, FlowRunResult } from '../flows/types.js';
 import { s } from '../schema/index.js';
 import { createFakeClock, createIdSequence, scriptedModel } from './fakePorts.js';
 
@@ -134,6 +134,10 @@ const KIT_FLOW: FlowDefinition<{ summary: string }> = {
   output: s.object({ summary: s.text({ max: 200 }) }),
 };
 
+/**
+ * The probe's ports. The policy is `big` at $0.50 with a $0.01 estimate: no spend confirmation applies, so ONLY the
+ * flow floor (`maxModelCalls > 1` → propose) can stop the probe for approval.
+ */
 const kitFlowPorts = (subject: ConformanceSubject, meter: MeterPort, clock: () => number): FlowPorts => ({
   callModel: scriptedModel([{ kind: 'final', output: { summary: 'ok' }, usd: 0.001 }]),
   meter,
@@ -144,9 +148,19 @@ const kitFlowPorts = (subject: ConformanceSubject, meter: MeterPort, clock: () =
   sub: 'conformance-subject',
   app: subject.manifest.app,
   product: subject.manifest.id,
-  policy: { app: 'dreamstream', confirm: 'always' },
+  policy: { app: 'dreamstream', confirm: 'big', bigSpendUsd: 0.5 },
   estimate: () => 0.01,
 });
+
+/** Leave no open hold on the host's real ledger: cancel a plan the kit made (a no-op once it ran or was released). */
+const cancelKitPlan = async (r: FlowRunResult<unknown>, ports: FlowPorts): Promise<{ ok: boolean }> => {
+  if (!r.plan || !r.planToken) return { ok: false };
+  try {
+    return await cancelPlan({ plan: r.plan, planToken: r.planToken }, ports);
+  } catch {
+    return { ok: false };
+  }
+};
 
 export const CONFORMANCE_CHECKS: readonly ConformanceCheck[] = [
   {
@@ -311,7 +325,9 @@ export const CONFORMANCE_CHECKS: readonly ConformanceCheck[] = [
         }
       }
       const clock = createFakeClock(nowOf(subject));
-      const r = await runFlow(KIT_FLOW, { topic: 'x' }, kitFlowPorts(subject, subject.meter({ governed: true, ledgerDown: false }), clock));
+      const ports = kitFlowPorts(subject, subject.meter({ governed: true, ledgerDown: false }), clock);
+      const r = await runFlow(KIT_FLOW, { topic: 'x' }, ports);
+      await cancelKitPlan(r, ports);
       if (r.status !== 'awaiting_approval' || !r.planToken) return failed(`a 2-call flow ran without approval (status ${r.status})`);
       return PASS;
     },
@@ -327,14 +343,21 @@ export const CONFORMANCE_CHECKS: readonly ConformanceCheck[] = [
       if (!first.plan || !first.planToken) return failed('the probe flow did not stop for approval');
       const approved = { plan: first.plan, planToken: first.planToken };
       const once = await runFlow(KIT_FLOW, { topic: 'x' }, { ...ports, callModel: scriptedModel([{ kind: 'final', output: { summary: 'ok' } }]) }, approved);
-      if (once.status !== 'done') return failed(`the first resume did not run (${once.status}: ${once.error ? once.error.reason : ''})`);
+      if (once.status !== 'done') {
+        await cancelKitPlan(first, ports);
+        return failed(`the first resume did not run (${once.status}: ${once.error ? once.error.reason : ''})`);
+      }
       const twice = await runFlow(KIT_FLOW, { topic: 'x' }, { ...ports, callModel: scriptedModel([{ kind: 'final', output: { summary: 'ok' } }]) }, approved);
       if (twice.status !== 'failed' || !twice.error || twice.error.status !== 409) return failed('a second resume of the same plan was not refused with 409');
       const second = await runFlow(KIT_FLOW, { topic: 'x' }, ports);
       if (!second.plan || !second.planToken) return failed('the probe flow did not stop for approval');
       clock.advance(16 * 60 * 1000);
       const late = await runFlow(KIT_FLOW, { topic: 'x' }, { ...ports, callModel: scriptedModel([{ kind: 'final', output: { summary: 'ok' } }]) }, { plan: second.plan, planToken: second.planToken });
+      // The expired resume must have released its hold (claimed, so a cancel now finds it used). If it did not, this
+      // cancel releases it, so the kit never leaves a hold behind either way.
+      const leftOpen = (await cancelKitPlan(second, ports)).ok;
       if (late.status !== 'failed' || !late.error || late.error.status !== 403) return failed('an expired plan token was not refused with 403');
+      if (leftOpen) return failed("an expired plan token's resume left its hold open");
       return PASS;
     },
   },

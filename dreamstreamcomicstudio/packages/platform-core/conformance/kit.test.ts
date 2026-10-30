@@ -4,7 +4,7 @@
 // breaks its rule — a kit that cannot fail proves nothing. Then the fake platform (the in-memory /v1 every host tests
 // against) enforces the wire's request rules.
 import { createHmac } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { EmailReview } from '../src/contract/email.js';
 import { CHAT_PRODUCT, COMIC_PRODUCT } from '../src/products.js';
 import type { MeterPort } from '../src/gates/ports.js';
@@ -112,6 +112,60 @@ describe('the conformance kit', () => {
     expect(await check.run(goodSubject())).toEqual({ status: 'pass' });
     const outcome = await check.run(breakIt(goodSubject())).catch((e: unknown) => ({ status: 'fail', reason: String(e) }));
     expect(outcome).toMatchObject({ status: 'fail', reason: REASONS[id] });
+  });
+
+  it('leaves no open hold on the host’s ledger', async () => {
+    const shared = createFakeLedger({ governed: true });
+    const report = await runConformance({ ...goodSubject(), meter: (o) => (o.ledgerDown ? ledgers()(o) : shared) });
+    expect(report.filter((r) => r.status === 'fail')).toEqual([]);
+    expect(shared.reservations.length).toBeGreaterThan(0);
+    expect(shared.reservations.filter((r) => r.status === 'reserved' || r.status === 'claimed')).toEqual([]);
+  });
+
+  it('check 10 fails when runFlow ignores the flow floor (the decideGate half alone would still pass)', async () => {
+    vi.resetModules();
+    vi.doMock('../src/flows/run.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/flows/run.js')>('../src/flows/run.js');
+      // A runFlow whose gate never sees maxModelCalls > 1: the flow floor is ignored, nothing else changes.
+      const runFlow: typeof actual.runFlow = (def, params, ports, approved) => actual.runFlow({ ...def, limits: { ...def.limits, maxModelCalls: 1 } }, params, ports, approved);
+      return { ...actual, runFlow };
+    });
+    try {
+      const kit = await import('../src/testing/conformance.js');
+      const check10 = kit.CONFORMANCE_CHECKS.find((c) => c.id === 10)!;
+      expect(await check10.run(goodSubject())).toMatchObject({ status: 'fail', reason: /ran without approval/ });
+    } finally {
+      vi.doUnmock('../src/flows/run.js');
+      vi.resetModules();
+    }
+  });
+
+  it('check 11 fails when an expired approval keeps its hold', async () => {
+    vi.resetModules();
+    vi.doMock('../src/flows/run.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/flows/run.js')>('../src/flows/run.js');
+      const tokens = await vi.importActual<typeof import('../src/flows/planToken.js')>('../src/flows/planToken.js');
+      // The old behaviour: an expired token is refused with 403, and its hold is left for the ledger's sweep.
+      const runFlow: typeof actual.runFlow = async (def, params, ports, approved) => {
+        if (approved) {
+          const v = tokens.verifyPlanToken(approved.planToken, ports.planKey, { nowMs: ports.clock(), sub: ports.sub, planHash: tokens.planHash(approved.plan) });
+          if (v.ok === false && v.reason === 'expired') return { status: 'failed', steps: [], modelCalls: 0, spentUsd: 0, error: { code: 'forbidden', status: 403, reason: 'plan-expired', message: 'expired' } };
+        }
+        return actual.runFlow(def, params, ports, approved);
+      };
+      return { ...actual, runFlow };
+    });
+    try {
+      const kit = await import('../src/testing/conformance.js');
+      const shared = createFakeLedger({ governed: true });
+      const check11 = kit.CONFORMANCE_CHECKS.find((c) => c.id === 11)!;
+      expect(await check11.run({ ...goodSubject(), meter: () => shared })).toMatchObject({ status: 'fail', reason: /left its hold open/ });
+      // …and even then the kit itself leaves nothing open on the host's ledger.
+      expect(shared.reservations.filter((r) => r.status === 'reserved' || r.status === 'claimed')).toEqual([]);
+    } finally {
+      vi.doUnmock('../src/flows/run.js');
+      vi.resetModules();
+    }
   });
 
   it('runs against another product too (Comic Studio)', async () => {

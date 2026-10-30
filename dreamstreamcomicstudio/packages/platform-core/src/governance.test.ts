@@ -58,6 +58,49 @@ describe('the capability registry (plan §5.3)', () => {
     expect(capabilityRegistryProblems([{ ...base, engines: [] }]).join()).toMatch(/no engine/);
     expect(capabilityRegistryProblems([{ ...base, limits: { maxBytes: 0, timeoutMs: 1 } }]).join()).toMatch(/limits/);
     expect(capabilityRegistryProblems([{ ...base, engines: [{ id: 'x', version: '1', maturity: 'trial' }] }]).join()).toMatch(/non-trial/);
+    // A placeholder engine version needs a provisional note; a blank note is not one.
+    expect(capabilityRegistryProblems([{ ...base, engines: [{ id: 'poppler', version: 'pinned' }], provisional: undefined }]).join()).toMatch(/no pinned version/);
+    expect(capabilityRegistryProblems([{ ...base, engines: [{ id: 'poppler', version: 'pinned' }], provisional: 'version pending (owner W2.4)' }])).toEqual([]);
+    expect(capabilityRegistryProblems([{ ...base, provisional: ' ' }]).join()).toMatch(/provisional note/);
+  });
+
+  it('marks every number the plan does not give as provisional, with its owner, and derives the rest from the spec', () => {
+    // The entries carrying a number (or a placeholder version) the plan does not give; ADR 0008 confirms each.
+    expect(CAPABILITIES.filter((c) => c.provisional).map((c) => c.id)).toEqual([
+      'email.render',
+      'richdoc.export',
+      'deck.export',
+      'pdf.sanitize',
+      'pdf.inspect',
+      'pdf.fill',
+      'pdf.redact',
+      'pdf.organize',
+      'asset.normalize',
+      'print.book',
+      'print.preflight',
+      'doc.convert',
+      'image.psd',
+      'layout.idml',
+      'comic.cbz',
+      'comic.epub',
+      'comic.strip',
+    ]);
+    for (const c of CAPABILITIES) if (c.provisional) expect(c.provisional, c.id).toMatch(/owner W\d\.\d.*ADR 0008/);
+    // §5.9: extract ≤ 50 MB and 300 pages; render ≤ 10 MB; convert ≤ 50 MB; every synchronous call within 25 s.
+    expect(getCapability('doc.extract')!.limits).toEqual({ maxBytes: 50000000, maxPages: 300, timeoutMs: 25000 });
+    expect(getCapability('richdoc.render')!.limits).toEqual({ maxBytes: 10000000, timeoutMs: 25000 });
+    expect(getCapability('deck.render')!.limits).toEqual({ maxBytes: 10000000, timeoutMs: 25000 });
+    expect(getCapability('doc.convert')!.limits).toEqual({ maxBytes: 50000000, timeoutMs: 25000 });
+    // W1.8's deck cap.
+    expect(getCapability('deck.export')!.limits.maxBytes).toBe(40000000);
+    // The PDF tools follow the extract cap instead of an invented one.
+    for (const id of ['pdf.sanitize', 'pdf.inspect', 'pdf.fill', 'pdf.redact', 'pdf.organize']) expect(getCapability(id)!.limits, id).toEqual({ maxBytes: 50000000, maxPages: 300, timeoutMs: 25000 });
+  });
+
+  it('gates plan-tier features as §10 packages them', () => {
+    for (const id of ['comic.cbz', 'comic.epub', 'comic.strip', 'image.psd']) expect(getCapability(id)!.plans, id).toEqual(['creator', 'studio', 'admin']);
+    for (const id of ['print.book', 'layout.idml']) expect(getCapability(id)!.plans, id).toEqual(['studio', 'admin']);
+    for (const c of CAPABILITIES) if (c.plans) expect(c.plans, c.id).not.toContain('free');
   });
 });
 

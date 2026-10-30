@@ -41,7 +41,10 @@ export interface ConsentRecord {
   payloadHash: string;
 }
 
-/** A consent older than this no longer authorises the write (the person approves again). */
+/**
+ * A consent older than this no longer authorises the write (the person approves again). PROVISIONAL, not a plan
+ * number: it mirrors the plan token's 15 minutes (owner W1.9 / W3.2; ADR 0008 to confirm).
+ */
 export const CONSENT_TTL_MS = 15 * 60 * 1000;
 
 export const CONSENT_LIMITS = { summary: 200, target: 64, surface: 64, userId: 128 } as const;
