@@ -8,6 +8,7 @@ import { collectAssetPaths, type ArchivedVersion, type ComicDoc, type RenderVers
 import { BOOK_NOW, historyEmptyDoc, historyV4Doc, historyV5Doc } from './__fixtures__/books';
 import { randomBook } from './__fixtures__/random';
 import {
+  EARLIER_NOTE_NO_START,
   EARLIER_TITLE,
   EARLIER_UNDATED_KEY,
   EARLIER_UNDATED_LABEL,
@@ -146,6 +147,64 @@ describe('earlierMoments: missing meta says "not recorded"', () => {
     expect(deleted.missing).toEqual(['by']);
     expect(earlierFacts(deleted)).toEqual([`Deleted by: ${NOT_RECORDED}`]);
   });
+
+  it('an image the editor made has no AI cost to miss: its label and its facts agree', () => {
+    const doc = historyV4Doc();
+    const bare = doc.pages[0].render.history[0] as Partial<RenderVersion>;
+    delete bare.origin;
+    delete bare.model;
+    delete bare.costUsd;
+    bare.source = 'derived';
+    for (const [i, origin] of (['derived', 'reused'] as const).entries()) {
+      const v = doc.pages[i + 1].render.history[0] as Partial<RenderVersion>;
+      v.origin = origin;
+      delete v.model;
+      delete v.costUsd; // the cost was lost, but the editor's work never had one
+    }
+    const moments = earlierMoments(doc);
+    const derived = byPath(moments, bare.path!);
+    expect(derived).toMatchObject({ by: 'editor', origin: null, source: 'derived', costUsd: null, label: 'The editor made art for page 1, no AI cost' });
+    expect(derived.missing).toEqual(['origin']);
+    expect(earlierFacts(derived)).toEqual([`How it was made: ${NOT_RECORDED}`, 'No AI cost']);
+    const fitted = byPath(moments, `${V4}/p2-v1.webp`);
+    const reused = byPath(moments, `${V4}/p3-v1.webp`);
+    expect(fitted).toMatchObject({ by: 'editor', label: 'The editor fitted page 2, no AI cost', missing: [] });
+    expect(reused).toMatchObject({ by: 'editor', label: 'Reused a drawing for page 3, no AI cost', missing: [] });
+    expect(earlierFacts(fitted)).toEqual(['Fitted by the editor, no AI cost']);
+    expect(earlierFacts(reused)).toEqual(['Reused, no AI cost']);
+    for (const m of [derived, fitted, reused]) {
+      const facts = earlierFacts(m);
+      expect(facts).not.toContain(`Cost: ${NOT_RECORDED}`);
+      expect(facts.join(' · ').match(/no AI cost/gi)).toHaveLength(1); // said once, never contradicted
+    }
+  });
+
+  it('a stored time no date can hold reads "not recorded" instead of breaking the Earlier section', () => {
+    const doc = historyV4Doc();
+    const path = doc.pages[0].render.history[0].path;
+    doc.pages[0].render.history[0].at = 9e15; // beyond the JS Date range (8.64e15)
+    let h: ReturnType<typeof earlierHistory> | undefined;
+    expect(() => {
+      h = earlierHistory(doc, { now: BOOK_NOW, tz: 'UTC' });
+    }).not.toThrow();
+    const m = byPath(h!.moments, path);
+    expect(m.at).toBeNull();
+    expect(m.missing).toContain('date');
+    expect(h!.moments[h!.moments.length - 1].path).toBe(path);
+    const last = h!.days[h!.days.length - 1];
+    expect(last).toMatchObject({ key: EARLIER_UNDATED_KEY, label: EARLIER_UNDATED_LABEL, at: null, count: 1 });
+    expect(last.groups[0].moments.map((x) => x.path)).toEqual([path]);
+    // The same for the other stored times, the History start and hand-built moments.
+    const v5 = historyV5Doc();
+    v5.trash![0].deletedAt = 9e15;
+    v5.publication!.publishedAt = 9e15;
+    const moments = earlierMoments(v5);
+    expect(moments.find((x) => x.kind === 'deleted')).toMatchObject({ at: null, missing: ['date', 'by'] });
+    expect(moments.find((x) => x.kind === 'published')).toMatchObject({ at: null, missing: ['date'] });
+    expect(earlierNote(9e15, 'UTC')).toBe(EARLIER_NOTE_NO_START);
+    const corrupt: EarlierMoment = { ...m, at: 9e15 };
+    expect(groupEarlierByDay([corrupt], { now: BOOK_NOW, tz: 'UTC' })).toMatchObject([{ key: EARLIER_UNDATED_KEY, label: EARLIER_UNDATED_LABEL, at: null }]);
+  });
 });
 
 describe('earlierMoments: the v4-shaped fixture (like f8312c86) and an empty doc', () => {
@@ -186,7 +245,9 @@ describe('earlierMoments: the v4-shaped fixture (like f8312c86) and an empty doc
     expect(earlierMoments(historyEmptyDoc())).toEqual([]);
     const h = earlierHistory(historyEmptyDoc(), { now: BOOK_NOW });
     expect(h).toMatchObject({ moments: [], days: [], owners: [], drawings: 0, tz: 'UTC' });
-    expect(h.note).toBe('Only drawings were recorded before History began.');
+    // One fallback string for the whole History UI (H5 uses this note, not its own).
+    expect(EARLIER_NOTE_NO_START).toBe('Only drawings were recorded before History started.');
+    expect(h.note).toBe(EARLIER_NOTE_NO_START);
   });
 
   it('the note names History’s first day in the viewer’s zone', () => {
@@ -270,6 +331,47 @@ describe('earlierMoments: v5 owners, version numbers and the History start', () 
     expect(days.reduce((n, d) => n + d.count, 0)).toBe(earlierMoments(doc).length);
   });
 
+  it('a page in Deleted whose id is live again is listed once, as the live page', () => {
+    const doc = historyV5Doc();
+    const live = doc.pages[1];
+    doc.trash = [
+      ...doc.trash!,
+      { page: { ...structuredClone(doc.trash![0].page), id: live.id }, fromN: 9, deletedAt: BOOK_NOW - 1_000 }
+    ];
+    const moments = earlierMoments(doc);
+    expect(moments.some((m) => m.owner.key === `trash:${live.id}`)).toBe(false);
+    expect(moments.filter((m) => m.kind === 'deleted').map((m) => m.owner.key)).toEqual(['trash:pg_old']);
+    expect(earlierForPage(moments, live.id).every((m) => m.owner.kind === 'page' && m.owner.key === `page:${live.id}`)).toBe(true);
+    expect(groupEarlierByOwner(moments).map((g) => g.label)).not.toContain('Deleted page 9');
+  });
+
+  it('an image two owners hold is one moment per owner, each with its own target ("Use this version" acts there)', () => {
+    const doc = historyV5Doc();
+    const p4 = doc.pages[3].render.asset!;
+    doc.pages[4].render.history.push({ ...p4, origin: 'reused', at: p4.at + 1 }); // page 5 reused page 4's drawing
+    const shared = earlierMoments(doc).filter((m) => m.kind === 'drawing' && m.path === p4.path);
+    expect(shared.map((m) => [m.id, m.owner.key, m.owner.target, m.current])).toEqual([
+      [`drawing|page:pg_5|${p4.path}`, 'page:pg_5', { kind: 'page', id: 'pg_5' }, false],
+      [`drawing|page:pg_4|${p4.path}`, 'page:pg_4', { kind: 'page', id: 'pg_4' }, true]
+    ]);
+    expect(shared[0].label).toBe('Reused a drawing for page 5, no AI cost');
+  });
+
+  it('a drawing keeps what its AssetRef holds: star and size', () => {
+    const doc = historyV4Doc();
+    doc.pages[0].render.history[0].starred = true;
+    const sizeless = doc.pages[1].render.history[0] as Partial<RenderVersion>;
+    delete sizeless.w;
+    delete sizeless.h;
+    const moments = earlierMoments(doc);
+    expect(byPath(moments, `${V4}/p1-v1.webp`)).toMatchObject({ starred: true, w: 928, h: 1392 });
+    expect(byPath(moments, `${V4}/p1.webp`)).toMatchObject({ starred: false, w: 928, h: 1392 });
+    expect(byPath(moments, `${V4}/cover.webp`)).toMatchObject({ w: 928, h: 1392 });
+    const bare = byPath(moments, `${V4}/p2-v1.webp`);
+    expect('w' in bare || 'h' in bare).toBe(false);
+    expect(moments.filter((m) => m.starred).map((m) => m.path)).toEqual([`${V4}/p1-v1.webp`]);
+  });
+
   it('a blocked or quarantined image keeps its moment but no thumbnail', () => {
     const doc = historyV5Doc();
     doc.pages[2].render.asset!.safety = { assessed: 'X', at: BOOK_NOW };
@@ -308,6 +410,35 @@ describe('earlierMoments: deterministic ordering', () => {
     expect(moments.slice(0, 4).map((m) => m.path)).toEqual([`${V4}/cover.webp`, `${V4}/p1.webp`, `${V4}/p1-v1.webp`, `${V4}/p2.webp`]);
     expect([...moments].reverse().sort(compareMoments)).toEqual(moments);
     expect(new Set(moments.map((m) => m.id)).size).toBe(moments.length);
+  });
+
+  it('at the same time and owner: published, then deleted, then the drawing', () => {
+    const doc = historyV5Doc();
+    const t = doc.trash![0];
+    t.deletedAt = t.page.render.asset!.at; // deleted the moment it was drawn
+    doc.publication!.publishedAt = doc.pages[0].render.asset!.at;
+    const moments = earlierMoments(doc);
+    const page = earlierForPage(moments, 'pg_old');
+    expect(page.slice(0, 2).map((m) => [m.kind, m.path])).toEqual([['deleted', `${V5}/old.webp`], ['drawing', `${V5}/old.webp`]]);
+    const atPub = moments.filter((m) => m.at === doc.publication!.publishedAt);
+    expect(atPub.map((m) => m.kind)).toEqual(['published', 'drawing']);
+    // compareMoments is exported for any input: the kind decides when time, owner and version tie.
+    const base = byPath(moments, `${V5}/old.webp`);
+    const same = (kind: EarlierMoment['kind']): EarlierMoment => ({ ...base, kind, id: `${kind}|${base.owner.key}|-`, versionN: undefined });
+    for (const input of [[same('drawing'), same('deleted'), same('published')], [same('deleted'), same('published'), same('drawing')]]) {
+      expect(input.sort(compareMoments).map((m) => m.kind)).toEqual(['published', 'deleted', 'drawing']);
+    }
+  });
+
+  it('grouping does not depend on the order of its input', () => {
+    const moments = earlierMoments(historyV5Doc());
+    const shuffled = [...moments].reverse();
+    const owners = groupEarlierByOwner(moments);
+    expect(groupEarlierByOwner(shuffled)).toEqual(owners);
+    expect(owners.map((g) => g.at)).toEqual(owners.map((g) => g.at).sort((a, b) => b! - a!));
+    for (const tz of ['UTC', 'Asia/Kolkata']) {
+      expect(groupEarlierByDay(shuffled, { now: BOOK_NOW, tz })).toEqual(groupEarlierByDay(moments, { now: BOOK_NOW, tz }));
+    }
   });
 });
 

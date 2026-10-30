@@ -47,15 +47,17 @@ export const EARLIER_TITLE = 'Earlier (images only)';
 export const EARLIER_UNDATED_LABEL = 'Date not recorded';
 /** Day key of that group. */
 export const EARLIER_UNDATED_KEY = 'undated';
+/** The note when History's start time is unknown (the one fallback string; the dated form names the day). */
+export const EARLIER_NOTE_NO_START = 'Only drawings were recorded before History started.';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 /**
- * "Only drawings were recorded before 29 Oct." — `startAt` is when History began for this comic (its `start` row's
- * time), shown as a local day in `tz` (UTC when missing or invalid). Without a start time: "… before History began."
+ * "Only drawings were recorded before 29 Oct." — `startAt` is when History started for this comic (its `start` row's
+ * time), shown as a local day in `tz` (UTC when missing or invalid). Without a usable start time: EARLIER_NOTE_NO_START.
  */
 export const earlierNote = (startAt?: number | null, tz?: string | null): string => {
-  if (!isDate(startAt)) return 'Only drawings were recorded before History began.';
+  if (!isDate(startAt)) return EARLIER_NOTE_NO_START;
   const p = localParts(startAt, zoneOf(tz));
   return `Only drawings were recorded before ${p.d} ${MONTHS[p.m - 1]}.`;
 };
@@ -186,7 +188,10 @@ export interface EarlierHistory {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const isDate = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+/** The largest time a JS Date can hold (±8.64e15 ms); a stored time beyond it is corrupt, so it reads "not recorded"
+ *  instead of making Intl throw a RangeError (which would blank the whole Earlier section). */
+const MAX_TIME_MS = 8.64e15;
+const isDate = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= MAX_TIME_MS;
 const zoneOf = (tz?: string | null): string => normalizeTimeZone(tz) ?? 'UTC';
 const clip = (s: string): string => (s.length <= HISTORY_LIMITS.labelChars ? s : `${s.slice(0, HISTORY_LIMITS.labelChars - 1).trimEnd()}…`);
 /** Lower-cases a leading Capitalized word inside a sentence ("Page 3" → "page 3"); an ALL-CAPS name stays ("MAYA"). */
@@ -306,10 +311,11 @@ const drawingMoment = (owner: EarlierOwner, held: Held): EarlierMoment | null =>
   if (at === null) missing.push('date');
   if (by === null) missing.push('by');
   if (origin === null) missing.push('origin');
-  // A model and a cost only exist for images an AI made (or whose maker is unknown); uploads and picks have neither.
+  // A model and a cost only exist for images an AI made (or whose maker is unknown); uploads, picks and the editor's
+  // own work (fitted, reused, derived) have neither, so their label's "no AI cost" is never contradicted.
   const aiOrUnknown = by === 'ai' || by === null;
   if (aiOrUnknown && model === null) missing.push('model');
-  if (by !== 'you' && costUsd === null) missing.push('cost');
+  if (aiOrUnknown && costUsd === null) missing.push('cost');
   const blocked = !canServeToOwner(v as AssetRef) || v.path.startsWith('q/');
   const thumb = blocked ? undefined : thumbOf(v as AssetRef);
   const m: EarlierMoment = {
@@ -530,7 +536,7 @@ export const compareMoments = (a: EarlierMoment, b: EarlierMoment): number => {
 
 const newestAt = (moments: EarlierMoment[]): number | null => {
   let best: number | null = null;
-  for (const m of moments) if (m.at !== null && (best === null || m.at > best)) best = m.at;
+  for (const m of moments) if (isDate(m.at) && (best === null || m.at > best)) best = m.at;
   return best;
 };
 
@@ -571,7 +577,8 @@ export const groupEarlierByDay = (moments: readonly EarlierMoment[], opts: { now
   const byDay = new Map<string, EarlierMoment[]>();
   for (const m of moments) {
     let key = EARLIER_UNDATED_KEY;
-    if (m.at !== null) {
+    // A time no Date can hold (only in hand-built moments: earlierMoments already reads it as null) is undated.
+    if (isDate(m.at)) {
       const p = localParts(m.at, zone);
       key = `${p.y}-${String(p.m).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`;
     }
@@ -621,6 +628,9 @@ export const earlierHistory = (doc: ComicDoc, opts: EarlierHistoryOptions): Earl
  *  passes the viewer's formatter (useCostFormat / formatCostForUser). */
 const usageWords = (usd: number): string => (Number.isFinite(usd) && usd > 0 ? 'uses a little of your usage' : 'Free');
 
+/** Origins whose "how" line already says it cost no AI (so "No AI cost" is not repeated). */
+const HOW_SAYS_NO_AI_COST: ReadonlySet<VersionOrigin> = new Set<VersionOrigin>(['derived', 'reused']);
+
 const HOW: Record<VersionOrigin, string> = {
   render: 'Drawn by AI',
   edit: 'Edited by AI',
@@ -645,7 +655,7 @@ export const earlierFacts = (m: EarlierMoment, money: (usd: number) => string = 
     else if (missing.has('model')) lines.push(`Image model: ${NOT_RECORDED}`);
     if (m.costUsd !== null) lines.push(m.costUsd > 0 ? money(m.costUsd) : 'Free');
     else if (missing.has('cost')) lines.push(`Cost: ${NOT_RECORDED}`);
-    else if (m.by === 'you') lines.push('No AI cost');
+    else if ((m.by === 'you' || m.by === 'editor') && !(m.origin && HOW_SAYS_NO_AI_COST.has(m.origin))) lines.push('No AI cost');
     if (m.current) lines.push('In the book now');
     else if (m.archived) lines.push('Archived');
     if (m.owner.kind === 'deleted_page') lines.push('Its page is in Deleted');
