@@ -7,7 +7,9 @@
  * host's injected key, so a plan token can never be confused with any other signed value the host makes.
  *
  * Single use is not in the token: at resume the host claims the reservation (`MeterPort.claim`), and a second resume
- * finds it used (409). An expired token is refused with 403; a tampered or foreign one with 401.
+ * finds it used (409). An expired token is refused with 403; a tampered or foreign one with 401. An authentic,
+ * same-user token that has expired still names its reservation (`payload` on the refusal), so the host can release
+ * the hold it pays for instead of leaving it to count against the user.
  */
 import { base64urlDecode, base64urlEncode, canonicalJson, hmacSha256, inputHash, isInputHash, timingSafeEqual, utf8Bytes, utf8Decode } from '../audit/inputHash.js';
 
@@ -75,20 +77,22 @@ export type PlanTokenRefusal = 'malformed' | 'signature' | 'expired' | 'not-yet-
 
 export type PlanTokenCheck =
   | { ok: true; payload: PlanTokenPayload }
-  | { ok: false; code: 'unauthorized'; status: 401; reason: 'malformed' | 'signature' }
-  | { ok: false; code: 'forbidden'; status: 403; reason: Exclude<PlanTokenRefusal, 'malformed' | 'signature'> };
+  | { ok: false; code: 'unauthorized'; status: 401; reason: 'malformed' | 'signature'; payload?: undefined }
+  /** Authentic, this user's, and expired: the payload names the reservation to release (never to run). */
+  | { ok: false; code: 'forbidden'; status: 403; reason: 'expired'; payload: PlanTokenPayload }
+  | { ok: false; code: 'forbidden'; status: 403; reason: Exclude<PlanTokenRefusal, 'malformed' | 'signature' | 'expired'>; payload?: undefined };
 
 const isSeconds = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 
 /**
  * Verify `token` for this user and this exact plan at `nowMs`. Never throws on a bad token (a short key still
- * throws: that is the host's misconfiguration). Order: shape, signature (constant-time), payload, lifetime, expiry,
- * subject, plan hash.
+ * throws: that is the host's misconfiguration). Order: shape, signature (constant-time), payload, lifetime, subject,
+ * expiry (an expired refusal carries the payload), not-yet-valid, plan hash.
  */
 export const verifyPlanToken = (token: unknown, key: string | Uint8Array, expect: { nowMs: number; sub: string; planHash: string }): PlanTokenCheck => {
   const k = keyBytes(key);
   const unauthorized = (reason: 'malformed' | 'signature'): PlanTokenCheck => ({ ok: false, code: 'unauthorized', status: 401, reason });
-  const forbidden = (reason: Exclude<PlanTokenRefusal, 'malformed' | 'signature'>): PlanTokenCheck => ({ ok: false, code: 'forbidden', status: 403, reason });
+  const forbidden = (reason: Exclude<PlanTokenRefusal, 'malformed' | 'signature' | 'expired'>): PlanTokenCheck => ({ ok: false, code: 'forbidden', status: 403, reason });
   if (typeof token !== 'string' || token.length > 2048) return unauthorized('malformed');
   const parts = token.split('.');
   if (parts.length !== 2 || !parts[0] || !parts[1]) return unauthorized('malformed');
@@ -118,10 +122,12 @@ export const verifyPlanToken = (token: unknown, key: string | Uint8Array, expect
     return unauthorized('malformed');
   }
   const now = Math.floor(expect.nowMs / 1000);
+  const verified: PlanTokenPayload = { v: 1, sub: p.sub, iat: p.iat, exp: p.exp, reservationId: p.reservationId, planHash: p.planHash };
   if (p.exp <= p.iat || p.exp - p.iat > PLAN_TOKEN_TTL_MAX_S) return forbidden('lifetime');
-  if (now >= p.exp) return forbidden('expired');
-  if (p.iat > now + PLAN_TOKEN_SKEW_S) return forbidden('not-yet-valid');
+  // The subject before expiry: only this user's own expired approval names a reservation back to them.
   if (!timingSafeEqual(p.sub, String(expect.sub))) return forbidden('subject');
+  if (now >= p.exp) return { ok: false, code: 'forbidden', status: 403, reason: 'expired', payload: verified };
+  if (p.iat > now + PLAN_TOKEN_SKEW_S) return forbidden('not-yet-valid');
   if (!timingSafeEqual(p.planHash, String(expect.planHash))) return forbidden('plan');
-  return { ok: true, payload: { v: 1, sub: p.sub, iat: p.iat, exp: p.exp, reservationId: p.reservationId, planHash: p.planHash } };
+  return { ok: true, payload: verified };
 };

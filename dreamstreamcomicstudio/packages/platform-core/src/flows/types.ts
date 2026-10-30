@@ -24,6 +24,10 @@ export const FLOW_IDS = [
 ] as const;
 export type FlowId = (typeof FLOW_IDS)[number];
 
+/**
+ * The shipped flows and their waves (plan §5.7). The titles are PROVISIONAL working names, not plan copy: each flow's
+ * owning package (waves 3–4) writes the final UI title with its definition.
+ */
 export const FLOW_CATALOG: readonly { id: FlowId; wave: PlatformWave; title: string }[] = [
   { id: 'comic_pitch_deck', wave: 3, title: 'Turn this comic into a pitch deck' },
   { id: 'meeting_followup_pack', wave: 3, title: 'Meeting follow-up pack' },
@@ -73,7 +77,11 @@ export interface FlowDefinition<O = unknown> {
   instructions: string;
   parameters: FlowParameter[];
   tools: PlatformToolName[];
-  /** A policy the flow itself requires (absent: the host's). The floors apply either way. */
+  /**
+   * A stricter policy the flow itself requires. It can only TIGHTEN the user's own policy (`FlowPorts.policy`): the
+   * run is gated under both and the stricter answer wins. It may never be an explicit never (`assertFlowDefinition`
+   * refuses it), so a definition can never grant itself the user's exemption from the flow floor.
+   */
   policy?: HostPolicy;
   limits: FlowLimits;
   output: Schema<O>;
@@ -137,6 +145,11 @@ export type FlowModelReply =
 
 /** The host's executor for the flow's tools (its own handlers, auth and storage). */
 export interface FlowToolPort {
+  /**
+   * Run a tool call the gate allows now: `run`, `quota-check`, or `spend-confirm` inside an approved plan. Never called
+   * for `propose` (a change to the person's content stops the run with a `FlowProposal`), `confirm` (an external
+   * write stops it with a `DraftAction`) or an unapproved `spend-confirm`.
+   */
   run(name: PlatformToolName, input: unknown, ctx: { decision: GateDecision; inputHash: string }): Promise<{ ok: true; output: unknown; usd?: number } | { ok: false; code: PlatformErrorCode; message: string }>;
   /** Prepare (never perform) an external write: the draft action a person approves later in the host. */
   draft?(name: PlatformToolName, input: unknown): Promise<DraftAction>;
@@ -159,7 +172,7 @@ export interface FlowPorts {
   app: string;
   product: string;
   actorId?: string;
-  /** The host's policy for this user (the flow's own policy wins when it sets one). */
+  /** The user's own policy. Every gate in the run reads it; a flow's own policy can only make it stricter. */
   policy: HostPolicy;
   /** The host's estimate for this run (USD); absent: the flow's `maxEstimateUsd`. */
   estimate?(def: FlowDefinition<unknown>, params: FlowParams): number;
@@ -182,16 +195,34 @@ export interface FlowError {
   message: string;
 }
 
+/**
+ * A tool call the run stopped at because a person must approve it first: a proposal on the person's own content, or
+ * a spend no approved plan covers. Nothing ran; the host shows it and, on approval, runs it through its own route.
+ */
+export interface FlowProposal {
+  tool: PlatformToolName;
+  decision: 'propose' | 'spend-confirm';
+  /** The checked arguments (host-side only; never audited). */
+  input: unknown;
+  inputHash: string;
+}
+
 export interface FlowRunResult<O = unknown> {
   status: FlowStatus;
   plan?: FlowPlan;
   planToken?: string;
   draftAction?: DraftAction;
+  proposal?: FlowProposal;
   output?: O;
   error?: FlowError;
   steps: FlowStepRecord[];
   modelCalls: number;
   spentUsd: number;
+  /**
+   * The ledger could not settle or release this run's reservation (it threw or answered `{ok:false}`): the hold is
+   * stranded until the host's reconciliation closes it. Audited as `settle-failed` / `release-failed`.
+   */
+  settleFailed?: true;
 }
 
 /** A resume request: the plan the person approved and its token. */

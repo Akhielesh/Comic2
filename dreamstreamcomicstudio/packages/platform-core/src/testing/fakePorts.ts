@@ -77,7 +77,8 @@ export interface FakeLedgerOptions {
 /**
  * A reservation ledger with the platform's semantics. Governed: holds count against the budget, and with the ledger
  * down `reserve` answers `unavailable` (fail closed). Ungoverned: no budget; while down `reserve` still answers
- * (exempt users are not metered) but `claim`, `settle` and `release` cannot reach the ledger.
+ * (exempt users are not metered) but `claim`, `settle` and `release` cannot reach the ledger: they answer
+ * `unavailable` and never throw.
  */
 export const createFakeLedger = (options: FakeLedgerOptions = {}): FakeLedger => {
   const governed = options.governed !== false;
@@ -121,7 +122,7 @@ export const createFakeLedger = (options: FakeLedgerOptions = {}): FakeLedger =>
     },
     async claim(id: string): Promise<MeterClaimResult> {
       calls.claim++;
-      if (ledger.down) throw new Error('The usage ledger is unreachable.');
+      if (ledger.down) return 'unavailable'; // a claim never throws (MeterPort)
       const r = find(id);
       if (!r) return 'unknown';
       if (r.status !== 'reserved') return 'used';

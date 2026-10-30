@@ -4,21 +4,28 @@
 // {sub, exp ≤ 15 min, reservationId, planHash}, good for ONE run:
 // - a tampered token is rejected (401), an expired one gets 403, a second resume against the ledger gets 409;
 // - with the ledger down a governed user fails closed (503) and nothing runs;
-// - runFlow can never pass an unconfirmed external write; every limit (steps, model calls, seconds, estimate) holds.
+// - runFlow can never pass an unconfirmed external write or change the person's content; every limit (steps, model
+//   calls, seconds, estimate) holds;
+// - an approval that will never run (expired, stale, other parameters, a higher estimate, cancelled) releases its hold;
+// - every gate reads the user's policy: a flow's own policy can only tighten it, never grant the never exemption.
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { s } from '../src/schema/index.js';
 import { base64urlEncode, canonicalJson, hmacSha256, utf8Bytes } from '../src/audit/inputHash.js';
 import type { HostPolicy } from '../src/gates/gates.js';
 import {
+  FLOW_ESTIMATE_MAX_USD,
   PLAN_TOKEN_TTL_MAX_S,
   PlanTokenError,
   assertFlowDefinition,
   canTransition,
+  cancelPlan,
+  decideFlowGate,
   mintPlanToken,
   nextFlowStatus,
   planHash,
   runFlow,
+  stricterGate,
   verifyPlanToken,
   type FlowDefinition,
   type FlowModelReply,
@@ -66,7 +73,12 @@ describe('planToken', () => {
 
   it('refuses an expired token with 403, and a token for another user or plan with 403', () => {
     const token = mint();
-    expect(verify(token, { nowMs: NOW + 900 * 1000 })).toMatchObject({ ok: false, code: 'forbidden', status: 403, reason: 'expired' });
+    // An expired refusal still names this user's reservation, so the host can release the hold.
+    expect(verify(token, { nowMs: NOW + 900 * 1000 })).toMatchObject({ ok: false, code: 'forbidden', status: 403, reason: 'expired', payload: { reservationId: 'res-1', sub: 'u1' } });
+    // …but never to another user: the subject is checked before expiry.
+    const otherExpired = verify(token, { nowMs: NOW + 900 * 1000, sub: 'u2' });
+    expect(otherExpired).toMatchObject({ ok: false, status: 403, reason: 'subject' });
+    expect(otherExpired.payload).toBeUndefined();
     expect(verify(token, { nowMs: NOW + 899 * 1000 }).ok).toBe(true);
     expect(verify(token, { sub: 'u2' })).toMatchObject({ ok: false, status: 403, reason: 'subject' });
     expect(verify(token, { planHash: planHash({ another: 'plan' }) })).toMatchObject({ ok: false, status: 403, reason: 'plan' });
@@ -172,16 +184,25 @@ describe('runFlow: one request per run, approval by a single-use plan token', ()
     expect(model.requests).toHaveLength(1);
   });
 
-  it('refuses an expired approval with 403 and runs nothing', async () => {
-    const { ports, clock, model } = setup();
-    const first = await runFlow(twoCalls, PARAMS, ports);
+  it('refuses an expired approval with 403, runs nothing, and releases its hold', async () => {
+    const { ports, clock, model, ledger } = setup({ budgetUsd: 2, estimate: 1.9 });
+    const big = { ...twoCalls, limits: { ...twoCalls.limits, maxEstimateUsd: 2 } };
+    const first = await runFlow(big, PARAMS, ports);
+    expect(first.status).toBe('awaiting_approval');
+    expect(ledger.remainingUsd()).toBeCloseTo(0.1);
     clock.advance(15 * 60 * 1000);
-    const late = await runFlow(twoCalls, undefined, ports, { plan: first.plan!, planToken: first.planToken! });
+    const late = await runFlow(big, undefined, ports, { plan: first.plan!, planToken: first.planToken! });
     expect(late).toMatchObject({ status: 'failed', error: { code: 'forbidden', status: 403, reason: 'plan-expired' } });
     expect(model.requests).toHaveLength(0);
+    expect(ledger.reservations[0].status).toBe('released');
+    expect(ledger.remainingUsd()).toBe(2);
+    // The same user can plan again: the expired plan no longer holds the allowance.
+    const again = await runFlow(big, PARAMS, ports);
+    expect(again.status).toBe('awaiting_approval');
+    expect(ledger.reservations[1]).toMatchObject({ status: 'reserved', estimateUsd: 1.9 });
   });
 
-  it('rejects a tampered token or an edited plan, and never runs them', async () => {
+  it('rejects a tampered token, an edited plan or another user, never runs them, and keeps the genuine hold', async () => {
     const { ports, model, ledger } = setup();
     const first = await runFlow(twoCalls, PARAMS, ports);
     const [body, sig] = first.planToken!.split('.');
@@ -191,21 +212,126 @@ describe('runFlow: one request per run, approval by a single-use plan token', ()
     expect(richer).toMatchObject({ status: 'failed', error: { status: 403, reason: 'plan-plan' } });
     const moreTools = await runFlow(twoCalls, undefined, ports, { plan: { ...first.plan!, tools: [...first.plan!.tools, 'doc_propose_changes'] }, planToken: first.planToken! });
     expect(moreTools).toMatchObject({ status: 'failed', error: { status: 403 } });
-    const otherParams = await runFlow(twoCalls, { notes: 'Something else entirely.' }, ports, { plan: first.plan!, planToken: first.planToken! });
-    expect(otherParams).toMatchObject({ status: 'failed', error: { status: 403, reason: 'plan-params' } });
     const otherUser = await runFlow(twoCalls, undefined, { ...ports, sub: 'u2' }, { plan: first.plan!, planToken: first.planToken! });
     expect(otherUser).toMatchObject({ status: 'failed', error: { status: 403, reason: 'plan-subject' } });
+    // An expired token of another user cannot release this user's hold either.
+    const later = { ...ports, sub: 'u2', clock: () => NOW + 16 * 60 * 1000 };
+    expect(await runFlow(twoCalls, undefined, later, { plan: first.plan!, planToken: first.planToken! })).toMatchObject({ error: { status: 403, reason: 'plan-subject' } });
     expect(model.requests).toHaveLength(0);
     expect(ledger.reservations[0].status).toBe('reserved'); // still open for the genuine approval
+    expect((await runFlow(twoCalls, undefined, ports, { plan: first.plan!, planToken: first.planToken! })).status).toBe('done');
   });
 
-  it('refuses a plan whose flow definition changed since approval (409)', async () => {
-    const { ports } = setup();
+  it('refuses the user’s own approval with other parameters (403) and releases its hold', async () => {
+    const { ports, model, ledger } = setup();
+    const first = await runFlow(twoCalls, PARAMS, ports);
+    const otherParams = await runFlow(twoCalls, { notes: 'Something else entirely.' }, ports, { plan: first.plan!, planToken: first.planToken! });
+    expect(otherParams).toMatchObject({ status: 'failed', error: { status: 403, reason: 'plan-params' } });
+    expect(model.requests).toHaveLength(0);
+    expect(ledger.reservations[0].status).toBe('released');
+    expect(ledger.remainingUsd()).toBe(10);
+    expect(await runFlow(twoCalls, undefined, ports, { plan: first.plan!, planToken: first.planToken! })).toMatchObject({ error: { status: 409 } });
+  });
+
+  it('refuses a plan whose flow definition changed since approval (409) and releases its hold', async () => {
+    const { ports, ledger } = setup();
     const first = await runFlow(twoCalls, PARAMS, ports);
     const changed = { ...twoCalls, version: '1.0.1' };
     expect(await runFlow(changed, undefined, ports, { plan: first.plan!, planToken: first.planToken! })).toMatchObject({ status: 'failed', error: { status: 409, reason: 'plan-stale' } });
-    const pricier = await runFlow(twoCalls, undefined, { ...ports, estimate: () => 0.15 }, { plan: first.plan!, planToken: first.planToken! });
+    expect(ledger.reservations[0].status).toBe('released');
+    expect(ledger.remainingUsd()).toBe(10);
+    const second = await runFlow(twoCalls, PARAMS, ports);
+    expect(ledger.reservations[1].status).toBe('reserved');
+    const pricier = await runFlow(twoCalls, undefined, { ...ports, estimate: () => 0.15 }, { plan: second.plan!, planToken: second.planToken! });
     expect(pricier).toMatchObject({ status: 'failed', error: { status: 409, reason: 'estimate-changed' } });
+    expect(ledger.reservations[1].status).toBe('released');
+    expect(ledger.remainingUsd()).toBe(10);
+  });
+});
+
+describe('cancelPlan releases the hold of a plan that will not run', () => {
+  it('releases a live plan, which then can never run', async () => {
+    const { ports, ledger, model } = setup();
+    const first = await runFlow(twoCalls, PARAMS, ports);
+    const approved = { plan: first.plan!, planToken: first.planToken! };
+    expect(await cancelPlan(approved, ports)).toEqual({ ok: true });
+    expect(ledger.reservations[0].status).toBe('released');
+    expect(await runFlow(twoCalls, undefined, ports, approved)).toMatchObject({ error: { status: 409, reason: 'reservation-used' } });
+    expect(await cancelPlan(approved, ports)).toMatchObject({ ok: false, error: { status: 409 } });
+    expect(model.requests).toHaveLength(0);
+  });
+
+  it('releases an expired plan’s hold too, and the user can plan again', async () => {
+    const { ports, ledger, clock } = setup({ budgetUsd: 2, estimate: 1.9 });
+    const big = { ...twoCalls, limits: { ...twoCalls.limits, maxEstimateUsd: 2 } };
+    const first = await runFlow(big, PARAMS, ports);
+    clock.advance(16 * 60 * 1000);
+    expect(await cancelPlan({ plan: first.plan!, planToken: first.planToken! }, ports)).toEqual({ ok: true });
+    expect(ledger.reservations[0].status).toBe('released');
+    expect(ledger.remainingUsd()).toBe(2);
+    expect((await runFlow(big, PARAMS, ports)).status).toBe('awaiting_approval');
+    expect(ledger.reservations[1].status).toBe('reserved');
+  });
+
+  it('refuses a tampered or foreign token, and reports a release the ledger refused', async () => {
+    const { ports, ledger } = setup();
+    const first = await runFlow(twoCalls, PARAMS, ports);
+    const [body] = first.planToken!.split('.');
+    expect(await cancelPlan({ plan: first.plan!, planToken: `${body}.AAAA` }, ports)).toMatchObject({ ok: false, error: { status: 401 } });
+    expect(await cancelPlan({ plan: first.plan!, planToken: first.planToken! }, { ...ports, sub: 'u2' })).toMatchObject({ ok: false, error: { status: 403 } });
+    expect(ledger.reservations[0].status).toBe('reserved');
+    const refusing = Object.assign(Object.create(ledger), { release: async () => ({ ok: false as const, code: 'unavailable' as const, message: 'down' }) });
+    expect(await cancelPlan({ plan: first.plan!, planToken: first.planToken! }, { ...ports, meter: refusing })).toMatchObject({ ok: false, error: { reason: 'release-failed' } });
+  });
+});
+
+describe('every gate reads the user’s policy; a flow’s own policy only tightens it', () => {
+  const ALWAYS: HostPolicy = { app: 'dreamstream', confirm: 'always' };
+
+  it('a definition can never claim the user’s explicit never', async () => {
+    for (const never of [NEVER, { app: 'atlas', approval: 'none' } as HostPolicy]) {
+      expect(() => assertFlowDefinition({ ...twoCalls, policy: never })).toThrow(/tighten/);
+    }
+    expect(() => assertFlowDefinition({ ...twoCalls, policy: { app: 'dreamstream', confirm: 'sometimes' } as never })).toThrow();
+    const { ports, model, ledger } = setup({ policy: ALWAYS, estimate: 0.1 });
+    const r = await runFlow({ ...twoCalls, policy: NEVER }, PARAMS, ports);
+    expect(r).toMatchObject({ status: 'failed', error: { reason: 'definition' } });
+    expect(r.planToken).toBeUndefined();
+    expect(model.requests).toHaveLength(0);
+    expect(ledger.reservations).toHaveLength(0);
+  });
+
+  it('gates under both and takes the stricter answer: a flow’s never never lifts the floor', () => {
+    const flow = { maxModelCalls: 3 };
+    expect(decideFlowGate({ flow, estimateUsd: 9, target: 'own-draft' }, ALWAYS, NEVER)).toBe('propose');
+    expect(decideFlowGate({ flow, estimateUsd: 9, target: 'own-draft' }, NEVER, ALWAYS)).toBe('propose');
+    expect(decideFlowGate({ flow, estimateUsd: 9, target: 'own-draft' }, NEVER)).toBe('run');
+    expect(decideFlowGate({ flow: { maxModelCalls: 1 }, estimateUsd: 0.05, target: 'own-draft' }, ALWAYS, { app: 'dreamstream', confirm: 'big', bigSpendUsd: 100 })).toBe('spend-confirm');
+    expect(stricterGate('spend-confirm', 'propose')).toBe('propose');
+    expect(stricterGate('run', 'quota-check')).toBe('quota-check');
+    expect(stricterGate('deny', 'confirm')).toBe('deny');
+  });
+
+  it('a laxer flow policy cannot skip the user’s spend confirmation', async () => {
+    const lax = { ...twoCalls, limits: { ...twoCalls.limits, maxModelCalls: 1 }, policy: { app: 'dreamstream', confirm: 'big', bigSpendUsd: 100 } as HostPolicy };
+    const { ports, model } = setup({ policy: ALWAYS, estimate: 0.05 });
+    const r = await runFlow(lax, PARAMS, ports);
+    expect(r.status).toBe('awaiting_approval');
+    expect(typeof r.planToken).toBe('string');
+    expect(model.requests).toHaveLength(0);
+  });
+
+  it('a stricter flow policy holds even for a user who chose never', async () => {
+    const strict = { ...twoCalls, policy: { app: 'dreamstream', confirm: 'always' } as HostPolicy };
+    const { ports, model } = setup({ policy: NEVER });
+    const r = await runFlow(strict, PARAMS, ports);
+    expect(r.status).toBe('awaiting_approval');
+    expect(model.requests).toHaveLength(0);
+  });
+
+  it('caps a single flow’s hold well under the whole allowance', () => {
+    expect(FLOW_ESTIMATE_MAX_USD).toBeLessThan(10);
+    expect(() => assertFlowDefinition({ ...twoCalls, limits: { ...twoCalls.limits, maxEstimateUsd: FLOW_ESTIMATE_MAX_USD + 0.01 } })).toThrow();
   });
 });
 
@@ -228,6 +354,26 @@ describe('runFlow fails closed with the ledger down', () => {
     expect(model.requests).toHaveLength(0);
     ledger.setDown(false);
     expect((await runFlow(twoCalls, undefined, ports, { plan: first.plan!, planToken: first.planToken! })).status).toBe('done');
+  });
+
+  it('a host claim that answers unavailable (or throws) is 503 ledger-down, never 409', async () => {
+    for (const claim of [async () => 'unavailable' as const, async (): Promise<never> => Promise.reject(new Error('socket hang up'))]) {
+      const { ports, ledger, model } = setup();
+      const first = await runFlow(twoCalls, PARAMS, ports);
+      const flaky = Object.assign(Object.create(ledger), { claim });
+      const r = await runFlow(twoCalls, undefined, { ...ports, meter: flaky }, { plan: first.plan!, planToken: first.planToken! });
+      expect(r).toMatchObject({ status: 'failed', error: { code: 'disabled', status: 503, reason: 'ledger-down' } });
+      expect(model.requests).toHaveLength(0);
+      expect(ledger.reservations[0].status).toBe('reserved');
+      // and on the no-approval path (the user chose never)
+      const never = setup({ policy: NEVER });
+      const n = await runFlow(twoCalls, PARAMS, { ...never.ports, meter: Object.assign(Object.create(never.ledger), { claim }) });
+      expect(n).toMatchObject({ status: 'failed', error: { status: 503, reason: 'ledger-down' } });
+      expect(never.model.requests).toHaveLength(0);
+    }
+    const down = createFakeLedger();
+    down.setDown(true);
+    expect(await down.claim('res-1')).toBe('unavailable'); // the fake answers; it never throws
   });
 
   it('an ungoverned user’s resume also fails closed: single use cannot be proven without the ledger', async () => {
@@ -270,19 +416,54 @@ describe('runFlow never passes an unconfirmed external write', () => {
     expect(toolCalls).toEqual([]);
   });
 
-  it('runs a propose-mode tool on user content only as a proposal, and refuses a tool outside the flow', async () => {
-    const replies: FlowModelReply[] = [
-      { kind: 'tool', tool: 'doc_propose_changes', args: { documentId: 'doc1', ops: [] } },
-      { kind: 'tool', tool: 'pdf_fill', args: { fileRef: 'f-1', fields: [{ name: 'Name', value: 'Ada' }] } },
-      { kind: 'final', output: { summary: 'Proposed.' } },
-    ];
-    const { ports, toolCalls, model } = setup({ policy: NEVER, replies });
-    const r = await runFlow(twoCalls, PARAMS, ports);
-    expect(r.status).toBe('done');
-    expect(r.steps[0]).toMatchObject({ tool: 'doc_propose_changes', outcome: 'refused' });
-    expect(r.steps[1]).toMatchObject({ tool: 'pdf_fill', decision: 'propose', outcome: 'ok' });
-    expect(toolCalls.map((c) => c.name)).toEqual(['pdf_fill']);
-    expect(model.requests[1].transcript[0]).toMatchObject({ kind: 'error', errors: [{ message: 'That tool is not part of this flow.' }] });
+  it('stops at a proposal on the person’s content: the tool never runs, under every policy', async () => {
+    for (const policy of [NEVER, BIG, { app: 'atlas', approval: 'none' } as HostPolicy]) {
+      const replies: FlowModelReply[] = [
+        { kind: 'tool', tool: 'doc_propose_changes', args: { documentId: 'doc1', ops: [] } },
+        { kind: 'tool', tool: 'pdf_fill', args: { fileRef: 'f-1', fields: [{ name: 'Name', value: 'Ada' }] }, usd: 0.01 },
+        { kind: 'final', output: { summary: 'Filled.' } },
+      ];
+      const { ports, toolCalls, model, ledger, audit } = setup({ policy, replies });
+      let r = await runFlow(twoCalls, PARAMS, ports);
+      if (r.status === 'awaiting_approval') r = await runFlow(twoCalls, undefined, ports, { plan: r.plan!, planToken: r.planToken! });
+      expect(r.status).toBe('awaiting_confirm');
+      expect(r.proposal).toEqual({ tool: 'pdf_fill', decision: 'propose', input: { fileRef: 'f-1', fields: [{ name: 'Name', value: 'Ada' }] }, inputHash: expect.stringMatching(/^sha256:/) });
+      expect(r.steps.map((s) => [s.tool, s.outcome])).toEqual([
+        ['doc_propose_changes', 'refused'], // not part of this flow
+        ['pdf_fill', 'pending'],
+      ]);
+      expect(toolCalls).toEqual([]); // the copy is never produced inside the flow
+      expect(model.requests).toHaveLength(2);
+      expect(model.requests[1].transcript[0]).toMatchObject({ kind: 'error', errors: [{ message: 'That tool is not part of this flow.' }] });
+      expect(ledger.reservations[0]).toMatchObject({ status: 'settled', actualUsd: 0.01 });
+      expect(audit.events[audit.events.length - 1]).toMatchObject({ outcome: 'pending' });
+      expect(JSON.stringify(audit.events)).not.toContain('Ada');
+    }
+  });
+});
+
+describe('a ledger that cannot close a hold is reported, never hidden', () => {
+  it('flags settleFailed and audits settle-failed when settle answers {ok:false}', async () => {
+    const { ports, ledger, audit } = setup({ policy: NEVER });
+    const meter = Object.assign(Object.create(ledger), { settle: async () => ({ ok: false as const, code: 'unavailable' as const, message: 'down' }) });
+    const r = await runFlow(twoCalls, PARAMS, { ...ports, meter });
+    expect(r).toMatchObject({ status: 'done', settleFailed: true, spentUsd: 0.01 });
+    expect(audit.events).toContainEqual(expect.objectContaining({ kind: 'flow', outcome: 'failed', errorCode: 'settle-failed', costMicros: 10000 }));
+    expect(ledger.reservations[0].status).toBe('claimed'); // stranded, for reconciliation
+  });
+
+  it('flags settleFailed and audits release-failed when release throws', async () => {
+    const replies: FlowModelReply[] = [{ kind: 'error', code: 'engine-failed', message: 'no' }];
+    const { ports, ledger, audit } = setup({ policy: NEVER, replies });
+    const meter = Object.assign(Object.create(ledger), { release: async () => Promise.reject(new Error('socket hang up')) });
+    const r = await runFlow(twoCalls, PARAMS, { ...ports, meter });
+    expect(r).toMatchObject({ status: 'failed', settleFailed: true, error: { reason: 'model-error' } });
+    expect(audit.events.map((e) => e.errorCode)).toEqual(['release-failed', 'model-error']);
+  });
+
+  it('a healthy ledger leaves no flag', async () => {
+    const { ports } = setup({ policy: NEVER });
+    expect((await runFlow(twoCalls, PARAMS, ports)).settleFailed).toBeUndefined();
   });
 });
 

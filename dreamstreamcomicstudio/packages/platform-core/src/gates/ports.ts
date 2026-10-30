@@ -44,8 +44,11 @@ export type MeterReserveResult =
   /** `quota`: the budget says no. `unavailable`: the ledger could not be asked (fail closed for governed users). */
   | { ok: false; code: 'quota' | 'unavailable'; message: string };
 
-/** `claimed`: this caller now owns the open reservation. `used`: it was claimed, settled or released before. */
-export type MeterClaimResult = 'claimed' | 'used' | 'unknown';
+/**
+ * `claimed`: this caller now owns the open reservation. `used`: it was claimed, settled or released before.
+ * `unknown`: the ledger has no such reservation. `unavailable`: the ledger could not be asked (fail closed: 503).
+ */
+export type MeterClaimResult = 'claimed' | 'used' | 'unknown' | 'unavailable';
 
 export type MeterSettleResult = { ok: true } | { ok: false; code: 'conflict' | 'unavailable'; message: string };
 
@@ -58,9 +61,13 @@ export const JOB_FLOOR_HEAVY_USD = 0.003;
  * `operation: 'platform_<tool>'` or `'platform_flow'`.
  * - `reserve` NEVER throws: with the ledger down it answers `{ok:false, code:'unavailable'}` for a governed user
  *   (fail closed).
- * - `claim` atomically turns an OPEN reservation into one owned by this caller: the single-use guard behind a plan
- *   token. A second claim of the same id answers `used`.
- * - `settle` / `release` close it; closing twice answers `conflict`.
+ * - `claim` NEVER throws either: it atomically turns an OPEN reservation into one owned by this caller (the single-use
+ *   guard behind a plan token), a second claim of the same id answers `used`, and with the ledger down it answers
+ *   `unavailable` (core still treats a throw as `unavailable`).
+ * - `settle` / `release` close it; closing twice answers `conflict`. A close that throws or answers `{ok:false}` leaves
+ *   a stranded hold: core reports it (`settleFailed`, audit `settle-failed` / `release-failed`) and never retries.
+ * - A sweep of open holds must RELEASE an unclaimed `platform_flow` or `platform_<tool>` hold, never settle it at its
+ *   held cost: an unclaimed hold is a plan nobody approved or a call that never ran.
  */
 export interface MeterPort {
   /** Whether this user's spend is governed (the shared allowance; never shown in dollars). */

@@ -6,19 +6,26 @@
  *    the plan and a signed, single-use `planToken` bound to the reservation.
  * 2. Resume (a new request carrying `{plan, planToken}`): verify the token (401 tampered, 403 expired / other user /
  *    other plan), re-validate the plan against the definition, re-estimate, then CLAIM the reservation; a second
- *    resume finds it used (409). With the ledger down the run fails closed (503).
+ *    resume finds it used (409). With the ledger down the run fails closed (503). A refusal of the user's own
+ *    authentic approval (expired, stale, other parameters, a higher estimate) RELEASES its hold, so an unrun plan never
+ *    keeps counting against the allowance.
  * 3. Run: one model completion per step, within `maxSteps`, `maxModelCalls`, `maxSeconds` and the reserved estimate.
  *    Each tool call is checked, gated and executed by the host. The first `external-write` stops the run at
- *    `awaiting_confirm` with a `DraftAction`: a flow can never perform an unconfirmed external write.
- * 4. Settle what was spent (or release when nothing was), and record ONE content-free audit event for the run.
+ *    `awaiting_confirm` with a `DraftAction`, and the first proposal on the person's content (or a spend no approved
+ *    plan covers) stops it with a `FlowProposal`: a flow never performs an unconfirmed external write or change.
+ * 4. Settle what was spent (or release when nothing was), and record ONE content-free audit event for the run (plus
+ *    one `settle-failed` / `release-failed` event when the ledger could not close a hold).
+ *
+ * Every gate reads the USER's policy (`ports.policy`); a flow's own policy can only make it stricter.
  */
 import type { CheckError, ObjectSchema, Schema } from '../contract/schema.js';
 import { check, s } from '../schema/index.js';
 import type { PlatformErrorCode } from '../errors.js';
 import { PLATFORM_ERRORS } from '../errors.js';
-import { decideGate } from '../gates/gates.js';
+import { decideGate, isExplicitNever, isHostPolicy } from '../gates/gates.js';
+import type { GateDecision, GateInput, HostPolicy } from '../gates/gates.js';
 import type { DraftAction } from '../gates/consent.js';
-import type { MeterReserveResult } from '../gates/ports.js';
+import type { MeterClaimResult, MeterReserveResult, MeterSettleResult } from '../gates/ports.js';
 import { auditEvent } from '../audit/event.js';
 import type { AuditDecision, AuditOutcome } from '../audit/event.js';
 import { canonicalJson, inputHash } from '../audit/inputHash.js';
@@ -26,6 +33,7 @@ import { getPlatformTool, isPlatformToolName } from '../tools/registry.js';
 import { checkToolInput, toChatSpec } from '../tools/projections.js';
 import { FORBIDDEN_NAME } from '../tools/types.js';
 import { mintPlanToken, planHash, verifyPlanToken } from './planToken.js';
+import type { PlanTokenCheck } from './planToken.js';
 import type {
   ApprovedPlan,
   FlowDefinition,
@@ -41,8 +49,29 @@ import type {
 } from './types.js';
 import { FLOW_LIMITS_MAX, FLOW_PARAMS_MAX, FLOW_PARAM_TEXT_MAX } from './types.js';
 
-/** A flow may never reserve more than this (the governed allowance is $10 in all). */
-export const FLOW_ESTIMATE_MAX_USD = 10;
+/**
+ * A flow may never reserve more than this. PROVISIONAL, not a plan number (owner W3.2; ADR 0008 to confirm): a fifth
+ * of the governed $10 allowance, far above §10's ≈ $0.02 for a 5-step flow, so one unapproved plan can never hold the
+ * whole allowance.
+ */
+export const FLOW_ESTIMATE_MAX_USD = 2;
+
+// ── Gating: the user's policy, tightened (never loosened) by the flow's ─────────────────────────────────────────
+
+const GATE_RANK: { readonly [D in GateDecision]: number } = { run: 0, 'quota-check': 1, 'spend-confirm': 2, propose: 3, confirm: 4, deny: 5 };
+
+/** The stricter of two decisions: `deny` > `confirm` > `propose` > `spend-confirm` > `quota-check` > `run`. */
+export const stricterGate = (a: GateDecision, b: GateDecision): GateDecision => (GATE_RANK[b] > GATE_RANK[a] ? b : a);
+
+/**
+ * Gate a flow run, or one tool call inside it, under the USER's policy; a flow's own policy is checked too and the
+ * stricter answer wins. Only the user's explicit never lifts the flow floor: a definition's policy cannot.
+ */
+export const decideFlowGate = (input: Omit<GateInput, 'policy'>, userPolicy: HostPolicy, flowPolicy?: HostPolicy): GateDecision => {
+  const mine = decideGate({ tool: input.tool, flow: input.flow, estimateUsd: input.estimateUsd, turnSpendUsd: input.turnSpendUsd, target: input.target, policy: userPolicy });
+  if (flowPolicy === undefined) return mine;
+  return stricterGate(mine, decideGate({ tool: input.tool, flow: input.flow, estimateUsd: input.estimateUsd, turnSpendUsd: input.turnSpendUsd, target: input.target, policy: flowPolicy }));
+};
 
 // ── The FlowRun reducer ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -117,6 +146,10 @@ export const assertFlowDefinition = (def: FlowDefinition<unknown>): void => {
     if (p.max !== undefined && !isInt(p.max, 1, FLOW_PARAM_TEXT_MAX)) fail(`parameter ${p.key} max must be 1 to ${FLOW_PARAM_TEXT_MAX}`);
   }
   if (!def.output || typeof def.output !== 'object') fail('output schema is required');
+  if (def.policy !== undefined) {
+    if (!isHostPolicy(def.policy)) fail('policy must be a host policy');
+    else if (isExplicitNever(def.policy)) fail('a flow policy can only tighten the user’s policy: never / none is the user’s choice alone');
+  }
 };
 
 /** The parameters as a capped schema: strings, numbers, booleans and selects; `optional` ones may be absent. */
@@ -176,12 +209,15 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
   let spent = 0;
   let plan: FlowPlan | undefined;
   let reservationId: string | undefined;
+  let settleFailed = false;
+  const approvedRun = !!approvedPlan;
   const move = (to: FlowStatus): void => {
     status = nextFlowStatus(status, to);
   };
   const result = (extra: Partial<FlowRunResult<O>>): FlowRunResult<O> => {
     const out: FlowRunResult<O> = { status, steps, modelCalls, spentUsd: spent };
     if (plan) out.plan = plan;
+    if (settleFailed) out.settleFailed = true;
     for (const k of Object.keys(extra) as (keyof FlowRunResult<O>)[]) (out as unknown as { [k: string]: unknown })[k] = extra[k];
     return out;
   };
@@ -213,18 +249,46 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
     record(decision, 'failed', error.reason);
     return result({ error });
   };
-  /** Close the reservation: settle what was spent, release when nothing was. */
+  /**
+   * Close one hold with the ledger: settle `settleUsd` when it is above 0, release it otherwise. A throw or an
+   * `{ok:false}` answer leaves the hold stranded: flagged on the result and audited, never retried here.
+   */
+  const closeHold = async (id: string, how: { settleUsd?: number; reason: string }): Promise<void> => {
+    const settling = how.settleUsd !== undefined && how.settleUsd > 0;
+    let closed: MeterSettleResult | undefined;
+    try {
+      closed = settling
+        ? await ports.meter.settle(id, { actualUsd: how.settleUsd as number, metadata: { platform: { app: ports.app, product: ports.product, flow: def.id, inputHash: plan ? planHash(plan) : undefined } } })
+        : await ports.meter.release(id, { reason: how.reason });
+    } catch {
+      closed = undefined;
+    }
+    if (!closed || closed.ok === false) {
+      settleFailed = true;
+      record(approvedRun ? 'confirmed' : 'auto', 'failed', settling ? 'settle-failed' : 'release-failed');
+    }
+  };
+  /** Close the run's reservation: settle what was spent, release when nothing was. */
   const close = async (): Promise<void> => {
     if (!reservationId) return;
     const id = reservationId;
     reservationId = undefined;
+    await closeHold(id, spent > 0 ? { settleUsd: spent, reason: 'flow-spent' } : { reason: 'flow-unspent' });
+  };
+  const claimHold = async (id: string): Promise<MeterClaimResult> => {
     try {
-      if (spent > 0) {
-        await ports.meter.settle(id, { actualUsd: spent, metadata: { platform: { app: ports.app, product: ports.product, flow: def.id, inputHash: plan ? planHash(plan) : undefined } } });
-      } else await ports.meter.release(id, { reason: 'flow-unspent' });
+      return await ports.meter.claim(id);
     } catch {
-      // the ledger's own sweeper closes a reservation the host could not
+      return 'unavailable'; // a claim must not throw; one that does is a ledger that could not be asked
     }
+  };
+  /**
+   * Release the hold of a plan that will never run (expired, stale, other parameters, a higher estimate). It is
+   * claimed first, so its token can never start a run afterwards. Never throws; with the ledger down the hold stays
+   * open and unclaimed, and the ledger's sweep must RELEASE it (never settle it at its held cost).
+   */
+  const releaseHold = async (id: string, reason: string): Promise<void> => {
+    if ((await claimHold(id)) === 'claimed') await closeHold(id, { reason });
   };
 
   // ── Validate ──
@@ -233,7 +297,7 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
   } catch (error) {
     return fail(errorOf('invalid', 'definition', error instanceof Error ? error.message : 'Invalid flow definition.'));
   }
-  const policy = def.policy || ports.policy;
+  const gateOf = (input: Omit<GateInput, 'policy'>): GateDecision => decideFlowGate(input, ports.policy, def.policy);
   const params0 = checkFlowParams(def, approvedPlan ? approvedPlan.plan && approvedPlan.plan.params : params);
   if (params0.ok === false) return fail(errorOf('invalid', 'params', params0.errors.map((e) => `${e.path || '(root)'}: ${e.message}`).join('; ')));
   const p = params0.value;
@@ -245,11 +309,12 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
   }
   if (typeof estimate !== 'number' || !isFinite(estimate) || estimate < 0) return fail(errorOf('invalid', 'estimate', 'The run could not be estimated.'));
   if (estimate > def.limits.maxEstimateUsd) return fail(errorOf('invalid', 'limit-estimate', 'This run would cost more than the flow allows.'));
-  const gate = decideGate({ flow: def.limits, policy, estimateUsd: estimate, target: 'own-draft' });
+  const gate = gateOf({ flow: def.limits, estimateUsd: estimate, target: 'own-draft' });
   if (gate === 'deny') return fail(errorOf('forbidden', 'gate-deny', 'This flow is not allowed under the current policy.'), 'blocked');
 
   const startMs = ports.clock();
   const cost = { app: ports.app, product: ports.product, flow: def.id };
+  const ledgerDown = (): FlowRunResult<O> => fail(errorOf('disabled', 'ledger-down', 'Usage could not be checked right now, so nothing ran. Try again in a moment.'), 'blocked');
 
   if (!approvedPlan) {
     // ── Plan and reserve ──
@@ -261,18 +326,17 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       reserved = { ok: false, code: 'unavailable', message: 'The usage ledger did not answer.' };
     }
     if (reserved.ok === false) {
-      return reserved.code === 'quota'
-        ? fail(errorOf('quota', 'quota', 'Not enough usage left for this run.'), 'blocked')
-        : fail(errorOf('disabled', 'ledger-down', 'Usage could not be checked right now, so nothing ran. Try again in a moment.'), 'blocked');
+      return reserved.code === 'quota' ? fail(errorOf('quota', 'quota', 'Not enough usage left for this run.'), 'blocked') : ledgerDown();
     }
-    reservationId = reserved.reservationId;
+    const held = reserved.reservationId;
+    reservationId = held;
     if (gate !== 'run' && gate !== 'quota-check') {
       let planToken: string;
       try {
-        planToken = mintPlanToken({ sub: ports.sub, reservationId, planHash: planHash(plan), nowMs: startMs }, ports.planKey);
+        planToken = mintPlanToken({ sub: ports.sub, reservationId: held, planHash: planHash(plan), nowMs: startMs }, ports.planKey);
       } catch (error) {
-        await ports.meter.release(reservationId, { reason: 'plan-token' }).catch(() => undefined);
         reservationId = undefined;
+        await closeHold(held, { reason: 'plan-token' });
         return fail(errorOf('engine-failed', 'plan-token', error instanceof Error ? error.message : 'The plan could not be signed.'));
       }
       move('awaiting_approval');
@@ -280,34 +344,31 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       return result({ planToken });
     }
     // No approval needed (the user chose never): claim our own reservation, the same single-use path as a resume.
-    let claim: string;
-    try {
-      claim = await ports.meter.claim(reservationId);
-    } catch {
-      claim = 'down';
-    }
+    const claim = await claimHold(held);
     if (claim !== 'claimed') {
       reservationId = undefined;
-      return claim === 'down'
-        ? fail(errorOf('disabled', 'ledger-down', 'Usage could not be checked right now, so nothing ran.'), 'blocked')
-        : fail(errorOf('conflict', 'reservation-used', 'This run was already started.'), 'blocked');
+      return claim === 'unavailable' ? ledgerDown() : fail(errorOf('conflict', 'reservation-used', 'This run was already started.'), 'blocked');
     }
     move('running');
   } else {
     // ── Resume an approved plan ──
     const approved = approvedPlan.plan;
-    let token;
+    let token: PlanTokenCheck;
     try {
       token = verifyPlanToken(approvedPlan.planToken, ports.planKey, { nowMs: startMs, sub: ports.sub, planHash: planHash(approved) });
     } catch (error) {
       return fail(errorOf('engine-failed', 'plan-key', error instanceof Error ? error.message : 'The plan key is misconfigured.'));
     }
     if (token.ok === false) {
+      // This user's own approval, expired: release the hold it was paying for.
+      if (token.reason === 'expired' && token.payload) await releaseHold(token.payload.reservationId, 'plan-expired');
       return fail(
         errorOf(token.code, `plan-${token.reason}`, token.reason === 'expired' ? 'This approval has expired. Review the plan again.' : 'This approval is not valid for this plan.', token.status),
         'blocked',
       );
     }
+    // From here the token is authentic, this user's and this plan's: a refusal below releases its hold.
+    const held = token.payload.reservationId;
     if (
       !approved ||
       approved.v !== 1 ||
@@ -317,23 +378,25 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       !sameJson(approved.limits, def.limits) ||
       typeof approved.estimateUsd !== 'number'
     ) {
+      await releaseHold(held, 'plan-stale');
       return fail(errorOf('conflict', 'plan-stale', 'The flow changed after this plan was approved. Review it again.'), 'blocked');
     }
     if (params !== undefined) {
       const given = checkFlowParams(def, params);
-      if (given.ok === false || !sameJson(given.value, p)) return fail(errorOf('forbidden', 'plan-params', 'These parameters are not the ones that were approved.', 403), 'blocked');
+      if (given.ok === false || !sameJson(given.value, p)) {
+        await releaseHold(held, 'plan-params');
+        return fail(errorOf('forbidden', 'plan-params', 'These parameters are not the ones that were approved.', 403), 'blocked');
+      }
     }
-    if (estimate > approved.estimateUsd + 1e-9) return fail(errorOf('conflict', 'estimate-changed', 'This run now costs more than was approved. Review it again.'), 'blocked');
+    if (estimate > approved.estimateUsd + 1e-9) {
+      await releaseHold(held, 'estimate-changed');
+      return fail(errorOf('conflict', 'estimate-changed', 'This run now costs more than was approved. Review it again.'), 'blocked');
+    }
     plan = approved;
-    let claim: string;
-    try {
-      claim = await ports.meter.claim(token.payload.reservationId);
-    } catch {
-      claim = 'down';
-    }
-    if (claim === 'down') return fail(errorOf('disabled', 'ledger-down', 'Usage could not be checked right now, so nothing ran. Try again in a moment.'), 'blocked');
+    const claim = await claimHold(held);
+    if (claim === 'unavailable') return ledgerDown();
     if (claim !== 'claimed') return fail(errorOf('conflict', claim === 'used' ? 'reservation-used' : 'reservation-unknown', 'This approved plan has already run.'), 'blocked');
-    reservationId = token.payload.reservationId;
+    reservationId = held;
     move('running');
   }
 
@@ -346,10 +409,9 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
     if (t) toolSpecs.push(toChatSpec(t));
   }
   const transcript: FlowTranscriptEntry[] = [];
-  const approvedRun = !!approvedPlan;
-  const finishFailed = async (error: FlowError): Promise<FlowRunResult<O>> => {
+  const finishFailed = async (error: FlowError, decision: AuditDecision = approvedRun ? 'confirmed' : 'auto'): Promise<FlowRunResult<O>> => {
     await close();
-    return fail(error, approvedRun ? 'confirmed' : 'auto');
+    return fail(error, decision);
   };
 
   let stepIndex = 0;
@@ -404,7 +466,7 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       transcript.push({ step, kind: 'error', tool: tool.name, errors: checked.errors });
       continue;
     }
-    const decision = decideGate({ tool, policy, target: tool.target });
+    const decision = gateOf({ tool, target: tool.target });
     if (decision === 'confirm') {
       // The first external write ends the run here: prepare the draft action; a person approves it in the host.
       let action: DraftAction | undefined;
@@ -415,7 +477,7 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       }
       if (!action) {
         steps.push({ step, kind: 'tool', tool: tool.name, decision, outcome: 'refused' });
-        return finishFailed(errorOf('forbidden', 'external-write', 'This flow needs your approval to write outside the app, and the app could not prepare it.'));
+        return finishFailed(errorOf('forbidden', 'external-write', 'This flow needs your approval to write outside the app, and the app could not prepare it.'), 'blocked');
       }
       if (ports.approver) await Promise.resolve(ports.approver.draft(action)).catch(() => undefined);
       steps.push({ step, kind: 'tool', tool: tool.name, decision, outcome: 'pending' });
@@ -424,12 +486,21 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
       record(approvedRun ? 'confirmed' : 'auto', 'pending');
       return result({ draftAction: action });
     }
-    if (decision === 'deny' || (decision === 'propose' && tool.mode !== 'propose')) {
+    if (decision === 'deny') {
       steps.push({ step, kind: 'tool', tool: tool.name, decision, outcome: 'refused' });
-      transcript.push({ step, kind: 'error', tool: tool.name, errors: [{ path: 'tool', code: 'enum', message: 'That tool cannot change the person’s own content inside a flow.' }] });
+      transcript.push({ step, kind: 'error', tool: tool.name, errors: [{ path: 'tool', code: 'enum', message: 'That tool is not allowed under the current policy.' }] });
       continue;
     }
-    // run / quota-check / spend-confirm (covered by the approved, reserved plan) / propose by a propose-mode tool
+    if (decision === 'propose' || (decision === 'spend-confirm' && !approvedRun)) {
+      // A change to the person's own content (or a spend no approved plan covers) is only ever PROPOSED: the run
+      // stops here with the checked call, nothing runs, and the host asks the person (plan §5.5, §5.6).
+      steps.push({ step, kind: 'tool', tool: tool.name, decision, outcome: 'pending' });
+      move('awaiting_confirm');
+      await close();
+      record(approvedRun ? 'confirmed' : 'auto', 'pending');
+      return result({ proposal: { tool: tool.name, decision, input: checked.value, inputHash: inputHash(checked.value) } });
+    }
+    // run / quota-check / spend-confirm covered by the approved, reserved plan
     let ran;
     try {
       ran = await ports.tools.run(tool.name, checked.value, { decision, inputHash: inputHash(checked.value) });
@@ -448,21 +519,35 @@ export const runFlow = async <O>(def: FlowDefinition<O>, params: unknown, ports:
   }
 };
 
-/** Cancel an approved-but-unused plan: release its reservation (the token then finds it used). */
+/**
+ * Cancel an approved-but-unused plan: claim its reservation (so the token can never run) and release it. An expired
+ * token of this user still names its reservation, so cancelling it releases the hold too.
+ */
 export const cancelPlan = async (approvedPlan: ApprovedPlan, ports: Pick<FlowPorts, 'meter' | 'planKey' | 'sub' | 'clock'>): Promise<{ ok: true } | { ok: false; error: FlowError }> => {
-  const token = verifyPlanToken(approvedPlan.planToken, ports.planKey, { nowMs: ports.clock(), sub: ports.sub, planHash: planHash(approvedPlan.plan) });
-  if (token.ok === false && token.reason !== 'expired') return { ok: false, error: errorOf(token.code, `plan-${token.reason}`, 'This approval is not valid for this plan.', token.status) };
-  const payload = token.ok ? token.payload : undefined;
-  if (!payload) {
-    // An expired token: its reservation is the ledger sweeper's to close; nothing to do here.
-    return { ok: true };
-  }
+  let token: PlanTokenCheck;
   try {
-    const claim = await ports.meter.claim(payload.reservationId);
-    if (claim !== 'claimed') return { ok: false, error: errorOf('conflict', 'reservation-used', 'This plan already ran or was cancelled.') };
-    await ports.meter.release(payload.reservationId, { reason: 'cancelled' });
-    return { ok: true };
-  } catch {
-    return { ok: false, error: errorOf('disabled', 'ledger-down', 'Usage could not be checked right now. Try again in a moment.') };
+    token = verifyPlanToken(approvedPlan && approvedPlan.planToken, ports.planKey, { nowMs: ports.clock(), sub: ports.sub, planHash: planHash(approvedPlan && approvedPlan.plan) });
+  } catch (error) {
+    return { ok: false, error: errorOf('engine-failed', 'plan-key', error instanceof Error ? error.message : 'The plan key is misconfigured.') };
   }
+  if (token.ok === false && token.reason !== 'expired') return { ok: false, error: errorOf(token.code, `plan-${token.reason}`, 'This approval is not valid for this plan.', token.status) };
+  const payload = token.payload;
+  if (!payload) return { ok: false, error: errorOf('forbidden', 'plan-expired', 'This approval is not valid for this plan.', 403) };
+  let claim: MeterClaimResult;
+  try {
+    claim = await ports.meter.claim(payload.reservationId);
+  } catch {
+    claim = 'unavailable';
+  }
+  if (claim === 'unavailable') return { ok: false, error: errorOf('disabled', 'ledger-down', 'Usage could not be checked right now. Try again in a moment.') };
+  if (claim !== 'claimed') return { ok: false, error: errorOf('conflict', 'reservation-used', 'This plan already ran or was cancelled.') };
+  let released: MeterSettleResult | undefined;
+  try {
+    released = await ports.meter.release(payload.reservationId, { reason: token.ok ? 'cancelled' : 'plan-expired' });
+  } catch {
+    released = undefined;
+  }
+  // Claimed, so the plan can never run; the hold itself is stranded until the host's reconciliation releases it.
+  if (!released || released.ok === false) return { ok: false, error: errorOf('disabled', 'release-failed', 'The plan was cancelled, but its usage hold could not be released yet.') };
+  return { ok: true };
 };
