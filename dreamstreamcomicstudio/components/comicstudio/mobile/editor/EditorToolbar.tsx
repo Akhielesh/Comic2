@@ -13,6 +13,8 @@ import React from 'react';
 import { Cloud, Eye, EyeOff, MessageCircle, MousePointer2, PanelBottomOpen, Redo2, Sparkles, Square, SquareDashed, Type, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../../shared/comic/doc';
 
+import { TONE_TEXT } from '../../../chat/studioDesign';
+
 const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
 
 export type EditorMode = 'move' | 'markup';
@@ -125,7 +127,7 @@ const TrayButton: React.FC<{ label: string; short: string; icon: React.ReactNode
       'press inline-flex h-11 shrink-0 items-center justify-center gap-1 rounded-xl border text-[12px] font-medium transition-colors duration-150 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-40',
       vertical ? 'w-11' : 'px-3',
       pressed ? 'border-[#D97757]/50 bg-[#D97757]/[0.12] text-[var(--ds-ink)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] hover:bg-[var(--ds-hover)]',
-      tone === 'warn' ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--ds-ink)]',
+      tone === 'warn' ? TONE_TEXT.warning : 'text-[var(--ds-ink)]',
       FOCUS
     )}
   >

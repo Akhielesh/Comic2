@@ -25,6 +25,7 @@ import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models
 import { failClosedMoney } from './bookModel';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import type { ClipVM } from './bookModel';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx, FOCUS_RING } from './ui';
 
 export type ClipAction =
@@ -189,7 +190,7 @@ export const ClipMenu: React.FC<ClipMenuProps> = ({ open, onClose, clip, anchor,
               className={cx(
                 'flex min-h-[40px] w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-[13px] hover:bg-[var(--ds-hover)] disabled:cursor-not-allowed disabled:opacity-45 coarse:min-h-[44px]',
                 FOCUS_RING,
-                it.danger ? 'text-red-600 dark:text-red-300' : 'text-[var(--ds-ink)]'
+                it.danger ? TONE_TEXT.danger : 'text-[var(--ds-ink)]'
               )}
             >
               <span className="shrink-0 text-[var(--ds-muted)]" aria-hidden>

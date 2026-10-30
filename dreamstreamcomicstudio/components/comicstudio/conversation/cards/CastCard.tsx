@@ -13,6 +13,7 @@ import type { Card, Character } from '../../../../shared/comic/doc';
 import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
+import { TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, cx, plural } from '../ui';
 import { CastAvatar, KIND_NAME, castAriaLabel, castRoleLabel, groupCount, kindOf } from './castVisual';
 import { useAction } from './useAction';
@@ -106,10 +107,10 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
                     <span
                       className={cx(
                         'flex min-w-0 items-center gap-1 text-[11px]',
-                        status.tone === 'bad' ? 'text-amber-700 dark:text-amber-300' : 'text-[var(--ds-muted)]'
+                        status.tone === 'bad' ? TONE_TEXT.warning : 'text-[var(--ds-muted)]'
                       )}
                     >
-                      {status.tone === 'ok' && <Check className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden />}
+                      {status.tone === 'ok' && <Check className={cx('h-3 w-3 shrink-0', TONE_TEXT.success)} aria-hidden />}
                       {status.tone === 'bad' && <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />}
                       {status.tone === 'busy' && <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--ds-accent)] motion-reduce:animate-none" aria-hidden />}
                       <span className="min-w-0 truncate">{castStatusLine(c)}</span>

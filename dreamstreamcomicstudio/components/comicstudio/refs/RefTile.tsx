@@ -14,6 +14,7 @@ import { GripVertical, Star, Trash2, Crop, Undo2, ArrowRightLeft } from 'lucide-
 import type { ContentRating } from '../../../shared/comic/safety';
 import type { RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { REF_LIMITS, refOwnerKey } from '../../../shared/comic/refs';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import { labelText, labelsFor, type RefUsage } from './refsModel';
@@ -253,7 +254,7 @@ export const RefActions: React.FC<RefActionsProps> = ({ refAsset: ref, index, ow
             </select>
           </label>
         )}
-        <button type="button" className={cx(ACTION_BTN, 'text-red-700 dark:text-red-300')} onClick={onRemove} disabled={busy}>
+        <button type="button" className={cx(ACTION_BTN, TONE_TEXT.danger)} onClick={onRemove} disabled={busy}>
           <Trash2 className="h-4 w-4" aria-hidden /> Remove
         </button>
       </div>

@@ -20,7 +20,7 @@ import { capFor } from '../../../shared/comic/refs';
 import { effectiveRating, safetyStatusOf, type ContentRating } from '../../../shared/comic/safety';
 import type { LetteringPresetId } from '../../../shared/comic/lettering/style';
 import type { StudioController } from '../types';
-import { RADIUS_PILL } from '../../chat/studioDesign';
+import { RADIUS_PILL, TONE_CHIP } from '../../chat/studioDesign';
 import { SelectPop } from '../../studio/kit/streamMotion';
 import { LibraryImage } from '../library/LibraryImage';
 import { PresetThumb } from '../library/procedural/PresetThumb';
@@ -291,7 +291,7 @@ export const StyleTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
             <span
               className={cx(
                 'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold',
-                locked ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
+                locked ? TONE_CHIP.success : 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]'
               )}
             >
               {locked && <Lock className="h-3 w-3" aria-hidden />} {STATUS_TEXT[style.status]}

@@ -21,6 +21,7 @@ import {
 } from '../../../../shared/comic/doc';
 import type { SpendAction } from '../../../../shared/comic/ops';
 import { ImageDevelop } from '../../../studio/kit/streamMotion';
+import { TONE_TEXT } from '../../../chat/studioDesign';
 import { cx } from '../ui';
 import { failureCaption, failureFacts, failureReason, formatFailedAt } from './failure';
 
@@ -154,7 +155,7 @@ export const RenderThumb: React.FC<RenderThumbProps> = ({
         className="flex h-full w-full flex-col items-center justify-[safe_center] gap-1 bg-[var(--ds-surface-soft)] p-1.5 text-center"
       >
         <span className="sr-only">{spokenFailure}</span>
-        <CircleAlert className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" aria-hidden />
+        <CircleAlert className={cx('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
         {!iconOnly && (
           <span aria-hidden className="line-clamp-2 text-[10.5px] font-medium leading-snug text-[var(--ds-muted)] first-letter:uppercase">
             {reason}

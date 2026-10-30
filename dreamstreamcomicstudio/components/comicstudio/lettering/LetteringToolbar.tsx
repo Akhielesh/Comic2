@@ -7,7 +7,7 @@ import React from 'react';
 import { Cloud, MessageCircle, Redo2, Sparkles, Square, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../shared/comic/doc';
 import type { StudioMode } from '../../../shared/comic/capabilities';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 
 export interface LetteringToolbarProps {
@@ -88,7 +88,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
       <Wand2 className="h-3.5 w-3.5" aria-hidden /> Tidy
     </button>
     {outsideCount > 0 && (
-      <button type="button" className={cx(BTN, 'text-amber-700 dark:text-amber-300')} disabled={disabled} onClick={onFixEdges} title="Move balloons that hug the page edge back inside the safe area (free)">
+      <button type="button" className={cx(BTN, TONE_TEXT.warning)} disabled={disabled} onClick={onFixEdges} title="Move balloons that hug the page edge back inside the safe area (free)">
         <Sparkles className="h-3.5 w-3.5" aria-hidden /> Fix edges ({outsideCount})
       </button>
     )}

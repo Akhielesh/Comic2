@@ -15,6 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { CircleCheck, Coffee, Info, PenLine, RefreshCw, Redo2, ShieldCheck, Undo2, X } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { useCostFormat } from './cost';
+import { STATUS_SURFACE, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from './ui';
 
 /** How long a notice / savings line stays before fading on its own. */
@@ -61,17 +62,17 @@ export const errorPresentation = (code: string | null | undefined): ErrorPresent
 };
 
 const TONE_CLS: Record<ErrorTone, string> = {
-  pause: 'border-sky-500/25 bg-sky-500/[0.07]',
+  pause: TONE_SURFACE.info,
   care: 'border-[#D97757]/30 bg-[#D97757]/[0.07]',
   info: 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]',
-  problem: 'border-amber-500/30 bg-amber-500/[0.08]'
+  problem: STATUS_SURFACE.attention
 };
 
 const TONE_ICON: Record<ErrorTone, React.ReactNode> = {
-  pause: <Coffee className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-700 dark:text-sky-300" aria-hidden />,
+  pause: <Coffee className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', TONE_TEXT.info)} aria-hidden />,
   care: <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" aria-hidden />,
   info: <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" aria-hidden />,
-  problem: <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-300" aria-hidden />
+  problem: <Info className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', TONE_TEXT.warning)} aria-hidden />
 };
 
 const SMALL_BTN =
@@ -210,7 +211,8 @@ export const SavedByEditorNote: React.FC<{
     <div
       role="status"
       className={cx(
-        'flex min-w-0 items-center gap-1.5 px-1 text-[11.5px] text-emerald-700 animate-fade-in motion-reduce:animate-none dark:text-emerald-300',
+        'flex min-w-0 items-center gap-1.5 px-1 text-[11.5px] animate-fade-in motion-reduce:animate-none',
+        TONE_TEXT.success,
         className
       )}
     >

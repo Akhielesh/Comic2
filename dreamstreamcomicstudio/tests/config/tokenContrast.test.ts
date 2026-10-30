@@ -129,14 +129,26 @@ function accentTextSurfaces(ctx: ContextName): Map<string, Rgba> {
 }
 
 const TONES = ['success', 'warning', 'danger', 'info'] as const;
-/** Status text: the page, the glass, hover rows, and its own TONE_SURFACE (10 % of the hue). */
+/**
+ * Where status text sits once Comic Studio's raw hue text moved onto the readable tokens (Atlas wave 8,
+ * "readable status ink"; tests/config/statusInkGuard.test.ts): the page, a card, the soft glass, a
+ * raised overlay (menus, sheets, popovers) and its highlighted / hovered rows — the danger rows of the
+ * clip and context menus — on top of the hover rows the matrix measured before.
+ */
+const STATUS_TEXT_BASES = [
+  'canvas', 'sidebar', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'raised',
+  'well on canvas', 'hover on canvas', 'hover on surface/canvas', 'hover on raised', 'overlay-hover on raised'
+];
+/** …and its own tint (a chip, a banner, a hover tint) over the page, a card, the soft glass and an overlay. */
+const STATUS_TINT_BASES = ['canvas', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'raised'];
+/** Status text: the surfaces above, and its own TONE_SURFACE (10 % of the hue) over each tint base. */
 function statusSurfaces(ctx: ContextName, tone: (typeof TONES)[number]): Map<string, Rgba> {
   const all = surfaces(ctx);
   const s = new Map<string, Rgba>();
-  for (const k of ['canvas', 'sidebar', 'surface/canvas', 'surface-strong/canvas', 'well on canvas', 'hover on canvas', 'hover on surface/canvas']) s.set(k, all.get(k)!);
+  for (const k of STATUS_TEXT_BASES) s.set(k, all.get(k)!);
   // TONE_SURFACE's tint: the hue at 10 % (danger reads the danger mark, the brighter red in Atlas dark).
   const tint = withAlpha(token(tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`, ctx), 0.1);
-  for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
+  for (const base of STATUS_TINT_BASES) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
   return s;
 }
 
@@ -549,11 +561,11 @@ describe('token contrast — the status vocabulary (healthy / active / waiting /
     }
   });
 
-  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card and a raised overlay) in every context', () => {
+  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card, the soft glass and a raised overlay) in every context', () => {
     const failing: string[] = [];
     for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
       const s = surfaces(ctx);
-      for (const base of ['canvas', 'surface/canvas', 'raised', 'surface-strong/canvas']) {
+      for (const base of ['canvas', 'surface/canvas', 'surface-soft/canvas', 'raised', 'surface-strong/canvas']) {
         for (const [state, text, surface] of STATES) {
           const bg = surface(ctx, s.get(base)!);
           const r = ratio(over(token(text, ctx), bg), bg);
@@ -567,7 +579,7 @@ describe('token contrast — the status vocabulary (healthy / active / waiting /
   it('the danger tone surface (TONE_SURFACE) on its mark tint keeps the readable danger text ≥ 4.5:1', () => {
     for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
       const s = surfaces(ctx);
-      for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) {
+      for (const base of STATUS_TINT_BASES) {
         const bg = over(withAlpha(token('--ds-danger-mark', ctx), 0.1), s.get(base)!);
         expect(ratio(over(token('--ds-danger-text', ctx), bg), bg), `${ctx} ${base}`).toBeGreaterThanOrEqual(4.5);
       }

@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 
@@ -84,7 +84,7 @@ export const GhostButton: React.FC<ButtonProps & { tone?: 'default' | 'danger' }
     aria-busy={busy || undefined}
     className={cx(
       `inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] font-medium hover:bg-[var(--ds-hover)] ${TRANSITION} ${FOCUS_RING} disabled:cursor-not-allowed disabled:opacity-45`,
-      tone === 'danger' ? 'text-red-600 dark:text-red-300' : 'text-[var(--ds-ink)]',
+      tone === 'danger' ? TONE_TEXT.danger : 'text-[var(--ds-ink)]',
       sizeCls(size),
       className
     )}
@@ -407,11 +407,11 @@ const STATUS_TEXT: Record<VisualStatus, string> = {
 export const StatusChip: React.FC<{ status: VisualStatus; className?: string; label?: string }> = ({ status, className, label }) => {
   const tone =
     status === 'ready'
-      ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+      ? TONE_CHIP.success
       : status === 'stale'
-        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+        ? TONE_CHIP.warning
         : status === 'failed'
-          ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'
+          ? TONE_CHIP.danger
           : status === 'rendering' || status === 'queued'
             ? 'border-[#D97757]/30 bg-[#D97757]/10 text-[var(--ds-ink)]'
             : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-muted)]';
@@ -593,7 +593,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
             compact ? 'gap-1 px-2.5 py-2' : 'gap-1.5 px-3.5 py-3'
           )}
         >
-          <CircleAlert className={cx('shrink-0 text-amber-600 dark:text-amber-300', compact ? 'h-4 w-4' : 'h-5 w-5')} aria-hidden />
+          <CircleAlert className={cx('shrink-0', TONE_TEXT.warning, compact ? 'h-4 w-4' : 'h-5 w-5')} aria-hidden />
           <p className={cx('min-w-0 max-w-[28ch] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere] first-letter:uppercase', compact ? 'text-[11.5px]' : 'text-[12px]')}>
             {caption}
           </p>

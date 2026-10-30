@@ -26,7 +26,7 @@ import {
   type LibraryStepView
 } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
-import { OVERLINE } from '../../../chat/studioDesign';
+import { OVERLINE, TONE_CHIP, TONE_TEXT } from '../../../chat/studioDesign';
 import {
   cancelLibraryRun,
   getLibraryManifest,
@@ -71,10 +71,10 @@ const STATUS_CLASS: Record<LibraryAssetStatus, string> = {
   pending: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
   generating: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
   analyzing: 'bg-[#D97757]/10 text-[var(--ds-accent)]',
-  needs_review: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-  published: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+  needs_review: TONE_CHIP.warning,
+  published: TONE_CHIP.success,
   rejected: 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
-  failed: 'bg-red-500/12 text-red-700 dark:text-red-300'
+  failed: TONE_CHIP.danger
 };
 
 const btn =
@@ -360,7 +360,7 @@ export const LibraryConsole: React.FC = () => {
   if (!manifest) {
     return (
       <div className={cx(panel, 'flex flex-wrap items-center gap-3 text-[13px] text-[var(--ds-ink)]')} role="alert">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+        <AlertTriangle className={cx('h-4 w-4 shrink-0', TONE_TEXT.warning)} aria-hidden />
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{loadError}</span>
         <button type="button" className={ghost} onClick={() => void load()}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry

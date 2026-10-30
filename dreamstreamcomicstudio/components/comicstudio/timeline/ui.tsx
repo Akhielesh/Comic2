@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { TONE_CHIP } from '../../chat/studioDesign';
 import { useFocusTrap } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -190,9 +191,9 @@ export const Badge: React.FC<{ children: React.ReactNode; tone?: 'default' | 'ac
     className={cx(
       'inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-1.5 py-px text-[10.5px] font-semibold leading-4',
       tone === 'accent' && 'bg-[#D97757]/15 text-[var(--ds-ink)]',
-      tone === 'warn' && 'bg-amber-500/15 text-amber-800 dark:text-amber-200',
-      tone === 'danger' && 'bg-red-500/15 text-red-700 dark:text-red-300',
-      tone === 'ok' && 'bg-emerald-500/15 text-emerald-800 dark:text-emerald-200',
+      tone === 'warn' && TONE_CHIP.warning,
+      tone === 'danger' && TONE_CHIP.danger,
+      tone === 'ok' && TONE_CHIP.success,
       tone === 'default' && 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]',
       className
     )}

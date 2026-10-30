@@ -42,7 +42,7 @@ import { deriveLock } from '../../shared/comic/modelLock';
 import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
@@ -861,7 +861,7 @@ const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean; chrome?: Rea
 const FatalError: React.FC<{ message: string; onRetry: () => void; onBack: () => void; retrying: boolean }> = ({ message, onRetry, onBack, retrying }) => (
   <main id="studio-main" className={`grid h-full min-h-0 w-full place-items-center p-6 ${CANVAS_BG}`}>
     <div role="alert" className={`w-full max-w-md rounded-2xl ${HAIRLINE} bg-[var(--ds-surface)] p-6 text-center shadow-[0_8px_32px_rgba(0,0,0,0.08)]`}>
-      <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-amber-500/10 text-amber-600">
+      <span className={`mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl ${TONE_CHIP.warning}`}>
         <AlertTriangle className="h-6 w-6" aria-hidden />
       </span>
       <h2 className="text-[17px] font-semibold tracking-tight text-[var(--ds-ink)]">Couldn’t open this comic</h2>

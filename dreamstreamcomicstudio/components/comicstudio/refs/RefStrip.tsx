@@ -15,6 +15,7 @@ import type { RefOwner } from '../../../shared/comic/doc';
 import { capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { effectiveRating } from '../../../shared/comic/safety';
 import { byokFromDoc } from '../board/boardModel';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { SafetyVeil } from '../safety/SafetyVeil';
 import type { StudioController } from '../types';
@@ -157,7 +158,7 @@ export const RefStrip: React.FC<RefStripProps> = ({ studio, owner, max = 5, onOp
         />
       )}
       {error && (
-        <p role="alert" className="mt-1 text-[12px] text-red-700 dark:text-red-300">
+        <p role="alert" className={cx('mt-1 text-[12px]', TONE_TEXT.danger)}>
           {error}
         </p>
       )}

@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Globe2, Link2, Loader2, Share2 } from 'lucide-react';
 import type { Card } from '../../../shared/comic/doc';
 import type { CardProps } from '../extensions';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { readinessRows } from './PublishPanel';
@@ -99,7 +100,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
       {card.status === 'done' && (
         <div className="space-y-2">
           <p className="m-0 flex items-center gap-2 text-[13px] text-[var(--ds-ink)]">
-            <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            <CheckCircle2 className={cx('h-4 w-4', TONE_TEXT.success)} aria-hidden />
             {card.mode === 'unpublish' ? 'Unpublished.' : card.mode === 'regenerate' ? 'New link ready — the old one no longer works.' : 'Published.'}
           </p>
           {url && (

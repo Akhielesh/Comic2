@@ -519,7 +519,7 @@
   --ds-warning: #fbbf24;
   --ds-warning-text: #fbbf24;
   --ds-danger: #f87171;
-  --ds-danger-text: #fb8b8b;       /* red-400 lifted: ≥ 4.5:1 on dark glass and its tint */
+  --ds-danger-text: #fca5a5;       /* red-300: ≥ 4.5:1 on dark glass, its tint and a highlighted menu row on a raised sheet (wave 8; #fb8b8b was 4.15 there) */
   --ds-info: #60a5fa;
   --ds-info-text: #93c5fd;
   --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
@@ -814,7 +814,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-success: #16a34a;
   --ds-success-text: color-mix(in srgb, var(--ds-success) 60%, var(--ds-ink));
   --ds-warning: #f59e0b;
-  --ds-warning-text: color-mix(in srgb, var(--ds-warning) 60%, var(--ds-ink));
+  --ds-warning-text: color-mix(in srgb, var(--ds-warning) 57%, var(--ds-ink)); /* 57 % (Atlas 60 %): ≥ 4.5:1 on its tint over the soft glass and on a highlighted menu row (wave 8) */
   --ds-danger: #d4183d;                 /* --destructive */
   --ds-danger-text: color-mix(in srgb, var(--ds-danger) 60%, var(--ds-ink));
   --ds-info: #262626;
@@ -899,7 +899,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-warning: oklch(0.7 0.15 85);
   --ds-warning-text: color-mix(in srgb, var(--ds-warning) 60%, var(--ds-ink));
   --ds-danger: oklch(0.396 0.141 25.723);
-  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 55%, var(--ds-ink)); /* 55 %: the deep dark red needs more ink to reach 4.5:1 on hover rows */
+  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 50%, var(--ds-ink)); /* 50 % (Atlas 60 %): the deep dark red needs more ink to reach 4.5:1 on hover rows and on a highlighted menu row (wave 8; 55 % was 4.17) */
   --ds-info: #e5e5e5;
   --ds-info-text: color-mix(in srgb, var(--ds-info) 60%, var(--ds-ink));
   --ds-ring: #8a8a8a;

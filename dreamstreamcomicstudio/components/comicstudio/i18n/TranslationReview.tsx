@@ -16,7 +16,7 @@ import { graphemes } from '../../../shared/comic/textLayout';
 import { AUTO_CORRECTED_NOTE, editionTextEntry, editionTextSource, translationBudget } from '../../../shared/comic/translationPlan';
 import { textSourceHash } from '../../../shared/comic/i18n';
 import { ComicPageView } from '../board/ComicPageView';
-import { OVERLINE } from '../../chat/studioDesign';
+import { OVERLINE, STATUS_EDGE, TONE_TEXT } from '../../chat/studioDesign';
 import { GhostButton, Segmented, cx } from '../board/ui';
 import type { StudioController } from '../types';
 import { LanguageSwitch } from './LanguageSwitch';
@@ -45,7 +45,7 @@ const STATUS_TONE: Partial<Record<DerivedStatus, string>> = {
   stale: 'border-[#D97757]/40 text-[var(--ds-ink)]',
   stale_edited: 'border-[#D97757]/40 text-[var(--ds-ink)]',
   machine: 'border-[var(--ds-hairline)] text-[var(--ds-muted)]',
-  reviewed: 'border-emerald-600/30 text-emerald-700 dark:text-emerald-300',
+  reviewed: `${STATUS_EDGE.healthy} ${TONE_TEXT.success}`,
   edited: 'border-[var(--ds-hairline)] text-[var(--ds-ink)]'
 };
 

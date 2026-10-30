@@ -55,7 +55,7 @@ import { aspectMismatch } from '../../../shared/comic/book';
 import { canServeToOwner, effectiveRating } from '../../../shared/comic/safety';
 import { i18nOf } from '../../../shared/comic/i18n';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
-import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_SOFT_BG, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, STATUS_SURFACE, TONE_CHIP, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { dirOf, languageSpec } from '../../../shared/comic/languages';
 import type { StudioController } from '../types';
 import { ModalPortal } from '../../modals/ModalPortal';
@@ -521,7 +521,7 @@ const LineRow: React.FC<{
         </IconButton>
       </div>
       {spoken && line.speakerId && !panel.castIds.includes(line.speakerId) && (
-        <p className="px-1 text-[11px] text-amber-700 dark:text-amber-300">
+        <p className={cx('px-1 text-[11px]', TONE_TEXT.warning)}>
           {castName(doc, line.speakerId)} isn’t in this panel — the line reads as off-panel.
         </p>
       )}
@@ -1518,7 +1518,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           {drawn && versions > 1 && (
             <GhostButton size="sm" onClick={pickVersions} className="min-w-0" data-testid="pick-versions">
               <Layers className="h-3.5 w-3.5 shrink-0" aria-hidden /> <span className="truncate">Pick from {versions} versions</span>
-              <span className="shrink-0 font-semibold text-emerald-700 dark:text-emerald-300">Free</span>
+              <span className={cx('shrink-0 font-semibold', TONE_TEXT.success)}>Free</span>
             </GhostButton>
           )}
           {overlayLettering && drawn && (
@@ -1557,8 +1557,8 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           {issues.length ? (
             <ul className="space-y-1">
               {issues.map((issue, i) => (
-                <li key={i} className="flex gap-2 rounded-lg bg-amber-500/[0.08] px-2.5 py-1.5 text-[12px] leading-snug text-[var(--ds-ink)]">
-                  <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+                <li key={i} className={cx('flex gap-2 rounded-lg px-2.5 py-1.5 text-[12px] leading-snug text-[var(--ds-ink)]', STATUS_SURFACE.attention)}>
+                  <TriangleAlert className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', TONE_TEXT.warning)} aria-hidden />
                   <span className="min-w-0 [overflow-wrap:anywhere]">{issue}</span>
                 </li>
               ))}

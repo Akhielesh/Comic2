@@ -26,6 +26,7 @@ import {
   tailToggleOps
 } from './styleOps';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
+import { TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../board/ui';
 
 const ROW = 'space-y-1.5';
@@ -195,7 +196,7 @@ export const EasyLetteringPanel: React.FC<LetteringPanelProps> = ({ doc, page, l
         )}
         <button
           type="button"
-          className={cx(SMALL_BTN, 'text-red-600 dark:text-red-400')}
+          className={cx(SMALL_BTN, TONE_TEXT.danger)}
           onClick={() => {
             run(deleteLinesOps(page, ids), lines.length > 1 ? 'Delete balloons' : 'Delete balloon');
             onDeselect();

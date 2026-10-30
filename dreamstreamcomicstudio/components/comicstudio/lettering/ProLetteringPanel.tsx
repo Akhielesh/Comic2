@@ -39,7 +39,7 @@ import {
 import { measureForGeneration } from './measure';
 import { fontLoadGeneration } from './fontLoader';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 import { LINE_KIND_LABEL, castName } from '../board/boardModel';
 
@@ -419,7 +419,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
               )}
               <button
                 type="button"
-                className={cx(BTN, 'text-red-600 dark:text-red-400')}
+                className={cx(BTN, TONE_TEXT.danger)}
                 onClick={() => {
                   run(deleteLinesOps(page, ids), lines.length > 1 ? 'Delete balloons' : 'Delete balloon');
                   onDeselect();

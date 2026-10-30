@@ -255,14 +255,25 @@ export const STATUS_INK: Record<StatusState, string> = {
   attention: TONE_TEXT.warning,
   error: TONE_TEXT.danger
 };
+/**
+ * A status's edge colour alone (Atlas wave 8): for a neutral surface that only borders in the state's
+ * colour (a toast or a hint bubble beside a status chip). STATUS_SURFACE is this edge plus the tint.
+ */
+export const STATUS_EDGE: Record<StatusState, string> = {
+  healthy: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)]',
+  active: 'border-[color:color-mix(in_srgb,var(--ds-ink)_15%,transparent)]',
+  waiting: 'border-[var(--ds-hairline)]',
+  attention: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)]',
+  error: 'border-[var(--ds-status-error-edge)]'
+};
 /** Border and tint for a status chip, callout or row. */
 export const STATUS_SURFACE: Record<StatusState, string> = {
-  healthy: 'border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_6%,transparent)]',
-  active: 'border-[color:color-mix(in_srgb,var(--ds-ink)_15%,transparent)] bg-[var(--ds-well)]',
-  waiting: 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)]',
-  attention: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,transparent)]',
+  healthy: `${STATUS_EDGE.healthy} bg-[color:color-mix(in_srgb,var(--ds-success)_6%,transparent)]`,
+  active: `${STATUS_EDGE.active} bg-[var(--ds-well)]`,
+  waiting: `${STATUS_EDGE.waiting} bg-[var(--ds-canvas)]`,
+  attention: `${STATUS_EDGE.attention} bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,transparent)]`,
   /** Atlas: destructive at 35 % / 6 % in light, the brighter mark at 40 % / 8 % in dark (the tokens carry both). */
-  error: 'border-[var(--ds-status-error-edge)] bg-[var(--ds-status-error-tint)]'
+  error: `${STATUS_EDGE.error} bg-[var(--ds-status-error-tint)]`
 };
 /** The solid dot of a status (always beside its words), a toast's edge and time-left bar. */
 export const STATUS_DOT: Record<StatusState, string> = {
