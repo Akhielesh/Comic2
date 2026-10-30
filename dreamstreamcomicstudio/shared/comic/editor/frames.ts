@@ -20,6 +20,7 @@ import {
   type ComicDoc,
   type FrameStyle,
   type Page,
+  type PageLayer,
   type Panel,
   type PanelCut,
   type PanelCuts,
@@ -46,6 +47,7 @@ import {
   framesShown,
   freshId,
   isUndrawn,
+  layerWord,
   lockedReason,
   NOTHING_TO_CHANGE,
   panelWord,
@@ -54,6 +56,7 @@ import {
   roundBox,
   sameBox,
   takenIds,
+  withNamedCuts,
   type EditResult,
   type FramesMode,
   type IdFactory
@@ -158,6 +161,15 @@ const finish = (ctx: Ctx, ops: DocOp[], label: string, notes: string[] = []): Ed
   return editOf(ctx.doc, [...all, ...planFollowups(ctx, all)], label, notes);
 };
 
+/** Design §6.4: "May look soft: shown 1.8× larger than drawn", naming the panel. */
+export const softNote = (page: Pick<Page, 'panels'>, panelId: string, up: number): string => `${cap1(panelWord(page, panelId))} may look soft: shown ${up}× larger than drawn`;
+
+/** The plain-words reason a locked overlay kept in one of these panels refuses an edit that would change it. */
+const lockedLayerIn = (page: Page, test: (layer: PageLayer) => boolean): string | undefined => {
+  const layer = (page.layers ?? []).find((l) => l.locked && test(l));
+  return layer ? `${layerWord(layer)} is locked. Unlock it to change it.` : undefined;
+};
+
 const softNotes = (ctx: Ctx, ops: DocOp[], panelIds: string[]): string[] => {
   if (ctx.undrawn) return [];
   const doc = applyAll(ctx.doc, ops);
@@ -166,7 +178,7 @@ const softNotes = (ctx: Ctx, ops: DocOp[], panelIds: string[]): string[] => {
   const out: string[] = [];
   for (const id of panelIds) {
     const up = upscaleOf(doc, page, id);
-    if (up !== undefined && up > EDITOR_LIMITS.upscaleSoft) out.push(`${cap1(panelWord(page, id))} may look soft at this size (shown ${up}× larger than drawn).`);
+    if (up !== undefined && up > EDITOR_LIMITS.upscaleSoft) out.push(softNote(page, id, up));
   }
   return out;
 };
@@ -518,10 +530,15 @@ function planSplit(ctx: Ctx, panelId: string, dir: SplitDir, at: number, newSide
   const fop = framesOpOf(ctx, boxes, new Map([[panelId, keepPatch]]), false);
   if (fop) ops.push(fop);
   if (cutsOp) ops.push(cutsOp);
+  // Overlays kept in the panel go with the half holding their centre; a locked one is not moved to another panel.
+  const movesLocked = lockedLayerIn(page, (l) => l.clip === panelId && containsPoint(fresh, centreOf(l.box)));
+  if (movesLocked) return movesLocked;
   for (const layer of page.layers ?? []) {
     if (layer.clip === panelId && containsPoint(fresh, centreOf(layer.box))) ops.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { clip: newId } });
   }
-  return { ops, newId, keep, fresh };
+  // The new panel shifts every later panel by one place: cuts matched by position are named first (the slice above
+  // already names every cut when it runs), so each later panel keeps its own picture.
+  return { ops: cutsOp ? ops : withNamedCuts(page, ops), newId, keep, fresh };
 }
 
 /**
@@ -571,21 +588,60 @@ export function joinFramesEdit(doc: ComicDoc, page: Page, aId: string, bId: stri
   const pb = page.panels[ib];
   const artA = showsArt(ctx, pa);
   const artB = showsArt(ctx, pb);
-  if (artA && artB) return refuse('These two panels are drawn separately. Keep both, or redraw them as one panel.');
+  if (artA && artB) return refuse('These two are drawn separately. Redraw them as one panel, or keep both.');
   // Keep the one with art; else the one that reads first.
   const keep = artB && !artA ? pb : ia <= ib ? pa : pb;
   const drop = keep === pa ? pb : pa;
   if (keep.lines.length + drop.lines.length > DOC_LIMITS.linesPerPanel) return refuse(`The joined panel would hold more than ${DOC_LIMITS.linesPerPanel} lines. Move some lines first.`);
+  // Overlays kept in the dropped panel move to the joined one: a locked one stays as it is, so the join waits.
+  const movesLocked = lockedLayerIn(page, (l) => l.clip === drop.id);
+  if (movesLocked) return refuse(movesLocked);
   const U = roundBox({ x: Math.min(A.x, B.x), y: Math.min(A.y, B.y), w: Math.max(A.x + A.w, B.x + B.w) - Math.min(A.x, B.x), h: Math.max(A.y + A.h, B.y + B.h) - Math.min(A.y, B.y) });
   const boxes = ctx.boxes.slice();
   boxes[indexOf(page, keep.id)] = U;
   const ops: DocOp[] = [];
   const fop = framesOpOf(ctx, boxes);
   if (fop) ops.push(fop);
+  // Not drawn yet: the dropped panel's plan (what happens, who is in it, where) joins the kept one, never lost silently.
+  const notes: string[] = [];
+  const merged = ctx.undrawn ? mergedPlanPatch(keep, drop) : undefined;
+  if (merged) {
+    ops.push({ op: 'panel', pageId: page.id, id: keep.id, patch: merged });
+    notes.push(`Panel ${drop.n}'s plan (what happens, who is in it) was merged into panel ${keep.n}.`);
+  }
   ops.push({ op: 'panel_remove', pageId: page.id, id: drop.id, linesTo: keep.id });
   for (const layer of page.layers ?? []) if (layer.clip === drop.id) ops.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { clip: keep.id } });
-  return finish(ctx, ops, `Join ${panelsWord(page, [aId, bId])}`);
+  // Removing a panel shifts the later ones: cuts matched by position are named first.
+  return finish(ctx, withNamedCuts(page, ops), `Join ${panelsWord(page, [aId, bId])}`, notes);
 }
+
+/** The most a panel's action may hold (the server's panel patch limit). */
+const ACTION_MAX = 2000;
+/** The cast a panel may list (the server's panel patch limit). */
+const CAST_MAX = 12;
+
+/**
+ * A panel patch that folds a dropped panel's plan into the kept one (a join before drawing): the cast (each once), the
+ * action (the kept one's first, then the dropped one's) and the place when the kept one has none. Undefined when the
+ * dropped panel has no plan of its own.
+ */
+const mergedPlanPatch = (keep: Panel, drop: Panel): Partial<Panel> | undefined => {
+  const action = drop.action?.trim() ?? '';
+  const extraCast = drop.castIds.filter((id) => !keep.castIds.includes(id));
+  const place = !keep.placeId && drop.placeId ? drop.placeId : undefined;
+  if (!action && !drop.castIds.length && !drop.placeId) return undefined;
+  const patch: Partial<Panel> = {};
+  if (extraCast.length) patch.castIds = [...keep.castIds, ...extraCast].slice(0, CAST_MAX);
+  if (action && !keep.action.includes(action)) {
+    const mine = keep.action.trim();
+    patch.action = (mine ? `${/[.!?…]$/.test(mine) ? mine : `${mine}.`} ${action}` : action).slice(0, ACTION_MAX);
+  }
+  if (place) patch.placeId = place;
+  // The staging of the cast it brings along (where they stand, how they look) comes with them.
+  const staged = Object.entries(drop.direction?.cast ?? {}).filter(([id]) => extraCast.includes(id));
+  if (staged.length) patch.direction = { ...(keep.direction ?? {}), cast: { ...(keep.direction?.cast ?? {}), ...Object.fromEntries(staged) } };
+  return Object.keys(patch).length ? patch : undefined;
+};
 
 /**
  * Add a panel: a new frame drawn on the page (the Frame tool), in free space or fully inside another frame (an inset).
@@ -603,6 +659,9 @@ export function addFrameEdit(doc: ComicDoc, page: Page, box: Box, opts: { ids?: 
   const host = ctx.boxes.findIndex((o) => contains(o, b));
   const hit = ctx.boxes.some((o, k) => k !== host && overlap(span(o, 'x'), span(b, 'x')) > 1e-4 && overlap(span(o, 'y'), span(b, 'y')) > 1e-4);
   if (hit) return refuse('Panels cannot overlap. Draw it in free space, or fully inside another panel as an inset.');
+  // An inset goes on top of its host: a locked host is not drawn over.
+  const hostLocked = host >= 0 ? lockOf(page, [page.panels[host].id]) : undefined;
+  if (hostLocked) return refuse(hostLocked);
   const order = readingOrderOf([...ctx.boxes, b], ctx.rtl);
   const pos = order.indexOf(ctx.boxes.length);
   const index = order.slice(0, pos).filter((k) => k < ctx.boxes.length).length;
@@ -615,7 +674,8 @@ export function addFrameEdit(doc: ComicDoc, page: Page, box: Box, opts: { ids?: 
   if (seed) ops.push(seed);
   ops.push({ op: 'panel_add', pageId: page.id, panel, index });
   const notes = ctx.undrawn ? [] : [`Panel ${index + 1} is empty. Drop an image here, or draw this panel.`];
-  return finish(ctx, ops, `Add panel ${index + 1}`, notes);
+  // A panel added before others shifts them: cuts matched by position are named first.
+  return finish(ctx, withNamedCuts(page, ops), `Add panel ${index + 1}`, notes);
 }
 
 /** Extend frames into empty space, up to the margins or the next frame (one gutter away). */
@@ -676,6 +736,9 @@ export function deleteFrameEdit(doc: ComicDoc, page: Page, panelId: string, opts
   if (target && panel.lines.length && target.lines.length + panel.lines.length > DOC_LIMITS.linesPerPanel) {
     return refuse(`${cap1(panelWord(page, target.id))} would hold more than ${DOC_LIMITS.linesPerPanel} lines. Move some lines first, or delete them with the panel.`);
   }
+  // Overlays kept in the panel stay on the page without it: a locked one is not changed.
+  const layerLocked = lockedLayerIn(page, (l) => l.clip === panelId);
+  if (layerLocked) return refuse(layerLocked);
   const removed = ctx.boxes[i];
   const rest = itemsOf(ctx).filter((it) => it.id !== panelId);
   const maxGap = Math.max(ctx.style.gutter * 2.5, 0.012);
@@ -696,7 +759,8 @@ export function deleteFrameEdit(doc: ComicDoc, page: Page, panelId: string, opts
   }
   ops.push({ op: 'panel_remove', pageId: page.id, id: panelId, ...(target ? { linesTo: target.id } : {}) });
   const notes = panel.lines.length ? [target ? `Its lines moved to ${panelWord(page, target.id)}.` : 'Its lines were deleted with it.'] : [];
-  return finish(ctx, ops, `Delete ${panelWord(page, panelId)}`, notes);
+  // Removing a panel shifts the later ones: cuts matched by position are named first.
+  return finish(ctx, withNamedCuts(page, ops), `Delete ${panelWord(page, panelId)}`, notes);
 }
 
 // ── Sizes ────────────────────────────────────────────────────────────────────
@@ -981,8 +1045,8 @@ export function closeUpEdit(doc: ComicDoc, page: Page, panelId: string, opts: { 
   const newSide = firstHalf ? 'second' : 'first';
   const plan = planSplit(ctx, panelId, dir, 0.5, newSide, opts.ids ?? defaultIds, { path: aff.path, box: crop });
   if (typeof plan === 'string') return refuse(plan);
-  const add = plan.ops[0];
-  if (add.op === 'panel_add') {
+  const add = plan.ops.find((o) => o.op === 'panel_add');
+  if (add && add.op === 'panel_add') {
     const who = castId ? ctx.doc.cast.find((c) => c.id === castId) : undefined;
     add.panel = { ...add.panel, shot: 'close_up', action: who ? `Close-up of ${who.name}` : 'Close-up', castIds: who ? [who.id] : [], lines: add.panel.lines };
   }

@@ -5,7 +5,7 @@
 
 import type { Box, ComicDoc, Page } from '../doc.js';
 import type { DocOp } from '../ops.js';
-import { buildScene, framesShown, quoteOf, type PageScene } from './scene.js';
+import { buildScene, framesShown, quoteOf, withNamedCuts, type PageScene } from './scene.js';
 
 /**
  * Indices of `boxes` in reading order. A box joins the current row when it overlaps the row's shortest member by at
@@ -67,7 +67,8 @@ export function panelOrderIssue(doc: ComicDoc, page: Page): PanelOrderIssue | un
     early: early.n,
     before: before.n,
     text: `Panel ${early.n} now reads before panel ${before.n}`,
-    fix: { label: 'Renumber the panels to match', ops: [{ op: 'panels_order', pageId: page.id, order: ids }] }
+    // Cuts matched by position are named first, so each panel keeps its own picture when the numbers change.
+    fix: { label: 'Renumber the panels to match', ops: withNamedCuts(page, [{ op: 'panels_order', pageId: page.id, order: ids }]) }
   };
 }
 

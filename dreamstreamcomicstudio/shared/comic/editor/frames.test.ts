@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { cutFor, type Balloon, type ComicDoc } from '../doc.js';
+import { cutFor, type Balloon, type ComicDoc, type Page } from '../doc.js';
 import { EDITOR_LIMITS } from '../limits.js';
 import { frameAffine } from '../panelize/space.js';
+import { inverseOps } from '../undo.js';
 import { apply, ASSET, baseDoc, drawnPage, line, OLD_TAKE, pageOf, panel, undrawnPage, withPages } from './__fixtures__/editorDoc.js';
 import {
   addFrameEdit,
@@ -19,6 +20,7 @@ import {
   swapPicturesEdit,
   useTakeEdit
 } from './frames.js';
+import { panelOrderIssue } from './readingOrder.js';
 import type { EditOk, EditResult } from './scene.js';
 
 /** Wire equality (undo.ts R4): a cleared key may come back as null. */
@@ -174,7 +176,7 @@ describe('join, delete, add', () => {
   it('joins an empty frame into its drawn neighbour; two drawn panels refuse in plain words', () => {
     const doc = gridDoc();
     const page = pageOf(doc, 'pg_a');
-    expect(joinFramesEdit(doc, page, 'p1', 'p2')).toEqual({ ok: false, reason: 'These two panels are drawn separately. Keep both, or redraw them as one panel.' });
+    expect(joinFramesEdit(doc, page, 'p1', 'p2')).toEqual({ ok: false, reason: 'These two are drawn separately. Redraw them as one panel, or keep both.' });
     // p2 has no cut: an empty frame.
     const cuts = { ...page.render.cuts!, cuts: page.render.cuts!.cuts.filter((c) => c.panelId !== 'p2') };
     const p = { ...page, render: { ...page.render, cuts } };
@@ -298,5 +300,83 @@ describe('pictures in frames', () => {
     ]) {
       expect(r).toEqual({ ok: false, reason });
     }
+  });
+});
+
+describe('cuts matched by position (no cut names a panel)', () => {
+  /** The same drawn page, its cuts naming no panel (a legal K2a shape: cutFor matches them by position). */
+  const unnamed = (page: Page, keep = page.render.cuts!.cuts.length): Page => ({
+    ...page,
+    render: { ...page.render, cuts: { ...page.render.cuts!, cuts: page.render.cuts!.cuts.slice(0, keep).map(({ panelId: _named, ...c }) => c) } }
+  });
+  const drawnOf = (page: Page): Record<string, number | undefined> => Object.fromEntries(page.panels.map((p) => [p.id, cutFor(page, p)?.drawn]));
+  /** Every panel still on the page shows the drawn panel it showed before; undo brings the cuts back exactly. */
+  const keepsPictures = (doc: ComicDoc, r: EditResult, extra: Record<string, number | undefined> = {}) => {
+    const before = pageOf(doc, 'pg_a');
+    const was = drawnOf(before);
+    const after = roundTrip(doc, r);
+    const pa = pageOf(after, 'pg_a');
+    const now = drawnOf(pa);
+    for (const p of pa.panels) expect(now[p.id], p.id).toBe(p.id in was ? was[p.id] : extra[p.id]);
+    expect(pageOf(apply(after, okOf(r).undo), 'pg_a').render.cuts).toEqual(before.render.cuts);
+    return pa;
+  };
+  const bigTop = (src = false) => {
+    const page = unnamed(drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1, [line('l1', 'Hello')]), panel('p2', 2, [line('l2', 'Hi')]), panel('p3', 3, [line('l3', 'Yo')])]));
+    if (src) page.panels[1] = { ...page.panels[1], frame: { ...page.panels[1].frame!, src: { path: OLD_TAKE, box: { ...page.panels[1].frame!.box } } } };
+    return withPages(baseDoc(), [page]);
+  };
+
+  it('delete: panel 3 keeps drawn panel 3 (it does not slide onto panel 2’s picture); undo restores the cuts', () => {
+    const doc = bigTop();
+    expect(drawnOf(pageOf(doc, 'pg_a'))).toEqual({ p1: 1, p2: 2, p3: 3 });
+    const del = deleteFrameEdit(doc, pageOf(doc, 'pg_a'), 'p2');
+    expect(okOf(del).ops[0]).toMatchObject({ op: 'page_cuts', pageId: 'pg_a', path: ASSET, moveBalloons: false });
+    keepsPictures(doc, del);
+  });
+
+  it('add: an inset that reads second is empty; panels 2 and 3 keep their pictures', () => {
+    const doc = bigTop();
+    const added = keepsPictures(doc, addFrameEdit(doc, pageOf(doc, 'pg_a'), { x: 0.05, y: 0.05, w: 0.2, h: 0.1 }), { pe1: undefined });
+    expect(added.panels.map((p) => p.id)).toEqual(['p1', 'pe1', 'p2', 'p3']);
+  });
+
+  it('split: of a panel showing another take, and of a panel cut from the drawing', () => {
+    let doc = bigTop(true);
+    const own = keepsPictures(doc, splitFrameEdit(doc, pageOf(doc, 'pg_a'), 'p2', 'across'), { pe1: undefined });
+    expect(own.panels.map((p) => p.id)).toEqual(['p1', 'p2', 'pe1', 'p3']);
+    expect(own.panels[2].frame!.src!.path).toBe(OLD_TAKE);
+    // The slice of a cut names every cut itself.
+    doc = bigTop();
+    keepsPictures(doc, splitFrameEdit(doc, pageOf(doc, 'pg_a'), 'p1', 'down'), { pe1: 1 });
+  });
+
+  it('join: an empty frame (no cut at its place) into its drawn neighbour', () => {
+    const grid = unnamed(drawnPage('pg_a', 1, 'four-grid', [panel('p1', 1), panel('p2', 2), panel('p3', 3), panel('p4', 4)]), 3);
+    const doc = withPages(baseDoc(), [grid]);
+    expect(drawnOf(grid)).toEqual({ p1: 1, p2: 2, p3: 3, p4: undefined });
+    const r = joinFramesEdit(doc, grid, 'p3', 'p4');
+    expect(okOf(r).ops[0]).toMatchObject({ op: 'page_cuts' });
+    keepsPictures(doc, r);
+  });
+
+  it('renumber to match the frames: each panel keeps its picture under its new number', () => {
+    const four = unnamed(drawnPage('pg_a', 1, 'four-grid', [panel('p1', 1), panel('p2', 2), panel('p3', 3), panel('p4', 4)]));
+    const moved: Page = { ...four, panels: four.panels.map((p, i) => (i === 0 ? { ...p, frame: four.panels[3].frame } : i === 3 ? { ...p, frame: four.panels[0].frame } : p)) };
+    const doc = withPages(baseDoc(), [moved]);
+    const issue = panelOrderIssue(doc, moved)!;
+    expect(issue.order).toEqual(['p4', 'p2', 'p3', 'p1']);
+    const renumbered = keepsPictures(doc, { ok: true, ops: issue.fix.ops, label: issue.fix.label, undo: inverseOps(doc, issue.fix.ops) });
+    expect(renumbered.panels.map((p) => [p.id, p.n])).toEqual([
+      ['p4', 1],
+      ['p2', 2],
+      ['p3', 3],
+      ['p1', 4]
+    ]);
+  });
+
+  it('cuts that already name their panels are left alone', () => {
+    const doc = withPages(baseDoc(), [drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1), panel('p2', 2), panel('p3', 3)])]);
+    expect(okOf(deleteFrameEdit(doc, pageOf(doc, 'pg_a'), 'p2')).ops.map((o) => o.op)).toEqual(['page_frames', 'panel_remove']);
   });
 });

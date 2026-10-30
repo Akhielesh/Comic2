@@ -11,7 +11,7 @@
 // This module also holds what every editor operation shares: the result shape (K2a ops plus their inverse from the one
 // undo path, `inverseOps`, never a parallel undo system), refusals in plain words, locks, and fresh ids.
 
-import { artModeOf, layersOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type PageLayer, type Panel } from '../doc.js';
+import { artModeOf, cutFor, layersOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type PageLayer, type Panel } from '../doc.js';
 import { i18nOf } from '../i18n.js';
 import { PLAN_W, type LetterPlan } from '../lettering/layout.js';
 import type { DocOp } from '../ops.js';
@@ -155,6 +155,30 @@ export const framesShown = (doc: Pick<ComicDoc, 'format'>, page: Page): FramesSh
     return { mode: 'planned', boxes: page.panels.map((p) => ({ ...p.frame!.box })) };
   }
   return { mode: 'drawn', boxes: panelBoxesFor(doc, page).map((b) => ({ ...b })) };
+};
+
+/**
+ * Cuts that name no panel are matched to panels by position (cutFor's fallback). Before an edit adds, removes, joins
+ * or reorders panels, every cut is named by the panel that shows it now, so each picture stays with its panel and not
+ * with a position (a cut no panel shows stays unnamed). Undefined when there is nothing to name: no drawing, no cuts,
+ * or cuts that already name their panels. It changes no picture, so the lettering stays put (moveBalloons: false).
+ */
+export const nameCutsOp = (page: Page): DocOp | undefined => {
+  const cuts = page.render?.cuts;
+  const path = page.render?.asset?.path;
+  if (!path || !cuts || !Array.isArray(cuts.cuts) || !cuts.cuts.length || cuts.cuts.some((c) => !!c?.panelId)) return undefined;
+  const named = cuts.cuts.map((c, i) => {
+    const p = page.panels[i];
+    return p && cutFor(page, p) === c ? { ...c, panelId: p.id } : { ...c };
+  });
+  if (!named.some((c) => c.panelId)) return undefined;
+  return { op: 'page_cuts', pageId: page.id, path, cuts: { ...cuts, cuts: named }, moveBalloons: false };
+};
+
+/** Ops with the cut-naming op first when the page needs one (see nameCutsOp). */
+export const withNamedCuts = (page: Page, ops: DocOp[]): DocOp[] => {
+  const named = nameCutsOp(page);
+  return named ? [named, ...ops] : ops;
 };
 
 /** Frames can be edited: the page is shown in frames, or it is not drawn yet (its frames are the plan). */
