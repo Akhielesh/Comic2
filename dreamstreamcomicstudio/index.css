@@ -717,7 +717,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 /* ==========================================================================
    ATLAS SKIN — `[data-ds-skin="atlas"]` (docs/design/atlas-skin.md)
-   The Atlas design language (atlasd, branch claude/quirky-darwin-fpx23q @ acd9fdfc, wave 5) applied to
+   The Atlas design language (atlasd, branch claude/quirky-darwin-fpx23q @ 98240e5b, wave 8) applied to
    Comic Studio as ONE block of token overrides over the semantic `--ds-*` layer above. The
    attribute goes on <html> at boot on the comics host (index.tsx → services/dsSkin.ts) and on the
    Comic Studio, public-reader and immersive-reader roots wherever they render, so the overrides

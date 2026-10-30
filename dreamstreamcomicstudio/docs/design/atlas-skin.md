@@ -5,8 +5,10 @@ Comic Studio renders in the **Atlas design language** (the owner is unifying the
 skin works, what it maps, where it applies and how it is kept in step with Atlas. Phase D0 is the
 token layer, the skin block, the fonts, the tokenized shared constants, a transitional accent shim,
 the tests and the visual proof; the **wave 5 port** (Atlas `acd9fdfc`, see the changelog at the end)
-brought the skin up to Atlas's refined foundations. Phases D1/D2 (later packages) rewrite the files
-that still hard-code the old accent and move components onto the Atlas primitive recipes.
+brought the skin up to Atlas's refined foundations, and the **wave 8 port** (Atlas `98240e5b`) moved
+the studio's eyebrow labels onto OVERLINE, its status text onto the readable tone tokens and its
+centred dialogs onto DIALOG_TITLE, each with a guard test. Phases D1/D2 (later packages) rewrite the
+files that still hard-code the old accent and move components onto the Atlas primitive recipes.
 
 ## The language in one paragraph
 
@@ -94,7 +96,7 @@ The semantic tokens Atlas has that Comic Studio lacked were added to `:root` / `
 | `--ds-warning` | `--warning` | `#f59e0b` | `oklch(0.7 0.15 85)` |
 | `--ds-danger` | `--destructive` | `#d4183d` | `oklch(0.396 0.141 25.723)` |
 | `--ds-info` | `--info` | `#262626` | `#e5e5e5` |
-| `--ds-{success,warning,danger,info}-text` | `ui-generated/tone.ts` `toneText` | `color-mix(in srgb, var(--ds-<tone>) 60%, var(--ds-ink))` | same |
+| `--ds-{success,warning,danger,info}-text` | `ui-generated/tone.ts` `toneText` | `color-mix(in srgb, var(--ds-<tone>) 60%, var(--ds-ink))`; warning **57 %** (wave 8) | same; danger **50 %** (wave 8) |
 | `--ds-ring` | `--ring` | `oklch(0.55 0 0)` | `#8a8a8a` |
 | `--ds-focus` (wave 5) | `--foreground` as `.atlas-focus-ring` / the primitives' `outline-foreground` | `var(--ds-ink)` | same |
 | `--ds-control-border` (wave 5) | `--control-border` | `color-mix(in srgb, var(--ds-ink) 45%, transparent)` | same |
@@ -116,8 +118,12 @@ the light high-contrast one), `--ds-muted` `#404040` / `#d4d4d4`, `--ds-ring` `#
 `--ds-control-border` ink 70 % and its hover the full ink. (Atlas's own Settings toggle,
 `.atlas-high-contrast`, has no Comic Studio counterpart.)
 
-The `-text` variants are the readable status colours (≥ 4.5:1 on the page, on cards and on the
-tinted status surfaces, both themes); the base tokens are for fills and borders.
+The `-text` variants are the readable status colours (≥ 4.5:1 on the page, on cards, on the soft
+glass, on overlays and their highlighted menu rows and on the tinted status surfaces, all six contexts;
+wave 8 added the glass, overlay and menu-row surfaces to the measurement); the base tokens are for
+fills and borders. Outside the skin the default dark `--ds-danger-text` is `#fca5a5` (wave 8; it was
+`#fb8b8b`, 4.15:1 on a hovered row of a raised sheet). Every consumer of the token is a Comic Studio
+file, so chat, settings and home do not change.
 
 ### Type, shape, depth, motion
 
@@ -126,6 +132,7 @@ tinted status surfaces, both themes); the base tokens are for fills and borders.
 | `--ds-font-sans` | `--font-atlas-sans` | `"IBM Plex Sans", sans-serif` | `Inter, sans-serif` (Tailwind `font-sans`) |
 | `--ds-font-display` | `--font-atlas-display` | `"Space Grotesk", sans-serif` | `Inter, sans-serif` (headings inherit) |
 | `--ds-text-base` / `-lg` | `--text-sm` / `--text-base` | `0.875rem` / `1rem` | `0.875rem` / `1rem` (unchanged) |
+| `--ds-text-xs` / `-sm` | none (Atlas's 11 px labels are `.atlas-overline`) | `0.6875rem` / `0.8125rem` | same |
 | `--ds-radius-panel` | `--radius-xl` | `0.75rem` (12 px) | `1rem` (`rounded-2xl`) |
 | `--ds-radius-control` | `--radius-lg` = radius − 2 | `0.625rem` (10 px) | `0.75rem` (`rounded-xl`) |
 | `--ds-radius-chip` | badge `rounded-md` | `0.625rem` (10 px) | `9999px` (`rounded-full`) |
@@ -219,9 +226,11 @@ them):
 | `FOCUS_RING`, `FOCUS_RING_FLUSH`, `FOCUS_ITEM` | `.atlas-focus-ring`; button / badge / checkbox / switch / select / tabs `focus-visible:outline-*-foreground`; menu items' inset ring and `dark:focus:bg-white/[0.08]` highlight | 2 px `--ds-focus` outline offset 2 (tabs: 0), 3 px under increase contrast; list rows highlight in `--ds-overlay-hover` with an inset `--ds-ring` ring |
 | `FIELD`, `FIELD_EMBEDDED`, `FIELD_GROUP` | `ui-generated/input.tsx`, `textarea`, `select` trigger; the document viewer / PDF / sheet search pills | the 3:1 control edge, focus drawn as a **ring** (2 px, offset 2) so an embedded field drops ring **and** offset; the group rests on the hairline as Atlas's pills do (hover ink 25 %) and shows focus **as a field does** — the edge in `--ds-focus` plus the 2 px ring (deviation below) |
 | `OVERLAY`, `SCRIM` | dialog / popover / dropdown / select / hover-card / sheet content and overlays | raised step, overlay edge and shadow, opaque; 40 / 60 % scrim without blur |
-| `OVERLINE` | `.atlas-overline` | 11 px semibold, 0.12em, uppercase, muted |
+| `OVERLINE` | `.atlas-overline` | 11 px semibold, leading 1rem, 0.12em, uppercase, muted. **Live since wave 8:** every eyebrow in `components/comicstudio` (below) |
+| `DIALOG_TITLE`, `DIALOG_TITLE_FROM_SM` (wave 8) | `DialogTitle` / `AlertDialogTitle` (`text-xl font-semibold`) | 20 px semibold, leading 1.75rem, display face, no colour of its own; the `_FROM_SM` form applies from `sm` up for a dialog that is a bottom sheet on phones. **Live:** the five centred modal dialogs |
 | `CHIP`, `CHIP_VARIANT` | `MetaChip` outline / filled / dashed | neutral chips |
 | `StatusState`, `STATUS_INK`, `STATUS_SURFACE`, `STATUS_DOT`, `STATUS_CHIP(_TONE)` | `components/connectors/status.tsx` | one status vocabulary: healthy / active / waiting / attention / error |
+| `STATUS_EDGE` (wave 8) | the status surfaces' border alone | a neutral surface (a toast, a hint bubble) that borders in a state's colour; `STATUS_SURFACE` is this edge plus the tint (same strings as before) |
 | `SEGMENTED_TRACK`, `_ITEM`, `_ACTIVE`, `_PILL` | `PanelTabs` (CSS-positioned gliding pill; track `bg-muted/60 dark:bg-muted/50 border-border/70`) | segmented tabs on `--ds-segment-track` with a 70 % hairline; the pill (`--ds-segment-pill` + the `--ds-shadow-segment` ring) glides on `--ds-motion-panel` + spring, jumps under reduced motion. **Live now:** every Comic Studio segmented control paints `SEGMENTED_ACTIVE` on a `--ds-segment-track` well (below) |
 | `SECTION_CARD`, `_HEADER`, `_ICON_TILE`, `_TITLE`, `_DESCRIPTION`, `_BODY` | `SectionCard` with `icon` | settings-style section header |
 | `TOAST`, `TOAST_EDGE`, `TOAST_COUNTDOWN`, `TOAST_ENTER` / `_EXIT`, `TOAST_TITLE` / `_MESSAGE`, `TOAST_SLOT(_OPEN/_CLOSED)`, `TOAST_EXIT_MS`, `TOAST_EXIT_FALLBACK_MS` | `GlobalNotificationBar` | monochrome toast — `rounded-2xl`, the raised step (Atlas `bg-card`, dark `bg-surface-elevated`), `--ds-toast-edge`, `shadow-panel`; title clamped to 2 lines, message to 3; in over 300 ms (12 px, zoom .98), out over 200 ms (8 px), removed after 240 ms even without an `animationend`; hue only on the edge, bar and icon; the stack glides closed |
@@ -247,7 +256,15 @@ track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a
 - `FIELD_GROUP` focus: Atlas's pills show focus as ink 70 % plus a 20 % ring. Under "increase
   contrast" (and against a 3:1 resting edge) that is under a 3:1 change, so the group shows focus as
   a field does (the focus-colour edge and a 2 px ring); its resting edge is Atlas's hairline.
-- `--ds-danger-text` in dark mixes 55 % (Atlas 60 %): the deep dark red at 60 % is 4.36:1 on a hover row.
+- `--ds-danger-text` in dark mixes 50 % (Atlas 60 %): the deep dark red at 60 % is 4.36:1 on a hover row
+  and at 55 % (wave 5's value) 4.17:1 on a highlighted menu row, where the studio's danger menu items
+  sit since wave 8; at 50 % it is 6.71:1 on the page and ≥ 4.71:1 everywhere it is measured.
+- `--ds-warning-text` in light mixes 57 % (Atlas 60 %, wave 8): at 60 % it is 4.35:1 on its own tint over
+  the soft glass (`#f4f4f4`) and 4.46:1 on a highlighted menu row; at 57 % 5.52:1 on the page and
+  ≥ 4.69:1 everywhere it is measured.
+- `DIALOG_TITLE` leading is 1.75rem (Atlas's AlertDialogTitle, text-xl's own) rather than DialogTitle's
+  restated `leading-none`: Comic Studio's dialog headers truncate to one line, where a 20 px line box
+  clips descenders, and wrap on phones, where it crowds the lines.
 - Chip radius 10 px (see Skipped).
 - `--ds-overlay-hover` in light is Atlas's item highlight (`bg-accent`, `#efefef`) rather than
   `--menu-hover` (`#f2f2f2`): menus under the light skin highlight one step deeper than before.
@@ -286,7 +303,17 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 - `services/dsSkin.theme.test.ts` — the theme switch: outside the skin exactly the old toggle; under
   it one view-transition cross-fade for a change the person asked for, instant (transitions held one
   frame) for boot syncs, system corrections, reduced motion, hidden pages and missing / failing APIs.
-- `tests/config/tokenContrast.test.ts` also measures the two "increase contrast" contexts, field edges
+- `tests/config/overlineGuard.test.ts` (wave 8) — no hand-rolled `uppercase` + `tracking-wider|widest|[0.…]`
+  eyebrow in `components/comicstudio/**` outside its commented allowlist, and no studio file imports the
+  pre-Atlas `LABEL`.
+- `tests/config/statusInkGuard.test.ts` (wave 8) — Atlas's status-ink guard for `components/comicstudio/**`:
+  no raw chromatic Tailwind text colour (`text-amber-700`, `dark:text-red-300`, …) outside its commented
+  allowlist.
+- `tests/config/dialogTitle.test.ts` (wave 8) — the recipe; every `aria-modal` surface in the studio is
+  classified, centred dialogs title with `DIALOG_TITLE(_FROM_SM)`, sheet and popover headers stay 15 px.
+- `tests/config/tokenContrast.test.ts` measures every status `-text` token on the page, cards, the soft
+  glass, raised overlays, hovered and highlighted menu rows and its own tint over each (wave 8), and also
+  measures the two "increase contrast" contexts, field edges
   and the focus colour (≥ 3:1), the danger mark and every status-vocabulary text on its own surface,
   and the wave 5 outcomes in all six contexts: the selected segment against its track (fill or ring
   ≥ 1.08:1; the two default-dark glass rows are pre-existing outside the skin and listed), a
@@ -306,11 +333,12 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`496f265c`** (2026-10-30; Atlas waves 6-7 —
-  diagnostics, a public /features page, docs — left every design file byte-identical to `acd9fdfc`, "Merge wave 5:
-  system-foundations refinements", the last port; previous syncs `acd9fdfc`, `07935fcf`). Re-sync:
-  `git -C /home/user/atlasd diff 496f265c origin/claude/quirky-darwin-fpx23q -- app/globals.css
-  tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md`.
+- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`98240e5b`** (2026-10-30; Atlas wave 8 —
+  `cddff16a` "Type scale, shared overline labels and readable status ink", merged in `5f4df1be`, and `98240e5b`
+  "Dialog titles default to 20px under the standard type scale"; see the wave 8 changelog below; previous syncs
+  `496f265c`, `acd9fdfc`, `07935fcf`). Re-sync:
+  `git -C /home/user/atlasd diff 98240e5b origin/claude/quirky-darwin-fpx23q -- app/globals.css
+  tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Files that define the language, and what each token group was derived from:
   - `app/globals.css` — `:root` / `.dark` colours (wave 5: overlays `#1a1a1a`, `--control-border`,
     the dark `--shadow-lg` behind `--ds-shadow-overlay`), radius, shadows, motion system (`--motion-ease-enter`, `-enter-quick`,
@@ -334,8 +362,81 @@ token layer this way is what makes "unify" and the fun theme two values of one a
     sticky header (wave 5: a plain surface at the top, frosted only once content scrolls beneath).
   - `docs/current/guides/ui-ux-and-design-language.md`, `docs/brand-asset-source-of-truth.md` —
     lucide for generic icons, brand marks only from checked-in SVGs (unchanged in wave 5).
+  - `tests/lib/status-ink-guard.test.ts`, `tests/lib/dialog-title-size-guard.test.ts` (wave 8) — the
+    rules Comic Studio's status-ink guard and dialog-title test mirror.
 
 ## Changelog
+
+### Wave 8 port (Atlas `496f265c` → `98240e5b`, 2026-10-30)
+
+Atlas wave 8 changed four things in its design files (`app/globals.css`, `ui-generated/dialog.tsx`,
+`ui-generated/alert-dialog.tsx`, `tests/lib/status-ink-guard.test.ts`); palette, fonts, radii, shadows and
+motion are unchanged, so no colour, shape or motion token moved for the port's own sake.
+
+**1. Type scale — verified, no token change.** Atlas's `--text-*` now mirror Tailwind (`lg` 20 → 18 px,
+`xl` 24 → 20, `2xl` 32 → 24, new `3xl` 30) and its `.text-xs … .text-2xl` overrides are gone; it moved
+every use, so its visible sizes are unchanged. Its 12 / 14 / 16 px steps (`--text-xs/sm/base`) did not
+change. Comic Studio's chrome scale maps onto them as before: `--ds-text-base` 14 px = Atlas `--text-sm`,
+`--ds-text-lg` 16 px = `--text-base`; `--ds-text-xs` 11 px and `--ds-text-sm` 13 px have no Atlas step
+(Atlas's 11 px labels are `.atlas-overline`). Comic Studio never redefined Tailwind's `text-*` classes
+(`tailwind.config.cjs` has no `fontSize`), so the inversion Atlas fixed (its `text-2xl` above `text-3xl`)
+never existed here. No `--ds-text-*` value changed.
+
+**2. Overlines — adopted, with a guard.** 36 eyebrows in `components/comicstudio/**` now use `OVERLINE`,
+keeping their element, margins and copy: 27 hand-rolled labels (10.5–12 px, `uppercase` with
+`tracking-wide` / `tracking-wider`, including the shared `SectionLabel` (conversation/ui) and
+`SectionTitle` (board/ui), the recap card's row labels, the compare table's column headers and the media
+bin's group toggles) and the 9 uses of the pre-Atlas `LABEL` recipe (10 px, 0.05em) in the model detail
+sheet, the model picker and the cost insights. Not overlines, left as they are: the script's speaker
+names and the wireframe shot labels (`tracking-wide`; content of the script and the thumbnail), lettering
+case, first-letter capitals, and the "Cover" word drawn at tile scale inside a cover thumbnail (the
+guard's one allowlist entry). `OVERLINE_DISPLAY` (`.atlas-overline-display`, 12 px medium 0.18em, Atlas's
+public-page section labels) was not added: no Comic Studio surface has a matching larger eyebrow.
+`components/usage/UsageMeter.tsx` also hand-rolls one but is shared with chat, so it stays.
+Guard: `tests/config/overlineGuard.test.ts`.
+
+**3. Readable status ink — adopted, with a guard.** Of the 118 raw Tailwind hue text classes in
+`components/comicstudio/**` (`text-amber-700 dark:text-amber-300`, `text-red-600`, `text-emerald-*`,
+`text-sky-*`), 116 now read the readable tone tokens through the recipes, across 33 files:
+`TONE_TEXT.success|warning|danger|info` (`--ds-*-text`) for words and icons, `TONE_CHIP` for chips and
+inline banners (the 10 % tint the contrast test measures), `STATUS_SURFACE` / `STATUS_CHIP_TONE` for
+status rows and callouts, and the new `STATUS_EDGE` for a neutral toast or bubble that only borders in a
+state's colour. Their 38 paired raw tints, edges and rings went with them (e.g. `bg-amber-500/15` →
+`TONE_CHIP.warning`, `border-red-500/30` → `STATUS_EDGE.error`, the unpublish button's
+`hover:bg-red-500/[0.08]` → `--ds-status-error-tint`). Under the skin, info is Atlas's monochrome (grey
+ink), and warning / danger / success follow the skin in both themes. Allowlisted, with a comment each:
+the marked-area chip's icon in the page editor (it echoes the red marquee drawn over the art) and the
+starred glyph on the black scrim over a media thumbnail. Content colours (lettering, balloon and caption
+swatches, pickers, art, the link-preview mock) are inline styles or hex, never hue classes.
+Tokens: no new token was needed (`--ds-info-text` already existed); three values moved so the text
+clears 4.5:1 on the menus, overlays and soft glass it now sits on — Atlas light `--ds-warning-text` 57 %,
+Atlas dark `--ds-danger-text` 50 % (deviations above) and the default dark `--ds-danger-text` `#fca5a5`.
+Measured (WCAG 2.x, `tokenContrast.test.ts` cascade), on the page / lowest anywhere: default dark danger
+7.99 / 5.00 (a hovered row on a raised sheet); Atlas light warning 5.52 / 4.69 (its tint over the soft
+glass); Atlas dark danger 6.71 / 4.71 (a highlighted menu row). On the surfaces the matrix measures, every
+status text in all six contexts is 4.61–17.26:1 (the `STATUS_*` 6 % / 8 % tints are held to ≥ 4.5:1 by the
+vocabulary test). Guard: `tests/config/statusInkGuard.test.ts`.
+
+**4. Dialog titles — `DIALOG_TITLE`.** Atlas's dialog and alert-dialog titles default to 20 px
+semibold. Comic Studio's five centred modal dialogs title with `DIALOG_TITLE`: the immersive reader's
+keyboard shortcuts (centred everywhere) and the share sheet's `dialog` / `wide` layouts (it stays a 16 px
+sheet header as a phone bottom or side sheet); the timeline dialog and the model-change and lab-run
+confirmations dock to the bottom as a sheet below `sm`, so they take `DIALOG_TITLE_FROM_SM` over their
+15 / 16 px phone size. Bottom, side and pop sheet headers keep 15 px; no heading inside a sheet outranks
+its header (the 16 px headings are the admin console's sections and page headings). The page editor's
+dialog is a full-screen workspace with a toolbar header, not a titled dialog. Test:
+`tests/config/dialogTitle.test.ts`.
+
+Deferred (not wave 8's rule, which covers text ink): 79 raw hue fill, border and ring classes remain in
+`components/comicstudio/**` across 22 files — solid `bg-red-600` / `bg-amber-500` buttons and badges under
+white text (the confirm strips, the timeline clip badges, the stale-page Re-render pill), status and
+quality dots (the share button, the publish checklist, the phone tab bar), the page editor's red marquee
+over the art, the colour field's "no colour" slash (content), the timeline clip's warning / failure
+rings, and `role="alert"` / `role="status"` banners with ink text such as
+`border-red-500/30 bg-red-500/[0.07]`. Atlas leaves fills and tints alone too; moving the banners onto
+`STATUS_SURFACE` and the fills onto a token is D2 work. The library
+console's status pills and the media bin's badges sit translucent over thumbnails (as before the port).
+`UsageMeter` and `DictationButton` (shared with chat) keep their own hues.
 
 ### Wave 5 port (Atlas `07935fcf` → `acd9fdfc`, 2026-10-29)
 
