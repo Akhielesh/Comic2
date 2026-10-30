@@ -1586,7 +1586,8 @@ describe('Ship 2 contract (K2a)', () => {
   const wire = (ops: DocOp[]): DocOp[] => (JSON.parse(encodeStudioEvent({ type: 'ops', rev: 1, ops })) as { ops: DocOp[] }).ops;
   const json = (v: unknown) => JSON.parse(JSON.stringify(v));
 
-  /** A random book with its drawn pages panelized (frames = cuts = the blueprint boxes); every third drawn page is stale. */
+  /** A random book with its drawn pages panelized (frames = cuts = the blueprint boxes); every third drawn page is stale;
+   *  on some pages the last panel has no frame. */
   const panelized = (seed: number): ComicDoc => {
     const r = rngOf(seed * 31 + 7);
     const book = randomBook(seed);
@@ -1599,7 +1600,8 @@ describe('Ship 2 contract (K2a)', () => {
         ...p,
         ...(r() < 0.8 ? { artMode: 'panels' as const } : {}),
         ...(r() < 0.5 ? { frameStyle: { gutter: 0.03, color: '#101010' } } : {}),
-        panels: p.panels.map((pn, j) => ({ ...pn, frame: { box: boxes[j] } })),
+        // Some pages leave their last panel without a frame (opted in, shown as drawn until it gets one or goes).
+        panels: p.panels.map((pn, j) => ((seed + i) % 4 === 0 && p.panels.length > 1 && j === p.panels.length - 1 ? pn : { ...pn, frame: { box: boxes[j] } })),
         render: { ...p.render, cuts, ...(findings ? { qc: { score: 0.9, issues: [], checkedAt: 1, findings } } : {}) }
       };
     });
@@ -1644,8 +1646,11 @@ describe('Ship 2 contract (K2a)', () => {
         };
       }
       case 'remove': {
-        const others = (page?.panels || []).filter((p) => p.id !== panel?.id);
-        return { op: 'panel_remove', pageId, id: panel?.id ?? 'ghost', ...(others.length && chance(0.5) ? { linesTo: pick(others).id } : {}) };
+        // Half the time a panel without a frame when there is one (on an opted-in page its removal flips the display).
+        const frameless = (page?.panels || []).filter((p) => !p.frame);
+        const gone = frameless.length && chance(0.5) ? pick(frameless) : panel;
+        const others = (page?.panels || []).filter((p) => p.id !== gone?.id);
+        return { op: 'panel_remove', pageId, id: gone?.id ?? 'ghost', ...(others.length && chance(0.5) ? { linesTo: pick(others).id } : {}) };
       }
       case 'layer': {
         const existing = page?.layers || [];
@@ -1963,6 +1968,7 @@ describe('Ship 2 contract (K2a)', () => {
   it('I5 (property): structural ops re-stamp only a fresh page shown in frames; op then inverse restores the original hash and doc', () => {
     let restamped = 0;
     let stale = 0;
+    let flipped = 0;
     for (let seed = 1; seed <= 60; seed += 1) {
       const doc = panelized(seed);
       const r = rngOf(seed);
@@ -1970,17 +1976,21 @@ describe('Ship 2 contract (K2a)', () => {
         if (!page.render.asset || page.panels.length < 2) continue;
         const ids = page.panels.map((p) => p.id);
         const others = ids.slice(1);
+        const frameless = page.panels.find((p) => !p.frame);
         const ops: DocOp[] = [
           { op: 'panels_order', pageId: page.id, order: [...ids].reverse() },
           { op: 'panel_remove', pageId: page.id, id: ids[0], ...(r() < 0.5 ? { linesTo: others[0] } : {}) },
-          { op: 'panel_add', pageId: page.id, index: 1, panel: { id: `pn_add_${seed}`, n: 0, size: 'small', shot: 'insert', action: 'An insert', castIds: [], lines: page.panels[0].lines.slice(0, 1), frame: { box: bx(0.3, 0.3, 0.3, 0.3) } } }
+          { op: 'panel_add', pageId: page.id, index: 1, panel: { id: `pn_add_${seed}`, n: 0, size: 'small', shot: 'insert', action: 'An insert', castIds: [], lines: page.panels[0].lines.slice(0, 1), frame: { box: bx(0.3, 0.3, 0.3, 0.3) } } },
+          // Removing the one frameless panel of an opted-in page brings the page into frames; its undo adds it back.
+          ...(frameless ? [{ op: 'panel_remove', pageId: page.id, id: frameless.id } as DocOp] : [])
         ];
         for (const op of ops) {
           const fresh = !!page.render.specHash && page.render.specHash === pageSpecHash(doc, page);
           const after = applyOps(doc, [op], 2);
           if (JSON.stringify(same(after)) === JSON.stringify(same(doc))) continue; // refused (a cap): nothing to check
           const now = after.pages.find((p) => p.id === page.id)!;
-          if (fresh && artModeOf(page) === 'panels') {
+          if (op.op === 'panel_remove' && frameless && op.id === frameless.id && page.artMode === 'panels') flipped += 1;
+          if (fresh && (artModeOf(page) === 'panels' || artModeOf(now) === 'panels')) {
             expect(now.render.specHash, `${seed} ${op.op}`).toBe(pageSpecHash(after, now));
             restamped += 1;
           } else {
@@ -1995,6 +2005,7 @@ describe('Ship 2 contract (K2a)', () => {
     }
     expect(restamped).toBeGreaterThan(40);
     expect(stale).toBeGreaterThan(10);
+    expect(flipped).toBeGreaterThan(5);
     // A page shown as drawn is never re-stamped: reordering its script panels is a real change (Out of date).
     const drawn = kDoc();
     const moved = applyOps(drawn, [{ op: 'panels_order', pageId: 'pg_k', order: ['pk_2', 'pk_1', 'pk_3'] }]);
@@ -2002,6 +2013,31 @@ describe('Ship 2 contract (K2a)', () => {
     const panels = kDoc({ panels: true });
     const reordered = applyOps(panels, [{ op: 'panels_order', pageId: 'pg_k', order: ['pk_2', 'pk_1', 'pk_3'] }]);
     expect(isPageStale(reordered, reordered.pages[0])).toBe(false);
+  });
+
+  it('I5/I7: removing the one frameless panel of an opted-in page (it flips to frames) undoes exactly, its lines and lettering included', () => {
+    // Opted in, but panel 3 has no frame, so the page is shown as drawn (I2). Removing panel 3 leaves every panel framed.
+    const doc = applyOps(kDoc({ panels: true }), [
+      { op: 'translation', lang: 'hi', lineId: 'lk_3', patch: { text: 'भागो!', status: 'reviewed', sourceHash: 'h', at: 3 } },
+      { op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_3', frame: null }] }
+    ]);
+    expect(artModeOf(doc.pages[0])).toBe('page');
+    expect(isPageStale(doc, doc.pages[0])).toBe(false);
+    const op: DocOp = { op: 'panel_remove', pageId: 'pg_k', id: 'pk_3' };
+    const after = applyOps(doc, [op]);
+    expect(after.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2']);
+    expect(artModeOf(after.pages[0])).toBe('panels');
+    expect(after.pages[0].balloons.some((b) => b.lineId === 'lk_3')).toBe(false);
+    expect(after.i18n!.editions.hi.lines.lk_3).toBeUndefined();
+    // The inverse (a frameless panel_add on a page now shown in frames) is applied: panel, line, balloon, translation.
+    const inverse = inverseOps(doc, [op]);
+    const undone = applyOps(after, inverse, 9);
+    expect(undone.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2', 'pk_3']);
+    expect(undone.pages[0].panels[2].lines.map((l) => l.text)).toEqual(['Run!']);
+    expect(undone.pages[0].render.specHash).toBe(doc.pages[0].render.specHash);
+    expect(same(undone)).toEqual(same(doc));
+    // Client and server agree on the undo (the wire turns undefined into null).
+    expect(json(applyOps(json(after), wire(inverse), 9))).toEqual(json(undone));
   });
 
   it('I6: balloons, clipped overlays and every edition override follow their frame; locked balloons stay; pinned flags unchanged', () => {
@@ -2118,7 +2154,6 @@ describe('Ship 2 contract (K2a)', () => {
       { op: 'page_cuts', pageId: 'pg_k', path: 'u/another.webp', cuts: CUTS },
       { op: 'panels_order', pageId: 'pg_k', order: ['pk_1', 'pk_2', 'pk_3'] },
       { op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_1', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [] } },
-      { op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_new', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [] } }, // no frame on a framed page
       { op: 'panel_remove', pageId: 'pg_k', id: 'pk_1', linesTo: 'pk_ghost' },
       { op: 'layer', pageId: 'pg_k', id: 'not-a-layer-id', patch: { kind: 'shape', box: bx(0, 0, 0.1, 0.1), shape: { type: 'rect' } } },
       { op: 'layer', pageId: 'pg_k', id: 'ly_new', patch: { kind: 'image', box: bx(0, 0, 0.1, 0.1) } },
@@ -2128,6 +2163,14 @@ describe('Ship 2 contract (K2a)', () => {
       { op: 'finding', pageId: 'pg_k', id: 'f_ghost', patch: { dismissed: true } }
     ];
     for (const op of noops) expect(applyOps(doc, [op], 1).pages, op.op).toBe(doc.pages);
+    // A panel without a frame is not refused on a page shown in frames: it shows the page as drawn again (I2), and its
+    // removal brings the frames back (this pair is how undo restores a removed frameless panel).
+    const bare: DocOp = { op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_new', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [] } };
+    const added = applyOps(doc, [bare], 1);
+    expect(added.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2', 'pk_3', 'pk_new']);
+    expect(added.pages[0].panels[3].frame).toBeUndefined();
+    expect(artModeOf(added.pages[0])).toBe('page');
+    expect(artModeOf(applyOps(added, [{ op: 'panel_remove', pageId: 'pg_k', id: 'pk_new' }], 1).pages[0])).toBe('panels');
     // ≤ 2 extra picture sources per page.
     const three = applyOps(doc, [{ op: 'page_frames', pageId: 'pg_k', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box, src: { path: `u/take${i}.webp` } } })) }], 1);
     expect(three.pages).toBe(applyOps(doc, [], 1).pages);

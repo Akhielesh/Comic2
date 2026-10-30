@@ -260,8 +260,8 @@ export type DocOp =
   /** Panel reading order (unlisted panels keep their order after the listed ones). Structural: re-stamps (I5). */
   | { op: 'panels_order'; pageId: string; order: string[] }
   /** Insert a panel. A listed line already on this page moves into it (the page's own Line object); a new id is a new
-   *  line; a line of another page refuses the op, and so does a panel without a frame on a page shown in frames.
-   *  Structural: re-stamps (I5). */
+   *  line; a line of another page refuses the op. A panel without a frame on a page shown in frames is applied and shows
+   *  the page as drawn again (I2; the undo of removing a frameless panel). Structural: re-stamps (I5). */
   | { op: 'panel_add'; pageId: string; panel: Panel; index?: number }
   /** Remove a panel. Its lines go to `linesTo` (a panel of this page), or back to their `lineHomes` (the undo of a
    *  panel_add), else they are deleted with their balloons and translations. Overlays clipped to it are unclipped (kept).
@@ -1558,10 +1558,11 @@ const applyPanelAdd = (doc: ComicDoc, op: Extract<DocOp, { op: 'panel_add' }>): 
   if (typeof raw.angle === 'string' && raw.angle) panel.angle = raw.angle;
   if (typeof raw.placeId === 'string' && raw.placeId) panel.placeId = raw.placeId;
   if (typeof raw.mood === 'string' && raw.mood) panel.mood = raw.mood;
+  // A panel without a frame is allowed on any page: on a page shown in frames it drops the display back to "as drawn"
+  // (I2, artModeOf). It is how undo brings back a removed frameless panel (I5/I7); the editor gives a panel it adds in
+  // panels mode a frame.
   const frame = raw.frame === undefined ? undefined : normalizePanelFrame(raw.frame);
   if (frame) panel.frame = frame;
-  // A page shown in frames keeps every panel framed: a frameless panel would drop it back to "as drawn".
-  else if (artModeOf(page) === 'panels') return doc;
   const direction = raw.direction === undefined ? undefined : normalizePanelDirection(raw.direction);
   if (direction) panel.direction = direction;
   const panels = page.panels.map((p) => (moved.size && p.lines.some((l) => moved.has(l.id)) ? { ...p, lines: p.lines.filter((l) => !moved.has(l.id)) } : p));
