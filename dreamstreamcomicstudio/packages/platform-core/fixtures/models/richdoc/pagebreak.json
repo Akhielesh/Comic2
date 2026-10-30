@@ -1,0 +1,47 @@
+{
+  "note": "Page breaks are sections. Inserting a section that starts a new page, then writing into it, must leave the section before it untouched: its last paragraph keeps its 'quote' style (some Word engines restyle the paragraph before an inserted page break).",
+  "doc": {
+    "v": 1,
+    "title": "The Lighthouse Keeper — script",
+    "sections": [
+      {
+        "id": "s1",
+        "pageBreakBefore": false,
+        "blocks": [
+          { "type": "heading", "id": "h1", "level": 1, "runs": [{ "text": "Chapter one" }] },
+          { "type": "paragraph", "id": "p1", "style": "lead", "runs": [{ "text": "It was a dark night." }] },
+          { "type": "paragraph", "id": "p2", "style": "quote", "runs": [{ "text": "The light never lies.", "marks": ["i"] }] }
+        ]
+      },
+      {
+        "id": "s3",
+        "pageBreakBefore": true,
+        "blocks": [{ "type": "paragraph", "id": "p5", "runs": [{ "text": "Chapter three." }] }]
+      }
+    ]
+  },
+  "ops": [
+    {
+      "op": "insert_section",
+      "id": "op-break",
+      "baseRev": 0,
+      "index": 1,
+      "section": {
+        "id": "s2",
+        "pageBreakBefore": true,
+        "blocks": [
+          { "type": "heading", "id": "h2", "level": 1, "runs": [{ "text": "Chapter two" }] },
+          { "type": "paragraph", "id": "p3", "runs": [{ "text": "Morning came." }] }
+        ]
+      }
+    },
+    {
+      "op": "insert_block",
+      "id": "op-more",
+      "baseRev": 0,
+      "sectionId": "s2",
+      "index": 0,
+      "block": { "type": "script", "id": "sc1", "kind": "scene", "runs": [{ "text": "EXT. HARBOUR — DAWN" }] }
+    }
+  ]
+}
