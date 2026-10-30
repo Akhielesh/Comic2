@@ -213,8 +213,9 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
       case 'history_restore':
         return restoreSetKeys(op.set, doc);
       // --- Ship 2 (K2a; pro plan §5.6): frames, overlays and continuity are page-text fields (by exclusion); cuts and
-      //     findings live on the drawing (art); scenes and consistency are book (meta) keys. A frame move carries the
-      //     panel's balloons (art) and translated overrides (edp) along; a structural edit may re-stamp the drawing (art). ---
+      //     findings live on the drawing (art); scenes and consistency are book (meta) keys. A frame move (or new cuts)
+      //     carries the panel's balloons (art), clipped overlays (page) and translated overrides (edp) along; a
+      //     structural edit may re-stamp the drawing (art). ---
       case 'page_frames':
         return [K.page(op.pageId), K.art(op.pageId), ...editionPageKeys(doc, op.pageId)];
       case 'panels_order':
@@ -226,6 +227,8 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
       case 'continuity':
         return [K.page(op.pageId)];
       case 'page_cuts':
+        // New cuts can move the page's lettering (clipped overlays, balloons, translated overrides) like a frame move.
+        return op.moveBalloons === false ? [K.art(op.pageId)] : [K.page(op.pageId), K.art(op.pageId), ...editionPageKeys(doc, op.pageId)];
       case 'finding':
         return [K.art(op.pageId)];
       case 'scene':

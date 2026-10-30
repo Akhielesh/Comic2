@@ -78,6 +78,27 @@ const lettersRestore = (doc: ComicDoc, page: Page, lineIds: string[]): DocOp[] =
   return out;
 };
 
+/**
+ * What followed a page's frames (I6: balloons, clipped overlays' boxes, every edition's balloon overrides) put back
+ * exactly from `doc` — snapshots, not a reverse affine, so no rounding drift. Empty when nothing moved.
+ */
+const followRestore = (doc: ComicDoc, after: ComicDoc, page: Page, now: Page): DocOp[] => {
+  const restore: DocOp[] = [];
+  if (!sameJson(page.balloons, now.balloons)) restore.push({ op: 'balloons', pageId: page.id, balloons: page.balloons });
+  for (const layer of page.layers || []) {
+    const moved = now.layers?.find((l) => l.id === layer.id);
+    if (moved && !sameJson(moved.box, layer.box)) restore.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { box: layer.box } });
+  }
+  const editionsNow = i18nOf(after).editions;
+  for (const [lang, e] of Object.entries(i18nOf(doc).editions)) {
+    for (const [lineId, prev] of Object.entries(e.balloons)) {
+      const cur = editionsNow[lang]?.balloons[lineId];
+      if (cur && !sameJson(prev, cur)) restore.push({ op: 'edition_balloon', lang, lineId, patch: restoreFull(prev, cur) as never });
+    }
+  }
+  return restore;
+};
+
 /** Ship 2 (K2a): the exact inverse of a panels/consistency op (every op it returns is in INVERTIBLE_OPS). */
 const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null => {
   switch (op.op) {
@@ -92,25 +113,15 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
         const ids = [...new Set(op.frames.map((f) => f?.panelId))].filter((id): id is string => typeof id === 'string' && page.panels.some((p) => p.id === id));
         frames.frames = ids.map((id) => ({ panelId: id, frame: page.panels.find((p) => p.id === id)!.frame ?? null }));
       }
-      const restore: DocOp[] = [frames];
-      // What followed the frames comes back exactly (snapshots, not a reverse affine: no rounding drift).
-      if (!sameJson(page.balloons, now.balloons)) restore.push({ op: 'balloons', pageId: op.pageId, balloons: page.balloons });
-      for (const layer of page.layers || []) {
-        const moved = now.layers?.find((l) => l.id === layer.id);
-        if (moved && !sameJson(moved.box, layer.box)) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { box: layer.box } });
-      }
-      const editionsNow = i18nOf(after).editions;
-      for (const [lang, e] of Object.entries(i18nOf(doc).editions)) {
-        for (const [lineId, prev] of Object.entries(e.balloons)) {
-          const cur = editionsNow[lang]?.balloons[lineId];
-          if (cur && !sameJson(prev, cur)) restore.push({ op: 'edition_balloon', lang, lineId, patch: restoreFull(prev, cur) as never });
-        }
-      }
-      return restore;
+      // What followed the frames comes back exactly.
+      return [frames, ...followRestore(doc, after, page, now)];
     }
     case 'page_cuts': {
       const page = findPage(doc, op.pageId);
-      return page ? [{ op: 'page_cuts', pageId: op.pageId, path: op.path, cuts: page.render.cuts ?? null, keepBy: true }] : [];
+      const now = findPage(after, op.pageId);
+      if (!page || !now) return [];
+      // The cuts it replaced (keepBy: their provenance too), then the lettering that followed them, exactly.
+      return [{ op: 'page_cuts', pageId: op.pageId, path: op.path, cuts: page.render.cuts ?? null, keepBy: true, moveBalloons: false }, ...followRestore(doc, after, page, now)];
     }
     case 'panels_order': {
       const page = findPage(doc, op.pageId);

@@ -84,6 +84,7 @@ import {
   // --- Ship 2 (K2a) ---
   LAYER_ID_RE,
   artModeOf,
+  cutFor,
   normalizeBalloonShip2,
   normalizeConsistencySettings,
   normalizeFrameStyle,
@@ -255,8 +256,10 @@ export type DocOp =
    *  balloon overrides (space.ts panelPointMap). */
   | { op: 'page_frames'; pageId: string; artMode?: 'panels' | null; frameStyle?: Partial<FrameStyle> | null; frames?: { panelId: string; frame: PanelFrame | null }[]; moveBalloons?: boolean }
   /** Cuts of the page's CURRENT drawing: applies only when `path` is render.asset.path; written as by 'user' (keepBy: the
-   *  inverse restores the cuts it replaced exactly). null clears them. */
-  | { op: 'page_cuts'; pageId: string; path: string; cuts: PanelCuts | null; keepBy?: boolean }
+   *  inverse restores the cuts it replaced exactly). null clears them. New cuts can change what a frame shows, or bring
+   *  the page into (or out of) frames: unless moveBalloons is false, what sits on those panels follows, as for
+   *  page_frames (I6). */
+  | { op: 'page_cuts'; pageId: string; path: string; cuts: PanelCuts | null; keepBy?: boolean; moveBalloons?: boolean }
   /** Panel reading order (unlisted panels keep their order after the listed ones). Structural: re-stamps (I5). */
   | { op: 'panels_order'; pageId: string; order: string[] }
   /** Insert a panel. A listed line already on this page moves into it (the page's own Line object); a new id is a new
@@ -1353,10 +1356,13 @@ const moveX = (m: PointMap, x: number, w: number): number => clamp01(round4(m.x(
 const moveY = (m: PointMap, y: number): number => clamp01(round4(m.y(y)));
 const movePt = (m: PointMap['x'], v: number): number => clamp01(round4(m(v)));
 
+/** The cut of the drawing a frame shows (undefined for a frame with its own source): new cuts change what it shows. */
+const rasterCutBox = (page: Page, panel: Panel): Box | undefined => (panel.frame?.src?.path ? undefined : cutFor(page, panel)?.box);
+
 /**
- * I6: what sits on a panel follows it when its frame (or the page's display) changes from `beforeDoc` to `afterDoc`:
- * its balloons (anchored by their top-centre; width unchanged; locked ones stay; pinned flags untouched), the overlays
- * clipped to it (their boxes), and every edition's balloon overrides of its lines.
+ * I6: what sits on a panel follows it when its frame, the cut it shows, or the page's display changes from `beforeDoc`
+ * to `afterDoc`: its balloons (anchored by their top-centre; width unchanged; locked ones stay; pinned flags
+ * untouched), the overlays clipped to it (their boxes), and every edition's balloon overrides of its lines.
  */
 const followFrames = (beforeDoc: ComicDoc, afterDoc: ComicDoc, pageId: string): ComicDoc => {
   const before = findPageById(beforeDoc, pageId);
@@ -1366,7 +1372,8 @@ const followFrames = (beforeDoc: ComicDoc, afterDoc: ComicDoc, pageId: string): 
   const maps = new Map<string, PointMap>();
   for (const panel of after.panels) {
     const prev = before.panels.find((p) => p.id === panel.id);
-    if (!prev || (!modeChanged && sameJson(prev.frame, panel.frame))) continue;
+    if (!prev) continue;
+    if (!modeChanged && sameJson(prev.frame, panel.frame) && sameJson(rasterCutBox(before, prev), rasterCutBox(after, panel))) continue;
     const m = panelPointMap(beforeDoc, before, afterDoc, after, panel.id);
     if (m) maps.set(panel.id, m);
   }
@@ -1483,16 +1490,21 @@ const applyPageCuts = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_cuts' }>): 
   const page = findPageById(doc, op.pageId);
   // Path-guarded: cuts never land on another drawing (a redraw raced the edit).
   if (!page || typeof op.path !== 'string' || !op.path || page.render.asset?.path !== op.path) return doc;
+  let out: ComicDoc;
   if (op.cuts === null || op.cuts === undefined) {
     if (page.render.cuts === undefined) return doc;
     const render = { ...page.render };
     delete render.cuts;
-    return setPage(doc, { ...page, render });
+    out = setPage(doc, { ...page, render });
+  } else {
+    const cuts = normalizePanelCuts(op.cuts);
+    if (!cuts) return doc;
+    const value: PanelCuts = { ...cuts, by: op.keepBy === true ? cuts.by : 'user' };
+    if (sameJson(value, page.render.cuts)) return doc;
+    out = setPage(doc, { ...page, render: { ...page.render, cuts: value } });
   }
-  const cuts = normalizePanelCuts(op.cuts);
-  if (!cuts) return doc;
-  const value: PanelCuts = { ...cuts, by: op.keepBy === true ? cuts.by : 'user' };
-  return sameJson(value, page.render.cuts) ? doc : setPage(doc, { ...page, render: { ...page.render, cuts: value } });
+  // New cuts can change what a frame shows or how the page is shown (I2): its lettering follows, as for page_frames (I6).
+  return op.moveBalloons === false ? out : followFrames(doc, out, page.id);
 };
 
 const applyPanelsOrder = (doc: ComicDoc, op: Extract<DocOp, { op: 'panels_order' }>): ComicDoc => {

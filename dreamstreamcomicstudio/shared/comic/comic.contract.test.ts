@@ -1506,7 +1506,7 @@ import { drawnPanelBoxes, estimatePanelBoxes, panelBoxesFor } from './pageGeomet
 import { letteringAspect, planLettering, estimateMeasure } from './lettering/layout';
 import { composeAspect, frameAffine, pageSpaceQc } from './panelize/space';
 import { partsOf } from './parts';
-import { TOP_LEVEL_SECTIONS, TYPED_META_KEYS, excludedOf, isExtraMetaKey, joinSections, splitSections, unassignedKeys } from './history/sections';
+import { TOP_LEVEL_SECTIONS, TYPED_META_KEYS, excludedOf, isExtraMetaKey, joinSections, sectionSignatures, splitSections, unassignedKeys } from './history/sections';
 import { AI_ACTIONS, EDITOR_ACTIONS, opActor, touchedKeys } from './history/touched';
 import { describeChanges, panelMomentsOfOps, withPanelMoments } from './history/describe';
 import { diffBooks } from './history/diff';
@@ -2093,6 +2093,61 @@ describe('Ship 2 contract (K2a)', () => {
     expect(aff.toImage({ x: tail.tailX!, y: tail.tailY! }).y).toBeCloseTo(0.8, 3);
   });
 
+  it('I6: page_cuts carries lettering along when new cuts bring the page into frames or change what a frame shows', () => {
+    // A square drawing on a 2:3 book with frames, opted in, but a redraw cleared the cuts: shown as drawn (I2).
+    const doc = applyOps(kDoc({ square: true }), [
+      { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: null },
+      { op: 'page_frames', pageId: 'pg_k', artMode: 'panels', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box } })), moveBalloons: false }
+    ], 1);
+    expect(artModeOf(doc.pages[0])).toBe('page');
+    const before = doc.pages[0];
+    const was2 = before.balloons.find((b) => b.lineId === 'lk_2')!;
+    const enter: DocOp = { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: CUTS };
+    const after = applyOps(doc, [enter], 2);
+    const page = after.pages[0];
+    expect(artModeOf(page)).toBe('panels');
+    // The tail stays on its point of the drawing (0.2, 0.8), as when page_frames enters frames.
+    const aff = frameAffine(after, page, 'pk_2')!;
+    const b2 = page.balloons.find((b) => b.lineId === 'lk_2')!;
+    expect(aff.toImage({ x: b2.tailX!, y: b2.tailY! }).x).toBeCloseTo(0.2, 3);
+    expect(aff.toImage({ x: b2.tailX!, y: b2.tailY! }).y).toBeCloseTo(0.8, 3);
+    expect(b2.w).toBe(was2.w);
+    expect(b2.pinned).toBe(true);
+    expect(page.balloons.find((b) => b.lineId === 'lk_3')).toEqual(before.balloons.find((b) => b.lineId === 'lk_3')); // locked
+    // The Hindi override followed with it; the overlay clipped to panel 3 moved into its frame.
+    const ov = after.i18n!.editions.hi.balloons.lk_2;
+    expect(aff.toImage({ x: ov.x! + was2.w / 2, y: ov.y! }).x).toBeCloseTo(0.12 + was2.w / 2, 3);
+    expect(page.layers![0].box).not.toEqual(before.layers![0].box);
+    // History names every section the move touched.
+    const a = sectionSignatures(doc);
+    const b = sectionSignatures(after);
+    const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]);
+    for (const k of changed) expect(touchedKeys(enter, doc), k).toContain(k);
+    // The inverse restores the cuts it replaced and the lettering exactly; client and server agree.
+    const inverse = inverseOps(doc, [enter]);
+    const undone = applyOps(after, inverse, 3);
+    expect(same(undone)).toEqual(same(doc));
+    expect(json(applyOps(json(after), wire(inverse), 3))).toEqual(json(undone));
+    // moveBalloons: false moves only the cuts.
+    const still = applyOps(doc, [{ ...enter, moveBalloons: false } as DocOp], 2);
+    expect(still.pages[0].balloons).toEqual(before.balloons);
+    expect(still.i18n).toEqual(doc.i18n);
+    expect(touchedKeys({ ...enter, moveBalloons: false } as DocOp, doc)).toEqual(['art:pg_k']);
+    // Staying in frames, a moved cut changes what panel 2 shows: its balloon stays on the same point of the art.
+    const framed = kDoc({ panels: true });
+    const shifted: DocOp = { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: { ...CUTS, cuts: CUTS.cuts.map((c, i) => (i === 1 ? { ...c, box: { ...c.box, y: c.box.y - 0.05 } } : c)) } };
+    const moved = applyOps(framed, [shifted], 2);
+    const f0 = framed.pages[0].balloons.find((x) => x.lineId === 'lk_2')!;
+    const f1 = moved.pages[0].balloons.find((x) => x.lineId === 'lk_2')!;
+    const a0 = frameAffine(framed, framed.pages[0], 'pk_2')!.toImage({ x: f0.tailX!, y: f0.tailY! });
+    const a1 = frameAffine(moved, moved.pages[0], 'pk_2')!.toImage({ x: f1.tailX!, y: f1.tailY! });
+    expect(f1.tailY).not.toBe(f0.tailY);
+    expect(a1.x).toBeCloseTo(a0.x, 3);
+    expect(a1.y).toBeCloseTo(a0.y, 3);
+    expect(moved.pages[0].balloons.find((x) => x.lineId === 'lk_1')).toEqual(framed.pages[0].balloons.find((x) => x.lineId === 'lk_1')); // its cut did not move
+    expect(same(applyOps(moved, inverseOps(framed, [shifted]), 3))).toEqual(same(framed));
+  });
+
   it('I7 (property): applyOps gives deep-equal docs on client and server for Ship 2 sequences, and every inverse undoes them exactly', () => {
     let effective = 0;
     const kinds = new Set<string>();
@@ -2202,7 +2257,8 @@ describe('Ship 2 contract (K2a)', () => {
     const doc = normalizeDoc(historyV5Doc());
     const p2 = doc.pages[1];
     expect(touchedKeys({ op: 'page_frames', pageId: p2.id, artMode: 'panels' }, doc)).toEqual(expect.arrayContaining([`page:${p2.id}`, `art:${p2.id}`]));
-    expect(touchedKeys({ op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null })).toEqual([`art:${p2.id}`]);
+    expect(touchedKeys({ op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null })).toEqual([`art:${p2.id}`, `page:${p2.id}`]);
+    expect(touchedKeys({ op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null, moveBalloons: false })).toEqual([`art:${p2.id}`]);
     expect(touchedKeys({ op: 'finding', pageId: p2.id, id: 'f', patch: { dismissed: true } })).toEqual([`art:${p2.id}`]);
     expect(touchedKeys({ op: 'layer', pageId: p2.id, id: 'ly_a', patch: null })).toEqual([`page:${p2.id}`]);
     expect(touchedKeys({ op: 'continuity', pageId: p2.id, patch: null })).toEqual([`page:${p2.id}`]);
