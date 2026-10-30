@@ -75,6 +75,18 @@ describe('richdocFromMarkdown: hostile input', () => {
     expect(plain(doc)).toContain("Text inside an HTML block's markdown stays text.");
   });
 
+  it('drops raw HTML inside list items too, and a script split across emphasis with its content', () => {
+    const all = JSON.stringify(doc);
+    for (const bad of ['<script', 'onerror', "alert('list'", "alert('list inline'", "alert('em'", 'alert(5', 'alert(6', 'alert(7']) expect(all).not.toContain(bad);
+    // The text around the dropped markup stays, in the list and around the emphasis.
+    const list = blocksOf(doc).filter((b) => b.type === 'list')[0];
+    expect(list && list.type === 'list' && list.items.map((i) => i.runs.map((r) => r.text).join(''))).toEqual([
+      'a list item with an HTML block',
+      'a list item with a link after its script',
+    ]);
+    expect(plain(doc)).toMatch(/Emphasis split: x +y stays\./);
+  });
+
   it('keeps a link only when it is https: or mailto: (javascript: in any case, data:, http:, relative and file: lose it)', () => {
     expect(links(doc).sort()).toEqual(['https://example.com/notes', 'https://example.net/ref', 'https://example.org/auto', 'mailto:team@example.com?subject=Notes'].sort());
     expect(JSON.stringify(doc)).not.toMatch(/"href":"(javascript|data|http:|file|\.\.)/i);
@@ -136,6 +148,24 @@ describe('richdocFromMarkdown: GFM', () => {
     const imgs = blocksOf(d).filter((b) => b.type === 'image');
     expect(imgs).toEqual([{ type: 'image', id: imgs[0].id, ref: { kind: 'data', dataUri: IMAGES.png }, alt: 'cover' }]);
     expect(plain(d)).toContain('[vector]');
+  });
+
+  it('a data: image in a table cell keeps its alt in the cell and is placed after the table, never lost', () => {
+    const d = richdocFromMarkdown(`| Cover | Note |\n|---|---|\n| ![pic](${IMAGES.png}) | x |\n| ![](${IMAGES.jpeg}) and text | y |\n\nAfter.`);
+    const all = blocksOf(d);
+    const table = all.find((b): b is DocTable => b.type === 'table')!;
+    expect(table.rows.map((r) => r.cells.map((c) => c.runs.map((x) => x.text).join('')))).toEqual([
+      ['Cover', 'Note'],
+      ['[pic]', 'x'],
+      ['[image] and text', 'y'],
+    ]);
+    // The pictures follow the table, in order, before the next paragraph.
+    expect(all.map((b) => b.type)).toEqual(['table', 'image', 'image', 'paragraph']);
+    expect(all.filter((b) => b.type === 'image').map((b) => b.type === 'image' && [b.ref, b.alt])).toEqual([
+      [{ kind: 'data', dataUri: IMAGES.png }, 'pic'],
+      [{ kind: 'data', dataUri: IMAGES.jpeg }, ''],
+    ]);
+    expectWithinContract(d);
   });
 
   it('stays within the contract', () => expectWithinContract(doc));

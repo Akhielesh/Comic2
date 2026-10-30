@@ -3,12 +3,14 @@
  * lockfile; unified and remark-parse are pinned exactly in the app's package.json).
  *
  * Untrusted Markdown (a model's answer, a pasted file) becomes data, never markup:
- * - **raw HTML is dropped**, block and inline (`<script>`, `<iframe>`, `<img onerror>` …); text between inline tags
- *   stays as text;
+ * - **raw HTML is dropped**, block and inline, at any depth (list items, quotes, table cells): `<script>`, `<iframe>`,
+ *   `<img onerror>` …; text between inline tags stays as text, except the content of `<script>`, `<style>` and the
+ *   like, which goes up to the closing tag even when the tags sit in different emphasis or link spans;
  * - **links are kept only when `https:` or `mailto:`** (`isSafeHref`); a `javascript:`, `data:`, `http:` or relative
  *   link keeps its text and loses the link;
  * - **images are never fetched:** a `data:` PNG/JPEG/WebP image that passes the contract's rule becomes an image
- *   block; any other image keeps only its alt text, as `[alt]`;
+ *   block (one in a table cell is placed after the table, and the cell keeps `[alt]`); any other image keeps only its
+ *   alt text, as `[alt]`;
  * - every cap of the contract holds: runs ≤ 4,000 characters (longer text is split), ≤ 500 runs per block, tables
  *   ≤ 50 × 12 (longer tables continue in a new table with the header repeated; extra columns are cut, with a note),
  *   ≤ 2,000 blocks per section (a new section continues without a page break), ≤ 200 sections (the rest is cut, with
@@ -142,24 +144,52 @@ class Builder {
   }
 }
 
+type Images = { dataUri: string; alt: string }[];
+
+/**
+ * Where one paragraph's raw-HTML skipping stands. One object is shared by every nested `inline()` call of a
+ * paragraph, so a `<script>` opened inside emphasis or a link still drops everything up to its closing tag, wherever
+ * that tag sits in the same paragraph.
+ */
+interface InlineState {
+  /** The raw-content element (`script`, `style` …) whose content is being dropped; '' when none. */
+  skipping: string;
+  /**
+   * Also leave `[alt]` (or `[image]`) where a placed `data:` image stood: a table cell cannot hold an image block,
+   * so the picture goes after the table and the cell says which one it was.
+   */
+  markPlaced?: boolean;
+}
+
 /**
  * Inline nodes → runs. Images inside the text that are valid `data:` images come back in `images` so the caller can
  * place them as blocks after the text; any other image leaves `[alt]`.
  */
-const inline = (nodes: MdNode[] | undefined, b: Builder, runs: Run[], images: { dataUri: string; alt: string }[], marks: RunMark[] = [], href?: string): Run[] => {
+const inline = (
+  nodes: MdNode[] | undefined,
+  b: Builder,
+  runs: Run[],
+  images: Images,
+  marks: RunMark[] = [],
+  href?: string,
+  state: InlineState = { skipping: '' },
+): Run[] => {
   // Inline raw HTML is dropped tag by tag; for elements whose content is code or hidden (`<script>`, `<style>` …)
   // the content between the tags goes too, up to the closing tag (or to the end of the paragraph without one).
-  let skipping = '';
   for (const node of nodes || []) {
-    if (skipping) {
-      if (node.type === 'html' && new RegExp(`^</${skipping}\\s*>`, 'i').test((node.value || '').trim())) skipping = '';
-      continue;
-    }
     if (node.type === 'html') {
-      const open = RAW_CONTENT.exec((node.value || '').trim());
-      if (open && !new RegExp(`</${open[1]}\\s*>$`, 'i').test((node.value || '').trim())) skipping = open[1].toLowerCase();
+      const tag = (node.value || '').trim();
+      if (state.skipping) {
+        if (new RegExp(`^</${state.skipping}\\s*>`, 'i').test(tag)) state.skipping = '';
+        continue;
+      }
+      const open = RAW_CONTENT.exec(tag);
+      if (open && !new RegExp(`</${open[1]}\\s*>$`, 'i').test(tag)) state.skipping = open[1].toLowerCase();
       continue;
     }
+    // While skipping, leaves (text, code, images …) are dropped; containers are still walked, because the closing
+    // tag may sit inside one (`*<script>* … *</script>* after`), and what follows it there is kept.
+    if (state.skipping && !Array.isArray(node.children)) continue;
     switch (node.type) {
       case 'text':
         pushText(runs, node.value || '', marks, href);
@@ -168,50 +198,52 @@ const inline = (nodes: MdNode[] | undefined, b: Builder, runs: Run[], images: { 
         pushText(runs, node.value || '', marks.indexOf('code') === -1 ? marks.concat('code') : marks, href);
         break;
       case 'emphasis':
-        inline(node.children, b, runs, images, marks.indexOf('i') === -1 ? marks.concat('i') : marks, href);
+        inline(node.children, b, runs, images, marks.indexOf('i') === -1 ? marks.concat('i') : marks, href, state);
         break;
       case 'strong':
-        inline(node.children, b, runs, images, marks.indexOf('b') === -1 ? marks.concat('b') : marks, href);
+        inline(node.children, b, runs, images, marks.indexOf('b') === -1 ? marks.concat('b') : marks, href, state);
         break;
       case 'delete':
-        inline(node.children, b, runs, images, marks, href);
+        inline(node.children, b, runs, images, marks, href, state);
         break;
       case 'break':
         pushText(runs, '\n', marks, href);
         break;
       case 'link':
-        inline(node.children, b, runs, images, marks, safeLink(node.url));
+        inline(node.children, b, runs, images, marks, safeLink(node.url), state);
         break;
       case 'linkReference':
-        inline(node.children, b, runs, images, marks, safeLink(b.defs[(node.identifier || '').toLowerCase()]));
+        inline(node.children, b, runs, images, marks, safeLink(b.defs[(node.identifier || '').toLowerCase()]), state);
         break;
       case 'image':
       case 'imageReference': {
         const url = node.type === 'image' ? node.url : b.defs[(node.identifier || '').toLowerCase()];
         const alt = cleanText(node.alt || '').slice(0, MODEL_LIMITS.alt);
-        if (typeof url === 'string' && check(DATA_IMAGE, { kind: 'data', dataUri: url }).ok) images.push({ dataUri: url, alt });
-        else if (alt) pushText(runs, `[${alt}]`, marks, href);
+        if (typeof url === 'string' && check(DATA_IMAGE, { kind: 'data', dataUri: url }).ok) {
+          images.push({ dataUri: url, alt });
+          if (state.markPlaced) pushText(runs, `[${alt || 'image'}]`, marks, href);
+        } else if (alt) pushText(runs, `[${alt}]`, marks, href);
         break;
       }
       case 'footnoteReference':
         pushText(runs, `[${cleanText(node.label || node.identifier || '')}]`, marks, href);
         break;
       default:
-        // `html` (raw tags, `<script>` included) and anything unknown: dropped; children of unknown containers kept.
-        if (node.type !== 'html' && Array.isArray(node.children)) inline(node.children, b, runs, images, marks, href);
+        // Anything unknown: dropped; children of unknown containers kept (raw `html` never gets here).
+        if (Array.isArray(node.children)) inline(node.children, b, runs, images, marks, href, state);
         break;
     }
   }
   return runs;
 };
 
-const imageBlocks = (images: { dataUri: string; alt: string }[], b: Builder): void => {
+const imageBlocks = (images: Images, b: Builder): void => {
   for (const img of images) b.push({ type: 'image', id: b.id('b'), ref: { kind: 'data', dataUri: img.dataUri }, alt: img.alt });
 };
 
 /** One paragraph-like node's text, images placed after it. */
 const textBlock = (node: MdNode, b: Builder, style?: 'quote' | 'caption', prefix = ''): void => {
-  const images: { dataUri: string; alt: string }[] = [];
+  const images: Images = [];
   const runs: Run[] = [];
   if (prefix) pushText(runs, prefix, [], undefined);
   inline(node.children, b, runs, images);
@@ -219,32 +251,60 @@ const textBlock = (node: MdNode, b: Builder, style?: 'quote' | 'caption', prefix
   imageBlocks(images, b);
 };
 
-/** A list item's text: its paragraphs joined by line breaks; nested lists come back to the caller. */
-const listItems = (list: MdNode, indent: number, b: Builder, out: { runs: Run[]; indent: number }[], images: { dataUri: string; alt: string }[]): void => {
+/** Children of a list item that never become text: raw HTML (`<script>`, `<img onerror>` …) and definitions. */
+const NOT_TEXT = /^(html|definition|yaml)$/;
+
+/**
+ * A list item's text: its paragraphs joined by line breaks; nested lists come back to the caller. Raw HTML inside an
+ * item is dropped like anywhere else; an item that held only raw HTML (no text, no task box, no nested list) is left
+ * out rather than shown as an empty bullet.
+ */
+const listItems = (list: MdNode, indent: number, b: Builder, out: { runs: Run[]; indent: number }[], images: Images): void => {
   for (const item of list.children || []) {
     const runs: Run[] = [];
-    if (item.checked === true || item.checked === false) pushText(runs, item.checked ? BALLOT.done : BALLOT.open, [], undefined);
+    const ballot = item.checked === true || item.checked === false;
+    if (ballot) pushText(runs, item.checked ? BALLOT.done : BALLOT.open, [], undefined);
     const nested: MdNode[] = [];
+    let onlyMarkup = (item.children || []).length > 0;
+    let hasText = false;
     for (const child of item.children || []) {
-      if (child.type === 'list') nested.push(child);
-      else if (child.type === 'code') {
-        if (runs.length) pushText(runs, '\n', [], undefined);
-        pushText(runs, child.value || '', ['code'], undefined);
-      } else {
-        if (runs.length && !(runs.length === 1 && (runs[0].text === BALLOT.done || runs[0].text === BALLOT.open))) pushText(runs, '\n', [], undefined);
-        inline(child.children || (child.value ? [{ type: 'text', value: child.value }] : []), b, runs, images);
+      if (child.type === 'list') {
+        nested.push(child);
+        continue;
       }
+      if (NOT_TEXT.test(child.type)) continue;
+      onlyMarkup = false;
+      const part: Run[] = [];
+      if (child.type === 'code') pushText(part, child.value || '', ['code'], undefined);
+      else if (child.type === 'text') pushText(part, child.value || '', [], undefined);
+      else inline(child.children, b, part, images);
+      if (!part.length) continue;
+      if (hasText) pushText(runs, '\n', [], undefined);
+      for (const r of part) pushText(runs, r.text, r.marks || [], r.link ? r.link.href : undefined);
+      hasText = true;
     }
-    out.push({ runs: runs.slice(0, RICHDOC_LIMITS.runsPerBlock), indent: Math.min(indent, MODEL_LIMITS.listIndentMax) });
+    if (!(onlyMarkup && !ballot && !nested.length)) {
+      out.push({ runs: runs.slice(0, RICHDOC_LIMITS.runsPerBlock), indent: Math.min(indent, MODEL_LIMITS.listIndentMax) });
+    }
     for (const sub of nested) listItems(sub, indent + 1, b, out, images);
   }
 };
 
+/**
+ * A GFM table → RichDoc tables (the header repeats on every 50 rows; past 12 columns is cut, with a note). A valid
+ * `data:` image in a kept cell leaves `[alt]` in the cell and is placed as an image block after the table.
+ */
 const tableBlocks = (node: MdNode, b: Builder): void => {
   const rows: TableRow[] = [];
+  const images: Images = [];
   let widest = 0;
   for (const row of node.children || []) {
-    const cells = (row.children || []).map((cell) => ({ runs: inline(cell.children, b, [], []).slice(0, RICHDOC_LIMITS.runsPerCell) }));
+    const cells = (row.children || []).map((cell, col) => {
+      const cellImages: Images = [];
+      const runs = inline(cell.children, b, [], cellImages, [], undefined, { skipping: '', markPlaced: true }).slice(0, RICHDOC_LIMITS.runsPerCell);
+      if (col < RICHDOC_LIMITS.tableCols) images.push(...cellImages);
+      return { runs };
+    });
     widest = Math.max(widest, cells.length);
     rows.push({ cells: cells.slice(0, RICHDOC_LIMITS.tableCols) });
   }
@@ -259,6 +319,7 @@ const tableBlocks = (node: MdNode, b: Builder): void => {
   if (widest > RICHDOC_LIMITS.tableCols) {
     b.paragraph([{ text: `This table has ${widest} columns; the first ${RICHDOC_LIMITS.tableCols} are shown.` }], 'caption');
   }
+  imageBlocks(images, b);
 };
 
 const blocks = (nodes: MdNode[] | undefined, b: Builder, inQuote = false): void => {
@@ -269,7 +330,7 @@ const blocks = (nodes: MdNode[] | undefined, b: Builder, inQuote = false): void 
           textBlock(node, b, 'quote');
           break;
         }
-        const images: { dataUri: string; alt: string }[] = [];
+        const images: Images = [];
         const runs = inline(node.children, b, [], images).slice(0, RICHDOC_LIMITS.runsPerBlock);
         if (runs.length) {
           if (!b.firstHeading) b.firstHeading = runs.map((r) => r.text).join('');
@@ -287,7 +348,7 @@ const blocks = (nodes: MdNode[] | undefined, b: Builder, inQuote = false): void 
         break;
       case 'list': {
         const items: { runs: Run[]; indent: number }[] = [];
-        const images: { dataUri: string; alt: string }[] = [];
+        const images: Images = [];
         listItems(node, 0, b, items, images);
         for (let i = 0; i < items.length; i += RICHDOC_LIMITS.listItems) {
           b.push({

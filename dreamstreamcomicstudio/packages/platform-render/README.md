@@ -25,8 +25,10 @@ Every refusal is a `RenderError` with a stable `code`: `blocked`, `overlap`, `in
   `XMLHttpRequest` or `writeFile`. P8 fixes an upstream bug (one `<a:pPr>` per paragraph).
 - **Links survive only as `https:` or `mailto:`** (`isSafeHref` from platform-core); any other link keeps its text and
   loses the link. Text is escaped by the writers and cleaned of characters XML cannot carry and of bidi overrides.
-- **Markdown is data.** Raw HTML is dropped (with the content of `<script>`, `<style>` and similar), images are never
-  fetched (only valid `data:` images become image blocks; others keep `[alt]`), and every cap holds: runs ≤ 4,000
+- **Markdown is data.** Raw HTML is dropped at any depth, list items and table cells included (with the content of
+  `<script>`, `<style>` and similar, up to the closing tag even across emphasis or link spans), images are never
+  fetched (only valid `data:` images become image blocks, placed after the table when they sit in a cell, whose text
+  keeps `[alt]`; others keep `[alt]`), and every cap holds: runs ≤ 4,000
   characters, tables ≤ 50 × 12 (long tables continue with the header repeated), ≤ 2,000 blocks per section, ≤ 200
   sections, input ≤ 2,000,000 characters.
 - **Decks are laid out by their own rectangles.** `renderPptx` refuses a deck while two `content` elements of a

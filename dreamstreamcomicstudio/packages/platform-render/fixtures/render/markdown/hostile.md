@@ -22,3 +22,12 @@ Reference [style][evil] and [good one][good].
 Text inside an HTML block's markdown stays text.
 
 </div>
+
+Emphasis split: x *<script>* alert('em') *</script>* y stays.
+
+- <script>alert('list')</script>
+- a list item with an HTML block
+
+  <img src=x onerror=alert(5)>
+- <div onclick=alert(6)>hi</div>
+- a list item with a [link](javascript:alert(7)) after <script>alert('list inline')</script>its script
