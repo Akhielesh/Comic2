@@ -6,18 +6,19 @@
 // front that a new shape / lettering mode marks them out of date and what a redraw would cost;
 // after such a change it says how many are now out of date and offers "Switch back" (free).
 //
-// Panels per page (plan §4.1, §5.1): Auto — "3–4 big panels", the beats decide (2–4; 5 only for a fast,
-// nearly silent sequence) — or a fixed 2, 3, 4, 5 or 6 (PANEL_LIMITS.uiChoices; the free fit check still
-// flags a panel with too many words). A storybook set above 3 plans its NEW pages with at most 3 and says so
-// (decision PD-2, panelCountNote). The choices are a wrapping grid sized by the panel, never the viewport:
-// this panel also opens inside the narrow recap card.
+// Panels per page (plan §4.1, §5.1): Auto — "3–4 big panels", the beats decide within the kind's range
+// (comics and manga 2–4, 5 only for a fast, nearly silent sequence; strips 3–4; webtoons 2–5; storybooks up to
+// 3) — or a fixed 2, 3, 4, 5 or 6 (PANEL_LIMITS.uiChoices; the free fit check still flags a panel with too many
+// words). A storybook set above 3 plans its NEW pages with at most 3 and says so (decision PD-2,
+// panelCountNote); the hint under the choice states the same number (panelCountRule). The choices are a
+// wrapping grid sized by the panel, never the viewport: this panel also opens inside the narrow recap card.
 
 import React from 'react';
 import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
 import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
 import { estimateJobs, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
-import { PANEL_LIMITS, panelCountNote } from '../../../../shared/comic/panelRules';
+import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
 import { useCostFormat } from '../cost';
@@ -69,15 +70,24 @@ export const PANEL_OPTIONS: Format['panelsPerPage'][] = ['auto', ...PANEL_LIMITS
 /** What Auto plans (plan §4.1): usually 3 big panels, sometimes 2 or 4. */
 export const AUTO_PANELS_LABEL = '3–4 big panels';
 
-/** The words under the panel choice: what the current setting plans. */
+/**
+ * The words under the panel choice: what the current setting plans, from the same rule the writer and the plan
+ * check use (panelRules.panelCountRule), so the hint never contradicts the storybook note or a kind's own range.
+ */
 export const panelChoiceHint = (format: Pick<Format, 'kind' | 'panelsPerPage'>): string => {
-  const v = format.panelsPerPage;
-  if (v === 'auto' || typeof v !== 'number') {
-    return format.kind === 'storybook'
-      ? `Auto: usually ${PANEL_LIMITS.storybookTypical} large panels a page (at most ${PANEL_LIMITS.storybookMax}), so every picture has room.`
-      : `Auto: usually ${PANEL_LIMITS.autoTypical} big panels a page (${PANEL_LIMITS.autoMin}–${PANEL_LIMITS.autoUsualMax}; ${PANEL_LIMITS.autoMax} only for a fast, nearly silent moment), so the art and the words both fit.`;
+  const rule = panelCountRule(format);
+  if (rule.exact !== undefined) {
+    const n = rule.exact;
+    // A storybook set above its limit plans its new pages with the limit (PD-2): say that number, as the note does.
+    const count = `${n} panel${n === 1 ? '' : 's'} on every new page${rule.clampedFrom !== undefined ? ' (the storybook limit)' : ''}`;
+    return `${count}. Fewer, bigger panels leave more room for detail and words; a panel with too many words is flagged before anything is drawn.`;
   }
-  return `${v} panel${v === 1 ? '' : 's'} on every new page. Fewer, bigger panels leave more room for detail and words; a panel with too many words is flagged before anything is drawn.`;
+  if (format.kind === 'storybook') {
+    return `Auto: usually ${rule.typical} large panels a page (at most ${rule.max}), so every picture has room.`;
+  }
+  const range = rule.min === rule.max ? `${rule.max}` : `${rule.min}–${rule.max}`;
+  const fast = rule.fast ? `; ${rule.fast.panels} only for a fast, nearly silent moment` : '';
+  return `Auto: usually ${rule.typical} big panels a page (${range}${fast}), so the art and the words both fit.`;
 };
 
 const clampPages = (n: number) => Math.min(MAX_PAGES, Math.max(MIN_PAGES, Math.round(n)));
