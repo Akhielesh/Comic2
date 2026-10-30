@@ -71,6 +71,10 @@ export const strongerActor = (a: HistoryActor | null | undefined, b: HistoryActo
 const isDerivedRender = (op: DocOp): boolean =>
   op?.op === 'render' && (op as { patch?: { origin?: unknown } }).patch?.origin === 'derived';
 
+/** A consented image-model switch in these ops (the lock a first drawing sets, or a migration, is no switch). */
+export const hasModelSwitch = (ops: readonly DocOp[]): boolean =>
+  ops.some((op) => op?.op === 'image_model' && (op as { lock?: { origin?: string } }).lock?.origin === 'user_change');
+
 /** What one commit means for history. */
 export interface BatchClass {
   /** The batch's most significant actor; null when it touched no book section (messages, spend, gate, memory,
@@ -129,7 +133,7 @@ export const classifyBatch = (
     if (op.op === 'spend' && op.entry && typeof op.entry === 'object') out.spend.push(op.entry);
     if (op.op === 'publication') out.publication = (op as { value?: PublicationMirror | null }).value ?? null;
     if (op.op === 'history_restore') out.restore = true;
-    if (op.op === 'image_model') out.model = true;
+    if (op.op === 'image_model' && hasModelSwitch([op])) out.model = true;
     if (CAPTURE_NEUTRAL_OPS.has(op.op)) continue;
     const actor = actorOf(op, origin, next, action, fitted);
     if (!actor) continue;
@@ -267,8 +271,6 @@ export const rowDiff = (base: ComicDoc, doc: ComicDoc): ReturnType<typeof diffBo
   }
   return diff;
 };
-
-const hasModelSwitch = (ops: readonly DocOp[]): boolean => ops.some((op) => op?.op === 'image_model');
 
 /** The actor recorded for a change item's section (an edition item matches its per-page keys too). */
 const keyActorOf = (item: ChangeItem, keys: ReadonlyMap<string, HistoryActor>): HistoryActor | undefined => {
