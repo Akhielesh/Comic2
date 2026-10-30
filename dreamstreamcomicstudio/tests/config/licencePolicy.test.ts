@@ -10,7 +10,7 @@
  *   - known violations are owner decisions (KNOWN), never silent and never a dependency change.
  * Fixtures are synthetic lockfiles / engine locks / asset records judged by the REAL policy.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -108,6 +108,32 @@ describe('npm lockfiles', () => {
     expect(failuresOf(g, '@img/sharp-win32-x64')).toEqual([]);
     expect(kinds(g, 'some-gpl-tool')).toEqual(['copyleft-not-allowlisted']);
     expect(kinds(g, 'gpl-with-exception')).toEqual(['copyleft-not-allowlisted']);
+  });
+
+  it('compares SPDX ids case-insensitively', () => {
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': lockfile({ lower: { license: 'mit' }, agpl: { license: 'agpl-3.0-only' } }) } });
+    expect(failuresOf(g, 'lower')).toEqual([]);
+    expect(kinds(g, 'agpl')).toEqual(['blocked']);
+  });
+
+  it('finds and checks a lockfile the policy does not name (a new Worker, the engine image)', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'licence-root-'));
+    try {
+      mkdirSync(path.join(root, 'new-worker'), { recursive: true });
+      mkdirSync(path.join(root, 'tests/fixtures'), { recursive: true });
+      writeFileSync(path.join(root, 'package-lock.json'), JSON.stringify(lockfile({ ok: { license: 'MIT' } })));
+      writeFileSync(path.join(root, 'new-worker/package-lock.json'), JSON.stringify(lockfile({ sneaky: { license: 'SSPL-1.0', dev: true } })));
+      // Synthetic test fixtures are never shipped and are not read.
+      writeFileSync(path.join(root, 'tests/fixtures/package-lock.json'), JSON.stringify(lockfile({ fixture: { license: 'AGPL-3.0-only' } })));
+      expect(gate.scanLockfiles(root, POLICY)).toEqual(['new-worker/package-lock.json', 'package-lock.json']);
+      const policy = clone(POLICY);
+      policy.dataAssets.records = [];
+      policy.vendored.records = [];
+      const g = gate.runGate({ root, policy, engines: {}, htmlPages: [] });
+      expect(g.failures.map((r) => [r.name, r.source])).toEqual([['sneaky', 'new-worker/package-lock.json: node_modules/sneaky']]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('reads every Worker lockfile the policy names', () => {
@@ -352,6 +378,16 @@ describe('vendored code and CDN scripts', () => {
     expect(kinds(noFiles, 'pptxgenjs').sort()).toEqual(['vendored-no-licence', 'vendored-no-patches']);
     const unknown = fixtureGate({ vendoredDirs: ['lib/vendor/mystery'] });
     expect(kinds(unknown, 'lib/vendor/mystery')).toEqual(['vendored-unrecorded']);
+  });
+
+  it('finds vendored code anywhere, public/ included (it ships to browsers as is)', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'licence-vendor-'));
+    try {
+      for (const d of ['public/vendor/widget', 'packages/x/src/vendor/lib', 'node_modules/y/vendor/z', 'dist/vendor/built']) mkdirSync(path.join(root, d), { recursive: true });
+      expect(gate.scanVendored(root, POLICY)).toEqual(['packages/x/src/vendor/lib', 'public/vendor/widget']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('a CDN script in index.html needs a record with a browser licence', () => {

@@ -148,16 +148,17 @@ export const rulesFor = (scope) => (scope === 'browser' || scope === 'qa' ? 'bro
  * @returns {Problem|null}
  */
 export function classifyLicence(id, scope, names, policy) {
+  // SPDX ids are case-insensitive.
   for (const b of policy.blocked) {
-    if (new RegExp(b.pattern).test(id)) return { kind: 'blocked', licence: id, message: `${id} is blocked everywhere (${b.reason})` };
+    if (new RegExp(b.pattern, 'i').test(id)) return { kind: 'blocked', licence: id, message: `${id} is blocked everywhere (${b.reason})` };
   }
-  if (new RegExp(policy.copyleft.pattern).test(id)) {
+  if (new RegExp(policy.copyleft.pattern, 'i').test(id)) {
     if (rulesFor(scope) === 'browser') return { kind: 'copyleft-in-browser', licence: id, message: `${id} is GPL/LGPL: never allowed in the browser bundle` };
     const allowed = policy.copyleft.serverAllowlist.some((/** @type {any} */ e) => names.some((n) => globMatch(e.match, n)));
     return allowed ? null : { kind: 'copyleft-not-allowlisted', licence: id, message: `${id} is GPL/LGPL and ${names[0]} is not on the server copyleft allowlist` };
   }
   const allow = policy.scopes[rulesFor(scope)].allow;
-  if (allow.includes(id)) return null;
+  if (allow.some((/** @type {string} */ a) => a.toLowerCase() === id.toLowerCase())) return null;
   return { kind: 'not-allowed', licence: id, message: `${id} is not on the ${rulesFor(scope)} allowlist` };
 }
 
@@ -497,6 +498,29 @@ export function checkDataAssets(files, policy, opts = {}) {
   return { results, warnings };
 }
 
+/**
+ * Every package-lock.json under root (outside node_modules and build output), so a new one (a new
+ * Worker, the engine image) is checked without anyone remembering to list it.
+ * @param {string} root @param {any} policy
+ */
+export function scanLockfiles(root, policy) {
+  const ignore = new Set(policy.dataAssets.ignoreDirs);
+  /** @type {string[]} */
+  const out = [];
+  /** @param {string} rel */
+  const walk = (rel) => {
+    let entries;
+    try { entries = readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      const r = rel ? `${rel}/${ent.name}` : ent.name;
+      if (ent.isDirectory()) { if (!ignore.has(ent.name) && !ignore.has(r)) walk(r); }
+      else if (ent.isFile() && ent.name === 'package-lock.json') out.push(r);
+    }
+  };
+  walk('');
+  return out.sort();
+}
+
 /** Directories directly under a folder named `vendor` (relative to root). @param {string} root @param {any} policy */
 export function scanVendored(root, policy) {
   const ignore = new Set(policy.dataAssets.ignoreDirs);
@@ -509,7 +533,7 @@ export function scanVendored(root, policy) {
     for (const ent of entries) {
       if (!ent.isDirectory()) continue;
       const r = rel ? `${rel}/${ent.name}` : ent.name;
-      if (ignore.has(ent.name) || ignore.has(r) || ent.name === 'public') continue;
+      if (ignore.has(ent.name) || ignore.has(r)) continue;
       if (ent.name === 'vendor') {
         for (const sub of readdirSync(path.join(root, r), { withFileTypes: true })) out.push(`${r}/${sub.name}`);
       } else walk(r);
@@ -599,7 +623,8 @@ export function runGate(opts = {}) {
   /** @type {Record<string, any>} */
   let lockfiles = opts.lockfiles ?? {};
   if (!opts.lockfiles) {
-    for (const f of policy.lockfiles) if (exists(f)) lockfiles[f] = JSON.parse(readFileSync(path.join(root, f), 'utf8'));
+    const files = [...new Set([...policy.lockfiles.filter((/** @type {string} */ f) => exists(f)), ...scanLockfiles(root, policy)])];
+    for (const f of files) lockfiles[f] = JSON.parse(readFileSync(path.join(root, f), 'utf8'));
   }
   const browser = opts.browserModules ?? null;
   if (!browser) {
