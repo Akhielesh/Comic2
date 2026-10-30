@@ -17,7 +17,7 @@
 import type { Resolution } from '../../../shared/comic/doc';
 import type { CatalogPrice, ModelCatalogRow, ObservedEntry } from '../../../shared/comic/modelCatalog';
 import type { PriceBook } from '../../../shared/comic/modelLock';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type ImageJobKind, type ImageModelSpec } from '../../../shared/comic/models';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type AnyImageJobKind, type ImageModelSpec } from '../../../shared/comic/models';
 import { ago, asOfCouldntRefresh, fromPriceList } from './copy';
 
 /** Observed medians are used from this many calls (models.md §2.3 step 2). */
@@ -66,7 +66,8 @@ export interface ClientQuote {
 }
 
 export interface ClientPriceBook extends PriceBook {
-  quote(modelId: string, res: Resolution, kind: ImageJobKind, refs?: number): ClientQuote;
+  /** Any image job kind, a Ship 2 'panel' included (its observed median is matched by kind, like the server's). */
+  quote(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): ClientQuote;
   /** What one page costs THIS user: (unit + QC) × markup unless BYOK; null when unpriced. */
   pagePrice(modelId: string, res: Resolution, byok: boolean): number | null;
   /** The row behind a model id (live data), if any. */
@@ -78,8 +79,9 @@ const kindNoun = (kind: string, n: number) => {
   return n === 1 ? base : `${base}s`;
 };
 
-/** The observed kind a job kind reads: the same kind, exactly as the server matches it (rows carry page/sheet/cover). */
-const observedKind = (kind: ImageJobKind): string => kind;
+/** The observed kind a job kind reads: the same kind, exactly as the server matches it (rows carry page/sheet/cover,
+ *  and 'panel' once the server records panel calls). */
+const observedKind = (kind: AnyImageJobKind): string => kind;
 
 const liveLabel = (row: ModelCatalogRow, now: number): string => {
   const at = row.fetchedAt?.catalog;
@@ -94,7 +96,7 @@ export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefi
   const byId = new Map((rows ?? []).map((r) => [r.id, r] as const));
   const rowFor = (modelId: string) => byId.get(getImageModel(modelId)?.id ?? modelId) ?? byId.get(modelId);
 
-  const quote = (modelId: string, res: Resolution, kind: ImageJobKind, refs = 0): ClientQuote => {
+  const quote = (modelId: string, res: Resolution, kind: AnyImageJobKind, refs = 0): ClientQuote => {
     const spec = getImageModel(modelId);
     const row = rowFor(modelId);
     const sent = isNum(refs) && refs > 0 ? Math.floor(refs) : 0;
@@ -157,7 +159,7 @@ export const clientPriceBook = (rows: readonly ModelCatalogRow[] | null | undefi
   };
 
   return {
-    unit: (modelId, res, kind, refs = 0) => {
+    unit: (modelId: string, res: Resolution, kind: AnyImageJobKind, refs = 0) => {
       const q = quote(modelId, res, kind, refs);
       return { usd: q.usd, basis: q.label };
     },
