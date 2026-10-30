@@ -37,8 +37,25 @@ const localDayOf = (now: number, tz: string): string => {
   }
 };
 
-/** "Page 3, v1: open" — the tile's name (the same words as before the shared derivation). */
-const tileLabel = (m: EarlierMoment): string => `${m.owner.label}${m.versionN ? `, v${m.versionN}` : ''}: open`;
+/**
+ * "Page 3, v1: open" — the tile's name (the same words as before the shared derivation). A drawing moment with no
+ * v-number is a panel picture or overlay a restore archived (shared/comic/history/earlier.ts): it is named from its own
+ * words, "An overlay from page 2: open", never just its page's.
+ */
+const tileLabel = (m: EarlierMoment): string =>
+  m.kind === 'drawing' && m.versionN === undefined ? `${m.label}: open` : `${m.owner.label}${m.versionN ? `, v${m.versionN}` : ''}: open`;
+
+/** Each tile's name, distinct within a day: tiles that would read the same (two overlays from page 2) say "1 of 2". */
+const tileNames = (tiles: EarlierMoment[]): Map<string, string> => {
+  const same = new Map<string, EarlierMoment[]>();
+  for (const m of tiles) {
+    const name = tileLabel(m);
+    same.set(name, [...(same.get(name) || []), m]);
+  }
+  const out = new Map<string, string>();
+  for (const [name, list] of same) list.forEach((m, i) => out.set(m.id, list.length > 1 ? name.replace(/: open$/, ` (${i + 1} of ${list.length}): open`) : name));
+  return out;
+};
 
 export const EarlierImages: React.FC<EarlierImagesProps> = ({ studio, startedAt, now, tz }) => {
   const doc = studio.doc;
@@ -72,6 +89,7 @@ export const EarlierImages: React.FC<EarlierImagesProps> = ({ studio, startedAt,
       {earlier.days.map((d) => {
         const moments = d.groups.flatMap((g) => g.moments);
         const tiles = moments.filter((m) => !!m.path);
+        const names = tileNames(tiles);
         const events = moments.filter((m) => !m.path);
         return (
           <div key={d.key} className="min-w-0" data-earlier-day={d.key}>
@@ -90,7 +108,7 @@ export const EarlierImages: React.FC<EarlierImagesProps> = ({ studio, startedAt,
                           setUse(null);
                           setOpenId(m.id);
                         }}
-                        aria-label={tileLabel(m)}
+                        aria-label={names.get(m.id) ?? tileLabel(m)}
                         data-earlier-moment={m.id}
                         className={cx('flex min-h-11 flex-col items-center gap-1', RADIUS_CONTROL, FOCUS_RING)}
                       >
