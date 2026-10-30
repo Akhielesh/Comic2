@@ -532,6 +532,8 @@ const applyMerge = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
     const merged = [...allTrash, ...existing].sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
     doc = trashPages({ ...doc, trash: [] }, merged, ctx);
   }
+  // A restored format keeps the planned page count in step with the pages (like every page op does).
+  if (isObj(set.format) && doc.pages.length >= 1 && doc.format.pageCount !== doc.pages.length) doc = { ...doc, format: { ...doc.format, pageCount: doc.pages.length } };
   return doc;
 };
 
@@ -578,6 +580,9 @@ const applyExact = (before: ComicDoc, set: RestoreSet): ComicDoc => {
     doc.i18n = { ...i18n, editions, glossary };
   }
   if (Array.isArray(set.archive)) doc.archive = set.archive.filter((a) => isObj(a) && typeof a.path === 'string' && typeof a.targetKey === 'string');
+  // The trash belongs to the comic, not the line — but a page that is live in this line is not also "deleted".
+  const live = new Set(doc.pages.map((p) => p.id));
+  if (trashOf(doc).some((t) => live.has(t.page.id))) doc.trash = trashOf(doc).filter((t) => !live.has(t.page.id));
   return doc;
 };
 

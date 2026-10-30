@@ -182,8 +182,10 @@ describe('exact mode (alternative switch)', () => {
       expect(diffBooks(other, after).same, ctx).toBe(true);
       // No history push: each page keeps exactly the version's older versions.
       for (const p of after.pages) expect(p.render.history.map((h) => h.path), `${ctx} ${p.id}`).toEqual(other.pages.find((x) => x.id === p.id)!.render.history.map((h) => h.path));
-      // The trash belongs to the comic, not the line; forward-only records are untouched.
-      expect(after.trash, ctx).toEqual(current.trash);
+      // The trash belongs to the comic, not the line (minus pages live in this line); forward-only records are untouched.
+      expect(after.trash, ctx).toEqual((current.trash || []).filter((t) => !after.pages.some((p) => p.id === t.page.id)));
+      const ids = [...after.pages.map((p) => p.id), ...(after.trash || []).map((t) => t.page.id)];
+      expect(new Set(ids).size, `${ctx} duplicate page ids`).toBe(ids.length);
       for (const k of FORWARD_ONLY) expect(after[k], `${ctx} ${k}`).toEqual(current[k]);
       // I1 over doc ∪ head.
       const kept = new Set([...collectAssetPaths(after), ...collectAssetPaths(head)]);
@@ -344,6 +346,16 @@ describe('per-scope restores on the fixtures', () => {
     const styled = restore(current, version, { kind: 'style' });
     expect(styled.style.spec).toBe(version.style.spec);
     expect(styled.source.script).toBe('Rewritten');
+  });
+
+  it('a details-only restore keeps the planned page count in step with the pages', () => {
+    const version = asVersion(v5());
+    const current = applyOps(v5(), [{ op: 'page_insert', id: 'pg_extra', after: 6 }, { op: 'brief', patch: { tone: 'grim' } }], AT - 1);
+    expect(current.format.pageCount).toBe(7);
+    const after = restore(current, version, { kind: 'keys', keys: ['meta'] });
+    expect(after.brief.tone).toBe(version.brief.tone);
+    expect(after.pages).toHaveLength(7);
+    expect(after.format.pageCount).toBe(7);
   });
 
   it('works on the v4 and empty fixtures', () => {
