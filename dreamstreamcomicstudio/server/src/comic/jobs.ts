@@ -36,6 +36,7 @@ import {
   isTargetStale,
   mapAssetRefs,
   newId,
+  normalizeBalloonShip2,
   normalizeErrorDetail,
   planInputHashOf as sharedPlanInputHashOf,
   renderTargetKey,
@@ -74,7 +75,17 @@ import {
   type StyleBible,
   type VersionMeta
 } from '../../../shared/comic/doc.js';
-import { CLIENT_PATCHABLE_OPS, applyOp, isSpendAction, layoutFixOps, type DocOp, type SpendAction, type StudioAction } from '../../../shared/comic/ops.js';
+import {
+  CLIENT_PATCHABLE_OPS,
+  PRO_PAGE_PATCH_OPS,
+  applyOp,
+  clampBalloonPatch,
+  isSpendAction,
+  layoutFixOps,
+  type DocOp,
+  type SpendAction,
+  type StudioAction
+} from '../../../shared/comic/ops.js';
 import { checkPagePlan } from '../../../shared/comic/pagePlanCheck.js';
 import type { OutageOption, RunPreflight } from '../../../shared/comic/modelHealth.js';
 import type { OpsOrigin } from '../../../shared/comic/events.js';
@@ -155,6 +166,7 @@ import { opSanitizerFor, patchScreens } from './sanitize/index.js';
 import { MODEL_LOCKED_CODE, assertSettingsPatchAllowed, modelLockedError, modelName } from './sanitize/models.js';
 import { LINE_STYLE_MAX_BYTES } from './sanitize/lettering.js';
 import { clipText, enteredText, storableText } from './sanitize/text.js';
+import { sanitizeDirection } from './sanitize/consistency.js';
 import { mergeRevisedPages, proposeStyleDirections, writePagePlan } from './writer.js';
 
 // ── Limits & constants ───────────────────────────────────────────────────────
@@ -4544,7 +4556,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
             action: (v) => str(v, 2000),
             castIds: (v) => (Array.isArray(v) && v.length <= 12 && v.every((x) => typeof x === 'string' && castIds.has(x)) ? [...new Set(v as string[])] : undefined),
             placeId: (v) => (v === null || v === '' ? null : typeof v === 'string' && placeIds.has(v) ? v : undefined),
-            mood: clearable((v) => str(v, 200))
+            mood: clearable((v) => str(v, 200)),
+            // Ship 2 (pro plan §5.3): the panel's direction (lens, staging, off-panel voices), normalized; text through
+            // safeText (softened in safe mode); null — or nothing valid left — clears it (null travels on the wire, so
+            // client and server clear it alike). A frame never moves through `panel` (page_frames carries its lettering).
+            direction: (v) => (v === null ? null : sanitizeDirection(v, { cast: [...castIds].map((cid) => ({ id: cid }) as Character) }, sanitizeCtx ?? defaultSanitizeCtx(doc)) ?? null)
           },
           'panel'
         );
@@ -4613,7 +4629,8 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
       case 'balloons': {
         const p = page(raw.pageId);
         if (!Array.isArray(raw.balloons) || raw.balloons.length > 80) throw badRequest('Invalid balloons.');
-        const lineIds = new Set(p.panels.flatMap((x) => x.lines.map((l) => l.id)));
+        // Lines as the batch has built them (an undo that re-adds a removed panel restores its balloons right after).
+        const lineIds = new Set((findPage(working, p.id) ?? p).panels.flatMap((x) => x.lines.map((l) => l.id)));
         // The array REPLACES the page's balloons, so links are checked against the new array (in order):
         // a link that would close a cycle with an earlier balloon of the same array is dropped.
         const linked = new Map<string, string>();
@@ -4641,7 +4658,7 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
       }
       case 'balloon': {
         const p = page(raw.pageId);
-        const lineIds = new Set(p.panels.flatMap((x) => x.lines.map((l) => l.id)));
+        const lineIds = new Set((findPage(working, p.id) ?? p).panels.flatMap((x) => x.lines.map((l) => l.id)));
         if (typeof raw.lineId !== 'string' || !lineIds.has(raw.lineId)) throw badRequest('That line is no longer on the page.');
         const patch = pick(
           raw.patch,
@@ -4655,7 +4672,11 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
             // lettering.md §9: stacking order, lock, link to the previous line (null clears).
             z: (v) => (v === null ? null : balloonZ(v)),
             locked: (v) => (typeof v === 'boolean' ? v : undefined),
-            linkTo: (v) => (v === null ? null : balloonLink(p, raw.lineId as string, v))
+            linkTo: (v) => (v === null ? null : balloonLink(p, raw.lineId as string, v)),
+            // Ship 2: rotation (±EDITOR_LIMITS.balloonRot) and minimum height (0 < minH ≤ minHMax), clamped by the shared
+            // clampBalloonPatch; null clears (sent as null so the client's applyOp clears it too). NaN is refused.
+            rot: (v) => (v === null ? null : typeof v === 'number' && Number.isFinite(v) ? clampBalloonPatch({ rot: v }).rot : undefined),
+            minH: (v) => (v === null ? null : typeof v === 'number' && Number.isFinite(v) && v > 0 ? clampBalloonPatch({ minH: v }).minH : undefined)
           },
           'balloon'
         );
@@ -4685,6 +4706,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
         const clean = sanitizer.sanitize(working, raw as unknown as DocOp, sanitizeCtx ?? defaultSanitizeCtx(doc));
         out.push(clean);
         if (clean.op === 'edition' && clean.patch !== null) working = applyOp(working, clean);
+        // Ship 2: later ops of the batch see the panels, overlays and scenes it has built (an undo re-adds a panel, then
+        // its balloons, translations and clipped overlays; a scene is created, then a page's continuity names it).
+        else if (PRO_PAGE_PATCH_OP_SET.has(clean.op)) working = applyOp(working, clean);
       }
     }
   }
@@ -4692,6 +4716,9 @@ export function sanitizePatchOps(doc: ComicDoc, ops: unknown, sanitizeCtx?: Sani
   for (const screen of patchScreens()) screened = screen(doc, screened, sanitizeCtx ?? defaultSanitizeCtx(doc));
   return screened;
 }
+
+/** The Ship 2 client ops (pro plan §5.3): applied to the batch's working doc as they are sanitized. */
+const PRO_PAGE_PATCH_OP_SET: ReadonlySet<string> = new Set<string>(PRO_PAGE_PATCH_OPS);
 
 /** Patches validated without a request context (tools, tests): default caps, the doc's own rating. */
 const defaultSanitizeCtx = (doc: ComicDoc): SanitizeCtx => ({
@@ -4738,8 +4765,20 @@ const sanitizeBalloon = (raw: unknown, lineIds: Set<string>, page?: Page): Ballo
     ...(raw.pinned === true || raw.locked === true ? { pinned: true } : {}),
     ...(z !== undefined ? { z } : {}),
     ...(raw.locked === true ? { locked: true } : {}),
-    ...(linkTo ? { linkTo } : {})
+    ...(linkTo ? { linkTo } : {}),
+    // Ship 2 (wave note K2b-4): the whole-page snapshots K2a's inverses and the editor send keep a balloon's rotation
+    // and minimum height (finite; ±EDITOR_LIMITS.balloonRot; 0 < minH ≤ minHMax), rounded as the client rounds them.
+    ...balloonShip2Of(raw)
   };
+};
+
+/** A balloon snapshot's Ship 2 keys (rot, minH) as stored: finite only, clamped, rounded by normalizeBalloonShip2. */
+const balloonShip2Of = (raw: Record<string, unknown>): Pick<Balloon, 'rot' | 'minH'> => {
+  const rot = typeof raw.rot === 'number' && Number.isFinite(raw.rot) ? raw.rot : undefined;
+  const minH = typeof raw.minH === 'number' && Number.isFinite(raw.minH) && raw.minH > 0 ? raw.minH : undefined;
+  if (rot === undefined && minH === undefined) return {};
+  const { rot: r, minH: h } = normalizeBalloonShip2({ lineId: '', x: 0, y: 0, w: 0, ...(rot !== undefined ? { rot } : {}), ...(minH !== undefined ? { minH } : {}) });
+  return { ...(r !== undefined ? { rot: r } : {}), ...(h !== undefined ? { minH: h } : {}) };
 };
 
 /**

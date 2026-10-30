@@ -13,6 +13,9 @@ import { READER_SANITIZERS } from './reader.js';
 import { REFS_SANITIZERS } from './refs.js';
 import { SAFETY_SANITIZERS, safetyPatchScreen } from './safety.js';
 import { TIMELINE_SANITIZERS } from './timeline.js';
+// --- Ship 2 (K2b; pro plan §5.3): panels as objects and consistency data (PRO_PAGE_OPS_PATCHABLE is on with them) ---
+import { CONSISTENCY_SANITIZERS } from './consistency.js';
+import { PANELS_SANITIZERS } from './panels.js';
 
 /** Ops whose client patches jobs.ts sanitizes itself (P1-JOBS extends their new fields there). */
 export const CORE_PATCH_OPS: ReadonlySet<string> = new Set([
@@ -25,7 +28,17 @@ const registry = createKeyedRegistry<OpSanitizer>({
   keyOf: (s) => s.op,
   reserved: CORE_PATCH_OPS,
   // MODELS_SANITIZERS is empty on purpose (image_model is never client-patchable; models.md §3.4) and listed for symmetry.
-  lists: () => [LETTERING_SANITIZERS, TIMELINE_SANITIZERS, SAFETY_SANITIZERS, I18N_SANITIZERS, REFS_SANITIZERS, READER_SANITIZERS, MODELS_SANITIZERS]
+  lists: () => [
+    LETTERING_SANITIZERS,
+    TIMELINE_SANITIZERS,
+    SAFETY_SANITIZERS,
+    I18N_SANITIZERS,
+    REFS_SANITIZERS,
+    READER_SANITIZERS,
+    MODELS_SANITIZERS,
+    PANELS_SANITIZERS,
+    CONSISTENCY_SANITIZERS
+  ]
 });
 
 /** op → sanitizer for every feature op (null-prototype object). */
