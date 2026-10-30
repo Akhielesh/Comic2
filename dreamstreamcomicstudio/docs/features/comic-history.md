@@ -97,9 +97,10 @@ creator confidence — no lost work, easy undo and versions.
   `semanticSectionContent` (diff.ts): such a key counts as untouched, never as "You've changed page 3 since".
 - **earlier.ts** (H6a) — "Earlier (images only)" for comics older than History: dated drawings (`AssetRef.at`) from
   version stacks, the archive, the style board, Deleted pages and the last publish time, per owner and per local day,
-  newest first; every gap says "not recorded"; only paths the doc holds; reference photos and uploads are left out;
-  pure (`now` and `tz` are passed in). `earlierHistory(doc, {now, tz, before})` with `before` = when History started
-  (the `start` row), so later drawings, which have real rows, are not repeated.
+  newest first; every gap says "not recorded"; only paths the doc holds; reference photos, chat uploads and the inbox
+  are left out (art you uploaded for a page or the cover is listed); pure (`now` and `tz` are passed in).
+  `earlierHistory(doc, {now, tz, before})` with `before` = when History started (the `start` row), so later drawings,
+  which have real rows, are not repeated.
 
 ## 5. The seams (H0 stubs; later packages replace them in place, same names)
 
@@ -187,8 +188,9 @@ git words). When the tables are not there yet, every call answers `NOT_AVAILABLE
   is never renamed: the answer carries `alreadyNamed: true` and that `name`, so the caller can say "This moment is
   already saved as '<name>'." instead of a success.
 - **Saves per hour** (`HISTORY_LIMITS.savesPerHour`, 30) counts only named saves that write a new row. Automatic
-  captures are never throttled, and naming or pinning an unchanged moment writes no row, so it is not counted. At
-  most 100 named versions per comic (`LIMIT:named`).
+  captures are never throttled, and naming or pinning an unchanged moment writes no row, so it is not counted. At the
+  cap every named save is refused (429, `LIMIT:saves_per_hour`), even one that would only name an unchanged moment:
+  the check runs before the dedupe. At most 100 named versions per comic (`LIMIT:named`).
 - **The classic snapshot's own time.** `VersionInput.createdAt` (epoch ms) is used for codec `'legacy'` only: it
   becomes the row's `created_at`, never later than now, so the classic line keeps its order. A value outside 0..1e13
   falls back to now, and every other row is stamped by the database clock. `get()` opens a legacy row from its own
