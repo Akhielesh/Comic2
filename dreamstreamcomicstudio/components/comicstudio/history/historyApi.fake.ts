@@ -1,0 +1,127 @@
+// The in-memory HistoryApi (package H5): the History UI's tests and QA scenes run on it until the owner routes (H3)
+// land. Same shapes as historyApi.ts; compare uses the shared diffBooks, so "what changed" is what the server will
+// say. Records every call (the card-renders-from-ids test reads them). No network, no timers, nothing spends.
+
+import { displayAssetPaths, type ComicDoc } from '../../../shared/comic/doc';
+import { diffBooks, HISTORY_MANIFEST_VERSION, type CompareRef, type Manifest, type VersionRow } from '../../../shared/comic/history/index';
+import type { ClassicSnapshotRow, HistoryApi, HistoryListResponse } from './historyApi';
+import { changeGroupsOf, filterRows } from './historyModel';
+
+export interface FakeHistoryVersion {
+  row: VersionRow;
+  doc: ComicDoc;
+}
+
+export interface FakeHistoryOptions {
+  /** The live book ("now"). */
+  live: () => ComicDoc;
+  /** Newest first. */
+  versions: FakeHistoryVersion[];
+  classic?: ClassicSnapshotRow[];
+  /** Methods that reject (honest error states). */
+  fail?: Partial<Record<keyof HistoryApi, Error>>;
+  /** Rows per list page (default 50). */
+  pageSize?: number;
+}
+
+export interface FakeHistoryCall {
+  method: keyof HistoryApi;
+  args: unknown[];
+}
+
+export interface FakeHistoryApi extends HistoryApi {
+  calls: FakeHistoryCall[];
+}
+
+/** A neutral placeholder image for a storage path (deterministic; never a real image). */
+export const fakeImageUrl = (path: string): string =>
+  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="60" viewBox="0 0 40 60" data-path="${path.replace(/[^\w./-]/g, '')}"><rect width="40" height="60" fill="gray" fill-opacity="0.25"/></svg>`)}`;
+
+const urlsFor = (paths: Iterable<string>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const p of paths) if (p) out[p] = fakeImageUrl(p);
+  return out;
+};
+
+const EMPTY_MANIFEST: Manifest = { v: HISTORY_MANIFEST_VERSION, meta: '', source: '', style: '', cover: '', places: '', glossary: '', options: [], cast: [], pages: [], editions: {}, archive: [], trash: [] };
+
+const notFound = (): Error => Object.assign(new Error("This comic doesn't exist or you don't have access to it."), { kind: 'not_found', status: 404 });
+
+export const createFakeHistoryApi = (opts: FakeHistoryOptions): FakeHistoryApi => {
+  const calls: FakeHistoryCall[] = [];
+  const record = (method: keyof HistoryApi, args: unknown[]) => {
+    calls.push({ method, args });
+    const err = opts.fail?.[method];
+    if (err) throw err;
+  };
+  const find = (id: string) => opts.versions.find((v) => v.row.id === id);
+  const docOf = (ref: CompareRef): { doc: ComicDoc; kind: 'version' | 'now' | 'published' | 'alt'; row?: VersionRow } => {
+    if (ref === 'now') return { doc: opts.live(), kind: 'now' };
+    if (ref === 'published') {
+      const pub = opts.versions.find((v) => v.row.kind === 'publish');
+      if (!pub) throw notFound();
+      return { doc: pub.doc, kind: 'published', row: pub.row };
+    }
+    const v = find(ref);
+    if (!v) throw notFound();
+    return { doc: v.doc, kind: 'version', row: v.row };
+  };
+  const size = opts.pageSize ?? 50;
+
+  const api: FakeHistoryApi = {
+    calls,
+    async list(projectId, query = {}) {
+      record('list', [projectId, query]);
+      const rows = filterRows(
+        opts.versions.map((v) => v.row),
+        query.filter ?? 'all',
+        query.pageId
+      );
+      const start = query.cursor ? Number(query.cursor) || 0 : 0;
+      const pageRows = rows.slice(start, start + (query.limit ?? size));
+      const res: HistoryListResponse = {
+        rows: pageRows,
+        next: start + pageRows.length < rows.length ? String(start + pageRows.length) : null,
+        urls: urlsFor(pageRows.flatMap((r) => r.thumbs.map((t) => t.path)))
+      };
+      return res;
+    },
+    async detail(projectId, versionId) {
+      record('detail', [projectId, versionId]);
+      const v = find(versionId);
+      if (!v) throw notFound();
+      return { row: v.row, manifest: EMPTY_MANIFEST, groups: changeGroupsOf(v.row.changes) };
+    },
+    async book(projectId, versionId) {
+      record('book', [projectId, versionId]);
+      const v = find(versionId);
+      if (!v) throw notFound();
+      return { row: v.row, doc: v.doc, urls: urlsFor(displayAssetPaths(v.doc)) };
+    },
+    async urls(projectId, versionId, paths) {
+      record('urls', [projectId, versionId, paths]);
+      return urlsFor(paths);
+    },
+    async compare(projectId, a, b) {
+      record('compare', [projectId, a, b]);
+      const A = docOf(a);
+      const B = docOf(b);
+      return {
+        a: { ref: a, kind: A.kind, ...(A.row ? { row: A.row } : {}) },
+        b: { ref: b, kind: B.kind, ...(B.row ? { row: B.row } : {}) },
+        diff: diffBooks(A.doc, B.doc),
+        docs: { a: A.doc, b: B.doc },
+        urls: urlsFor([...displayAssetPaths(A.doc), ...displayAssetPaths(B.doc)])
+      };
+    },
+    async classicSnapshots(projectId) {
+      record('classicSnapshots', [projectId]);
+      return { snapshots: (opts.classic || []).filter((s) => s.projectId === projectId) };
+    },
+    async startFromClassicSnapshot(fromProjectId, snapshotId) {
+      record('startFromClassicSnapshot', [fromProjectId, snapshotId]);
+      return { projectId: `proj_from_${snapshotId}` };
+    }
+  };
+  return api;
+};
