@@ -331,7 +331,7 @@ function overlayDrop(
   const panel = page.panels.find((p) => p.id === frame.id)!;
   let fillOps: DocOp[] | undefined;
   let fillRefusal: string | undefined;
-  if (shown.mode === 'drawn') fillRefusal = `Page ${page.n} is shown as drawn. Make its panels editable first (free) to fill a panel.`;
+  if (shown.mode === 'drawn') fillRefusal = isUndrawn(page) ? `Pick a layout for page ${page.n} first, then fill a panel.` : `Page ${page.n} is shown as drawn. Make its panels editable first (free) to fill a panel.`;
   else {
     const extra = new Set(page.panels.map((p) => (p.id === panel.id ? item.path : p.frame?.src?.path)).filter((x): x is string => !!x && x !== page.render.asset?.path));
     if (extra.size > EDITOR_LIMITS.sourcesPerPage) fillRefusal = `This page already shows pictures from ${EDITOR_LIMITS.sourcesPerPage} other takes or images. Flatten the page first (free), or place it as a sticker.`;
