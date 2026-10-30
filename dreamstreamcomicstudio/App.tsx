@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
-import { clearReaderUrlParams, setReaderUrlParams } from './services/readerUrl';
+import { clearReaderUrlParams, readerDeepLinkId, setReaderUrlParams } from './services/readerUrl';
 import { HomePage } from './components/HomePage';
 import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 // Lazy Load Heavy Components
@@ -366,6 +366,11 @@ const App: React.FC = () => {
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
   const [systemError, setSystemError] = useState<string | null>(null);
   const [pendingReaderTarget, setPendingReaderTarget] = useState<PendingReaderTarget | null>(null);
+  // A shared reader link opened cold (?view=read&id=…): held until the reader deep-link effect below has read it,
+  // so the URL-sync effect cannot rewrite it to '/' first (which sent every cold shared link to the home page).
+  const readerDeepLinkRef = useRef<string | null>(
+    typeof window === 'undefined' || isPublicComicPath(window.location.pathname) ? null : readerDeepLinkId(window.location.search)
+  );
   const [pendingStudioTarget, setPendingStudioTarget] = useState<PendingStudioTarget | null>(null);
   const [shareToken, setShareToken] = useState<string | null>(null);
   const hasWarnedDobProfileCheckRef = useRef(false);
@@ -518,6 +523,8 @@ const App: React.FC = () => {
     // The public share reader owns its URL (?p=, ?lang=, and the immersive reader's own history entry).
     if (currentView === 'reader' || currentView === 'shared' || currentView === 'auth-callback' || currentView === 'models' || currentView === 'publiccomic') return;
     if (isPublicComicPath(window.location.pathname)) return;
+    // A cold shared reader link is still waiting for the deep-link effect (it waits for auth): leave its URL alone.
+    if (readerDeepLinkRef.current) return;
     try {
       const url = new URL(window.location.href);
       const urlView = url.searchParams.get('view');
@@ -629,6 +636,8 @@ const App: React.FC = () => {
   // Open shared links (?view=read&id=...) straight into the reader — no login required.
   useEffect(() => {
     if (authLoading || isCheckingKey) return;
+    // The deep link has been read (opened below, or the URL no longer asks for the reader): the URL-sync effect may run.
+    readerDeepLinkRef.current = null;
     if (publicComicRoute) return; // /c/<slug> is its own reader; ?view=read on it means nothing
 
     const params = new URLSearchParams(window.location.search);
