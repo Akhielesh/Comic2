@@ -2,8 +2,8 @@
 // the breakdown's per-page anchors / text-only cast / detail / lint. Without the new options plan.ts is byte for byte
 // what it was (plan.compat.test.ts); the client quote equals the server estimate in server/src/comic/plan.anchors.parity.test.ts.
 import { describe, expect, it } from 'vitest';
-import { harbourComic, lakeStory, readyRender } from './__fixtures__/consistencyBooks';
-import type { ComicDoc } from './doc';
+import { asset, harbourComic, lakeStory, readyRender } from './__fixtures__/consistencyBooks';
+import type { ComicDoc, ImageModelLock, RefAsset } from './doc';
 import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel } from './models';
 import { partsOf } from './parts';
 import { REF_ALLOWANCE_USD, extraRefsUsd, missingAnchorsFor, quoteRenderPages, summarizeBook, type AnchorRunOptions } from './plan';
@@ -13,6 +13,7 @@ const NB21 = getImageModel('nano-banana-2.1')!;
 const PRO = getImageModel('nano-banana-pro')!;
 const PLACES: AnchorRunOptions = { mode: 'auto', kinds: { places: true } };
 const ALL: AnchorRunOptions = { mode: 'auto', kinds: { places: true, props: true, styleKey: true, sheetV2: true } };
+const LEGACY: ImageModelLock = { modelId: 'nano-banana-legacy', lockedAt: 1, origin: 'first_render' };
 
 describe('missingAnchorsFor', () => {
   it('recurring extras always; recurring places and props only with their kind; leads and one-offs never', () => {
@@ -53,13 +54,16 @@ describe('quoteRenderPages — counting anchors plus the reference allowance', (
     const page = (NB21.priceUsd['2K']! + QC_USD_PER_PAGE) * PLATFORM_MARKUP;
     // Extra references (the anchors' additions over today's plan, sheets drawn first counted as attached):
     // p1 +2 (the guard's sheet, the gate), p2 +2 (the guard, the gate), p3–p6 +1 each (their place) = 8.
-    expect(q.anchors).toEqual({ keys: ['char:c_guard', 'place:pl_gate', 'place:pl_market', 'place:pl_temple'], skipped: [], extraRefs: 8 });
-    expect(q.lines).toEqual([
-      { label: 'pages', count: 6, usd: r4(page * 6) },
-      { label: 'recurring character sheets', count: 1, usd: r4(NB21.priceUsd['2K']! * PLATFORM_MARKUP) },
-      { label: 'place sheets', count: 3, usd: r4(NB21.priceUsd['1K']! * 3 * PLATFORM_MARKUP) },
-      { label: 'extra references', count: 8, usd: r4(8 * REF_ALLOWANCE_USD * PLATFORM_MARKUP) }
+    expect(q.anchors).toMatchObject({ keys: ['char:c_guard', 'place:pl_gate', 'place:pl_market', 'place:pl_temple'], skipped: [], unused: [], extraRefs: 8 });
+    expect(q.anchors!.missing.map((m) => m.key)).toEqual(q.anchors!.keys);
+    expect(q.anchors!.missing.some((m) => m.unused)).toBe(false);
+    expect(q.anchors!.lines).toEqual([
+      { label: 'recurring character sheets', count: 1, usd: r4(NB21.priceUsd['2K']! * PLATFORM_MARKUP), kind: 'sheet' },
+      { label: 'place sheets', count: 3, usd: r4(NB21.priceUsd['1K']! * 3 * PLATFORM_MARKUP), kind: 'place' },
+      { label: 'extra references', count: 8, usd: r4(8 * REF_ALLOWANCE_USD * PLATFORM_MARKUP), kind: 'refs' }
     ]);
+    // One base line here ('pages': no missing lead/support sheet, no cover): the anchor lines follow it, never at a fixed index.
+    expect(q.lines).toEqual([{ label: 'pages', count: 6, usd: r4(page * 6) }, ...q.anchors!.lines.map(({ kind: _k, ...l }) => l)]);
     expect(q.usd).toBe(r4(q.lines.reduce((s, l) => s + l.usd, 0)));
     expect(q.imageCount).toBe(plain.imageCount + 4);
     expect(q.pageIds).toEqual(plain.pageIds);
@@ -95,6 +99,80 @@ describe('quoteRenderPages — counting anchors plus the reference allowance', (
     expect(q.lines.find((l) => l.label === 'place sheets')!.usd).toBe(r4(PRO.priceUsd['1K']! * 3));
   });
 
+  it('a legacy-locked comic quotes no place or prop sheet it can never attach; those anchors stay in words and say why', () => {
+    // nano-banana-legacy takes 3 references (2 characters, 1 object): every page attaches its two beings and the style
+    // board, so the places and the lantern are never attached (plan §8: places, props and style go as text).
+    const doc = harbourComic((d) => {
+      d.imageModel = LEGACY;
+    });
+    const run: AnchorRunOptions = { mode: 'auto', kinds: { places: true, props: true } };
+    const plain = quoteRenderPages(doc, { byok: false, tier: 'standard' });
+    const q = quoteRenderPages(doc, { byok: false, tier: 'standard', anchors: run });
+    expect(q.lines.map((l) => l.label)).toEqual(['pages', 'recurring character sheets', 'extra references']);
+    expect(q.anchors!.keys).toEqual(['char:c_guard']);
+    expect(q.anchors!.unused).toEqual(['place:pl_gate', 'place:pl_market', 'place:pl_temple', 'prop:c_lantern']);
+    expect(q.imageCount).toBe(plain.imageCount + 1);
+    const lake = q.anchors!.missing.find((m) => m.key === 'place:pl_gate')!;
+    expect(lake).toMatchObject({ unused: true, skipped: false });
+    expect(lake.text).toBe('No sheet is made for CHITRAKULAM GATE: no page in this run has a reference slot left for it, so it is described in words.');
+    expect(q.anchors!.missing.find((m) => m.key === 'char:c_guard')!.unused).toBeUndefined();
+    // The breakdown says the same: the book's list flags them, and each page names the cap that leaves them in words.
+    const s = summarizeBook(doc, { byok: false, tier: 'standard', consistency: run });
+    expect(s.anchors!.missing.filter((m) => m.unused).map((m) => m.key)).toEqual(q.anchors!.unused);
+    expect(s.anchors!.usd).toBe(r4(q.usd - plain.usd));
+    expect(s.pages[0].anchors!.map((a) => a.key)).toEqual(['char:c_meera', 'char:c_guard', 'style']);
+    expect(s.pages[0].textOnly).toEqual([
+      { id: 'pl_gate', name: 'CHITRAKULAM GATE', why: 'cap', text: 'This model takes at most 3 reference images per page. CHITRAKULAM GATE is described in words on this page.' }
+    ]);
+    expect(s.pages[2].textOnly!.map((t) => [t.id, t.why])).toEqual([
+      ['pl_market', 'cap'],
+      ['c_lantern', 'cap']
+    ]);
+    // An unticked anchor that ticking would not help is flagged too (the card offers nothing for it).
+    const skipped = harbourComic((d) => {
+      d.imageModel = LEGACY;
+      d.consistency = { skip: ['place:pl_gate'] };
+    });
+    const qs = quoteRenderPages(skipped, { byok: false, tier: 'standard', anchors: run });
+    expect(qs.anchors!.skipped).toEqual(['place:pl_gate']);
+    expect(qs.anchors!.missing.find((m) => m.key === 'place:pl_gate')).toMatchObject({ skipped: true, unused: true });
+    expect(qs.usd).toBe(q.usd);
+  });
+
+  it('an unticked anchor that ticking would attach is offered, not flagged unused', () => {
+    const doc = harbourComic((d) => {
+      d.consistency = { skip: ['place:pl_gate'] };
+    });
+    const q = quoteRenderPages(doc, { byok: false, tier: 'standard', anchors: PLACES });
+    expect(q.anchors!.missing.find((m) => m.key === 'place:pl_gate')).toEqual({
+      key: 'place:pl_gate',
+      kind: 'place',
+      id: 'pl_gate',
+      name: 'CHITRAKULAM GATE',
+      pageIds: ['pg_1', 'pg_2'],
+      skipped: true
+    });
+  });
+
+  it('a page that attaches fewer references with anchors never lowers the quote (each page counts from 0)', () => {
+    // Page 1 uses six places with sheets: today attaches all of them, the places kind only 2 (−2 references); page 2
+    // adds the guard's and the gate's sheets (+2). The allowance prices +2, never the net 0.
+    const doc = harbourComic((d) => {
+      for (const k of [1, 2, 3, 4, 5]) d.places.push({ id: `pl_x${k}`, name: `Alley ${k}`, look: 'Narrow', refs: [], sheet: readyRender(`u/o/h/x${k}.webp`) });
+      const base = d.pages[0].panels[2];
+      d.pages[0].panels = [
+        ...d.pages[0].panels.map((pn, i) => ({ ...pn, placeId: ['pl_gate', 'pl_x1', 'pl_x2'][i] })),
+        ...[3, 4, 5].map((k, i) => ({ ...base, id: `pg_1_p${4 + i}`, n: 4 + i, placeId: `pl_x${k}` }))
+      ];
+    });
+    const q = quoteRenderPages(doc, { byok: false, tier: 'standard', pageIds: ['pg_1', 'pg_2'], anchors: PLACES });
+    expect(q.anchors!.extraRefs).toBe(2);
+    expect(q.anchors!.lines.find((l) => l.kind === 'refs')).toEqual({ label: 'extra references', count: 2, usd: r4(2 * REF_ALLOWANCE_USD * PLATFORM_MARKUP), kind: 'refs' });
+    const p1Only = quoteRenderPages(doc, { byok: false, tier: 'standard', pageIds: ['pg_1'], anchors: PLACES });
+    expect(p1Only.anchors!.extraRefs).toBe(0);
+    expect(p1Only.usd).toBeGreaterThanOrEqual(quoteRenderPages(doc, { byok: false, tier: 'standard', pageIds: ['pg_1'] }).usd);
+  });
+
   it("mode 'none' and kinds off with nothing recurring are today's quote", () => {
     const doc = harbourComic();
     const plain = quoteRenderPages(doc, { byok: false, tier: 'standard', includeCover: true });
@@ -104,7 +182,7 @@ describe('quoteRenderPages — counting anchors plus the reference allowance', (
     });
     const auto = quoteRenderPages(lake, { byok: false, tier: 'draft', anchors: { mode: 'auto' } });
     const { anchors, ...rest } = auto;
-    expect(anchors).toEqual({ keys: [], skipped: [], extraRefs: 0 });
+    expect(anchors).toEqual({ keys: [], skipped: [], unused: [], extraRefs: 0, lines: [], missing: [] });
     expect(rest).toEqual(quoteRenderPages(lake, { byok: false, tier: 'draft' }));
   });
 });
@@ -115,7 +193,7 @@ describe('summarizeBook — the consistency view', () => {
     const s = summarizeBook(doc, { byok: false, consistency: { mode: 'none' } });
     const p5 = s.pages.find((p) => p.n === 5)!;
     expect(p5.anchors!.map((a) => a.key)).toEqual(['char:c_baby', 'char:c_ducks', 'char:c_frog', 'char:c_bunny', 'place:pl_lake', 'style', 'prev:pg_4']);
-    expect(p5.anchors![0]).toEqual({ key: 'char:c_baby', role: 'character', name: 'THE BABY', source: 'sheet' });
+    expect(p5.anchors![0]).toEqual({ key: 'char:c_baby', role: 'character', name: 'THE BABY', source: 'sheet', path: 'u/o/l/baby.webp' });
     expect(p5.textOnly).toEqual([{ id: 'c_heron', name: 'HERON', why: 'cap', text: 'This model keeps 4 characters on model per page. HERON is described in words on this page.' }]);
     expect(p5.detail).toEqual({ panels: 4, directions: 0, continuity: false, scene: { name: 'The Lake', from: 'derived' } });
     expect(p5.lint).toBeUndefined();
@@ -151,6 +229,22 @@ describe('summarizeBook — the consistency view', () => {
     expect(s.pages[1].detail).toMatchObject({ continuity: true });
     expect(s.pages[3].detail!.changed).toEqual(["Panel 2: who's in it"]);
     expect(s.pages[0].lint).toBeUndefined();
+  });
+
+  it("ranks photos with summarizeBook's own rating unless the view names one", () => {
+    const photo = (path: string, assessed: 'G' | 'PG-13'): RefAsset => ({ ...asset(path), source: 'upload', safety: { assessed, at: 1 } });
+    const doc = harbourComic((d) => {
+      d.settings = { ...d.settings, rating: 'PG-13' };
+      d.cast = d.cast.map((c) => (c.id === 'c_guard' ? { ...c, refs: [photo('u/o/h/guard-teen.jpg', 'PG-13'), photo('u/o/h/guard-kid.jpg', 'G')] } : c));
+    });
+    const guard = (s: ReturnType<typeof summarizeBook>) => s.pages[0].anchors!.find((a) => a.key === 'char:c_guard')!.path;
+    expect(guard(summarizeBook(doc, { byok: false, consistency: { mode: 'none' } }))).toBe('u/o/h/guard-teen.jpg');
+    expect(guard(summarizeBook(doc, { byok: false, rating: 'G', consistency: { mode: 'none' } }))).toBe('u/o/h/guard-kid.jpg');
+    expect(summarizeBook(doc, { byok: false, rating: 'G', consistency: { mode: 'none' } }).pages).toEqual(
+      summarizeBook(doc, { byok: false, rating: 'G', consistency: { mode: 'none', rating: 'G' } }).pages
+    );
+    // The view's own rating wins.
+    expect(guard(summarizeBook(doc, { byok: false, rating: 'G', consistency: { mode: 'none', rating: 'PG-13' } }))).toBe('u/o/h/guard-teen.jpg');
   });
 
   it('without the option no Ship 2 field appears (the byte-for-byte proof is plan.compat.test.ts)', () => {

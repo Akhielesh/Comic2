@@ -139,8 +139,39 @@ export interface RenderQuote extends SpendEstimate {
   /** With `holdBack`: overfull pages left out of the run and this quote (PD-1), when any. */
   heldBackIds?: string[];
   /** With `anchors` mode 'auto' (Ship 2, B4): the anchor sheets the run draws first (ticked line items), the ones the
-   *  user unticked (consistency.skip: not drawn, not quoted) and the extra reference images the anchors add. */
-  anchors?: { keys: string[]; skipped: string[]; extraRefs: number };
+   *  user unticked (consistency.skip: not drawn, not quoted), the ones no page could attach (not drawn, not quoted),
+   *  the extra reference images the anchors add, and the anchor lines by kind. */
+  anchors?: RenderQuoteAnchors;
+}
+
+/**
+ * One anchor line of a quote, tagged with how the server prices it: 'sheet' = a character sheet job (jobs.ts
+ * priceImageJobs kind 'sheet'); 'place' / 'prop' = a 'place' job at ANCHOR_SHEET_RES; 'refs' = the reference
+ * allowance (extraRefsUsd), taken as is.
+ */
+export interface AnchorQuoteLine {
+  label: string;
+  count: number;
+  usd: number;
+  kind: 'sheet' | 'place' | 'prop' | 'refs';
+}
+
+export interface RenderQuoteAnchors {
+  /** Anchor sheets the run draws first: ticked, and attached by at least one page of the run. */
+  keys: string[];
+  /** Unticked by the user (consistency.skip): not drawn, not quoted. */
+  skipped: string[];
+  /** Ticked, but no page of the run can attach them under the model's caps (MissingAnchor.unused): not drawn, not quoted. */
+  unused: string[];
+  /** Reference images the anchors add over today's plan (the allowance line counts them). */
+  extraRefs: number;
+  /** The lines this quote appends after its base lines, in order: `lines` = [...base lines, ...these without `kind`].
+   *  The base has 0–3 lines (estimateJobs drops empty ones), so a PriceBook re-prices THESE by kind — never a
+   *  fixed-index slice of `lines`. */
+  lines: AnchorQuoteLine[];
+  /** Every missing anchor of the run with its skipped / unused flags (the card's ticked line items, and why the rest are
+   *  not made). */
+  missing: MissingAnchor[];
 }
 
 /**
@@ -231,6 +262,13 @@ export interface MissingAnchor {
   pageIds: string[];
   /** The user unticked it (consistency.skip): not drawn, not quoted; the pages describe it in words. */
   skipped: boolean;
+  /** No page of the run attaches it under the locked model's caps (a legacy-locked comic's places and props, a
+   *  low-ranked extra when the character slots are full): no sheet is made or quoted, the pages describe it in words.
+   *  Set by the quote (quoteRenderPages anchors 'auto'), never by missingAnchorsFor. */
+  unused?: true;
+  /** With `unused`: "No sheet is made for THE LAKE: no page in this run has a reference slot left for it, so it is
+   *  described in words." */
+  text?: string;
 }
 
 /**
@@ -273,37 +311,93 @@ export function missingAnchorsFor(doc: ComicDoc, pages: Page[], opts: { kinds?: 
 export const extraRefsUsd = (spec: Pick<ImageModelSpec, 'perRefUsd'>, count: number, byok: boolean): number =>
   count > 0 ? round4(count * (typeof spec.perRefUsd === 'number' && Number.isFinite(spec.perRefUsd) ? spec.perRefUsd : REF_ALLOWANCE_USD) * (byok ? 1 : PLATFORM_MARKUP)) : 0;
 
+/** Why a missing anchor is not made (MissingAnchor.text). */
+const unusedAnchorText = (name: string): string =>
+  `No sheet is made for ${name}: no page in this run has a reference slot left for it, so it is described in words.`;
+
+/** What a run with anchors draws and assumes (anchorRunOf). */
+interface AnchorRun {
+  kinds: AnchorKinds;
+  /** missingAnchorsFor, each flagged `unused` when no page of the run would attach it. */
+  missing: MissingAnchor[];
+  /** The anchor sheets the run draws first: ticked and used. */
+  drawn: MissingAnchor[];
+  /** Keys the run draws without anchors (missing lead/support sheets): today's plan assumes them. */
+  todayReady: ReadonlySet<string>;
+  /** todayReady plus the anchors drawn first. */
+  runReady: ReadonlySet<string>;
+  /** runReady plus the ticked-but-unused anchors, so a page names the cap that leaves each of them in words. */
+  viewReady: ReadonlySet<string>;
+  /** References each page of the run attaches with its anchors (planAnchors; sheets drawn first count as attached). */
+  attached: ReadonlyMap<string, number>;
+}
+
+interface AnchorRunAt {
+  /** The page job's model (resolveImageJob('page', …)); the lock's model wins inside planAnchors. */
+  spec: ImageModelSpec;
+  lock?: ImageModelLock;
+  rating?: ContentRating;
+}
+
 /**
- * Extra reference images the anchors add per page: planAnchors with the run's kinds minus planAnchors as today
- * (Ship-1), both assuming the sheets and pages the run draws first; never below 0. Today's quote prices no reference
- * images, so only the anchors' additions are counted.
+ * What a run with anchors draws and assumes. Every missing anchor of the pages is planned as ready on every page
+ * (anchors mode, the run's pages drawn first); one that no page attaches under the model's caps is `unused` — never
+ * drawn, never quoted (plan §8: a legacy-locked comic gets places and props as text). An unticked anchor is `unused`
+ * when ticking it alone would not get it attached on any of its pages. With mode 'none' nothing is planned.
  */
-const extraRefsByPage = (
-  doc: ComicDoc,
-  pages: Page[],
-  o: { spec: ImageModelSpec; lock?: ImageModelLock; kinds: AnchorKinds; layoutGuide?: boolean; todayReady: ReadonlySet<string>; runReady: ReadonlySet<string> }
-): Map<string, number> => {
+const anchorRunOf = (doc: ComicDoc, pages: Page[], sheets: Character[], run: AnchorRunOptions, at: AnchorRunAt): AnchorRun => {
+  const kinds = anchorKindsOf(run.kinds);
+  const todayReady = new Set(sheets.map((c) => anchorKeys.cast(c)));
+  if (run.mode !== 'auto') return { kinds, missing: [], drawn: [], todayReady, runReady: todayReady, viewReady: todayReady, attached: new Map() };
+  const listed = missingAnchorsFor(doc, pages, { kinds });
+  const assumeDrawn = new Set(pages.map((p) => p.id));
+  const planOf = (page: Page, assumeReady: ReadonlySet<string>) =>
+    planAnchors(doc, page, at.spec, at.lock ?? null, { kinds, layoutGuide: run.layoutGuide, assumeReady, assumeDrawn, ...(at.rating ? { rating: at.rating } : {}) });
+  const tickedReady = new Set([...todayReady, ...listed.filter((m) => !m.skipped).map((m) => m.key)]);
+  const used = new Set<string>();
+  const attached = new Map<string, number>();
+  for (const page of pages) {
+    const plan = planOf(page, tickedReady);
+    attached.set(page.id, plan.attached.length);
+    for (const a of plan.attached) used.add(a.key);
+  }
+  const byId = new Map(pages.map((p) => [p.id, p]));
+  const wouldAttach = (m: MissingAnchor): boolean =>
+    m.pageIds.some((id) => {
+      const page = byId.get(id);
+      return !!page && planOf(page, new Set([...tickedReady, m.key])).attached.some((a) => a.key === m.key);
+    });
+  const missing = listed.map((m): MissingAnchor => ((m.skipped ? wouldAttach(m) : used.has(m.key)) ? m : { ...m, unused: true, text: unusedAnchorText(m.name) }));
+  const drawn = missing.filter((m) => !m.skipped && !m.unused);
+  const runReady = new Set([...todayReady, ...drawn.map((m) => m.key)]);
+  // An unused anchor is attached nowhere even when ready, so assuming it changes no page's attachments — only the reason.
+  const viewReady = new Set([...runReady, ...missing.filter((m) => m.unused && !m.skipped).map((m) => m.key)]);
+  return { kinds, missing, drawn, todayReady, runReady, viewReady, attached };
+};
+
+/**
+ * Extra reference images the anchors add per page: the run's anchors-mode plan (anchorRunOf) minus planAnchors as
+ * today (Ship-1), both assuming the sheets and pages the run draws first; never below 0 (a page that attaches fewer
+ * references with anchors never lowers the quote). Today's quote prices no reference images, so only the anchors'
+ * additions are counted.
+ */
+const extraRefsByPage = (doc: ComicDoc, pages: Page[], run: AnchorRun, at: AnchorRunAt & { layoutGuide?: boolean }): Map<string, number> => {
   const assumeDrawn = new Set(pages.map((p) => p.id));
   const out = new Map<string, number>();
   for (const page of pages) {
-    const today = planAnchors(doc, page, o.spec, o.lock ?? null, { kinds: ANCHOR_KINDS_OFF, layoutGuide: o.layoutGuide, assumeReady: o.todayReady, assumeDrawn }).attached.length;
-    const withAnchors = planAnchors(doc, page, o.spec, o.lock ?? null, { kinds: o.kinds, layoutGuide: o.layoutGuide, assumeReady: o.runReady, assumeDrawn }).attached.length;
-    out.set(page.id, Math.max(0, withAnchors - today));
+    const today = planAnchors(doc, page, at.spec, at.lock ?? null, {
+      kinds: ANCHOR_KINDS_OFF,
+      layoutGuide: at.layoutGuide,
+      assumeReady: run.todayReady,
+      assumeDrawn,
+      ...(at.rating ? { rating: at.rating } : {})
+    }).attached.length;
+    out.set(page.id, Math.max(0, (run.attached.get(page.id) ?? 0) - today));
   }
   return out;
 };
 
-/** What a run with anchors draws and assumes: the missing anchors, and the keys planned as pending. */
-const anchorRunOf = (doc: ComicDoc, pages: Page[], sheets: Character[], run: AnchorRunOptions) => {
-  const kinds = anchorKindsOf(run.kinds);
-  const missing = run.mode === 'auto' ? missingAnchorsFor(doc, pages, { kinds }) : [];
-  const drawn = missing.filter((m) => !m.skipped);
-  const todayReady = new Set(sheets.map((c) => anchorKeys.cast(c)));
-  const runReady = new Set([...todayReady, ...drawn.map((m) => m.key)]);
-  return { kinds, missing, drawn, todayReady, runReady };
-};
-
-/** quoteRenderPages with anchors 'auto': the base lines, then the anchor sheets and the reference allowance. */
+/** quoteRenderPages with anchors 'auto': the base lines, then the anchor sheets the run uses and the reference allowance. */
 const withAnchorLines = (
   doc: ComicDoc,
   base: RenderQuote,
@@ -311,28 +405,40 @@ const withAnchorLines = (
   sheets: Character[],
   o: { byok: boolean; tier: QualityTier; modelOverride?: string; lock?: ImageModelLock; anchors: AnchorRunOptions }
 ): RenderQuote => {
-  const { kinds, missing, drawn, todayReady, runReady } = anchorRunOf(doc, pages, sheets, o.anchors);
-  const count = (k: MissingAnchor['kind']) => drawn.filter((m) => m.kind === k).length;
+  const pageSpec = resolveImageJob('page', o.tier, o.modelOverride, o.lock).spec;
+  const run = anchorRunOf(doc, pages, sheets, o.anchors, { spec: pageSpec, lock: o.lock });
+  const count = (k: MissingAnchor['kind']) => run.drawn.filter((m) => m.kind === k).length;
   const markup = o.byok ? 1 : PLATFORM_MARKUP;
   const lockOpt = o.lock ? { lock: o.lock } : {};
   // Recurring extras get the same character sheet job as leads; places and props draw at ANCHOR_SHEET_RES.
-  const charLines = estimateJobs([{ kind: 'sheet', count: count('character'), label: 'recurring character sheets' }], o.tier, { override: o.modelOverride, byok: o.byok, ...lockOpt }).lines;
+  const charLines: AnchorQuoteLine[] = estimateJobs([{ kind: 'sheet', count: count('character'), label: 'recurring character sheets' }], o.tier, {
+    override: o.modelOverride,
+    byok: o.byok,
+    ...lockOpt
+  }).lines.map((l) => ({ ...l, kind: 'sheet' }));
   const sheetSpec = resolveImageJob('place', o.tier, o.modelOverride, o.lock).spec;
   const sheetUnit = imagePriceUsd(sheetSpec, nearestResolution(sheetSpec, ANCHOR_SHEET_RES));
-  const at1k = (label: string, n: number) => (n > 0 ? [{ label, count: n, usd: round4(sheetUnit * n * markup) }] : []);
-  const pageSpec = resolveImageJob('page', o.tier, o.modelOverride, o.lock).spec;
-  const perPage = extraRefsByPage(doc, pages, { spec: pageSpec, lock: o.lock, kinds, layoutGuide: o.anchors.layoutGuide, todayReady, runReady });
+  const at1k = (label: string, kind: 'place' | 'prop', n: number): AnchorQuoteLine[] => (n > 0 ? [{ label, count: n, usd: round4(sheetUnit * n * markup), kind }] : []);
+  const perPage = extraRefsByPage(doc, pages, run, { spec: pageSpec, lock: o.lock, layoutGuide: o.anchors.layoutGuide });
   const extraRefs = [...perPage.values()].reduce((n, v) => n + v, 0);
-  const refLine = extraRefs > 0 ? [{ label: 'extra references', count: extraRefs, usd: extraRefsUsd(pageSpec, extraRefs, o.byok) }] : [];
-  const lines = [...base.lines, ...charLines, ...at1k('place sheets', count('place')), ...at1k('prop sheets', count('prop')), ...refLine];
-  const images = drawn.length;
+  const refLine: AnchorQuoteLine[] = extraRefs > 0 ? [{ label: 'extra references', count: extraRefs, usd: extraRefsUsd(pageSpec, extraRefs, o.byok), kind: 'refs' }] : [];
+  const anchorLines = [...charLines, ...at1k('place sheets', 'place', count('place')), ...at1k('prop sheets', 'prop', count('prop')), ...refLine];
+  const lines = [...base.lines, ...anchorLines.map(({ kind: _kind, ...line }) => line)];
+  const images = run.drawn.length;
   return {
     ...base,
     usd: round4(lines.reduce((sum, l) => sum + l.usd, 0)),
     imageCount: base.imageCount + images,
     lines,
     nothing: base.nothing && !images,
-    anchors: { keys: drawn.map((m) => m.key), skipped: missing.filter((m) => m.skipped).map((m) => m.key), extraRefs }
+    anchors: {
+      keys: run.drawn.map((m) => m.key),
+      skipped: run.missing.filter((m) => m.skipped).map((m) => m.key),
+      unused: run.missing.filter((m) => m.unused && !m.skipped).map((m) => m.key),
+      extraRefs,
+      lines: anchorLines,
+      missing: run.missing
+    }
   };
 };
 
@@ -430,6 +536,8 @@ export interface PageAnchorItem {
   role: AnchorRole;
   name: string;
   source: PlannedAnchor['source'];
+  /** The image attached (a thumbnail for the card); absent for the layout guide and for anchors drawn first. */
+  path?: string;
   /** Drawn first by this run. */
   pending?: true;
 }
@@ -460,7 +568,8 @@ export interface PageLintItem {
   panel?: number;
 }
 
-/** summarizeBook's Ship 2 view: the anchor run options plus the job rating used to rank photos. */
+/** summarizeBook's Ship 2 view: the anchor run options plus the job rating used to rank photos (absent = summarizeBook's
+ *  own `rating`, else the doc's effective rating). */
 export interface ConsistencyViewOptions extends AnchorRunOptions {
   rating?: ContentRating;
 }
@@ -492,7 +601,8 @@ export interface BookSummary {
   anchors?: {
     mode: AnchorRunOptions['mode'];
     kinds: AnchorKinds;
-    /** Missing anchors of the pages "Render all" draws (unticked ones say so). */
+    /** Missing anchors of the pages "Render all" draws, as its quote counts them: unticked ones are `skipped`, ones no
+     *  page can attach under the model's caps are `unused` (with the words why); neither is drawn or quoted. */
     missing: MissingAnchor[];
     /** The anchor sheets and the reference allowance inside totals.toDrawUsd. */
     usd: number;
@@ -571,7 +681,11 @@ export function summarizeBook(
   const anyway = new Set(opts.drawOverfull ?? []);
   const meter = needMeter(doc, { aspect: letteringAspect(doc, null) });
   const recurring = recurringCastIds(doc);
-  const view = opts.consistency ? consistencyView(doc, opts.consistency, { byok: opts.byok, tier, modelOverride: override }) : undefined;
+  // The view ranks photos with its own rating, else summarizeBook's (one rating for the safety badges and the anchors).
+  const viewRating = opts.consistency?.rating ?? opts.rating;
+  const view = opts.consistency
+    ? consistencyView(doc, { ...opts.consistency, ...(viewRating ? { rating: viewRating } : {}) }, { byok: opts.byok, tier, modelOverride: override })
+    : undefined;
   const runAnchors = view?.run ? { anchors: view.run } : {};
   const pages: PageSummary[] = [...doc.pages]
     .sort((a, b) => a.n - b.n)
@@ -684,9 +798,10 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
   const lock = quoteLockOf(doc);
   const spec = resolveImageJob('page', q.tier, q.modelOverride, lock).spec;
   const targets = pageTargets(doc);
-  const run = anchorRunOf(doc, targets, missingSheetsFor(doc, targets), o);
+  const at: AnchorRunAt = { spec, lock, ...(o.rating ? { rating: o.rating } : {}) };
+  const run = anchorRunOf(doc, targets, missingSheetsFor(doc, targets), o, at);
   const assumeDrawn = new Set(targets.map((p) => p.id));
-  const extra = o.mode === 'auto' ? extraRefsByPage(doc, targets, { spec, lock, kinds: run.kinds, layoutGuide: o.layoutGuide, todayReady: run.todayReady, runReady: run.runReady }) : new Map<string, number>();
+  const extra = o.mode === 'auto' ? extraRefsByPage(doc, targets, run, { ...at, layoutGuide: o.layoutGuide }) : new Map<string, number>();
   const lint = new Map<string, PageLintItem[]>();
   const note = (pageId: string, item: PageLintItem) => lint.set(pageId, [...(lint.get(pageId) ?? []), item]);
   for (const i of lintContinuity(doc)) note(i.pageId, { kind: i.kind, severity: i.severity, text: i.text });
@@ -696,7 +811,8 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
     run: o.mode === 'auto' ? runOpts : undefined,
     extraUsd: (pageId: string): number => extraRefsUsd(spec, extra.get(pageId) ?? 0, q.byok),
     page: (p: Page): Pick<PageSummary, 'anchors' | 'textOnly' | 'detail' | 'lint'> => {
-      const plan = planAnchors(doc, p, spec, lock ?? null, { kinds: run.kinds, layoutGuide: o.layoutGuide, rating: o.rating, assumeReady: run.runReady, assumeDrawn });
+      // viewReady: an anchor no page can attach is planned as ready, so the page names the cap that leaves it in words.
+      const plan = planAnchors(doc, p, spec, lock ?? null, { kinds: run.kinds, layoutGuide: o.layoutGuide, rating: o.rating, assumeReady: run.viewReady, assumeDrawn });
       const state = resolveContinuity(doc, p);
       const changed = staleReasons(doc, p).map((r) => r.text);
       const textOnly = plan.overflow
@@ -710,7 +826,7 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
         ...(changed.length ? { changed } : {})
       };
       return {
-        anchors: plan.attached.map((a) => ({ key: a.key, role: a.role, name: a.name, source: a.source, ...(a.pending ? { pending: true as const } : {}) })),
+        anchors: plan.attached.map((a) => ({ key: a.key, role: a.role, name: a.name, source: a.source, ...(a.path ? { path: a.path } : {}), ...(a.pending ? { pending: true as const } : {}) })),
         textOnly,
         detail,
         ...(lint.get(p.id)?.length ? { lint: lint.get(p.id) } : {})
@@ -719,11 +835,11 @@ const consistencyView = (doc: ComicDoc, o: ConsistencyViewOptions, q: { byok: bo
     book: (anyway: Set<string>, meter: NeedMeter): NonNullable<BookSummary['anchors']> => {
       const all = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter }, ...(o.mode === 'auto' ? { anchors: runOpts } : {}) });
       const plain = quoteRenderPages(doc, { byok: q.byok, tier: q.tier, modelOverride: q.modelOverride, holdBack: { drawOverfull: [...anyway], meter } });
-      const drawnIds = new Set(all.pageIds);
       return {
         mode: o.mode,
         kinds: run.kinds,
-        missing: o.mode === 'auto' ? missingAnchorsFor(doc, targets.filter((p) => drawnIds.has(p.id)), { kinds: run.kinds }) : [],
+        // The quote's own list: the pages "Render all" draws, each anchor flagged skipped / unused as the quote counts it.
+        missing: all.anchors?.missing ?? [],
         usd: round4(all.usd - plain.usd),
         extraRefs: all.anchors?.extraRefs ?? 0
       };
