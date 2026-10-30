@@ -78,8 +78,8 @@ export function p2ShapedDoc(opts: P2Options = {}): { doc: ComicDoc; page: Page }
     render: {
       ...emptyRender(),
       status: 'ready',
-      asset: { path: 'u/doc_letterfit/p2.png', w: 1696, h: 2528 },
-      qc: { score: 0.75, checkedAt: '2026-10-01T00:00:00.000Z', panelBoxes: P2_BOXES.map((b) => ({ ...b })) }
+      asset: { path: 'u/doc_letterfit/p2.png', w: 1696, h: 2528, source: 'generated', at: 1790000000000 },
+      qc: { score: 0.75, issues: [], checkedAt: 1790000000000, panelBoxes: P2_BOXES.map((b) => ({ ...b })) }
     },
     balloons
   };

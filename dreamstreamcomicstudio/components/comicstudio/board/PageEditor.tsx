@@ -84,7 +84,8 @@ import { panelBoxesFor, panelForRegion, regionFromPoints, toPagePoint, type Poin
 import { GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, SectionTitle, Segmented, StatusChip, cx, useClickGuard, useElementSize, useFocusTrap } from './ui';
 import type { PatchOptions } from '../types';
 import type { StudioMode } from '../../../shared/comic/capabilities';
-import { LetteringInspector, type Rect } from '../lettering/LetteringInspector';
+import { LetteringInspector, PlacementFixChip, TooMuchTextChip, densePanels, recheckQuoteUsd, type Rect } from '../lettering/LetteringInspector';
+import { BUSY_GRID_SIDE, hasFaceData, loadBusyGrid, reletterAroundArtOps } from '../lettering/busyGrid';
 import { LetteringToolbar } from '../lettering/LetteringToolbar';
 import { LINE_TEXT_MAX } from '../lettering/BalloonTextEditor';
 import { PresetGallery } from '../lettering/PresetGallery';
@@ -818,6 +819,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   // Dense page: the renderer lettered the software-placed balloons smaller so nothing overlaps.
   const dense = plans.filter((p) => typeof p.densityScale === 'number' && p.densityScale < 1);
   const densityPct = dense.length ? Math.round(Math.min(...dense.map((p) => p.densityScale as number)) * 100) : 100;
+  // Letter fit (plan §10 A4): a panel with too much text for its picture, and a page whose check has no face data
+  // (balloons may sit on heads): placement around the art (free) or by reading the page again (paid, quoted).
+  const tooMuchText = densePanels(plans).length > 0;
+  const placementFix = overlayLettering && artOk && !busy && plans.length > 0 && !hasFaceData(sourcePage);
   // The balloon menu is the one surface while it is open: the inspector (a second sheet on phones, which
   // would also re-fit the page under the menu) waits until it closes ("Style…" then shows it).
   const inspectorOpen = letteringEditable && lettering && selection.ids.length > 0 && !inspectorClosed && !editingLineId && !menu;
@@ -1117,6 +1122,20 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
     </span>
   );
 
+  const recheckUsd = recheckQuoteUsd(byok);
+  const placeAroundArt = () =>
+    fire('placement', async () => {
+      const cells = await loadBusyGrid(studio.urlFor(sourcePage.render.asset, { width: BUSY_GRID_SIDE * 2 }));
+      const ops = reletterAroundArtOps(doc, sourcePage, aspect, measure, cells);
+      if (ops.length) apply(ops, { label: 'Place balloons around the art' });
+      setNotice(
+        !cells.length
+          ? 'This drawing couldn’t be read here, so the balloons were placed from the panels alone (free). To keep them off faces, use Fix balloon placement.'
+          : ops.length
+            ? 'Balloons placed around the busy parts of the art (free). Balloons you moved stay put — Undo puts the others back.'
+            : 'The balloons already sit clear of the busy parts of the art.'
+      );
+    });
   const chips = (
     <>
       {letteringEditable && lettering && crowdedIds.length > 0 && (
@@ -1155,6 +1174,16 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
             {lang ? ` in ${languageLabel(lang)}` : ''}
           </span>
         </button>
+      )}
+      {letteringEditable && lettering && tooMuchText && <TooMuchTextChip plans={plans} onSelect={(ids) => selection.set(ids)} />}
+      {letteringEditable && lettering && placementFix && (
+        <PlacementFixChip
+          price={cost(recheckUsd)}
+          busy={busyKey === 'placement'}
+          freeDisabled={lang ? `Switch to ${sourceName} to re-letter` : undefined}
+          onFree={placeAroundArt}
+          onPaid={() => fire('placement', () => studio.act({ type: 'recheck_page', pageId: sourcePage.id, quotedUsd: recheckUsd }))}
+        />
       )}
     </>
   );
@@ -1265,7 +1294,7 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
         />
       )}
       {!(letteringEditable && lettering) && undoPill /* Undo / redo stay one tap away in every mode. */}
-      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0) && (
+      {letteringEditable && lettering && (crowdedIds.length > 0 || dense.length > 0 || overflowIds.length > 0 || tooMuchText || placementFix) && (
         // The status chips move as one line (they shrink and truncate, never stack): a chip wrapped under
         // another put each one's 44 px area on its neighbour's (fold5 dense page).
         <span className="inline-flex min-w-0 max-w-full flex-nowrap items-center gap-1.5" data-testid="editor-chip-group">
