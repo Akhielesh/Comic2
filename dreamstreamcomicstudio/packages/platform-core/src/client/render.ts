@@ -14,6 +14,9 @@ import { badResponse, guard, isRecord, jsonBody, mediaType, readJson, send } fro
 export const RENDER_KINDS = ['docx', 'pdf', 'pptx'] as const;
 export type RenderKind = (typeof RENDER_KINDS)[number];
 
+/** `POST /v1/render` answers with at most 10 MB of bytes (plan §5.9); a bigger answer is refused while reading. */
+export const RENDER_MAX_BYTES = 10000000;
+
 /** The media type the gateway answers with for each kind. */
 export const RENDER_MEDIA_TYPES: { readonly [K in RenderKind]: string } = {
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -40,7 +43,15 @@ export const render = (ctx: ClientContext, input: RenderInput): Promise<RenderRe
     if (!isRecord(input.spec)) return inputFailure('input', 'spec must be a JSON object');
     const body = jsonBody({ kind: input.kind, spec: input.spec });
     if (!isBytes(body)) return body;
-    const r = await send(ctx, { method: 'POST', path: '/v1/render', body, contentType: 'application/json', claim: input.claim, idempotencyKey: input.idempotencyKey });
+    const r = await send(ctx, {
+      method: 'POST',
+      path: '/v1/render',
+      body,
+      contentType: 'application/json',
+      claim: input.claim,
+      idempotencyKey: input.idempotencyKey,
+      maxResponseBytes: RENDER_MAX_BYTES,
+    });
     if (r.ok === false) return r;
     if (r.status === 202) {
       const ref = parseJobRef(readJson(r.body));

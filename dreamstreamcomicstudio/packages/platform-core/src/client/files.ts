@@ -13,6 +13,20 @@ import { badResponse, encodeFileName, guard, isRecord, isText, isWhole, mediaTyp
 
 export const FILE_REF = new RegExp(FILE_REF_PATTERN);
 
+/**
+ * The only media types `GET /v1/files/:ref` serves (plan §5.9): pdf, docx, pptx, png, jpeg, webp and psd. Anything
+ * else (HTML, SVG, XHTML, XML, scripts, text) is refused rather than handed to a host that might serve it on.
+ */
+export const SERVED_FILE_TYPES: readonly string[] = [
+  'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/vnd.adobe.photoshop',
+];
+
 export interface UploadFileInput extends SignedPost {
   bytes: Uint8Array;
   fileName: string;
@@ -73,7 +87,7 @@ export const downloadFile = (ctx: ClientContext, input: DownloadFileInput): Prom
     const r = await send(ctx, { method: 'GET', path: `/v1/files/${input.fileRef}`, claim: input.claim });
     if (r.ok === false) return r;
     const type = mediaType(r.contentType);
-    // The gateway never serves HTML or SVG (plan §5.9); refuse them rather than hand them to a host.
-    if (r.status !== 200 || !type || type === 'text/html' || type === 'image/svg+xml') return badResponse('file', r.meta);
+    // Only the served types (plan §5.9): never HTML, SVG or anything else a browser might run.
+    if (r.status !== 200 || SERVED_FILE_TYPES.indexOf(type) === -1) return badResponse('file', r.meta);
     return { ok: true, bytes: r.body, contentType: type, meta: r.meta };
   });

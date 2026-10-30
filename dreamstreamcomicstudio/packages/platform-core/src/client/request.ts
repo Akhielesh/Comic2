@@ -7,7 +7,7 @@ import { PLATFORM_HEADERS, parseCostMicros, parseWarnings, signedRequestHeaders 
 import { encodeQuery, isIdempotencyKey } from '../wire/canonical.js';
 import { isUsableSecret } from '../wire/crypto.js';
 import { failureFromResponse, inputFailure, internalFailure, networkFailure, wireFailure } from '../wire/errors.js';
-import { toArrayBuffer, utf8Decode, utf8Encode } from '../wire/bytes.js';
+import { isBytes, toArrayBuffer, utf8Decode, utf8Encode } from '../wire/bytes.js';
 import type { FetchLike, FetchResponseLike, WireClock, WireCrypto, WireFailure } from '../wire/types.js';
 import { APP_ID_PATTERN, KEY_ID_PATTERN, WIRE_LIMITS } from '../wire/types.js';
 
@@ -26,7 +26,12 @@ export interface PlatformClientConfig {
   now: WireClock;
   /** Makes an X-Request-Id per call (echoed back by the gateway, for correlating logs). */
   requestId?: () => string;
-  /** The biggest response the client reads (default `WIRE_LIMITS.maxResponseBytes`). */
+  /**
+   * The biggest response body the client accepts (default `WIRE_LIMITS.maxResponseBytes`). It is refused before
+   * reading when Content-Length says so, and while reading when the response has a body stream (fetch's own Response
+   * does); a response that offers only `arrayBuffer()` is read whole first and checked after, so a host whose fetch
+   * has no stream should wrap it with a size-limiting reader.
+   */
   maxResponseBytes?: number;
 }
 
@@ -105,6 +110,8 @@ export interface SendSpec {
   headers?: Record<string, string>;
   claim?: string;
   idempotencyKey?: string;
+  /** A tighter response cap for this endpoint (e.g. `/v1/render`'s 10 MB); the config's cap still applies. */
+  maxResponseBytes?: number;
 }
 
 export interface RawResponse {
@@ -202,7 +209,8 @@ export const send = async (ctx: ClientContext, spec: SendSpec): Promise<RawRespo
   }
   if (!res || typeof res.status !== 'number') return wireFailure('response', 'fetch gave no response');
 
-  const max = typeof cfg.maxResponseBytes === 'number' && cfg.maxResponseBytes > 0 ? cfg.maxResponseBytes : WIRE_LIMITS.maxResponseBytes;
+  const configMax = typeof cfg.maxResponseBytes === 'number' && cfg.maxResponseBytes > 0 ? cfg.maxResponseBytes : WIRE_LIMITS.maxResponseBytes;
+  const max = spec.maxResponseBytes !== undefined && spec.maxResponseBytes < configMax ? spec.maxResponseBytes : configMax;
   let declared: string | null = null;
   try {
     declared = res.headers.get('Content-Length');
@@ -212,13 +220,15 @@ export const send = async (ctx: ClientContext, spec: SendSpec): Promise<RawRespo
   if (declared !== null && /^[0-9]{1,16}$/.test(declared) && Number(declared) > max) {
     return wireFailure('response', `the platform's answer is over ${max} bytes`, { status: res.status });
   }
-  let bytes: Uint8Array;
+  let read: Uint8Array | 'too-large' | 'not-bytes';
   try {
-    bytes = new Uint8Array(await res.arrayBuffer());
+    read = await readBody(res, max);
   } catch (e) {
     return networkFailure(e instanceof Error ? e.message : 'the answer was cut off');
   }
-  if (bytes.length > max) return wireFailure('response', `the platform's answer is over ${max} bytes`, { status: res.status });
+  if (read === 'too-large') return wireFailure('response', `the platform's answer is over ${max} bytes`, { status: res.status });
+  if (read === 'not-bytes') return wireFailure('response', "the platform's answer stream gave something other than bytes", { status: res.status });
+  const bytes = read;
 
   const meta = responseMeta(res);
   if (res.status < 200 || res.status > 299) {
@@ -232,6 +242,62 @@ export const send = async (ctx: ClientContext, spec: SendSpec): Promise<RawRespo
     contentType = null;
   }
   return { ok: true, status: res.status, body: bytes, contentType, meta, requestBodySha256Hex: bodyHex };
+};
+
+/** The reader a WHATWG body stream hands out (only what `readBody` uses). */
+interface BodyReader {
+  read(): PromiseLike<{ done?: boolean; value?: unknown }>;
+  cancel?(reason?: unknown): unknown;
+}
+
+/** Cancel a stream we stopped reading, ignoring whatever cancel does or throws. */
+const cancelQuietly = (reader: BodyReader): void => {
+  try {
+    const p = typeof reader.cancel === 'function' ? reader.cancel() : undefined;
+    if (p && typeof (p as PromiseLike<unknown>).then === 'function') (p as PromiseLike<unknown>).then(undefined, () => undefined);
+  } catch {
+    // Nothing to do: the answer is refused either way.
+  }
+};
+
+/**
+ * The answer's body, at most `max` bytes. When the response has a WHATWG body stream (`res.body.getReader()`, as
+ * fetch's own Response does), reading stops and the stream is cancelled as soon as the cap is passed, so a chunked
+ * answer without Content-Length never fills memory. A response that offers only `arrayBuffer()` is read whole, then
+ * checked. Throws only what the stream or `arrayBuffer()` throws (a network failure).
+ */
+const readBody = async (res: FetchResponseLike, max: number): Promise<Uint8Array | 'too-large' | 'not-bytes'> => {
+  const stream = (res as { body?: unknown }).body;
+  const getReader = typeof stream === 'object' && stream !== null ? (stream as { getReader?: unknown }).getReader : undefined;
+  if (typeof getReader !== 'function') {
+    const whole = new Uint8Array(await res.arrayBuffer());
+    return whole.length > max ? 'too-large' : whole;
+  }
+  const reader = (getReader as (this: unknown) => BodyReader).call(stream);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const step = await reader.read();
+    if (!step || step.done) break;
+    const chunk = step.value;
+    if (!isBytes(chunk)) {
+      cancelQuietly(reader);
+      return 'not-bytes';
+    }
+    total += chunk.length;
+    if (total > max) {
+      cancelQuietly(reader);
+      return 'too-large';
+    }
+    chunks.push(chunk);
+  }
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    out.set(chunks[i], at);
+    at += chunks[i].length;
+  }
+  return out;
 };
 
 /** Run a client call; anything it throws becomes an `internal` failure, so a call never throws. */

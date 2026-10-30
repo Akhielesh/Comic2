@@ -28,8 +28,9 @@ import {
   wireCryptoFromSubtle,
 } from '../wire/index.js';
 import type { FetchInitLike, FetchLike, FetchResponseLike, PreflightOptions, SubtleCryptoLike, WireCrypto, WireFailure } from '../wire/index.js';
-import { createPlatformClient, jobPollUrl, verifyCallback } from './index.js';
+import { RENDER_MAX_BYTES, SERVED_FILE_TYPES, createPlatformClient, jobPollUrl, verifyCallback } from './index.js';
 import type { PlatformClient, PlatformClientConfig } from './index.js';
+import { createContext, send } from './request.js';
 
 // ── Harness ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -283,6 +284,11 @@ describe('refused before anything is sent', () => {
     }
     expect(await client.convert({ bytes: PDF, contentType: 'application/pdf', fileName: 'bad\nname', targetFormat: 'pdf', claim: c, idempotencyKey: 'k1' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(await client.convert({ bytes: PDF, contentType: 'text/plain\r\nX-Evil: 1', fileName: 'a.pdf', targetFormat: 'pdf', claim: c, idempotencyKey: 'k1' })).toMatchObject({ ok: false, code: 'invalid' });
+    // The request core refuses a header value with a line break whichever endpoint built it.
+    const ctx = createContext(configFor(fetch));
+    for (const value of ['a\r\nb', 'a\nX-Evil: 1', '', 'é']) {
+      expect(await send(ctx, { method: 'GET', path: '/v1/jobs/job-1', headers: { 'X-Platform-File-Name': value }, claim: c }), JSON.stringify(value)).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+    }
     expect(await client.convert({ bytes: PDF, contentType: 'application/pdf', fileName: 'a.pdf', targetFormat: 'docx' as never, claim: c, idempotencyKey: 'k1' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(await client.downloadFile({ fileRef: '../etc/passwd' })).toMatchObject({ ok: false, code: 'invalid' });
     expect(await client.jobs.get({ jobId: 'job/1' })).toMatchObject({ ok: false, code: 'invalid' });
@@ -376,6 +382,60 @@ describe('failures come back as results', () => {
     expect(read).not.toHaveBeenCalled();
     const undeclared = gateway(() => ({ status: 200, headers: { 'Content-Type': 'application/pdf' }, body: new Uint8Array(2000) }));
     expect(await createPlatformClient(configFor(undeclared.fetch, { maxResponseBytes: 1000 })).downloadFile({ fileRef: 'file-1' })).toMatchObject({ ok: false, reason: 'response' });
+    // A response that offers only arrayBuffer() (no body stream) is checked after reading.
+    const bufferOnly: FetchLike = async () => ({ status: 200, headers: new Headers({ 'Content-Type': 'application/pdf' }), arrayBuffer: async () => new ArrayBuffer(2000) });
+    expect(await createPlatformClient(configFor(bufferOnly, { maxResponseBytes: 1000 })).downloadFile({ fileRef: 'file-1' })).toMatchObject({ ok: false, reason: 'response' });
+  });
+
+  it('a chunked answer with no Content-Length stops being read, and is cancelled, once it passes the cap', async () => {
+    let pulls = 0;
+    let cancelled = false;
+    const whole = vi.fn(async () => new ArrayBuffer(0));
+    const endless: FetchLike = async () =>
+      ({
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/pdf' }),
+        arrayBuffer: whole,
+        body: {
+          getReader: () => ({
+            read: async () => {
+              pulls++;
+              return pulls > 1000 ? { done: true } : { done: false, value: new Uint8Array(600) };
+            },
+            cancel: async () => {
+              cancelled = true;
+            },
+          }),
+        },
+      }) as FetchResponseLike;
+    const r = await createPlatformClient(configFor(endless, { maxResponseBytes: 1000 })).downloadFile({ fileRef: 'file-1' });
+    expect(r).toMatchObject({ ok: false, code: 'engine-failed', reason: 'response' });
+    expect(pulls).toBe(2);
+    expect(cancelled).toBe(true);
+    expect(whole).not.toHaveBeenCalled();
+    // Under the cap, the chunks are joined in order; a chunk that is not bytes is a malformed answer.
+    const chunks = [PDF.slice(0, 4), PDF.slice(4)];
+    const streamed: FetchLike = async () =>
+      ({
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/pdf' }),
+        arrayBuffer: whole,
+        body: { getReader: () => ({ read: async () => (chunks.length ? { done: false, value: chunks.shift() } : { done: true }) }) },
+      }) as FetchResponseLike;
+    expect(await createPlatformClient(configFor(streamed)).downloadFile({ fileRef: 'file-1' })).toMatchObject({ ok: true, bytes: PDF });
+    const junkChunks: unknown[] = ['%PDF'];
+    const junk: FetchLike = async () =>
+      ({
+        status: 200,
+        headers: new Headers({ 'Content-Type': 'application/pdf' }),
+        arrayBuffer: whole,
+        body: { getReader: () => ({ read: async () => (junkChunks.length ? { done: false, value: junkChunks.shift() } : { done: true }) }) },
+      }) as FetchResponseLike;
+    expect(await createPlatformClient(configFor(junk)).downloadFile({ fileRef: 'file-1' })).toMatchObject({ ok: false, reason: 'response' });
+    const cut: FetchLike = async () =>
+      ({ status: 200, headers: new Headers({ 'Content-Type': 'application/pdf' }), arrayBuffer: whole, body: { getReader: () => ({ read: () => Promise.reject(new Error('terminated')) }) } }) as FetchResponseLike;
+    expect(await createPlatformClient(configFor(cut)).downloadFile({ fileRef: 'file-1' })).toMatchObject({ ok: false, retryable: true, reason: 'network' });
+    expect(whole).not.toHaveBeenCalled();
   });
 
   it('a failing injected crypto, clock or request-id maker is an internal failure, not a throw', async () => {
@@ -488,13 +548,18 @@ describe('answers are checked against the contract', () => {
     });
     expect(await run(json(201, { fileRef: 'file-1', sha256: 'f'.repeat(64), bytes: PDF.length, sniffed: 'application/pdf' }), up)).toMatchObject({ ok: false, reason: 'response' });
     expect(await run(json(201, { fileRef: '../x', sha256: sha, bytes: PDF.length, sniffed: 'application/pdf' }), up)).toMatchObject({ ok: false, reason: 'response' });
+    // The right hash but another byte count: the answer is not about the bytes sent either.
+    expect(await run(json(201, { fileRef: 'file-1', sha256: sha, bytes: PDF.length + 1, sniffed: 'application/pdf' }), up)).toMatchObject({ ok: false, reason: 'response' });
   });
 
-  it('downloadFile never hands back HTML or SVG', async () => {
+  it('downloadFile hands back only the served types: pdf, docx, pptx, png, jpeg, webp and psd', async () => {
     const dl = (c: PlatformClient) => c.downloadFile({ fileRef: 'file-1' });
     expect(await run({ status: 200, headers: { 'Content-Type': 'application/pdf' }, body: PDF }, dl)).toMatchObject({ ok: true, contentType: 'application/pdf' });
-    for (const type of ['text/html', 'TEXT/HTML; charset=utf-8', 'image/svg+xml']) {
-      expect(await run({ status: 200, headers: { 'Content-Type': type }, body: '<x/>' }, dl), type).toMatchObject({ ok: false, reason: 'response' });
+    expect(SERVED_FILE_TYPES).toHaveLength(7);
+    for (const type of SERVED_FILE_TYPES) expect(await run({ status: 200, headers: { 'Content-Type': type }, body: PDF }, dl), type).toMatchObject({ ok: true, contentType: type });
+    const refused = ['text/html', 'TEXT/HTML; charset=utf-8', 'image/svg+xml', 'application/xhtml+xml', 'text/xml', 'application/xml', 'application/javascript', 'text/plain', 'application/octet-stream', ''];
+    for (const type of refused) {
+      expect(await run({ status: 200, headers: type ? { 'Content-Type': type } : {}, body: '<x/>' }, dl), type).toMatchObject({ ok: false, reason: 'response' });
     }
   });
 
@@ -511,7 +576,25 @@ describe('answers are checked against the contract', () => {
     expect(await run({ status: 200, headers: { 'Content-Type': docxType }, body: zip }, docx)).toMatchObject({ ok: true, kind: 'file', contentType: docxType });
     expect(await run({ status: 200, headers: { 'Content-Type': 'application/pdf' }, body: PDF }, docx)).toMatchObject({ ok: false, reason: 'response' });
     expect(await run({ status: 200, headers: { 'Content-Type': docxType }, body: PDF }, docx)).toMatchObject({ ok: false, reason: 'response' });
+    // A zip with the wrong media type: the magic matches, the type does not.
+    expect(await run({ status: 200, headers: { 'Content-Type': 'application/zip' }, body: zip }, docx)).toMatchObject({ ok: false, reason: 'response' });
     expect(await run(json(202, { jobId: 'job-8', pollToken: token }), docx)).toMatchObject({ ok: true, kind: 'job', jobId: 'job-8' });
+  });
+
+  it('render answers with at most 10 MB of bytes', async () => {
+    const c = await claim();
+    const docx = (cl: PlatformClient) => cl.render({ kind: 'docx', spec: { v: 1 }, claim: c, idempotencyKey: 'k1' });
+    const docxType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const zipOf = (n: number) => {
+      const b = new Uint8Array(n);
+      b.set([0x50, 0x4b, 0x03, 0x04]);
+      return b;
+    };
+    expect(RENDER_MAX_BYTES).toBe(10000000);
+    expect(await run({ status: 200, headers: { 'Content-Type': docxType }, body: zipOf(RENDER_MAX_BYTES) }, docx)).toMatchObject({ ok: true, kind: 'file' });
+    expect(await run({ status: 200, headers: { 'Content-Type': docxType }, body: zipOf(RENDER_MAX_BYTES + 1) }, docx)).toMatchObject({ ok: false, code: 'engine-failed', reason: 'response' });
+    // The same size from /v1/files is fine: the 10 MB cap is render's own.
+    expect(await run({ status: 200, headers: { 'Content-Type': docxType }, body: zipOf(RENDER_MAX_BYTES + 1) }, (cl) => cl.downloadFile({ fileRef: 'file-1' }))).toMatchObject({ ok: true });
   });
 
   it('jobs: create gives a poll token, get gives a status, and the poll URL is the only browser call', async () => {

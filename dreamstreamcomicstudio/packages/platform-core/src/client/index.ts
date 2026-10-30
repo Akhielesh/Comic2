@@ -71,9 +71,10 @@ export { CONVERT_TARGET_FORMATS, isPdfBytes } from './convert.js';
 export type { ConvertInput, ConvertOutputType, ConvertResult, ConvertTargetFormat } from './convert.js';
 export { EXTRACT_RESULT_LIMITS, parseExtractResult } from './extract.js';
 export type { ExtractCallResult, ExtractInput, ExtractResult, ExtractSection } from './extract.js';
+export { SERVED_FILE_TYPES } from './files.js';
 export type { DownloadFileInput, DownloadFileResult, StagedFile, UploadFileInput, UploadFileResult } from './files.js';
 export type { PdfInput, PdfJobSpec, PdfResult } from './pdf.js';
-export { RENDER_KINDS, RENDER_MEDIA_TYPES } from './render.js';
+export { RENDER_KINDS, RENDER_MAX_BYTES, RENDER_MEDIA_TYPES } from './render.js';
 export type { RenderInput, RenderKind, RenderResult } from './render.js';
 export { JOB_STATES, jobPollUrl, parseJobStatus, verifyCallback } from './jobs.js';
 export type {
