@@ -4,7 +4,7 @@
 // character's reference photos, a style sheet or a panel's older renders; force-private and v4 rows authorize nothing.
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, readerPathsOfState } from './publicReaderPaths';
+import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, readerPathsOfState } from './publicReaderPaths.js';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
