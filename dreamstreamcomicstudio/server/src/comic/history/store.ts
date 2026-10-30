@@ -676,3 +676,15 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
   };
   return store;
 }
+
+// ── The process-wide store ───────────────────────────────────────────────────
+
+let shared: HistoryStore | null = null;
+
+/** The server's history store (Supabase, service role), created on first use. H2/H3/H7 take it from here. */
+export const getHistoryStore = (): HistoryStore => (shared ??= createSupabaseHistoryStore());
+
+/** Tests: swap in the fake (createFakeHistoryStore) or reset to the default with null. */
+export const __setHistoryStoreForTests = (store: HistoryStore | null): void => {
+  shared = store;
+};

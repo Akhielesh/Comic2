@@ -11,7 +11,7 @@ import { StudioError } from '../types.js';
 import { assembleBook, chunkBook, historyHash } from './hash.js';
 import type { HistoryScope } from './hooks.js';
 import { createFakeHistoryStore, type FakeHistoryMethod, type FakeHistoryStore } from './store.fake.js';
-import { versionPaths, type StoredVersionWithPaths } from './store.js';
+import { __setHistoryStoreForTests, getHistoryStore, versionPaths, type StoredVersionWithPaths } from './store.js';
 import type { ChunkInput, VersionInput } from './storeTypes.js';
 
 const P = 'proj-1';
@@ -334,6 +334,16 @@ describe('names, removal, lines', () => {
     expect((await store.list(ME, { kinds: ['ai'] })).rows.map((r) => r.id)).toEqual([ids[5], ids[3], ids[1]]);
     expect((await store.list(ME, { actor: 'you' })).rows).toHaveLength(4);
     expect((await store.list(ME, { pageId: 'pg_a' })).rows.map((r) => r.id)).toEqual([ids[2], ids[1], ids[0]]);
+  });
+
+  it('can stand in for the process-wide store', async () => {
+    const { store } = setup();
+    __setHistoryStoreForTests(store);
+    expect(getHistoryStore()).toBe(store);
+    __setHistoryStoreForTests(null);
+    expect(getHistoryStore()).not.toBe(store);
+    expect(getHistoryStore()).toBe(getHistoryStore());
+    __setHistoryStoreForTests(null);
   });
 
   it('a queued failure rejects exactly one call (for "a store failure never breaks a save" tests)', async () => {
