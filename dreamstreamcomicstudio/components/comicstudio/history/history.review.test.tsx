@@ -7,24 +7,27 @@
 //   - a panel's "Use then" that leaves the newer drawing asks what next (earlier drawing free · quoted redraw)
 //   - "Earlier (images only)" waits until History's start is known; the panel re-reads after its own actions
 //   - a gone moment says so (not "History isn't available") (the reader's re-signing: VersionReader.test.tsx)
+//   - a phone header narrower than 480 px gets no History icon (it overflowed), yet History still opens
 //   - the timeline link is 44 px on every pointer; a row never renders a stray "0"; the publish link stays quiet
 //     when nothing changed; the undo-AI conflict asks in the plan's words
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, within } from '@testing-library/react';
 import { normalizeDoc, type ComicDoc } from '../../../shared/comic/doc';
 import type { HistoryCard as HistoryCardData, VersionRow } from '../../../shared/comic/history/types';
 import { resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { resetBackStack } from '../mobile/backStack';
 import { ChangesSincePublishLink } from './ChangesSincePublishLink';
 import { TimelineHistoryLink } from './EntryLinks';
+import { HistoryButton, HISTORY_HEADER_ICON_MIN_WIDTH } from './HistoryButton';
 import { HistoryCardView } from './HistoryCard';
+import { requestOpenHistory } from './openHistory';
 import { HistoryBrowser, HistoryPanel, type HistoryOpenRequest } from './HistoryPanel';
 import { HISTORY_MOMENT_GONE, HISTORY_UNAVAILABLE } from './historyApi';
 import { MomentRow } from './MomentRow';
 import { historyFixture } from './__scenes__/historyFixtures';
-import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, mountWith, settle, type Mounted } from './history.testkit';
+import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, interactive, mountWith, overflowProblems, settle, TARGET_RE, type Mounted } from './history.testkit';
 
 const NOW = HISTORY_NOW;
 const TZ = HISTORY_TZ;
@@ -399,6 +402,64 @@ describe('a missing moment says so; only the list speaks for the whole History',
     browser(m, req());
     await settle();
     expect(view('list').textContent).toContain(HISTORY_UNAVAILABLE);
+  });
+});
+
+// ── The new pieces at 320 px: no overflow, 44 px targets ─────────────────────
+
+describe('the new confirm and toast choices fit a 320 px phone', () => {
+  it('the "Out of date" confirm and the drawing follow-up toast: nothing wider than the phone, every control 44 px', async () => {
+    const f = historyFixture('v5');
+    const look = clone(f.live);
+    look.cast[0].look = { ...look.cast[0].look, summary: 'A wiry girl in a green scarf' };
+    const act2 = clone(f.versions.find((v) => v.row.id === 'ver_before')!.doc);
+    act2.pages.find((p) => p.id === 'pg_3')!.panels[0].action = 'The market before dawn, empty';
+    const m = withMoments([moment('ver_look', normalizeDoc(look)), moment('ver_act', normalizeDoc(act2))], { width: 320, height: 568, studio: { act: fakeAct() } });
+    const { unmount } = browser(m, req({ view: 'compare', versionId: 'ver_look' }));
+    await settle();
+    const row = view('compare').querySelector<HTMLElement>('[data-other-change="char:ch_maya"]')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Use then: Maya (free)' }));
+    const ask = row.querySelector<HTMLElement>('[data-stale-confirm]')!;
+    expect(overflowProblems(ask, 320)).toEqual([]);
+    for (const el of interactive(ask)) expect(el.className).toMatch(TARGET_RE);
+    unmount();
+    resetBackStack();
+    browser(m, req({ view: 'compare', versionId: 'ver_act', pageId: 'pg_3' }));
+    await settle();
+    fireEvent.click(within(view('compare').querySelector<HTMLElement>('[data-panel-diff="pg_3_p1"]')!).getByRole('button', { name: /Use then: panel/ }));
+    await settle();
+    const toast = document.querySelector<HTMLElement>('[data-history-toast]')!;
+    expect(toast.querySelector('[data-toast-actions]')).toBeTruthy();
+    expect(overflowProblems(toast, 320)).toEqual([]);
+    for (const el of interactive(toast)) expect(el.className).toMatch(TARGET_RE);
+  });
+});
+
+// ── Minor: the phone header at 320–430 px ────────────────────────────────────
+
+describe('a narrow phone header gets no History icon (measured overflow), yet History still opens', () => {
+  it('320 and 360 px compact headers: no icon; the open event still opens the panel; 480 px and wider headers show it', async () => {
+    for (const width of [320, 360]) {
+      const m = historySetup({ width, height: 740 });
+      const { container, unmount } = mountWith(m, <HistoryButton studio={m.studio} compact />);
+      expect(container.querySelector('[data-history-entry="header"]'), `${width}`).toBeNull();
+      let handled = false;
+      act(() => {
+        handled = requestOpenHistory({ view: 'list' });
+      });
+      expect(handled).toBe(true);
+      await settle();
+      expect(document.querySelector('[data-history-sheet="History"]')).toBeTruthy();
+      unmount();
+      resetBackStack();
+    }
+    const wide = historySetup({ width: HISTORY_HEADER_ICON_MIN_WIDTH, height: 900 });
+    const w = mountWith(wide, <HistoryButton studio={wide.studio} compact />);
+    expect(w.container.querySelector('[data-history-entry="header"]')).toBeTruthy();
+    w.unmount();
+    const desk = historySetup({ width: 1440, height: 900, coarse: false });
+    const d = mountWith(desk, <HistoryButton studio={desk.studio} compact={false} />);
+    expect(d.container.querySelector('[data-history-entry="header"]')).toBeTruthy();
   });
 });
 

@@ -136,7 +136,8 @@ describe('every target is at least 44 px', () => {
   });
 
   it('the header button and the entry links are 44 px too', () => {
-    const m = historySetup();
+    // A phone header wide enough for the icon (narrower ones carry History in the ⋯ menu instead).
+    const m = historySetup({ width: 480, height: 900 });
     const { container } = mountWith(
       m,
       <>

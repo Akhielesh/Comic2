@@ -59,7 +59,7 @@ export { matchHistoryIntent, handleHistoryIntent, historyUndoFallback } from './
 export type { HistoryIntent, HistoryIntentHost } from './intents';
 
 export { HistoryPanel, HistoryBrowser } from './HistoryPanel';
-export { HistoryButton } from './HistoryButton';
+export { HistoryButton, HISTORY_HEADER_ICON_MIN_WIDTH } from './HistoryButton';
 export { HistoryCardView } from './HistoryCard';
 export { HistoryTab } from './HistoryTab';
 export { ChangesSincePublishLink } from './ChangesSincePublishLink';
