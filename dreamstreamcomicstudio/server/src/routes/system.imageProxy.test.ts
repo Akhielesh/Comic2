@@ -22,7 +22,9 @@ const FORCED_CLASSIC = '44444444-4444-4444-8444-444444444444';
 const db = vi.hoisted(() => ({
   tables: {} as Record<string, Record<string, unknown>[]>,
   tokens: {} as Record<string, string>,
-  signed: [] as string[]
+  signed: [] as string[],
+  /** Storage paths with no object: signing them fails the way Supabase does (a 400). */
+  missing: [] as string[]
 }));
 
 vi.mock('../services/supabase.js', () => {
@@ -51,6 +53,7 @@ vi.mock('../services/supabase.js', () => {
     storage: {
       from: () => ({
         createSignedUrl: async (path: string) => {
+          if (db.missing.includes(path)) return { data: null, error: { status: 400, statusCode: '404', message: 'Object not found' } };
           db.signed.push(path);
           return { data: { signedUrl: `https://signed.example/${path}` }, error: null };
         }
@@ -88,6 +91,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 beforeEach(() => {
   publicReaderPathCache.clear();
   db.signed = [];
+  db.missing = [];
   db.tokens = { 'owner-token': OWNER, 'stranger-token': STRANGER };
   const project = (id: string, extra: Row = {}): Row => ({
     id,
@@ -250,20 +254,22 @@ describe('image proxy: legacy paths of a public classic comic (reading is free w
   beforeEach(() => {
     db.tables.projects[1].state = {
       coverImageId: legacy('cover.png'),
+      coverTemplateImageId: legacy('template.jpg'),
       panels: [{ imageId: legacy('p1.png'), imageIdHistory: [legacy('p1-old.png')] }, { imageId: legacy('p2') }],
-      characters: [{ imageId: legacy('hero.png'), referenceImageIds: [legacy('selfie.jpg')] }]
+      characters: [{ imageId: legacy('hero.png'), referenceImageIds: [legacy('selfie.jpg')] }],
+      styleVariants: [{ imageId: legacy('style.png') }]
     };
     db.tables.projects[2].state = { coverImageId: legacy('private-cover.png') };
     db.tables.projects[3].state = { coverImageId: legacy('moderated-cover.png') };
   });
 
-  it.each(['cover.png', 'p1.png', 'p2.webp'])('signs %s for a signed-out reader (what the reader shows)', async (file) => {
+  it.each(['cover.png', 'p1.png', 'p2.webp', 'style.png'])('signs %s for a signed-out reader (what the comic shows)', async (file) => {
     const res = await fetchImage(legacy(file));
     expect(res.status).toBe(200);
     expect(db.signed).toEqual([legacy(file)]);
   });
 
-  it.each(['p1-old.png', 'selfie.jpg', 'hero.png', 'private-cover.png', 'moderated-cover.png', 'unknown.png'])(
+  it.each(['p1-old.png', 'selfie.jpg', 'template.jpg', 'hero.png', 'private-cover.png', 'moderated-cover.png', 'unknown.png', 'p1.png.png'])(
     'refuses %s to a signed-out reader with 401',
     async (file) => {
       const res = await fetchImage(legacy(file));
@@ -271,6 +277,20 @@ describe('image proxy: legacy paths of a public classic comic (reading is free w
       expect(db.signed).toEqual([]);
     }
   );
+
+  it("signs a shown panel's tmp-lane twin when the legacy object is gone (the proxy's own fallback)", async () => {
+    db.missing = [legacy('p1.png')];
+    const res = await fetchImage(legacy('p1.png'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).path).toBe(`u/${OWNER}/tmp/p1.png`);
+    expect(db.signed).toEqual([`u/${OWNER}/tmp/p1.png`]);
+  });
+
+  it('refuses an upper-cased owner id (never a storage spelling) without signing', async () => {
+    const res = await fetchImage(`${OWNER.toUpperCase()}/p1.png`);
+    expect(res.status).toBe(401);
+    expect(db.signed).toEqual([]);
+  });
 
   it('a public v4 listing state never authorizes a legacy path', async () => {
     db.tables.projects[0].state = { studioVersion: 4, coverImageId: legacy('v4-cover.png') };

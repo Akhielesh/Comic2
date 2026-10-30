@@ -197,8 +197,9 @@ const isPathReferencedByPublicProject = async (
 };
 
 /**
- * What a signed-out reader may sign on legacy and tmp-lane paths: only the art a public classic comic's reader shows
- * (cover, panels), checked against a short per-owner cache (see publicReaderPaths.ts).
+ * What a signed-out reader may sign on legacy and tmp-lane paths: only the art a public classic comic shows to anyone
+ * (the reader's cover and panels, a card's style preview), checked against a short per-owner cache
+ * (see publicReaderPaths.ts).
  */
 export const publicReaderPathCache = createPublicReaderPathCache((ownerId) => loadPublicReaderPaths(getSupabaseAdmin(), ownerId));
 
@@ -274,8 +275,9 @@ const canAccessImagePath = async (
   if (tempScoped) {
     if (requesterId && requesterId === tempScoped.ownerId) return { allowed: true };
     // A tmp/ image can still be referenced by a published (public) project. Without this, panel images that fell
-    // back to the tmp lane 401/403 for everyone but the owner. A signed-out reader gets only what the public
-    // reader shows (cover, panels); a signed-in one, as before, anything the public project references.
+    // back to the tmp lane 401/403 for everyone but the owner. A signed-out reader gets only what the public comic
+    // shows (cover, panels, a card's style preview: never reference photos or old renders); a signed-in one, as
+    // before, anything the public project references.
     if (!requesterId) {
       if (await publicReaderPathCache.shows(tempScoped.ownerId, imagePath)) return { allowed: true };
       return { allowed: false, status: 401, message: 'Authentication required for this image.' };
@@ -293,7 +295,8 @@ const canAccessImagePath = async (
     }
     if (!requesterId) {
       // Reading is free without an account: a signed-out reader of a public classic comic gets its cover and panel
-      // art (and nothing else of the owner's). Without this, every older comic stalled for signed-out readers.
+      // art and a card's style preview (nothing else of the owner's). Without this, every older comic stalled for
+      // signed-out readers.
       if (await publicReaderPathCache.shows(legacyScoped.ownerId, imagePath)) return { allowed: true };
       return { allowed: false, status: 401, message: 'Authentication required for this image.' };
     }

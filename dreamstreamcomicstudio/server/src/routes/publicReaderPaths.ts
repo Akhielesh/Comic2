@@ -1,18 +1,25 @@
-// The storage paths a public classic comic's reader shows: its cover and its panels' art. Nothing else.
+// The storage paths a public classic comic shows to anyone: the reader's cover and panel art, and the style preview
+// its Library and profile cards fall back to. Nothing else.
 //
-// A signed-out reader of a public classic comic needs signed URLs for exactly these paths, and never for a
-// character's reference photos, a style sheet or an old render from a panel's history. Checking a path means
-// reading every public project of its owner, and one reader asks for a whole comic's panels at once. So the
-// answer is kept per owner for a short while: one query per owner per TTL, shared by concurrent requests, never
-// cached when it fails. A comic unpublished meanwhile stops authorizing new URLs within the TTL.
+// A signed-out reader of a public classic comic needs signed URLs for exactly these paths. Never a character's
+// reference photos or the cover template (author uploads, possibly of real people, used only as AI references), item
+// art, image tags or an old render from a panel's history. (A Page Studio page is stored as a URL and never signed
+// here.) Checking a path means reading every public project of its owner, and one reader asks for a whole comic's
+// panels at once. So the answer is kept per owner for a short while: one query per owner per TTL, shared by
+// concurrent requests, never cached when it fails. A comic unpublished or taken down meanwhile stops authorizing new
+// URLs within the TTL (a URL already signed lives for its own lifetime, as for every signed image).
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-const IMAGE_EXT = /\.(webp|png|jpe?g)$/i;
+/** Owner ids as storage writes them: lower-case canonical UUIDs. Any other spelling can never match a stored path. */
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The paths a classic comic's reader shows. A Comic Studio v4 listing state never authorizes a storage path. */
+/** `<dir>/<name>.<ext>` → `<dir>/<name>`: the extension the client adds to an id stored without one (never stacked). */
+const stem = (path: string): string | null => path.match(/^(.*\/[^/.]+)\.(?:webp|png|jpg|jpeg)$/)?.[1] ?? null;
+
+/** The paths a classic comic shows to anyone. A Comic Studio v4 listing state never authorizes a storage path. */
 export const readerPathsOfState = (state: unknown): string[] => {
   if (!isRecord(state) || state.studioVersion === 4) return [];
   const paths: string[] = [];
@@ -20,8 +27,9 @@ export const readerPathsOfState = (state: unknown): string[] => {
     if (typeof value === 'string' && value.trim()) paths.push(value.trim());
   };
   add(state.coverImageId);
-  add(state.coverTemplateImageId);
   if (Array.isArray(state.panels)) for (const panel of state.panels) if (isRecord(panel)) add(panel.imageId);
+  // Generated style samples: a Library or profile card shows one when the comic has no cover or panel art yet.
+  if (Array.isArray(state.styleVariants)) for (const variant of state.styleVariants) if (isRecord(variant)) add(variant.imageId);
   return paths;
 };
 
@@ -43,7 +51,7 @@ export const loadPublicProjectStates = async (supabaseAdmin: SupabaseClient, own
   return rows.filter((row) => row.is_forced_private !== true).map((row) => row.state);
 };
 
-/** Reader paths of an owner's public, not force-private projects. */
+/** Publicly shown paths of an owner's public, not force-private projects. */
 export const loadPublicReaderPaths = async (supabaseAdmin: SupabaseClient, ownerId: string): Promise<Set<string>> => {
   const paths = new Set<string>();
   for (const state of await loadPublicProjectStates(supabaseAdmin, ownerId)) for (const path of readerPathsOfState(state)) paths.add(path);
@@ -52,9 +60,9 @@ export const loadPublicReaderPaths = async (supabaseAdmin: SupabaseClient, owner
 
 export interface PublicReaderPathCache {
   /**
-   * The owner's public reader shows `imagePath`: as stored, with the extension the client adds to an id stored without
+   * The owner's public comics show `imagePath`: as stored, with the extension the client adds to an id stored without
    * one, or as the tmp-lane twin (`u/<owner>/tmp/<file>`) of a legacy `<owner>/<file>` path, which the image proxy
-   * already signs in its place.
+   * already signs in its place. An owner id not spelled as storage writes it is refused without a query.
    */
   shows: (ownerId: string, imagePath: string) => Promise<boolean>;
   clear: () => void;
@@ -68,7 +76,12 @@ export const createPublicReaderPathCache = (
 
   const pathsOf = (ownerId: string): Promise<Set<string>> => {
     const hit = entries.get(ownerId);
-    if (hit && now() - hit.at < ttlMs) return hit.paths;
+    if (hit && now() - hit.at < ttlMs) {
+      // Least recently used leaves first: an owner being read keeps its place.
+      entries.delete(ownerId);
+      entries.set(ownerId, hit);
+      return hit.paths;
+    }
     const entry = { at: now(), paths: load(ownerId) };
     entries.delete(ownerId);
     entries.set(ownerId, entry);
@@ -85,11 +98,12 @@ export const createPublicReaderPathCache = (
 
   return {
     shows: async (ownerId, imagePath) => {
+      if (!CANONICAL_UUID.test(ownerId)) return false;
+      const forms = [imagePath, stem(imagePath)];
+      const tmpFile = imagePath.startsWith(`u/${ownerId}/tmp/`) ? imagePath.slice(`u/${ownerId}/tmp/`.length) : null;
+      if (tmpFile && !tmpFile.includes('/')) forms.push(`${ownerId}/${tmpFile}`, stem(`${ownerId}/${tmpFile}`));
       const paths = await pathsOf(ownerId);
-      const forms = [imagePath, imagePath.replace(IMAGE_EXT, '')];
-      const tmp = imagePath.match(/^u\/([0-9a-f-]{36})\/tmp\/([^/]+)$/i);
-      if (tmp && tmp[1].toLowerCase() === ownerId.toLowerCase()) forms.push(`${ownerId}/${tmp[2]}`, `${ownerId}/${tmp[2].replace(IMAGE_EXT, '')}`);
-      return forms.some((form) => paths.has(form));
+      return forms.some((form) => form !== null && paths.has(form));
     },
     clear: () => entries.clear()
   };

@@ -1,13 +1,15 @@
 // @vitest-environment node
 //
-// What a signed-out reader of a public classic comic may sign: the art its reader shows (cover, panels), never a
-// character's reference photos, a style sheet or a panel's older renders; force-private and v4 rows authorize nothing.
+// What a signed-out reader of a public classic comic may sign: what the comic shows to anyone (the reader's cover and
+// panels, a card's style preview), never a character's reference photos, the cover template or a panel's older
+// renders; force-private and v4 rows authorize nothing.
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, readerPathsOfState } from './publicReaderPaths.js';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const O3 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 /** A service-role client whose projects table answers select().eq().eq(), optionally without the moderation column. */
 const fakeAdmin = (rows: Record<string, unknown>[], opts: { noModerationColumn?: boolean; fail?: boolean } = {}) => {
@@ -57,8 +59,8 @@ const classicState = {
 };
 
 describe('readerPathsOfState', () => {
-  it('is the cover, the cover template and each panel image: never history, references, items, styles or tags', () => {
-    expect(readerPathsOfState(classicState)).toEqual([`${OWNER}/cover.png`, `${OWNER}/template.png`, `${OWNER}/p1.png`, `${OWNER}/p2`]);
+  it('is the cover, each panel image and the style previews: never history, references, the cover template, items or tags', () => {
+    expect(readerPathsOfState(classicState)).toEqual([`${OWNER}/cover.png`, `${OWNER}/p1.png`, `${OWNER}/p2`, `${OWNER}/style.png`]);
   });
 
   it('a v4 listing state and malformed states authorize nothing', () => {
@@ -86,6 +88,7 @@ describe('loadPublicReaderPaths', () => {
     expect(paths.has(`${OWNER}/draft.png`)).toBe(false);
     expect(paths.has(`${OTHER}/theirs.png`)).toBe(false);
     expect(paths.has(`${OWNER}/selfie.jpg`)).toBe(false);
+    expect(paths.has(`${OWNER}/template.png`)).toBe(false);
   });
 
   it('tolerates a database without the moderation column', async () => {
@@ -110,10 +113,26 @@ describe('createPublicReaderPathCache', () => {
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/p1.png`)).toBe(true);
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/p2.png`)).toBe(true);
     expect(await cache.shows(OWNER, `${OWNER}/p1-old.png`)).toBe(false);
-    expect(await cache.shows(OWNER, `${OWNER}/p1.png/../x.png`)).toBe(false);
-    // Another owner's tmp lane is never this owner's twin.
+    // Another owner's tmp lane is never this owner's twin, nor a nested tmp path.
     expect(await cache.shows(OWNER, `u/${OTHER}/tmp/p1.png`)).toBe(false);
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/nested/p1.png`)).toBe(false);
+  });
+
+  it('never stacks or re-cases an extension: a stored "a.png" authorizes "a.png" only', async () => {
+    const cache = createPublicReaderPathCache(async () => set(`${OWNER}/p1.png`, `${OWNER}/p2`));
+    for (const path of [`${OWNER}/p1.png.png`, `${OWNER}/p1.png.jpeg`, `u/${OWNER}/tmp/p1.png.jpeg`, `${OWNER}/p2.PNG`, `${OWNER}/p2.png.webp`, `${OWNER}/p2.gif`]) {
+      expect(await cache.shows(OWNER, path)).toBe(false);
+    }
+  });
+
+  it('refuses an owner id not spelled as storage writes it, without a query', async () => {
+    const load = vi.fn(async () => set(`${OWNER}/p1.png`));
+    const cache = createPublicReaderPathCache(load);
+    const upper = OWNER.toUpperCase();
+    expect(await cache.shows(upper, `${upper}/p1.png`)).toBe(false);
+    expect(await cache.shows('-'.repeat(36), `${'-'.repeat(36)}/p1.png`)).toBe(false);
+    expect(await cache.shows('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/p1.png')).toBe(false);
+    expect(load).not.toHaveBeenCalled();
   });
 
   it('loads once per owner per TTL, shared by concurrent requests', async () => {
@@ -140,24 +159,26 @@ describe('createPublicReaderPathCache', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps at most maxOwners owners (oldest out first)', async () => {
+  it('keeps at most maxOwners owners, the least recently read leaving first', async () => {
     const load = vi.fn(async (owner: string) => set(`${owner}/a.png`));
     const cache = createPublicReaderPathCache(load, { maxOwners: 2 });
-    await cache.shows('o1', 'o1/a.png');
-    await cache.shows('o2', 'o2/a.png');
-    await cache.shows('o3', 'o3/a.png'); // o1 leaves
-    await cache.shows('o2', 'o2/a.png');
+    await cache.shows(OWNER, `${OWNER}/a.png`);
+    await cache.shows(OTHER, `${OTHER}/a.png`);
+    await cache.shows(OWNER, `${OWNER}/a.png`); // read again: OTHER is now the least recent
+    await cache.shows(O3, `${O3}/a.png`); // OTHER leaves
     expect(load).toHaveBeenCalledTimes(3);
-    await cache.shows('o1', 'o1/a.png');
+    await cache.shows(OWNER, `${OWNER}/a.png`);
+    expect(load).toHaveBeenCalledTimes(3);
+    await cache.shows(OTHER, `${OTHER}/a.png`);
     expect(load).toHaveBeenCalledTimes(4);
   });
 
   it('clear() forgets every owner', async () => {
     const load = vi.fn(async () => set());
     const cache = createPublicReaderPathCache(load);
-    await cache.shows(OWNER, 'x');
+    await cache.shows(OWNER, `${OWNER}/x.png`);
     cache.clear();
-    await cache.shows(OWNER, 'x');
+    await cache.shows(OWNER, `${OWNER}/x.png`);
     expect(load).toHaveBeenCalledTimes(2);
   });
 });
