@@ -56,7 +56,8 @@ export type TopLevelSection =
  * Where every top-level ComicDoc key goes. Excluded keys are forward-only records (spend, conversation,
  * memory, settings, safety, publication, the image-model lock, the composer inbox) or identity/bookkeeping —
  * a restore never rewinds them. Adding a ComicDoc key without listing it here fails the typecheck.
- * (Ship 2 / K2a: `scenes` and `consistency` go to 'meta'.)
+ * (Ship 2 / K2a: `scenes` and `consistency` go to 'meta'. Nothing else is needed for them: every 'meta' key beyond
+ * TYPED_META_KEYS is captured, compared (diffBooks) and restored (RestoreSet.metaExtra) generically.)
  */
 export const TOP_LEVEL_SECTIONS: Readonly<Record<keyof ComicDoc, TopLevelSection>> = {
   v: 'excluded',
@@ -97,9 +98,32 @@ export const EXCLUDED_TOP_LEVEL_KEYS: readonly (keyof ComicDoc)[] = (Object.keys
 );
 
 const ASSIGNED = new Set<string>(Object.keys(TOP_LEVEL_SECTIONS));
+/** The section of a top-level key (own entries only: 'toString' or 'constructor' are not listed keys). */
+const sectionOf = (key: string): TopLevelSection | undefined =>
+  ASSIGNED.has(key) ? (TOP_LEVEL_SECTIONS as Record<string, TopLevelSection>)[key] : undefined;
 
 /** Top-level keys of `doc` that TOP_LEVEL_SECTIONS does not list (they still ride in `meta`, so nothing is lost). */
 export const unassignedKeys = (doc: object): string[] => Object.keys(doc).filter((k) => !ASSIGNED.has(k));
+
+/** The meta keys a RestoreSet carries as typed fields (history/restore.ts metaFields, history/apply.ts). */
+export const TYPED_META_KEYS: readonly (keyof ComicDoc)[] = ['brief', 'format', 'planStatus', 'letterStyle', 'book', 'reader', 'planInputHash'];
+const TYPED_META = new Set<string>(TYPED_META_KEYS);
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * A key of the meta section with no typed RestoreSet field: a TOP_LEVEL_SECTIONS 'meta' key beyond the typed ones
+ * (K2a: `scenes`, `consistency`) or a key TOP_LEVEL_SECTIONS does not list. These travel in RestoreSet.metaExtra,
+ * so whatever the meta section captures, a restore brings back. Never an excluded or other-section key.
+ */
+export const isExtraMetaKey = (key: string): boolean => {
+  if (typeof key !== 'string' || !key || UNSAFE_KEYS.has(key) || TYPED_META.has(key)) return false;
+  const section = sectionOf(key);
+  return section === 'meta' || section === undefined;
+};
+
+/** The extra meta keys `doc` has a value for (see isExtraMetaKey). */
+export const extraMetaKeys = (doc: object): string[] =>
+  Object.keys(doc).filter((k) => isExtraMetaKey(k) && (doc as Record<string, unknown>)[k] !== undefined);
 
 // ── Section keys ─────────────────────────────────────────────────────────────
 
@@ -316,7 +340,7 @@ const editionSplit = (edition: LanguageEdition, pageLines: Map<string, string[]>
 export const splitSections = (doc: ComicDoc): BookSections => {
   const meta: Record<string, unknown> = {};
   for (const key of Object.keys(doc)) {
-    const section = (TOP_LEVEL_SECTIONS as Record<string, TopLevelSection | undefined>)[key];
+    const section = sectionOf(key);
     if (section === 'meta' || section === undefined) {
       const value = (doc as unknown as Record<string, unknown>)[key];
       if (value !== undefined) meta[key] = value;

@@ -10,8 +10,11 @@ import {
   ARCHIVE_BLOCK,
   EXCLUDED_TOP_LEVEL_KEYS,
   TOP_LEVEL_SECTIONS,
+  TYPED_META_KEYS,
   buildManifest,
   excludedOf,
+  extraMetaKeys,
+  isExtraMetaKey,
   joinSections,
   manifestKeyHashes,
   parseSectionKey,
@@ -91,6 +94,19 @@ describe('every top-level key is assigned or excluded', () => {
     const s = splitSections(doc);
     expect(s.meta.scenesFromTheFuture).toEqual([{ id: 'sc_1', name: 'Market' }]);
     expect((roundTrip(doc) as unknown as Record<string, unknown>).scenesFromTheFuture).toEqual([{ id: 'sc_1', name: 'Market' }]);
+  });
+
+  it('every meta key without a typed restore field is an "extra" meta key, which a restore brings back generically', () => {
+    // The typed fields are exactly today's 'meta' keys; K2a's scenes/consistency (listed as 'meta') become extra keys.
+    const metaKeys = (Object.keys(TOP_LEVEL_SECTIONS) as (keyof ComicDoc)[]).filter((k) => TOP_LEVEL_SECTIONS[k] === 'meta');
+    for (const k of metaKeys) expect(TYPED_META_KEYS.includes(k) || isExtraMetaKey(k), k).toBe(true);
+    for (const k of TYPED_META_KEYS) expect(TOP_LEVEL_SECTIONS[k], k).toBe('meta');
+    expect(isExtraMetaKey('scenesFromTheFuture')).toBe(true);
+    // Never an excluded, typed or other-section key, and never a prototype key.
+    for (const k of [...EXCLUDED_TOP_LEVEL_KEYS, ...TYPED_META_KEYS, 'pages', 'cast', 'style', 'i18n', 'archive', 'trash', 'cover', 'source', '__proto__', 'constructor', 'prototype', ''])
+      expect(isExtraMetaKey(k), k).toBe(false);
+    const doc = { ...normalizeDoc(historyV5Doc()), scenesFromTheFuture: [], gone: undefined } as ComicDoc;
+    expect(extraMetaKeys(doc)).toEqual(['scenesFromTheFuture']);
   });
 
   it('never holds an excluded record (spend, conversation, memory, settings, safety, publication, the lock, the inbox)', () => {

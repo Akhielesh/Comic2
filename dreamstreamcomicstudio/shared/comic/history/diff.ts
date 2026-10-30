@@ -8,7 +8,7 @@
 import { stableStringify } from '../hash.js';
 import { i18nOf } from '../i18n.js';
 import type { Balloon, ComicDoc, Line, Page, Panel, RenderState, TextTranslation } from '../doc.js';
-import { manifestKeyHashes } from './sections.js';
+import { extraMetaKeys, manifestKeyHashes } from './sections.js';
 import type { BookDiff, EditionDiff, EntityDiff, LineDiff, Manifest, ManifestDiff, PageDiff, PanelDiff, WordDiffPart } from './types.js';
 
 // ── Manifests ────────────────────────────────────────────────────────────────
@@ -103,7 +103,14 @@ export const semanticValue = (value: unknown, depth = 0): unknown => {
   for (const [k, v] of Object.entries(value)) if (!HIDDEN_KEYS.has(k) && v !== undefined) out[k] = semanticValue(v, depth + 1);
   return out;
 };
-const sig = (v: unknown): string => stableStringify(semanticValue(v));
+/**
+ * The canonical content of a section body AFTER the semantic filter: two bodies with equal semanticSectionContent
+ * differ only in QC, size variants, safety verdicts or a render's older-versions list — nothing the creator made.
+ * H3 compares the live and R bodies of a raw-hash mismatch with it (planUndoLastAi's `sameContent`), so a variant
+ * backfill or an async safety verdict never reads as "You've changed page 3 since".
+ */
+export const semanticSectionContent = (body: unknown): string => stableStringify(semanticValue(body));
+const sig = semanticSectionContent;
 
 // ── Books ────────────────────────────────────────────────────────────────────
 
@@ -238,7 +245,9 @@ export const diffBooks = (a: ComicDoc, b: ComicDoc): BookDiff => {
     text: coverText(a.cover) !== coverText(b.cover),
     art: (a.cover.render.asset?.path ?? null) !== (b.cover.render.asset?.path ?? null) || (a.cover.lettering ?? 'in_art') !== (b.cover.lettering ?? 'in_art')
   };
-  const meta = META_FIELDS.filter((k) => sig((a as unknown as Record<string, unknown>)[k]) !== sig((b as unknown as Record<string, unknown>)[k])).map(String);
+  // The typed fields, then every other meta key either side has (K2a's scenes/consistency, unlisted keys).
+  const metaKeys: string[] = [...META_FIELDS, ...[...new Set([...extraMetaKeys(a), ...extraMetaKeys(b)])].sort()];
+  const meta = metaKeys.filter((k) => sig((a as unknown as Record<string, unknown>)[k]) !== sig((b as unknown as Record<string, unknown>)[k]));
   const editions = diffEditions(a, b);
   const glossary = sig(i18nOf(a).glossary) !== sig(i18nOf(b).glossary);
   const ma = drawnModelOf(a);

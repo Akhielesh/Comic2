@@ -357,6 +357,13 @@ export interface RestoreSet {
   reader?: ReaderSettings;
   /** null removes it. */
   planInputHash?: string | null;
+  /**
+   * Every other key of the meta section (sections.ts isExtraMetaKey: TOP_LEVEL_SECTIONS 'meta' keys beyond the
+   * typed ones — K2a's scenes and consistency — and keys TOP_LEVEL_SECTIONS does not list). key → the version's
+   * value; null removes the key. Merge mode applies the listed keys; exact mode replaces the whole set (a current
+   * extra key that is not listed is removed). The applier ignores any key that is not an extra meta key.
+   */
+  metaExtra?: Record<string, unknown>;
   /** The version's pages in its order: pages added since go to Deleted (I6). */
   pages?: Page[];
   /** Characters/places/options created since are kept (I6). */

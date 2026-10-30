@@ -19,7 +19,7 @@
 
 import type { Balloon, ComicDoc, LanguageEdition, Page, StyleBible } from '../doc.js';
 import { i18nOf } from '../i18n.js';
-import { parseSectionKey } from './sections.js';
+import { extraMetaKeys, parseSectionKey } from './sections.js';
 import type { EditionMerge, HistoryRestoreOp, RestoreMode, RestorePart, RestoreScope, RestoreSet } from './types.js';
 
 const styleSection = (style: StyleBible): Omit<StyleBible, 'options'> => {
@@ -71,16 +71,34 @@ const glossaryFor = (version: ComicDoc, refId: string) => i18nOf(version).glossa
 
 const findPage = (doc: ComicDoc, id: string) => doc.pages.find((p) => p.id === id);
 
-/** The meta section's fields (brief, format, plan status, lettering, book, reader, plan input fingerprint). */
-const metaFields = (version: ComicDoc): RestoreSet => ({
-  brief: version.brief,
-  format: version.format,
-  planStatus: version.planStatus,
-  ...(version.letterStyle ? { letterStyle: version.letterStyle } : {}),
-  ...(version.book ? { book: version.book } : {}),
-  ...(version.reader ? { reader: version.reader } : {}),
-  planInputHash: version.planInputHash ?? null
-});
+/**
+ * The meta section's extra keys (sections.ts isExtraMetaKey): the version's values, plus null for an extra key the
+ * current doc has and the version does not (removed). Undefined when there are none, unless `always`.
+ */
+const metaExtraOf = (version: ComicDoc, current: ComicDoc | undefined, always = false): Record<string, unknown> | undefined => {
+  const out: Record<string, unknown> = {};
+  for (const k of extraMetaKeys(version)) out[k] = (version as unknown as Record<string, unknown>)[k];
+  if (current) for (const k of extraMetaKeys(current)) if (!Object.prototype.hasOwnProperty.call(out, k)) out[k] = null;
+  return always || Object.keys(out).length ? out : undefined;
+};
+
+/**
+ * The meta section's fields: brief, format, plan status, lettering, book, reader, plan input fingerprint — and
+ * every other meta key (metaExtra), so whatever the meta section captures, a restore brings back.
+ */
+const metaFields = (version: ComicDoc, current?: ComicDoc, exact = false): RestoreSet => {
+  const metaExtra = metaExtraOf(version, current, exact);
+  return {
+    brief: version.brief,
+    format: version.format,
+    planStatus: version.planStatus,
+    ...(version.letterStyle ? { letterStyle: version.letterStyle } : {}),
+    ...(version.book ? { book: version.book } : {}),
+    ...(version.reader ? { reader: version.reader } : {}),
+    planInputHash: version.planInputHash ?? null,
+    ...(metaExtra ? { metaExtra } : {})
+  };
+};
 
 const merge = (a: RestoreSet, b: RestoreSet): RestoreSet => {
   const out: RestoreSet = { ...a };
@@ -110,7 +128,7 @@ const keysSet = (current: ComicDoc, version: ComicDoc, keys: readonly string[]):
     if (!k) continue;
     switch (k.kind) {
       case 'meta':
-        set = merge(set, metaFields(version));
+        set = merge(set, metaFields(version, current));
         break;
       case 'source':
         set = merge(set, { source: version.source });
@@ -207,7 +225,7 @@ export const restoreOps = (current: ComicDoc, version: ComicDoc, scope: RestoreS
   switch (scope.kind) {
     case 'book':
       return {
-        ...metaFields(version),
+        ...metaFields(version, current),
         source: version.source,
         style: styleSection(version.style),
         options: version.style.options,
@@ -309,7 +327,7 @@ export const historyRestoreOp = (set: RestoreSet, opts: { versionId: string; at:
  * which belongs to the comic: the line's Deleted pages join the comic's (so a switch there and back loses none).
  */
 export const exactRestoreSet = (version: ComicDoc): RestoreSet => ({
-  ...metaFields(version),
+  ...metaFields(version, undefined, true),
   source: version.source,
   style: styleSection(version.style),
   options: version.style.options,

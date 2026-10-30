@@ -55,7 +55,7 @@ import {
 import { DOC_LIMITS, MAX_BALLOON_SNAPSHOT, MAX_RENDER_HISTORY, MAX_TRASH } from '../limits.js';
 import { i18nOf, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextTranslation } from '../i18n.js';
 import { languageSpec, sameLanguage } from '../languages.js';
-import { stableRender } from './sections.js';
+import { extraMetaKeys, isExtraMetaKey, stableRender } from './sections.js';
 import type { EditionMerge, HistoryRestoreOp, RestorePart, RestoreSet } from './types.js';
 
 /** The ops.ts archive primitives (passed in, so this module never imports ops.ts at runtime). */
@@ -367,6 +367,25 @@ const withBalloons = (balloons: Balloon[], updates: Balloon[], drop: Set<string>
   return out;
 };
 
+/**
+ * The meta section's extra keys (K2a's scenes/consistency, keys TOP_LEVEL_SECTIONS does not list): each listed key
+ * takes the version's value, null (or undefined, which the wire turns into null) removes it. `replace` (exact
+ * mode) also removes every current extra key the set does not list. Any other key is ignored (never an excluded,
+ * forward-only or other-section key).
+ */
+const withMetaExtra = (doc: ComicDoc, extra: Record<string, unknown>, replace: boolean): ComicDoc => {
+  const entries = Object.entries(extra).filter(([k]) => isExtraMetaKey(k));
+  const drop = replace ? extraMetaKeys(doc).filter((k) => !Object.prototype.hasOwnProperty.call(extra, k)) : [];
+  if (!entries.length && !drop.length) return doc;
+  const out = { ...doc } as unknown as Record<string, unknown>;
+  for (const k of drop) delete out[k];
+  for (const [k, v] of entries) {
+    if (v === null || v === undefined) delete out[k];
+    else out[k] = v;
+  }
+  return out as unknown as ComicDoc;
+};
+
 // ── Merge ────────────────────────────────────────────────────────────────────
 
 const applyMerge = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
@@ -384,6 +403,7 @@ const applyMerge = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
       delete doc.planInputHash;
     }
   } else if (typeof set.planInputHash === 'string' && set.planInputHash) doc = { ...doc, planInputHash: set.planInputHash };
+  if (isObj(set.metaExtra)) doc = withMetaExtra(doc, set.metaExtra, false);
 
   // Style bible (options are their own sections).
   if (isObj(set.style)) doc = { ...doc, style: mergeStyle(doc.style, set.style as Omit<StyleBible, 'options'>) };
@@ -555,6 +575,7 @@ const applyExact = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
   if (isObj(set.reader)) doc.reader = pickReader(set.reader);
   if (typeof set.planInputHash === 'string' && set.planInputHash) doc.planInputHash = set.planInputHash;
   else if (set.planInputHash === null) delete doc.planInputHash;
+  if (isObj(set.metaExtra)) doc = withMetaExtra(doc, set.metaExtra, true);
   if (isObj(set.style)) doc.style = { ...(set.style as StyleBible), options: doc.style.options };
   if (Array.isArray(set.options)) doc.style = { ...doc.style, options: set.options.filter(hasId).map(freshOption) };
   if (Array.isArray(set.cast)) doc.cast = set.cast.filter(hasId).map(freshCharacter);

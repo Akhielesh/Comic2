@@ -1399,7 +1399,9 @@ describe('P2-AMEND events, models, caps, safety text, versions, public payload',
 });
 
 // ── Comic History H0 (versions plan §3.3) ────────────────────────────────────
+import { expectTypeOf } from 'vitest';
 import { HISTORY_ACTION_TYPES, type HistoryCard } from './history/types';
+import type { Card } from './doc';
 import { HISTORY_LIMITS, MAX_ALTERNATIVES } from './limits';
 import { KNOWN_DOC_OPS, isKnownDocOp } from './ops';
 import { STREAM_EVENT_NAMES, normalizeTimeZone } from './events';
@@ -1429,8 +1431,14 @@ describe('Comic History contract (H0)', () => {
     expect(isSpendAction({ type: 'history_undo_ai' })).toBe(false);
   });
 
-  it('the history card holds ids only and survives normalizeDoc', () => {
+  it('the history card is a conversation Card (typecheck), holds ids only and survives normalizeDoc', () => {
+    // Type contract (npm run typecheck): the `history` member of Card is exactly HistoryCard.
+    expectTypeOf<Extract<Card, { type: 'history' }>>().toEqualTypeOf<HistoryCard>();
     const card: HistoryCard = { type: 'history', id: 'card_h', view: 'compare', a: 'v1', b: 'now', pageId: 'pg_1', scope: { kind: 'page', pageId: 'pg_1', mode: 'replace', part: 'text' } };
+    const asCard: Card = card;
+    // Ids only: every field is a short id/enum string, or a scope made of them (no doc bodies, no URLs).
+    const leaves = (v: unknown): unknown[] => (v && typeof v === 'object' ? Object.values(v).flatMap(leaves) : [v]);
+    for (const leaf of leaves(asCard)) expect(typeof leaf === 'string' && leaf.length <= 64 && !/[/:]/.test(leaf), String(leaf)).toBe(true);
     const doc = normalizeDoc({ ...createEmptyDoc('h'), conversation: [{ id: 'm', role: 'assistant', text: 'Here', at: 1, cards: [card] }] });
     expect(doc.conversation[0].cards).toEqual([card]);
   });

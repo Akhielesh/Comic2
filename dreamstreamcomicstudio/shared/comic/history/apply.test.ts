@@ -381,14 +381,19 @@ describe('per-scope restores on the fixtures', () => {
 
   it('text restore keeps the art (stale honestly); art restore keeps the text', () => {
     const version = asVersion(v5());
+    const verdict = { assessed: 'PG' as const, at: AT - 2, by: 'check' as const };
+    const variants = [{ path: 'x/p2_w480.webp', w: 480, h: 720 }];
     const current = applyOps(
       v5(),
       [
         { op: 'panel', pageId: 'pg_2', id: 'pg_2_p2', patch: { action: 'Maya drops the tin' } },
-        { op: 'render', target: { kind: 'page', id: 'pg_2' }, patch: { status: 'ready', asset: { path: 'x/p2-new.webp', source: 'generated', at: AT - 3 } } }
+        { op: 'render', target: { kind: 'page', id: 'pg_2' }, patch: { status: 'ready', asset: { path: 'x/p2-new.webp', source: 'generated', at: AT - 3 } } },
+        // Since the version: a newer safety verdict and new size variants for the drawing the version had.
+        { op: 'asset_meta', path: version.pages[1].render.asset!.path, patch: { safety: verdict, variants } }
       ],
-      AT - 3
+      AT - 2
     );
+    expect(version.pages[1].render.asset!.safety).not.toEqual(verdict); // the stored version still has the old verdict
     const text = restore(current, version, { kind: 'page', pageId: 'pg_2', mode: 'replace', part: 'text' });
     expect(text.pages[1].panels[1].action).toBe(version.pages[1].panels[1].action);
     expect(text.pages[1].render.asset!.path).toBe('x/p2-new.webp');
@@ -396,7 +401,8 @@ describe('per-scope restores on the fixtures', () => {
     expect(art.pages[1].panels[1].action).toBe('Maya drops the tin');
     expect(art.pages[1].render.asset!.path).toBe(version.pages[1].render.asset!.path);
     // A restored image keeps the live doc's newest verdict and variants (I3: forward-only image metadata).
-    expect(art.pages[1].render.asset!.safety).toEqual(current.pages[1].render.history.find((h) => h.path === version.pages[1].render.asset!.path)?.safety);
+    expect(art.pages[1].render.asset!.safety).toEqual(verdict);
+    expect(art.pages[1].render.asset!.variants).toEqual(variants);
   });
 
   it('line and panel restores bring back that text and its translations only', () => {
@@ -468,6 +474,44 @@ describe('per-scope restores on the fixtures', () => {
     expect(after.brief.tone).toBe(version.brief.tone);
     expect(after.pages).toHaveLength(7);
     expect(after.format.pageCount).toBe(7);
+  });
+
+  it('every meta key beyond the typed ones comes back (K2a scenes/consistency travel the same way): book, meta key, switch', () => {
+    // Keys TOP_LEVEL_SECTIONS does not list ride in the meta section; once K2a lists scenes/consistency as 'meta'
+    // they take exactly this path (isExtraMetaKey), with no change to restore.ts or apply.ts.
+    const extra = (doc: ComicDoc, values: Record<string, unknown>): ComicDoc => {
+      const out = { ...doc } as unknown as Record<string, unknown>;
+      for (const [k, v] of Object.entries(values)) {
+        if (v === undefined) delete out[k];
+        else out[k] = v;
+      }
+      return out as unknown as ComicDoc;
+    };
+    const get = (doc: ComicDoc, k: string) => (doc as unknown as Record<string, unknown>)[k];
+    const then = asVersion(extra(v5(), { scenesFromTheFuture: [{ id: 'sc_1', name: 'Market' }], tidbitsThen: { a: 1 } }));
+    const now = extra(v5(), { scenesFromTheFuture: [{ id: 'sc_1', name: 'Rooftops' }, { id: 'sc_2', name: 'Chase' }], keysAddedSince: { b: 2 } });
+    expect(diffBooks(then, now).meta).toEqual(['keysAddedSince', 'scenesFromTheFuture', 'tidbitsThen']);
+    const check = (after: ComicDoc, ctx: string) => {
+      expect(get(after, 'scenesFromTheFuture'), ctx).toEqual([{ id: 'sc_1', name: 'Market' }]);
+      expect(get(after, 'tidbitsThen'), ctx).toEqual({ a: 1 });
+      expect('keysAddedSince' in after, ctx).toBe(false);
+      expect(diffBooks(then, after).meta, ctx).toEqual([]);
+      expect(normalizeDoc(after), ctx).toEqual(after);
+    };
+    check(restore(now, then, { kind: 'book' }), 'book');
+    check(restore(now, then, { kind: 'keys', keys: ['meta'] }), 'meta key (undo the last AI change)');
+    check(restore(now, then, { kind: 'book' }, 'exact'), 'switch');
+    // Server == client over the wire (the wire turns undefined into null; both remove the key).
+    const op = historyRestoreOp({ metaExtra: { scenesFromTheFuture: null, keysAddedSince: undefined, tidbitsThen: { a: 1 } } }, { versionId: 'v', at: AT });
+    expect(applyOps(wireDoc(now), [overTheWire(op)], AT)).toEqual(wireDoc(applyOps(now, [op], AT)));
+    // metaExtra never reaches forward-only, identity or other-section keys.
+    // (JSON.parse makes "__proto__" an own key, as a crafted wire payload would.)
+    const metaExtra = { ...JSON.parse('{"__proto__": {"polluted": true}}'), spend: { totalUsd: 0, byKind: {}, entries: [] }, conversation: [], pages: [], settings: null, imageModel: null, rev: 0, brief: null };
+    expect(Object.keys(metaExtra)).toContain('__proto__');
+    const kept = applyOps(now, [historyRestoreOp({ metaExtra }, { versionId: 'v', at: AT })], AT);
+    for (const k of [...FORWARD_ONLY, 'pages', 'brief', 'rev'] as const) expect(kept[k], k).toEqual(now[k]);
+    expect(Object.getPrototypeOf(kept)).toBe(Object.prototype);
+    expect((kept as unknown as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it('works on the v4 and empty fixtures', () => {

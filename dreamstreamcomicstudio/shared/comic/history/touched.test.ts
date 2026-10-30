@@ -72,6 +72,18 @@ describe('describeChanges', () => {
     for (const label of [describeChanges(items, 'ai'), describeChanges(yours, 'edits'), describeChanges([], 'switch', { name: 'New ending' }), describeChanges([], 'before_restore')]) expect(label).not.toMatch(GIT);
   });
 
+  it('an image-model switch leads its label (spec copy), and up to three phrases are named before "and more"', () => {
+    const art = (n: number[]) => ({ what: 'art' as const, by: 'ai' as const, pageNs: n });
+    const switched = [art([1, 2, 3, 4, 5, 6]), { what: 'model' as const, by: 'ai' as const }];
+    expect(describeChanges(switched, 'ai')).toBe('Switched the image model and redrew pages 1–6');
+    expect(describeChanges(switched, 'before_ai')).toBe('Before switching the image model and redrawing pages 1–6');
+    expect(describeChanges([{ what: 'model', by: 'ai' }], 'ai')).toBe('Switched the image model');
+    // Three phrases: every one is named (the translation is not hidden behind "and more").
+    const three = [{ what: 'dialogue' as const, by: 'ai' as const, pageNs: [3] }, art([3]), { what: 'translation' as const, by: 'ai' as const, lang: 'te', count: 4 }];
+    expect(describeChanges(three, 'ai')).toBe('AI revised page 3, drew page 3 and translated 4 lines to Telugu');
+    expect(describeChanges([...three, { what: 'cover' as const, by: 'ai' as const }], 'ai')).toBe('AI revised page 3, drew page 3, translated 4 lines to Telugu and more');
+  });
+
   it('page ranges read naturally', () => {
     expect(pageRangeText([3])).toBe('page 3');
     expect(pageRangeText([4, 3])).toBe('pages 3–4');

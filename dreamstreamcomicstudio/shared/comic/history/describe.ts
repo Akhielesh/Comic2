@@ -1,7 +1,8 @@
 // Comic History — plain words for a moment (versions plan §4.3 labels; package H0). Pure.
 //
-// "AI revised pages 3–4", "Before the AI drew pages 1–6", "AI translated 58 lines to Telugu", "You edited dialogue on
-// pages 2 and 5", "The editor re-fitted balloons on page 2, no AI cost", "History starts here", "Where you left off".
+// "AI revised pages 3–4", "Before the AI drew pages 1–6", "AI translated 58 lines to Telugu", "Switched the image model
+// and redrew pages 1–6", "You edited dialogue on pages 2 and 5", "The editor re-fitted balloons on page 2, no AI
+// cost", "History starts here", "Where you left off".
 // No git words (branch, merge, commit, checkout, fork, HEAD, diff, rebase, revert) — the creator never sees them.
 
 import type { ComicDoc } from '../doc.js';
@@ -59,10 +60,19 @@ const groupBy = (changes: ChangeItem[]): Map<ChangeWhat, ChangeItem[]> => {
   return out;
 };
 
-/** The verb phrases of a set of changes, most important first ("revised pages 3–4", "drew page 5"). */
+/**
+ * The verb phrases of a set of changes, most important first ("revised pages 3–4", "drew page 5"). An image-model
+ * switch leads, with its redraw right after it ("switched the image model", "redrew pages 1–6").
+ */
 const phrases = (changes: ChangeItem[], opts: DescribeOptions, actor: HistoryActor): string[] => {
   const g = groupBy(changes);
   const out: string[] = [];
+  const model = !!g.get('model');
+  const art = g.get('art');
+  if (model) {
+    out.push('switched the image model');
+    if (art) out.push(`redrew ${pageRangeText(pagesOf(art))}`);
+  }
   const text = [...(g.get('dialogue') || []), ...(g.get('panels') || []), ...(g.get('page_text') || [])];
   if (text.length) {
     const onlyDialogue = text.every((c) => c.what === 'dialogue');
@@ -73,15 +83,13 @@ const phrases = (changes: ChangeItem[], opts: DescribeOptions, actor: HistoryAct
   if (added) out.push(`added ${pageRangeText(pagesOf(added))}`);
   const removed = g.get('pages_removed');
   if (removed) out.push(`removed ${pageRangeText(pagesOf(removed))}`);
-  const art = g.get('art');
-  if (art) out.push(actor === 'ai' ? `drew ${pageRangeText(pagesOf(art))}` : `changed the art on ${pageRangeText(pagesOf(art))}`);
+  if (art && !model) out.push(actor === 'ai' ? `drew ${pageRangeText(pagesOf(art))}` : `changed the art on ${pageRangeText(pagesOf(art))}`);
   const balloons = g.get('balloons');
   if (balloons) out.push(actor === 'editor' ? `re-fitted balloons on ${pageRangeText(pagesOf(balloons))}` : `moved balloons on ${pageRangeText(pagesOf(balloons))}`);
   for (const c of g.get('translation') || []) {
     const n = c.count ?? c.lineIds?.length ?? 0;
     out.push(n ? `translated ${plural(n, 'line')} to ${langName(c.lang || '', opts)}` : `updated the ${langName(c.lang || '', opts)} edition`);
   }
-  if (g.get('model')) out.push('switched the image model');
   const chars = g.get('character');
   if (chars) out.push(chars.length === 1 ? `updated ${chars[0].name || 'a character'}` : `updated ${plural(chars.length, 'character')}`);
   const places = g.get('place');
@@ -94,7 +102,14 @@ const phrases = (changes: ChangeItem[], opts: DescribeOptions, actor: HistoryAct
   return out;
 };
 
-const join = (parts: string[]): string => (parts.length <= 1 ? parts[0] || '' : parts.length === 2 ? `${parts[0]} and ${parts[1]}` : `${parts[0]}, ${parts[1]} and more`);
+/** "a" · "a and b" · "a, b and c" · "a, b, c and more" (up to three phrases are named). */
+const join = (parts: string[]): string => {
+  if (parts.length <= 1) return parts[0] || '';
+  if (parts.length <= 3) return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+  return `${parts.slice(0, 3).join(', ')} and more`;
+};
+const capitalize = (s: string): string => (s ? s[0].toUpperCase() + s.slice(1) : s);
+const hasModel = (list: ChangeItem[]): boolean => list.some((c) => c?.what === 'model');
 
 /** The row label for `kind` from its changes (≤ HISTORY_LIMITS.labelChars). Pure. */
 export const describeChanges = (changes: readonly ChangeItem[], kind: HistoryKind, opts: DescribeOptions = {}): string => {
@@ -118,10 +133,18 @@ export const describeChanges = (changes: readonly ChangeItem[], kind: HistoryKin
       return clip(opts.name ? `Switched to “${opts.name}”` : 'Switched versions');
     case 'before_ai': {
       const p = phrases(list, opts, 'ai');
+      if (hasModel(list)) {
+        // "Before switching the image model and redrawing pages 1–6" (the switch is the creator's consented choice).
+        const art = list.filter((c) => c.what === 'art');
+        const rest = p.length - (art.length ? 2 : 1);
+        return clip(`Before switching the image model${art.length ? ` and redrawing ${pageRangeText(pagesOf(art))}` : ''}${rest > 0 ? ' and more' : ''}`);
+      }
       return clip(p.length ? `Before the AI ${join(p)}` : 'Before an AI change');
     }
     case 'ai': {
       const p = phrases(list, opts, 'ai');
+      // A model switch is the creator's consented choice: "Switched the image model and redrew pages 1–6".
+      if (hasModel(list)) return clip(capitalize(join(p)));
       return clip(p.length ? `AI ${join(p)}` : 'AI changed the book');
     }
     case 'edits':
