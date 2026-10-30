@@ -40,24 +40,32 @@ import {
   ratio,
   compareSpecificity,
   resolveColor,
+  rgbaString,
   specificity,
+  spreadRingColor,
   tokenBlocks,
+  tokensOf,
   topLevelSplit,
   withAlpha
 } from './cssTokens';
 
 const rules = parseRules(css);
-const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK } = tokenBlocks(rules);
+const { ROOT_TOKENS, DARK_TOKENS, ATLAS_LIGHT, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_DARK_MORE } = tokenBlocks(rules);
 
 /**
  * The cascade an element sees, highest priority first. Atlas dark: the `.dark[data-ds-skin]` block
  * (0,2,0) beats the skin's light block, which comes after `.dark` in the file at equal specificity.
+ * The two "more contrast" contexts are the skin under the OS "increase contrast" setting (Atlas wave
+ * 5): the media query's blocks win over their base blocks of the same specificity (they come later),
+ * and the dark base block (0,2,0) still beats the light high-contrast block (0,1,0).
  */
 const CONTEXTS = {
   'default light': [ROOT_TOKENS],
   'default dark': [DARK_TOKENS, ROOT_TOKENS],
   'atlas light': [ATLAS_LIGHT, ROOT_TOKENS],
-  'atlas dark': [ATLAS_DARK, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS]
+  'atlas dark': [ATLAS_DARK, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS],
+  'atlas light more contrast': [ATLAS_LIGHT_MORE, ATLAS_LIGHT, ROOT_TOKENS],
+  'atlas dark more contrast': [ATLAS_DARK_MORE, ATLAS_DARK, ATLAS_LIGHT_MORE, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS]
 } as const;
 type ContextName = keyof typeof CONTEXTS;
 const isAtlas = (c: ContextName) => c.startsWith('atlas');
@@ -93,10 +101,13 @@ function surfaces(ctx: ContextName): Map<string, Rgba> {
     ['surface/sidebar', over(t('--ds-surface'), sidebar)],
     ['surface-soft/sidebar', over(t('--ds-surface-soft'), sidebar)]
   ]);
-  // Rows, pills and tracks: one tint over the page, the sidebar or a glass level.
-  for (const base of ['canvas', 'sidebar', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas']) {
+  // Rows, pills and tracks: one tint over the page, the sidebar or a glass level; on a raised overlay
+  // (a menu, a sheet) the rows a menu highlights and a segmented track inside a sheet.
+  for (const base of ['canvas', 'sidebar', 'surface/canvas', 'surface-soft/canvas', 'surface-strong/canvas', 'raised']) {
     const under = s.get(base)!;
-    for (const tint of ['--ds-well', '--ds-well-strong', '--ds-hover', '--ds-active', '--ds-accent-soft']) s.set(`${tint.slice(5)} on ${base}`, over(t(tint), under));
+    const tints = ['--ds-hover', '--ds-overlay-hover', '--ds-segment-track'];
+    if (base !== 'raised') tints.push('--ds-well', '--ds-well-strong', '--ds-active', '--ds-accent-soft');
+    for (const tint of tints) s.set(`${tint.slice(5)} on ${base}`, over(t(tint), under));
   }
   // A track or a hovered row inside a well (the segmented radio track that measured #e9e8e4).
   for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) {
@@ -123,7 +134,8 @@ function statusSurfaces(ctx: ContextName, tone: (typeof TONES)[number]): Map<str
   const all = surfaces(ctx);
   const s = new Map<string, Rgba>();
   for (const k of ['canvas', 'sidebar', 'surface/canvas', 'surface-strong/canvas', 'well on canvas', 'hover on canvas', 'hover on surface/canvas']) s.set(k, all.get(k)!);
-  const tint = withAlpha(token(`--ds-${tone}`, ctx), 0.1);
+  // TONE_SURFACE's tint: the hue at 10 % (danger reads the danger mark, the brighter red in Atlas dark).
+  const tint = withAlpha(token(tone === 'danger' ? '--ds-danger-mark' : `--ds-${tone}`, ctx), 0.1);
   for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) s.set(`${tone} tone surface on ${base}`, over(tint, all.get(base)!));
   return s;
 }
@@ -155,7 +167,7 @@ function pairs(): Pair[] {
   for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
     for (const fg of ['--ds-ink', '--ds-muted']) {
       for (const [bg, c] of surfaces(ctx)) {
-        if (isAtlas(ctx) && ATLAS_BASE_PAIRS_ELSEWHERE.has(bg)) continue;
+        if (isAtlas(ctx) && !ctx.endsWith('more contrast') && ATLAS_BASE_PAIRS_ELSEWHERE.has(bg)) continue;
         out.push({ ctx, fg, bg, ratio: ratio(token(fg, ctx), c), min: 4.5 });
       }
     }
@@ -503,6 +515,66 @@ describe('token contrast — the accent utilities paint the readable tokens', ()
   });
 });
 
+/**
+ * Atlas wave 5's one status vocabulary (studioDesign STATUS_*): its text on its own surface, both
+ * themes, both skins and under "increase contrast". The surfaces are the 6 % / 8 % tints, the active
+ * well and the waiting page; error tints read the danger MARK (the brighter red in dark).
+ */
+describe('token contrast — the status vocabulary (healthy / active / waiting / attention / error)', () => {
+  const STATES: Array<[string, string, (ctx: ContextName, under: Rgba) => Rgba]> = [
+    ['healthy', '--ds-success-text', (ctx, under) => over(withAlpha(token('--ds-success', ctx), 0.06), under)],
+    ['active', '--ds-ink', (ctx, under) => over(token('--ds-well', ctx), under)],
+    ['waiting', '--ds-muted', (ctx) => token('--ds-canvas', ctx)],
+    ['attention', '--ds-warning-text', (ctx, under) => over(withAlpha(token('--ds-warning', ctx), 0.08), under)],
+    // The error surface's tint is a token (Atlas: destructive 6 % in light, the brighter mark at 8 % in dark).
+    ['error', '--ds-danger-text', (ctx, under) => over(token('--ds-status-error-tint', ctx), under)]
+  ];
+
+  it('the studioDesign maps spell exactly these tokens and tints', () => {
+    for (const [state, text] of STATES) expect(design.STATUS_INK[state as keyof typeof design.STATUS_INK]).toBe(`text-[var(${text})]`);
+    expect(design.STATUS_SURFACE.error).toBe('border-[var(--ds-status-error-edge)] bg-[var(--ds-status-error-tint)]');
+  });
+
+  it('the error surface is Atlas’s: destructive at 35 % / 6 % in light, the brighter mark at 40 % / 8 % in dark', () => {
+    const alpha = (name: string, ctx: ContextName) => Math.round(token(name, ctx).a * 100);
+    for (const ctx of ['default light', 'default dark', 'atlas light', 'atlas light more contrast'] as const) {
+      expect([alpha('--ds-status-error-edge', ctx), alpha('--ds-status-error-tint', ctx)], ctx).toEqual([35, 6]);
+    }
+    for (const ctx of ['atlas dark', 'atlas dark more contrast'] as const) {
+      expect([alpha('--ds-status-error-edge', ctx), alpha('--ds-status-error-tint', ctx)], ctx).toEqual([40, 8]);
+      // …of the danger MARK (destructive-foreground), not the deep fill red.
+      const { r, g, b } = token('--ds-status-error-tint', ctx);
+      const mark = token('--ds-danger-mark', ctx);
+      expect([r, g, b].map(Math.round), ctx).toEqual([mark.r, mark.g, mark.b].map(Math.round));
+    }
+  });
+
+  it('every status text is ≥ 4.5:1 on its own surface (over the page, a card and a raised overlay) in every context', () => {
+    const failing: string[] = [];
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const s = surfaces(ctx);
+      for (const base of ['canvas', 'surface/canvas', 'raised', 'surface-strong/canvas']) {
+        for (const [state, text, surface] of STATES) {
+          const bg = surface(ctx, s.get(base)!);
+          const r = ratio(over(token(text, ctx), bg), bg);
+          if (r < 4.5) failing.push(`${ctx}: ${state} (${text}) on ${base} = ${r.toFixed(2)}`);
+        }
+      }
+    }
+    expect(failing).toEqual([]);
+  });
+
+  it('the danger tone surface (TONE_SURFACE) on its mark tint keeps the readable danger text ≥ 4.5:1', () => {
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const s = surfaces(ctx);
+      for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas']) {
+        const bg = over(withAlpha(token('--ds-danger-mark', ctx), 0.1), s.get(base)!);
+        expect(ratio(over(token('--ds-danger-text', ctx), bg), bg), `${ctx} ${base}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+});
+
 describe('token contrast — studioDesign spells the readable tokens', () => {
   it('accent text, the text-bearing fill and the primary button', () => {
     expect(design.ACCENT_TEXT).toBe('text-[var(--ds-accent-text)]');
@@ -525,7 +597,8 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
   });
 
   it('every text constant reads a token this matrix measures', () => {
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', ...TONES.map((t) => `--ds-${t}-text`)]);
+    // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas.
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-canvas', ...TONES.map((t) => `--ds-${t}-text`)]);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
@@ -696,11 +769,47 @@ describe('token contrast — non-text: the focus ring and accent state borders r
 
   it('the focus ring (--ds-ring) is ≥ 3:1 on every backdrop in all four contexts', () => {
     const ring = measureNonText('--ds-ring');
-    expect(ring.length).toBe(4 * NON_TEXT_BACKDROPS.length);
+    expect(ring.length).toBe(Object.keys(CONTEXTS).length * NON_TEXT_BACKDROPS.length);
     expect(ring.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);
     // The old translucent rings really failed (45 % / 50 % terracotta: 1.6 and 2.2:1).
     expect(ratio(over(resolveColor('rgba(217,119,87,0.45)'), token('--ds-canvas', 'default light')), token('--ds-canvas', 'default light'))).toBeLessThan(3);
     expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {
+    const focus = measureNonText('--ds-focus');
+    expect(focus.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    for (const ctx of ['atlas light', 'atlas dark'] as const) expect(token('--ds-focus', ctx), ctx).toEqual(token('--ds-ink', ctx));
+  });
+
+  /**
+   * Atlas wave 5: "a field's edge has to clear 3:1 against the page" (--control-border; --border is a
+   * hairline for cards and dividers). Under the skin the field edge and its hover clear 3:1 on every
+   * backdrop, in both themes and under "increase contrast". Outside the skin the token defaults to
+   * today's hairline, which nothing reads yet (FIELD in studioDesign is new).
+   */
+  it('field edges (--ds-control-border, -hover) are ≥ 3:1 on every backdrop under the skin', () => {
+    const atlas = (Object.keys(CONTEXTS) as ContextName[]).filter(isAtlas);
+    expect(atlas.length).toBe(4);
+    for (const fg of ['--ds-control-border', '--ds-control-border-hover']) {
+      const under = measureNonText(fg).filter((p) => atlas.some((c) => p.name.startsWith(`${c}:`)) && p.ratio < 3);
+      expect(under.map((p) => `${p.name} = ${p.ratio.toFixed(2)}`), fg).toEqual([]);
+    }
+    // The card hairline really is below 3:1 — that is why fields get their own edge.
+    expect(ratio(over(token('--ds-hairline', 'atlas light'), token('--ds-canvas', 'atlas light')), token('--ds-canvas', 'atlas light'))).toBeLessThan(3);
+  });
+
+  it('the danger mark (status dots, bars, toast edges) is ≥ 3:1 on the skin pages; in dark it is the brighter red', () => {
+    const atlas = (Object.keys(CONTEXTS) as ContextName[]).filter(isAtlas);
+    for (const ctx of atlas) {
+      const s = surfaces(ctx);
+      for (const bg of ['canvas', 'raised', 'surface/canvas', 'surface-strong/canvas']) {
+        expect(ratio(token('--ds-danger-mark', ctx), s.get(bg)!), `${ctx} on ${bg}`).toBeGreaterThanOrEqual(3);
+      }
+    }
+    // The deep dark danger (destructive fills) is under 3:1 as a mark on the dark page.
+    expect(ratio(token('--ds-danger', 'atlas dark'), token('--ds-canvas', 'atlas dark'))).toBeLessThan(3);
+    expect(luminance(token('--ds-danger-mark', 'atlas dark'))).toBeGreaterThan(luminance(token('--ds-danger', 'atlas dark')));
   });
 
   it('a state border in the readable accent is ≥ 3:1 everywhere', () => {
@@ -712,5 +821,244 @@ describe('token contrast — non-text: the focus ring and accent state borders r
     const under = brand.filter((p) => p.ratio < 3);
     expect(under.map((p) => p.name).sort()).toEqual([...BRAND_BORDER_ON_LIGHT_PAPER].sort());
     for (const p of under) expect(p.ratio, p.name).toBeGreaterThanOrEqual(2.6); // 2.65 (hover row) … 2.96 (paper)
+  });
+});
+
+// ── Outcomes the Atlas wave 5 port must hold (measured from the token cascade) ──────────────────
+/** The token names a recipe's classes read, by utility prefix (e.g. `focus-within:border-`). */
+const classToken = (recipe: string, prefix: string): string => {
+  const re = new RegExp(String.raw`(?:^|\s)${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\[var\((--ds-[\w-]+)\)\]`);
+  const m = re.exec(recipe);
+  if (!m) throw new Error(`tokenContrast: no ${prefix}[var(--ds-…)] in "${recipe}"`);
+  return m[1];
+};
+const ALL_CONTEXTS = Object.keys(CONTEXTS) as ContextName[];
+
+/**
+ * The selected segment of a segmented control (SEGMENTED_ACTIVE: --ds-segment-pill with the
+ * --ds-shadow-segment ring, on a --ds-segment-track well) must stand off its track: its fill OR its
+ * 1 px ring differs from the track by at least this much. The wave 5 regression painted the dark
+ * skin's #1a1a1a raised pill on its #1a1a1a well (1.00:1, its only cue a black 8 % drop shadow).
+ */
+const MIN_PILL_STEP = 1.08;
+/** Where segmented controls sit: the page, a card, a sheet / overlay. */
+const TRACK_BASES = ['canvas', 'surface/canvas', 'surface-strong/canvas', 'raised'];
+/**
+ * Outside the skin the paint is today's and must stay so (the skin changes nothing outside its
+ * scope): in the default dark theme a segmented track on the frosted glass levels lifts the
+ * well to the raised pill's own grey. Pre-existing, and the same with or without this port.
+ */
+const PILL_STEP_OUTSIDE_THE_SKIN = ['default dark: on surface/canvas', 'default dark: on surface-strong/canvas'];
+
+function pillStep(ctx: ContextName, base: Rgba, pillToken = '--ds-segment-pill', shadowToken = '--ds-shadow-segment', trackToken = '--ds-segment-track') {
+  const track = over(token(trackToken, ctx), base);
+  const fill = ratio(over(token(pillToken, ctx), track), track);
+  const ringValue = spreadRingColor(lookup(shadowToken, ctx));
+  const ring = ringValue ? ratio(over(resolve(ringValue, ctx), track), track) : 1;
+  return { fill, ring, step: Math.max(fill, ring) };
+}
+
+describe('Atlas wave 5 outcomes — the selected segment stands off its track in every context', () => {
+  it('SEGMENTED_ACTIVE is the pill tokens, and the track recipe reads the track token', () => {
+    expect(classToken(design.SEGMENTED_ACTIVE, 'bg-')).toBe('--ds-segment-pill');
+    expect(design.SEGMENTED_ACTIVE).toContain('shadow-[shadow:var(--ds-shadow-segment)]');
+    expect(classToken(design.SEGMENTED_TRACK, 'bg-')).toBe('--ds-segment-track');
+    expect(classToken(design.SEGMENTED_PILL, 'bg-')).toBe('--ds-segment-pill');
+  });
+
+  it(`the pill's fill or ring differs from the track by ≥ ${MIN_PILL_STEP}:1 on the page, a card and an overlay`, () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const s = surfaces(ctx);
+      for (const base of TRACK_BASES) {
+        const { fill, ring, step } = pillStep(ctx, s.get(base)!);
+        if (step < MIN_PILL_STEP) under.push(`${ctx}: on ${base} (fill ${fill.toFixed(3)}, ring ${ring.toFixed(3)})`);
+      }
+    }
+    expect(under.map((u) => u.replace(/ \(.*$/, ''))).toEqual(PILL_STEP_OUTSIDE_THE_SKIN);
+    // Under the skin the ring carries it everywhere, including on an overlay of the pill's own grey.
+    for (const ctx of ALL_CONTEXTS.filter(isAtlas)) {
+      for (const base of TRACK_BASES) expect(pillStep(ctx, surfaces(ctx).get(base)!).ring, `${ctx} ${base}`).toBeGreaterThanOrEqual(1.12);
+    }
+  });
+
+  it('the paint it replaced really vanished in Atlas dark (raised pill on the well-strong track, no ring)', () => {
+    for (const ctx of ['atlas dark', 'atlas dark more contrast'] as const) {
+      const s = surfaces(ctx);
+      for (const base of TRACK_BASES) {
+        const old = pillStep(ctx, s.get(base)!, '--ds-raised', '--ds-shadow-soft', '--ds-well-strong');
+        expect(old.step, `${ctx} ${base}`).toBeLessThan(MIN_PILL_STEP);
+      }
+    }
+  });
+
+  it('outside the skin the live controls paint exactly what they did (the raised pill, its 8 % drop shadow, the well)', () => {
+    expect(lookup('--ds-segment-pill', 'default light')).toBe('var(--ds-raised)');
+    expect(lookup('--ds-shadow-segment', 'default light')).toBe('0 1px 2px rgba(0,0,0,0.08)');
+    expect(lookup('--ds-segment-track', 'default light')).toBe('var(--ds-well-strong)');
+    for (const ctx of ['default light', 'default dark'] as const) {
+      for (const [a, b] of [['--ds-segment-pill', '--ds-raised'], ['--ds-segment-track', '--ds-well-strong']]) expect(token(a, ctx), `${ctx} ${a}`).toEqual(token(b, ctx));
+    }
+  });
+
+  /** The live segmented controls (the reader's Scroll / Page / Spread switch reaches board/ui through ComicReaderView). */
+  const LIVE_SEGMENTED = [
+    'components/comicstudio/board/ui.tsx',
+    'components/comicstudio/conversation/ui.tsx',
+    'components/comicstudio/lettering/ProLetteringPanel.tsx',
+    'components/comicstudio/lettering/LetteringToolbar.tsx',
+    'components/comicstudio/insights/CostInsights.tsx',
+    'components/comicstudio/share/ShareSheet.tsx'
+  ];
+  it('every live segmented control paints SEGMENTED_ACTIVE on the segment track, and the old pill is gone from the tree', () => {
+    for (const rel of LIVE_SEGMENTED) {
+      const src = readFileSync(`${ROOT}/${rel}`, 'utf8');
+      expect(src, rel).toMatch(/\bSEGMENTED_ACTIVE\b/);
+      expect(src, rel).toContain('bg-[var(--ds-segment-track)]');
+    }
+    // The selected-pill paint the six controls used (a raised fill with a literal drop shadow or the soft shadow).
+    const OLD_PILL = /bg-\[var\(--ds-raised\)\] text-\[var\(--ds-ink\)\] shadow-\[(?:0_1px_2px_rgba\(0,0,0,0\.08\)|shadow:var\(--ds-shadow-soft\))\]/;
+    expect(SOURCE).not.toMatch(OLD_PILL);
+  });
+});
+
+/**
+ * A highlighted row inside a menu, a select or a list (MENU_ITEM's hover, FOCUS_ITEM) sits on an
+ * overlay: the raised step or the strong glass. Atlas wave 5 raised dark overlays to #1a1a1a and
+ * moved their item highlight to white 8 %, because the #1f1f1f menu hover was a hair above it.
+ */
+const MIN_ROW_STEP = 1.1;
+const OVERLAY_BASES = ['raised', 'surface-strong/canvas'];
+describe('Atlas wave 5 outcomes — a highlighted row on an overlay is a visible step', () => {
+  it('MENU_ITEM and FOCUS_ITEM highlight in --ds-overlay-hover (the hover tint by default, so nothing changes outside the skin)', () => {
+    expect(classToken(design.MENU_ITEM, 'hover:bg-')).toBe('--ds-overlay-hover');
+    expect(classToken(design.FOCUS_ITEM, 'focus-visible:bg-')).toBe('--ds-overlay-hover');
+    for (const ctx of ['default light', 'default dark'] as const) expect(token('--ds-overlay-hover', ctx), ctx).toEqual(token('--ds-hover', ctx));
+  });
+
+  it(`hover on raised and on surface-strong is ≥ ${MIN_ROW_STEP}:1 in every context`, () => {
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const s = surfaces(ctx);
+      for (const base of OVERLAY_BASES) {
+        const r = ratio(s.get(`overlay-hover on ${base}`)!, s.get(base)!);
+        if (r < MIN_ROW_STEP) under.push(`${ctx}: on ${base} = ${r.toFixed(3)}`);
+      }
+    }
+    expect(under).toEqual([]);
+  });
+
+  it('the plain --ds-hover it replaced in the menus is under that step on the dark overlay', () => {
+    for (const ctx of ['atlas dark', 'atlas dark more contrast'] as const) {
+      const s = surfaces(ctx);
+      for (const base of OVERLAY_BASES) expect(ratio(s.get(`hover on ${base}`)!, s.get(base)!), `${ctx} ${base}`).toBeLessThan(MIN_ROW_STEP);
+    }
+  });
+});
+
+/**
+ * The inverse surface (INVERSE_SURFACE: bg ink, text canvas). In Atlas dark index.css swaps the ink
+ * and page tokens back inside it. A custom property that is not redeclared on the panel inherits as
+ * the value COMPUTED at the skin root, so the accent-derived tokens (--ds-accent-fill, -fill-hover,
+ * -text), declared there as var(--ds-accent), do not follow a swap made inside the panel. This
+ * models exactly that: declarations on the panel resolve inside it; everything else is the root's
+ * computed colour.
+ */
+const INVERSE_LIGHT = tokensOf(rules, (sel) => sel === '[data-ds-skin="atlas"] .ds-inverse-surface');
+const INVERSE_DARK = tokensOf(rules, (sel) => sel === '.dark[data-ds-skin="atlas"] .ds-inverse-surface, .dark [data-ds-skin="atlas"] .ds-inverse-surface');
+function insideInverse(ctx: ContextName, panelDecls?: Map<string, string>) {
+  const decls = panelDecls ?? new Map([...INVERSE_LIGHT, ...(ctx.startsWith('atlas dark') ? INVERSE_DARK : [])]);
+  const inner = (name: string): string => decls.get(name) ?? rgbaString(token(name, ctx));
+  const t = (name: string) => resolveColor(inner(name), inner, [name]);
+  const panel = t('--ds-ink'); // INVERSE_SURFACE: bg-[var(--ds-ink)] text-[var(--ds-canvas)]
+  return { t, panel };
+}
+describe('Atlas wave 5 outcomes — inside the inverse surface', () => {
+  const SKIN = ALL_CONTEXTS.filter(isAtlas);
+
+  it('the panel text, a primary button (ON_ACCENT_TEXT on ACCENT_FILL and its hover) and keyboard focus stay readable, both themes', () => {
+    expect(design.INVERSE_SURFACE).toContain('bg-[var(--ds-ink)]');
+    expect(design.INVERSE_SURFACE).toContain('text-[var(--ds-canvas)]');
+    expect(classToken(design.PRIMARY_BTN, 'bg-')).toBe('--ds-accent-fill');
+    expect(classToken(design.PRIMARY_BTN, 'text-')).toBe('--ds-on-accent');
+    const problems: string[] = [];
+    for (const ctx of SKIN) {
+      const { t, panel } = insideInverse(ctx);
+      const check = (what: string, r: number, min: number) => r < min && problems.push(`${ctx}: ${what} = ${r.toFixed(2)}`);
+      check('panel text', ratio(t('--ds-canvas'), panel), 4.5);
+      for (const fill of ['--ds-accent-fill', '--ds-accent-fill-hover']) {
+        const bg = over(t(fill), panel);
+        check(`ON_ACCENT_TEXT on ${fill}`, ratio(over(t('--ds-on-accent'), bg), bg), 4.5);
+      }
+      check('focus outline on the panel', ratio(over(t('--ds-focus'), panel), panel), 3);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it('in dark it is a raised dark panel (not a white slab), and the model catches an accent swap the derived tokens ignore', () => {
+    for (const ctx of ['atlas dark', 'atlas dark more contrast'] as const) {
+      const { panel } = insideInverse(ctx);
+      expect(luminance(panel), ctx).toBeLessThan(0.02);
+      // Swapping --ds-accent / --ds-on-accent inside the panel (the first wave 5 port) left the
+      // root-computed fill behind: the paper label on the paper fill.
+      const swapped = insideInverse(ctx, new Map([...INVERSE_LIGHT, ...INVERSE_DARK, ['--ds-accent', '#161616'], ['--ds-on-accent', '#fafafa']]));
+      expect(ratio(swapped.t('--ds-on-accent'), swapped.t('--ds-accent-fill')), ctx).toBeLessThan(1.1);
+    }
+    // Atlas swaps only --foreground / --background there: no accent token is redeclared on the panel.
+    expect([...INVERSE_DARK.keys()].filter((k) => k.startsWith('--ds-accent') || k === '--ds-on-accent')).toEqual([]);
+  });
+});
+
+/**
+ * FIELD_GROUP (a search pill around an embedded field) must show focus as a change the eye can
+ * find: its edge at rest vs its edge when focused differs by ≥ 3:1, and the 2 px focus ring it adds
+ * outside the edge is ≥ 3:1 on whatever the group sits on — in all six contexts, including the OS
+ * "increase contrast" ones (where the first port's ink-70 % focus edge on an ink-70 % resting edge
+ * changed nothing). The tokens are read off the recipe itself.
+ */
+describe('Atlas wave 5 outcomes — FIELD_GROUP focus is a visible change in every context', () => {
+  // Read inside the tests, so a recipe that stops spelling a token fails a named test.
+  const recipe = () => ({
+    rest: classToken(design.FIELD_GROUP, 'border-'),
+    focused: classToken(design.FIELD_GROUP, 'focus-within:border-'),
+    ring: classToken(design.FIELD_GROUP, 'focus-within:ring-'),
+    fill: classToken(design.FIELD_GROUP, 'bg-')
+  });
+
+  it('the focused edge differs from the resting edge by ≥ 3:1 (the edge is painted over the group’s own fill)', () => {
+    const { rest, focused, fill } = recipe();
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const bg = token(fill, ctx);
+      const r = ratio(over(token(focused, ctx), bg), over(token(rest, ctx), bg));
+      if (r < 3) under.push(`${ctx}: ${focused} vs ${rest} = ${r.toFixed(2)}`);
+    }
+    expect(under).toEqual([]);
+  });
+
+  it('the 2 px focus ring outside the edge is ≥ 3:1 on the page, a card and an overlay', () => {
+    expect(design.FIELD_GROUP).toContain('focus-within:ring-2');
+    const { ring } = recipe();
+    const under: string[] = [];
+    for (const ctx of ALL_CONTEXTS) {
+      const s = surfaces(ctx);
+      for (const base of ['canvas', 'surface/canvas', 'surface-strong/canvas', 'raised']) {
+        const r = ratio(over(token(ring, ctx), s.get(base)!), s.get(base)!);
+        if (r < 3) under.push(`${ctx}: ${ring} on ${base} = ${r.toFixed(2)}`);
+      }
+    }
+    expect(under).toEqual([]);
+  });
+});
+
+describe('Atlas wave 5 outcomes — "increase contrast" strengthens both hairlines in both themes', () => {
+  it('the hairline and the soft hairline are each stronger than without the setting (light and dark)', () => {
+    for (const [base, more] of [['atlas light', 'atlas light more contrast'], ['atlas dark', 'atlas dark more contrast']] as const) {
+      const canvas = token('--ds-canvas', base);
+      for (const line of ['--ds-hairline', '--ds-hairline-soft']) {
+        const step = (ctx: ContextName) => ratio(over(token(line, ctx), canvas), canvas);
+        expect(step(more) - step(base), `${more} ${line}`).toBeGreaterThan(0.25);
+      }
+    }
   });
 });

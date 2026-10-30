@@ -163,7 +163,9 @@ describe('summarizeBook', () => {
     const s = summarizeBook(sample, { pageIds: ['pg_1'], byok: true });
     expect(s.pages.map((p) => p.id)).toEqual(['pg_1']);
     expect(s.pages[0].aspectOk).toBe(false);
-    expect(s.pages[0].missingRefCastIds).toEqual(['ch_arjun']);
+    // ARJUN (support, no sheet) and the VENDOR, an extra on every page (recurring): page renders now attach any
+    // on-page being's ready sheet, so a recurring extra without one is flagged too (plan A1).
+    expect(s.pages[0].missingRefCastIds).toEqual(['ch_arjun', 'ch_vendor']);
     expect(s.totals.pages).toBe(6);
   });
 

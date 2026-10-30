@@ -16,6 +16,7 @@ import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } fro
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
+import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
@@ -228,7 +229,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
   const dragStyle: React.CSSProperties | undefined = layout === 'bottom' && dragY > 0 ? { transform: `translateY(${dragY}px)` } : undefined;
 
   const visibilityControl = (
-    <div role="radiogroup" aria-label="Who can read it" className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--ds-well-strong)] p-1">
+    <div role="radiogroup" aria-label="Who can read it" className="grid grid-cols-3 gap-1 rounded-xl bg-[var(--ds-segment-track)] p-1">
       {(
         [
           ['private', 'Private'],
@@ -247,7 +248,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
             onClick={() => choose(v)}
             className={cx(
               'min-h-[44px] min-w-0 rounded-[10px] px-1.5 text-[12px] font-medium leading-tight touch-manipulation focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-50',
-              on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+              on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
             {label}

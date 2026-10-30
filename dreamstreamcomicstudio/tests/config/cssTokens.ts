@@ -84,18 +84,32 @@ export const dsOnly = (m: Map<string, string>) => new Map([...m].filter(([k]) =>
 export const ATLAS_LIGHT_SELECTOR = '[data-ds-skin="atlas"]';
 export const ATLAS_DARK_SELECTOR = '.dark[data-ds-skin="atlas"], .dark [data-ds-skin="atlas"]';
 
+/** The OS "increase contrast" setting: the skin's high-contrast token overrides live under this at-rule. */
+export const MORE_CONTRAST_MEDIA = '@media (prefers-contrast: more)';
+
 export interface TokenBlocks {
   ROOT_TOKENS: Map<string, string>;
   DARK_TOKENS: Map<string, string>;
   ATLAS_LIGHT: Map<string, string>;
   ATLAS_DARK: Map<string, string>;
+  /** The skin's `@media (prefers-contrast: more)` overrides (Atlas wave 5), light and dark. */
+  ATLAS_LIGHT_MORE: Map<string, string>;
+  ATLAS_DARK_MORE: Map<string, string>;
 }
+/**
+ * The token blocks. The four base blocks are top-level rules only: a block nested in an at-rule
+ * (the high-contrast media query) is a conditional override, read separately.
+ */
 export function tokenBlocks(rules: Rule[]): TokenBlocks {
+  const top = rules.filter((r) => r.parents.length === 0);
+  const more = rules.filter((r) => r.parents.length === 1 && r.parents[0] === MORE_CONTRAST_MEDIA);
   return {
-    ROOT_TOKENS: dsOnly(tokensOf(rules, (s) => s === ':root')),
-    DARK_TOKENS: dsOnly(tokensOf(rules, (s) => s === '.dark')),
-    ATLAS_LIGHT: dsOnly(tokensOf(rules, (s) => s === ATLAS_LIGHT_SELECTOR)),
-    ATLAS_DARK: dsOnly(tokensOf(rules, (s) => s === ATLAS_DARK_SELECTOR))
+    ROOT_TOKENS: dsOnly(tokensOf(top, (s) => s === ':root')),
+    DARK_TOKENS: dsOnly(tokensOf(top, (s) => s === '.dark')),
+    ATLAS_LIGHT: dsOnly(tokensOf(top, (s) => s === ATLAS_LIGHT_SELECTOR)),
+    ATLAS_DARK: dsOnly(tokensOf(top, (s) => s === ATLAS_DARK_SELECTOR)),
+    ATLAS_LIGHT_MORE: dsOnly(tokensOf(more, (s) => s === ATLAS_LIGHT_SELECTOR)),
+    ATLAS_DARK_MORE: dsOnly(tokensOf(more, (s) => s === ATLAS_DARK_SELECTOR))
   };
 }
 
@@ -168,6 +182,12 @@ export function resolveColor(value: string, lookup?: (name: string) => string, s
   }
   const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v);
   if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: rgb[4] === undefined ? 1 : +rgb[4] };
+  // The space-separated form the shadows use: rgb(0 0 0 / 0.06).
+  const rgbSpace = /^rgba?\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:\/\s*([\d.]+)(%?)\s*)?\)$/.exec(v);
+  if (rgbSpace) {
+    const a = rgbSpace[4] === undefined ? 1 : +rgbSpace[4] / (rgbSpace[5] ? 100 : 1);
+    return { r: +rgbSpace[1], g: +rgbSpace[2], b: +rgbSpace[3], a };
+  }
   const ok = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(v);
   if (ok) return oklchToRgb(+ok[1], +ok[2], +ok[3]);
   const mix = /^color-mix\(\s*in srgb\s*,([\s\S]+)\)$/.exec(v);
@@ -186,6 +206,21 @@ export function resolveColor(value: string, lookup?: (name: string) => string, s
     return { r: ch('r'), g: ch('g'), b: ch('b'), a };
   }
   throw new Error(`cssTokens: cannot parse the colour "${v}"${seen.length ? ` (${seen.join(' → ')})` : ''}`);
+}
+
+/** A resolved colour written back as a literal (for a custom property that inherits as a computed value). */
+export const rgbaString = ({ r, g, b, a }: Rgba) => `rgba(${r}, ${g}, ${b}, ${a})`;
+
+/**
+ * The colour of a box-shadow's 1 px spread ring (`0 0 0 1px <colour>`, not inset), or null when the
+ * shadow has none.
+ */
+export function spreadRingColor(shadow: string): string | null {
+  for (const part of topLevelSplit(shadow)) {
+    const m = /^0 0 0 1px (.+)$/.exec(part.trim());
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /** Paint `top` over an opaque `under`. */

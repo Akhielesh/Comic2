@@ -21,7 +21,7 @@ import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { deriveLock } from '../../../shared/comic/modelLock';
 import type { BookSummary, quoteRenderPages } from '../../../shared/comic/plan';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
-import { LABEL, RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
+import { LABEL, RADIUS_CONTROL, SEGMENTED_ACTIVE, TRANSITION } from '../../chat/studioDesign';
 import type { CostFormat } from '../conversation/cost';
 import { cx, plural } from '../conversation/ui';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
@@ -91,7 +91,7 @@ export const InsightsTabs: React.FC<InsightsTabsProps> = ({ doc, money, byok, pr
         role="tablist"
         aria-label="Cost details"
         onKeyDown={onKeyDown}
-        className={cx('grid min-w-0 grid-cols-4 gap-0.5 bg-[var(--ds-well-strong)] p-0.5', RADIUS_CONTROL)}
+        className={cx('grid min-w-0 grid-cols-4 gap-0.5 bg-[var(--ds-segment-track)] p-0.5', RADIUS_CONTROL)}
       >
         {INSIGHTS_TABS.map((id) => {
           const on = id === active;
@@ -111,7 +111,7 @@ export const InsightsTabs: React.FC<InsightsTabsProps> = ({ doc, money, byok, pr
               onClick={() => select(id, false)}
               className={cx(
                 `min-w-0 truncate rounded-[var(--ds-radius-sm)] px-1 py-1.5 text-[12px] font-medium ${TRANSITION} ${FOCUS} coarse:min-h-11`,
-                on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-soft)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
               )}
             >
               {INSIGHTS_TAB_LABELS[id]}
