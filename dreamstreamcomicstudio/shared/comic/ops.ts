@@ -725,8 +725,12 @@ const withPages = (doc: ComicDoc, pages: Page[]): ComicDoc => {
   return { ...doc, pages: renumbered, format };
 };
 
-const lineIdsOf = (doc: ComicDoc): Set<string> =>
-  new Set(doc.pages.flatMap((p) => p.panels.flatMap((panel) => panel.lines.map((l) => l.id))));
+/** Line ids on the live pages; with `withTrash`, also those on pages in Deleted (an edition keeps their translations, so
+ *  undoing an edition's removal must be able to put them back: the translation and edition_balloon inverses). */
+const lineIdsOf = (doc: ComicDoc, withTrash = false): Set<string> =>
+  new Set(
+    [...doc.pages, ...(withTrash ? trashOf(doc).map((t) => t.page) : [])].flatMap((p) => p.panels.flatMap((panel) => panel.lines.map((l) => l.id)))
+  );
 
 const mapEditions = (doc: ComicDoc, fn: (e: LanguageEdition) => LanguageEdition): ComicDoc => {
   const i18n = i18nOf(doc);
@@ -1179,7 +1183,7 @@ const applyI18nOp = (
     }
     case 'translation': {
       const e = i18n.editions[op.lang];
-      if (!e || !lineIdsOf(doc).has(op.lineId)) return doc;
+      if (!e || !lineIdsOf(doc, true).has(op.lineId)) return doc;
       if (op.patch === null) {
         if (!(op.lineId in e.lines)) return doc;
         const lines = { ...e.lines };
@@ -1234,7 +1238,7 @@ const applyI18nOp = (
     }
     case 'edition_balloon': {
       const e = i18n.editions[op.lang];
-      if (!e || !lineIdsOf(doc).has(op.lineId)) return doc;
+      if (!e || !lineIdsOf(doc, true).has(op.lineId)) return doc;
       const balloons = { ...e.balloons };
       if (op.patch === null) {
         if (!(op.lineId in balloons)) return doc;
