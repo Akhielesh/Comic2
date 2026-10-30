@@ -55,13 +55,6 @@ export const HISTORY_MOMENT_BATCHES_MAX = 200;
 // ── Classification (§4.2) ────────────────────────────────────────────────────
 
 /**
- * Free software actions whose batches are the editor's whoever asked (§4.2: "fit_render (derived art),
- * relayout_balloons → editor, no AI cost"). touched.ts EDITOR_ACTIONS lists them (with K2a's panel actions), so opActor
- * decides them from its 4th argument; kept for importers.
- */
-export const EDITOR_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set(['fit_render', 'relayout_balloons']);
-
-/**
  * The writer's batch by its commit label, for a commit made without its action (jobs.ts startAction passes the action
  * through withHistoryAction, so "Plan the pages" is named by touched.ts AI_ACTIONS; this covers anything outside it):
  * one of these labels with a `pages` or `character` op is the AI's. The labels are set by the server only (a client

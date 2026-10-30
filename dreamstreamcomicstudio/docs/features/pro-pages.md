@@ -79,9 +79,9 @@ frame box to frame box. Balloons move by their top-centre and keep their width (
 balloons stay; pinned flags are untouched.
 
 **Cut provenance:** `keepBy` exists so an undo restores the detector's cuts exactly. Once the ops are patchable, the
-server must not trust a client's `by`: K2b refuses a `page_cuts` batch with `keepBy` unless its cuts deep-equal cuts
-the server itself stamped for that same drawing, and the automatic-panelization shadow counts read only cuts the
-server stamped (at stamping time), never `by` from a stored doc.
+server must not trust a client's `by`: K2b keeps `keepBy` only when its cuts deep-equal cuts the server itself stamped
+for that same drawing, and otherwise drops it and writes the cuts as the user's (§11); the automatic-panelization
+shadow counts read only cuts the server stamped (at stamping time), never `by` from a stored doc.
 
 **The re-stamp rule (I5):** a structural edit of a page shown in frames keeps a fresh drawing fresh (the frames are the
 display truth), and leaves a stale one stale. A page shown as drawn is never re-stamped: reordering its script panels
@@ -165,12 +165,10 @@ request into `StudioCaps.anchorKinds` (`server/src/comic/access.ts` `studioCapsF
 the client quotes and summarizes with the kinds the runs use. The Model Lab's A/B allowance is the same number
 (`LAB_AB_REF_ALLOWANCE_USD = REF_ALLOWANCE_USD`). Nothing calls the anchors quote or the consistency view yet.
 
-**Next.** K2b: server sanitizers (`sanitize/{panels,consistency}.ts`), dispatch of the new actions, `versionMeta`
-stamping of cuts/parts/anchor keys, the publication whitelist. Before `PRO_PAGE_OPS_PATCHABLE` flips, the server's
-`balloons` sanitizer must keep `rot` and `minH` (the K2a inverses and the editor send whole-page balloon snapshots), and
-the cut provenance rule above must hold. The History restore filter and forgetting a photo (H3, `sanitize/refs.ts`)
-must drop frame and overlay sources too (`dropPanelSourcePaths`). B1 composition, B2 panelization, B5 (the page prompt
-on `planAnchors`), then the C packages (UI) on the editor engine (§10).
+K2b landed: see §11 (seams, sanitizers, keepBy, the run engine and the stub table). Next: B1 composition, B2
+panelization, B5 (the page prompt on `planAnchors`), then the C packages on the editor engine (§10). Still for H3: the
+History restore filter and forgetting a photo (`sanitize/refs.ts`) drop frame and overlay sources too
+(`dropPanelSourcePaths`).
 
 ## 10. Editor engine (B9)
 
@@ -340,5 +338,12 @@ that keeps today's behaviour:
 | `panelize/server.ts` `panelizeAfterLetter`, `AUTO_PANELIZE_FLAG` | B2 | no ops (tracked, never awaited by the page job) |
 
 Still open for B7: whether settle `stored` may use a predecessor whose safety check is still pending as the next
-page's reference (the stub uses `done`). For B5: honour `board: false`, emit the generated reference paths, list
-`__region__` after `__page__`, and soften directions and continuity on a safe take.
+page's reference (the stub uses `done`), and `unavailable` on the `enrich_pages` stub (above). For B5: honour
+`board: false`, emit the generated reference paths, list `__region__` after `__page__`, and soften directions and
+continuity on a safe take. For B8, before `fixPanelProblem` stops refusing: `routes/comic.ts actionInputText` screens a
+`fix_panel` instruction like an `edit_page` one (`if (a.type === 'fix_panel') return flatText(a.instruction,
+ACTION_TEXT_LIMITS.instruction);`), with a `comic.routes.test` S15 case (a blocked instruction: 422, nothing drawn).
+Today the stub refuses first, so that text never reaches a prompt and is not screened. For `sanitize/i18n.ts`: shared
+`applyOp` brings back the translated lines of a page in Deleted when removing a language is undone (`lineIdsOf(doc,
+true)` for `translation` and `edition_balloon`), but the server's `findLine` searches live pages only, so that undo is
+still refused ("That line no longer exists.") until it also searches `trashOf(doc)`.
