@@ -431,6 +431,13 @@ describe('failures come back as results', () => {
         expect(r).toMatchObject({ ok: false });
       }
     }
+    // An input or a config whose every property read throws (a hostile proxy): still a result, never a throw.
+    const hostile = new Proxy({}, { get: () => { throw new Error('hostile getter'); } });
+    for (const method of methods) expect(await method(hostile as never)).toMatchObject({ ok: false, code: 'engine-failed', reason: 'internal' });
+    expect(await verifyCallback(hostile as never, hostile as never)).toMatchObject({ ok: false, reason: 'internal' });
+    const fromHostile = createPlatformClient(hostile as never);
+    expect(fromHostile.configError).toBe('the client config cannot be read');
+    expect(await fromHostile.extract({} as never)).toMatchObject({ ok: false, code: 'invalid' });
     expect(createPlatformClient(null as never).configError).not.toBeNull();
     expect(await createPlatformClient(null as never).extract({} as never)).toMatchObject({ ok: false, code: 'invalid' });
     expect(await verifyCallback(null as never, null as never)).toMatchObject({ ok: false });

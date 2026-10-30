@@ -70,6 +70,14 @@ const MEDIA_TYPE = /^[\x20-\x7e]{1,200}$/;
 const HEADER_VALUE = /^[\x20-\x7e]{1,4096}$/;
 
 export const createContext = (config: PlatformClientConfig): ClientContext => {
+  try {
+    return checkContext(config);
+  } catch {
+    return { config, configError: 'the client config cannot be read', origin: '' };
+  }
+};
+
+const checkContext = (config: PlatformClientConfig): ClientContext => {
   let configError: string | null = null;
   let origin = '';
   if (!config || typeof config !== 'object') configError = 'no client config';
