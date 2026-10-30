@@ -160,6 +160,9 @@
     "$comment": "Every font and ICC profile file in the repo (outside node_modules and build output) must match exactly one record with its licence, its terms (what we may do with it) and the licence text file. Scope browser = served to browsers; server = backend image; engine = platform-engine image; qa = the QA harness build (dist-qa), checked with the browser rules.",
     "extensions": [".ttf", ".otf", ".woff", ".woff2", ".ttc", ".icc", ".icm"],
     "ignoreDirs": ["node_modules", "dist", "dist-qa", "dist-ssr", "server/dist", ".git", ".wrangler", "test-results", "playwright-report", "coverage"],
+    "customLicences": {
+      "$comment": "LicenseRef-* terms a data asset may carry (an ICC profile's licence, say), keyed by id: { terms, licenceText, scopes, verified }. 'verified' becomes true only after a human read the licence text; until then any record using it fails."
+    },
     "minVersions": [
       { "name": "^Liberation\\b", "min": "2.0.0", "reason": "Liberation fonts 1.x are GPL-2.0 with a font exception; 2.x is OFL-1.1" }
     ],

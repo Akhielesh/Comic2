@@ -225,11 +225,16 @@ function findException(policy, subject, licence) {
 /**
  * Judges one subject (npm package, engine, asset, vendored copy or CDN script).
  * @param {{ subject?: string, name: string, aliases?: string[], version?: string, licence?: string|null,
- *           scope: Scope, source: string, noDeny?: boolean, extraProblems?: Problem[] }} item
+ *           scope: Scope, source: string, noDeny?: boolean, extraProblems?: Problem[], extraAllow?: string[] }} item
  * @param {any} policy
  * @returns {Result}
  */
 export function evaluateItem(item, policy) {
+  if (item.extraAllow?.length) {
+    // A licence allowed for this one subject only (a verified custom data-asset licence).
+    const rules = rulesFor(item.scope);
+    policy = { ...policy, scopes: { ...policy.scopes, [rules]: { ...policy.scopes[rules], allow: [...policy.scopes[rules].allow, ...item.extraAllow] } } };
+  }
   const names = [item.name, ...(item.aliases ?? [])];
   /** @type {Problem[]} */
   const problems = [...(item.extraProblems ?? [])];
@@ -475,7 +480,17 @@ export function checkDataAssets(files, policy, opts = {}) {
       else if (compareVersions(r.version, pin.min) < 0) extra.push({ kind: 'asset-version', message: `${r.name} ${r.version} is below ${pin.min} (${pin.reason})` });
     }
     const scope = /** @type {Scope} */ (['browser', 'server', 'engine', 'qa'].includes(r.scope) ? r.scope : 'browser');
-    const res = evaluateItem({ subject: `asset:${r.name}`, name: `asset:${r.name}`, version: r.version, licence: r.licence, scope, source: 'data assets', noDeny: true, extraProblems: extra }, policy);
+    // Custom terms (an ICC profile's licence, say) are a LicenseRef-* that the policy lists with the
+    // terms as read from the licence text; they count only once a human marked them verified.
+    /** @type {string[]} */
+    const extraAllow = [];
+    const custom = typeof r.licence === 'string' ? policy.dataAssets.customLicences?.[r.licence] : undefined;
+    if (custom && typeof custom === 'object') {
+      if (custom.verified !== true) extra.push({ kind: 'asset-terms-unverified', licence: r.licence, message: `${r.name}: the terms of ${r.licence} are not verified yet (read the licence text, then set verified: true)` });
+      else if (!(custom.scopes ?? []).includes(r.scope)) extra.push({ kind: 'asset-scope', licence: r.licence, message: `${r.name}: ${r.licence} is not allowed in scope ${r.scope}` });
+      else extraAllow.push(r.licence);
+    }
+    const res = evaluateItem({ subject: `asset:${r.name}`, name: `asset:${r.name}`, version: r.version, licence: r.licence, scope, source: 'data assets', noDeny: true, extraProblems: extra, extraAllow }, policy);
     results.push(res);
     if (!used.has(r) && opts.root) warnings.push(`data-asset record '${r.name}' matches no file (stale or not landed yet)`);
   }
