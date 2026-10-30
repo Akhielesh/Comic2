@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "mode": "reply",
+  "subject": "Re: Lighthouse",
+  "to": [{ "address": "editor@example.com" }],
+  "blocks": [
+    { "type": "paragraph", "id": "p1", "runs": [{ "text": "Thanks, Sam. Attached as promised." }] },
+    { "type": "quote", "id": "q1", "runs": [{ "text": "Can you send the deck?" }] }
+  ]
+}
