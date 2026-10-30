@@ -92,6 +92,18 @@ describe('comic_history.sql is idempotent and never destructive', () => {
     expect(top).not.toMatch(/\bcreate policy\b/i);
   });
 
+  it('adds columns only behind "if not exists"; a removed line is marked, never deleted (V-3)', () => {
+    for (const m of top.matchAll(/add\s+column\s+(?!if not exists)(\S+)/gi)) throw new Error(`unguarded: ${m[0]}`);
+    expect(top).toMatch(/alter table public\.comic_alternatives add column if not exists removed_at timestamptz;/);
+    const remove = squash(byName.get('comic_history_alternative_remove')!.body);
+    expect(remove).not.toMatch(/delete from public\.comic_alternatives/i);
+    expect(remove).toMatch(/set removed_at = now\(\), is_active = false, head_version_id = null/);
+    // Every line lookup that a write trusts skips removed lines.
+    for (const name of ['comic_history_put', 'comic_history_set_head', 'comic_history_alternative_update', 'comic_history_alternative_remove', 'comic_history_alternative_create']) {
+      expect(squash(byName.get(name)!.body), name).toMatch(/removed_at is null/);
+    }
+  });
+
   it('runs nothing destructive at the top level (no drop table/column/function, truncate, delete or update)', () => {
     expect(top).not.toMatch(/\bdrop\s+(table|column|function|index|schema|extension)\b/i);
     expect(top).not.toMatch(/\btruncate\b/i);

@@ -4,7 +4,8 @@
 // It behaves like the RPCs: one "transaction" per call (a refused put leaves nothing behind), chunk hashes verified on
 // insert and on read, paths filtered by the GC-root rule and only ever shrinking, the presence check, dedupe on an
 // equal root, thinning (48 h / hourly / daily / weekly, the row cap, the byte budget), the 10-minute chunk GC, named
-// and per-hour save limits, line heads, and the same StudioErrors as the Supabase store.
+// and per-hour save limits, line heads, soft-removed lines (their rows keep their line; "Original"'s head is always its
+// own newest row), and the same StudioErrors as the Supabase store.
 //
 // Scoping is asserted, not assumed: every call must carry a project AND a user (a call without one throws — a test
 // failure, never a silent pass), every call is recorded in `calls`, and every read filters by both. A project belongs
@@ -14,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { MAX_ALTERNATIVES } from '../../../../shared/comic/limits.js';
 import type { AlternativeRow, ChangeItem, HistoryActor, HistoryCodec, HistoryKind, Manifest, VersionStats, VersionThumb } from '../../../../shared/comic/history/types.js';
 import { StudioError } from '../types.js';
-import { CHUNK_PATHS_MAX, gcRootOf, historyHash, manifestHashes, parseVerifiedChunk } from './hash.js';
+import { CHUNK_PATHS_MAX, gcRootOf, historyHash, parseVerifiedChunk } from './hash.js';
 import type { HistoryScope } from './hooks.js';
 import {
   decodeHistoryCursor,
@@ -22,7 +23,10 @@ import {
   historyStoreError,
   listLimitOf,
   preparePut,
+  versionHashes,
   type HeadVersionRow,
+  type HistoryPutResult,
+  type HistoryVersionInput,
   type StoredVersionRow,
   type StoredVersionWithPaths
 } from './store.js';
@@ -93,6 +97,8 @@ interface FakeAlt {
   active: boolean;
   createdAt: number;
   updatedAt: number;
+  /** comic_alternatives.removed_at: a removed line is never deleted, only marked. */
+  removedAt?: number;
 }
 
 export type FakeHistoryMethod = keyof HistoryStore;
@@ -173,9 +179,25 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       .filter((r) => sameLine(r, line) && (userId === undefined || r.userId === userId))
       .sort(newestFirst)[0];
   const isHead = (projectId: string, id: string) => [...alts.values()].some((a) => a.projectId === projectId && a.headVersionId === id);
+  /** A line still being tried, of this comic and user (a removed one is not found). */
+  const liveAlt = (scope: HistoryScope, id: unknown): FakeAlt | undefined => {
+    const a = typeof id === 'string' ? alts.get(id) : undefined;
+    return a && a.projectId === scope.projectId && a.userId === scope.userId && a.removedAt === undefined ? a : undefined;
+  };
+  /** "Original" (null) or a line still being tried: the lines whose newest row is their current state. */
+  const isCurrentLine = (projectId: string, line: string | null) => {
+    if (line === null) return true;
+    const a = alts.get(line);
+    return !!a && a.projectId === projectId && a.removedAt === undefined;
+  };
   const activeLine = (scope: HistoryScope) =>
-    [...alts.values()].find((a) => a.projectId === scope.projectId && a.userId === scope.userId && a.active)?.id ?? null;
-  const lineOf = (scope: HistoryScope, alternativeId: string | null | undefined) => (alternativeId === undefined ? activeLine(scope) : alternativeId);
+    [...alts.values()].find((a) => a.projectId === scope.projectId && a.userId === scope.userId && a.active && a.removedAt === undefined)?.id ?? null;
+  /** undefined = the line you're on; null = "Original"; an id must be a line still being tried (else not found). */
+  const resolveLine = (scope: HistoryScope, alternativeId: string | null | undefined): { line: string | null } | null => {
+    if (alternativeId === undefined) return { line: activeLine(scope) };
+    if (alternativeId === null) return { line: null };
+    return liveAlt(scope, alternativeId) ? { line: alternativeId } : null;
+  };
 
   const rowOut = (r: FakeRow): StoredVersionRow => {
     const out: StoredVersionRow = {
@@ -233,10 +255,12 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     }
   };
 
-  /** comic_history_deletable: unpinned, unnamed, past keep_until, not a line's newest row, not a line's head. */
+  /** comic_history_deletable: unpinned, unnamed, past keep_until, not a line's head, not the newest row of "Original"
+   *  or of a line still being tried (a removed line ages out fully). */
   const deletable = (projectId: string, at: number) => {
     const newest = new Map<string, FakeRow>();
     for (const r of rowsOf(projectId).sort(newestFirst)) {
+      if (!isCurrentLine(projectId, r.alternativeId)) continue;
       const line = r.alternativeId ?? '';
       if (!newest.has(line)) newest.set(line, r);
     }
@@ -369,7 +393,7 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async put(scope: HistoryScope, input: VersionInput, chunks: ChunkInput[], policy?: Partial<HistoryPolicy>): Promise<PutResult> {
       enter('put', scope);
       lock(scope);
-      const { version, chunks: incoming } = preparePut(input, chunks);
+      const { version, chunks: incoming } = preparePut(input as HistoryVersionInput, chunks);
       const at = now();
       const unpinned = Math.min(Math.max(Math.trunc(policy?.unpinnedRows ?? 300), 1), 100_000);
       const budget = Math.max(policy?.bytesPerComic ?? 25_000_000, 0);
@@ -378,10 +402,7 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       const savesCap = typeof extra.savesPerHour === 'number' ? extra.savesPerHour : 30;
       const restoreDays = typeof extra.beforeRestoreDays === 'number' ? extra.beforeRestoreDays : 30;
       const line = version.alternativeId ?? null;
-      if (line !== null) {
-        const alt = alts.get(line);
-        if (!alt || alt.projectId !== scope.projectId || alt.userId !== scope.userId) throw historyStoreError('NOT_FOUND');
-      }
+      if (line !== null && !liveAlt(scope, line)) throw historyStoreError('NOT_FOUND');
       // 3. Stage the chunks (verified; one already stored is skipped). Nothing is kept unless the whole call succeeds.
       const staged = new Map<string, FakeChunk>();
       for (const c of incoming) {
@@ -425,14 +446,18 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
         if (head && head.rootHash === version.rootHash) {
           if (version.kind === 'named' && !head.name && head.kind !== 'named' && namedCount(scope.projectId) >= namedCap) throw historyStoreError('LIMIT:named');
           if (version.kind === 'start' || version.kind === 'named' || version.kind === 'publish' || version.kind === 'import') head.pinned = true;
-          if (version.kind === 'named') {
+          // A moment already saved under a name keeps it: a second save never renames it (the caller says so).
+          const alreadyNamed = version.kind === 'named' && head.name ? head.name : undefined;
+          if (version.kind === 'named' && !alreadyNamed) {
             if (version.name) head.name = version.name;
             if (version.note) head.note = version.note;
           }
           if (version.kind === 'publish' && typeof version.publishedRev === 'number') head.publishedRev = version.publishedRev;
           if (version.kind === 'before_restore' && keepUntil !== undefined) head.keepUntil = Math.max(head.keepUntil ?? 0, keepUntil);
           commitChunks();
-          return deduped(head.id);
+          const out: HistoryPutResult = deduped(head.id);
+          if (alreadyNamed) Object.assign(out, { alreadyNamed: true, name: alreadyNamed });
+          return out;
         }
       }
       if (version.kind === 'named' && namedCount(scope.projectId) >= namedCap) throw historyStoreError('LIMIT:named');
@@ -443,8 +468,9 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
         const r = id ? versions.get(id) : undefined;
         return r && r.projectId === scope.projectId && r.userId === scope.userId ? r.id : undefined;
       };
-      const createdAt = Math.max(at, lastCreated + 1);
-      lastCreated = createdAt;
+      // A classic snapshot keeps its own time (never later than now); every other row is stamped strictly in order.
+      const createdAt = version.codec === 'legacy' && version.createdAt !== undefined ? Math.min(version.createdAt, at) : Math.max(at, lastCreated + 1);
+      lastCreated = Math.max(lastCreated, createdAt);
       const row: FakeRow = {
         id: randomUUID(),
         projectId: scope.projectId,
@@ -487,7 +513,9 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async head(scope, alternativeId) {
       enter('head', scope);
       if (!owns(scope)) return null;
-      const r = newestOfLine(scope.projectId, lineOf(scope, alternativeId), scope.userId);
+      const resolved = resolveLine(scope, alternativeId);
+      if (!resolved) return null;
+      const r = newestOfLine(scope.projectId, resolved.line, scope.userId);
       if (!r) return null;
       const out: HeadVersionRow = { ...rowOut(r), manifest: clone(r.manifest) };
       return out;
@@ -496,12 +524,16 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async list(scope, filter: HistoryListFilter = {}) {
       enter('list', scope);
       if (!owns(scope)) return { rows: [] };
-      const line = lineOf(scope, filter.alternativeId);
+      const resolved = resolveLine(scope, filter.alternativeId);
+      if (!resolved) return { rows: [] };
+      const line = resolved.line;
       const limit = listLimitOf(filter.limit);
       const cursor = decodeHistoryCursor(filter.cursor);
       const cursorAt = cursor ? Date.parse(cursor.contentAt) : NaN;
+      // "Original" also lists the rows of removed lines (each keeps its alternativeId); head(null) never sees them.
+      const inList = (r: FakeRow) => sameLine(r, line) || (line === null && r.alternativeId !== null && !isCurrentLine(scope.projectId, r.alternativeId));
       const rows = rowsOf(scope.projectId)
-        .filter((r) => r.userId === scope.userId && sameLine(r, line))
+        .filter((r) => r.userId === scope.userId && inList(r))
         .filter((r) => !filter.kinds || filter.kinds.includes(r.kind))
         .filter((r) => !filter.actor || r.actor === filter.actor)
         .filter((r) => !filter.pageId || r.changes.some((c) => c.pageIds?.includes(filter.pageId!)))
@@ -519,7 +551,8 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       enter('get', scope);
       const r = typeof versionId === 'string' ? versions.get(versionId) : undefined;
       if (!r || r.projectId !== scope.projectId || r.userId !== scope.userId) return null;
-      const hashes = manifestHashes(r.manifest);
+      const hashes = versionHashes(r.codec, r.manifest, r.chunks);
+      if (!hashes) return null;
       const { bodies, paths } = verifiedChunks(scope, hashes);
       if (hashes.some((h) => !bodies.has(h))) return null;
       const out: StoredVersionWithPaths = { row: rowOut(r), manifest: clone(r.manifest), bodies, paths };
@@ -560,8 +593,9 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       if (!owns(scope)) return false;
       const r = typeof versionId === 'string' ? versions.get(versionId) : undefined;
       if (!r || r.projectId !== scope.projectId || r.userId !== scope.userId) return false;
-      if (r.kind !== 'named') throw historyStoreError('REFUSED:not_named');
-      if (newestOfLine(scope.projectId, r.alternativeId)?.id === r.id) throw historyStoreError('REFUSED:newest');
+      if (r.kind === 'legacy') throw historyStoreError('REFUSED:classic');
+      if (r.kind !== 'named' && !r.name) throw historyStoreError('REFUSED:not_named');
+      if (isCurrentLine(scope.projectId, r.alternativeId) && newestOfLine(scope.projectId, r.alternativeId)?.id === r.id) throw historyStoreError('REFUSED:newest');
       if (isHead(scope.projectId, r.id)) throw historyStoreError('REFUSED:head');
       removeRows(new Set([r.id]));
       gc(scope.projectId);
@@ -586,7 +620,7 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       enter('alternatives', scope);
       if (!owns(scope)) return [];
       return [...alts.values()]
-        .filter((a) => a.projectId === scope.projectId && a.userId === scope.userId)
+        .filter((a) => a.projectId === scope.projectId && a.userId === scope.userId && a.removedAt === undefined)
         .sort((a, b) => a.createdAt - b.createdAt)
         .map(altOut);
     },
@@ -596,7 +630,9 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       lock(scope);
       const name = String(input?.name ?? '').trim().slice(0, 60);
       if (!name) throw historyStoreError('INVALID');
-      if ([...alts.values()].filter((a) => a.projectId === scope.projectId).length + 1 >= Math.max(maxAlternatives, 1)) throw historyStoreError('LIMIT:alternatives');
+      if ([...alts.values()].filter((a) => a.projectId === scope.projectId && a.removedAt === undefined).length + 1 >= Math.max(maxAlternatives, 1)) {
+        throw historyStoreError('LIMIT:alternatives');
+      }
       const head = input?.headVersionId ? versions.get(input.headVersionId) : undefined;
       if (!head || head.projectId !== scope.projectId || head.userId !== scope.userId) throw historyStoreError('NOT_FOUND');
       const from = input.fromVersionId ? versions.get(input.fromVersionId) : undefined;
@@ -621,8 +657,8 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async updateAlternative(scope, id, patch) {
       enter('updateAlternative', scope);
       if (!owns(scope)) return null;
-      const alt = typeof id === 'string' ? alts.get(id) : undefined;
-      if (!alt || alt.projectId !== scope.projectId || alt.userId !== scope.userId) return null;
+      const alt = liveAlt(scope, id);
+      if (!alt) return null;
       const name = typeof patch?.name === 'string' ? patch.name.trim().slice(0, 60) : undefined;
       if (name === '') throw historyStoreError('INVALID');
       const at = now();
@@ -638,15 +674,17 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async removeAlternative(scope, id) {
       enter('removeAlternative', scope);
       if (!owns(scope)) return false;
-      const alt = typeof id === 'string' ? alts.get(id) : undefined;
-      if (!alt || alt.projectId !== scope.projectId || alt.userId !== scope.userId) return false;
+      const alt = liveAlt(scope, id);
+      if (!alt) return false;
       if (alt.active) throw historyStoreError('REFUSED:active');
       for (const r of rowsOf(scope.projectId)) {
         const headElsewhere = [...alts.values()].some((a) => a.id !== alt.id && a.projectId === scope.projectId && a.headVersionId === r.id);
         if ((r.alternativeId === alt.id || (r.id === alt.headVersionId && !headElsewhere)) && r.pinned && !PINNED_KINDS.has(r.kind) && !r.name) r.pinned = false;
       }
-      alts.delete(alt.id);
-      for (const r of rowsOf(scope.projectId)) if (r.alternativeId === alt.id) r.alternativeId = null;
+      // Marked, never deleted: its rows keep their line and age out; it is not found from now on.
+      const at = now();
+      Object.assign(alt, { removedAt: at, active: false, updatedAt: at });
+      delete alt.headVersionId;
       return true;
     },
 
@@ -655,16 +693,16 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       lock(scope);
       const v = typeof versionId === 'string' ? versions.get(versionId) : undefined;
       if (!v || v.projectId !== scope.projectId || v.userId !== scope.userId) throw historyStoreError('NOT_FOUND');
-      if (alternativeId !== null) {
-        const alt = alts.get(alternativeId);
-        if (!alt || alt.projectId !== scope.projectId || alt.userId !== scope.userId) throw historyStoreError('NOT_FOUND');
-        const old = alt.headVersionId;
-        alt.headVersionId = v.id;
-        alt.updatedAt = now();
-        if (old && old !== v.id && !isHead(scope.projectId, old)) {
-          const o = versions.get(old);
-          if (o && !PINNED_KINDS.has(o.kind) && !o.name) o.pinned = false;
-        }
+      // "Original"'s head is its newest row (never thinned): nothing to store, nothing to pin.
+      if (alternativeId === null) return;
+      const alt = liveAlt(scope, alternativeId);
+      if (!alt) throw historyStoreError('NOT_FOUND');
+      const old = alt.headVersionId;
+      alt.headVersionId = v.id;
+      alt.updatedAt = now();
+      if (old && old !== v.id && !isHead(scope.projectId, old)) {
+        const o = versions.get(old);
+        if (o && !PINNED_KINDS.has(o.kind) && !o.name) o.pinned = false;
       }
       v.pinned = true;
     }

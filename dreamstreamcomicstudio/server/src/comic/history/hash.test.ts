@@ -297,4 +297,13 @@ describe('read-side verification', () => {
     expect(content).not.toContain('\u0000'); // JSON escapes it: Postgres text accepts the chunk
     expect(historyHash(content)).toBe(sha128(content));
   });
+
+  it('matches the literal Postgres accepts (server/sql/tests/comic_history.test.sql inserts this exact chunk and hash)', () => {
+    // Multi-byte Telugu, curly quotes, an escaped NUL, an escaped lone surrogate and an astral emoji. The SQL harness
+    // inserts this content with this hash into comic_version_chunks: the verify trigger (extensions.digest) accepts it.
+    const content = sectionContent({ t: 'నమస్తే — “q” \u0000 🎨', s: '\uD800' });
+    expect(content).toBe('{"s":"\\ud800","t":"నమస్తే — “q” \\u0000 🎨"}');
+    expect(Buffer.byteLength(content, 'utf8')).toBe(63);
+    expect(historyHash(content)).toBe('c7e29801600af2d024412cfcdba68ea3');
+  });
 });

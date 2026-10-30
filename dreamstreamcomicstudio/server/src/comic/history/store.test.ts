@@ -6,6 +6,8 @@
 //   * put sends the VersionInput the RPC reads (trimmed, capped, policy defaults) and maps its answer;
 //   * get re-verifies every chunk: an altered one makes the version unopenable (and is logged);
 //   * lists page by an opaque (content_at, id) cursor quoted for PostgREST; page filter is jsonb containment;
+//   * a removed line is not found (head, list, the line list) and Original's list also carries its rows, merged in
+//     the database's order; a classic-editor row opens from its `chunks` column;
 //   * database refusals become honest StudioErrors.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -15,7 +17,8 @@ import { excludedOf, stripVolatile } from '../../../../shared/comic/history/sect
 import { historyV5Doc } from '../../../../shared/comic/history/__fixtures__/books.js';
 import { logger } from '../../lib/logger.js';
 import { StudioError } from '../types.js';
-import { assembleBook, chunkBook, manifestHashes } from './hash.js';
+import type { Manifest } from '../../../../shared/comic/history/types.js';
+import { assembleBook, chunkBook, historyHash, manifestHashes } from './hash.js';
 import type { HistoryScope } from './hooks.js';
 import {
   createSupabaseHistoryStore,
@@ -43,7 +46,7 @@ interface Req {
   body: Record<string, unknown> | null;
 }
 
-/** A PostgREST look-alike over in-memory tables: eq / in / is filters, order desc on one column, limit. */
+/** A PostgREST look-alike over in-memory tables: eq / in / is / not.is / not.in filters, order desc on one column, limit. */
 const makeDb = () => {
   const tables: Record<string, Row[]> = { comic_versions: [], comic_version_chunks: [], comic_alternatives: [] };
   const rpcs: Record<string, (body: Record<string, unknown>) => { status: number; body: unknown }> = {};
@@ -64,11 +67,17 @@ const makeDb = () => {
     let rows = [...(tables[path] || [])];
     for (const [key, value] of url.searchParams) {
       if (['select', 'order', 'limit', 'or'].includes(key)) continue;
-      if (value.startsWith('eq.')) rows = rows.filter((r) => String(r[key]) === value.slice(3));
-      else if (value.startsWith('in.(')) {
-        const set = new Set(value.slice(4, -1).split(',').map((x) => x.replace(/^"|"$/g, '')));
-        rows = rows.filter((r) => set.has(String(r[key])));
-      } else if (value === 'is.null') rows = rows.filter((r) => r[key] === null || r[key] === undefined);
+      for (const one of url.searchParams.getAll(key)) {
+        if (one.startsWith('eq.')) rows = rows.filter((r) => String(r[key]) === one.slice(3));
+        else if (one.startsWith('in.(')) {
+          const set = new Set(one.slice(4, -1).split(',').map((x) => x.replace(/^"|"$/g, '')));
+          rows = rows.filter((r) => set.has(String(r[key])));
+        } else if (one.startsWith('not.in.(')) {
+          const set = new Set(one.slice(8, -1).split(',').map((x) => x.replace(/^"|"$/g, '')));
+          rows = rows.filter((r) => !set.has(String(r[key])));
+        } else if (one === 'is.null') rows = rows.filter((r) => r[key] === null || r[key] === undefined);
+        else if (one === 'not.is.null') rows = rows.filter((r) => r[key] !== null && r[key] !== undefined);
+      }
     }
     const order = url.searchParams.get('order');
     if (order) {
@@ -253,6 +262,25 @@ describe('put', () => {
     });
   });
 
+  it('sends createdAt only for a classic snapshot, and maps "already saved under a name"', async () => {
+    const db = makeDb();
+    const seen: Record<string, unknown>[] = [];
+    db.rpcs.comic_history_put = (body) => {
+      seen.push(body.p_version as Record<string, unknown>);
+      return { status: 200, body: { id: V1, deduped: true, thinned: 0, budgetThinned: 0, gcChunks: 0, bytesNew: 0, alreadyNamed: true, name: 'Draft 1' } };
+    };
+    const book = chunkBook(historyV5Doc());
+    const store = storeOn(db);
+    const at = Date.UTC(2026, 0, 2, 3, 4, 5);
+    const res = await store.put(ME, { ...versionOf(book, { kind: 'named', name: 'Draft 2' }), createdAt: at } as VersionInput, []);
+    expect(res).toEqual({ id: V1, deduped: true, thinned: 0, budgetThinned: 0, gcChunks: 0, bytesNew: 0, alreadyNamed: true, name: 'Draft 1' });
+    await store.put(ME, { ...versionOf(book, { kind: 'legacy', codec: 'legacy', legacyRef: { snapshotId: 's1' } }), createdAt: at } as VersionInput, []);
+    await store.put(ME, { ...versionOf(book, { kind: 'legacy', codec: 'legacy' }), createdAt: 1e300 } as VersionInput, []);
+    expect('createdAt' in seen[0]).toBe(false); // a v5 row is stamped by the database
+    expect(seen[1].createdAt).toBe(at);
+    expect('createdAt' in seen[2]).toBe(false); // no time at all
+  });
+
   it('refuses malformed input before any request', async () => {
     const db = makeDb();
     const store = storeOn(db);
@@ -303,6 +331,25 @@ describe('get', () => {
     expect(bodies.size).toBe(book.hashes.length - 1);
   });
 
+  it('opens a classic-editor row (codec legacy) from its chunks column: its manifest is not v5-shaped', async () => {
+    const db = makeDb();
+    const parts = [JSON.stringify({ pages: [{ id: 'p1' }] }), JSON.stringify('A classic title')];
+    const hashes = parts.map((c) => historyHash(c));
+    const manifest = { state: { pages: hashes[0], title: hashes[1] } } as unknown as Manifest;
+    db.tables.comic_versions.push(dbRow(V1, { kind: 'legacy', codec: 'legacy', manifest, chunks: hashes, legacy_ref: { snapshotId: 's1' } }));
+    db.tables.comic_version_chunks.push(...parts.map((content, i) => ({ project_id: P, user_id: U, hash: hashes[i], content, paths: [] })));
+    const got = await storeOn(db).get(ME, V1);
+    expect(got?.row).toMatchObject({ kind: 'legacy', codec: 'legacy', legacy: { snapshotId: 's1' } });
+    expect(got?.manifest).toEqual(manifest);
+    expect(got?.bodies.get(hashes[0])).toEqual({ pages: [{ id: 'p1' }] });
+    expect(got?.bodies.get(hashes[1])).toBe('A classic title');
+    expect(db.requests.find((r) => r.path === 'comic_versions')!.params.get('select')).toMatch(/,manifest,chunks$/);
+    // A missing classic chunk still makes it unopenable.
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    db.tables.comic_version_chunks.pop();
+    expect(await storeOn(db).get(ME, V1)).toBeNull();
+  });
+
   it('is null for a missing chunk, a missing row, or a row without a manifest', async () => {
     const { db } = stored();
     vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
@@ -321,10 +368,12 @@ describe('lists and heads', () => {
       dbRow(V1, { content_at: '2026-10-30T07:00:01.000001+00:00' })
     );
     const store = storeOn(db);
+    const versionsReqs = () => db.requests.filter((r) => r.path === 'comic_versions');
     const first = await store.list(ME, { limit: 2, alternativeId: null, pageId: 'pg_"1"', kinds: ['edits', 'ai'], actor: 'you' });
     expect(first.rows.map((r) => r.id)).toEqual([V3, V2]);
     expect(decodeHistoryCursor(first.next)).toEqual({ contentAt: '2026-10-30T07:00:02.000002+00:00', id: V2 });
-    const q = db.requests[0].params;
+    expect(versionsReqs()).toHaveLength(1); // no removed line: one query
+    const q = versionsReqs()[0].params;
     expect(q.get('alternative_id')).toBe('is.null');
     expect(q.get('changes')).toBe(`cs.${JSON.stringify([{ pageIds: ['pg_"1"'] }])}`);
     expect(q.get('kind')).toBe('in.(edits,ai)');
@@ -332,12 +381,12 @@ describe('lists and heads', () => {
     expect(q.get('limit')).toBe('3');
     expect(q.get('order')).toBe('content_at.desc,id.desc');
     await store.list(ME, { limit: 2, alternativeId: null, cursor: first.next });
-    expect(db.requests[1].params.get('or')).toBe(
+    expect(versionsReqs()[1].params.get('or')).toBe(
       `(content_at.lt."2026-10-30T07:00:02.000002+00:00",and(content_at.eq."2026-10-30T07:00:02.000002+00:00",id.lt.${V2}))`
     );
     // A forged cursor is ignored, never pasted into the filter.
     await store.list(ME, { alternativeId: null, cursor: encodeHistoryCursor('2026-10-30T07:00:00Z),id.gt.(0', V1) });
-    expect(db.requests[2].params.get('or')).toBeNull();
+    expect(versionsReqs()[2].params.get('or')).toBeNull();
     expect(decodeHistoryCursor('not base64 json')).toBeNull();
     // Unknown kinds / actors match nothing (and make no request).
     const before = db.requests.length;
@@ -359,6 +408,49 @@ describe('lists and heads', () => {
     expect(db.requests[1].params.get('alternative_id')).toBe(`eq.${ALT}`);
     expect((await store.head(ME, null))?.id).toBe(V1);
     expect((await store.list(ME)).rows.map((r) => r.id)).toEqual([V2]);
+  });
+
+  it('a removed line is not found; Original keeps its own head, and its list also carries the removed line’s rows in order', async () => {
+    const db = makeDb();
+    const book = chunkBook(historyV5Doc());
+    const LIVE = '44444444-4444-4444-8444-444444444445';
+    const at = (s: string) => `2026-10-30T07:00:${s}+00:00`;
+    db.tables.comic_alternatives.push(
+      { id: ALT, project_id: P, user_id: U, name: 'B', is_active: false, removed_at: '2026-10-30T08:00:00+00:00' },
+      { id: LIVE, project_id: P, user_id: U, name: 'C', is_active: true, removed_at: null }
+    );
+    const V4 = '33333333-3333-4333-8333-333333333334';
+    const V5 = '33333333-3333-4333-8333-333333333335';
+    db.tables.comic_versions.push(
+      dbRow(V1, { content_at: at('01'), created_at: at('01'), manifest: book.manifest }), // Original
+      dbRow(V2, { content_at: at('02.000002'), created_at: at('05'), alternative_id: ALT, manifest: book.manifest }), // removed B, newer
+      dbRow(V3, { content_at: at('02.000001'), created_at: at('06'), alternative_id: ALT, manifest: book.manifest }), // removed B, newest written
+      dbRow(V4, { content_at: at('03'), created_at: at('07'), alternative_id: LIVE, manifest: book.manifest }), // C, live
+      dbRow(V5, { content_at: at('02.5'), created_at: at('02'), manifest: book.manifest }) // Original
+    );
+    const store = storeOn(db);
+    // head(null) reads only alternative_id is null: B's newer rows never become Original's head.
+    expect((await store.head(ME, null))?.id).toBe(V5);
+    // A removed line is not found for head and list (no versions query at all); the line list leaves it out.
+    db.requests.length = 0;
+    expect(await store.head(ME, ALT)).toBeNull();
+    expect(await store.list(ME, { alternativeId: ALT })).toEqual({ rows: [] });
+    expect(db.requests.map((r) => r.path)).toEqual(['comic_alternatives', 'comic_alternatives']);
+    for (const r of db.requests) expect(r.params.get('removed_at')).toBe('is.null');
+    expect((await store.alternatives(ME)).map((a) => a.id)).toEqual([LIVE]);
+    expect(db.requests.at(-1)!.params.get('removed_at')).toBe('is.null');
+    expect(db.requests.at(-1)!.params.get('select')).toContain('removed_at');
+    expect((await store.head(ME, LIVE))?.id).toBe(V4);
+    // Original's list = its own rows + the removed line's rows (alternativeId kept), merged by (content_at, id) desc
+    // to the microsecond; a live line's rows never.
+    db.requests.length = 0;
+    const page1 = await store.list(ME, { alternativeId: null, limit: 2 });
+    expect(page1.rows.map((r) => [r.id, r.alternativeId])).toEqual([[V5, null], [V2, ALT]]);
+    const removedReq = db.requests.filter((r) => r.path === 'comic_versions')[1];
+    expect(removedReq.params.getAll('alternative_id')).toEqual(['not.is.null', `not.in.(${LIVE})`]);
+    expect(removedReq.params.get('project_id')).toBe(`eq.${P}`);
+    expect(removedReq.params.get('user_id')).toBe(`eq.${U}`);
+    expect(decodeHistoryCursor(page1.next)).toEqual({ contentAt: at('02.000002'), id: V2 });
   });
 });
 
@@ -406,11 +498,13 @@ describe('rows and errors', () => {
     expect(err('54000', 'COMIC_HISTORY_LIMIT:named')).toMatchObject({ code: 'LIMIT', status: 409, userMessage: expect.stringMatching(/100 saved versions/) });
     expect(err('54000', 'COMIC_HISTORY_LIMIT:saves_per_hour')).toMatchObject({ code: 'LIMIT', status: 429, retryable: true });
     expect(err('55000', 'COMIC_HISTORY_REFUSED:newest')).toMatchObject({ code: 'CONFLICT', userMessage: "The latest moment can't be removed." });
+    expect(err('55000', 'COMIC_HISTORY_REFUSED:classic')).toMatchObject({ code: 'CONFLICT', status: 409, userMessage: expect.stringMatching(/classic editor/) });
+    expect(err('55000', 'COMIC_HISTORY_REFUSED:not_named')).toMatchObject({ userMessage: expect.stringMatching(/saved or named/) });
     expect(err('42883', 'function public.comic_history_put does not exist')).toMatchObject({ code: 'NOT_AVAILABLE', status: 503 });
     expect(err('PGRST205', 'Could not find the table')).toMatchObject({ code: 'NOT_AVAILABLE' });
     expect(err('22000', 'comic_version_chunks: the hash does not match the content')).toMatchObject({ code: 'INTERNAL' });
     expect(err('08006', 'connection failure')).toMatchObject({ code: 'INTERNAL', status: 503, retryable: true });
-    for (const e of [err('42501', 'COMIC_HISTORY_FORBIDDEN'), err('55000', 'COMIC_HISTORY_REFUSED:head')]) {
+    for (const e of [err('42501', 'COMIC_HISTORY_FORBIDDEN'), err('55000', 'COMIC_HISTORY_REFUSED:head'), err('55000', 'COMIC_HISTORY_REFUSED:classic')]) {
       expect(e.userMessage).not.toMatch(/\b(commit|branch|merge|diff|checkout|HEAD)\b/);
     }
   });

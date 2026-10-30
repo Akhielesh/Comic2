@@ -54,6 +54,19 @@ export interface HeadVersionRow extends StoredVersionRow {
   manifest: Manifest;
 }
 
+/** put() input: VersionInput plus, for a classic-editor snapshot (codec 'legacy') only, the snapshot's own time. */
+export interface HistoryVersionInput extends VersionInput {
+  /** Epoch ms. Kept as created_at (never later than now) for codec 'legacy'; ignored for every other row. */
+  createdAt?: number;
+}
+
+/** put() answer: PutResult plus, when a named save found the unchanged moment already saved under a name, that name
+ *  (it is never renamed: the caller says "This moment is already saved as 'Draft 1'"). */
+export interface HistoryPutResult extends PutResult {
+  alreadyNamed?: true;
+  name?: string;
+}
+
 /** get(): a verified version plus each chunk's GC roots. A path the version's bodies mention but no chunk's `paths`
  *  lists was forgotten (V-4: a removed reference photo): restores and signing must skip it. */
 export interface StoredVersionWithPaths extends StoredVersion {
@@ -61,6 +74,23 @@ export interface StoredVersionWithPaths extends StoredVersion {
   /** hash → that chunk's `paths`. */
   paths: Map<string, string[]>;
 }
+
+/**
+ * The chunks get() loads and verifies: a v5 row's manifest hashes; a classic-editor row (codec 'legacy', chunked per
+ * top-level projects.state key: no v5 manifest shape) its `chunks` column. null when they cannot be read.
+ */
+export const versionHashes = (codec: HistoryCodec, manifest: Manifest, chunks: unknown): string[] | null => {
+  if (codec === 'legacy') {
+    const list = Array.isArray(chunks) ? chunks.filter((h): h is string => typeof h === 'string') : [];
+    return list.length && list.every(isHistoryHash) ? [...new Set(list)].sort() : null;
+  }
+  try {
+    const hashes = manifestHashes(manifest);
+    return hashes.length && hashes.every(isHistoryHash) ? hashes : null;
+  } catch {
+    return null;
+  }
+};
 
 /** Every GC root of a verified version (the union of its chunks' `paths`). */
 export const versionPaths = (version: StoredVersion): Set<string> => {
@@ -81,6 +111,7 @@ export type HistoryErrorToken =
   | 'REFUSED:newest'
   | 'REFUSED:head'
   | 'REFUSED:not_named'
+  | 'REFUSED:classic'
   | 'REFUSED:active'
   | 'INVALID'
   | 'TOO_LARGE'
@@ -96,7 +127,8 @@ export const HISTORY_STORE_MESSAGES: Readonly<Record<HistoryErrorToken, string>>
   'LIMIT:alternatives': `You can try up to ${MAX_ALTERNATIVES} versions of a comic at once, counting the original. Remove one to start another.`,
   'REFUSED:newest': "The latest moment can't be removed.",
   'REFUSED:head': "This moment is where a version you're trying is kept, so it can't be removed.",
-  'REFUSED:not_named': 'Only versions you saved can be removed. Automatic moments are tidied up for you.',
+  'REFUSED:not_named': 'Only versions you saved or named can be removed. Automatic moments are tidied up for you.',
+  'REFUSED:classic': "Snapshots from the classic editor are kept safely, so they can't be removed.",
   'REFUSED:active': "Switch to another version before removing this one.",
   INVALID: "History couldn't read that request. Nothing in your comic changed.",
   TOO_LARGE: "This comic is too large to save in History right now. Nothing in your comic changed.",
@@ -121,6 +153,7 @@ export const historyStoreError = (token: HistoryErrorToken, cause?: unknown): St
     case 'REFUSED:newest':
     case 'REFUSED:head':
     case 'REFUSED:not_named':
+    case 'REFUSED:classic':
     case 'REFUSED:active':
       return new StudioError('CONFLICT', message, { status: 409, cause });
     case 'INVALID':
@@ -136,7 +169,7 @@ const pgMessage = (err: unknown): string => String((err as PgError)?.message || 
 
 const TOKENS: HistoryErrorToken[] = [
   'MISSING_CHUNKS', 'LIMIT:named', 'LIMIT:saves_per_hour', 'LIMIT:alternatives', 'REFUSED:newest', 'REFUSED:head',
-  'REFUSED:not_named', 'REFUSED:active', 'FORBIDDEN', 'NOT_FOUND', 'INVALID'
+  'REFUSED:not_named', 'REFUSED:classic', 'REFUSED:active', 'FORBIDDEN', 'NOT_FOUND', 'INVALID'
 ];
 
 /** A database / PostgREST error as a StudioError (and one log line). */
@@ -273,11 +306,14 @@ const policyOf = (policy?: Partial<HistoryPolicy>) => ({
   ...(policy || {})
 });
 
+/** Epoch ms the database accepts as a time (1970..2286); anything else is no time at all. */
+export const isEpochMs = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1e13;
+
 /**
  * Validate and normalize a put (both stores): hashes, kinds, sizes and caps. Throws INVALID / TOO_LARGE; never
- * modifies the caller's objects. The chunk list is deduped by hash.
+ * modifies the caller's objects. The chunk list is deduped by hash. `createdAt` survives only on a classic snapshot.
  */
-export const preparePut = (version: VersionInput, chunks: ChunkInput[]): { version: VersionInput; chunks: ChunkInput[] } => {
+export const preparePut = (version: HistoryVersionInput, chunks: ChunkInput[]): { version: HistoryVersionInput; chunks: ChunkInput[] } => {
   if (!isRecord(version) || !KINDS.has(version.kind) || !ACTORS.includes(version.actor) || !isHistoryHash(version.rootHash) || !isRecord(version.manifest)) {
     throw historyStoreError('INVALID');
   }
@@ -302,7 +338,7 @@ export const preparePut = (version: VersionInput, chunks: ChunkInput[]): { versi
   }
   const name = typeof version.name === 'string' ? version.name.trim().slice(0, HISTORY_LIMITS.nameChars) : '';
   const note = typeof version.note === 'string' ? version.note.trim().slice(0, HISTORY_LIMITS.noteChars) : '';
-  const out: VersionInput = {
+  const out: HistoryVersionInput = {
     ...version,
     codec,
     label: String(version.label ?? '').slice(0, LABEL_CHARS),
@@ -320,6 +356,7 @@ export const preparePut = (version: VersionInput, chunks: ChunkInput[]): { versi
     else delete out.publishedRev;
   }
   if (out.keepUntil !== undefined && !Number.isFinite(out.keepUntil)) delete out.keepUntil;
+  if (codec !== 'legacy' || !isEpochMs(out.createdAt)) delete out.createdAt;
   if (out.alternativeId !== undefined && out.alternativeId !== null && !isUuid(out.alternativeId)) throw historyStoreError('NOT_FOUND');
   return { version: out, chunks: outChunks };
 };
@@ -353,9 +390,24 @@ export const listLimitOf = (limit: unknown): number =>
 /** Row columns read for lists (no manifest: it is 1–5 KB and only head/get need it). */
 export const VERSION_ROW_COLUMNS =
   'id,kind,actor,label,name,note,pinned,keep_until,rev,content_at,created_at,parent_id,undo_id,alternative_id,model_id,published_rev,codec,changes,thumbs,stats,legacy_ref,root_hash';
-const ALTERNATIVE_COLUMNS = 'id,name,from_version_id,head_version_id,is_active,created_at,updated_at';
+const ALTERNATIVE_COLUMNS = 'id,name,from_version_id,head_version_id,is_active,created_at,updated_at,removed_at';
 /** Hashes per `in (…)` filter (keeps the request URL small). */
 const HASH_BATCH = 120;
+
+/** A timestamptz from PostgREST as microseconds since the epoch (list merges order exactly as the database does). */
+const tsMicros = (v: unknown): number => {
+  const text = String(v ?? '');
+  const ms = Date.parse(text);
+  if (!Number.isFinite(ms)) return -Infinity;
+  const frac = /T\d{2}:\d{2}:\d{2}\.(\d{1,6})/.exec(text)?.[1] ?? '';
+  return Math.floor(ms / 1000) * 1_000_000 + Number(frac.padEnd(6, '0') || 0);
+};
+/** content_at desc, id desc (the list order). */
+const newestRowFirst = (a: Record<string, unknown>, b: Record<string, unknown>): number =>
+  tsMicros(b.content_at) - tsMicros(a.content_at) || (String(a.id) < String(b.id) ? 1 : String(a.id) > String(b.id) ? -1 : 0);
+
+/** The rows of a comic's list: one line's own rows, or (for "Original") also the rows of removed lines. */
+type ListPart = { kind: 'line'; line: string | null } | { kind: 'removed'; live: string[] };
 
 export interface SupabaseHistoryStoreOptions {
   /** The service-role client (default: getSupabaseAdmin). */
@@ -384,13 +436,44 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       .eq('project_id', scope.projectId)
       .eq('user_id', scope.userId)
       .eq('is_active', true)
+      .is('removed_at', null)
       .limit(1);
     if (error) throw mapHistoryDbError(error, 'read the active line');
     return Array.isArray(data) && data[0] ? String((data[0] as { id: unknown }).id) : null;
   };
-  /** undefined = the line you're on; null = "Original". */
-  const lineOf = async (scope: HistoryScope, alternativeId: string | null | undefined): Promise<string | null> =>
-    alternativeId === undefined ? activeLine(scope) : alternativeId;
+  /**
+   * undefined = the line you're on; null = "Original"; an id must be a line still being tried. A removed or unknown
+   * line is not found (null): a stale tab can never switch to, or read as current, a line that was removed.
+   */
+  const resolveLine = async (scope: HistoryScope, alternativeId: string | null | undefined): Promise<{ line: string | null } | null> => {
+    if (alternativeId === undefined) return { line: await activeLine(scope) };
+    if (alternativeId === null) return { line: null };
+    if (!isUuid(alternativeId)) return null;
+    const { data, error } = await admin()
+      .from('comic_alternatives')
+      .select('id')
+      .eq('id', alternativeId)
+      .eq('project_id', scope.projectId)
+      .eq('user_id', scope.userId)
+      .is('removed_at', null)
+      .limit(1);
+    if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
+    return Array.isArray(data) && data[0] ? { line: alternativeId } : null;
+  };
+  /** The comic's lines: the ones still being tried, and the removed ones. */
+  const linesOf = async (scope: HistoryScope): Promise<{ live: string[]; removed: string[] }> => {
+    const { data, error } = await admin()
+      .from('comic_alternatives')
+      .select('id,removed_at')
+      .eq('project_id', scope.projectId)
+      .eq('user_id', scope.userId);
+    if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
+    const out = { live: [] as string[], removed: [] as string[] };
+    for (const r of (Array.isArray(data) ? data : []) as { id: unknown; removed_at: unknown }[]) {
+      if (isUuid(r.id)) (r.removed_at ? out.removed : out.live).push(r.id);
+    }
+    return out;
+  };
 
   const chunkRows = async (scope: HistoryScope, hashes: string[]): Promise<{ hash: string; content: unknown; paths: unknown }[]> => {
     const wanted = [...new Set(hashes.filter(isHistoryHash))];
@@ -444,7 +527,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
 
     async put(scope, version, chunks, policy) {
       if (!scoped(scope)) throw historyStoreError('NOT_FOUND');
-      const prepared = preparePut(version, chunks);
+      const prepared = preparePut(version as HistoryVersionInput, chunks);
       const v = prepared.version;
       const pVersion = jsonbSafe({
         kind: v.kind,
@@ -468,7 +551,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         modelId: v.modelId,
         publishedRev: v.publishedRev,
         codec: v.codec,
-        legacyRef: v.legacyRef
+        legacyRef: v.legacyRef,
+        createdAt: v.createdAt
       });
       const data = await rpc<Record<string, unknown> | null>(
         'comic_history_put',
@@ -476,7 +560,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         'save a moment'
       );
       if (!isRecord(data) || typeof data.id !== 'string') throw mapHistoryDbError({ code: 'XX000', message: 'comic_history_put returned nothing' }, 'save a moment');
-      const result: PutResult = {
+      const result: HistoryPutResult = {
         id: data.id,
         deduped: data.deduped === true,
         thinned: int(data.thinned) ?? 0,
@@ -484,13 +568,20 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         gcChunks: int(data.gcChunks) ?? 0,
         bytesNew: int(data.bytesNew) ?? 0
       };
+      if (data.alreadyNamed === true && typeof data.name === 'string') {
+        result.alreadyNamed = true;
+        result.name = data.name;
+      }
       return result;
     },
 
     async head(scope, alternativeId) {
       if (!scoped(scope)) return null;
-      const line = await lineOf(scope, alternativeId);
+      const resolved = await resolveLine(scope, alternativeId);
+      if (!resolved) return null;
+      const line = resolved.line;
       if (line !== null && !isUuid(line)) return null;
+      // "Original"'s head is its own newest row: rows of a removed line keep their alternative_id and never count.
       let q = admin()
         .from('comic_versions')
         .select(`${VERSION_ROW_COLUMNS},manifest`)
@@ -505,28 +596,40 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       return row;
     },
 
+    // "Original"'s list also carries the rows of removed lines (their named saves are kept forever, so they must stay
+    // reachable); each keeps its alternativeId, which tells the timeline it came from a removed line. head(null) and
+    // the put's dedupe never see them.
     async list(scope, filter: HistoryListFilter = {}) {
       if (!scoped(scope)) return { rows: [] };
-      const line = await lineOf(scope, filter.alternativeId);
-      if (line !== null && !isUuid(line)) return { rows: [] };
-      const limit = listLimitOf(filter.limit);
-      let q = admin().from('comic_versions').select(VERSION_ROW_COLUMNS).eq('project_id', scope.projectId).eq('user_id', scope.userId);
-      q = line === null ? q.is('alternative_id', null) : q.eq('alternative_id', line);
       const kinds = (filter.kinds || []).filter((k) => KINDS.has(k));
       if (filter.kinds && !kinds.length) return { rows: [] };
-      if (kinds.length) q = q.in('kind', kinds);
-      if (filter.actor) {
-        if (!ACTORS.includes(filter.actor)) return { rows: [] };
-        q = q.eq('actor', filter.actor);
-      }
-      // A JSON string: postgrest-js would turn a JS array into a Postgres array literal, which jsonb rejects.
-      if (typeof filter.pageId === 'string' && filter.pageId) q = q.contains('changes', JSON.stringify([{ pageIds: [filter.pageId] }]));
+      if (filter.actor && !ACTORS.includes(filter.actor)) return { rows: [] };
+      const resolved = await resolveLine(scope, filter.alternativeId);
+      if (!resolved) return { rows: [] };
+      const line = resolved.line;
+      if (line !== null && !isUuid(line)) return { rows: [] };
+      const limit = listLimitOf(filter.limit);
       const cursor = decodeHistoryCursor(filter.cursor);
-      // Keyset on (content_at, id); the timestamp is quoted (PostgREST reserves '.' and ':' inside or()).
-      if (cursor && isUuid(cursor.id)) q = q.or(`content_at.lt."${cursor.contentAt}",and(content_at.eq."${cursor.contentAt}",id.lt.${cursor.id})`);
-      const { data, error } = await q.order('content_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
-      if (error) throw mapHistoryDbError(error, 'read history');
-      const raw = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
+      const part = async (which: ListPart): Promise<Record<string, unknown>[]> => {
+        let q = admin().from('comic_versions').select(VERSION_ROW_COLUMNS).eq('project_id', scope.projectId).eq('user_id', scope.userId);
+        if (which.kind === 'line') q = which.line === null ? q.is('alternative_id', null) : q.eq('alternative_id', which.line);
+        else {
+          q = q.not('alternative_id', 'is', null);
+          if (which.live.length) q = q.not('alternative_id', 'in', `(${which.live.join(',')})`);
+        }
+        if (kinds.length) q = q.in('kind', kinds);
+        if (filter.actor) q = q.eq('actor', filter.actor);
+        // A JSON string: postgrest-js would turn a JS array into a Postgres array literal, which jsonb rejects.
+        if (typeof filter.pageId === 'string' && filter.pageId) q = q.contains('changes', JSON.stringify([{ pageIds: [filter.pageId] }]));
+        // Keyset on (content_at, id); the timestamp is quoted (PostgREST reserves '.' and ':' inside or()).
+        if (cursor && isUuid(cursor.id)) q = q.or(`content_at.lt."${cursor.contentAt}",and(content_at.eq."${cursor.contentAt}",id.lt.${cursor.id})`);
+        const { data, error } = await q.order('content_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
+        if (error) throw mapHistoryDbError(error, 'read history');
+        return (Array.isArray(data) ? data : []) as Record<string, unknown>[];
+      };
+      const [own, lines] = await Promise.all([part({ kind: 'line', line }), line === null ? linesOf(scope) : Promise.resolve(null)]);
+      // Both parts are keyset pages in the same order: their merge's first `limit` rows are the union's.
+      const raw = lines && lines.removed.length ? [...own, ...(await part({ kind: 'removed', live: lines.live }))].sort(newestRowFirst) : own;
       const page = raw.slice(0, limit);
       const last = page[page.length - 1];
       const out: HistoryListPage = { rows: page.map(versionRowFromDb) };
@@ -538,7 +641,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       if (!scoped(scope) || !isUuid(versionId)) return null;
       const { data, error } = await admin()
         .from('comic_versions')
-        .select(`${VERSION_ROW_COLUMNS},manifest`)
+        .select(`${VERSION_ROW_COLUMNS},manifest,chunks`)
         .eq('id', versionId)
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
@@ -546,7 +649,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       if (error) throw mapHistoryDbError(error, 'read history');
       if (!isRecord(data) || !isRecord(data.manifest)) return null;
       const manifest = data.manifest as unknown as Manifest;
-      const hashes = manifestHashes(manifest);
+      const hashes = versionHashes(data.codec === 'legacy' ? 'legacy' : 'v5', manifest, data.chunks);
+      if (!hashes) return null;
       const { bodies, paths } = await verified(scope, hashes);
       if (hashes.some((h) => !bodies.has(h))) {
         logger.warn('comic_history_version_incomplete', { projectId: scope.projectId, versionId, missing: hashes.filter((h) => !bodies.has(h)).length });
@@ -612,6 +716,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .select(ALTERNATIVE_COLUMNS)
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
+        .is('removed_at', null)
         .order('created_at', { ascending: true });
       if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
       return ((Array.isArray(data) ? data : []) as Record<string, unknown>[]).map(alternativeRowFromDb);

@@ -1,7 +1,8 @@
 // @vitest-environment node
 // The in-memory HistoryStore (versions plan §14 H1): the same semantics as comic_history.sql, so H2/H3/H5/H7 can
 // build on it. Every call must carry a project AND a user and every read filters by both; a chunk whose content was
-// altered is refused on read; puts are all-or-nothing; dedupe, thinning, the budget, the GC grace, names, lines.
+// altered is refused on read; puts are all-or-nothing; dedupe, thinning, the budget, the GC grace, names, lines
+// (a removed line is marked, never merged into "Original"), classic snapshots (their time, their chunk list).
 import { describe, expect, it } from 'vitest';
 import { normalizeDoc, type ComicDoc } from '../../../../shared/comic/doc.js';
 import { applyOps } from '../../../../shared/comic/ops.js';
@@ -11,7 +12,8 @@ import { StudioError } from '../types.js';
 import { assembleBook, chunkBook, historyHash } from './hash.js';
 import type { HistoryScope } from './hooks.js';
 import { createFakeHistoryStore, type FakeHistoryMethod, type FakeHistoryStore } from './store.fake.js';
-import { __setHistoryStoreForTests, getHistoryStore, versionPaths, type StoredVersionWithPaths } from './store.js';
+import { __setHistoryStoreForTests, getHistoryStore, versionPaths, type HistoryVersionInput, type StoredVersionWithPaths } from './store.js';
+import type { Manifest } from '../../../../shared/comic/history/types.js';
 import type { ChunkInput, VersionInput } from './storeTypes.js';
 
 const P = 'proj-1';
@@ -43,6 +45,28 @@ const capture = async (store: FakeHistoryStore, scope: HistoryScope, doc: ComicD
 
 /** A tiny distinct book per index (for thinning: many rows, few bytes). */
 const tinyDoc = (i: number): ComicDoc => applyOps(historyV4Doc(), [{ op: 'brief', patch: { title: `Take ${i}` } }]);
+
+/** A classic-editor snapshot as H6 imports it: chunked per top-level projects.state key (no v5 manifest shape). */
+const classicSnapshot = (snapshotId: string, extra: Partial<HistoryVersionInput> = {}) => {
+  const contents = [JSON.stringify({ panels: [{ id: `${snapshotId}-p1`, imageId: `u/a/p/c/img/${snapshotId}.webp` }] }), JSON.stringify(`Title ${snapshotId}`)];
+  const hashes = contents.map((c) => historyHash(c));
+  const manifest = { state: { panels: hashes[0], title: hashes[1] } } as unknown as Manifest;
+  const version: HistoryVersionInput = {
+    kind: 'legacy',
+    actor: 'you',
+    label: 'Auto - Before Restore',
+    rev: 0,
+    contentAt: Date.UTC(2026, 0, 2),
+    manifest,
+    rootHash: historyHash(JSON.stringify(manifest)),
+    chunks: hashes,
+    codec: 'legacy',
+    legacyRef: { snapshotId },
+    ...extra
+  };
+  const chunks: ChunkInput[] = contents.map((content, i) => ({ hash: hashes[i], kind: 'state', content, paths: [] }));
+  return { version, chunks, hashes, contents };
+};
 
 const rejects = async (p: Promise<unknown>, code: string) => {
   const err = await p.then(() => null, (e: unknown) => e);
@@ -145,8 +169,49 @@ describe('put → get', () => {
     expect(b.res).toMatchObject({ id: a.res.id, deduped: true });
     const c = await capture(store, ME, doc, clock.t + 2, { kind: 'named', name: '  Before the twist ', note: 'safe point' });
     expect(c.res).toMatchObject({ id: a.res.id, deduped: true });
+    expect('alreadyNamed' in c.res).toBe(false);
     expect(store.rows(ME)).toHaveLength(1);
     expect(store.rows(ME)[0]).toMatchObject({ kind: 'edits', pinned: true, name: 'Before the twist', note: 'safe point' });
+    // Saving the same moment again under another name keeps the first name, and says so: never a silent rename.
+    const d = await capture(store, ME, doc, clock.t + 3, { kind: 'named', name: 'Draft 2', note: 'other' });
+    expect(d.res).toEqual({ id: a.res.id, deduped: true, thinned: 0, budgetThinned: 0, gcChunks: 0, bytesNew: 0, alreadyNamed: true, name: 'Before the twist' });
+    expect(store.rows(ME)).toHaveLength(1);
+    expect(store.rows(ME)[0]).toMatchObject({ name: 'Before the twist', note: 'safe point', pinned: true });
+  });
+
+  it('a classic snapshot keeps its own time (never later than now); every other row is stamped by the store', async () => {
+    const { store, clock } = setup();
+    const latest = (await capture(store, ME, tinyDoc(1), clock.t)).res.id;
+    const old = Date.UTC(2026, 0, 2, 3, 4, 5);
+    const a = classicSnapshot('s1', { createdAt: old });
+    const imported = await store.put(ME, a.version, a.chunks);
+    expect(store.rows(ME).find((r) => r.id === imported.id)?.createdAt).toBe(old);
+    // An older snapshot never becomes the newest moment of the line.
+    expect((await store.head(ME, null))?.id).toBe(latest);
+    const future = classicSnapshot('s2', { createdAt: clock.t + DAY });
+    expect(store.rows(ME).length).toBe(2);
+    const f = await store.put(ME, future.version, future.chunks);
+    expect(store.rows(ME).find((r) => r.id === f.id)?.createdAt).toBe(clock.t);
+    const nonsense = classicSnapshot('s3', { createdAt: 1e300 });
+    const n = await store.put(ME, nonsense.version, nonsense.chunks);
+    expect(store.rows(ME).find((r) => r.id === n.id)?.createdAt).toBeGreaterThanOrEqual(clock.t);
+    // A v5 row ignores createdAt.
+    const book = chunkBook(tinyDoc(2));
+    const v5 = await store.put(ME, { kind: 'edits', actor: 'you', label: 'x', rev: 1, contentAt: clock.t, manifest: book.manifest, rootHash: book.rootHash, chunks: book.hashes, createdAt: old } as HistoryVersionInput, book.chunks);
+    expect(store.rows(ME).find((r) => r.id === v5.id)?.createdAt).toBeGreaterThan(clock.t);
+  });
+
+  it('opens a classic-editor row from its chunk list (its manifest is not v5-shaped)', async () => {
+    const { store } = setup();
+    const snap = classicSnapshot('s1');
+    const res = await store.put(ME, snap.version, snap.chunks);
+    const got = await store.get(ME, res.id);
+    expect(got?.row).toMatchObject({ kind: 'legacy', codec: 'legacy', pinned: true, legacy: { snapshotId: 's1' } });
+    expect(got?.manifest).toEqual(snap.version.manifest);
+    expect([...got!.bodies.keys()].sort()).toEqual([...snap.hashes].sort());
+    expect(got!.bodies.get(snap.hashes[1])).toBe('Title s1');
+    store.corruptChunk(ME, snap.hashes[0], `${snap.contents[0]} `);
+    expect(await store.get(ME, res.id)).toBeNull();
   });
 
   it('is all-or-nothing: a version that references a chunk nobody stored writes nothing at all', async () => {
@@ -306,9 +371,103 @@ describe('names, removal, lines', () => {
     await store.setHead(ME, lines[1].id, onLine);
     await store.updateAlternative(ME, lines[1].id, { active: false });
     expect(await store.removeAlternative(ME, lines[1].id)).toBe(true);
-    const moved = store.rows(ME).find((r) => r.id === onLine)!;
-    expect(moved).toMatchObject({ alternativeId: null, pinned: false });
+    // Marked, never merged: its row keeps its line, unpinned; Original's head is still its own newest row.
+    expect(store.rows(ME).find((r) => r.id === onLine)).toMatchObject({ alternativeId: lines[1].id, pinned: false });
+    expect((await store.head(ME, null))?.id).toBe(base);
+    // A removed line is not found anywhere…
     await rejects(capture(store, ME, tinyDoc(3), clock.t + 2, { alternativeId: lines[1].id }), 'NOT_FOUND');
+    await rejects(store.setHead(ME, lines[1].id, base), 'NOT_FOUND');
+    expect(await store.updateAlternative(ME, lines[1].id, { active: true, name: 'Back' })).toBeNull();
+    expect(await store.removeAlternative(ME, lines[1].id)).toBe(false);
+    expect(await store.head(ME, lines[1].id)).toBeNull();
+    expect(await store.list(ME, { alternativeId: lines[1].id })).toEqual({ rows: [] });
+    expect((await store.alternatives(ME)).map((a) => a.id)).not.toContain(lines[1].id);
+    // …and frees its slot.
+    await store.createAlternative(ME, { name: 'Fresh try', headVersionId: base });
+    await rejects(store.createAlternative(ME, { name: 'One too many', headVersionId: base }), 'LIMIT');
+    // Original's list still carries its rows (named saves stay reachable), each marked by the removed line's id.
+    expect((await store.list(ME, { alternativeId: null })).rows.map((r) => [r.id, r.alternativeId])).toEqual([
+      [onLine, lines[1].id],
+      [base, null]
+    ]);
+  });
+
+  it("removing a line while on another never changes Original's head; the removed line ages out", async () => {
+    const { store, clock } = setup();
+    const t0 = clock.t;
+    const o = (await capture(store, ME, tinyDoc(1), t0)).res.id;
+    await store.setHead(ME, null, o); // leaving Original: acknowledged, nothing pinned
+    expect(store.rows(ME).find((r) => r.id === o)?.pinned).toBe(false);
+    const b = await store.createAlternative(ME, { name: 'B', fromVersionId: o, headVersionId: o });
+    await store.updateAlternative(ME, b.id, { active: true });
+    const b1 = (await capture(store, ME, tinyDoc(2), (clock.t = t0 + 60_000), { alternativeId: b.id })).res.id;
+    await store.setHead(ME, b.id, b1);
+    const c = await store.createAlternative(ME, { name: 'C', fromVersionId: b1, headVersionId: b1 });
+    await store.updateAlternative(ME, c.id, { active: true });
+    const c1 = (await capture(store, ME, tinyDoc(3), (clock.t = t0 + 120_000), { alternativeId: c.id })).res.id;
+    await store.setHead(ME, c.id, c1);
+
+    expect(await store.removeAlternative(ME, b.id)).toBe(true);
+    expect((await store.head(ME, null))?.id).toBe(o);
+    // Switching back exact-restores O: the switch row dedupes against O.
+    const back = await capture(store, ME, tinyDoc(1), (clock.t = t0 + 180_000), { kind: 'switch' });
+    expect(back.res).toMatchObject({ id: o, deduped: true });
+    expect(store.rows(ME).find((r) => r.id === b1)).toMatchObject({ alternativeId: b.id, pinned: false });
+    // Over the row cap, B's newest row (no line's current state any more) goes; O (Original's newest) and C stay.
+    const book = chunkBook(tinyDoc(4));
+    const res = await store.put(
+      ME,
+      { kind: 'edits', actor: 'you', label: 'x', rev: 1, contentAt: (clock.t = t0 + 240_000), manifest: book.manifest, rootHash: book.rootHash, chunks: book.hashes, alternativeId: c.id },
+      book.chunks,
+      { unpinnedRows: 1 }
+    );
+    expect(res.thinned).toBe(1);
+    expect(store.rows(ME).map((r) => r.id)).not.toContain(b1);
+    expect(store.rows(ME).map((r) => r.id)).toEqual(expect.arrayContaining([o, c1, res.id]));
+  });
+
+  it('removing a line from Original keeps Original its own; repeated setHead(null) leaves no pin behind', async () => {
+    const { store, clock } = setup();
+    const t0 = clock.t;
+    const o = (await capture(store, ME, tinyDoc(1), t0)).res.id;
+    await store.setHead(ME, null, o);
+    const b = await store.createAlternative(ME, { name: 'B', fromVersionId: o, headVersionId: o });
+    await store.updateAlternative(ME, b.id, { active: true });
+    const b1 = (await capture(store, ME, tinyDoc(2), (clock.t = t0 + 60_000), { alternativeId: b.id })).res.id;
+    await store.setHead(ME, b.id, b1);
+    await store.updateAlternative(ME, b.id, { active: false }); // back to Original
+    expect((await capture(store, ME, tinyDoc(1), (clock.t = t0 + 120_000), { kind: 'switch' })).res).toMatchObject({ id: o, deduped: true });
+    const o2 = (await capture(store, ME, tinyDoc(5), (clock.t = t0 + 180_000))).res.id;
+    await store.setHead(ME, null, o2);
+    await rejects(store.setHead(ME, null, 'not-a-version'), 'NOT_FOUND');
+
+    expect(await store.removeAlternative(ME, b.id)).toBe(true);
+    expect((await store.head(ME, null))?.id).toBe(o2);
+    expect(store.rows(ME).filter((r) => r.alternativeId === null && r.pinned)).toEqual([]);
+    expect(store.rows(ME).find((r) => r.id === b1)).toMatchObject({ alternativeId: b.id, pinned: false });
+  });
+
+  it("removes what the user saved or named; never the newest moment or a classic snapshot; a removed line's saves may go", async () => {
+    const { store, clock } = setup();
+    const a1 = (await capture(store, ME, tinyDoc(1), clock.t)).res.id;
+    const a2 = (await capture(store, ME, tinyDoc(2), clock.t + 1)).res.id;
+    const a3 = (await capture(store, ME, tinyDoc(3), clock.t + 2)).res.id;
+    await store.label(ME, a1, { name: 'Before the twist' });
+    expect(await store.delete(ME, a1)).toBe(true); // a moment the user named is one they saved
+    expect((await rejects(store.delete(ME, a2), 'CONFLICT')).message).toMatch(/saved or named/);
+    await store.label(ME, a3, { name: 'Latest' });
+    expect((await rejects(store.delete(ME, a3), 'CONFLICT')).message).toMatch(/latest moment/);
+    const snap = classicSnapshot('s1', { createdAt: Date.UTC(2026, 0, 2) });
+    const classic = (await store.put(ME, snap.version, snap.chunks)).id;
+    expect((await store.head(ME, null))?.id).toBe(a3);
+    await store.label(ME, classic, { name: 'Old snapshot' });
+    expect((await rejects(store.delete(ME, classic), 'CONFLICT')).message).toMatch(/classic editor/);
+    const side = await store.createAlternative(ME, { name: 'Side', headVersionId: a3 });
+    const sn = (await capture(store, ME, tinyDoc(6), clock.t + 3, { kind: 'named', name: 'Side save', alternativeId: side.id })).res.id;
+    expect((await rejects(store.delete(ME, sn), 'CONFLICT')).message).toMatch(/latest moment/);
+    expect(await store.removeAlternative(ME, side.id)).toBe(true);
+    expect(store.rows(ME).find((r) => r.id === sn)).toMatchObject({ pinned: true, alternativeId: side.id });
+    expect(await store.delete(ME, sn)).toBe(true);
   });
 
   it('lists newest first by content time with an opaque cursor and kind / actor / page filters', async () => {
