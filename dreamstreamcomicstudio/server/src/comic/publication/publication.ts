@@ -54,6 +54,7 @@ import {
   copiesFor,
   coverUrlOf,
   drawnPages,
+  fingerprintMatches,
   hasPublishableArt,
   isServerArt,
   kindLabelOf,
@@ -459,7 +460,7 @@ async function buildView(ctx: StudioContext, doc: ComicDoc, row: PublicationRow 
     publishedRev: live ? row.publishedRev : 0,
     docRev: doc.rev,
     behind: live
-      ? contentFingerprint(doc, row.languages) !== String(row.safety?.contentHash || '') || (!!publishedRating && publishedRating !== ratingOf(ctx, doc))
+      ? !fingerprintMatches(doc, row.languages, String(row.safety?.contentHash || '')) || (!!publishedRating && publishedRating !== ratingOf(ctx, doc))
       : false,
     readiness
   };

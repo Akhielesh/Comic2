@@ -2,7 +2,7 @@
 // P1-PUBLISH server tests (sharing.md §11 #18–27, contract §9.3 exact key sets).
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
-import { DEFAULT_SETTINGS, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
+import { DEFAULT_SETTINGS, normalizeDoc, type AssetRef, type ComicDoc, type RenderState } from '../../../../shared/comic/doc.js';
 import { editionProgress, editionReadiness, fallbackLineIds, lineSourceHash, localizeDoc } from '../../../../shared/comic/i18n.js';
 import { ASSET_KEY_RE, SLUG_RE, type ShareCard } from '../../../../shared/comic/publication.js';
 import { effectiveRating, publishableText, safetyStatusOf, type SafetyStatus } from '../../../../shared/comic/safety.js';
@@ -28,7 +28,7 @@ import {
   publishWithOutcome,
   sweepOrphanPublications
 } from './publication.js';
-import { planSnapshot } from './snapshot.js';
+import { contentFingerprint, fingerprintMatches, legacyContentFingerprint, planSnapshot } from './snapshot.js';
 import { createMemoryPublicationStore, type MemoryPublicationStore } from './store.js';
 
 const USER = 'user-1';
@@ -1356,4 +1356,98 @@ describe('OG image (sharp + Pango, $0)', () => {
     for (let i = 0; i < info.width * info.height; i += 1) if (data[i] > 200) bright += 1;
     expect(bright).toBeGreaterThan(500);
   }, 30_000);
+});
+
+// ── Canonical content fingerprint (K1 fixer note 5) ──────────────────────────
+// Postgres jsonb reorders object keys on save (shorter keys first, then bytewise). The "changes since publishing"
+// fingerprint hashed JSON.stringify of the in-memory order, so a save and reload showed "Update the published
+// version" when nothing had changed. It is now canonical (keys sorted at every depth); the pre-F1 form a row may
+// still carry is accepted until the next publish stores the canonical one.
+
+/** What jsonb does to object key order on save (the same helper as comic.contract.test.ts). */
+const jsonbOrder = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(jsonbOrder)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.keys(v as object)
+            .sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+            .map((k) => [k, jsonbOrder((v as Record<string, unknown>)[k])])
+        )
+      : v;
+/** A save and reload through jsonb, then the load path. */
+const jsonbReload = (doc: ComicDoc): ComicDoc => normalizeDoc(jsonbOrder(JSON.parse(JSON.stringify(doc))) as ComicDoc);
+
+/** richDoc with reader-visible objects whose keys jsonb reorders: balloons, line styles, letterStyle. */
+const styledDoc = (): ComicDoc => {
+  const doc = richDoc();
+  doc.pages = doc.pages.map((p) => ({
+    ...p,
+    balloons: [{ lineId: `ln_${p.n}_2`, x: 0.1, y: 0.1, w: 0.3, tailX: 0.2, tailY: 0.4, pinned: true }],
+    panels: p.panels.map((pn) => ({ ...pn, lines: pn.lines.map((l) => ({ ...l, style: { sizeScale: 1.1, italic: true, align: 'left' as const } })) }))
+  }));
+  return doc;
+};
+
+describe('content fingerprint is canonical (a jsonb reload never marks the publication behind)', () => {
+  it('a key reorder keeps the canonical fingerprint; the legacy one changes (so the reorder is real)', () => {
+    const doc = styledDoc();
+    const reloaded = jsonbReload(doc);
+    expect(contentFingerprint(reloaded, ['en'])).toBe(contentFingerprint(doc, ['en']));
+    expect(legacyContentFingerprint(reloaded, ['en'])).not.toBe(legacyContentFingerprint(doc, ['en']));
+  });
+
+  it('a real change still changes it (text, a balloon move, new art, page order)', () => {
+    const doc = styledDoc();
+    const base = contentFingerprint(doc, ['en']);
+    const text = structuredClone(doc);
+    text.pages[0].panels[1].lines[0].text = 'A new line';
+    const moved = structuredClone(doc);
+    moved.pages[0].balloons[0].x = 0.12;
+    const art = structuredClone(doc);
+    art.pages[1].render.asset = { ...art.pages[1].render.asset!, path: `u/${USER}/p/proj-1/img/p2-v2.webp` };
+    const order = structuredClone(doc);
+    [order.pages[0], order.pages[1]] = [order.pages[1], order.pages[0]];
+    for (const changed of [text, moved, art, order]) expect(contentFingerprint(changed, ['en'])).not.toBe(base);
+  });
+
+  it('fingerprintMatches accepts the canonical and the legacy form, nothing else', () => {
+    const doc = styledDoc();
+    expect(fingerprintMatches(doc, ['en'], contentFingerprint(doc, ['en']))).toBe(true);
+    expect(fingerprintMatches(doc, ['en'], legacyContentFingerprint(doc, ['en']))).toBe(true);
+    expect(fingerprintMatches(doc, ['en'], '')).toBe(false);
+    expect(fingerprintMatches(doc, ['en'], 'deadbeef')).toBe(false);
+  });
+
+  it('publish, then a jsonb save and reload: not behind; a real edit after the reload: behind', async () => {
+    const { getPublicationView } = await import('./index.js');
+    setup(styledDoc());
+    const view = await publish(ctx, { visibility: 'unlisted' });
+    expect(view.behind).toBe(false);
+    const row = store.rows.get('proj-1')!;
+    expect(row.safety?.contentHash).toBe(contentFingerprint(ctx.session.doc, row.languages));
+    // The next request loads the doc back from jsonb: same comic, other key order.
+    const reloaded = testContext(newSession(jsonbReload(ctx.session.doc)), { assets });
+    expect(legacyContentFingerprint(reloaded.session.doc, row.languages)).not.toBe(legacyContentFingerprint(ctx.session.doc, row.languages));
+    expect((await getPublicationView(reloaded)).behind).toBe(false);
+    reloaded.session.commit([{ op: 'balloon', pageId: 'pg_1', lineId: 'ln_1_2', patch: { x: 0.3 } }], { origin: 'user' });
+    expect((await getPublicationView(reloaded)).behind).toBe(true);
+  });
+
+  it('a row published before canonical fingerprints (legacy hash) reads as current; the next publish stores the canonical one', async () => {
+    const { getPublicationView } = await import('./index.js');
+    setup(styledDoc());
+    await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    const legacy = legacyContentFingerprint(ctx.session.doc, row.languages);
+    expect(legacy).not.toBe(contentFingerprint(ctx.session.doc, row.languages));
+    row.safety = { ...row.safety!, contentHash: legacy };
+    expect((await getPublicationView(ctx)).behind).toBe(false);
+    // A real change is still seen against the legacy hash.
+    ctx.session.commit([{ op: 'brief', patch: { title: 'A new title' } }], { origin: 'user' });
+    expect((await getPublicationView(ctx)).behind).toBe(true);
+    clock += 1000;
+    await publish(ctx, { visibility: 'unlisted' });
+    expect(store.rows.get('proj-1')!.safety?.contentHash).toBe(contentFingerprint(ctx.session.doc, row.languages));
+  });
 });

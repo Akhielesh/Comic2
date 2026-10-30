@@ -24,7 +24,7 @@ import {
   type QcReport,
   type TextTranslation
 } from '../../../../shared/comic/doc.js';
-import { hashString } from '../../../../shared/comic/hash.js';
+import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import type { ShareCard } from '../../../../shared/comic/publication.js';
@@ -338,14 +338,11 @@ export function snapshotPaths(snapshot: ComicDoc): string[] {
 
 // ── Content fingerprint ("changes since publishing") ─────────────────────────
 
-/**
- * Hash of everything a reader would see from the live doc (art paths, text, layout, lettering,
- * published translations). Equal fingerprints ⇒ republishing would change nothing.
- */
-export function contentFingerprint(doc: ComicDoc, languages: string[]): string {
+/** Everything a reader would see from the live doc, as one value (hashed by the two fingerprints below). */
+const fingerprintView = (doc: ComicDoc, languages: string[]) => {
   const source = doc.format?.language || 'en';
   const editions = languages.filter((l) => !sameLanguage(l, source));
-  const view = {
+  return {
     brief: [doc.brief?.title, doc.brief?.logline],
     format: [doc.format?.kind, doc.format?.pageAspect, doc.format?.readingDirection, doc.format?.lettering],
     cover: [doc.cover?.title, doc.cover?.tagline, doc.cover?.lettering, doc.cover?.titleStyle, hasPublishableArt(doc.cover?.render) ? doc.cover.render.asset!.path : ''],
@@ -362,7 +359,36 @@ export function contentFingerprint(doc: ComicDoc, languages: string[]): string {
     reader: doc.reader,
     i18n: publicI18n(i18nOf(doc), editions)
   };
-  return hashString(JSON.stringify(view));
+};
+
+/**
+ * Hash of everything a reader would see from the live doc (art paths, text, layout, lettering,
+ * published translations). Equal fingerprints ⇒ republishing would change nothing.
+ *
+ * Canonical (back-compat F1, like the spec hashes): object keys are sorted at every depth, so a jsonb save and
+ * reload — which reorders the keys of balloons, line styles, letterStyle, book, reader and i18n — never makes
+ * the published version look behind when nothing changed. Array order (pages, panels, lines) still counts.
+ */
+export function contentFingerprint(doc: ComicDoc, languages: string[]): string {
+  return hashString(stableStringify(fingerprintView(doc, languages)));
+}
+
+/**
+ * The pre-F1 fingerprint (JSON.stringify in the doc's in-memory key order), which rows published before canonical
+ * fingerprints carry. Accepted by fingerprintMatches until the next publish stores the canonical one.
+ */
+export function legacyContentFingerprint(doc: ComicDoc, languages: string[]): string {
+  return hashString(JSON.stringify(fingerprintView(doc, languages)));
+}
+
+/**
+ * Whether a publication row's stored fingerprint still describes the live doc: the canonical fingerprint, or —
+ * for a row published before canonical fingerprints — the legacy one. A legacy hash stamped in a session whose
+ * keys were later reordered can still differ once; the next publish stores the canonical form and that clears.
+ */
+export function fingerprintMatches(doc: ComicDoc, languages: string[], stored: string): boolean {
+  if (!stored) return false;
+  return stored === contentFingerprint(doc, languages) || stored === legacyContentFingerprint(doc, languages);
 }
 
 // ── Share card ───────────────────────────────────────────────────────────────
