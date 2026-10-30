@@ -229,6 +229,23 @@ export const SCRIM = 'bg-[var(--ds-scrim)]';
 /** The small uppercase label above a heading or a group of controls (Atlas `.atlas-overline`). */
 export const OVERLINE = 'text-[11px] font-semibold leading-4 tracking-[0.12em] uppercase text-[var(--ds-muted)]';
 
+/**
+ * The title of a CENTRED modal dialog (Atlas wave 8: DialogTitle / AlertDialogTitle default to 20 px
+ * semibold, `text-xl`). The leading is the alert-dialog title's 1.75rem (text-xl's own, what Atlas's
+ * titles rendered before the type-scale change): Atlas's DialogTitle restates leading-none, which here
+ * would clip descenders in the one-line truncating dialog headers and crowd a title that wraps on a
+ * phone. No colour: it inherits the dialog's ink (the immersive reader's shortcuts dialog is white on
+ * its dark glass). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM for a dialog
+ * that docks to the bottom as a sheet on phones.
+ */
+export const DIALOG_TITLE = `text-xl font-semibold leading-7 tracking-normal ${FONT_DISPLAY}`;
+/**
+ * DIALOG_TITLE from `sm` up, for a dialog that is a bottom sheet below `sm` and a centred dialog above
+ * (the timeline dialog, the model-change and lab-run confirmations): the element keeps its sheet-header
+ * size on phones and becomes the dialog title once it is centred. Pair it with that phone size.
+ */
+export const DIALOG_TITLE_FROM_SM = 'sm:text-xl sm:font-semibold sm:leading-7 sm:tracking-normal';
+
 /** A neutral chip (Atlas MetaChip) — status meaning uses STATUS_CHIP. Add one CHIP_VARIANT. */
 export const CHIP = `inline-flex max-w-full items-center gap-1 whitespace-nowrap ${RADIUS_PILL} border px-2 py-0.5 text-[11px] font-medium leading-4`;
 export const CHIP_VARIANT = {

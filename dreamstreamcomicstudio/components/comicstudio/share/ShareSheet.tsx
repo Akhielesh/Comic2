@@ -16,7 +16,7 @@ import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } fro
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
+import { DIALOG_TITLE, OVERLINE, SEGMENTED_ACTIVE, TONE_TEXT } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
@@ -507,7 +507,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
         )}
         <header className="flex shrink-0 items-start justify-between gap-3 px-4 pb-2 pt-3 sm:px-5">
           <div className="min-w-0">
-            <h2 id="ds-share-title" className="m-0 truncate text-[16px] font-semibold text-[var(--ds-ink)]">
+            <h2 id="ds-share-title" className={cx('m-0 truncate text-[var(--ds-ink)]', layout === 'dialog' || layout === 'wide' ? DIALOG_TITLE : 'text-[16px] font-semibold')}>
               Share “{title}”
             </h2>
             <p

@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-import { TONE_CHIP } from '../../chat/studioDesign';
+import { DIALOG_TITLE_FROM_SM, TONE_CHIP } from '../../chat/studioDesign';
 import { useFocusTrap } from '../board/ui';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -153,7 +153,7 @@ export const TimelineDialog: React.FC<{
         style={{ paddingBottom: 'var(--sa-bottom-eff, 0px)' }}
       >
         <div className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-4 py-3">
-          <h2 id={titleId} className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">
+          <h2 id={titleId} className={cx('min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]', DIALOG_TITLE_FROM_SM)}>
             {title}
           </h2>
           <button

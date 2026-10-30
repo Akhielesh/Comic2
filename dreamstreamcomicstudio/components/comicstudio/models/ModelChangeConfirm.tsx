@@ -19,7 +19,7 @@ import type { ModelCatalogRow } from '../../../shared/comic/modelCatalog';
 import { drawnTargets, modelFit, redrawQuote, type RedrawQuote } from '../../../shared/comic/modelLock';
 import { TIER_PRESETS, getImageModel, type ImageModelSpec } from '../../../shared/comic/models';
 import type { DocOp, StudioAction } from '../../../shared/comic/ops';
-import { HAIRLINE, HEADING, RADIUS_CONTROL, RADIUS_PANEL, SHADOW_SOFT, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { DIALOG_TITLE_FROM_SM, HAIRLINE, HEADING, RADIUS_CONTROL, RADIUS_PANEL, SHADOW_SOFT, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { useSheetBehaviour } from '../conversation/PopSheet';
 import { useCostFormat } from '../conversation/cost';
 import { useBackLayer } from '../mobile/backStack';
@@ -306,8 +306,8 @@ export const ModelChangeConfirm: React.FC<ModelChangeConfirmProps> = ({
       style={modal ? { paddingBottom: 'var(--sa-bottom-eff, 0px)' } : undefined}
     >
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-3 pt-4 sm:px-5">
-        <h2 id={titleId} className={cx(HEADING, 'flex min-w-0 items-start gap-2 text-[16px] leading-snug [overflow-wrap:anywhere]')}>
-          {locked && <Lock className="mt-1 h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-hidden />}
+        <h2 id={titleId} className={cx(HEADING, 'flex min-w-0 items-start gap-2 text-[16px] leading-snug [overflow-wrap:anywhere]', modal && DIALOG_TITLE_FROM_SM)}>
+          {locked && <Lock className={cx('mt-1 h-4 w-4 shrink-0 text-[var(--ds-muted)]', modal && 'sm:mt-1.5')} aria-hidden />}
           <span className="min-w-0">{locked ? confirmTitleLocked(nextName) : confirmTitleUnlocked(nextName)}</span>
         </h2>
         <div id={descId} className="mt-2 space-y-2 text-[13px] leading-relaxed text-[var(--ds-ink)] [overflow-wrap:anywhere]">
