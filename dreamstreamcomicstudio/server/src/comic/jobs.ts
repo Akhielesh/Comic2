@@ -84,7 +84,13 @@ import {
   clampBalloonPatch,
   isSpendAction,
   layoutFixOps,
+  type ApplyFindingAction,
   type DocOp,
+  type EnrichPagesAction,
+  type FixPanelAction,
+  type FlattenPageAction,
+  type PanelizePageAction,
+  type RebindPanelsAction,
   type SpendAction,
   type StudioAction
 } from '../../../shared/comic/ops.js';
@@ -152,9 +158,7 @@ import { identityNoticesEnabled, qcNoticeFor } from './qcNotice.js';
 import { LAYOUT_REFERENCE_PATH, layoutGuideEnabled, renderLayoutGuide, tryRenderPageLayoutGuide, type LayoutGuideImage } from './panelize/wireframe.js';
 // --- Ship 2 (pro plan §5.3, §10 K2b): seams into the packages that own each step (stubs until they land) ---
 import { compileFixPanel, finishFixPanel, fixPanelJobs, fixPanelMeta, fixPanelProblem } from './actions/panelFix.js';
-import { applyFindingAction, enrichPagesAction, enrichPagesQuote, rebindPanelsAction } from './actions/consistency.js';
-import { flattenPageAction } from './actions/editor.js';
-import { panelizePageAction } from './actions/panels.js';
+import { enrichPagesQuote } from './actions/consistency.js';
 import { boardForCheck, boardImage } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
 import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
@@ -410,28 +414,22 @@ export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE';
 
 // ── Ship 2 actions (pro plan §5.3) ───────────────────────────────────────────
 //
-// Declared here until shared/comic/ops.ts lists them in StudioAction / SpendAction (K2b wave note; doc.ts then names them
-// in SPEND_ACTION_TYPES / NON_SPEND_ACTION_TYPES, which is what lets a client send them: until then the stream refuses
-// them as unknown, and only server code can start one). Identical shapes, so the move is a cut-and-paste.
+// The action shapes live in shared/comic/ops.ts (StudioAction / SpendAction) and doc.ts names them in
+// SPEND_ACTION_TYPES / NON_SPEND_ACTION_TYPES, so a client may send them and the action registry lists their handlers.
+// Re-exported here for the runner's importers (actions/panelFix.ts, actions/consistency.ts).
 
-type ProQuoted = { quotedUsd?: number };
-/** fix: repair what is wrong; redraw: draw the panel again; draw: an empty panel; extend: a reshaped frame. */
-export type FixPanelMode = 'fix' | 'redraw' | 'draw' | 'extend';
-/** SPEND: one panel drawn again on the comic's locked model (one tier down) and put back into a copy of the page. */
-export type FixPanelAction = { type: 'fix_panel'; pageId: string; panelId: string; mode: FixPanelMode; instruction?: string; region?: Box } & ProQuoted;
-/** SPEND (text): directions, continuity and scenes for these pages (never story text). */
-export type EnrichPagesAction = { type: 'enrich_pages'; pageIds: string[] } & ProQuoted;
-/** Free: "Make panels editable". */
-export type PanelizePageAction = { type: 'panelize_page'; pageId: string };
-/** Free: "Match the script to the art" (order: the drawn panel each planned panel takes, 1-based). */
-export type RebindPanelsAction = { type: 'rebind_panels'; pageId: string; order: number[] };
-/** Free: a finding's software fix (off-panel voice, drop from the cast, keep the drawn state). */
-export type ApplyFindingAction = { type: 'apply_finding'; pageId: string; findingId: string };
-/** Free: bake frames, art and printed overlays into one raster. */
-export type FlattenPageAction = { type: 'flatten_page'; pageId: string };
+export type {
+  ApplyFindingAction,
+  EnrichPagesAction,
+  FixPanelAction,
+  FixPanelMode,
+  FlattenPageAction,
+  PanelizePageAction,
+  RebindPanelsAction
+} from '../../../shared/comic/ops.js';
 export type ProSpendAction = FixPanelAction | EnrichPagesAction;
 export type ProPageAction = ProSpendAction | PanelizePageAction | RebindPanelsAction | ApplyFindingAction | FlattenPageAction;
-/** Every spend the gate handles: today's SpendActions and the Ship 2 ones. */
+/** Every spend the gate handles: the SpendActions, Ship 2's included. */
 export type GatedSpend = SpendAction | ProSpendAction;
 
 export const PRO_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages']);
@@ -443,10 +441,10 @@ export const isProSpendAction = (action: unknown): action is ProSpendAction =>
 export const isGatedSpend = (action: unknown): action is GatedSpend =>
   !!action && typeof action === 'object' && (isSpendAction(action as StudioAction) || isProSpendAction(action));
 
-/** render_pages as the run reads it: Ship 2's "Redraw with my layout" (the frames become the layout guide). */
-type RenderPagesRun = Extract<SpendAction, { type: 'render_pages' }> & { followFrames?: boolean };
-/** edit_page as the run reads it: Ship 2's region paste-back (the default whenever a region is marked). */
-type EditPageRun = Extract<SpendAction, { type: 'edit_page' }> & { pasteBack?: 'region' | 'page' };
+/** render_pages as the run reads it (followFrames: Ship 2's "Redraw with my layout"). */
+type RenderPagesRun = Extract<SpendAction, { type: 'render_pages' }>;
+/** edit_page as the run reads it (pasteBack: Ship 2's region paste-back, the default whenever a region is marked). */
+type EditPageRun = Extract<SpendAction, { type: 'edit_page' }>;
 
 /**
  * The comic's image-model lock (lockOf) and the registry id a lock names (lockedSpecId): one implementation in
@@ -1211,17 +1209,12 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
   if (!action || typeof action !== 'object' || typeof (action as { type?: unknown }).type !== 'string') {
     throw badRequest('Unknown action.');
   }
-  // Feature actions (contract §12.1) go through the registry; core types never do.
+  // Feature actions (contract §12.1) go through the registry; core types never do. Ship 2 (pro plan §5.3): fix_panel is
+  // an image spend on the core pipeline (quote, gate, budget, lock, preflight, reservation); panelize_page,
+  // rebind_panels, apply_finding, flatten_page and enrich_pages are registered handlers (enrich_pages through the gate).
   const handler = actionHandlerFor(action.type);
   if (handler) return runFeatureAction(ctx, handler, action, opts);
   if (isSpendAction(action)) return startSpend(ctx, action, opts);
-  // Ship 2 (pro plan §5.3): fix_panel is an image spend on the core pipeline (quote, gate, budget, lock, preflight,
-  // reservation); the others go to their package's handler (spend ones through the gate) — the same handlers the action
-  // registry lists once shared/comic/doc.ts names their types.
-  const ship2 = action as StudioAction | ProPageAction;
-  if (ship2.type === 'fix_panel') return startSpend(ctx, ship2, opts);
-  const proHandler = proActionHandlerFor(ship2.type);
-  if (proHandler) return runFeatureAction(ctx, proHandler, action, opts);
   switch (action.type) {
     case 'approve_gate':
       return approveGate(ctx, action.gateId, opts);
@@ -1247,25 +1240,12 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
   }
 }
 
-/** The Ship 2 action handlers jobs.ts dispatches (fixed export names of their stub modules). Prototype-safe. */
-const proActionHandlerFor = (type: string): ActionHandler | undefined => {
-  const handlers: Record<string, ActionHandler> = {
-    panelize_page: panelizePageAction,
-    rebind_panels: rebindPanelsAction,
-    apply_finding: applyFindingAction,
-    flatten_page: flattenPageAction,
-    enrich_pages: enrichPagesAction
-  };
-  return Object.prototype.hasOwnProperty.call(handlers, type) ? handlers[type] : undefined;
-};
-
 /**
  * Run a registered feature action. Spend handlers with an estimate (translate) go through
  * estimate → gateDecision → run exactly like the core spends (a stale chip quote re-gates).
  */
 export async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
-  // Ship 2's enrich_pages is a spend like translate (quoted, gated, re-gated on a stale quote) before shared/comic/ops.ts
-  // lists it among the SpendActions.
+  // Ship 2's enrich_pages is a spend like translate (quoted, gated, re-gated on a stale quote).
   if (!handler.spend || !handler.estimate || !isGatedSpend(action)) return handler.run(ctx, action, opts);
   const estimate = await handler.estimate(ctx, action as SpendAction);
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
@@ -1303,7 +1283,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   const gated = gate.action as StudioAction | ProPageAction;
   if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
-  const handler = actionHandlerFor(gated.type) ?? proActionHandlerFor(gated.type);
+  const handler = actionHandlerFor(gated.type);
   const estimate = handler?.estimate ? await handler.estimate(ctx, gated as SpendAction) : estimateSpendAction(doc, gated, spendActionIsByok(doc, gated, ctx.keys), gated.type === 'recheck_page' ? undefined : prices);
   const nickname = handler ? gate.model : gateModelName(doc, gated, estimate);
   const origin = originOf(opts);

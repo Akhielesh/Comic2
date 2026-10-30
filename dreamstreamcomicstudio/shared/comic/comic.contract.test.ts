@@ -1090,12 +1090,21 @@ describe('v5 §16.5 sets', () => {
       update_publication: true, unpublish: true, regenerate_link: true, decline_publish: true, safety_recheck: true,
       swap_source_language: true, accept_translation_issue: true, library_save: true, library_use: true, import_classic_cast: true,
       change_image_model: true, // W-M M0-CONTRACT (models.md §3.3)
+      // Ship 2 (pro plan §5.3; K2b): a one-panel fix and a detail pass spend; the editor actions are free
+      fix_panel: true, enrich_pages: true, panelize_page: true, rebind_panels: true, apply_finding: true, flatten_page: true,
       // Comic History H0 (versions plan §3.3): every history path is free
       history_save: true, history_restore: true, history_undo_ai: true, history_forget_photo: true, history_alternative: true
     };
     for (const t of Object.keys(all)) expect(Number(SPEND_ACTION_TYPES.has(t)) + Number(NON_SPEND_ACTION_TYPES.has(t)), t).toBe(1);
     expect(SPEND_ACTION_TYPES.size + NON_SPEND_ACTION_TYPES.size).toBe(Object.keys(all).length);
     expect(isSpendAction({ type: 'translate', languages: ['hi'] })).toBe(true);
+    // Ship 2: the two paid ones are spends (quoted, gated, budgeted, refused for restricted accounts); the rest are free.
+    expect(isSpendAction({ type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1', mode: 'fix' })).toBe(true);
+    expect(isSpendAction({ type: 'enrich_pages', pageIds: ['pg_1'] })).toBe(true);
+    for (const t of ['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page']) {
+      expect(NON_SPEND_ACTION_TYPES.has(t), t).toBe(true);
+      expect(SPEND_ACTION_TYPES.has(t), t).toBe(false);
+    }
   });
 });
 

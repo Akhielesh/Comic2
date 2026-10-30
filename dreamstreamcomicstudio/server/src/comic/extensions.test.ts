@@ -225,8 +225,23 @@ describe('action registry', () => {
     for (const type of all) expect(CORE_ACTION_TYPES.has(type) !== registered.includes(type)).toBe(true);
     for (const type of registered) expect(all.has(type)).toBe(true);
     for (const type of CORE_ACTION_TYPES) expect(all.has(type)).toBe(true);
-    expect(ACTION_HANDLERS.translate.spend).toBe(true);
-    for (const type of registered.filter((t) => t !== 'translate')) expect(ACTION_HANDLERS[type].spend).toBe(false);
+    // Spend handlers: translate, and Ship 2's enrich_pages (a writer pass, quoted and gated like translate).
+    const spends = ['translate', 'enrich_pages'];
+    for (const type of spends) expect(ACTION_HANDLERS[type].spend, type).toBe(true);
+    for (const type of registered.filter((t) => !spends.includes(t))) expect(ACTION_HANDLERS[type].spend, type).toBe(false);
+  });
+
+  it('lists the Ship 2 actions once shared/comic/doc.ts names them: fix_panel is core (jobs.ts spend pipeline), the rest registered', () => {
+    expect(CORE_ACTION_TYPES.has('fix_panel')).toBe(true);
+    expect(actionHandlerFor('fix_panel')).toBeUndefined();
+    expect(ACTION_HANDLERS.enrich_pages).toMatchObject({ type: 'enrich_pages', spend: true });
+    expect(typeof ACTION_HANDLERS.enrich_pages.estimate).toBe('function');
+    for (const type of ['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page']) {
+      expect(ACTION_HANDLERS[type], type).toMatchObject({ type, spend: false });
+      expect(SPEND_ACTION_TYPES.has(type), type).toBe(false);
+      expect(NON_SPEND_ACTION_TYPES.has(type), type).toBe(true);
+    }
+    for (const type of ['fix_panel', 'enrich_pages']) expect(SPEND_ACTION_TYPES.has(type), type).toBe(true);
   });
 
   it('is prototype-safe', () => {

@@ -1022,7 +1022,9 @@ export type Card =
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
-  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page'
+  'render_style_options', 'render_sheets', 'render_pages', 'edit_page', 'render_cover', 'translate', 'recheck_page',
+  // --- Ship 2 (pro plan §5.3): a one-panel fix and a page detail pass ---
+  'fix_panel', 'enrich_pages'
 ]);
 /** Moved from routes/comic.ts:47 (single source for client + server). */
 export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -1033,6 +1035,8 @@ export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   'safety_recheck', 'swap_source_language', 'accept_translation_issue',
   'library_save', 'library_use', 'import_classic_cast',
   'change_image_model',
+  // --- Ship 2 (pro plan §5.3): free editor actions ---
+  'panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page',
   // --- history (versions plan §3.3): every history path is free ---
   'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative'
 ]);

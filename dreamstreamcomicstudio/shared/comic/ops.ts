@@ -297,6 +297,23 @@ export type ScenePatch = { [K in Exclude<keyof Scene, 'id'>]?: Scene[K] | null }
 export type ContinuityPatch = { [K in keyof PageContinuity]?: PageContinuity[K] | null };
 
 type Quoted = { quotedUsd?: number };
+
+// --- Ship 2 actions (pro plan §5.3; K2b) ---
+/** fix: repair what is wrong; redraw: draw the panel again; draw: an empty panel; extend: a reshaped frame. */
+export type FixPanelMode = 'fix' | 'redraw' | 'draw' | 'extend';
+/** SPEND: one panel drawn again on the comic's locked model (one tier down) and put back into a copy of the page. */
+export type FixPanelAction = { type: 'fix_panel'; pageId: string; panelId: string; mode: FixPanelMode; instruction?: string; region?: Box } & Quoted;
+/** SPEND (text): directions, continuity and scenes for these pages (never story text). */
+export type EnrichPagesAction = { type: 'enrich_pages'; pageIds: string[] } & Quoted;
+/** Free: "Make panels editable". */
+export type PanelizePageAction = { type: 'panelize_page'; pageId: string };
+/** Free: "Match the script to the art" (order: the drawn panel each planned panel takes, 1-based). */
+export type RebindPanelsAction = { type: 'rebind_panels'; pageId: string; order: number[] };
+/** Free: a finding's software fix (off-panel voice, drop from the cast, keep the drawn state). */
+export type ApplyFindingAction = { type: 'apply_finding'; pageId: string; findingId: string };
+/** Free: bake frames, art and printed overlays into one raster. */
+export type FlattenPageAction = { type: 'flatten_page'; pageId: string };
+
 /** Spend actions — the ones that may be gated. A confirmed action whose fresh estimate exceeds
  *  quotedUsd × 1.15 + 0.01 is treated as UNconfirmed (re-gated), same tolerance as gateStillHolds. */
 export type SpendAction =
@@ -316,8 +333,12 @@ export type SpendAction =
       /** Ship 2 (pro plan §5.3; B4 amendment 3): 'none' draws without consistency anchors; absent or 'auto' draws the
        *  missing anchor sheets first (ticked line items in the quote) once the run draws anchors at all. */
       anchors?: 'auto' | 'none';
+      /** Ship 2 "Redraw with my layout": the page's frames become the layout guide (only while COMIC_LAYOUT_GUIDE is on). */
+      followFrames?: boolean;
     } & Quoted)
-  | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean } & Quoted)
+  /** pasteBack (Ship 2): with a region marked, only the region is put back into the page ('region', the default) or the
+   *  whole edited image is kept ('page'). */
+  | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean; pasteBack?: 'region' | 'page' } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
   /** Translation (writer-class translator + automated linguist review, always). lineIds (≤ DOC_LIMITS.translateLineIds):
@@ -326,7 +347,10 @@ export type SpendAction =
   /** Paid re-check of a drawn page (lettering.md §9): one vision call re-reads the art (QC, faces, speakers), then
    *  the balloons are re-laid around it. TEXT-priced (models.ts RELAYOUT_VISION_USD); gated, budgeted and refused
    *  for restricted accounts like every spend. The free re-layout is `relayout_balloons` (stored QC, no AI). */
-  | ({ type: 'recheck_page'; pageId: string } & Quoted);
+  | ({ type: 'recheck_page'; pageId: string } & Quoted)
+  // --- Ship 2 (pro plan §5.3): a one-panel fix (image) and a detail pass (text) ---
+  | FixPanelAction
+  | EnrichPagesAction;
 
 export type StudioAction =
   | SpendAction
@@ -361,6 +385,11 @@ export type StudioAction =
    *  confirm ("consistency can be affected"); `quotedUsd` is the redraw quote shown (re-gated on drift). Non-spend:
    *  a redraw it triggers runs as a separate render_* action carrying that quote. */
   | { type: 'change_image_model'; modelId: string; redraw: RedrawScope; quotedUsd: number; ack: true }
+  // --- Ship 2 (pro plan §5.3): free, non-spend ---
+  | PanelizePageAction
+  | RebindPanelsAction
+  | ApplyFindingAction
+  | FlattenPageAction
   // --- history (versions plan §3.3): free, non-spend ---
   | HistoryStudioAction;
 
