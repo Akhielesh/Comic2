@@ -270,3 +270,49 @@ describe('onlyWrites', () => {
     expect(next).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('Comic History owner routes (H0 stubs)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const HISTORY_PATHS = [
+    '/api/comic/projects/p1/history',
+    '/api/comic/projects/p1/history/compare?a=v1&b=now',
+    '/api/comic/projects/p1/history/v1/book',
+    '/api/comic/projects/p1/history/legacy',
+    '/api/comic/projects/p1/history/legacy/snap_2'
+  ];
+
+  it('with COMIC_HISTORY unset, every history path reaches the studio exactly as before (counted once)', async () => {
+    for (const path of HISTORY_PATHS) {
+      text.hits.length = 0;
+      const r = await call(path, { headers: user });
+      expect(r.body, path).toMatchObject({ route: 'studio' });
+      expect(text.hits, path).toHaveLength(1);
+    }
+  });
+
+  it('with COMIC_HISTORY on, the history routers answer their own paths (one bare 404, private, no detail), text-limited once, never public', async () => {
+    vi.stubEnv('COMIC_HISTORY', '1');
+    for (const path of HISTORY_PATHS) {
+      text.hits.length = 0;
+      const res = await fetch(`${base}${path}`, { headers: { 'content-type': 'application/json', ...user } });
+      expect(res.status, path).toBe(404);
+      expect(res.headers.get('cache-control'), path).toBe('private, no-store');
+      expect(await res.json(), path).toEqual({ error: { message: "This comic doesn't exist or you don't have access to it.", code: 'NOT_FOUND' } });
+      expect(text.hits, path).toHaveLength(1);
+      expect((await call(path)).status, `${path} anonymous`).toBe(401);
+    }
+    // Rate-limited like the studio (exact paths only), and other project paths still reach the studio.
+    expect((await call('/api/comic/projects/p1/history', { headers: { ...user, 'x-limit': '1' } })).status).toBe(429);
+    expect((await call('/api/comic/projects/p1/historyx', { headers: user })).body).toMatchObject({ route: 'studio' });
+    expect((await call('/api/comic/projects/p1', { headers: user })).body).toMatchObject({ route: 'studio' });
+    // The public reader never serves history.
+    expect((await call('/api/comic/public/p1/history')).body).not.toHaveProperty('error.code', 'NOT_FOUND');
+  });
+
+  it('logs history paths by their route pattern', () => {
+    expect(comicRoutePattern('/api/comic/projects/p-1/history/v-9/book')).toBe('/api/comic/projects/:id/history/:id/book');
+    expect(comicRoutePattern('/api/comic/projects/p-1/history/compare?a=1')).toBe('/api/comic/projects/:id/history/compare');
+    expect(comicRoutePattern('/api/comic/projects/p-1/history/legacy/s_1')).toBe('/api/comic/projects/:id/history/legacy/:id');
+    expect(comicRoutePattern('/api/comic/projects/p-1/history/alternatives')).toBe('/api/comic/projects/:id/history/alternatives');
+  });
+});

@@ -44,6 +44,8 @@ import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
 import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
 import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
+// --- history (versions plan §4.1; H0 seam: no-op hooks until H2) ---
+import { createHistoryHooks, type HistoryHooks } from './history/hooks.js';
 
 /**
  * Hard size limits on a document. Every source of new entities (client patches, director
@@ -359,9 +361,12 @@ export const evictedArchivePaths = (before: ComicDoc, after: ComicDoc): string[]
   return [...new Set(gone.filter((p) => !used.has(p)))];
 };
 
-/** The info notice for an archive eviction (never silent — decisions-final #8). */
-export const archiveEvictionNotice = (count: number, now: number) => {
-  const text = `Version archive is full (${MAX_ARCHIVE}): removed ${count} oldest unstarred ${count === 1 ? 'version' : 'versions'} that nothing uses. Star a version to keep it forever.`;
+/** The info notice for an archive eviction (never silent — decisions-final #8). `history`: Comic History is
+ *  recording, so the removed versions are still in History (said only when true). */
+export const archiveEvictionNotice = (count: number, now: number, opts: { history?: boolean } = {}) => {
+  const text = `Version archive is full (${MAX_ARCHIVE}): removed ${count} oldest unstarred ${count === 1 ? 'version' : 'versions'} that nothing uses. Star a version to keep it forever.${
+    opts.history ? ' History still keeps them.' : ''
+  }`;
   return {
     op: 'message' as const,
     msg: { id: newId('msg'), role: 'assistant' as const, text, at: now, cards: [{ type: 'notice' as const, id: newId('card'), tone: 'info' as const, text }] }
@@ -377,11 +382,27 @@ export interface StudioSessionOptions {
   store: DocStore;
   saveDebounceMs?: number;
   now?: () => number;
+  /** Comic History hooks (default: createHistoryHooks, a no-op until H2). */
+  history?: HistoryHooks;
 }
+
+/** Run a history hook: a failure is logged and swallowed — it never reaches a save, a turn or a render (§4.1). */
+const runHistoryHook = (projectId: string, hook: string, call: () => void | Promise<void>): Promise<void> | undefined => {
+  const fail = (err: unknown) => logger.warn('comic_history_capture_failed', { projectId, hook, message: (err as Error)?.message });
+  try {
+    const out = call();
+    if (out && typeof (out as Promise<void>).then === 'function') return (out as Promise<void>).then(undefined, fail);
+  } catch (err) {
+    fail(err);
+  }
+  return undefined;
+};
 
 export class StudioSession implements StudioSessionApi {
   readonly projectId: string;
   readonly userId: string;
+  /** Comic History seam (versions plan §4.1). */
+  readonly history: HistoryHooks;
 
   private current: ComicDoc;
   private readonly store: DocStore;
@@ -418,6 +439,7 @@ export class StudioSession implements StudioSessionApi {
     this.now = opts.now || (() => Date.now());
     this.savedRev = opts.doc.rev;
     this.lastActiveAt = this.now();
+    this.history = opts.history ?? createHistoryHooks({ projectId: opts.projectId, userId: opts.userId });
   }
 
   get doc(): ComicDoc {
@@ -475,11 +497,14 @@ export class StudioSession implements StudioSessionApi {
       ...(opts?.label ? { label: opts.label } : {})
     });
     this.scheduleSave(this.saveDebounceMs);
+    // History bookkeeping (synchronous; never throws into the commit).
+    const committed = this.current;
+    void runHistoryHook(this.projectId, 'onCommit', () => this.history.onCommit(before, committed, ops, opts?.origin, opts?.label));
     // Archive eviction is never silent (decisions-final #8).
     const evicted = evictedArchivePaths(before, this.current);
     if (evicted.length) {
       logger.info('comic_archive_evicted', { projectId: this.projectId, count: evicted.length });
-      this.commit([archiveEvictionNotice(evicted.length, at)], { origin: 'job' });
+      this.commit([archiveEvictionNotice(evicted.length, at, { history: this.history.recording })], { origin: 'job' });
     }
     return this.current;
   }
@@ -528,13 +553,16 @@ export class StudioSession implements StudioSessionApi {
     };
   }
 
-  /** Persist now: waits for an in-flight save, then saves anything newer. Never throws. */
-  async flush(): Promise<void> {
+  /** Persist now: waits for an in-flight save, then saves anything newer; then the history capture (awaited).
+   *  `final`: the session is being evicted or the server is shutting down. Never throws. */
+  async flush(opts?: { final?: boolean }): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
     await this.persist();
+    const capture = runHistoryHook(this.projectId, 'onFlush', () => this.history.onFlush(this.current, { final: opts?.final === true }));
+    if (capture) await capture;
   }
 
   resetAbort(): AbortController {
@@ -692,7 +720,7 @@ export const sweepIdleSessions = async (now = Date.now()): Promise<number> => {
       }
     }
     if (!session.isIdle(now)) continue;
-    await session.flush();
+    await session.flush({ final: true });
     // Something may have started while flushing.
     if (!session.isIdle(now) || sessions.get(projectId) !== session) continue;
     if (!session.persisted) continue; // keep unsaved work in memory; retried next sweep
@@ -718,7 +746,7 @@ export const drainStudioSessions = async (timeoutMs = 25_000): Promise<void> => 
     await new Promise((r) => setTimeout(r, 250));
   }
   await Promise.race([
-    Promise.allSettled([...sessions.values()].map((s) => s.flush())),
+    Promise.allSettled([...sessions.values()].map((s) => s.flush({ final: true }))),
     new Promise((r) => setTimeout(r, Math.max(1_000, deadline - Date.now())))
   ]);
 };
@@ -782,6 +810,8 @@ export async function getStudioSession(
       session.commit(pruned, { origin: 'job', label: 'Clear old uploads' });
       logger.info('comic_ref_inbox_pruned', { projectId, count: pruned.length });
     }
+    // Comic History: the load moment ("History starts here" for a comic with no rows; H2). Never awaited, never throws.
+    void runHistoryHook(projectId, 'onLoad', () => session.history.onLoad(session.doc));
     sessions.set(projectId, session);
     ensureSweeper();
     return session;
