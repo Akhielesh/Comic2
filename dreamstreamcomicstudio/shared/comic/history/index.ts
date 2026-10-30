@@ -16,7 +16,7 @@
 
 export * from './types.js';
 export * from './sections.js';
-export { applyHistoryRestore, type RestoreKernel } from './apply.js';
+export { applyHistoryRestore, isPanelSourceArchive, PANEL_SOURCE_ARCHIVE_WORDS, type RestoreKernel } from './apply.js';
 export * from './restore.js';
 export * from './diff.js';
 export * from './touched.js';

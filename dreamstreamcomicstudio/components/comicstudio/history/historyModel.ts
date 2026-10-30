@@ -8,7 +8,7 @@
 // "Earlier (images only)" moment (the moments themselves come from shared/comic/history/earlier.ts), and the
 // no-git-words guard. No React, no network.
 
-import { isPageStale, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
+import { archiveOf, isPageStale, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
 import { editionProgress, i18nOf, translationStatus } from '../../../shared/comic/i18n';
 import { languageSpec } from '../../../shared/comic/languages';
 import { lockedModelId, lockedSpecId } from '../../../shared/comic/modelLock';
@@ -20,6 +20,7 @@ import {
   diffBooks,
   drawnModelOf,
   historyRestoreOp,
+  isPanelSourceArchive,
   localParts,
   pageIdsOfKeys,
   pageRangeText,
@@ -593,10 +594,16 @@ export const undoAiPreview = (P: ComicDoc, R: ComicDoc, live: ComicDoc, decision
  * collectMedia keeps one item per path (the first owner wins) while Earlier lists a path once per owner (page 5
  * reusing page 4's drawing): the item is matched on path AND owner. When another owner holds the path, page 4's item
  * is never opened — a one-item list where the path's item takes this moment's owner, so MediaPreview's versionList,
- * refusal and render_use rules apply in the right page's context.
+ * refusal and render_use rules apply in the right page's context. A frame's picture or an overlay a restore displaced
+ * (archived under its page with no maker or date, apply.ts isPanelSourceArchive) is not a drawing of the page: never
+ * offered, since using it would print that picture — even a guide-only overlay — as the whole page's art.
  */
 export const earlierUseOf = (doc: ComicDoc, m: EarlierMoment): { items: MediaItem[]; index: number } | null => {
   if (m.kind !== 'drawing' || m.blocked || m.current || !m.owner.target || !m.path) return null;
+  if (m.archived) {
+    const held = archiveOf(doc).filter((a) => a.path === m.path && a.targetKey === m.owner.key);
+    if (held.length && held.every(isPanelSourceArchive)) return null;
+  }
   const items = collectMedia(doc);
   const index = items.findIndex((i) => i.path === m.path && i.owner.key === m.owner.key);
   if (index >= 0) return { items, index };

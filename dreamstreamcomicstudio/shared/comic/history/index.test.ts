@@ -4,6 +4,7 @@ import * as barrel from './index';
 import * as earlier from './earlier';
 import * as describeModule from './describe';
 import * as when from './when';
+import * as apply from './apply';
 
 describe('shared/comic/history/index.ts', () => {
   it('re-exports earlier.ts (H6a) — every runtime export, the same binding', () => {
@@ -17,5 +18,10 @@ describe('shared/comic/history/index.ts', () => {
       for (const name of Object.keys(earlier)) expect(Object.keys(other), name).not.toContain(name);
     }
     expect(barrel.EARLIER_NOTE_NO_START).toBe('Only drawings were recorded before History started.');
+  });
+
+  it('re-exports the archive test for displaced frame pictures and overlays (apply.ts), the same binding', () => {
+    expect(barrel.isPanelSourceArchive).toBe(apply.isPanelSourceArchive);
+    expect(barrel.PANEL_SOURCE_ARCHIVE_WORDS).toBe(apply.PANEL_SOURCE_ARCHIVE_WORDS);
   });
 });

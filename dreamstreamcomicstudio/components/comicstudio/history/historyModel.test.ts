@@ -5,7 +5,8 @@
 import { describe, expect, it } from 'vitest';
 import { collectAssetPaths, normalizeDoc } from '../../../shared/comic/doc';
 import { historyFixture, HISTORY_NOW, HISTORY_TZ } from './__scenes__/historyFixtures';
-import { earlierHistory, earlierMoments, type EarlierMoment } from '../../../shared/comic/history/index';
+import { earlierHistory, earlierMoments, historyRestoreOp, restoreOps, type EarlierMoment } from '../../../shared/comic/history/index';
+import { applyOps } from '../../../shared/comic/ops';
 import { collectMedia } from '../timeline/bookModel';
 import {
   earlierUseOf,
@@ -182,6 +183,32 @@ describe('"Earlier (images only)": what "Use this version" opens (H6a FIX note 1
     expect(earlierUseOf(doc, { ...older, owner: { ...older.owner, target: undefined } })).toBeNull();
     // Exactly the five older page drawings of the v4 fixture can be used.
     expect(ms.filter((m) => earlierUseOf(doc, m)).map((m) => m.owner.key).sort()).toEqual(['page:pg_1', 'page:pg_2', 'page:pg_3', 'page:pg_4', 'page:pg_5']);
+  });
+
+  it('a frame picture or overlay a restore displaced (archived under its page) is never offered as the page’s drawing', () => {
+    const base = v4();
+    const page = base.pages[1];
+    const STICKER = 'u/user-a/p/proj-v4/refs/sticker.webp';
+    const TAKE = 'u/user-a/p/proj-v4/img/frame-take.webp';
+    const at = before() - 60_000;
+    const bx = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+    const framed = applyOps(base, [
+      { op: 'page_frames', pageId: page.id, artMode: 'panels', frames: page.panels.map((pn, i) => ({ panelId: pn.id, frame: { box: { x: 0.02, y: 0.02 + i * 0.3, w: 0.96, h: 0.28 }, ...(i === 0 ? { src: { path: TAKE } } : {}) } })), moveBalloons: false },
+      { op: 'layer', pageId: page.id, id: 'ly_sticker', patch: { kind: 'image', box: bx, src: { path: STICKER }, print: false } }
+    ], at);
+    // The page comes back from before it was put in frames: the I1 net archives both pictures under the page.
+    const doc = applyOps(framed, [historyRestoreOp(restoreOps(framed, base, { kind: 'page', pageId: page.id, mode: 'replace', part: 'all' }), { versionId: 'v', at })], at);
+    expect((doc.archive || []).filter((a) => a.path === STICKER || a.path === TAKE).map((a) => [a.path, a.targetKey, a.label])).toEqual(
+      expect.arrayContaining([[TAKE, `page:${page.id}`, `Page ${page.n} panel picture`], [STICKER, `page:${page.id}`, `Page ${page.n} overlay`]])
+    );
+    const ms = earlierHistory(doc, { now: HISTORY_NOW, tz: HISTORY_TZ, before: before() }).moments;
+    for (const path of [STICKER, TAKE]) {
+      const m = find(ms, (x) => x.path === path && x.owner.key === `page:${page.id}`);
+      expect(m.archived, path).toBe(true);
+      expect(earlierUseOf(doc, m), path).toBeNull();
+    }
+    // The page's real older drawings are still offered.
+    expect(ms.filter((m) => m.owner.key === `page:${page.id}` && earlierUseOf(doc, m)).length).toBeGreaterThan(0);
   });
 
   it('a path page 5 shares with page 4 opens a one-item list in page 5’s context, never page 4’s item', () => {

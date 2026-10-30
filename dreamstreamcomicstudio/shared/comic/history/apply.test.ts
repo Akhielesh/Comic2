@@ -16,6 +16,7 @@ import { MAX_ARCHIVE, MAX_RENDER_HISTORY, MAX_TRASH } from '../limits';
 import { historyEmptyDoc, historyV4Doc, historyV5Doc, BOOK_NOW } from './__fixtures__/books';
 import { evolveBook, randomBook, randomScope } from './__fixtures__/random';
 import { diffBooks } from './diff';
+import { isPanelSourceArchive } from './apply';
 import { exactRestoreSet, historyRestoreOp, isEmptyRestoreSet, restoreEffects, restoreOps } from './restore';
 import { excludedOf, joinSections, splitSections } from './sections';
 import type { RestoreScope } from './types';
@@ -228,10 +229,12 @@ describe('I1 on panelized pages: frame sources and image overlays (K2a)', () => 
       // I1: nothing the book held is lost — the displaced pictures went to the archive, once each, under their page.
       const kept = new Set(collectAssetPaths(after));
       expect(collectAssetPaths(current).filter((p) => !kept.has(p)), ctx).toEqual([]);
-      for (const path of [TAKE, STICKER, GUIDE]) {
-        expect(after.archive!.filter((a) => a.path === path), `${ctx} ${path}`).toEqual([
-          expect.objectContaining({ path, targetKey: 'page:pg_2', label: 'Page 2', archivedAt: AT, source: 'upload' })
-        ]);
+      // The label says what the picture was (never just "Page 2": it is not a drawing of the page).
+      for (const [path, label] of [[TAKE, 'Page 2 panel picture'], [STICKER, 'Page 2 overlay'], [GUIDE, 'Page 2 overlay']]) {
+        const entries = after.archive!.filter((a) => a.path === path);
+        expect(entries, `${ctx} ${path}`).toEqual([expect.objectContaining({ path, targetKey: 'page:pg_2', label, archivedAt: AT, source: 'upload', at: 0 })]);
+        expect(entries[0].origin, `${ctx} ${path}`).toBeUndefined();
+        expect(isPanelSourceArchive(entries[0]), `${ctx} ${path}`).toBe(true);
       }
       expect(duplicatePaths(after.archive), ctx).toEqual([]);
       expect(normalizeDoc(after), ctx).toEqual(after);
@@ -256,9 +259,26 @@ describe('I1 on panelized pages: frame sources and image overlays (K2a)', () => 
     expect(reinserted.pages.map((p) => p.id)).toContain('pg_2');
     const kept = new Set(collectAssetPaths(reinserted));
     expect(collectAssetPaths(deleted).filter((p) => !kept.has(p))).toEqual([]);
-    for (const path of [TAKE, STICKER, GUIDE]) {
-      expect(reinserted.archive!.filter((a) => a.path === path), path).toEqual([expect.objectContaining({ targetKey: 'page:pg_2', label: `Deleted page ${fromN}` })]);
+    for (const [path, what] of [[TAKE, 'panel picture'], [STICKER, 'overlay'], [GUIDE, 'overlay']]) {
+      const entries = reinserted.archive!.filter((a) => a.path === path);
+      expect(entries, path).toEqual([expect.objectContaining({ targetKey: 'page:pg_2', label: `Deleted page ${fromN} ${what}` })]);
+      expect(isPanelSourceArchive(entries[0]), path).toBe(true);
     }
+  });
+
+  it('isPanelSourceArchive: only an undated, maker-less page entry labelled as a panel picture or overlay', () => {
+    const entry = { path: 'x/a.webp', w: 1, h: 1, source: 'upload' as const, at: 0, targetKey: 'page:pg_2', label: 'Page 2 overlay', archivedAt: AT };
+    expect(isPanelSourceArchive(entry)).toBe(true);
+    expect(isPanelSourceArchive({ ...entry, label: 'Page 2 panel picture' })).toBe(true);
+    expect(isPanelSourceArchive({ ...entry, label: 'Deleted page 4 overlay' })).toBe(true);
+    // A real older drawing of the page (its own label, a maker or a date) is never one.
+    expect(isPanelSourceArchive({ ...entry, label: 'Page 2' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, origin: 'render' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, at: AT })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, targetKey: 'cover', label: 'Cover overlay' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, targetKey: 'style_option:so_1', label: 'Style option “Neon overlay”' })).toBe(false);
+    // Every archive entry of the v5 fixture (real drawings) reads as a drawing.
+    for (const a of v5().archive || []) expect(isPanelSourceArchive(a), a.path).toBe(false);
   });
 
   it('holds on random books whose pages carry frame sources and overlays (property)', () => {

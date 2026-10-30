@@ -27,7 +27,6 @@ import {
   archiveOf,
   collectAssetPaths,
   mapAssetRefs,
-  pageSourcePaths,
   pickBook,
   pickReader,
   renderTargetKey,
@@ -59,6 +58,29 @@ import { i18nOf, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextT
 import { languageSpec, sameLanguage } from '../languages.js';
 import { extraMetaKeys, isExtraMetaKey, stableRender } from './sections.js';
 import type { EditionMerge, HistoryRestoreOp, RestorePart, RestoreSet } from './types.js';
+
+/**
+ * What the archive calls a page's frame picture (frame.src) or image overlay (layer.src) when a restore displaces it
+ * (K2a, I1): "Page 3 panel picture", "Deleted page 2 overlay". Such a picture is not a drawing of the page.
+ */
+export const PANEL_SOURCE_ARCHIVE_WORDS = { frame: 'panel picture', layer: 'overlay' } as const;
+
+const PANEL_SOURCE_LABEL_RE = /^(?:Page|Deleted page)(?: \d+)? (?:panel picture|overlay)$/;
+
+/**
+ * An archive entry the I1 net made for a displaced frame picture or overlay: under a page ('page:<id>'), with no
+ * maker or time recorded (no origin, at 0) and a label that says which. It is not an older drawing of the page, so
+ * nothing should offer it as one ("Use for this page" / "Use this version" would print an overlay — even a guide-only
+ * one — as the whole page's art).
+ */
+export const isPanelSourceArchive = (v: Pick<ArchivedVersion, 'targetKey' | 'label'> & { origin?: unknown; at?: unknown }): boolean =>
+  !!v &&
+  typeof v.targetKey === 'string' &&
+  v.targetKey.startsWith('page:') &&
+  v.origin === undefined &&
+  !(typeof v.at === 'number' && v.at > 0) &&
+  typeof v.label === 'string' &&
+  PANEL_SOURCE_LABEL_RE.test(v.label);
 
 /** The ops.ts archive primitives (passed in, so this module never imports ops.ts at runtime). */
 export interface RestoreKernel {
@@ -699,10 +721,16 @@ const pathHomes = (doc: ComicDoc): Map<string, { asset: AssetRef; key: string; l
   });
   // Ship 2 (K2a): a frame's own picture (frame.src) and an image overlay (layer.src) live on their page ('page:<id>'),
   // so I1 archives one a restore displaces. Listed last: a path a render also holds keeps that richer home. Plain
-  // paths carry no maker or time, so the entry says so honestly (an image you brought; date not recorded).
+  // paths carry no maker or time (at 0 = date not recorded), and the label says what the picture was — "Page 3 panel
+  // picture", "Page 3 overlay" — never just "Page 3", so it is not taken for a drawing of the page
+  // (isPanelSourceArchive). A path a frame and an overlay share keeps the frame's (first) home.
   const sources = (page: Page, label: string) => {
     const key = renderTargetKey({ kind: 'page', id: page.id });
-    for (const path of pageSourcePaths(page)) add({ path, source: 'upload', at: 0 }, key, label);
+    const plain = (path: unknown, what: string) => {
+      if (typeof path === 'string' && path) add({ path, source: 'upload', at: 0 }, key, `${label} ${what}`);
+    };
+    for (const panel of page?.panels || []) plain(panel?.frame?.src?.path, PANEL_SOURCE_ARCHIVE_WORDS.frame);
+    for (const layer of page?.layers || []) plain(layer?.src?.path, PANEL_SOURCE_ARCHIVE_WORDS.layer);
   };
   doc.pages.forEach((p) => sources(p, targetLabel(doc, { kind: 'page', id: p.id })));
   trashOf(doc).forEach((t) => sources(t.page, `Deleted page ${t.fromN}`));
