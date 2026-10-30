@@ -20,7 +20,8 @@ import { useAction } from './useAction';
 type CastCardData = Extract<Card, { type: 'cast' }>;
 
 export const sheetStatus = (c: Character): { text: string; tone: 'ok' | 'busy' | 'bad' | 'none' } => {
-  if (c.tier === 'extra') return { text: 'Described in text', tone: 'none' };
+  // An extra is described in words until it has a ready sheet; a ready sheet is attached on every page it is on.
+  if (c.tier === 'extra') return c.sheet.status === 'ready' ? { text: 'Sheet ready · used on pages', tone: 'ok' } : { text: 'Described in text', tone: 'none' };
   switch (c.sheet.status) {
     case 'ready':
       return { text: 'Sheet ready', tone: 'ok' };
