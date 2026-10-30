@@ -9,11 +9,13 @@
 //    server/src/comic/prompts.ts planPageReferences selection and order (a parity test pins it), so a doc without new
 //    data compiles byte for byte (I8). The previous page is the continuity anchor (nearestReadyBefore without ledger
 //    scenes).
-//  - 'anchors' (any kind on): the plan's priority — beings by page rank (character slots) → style board, else the
-//    style key page → the same-scene previous page → ≤ ANCHOR_CAPS.placesPerPage places → ≤ ANCHOR_CAPS.propsPerPage
-//    props (object slots: props stop using character slots) → spare character slots for likeness photos; one object
-//    slot reserved first for the layout guide when it is on. The total is capped by the locked model's refs.total and
-//    doc.consistency.maxRefs (CONSISTENCY_LIMITS.maxRefsDefault).
+//  - 'anchors' (the places, props or styleKey kind on — ANCHOR_PLAN_KINDS; sheetV2 only changes how new sheets are laid
+//    out, so it alone leaves the page plan in 'ship1'): the plan's priority — beings by page rank (character slots) →
+//    style board, else the style key page (styleKey) → the same-scene previous page → ≤ ANCHOR_CAPS.placesPerPage
+//    places (the cap only with places on) → ≤ ANCHOR_CAPS.propsPerPage props (props on: object slots, so props stop
+//    using character slots) → spare character slots for likeness photos; one object slot reserved first for the layout
+//    guide when it is on. The total is capped by the locked model's refs.total and doc.consistency.maxRefs
+//    (CONSISTENCY_LIMITS.maxRefsDefault).
 //
 // Caps come only from the model registry (spec.refs) and the K2a limits; the lock's model always wins over the tier
 // (a job never draws on another model). Anchors (sheets worth making, once per book): lead/support beings and props as
@@ -55,13 +57,30 @@ export const anchorKindsFromFlag = (value: unknown): AnchorKinds => {
 export const anchorKindsOf = (kinds?: Partial<AnchorKinds>): AnchorKinds => ({ ...ANCHOR_KINDS_OFF, ...(kinds ?? {}) });
 export const anyAnchorKind = (kinds?: Partial<AnchorKinds>): boolean => ANCHOR_KINDS.some((k) => !!kinds?.[k]);
 
-/** Per-page caps of the plan (§4.2: "≤ 2 place sheets → ≤ 2 prop sheets", one reserved slot for the layout guide). */
-export const ANCHOR_CAPS = { placesPerPage: 2, propsPerPage: 2, layoutGuide: 1 } as const;
+/** The kinds that change which references a page attaches. sheetV2 changes only how NEW sheets are laid out (one image,
+ *  same spec hash), so with it alone every page plans exactly as today ('ship1'). */
+export const ANCHOR_PLAN_KINDS: readonly AnchorKind[] = ['places', 'props', 'styleKey'];
+/** planAnchors runs in 'anchors' mode (priorities, maxRefs default) only when one of ANCHOR_PLAN_KINDS is on. */
+export const plansWithAnchors = (kinds?: Partial<AnchorKinds>): boolean => ANCHOR_PLAN_KINDS.some((k) => !!kinds?.[k]);
+
+/** K2a's limits, read with the per-page anchor counts B4 asked for (CONSISTENCY_LIMITS.placeAnchors / propAnchors,
+ *  amendment 1); until the contract carries them the plan's numbers (§4.2) stand in. */
+const LIMITS = CONSISTENCY_LIMITS as typeof CONSISTENCY_LIMITS & Partial<Record<'placeAnchors' | 'propAnchors', number>>;
+/**
+ * Per-page caps of the plan (§4.2: "≤ 2 place sheets → ≤ 2 prop sheets", one reserved slot for the layout guide) and
+ * the style-slot rule today's page compile uses (prompts.ts styleReferences: a style-class model takes the board plus
+ * up to styleUserRefs ranked user style references, at most styleClassMax in its style slots). One place for each
+ * number; B5 reads the style pair from here when it rebuilds planPageReferences on planAnchors.
+ */
+export const ANCHOR_CAPS = {
+  placesPerPage: LIMITS.placeAnchors ?? 2,
+  propsPerPage: LIMITS.propAnchors ?? 2,
+  layoutGuide: 1,
+  styleClassMax: 3,
+  styleUserRefs: 2
+} as const;
 /** Place and prop sheets draw at 1K (pro plan §4.2); the quote prices them there. */
 export const ANCHOR_SHEET_RES: Resolution = '1K';
-/** Style references a style-class model takes besides the board, and its style-slot ceiling (prompts.ts styleReferences). */
-const STYLE_CLASS_MAX = 3;
-const STYLE_USER_REFS = 2;
 
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
@@ -193,7 +212,9 @@ export interface AnchorPlan {
 }
 
 export interface AnchorOptions {
-  /** COMIC_CONSISTENCY_ANCHORS kinds that are on (absent = all off = 'ship1'). */
+  /** COMIC_CONSISTENCY_ANCHORS kinds that are on (absent = all off = 'ship1'; only ANCHOR_PLAN_KINDS change the plan,
+   *  each gating its own behaviour: places the per-page place cap, props the object slots for props, any of the three
+   *  the anchors order and the maxRefs default). */
   kinds?: Partial<AnchorKinds>;
   /** COMIC_LAYOUT_GUIDE: reserve one object slot (first) for the layout guide. */
   layoutGuide?: boolean;
@@ -254,12 +275,17 @@ const rankPagePlaces = (page: Pick<Page, 'panels'>): string[] => {
   return [...counts.entries()].sort((a, b) => b[1].count - a[1].count || a[1].first - b[1].first).map(([id]) => id);
 };
 
-/** The model a page job draws on: the lock's model when the registry knows it, else `spec`, else the doc's tier. */
+/**
+ * The model a page job draws on: the lock's model when the registry knows it, else `spec`, else the doc's tier. `lock`
+ * follows plan.ts's convention: absent (undefined) = the comic's own lock (lockOf: persisted, else the migration lock),
+ * so a card that passes only the tier's spec still shows the locked model's caps; null = as if unlocked.
+ */
 export const anchorModelOf = (doc: ComicDoc, spec?: ImageModelSpec, lock?: ImageModelLock | null): ImageModelSpec => {
-  const locked = lock ? getImageModel(lock.modelId) : undefined;
+  const l = lock === undefined ? lockOf(doc) : (lock ?? undefined);
+  const locked = l ? getImageModel(l.modelId) : undefined;
   if (locked) return locked;
   if (spec) return spec;
-  return resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, lock === null ? undefined : lockOf(doc)).spec;
+  return resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, l).spec;
 };
 
 /** The style key page for `page` (consistency.styleKeyPageId, else the book's first page), when drawn and not `page`. */
@@ -280,13 +306,14 @@ interface Group {
 
 /**
  * Which references a page job attaches, in order, within the model's caps — and every being, place and prop it leaves
- * to words, with the reason. `spec` is the model the page job resolves to; `lock` is the comic's lock (its model wins).
- * See the header for the two modes. Pure; the server's page compile and the client's card call the same function.
+ * to words, with the reason. `spec` is the model the page job resolves to; `lock` is the comic's lock (its model wins;
+ * undefined = the doc's own lock, null = unlocked — see anchorModelOf). See the header for the two modes. Pure; the
+ * server's page compile and the client's card call the same function.
  */
 export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | undefined, lock: ImageModelLock | null | undefined, opts: AnchorOptions = {}): AnchorPlan => {
   const model = anchorModelOf(doc, spec, lock);
   const kinds = anchorKindsOf(opts.kinds);
-  const mode: AnchorPlan['mode'] = anyAnchorKind(kinds) ? 'anchors' : 'ship1';
+  const mode: AnchorPlan['mode'] = plansWithAnchors(kinds) ? 'anchors' : 'ship1';
   const anchors = mode === 'anchors';
   const userMax = consistencyOf(doc).maxRefs;
   const maxRefs = userMax ?? (anchors ? CONSISTENCY_LIMITS.maxRefsDefault : undefined);
@@ -322,12 +349,14 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
           ? `${name} is described in words on this page.`
           : `${name} has no sheet or photo yet, so it is described in words on this page.`;
 
-  // 1. The layout guide: one object slot, first — never a model's only object slot (prompts.ts rule).
+  // 1. The layout guide: ANCHOR_CAPS.layoutGuide object slot(s), first — never a model's only object slot, and never
+  //    the last reference (prompts.ts rule).
   const guide: PlannedAnchor[] = [];
-  if (opts.layoutGuide && caps.objects >= 2 && budget.objects > 0 && budget.total > 1) {
+  const guideSlots = ANCHOR_CAPS.layoutGuide;
+  if (opts.layoutGuide && caps.objects > guideSlots && budget.objects >= guideSlots && budget.total > guideSlots) {
     guide.push({ key: anchorKeys.layout, role: 'layout', slot: 'object', source: 'guide', name: 'PAGE LAYOUT GUIDE' });
-    budget.objects -= 1;
-    budget.total -= 1;
+    budget.objects -= guideSlots;
+    budget.total -= guideSlots;
   }
 
   // 2. Beings (pass 1): one reference each, in the page's rank order, within the character slots.
@@ -417,10 +446,10 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
   });
   const styleRef = (ref: RefAsset, n: number, slot: AnchorSlot): PlannedAnchor => ({ key: `${anchorKeys.style}:${n}`, role: 'style', slot, source: 'style_ref', path: ref.path, name: `STYLE REFERENCE ${n}` });
   if (caps.style > 0) {
-    const max = Math.min(caps.style, STYLE_CLASS_MAX, budget.total);
+    const max = Math.min(caps.style, ANCHOR_CAPS.styleClassMax, budget.total);
     if (board && style.length < max) style.push({ key: anchorKeys.style, role: 'style', slot: 'style', source: 'board', path: board, name: 'STYLE BOARD' });
     else if (keyPage && style.length < max) style.push(keyAnchor('style'));
-    for (const ref of pickRefs(doc.style.refs, STYLE_USER_REFS, 'style', { effectiveRating: rating })) {
+    for (const ref of pickRefs(doc.style.refs, ANCHOR_CAPS.styleUserRefs, 'style', { effectiveRating: rating })) {
       if (style.length >= max) break;
       style.push(styleRef(ref, style.filter((s) => s.source === 'style_ref').length + 1, 'style'));
     }
@@ -465,7 +494,7 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
     }
   };
 
-  // Places: today all of them (object slots allowing); with anchors ≤ ANCHOR_CAPS.placesPerPage.
+  // Places: today all of them (object slots allowing); with the places kind ≤ ANCHOR_CAPS.placesPerPage.
   const places: PlannedAnchor[] = [];
   const attachPlaces = () => {
     for (const id of rankPagePlaces(page)) {
@@ -481,7 +510,7 @@ export const planAnchors = (doc: ComicDoc, page: Page, spec: ImageModelSpec | un
         overflow.push({ key, role: 'place', id, name, why, text: missText(name, why) });
         continue;
       }
-      const kindFull = anchors && places.length >= ANCHOR_CAPS.placesPerPage;
+      const kindFull = anchors && kinds.places && places.length >= ANCHOR_CAPS.placesPerPage;
       if (kindFull || budget.objects <= 0 || budget.total <= 0) {
         const slot = kindFull ? 'kind' : budget.total <= 0 ? 'total' : 'object';
         overflow.push({ key, role: 'place', id, name, why: 'cap', slot, text: capText(name, slot, 'places', charSlots) });
@@ -559,6 +588,9 @@ export interface StaleReason {
   text: string;
 }
 
+/** The staleness words for a change in VersionParts.cont: this page's own continuity record or its scene. */
+export const CONTINUITY_STALE_TEXT = "This page's continuity (outfits, props, notes or scene)";
+
 const PANEL_PARTS: { k: keyof PanelParts; part: StalePart; words: string }[] = [
   { k: 'c', part: 'cast', words: "who's in it" },
   { k: 'a', part: 'action', words: 'what happens' },
@@ -596,7 +628,9 @@ export const staleReasons = (doc: ComicDoc, page: Page, version: Pick<VersionMet
   for (const id of Object.keys(was)) {
     if (!is[id] && !page.panels.some((p) => p.id === id)) out.push({ part: 'panel_removed', panelId: id, text: 'A panel was removed' });
   }
-  if (before.cont !== now.cont) out.push({ part: 'continuity', text: 'What carries over from earlier pages' });
+  // `cont` fingerprints this page's own continuity record and its scene (parts.ts partsOf), not state carried from
+  // earlier pages: an edit to page 1's outfit never marks page 3 here.
+  if (before.cont !== now.cont) out.push({ part: 'continuity', text: CONTINUITY_STALE_TEXT });
   for (const [id, hash] of Object.entries(now.places ?? {})) {
     const old = before.places?.[id];
     if (old !== undefined && old !== hash) {

@@ -3,12 +3,15 @@ import { asset, harbourComic, lakeStory, readyRender } from './__fixtures__/cons
 import {
   ANCHOR_CAPS,
   ANCHOR_KINDS_OFF,
+  ANCHOR_PLAN_KINDS,
+  CONTINUITY_STALE_TEXT,
   anchorEligible,
   anchorKindsFromFlag,
   appearances,
   isRecurring,
   partsStale,
   planAnchors,
+  plansWithAnchors,
   staleReasons,
   type AnchorKinds
 } from './anchors';
@@ -128,6 +131,19 @@ describe('planAnchors — caps from the locked model', () => {
     expect(planAnchors(doc, p5, spec('nano-banana-pro'), null).modelId).toBe('nano-banana-pro');
   });
 
+  it("an undefined lock means the comic's own lock (a card passing the tier's spec shows the locked model's caps); null means unlocked", () => {
+    const pro = lakeStory((d) => {
+      d.imageModel = lock('nano-banana-pro');
+    });
+    const card = planAnchors(pro, page(pro, 5), NB21, undefined);
+    expect(card.modelId).toBe('nano-banana-pro');
+    expect(card.caps).toEqual({ total: 14, characters: 5, objects: 6, style: 3 });
+    expect(card.attached).toEqual(planAnchors(pro, page(pro, 5), NB21, pro.imageModel).attached);
+    expect(planAnchors(pro, page(pro, 5), NB21, null).modelId).toBe('nano-banana-2.1');
+    // No lock at all: the spec passed in.
+    expect(planAnchors(doc, p5, NB21, undefined).modelId).toBe('nano-banana-2.1');
+  });
+
   it('anchors mode caps the total at doc.consistency.maxRefs (default 9) and says so', () => {
     expect(planAnchors(doc, p5, NB21, undefined, { kinds: ALL }).caps.total).toBe(CONSISTENCY_LIMITS.maxRefsDefault);
     const tight = lakeStory((d) => {
@@ -197,6 +213,42 @@ describe('planAnchors — places, previous page, style key, reserved slot', () =
     expect(plan.overflow.filter((o) => o.role === 'place')).toEqual([
       { key: 'place:pl_temple', role: 'place', id: 'pl_temple', name: 'SEA TEMPLE', why: 'cap', slot: 'kind', text: 'Only 2 places are attached per page. SEA TEMPLE is described in words on this page.' }
     ]);
+  });
+
+  it('sheetV2 alone plans every page exactly as today; each plan kind gates only its own behaviour', () => {
+    expect(ANCHOR_PLAN_KINDS).toEqual(['places', 'props', 'styleKey']);
+    expect(plansWithAnchors({ sheetV2: true })).toBe(false);
+    for (const doc of [threePlaces(), lakeStory(), harbourComic()]) {
+      for (const p of doc.pages) {
+        const v2 = planAnchors(doc, p, NB21, undefined, { kinds: { sheetV2: true } });
+        expect(v2.mode).toBe('ship1');
+        expect(v2).toEqual(planAnchors(doc, p, NB21, undefined, { kinds: ANCHOR_KINDS_OFF }));
+      }
+    }
+    // styleKey alone: the anchors order and the maxRefs default, but the place cap belongs to the places kind.
+    const doc = threePlaces();
+    const styleOnly = planAnchors(doc, page(doc, 1), NB21, undefined, { kinds: { styleKey: true } });
+    expect(styleOnly.mode).toBe('anchors');
+    expect(styleOnly.caps.total).toBe(CONSISTENCY_LIMITS.maxRefsDefault);
+    expect(styleOnly.attached.filter((a) => a.role === 'place').map((a) => a.id)).toEqual(['pl_gate', 'pl_market', 'pl_temple']);
+    expect(styleOnly.overflow.some((o) => o.slot === 'kind')).toBe(false);
+  });
+
+  it('anchors priority: the same-scene previous page before place sheets when slots run short (ship1 keeps places first)', () => {
+    const doc = harbourComic((d) => {
+      d.scenes = [{ id: 'sc_a', name: 'Gate' }];
+      d.pages[0].continuity = { sceneId: 'sc_a' };
+      d.pages[0].render = readyRender('u/o/h/p1.webp');
+      d.places[0].sheet = readyRender('u/o/h/gate.webp');
+      // Meera + Ravi + the style board leave one reference.
+      d.consistency = { maxRefs: 4 };
+    });
+    const plan = planAnchors(doc, page(doc, 2), NB21, undefined, { kinds: { places: true } });
+    expect(plan.attached.map((a) => a.key)).toEqual(['char:c_meera', 'char:c_ravi', 'style', 'prev:pg_1']);
+    expect(plan.overflow.find((o) => o.id === 'pl_gate')).toMatchObject({ role: 'place', why: 'cap', slot: 'total' });
+    const today = planAnchors(doc, page(doc, 2), NB21, undefined);
+    expect(today.attached.map((a) => a.key)).toEqual(['char:c_meera', 'char:c_ravi', 'place:pl_gate', 'style']);
+    expect(today.overflow.find((o) => o.role === 'previous')).toMatchObject({ id: 'pg_1', why: 'cap', slot: 'total' });
   });
 
   it('anchors: the same-scene previous page is attached (pending when the run draws it first)', () => {
@@ -321,8 +373,8 @@ describe('partsStale / staleReasons', () => {
     expect(at((d) => (d.pages[0].panels[2].shot = 'close_up'))).toEqual(['Panel 3: the shot']);
     expect(at((d) => (d.pages[0].panels[0].mood = 'tense'))).toEqual(['Panel 1: the mood']);
     expect(at((d) => (d.pages[0].panels[0].direction = { lens: 'wide', by: 'user' }))).toEqual(['Panel 1: the direction']);
-    expect(at((d) => (d.pages[0].continuity = { props: { lantern: 'lit' }, notes: ['Rain.'] }))).toEqual(['What carries over from earlier pages']);
-    expect(at((d) => (d.pages[0].continuity = { props: { lantern: 'broken' } }))).toEqual(['What carries over from earlier pages', 'The state of “lantern”']);
+    expect(at((d) => (d.pages[0].continuity = { props: { lantern: 'lit' }, notes: ['Rain.'] }))).toEqual(["This page's continuity (outfits, props, notes or scene)"]);
+    expect(at((d) => (d.pages[0].continuity = { props: { lantern: 'broken' } }))).toEqual([CONTINUITY_STALE_TEXT, 'The state of “lantern”']);
     expect(at((d) => (d.places[0].look = 'Gate in fog'))).toEqual(['Panel 1: the place', 'Panel 2: the place', 'Panel 3: the place', 'How CHITRAKULAM GATE looks']);
     expect(at((d) => d.pages[0].panels.push({ ...d.pages[0].panels[2], id: 'pg_1_p4', n: 4 }))).toEqual(['Panel 4 is new']);
     expect(at((d) => d.pages[0].panels.pop())).toEqual(['A panel was removed']);
@@ -333,6 +385,12 @@ describe('partsStale / staleReasons', () => {
     });
     doc.pages[0].panels[0].direction = { lens: 'wide', by: 'user' };
     expect(partsStale(doc, doc.pages[0])).toBe(false);
+  });
+
+  it('a place newly used on the page is a panel change, not "How X looks" (no look was drawn before)', () => {
+    const doc = drawnWithParts();
+    doc.pages[0].panels[0].placeId = 'pl_market';
+    expect(staleReasons(doc, doc.pages[0]).map((r) => r.text)).toEqual(['Panel 1: the place']);
   });
 
   it('an older version can be checked too', () => {
