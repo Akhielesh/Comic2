@@ -245,6 +245,10 @@ describe('check-consumers', () => {
 interface TarEntry {
   name: string;
   data: Buffer;
+  /** The raw 512-byte ustar header, for the fixed-field checks. */
+  header: Buffer;
+  /** A NUL-terminated header field as text. */
+  field: (offset: number, length: number) => string;
 }
 
 const untar = (buf: Buffer): TarEntry[] => {
@@ -256,7 +260,7 @@ const untar = (buf: Buffer): TarEntry[] => {
     const prefix = field(345, 155);
     const name = (prefix ? `${prefix}/` : '') + field(0, 100);
     const size = parseInt(field(124, 12), 8);
-    out.push({ name, data: buf.subarray(at + 512, at + 512 + size) });
+    out.push({ name, data: buf.subarray(at + 512, at + 512 + size), header: h, field });
     at += 512 + Math.ceil(size / 512) * 512;
   }
   return out;
@@ -264,8 +268,19 @@ const untar = (buf: Buffer): TarEntry[] => {
 
 const sha256 = (buf: Buffer) => createHash('sha256').update(buf).digest('hex');
 
+/** npm's fixed tarball time, 1985-10-26T08:15:00Z: never the clock. */
+const TAR_MTIME = 499162500;
+
+/**
+ * Files that must never ship: tests (except the conformance kit's, which W1.4 ships for hosts to run), scripts and
+ * tsconfig files.
+ */
+const unshippable = (files: string[]): string[] =>
+  files.filter((f) => (f.endsWith('.test.ts') && !f.startsWith('conformance/')) || f.startsWith('scripts/') || f.includes('tsconfig'));
+
 describe('export.mjs', () => {
-  const run = (out: string) => spawnSync(process.execPath, [join(PKG, 'scripts/export.mjs'), '--out', out], { encoding: 'utf8', timeout: SLOW });
+  const run = (out: string, ...args: string[]) =>
+    spawnSync(process.execPath, [join(PKG, 'scripts/export.mjs'), '--out', out, ...args], { encoding: 'utf8', timeout: SLOW });
 
   it(
     'writes both flavours, MANIFEST.json and SHA256SUMS, byte-identical on a second run',
@@ -304,22 +319,71 @@ describe('export.mjs', () => {
         // gzip with stored deflate blocks (BTYPE 00): no dependence on the zlib build.
         expect([tgz[0], tgz[1], tgz[2]]).toEqual([0x1f, 0x8b, 8]);
         expect(tgz[10] & 0b110).toBe(0);
+        // No clock anywhere: the gzip MTIME (bytes 4-7) is 0, and every tar header is fixed (two runs a few
+        // milliseconds apart would not notice a clock rounded to the minute; these checks do).
+        expect([...tgz.subarray(4, 8)]).toEqual([0, 0, 0, 0]);
         const entries = untar(gunzipSync(tgz));
         expect(entries.map((e) => e.name)).toEqual(Object.keys(info.files).map((f) => `package/${f}`));
-        for (const e of entries) expect(sha256(e.data), e.name).toBe(info.files[e.name.slice('package/'.length)]);
+        for (const e of entries) {
+          expect(sha256(e.data), e.name).toBe(info.files[e.name.slice('package/'.length)]);
+          expect(e.field(136, 12), `${e.name} mtime`).toBe(TAR_MTIME.toString(8).padStart(11, '0'));
+          expect(parseInt(e.field(136, 12), 8)).toBe(TAR_MTIME);
+          expect(e.field(100, 8), `${e.name} mode`).toBe('0000644');
+          expect([e.field(108, 8), e.field(116, 8)], `${e.name} uid/gid`).toEqual(['0000000', '0000000']);
+          expect([e.field(265, 32), e.field(297, 32)], `${e.name} uname/gname`).toEqual(['', '']);
+          expect(e.field(156, 1), `${e.name} type`).toBe('0');
+        }
 
         const files = Object.keys(info.files);
         expect(files).toContain('package.json');
         expect(files).toContain('src/index.ts');
         expect(files).toContain('src/contract/email.ts');
         expect(files).toContain('fixtures/contract/richdoc/full.json');
-        expect(files.filter((f) => f.endsWith('.test.ts') || f.startsWith('scripts/') || f.includes('tsconfig'))).toEqual([]);
+        expect(unshippable(files)).toEqual([]);
+        expect(files.filter((f) => f.startsWith('src/') && f.endsWith('.test.ts'))).toEqual([]);
 
         const index = entries.find((e) => e.name === 'package/src/index.ts')!.data.toString('utf8');
         const relativeSpecs = specifiers(index).filter(isRelative);
         expect(relativeSpecs.length).toBeGreaterThan(3);
         if (flavour === 'node16') expect(relativeSpecs.every((sp) => sp.endsWith('.js'))).toBe(true);
         else expect(relativeSpecs.some((sp) => sp.endsWith('.js'))).toBe(false);
+      }
+    },
+    SLOW,
+  );
+
+  it(
+    'MANIFEST.json does not depend on how the SHA was given: --git-sha <HEAD> and a plain run write the same bytes',
+    () => {
+      const plain = tempDir('platform-core-export-plain-');
+      expect(run(plain).status).toBe(0);
+      const manifest = JSON.parse(readFileSync(join(plain, 'MANIFEST.json'), 'utf8')) as { gitSha: string; clean: unknown };
+      expect(Object.keys(manifest)).toContain('clean');
+      expect([true, false, null]).toContain(manifest.clean);
+      const pinned = tempDir('platform-core-export-pinned-');
+      expect(run(pinned, '--git-sha', manifest.gitSha).status).toBe(0);
+      for (const name of readdirSync(plain)) expect(readFileSync(join(pinned, name)).equals(readFileSync(join(plain, name))), name).toBe(true);
+    },
+    SLOW,
+  );
+
+  it(
+    'ships the conformance kit, tests included (W1.4), and still no src/ test',
+    () => {
+      const dir = packageCopy();
+      for (const entry of ['scripts/export.mjs', 'fixtures', 'README.md', 'CHANGELOG.md']) cpSync(join(PKG, entry), join(dir, entry), { recursive: true });
+      mkdirSync(join(dir, 'conformance'), { recursive: true });
+      writeFileSync(join(dir, 'conformance', 'ports.test.ts'), "import { s } from '../src/index.js';\nexport const kit = s;\n");
+      const out = tempDir('platform-core-export-conformance-');
+      const r = spawnSync(process.execPath, [join(dir, 'scripts/export.mjs'), '--out', out], { encoding: 'utf8', timeout: SLOW });
+      expect(r.status, r.stderr).toBe(0);
+      const manifest = JSON.parse(readFileSync(join(out, 'MANIFEST.json'), 'utf8')) as { flavours: Record<string, { files: Record<string, string> }> };
+      for (const info of Object.values(manifest.flavours)) {
+        const files = Object.keys(info.files);
+        expect(files).toContain('conformance/ports.test.ts');
+        expect(files).toContain('src/index.ts');
+        expect(unshippable(files)).toEqual([]);
+        expect(files.filter((f) => f.startsWith('src/') && f.endsWith('.test.ts'))).toEqual([]);
       }
     },
     SLOW,

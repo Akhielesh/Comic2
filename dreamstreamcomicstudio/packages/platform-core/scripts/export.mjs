@@ -8,7 +8,8 @@
 //                                    that map .js to .ts)
 //   platform-core-bundler-<ver>.tgz  the same sources with the .js suffixes stripped, for a bundler that does not
 //                                    map .js to .ts
-//   MANIFEST.json                    name, version, git SHA, and the sha256 of each tgz and of every file in each
+//   MANIFEST.json                    name, version, git SHA (and whether the package folder was clean), and the
+//                                    sha256 of each tgz and of every file in each
 //   SHA256SUMS                       `sha256sum -c` lines for the two tgz files and MANIFEST.json
 //
 // Deterministic: files are sorted, every tar header is fixed (mode 0644, uid/gid 0, no names, one mtime), and the
@@ -140,15 +141,23 @@ export const gzipStored = (data) => {
 
 // ── Export ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `{gitSha, clean}` with both keys always present, so an export run with `--git-sha <HEAD>` and a plain run of the same
+ * tree write the same MANIFEST.json bytes. `clean` is whether the package folder has no uncommitted change, or `null`
+ * outside a git checkout (a source tarball), where `gitSha` is the override or `'unknown'`.
+ */
 const gitInfo = (pkg, override) => {
-  if (override) return { gitSha: override };
+  const git = (args) => execFileSync('git', ['-C', pkg, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  let head;
+  let clean = null;
   try {
-    const gitSha = execFileSync('git', ['-C', pkg, 'rev-parse', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    const dirty = execFileSync('git', ['-C', pkg, 'status', '--porcelain', '--', '.'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return { gitSha, clean: dirty === '' };
+    head = git(['rev-parse', 'HEAD']);
+    clean = git(['status', '--porcelain', '--', '.']) === '';
   } catch {
-    return { gitSha: 'unknown' };
+    head = undefined;
+    clean = null;
   }
+  return { gitSha: override || head || 'unknown', clean };
 };
 
 /**
