@@ -1,0 +1,27 @@
+{
+  // The renderers run in the browser (lazy chunks, services/platformExport.ts) and, from wave 4, in the light engine
+  // (Node). So the shipped sources compile against the ES2017 library ALONE (`types: []`): no DOM, no Node. Images
+  // arrive as bytes, links are strings, and the outputs are Uint8Array; nothing here can fetch, read a path or touch
+  // a document. Node16 resolution makes every relative import name its `.js` file, as the backend build requires.
+  // The vendored PptxGenJS is JavaScript with our own types (src/vendor/pptxgenjs/pptxgen.es.d.ts); docx, unified and
+  // remark resolve from the app's node_modules. Tests (*.test.ts) use vitest and Node; the app's root tsconfig checks
+  // them, and the test helpers (*.testkit.ts).
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["ES2017"],
+    "types": [],
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.testkit.ts"]
+}
