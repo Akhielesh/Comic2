@@ -1,0 +1,108 @@
+{
+  "note": "Golden vectors for user and service claims (plan §5.8). Computed once by an independent node:crypto script and pinned: a change here is a contract change (ADR 0008). Synthetic secrets only.",
+  "secret": "zoCviGCT0E5FtgPDS-rKegNJApSWYH3oaSjfx51FKRk",
+  "claimKeyHex": "702600429da5c52b316f215f786e18beb1fd072983040233d42ab697c7f39ffb",
+  "now": 1793610000,
+  "sub": {
+    "subSecret": "JfTAJ8aNl8C3ZFNHFWBezx2jhw19JsT7RhusOX6sFyM",
+    "subKeyHex": "b7736c08febe855e4977edcc870b35ebf68b7b6e24c5b2b65bda6154bc86afe1",
+    "userId": "user-0001",
+    "sub": "82ba41a2b94afce70f3475de1daa9ba6"
+  },
+  "vectors": [
+    {
+      "name": "user claim",
+      "mint": "user",
+      "input": {
+        "app": "dreamstream",
+        "product": "chat",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "tier": "creator",
+        "purpose": "extract",
+        "caps": [
+          "doc.extract"
+        ],
+        "ttlSeconds": 120,
+        "jti": "jti-user-0001"
+      },
+      "payload": {
+        "v": 1,
+        "kind": "user",
+        "app": "dreamstream",
+        "product": "chat",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "tier": "creator",
+        "purpose": "extract",
+        "caps": [
+          "doc.extract"
+        ],
+        "exp": 1793610120,
+        "jti": "jti-user-0001"
+      },
+      "token": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJzdWIiOiI4MmJhNDFhMmI5NGFmY2U3MGYzNDc1ZGUxZGFhOWJhNiIsInRpZXIiOiJjcmVhdG9yIiwicHVycG9zZSI6ImV4dHJhY3QiLCJjYXBzIjpbImRvYy5leHRyYWN0Il0sImV4cCI6MTc5MzYxMDEyMCwianRpIjoianRpLXVzZXItMDAwMSJ9.in6CIlOfIZ3_xBbvSGVHR7RF8FPMrkMa5iuFqsv4h5E"
+    },
+    {
+      "name": "user claim with a workspace and the longest lifetime",
+      "mint": "user",
+      "input": {
+        "app": "dreamstream",
+        "product": "comic",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "ws": "ws-0042",
+        "tier": "studio",
+        "purpose": "export",
+        "caps": [
+          "print.book",
+          "print.preflight"
+        ],
+        "ttlSeconds": 300,
+        "jti": "jti-user-0002"
+      },
+      "payload": {
+        "v": 1,
+        "kind": "user",
+        "app": "dreamstream",
+        "product": "comic",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "ws": "ws-0042",
+        "tier": "studio",
+        "purpose": "export",
+        "caps": [
+          "print.book",
+          "print.preflight"
+        ],
+        "exp": 1793610300,
+        "jti": "jti-user-0002"
+      },
+      "token": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNvbWljIiwic3ViIjoiODJiYTQxYTJiOTRhZmNlNzBmMzQ3NWRlMWRhYTliYTYiLCJ3cyI6IndzLTAwNDIiLCJ0aWVyIjoic3R1ZGlvIiwicHVycG9zZSI6ImV4cG9ydCIsImNhcHMiOlsicHJpbnQuYm9vayIsInByaW50LnByZWZsaWdodCJdLCJleHAiOjE3OTM2MTAzMDAsImp0aSI6Imp0aS11c2VyLTAwMDIifQ.SxfnSfUdYuOPa7PPA12DbD_p5lT8lrsA1QwBGbpUiOw"
+    },
+    {
+      "name": "service claim (preview only)",
+      "mint": "service",
+      "input": {
+        "app": "dreamstream",
+        "product": "chat",
+        "caps": [
+          "doc.convert",
+          "doc.thumbnail"
+        ],
+        "ttlSeconds": 60,
+        "jti": "jti-svc-0001"
+      },
+      "payload": {
+        "v": 1,
+        "kind": "service",
+        "app": "dreamstream",
+        "product": "chat",
+        "purpose": "preview",
+        "caps": [
+          "doc.convert",
+          "doc.thumbnail"
+        ],
+        "exp": 1793610060,
+        "jti": "jti-svc-0001"
+      },
+      "token": "eyJ2IjoxLCJraW5kIjoic2VydmljZSIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJwdXJwb3NlIjoicHJldmlldyIsImNhcHMiOlsiZG9jLmNvbnZlcnQiLCJkb2MudGh1bWJuYWlsIl0sImV4cCI6MTc5MzYxMDA2MCwianRpIjoianRpLXN2Yy0wMDAxIn0.eheJPUuBxAlocccBMhglBy0tduDGWd0fOxS8EtBBfOA"
+    }
+  ]
+}
