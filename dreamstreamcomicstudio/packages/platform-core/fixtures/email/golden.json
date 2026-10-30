@@ -1,0 +1,62 @@
+{
+  "minimal": {
+    "html": "934272c01da00c39202788b01f81dcb474cc998c294ffb17a6239fb510feb93a",
+    "text": "76be6c395f4de9bccafbca3628f6c194c602fa274ed166211a3a1e9006034dca"
+  },
+  "full": {
+    "html": "09cf3c82199b376d95f4eeb4d1bca430945d4618c3cc1ac8e49160def20ac0ae",
+    "text": "2fc37513fc424d727556f37029be64d6f36586818da167819f169558d66a4b6d"
+  },
+  "full-atlas": {
+    "html": "364a7e878eb760c7d7402d7093d84b3a4a441ba8bb87f4b8eb17a931835f2348",
+    "text": "2fc37513fc424d727556f37029be64d6f36586818da167819f169558d66a4b6d"
+  },
+  "reply": {
+    "html": "6dfc4b36e41c874f4b4aed2f00ae4085515f0ba07f5715d14c58a97466bdb1af",
+    "text": "998b65b379a53bc7f03cc851831875d13dfaadbc2e1623974ba263d221f22a17"
+  },
+  "hostile": {
+    "html": "4037d4f31e72d1472fd387f74b5957ea55e69322fdd0c9fc39129a6a1861c17f",
+    "text": "51878e8893661d22a14c9efa521ee85367a80142b32d3b58d44bb92b204e6af6"
+  },
+  "creator-brand": {
+    "html": "bebed772a6571e8639aec6c04b3c2ab20d06b3cba8dcaf1a9d0ca175b10b4417",
+    "text": "2fc37513fc424d727556f37029be64d6f36586818da167819f169558d66a4b6d"
+  },
+  "template-reply": {
+    "html": "09dd4bfe4771b0dd0356ad90973f78802acaca91acd7493c739ab25125e8f812",
+    "text": "78d0e7397fd66e8537cc72673a69f525eb509d095a40f21574edfdd3adf9446c"
+  },
+  "template-follow_up": {
+    "html": "0067530af86cdebb511f23022a47489357a01bf86d733b105246596bdd79d079",
+    "text": "f05f9a624fedbe50b8ca96c3b422b7b7f638fa5da160eb288411e5713b1815a6"
+  },
+  "template-intro": {
+    "html": "85f1ef5b9e5bfa0553a3e22f223051381185e84c25b965a9690150c76c86941d",
+    "text": "84dd57c866c644fb57258b0a336ac6ee868831b94c6d66944ce21ae412d8772e"
+  },
+  "template-meeting_recap": {
+    "html": "e4d174dbc8f95873bdf23be605ff58a10e102f8622604396f82d43293438fd81",
+    "text": "2b2a763c156d08bef494447c53dc4d5f9512f1ff6ed92f3c0f6602ff0d6c5b94"
+  },
+  "template-quote_cover_note": {
+    "html": "c2c06af1721aba359c1f544ff0714c210e11e8152a023319cf24023c13bf7648",
+    "text": "80c2845747a912e382df987a44dc8e1234fe6404355ae57f4c6d69005fdc6009"
+  },
+  "template-invoice_nudge": {
+    "html": "a202be3fc4d8d2a7cd77a4721575eb5bd4766f17fc1a6f149b0656efc9634d2f",
+    "text": "23aba7244f5bf4f958f5f7b559bb2a4697603ee7be0313b5f23727d57d3e5189"
+  },
+  "template-comic_gift_reveal": {
+    "html": "61b2b9f0ddec0d7e7aca8417a29212d2b17c6274531a53c60f5f6e264ff238b9",
+    "text": "8e0ea1cebd90555043ec405d9823326a37178237eee0729e5f2619d31abce505"
+  },
+  "template-creator_pitch": {
+    "html": "81cd742f9369a84e8f28fed970b8a3d6fa8be209d3c8daba7f3fd0770604fbe9",
+    "text": "4c53a894a8b1d66901525cc7a34a56eeec3df0aa2a5535a10b83450fb893ce68"
+  },
+  "template-creator_launch": {
+    "html": "70a741f3ee2a7f1d043b0739639f8b530fa435482eb821d95d56c526d8c6e75a",
+    "text": "690d3342beffefa6f4786cecd4ac413b01f63a724f20376b92d7e1174d9f2523"
+  }
+}

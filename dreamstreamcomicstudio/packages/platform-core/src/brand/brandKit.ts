@@ -307,13 +307,14 @@ const CONTRAST_PAIRS: readonly [keyof BrandColors, keyof BrandColors][] = [
   ['ink', 'surface'],
   ['ink', 'canvas'],
   ['muted', 'surface'],
+  ['muted', 'canvas'],
   ['accentText', 'surface'],
   ['onAccent', 'accent'],
 ];
 
 /**
  * Everything wrong with a kit (empty when it is usable): malformed ids and text, colours that are not `#RRGGBB`,
- * text pairs under 4.5:1 (ink, muted and links on the surface; ink on the canvas; the button label on the accent;
+ * text pairs under 4.5:1 (ink, muted and links on the surface; ink and muted (the footer) on the canvas; the button label on the accent;
  * the DOCX and deck text colours on their paper), font ids the registry does not know, a logo that is not a valid
  * `AssetRef`, radii out of range. Never throws, whatever it is given.
  */

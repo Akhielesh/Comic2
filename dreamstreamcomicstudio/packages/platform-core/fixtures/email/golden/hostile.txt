@@ -1,0 +1,29 @@
+<img src=x onerror=alert(1)>
+
+js link http link data link quote breakout upper case fine (https://ok.example.com/path?a=1&b=2) controls:[31m and bidi exe.pdf
+
+Click <me>
+
+VB
+
+[Image: " onerror="alert(1)]
+
+[Image: pixel]
+
+[Image: a PNG header lie]
+
+[Image: path traversal]
+
+> line one
+> line two
+> — <i>someone</i>
+
+write to them (mailto:someone@evil.example?subject=hi)
+
+1. style="x" on*=y
+
+https://bank.example.com (https://evil.example.net/login)
+
+-- 
+Alex
+<script>sig</script>
