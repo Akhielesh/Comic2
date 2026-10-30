@@ -104,10 +104,15 @@ The semantic tokens Atlas has that Comic Studio lacked were added to `:root` / `
 | `--ds-danger-mark` (wave 5) | `bg-destructive dark:bg-destructive-foreground` (dots, status edges) | `var(--ds-danger)` | `oklch(0.637 0.237 25.331)` |
 | `--ds-skeleton` / `-glint` (wave 5) | `.atlas-skeleton`, `.dark .atlas-skeleton` | ink at 4.5 % (= `--muted` `#f4f4f4` on white, but translucent: `.studio-shimmer` overlays a queued page's wireframe) / canvas at 55 % | ink at 9 % / 7 % |
 | `--ds-segment-pill` (wave 5) | PanelTabs pill `bg-background dark:bg-accent` | `#ffffff` | `#1f1f1f` |
+| `--ds-segment-track` (wave 5) | PanelTabs track `bg-muted/60 dark:bg-muted/50` | `--ds-well-strong` at 60 % | `--ds-well-strong` at 50 % |
+| `--ds-overlay-hover` (wave 5) | menu / select / dropdown items `focus:bg-accent dark:focus:bg-white/[0.08]` | `var(--ds-accent-soft)` (`#efefef`) | `rgba(255,255,255,0.08)` |
+| `--ds-status-error-edge` / `-tint` (wave 5) | status error `border-destructive/35 bg-destructive/[0.06]`, dark `border-destructive-foreground/40 bg-destructive-foreground/[0.08]` | `--ds-danger-mark` at 35 % / 6 % | `--ds-danger-mark` at 40 % / 8 % |
+| `--ds-toast-edge` (wave 5) | toast `border-border/70 dark:border-white/[0.12]` | hairline at 70 % (`rgba(0,0,0,0.07)`) | `rgba(255,255,255,0.12)` |
 
 Under the OS **increase contrast** setting (`@media (prefers-contrast: more)`, wave 5) the skin applies
-Atlas's high-contrast tokens: `--ds-hairline` `rgba(0,0,0,0.32)` / dark `oklch(0.52 0 0)` (soft
-hairline 60 % of it), `--ds-muted` `#404040` / `#d4d4d4`, `--ds-ring` `#000` / `#fff`,
+Atlas's high-contrast tokens: `--ds-hairline` `rgba(0,0,0,0.32)` / dark `oklch(0.52 0 0)` (the soft
+hairline 60 % of it in both themes — the dark block restates it, because the base dark block outranks
+the light high-contrast one), `--ds-muted` `#404040` / `#d4d4d4`, `--ds-ring` `#000` / `#fff`,
 `--ds-control-border` ink 70 % and its hover the full ink. (Atlas's own Settings toggle,
 `.atlas-high-contrast`, has no Comic Studio counterpart.)
 
@@ -143,8 +148,17 @@ tinted status surfaces, both themes); the base tokens are for fills and borders.
 The wave 5 tokens default, outside the skin, to what the page paints today (`--ds-control-border`
 and `--ds-overlay-edge` = the hairline, `--ds-focus` = `--ds-ring`, `--ds-shadow-overlay` = the soft
 shadow, `--ds-danger-mark` = `--ds-danger`, `--ds-skeleton(-glint)` = `.studio-shimmer`'s slate,
-`--ds-segment-pill` / `--ds-shadow-segment` = the board Segmented's pill); `--ds-scrim` and the enter
-/ exit motion tokens had no prior equivalent and take the Atlas values.
+`--ds-segment-pill` / `--ds-shadow-segment` / `--ds-segment-track` = the live segmented controls'
+raised pill, 8 % drop shadow and well, `--ds-overlay-hover` = `--ds-hover` (so `MENU_ITEM` in chat
+paints exactly as before), `--ds-status-error-*` = the light Atlas mix, `--ds-toast-edge` = the
+overlay edge); `--ds-scrim` and the enter / exit motion tokens had no prior equivalent and take the
+Atlas values.
+
+A token written as `var(--ds-other)` is resolved where it is declared and inherits as that computed
+colour, so every such token is restated in the skin blocks (the apex roots are `<div>`s under an
+unskinned `<html>`), and a rule that swaps a token inside a subtree (the inverse surface) must
+restate whatever is derived from it — or, as the inverse surface now does, not swap it.
+`tests/config/tokenContrast.test.ts` models exactly that inheritance.
 
 Reader-room tokens (`--ds-reader-room`, `--ds-reader-paper-back`, `--ds-reader-endpaper`) are
 content, not chrome, and are deliberately not overridden.
@@ -202,19 +216,41 @@ them):
 
 | Constant | Atlas source | What it is |
 | --- | --- | --- |
-| `FOCUS_RING`, `FOCUS_RING_FLUSH`, `FOCUS_ITEM` | `.atlas-focus-ring`; button / badge / checkbox / switch / select / tabs `focus-visible:outline-*-foreground`; menu items' inset ring | 2 px `--ds-focus` outline offset 2 (tabs: 0), 3 px under increase contrast; inset `--ds-ring` ring for list rows |
-| `FIELD`, `FIELD_EMBEDDED`, `FIELD_GROUP` | `ui-generated/input.tsx`, `textarea`, `select` trigger; the document viewer / PDF search pills | the 3:1 control edge, focus drawn as a **ring** (2 px, offset 2) so an embedded field drops ring **and** offset; the group shows focus with ink-70 % edge and a faint ring |
+| `FOCUS_RING`, `FOCUS_RING_FLUSH`, `FOCUS_ITEM` | `.atlas-focus-ring`; button / badge / checkbox / switch / select / tabs `focus-visible:outline-*-foreground`; menu items' inset ring and `dark:focus:bg-white/[0.08]` highlight | 2 px `--ds-focus` outline offset 2 (tabs: 0), 3 px under increase contrast; list rows highlight in `--ds-overlay-hover` with an inset `--ds-ring` ring |
+| `FIELD`, `FIELD_EMBEDDED`, `FIELD_GROUP` | `ui-generated/input.tsx`, `textarea`, `select` trigger; the document viewer / PDF / sheet search pills | the 3:1 control edge, focus drawn as a **ring** (2 px, offset 2) so an embedded field drops ring **and** offset; the group rests on the hairline as Atlas's pills do (hover ink 25 %) and shows focus **as a field does** — the edge in `--ds-focus` plus the 2 px ring (deviation below) |
 | `OVERLAY`, `SCRIM` | dialog / popover / dropdown / select / hover-card / sheet content and overlays | raised step, overlay edge and shadow, opaque; 40 / 60 % scrim without blur |
 | `OVERLINE` | `.atlas-overline` | 11 px semibold, 0.12em, uppercase, muted |
 | `CHIP`, `CHIP_VARIANT` | `MetaChip` outline / filled / dashed | neutral chips |
 | `StatusState`, `STATUS_INK`, `STATUS_SURFACE`, `STATUS_DOT`, `STATUS_CHIP(_TONE)` | `components/connectors/status.tsx` | one status vocabulary: healthy / active / waiting / attention / error |
-| `SEGMENTED_TRACK`, `_ITEM`, `_ACTIVE`, `_PILL` | `PanelTabs` (CSS-positioned gliding pill) | segmented tabs; the pill glides on `--ds-motion-panel` + spring, jumps under reduced motion |
+| `SEGMENTED_TRACK`, `_ITEM`, `_ACTIVE`, `_PILL` | `PanelTabs` (CSS-positioned gliding pill; track `bg-muted/60 dark:bg-muted/50 border-border/70`) | segmented tabs on `--ds-segment-track` with a 70 % hairline; the pill (`--ds-segment-pill` + the `--ds-shadow-segment` ring) glides on `--ds-motion-panel` + spring, jumps under reduced motion. **Live now:** every Comic Studio segmented control paints `SEGMENTED_ACTIVE` on a `--ds-segment-track` well (below) |
 | `SECTION_CARD`, `_HEADER`, `_ICON_TILE`, `_TITLE`, `_DESCRIPTION`, `_BODY` | `SectionCard` with `icon` | settings-style section header |
-| `TOAST`, `TOAST_EDGE`, `TOAST_COUNTDOWN`, `TOAST_ENTER` / `_EXIT`, `TOAST_TITLE` / `_MESSAGE`, `TOAST_SLOT(_OPEN/_CLOSED)` | `GlobalNotificationBar` | monochrome toast, hue only on the edge, bar and icon; the stack glides closed |
-| `INVERSE_SURFACE` | `.atlas-inverse-surface` | the inverted ink panel |
+| `TOAST`, `TOAST_EDGE`, `TOAST_COUNTDOWN`, `TOAST_ENTER` / `_EXIT`, `TOAST_TITLE` / `_MESSAGE`, `TOAST_SLOT(_OPEN/_CLOSED)`, `TOAST_EXIT_MS`, `TOAST_EXIT_FALLBACK_MS` | `GlobalNotificationBar` | monochrome toast — `rounded-2xl`, the raised step (Atlas `bg-card`, dark `bg-surface-elevated`), `--ds-toast-edge`, `shadow-panel`; title clamped to 2 lines, message to 3; in over 300 ms (12 px, zoom .98), out over 200 ms (8 px), removed after 240 ms even without an `animationend`; hue only on the edge, bar and icon; the stack glides closed |
+| `INVERSE_SURFACE` | `.atlas-inverse-surface` | the inverted ink panel; in dark only ink and page swap back (never the accent, as Atlas) |
 
 `TONE_FILL.danger` and `TONE_SURFACE.danger` read `--ds-danger-mark` (identical paint outside the skin
 and in Atlas light; the brighter Atlas red in Atlas dark, where the deep red is under 3:1 as a dot).
+`STATUS_SURFACE.error` reads `--ds-status-error-edge` / `-tint` (Atlas's 35 % / 6 % in light, 40 % / 8 %
+of the brighter mark in dark).
+
+**Live segmented controls.** The selected segment of every segmented control in Comic Studio is
+`SEGMENTED_ACTIVE` on a `bg-[var(--ds-segment-track)]` well: `board/ui.tsx` `Segmented` (the studio
+Easy / Pro switch, the board density switch, the reader's Scroll / Page / Spread switch through
+`ComicReaderView`, …), `conversation/ui.tsx` `Segmented`, the `ProLetteringPanel` tabs, the
+`LetteringToolbar` balloon group, the `CostInsights` tabs and the `ShareSheet` "Who can read it"
+group. Outside the skin the tokens are exactly the old paint (raised pill, 8 % drop shadow, the
+well; `CostInsights` used the soft shadow, and it only renders inside the always-skinned Comic Studio
+root). In the dark skin the pill is the `#1f1f1f` accent step ringed in white 8 % on the half-strength
+track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a1a` well.
+`tokenContrast.test.ts` measures pill against track in all six contexts.
+
+**Deliberate deviations from the Atlas source** (kept, with the reason):
+- `FIELD_GROUP` focus: Atlas's pills show focus as ink 70 % plus a 20 % ring. Under "increase
+  contrast" (and against a 3:1 resting edge) that is under a 3:1 change, so the group shows focus as
+  a field does (the focus-colour edge and a 2 px ring); its resting edge is Atlas's hairline.
+- `--ds-danger-text` in dark mixes 55 % (Atlas 60 %): the deep dark red at 60 % is 4.36:1 on a hover row.
+- Chip radius 10 px (see Skipped).
+- `--ds-overlay-hover` in light is Atlas's item highlight (`bg-accent`, `#efefef`) rather than
+  `--menu-hover` (`#f2f2f2`): menus under the light skin highlight one step deeper than before.
 
 ## The transitional accent shim (Phase D0 only)
 
@@ -245,11 +281,18 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 - `tests/config/atlasSkinShim.test.ts` — the shim covers every literal utility; the literal count.
 - `services/productHost.skin.test.ts` — the attribute is set on the comics host and alias, never on
   the apex; the boot does only what the brief allows (attribute + two preloads; no registration).
+- `services/dsSkin.theme.test.ts` also overlaps two cross-fades: only the latest one clears
+  `ds-theme-transition`, in either finishing order.
 - `services/dsSkin.theme.test.ts` — the theme switch: outside the skin exactly the old toggle; under
   it one view-transition cross-fade for a change the person asked for, instant (transitions held one
   frame) for boot syncs, system corrections, reduced motion, hidden pages and missing / failing APIs.
 - `tests/config/tokenContrast.test.ts` also measures the two "increase contrast" contexts, field edges
-  and the focus colour (≥ 3:1), the danger mark and every status-vocabulary text on its own surface.
+  and the focus colour (≥ 3:1), the danger mark and every status-vocabulary text on its own surface,
+  and the wave 5 outcomes in all six contexts: the selected segment against its track (fill or ring
+  ≥ 1.08:1; the two default-dark glass rows are pre-existing outside the skin and listed), a
+  highlighted row on an overlay (≥ 1.1:1), the panel text / primary button / focus inside the inverse
+  surface (with the custom-property inheritance modelled), `FIELD_GROUP`'s focused vs resting edge and
+  its ring (≥ 3:1), and both hairlines strengthening under "increase contrast".
 - `components/comicstudio/atlasSkinRoots.test.tsx` — the three roots carry the attribute on the apex.
 - The chat tests and the 4-viewport layout smoke (`node scripts/layout-smoke.mjs`) stay green: the
   skin changes nothing outside its scope. The smoke runs the scenes **without** `?skin=atlas`, i.e.
@@ -269,7 +312,7 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md`.
 - Files that define the language, and what each token group was derived from:
   - `app/globals.css` — `:root` / `.dark` colours (wave 5: overlays `#1a1a1a`, `--control-border`,
-    dark `--shadow-*`), radius, shadows, motion system (`--motion-ease-enter`, `-enter-quick`,
+    the dark `--shadow-lg` behind `--ds-shadow-overlay`), radius, shadows, motion system (`--motion-ease-enter`, `-enter-quick`,
     `-exit`), scrollbars, the theme switch (view transition + `.atlas-no-transitions`), `@layer base`
     (tap highlight, text-wrap, selection, focus-visible, overlay curves), the effects layer
     (`.atlas-press`, `.atlas-skeleton`, `.atlas-toast-countdown`, `.atlas-inverse-surface`,
@@ -279,7 +322,7 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   - `ui-generated/{button,badge,checkbox,input,textarea,select,switch,tabs,scroll-area,dialog,
     alert-dialog,sheet,drawer,popover,dropdown-menu,hover-card,progress,card,tone,tooltip}.tsx` —
     primitive recipes (wave 5: the solid ink focus outline, the field ring and control edge, overlay
-    edge / shadow / step, scrims without blur, menu highlights in dark, forced-colours progress).
+    edge / shadow / step, scrims without blur, menu / select item highlights in dark).
   - `components/connectors/status.tsx`, `components/WorkspacePrimitives.tsx`,
     `components/workspace-pages/primitives.tsx`, `components/GlobalNotificationBar.tsx`,
     `providers/ThemeProvider.tsx` — the status vocabulary, section card, segmented tabs, chips, toasts
@@ -309,6 +352,19 @@ outside `[data-ds-skin="atlas"]` changes):
 - **Primitives:** field ring + embedded-field rule, chips, one status vocabulary, segmented tabs with a
   gliding pill, section cards, toasts (countdown, edge, slot), overline, inverse surface, skeletons.
 
+Review fixes (same port):
+- The dark skin's `#1a1a1a` raised step had erased the selected pill of every live segmented control
+  (raised pill on the `#1a1a1a` well): they now paint `SEGMENTED_ACTIVE` on `--ds-segment-track`
+  (Atlas's PanelTabs pill and track); paint outside the skin unchanged.
+- Menu / list highlights on the dark overlays: `--ds-overlay-hover` (white 8 %, Atlas's
+  `dark:focus:bg-white/[0.08]`) in `MENU_ITEM` and `FOCUS_ITEM`.
+- `.ds-inverse-surface` in dark swaps only ink and page, as Atlas: the accent swap had left the
+  root-computed `--ds-accent-fill` behind, a paper label on a paper fill.
+- `FIELD_GROUP` shows focus as a field does (see the deviations above).
+- Under dark "increase contrast" the soft hairline now strengthens too.
+- Recipes aligned with the source: toast (radius, edge, line clamps, 300 / 200 ms), the dark error
+  surface (40 % / 8 %), the segmented track (60 % / 50 % muted, 70 % hairline).
+
 Skipped, and why:
 - Atlas product surfaces — connectors / profile / settings / about pages, the search home, emails and
   the reading surfaces (document, PDF, sheet, media viewers), the command palette, the workspace
@@ -328,8 +384,27 @@ Skipped, and why:
 - Chip radius: Atlas's MetaChip / StatusChip are `rounded-full` (unchanged in wave 5); the skin keeps
   D0's `--ds-radius-chip` 10 px (badge `rounded-md`) and the recipes read `RADIUS_PILL`. Flagged for
   the lead.
+- Dark `--shadow-sm` / `-md` / `-xl` (Atlas deepened them for black pages): Comic Studio has no
+  matching tokens — its chrome reads `--ds-shadow-soft` / `-panel` / `-lift` (already Atlas's dark
+  values) and `--ds-shadow-overlay` (Atlas's dark `--shadow-lg`). The literal Tailwind `shadow-sm` /
+  `shadow-lg` / `shadow-2xl` overlays in Comic Studio files stay 10 % black in dark until D2 moves
+  them onto `OVERLAY` / the tokens; a blanket skin rule over `.shadow-lg` would also override their
+  `shadow-black/NN` colour modifiers. Listed under Next.
 
 Next (D2): move the Comic Studio controls onto `FOCUS_RING` / `FIELD*` / `OVERLAY` / `SCRIM` /
-`SEGMENTED_*` / `STATUS_*` / `TOAST*`, the 37 `focus-visible:ring-[var(--ds-ring)]` and the shimmed
-literal rings onto the ink outline, entrances (`.animate-fade-in`) onto the 280 ms rise, and the sticky
-header onto the scroll-aware glass.
+`STATUS_*` / `TOAST*` (the segmented controls are already on `SEGMENTED_ACTIVE`), the 37
+`focus-visible:ring-[var(--ds-ring)]` and the shimmed literal rings onto the ink outline, entrances
+(`.animate-fade-in`) onto the 280 ms rise, and the sticky header onto the scroll-aware glass. Also,
+each needing a component change Comic Studio has no shared primitive for yet:
+- the literal `shadow-lg` / `shadow-2xl` overlays onto `OVERLAY` (`--ds-shadow-overlay`, the dark
+  `--shadow-lg`), so they stop vanishing on black (see Skipped);
+- the selected tiles of the phone tab bar and the editor toolbar (`--ds-hover` / `--ds-accent-soft`
+  `#1f1f1f` on the `#1a1a1a` strong surface, 1.06:1 in dark) onto `--ds-overlay-hover` or
+  `SEGMENTED_ACTIVE`;
+- forced colours: Atlas's progress bar outlines its track in `CanvasText` and fills in `Highlight`,
+  and its switch thumb carries a transparent border so it survives high-contrast mode — Comic Studio's
+  progress bars and switches are ad-hoc `div`s (no `Progress` / `Switch` primitive), so these land
+  when D2 gives them one;
+- Atlas's `ScrollArea` viewport draws focus as a 2 px inset ink outline (an outset one is clipped by the
+  scroller): Comic Studio's focusable scroll regions (`tabIndex={0}` panels) still get the base
+  outset outline.

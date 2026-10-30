@@ -83,14 +83,17 @@ skin is one block of `--ds-*` overrides at the end of `index.css`, so nothing ou
 the attribute changes. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
 `--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
 readable status text, always with a word or icon; `--ds-danger-mark` for dots and edges),
-`--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge`, `--ds-scrim`,
+`--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge|hover`, `--ds-scrim`,
+`--ds-segment-pill|track`,
 `--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm`,
 `--ds-shadow-soft|panel|lift|overlay`, `--ds-motion-fast|medium|slow|panel|modal|theme|enter|exit`,
 `--ds-ease(-enter)`, `--ds-surface-blur` — via the `studioDesign.ts` constants (`RADIUS_*`,
 `SHADOW_SOFT`, `TRANSITION`, `TONE_*`, `PRESS`, and the Atlas wave 5 recipes `FOCUS_RING`,
 `FIELD*`, `OVERLAY`, `SCRIM`, `CHIP*`, `STATUS_*`, `SEGMENTED_*`, `SECTION_*`, `TOAST*`),
-never by spelling out `rounded-2xl` / `duration-200` / a hue. Theme changes go through
-`services/theme.ts` (under the skin: one view-transition cross-fade).
+never by spelling out `rounded-2xl` / `duration-200` / a hue (a selected segment is
+`SEGMENTED_ACTIVE` on `bg-[var(--ds-segment-track)]`, never a raised fill). A token derived with
+`var()` inherits as a computed colour: a skin block or a subtree that changes its source must restate
+it. Theme changes go through `services/theme.ts` (under the skin: one view-transition cross-fade).
 
 ### Two versions per widget (density)
 
