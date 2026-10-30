@@ -98,15 +98,19 @@ const frameRef = (id: string): SceneRef => ({ kind: 'frame', id });
 const nameOf = (doc: ComicDoc, castId?: string) => (castId && doc.cast.find((c) => c.id === castId)?.name) || 'Someone';
 const PART_WORDS: Record<keyof PanelParts, string> = { c: "who's in it", a: 'what happens', p: 'the place', s: 'the shot', m: 'the mood', d: 'the direction' };
 
-/** Meters by doc object: the engine's measurements are reused while the doc is unchanged. */
-const meters = new WeakMap<ComicDoc, NeedMeter>();
+/**
+ * One need meter per lettering setup. Docs are immutable and an edit keeps every subtree it does not touch, so the
+ * meter (and its per-line measurements) carries over from edit to edit while the format, the lettering style and the
+ * cast are the same objects; changing any of them starts a fresh meter.
+ */
+const meters = new WeakMap<object, { letterStyle: unknown; cast: unknown; meter: NeedMeter }>();
 const meterFor = (doc: ComicDoc): NeedMeter => {
-  let m = meters.get(doc);
-  if (!m) {
-    m = needMeter(doc);
-    meters.set(doc, m);
-  }
-  return m;
+  const key = doc.format as object;
+  const hit = key ? meters.get(key) : undefined;
+  if (hit && hit.letterStyle === doc.letterStyle && hit.cast === doc.cast) return hit.meter;
+  const meter = needMeter(doc);
+  if (key) meters.set(key, { letterStyle: doc.letterStyle, cast: doc.cast, meter });
+  return meter;
 };
 
 // ── Text fits ────────────────────────────────────────────────────────────────
