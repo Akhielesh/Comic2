@@ -42,8 +42,17 @@ import {
   toToolSpec,
   type ToolHandler,
 } from './index.js';
-import { toToolSpec as chatRegistryToToolSpec, KNOWN_TOOL_NAMES } from '../../../../server/src/ai/tools/registry.js';
-import { TOOL_COST_PREFIX } from '../../../../server/src/comic/extensions.js';
+
+// The chat registry and the director's cost prefixes, loaded at run time only: a static import would pull the whole
+// backend graph into the app's root typecheck (and past its heap). Their shapes are asserted below instead.
+const server = (rel: string): Promise<Record<string, unknown>> => import(/* @vite-ignore */ new URL(`../../../../server/src/${rel}`, import.meta.url).href);
+const chatRegistry = (await server('ai/tools/registry.ts')) as {
+  toToolSpec: (tool: { name: string; description: string; parameters: Record<string, unknown>; execute: () => Promise<unknown> }) => unknown;
+  KNOWN_TOOL_NAMES: readonly string[];
+};
+const { TOOL_COST_PREFIX } = (await server('comic/extensions.ts')) as { TOOL_COST_PREFIX: Record<string, string> };
+const chatRegistryToToolSpec = chatRegistry.toToolSpec;
+const KNOWN_TOOL_NAMES = chatRegistry.KNOWN_TOOL_NAMES;
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../../fixtures/contract/${name}`, import.meta.url), 'utf8'));
 
@@ -182,7 +191,7 @@ describe('projections', () => {
       expect(cap!.wave, tool.name).toBeLessThanOrEqual(tool.wave);
     }
     // KNOWN_TOOL_NAMES gains email_draft and deck_create in W1.9; until then the gap is reported, not hidden.
-    const missing = PLATFORM_TOOLS.filter((t) => t.wave === 1 && !(KNOWN_TOOL_NAMES as readonly string[]).includes(t.name)).map((t) => t.name);
+    const missing = PLATFORM_TOOLS.filter((t) => t.wave === 1 && !KNOWN_TOOL_NAMES.includes(t.name)).map((t) => t.name);
     expect(missing.every((n) => n === 'email_draft' || n === 'deck_create')).toBe(true);
   });
 });
