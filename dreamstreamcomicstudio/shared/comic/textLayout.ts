@@ -408,6 +408,12 @@ export interface FitInput {
   /** Grow toward the panel's LEFT edge, keeping the right edge put (rtl-anchored captions, i18n §5.3).
    *  The caller re-anchors x = (balloon.x + balloon.w) − result.w. */
   growLeft?: boolean;
+  /**
+   * Pinned balloons only (FX6, render time): draw the balloon as wide as its longest word plus padding, so a balloon
+   * the owner stored too narrow never breaks a word ("CALIBRAT / ING") — when that fits within `maxW` (page-width
+   * fraction: the room to its panel's edge). The stored width is untouched; the result's `w` is the width drawn.
+   */
+  minWordFit?: { maxW: number };
 }
 export interface FitResult {
   w: number;
@@ -424,7 +430,8 @@ export interface FitResult {
  * font and page size): grow the width (unpinned, within the panel, ≤ 0.42; leftwards for rtl-anchored
  * captions) in 0.02 steps → shrink the
  * font in 4 % steps down to max(9px, 0.82 × base) → otherwise `overflow: true`. Never clips: an
- * overflowing result keeps every line (the balloon simply grows past the panel).
+ * overflowing result keeps every line (the balloon simply grows past the panel). A pinned balloon asked for
+ * `minWordFit` is first drawn as wide as its longest word (FX6), within the room it is given.
  */
 export const fitBalloonText = (input: FitInput): FitResult => {
   const spec = scriptOf(input.lang);
@@ -449,6 +456,20 @@ export const fitBalloonText = (input: FitInput): FitResult => {
 
   let w = clamp(b.w, 0.02, 1);
   let fontPx = round2(base);
+  let widened = false;
+  if (b.pinned && input.minWordFit && units.length) {
+    // The narrowest width that letters every word whole at the base size (rounded up to the stored precision).
+    let longest = 0;
+    for (const u of units) longest = Math.max(longest, input.measure(u.text, fontPx));
+    const need = Math.ceil(((longest + 2 * padXpx) / pageW + 1e-6) * 10000) / 10000;
+    // Only when the room allows every word whole: a wider balloon that still breaks a word fixes nothing (it stays
+    // as stored and is flagged, and the editor offers Widen).
+    const maxW = clamp(input.minWordFit.maxW, w, 1);
+    if (need > w + 1e-9 && need <= maxW + 1e-9) {
+      w = need;
+      widened = true;
+    }
+  }
   let lines = wrapAt(w, fontPx);
   const done = (overflow: boolean, grew: boolean, shrank: boolean): FitResult => ({
     w: round4(w),
@@ -459,9 +480,9 @@ export const fitBalloonText = (input: FitInput): FitResult => {
     grew,
     shrank
   });
-  if (heightOf(lines, fontPx) <= maxH) return done(false, false, false);
+  if (heightOf(lines, fontPx) <= maxH) return done(false, widened, false);
 
-  let grew = false;
+  let grew = widened;
   if (!b.pinned) {
     const right = Math.min(1, Math.max(0, b.x) + w);
     const limit = input.growLeft

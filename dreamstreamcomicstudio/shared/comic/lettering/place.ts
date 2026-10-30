@@ -34,8 +34,17 @@
 //    nudges software-placed and unpinned stored balloons out of each other's way and off pinned ones,
 //    keeping the same reading order (its tier, then a later tier, then edge to edge, and only then early).
 //    Stored values stay untouched; pinned and locked balloons never move.
+//  - Never over text (FX2): a balloon may, on an over-full page, touch another balloon's outline or tail, but
+//    its outline never covers another balloon's TEXT and its text never sits under another outline. When no
+//    clean spot exists the placement takes a text-free spot anywhere on the page (a gutter, a margin, read as
+//    late as it can) before it would ever take one over text; the settle pass does the same at render time.
+//  - Coverage cap (FX2/F8): a panel's lettering covers at most `coverCap` of its picture (fill × outline ∩
+//    panel ÷ panel area — density.ts units). A panel whose lines would cover more letters them partly across
+//    its border (text still read inside the panel) before it covers more of its picture; under the cap the
+//    placement is exactly what it was.
 
 import type { Balloon, Box, KeepOut, Line, LineKind, Page, SpeakerMark } from '../doc.js';
+import { PANEL_LIMITS } from '../panelRules.js';
 import { estimateTextHeight, estimateWidthForText, normalizeLetteringText } from '../textLayout.js';
 import type { BubbleShape } from './style.js';
 
@@ -45,6 +54,8 @@ const GAP = 0.01;
 /** Clearance a placement keeps around a balloon's footprint: the settle gap plus rounding headroom. */
 const CLEAR_GAP = GAP * 1.05;
 const PAGE_FALLBACK_BOX: Box = { x: 0.02, y: 0.02, w: 0.96, h: 0.96 };
+/** The render-time page margin for outlines (layout.ts PAGE_FIT_MARGIN), page widths. */
+const PAGE_EDGE = 0.008;
 const SPOKEN: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -96,6 +107,19 @@ export interface PlaceArgs {
   wholeWords?: readonly string[];
   /** Lettering language (estimates); default the line's own `lang`, else 'en'. */
   lang?: string;
+  /**
+   * Most of a panel's picture its lettering may cover (fill × outline ∩ panel ÷ panel area). placeBalloonsDetailed
+   * applies it only when given; placeBalloonsWholeWords (what callers SAVE) defaults to PANEL_LIMITS.coverCap (0.30;
+   * layout.ts placementCoverOptions gives 0.25 for children's books). `false`: no cap.
+   */
+  coverCap?: number | false;
+  /** Share of its outline box a line's balloon really fills (π/4 for elliptical shapes, 1 for boxy ones); default by kind. */
+  fillFor?: (line: Line) => number;
+  /**
+   * Busy parts of the art with no face data behind them (the editor's free busy-area grid, FX3): page fractions.
+   * Avoided like hands and action, below faces; a hint, never law.
+   */
+  busy?: readonly Box[];
 }
 
 export interface PlaceResult {
@@ -110,6 +134,11 @@ export interface PlaceResult {
    * one) because no wider spot was free: the drawn lettering splits a word ("EXPLANATI / ON").
    */
   split: string[];
+  /**
+   * Placed lines lettered partly across their panel's border (text still read inside it) because the panel is over
+   * its coverage cap; they are in `crowded` too — their panel has more text than room.
+   */
+  straddled?: string[];
 }
 
 // ── Geometry helpers ─────────────────────────────────────────────────────────
@@ -282,6 +311,8 @@ interface Candidate {
   x: number;
   y: number;
   bias: number; // kind-specific preference (negative = preferred)
+  /** A spot across the panel's border (coverage cap): taken only while the text's centre stays inside the panel. */
+  inside?: boolean;
 }
 
 /** Default sizer when the caller's `plansFor` returns nothing usable: estimates + classic bleed. */
@@ -344,6 +375,35 @@ const storedTip = (b: Balloon, size: SizedLine): { x: number; y: number } | null
   return size.tail ? defaultTailTip(b, size.h) : null;
 };
 
+/** Share of its outline box a balloon of each kind fills with the classic shapes (ellipse-like π/4, boxes 1). */
+const KIND_FILL: Record<LineKind, number> = { speech: Math.PI / 4, whisper: Math.PI / 4, thought: Math.PI / 4, shout: Math.PI / 4, caption: 1, sfx: 1 };
+
+/**
+ * Cost of covering more of a panel's picture than the cap, per unit of coverage over it: a panel 0.1 over its cap
+ * outweighs letting a balloon reach half out of its panel (80 per unit outside) and the speaker aim, never a face,
+ * an overlap or the reading order.
+ */
+const COVER_COST = 500;
+/** Cost per unit of another balloon's text under an outline (or of this text under another outline): above the
+ *  safe area's 1000, so a balloon goes to the page margin before it would ever cover text. */
+const TEXT_COST = 2000;
+/** The placement aims this far under the cap (its estimate of the lines still to come is approximate). */
+const COVER_AIM = 0.95;
+/** Weight of the client's busy-area cells (hands and action weigh 150, faces 400). */
+const GRID_BUSY_COST = 100;
+
+/**
+ * Coverage of a panel's picture by lettering outlines (density.ts units): Σ fill × area(outline ∩ panel) ÷ area(panel).
+ * Outlines are tail-less boxes; `fill` is the share of its box each one fills (π/4 for ellipse-like shapes).
+ */
+export function coverageOf(panel: Box, outlines: readonly { outline: Box; fill: number }[]): number {
+  const a = area(panel);
+  if (!(a > 0)) return 0;
+  let s = 0;
+  for (const o of outlines) s += (Number.isFinite(o.fill) && o.fill > 0 ? o.fill : 1) * area(intersect(o.outline, panel));
+  return s / a;
+}
+
 /** Distance (page widths) from a box's centre to the nearest point of `region` (0 inside). */
 const distToRegion = (b: Box, region: Box, aspect: number): number => {
   const cx = b.x + b.w / 2;
@@ -375,10 +435,25 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
   }
   const busy: Box[] = keepOut.filter((k) => k.kind === 'hands' || k.kind === 'action' || k.kind === 'text').map((k) => k.box);
   const other: Box[] = keepOut.filter((k) => k.kind === 'other').map((k) => k.box);
+  const gridBusy: Box[] = (args.busy || []).filter((b) => validBox(b));
 
   const panels = page.panels.map((panel, index) => ({ panel, index })).sort((a, b) => a.panel.n - b.panel.n || a.index - b.index);
   const boxFor = (index: number): Box => (validBox(args.boxes?.[index]) ? args.boxes[index] : PAGE_FALLBACK_BOX);
   const langOf = (line: Line) => line.lang || args.lang || 'en';
+  const fillOf = (line: Line): number => {
+    let f: number | undefined;
+    try {
+      f = args.fillFor?.(line);
+    } catch {
+      f = undefined;
+    }
+    return typeof f === 'number' && Number.isFinite(f) && f > 0 && f <= 1 ? f : KIND_FILL[line.kind] ?? 1;
+  };
+  // Coverage cap (only when given): measured on the panels' own (valid) boxes.
+  const cap = typeof args.coverCap === 'number' && Number.isFinite(args.coverCap) && args.coverCap > 0 ? args.coverCap : undefined;
+  const capBoxes: (Box | undefined)[] = page.panels.map((_p, i) => (validBox(args.boxes?.[i]) ? args.boxes[i] : undefined));
+  /** What the placement aims for: a little under the cap, since it estimates the lines still to come at their first width. */
+  const aim = cap !== undefined ? cap * COVER_AIM : 1;
   const isKept = (line: Line): boolean => {
     const b = existing.get(line.id);
     if (!b) return false;
@@ -387,25 +462,51 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     return !!b.pinned || keepAll;
   };
 
-  // Obstacles: every kept balloon's FOOTPRINT (outline + tail tip), page-wide, before anything is placed.
-  const obstacles: { lineId: string; box: Box; panelIndex: number; x: number; y: number }[] = [];
+  // Obstacles: every kept balloon's FOOTPRINT (outline + tail tip), page-wide, before anything is placed; with
+  // its outline and text box (never covered) and how much of its box it fills (coverage).
+  const obstacles: { lineId: string; box: Box; panelIndex: number; x: number; y: number; outline: Box; text: Box; fill: number }[] = [];
   for (const { panel, index } of panels) {
     for (const line of panel.lines) {
       if (!normalizeLetteringText(line.text) || !isKept(line)) continue;
       const b = existing.get(line.id)!;
       const s = sizeOf(args, line, b.w, langOf(line));
       const outline = { x: b.x + s.bounds.x, y: b.y + s.bounds.y, w: s.bounds.w, h: s.bounds.h };
-      obstacles.push({ lineId: line.id, panelIndex: index, x: b.x, y: b.y, box: balloonFootprint(outline, storedTip(b, s)) });
+      obstacles.push({
+        lineId: line.id,
+        panelIndex: index,
+        x: b.x,
+        y: b.y,
+        box: balloonFootprint(outline, storedTip(b, s)),
+        outline,
+        text: { x: b.x, y: b.y, w: b.w, h: s.h },
+        fill: fillOf(line)
+      });
     }
   }
+  /** Coverage of panel `q` by everything lettered so far. */
+  const coverNow = (q: number): number => {
+    const b = capBoxes[q];
+    return b ? coverageOf(b, obstacles) : 0;
+  };
+  /** An outline / text box pair covers another balloon's text, or sits with its text under another outline. */
+  const textHitOf = (outline: Box, text: Box): number => {
+    let hit = 0;
+    for (const o of obstacles) {
+      if (!area(intersect(outline, o.outline)) && !area(intersect(text, o.outline))) continue;
+      hit += covered(o.text, outline) + covered(text, o.outline);
+    }
+    return hit;
+  };
 
   const result: Balloon[] = [];
   const placedIds: string[] = [];
   const crowded: string[] = [];
   const split: string[] = [];
+  const straddled: string[] = [];
   const wholeOnly = new Set(args.wholeWords ?? []);
 
-  type Pick = { cost: number; x: number; y: number; w: number; h: number; outline: Box; clean: boolean; roomy: boolean; spill: boolean; tip: { x: number; y: number } | null };
+  /** `textClear`: its outline covers no other balloon's text and its text sits under no other outline. */
+  type Pick = { cost: number; x: number; y: number; w: number; h: number; outline: Box; clean: boolean; roomy: boolean; spill: boolean; tip: { x: number; y: number } | null; textClear: boolean };
 
   panels.forEach(({ panel, index }, readPos) => {
     const box = boxFor(index);
@@ -487,6 +588,45 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         const allowed = (w: number) => !wholeOnly.has(line.id) || w >= noSplit;
         const widths = [w0, narrow(0.8), narrow(0.65), rawW(0.8), rawW(0.65)].filter((w, i, a) => a.indexOf(w) === i && allowed(w));
 
+        // Coverage cap: the panel's coverage once every line still to letter in it is in (inside it, at its first
+        // width). Only a panel that would go over the cap weighs coverage or tries spots across its border, so a
+        // panel under the cap is placed exactly as before.
+        const fill = fillOf(line);
+        const capBox = cap !== undefined ? capBoxes[index] : undefined;
+        const covered0: number[] = [];
+        let rest = 0;
+        let capOn = false;
+        if (capBox && cap !== undefined) {
+          for (let q = 0; q < capBoxes.length; q += 1) covered0.push(coverNow(q));
+          const capArea = area(capBox);
+          for (const later of lines.slice(k + 1)) {
+            if (isKept(later)) continue;
+            const ll = langOf(later);
+            const lw = Math.min(estimateWidthForText(later.text, ll), Math.max(0.08, box.w - 2 * PAD));
+            const s = sizeOf(args, later, lw, ll);
+            rest += (fillOf(later) * s.bounds.w * s.bounds.h) / capArea;
+          }
+          const own = sizeOf(args, line, w0, lang).bounds;
+          capOn = covered0[index] + rest + (fill * own.w * own.h) / capArea > aim + 1e-9;
+        }
+        /** What this outline adds over the cap, summed over every panel it covers (the later lines of its own panel counted in). */
+        const coverCost = (outline: Box): number => {
+          if (!capOn || cap === undefined) return 0;
+          let c = 0;
+          for (let q = 0; q < capBoxes.length; q += 1) {
+            const b = capBoxes[q];
+            if (!b) continue;
+            const add = (fill * area(intersect(outline, b))) / area(b);
+            if (!(add > 0)) continue;
+            // Its own panel aims a little under the cap (the lines still to come are estimates); a neighbour's
+            // lettering is all known, so it may go up to the cap itself.
+            const base = covered0[q] + (q === index ? rest : 0);
+            const limit = q === index ? aim : cap;
+            c += Math.max(0, base + add - limit) - Math.max(0, base - limit);
+          }
+          return COVER_COST * c;
+        };
+
         /**
          * Score one text-box position (x, y) at a width: the drawn footprint (outline + tail) against everything
          * on the page. `bendable`: the panel's in-order fallback, where a tail whose aim alone is in the way bends.
@@ -540,7 +680,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           if (headPt) aim = Math.hypot(cx - headPt.x, (y + size.h - headPt.y) / aspect);
           else if (spoken) aim = Math.abs(cx - (box.x + stageX * box.w));
           const sug = suggestion ? Math.hypot(x - suggestion.x, (y - suggestion.y) / aspect) : 0;
-          const cost =
+          let cost =
             1000 * outside(outline, safe) +
             400 * faceHit +
             150 * busyHit +
@@ -556,12 +696,24 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
             (compact
               ? 30 * clampP((y - region.y) / Math.max(0.01, region.h), 0, 1) + 8 * clampP((rtl ? region.x + region.w - (x + w) : x - region.x) / Math.max(0.01, region.w), 0, 1)
               : 12 * aim + 6 * clampP((y - box.y) / Math.max(0.01, box.h), 0, 1) + 4 * sug + bias);
+          // Never over text: only a spot that already overlaps a balloon can cover its text (the footprints contain
+          // the outlines and the text boxes), so a clean or roomy spot costs exactly what it did.
+          const textHit = overlap >= 1e-9 ? textHitOf(outline, text) : 0;
+          if (textHit > 0) cost += TEXT_COST * textHit;
+          // Over the panel's coverage cap (only in a panel that would go over it).
+          if (capOn) cost += coverCost(outline);
+          // The client's busy-area cells (no face data): sky, walls and gutters first.
+          if (gridBusy.length) {
+            let gridHit = 0;
+            for (const a of gridBusy) gridHit += covered(outline, a);
+            if (gridHit > 0) cost += GRID_BUSY_COST * gridHit;
+          }
           // Clean: clear of every balloon and face, inside the safe area, and read in turn inside the panel (after
           // its previous line, before its later fixed ones). A spilled spot must also be read after everything
           // before this panel and stay near it.
           const roomy = overlap < 1e-9 && faceHit < 0.005 && outside(outline, safe) < 0.001;
           const clean = roomy && !order && (!spill || (!readsEarly(cx, y + size.h / 2) && dist <= spillReach));
-          return { cost, x, y, w, h: size.h, outline, clean, roomy, spill, tip };
+          return { cost, x, y, w, h: size.h, outline, clean, roomy, spill, tip, textClear: textHit < 1e-9 };
         };
 
         let best: Pick | undefined;
@@ -610,11 +762,26 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
             }
             if (suggestion && validBalloon(suggestion)) cands.push({ x: suggestion.x, y: suggestion.y, bias: 0 });
             for (const y of ys) for (const x of xs) cands.push({ x, y, bias: 0 });
+            // Over the coverage cap: spots across the panel's border too (into a gutter, a margin or a quiet
+            // neighbour), the text's centre kept inside the panel so it is still read in its turn.
+            if (capOn) {
+              for (let j = 0; j < 7; j += 1)
+                for (let i = 0; i < 7; i += 1) {
+                  const cx = box.x + box.w * (0.02 + (0.96 * i) / 6);
+                  const cy = box.y + box.h * (0.02 + (0.96 * j) / 6);
+                  cands.push({ x: cx - w / 2, y: cy - size.h / 2, bias: 0, inside: true });
+                }
+            }
             const place = (list: readonly Candidate[]) => {
               for (const c of list) {
                 // Keep every candidate's outline inside the page safe area when it can fit there at all.
                 const x = b.w <= safe.w ? clampP(c.x, safe.x - b.x, safe.x + safe.w - (b.x + b.w)) : c.x;
                 const y = b.h <= safe.h ? clampP(c.y, safe.y - b.y, safe.y + safe.h - (b.y + b.h)) : c.y;
+                if (c.inside) {
+                  const cx = x + w / 2;
+                  const cy = y + size.h / 2;
+                  if (cx < box.x || cx > box.x + box.w || cy < box.y || cy > box.y + box.h) continue;
+                }
                 consider(score(x, y, w, size, c.bias, false, bendable));
               }
             };
@@ -671,9 +838,15 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         let spilled = false;
         /** Last resort of an over-full page: a free spot the reader meets early, as few panels back as possible. */
         let bestFree: Pick | undefined;
-        /** Over-full search: free cells anywhere, ranked by how far back the reader meets them. */
-        const spillSearch = (mode: 'tier' | 'later' | 'free'): void => {
-          const strict = mode !== 'free';
+        /** Last resort of a page with no free room at all: a spot that touches outlines but never text. */
+        let bestText: Pick | undefined;
+        /**
+         * Over-full search: free cells anywhere, ranked by how far back the reader meets them. `text`: cells whose
+         * outline may touch other outlines but covers no balloon's text (and whose text no outline covers), in
+         * `zone` (the safe area, else the page inside its render margin).
+         */
+        const spillSearch = (mode: 'tier' | 'later' | 'free' | 'text', zone: Box = safe): void => {
+          const strict = mode === 'tier' || mode === 'later';
           // Slimmer than the panel search would go: a tall narrow balloon fits a gutter or a side band.
           // Whole words first (narrowest first), then the widths that split one.
           const whole = (w: number) => w >= noSplit;
@@ -681,11 +854,11 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
           for (const w of spillWidths) {
             const size = sizeOf(args, line, w, lang);
             const b = size.bounds;
-            if (b.w > safe.w || b.h > safe.h) continue;
-            const xLo = safe.x - b.x;
-            const xHi = safe.x + safe.w - (b.x + b.w);
-            const yLo = safe.y - b.y;
-            const yHi = safe.y + safe.h - (b.y + b.h);
+            if (b.w > zone.w || b.h > zone.h) continue;
+            const xLo = zone.x - b.x;
+            const xHi = zone.x + zone.w - (b.x + b.w);
+            const yLo = zone.y - b.y;
+            const yHi = zone.y + zone.h - (b.y + b.h);
             const nx = Math.max(2, Math.min(24, Math.round((xHi - xLo) / Math.max(0.01, b.w / 3)) + 1));
             const ny = Math.max(2, Math.min(40, Math.round((yHi - yLo) / Math.max(0.01, b.h / 3)) + 1));
             // Only a free spill spot is ever taken (the panel search already holds the least-bad one), so a
@@ -697,8 +870,12 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
               if (mode === 'tier' && y + size.h / 2 > box.y + box.h) return true;
               const outline: Box = { x: x + b.x, y: y + b.y, w: b.w, h: b.h };
               if (strict && distToRegion(outline, box, aspect) > spillReach) return true;
-              const grown = inflate(outline, CLEAR_GAP, CLEAR_GAP * aspect);
-              for (const o of obstacles) if (area(intersect(grown, o.box)) > 0) return true;
+              if (mode === 'text') {
+                if (textHitOf(outline, { x, y, w, h: size.h }) > 1e-9) return true;
+              } else {
+                const grown = inflate(outline, CLEAR_GAP, CLEAR_GAP * aspect);
+                for (const o of obstacles) if (area(intersect(grown, o.box)) > 0) return true;
+              }
               let faceHit = 0;
               for (const f of faces) faceHit += covered(outline, f);
               return faceHit >= 0.005;
@@ -710,12 +887,16 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
                 if (hopeless(x, y)) continue;
                 const p = score(x, y, w, size, 0, true);
                 if (strict) consider(p);
-                else if (p.roomy) {
+                else if (mode === 'text') {
+                  if (!p.textClear) continue;
+                  p.cost += 200 * readBack(x + w / 2, y + size.h / 2);
+                  if (!bestText || p.cost < bestText.cost - 1e-9) bestText = p;
+                } else if (p.roomy) {
                   p.cost += 200 * readBack(x + w / 2, y + size.h / 2);
                   if (!bestFree || p.cost < bestFree.cost - 1e-9) bestFree = p;
                 }
               }
-            if (strict ? bestClean : bestFree) return;
+            if (strict ? bestClean : mode === 'text' ? bestText : bestFree) return;
           }
         };
         // The panel is full: spill to the nearest free spot in the page's safe area that the reader still
@@ -726,9 +907,20 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         // Over-full: no room in reading order anywhere. A free spot read early beats an overlap (the page
         // is lettered smaller first, and the line is flagged so the editor can say so).
         if (!bestClean && !bestRoomy) spillSearch('free');
-        const pick = (bestClean ?? bestRoomy ?? bestFree ?? best)!;
+        // No free room anywhere: the least-bad spot near home when it covers no text, else a spot anywhere on
+        // the page (the safe area first, then the page margin) that covers no text — never a balloon over text
+        // while such a spot exists.
+        const nearest = best as Pick | undefined;
+        if (!bestClean && !bestRoomy && !bestFree && !(nearest && nearest.textClear)) {
+          spillSearch('text');
+          if (!bestText) spillSearch('text', { x: PAGE_EDGE, y: PAGE_EDGE * aspect, w: 1 - 2 * PAGE_EDGE, h: 1 - 2 * PAGE_EDGE * aspect });
+        }
+        const pick = (bestClean ?? bestRoomy ?? bestFree ?? (nearest && nearest.textClear ? nearest : bestText ?? nearest))!;
         if (!pick.clean) stuck += 1;
-        if (!pick.clean || spilled) crowded.push(line.id);
+        // Lettered across its panel's border to keep the panel under its coverage cap: crowded too (honest), and named.
+        const across = capOn && !pick.spill && outside(pick.outline, box) > 0.001;
+        if (across) straddled.push(line.id);
+        if (!pick.clean || spilled || across) crowded.push(line.id);
         if (pick.w < noSplit - 1e-9) split.push(line.id);
 
         // Rounded to the stored precision without nudging an outline that fits the safe area out of it.
@@ -760,20 +952,30 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
         }
         result.push(balloon);
         placedIds.push(line.id);
-        obstacles.push({ lineId: line.id, panelIndex: index, x: balloon.x, y: balloon.y, box: balloonFootprint(pick.outline, pick.tip) });
+        obstacles.push({
+          lineId: line.id,
+          panelIndex: index,
+          x: balloon.x,
+          y: balloon.y,
+          box: balloonFootprint(pick.outline, pick.tip),
+          outline: pick.outline,
+          text: { x: pick.x, y: pick.y, w: pick.w, h: pick.h },
+          fill
+        });
         prevInPanel = { x: balloon.x, y: balloon.y };
       });
       return stuck;
     };
 
     // A panel whose lines did not all find a clean spot is packed again, compactly; the better one stays.
-    const mark = { obstacles: obstacles.length, result: result.length, placed: placedIds.length, crowded: crowded.length, split: split.length };
+    const mark = { obstacles: obstacles.length, result: result.length, placed: placedIds.length, crowded: crowded.length, split: split.length, straddled: straddled.length };
     const keep = () => ({
       obstacles: obstacles.slice(mark.obstacles),
       result: result.slice(mark.result),
       placed: placedIds.slice(mark.placed),
       crowded: crowded.slice(mark.crowded),
-      split: split.slice(mark.split)
+      split: split.slice(mark.split),
+      straddled: straddled.slice(mark.straddled)
     });
     const rewind = () => {
       obstacles.length = mark.obstacles;
@@ -781,6 +983,7 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
       placedIds.length = mark.placed;
       crowded.length = mark.crowded;
       split.length = mark.split;
+      straddled.length = mark.straddled;
     };
     const stuck = letterPanel(false);
     if (!stuck) return;
@@ -793,8 +996,9 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
     placedIds.push(...first.placed);
     crowded.push(...first.crowded);
     split.push(...first.split);
+    straddled.push(...first.straddled);
   });
-  return { balloons: result, placed: placedIds, crowded, split };
+  return { balloons: result, placed: placedIds, crowded, split, ...(cap !== undefined ? { straddled } : {}) };
 }
 
 /**
@@ -806,9 +1010,48 @@ export function placeBalloonsDetailed(args: PlaceArgs): PlaceResult {
  * `placeBalloonsDetailed` places it.
  */
 export function placeBalloonsWholeWords(args: PlaceArgs): PlaceResult {
-  const first = placeBalloonsDetailed(args);
-  if (!first.split.length) return first;
-  return placeBalloonsDetailed({ ...args, wholeWords: [...new Set([...(args.wholeWords ?? []), ...first.split])] });
+  const whole = (a: PlaceArgs): PlaceResult => {
+    const first = placeBalloonsDetailed(a);
+    if (!first.split.length) return first;
+    return placeBalloonsDetailed({ ...a, wholeWords: [...new Set([...(a.wholeWords ?? []), ...first.split])] });
+  };
+  const plain = whole({ ...args, coverCap: false });
+  if (args.coverCap === false) return plain;
+  // The coverage cap (FX2/F8): a saved placement keeps every panel under it where it can. A page whose panels are all
+  // under the cap is placed exactly as before; otherwise the capped placement is kept only when it covers less and
+  // is no worse a page (no more lines without a clean spot, no more split words).
+  const cap = typeof args.coverCap === 'number' && Number.isFinite(args.coverCap) && args.coverCap > 0 ? args.coverCap : PANEL_LIMITS.coverCap;
+  const before = placementExcess(args, plain.balloons, cap);
+  if (!(before > 1e-9)) return plain;
+  const capped = whole({ ...args, coverCap: cap });
+  const stuck = (r: PlaceResult) => r.crowded.filter((id) => !(r.straddled ?? []).includes(id)).length;
+  if (stuck(capped) > stuck(plain) || capped.split.length > plain.split.length) return plain;
+  return placementExcess(args, capped.balloons, cap) < before - 1e-9 ? capped : plain;
+}
+
+/** How far a placement's panels are over the coverage cap in total (Σ max(0, coverage − cap)), with the caller's sizer. */
+function placementExcess(args: PlaceArgs, balloons: readonly Balloon[], cap: number): number {
+  const lines = new Map<string, Line>();
+  for (const panel of args.page.panels) for (const line of panel.lines || []) lines.set(line.id, line);
+  const outlines: { outline: Box; fill: number }[] = [];
+  for (const b of balloons) {
+    const line = lines.get(b.lineId);
+    if (!line || !validBalloon(b)) continue;
+    const s = sizeOf(args, line, b.w, line.lang || args.lang || 'en');
+    let fill: number | undefined;
+    try {
+      fill = args.fillFor?.(line);
+    } catch {
+      fill = undefined;
+    }
+    outlines.push({ outline: { x: b.x + s.bounds.x, y: b.y + s.bounds.y, w: s.bounds.w, h: s.bounds.h }, fill: typeof fill === 'number' && fill > 0 && fill <= 1 ? fill : KIND_FILL[line.kind] ?? 1 });
+  }
+  let excess = 0;
+  args.page.panels.forEach((_p, i) => {
+    const box = args.boxes?.[i];
+    if (validBox(box)) excess += Math.max(0, coverageOf(box, outlines) - cap);
+  });
+  return excess;
 }
 
 /** Two text boxes whose tops are this close (page heights) share a row: the reader takes them left to right (rtl: right to left). */
@@ -917,6 +1160,9 @@ export function placeBalloons(args: {
   keep?: 'pinned' | 'all';
   only?: readonly string[];
   lang?: string;
+  coverCap?: number | false;
+  fillFor?: (line: Line) => number;
+  busy?: readonly Box[];
 }): Balloon[] {
   return placeBalloonsDetailed(args).balloons;
 }
@@ -937,6 +1183,9 @@ export interface SettleItem {
   group?: string;
   /** The text box (same unit; it moves with the outline): reading-order checks use it. Default: the outline. */
   text?: Box;
+  /** The balloon's own outline without its tail reach (same unit; it moves with the outline): the never-over-text
+   *  check uses it. Default: the outline. */
+  body?: Box;
   /** Panels the reader finishes before this balloon's own: a nudge never lands its text centre in one. */
   before?: Box[];
   /** The line this one is read after (the previous line of its panel): a nudge keeps it read after that one. */
@@ -978,6 +1227,8 @@ const sortedByCost = (cost: Float64Array): Uint32Array => {
 const TIGHT_PAD = 0.5;
 
 const overlapsBox = (a: Box, b: Box): boolean => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 1e-6 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 1e-6;
+/** Two boxes overlap by more than `eps` on both axes. */
+const overlapsBy = (a: Box, b: Box, eps: number): boolean => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > eps && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > eps;
 
 /**
  * Deterministic collision pass over DRAWN balloons (planLettering's real text sizes and tails), in
@@ -998,6 +1249,8 @@ export function settleBalloons(
   const half = gap / 2;
   const rtl = !!opts.rtl;
   const rowTol = ROW_TOLERANCE * H;
+  /** A sliver this thin (0.1 % of the width: under half a pixel on a phone) is not text under a balloon. */
+  const textEps = W * 0.001;
   const moves = new Map<string, SettleMove>();
   const unresolved: string[] = [];
   const reordered: string[] = [];
@@ -1022,6 +1275,12 @@ export function settleBalloons(
   const textAt = (it: SettleItem, x: number, y: number): Box => {
     const o0 = start.get(it.id)!;
     const t = it.text && validBox(it.text) ? it.text : o0;
+    return { x: t.x + (x - o0.x), y: t.y + (y - o0.y), w: t.w, h: t.h };
+  };
+  /** The tail-less outline of an item whose outline sits at (x, y). */
+  const bodyAt = (it: SettleItem, x: number, y: number): Box => {
+    const o0 = start.get(it.id)!;
+    const t = it.body && validBox(it.body) ? it.body : o0;
     return { x: t.x + (x - o0.x), y: t.y + (y - o0.y), w: t.w, h: t.h };
   };
   /** `a` (a text box) is read after `b`: below it, or on its row and after it (rtl: before it in x). */
@@ -1218,7 +1477,61 @@ export function settleBalloons(
       if (best) break;
     }
     if (!best) {
-      if (blockers.length) unresolved.push(it.id);
+      if (!blockers.length) return;
+      unresolved.push(it.id);
+      // No room on the page for the whole balloon: it may still touch another outline or tail, but never cover
+      // another balloon's text or sit with its text under another outline (FX2). The nearest such spot, reading
+      // order first; where there is none it stays as it is.
+      /** The body (tail-less outline) at outline position (x, y) covers no other text, and no other body covers its text. */
+      const clearOfText = (x: number, y: number): boolean => {
+        const at = bodyAt(it, x, y);
+        const t = textAt(it, x, y);
+        for (const b of live) {
+          if (b.id === it.id || (it.group && it.group === b.group)) continue;
+          const ob = cur.get(b.id)!;
+          if (overlapsBy(at, textAt(b, ob.x, ob.y), textEps) || overlapsBy(t, bodyAt(b, ob.x, ob.y), textEps)) return false;
+        }
+        return true;
+      };
+      if (clearOfText(o.x, o.y)) return;
+      // A finer lattice than the free search (1 % of the width): the gaps between bodies are narrow on such a page.
+      const tx: number[] = [];
+      const ty: number[] = [];
+      const fine = W * 0.01;
+      if (hiX >= loX && hiY >= loY) {
+        const nx = Math.min(120, Math.floor((hiX - loX) / fine) + 1);
+        const ny = Math.min(180, Math.floor((hiY - loY) / fine) + 1);
+        for (let j = 0; j < ny; j += 1)
+          for (let i = 0; i < nx; i += 1) {
+            tx.push(loX + (nx > 1 ? ((hiX - loX) * i) / (nx - 1) : 0));
+            ty.push(loY + (ny > 1 ? ((hiY - loY) * j) / (ny - 1) : 0));
+          }
+      } else {
+        tx.push(o.w > W - 2 * margin.x ? (W - o.w) / 2 : clampP(o.x, loX, hiX));
+        ty.push(o.h > H - 2 * margin.y ? (H - o.h) / 2 : clampP(o.y, loY, hiY));
+      }
+      const n2 = tx.length;
+      const cost2 = new Float64Array(n2);
+      for (let k = 0; k < n2; k += 1) cost2[k] = costAt(tx[k], ty[k]);
+      const back2 = (k: number): number => {
+        const t = textAt(it, tx[k], ty[k]);
+        const cx = t.x + t.w / 2;
+        const cy = t.y + t.h / 2;
+        const list = it.before ?? [];
+        for (let i = list.length - 1; i >= 0; i -= 1) if (inBox(cx, cy, list[i])) return list.length - i;
+        return 0;
+      };
+      for (const level of [2, 3]) {
+        const order = level === 3 ? sortedByCost(cost2.map((c, k) => c + 0.5 * W * back2(k))) : sortedByCost(cost2);
+        for (const k of order) {
+          if (!clearOfText(tx[k], ty[k])) continue;
+          if (level < 3 && orderLevel(it, textAt(it, tx[k], ty[k])) > level) continue;
+          const c: Box = { x: tx[k], y: ty[k], w: o.w, h: o.h };
+          cur.set(it.id, c);
+          moves.set(it.id, { dx: round4(c.x - o.x), dy: round4(c.y - o.y), tipMoved: false });
+          return;
+        }
+      }
       return;
     }
     if (best.level >= 2) {
