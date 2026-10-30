@@ -6,7 +6,8 @@
 // MERGE mode (every restore and "Use then"), invariants property-tested in apply.test.ts:
 //   I1 no lost image — a displaced current asset goes to its target's render.history (the render_use swap rule)
 //      with overflow to the archive; a removed page goes to the trash; any other path that would be left
-//      unreferenced is archived. (Archive cap eviction stays the existing, never-silent §5.3.1 rule.)
+//      unreferenced is archived where it lived — a frame source or an image overlay under its page ('page:<id>').
+//      (Archive cap eviction stays the existing, never-silent §5.3.1 rule.)
 //   I2 no lost translation — editions merge by line id: the version wins for its own lines, other lines are kept;
 //      editions and glossary terms are a union. Stale/current/missing re-derive from sourceHash for free.
 //   I3 forward-only state untouched — spend, conversation, memory, settings, safety, publication, imageModel and
@@ -26,6 +27,7 @@ import {
   archiveOf,
   collectAssetPaths,
   mapAssetRefs,
+  pageSourcePaths,
   pickBook,
   pickReader,
   renderTargetKey,
@@ -695,6 +697,15 @@ const pathHomes = (doc: ComicDoc): Map<string, { asset: AssetRef; key: string; l
     add(t.page.render.asset, key, `Deleted page ${t.fromN}`);
     t.page.render.history.forEach((v) => add(v, key, `Deleted page ${t.fromN}`));
   });
+  // Ship 2 (K2a): a frame's own picture (frame.src) and an image overlay (layer.src) live on their page ('page:<id>'),
+  // so I1 archives one a restore displaces. Listed last: a path a render also holds keeps that richer home. Plain
+  // paths carry no maker or time, so the entry says so honestly (an image you brought; date not recorded).
+  const sources = (page: Page, label: string) => {
+    const key = renderTargetKey({ kind: 'page', id: page.id });
+    for (const path of pageSourcePaths(page)) add({ path, source: 'upload', at: 0 }, key, label);
+  };
+  doc.pages.forEach((p) => sources(p, targetLabel(doc, { kind: 'page', id: p.id })));
+  trashOf(doc).forEach((t) => sources(t.page, `Deleted page ${t.fromN}`));
   return out;
 };
 
