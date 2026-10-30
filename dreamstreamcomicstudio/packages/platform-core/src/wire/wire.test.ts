@@ -49,7 +49,7 @@ import {
   verifySignature,
   wireCryptoFromSubtle,
 } from './index.js';
-import type { ClaimPurpose, PreflightOptions, SubtleCryptoLike, UserClaimInput, WireCrypto } from './index.js';
+import type { ClaimPurpose, PollTokenInput, PreflightOptions, SubtleCryptoLike, UserClaimInput, WireCrypto } from './index.js';
 
 // ── Fixtures and adapters ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -491,7 +491,7 @@ describe('poll tokens', () => {
     const exp = v.payload.exp as number;
     expect(await verifyPollToken(v.token, opts({ now: at(exp) }))).toMatchObject({ ok: false, reason: 'expired' });
     const ring = { secret: SECRET, crypto: nodeCrypto, now: at(POLL.now) };
-    expect(await mintPollToken(ring, { ...(v.input as never), ttlSeconds: 3601 })).toMatchObject({ ok: false, code: 'invalid', reason: 'exp-too-far' });
+    expect(await mintPollToken(ring, { ...(v.input as unknown as PollTokenInput), ttlSeconds: 3601 })).toMatchObject({ ok: false, code: 'invalid', reason: 'exp-too-far' });
     expect(await verifyPollToken(await forgePoll({ ...v.payload, exp: POLL.now + 3601 }), opts())).toMatchObject({ ok: false, reason: 'exp-too-far' });
     expect((await verifyPollToken(await forgePoll({ ...v.payload, exp: POLL.now + 3600 }), opts())).ok).toBe(true);
     const [, mac] = v.token.split('.');
