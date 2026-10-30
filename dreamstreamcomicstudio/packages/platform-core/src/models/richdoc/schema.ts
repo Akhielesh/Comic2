@@ -1,15 +1,30 @@
 /**
  * RichDoc v1 in the schema DSL (plan §5.2): `Infer<typeof RichDocSchema>` IS the frozen contract type `RichDoc`
- * (src/contract/richdoc.ts), and so on for every schema here (models/contract.test.ts proves it under a strict
+ * (src/contract/richdoc.ts), and so on for every schema here (src/models/models.test.ts proves it under a strict
  * compile). `checkRichDoc` is what a host runs on a stored or model-made document; `migrateRichDoc` reads any version.
+ * Rules the DSL cannot say are refinements, run by `checkRichDoc` and (for what an op carries) by `applyDocOps`:
+ * - section ids are unique in a document, and block ids across all its sections (ops address a block by id alone);
+ * - a run names each mark at most once (`too-many` at `…marks`).
  */
 import type { CheckError, CheckOptions, CheckResult } from '../../contract/schema.js';
 import { MODEL_LIMITS } from '../../contract/schema.js';
 import type { DocOp, DocSuggestion, RichDoc } from '../../contract/richdoc.js';
 import { RICHDOC_LIMITS } from '../../contract/richdoc.js';
-import { check } from '../../schema/check.js';
 import { s } from '../../schema/s.js';
-import { checkRefined, idSchema, insertIndexSchema, listItemsOf, migrateV1, opBaseFields, refineError, runsOf, tableRowsOf } from '../common.js';
+import type { RefinePath } from '../common.js';
+import {
+  checkRefined,
+  idSchema,
+  idScope,
+  insertIndexSchema,
+  listItemsOf,
+  migrateV1,
+  opBaseFields,
+  refineError,
+  repeatedMarks,
+  runsOf,
+  tableRowsOf,
+} from '../common.js';
 
 const R = RICHDOC_LIMITS;
 
@@ -73,12 +88,32 @@ export const DocOpSchema = s.union('op', [
 /** An agent's proposed change to a user's document (`at` is Unix ms, stamped by the host). */
 export const DocSuggestionSchema = s.object({ id: idSchema, op: DocOpSchema, author: s.literal('agent'), at: s.int({ min: 0 }) });
 
-/** Op rules the DSL cannot say: `update_block` keeps the block's id. */
-export const refineDocOp = (op: DocOp): CheckError[] =>
-  op.op === 'update_block' && op.block.id !== op.blockId ? [refineError(['block', 'id'], 'literal', `must be the blockId, ${JSON.stringify(op.blockId)}`)] : [];
+/**
+ * The refinements of a whole (schema-checked) document; `path` is where it sits (`[]` at the root, or inside an email
+ * attachment): unique section ids, unique block ids across sections, each mark at most once per run.
+ */
+export const refineRichDoc = (doc: RichDoc, path: RefinePath = []): CheckError[] => {
+  const sections = idScope('section');
+  const blocks = idScope('block');
+  doc.sections.forEach((section, i) => {
+    const at = path.concat(['sections', i]);
+    sections.add(section.id, at);
+    section.blocks.forEach((block, j) => blocks.add(block.id, at.concat(['blocks', j])));
+  });
+  return sections.errors.concat(blocks.errors, repeatedMarks(doc.sections, path.concat(['sections'])));
+};
 
-/** A RichDoc v1 (a fresh copy on success). Hosts run it on every stored, imported or model-made document. */
-export const checkRichDoc = (value: unknown, options?: CheckOptions): CheckResult<RichDoc> => check(RichDocSchema, value, options);
+/** Op rules the DSL cannot say: `update_block` keeps the block's id; a carried block or section repeats no mark. */
+export const refineDocOp = (op: DocOp): CheckError[] => {
+  const errors =
+    op.op === 'update_block' && op.block.id !== op.blockId ? [refineError(['block', 'id'], 'literal', `must be the blockId, ${JSON.stringify(op.blockId)}`)] : [];
+  if (op.op === 'insert_block' || op.op === 'update_block') return errors.concat(repeatedMarks(op.block, ['block']));
+  if (op.op === 'insert_section') return errors.concat(repeatedMarks(op.section, ['section']));
+  return errors;
+};
+
+/** A RichDoc v1 with its refinements (a fresh copy on success). Hosts run it on every stored, imported or model-made document. */
+export const checkRichDoc = (value: unknown, options?: CheckOptions): CheckResult<RichDoc> => checkRefined(RichDocSchema, value, (doc) => refineRichDoc(doc), options);
 
 /** One `DocOp`, with the refinements `applyDocOps` applies. */
 export const checkDocOp = (value: unknown): CheckResult<DocOp> => checkRefined(DocOpSchema, value, refineDocOp);

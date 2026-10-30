@@ -323,15 +323,16 @@ describe('exact inverses', () => {
 
 describe('acceptDocSuggestion', () => {
   const suggestion = (): DocSuggestion => fixture<DocSuggestion>('contract/richdoc/suggestion.json');
+  const log = { seenOpIds: [] as string[] };
 
   it('re-stamps baseRev, so accepting one suggestion never makes the others stale', () => {
     const doc = minimal();
     const a = suggestion(); // update_block p1, made at rev 0
     const b: DocSuggestion = { id: 'sg-2', author: 'agent', at: 1793318400001, op: { op: 'set_title', id: 'op-sg-2', baseRev: 0, title: 'Agreed title' } };
-    const first = acceptDocSuggestion(doc, a);
+    const first = acceptDocSuggestion(doc, a, log);
     expect(first.applied).toHaveLength(1);
     expect(first.doc.rev).toBe(1);
-    const second = acceptDocSuggestion(first.doc, b);
+    const second = acceptDocSuggestion(first.doc, b, { seenOpIds: ['op-sg-1'] });
     expect(second.rejected).toEqual([]);
     expect(second.applied).toEqual([{ ...b.op, baseRev: 1 }]);
     expect(second.doc).toMatchObject({ rev: 2, title: 'Agreed title' });
@@ -341,12 +342,12 @@ describe('acceptDocSuggestion', () => {
 
   it('checks the target FIRST: a suggestion whose block is gone is not-found and is not re-stamped or applied', () => {
     const removed = applyDocOps(minimal(), [{ op: 'remove_block', id: 'rm', baseRev: 0, blockId: 'p1' }]).doc;
-    const r = acceptDocSuggestion(removed, suggestion());
+    const r = acceptDocSuggestion(removed, suggestion(), log);
     expect(r.doc).toBe(removed);
     expect(r.applied).toEqual([]);
     expect(r.rejected).toEqual([{ index: 0, opId: 'op-sg-1', code: 'not-found', message: "the suggestion's block p1 is gone" }]);
     const gone: DocSuggestion = { id: 'sg-3', author: 'agent', at: 1, op: { op: 'insert_block', id: 'op-sg-3', baseRev: 0, sectionId: 's9', block: para('q', 'x') } };
-    expect(acceptDocSuggestion(minimal(), gone).rejected).toMatchObject([{ code: 'not-found', message: "the suggestion's section s9 is gone" }]);
+    expect(acceptDocSuggestion(minimal(), gone, log).rejected).toMatchObject([{ code: 'not-found', message: "the suggestion's section s9 is gone" }]);
     // The target is checked before anything else: a suggestion whose block is gone is not-found even when its op id is
     // also in the host's log (applying it would have said duplicate).
     expect(acceptDocSuggestion(removed, suggestion(), { seenOpIds: ['op-sg-1'] }).rejected).toMatchObject([{ code: 'not-found' }]);
@@ -354,10 +355,28 @@ describe('acceptDocSuggestion', () => {
 
   it('refuses a malformed suggestion, and applies a suggestion at most once with the host op log', () => {
     const bad = { ...suggestion(), author: 'user' } as unknown as DocSuggestion;
-    expect(acceptDocSuggestion(minimal(), bad)).toMatchObject({ applied: [], rejected: [{ code: 'invalid', message: expect.stringContaining('author') }] });
-    const once = acceptDocSuggestion(minimal(), suggestion());
+    expect(acceptDocSuggestion(minimal(), bad, log)).toMatchObject({ applied: [], rejected: [{ code: 'invalid', message: expect.stringContaining('author') }] });
+    const once = acceptDocSuggestion(minimal(), suggestion(), log);
     const twice = acceptDocSuggestion(once.doc, suggestion(), { seenOpIds: ['op-sg-1'] });
     expect(twice.doc).toBe(once.doc);
     expect(twice.rejected).toMatchObject([{ code: 'duplicate' }]);
+  });
+
+  it('the op log is REQUIRED: a call without it does not compile and is refused at run time, so a re-stamp never replays', () => {
+    const sg: DocSuggestion = { id: 'sg-t', author: 'agent', at: 1, op: { op: 'set_title', id: 'op-t', baseRev: 0, title: 'Once' } };
+    const doc = minimal();
+    // @ts-expect-error -- the host's op log is a required argument (the re-stamp bypasses the stale guard)
+    const bare = acceptDocSuggestion(doc, sg);
+    expect(bare.doc).toBe(doc);
+    expect(bare.applied).toEqual([]);
+    expect(bare.rejected).toEqual([{ index: 0, code: 'invalid', message: expect.stringContaining('seenOpIds') }]);
+    const notAList = acceptDocSuggestion(minimal(), sg, { seenOpIds: 'op-t' } as unknown as { seenOpIds: string[] });
+    expect(notAList.rejected).toMatchObject([{ code: 'invalid' }]);
+    // With the log, the same suggestion accepted twice moves rev once.
+    const first = acceptDocSuggestion(minimal(), sg, { seenOpIds: [] });
+    const again = acceptDocSuggestion(first.doc, sg, { seenOpIds: first.applied.map((o) => o.id) });
+    expect([first.doc.rev, again.doc.rev]).toEqual([1, 1]);
+    expect(again.doc).toBe(first.doc);
+    expect(again.rejected).toMatchObject([{ opId: 'op-t', code: 'duplicate' }]);
   });
 });

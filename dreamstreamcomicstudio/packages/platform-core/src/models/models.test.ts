@@ -50,6 +50,7 @@ import {
   applyDeckOps,
   checkDeckSpec,
   deckOverlaps,
+  invertDeckOp,
   invertDeckOps,
   migrateDeckSpec,
   overlapCheck,
@@ -65,6 +66,7 @@ import {
   applyEmailOps,
   checkEmailDoc,
   emailBodyTextLength,
+  invertEmailOp,
   invertEmailOps,
   migrateEmailDoc,
   stampAgentEmailOp,
@@ -78,7 +80,9 @@ import {
   RichDocSchema,
   acceptDocSuggestion,
   applyDocOps,
+  checkDocSuggestion,
   checkRichDoc,
+  invertDocOp,
   invertDocOps,
   migrateRichDoc,
 } from './richdoc/index.js';
@@ -195,6 +199,22 @@ describe('the schemas are the frozen contract', () => {
     },
     60_000,
   );
+
+  it(
+    "acceptDocSuggestion requires the host's op log: a call without it does not compile (strict and not)",
+    () => {
+      const head = [
+        "import type { DocSuggestion, RichDoc } from '../contract/richdoc.js';",
+        "import { acceptDocSuggestion } from './richdoc/index.js';",
+        'declare const doc: RichDoc;',
+        'declare const sg: DocSuggestion;',
+      ].join('\n');
+      expect(compileProbe(`${head}\nexport const ok = acceptDocSuggestion(doc, sg, { seenOpIds: [] });\n`)).toEqual([]);
+      expect(compileProbe(`${head}\nexport const bare = acceptDocSuggestion(doc, sg);\n`).join('\n')).toMatch(/Expected 3 arguments/);
+      expect(compileProbe(`${head}\nexport const empty = acceptDocSuggestion(doc, sg, {});\n`).join('\n')).toMatch(/seenOpIds/);
+    },
+    60_000,
+  );
 });
 
 // ── Purity ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -238,10 +258,11 @@ describe('purity', () => {
     const e = applyEmailOps(email, emailOps);
     expect([d.rejected, k.rejected, e.rejected]).toEqual([[], [], []]); // a write to a frozen input would have been refused
     const minimalDoc = deepFreeze(fixture<RichDoc>('contract/richdoc/minimal.json'));
+    expect(acceptDocSuggestion(minimalDoc, suggestion, { seenOpIds: [] }).rejected).toEqual([]);
     const out: unknown[] = [
       d,
       invertDocOps(doc, d.applied, { baseRev: 4, id: (op) => `u-${op.id}` }),
-      acceptDocSuggestion(minimalDoc, suggestion),
+      acceptDocSuggestion(minimalDoc, suggestion, { seenOpIds: [] }),
       checkRichDoc(doc),
       migrateRichDoc(doc),
       k,
@@ -349,6 +370,38 @@ describe('hostile documents (fixtures/models/invalid.json)', () => {
   }
 });
 
+describe('each mark at most once, in documents and in what ops carry', () => {
+  it('an op (or a suggestion) cannot bring in a run that names a mark twice, in any model', () => {
+    const run = { text: 'x', marks: ['b', 'b'] };
+    const para = (id: string) => ({ type: 'paragraph', id, runs: [run] });
+    const doc = fixture<RichDoc>('contract/richdoc/minimal.json');
+    const cases: [ReturnType<AnyApplyFn>, string][] = [
+      [(applyDocOps as unknown as AnyApplyFn)(doc, [{ op: 'insert_block', id: 'm1', baseRev: 0, sectionId: 's1', block: para('pm') }]), 'block.runs[0].marks'],
+      [(applyDocOps as unknown as AnyApplyFn)(doc, [{ op: 'update_block', id: 'm2', baseRev: 0, blockId: 'p1', block: para('p1') }]), 'block.runs[0].marks'],
+      [
+        (applyDocOps as unknown as AnyApplyFn)(doc, [{ op: 'insert_section', id: 'm3', baseRev: 0, section: { id: 's2', pageBreakBefore: true, blocks: [para('pm')] } }]),
+        'section.blocks[0].runs[0].marks',
+      ],
+      [
+        (applyDeckOps as unknown as AnyApplyFn)(fixture('contract/deck/minimal.json'), [
+          { op: 'add_slide', id: 'm4', baseRev: 0, slide: { id: 'sm', layout: 'content', elements: [{ kind: 'text', id: 't', rect: [0, 0, 1, 1], layer: 'content', paragraphs: [{ runs: [run] }] }] } },
+        ]),
+        'slide.elements[0].paragraphs[0].runs[0].marks',
+      ],
+      [(applyEmailOps as unknown as AnyApplyFn)(fixture('contract/email/minimal.json'), [{ op: 'insert_block', id: 'm5', baseRev: 0, block: para('pm') }]), 'block.runs[0].marks'],
+    ];
+    for (const [r, path] of cases) {
+      expect(r.applied).toEqual([]);
+      expect(r.rejected).toEqual([{ index: 0, opId: expect.any(String), code: 'invalid', message: expect.stringContaining(path) }]);
+    }
+    const sg = { id: 'sg', author: 'agent', at: 1, op: { op: 'update_block', id: 'm6', baseRev: 0, blockId: 'p1', block: para('p1') } };
+    expect(checkDocSuggestion(sg)).toMatchObject({ ok: false, errors: [{ path: 'op.block.runs[0].marks', code: 'too-many' }] });
+    // Distinct marks are fine.
+    const fine = (applyDocOps as unknown as AnyApplyFn)(doc, [{ op: 'insert_block', id: 'm7', baseRev: 0, sectionId: 's1', block: { type: 'paragraph', id: 'pm', runs: [{ text: 'x', marks: ['b', 'i', 'u', 'code'] }] } }]);
+    expect(fine.rejected).toEqual([]);
+  });
+});
+
 // ── The 5 MB data: image cap ─────────────────────────────────────────────────────────────────────────────────────
 
 /** A PNG `data:` URI of exactly `bytes` decoded bytes (PNG magic, then zeros). */
@@ -444,6 +497,149 @@ describe('golden apply and undo cases', () => {
       });
     }
   }
+});
+
+// ── "Never throws" is total, and every inverse is a valid op ─────────────────────────────────────────────────────
+
+type AnyApplyFn = (doc: unknown, ops: unknown, options?: unknown) => { doc: unknown; applied: unknown[]; rejected: { index: number; opId?: string; code: string }[] };
+type AnyInvertFn = (before: unknown, applied: unknown, meta: unknown) => unknown[] | null;
+type AnyInvertOneFn = (before: unknown, op: unknown, meta: unknown) => unknown;
+
+const MODELS: { model: string; doc: () => unknown; op: (id: string) => Record<string, unknown>; apply: AnyApplyFn; invert: AnyInvertFn; invertOne: AnyInvertOneFn }[] = [
+  {
+    model: 'richdoc',
+    doc: () => fixture('contract/richdoc/minimal.json'),
+    op: (id) => ({ op: 'set_title', id, baseRev: 0, title: 'New' }),
+    apply: applyDocOps as unknown as AnyApplyFn,
+    invert: invertDocOps as unknown as AnyInvertFn,
+    invertOne: invertDocOp as unknown as AnyInvertOneFn,
+  },
+  {
+    model: 'deck',
+    doc: () => fixture('contract/deck/minimal.json'),
+    op: (id) => ({ op: 'set_theme', id, baseRev: 0, theme: { preset: 'dark' } }),
+    apply: applyDeckOps as unknown as AnyApplyFn,
+    invert: invertDeckOps as unknown as AnyInvertFn,
+    invertOne: invertDeckOp as unknown as AnyInvertOneFn,
+  },
+  {
+    model: 'email',
+    doc: () => fixture('contract/email/minimal.json'),
+    op: (id) => ({ op: 'set_subject', id, baseRev: 0, subject: 'New' }),
+    apply: applyEmailOps as unknown as AnyApplyFn,
+    invert: invertEmailOps as unknown as AnyInvertFn,
+    invertOne: invertEmailOp as unknown as AnyInvertOneFn,
+  },
+];
+
+const boom = (): never => {
+  throw new Error('boom');
+};
+
+/** A Proxy whose every trap throws. */
+const hostileProxy = (): object =>
+  new Proxy({}, { get: boom, has: boom, ownKeys: boom, getOwnPropertyDescriptor: boom, getPrototypeOf: boom, set: boom, defineProperty: boom });
+
+/** A revoked Proxy: even Array.isArray throws on it. */
+const revoked = (): object => {
+  const r = Proxy.revocable({}, {});
+  r.revoke();
+  return r.proxy;
+};
+
+/** `base` with a getter for `key` that throws. */
+const throwingGetter = (base: Record<string, unknown>, key: string): object => {
+  const out: Record<string, unknown> = { ...base };
+  delete out[key];
+  Object.defineProperty(out, key, { get: boom, enumerable: true });
+  return out;
+};
+
+describe('never throws, whatever the caller passes', () => {
+  for (const m of MODELS) {
+    it(`${m.model}: a throwing getter or Proxy in an op is refused as invalid (no opId) and the rest of the batch applies`, () => {
+      const doc = m.doc();
+      const hostile: unknown[] = [throwingGetter(m.op('x1'), 'id'), throwingGetter(m.op('x2'), 'op'), throwingGetter(m.op('x3'), 'baseRev'), hostileProxy(), revoked()];
+      let r: ReturnType<AnyApplyFn> | undefined;
+      expect(() => {
+        r = m.apply(doc, hostile);
+      }).not.toThrow();
+      expect(r!.doc).toBe(doc);
+      expect(r!.rejected).toEqual(hostile.map((_, index) => ({ index, code: 'invalid', message: expect.stringContaining('could not be read') })));
+      const mixed = m.apply(doc, [hostileProxy(), m.op('ok')]);
+      expect(mixed.applied).toHaveLength(1);
+      expect(mixed.rejected).toEqual([{ index: 0, code: 'invalid', message: expect.any(String) }]);
+    });
+
+    it(`${m.model}: a throwing ops list, document or options object is refused, never thrown through`, () => {
+      const doc = m.doc();
+      const lists = [hostileProxy(), revoked(), new Proxy([m.op('a')], { get: boom })];
+      for (const ops of lists) {
+        const r = m.apply(doc, ops);
+        expect(r.doc).toBe(doc);
+        expect(r.applied).toEqual([]);
+        expect(r.rejected).toMatchObject([{ index: 0, code: 'invalid' }]);
+      }
+      for (const bad of [hostileProxy(), revoked(), throwingGetter(doc as Record<string, unknown>, 'rev')]) {
+        const r = m.apply(bad, [m.op('a')]);
+        expect(r.doc).toBe(bad);
+        expect(r.applied).toEqual([]);
+        expect(r.rejected).toMatchObject([{ index: 0, code: 'invalid' }]);
+      }
+      for (const options of [hostileProxy(), revoked(), throwingGetter({}, 'seenOpIds'), { seenOpIds: new Proxy([], { get: boom }) }]) {
+        const r = m.apply(doc, [m.op('a')], options);
+        expect(r.doc).toBe(doc);
+        expect(r.rejected).toMatchObject([{ index: 0, code: 'invalid' }]);
+      }
+      for (const hostile of [hostileProxy(), revoked()]) {
+        expect(m.invert(hostile, [m.op('a')], { baseRev: 1, id: () => 'u' })).toBeNull();
+        expect(m.invert(doc, hostile, { baseRev: 1, id: () => 'u' })).toBeNull();
+        expect(m.invert(doc, [hostile], { baseRev: 1, id: () => 'u' })).toBeNull();
+        expect(m.invert(doc, [m.op('a')], hostile)).toBeNull();
+        expect(m.invertOne(hostile, m.op('a'), { id: 'u', baseRev: 1 })).toBeNull();
+        expect(m.invertOne(doc, hostile, { id: 'u', baseRev: 1 })).toBeNull();
+        expect(m.invertOne(doc, m.op('a'), hostile)).toBeNull();
+      }
+    });
+
+    it(`${m.model}: an inverse is a valid op or there is none (an over-long or unsafe undo id gives null)`, () => {
+      const doc = m.doc();
+      const longId = 'f'.repeat(64);
+      const r = m.apply(doc, [m.op(longId)]);
+      expect(r.applied).toHaveLength(1);
+      // The fixtures' own convention, 'undo-' + id, would be 69 characters here: no undo batch apply would refuse.
+      expect(m.invert(doc, r.applied, { baseRev: 1, id: (op: { id: string }) => `undo-${op.id}` })).toBeNull();
+      expect(m.invert(doc, r.applied, { baseRev: 1, id: () => '../x' })).toBeNull();
+      expect(m.invertOne(doc, r.applied[0], { id: '../x', baseRev: 1 })).toBeNull();
+      expect(m.invertOne(doc, r.applied[0], { id: 'u', baseRev: -1 })).toBeNull();
+      const undo = m.invert(doc, r.applied, { baseRev: 1, id: (op: { id: string }) => `u${op.id}`.slice(0, 64) });
+      expect(undo).toHaveLength(1);
+      expect(m.apply(r.doc, undo).rejected).toEqual([]);
+    });
+  }
+
+  it('acceptDocSuggestion: a document, suggestion or log whose getters throw is refused, never thrown through', () => {
+    const doc = fixture<RichDoc>('contract/richdoc/minimal.json');
+    const sg = fixture<DocSuggestion>('contract/richdoc/suggestion.json');
+    const sectionsThrow = throwingGetter(doc as unknown as Record<string, unknown>, 'sections') as unknown as RichDoc;
+    for (const [d, s, o] of [
+      [sectionsThrow, sg, { seenOpIds: [] }],
+      [hostileProxy(), sg, { seenOpIds: [] }],
+      [revoked(), sg, { seenOpIds: [] }],
+      [doc, hostileProxy(), { seenOpIds: [] }],
+      [doc, throwingGetter(sg as unknown as Record<string, unknown>, 'op'), { seenOpIds: [] }],
+      [doc, sg, hostileProxy()],
+      [doc, sg, throwingGetter({}, 'seenOpIds')],
+    ] as [RichDoc, DocSuggestion, { seenOpIds: string[] }][]) {
+      let r: ReturnType<typeof acceptDocSuggestion> | undefined;
+      expect(() => {
+        r = acceptDocSuggestion(d, s, o);
+      }).not.toThrow();
+      expect(r!.doc).toBe(d);
+      expect(r!.applied).toEqual([]);
+      expect(r!.rejected).toMatchObject([{ index: 0, code: 'invalid' }]);
+    }
+  });
 });
 
 // ── JSON Schema projections (W1.4 projects these into tool inputs) ───────────────────────────────────────────────

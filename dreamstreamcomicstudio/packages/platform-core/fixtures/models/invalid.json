@@ -20,6 +20,9 @@
     { "name": "title with a line break", "model": "richdoc", "at": ["title"], "value": "Pitch\nBcc: spy@example.net", "path": "title", "code": "single-line" },
     { "name": "bidi override in a run", "model": "richdoc", "at": ["sections", 0, "blocks", 2, "runs", 0, "text"], "value": "invoice‮fdp.exe", "path": "sections[0].blocks[2].runs[0].text", "code": "bad-char" },
     { "name": "script block of an unknown kind", "model": "richdoc", "at": ["sections", 1, "blocks", 1, "kind"], "value": "html", "path": "sections[1].blocks[1].kind", "code": "enum" },
+    { "name": "a block id used in two sections (interim code until A1 adds duplicate-id)", "model": "richdoc", "at": ["sections", 1, "blocks", 0, "id"], "value": "h1", "path": "sections[1].blocks[0].id", "code": "too-many" },
+    { "name": "two sections with one id", "model": "richdoc", "at": ["sections", 1, "id"], "value": "s-intro", "path": "sections[1].id", "code": "too-many" },
+    { "name": "a run that names a mark twice", "model": "richdoc", "at": ["sections", 0, "blocks", 1, "runs", 1, "marks"], "value": ["b", "i", "b"], "path": "sections[0].blocks[1].runs[1].marks", "code": "too-many" },
 
     { "name": "javascript: link in a deck paragraph", "model": "deck", "at": ["slides", 2, "elements", 1, "paragraphs", 1, "runs", 0, "link", "href"], "value": "javascript:alert(1)", "path": "slides[2].elements[1].paragraphs[1].runs[0].link.href", "code": "link" },
     { "name": "deck image by URL", "model": "deck", "at": ["slides", 4, "elements", 2, "ref"], "value": { "kind": "url", "url": "https://example.com/logo.png" }, "path": "slides[4].elements[2].ref.kind", "code": "tag" },
@@ -29,6 +32,12 @@
     { "name": "chart series with fewer values than categories", "model": "deck", "at": ["slides", 4, "elements", 1, "series", 0, "values"], "value": [120, 340], "path": "slides[4].elements[1].series[0].values", "code": "too-few" },
     { "name": "chart series with more values than categories", "model": "deck", "at": ["slides", 5, "elements", 1, "series", 0, "values"], "value": [40, 60, 1], "path": "slides[5].elements[1].series[0].values", "code": "too-many" },
     { "name": "rect fraction above 1", "model": "deck", "at": ["slides", 1, "elements", 0, "rect"], "value": [0.1, 0.4, 1.5, 0.2], "path": "slides[1].elements[0].rect[2]", "code": "above-max" },
+    { "name": "a flat text box (only a line shape may have no height)", "model": "deck", "at": ["slides", 0, "elements", 1, "rect"], "value": [0.08, 0.3, 0.84, 0], "path": "slides[0].elements[1].rect[3]", "code": "below-min" },
+    { "name": "a table with no width", "model": "deck", "at": ["slides", 4, "elements", 0, "rect"], "value": [0.05, 0.15, 0, 0.7], "path": "slides[4].elements[0].rect[2]", "code": "below-min" },
+    { "name": "a flat ellipse", "model": "deck", "at": ["slides", 4, "elements", 3, "rect"], "value": [0.02, 0.02, 0.06, 0.0000005], "path": "slides[4].elements[3].rect[3]", "code": "below-min" },
+    { "name": "two slides with one id", "model": "deck", "at": ["slides", 6, "id"], "value": "sl-title", "path": "slides[6].id", "code": "too-many" },
+    { "name": "two elements with one id on a slide", "model": "deck", "at": ["slides", 4, "elements", 4, "id"], "value": "tbl", "path": "slides[4].elements[4].id", "code": "too-many" },
+    { "name": "a deck run that names a mark twice", "model": "deck", "at": ["slides", 0, "elements", 1, "paragraphs", 0, "runs", 0, "marks"], "value": ["i", "i"], "path": "slides[0].elements[1].paragraphs[0].runs[0].marks", "code": "too-many" },
 
     { "name": "javascript: button", "model": "email", "at": ["blocks", 4, "href"], "value": "javascript:alert(1)", "path": "blocks[4].href", "code": "link" },
     { "name": "data: button", "model": "email", "at": ["blocks", 4, "href"], "value": "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==", "path": "blocks[4].href", "code": "link" },
@@ -53,6 +62,12 @@
       { "id": "a6", "name": "Six", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "6", "sections": [] } } }
     ], "path": "attachments", "code": "too-many" },
     { "name": "a third column", "model": "email", "at": ["blocks", 7, "columns", 2], "value": { "blocks": [] }, "path": "blocks[7].columns", "code": "too-many" },
-    { "name": "columns inside columns", "model": "email", "at": ["blocks", 7, "columns", 0, "blocks", 0], "value": { "type": "columns", "id": "nested", "columns": [] }, "path": "blocks[7].columns[0].blocks[0].type", "code": "tag" }
+    { "name": "columns inside columns", "model": "email", "at": ["blocks", 7, "columns", 0, "blocks", 0], "value": { "type": "columns", "id": "nested", "columns": [] }, "path": "blocks[7].columns[0].blocks[0].type", "code": "tag" },
+    { "name": "an empty attachment list (no attachments is no field)", "model": "email", "at": ["attachments"], "value": [], "path": "attachments", "code": "too-few" },
+    { "name": "a top-level block that reuses an id from inside columns", "model": "email", "at": ["blocks", 8, "id"], "value": "p2", "path": "blocks[8].id", "code": "too-many" },
+    { "name": "a column block that reuses a top-level id", "model": "email", "at": ["blocks", 7, "columns", 1, "blocks", 1, "id"], "value": "p1", "path": "blocks[7].columns[1].blocks[1].id", "code": "too-many" },
+    { "name": "two attachments with one id", "model": "email", "at": ["attachments", 1, "id"], "value": "a1", "path": "attachments[1].id", "code": "too-many" },
+    { "name": "an attached doc that repeats a block id", "model": "email", "at": ["attachments", 0, "spec", "doc", "sections", 0, "blocks", 1], "value": { "type": "divider", "id": "p1" }, "path": "attachments[0].spec.doc.sections[0].blocks[1].id", "code": "too-many" },
+    { "name": "an email run that names a mark twice", "model": "email", "at": ["blocks", 1, "runs", 1, "marks"], "value": ["b", "b"], "path": "blocks[1].runs[1].marks", "code": "too-many" }
   ]
 }

@@ -45,6 +45,8 @@ const roundTrip = (deck: DeckSpec, ops: DeckOp[]) => {
 };
 
 const box = (id: string, rect: DeckRect, layer: 'content' | 'background' = 'content'): DeckElement => ({ kind: 'shape', id, rect, layer, shape: 'rect' });
+const line = (id: string, rect: DeckRect): DeckElement => ({ kind: 'shape', id, rect, layer: 'content', shape: 'line' });
+const text = (id: string, rect: DeckRect): DeckElement => ({ kind: 'text', id, rect, layer: 'content', paragraphs: [{ runs: [{ text: id }] }] });
 const slideOf = (elements: DeckElement[]): Slide => ({ id: 'sl', layout: 'content', elements });
 
 describe('DeckSpec schema', () => {
@@ -113,13 +115,52 @@ describe('overlapCheck', () => {
     expect(overlapCheck(slideOf([box('big', [0, 0, 1, 1]), box('in', [0.4, 0.4, 0.1, 0.1])]))).toEqual([{ a: 'big', b: 'in', area: expect.closeTo(0.01, 9) }]);
   });
 
-  it('a line through a box overlaps it (area 0); a line along an edge, or two crossing lines, do not', () => {
-    const text = box('t', [0.1, 0.1, 0.5, 0.5]);
-    expect(overlapCheck(slideOf([text, box('h', [0, 0.3, 1, 0])]))).toEqual([{ a: 't', b: 'h', area: 0 }]);
-    expect(overlapCheck(slideOf([box('v', [0.3, 0, 0, 1]), text]))).toEqual([{ a: 'v', b: 't', area: 0 }]);
-    expect(overlapCheck(slideOf([text, box('edge', [0, 0.6, 1, 0])]))).toEqual([]);
-    expect(overlapCheck(slideOf([text, box('beside', [0.7, 0.3, 0.2, 0])]))).toEqual([]);
-    expect(overlapCheck(slideOf([box('h', [0, 0.5, 1, 0]), box('v', [0.5, 0, 0, 1])]))).toEqual([]);
+  it('a line shape through a box overlaps it (area 0); a line along an edge, or two crossing lines, do not', () => {
+    const t = box('t', [0.1, 0.1, 0.5, 0.5]);
+    expect(overlapCheck(slideOf([t, line('h', [0, 0.3, 1, 0])]))).toEqual([{ a: 't', b: 'h', area: 0 }]);
+    expect(overlapCheck(slideOf([line('v', [0.3, 0, 0, 1]), t]))).toEqual([{ a: 'v', b: 't', area: 0 }]);
+    expect(overlapCheck(slideOf([t, line('edge', [0, 0.6, 1, 0])]))).toEqual([]);
+    expect(overlapCheck(slideOf([t, line('beside', [0.7, 0.3, 0.2, 0])]))).toEqual([]);
+    expect(overlapCheck(slideOf([line('h', [0, 0.5, 1, 0]), line('v', [0.5, 0, 0, 1])]))).toEqual([]);
+    // A diagonal line counts as its bounding box.
+    expect(overlapCheck(slideOf([t, line('diag', [0.5, 0.5, 0.3, 0.3])]))).toEqual([{ a: 't', b: 'diag', area: expect.closeTo(0.01, 9) }]);
+  });
+
+  it('only a line shape may be flat: a flat text box or table is refused, and overlapCheck still flags it', () => {
+    // A zero-height text box on the chart's top edge: renderers draw the text down from that edge, across the chart.
+    const chart: DeckElement = { kind: 'chart', id: 'chart', rect: [0.1, 0.2, 0.8, 0.7], layer: 'content', chart: 'bar', categories: ['a'], series: [{ name: 's', values: [1] }] };
+    const onEdge = slideOf([chart, text('label', [0.1, 0.2, 0.8, 0])]);
+    expect(checkSlide(onEdge)).toMatchObject({ ok: false, errors: [{ path: 'elements[1].rect[3]', code: 'below-min' }] });
+    expect(overlapCheck(onEdge)).toEqual([{ a: 'chart', b: 'label', area: 0 }]);
+    // Two zero-height text boxes stacked at the same y.
+    const stacked = slideOf([text('one', [0.1, 0.5, 0.8, 0]), text('two', [0.1, 0.5, 0.8, 0])]);
+    expect(checkSlide(stacked)).toMatchObject({
+      ok: false,
+      errors: [
+        { path: 'elements[0].rect[3]', code: 'below-min' },
+        { path: 'elements[1].rect[3]', code: 'below-min' },
+      ],
+    });
+    expect(overlapCheck(stacked)).toEqual([{ a: 'one', b: 'two', area: 0 }]);
+    // A table with no width, a rect shape squashed flat: refused too. A line shape may be flat either way.
+    const table: DeckElement = { kind: 'table', id: 'tbl', rect: [0.1, 0.9, 0, 0.05], layer: 'content', rows: [] };
+    expect(checkSlide(slideOf([table]))).toMatchObject({ ok: false, errors: [{ path: 'elements[0].rect[2]', code: 'below-min' }] });
+    expect(checkSlide(slideOf([box('r', [0.1, 0.1, 0.5, 1e-7])]))).toMatchObject({ ok: false, errors: [{ path: 'elements[0].rect[3]', code: 'below-min' }] });
+    expect(checkSlide(slideOf([line('h', [0, 0.5, 1, 0]), line('v', [0.5, 0, 0, 1])])).ok).toBe(true);
+    // An op cannot bring one in either.
+    const r = applyDeckOps(minimal(), [{ op: 'add_slide', id: 'flat', baseRev: 0, slide: onEdge }]);
+    expect(r.rejected).toMatchObject([{ code: 'invalid', message: expect.stringContaining('slide.elements[1].rect[3]') }]);
+    // A flat box that touches nothing is no overlap.
+    expect(overlapCheck(slideOf([chart, text('far', [0.1, 0.95, 0.8, 0])]))).toEqual([]);
+  });
+
+  it('slide ids are unique in a deck and element ids within a slide (the same element id on two slides is fine)', () => {
+    const deck = full();
+    const twoSlides: DeckSpec = { ...deck, slides: [deck.slides[0], { ...deck.slides[1], id: deck.slides[0].id }] };
+    expect(checkDeckSpec(twoSlides)).toMatchObject({ ok: false, errors: [{ path: 'slides[1].id', code: 'too-many' }] });
+    const sameOnTwo: DeckSpec = { ...minimal(), slides: [slideOf([box('e', [0, 0, 0.1, 0.1])]), { ...slideOf([box('e', [0, 0, 0.1, 0.1])]), id: 'sl2' }] };
+    expect(checkDeckSpec(sameOnTwo).ok).toBe(true);
+    expect(checkSlide(slideOf([box('e', [0, 0, 0.1, 0.1]), box('e', [0.5, 0.5, 0.1, 0.1])]))).toMatchObject({ ok: false, errors: [{ path: 'elements[1].id', code: 'too-many' }] });
   });
 
   it('background elements never count, and it never throws on anything', () => {

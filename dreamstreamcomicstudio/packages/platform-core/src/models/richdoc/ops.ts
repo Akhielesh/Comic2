@@ -10,7 +10,7 @@
  *   is the same object as before.
  * - Caps: `RICHDOC_LIMITS.sections` sections and `RICHDOC_LIMITS.blocksPerSection` blocks per section (`limit`).
  */
-import type { OpId } from '../../contract/schema.js';
+import type { OpId, OpRejectCode } from '../../contract/schema.js';
 import type { DocOp, DocOpResult, DocSection, DocSuggestion, RichDoc } from '../../contract/richdoc.js';
 import { RICHDOC_LIMITS } from '../../contract/richdoc.js';
 import type { ApplyOptions, InverseMeta, OpKernel, Step } from '../common.js';
@@ -152,28 +152,44 @@ const targetOf = (op: DocOp): { kind: 'section' | 'block'; id: string } | null =
   }
 };
 
+/** What `acceptDocSuggestion` needs from the host: its op log, so a suggestion's op applies at most once. */
+export interface AcceptSuggestionOptions {
+  /** Op ids the host already applied (its op log), as `ApplyOptions.seenOpIds`. Required: pass `[]` for a new log. */
+  seenOpIds: readonly OpId[];
+}
+
 /**
  * Accept one agent suggestion: its target (the section or block its op names) must still exist, else it is refused
  * as `not-found` and NOT re-stamped; then its op's `baseRev` is re-stamped to the document's current `rev` and the op
- * applied, so accepting one suggestion never makes the others stale. Each suggestion's op id still applies at most
- * once when the host passes its op log in `options.seenOpIds`.
+ * applied, so accepting one suggestion never makes the others stale.
+ *
+ * The re-stamp bypasses the `stale` guard, so the host's op log is the only thing that stops the same suggestion
+ * applying twice: `options.seenOpIds` is REQUIRED (a call without it does not compile, and is refused as `invalid` at
+ * run time), and an op id in it is refused as `duplicate`.
  *
  * The check is by id only: an accepted `update_block` replaces whatever the block holds now. A host that must not
- * overwrite a later user edit compares the block with the one the suggestion saw first.
+ * overwrite a later user edit compares the block with the one the suggestion saw first. Never throws.
  */
-export const acceptDocSuggestion = (doc: RichDoc, suggestion: DocSuggestion, options?: ApplyOptions): DocOpResult => {
-  const r = checkDocSuggestion(suggestion);
-  if (r.ok === false) return { doc, applied: [], rejected: [{ index: 0, code: 'invalid', message: describeErrors(r.errors) }] };
-  const op = r.value.op;
-  const target = targetOf(op);
-  if (target && isRecord(doc) && Array.isArray(doc.sections)) {
-    let found: boolean;
-    try {
-      found = target.kind === 'section' ? indexById(doc.sections, target.id) !== -1 : findBlock(doc, target.id) !== null;
-    } catch {
-      found = false;
+export const acceptDocSuggestion = (doc: RichDoc, suggestion: DocSuggestion, options: AcceptSuggestionOptions): DocOpResult => {
+  const refuse = (code: OpRejectCode, message: string, opId?: OpId): DocOpResult => ({
+    doc,
+    applied: [],
+    rejected: [opId === undefined ? { index: 0, code, message } : { index: 0, opId, code, message }],
+  });
+  try {
+    if (!isRecord(options) || !Array.isArray(options.seenOpIds)) {
+      return refuse('invalid', "accepting a suggestion needs the host's op log (options.seenOpIds), so it applies at most once");
     }
-    if (!found) return { doc, applied: [], rejected: [{ index: 0, opId: op.id, code: 'not-found', message: `the suggestion's ${target.kind} ${target.id} is gone` }] };
+    const r = checkDocSuggestion(suggestion);
+    if (r.ok === false) return refuse('invalid', describeErrors(r.errors));
+    const op = r.value.op;
+    const target = targetOf(op);
+    if (target && isRecord(doc) && Array.isArray(doc.sections)) {
+      const found = target.kind === 'section' ? indexById(doc.sections, target.id) !== -1 : findBlock(doc, target.id) !== null;
+      if (!found) return refuse('not-found', `the suggestion's ${target.kind} ${target.id} is gone`, op.id);
+    }
+    return applyDocOps(doc, [{ ...op, baseRev: revOf(doc) }], { seenOpIds: options.seenOpIds });
+  } catch {
+    return refuse('invalid', 'the document, the suggestion or the options could not be read (a getter or a Proxy trap threw)');
   }
-  return applyDocOps(doc, [{ ...op, baseRev: revOf(doc) }], options);
 };

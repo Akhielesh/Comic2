@@ -8,8 +8,9 @@
  * - Block ops address TOP-LEVEL blocks only: `index` is a position in `blocks`, and a `blockId` that names a block
  *   inside a `columns` block is `not-found` (that block changes through an `update_block` of its columns block).
  * - Block ids are unique across the email, columns included; attachment ids across its attachments (`invalid`).
- * - `attach` honours `index` (absent appends); `detach`'s inverse is an `attach` at the old index. An empty
- *   attachment list is the same as none: detaching the last attachment removes the field.
+ * - `attach` honours `index` (absent appends); `detach`'s inverse is an `attach` at the old index. An email with no
+ *   attachments has no `attachments` field (the schema refuses an empty list): detaching the last attachment removes
+ *   the field, so attach followed by its undo is exact.
  * - Caps: `EMAIL_LIMITS.blocks` blocks and `EMAIL_LIMITS.attachments` attachments, and a block op may not take the
  *   plain-text body past `EMAIL_LIMITS.field` characters (`emailBodyTextLength`) (`limit`).
  * - There is no op, mode or field that sends.

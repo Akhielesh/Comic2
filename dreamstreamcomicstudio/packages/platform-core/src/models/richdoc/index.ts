@@ -44,5 +44,7 @@ export {
   checkRichDoc,
   migrateRichDoc,
   refineDocOp,
+  refineRichDoc,
 } from './schema.js';
+export type { AcceptSuggestionOptions } from './ops.js';
 export { acceptDocSuggestion, applyDocOps, invertDocOp, invertDocOps } from './ops.js';

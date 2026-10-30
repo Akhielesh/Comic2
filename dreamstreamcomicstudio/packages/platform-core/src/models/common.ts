@@ -13,7 +13,10 @@
  *   applies at least one op bumps `rev` by 1, so a replayed batch is refused as `stale`.
  * - Each op id applies at most once: a second op with the same id in one call, or an id the host lists in
  *   `seenOpIds` (its op log), is refused as `duplicate`.
- * - Every applied op has an exact inverse (`invert*Ops`), computed against the document it was applied to.
+ * - Every applied op has an exact inverse (`invert*Ops`), computed against the document it was applied to; an
+ *   inverse is itself a valid op (it passes the same check), or there is none (null).
+ * - "Never throws" is total: an op, a document or an options object whose getters or Proxy traps throw is refused
+ *   (`invalid`), never thrown through.
  */
 import type {
   CheckError,
@@ -121,6 +124,64 @@ export type RefinePath = (string | number)[];
 
 export const refineError = (path: RefinePath, code: CheckError['code'], message: string): CheckError => ({ path: formatPath(path), code, message });
 
+/**
+ * The code a repeated id is refused with. Interim: CHECK_ERROR_CODES has no `duplicate-id` yet (amendment A1, open
+ * with the lead); when it lands this one line and the repeated-id cases of fixtures/models/invalid.json change to it.
+ */
+const REPEATED_ID: CheckError['code'] = 'too-many';
+
+/** One id namespace of a document (its sections, its blocks, a slide's elements…): each id at most once. */
+export interface IdScope {
+  /** Record the item at `path` (its id is at `path.id`); a repeat is reported at that `id`. */
+  add: (id: string, path: RefinePath) => void;
+  errors: CheckError[];
+}
+
+/** A fresh `IdScope`; `what` names the ids in messages ("block", "slide"…). */
+export const idScope = (what: string): IdScope => {
+  const first = new Map<string, string>();
+  const errors: CheckError[] = [];
+  return {
+    errors,
+    add: (id, path) => {
+      const prior = first.get(id);
+      if (prior === undefined) first.set(id, formatPath(path) || '(root)');
+      else errors.push(refineError(path.concat(['id']), REPEATED_ID, `repeats the ${what} id ${JSON.stringify(id)} of ${prior} (each ${what} id at most once)`));
+    },
+  };
+};
+
+/**
+ * Every run's `marks` inside `value` (a checked copy, found at `path`) that names a mark twice, refused as `too-many`
+ * at that `marks`: each mark at most once (MODEL_LIMITS.marks). `Run` is the only shape with a `marks` field.
+ */
+export const repeatedMarks = (value: unknown, path: RefinePath): CheckError[] => {
+  const errors: CheckError[] = [];
+  const at: RefinePath = path.slice();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) {
+        at.push(i);
+        walk(v[i]);
+        at.pop();
+      }
+      return;
+    }
+    if (!isRecord(v)) return;
+    for (const key of Object.keys(v)) {
+      at.push(key);
+      const child = v[key];
+      if (key === 'marks' && Array.isArray(child)) {
+        const repeat = firstRepeat(child as string[]);
+        if (repeat !== null) errors.push(refineError(at, 'too-many', `names the mark ${JSON.stringify(repeat)} more than once (each mark at most once)`));
+      } else walk(child);
+      at.pop();
+    }
+  };
+  walk(value);
+  return errors;
+};
+
 /** `check(schema, value)`, then the refinements on the checked copy. */
 export const checkRefined = <T>(schema: Schema<T>, value: unknown, refine: (value: T) => CheckError[], options?: CheckOptions): CheckResult<T> => {
   const r = check(schema, value, options);
@@ -190,6 +251,9 @@ const readableId = (raw: unknown): OpId | undefined => {
 export const checkOp = <D, O extends OpBase>(kernel: OpKernel<D, O>, raw: unknown): CheckResult<O> =>
   checkRefined(kernel.schema, raw, kernel.refine);
 
+/** What a caller-supplied value whose getters or Proxy traps throw is refused with. */
+const UNREADABLE = 'could not be read (a getter or a Proxy trap threw)';
+
 /** The engine behind `applyDocOps`, `applyDeckOps` and `applyEmailOps` (see the op rules at the top of this file). */
 export const applyOpsWith = <D, O extends OpBase>(
   kernel: OpKernel<D, O>,
@@ -199,40 +263,56 @@ export const applyOpsWith = <D, O extends OpBase>(
 ): OpResult<D, O> => {
   const applied: O[] = [];
   const rejected: OpRejection[] = [];
-  if (!Array.isArray(ops)) {
-    rejected.push({ index: 0, code: 'invalid', message: 'ops must be a list' });
-    return { doc, applied, rejected };
-  }
-  const rev = revOf(doc);
   const seen = new Set<string>();
-  const log = options && Array.isArray(options.seenOpIds) ? options.seenOpIds : [];
-  for (const id of log) if (typeof id === 'string') seen.add(id);
+  let count: number;
+  let rev: number;
+  let docOk: boolean;
+  // Everything read from the call's arguments before the first op: the list, the document's revision, the op log.
+  try {
+    if (!Array.isArray(ops)) {
+      rejected.push({ index: 0, code: 'invalid', message: 'ops must be a list' });
+      return { doc, applied, rejected };
+    }
+    count = ops.length;
+    rev = revOf(doc);
+    docOk = isRecord(doc);
+    const log = options && Array.isArray(options.seenOpIds) ? options.seenOpIds : [];
+    for (const id of log) if (typeof id === 'string') seen.add(id);
+  } catch {
+    return { doc, applied, rejected: [{ index: 0, code: 'invalid', message: `the ops, the ${kernel.noun} or the options ${UNREADABLE}` }] };
+  }
+  /** Op `index` as the engine applies it (a checked copy), or why not. Reads caller data, so it is all in one try. */
+  const admit = (index: number): { op: O } | { rejection: OpRejection } => {
+    let opId: OpId | undefined;
+    const refuse = (code: OpRejectCode, message: string): { rejection: OpRejection } => ({
+      rejection: opId === undefined ? { index, code, message } : { index, opId, code, message },
+    });
+    try {
+      const raw: unknown = ops[index];
+      opId = readableId(raw);
+      if (index >= MODEL_OPS_MAX) return refuse('limit', `one call applies at most ${MODEL_OPS_MAX} ops`);
+      if (!docOk) return refuse('invalid', `the ${kernel.noun} is not a ${kernel.noun} object`);
+      const denied = kernel.gate && isRecord(raw) ? kernel.gate(raw) : null;
+      if (denied) return refuse(denied.code, denied.message);
+      const r = checkOp(kernel, raw);
+      if (r.ok === false) return refuse('invalid', describeErrors(r.errors));
+      return { op: r.value as O };
+    } catch {
+      return { rejection: { index, code: 'invalid', message: `the op ${UNREADABLE}` } };
+    }
+  };
   let current = doc;
-  for (let index = 0; index < ops.length; index++) {
-    const raw: unknown = ops[index];
-    const opId = readableId(raw);
+  for (let index = 0; index < count; index++) {
+    const admitted = admit(index);
+    if ('rejection' in admitted) {
+      rejected.push(admitted.rejection);
+      continue;
+    }
+    // From here on the op is the engine's own checked copy: nothing below reads caller data except `step`.
+    const op = admitted.op;
     const refuse = (code: OpRejectCode, message: string): void => {
-      rejected.push(opId === undefined ? { index, code, message } : { index, opId, code, message });
+      rejected.push({ index, opId: op.id, code, message });
     };
-    if (index >= MODEL_OPS_MAX) {
-      refuse('limit', `one call applies at most ${MODEL_OPS_MAX} ops`);
-      continue;
-    }
-    if (!isRecord(doc)) {
-      refuse('invalid', `the ${kernel.noun} is not a ${kernel.noun} object`);
-      continue;
-    }
-    const denied = kernel.gate && isRecord(raw) ? kernel.gate(raw) : null;
-    if (denied) {
-      refuse(denied.code, denied.message);
-      continue;
-    }
-    const r = checkOp(kernel, raw);
-    if (r.ok === false) {
-      refuse('invalid', describeErrors(r.errors));
-      continue;
-    }
-    const op = r.value as O;
     if (seen.has(op.id)) {
       refuse('duplicate', `op ${op.id} was already applied`);
       continue;
@@ -258,11 +338,20 @@ export const applyOpsWith = <D, O extends OpBase>(
   return { doc: applied.length ? { ...current, rev: rev + 1 } : doc, applied, rejected };
 };
 
+/** `inverse` as the engine would apply it (a checked copy), or null when it is not a valid op (an over-long id…). */
+const checkedInverse = <D, O extends OpBase>(kernel: OpKernel<D, O>, inverse: O | null): O | null => {
+  if (!inverse) return null;
+  const r = checkOp(kernel, inverse);
+  return r.ok === false ? null : (r.value as O);
+};
+
 /**
  * The undo batch for `applied` (the ops one `apply*Ops` call applied to `before`, in order): each op's exact inverse,
  * computed against the document just before that op, newest first, all stamped with `meta.baseRev`. Applying the
- * result to the document after the call gives back `before` (apart from `rev`, which moves forward). Null when an
- * op is malformed or does not apply to `before` (it was not applied to this document).
+ * result to the document after the call gives back `before` (apart from `rev`, which moves forward). Each inverse is
+ * checked like any op (checked copies are returned). Null when an op is malformed or does not apply to `before` (it
+ * was not applied to this document), or when an inverse is not a valid op (for example `meta.id` gave an id that is
+ * not an `OpId`: too long, or not matching `ID_PATTERN`), so an undo batch apply would refuse is never handed out.
  */
 export const invertOpsWith = <D, O extends OpBase>(
   kernel: OpKernel<D, O>,
@@ -270,15 +359,15 @@ export const invertOpsWith = <D, O extends OpBase>(
   applied: readonly unknown[],
   meta: InverseMeta<O>,
 ): O[] | null => {
-  if (!Array.isArray(applied) || !isRecord(before) || !isRecord(meta)) return null;
   const out: O[] = [];
-  let current: D = before;
   try {
+    if (!Array.isArray(applied) || !isRecord(before) || !isRecord(meta)) return null;
+    let current: D = before;
     for (let index = 0; index < applied.length; index++) {
       const r = checkOp(kernel, applied[index]);
       if (r.ok === false) return null;
       const op = r.value as O;
-      const inverse = kernel.invert(current, op, meta.id(op, index), meta.baseRev);
+      const inverse = checkedInverse(kernel, kernel.invert(current, op, meta.id(op, index), meta.baseRev));
       const next = kernel.step(current, op);
       if (!inverse || next.ok === false) return null;
       out.push(inverse);
@@ -290,13 +379,17 @@ export const invertOpsWith = <D, O extends OpBase>(
   return out.reverse();
 };
 
-/** The exact inverse of one op as applied to `before`, or null (malformed, or it does not apply to `before`). */
+/**
+ * The exact inverse of one op as applied to `before`, or null (malformed, it does not apply to `before`, or the
+ * inverse is not a valid op, e.g. `meta.id` is not an `OpId`). A checked copy.
+ */
 export const invertOpWith = <D, O extends OpBase>(kernel: OpKernel<D, O>, before: D, op: unknown, meta: { id: OpId; baseRev: number }): O | null => {
-  if (!isRecord(before) || !isRecord(meta)) return null;
-  const r = checkOp(kernel, op);
-  if (r.ok === false) return null;
   try {
-    return kernel.step(before, r.value as O).ok ? kernel.invert(before, r.value as O, meta.id, meta.baseRev) : null;
+    if (!isRecord(before) || !isRecord(meta)) return null;
+    const r = checkOp(kernel, op);
+    if (r.ok === false) return null;
+    const checked = r.value as O;
+    return kernel.step(before, checked).ok ? checkedInverse(kernel, kernel.invert(before, checked, meta.id, meta.baseRev)) : null;
   } catch {
     return null;
   }

@@ -4,8 +4,14 @@
  * `checkEmailDoc` and by `applyEmailOps`:
  * - the whole plain-text body (`emailBodyTextLength`) is at most `EMAIL_LIMITS.field` characters, so a draft fits a
  *   10,000-character composer (`too-long` at `blocks`);
- * - a `docx` attachment carries a doc and a `pptx` one a deck (`tag` at `spec.type`); an attached deck obeys the
- *   deck refinements.
+ * - a `docx` attachment carries a doc and a `pptx` one a deck (`tag` at `spec.type`); an attached doc or deck obeys
+ *   its own model's refinements;
+ * - block ids are unique across the email (columns included) and attachment ids across its attachments; a run names
+ *   each mark at most once.
+ *
+ * An email with no attachments has no `attachments` field: the list, when present, holds at least one (`too-few`), so
+ * attach followed by its undo gives back exactly the email it started from. Hosts drop an empty list a model writes
+ * before `checkEmailDoc`.
  *
  * Agents draft; people send. Nothing here can send, and an agent can never change recipients: `set_recipients` needs
  * `actor: 'user'`, which the HOST stamps; `stampAgentEmailOp` is how a host turns model output into an op.
@@ -18,9 +24,21 @@ import type { Run } from '../../contract/schema.js';
 import { check } from '../../schema/check.js';
 import { s } from '../../schema/s.js';
 import type { RefinePath } from '../common.js';
-import { checkRefined, idSchema, insertIndexSchema, isRecord, listItemsOf, migrateV1, opBaseFields, refineError, runsOf } from '../common.js';
+import {
+  checkRefined,
+  idSchema,
+  idScope,
+  insertIndexSchema,
+  isRecord,
+  listItemsOf,
+  migrateV1,
+  opBaseFields,
+  refineError,
+  repeatedMarks,
+  runsOf,
+} from '../common.js';
 import { DeckSpecSchema, refineDeckSpec } from '../deck/schema.js';
-import { RichDocSchema } from '../richdoc/schema.js';
+import { RichDocSchema, refineRichDoc } from '../richdoc/schema.js';
 
 const E = EMAIL_LIMITS;
 
@@ -77,7 +95,8 @@ export const EmailDocSchema = s.object({
   bcc: s.optional(recipients),
   blocks: s.array(EmailBlockSchema, { max: E.blocks }),
   signature: s.optional(s.text({ max: E.field })),
-  attachments: s.optional(s.array(AttachmentSpecSchema, { max: E.attachments })),
+  /** Absent when there are none: a present list holds 1–5 (so attach + undo is exact). */
+  attachments: s.optional(s.array(AttachmentSpecSchema, { min: 1, max: E.attachments })),
   brand: s.optional(idSchema),
 });
 
@@ -104,27 +123,36 @@ export const AgentEmailOpSchema = s.union('op', agentOps);
 // ── The plain-text body cap ────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * What `emailBodyTextLength` adds for the plain-text formatting around the text, per element. They are generous on
- * purpose: the measure is an UPPER bound on any plain-text rendering of the body (`emailToPlainText` must stay within
- * it), so a body under the cap always fits the composer.
+ * What `emailBodyTextLength` adds for the plain-text formatting around the text. The measure is an UPPER bound on
+ * the plain text `emailToPlainText` (src/email/plainText.ts) writes, so a body under the cap always fits the composer.
+ * It follows that layout: blocks are separated by a blank line; a list item is `  `×indent, then `- ` or `n. `, and
+ * every line after its first is padded to the same width; every line of a quote starts with `> ` and its cite is a
+ * last line `> — cite`; an image is `[Image: alt]`; the signature follows a `-- ` line. A layout that needs more room
+ * changes these numbers (and the tests that pin them), never the cap.
  */
 export const EMAIL_TEXT_ALLOWANCE = {
-  /** The blank line after every block. */
+  /** The blank line between blocks (and before the signature). */
   block: 2,
-  /** A list item's indent (at most 4), marker (at most `100. `) and line break. */
+  /** A list item's prefix (at most 9: an indent of 4, then `100. `) and the line break before the next item. */
   listItem: 10,
   /** ` (` + `)` around a linked run's href. */
   link: 3,
   /** `: ` between a button's label and its href, and a line break. */
   button: 4,
-  /** `[` + `]` around an image's alt text, and a line break. */
-  image: 4,
+  /** `[Image: ` + `]` around an image's alt text. */
+  image: 9,
   /** A rule (`---`) and its line break. */
   divider: 4,
-  /** `— ` before a quote's cite, and a line break. */
-  cite: 4,
-  /** A prefix repeated after each line break inside a text (a quote's `> `, a list item's indent). */
-  lineBreak: 4,
+  /** The `> ` before a quote's first line. */
+  quote: 2,
+  /** The line break, `> ` and `— ` before a quote's cite. */
+  cite: 5,
+  /**
+   * What a line break inside a quote (or its cite) adds: the next line's `> `. A line break inside a list item adds
+   * that item's prefix width instead (`listPrefixWidth`); in a heading, paragraph, alt text or the signature it adds
+   * nothing (alt text is written on one line).
+   */
+  lineBreak: 2,
   /** The `-- ` line before the signature. */
   signature: 4,
 } as const;
@@ -132,11 +160,18 @@ export const EMAIL_TEXT_ALLOWANCE = {
 const A = EMAIL_TEXT_ALLOWANCE;
 const LINE_BREAK = /\r\n|\r|\n/g;
 
-const textLength = (text: string): number => text.length + (text.match(LINE_BREAK) || []).length * A.lineBreak;
+/**
+ * The width of list item `number`'s prefix (1-based, counting every item of the list): `  ` per indent level, then
+ * `- ` or `n. `. Every line of the item after its first is padded to this width. At most 9 within the schema's caps.
+ */
+export const listPrefixWidth = (ordered: boolean, indent: number, number: number): number => 2 * indent + (ordered ? String(number).length + 2 : 2);
 
-const runsLength = (runs: readonly Run[]): number => {
+/** `text` plus `perBreak` for each of its line breaks (CRLF counts once). */
+const textLength = (text: string, perBreak: number): number => text.length + (perBreak ? (text.match(LINE_BREAK) || []).length * perBreak : 0);
+
+const runsLength = (runs: readonly Run[], perBreak: number): number => {
   let n = 0;
-  for (const run of runs) n += textLength(run.text) + (run.link ? run.link.href.length + A.link : 0);
+  for (const run of runs) n += textLength(run.text, perBreak) + (run.link ? run.link.href.length + A.link : 0);
   return n;
 };
 
@@ -144,20 +179,22 @@ const blockLength = (block: EmailBlock): number => {
   switch (block.type) {
     case 'heading':
     case 'paragraph':
-      return runsLength(block.runs) + A.block;
+      return runsLength(block.runs, 0) + A.block;
     case 'list': {
       let n = A.block;
-      for (const item of block.items) n += runsLength(item.runs) + A.listItem;
+      block.items.forEach((item, i) => {
+        n += runsLength(item.runs, listPrefixWidth(block.ordered, item.indent || 0, i + 1)) + A.listItem;
+      });
       return n;
     }
     case 'button':
-      return textLength(block.label) + block.href.length + A.button + A.block;
+      return textLength(block.label, 0) + block.href.length + A.button + A.block;
     case 'quote':
-      return runsLength(block.runs) + (block.cite !== undefined ? textLength(block.cite) + A.cite : 0) + A.block;
+      return A.quote + runsLength(block.runs, A.lineBreak) + (block.cite !== undefined ? textLength(block.cite, A.lineBreak) + A.cite : 0) + A.block;
     case 'divider':
       return A.divider + A.block;
     case 'image':
-      return textLength(block.alt) + A.image + A.block;
+      return textLength(block.alt, 0) + A.image + A.block;
     case 'columns': {
       let n = A.block;
       for (const column of block.columns) for (const inner of column.blocks) n += blockLength(inner);
@@ -167,35 +204,47 @@ const blockLength = (block: EmailBlock): number => {
 };
 
 /**
- * The most characters a plain-text rendering of the body (the blocks and the signature; not the subject) can hold:
- * every text, href, label, cite and alt, plus `EMAIL_TEXT_ALLOWANCE` for the formatting around them. The cap
+ * The most characters the plain-text rendering of the body (the blocks and the signature; not the subject) can hold:
+ * every text, href, label, cite and alt, plus `EMAIL_TEXT_ALLOWANCE` for the layout around them (see there). The cap
  * `EMAIL_LIMITS.field` applies to it. For a schema-checked document.
  */
 export const emailBodyTextLength = (doc: Pick<EmailDoc, 'blocks' | 'signature'>): number => {
   let n = 0;
   for (const block of doc.blocks) n += blockLength(block);
-  if (doc.signature !== undefined) n += textLength(doc.signature) + A.signature;
+  if (doc.signature !== undefined) n += textLength(doc.signature, 0) + A.signature;
   return n;
 };
 
 // ── Refinements ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A docx needs a doc and a pptx a deck (a pdf takes either); an attached deck obeys the deck refinements. */
+/** A docx needs a doc and a pptx a deck (a pdf takes either); an attached doc or deck obeys its model's refinements. */
 export const refineAttachment = (attachment: AttachmentSpec, path: RefinePath): CheckError[] => {
   const errors: CheckError[] = [];
   const { kind, spec } = attachment;
   if ((kind === 'docx' && spec.type !== 'doc') || (kind === 'pptx' && spec.type !== 'deck')) {
     errors.push(refineError(path.concat(['spec', 'type']), 'tag', `a ${kind} attachment needs a ${kind === 'docx' ? 'doc' : 'deck'}`));
   }
-  return spec.type === 'deck' ? errors.concat(refineDeckSpec(spec.deck, path.concat(['spec', 'deck']))) : errors;
+  return errors.concat(
+    spec.type === 'deck' ? refineDeckSpec(spec.deck, path.concat(['spec', 'deck'])) : refineRichDoc(spec.doc, path.concat(['spec', 'doc'])),
+  );
 };
 
 /** The refinements of a whole (schema-checked) email. */
 export const refineEmailDoc = (doc: EmailDoc): CheckError[] => {
   let errors: CheckError[] = [];
+  const attachmentIds = idScope('attachment');
   (doc.attachments || []).forEach((attachment, i) => {
+    attachmentIds.add(attachment.id, ['attachments', i]);
     errors = errors.concat(refineAttachment(attachment, ['attachments', i]));
   });
+  const blockIds = idScope('block');
+  doc.blocks.forEach((block, i) => {
+    blockIds.add(block.id, ['blocks', i]);
+    if (block.type === 'columns') {
+      block.columns.forEach((column, c) => column.blocks.forEach((inner, j) => blockIds.add(inner.id, ['blocks', i, 'columns', c, 'blocks', j])));
+    }
+  });
+  errors = errors.concat(attachmentIds.errors, blockIds.errors, repeatedMarks(doc.blocks, ['blocks']));
   const length = emailBodyTextLength(doc);
   if (length > E.field) {
     errors.push(refineError(['blocks'], 'too-long', `the body must be at most ${E.field} characters of plain text (it has about ${length})`));
@@ -203,11 +252,16 @@ export const refineEmailDoc = (doc: EmailDoc): CheckError[] => {
   return errors;
 };
 
-/** Op rules the DSL cannot say: an attached spec obeys `refineAttachment`; `update_block` keeps the block's id. */
+/**
+ * Op rules the DSL cannot say: an attached spec obeys `refineAttachment`; `update_block` keeps the block's id; a
+ * carried block repeats no mark.
+ */
 export const refineEmailOp = (op: EmailOp): CheckError[] => {
   if (op.op === 'attach') return refineAttachment(op.attachment, ['attachment']);
-  if (op.op === 'update_block' && op.block.id !== op.blockId) return [refineError(['block', 'id'], 'literal', `must be the blockId, ${JSON.stringify(op.blockId)}`)];
-  return [];
+  if (op.op !== 'insert_block' && op.op !== 'update_block') return [];
+  const errors =
+    op.op === 'update_block' && op.block.id !== op.blockId ? [refineError(['block', 'id'], 'literal', `must be the blockId, ${JSON.stringify(op.blockId)}`)] : [];
+  return errors.concat(repeatedMarks(op.block, ['block']));
 };
 
 /** An EmailDoc v1 with its refinements (a fresh copy on success). */

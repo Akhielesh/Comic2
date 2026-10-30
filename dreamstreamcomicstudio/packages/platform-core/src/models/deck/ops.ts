@@ -4,7 +4,8 @@
  * to an engine are laid out by explicit rectangles and no engine is trusted to move things apart.
  *
  * The op rules are in models/common.ts; what is DeckSpec's own:
- * - Slide ids are unique in a deck, element ids within a slide; an op that would repeat one is refused (`invalid`).
+ * - Slide ids are unique in a deck, element ids within a slide; an op that would repeat one is refused (`invalid`;
+ *   a slide that repeats an element id already fails the op's own check).
  * - Positions are exact: `add_slide` at most at the end, `move_slide` to an existing position (`invalid` otherwise).
  * - At most `DECK_LIMITS.slides` slides (`limit`). Overlaps are allowed while editing; only export refuses them.
  */
@@ -12,20 +13,13 @@ import type { OpId } from '../../contract/schema.js';
 import type { DeckOp, DeckOpResult, DeckRect, DeckSpec, OverlapPair, Slide } from '../../contract/deck.js';
 import { DECK_LIMITS } from '../../contract/deck.js';
 import type { ApplyOptions, InverseMeta, OpKernel, Step } from '../common.js';
-import { applyOpsWith, firstRepeat, indexById, insertAt, invertOpWith, invertOpsWith, isRecord, removeAt, replaceAt, stepFail, stepOk } from '../common.js';
-import { DeckOpSchema, refineDeckOp } from './schema.js';
-
-const repeatedElement = (slide: Slide): string | null => {
-  const repeat = firstRepeat(slide.elements.map((el) => el.id));
-  return repeat === null ? null : `element id ${repeat} appears twice on slide ${slide.id}`;
-};
+import { applyOpsWith, indexById, insertAt, invertOpWith, invertOpsWith, isRecord, removeAt, replaceAt, stepFail, stepOk } from '../common.js';
+import { DECK_OVERLAP_EPSILON, DeckOpSchema, isLineShape, refineDeckOp } from './schema.js';
 
 const step = (deck: DeckSpec, op: DeckOp): Step<DeckSpec> => {
   switch (op.op) {
     case 'add_slide': {
       if (indexById(deck.slides, op.slide.id) !== -1) return stepFail('invalid', `slide id ${op.slide.id} is already used`);
-      const repeat = repeatedElement(op.slide);
-      if (repeat) return stepFail('invalid', repeat);
       const index = op.index === undefined ? deck.slides.length : op.index;
       if (index > deck.slides.length) return stepFail('invalid', `index ${index} is past the end of the slides (${deck.slides.length})`);
       if (deck.slides.length >= DECK_LIMITS.slides) return stepFail('limit', `a deck holds at most ${DECK_LIMITS.slides} slides`);
@@ -34,8 +28,6 @@ const step = (deck: DeckSpec, op: DeckOp): Step<DeckSpec> => {
     case 'update_slide': {
       const at = indexById(deck.slides, op.slideId);
       if (at === -1) return stepFail('not-found', `there is no slide ${op.slideId}`);
-      const repeat = repeatedElement(op.slide);
-      if (repeat) return stepFail('invalid', repeat);
       return stepOk({ ...deck, slides: replaceAt(deck.slides, at, op.slide) });
     }
     case 'remove_slide': {
@@ -97,11 +89,7 @@ export const invertDeckOp = (before: DeckSpec, op: DeckOp, meta: { id: OpId; bas
 
 // ── Overlaps ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * Overlaps thinner than this (a slide fraction: 0.002 px on a 1920 px slide) do not count, so edges that merely touch
- * (`[0, 0, 0.5, 1]` beside `[0.5, 0, 0.5, 1]`, even after 0.1 + 0.4 rounds in binary) are not an overlap.
- */
-export const DECK_OVERLAP_EPSILON = 1e-6;
+export { DECK_OVERLAP_EPSILON };
 
 const E = DECK_OVERLAP_EPSILON;
 
@@ -112,8 +100,15 @@ const rectOf = (el: unknown): DeckRect | null => {
   return r as DeckRect;
 };
 
-/** A rect with no width or no height: a line (a `line` shape, or a box squashed flat). */
-const isLine = (r: DeckRect): boolean => r[2] <= E || r[3] <= E;
+/** A content element as `overlapCheck` sees it. */
+interface Box {
+  id: string;
+  rect: DeckRect;
+  /** A `line` shape with no width or no height: it collides only with a box it runs through. */
+  line: boolean;
+  /** Any other element with no width or no height (refused by `checkDeckSpec`): it collides with whatever it touches. */
+  squashed: boolean;
+}
 
 /** How much `[lo1, hi1]` and `[lo2, hi2]` share. */
 const shared = (lo1: number, len1: number, lo2: number, len2: number): number => Math.min(lo1 + len1, lo2 + len2) - Math.max(lo1, lo2);
@@ -127,35 +122,43 @@ const crosses = (line: DeckRect, box: DeckRect): boolean => {
   return lx > bx + E && lx < bx + bw - E && shared(ly, lh, by, bh) > E;
 };
 
+/** Two rects meet, edges and corners included. */
+const touches = (a: DeckRect, b: DeckRect): boolean => shared(a[0], a[2], b[0], b[2]) >= -E && shared(a[1], a[3], b[1], b[3]) >= -E;
+
 /** The overlap of two content elements as a fraction of the slide (0 for a line through a box), or null for none. */
-const overlapOf = (a: DeckRect, b: DeckRect): number | null => {
-  const lineA = isLine(a);
-  const lineB = isLine(b);
-  if (lineA && lineB) return null; // two rules crossing is a drawing, not a collision
-  if (lineA) return crosses(a, b) ? 0 : null;
-  if (lineB) return crosses(b, a) ? 0 : null;
-  const w = shared(a[0], a[2], b[0], b[2]);
-  const h = shared(a[1], a[3], b[1], b[3]);
+const overlapOf = (a: Box, b: Box): number | null => {
+  // A flat text box or table is still drawn down from its top edge, so it collides with anything it touches.
+  if (a.squashed || b.squashed) return touches(a.rect, b.rect) ? 0 : null;
+  if (a.line && b.line) return null; // two rules crossing is a drawing, not a collision
+  if (a.line) return crosses(a.rect, b.rect) ? 0 : null;
+  if (b.line) return crosses(b.rect, a.rect) ? 0 : null;
+  const w = shared(a.rect[0], a.rect[2], b.rect[0], b.rect[2]);
+  const h = shared(a.rect[1], a.rect[3], b.rect[1], b.rect[3]);
   return w > E && h > E ? w * h : null;
 };
 
 /**
  * Every pair of `content` elements on `slide` whose rects overlap, in element order (`a` before `b`), with the
- * overlap's area as a fraction of the slide. `background` elements never count. A line (a rect with no width or no
- * height) overlaps a box it runs through, with area 0; edges that only touch do not overlap. Pure and total: an
- * element it cannot read is skipped, and it never throws.
+ * overlap's area as a fraction of the slide. `background` elements never count; edges that only touch do not overlap.
+ * A `line` shape with no width or no height overlaps a box it runs through, with area 0, and never another line (a
+ * diagonal line counts as its bounding box). Any other element with no width or no height (which `checkDeckSpec`
+ * refuses) overlaps everything it touches, with area 0. Pure and total on any JSON value: an element it cannot read is
+ * skipped.
  */
 export const overlapCheck = (slide: Slide): OverlapPair[] => {
   const out: OverlapPair[] = [];
   if (!isRecord(slide) || !Array.isArray(slide.elements)) return out;
-  const boxes: { id: string; rect: DeckRect }[] = [];
+  const boxes: Box[] = [];
   for (const el of slide.elements as unknown[]) {
     const rect = rectOf(el);
-    if (rect && isRecord(el) && el.layer === 'content' && typeof el.id === 'string') boxes.push({ id: el.id, rect });
+    if (!rect || !isRecord(el) || el.layer !== 'content' || typeof el.id !== 'string') continue;
+    const flat = rect[2] <= E || rect[3] <= E;
+    const line = flat && isLineShape(el);
+    boxes.push({ id: el.id, rect, line, squashed: flat && !line });
   }
   for (let i = 0; i < boxes.length; i++) {
     for (let j = i + 1; j < boxes.length; j++) {
-      const area = overlapOf(boxes[i].rect, boxes[j].rect);
+      const area = overlapOf(boxes[i], boxes[j]);
       if (area !== null) out.push({ a: boxes[i].id, b: boxes[j].id, area });
     }
   }

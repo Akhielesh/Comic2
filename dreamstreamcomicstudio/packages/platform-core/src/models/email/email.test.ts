@@ -19,6 +19,7 @@ import {
   emailBodyTextLength,
   invertEmailOp,
   invertEmailOps,
+  listPrefixWidth,
   migrateEmailDoc,
   stampAgentEmailOp,
 } from './index.js';
@@ -101,8 +102,10 @@ describe('EmailDoc schema', () => {
     expect(checkEmailDoc({ ...atCap, signature: 'S' })).toMatchObject({ ok: false, errors: [{ path: 'blocks', code: 'too-long' }] });
   });
 
-  it('measures the body as an upper bound on any plain-text rendering: text, hrefs, labels, alts and their formatting', () => {
+  it('measures the body as an upper bound on its plain-text rendering: text, hrefs, labels, alts and their layout', () => {
     const A = EMAIL_TEXT_ALLOWANCE;
+    // The allowances follow emailToPlainText's layout (see EMAIL_TEXT_ALLOWANCE): pinned, so a change is deliberate.
+    expect(A).toEqual({ block: 2, listItem: 10, link: 3, button: 4, image: 9, divider: 4, quote: 2, cite: 5, lineBreak: 2, signature: 4 });
     const doc: EmailDoc = {
       ...minimal(),
       blocks: [
@@ -118,15 +121,74 @@ describe('EmailDoc schema', () => {
     };
     const expected =
       3 + 5 + 21 + A.link + A.block + // paragraph
-      (3 + A.listItem) + (9 + A.lineBreak + A.listItem) + A.block + // list
+      (3 + A.listItem) + (9 + 3 + A.listItem) + A.block + // list: the line break in item 2 is padded to its `2. `
       4 + 21 + A.button + A.block + // button
-      6 + 3 + A.cite + A.block + // quote
+      A.quote + 6 + 3 + A.cite + A.block + // quote
       A.divider + A.block + // divider
       7 + A.image + A.block + // image
       (3 + A.block) + A.block + // columns
       2 + A.signature; // signature
     expect(emailBodyTextLength(doc)).toBe(expected);
     expect(emailBodyTextLength({ blocks: [] })).toBe(0);
+  });
+
+  // Each case is hand-computed against the layout emailToPlainText (W1.3, src/email/plainText.ts) writes; the
+  // comments give its real length, which the bound must never be under.
+  it('follows the plain-text layout: list line breaks pay their item prefix, quotes their `> `, images `[Image: ]`', () => {
+    expect([listPrefixWidth(false, 0, 1), listPrefixWidth(true, 0, 1), listPrefixWidth(true, 2, 9), listPrefixWidth(true, 2, 10), listPrefixWidth(true, 2, 100)]).toEqual([2, 3, 7, 8, 9]);
+
+    // An ordered list of 100 items at indent 2, each `ab\ncd`: items 1–9 have a 7-wide prefix (`    1. `), 10–99
+    // 8, item 100 9. Bound: 2 + Σ(5 + prefix + 10) = 2 + 1,500 + (9·7 + 90·8 + 9) = 2,294.
+    // emailToPlainText: Σ(2·prefix + 5) + 99 line breaks = 2·792 + 500 + 99 = 2,183.
+    const items = [];
+    for (let i = 0; i < 100; i++) items.push({ indent: 2, runs: [{ text: 'ab\ncd' }] });
+    const list: EmailDoc = { ...minimal(), blocks: [{ type: 'list', id: 'l', ordered: true, items }] };
+    expect(checkEmailDoc(list).ok).toBe(true);
+    expect(emailBodyTextLength(list)).toBe(2294);
+
+    // One item `    1. ` holding 1,250 line breaks: emailToPlainText writes 7 + 1,250·8 = 10,007 characters, so the
+    // bound (2 + 10 + 1,250 + 1,250·7 = 10,012) refuses it, and an agent cannot insert it either.
+    const tall: EmailBlock = { type: 'list', id: 'tall', ordered: true, items: [{ indent: 2, runs: [{ text: '\n'.repeat(1250) }] }] };
+    expect(emailBodyTextLength({ blocks: [tall] })).toBe(10012);
+    expect(checkEmailDoc({ ...minimal(), blocks: [tall] })).toMatchObject({ ok: false, errors: [{ path: 'blocks', code: 'too-long' }] });
+    const agent = stampAgentEmailOp({ op: 'insert_block', id: 'ins', baseRev: 0, block: tall });
+    expect(agent.ok).toBe(true);
+    expect(applyEmailOps(minimal(), [agent.value!]).rejected).toMatchObject([{ code: 'limit' }]);
+
+    // 80 images, 40 with an empty alt and 40 with a 118-character one: bound 40·(0 + 9 + 2) + 40·(118 + 9 + 2) = 5,600.
+    // emailToPlainText: 40·7 (`[Image]`) + 40·127 (`[Image: …]`) + 79·2 = 5,518.
+    const images = (alt: (i: number) => string): EmailBlock[] => {
+      const out: EmailBlock[] = [];
+      for (let i = 0; i < 80; i++) out.push({ type: 'image', id: `i${i}`, ref: { kind: 'asset', id: 'img/1.png' }, alt: alt(i) });
+      return out;
+    };
+    expect(emailBodyTextLength({ blocks: images((i) => (i % 2 ? 'a'.repeat(118) : '')) })).toBe(5600);
+    // 80 alts of 114 measure exactly 10,000 (emailToPlainText: 80·123 + 158 = 9,998) and pass; 80 of 118 measure
+    // 10,320 and are refused (emailToPlainText: 10,318, over the composer's 10,000).
+    expect(emailBodyTextLength({ blocks: images(() => 'a'.repeat(114)) })).toBe(10000);
+    expect(checkEmailDoc({ ...minimal(), blocks: images(() => 'a'.repeat(114)) }).ok).toBe(true);
+    expect(emailBodyTextLength({ blocks: images(() => 'a'.repeat(118)) })).toBe(10320);
+    expect(checkEmailDoc({ ...minimal(), blocks: images(() => 'a'.repeat(118)) })).toMatchObject({ ok: false, errors: [{ path: 'blocks', code: 'too-long' }] });
+
+    // A multi-line quote with a cite: `> one\n> two\n>\n> three\n> — Sam` is 29 characters; the bound is
+    // 2 (`> `) + 14 + 3·2 (line breaks) + 3 + 5 (`\n> — `) + 2 = 32. A cite's own line break counts like the quote's.
+    const quote = (runs: string, cite?: string): EmailBlock =>
+      cite === undefined ? { type: 'quote', id: 'q', runs: [{ text: runs }] } : { type: 'quote', id: 'q', runs: [{ text: runs }], cite };
+    expect(emailBodyTextLength({ blocks: [quote('one\ntwo\n\nthree', 'Sam')] })).toBe(32);
+    expect(emailBodyTextLength({ blocks: [quote('one\ntwo', 'Sam\nLee')] })).toBe(2 + 7 + 2 + 7 + 2 + 5 + 2);
+    // 80 cited quotes of 115 characters measure exactly 10,000 (emailToPlainText: 80·123 + 158 = 9,998); at 116 they
+    // are refused (emailToPlainText: 10,078).
+    const quotes = (n: number): EmailBlock[] => {
+      const out: EmailBlock[] = [];
+      for (let i = 0; i < 80; i++) out.push({ type: 'quote', id: `q${i}`, runs: [{ text: 'q'.repeat(n) }], cite: 'c' });
+      return out;
+    };
+    expect(emailBodyTextLength({ blocks: quotes(115) })).toBe(10000);
+    expect(checkEmailDoc({ ...minimal(), blocks: quotes(115) }).ok).toBe(true);
+    expect(checkEmailDoc({ ...minimal(), blocks: quotes(116) })).toMatchObject({ ok: false, errors: [{ path: 'blocks', code: 'too-long' }] });
+
+    // Line breaks in a heading, a paragraph or the signature add nothing (they are written as they are).
+    expect(emailBodyTextLength({ blocks: [para('p', 'a\nb\r\nc')], signature: 'x\ny' })).toBe(6 + 2 + 3 + 4);
   });
 
   it('a docx attachment needs a doc and a pptx one a deck; a pdf takes either', () => {
@@ -273,12 +335,35 @@ describe('applyEmailOps', () => {
     expect(applyEmailOps(five, [{ op: 'attach', id: 'z', baseRev: 0, attachment: attachment('a6') }]).rejected).toMatchObject([{ code: 'limit' }]);
   });
 
-  it('detaching the last attachment removes the field, so attach then detach on an email without attachments is exact', () => {
+  it('no attachments is no field: an empty list is refused, so attach / detach and their undo are exact for every valid email', () => {
+    expect(checkEmailDoc({ ...minimal(), attachments: [] })).toMatchObject({ ok: false, errors: [{ path: 'attachments', code: 'too-few' }] });
     const doc = minimal();
     const r = roundTrip(doc, [{ op: 'attach', id: 'x', baseRev: 0, attachment: attachment('a1', 'docx') }]);
     expect(r.doc.attachments).toHaveLength(1);
     const back = applyEmailOps(r.doc, [{ op: 'detach', id: 'y', baseRev: 1, attachmentId: 'a1' }]).doc;
     expect('attachments' in back).toBe(false);
+    expect(checkEmailDoc(back).ok).toBe(true);
+
+    // Every valid starting point (no field, then 1–4 attachments): attach at every position and appended, and detach
+    // each attachment; every result is valid and its undo gives back the very same email, key for key.
+    const exact = (before: EmailDoc, op: EmailOp) => {
+      const forward = applyEmailOps(before, [op]);
+      expect(forward.rejected).toEqual([]);
+      expect(checkEmailDoc(forward.doc).ok).toBe(true);
+      const undo = invertEmailOps(before, forward.applied, { baseRev: forward.doc.rev ?? 0, id: undoIds });
+      const restored = applyEmailOps(forward.doc, undo!).doc;
+      expect(content(restored)).toStrictEqual(content(before));
+      expect('attachments' in restored).toBe('attachments' in before);
+    };
+    for (let n = 0; n <= EMAIL_LIMITS.attachments - 1; n++) {
+      const list: AttachmentSpec[] = [];
+      for (let i = 0; i < n; i++) list.push(attachment(`a${i}`, (['docx', 'pdf', 'pptx'] as const)[i % 3]));
+      const before: EmailDoc = n ? { ...minimal(), attachments: list } : minimal();
+      expect(checkEmailDoc(before).ok).toBe(true);
+      for (let index = 0; index <= n; index++) exact(before, { op: 'attach', id: `at-${index}`, baseRev: 0, index, attachment: attachment('new') });
+      exact(before, { op: 'attach', id: 'at-end', baseRev: 0, attachment: attachment('new', 'pptx') });
+      for (const a of list) exact(before, { op: 'detach', id: `de-${a.id}`, baseRev: 0, attachmentId: a.id });
+    }
   });
 
   it('a block op may not take the plain-text body past 10,000 characters, but may shrink an over-long one', () => {

@@ -51,6 +51,7 @@ export {
   checkEmailDoc,
   checkEmailOp,
   emailBodyTextLength,
+  listPrefixWidth,
   migrateEmailDoc,
   refineAttachment,
   refineEmailDoc,

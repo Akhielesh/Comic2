@@ -1,9 +1,13 @@
 /**
  * DeckSpec v1 in the schema DSL (plan §5.2): `Infer<typeof DeckSpecSchema>` IS the frozen contract type `DeckSpec`.
- * Two rules the DSL cannot say are refinements, run by `checkDeckSpec` and by `applyDeckOps` on every slide an op
+ * Rules the DSL cannot say are refinements, run by `checkDeckSpec` and by `applyDeckOps` on every slide an op
  * carries:
  * - a rect stays on the slide: `x + w ≤ 1` and `y + h ≤ 1` (`above-max` at `rect[2]` / `rect[3]`);
- * - a chart series holds one value per category (`too-many` / `too-few` at `series[i].values`).
+ * - only a `line` shape may be flat: every other element has a width and a height over `DECK_OVERLAP_EPSILON`
+ *   (`below-min` at `rect[2]` / `rect[3]`), because text and tables are drawn down from the top of their box whatever
+ *   its height, and a flat box would slip past `overlapCheck`;
+ * - a chart series holds one value per category (`too-many` / `too-few` at `series[i].values`);
+ * - slide ids are unique in a deck and element ids within a slide; a run names each mark at most once.
  */
 import type { CheckError, CheckOptions, CheckResult } from '../../contract/schema.js';
 import { MODEL_LIMITS } from '../../contract/schema.js';
@@ -15,10 +19,12 @@ import {
   checkRefined,
   hexColorSchema,
   idSchema,
+  idScope,
   insertIndexSchema,
   migrateV1,
   opBaseFields,
   refineError,
+  repeatedMarks,
   runsOf,
   tableRowsOf,
   unitSchema,
@@ -28,6 +34,16 @@ const D = DECK_LIMITS;
 
 /** Floating-point slack for `x + w ≤ 1` (0.1 + 0.9 is 1.0000000000000002 in binary). */
 export const DECK_RECT_EPSILON = 1e-9;
+
+/**
+ * The thinnest width or height that counts (a slide fraction: 0.002 px on a 1920 px slide). Overlaps thinner than this
+ * do not count, so edges that merely touch (`[0, 0, 0.5, 1]` beside `[0.5, 0, 0.5, 1]`, even after 0.1 + 0.4 rounds
+ * in binary) are not an overlap; and only a `line` shape may be this thin.
+ */
+export const DECK_OVERLAP_EPSILON = 1e-6;
+
+/** A `line` shape: the only element that may have no width or no height. */
+export const isLineShape = (el: { kind?: unknown; shape?: unknown }): boolean => el.kind === 'shape' && el.shape === 'line';
 
 const elementBase = {
   id: idSchema,
@@ -108,12 +124,20 @@ export const DeckOpSchema = s.union('op', [
   s.object({ op: s.literal('set_theme'), ...opBaseFields, theme: DeckThemeSchema }),
 ]);
 
-/** The rect and chart rules of one (schema-checked) slide; `path` is where the slide sits. */
+/**
+ * The rules of one (schema-checked) slide; `path` is where the slide sits: rects on the slide and (but for a line
+ * shape) not flat, one chart value per category, unique element ids, each mark at most once.
+ */
 export const refineSlide = (slide: Slide, path: RefinePath): CheckError[] => {
   const errors: CheckError[] = [];
+  const ids = idScope('element');
   slide.elements.forEach((el, i) => {
     const at = path.concat(['elements', i]);
+    ids.add(el.id, at);
     const [x, y, w, h] = el.rect;
+    const flatOk = isLineShape(el);
+    if (!flatOk && w <= DECK_OVERLAP_EPSILON) errors.push(refineError(at.concat(['rect', 2]), 'below-min', 'must be more than 0: only a line shape may have no width'));
+    if (!flatOk && h <= DECK_OVERLAP_EPSILON) errors.push(refineError(at.concat(['rect', 3]), 'below-min', 'must be more than 0: only a line shape may have no height'));
     if (x + w > 1 + DECK_RECT_EPSILON) errors.push(refineError(at.concat(['rect', 2]), 'above-max', 'x + w must be at most 1 (the element runs off the right edge)'));
     if (y + h > 1 + DECK_RECT_EPSILON) errors.push(refineError(at.concat(['rect', 3]), 'above-max', 'y + h must be at most 1 (the element runs off the bottom edge)'));
     if (el.kind === 'chart') {
@@ -126,19 +150,22 @@ export const refineSlide = (slide: Slide, path: RefinePath): CheckError[] => {
       });
     }
   });
-  return errors;
+  return errors.concat(ids.errors, repeatedMarks(slide.elements, path.concat(['elements'])));
 };
 
 /** The refinements of a whole (schema-checked) deck; `path` is where the deck sits (`[]` at the root). */
 export const refineDeckSpec = (deck: DeckSpec, path: RefinePath = []): CheckError[] => {
   let errors: CheckError[] = [];
+  const ids = idScope('slide');
   deck.slides.forEach((slide, i) => {
-    errors = errors.concat(refineSlide(slide, path.concat(['slides', i])));
+    const at = path.concat(['slides', i]);
+    ids.add(slide.id, at);
+    errors = errors.concat(refineSlide(slide, at));
   });
-  return errors;
+  return errors.concat(ids.errors);
 };
 
-/** Op rules the DSL cannot say: an op's slide obeys `refineSlide`, and `update_slide` keeps the slide's id. */
+/** Op rules the DSL cannot say: an op's slide obeys `refineSlide` (so its element ids are unique), and `update_slide` keeps the slide's id. */
 export const refineDeckOp = (op: DeckOp): CheckError[] => {
   if (op.op !== 'add_slide' && op.op !== 'update_slide') return [];
   const errors = refineSlide(op.slide, ['slide']);
