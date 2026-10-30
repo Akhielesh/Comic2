@@ -1,6 +1,6 @@
 /**
- * `emailToPlainText(doc)`: the body as plain text, which a composer fills in as-is (Atlas's body textarea, the
- * text/plain alternative of an HTML mail, Copy text). It is the body only: the subject, preheader and recipients
+ * `emailToPlainText(doc)`: the body as plain text, which a composer fills in as-is (a host composer's body textarea,
+ * the text/plain alternative of an HTML mail, Copy text). It is the body only: the subject, preheader and recipients
  * travel separately, and attachments are prepared by the host.
  *
  * - Every link shows its full URL: `text (https://…)`, or the URL alone when the text already is it.
@@ -9,6 +9,7 @@
  * - The signature follows the standard `-- ` delimiter line.
  */
 import type { EmailDoc } from '../contract/email.js';
+import { trimEnd } from './layout.js';
 import { readDoc, type ReadBlock, type ReadRun } from './read.js';
 
 const runLink = (r: ReadRun): string => {
@@ -64,7 +65,7 @@ export const emailToPlainText = (doc: EmailDoc): string => {
   const d = readDoc(doc);
   const parts = d.blocks.map(blockText).filter((t) => t !== '');
   let out = parts.join('\n\n');
-  const sig = d.signature.replace(/\s+$/, '');
+  const sig = trimEnd(d.signature);
   if (sig) out += `${out ? '\n\n' : ''}-- \n${sig}`;
   return out;
 };

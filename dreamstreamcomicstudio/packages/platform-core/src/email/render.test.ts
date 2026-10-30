@@ -14,6 +14,7 @@ import type { EmailDoc, EmailReviewContext } from '../contract/email.js';
 import { isSafeHref } from '../schema/check.js';
 import { ATLAS_BRAND, DREAMSTREAM_BRAND, checkBrandKit, type BrandKit } from '../brand/index.js';
 import { EMAIL_TEMPLATES, EMAIL_TEMPLATE_IDS, emailToPlainText, fillTemplate, renderEmail, reviewEmail, type RenderEmailOptions } from './index.js';
+import { trimEnd } from './layout.js';
 
 const FIXTURES = fileURLToPath(new URL('../../fixtures/', import.meta.url));
 const load = <T>(rel: string): T => JSON.parse(readFileSync(FIXTURES + rel, 'utf8')) as T;
@@ -154,7 +155,15 @@ describe('untrusted text is escaped, unsafe links are dropped', () => {
   it('a javascript: href is dropped and its text kept; so are vbscript:, http:, data:, upper-case and quote-breaking hrefs', () => {
     expect(html).toContain('js link http link data link quote breakout upper case');
     expect(html).not.toMatch(/javascript:|vbscript:|onmouseover/i);
-    expect(attrValues(html, 'href')).toEqual(['https://ok.example.com/path?a=1&b=2', 'mailto:someone@evil.example?subject=hi', 'https://evil.example.net/login']);
+    expect(attrValues(html, 'href')).toEqual([
+      'https://docs.example.com/heading',
+      'https://ok.example.com/path?a=1&b=2',
+      'mailto:quoted@example.org?subject=Re',
+      'mailto:someone@evil.example?subject=hi',
+      'mailto:list@example.org',
+      'https://list.example.com/item',
+      'https://evil.example.net/login',
+    ]);
     expect(html).toContain('href="https://ok.example.com/path?a=1&amp;b=2"');
     expect(text).toContain('js link http link data link quote breakout upper case');
     expect(text).not.toMatch(/javascript:|vbscript:|http:/);
@@ -187,6 +196,18 @@ describe('untrusted text is escaped, unsafe links are dropped', () => {
     expect(html).not.toContain('></h1>');
     expect(html.match(/<h1 /g)).toHaveLength(1);
     expect(html).toContain('Alex<br>');
+  });
+
+  it('links inside a heading, a quote, a list item and a list inside columns are written as links (and listed: see "every render case")', () => {
+    expect(html).toContain('<h2 style="margin:0 0 16px;font-family:');
+    expect(html).toMatch(/Read the <a href="https:\/\/docs\.example\.com\/heading" target="_blank" rel="noopener noreferrer" style="[^"]*">heading link<\/a><\/h2>/);
+    expect(html).toMatch(/line one<br>line two<a href="mailto:quoted@example\.org\?subject=Re" [^>]*> quoted reply<\/a><span/);
+    expect(html).toMatch(/<li style="margin:0 0 6px;">see <a href="https:\/\/list\.example\.com\/item" [^>]*>the list link<\/a> and a bad one<\/li>/);
+    expect(html).toMatch(/<td class="ds-col"[^>]*>[\s\S]*<ul [^>]*><li style="margin:0 0 6px;"><a href="mailto:list@example\.org" [^>]*>column list mail<\/a><\/li><\/ul>/);
+    expect(text).toContain('Read the heading link (https://docs.example.com/heading)');
+    expect(text).toContain('> line two quoted reply (mailto:quoted@example.org?subject=Re)');
+    expect(text).toContain('2. see the list link (https://list.example.com/item) and a bad one');
+    expect(text).toContain('- column list mail (mailto:list@example.org)');
   });
 
   it('a list indent beyond the cap falls back to 0', () => {
@@ -321,6 +342,31 @@ describe('emailToPlainText', () => {
       ],
     };
     expect(emailToPlainText(d)).toBe('https://a.example.com and b@example.com\n\n1. one\n   more\n2. two');
+  });
+});
+
+describe('bounded work on model-written text', () => {
+  it('trimEnd drops trailing whitespace only', () => {
+    expect(trimEnd('Alex \t\n ')).toBe('Alex');
+    expect(trimEnd('  Alex')).toBe('  Alex');
+    expect(trimEnd(' \n\t')).toBe('');
+    expect(trimEnd('')).toBe('');
+  });
+
+  it('a 10,000-character whitespace signature renders in linear time (no /\\s+$/ backtracking)', () => {
+    const spacesThenText: EmailDoc = { ...minimal, signature: `${' '.repeat(9999)}x` };
+    const textThenSpaces: EmailDoc = { ...minimal, signature: `Alex${' \t\n'.repeat(3332)}` };
+    const started = Date.now();
+    for (let i = 0; i < 10; i++) {
+      for (const d of [spacesThenText, textThenSpaces]) {
+        renderEmail(d);
+        reviewEmail(d, { mode: 'compose', participants: [], userTyped: [] });
+      }
+    }
+    expect(Date.now() - started).toBeLessThan(250);
+    expect(emailToPlainText(spacesThenText).endsWith(`-- \n${' '.repeat(9999)}x`)).toBe(true);
+    expect(emailToPlainText(textThenSpaces).endsWith('-- \nAlex')).toBe(true);
+    expect(renderEmail(textThenSpaces).html).toContain('">Alex</p>');
   });
 });
 

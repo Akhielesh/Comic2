@@ -11,7 +11,7 @@
  * - colours are `#RRGGBB` and fonts come from the font registry, so a BrandKit cannot inject CSS;
  * - the same document and kit always give the same bytes (no clock, no randomness).
  *
- * Hosts still sanitize what they show (Atlas `sanitizeHtml`) and preview it in a `srcdoc` iframe with `sandbox=""`.
+ * Hosts still sanitize what they show and preview it in a `srcdoc` iframe with `sandbox=""`.
  */
 import type { EmailDoc, RenderedEmail } from '../contract/email.js';
 import { HEX_COLOR_PATTERN } from '../contract/schema.js';
@@ -35,6 +35,7 @@ import {
   quote,
   signature,
   textHtml,
+  trimEnd,
   wrapHtml,
   type EmailStyle,
 } from './layout.js';
@@ -186,7 +187,8 @@ export const renderEmail = (doc: EmailDoc, brand?: BrandKit | null, options?: Re
   const st = emailStyleOf(kit);
   const resolveAsset = options?.resolveAsset;
   const parts = nonEmpty(d.blocks.map((b) => blockHtml(st, b, resolveAsset, CONTENT_WIDTH)));
-  if (d.signature.trim()) parts.push(signature(st, d.signature.replace(/\s+$/, '')));
+  const sig = trimEnd(d.signature);
+  if (sig.trim()) parts.push(signature(st, sig));
   const footer = own(own(kit, 'emailTheme'), 'footer');
   const html = wrapHtml({
     style: st,

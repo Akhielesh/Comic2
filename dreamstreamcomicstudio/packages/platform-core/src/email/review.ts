@@ -6,15 +6,16 @@
  * - Trusted addresses are the thread's header participants and the addresses the user typed in their OWN
  *   instruction (`ctx.userTyped`). An address that also appears in text the user pasted (`ctx.pasted`) is not
  *   trusted on that basis; a header participant stays trusted.
- * - A trusted recipient is pre-filled (with the participant's own display name, never one the model wrote). Any other
- *   recipient is `flagged` ("Suggested by AI — not added") and never pre-filled.
+ * - A trusted recipient is pre-filled (with the participant's own display name when it is one clean line, never one
+ *   the model wrote). Any other recipient is `flagged` ("Suggested by AI — not added") and never pre-filled.
  * - In the reply modes the mail provider decides the recipients: the prefill is empty, and an untrusted address the
- *   draft names is still flagged.
+ *   draft names is still flagged. The rule applies when the host's mode OR the draft's is a reply mode, so a draft can
+ *   narrow the prefill but never widen it.
  *
- * Links: every `https:`/`mailto:` link (run or button, columns included) is listed with its full URL, in document
- * order, exactly as `renderEmail` writes it. A dropped (unsafe) link, a link whose text names another site, and a
- * `mailto:` link to an untrusted address are warnings. (A `mailto:` link's recipients are its path alone: `check()`
- * allows only `subject` and `body` in its query.)
+ * Links: every `https:`/`mailto:` link (a run in a heading, paragraph, quote or list item, or a button; inside columns
+ * too) is listed with its full URL, in document order, exactly as `renderEmail` writes it. A dropped (unsafe) link, a
+ * link whose text names another site, and a `mailto:` link to an untrusted address are warnings. (A `mailto:` link's
+ * recipients are its path alone: `check()` allows only `subject` and `body` in its query.)
  */
 import {
   EMAIL_LIMITS,
@@ -27,6 +28,7 @@ import {
   type FlaggedRecipient,
   type ReviewedLink,
 } from '../contract/email.js';
+import { SCHEMA_LIMITS } from '../contract/schema.js';
 import { check, isSafeHref } from '../schema/check.js';
 import { s } from '../schema/s.js';
 import { emailToPlainText } from './plainText.js';
@@ -37,7 +39,8 @@ export const EMAIL_WARNING_CODES = {
   'reply-recipients': 'In a reply your mail app chooses the recipients, so the draft fills in none of its own.',
   'invalid-recipient': 'A recipient is not one plain email address, so it was left out.',
   'duplicate-recipient': 'A recipient appears more than once; only the first is used.',
-  'mode-mismatch': 'The draft names a different mode (compose, reply, reply-all, forward) than the one the person chose; the choice is used.',
+  'mode-mismatch':
+    'The draft names a different mode (compose, reply, reply-all, forward) than the one the person chose; the choice is used, except that a draft written as a reply fills in no recipients.',
   'unsafe-link': 'A link that was not https: or mailto: was removed; its text stays.',
   'link-text-mismatch': 'A link shows one address but goes to another.',
   'mailto-untrusted': 'A link starts a new email to an address that is not in the thread and that you did not type.',
@@ -48,6 +51,8 @@ export const EMAIL_WARNING_CODES = {
 export type EmailWarningCode = keyof typeof EMAIL_WARNING_CODES;
 
 const EMAIL = s.email();
+/** A participant's display name as a checked `EmailRecipient.name` would be: one line, no control or bidi characters. */
+const RECIPIENT_NAME = s.text({ max: EMAIL_LIMITS.recipientName, singleLine: true });
 const isAddress = (v: unknown): v is string => typeof v === 'string' && check(EMAIL, v).ok === true;
 const norm = (v: string): string => v.trim().toLowerCase();
 
@@ -64,16 +69,32 @@ export const mailtoRecipients = (href: string): string[] => {
 const ADDRESS_SCAN_MAX = 100000;
 
 /**
+ * `piece` without its leading and trailing dots (sentence punctuation), found by index: a regex such as `/[.]+$/`
+ * backtracks once per start position inside a long run of dots, which is quadratic.
+ */
+const trimDots = (piece: string): string => {
+  let start = 0;
+  let end = piece.length;
+  while (start < end && piece.charCodeAt(start) === 0x2e) start++;
+  while (end > start && piece.charCodeAt(end - 1) === 0x2e) end--;
+  return piece.slice(start, end);
+};
+
+/**
  * The plain email addresses in a piece of text (lower-cased, de-duplicated, in order, at most
- * `EMAIL_LIMITS.recipients`). For a host deriving `ctx.userTyped` from the user's OWN instruction only. Linear: the
- * text is split on spaces and punctuation that never occurs in an address, and each piece is checked whole.
+ * `EMAIL_LIMITS.recipients`). For a host deriving `ctx.userTyped` from the user's OWN instruction only. Linear in the
+ * length of the text (at most `ADDRESS_SCAN_MAX` characters are read): the text is split on spaces and punctuation
+ * that never occurs in an address, each piece loses its leading and trailing dots by index, and only a piece no longer
+ * than an address can be (`SCHEMA_LIMITS.emailMax`) is checked.
  */
 export const addressesIn = (text: string): string[] => {
   const out: string[] = [];
   if (typeof text !== 'string') return out;
   for (const piece of text.slice(0, ADDRESS_SCAN_MAX).split(/[\s,;:<>()"'`\[\]{}|\\/!?*&=^~#$]+/)) {
     if (piece.indexOf('@') === -1) continue;
-    const a = norm(piece.replace(/^[.]+|[.]+$/g, ''));
+    const bare = trimDots(piece);
+    if (bare.length > SCHEMA_LIMITS.emailMax) continue;
+    const a = norm(bare);
     if (isAddress(a) && out.indexOf(a) === -1) out.push(a);
     if (out.length >= EMAIL_LIMITS.recipients) break;
   }
@@ -102,6 +123,9 @@ export const reviewEmail = (doc: EmailDoc, ctx: EmailReviewContext): EmailReview
   // The HOST's mode decides (the person chose it); a draft that claims another mode never widens the prefill.
   const isReply = (m: unknown): boolean => m === 'reply' || m === 'reply-all';
   const reply = isReply(c.mode) || isReply(d.mode);
+  // The person chose compose or forward, but the draft was written as a reply: nothing is filled in (a draft can only
+  // narrow the prefill), and the warning says so instead of claiming the person's choice was used.
+  const draftReplyOnly = c.mode !== undefined && isReply(d.mode) && !isReply(c.mode);
 
   const participantName: { [address: string]: string | undefined } = {};
   const participants: string[] = [];
@@ -111,8 +135,10 @@ export const reviewEmail = (doc: EmailDoc, ctx: EmailReviewContext): EmailReview
     const a = norm(addr as string);
     if (participants.indexOf(a) !== -1) continue;
     participants.push(a);
+    // A header display name is outside text (a sender controls it): kept only when it passes the same check as a
+    // checked `EmailRecipient.name` (one line, no control or bidi characters), else the address goes in unnamed.
     const name = (p as EmailRecipient).name;
-    participantName[a] = typeof name === 'string' && name.trim() && name.length <= EMAIL_LIMITS.recipientName && !/[\r\n]/.test(name) ? name.trim() : undefined;
+    participantName[a] = typeof name === 'string' && name.trim() && check(RECIPIENT_NAME, name).ok === true ? name.trim() : undefined;
   }
   const typed = list(c.userTyped).filter((a): a is string => typeof a === 'string' && isAddress(a.trim())).map(norm);
   const pasted = list(c.pasted).filter((a): a is string => typeof a === 'string').map(norm);
@@ -157,8 +183,12 @@ export const reviewEmail = (doc: EmailDoc, ctx: EmailReviewContext): EmailReview
       }
     }
   }
-  if (reply && named > 0) warn('reply-recipients', EMAIL_WARNING_CODES['reply-recipients']);
-  if (c.mode !== undefined && c.mode !== d.mode) warn('mode-mismatch', `The draft was written as "${d.mode}" but you chose "${String(c.mode).slice(0, 20)}"; your choice is used.`);
+  if (draftReplyOnly) {
+    warn('mode-mismatch', 'The draft was written as a reply; to stay safe nothing was filled in. Choose recipients yourself.');
+  } else {
+    if (reply && named > 0) warn('reply-recipients', EMAIL_WARNING_CODES['reply-recipients']);
+    if (c.mode !== undefined && c.mode !== d.mode) warn('mode-mismatch', `The draft was written as "${d.mode}" but you chose "${String(c.mode).slice(0, 20)}"; your choice is used.`);
+  }
 
   const links: ReviewedLink[] = [];
   const addLink = (href: string, text: string, blockId: string, source: 'run' | 'button'): void => {

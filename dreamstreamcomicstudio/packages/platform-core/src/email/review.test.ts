@@ -74,6 +74,23 @@ describe('recipients', () => {
     expect(r.warnings.map((w) => w.code)).toEqual(['reply-recipients', 'mode-mismatch']);
   });
 
+  for (const hostMode of ['compose', 'forward'] as const) {
+    it(`a draft written as a reply while the person chose ${hostMode} fills in nothing, and the warning says so (not "your choice is used")`, () => {
+      const r = reviewEmail({ ...doc, mode: 'reply' }, ctx(hostMode));
+      expect(r.prefill).toEqual({ to: [], cc: [], bcc: [] });
+      expect(r.flagged.map((f) => f.address)).toEqual(['attacker@evil.example', 'quoted@example.net', 'hidden@evil.example']);
+      expect(r.warnings).toEqual([
+        { code: 'mode-mismatch', message: 'The draft was written as a reply; to stay safe nothing was filled in. Choose recipients yourself.' },
+      ]);
+    });
+  }
+
+  it('a forward draft in a compose (or the reverse) keeps the choice and says so', () => {
+    const r = reviewEmail({ ...doc, mode: 'forward' }, ctx('compose'));
+    expect(r.prefill.to).toHaveLength(2);
+    expect(r.warnings).toEqual([{ code: 'mode-mismatch', message: 'The draft was written as "forward" but you chose "compose"; your choice is used.' }]);
+  });
+
   it('an address the user pasted from the thread is not trusted, even if also extracted as typed; a participant stays trusted', () => {
     const d = draft('compose', [{ address: 'quoted@example.net' }, { address: 'sam@example.com' }]);
     const r = reviewEmail(d, ctx('compose', { userTyped: ['quoted@example.net'], pasted: ['quoted@example.net', 'sam@example.com'] }));
@@ -93,6 +110,22 @@ describe('recipients', () => {
     expect(r.prefill.to).toEqual([{ address: 'typed@example.org' }]);
     expect(r.flagged).toEqual([]);
     expect(r.warnings.map((w) => w.code)).toEqual(['duplicate-recipient', 'invalid-recipient', 'invalid-recipient']);
+  });
+
+  it('a participant display name with control or bidi characters is left out; the address is still pre-filled', () => {
+    const d = draft('compose', [{ address: 'a@example.com' }, { address: 'b@example.com' }, { address: 'c@example.com' }, { address: 'd@example.com' }]);
+    const r = reviewEmail(d, {
+      mode: 'compose',
+      participants: [
+        { address: 'a@example.com', name: 'Pay \u202Efdp.exe' },
+        { address: 'b@example.com', name: 'Null\u0000Byte' },
+        { address: 'c@example.com', name: 'Esc\u001b[31m \u2066Isolate\u2069' },
+        { address: 'd@example.com', name: '  Dana Clean  ' },
+      ],
+      userTyped: [],
+    });
+    expect(r.prefill.to).toEqual([{ address: 'a@example.com' }, { address: 'b@example.com' }, { address: 'c@example.com' }, { address: 'd@example.com', name: 'Dana Clean' }]);
+    expect(JSON.stringify(r.prefill)).not.toMatch(/[\u0000-\u001f\u202a-\u202e\u2066-\u2069]/);
   });
 
   it('bad context entries are ignored, never trusted', () => {
@@ -119,16 +152,33 @@ describe('links', () => {
 
   it('a javascript: (or otherwise unsafe) href is not listed and is reported as removed', () => {
     const r = reviewEmail(hostile, { mode: 'compose', participants: [], userTyped: [] });
-    expect(r.links.map((l) => l.href)).toEqual(['https://ok.example.com/path?a=1&b=2', 'mailto:someone@evil.example?subject=hi', 'https://evil.example.net/login']);
+    expect(r.links.map((l) => l.href)).not.toContain('javascript:alert(2)');
     const unsafe = r.warnings.filter((w) => w.code === 'unsafe-link');
-    expect(unsafe.map((w) => w.blockId)).toEqual(['p1', 'p1', 'p1', 'p1', 'p1', 'b1', 'b2']);
+    expect(unsafe.map((w) => w.blockId)).toEqual(['p1', 'p1', 'p1', 'p1', 'p1', 'b1', 'b2', 'l1']);
+    expect(unsafe[7].message).toBe('A link on "and a bad one" was not https: or mailto:, so it was removed.');
+  });
+
+  it('links in a heading, a quote, a list item and a list inside columns are listed exactly, in document order', () => {
+    const r = reviewEmail(hostile, { mode: 'compose', participants: [], userTyped: [] });
+    expect(r.links).toEqual([
+      { href: 'https://docs.example.com/heading', text: 'heading link', blockId: 'h3', source: 'run' },
+      { href: 'https://ok.example.com/path?a=1&b=2', text: ' fine', blockId: 'p1', source: 'run' },
+      { href: 'mailto:quoted@example.org?subject=Re', text: ' quoted reply', blockId: 'q1', source: 'run' },
+      { href: 'mailto:someone@evil.example?subject=hi', text: 'write to them', blockId: 'p2', source: 'run' },
+      { href: 'mailto:list@example.org', text: 'column list mail', blockId: 'l2', source: 'run' },
+      { href: 'https://list.example.com/item', text: 'the list link', blockId: 'l1', source: 'run' },
+      { href: 'https://evil.example.net/login', text: 'https://bank.example.com', blockId: 'p3', source: 'run' },
+    ]);
+    // A mailto in a quote or a column list is checked like any other: nobody gave these addresses.
+    const untrusted = r.warnings.filter((w) => w.code === 'mailto-untrusted').map((w) => w.blockId);
+    expect(untrusted).toEqual(['q1', 'p2', 'l2']);
   });
 
   it('a link whose text names another site, and a mailto to an address nobody gave, are warnings', () => {
     const r = reviewEmail(hostile, { mode: 'compose', participants: [], userTyped: [] });
     expect(r.warnings).toContainEqual({ code: 'link-text-mismatch', message: '"https://bank.example.com" goes to https://evil.example.net/login.', blockId: 'p3' });
     expect(r.warnings).toContainEqual({ code: 'mailto-untrusted', message: '"write to them" starts a new email to someone@evil.example, an address you did not give.', blockId: 'p2' });
-    const trusted = reviewEmail(hostile, { mode: 'compose', participants: [], userTyped: ['someone@evil.example'] });
+    const trusted = reviewEmail(hostile, { mode: 'compose', participants: [{ address: 'list@example.org' }], userTyped: ['someone@evil.example', 'quoted@example.org'] });
     expect(trusted.warnings.map((w) => w.code)).not.toContain('mailto-untrusted');
   });
 
@@ -181,6 +231,16 @@ describe('helpers', () => {
     expect(addressesIn('a'.repeat(100000))).toEqual([]);
     expect(addressesIn(`${'a.'.repeat(50000)}@`)).toEqual([]);
     expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('addressesIn is linear on a long run of dots next to an @ (no /[.]+$/ backtracking)', () => {
+    for (const text of [`@${'.'.repeat(99998)}x`, `a@b${'.'.repeat(99990)}x`, `${'.'.repeat(99980)}a@b.example${'.'.repeat(9)}`]) {
+      const started = Date.now();
+      const found = addressesIn(text);
+      expect(Date.now() - started).toBeLessThan(100);
+      expect(found).toEqual(text.charAt(0) === '.' ? ['a@b.example'] : []);
+    }
+    expect(addressesIn('Write to ...jane@example.com... today')).toEqual(['jane@example.com']);
   });
 });
 

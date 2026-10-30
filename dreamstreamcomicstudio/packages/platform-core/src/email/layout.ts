@@ -78,6 +78,19 @@ export const cleanText = (value: unknown): string => {
   return out;
 };
 
+const SPACE = /\s/;
+
+/**
+ * `value` without its trailing whitespace (what `/\s/` matches), in linear time. `value.replace(/\s+$/, '')`
+ * backtracks once per start position inside a long run of spaces that is followed by text, so it is quadratic on
+ * model-written input; ES2017 has no `String#trimEnd`.
+ */
+export const trimEnd = (value: string): string => {
+  let end = value.length;
+  while (end > 0 && SPACE.test(value.charAt(end - 1))) end--;
+  return end === value.length ? value : value.slice(0, end);
+};
+
 /** Plain text as HTML: cleaned, escaped, line breaks as `<br>`. */
 export const textHtml = (value: unknown): string => escapeHtml(cleanText(value)).replace(/\n/g, '<br>');
 
