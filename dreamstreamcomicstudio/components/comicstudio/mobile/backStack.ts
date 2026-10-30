@@ -21,7 +21,10 @@
 // Reloads: history.state survives a reload (pull-to-refresh, iOS evicting the tab), so the entry a layer pushed
 // comes back while nothing owns it. Layer ids carry a per-page-load token, so such an entry never counts as a live
 // layer, and a layer that opens again with the same key ADOPTS it (replaceState) instead of stacking a second
-// one — the first Back then closes it, as before the reload, and history.length does not grow.
+// one — the first Back then closes it, as before the reload, and history.length does not grow. Stale layers that
+// sat above it at the reload (a reading mode, a sheet) each left an entry of their own on top of its entry: the
+// layer steps back over them first and adopts its own entry there, so the first Back still lands where the layer
+// was opened and never on a dead entry under it.
 //
 // StrictMode-safe: a dev double-mount revives the same layer instead of pushing twice.
 
@@ -42,6 +45,13 @@ const closing = new Map<string, { layer: Layer; timer: ReturnType<typeof setTime
 let leaving: { id: string; action: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
 /** Layer ids whose entry a traversal of ours is popping right now (until it lands): never adopted. */
 const popping = new Set<string>();
+/**
+ * A layer stepping back over the stale entries above the one it adopts (until that traversal lands): `slot` is where
+ * its id goes in the landed entry's layers, `url` the URL the page had (a reader's ?p= lives on the top entry only).
+ */
+let adopting: { id: string; slot: number; url: string; timer: ReturnType<typeof setTimeout> } | null = null;
+/** Layers opened while an adoption's step back is under way: their entries go on top of the adopted one once it lands. */
+const afterAdopt: string[] = [];
 let listening = false;
 let seq = 0;
 /** Unique per page load: an entry a reload brings back can never hold the id of a layer opened in this load. */
@@ -92,8 +102,32 @@ const traverseBack = (n: number) => {
   else window.history.go(-n);
 };
 
+/**
+ * The step back of an adoption landed (or never reported back): take the entry over. A layer whose close from the UI
+ * is still pending takes it too, so that close finds its entry and pops it; one already gone pops the stale entry.
+ * Layers opened meanwhile then push their entries on top of it, in order.
+ */
+const finishAdopt = () => {
+  const a = adopting;
+  if (!a) return;
+  adopting = null;
+  clearTimeout(a.timer);
+  const queued = afterAdopt.splice(0).filter((id) => stack.some((l) => l.id === id));
+  try {
+    if (stack.some((l) => l.id === a.id) || closing.has(a.id)) {
+      window.history.replaceState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...historyLayers().slice(0, a.slot), a.id] }, '', a.url);
+      for (const id of queued) window.history.pushState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...historyLayers(), id] }, '');
+    } else {
+      window.history.back();
+    }
+  } catch {
+    /* sandboxed */
+  }
+};
+
 const onPopState = () => {
   popping.clear();
+  if (adopting) finishAdopt();
   const live = new Set(historyLayers());
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
@@ -134,7 +168,11 @@ const stopListening = () => {
 export const pushLayer = (key: string, close: () => void): string => {
   seq += 1;
   const id = `${key}#${LOAD_TOKEN}.${seq}`;
-  if (canUseHistory()) {
+  if (canUseHistory() && adopting) {
+    // An adoption is stepping back over stale entries: this layer's entry goes on top of the adopted one once it lands.
+    afterAdopt.push(id);
+    startListening();
+  } else if (canUseHistory()) {
     const layers = historyLayers();
     const top = layers[layers.length - 1];
     const reusing = top !== undefined && closing.has(top);
@@ -145,9 +183,14 @@ export const pushLayer = (key: string, close: () => void): string => {
         clearTimeout(closing.get(top)!.timer);
         closing.delete(top);
         window.history.replaceState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers.slice(0, -1), id] }, '');
-      } else if (adopt >= 0) {
+      } else if (adopt >= 0 && adopt === layers.length - 1) {
         // The entry this layer left behind before a reload: take it over instead of stacking a dead one under it.
         window.history.replaceState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers.slice(0, adopt), id] }, '');
+      } else if (adopt >= 0) {
+        // Stale layers above it (a reading mode open at the reload) each pushed an entry on top of this layer's own:
+        // step back over them and take its own entry over once that lands (finishAdopt).
+        adopting = { id, slot: adopt, url: window.location.href, timer: setTimeout(() => finishAdopt(), LEAVE_SETTLE_MS) };
+        traverseBack(layers.length - 1 - adopt);
       } else {
         window.history.pushState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers, id] }, '');
       }
@@ -296,6 +339,9 @@ export const resetBackStack = (): void => {
   closing.clear();
   if (leaving) clearTimeout(leaving.timer);
   leaving = null;
+  if (adopting) clearTimeout(adopting.timer);
+  adopting = null;
+  afterAdopt.splice(0);
   popping.clear();
   stopListening();
 };

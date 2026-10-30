@@ -123,6 +123,12 @@ const AppLikeHost: React.FC<{ project: Project; h: ReturnType<typeof handlers> }
     />
   );
 };
+/** Let a pending history traversal (an adoption stepping back over stale entries) land. */
+const landed = async () => {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 30));
+  });
+};
 const back = async () => {
   await act(async () => {
     window.history.back();
@@ -434,11 +440,14 @@ describe('after a reload with the reader open', () => {
     const before = window.history.length;
     const h = handlers();
     render(<ComicReader project={project('r2')} {...h} />);
+    await landed(); // it steps back over the old reading mode's entry and adopts its own
     expect(window.history.length).toBe(before);
     expect(readerState()).toBe('r2');
     expect(fullscreenEntry()).toBe(false);
     expect(screen.getByTestId('classic-reader')).toHaveAttribute('data-reading-mode', 'false');
     await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened(); // never on the reader's old entry (a dead ?view=read Back)
     expect(h.onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -449,10 +458,13 @@ describe('after a reload with the reader open', () => {
     const h = handlers();
     render(<ComicReader project={project('v4r', { studioVersion: 4 })} {...h} />);
     expect(await screen.findByTestId('v4-reader')).toBeInTheDocument();
+    await landed();
     expect(window.history.length).toBe(before);
     expect(readerState()).toBe('v4r');
     expect(fullscreenEntry()).toBe(false);
     await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
     expect(h.onClose).toHaveBeenCalledTimes(1);
   });
 

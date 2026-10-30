@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import { HISTORY_LAYERS_KEY, historyLayers, layerKey, leaveLayer, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
+import { HISTORY_LAYERS_KEY, LEAVE_SETTLE_MS, historyLayers, layerKey, leaveLayer, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
 import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetFor, variantWidthFor } from './media/imageVariants';
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
@@ -202,14 +202,73 @@ describe('backStack (the back gesture closes the top layer first)', () => {
     expect(window.history.state).toEqual(opening);
   });
 
-  it('the stale layers above it (a reading mode open at the reload) go with the adopted entry', () => {
+  it('the stale layers above it (a reading mode open at the reload) are stepped over: it adopts its own entry, so the first Back lands where it opened', async () => {
+    const opening = openFrom();
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: ['reader:c1#1'] }, '');
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: ['reader:c1#1', 'fullscreen#2'] }, '');
+    const before = window.history.length;
+    const push = vi.spyOn(window.history, 'pushState');
+    const back = vi.spyOn(window.history, 'back');
+    const close = vi.fn();
+    const id = pushLayer('reader:c1', close);
+    expect(push).not.toHaveBeenCalled();
+    expect(back).toHaveBeenCalledTimes(1); // one stale layer above it: one step
+    await settle(); // the step back lands on the reader's own entry, which it takes over
+    expect(close).not.toHaveBeenCalled();
+    expect(openLayers()).toEqual(['reader:c1']);
+    expect(historyLayers()).toEqual([id]);
+    expect(window.history.length).toBe(before);
+    push.mockRestore();
+    back.mockRestore();
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(close).toHaveBeenCalledTimes(1); // the first Back closes it and lands where it was opened, not on a dead entry
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('a layer opened while that step back is under way gets its entry on top of the adopted one', async () => {
+    const opening = openFrom();
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: ['reader:c1#1'] }, '');
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: ['reader:c1#1', 'immersive#2'] }, '');
+    const closeReader = vi.fn();
+    const closeImmersive = vi.fn();
+    const reader = pushLayer('reader:c1', closeReader);
+    const immersive = pushLayer('immersive', closeImmersive); // same tick: the traversal has not landed yet
+    await settle();
+    expect(closeReader).not.toHaveBeenCalled();
+    expect(closeImmersive).not.toHaveBeenCalled();
+    expect(historyLayers()).toEqual([reader, immersive]);
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(closeImmersive).toHaveBeenCalledTimes(1);
+    expect(closeReader).not.toHaveBeenCalled();
+    expect(historyLayers()).toEqual([reader]);
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(closeReader).toHaveBeenCalledTimes(1);
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('when the step back never reports back, it adopts the entry it is on (as before)', async () => {
     openFrom();
     window.history.pushState({ [HISTORY_LAYERS_KEY]: ['reader:c1#1'] }, '');
     window.history.pushState({ [HISTORY_LAYERS_KEY]: ['reader:c1#1', 'fullscreen#2'] }, '');
-    const before = window.history.length;
-    const id = pushLayer('reader:c1', vi.fn());
-    expect(window.history.length).toBe(before);
-    expect(historyLayers()).toEqual([id]);
+    vi.useFakeTimers();
+    try {
+      const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined); // sandboxed: nothing lands
+      const id = pushLayer('reader:c1', vi.fn());
+      expect(back).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(LEAVE_SETTLE_MS);
+      expect(historyLayers()).toEqual([id]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("never adopts a live layer's entry, nor a left-behind entry of another key", () => {

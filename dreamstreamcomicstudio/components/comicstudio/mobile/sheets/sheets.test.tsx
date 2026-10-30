@@ -16,7 +16,14 @@ const PHONE_LANDSCAPE = formFactorFor({ w: 852, h: 393, coarse: true });
 const TABLET = formFactorFor({ w: 820, h: 1180, coarse: true });
 const DESKTOP = formFactorFor({ w: 1440, h: 900 });
 
-beforeEach(() => resetBackStack());
+let entryNo = 0;
+beforeEach(() => {
+  resetBackStack();
+  // Each test opens from an entry of its own: a sheet an earlier test left open (reset, never popped) would otherwise
+  // look like an entry a reload left behind, and the next sheet with its key would adopt it.
+  entryNo += 1;
+  window.history.pushState({ sheetsTest: entryNo }, '');
+});
 afterEach(() => resetBackStack());
 
 describe('resolvePresentation', () => {
