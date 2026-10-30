@@ -5,7 +5,10 @@
 //
 // "Use for this page" / "Use as cover" are offered only for images the server would accept as page
 // art for THIS comic (pageArtRefusal mirrors its render_use rule); anything else gets a calm line
-// with the remedy instead of a button that ends in a refusal.
+// with the remedy instead of a button that ends in a refusal. A page's frame picture or overlay that
+// a restore archived (isPanelSourceArchive) is never offered as page or cover art: it is not a
+// drawing of the page, and using it would print it — even a guide-only overlay — as the whole page.
+// The page picker starts on the image's own page (page 1 when it has none).
 
 import React, { useId, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, RotateCcw, SplitSquareHorizontal, Star } from 'lucide-react';
@@ -25,7 +28,8 @@ import {
   renderUseOps,
   versionCostLabel,
   versionList,
-  type MediaItem
+  type MediaItem,
+  type PanelSourceWhat
 } from './bookModel';
 import { CompareView } from './CompareView';
 import type { TimelineEdit } from './UndoToast';
@@ -66,6 +70,17 @@ export const pageArtRefusal = (item: Pick<MediaItem, 'path' | 'role' | 'source'>
   return null;
 };
 
+/** A panel's own picture a restore archived: not page or cover art. */
+export const PANEL_PICTURE_LINE = "This was a panel's own picture, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference or download it.";
+/** An overlay a restore archived: not page or cover art. */
+export const OVERLAY_LINE = "This was an overlay on the page, not a drawing of the whole page, so it can't be put on a page or the cover. You can still use it as a reference or download it.";
+const PANEL_SOURCE_LINE: Record<PanelSourceWhat, string> = { 'panel picture': PANEL_PICTURE_LINE, overlay: OVERLAY_LINE };
+const PANEL_SOURCE_WHAT: Record<PanelSourceWhat, string> = { 'panel picture': 'Panel picture', overlay: 'Overlay' };
+
+/** The page "Use for this page" starts on: the image's own page when it still exists, else page 1 (timeline owner note 4a). */
+const ownPageId = (doc: ComicDoc, item: MediaItem | undefined, pages: { id: string }[]): string =>
+  item?.owner.target?.kind === 'page' && findPage(doc, item.owner.target.id) ? item.owner.target.id : pages[0]?.id ?? '';
+
 const ROLE_LABEL: Record<MediaItem['role'], string> = {
   page: 'Page art',
   cover: 'Cover art',
@@ -103,7 +118,14 @@ export interface MediaPreviewProps {
 export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, index, onIndex, edit }) => {
   const item = items[Math.max(0, Math.min(items.length - 1, index))];
   const pages = sortedPages(doc);
-  const [pickedPageId, setPageId] = useState<string>(pages[0]?.id ?? '');
+  // The picker starts on the image's own page and starts again there whenever the image changes (←/→, a new pick).
+  const itemKey = item ? `${item.owner.key}\u0000${item.path}` : '';
+  const [pickedPageId, setPageId] = useState<string>(() => ownPageId(doc, item, pages));
+  const [pickedFor, setPickedFor] = useState(itemKey);
+  if (pickedFor !== itemKey) {
+    setPickedFor(itemKey);
+    setPageId(ownPageId(doc, item, pages));
+  }
   // The picked page may have been deleted (or none existed when the preview opened): fall back to page 1.
   const pageId = findPage(doc, pickedPageId) ? pickedPageId : pages[0]?.id ?? '';
   const choices = refChoices(doc);
@@ -128,8 +150,8 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
   };
 
   // Offered as page/cover art only when the server would accept it (the buttons are hidden otherwise;
-  // this guard keeps a stale click honest too).
-  const refusal = pageArtRefusal(item, doc);
+  // this guard keeps a stale click honest too) — and never for a panel picture or overlay.
+  const refusal = item.panelSource ? PANEL_SOURCE_LINE[item.panelSource] : pageArtRefusal(item, doc);
   const putOn = (target: RenderTarget, label: string, confirmed = false) => {
     if (refusal) return setNote(refusal);
     const render = getRender(doc, target);
@@ -174,7 +196,8 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
   };
 
   const target = item.owner.target;
-  const versions = target && !item.current ? versionList(doc, target) : [];
+  // A panel picture or overlay is not one of the page's versions: nothing to compare it with.
+  const versions = target && !item.current && !item.panelSource ? versionList(doc, target) : [];
   const currentV = versions.find((v) => v.current);
   const thisV = versions.find((v) => v.path === item.path);
   const restorePage = () => {
@@ -183,16 +206,26 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
     edit.commit([{ op: 'page_restore', id: item.deletedPageId }], `Restored the deleted page`, { label: 'Restore a page' });
     setNote(`Restored as page ${Math.min(item.deletedFromN ?? 1, pages.length + 1)} with its art and versions.`);
   };
-  const facts: [string, string][] = [
-    ['What', ROLE_LABEL[item.role]],
-    ['Version', item.versionLabel ?? '—'],
-    ['Model', item.modelLabel ?? (item.source === 'upload' ? 'Uploaded' : 'Not recorded')],
-    ['Size', item.w && item.h ? `${item.w}×${item.h}` : 'Not recorded'],
-    ['Cost', item.source === 'upload' && typeof item.costUsd !== 'number' ? 'No AI cost (uploaded)' : versionCostLabel(item, cost.exact)],
-    ['QC', typeof item.qcScore === 'number' ? item.qcScore.toFixed(2) : 'Not checked'],
-    ['Made by', item.origin ? ORIGIN_LABEL[item.origin] : item.source === 'upload' ? 'Uploaded' : 'Not recorded'],
-    ['Added', shortDate(item.at)]
-  ];
+  // A panel picture or overlay records nothing but its page (its source 'upload' only means nothing was known).
+  const facts: [string, string][] = item.panelSource
+    ? [
+        ['What', `${PANEL_SOURCE_WHAT[item.panelSource]} · not a version of the page's drawing`],
+        ['Model', 'Not recorded'],
+        ['Size', item.w && item.h ? `${item.w}×${item.h}` : 'Not recorded'],
+        ['Cost', 'Not recorded'],
+        ['Made by', 'Not recorded'],
+        ['Added', 'Date not recorded']
+      ]
+    : [
+        ['What', ROLE_LABEL[item.role]],
+        ['Version', item.versionLabel ?? '—'],
+        ['Model', item.modelLabel ?? (item.source === 'upload' ? 'Uploaded' : 'Not recorded')],
+        ['Size', item.w && item.h ? `${item.w}×${item.h}` : 'Not recorded'],
+        ['Cost', item.source === 'upload' && typeof item.costUsd !== 'number' ? 'No AI cost (uploaded)' : versionCostLabel(item, cost.exact)],
+        ['QC', typeof item.qcScore === 'number' ? item.qcScore.toFixed(2) : 'Not checked'],
+        ['Made by', item.origin ? ORIGIN_LABEL[item.origin] : item.source === 'upload' ? 'Uploaded' : 'Not recorded'],
+        ['Added', shortDate(item.at)]
+      ];
 
   return (
     <div
@@ -210,7 +243,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
         <CompareView studio={studio} doc={doc} a={thisV.n < currentV.n ? thisV : currentV} b={thisV.n < currentV.n ? currentV : thisV} ratio={ratio} />
       ) : (
         <div className="relative mx-auto w-full overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)]" style={{ aspectRatio: String(ratio), maxWidth: `min(100%, ${Math.round(460 * Math.min(1.6, Math.max(0.6, ratio)))}px)` }}>
-          {item.blocked ? <BlockedTile /> : url ? <img src={url} alt={`${item.owner.label}${item.versionLabel ? `, ${item.versionLabel}` : ''}`} className="absolute inset-0 h-full w-full object-contain" draggable={false} /> : <span className="studio-shimmer absolute inset-0" aria-hidden />}
+          {item.blocked ? <BlockedTile /> : url ? <img src={url} alt={item.panelSource && item.versionLabel ? item.versionLabel : `${item.owner.label}${item.versionLabel ? `, ${item.versionLabel}` : ''}`} className="absolute inset-0 h-full w-full object-contain" draggable={false} /> : <span className="studio-shimmer absolute inset-0" aria-hidden />}
           <button type="button" onClick={() => go(-1)} disabled={index <= 0} aria-label="Previous image" className={cx('absolute left-1.5 top-1/2 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/60 disabled:opacity-30', FOCUS_RING)}>
             <ChevronLeft className="h-5 w-5" aria-hidden />
           </button>
@@ -220,7 +253,7 @@ export const MediaPreview: React.FC<MediaPreviewProps> = ({ studio, doc, items, 
         </div>
       )}
       <div className="flex flex-wrap items-center gap-1">
-        <span className="mr-1 text-[13px] font-semibold text-[var(--ds-ink)]">{item.owner.label}</span>
+        <span className="mr-1 min-w-0 text-[13px] font-semibold text-[var(--ds-ink)] [overflow-wrap:anywhere]">{item.panelSource && item.versionLabel ? item.versionLabel : item.owner.label}</span>
         {item.current && <Badge tone="accent">In use</Badge>}
         {item.archived && <Badge>Archived</Badge>}
         {item.starred && <Badge tone="accent">Starred</Badge>}

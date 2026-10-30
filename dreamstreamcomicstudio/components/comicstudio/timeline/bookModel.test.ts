@@ -3,6 +3,8 @@
 import { formatUsd } from '../../../shared/comic/models';
 import { describe, expect, it } from 'vitest';
 import { applyOps, applyOp } from '../../../shared/comic/ops';
+import { versionList as sharedVersionList } from '../../../shared/comic/book';
+import type { ArchivedVersion, ComicDoc } from '../../../shared/comic/doc';
 import { makeSampleDoc } from '../conversation/testing/fixtures';
 import { A, richDoc } from './__fixtures__/richDoc';
 import {
@@ -20,6 +22,7 @@ import {
   staleImpact,
   undoPlan,
   versionCostLabel,
+  versionCount,
   versionList
 } from './bookModel';
 
@@ -186,5 +189,59 @@ describe('media index', () => {
     expect(downloadName(doc, { owner: { key: 'k', label: 'Maya ref', order: 0 } }, 'image/png')).toBe('my-heist-1-maya-ref.png');
     expect(downloadName(doc, { owner: { key: 'k', label: 'Upload', order: 0 }, path: 'u/x/p/ref/photo.JPEG' })).toBe('my-heist-1-upload.jpg');
     expect(downloadName(doc, { owner: { key: 'k', label: 'Upload', order: 0 }, path: 'u/x/p/ref/photo.exe' }, 'text/html')).toBe('my-heist-1-upload.webp');
+  });
+});
+
+// A page's frame picture or overlay that a restore displaced is archived under the page ('page:<id>') with no maker
+// or date and a label that says what it was (shared/comic/history apply.ts pathHomes, isPanelSourceArchive). It is
+// not a drawing of the page (timeline owner note 4b).
+const withPanelSources = (doc: ComicDoc): ComicDoc => {
+  const plain = (name: string, targetKey: string, label: string, archivedAt: number): ArchivedVersion => ({ path: `u/x/p/${name}.webp`, source: 'upload', at: 0, targetKey, label, archivedAt });
+  doc.archive = [
+    plain('ov-p1', 'page:pg_1', 'Page 1 overlay', 26),
+    plain('pic-p2', 'page:pg_2', 'Page 2 panel picture', 27),
+    plain('ov-t', 'page:pg_t', 'Deleted page 4 overlay', 28),
+    plain('ov-gone', 'page:pg_gone', 'Page 7 overlay', 29),
+    // A look-alike that IS a drawing of page 2 (its label is just the page's): still one of its versions.
+    plain('p2-old', 'page:pg_2', 'Page 2', 30),
+    ...(doc.archive || [])
+  ];
+  return doc;
+};
+
+describe('a panel picture or overlay a restore archived is not a version of the page (note 4b)', () => {
+  it('versionList leaves it out and keeps the shared v-numbers (the director’s) for the drawings', () => {
+    const doc = withPanelSources(richDoc());
+    const page1 = { kind: 'page', id: 'pg_1' } as const;
+    const shared = new Map(sharedVersionList(doc, page1).map((v) => [v.path, v.n]));
+    expect(shared.has('u/x/p/ov-p1.webp')).toBe(true); // the shared list still counts it (book.ts wave note)
+    const list = versionList(doc, page1);
+    expect(list.map((v) => v.path)).toEqual(['u/x/p/p1-v1.webp', 'u/x/p/p1-v2.webp', 'u/x/p/p1-v3.webp']);
+    for (const v of list) expect(v.n, v.path).toBe(shared.get(v.path));
+    expect(versionCount(doc, page1)).toBe(3);
+    // Page 2: the panel picture is gone from its versions; the look-alike drawing stays.
+    expect(versionList(doc, { kind: 'page', id: 'pg_2' }).map((v) => v.path)).toEqual(['u/x/p/p2-old.webp']);
+    expect(bookClips(doc).find((c) => c.target?.kind === 'page' && c.target.id === 'pg_1')?.versions).toBe(3);
+  });
+
+  it('the media index lists it under its page by its own label, never as a version of the drawing', () => {
+    const items = collectMedia(withPanelSources(richDoc()));
+    const at = (name: string) => items.find((i) => i.path === `u/x/p/${name}.webp`);
+    expect(at('ov-p1')).toMatchObject({ role: 'page', group: 'pages', owner: { key: 'page:pg_1', label: 'Page 1' }, versionLabel: 'Page 1 overlay · date not recorded', panelSource: 'overlay', current: false, archived: true, canStar: true });
+    expect(at('ov-p1')).not.toHaveProperty('versionN');
+    expect(at('pic-p2')).toMatchObject({ owner: { key: 'page:pg_2', label: 'Page 2' }, versionLabel: 'Page 2 panel picture · date not recorded', panelSource: 'panel picture' });
+    // A deleted page's: under that deleted page, never its Restore.
+    expect(at('ov-t')).toMatchObject({ role: 'deleted_page', owner: { key: 'trash:pg_t', label: 'Deleted page 4' }, versionLabel: 'Deleted page 4 overlay · date not recorded', panelSource: 'overlay' });
+    expect(at('ov-t')).not.toHaveProperty('deletedPageId');
+    // A purged page's: under that page's own name.
+    expect(at('ov-gone')).toMatchObject({ role: 'deleted_page', owner: { key: 'archive:page:pg_gone', label: 'Page 7' }, versionLabel: 'Page 7 overlay · date not recorded', panelSource: 'overlay' });
+    // The drawings keep their shared numbers; the look-alike drawing is a version as before.
+    const page1 = groupMedia(items, 'book').find((g) => g.label === 'Page 1')!;
+    expect(page1.items.map((i) => i.versionLabel)).toEqual(['v4 · current', 'v3', 'v2', 'Page 1 overlay · date not recorded']);
+    expect(at('p2-old')).toMatchObject({ role: 'page', versionLabel: 'v1', archived: true });
+    expect(at('p2-old')).not.toHaveProperty('panelSource');
+    // One item per path; nothing else in the bin changed.
+    expect(new Set(items.map((i) => i.path)).size).toBe(items.length);
+    expect(items.filter((i) => i.panelSource).map((i) => i.path).sort()).toEqual(['u/x/p/ov-gone.webp', 'u/x/p/ov-p1.webp', 'u/x/p/ov-t.webp', 'u/x/p/pic-p2.webp']);
   });
 });

@@ -3,12 +3,12 @@ import { computeAccessibleName } from 'dom-accessibility-api';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { ComicDoc } from '../../../shared/comic/doc';
+import type { ArchivedVersion, ComicDoc } from '../../../shared/comic/doc';
 import { applyOps } from '../../../shared/comic/ops';
 import { makeFakeStudio, makeSampleDoc } from '../conversation/testing/fixtures';
-import { richDoc } from './__fixtures__/richDoc';
+import { A, richDoc } from './__fixtures__/richDoc';
 import { MediaBin } from './MediaBin';
-import { OLDER_COMIC_LINE, OUTSIDE_STUDIO_LINE, pageArtRefusal } from './MediaPreview';
+import { OLDER_COMIC_LINE, OUTSIDE_STUDIO_LINE, OVERLAY_LINE, PANEL_PICTURE_LINE, pageArtRefusal } from './MediaPreview';
 import type { MediaItem } from './bookModel';
 import { feature } from './index';
 import { VersionsCard } from './VersionsCard';
@@ -249,5 +249,99 @@ describe('MediaPreview — page/cover use follows the server’s render_use rule
     expect(pageArtRefusal(item('u/x/p/proj-1/ref/photo.webp'), { id: 'proj.1' })).toBeNull();
     expect(pageArtRefusal(item('u/x/p/projX1/ref/photo.webp'), { id: 'proj.1' })).toBe(OLDER_COMIC_LINE);
     expect(pageArtRefusal(item('u/x/p/proj_1/ref/photo.webp'), { id: '' })).toBe(OLDER_COMIC_LINE);
+  });
+});
+
+describe('MediaPreview — the page picker starts on the image’s own page (timeline owner note 4a)', () => {
+  /** richDoc with a second drawn page that has an earlier version. */
+  const twoDrawn = () => {
+    const doc = richDoc();
+    doc.pages[1] = { ...doc.pages[1], render: { status: 'ready', asset: A('p2-v2', 32), history: [A('p2-v1', 22)] } };
+    return doc;
+  };
+  const picker = (dialog: HTMLElement) => within(dialog).getByLabelText('Page to put this image on') as HTMLSelectElement;
+
+  it('an earlier version of page 2 offers "Use for this page" on page 2, not page 1', () => {
+    const { studio } = setup(twoDrawn());
+    fireEvent.click(tile(/^Page 2, v1/));
+    const dialog = screen.getByRole('dialog', { name: 'Page 2' });
+    expect(picker(dialog).value).toBe('pg_2');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Use for this page' }));
+    expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path: 'u/x/p/p2-v1.webp', at: expect.any(Number) }]);
+  });
+
+  it('starts again on the new image’s page whenever the image changes; an image with no page starts on page 1', () => {
+    setup(twoDrawn());
+    fireEvent.click(tile(/^Page 2, v1/));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(picker(dialog), { target: { value: 'pg_3' } });
+    expect(picker(dialog).value).toBe('pg_3');
+    // ← to page 2's current version: back on page 2, not the pick made for the other image.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Previous image' }));
+    expect(within(dialog).getByRole('img', { name: /^Page 2, v2 · current/ })).toBeInTheDocument();
+    expect(picker(dialog).value).toBe('pg_2');
+    fireEvent.change(picker(dialog), { target: { value: 'pg_3' } });
+    // ← again: page 1's archived v1 starts on page 1.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Previous image' }));
+    expect(within(dialog).getByRole('img', { name: /^Page 1, v1/ })).toBeInTheDocument();
+    expect(picker(dialog).value).toBe('pg_1');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    // A chat upload belongs to no page: page 1.
+    fireEvent.click(tile(/^Chat uploads/));
+    expect(picker(screen.getByRole('dialog')).value).toBe('pg_1');
+  });
+});
+
+describe('MediaPreview — a panel picture or overlay a restore archived is not page art (timeline owner note 4b)', () => {
+  const plain = (name: string, targetKey: string, label: string, archivedAt: number): ArchivedVersion => ({ path: `u/x/p/${name}.webp`, source: 'upload', at: 0, targetKey, label, archivedAt });
+  const withPanelSources = () => {
+    const doc = richDoc();
+    doc.archive = [plain('ov-p1', 'page:pg_1', 'Page 1 overlay', 26), plain('pic-p2', 'page:pg_2', 'Page 2 panel picture', 27), plain('ov-t', 'page:pg_t', 'Deleted page 4 overlay', 28), ...doc.archive];
+    return doc;
+  };
+
+  it('is shown under its page by its label, and never as one of the page’s versions', () => {
+    setup(withPanelSources());
+    const page1 = screen.getAllByRole('region').find((r) => r.getAttribute('aria-label') === 'Page 1')!;
+    expect(within(page1).getByText('Page 1 overlay · date not recorded')).toBeInTheDocument();
+    expect(within(page1).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).not.toContainEqual(expect.stringMatching(/^Page 1, v\d.*overlay/));
+    const page2 = screen.getAllByRole('region').find((r) => r.getAttribute('aria-label') === 'Page 2')!;
+    expect(within(page2).getByText('Page 2 panel picture · date not recorded')).toBeInTheDocument();
+    expect(within(page2).queryByText(/^v\d/)).toBeNull();
+    const deleted = screen.getAllByRole('region').find((r) => r.getAttribute('aria-label') === 'Deleted page 4')!;
+    expect(within(deleted).getByText('Deleted page 4 overlay · date not recorded')).toBeInTheDocument();
+  });
+
+  it('offers no "Use for this page" or "Use as cover" — a calm line instead; reference, star and download stay', () => {
+    const { studio } = setup(withPanelSources());
+    fireEvent.click(tile(/^Page 1, Page 1 overlay · date not recorded, archived/));
+    const dialog = screen.getByRole('dialog', { name: 'Page 1' });
+    expect(within(dialog).queryByRole('button', { name: 'Use for this page' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Use as cover' })).toBeNull();
+    expect(within(dialog).queryByLabelText('Page to put this image on')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: /Compare with current/ })).toBeNull();
+    expect(within(dialog).getByTestId('page-art-refusal')).toHaveTextContent(OVERLAY_LINE);
+    // Shown by its label; its facts say only what is known (source 'upload' recorded that nothing was).
+    expect(within(dialog).getByRole('img', { name: 'Page 1 overlay · date not recorded' })).toBeInTheDocument();
+    expect(within(dialog).getByText("Overlay · not a version of the page's drawing", { selector: 'dd' })).toBeInTheDocument();
+    expect(within(dialog).getByText('Date not recorded', { selector: 'dd' })).toBeInTheDocument();
+    expect(within(dialog).queryByText('Uploaded', { selector: 'dd' })).toBeNull();
+    expect(within(dialog).queryByText('Page art', { selector: 'dd' })).toBeNull();
+    expect(within(dialog).getByLabelText('Use as a reference for')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /Star \(keep forever\)/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download' })).toBeInTheDocument();
+    expect(studio.patch).not.toHaveBeenCalled();
+  });
+
+  it('a panel picture says so; a deleted page’s overlay is not a way to restore that page', () => {
+    setup(withPanelSources());
+    fireEvent.click(tile(/^Page 2, Page 2 panel picture/));
+    expect(within(screen.getByRole('dialog')).getByTestId('page-art-refusal')).toHaveTextContent(PANEL_PICTURE_LINE);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    fireEvent.click(tile(/^Deleted page 4, Deleted page 4 overlay/));
+    const dialog = screen.getByRole('dialog', { name: 'Deleted page 4' });
+    expect(within(dialog).queryByRole('button', { name: 'Restore this page · Free' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Use for this page' })).toBeNull();
+    expect(within(dialog).getByTestId('page-art-refusal')).toHaveTextContent(OVERLAY_LINE);
   });
 });
