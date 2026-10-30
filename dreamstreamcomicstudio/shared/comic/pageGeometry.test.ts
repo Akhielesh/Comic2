@@ -81,3 +81,47 @@ describe('blueprints the board and the server both feed in', () => {
     }
   });
 });
+
+// B9 FIX amendment: the blueprint reads the editor's inset clause. The inset is its own panel (outside every row), in a
+// corner of its host, at layoutText's geometry; the rows keep the other reading numbers. A sentence without the clause
+// reads as before (server/src/comic/layoutSentences.golden.test.ts pins every sentence the code and fixtures make).
+describe('the inset clause', () => {
+  const pageWith = (layout: string, n: number): Pick<Page, 'panels' | 'layout'> => ({ layout, panels: panelsOf(new Array(n).fill('medium')) });
+
+  it('Hero + inset: one row for the hero, the inset in its lower right corner', () => {
+    const s = 'Row 1: one dominant splash panel across the full page (panel 1) with a small inset panel in its lower right corner (panel 2).';
+    expect(geo.parseLayout(s)).toEqual({ mode: 'rows', rows: [{ panels: [0], weight: 2.2 }], insets: [{ panel: 1, host: 0, vert: 'lower', horiz: 'right' }] });
+    const [hero, inset] = geo.estimatePanelBoxes(pageWith(s, 2));
+    expect(hero).toEqual({ x: 0.02, y: 0.02, w: 0.96, h: 0.96 });
+    expect(inset).toEqual(geo.layoutInsetBox(hero, 'lower', 'right'));
+    expect(inset).toEqual({ x: 0.63, y: 0.7004, w: 0.32, h: 0.2496 });
+    // The board's re-export reads it the same way.
+    expect(board.estimatePanelBoxes(pageWith(s, 2))).toEqual([hero, inset]);
+  });
+
+  it('an inset in a stacked panel is counted (the old parse counted 3 of these 4 panels) and keeps the reading numbers', () => {
+    const s = 'Rows 1–2: one tall panel on the left (panel 1) beside two stacked panels on the right (panels 2–3) with a small inset panel in the upper left corner of panel 3 (panel 4).';
+    const parsed = geo.parseLayout(s)!;
+    expect(geo.layoutPanelCount(parsed)).toBe(4);
+    expect(parsed.rows).toEqual([{ panels: [0, 1, 2], weight: 2, span: { tallSide: 'left', stacked: 2 } }]);
+    expect(parsed.insets).toEqual([{ panel: 3, host: 2, vert: 'upper', horiz: 'left' }]);
+    const boxes = geo.estimatePanelBoxes(pageWith(s, 4));
+    expect(boxes[3]).toEqual(geo.layoutInsetBox(boxes[2], 'upper', 'left'));
+  });
+
+  it('an inset before the next row takes its reading number; the next row panels follow it', () => {
+    const s = 'Row 1: one large panel across the full width (panel 1) with a small inset panel in its upper left corner (panel 2). Row 2: two equal panels side by side (panels 3–4).';
+    const parsed = geo.parseLayout(s)!;
+    expect(parsed.rows.map((r) => r.panels)).toEqual([[0], [2, 3]]);
+    expect(parsed.insets).toEqual([{ panel: 1, host: 0, vert: 'upper', horiz: 'left' }]);
+  });
+
+  it('a sentence without the clause, or with one that does not add up, parses exactly as before', () => {
+    const plain = 'Row 1: one wide panel. Row 2: two equal panels.';
+    expect(geo.parseLayout(plain)).toEqual({ mode: 'rows', rows: [{ panels: [0], weight: 1 }, { panels: [1, 2], weight: 1 }] });
+    expect('insets' in geo.parseLayout(plain)!).toBe(false);
+    const broken = 'Row 1: one wide panel across the full width (panel 1) with a small inset panel in its lower right corner (panel 7).';
+    // (The old reading: two panels side by side, the word "small" making the row short.)
+    expect(geo.parseLayout(broken)).toEqual({ mode: 'rows', rows: [{ panels: [0, 1], weight: 0.85 }] });
+  });
+});
