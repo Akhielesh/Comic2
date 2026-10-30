@@ -31,7 +31,7 @@ export const LanguageChips: React.FC<LanguageChipsProps> = ({ chips, selected, o
     <div className="min-w-0" data-history-languages>
       <div role="group" aria-label="Language" className="flex min-w-0 gap-2 overflow-x-auto px-4 py-2">
         {chips.map((c) => (
-          <ChipBtn key={c.lang} selected={c.lang === selected} onClick={() => onSelect(c.lang)} lang={c.lang}>
+          <ChipBtn key={c.lang} selected={c.lang === selected} onClick={() => onSelect(c.lang)}>
             {c.source ? <Languages className="h-3.5 w-3.5" aria-hidden /> : null}
             <span className="min-w-0 truncate">{c.label}</span>
             {c.source ? <span className="sr-only"> (source)</span> : null}

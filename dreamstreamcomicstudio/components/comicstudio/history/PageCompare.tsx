@@ -288,7 +288,7 @@ export const PageCompare: React.FC<PageCompareProps> = ({
           {lettering ? 'Hide words' : 'Show words'}
         </QuietBtn>
       </div>
-      <div tabIndex={0} onKeyDown={onKeyDown} aria-label="Page compare. B blinks, L shows or hides the words, arrow keys move between changed pages." className={cx('min-w-0 px-4', FOCUS_RING)}>
+      <div role="group" tabIndex={0} onKeyDown={onKeyDown} aria-label="Page compare. B blinks, L shows or hides the words, arrow keys move between changed pages." className={cx('min-w-0 px-4', FOCUS_RING)}>
         {mode === 'side' && (
           <div className="grid min-w-0 grid-cols-2 gap-3">
             <figure className="m-0 min-w-0">

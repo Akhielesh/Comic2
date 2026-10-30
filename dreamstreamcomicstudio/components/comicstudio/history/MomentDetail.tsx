@@ -83,16 +83,15 @@ export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, r
         </div>
         {more.length > 0 && (
           <div className="relative shrink-0">
-            <IconBtn label="More" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
+            <IconBtn label="More" aria-expanded={menu} aria-controls={`more-${row.id}`} onClick={() => setMenu((m) => !m)}>
               <MoreHorizontal className="h-4 w-4" aria-hidden />
             </IconBtn>
             {menu && (
-              <div role="menu" className={cx('absolute right-0 top-full z-10 mt-1 w-56 max-w-[calc(100vw-32px)] py-1', MENU)}>
+              <div id={`more-${row.id}`} className={cx('absolute right-0 top-full z-10 mt-1 w-56 max-w-[calc(100vw-32px)] py-1', MENU)}>
                 {more.map((m) => (
                   <button
                     key={m.id}
                     type="button"
-                    role="menuitem"
                     onClick={() => {
                       setMenu(false);
                       m.run();
