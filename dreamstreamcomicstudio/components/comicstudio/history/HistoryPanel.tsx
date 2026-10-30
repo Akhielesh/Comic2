@@ -187,14 +187,24 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
             undo,
             actions: [
               { label: 'Use the earlier drawing too · Free', primary: true, onClick: () => void restore(versionId, pageScope(followUp.pageId, 'art', studioRef.current.doc), at) },
-              {
-                label: `Redraw ${n ? `page ${n}` : 'the page'} · ${costRef.current.approx(usd)}`,
-                onClick: () => {
-                  setToast(null);
-                  // The normal quoted redraw (the confirm policy applies as everywhere else); never automatic.
-                  void studioRef.current.act({ type: 'render_pages', pageIds: [followUp.pageId], force: true, quotedUsd: usd });
-                }
-              }
+              usd > 0
+                ? {
+                    label: `Redraw ${n ? `page ${n}` : 'the page'} · ${costRef.current.approx(usd)}`,
+                    onClick: () => {
+                      setToast(null);
+                      // The normal quoted redraw, as the timeline sends it (the confirm policy applies as everywhere
+                      // else); only on this tap, never automatic.
+                      void studioRef.current.act({ type: 'render_pages', pageIds: [followUp.pageId], force: true, quotedUsd: usd });
+                    }
+                  }
+                : {
+                    // No price known here: never call a paid redraw "Free" — open the page, where Redraw shows its quote.
+                    label: `Redraw ${n ? `page ${n}` : 'the page'}…`,
+                    onClick: () => {
+                      setToast(null);
+                      studioRef.current.openPage(followUp.pageId);
+                    }
+                  }
             ]
           });
         } else {
