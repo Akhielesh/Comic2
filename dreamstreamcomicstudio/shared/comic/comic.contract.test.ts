@@ -1884,8 +1884,8 @@ describe('Ship 2 contract (K2a)', () => {
     expect(CLIENT_PATCHABLE_OPS.has('page_panels')).toBe(false);
     expect(PRO_PAGE_PATCH_OPS).not.toContain('page_panels');
     expect([...PRO_PAGE_PATCH_OPS].sort()).toEqual(['consistency', 'continuity', 'finding', 'layer', 'page_cuts', 'page_frames', 'panel_add', 'panel_remove', 'panels_order', 'scene']);
-    // No flag flip in K2a: they become patchable with the server sanitizers (one constant).
-    expect(PRO_PAGE_OPS_PATCHABLE).toBe(false);
+    // K2b flipped it with the server sanitizers (sanitize/panels.ts, sanitize/consistency.ts): one constant.
+    expect(PRO_PAGE_OPS_PATCHABLE).toBe(true);
     for (const op of PRO_PAGE_PATCH_OPS) {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(PRO_PAGE_OPS_PATCHABLE);
       expect(isKnownDocOp({ op }), op).toBe(true);
