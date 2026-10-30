@@ -24,3 +24,14 @@ export function clearReaderUrlParams(opts?: { replace?: boolean }, loc: Pick<Loc
   if (opts?.replace) history.replaceState({}, '', url);
   else history.pushState({}, '', url);
 }
+
+/**
+ * The comic id of a shared reader link (?view=read&id=<id>) in `search`, else null. App reads it once at startup:
+ * until the reader deep-link effect (which waits for auth) has opened that link, nothing may rewrite the URL —
+ * otherwise a cold shared link loses its ?view=read&id before it is read and the visitor lands on the home page.
+ */
+export function readerDeepLinkId(search: string): string | null {
+  const params = new URLSearchParams(search);
+  const id = params.get('id');
+  return params.get('view') === 'read' && id ? id : null;
+}
