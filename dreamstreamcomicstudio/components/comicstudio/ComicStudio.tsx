@@ -11,7 +11,8 @@
 //
 // The header carries back, the editable title, quality, the truthful spend chip (with a by-kind
 // breakdown and BYOK note), Read and the ⋯ menu (settings, resync, install). On phones it keeps only
-// Back · Title · Share · $ · ⋯ — everything else moves into ⋯, a thumb-reachable bottom sheet.
+// Back · Title · Share · $ · ⋯ — everything else moves into ⋯, a thumb-reachable bottom sheet (with Comic History on,
+// headers narrower than HISTORY_HEADER_ICON_MIN_WIDTH carry History there too).
 // Feature controls (Share, Easy/Pro, savings, a model-status pill) join through the header slot
 // registry (features.ts, contract §13.2) interleaved by `order`; slots ordered ≥ 1000 render as a
 // full-width calm banner strip under the header (mobile/headerSlots.ts).
@@ -26,6 +27,7 @@ import {
   BookOpen,
   ChevronDown,
   Download,
+  History as HistoryIcon,
   LayoutGrid,
   Lock,
   MessageSquare,
@@ -39,7 +41,7 @@ import type { ComicDoc, ConfirmPolicy, SpendKind } from '../../shared/comic/doc'
 import type { DocOp } from '../../shared/comic/ops';
 import { PLATFORM_MARKUP, TIER_PRESETS, getImageModel, resolveImageJob } from '../../shared/comic/models';
 import { deriveLock } from '../../shared/comic/modelLock';
-import type { StudioCaps } from '../../shared/comic/capabilities';
+import { historyEnabled, type StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TONE_CHIP, TRANSITION } from '../chat/studioDesign';
@@ -75,6 +77,7 @@ import type { StudioNavItem } from './mobile/shell/MobileTabBar';
 import { PaneSwitcher, readPaneMode, writePaneMode, type PaneMode } from './mobile/shell/PaneSwitcher';
 import { CompactHeaderMenu, useInstallPrompt, type MenuRow } from './mobile/shell/CompactHeaderMenu';
 import { useOpenSettingsRequests } from './openSettings';
+import { HISTORY_HEADER_ICON_MIN_WIDTH, requestOpenHistory } from './history/index';
 import { INSIGHTS_KIND_ORDER } from '../../shared/comic/modelInsights';
 import { recentLabel } from './insights/copy';
 import { spendSummary } from './insights/insightsModel';
@@ -380,6 +383,19 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
       hint: readHint,
       disabled: !!readHint,
       onSelect: onRead
+    });
+  }
+  // Comic History on narrow headers: below HISTORY_HEADER_ICON_MIN_WIDTH the History slot shows no icon (one more 44 px
+  // control overflows a 320–430 px header), so History is a row here — exactly when the icon is hidden. The slot still
+  // hosts the panel and answers the open request. Nothing while History is off (caps.history false).
+  if (compact && historyEnabled(studio.caps) && ff.width < HISTORY_HEADER_ICON_MIN_WIDTH) {
+    rows.push({
+      id: 'history',
+      label: 'History',
+      icon: <HistoryIcon className="h-4 w-4" />,
+      hint: 'Look back and restore — free',
+      opensSheet: true,
+      onSelect: () => void requestOpenHistory({ view: 'list' })
     });
   }
   rows.push({ id: 'settings', label: 'Settings', icon: <Settings2 className="h-4 w-4" />, opensSheet: true, onSelect: onOpenSettings });
