@@ -38,6 +38,7 @@ import { mapAssetRefs, normalizeDoc, type AspectRatio, type ComicDoc, type Page,
 import type { HealthState, ModelHealth } from '../../../../shared/comic/modelHealth.js';
 import { lockOf, lockedSpecId } from '../../../../shared/comic/modelLock.js';
 import { QC_USD_PER_PAGE, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
+import { REF_ALLOWANCE_USD } from '../../../../shared/comic/plan.js';
 import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../../shared/comic/sendable.js';
 import { reasoningBudget } from '../../ai/providers/openrouter.js';
 import { OPENROUTER_APP_TITLE, OPENROUTER_APP_URL, OPENROUTER_BASE_URL } from '../../config.js';
@@ -95,11 +96,13 @@ const QUOTE_EPSILON = 0.000_05;
 export const LAB_AB_HARD_CAP_USD = 1.2;
 /**
  * Headroom held under the A/B limit for each image a drawing attaches (references and the layout guide), because the
- * quote can't price them: Nano Banana 2.1's reference input is unpublished (plan §7 names this $0.004-per-reference
- * provider allowance, and real 2K pages bill about 27% over list). The quote shown stays the PriceBook's; only the
- * limit a run may reserve against shrinks, so a finished run's larger reported cost still lands under the hard cap.
+ * quote can't price them: Nano Banana 2.1's reference input is unpublished (plan §7 names this per-reference provider
+ * allowance, and real 2K pages bill about 27% over list). The quote shown stays the PriceBook's; only the limit a run
+ * may reserve against shrinks, so a finished run's larger reported cost still lands under the hard cap. The number
+ * lives in one place: shared/comic/plan.ts REF_ALLOWANCE_USD, the same allowance quoteRenderPages adds per extra
+ * reference.
  */
-export const LAB_AB_REF_ALLOWANCE_USD = 0.004;
+export const LAB_AB_REF_ALLOWANCE_USD = REF_ALLOWANCE_USD;
 /** The checks that share the A/B cap. */
 export const LAB_AB_CHECKS: readonly LabCheckId[] = ['P1', 'P2'];
 /**

@@ -1131,6 +1131,23 @@ export const pageLayoutBoxes = (doc: ComicDoc, page: Page): Box[] => drawnLayout
 const ROW_EPS = 0.005;
 const pct = (v: number): number => Math.max(1, Math.min(100, Math.round(v * 100)));
 
+/**
+ * Insets (B9's "small inset panel in its lower right corner"): a box inside a larger one, read by its host's index. The
+ * rows are measured without them, and each is described in its host's corner. A page with no inset has none of these.
+ */
+const insetHostsOf = (boxes: Box[]): Map<number, number> => {
+  const inside = (o: Box, b: Box) => b.x >= o.x - 1e-6 && b.y >= o.y - 1e-6 && b.x + b.w <= o.x + o.w + 1e-6 && b.y + b.h <= o.y + o.h + 1e-6;
+  const out = new Map<number, number>();
+  boxes.forEach((b, i) => {
+    const host = b ? boxes.findIndex((o, k) => k !== i && !!o && o.w * o.h > b.w * b.h && inside(o, b)) : -1;
+    if (host >= 0) out.set(i, host);
+  });
+  return out;
+};
+/** "lower right" — the corner of its host an inset sits in (layoutText's rule). */
+const insetCorner = (host: Box, b: Box): string =>
+  `${b.y + b.h / 2 >= host.y + host.h / 2 ? 'lower' : 'upper'} ${b.x + b.w / 2 >= host.x + host.w / 2 ? 'right' : 'left'}`;
+
 /** Distinct row tops (sorted): a tall panel beside a stack starts one row and runs into the next. */
 const rowTopsOf = (boxes: Box[]): number[] => {
   const tops: number[] = [];
@@ -1163,7 +1180,10 @@ const boxWhere = (boxes: Box[], i: number): string => {
   if (!b) return '';
   const size = `${pct(b.w)}% wide × ${pct(b.h)}% tall`;
   if (boxes.length === 1) return `the whole page; ${size}`;
-  const tops = rowTopsOf(boxes);
+  const insets = insetHostsOf(boxes);
+  const host = insets.get(i);
+  if (host !== undefined) return `a small inset in the ${insetCorner(boxes[host], b)} corner of box ${host + 1}, drawn over it; ${size}`;
+  const tops = rowTopsOf(insets.size ? boxes.filter((_, k) => !insets.has(k)) : boxes);
   const [first, last] = rowSpanOf(tops, b);
   const rows = first === last ? `row ${first + 1}` : `rows ${first + 1}–${last + 1}`;
   return `${rows}, ${sideOf(b)}; ${size}`;
@@ -1180,11 +1200,12 @@ const measuredLayout = (doc: ComicDoc, page: Page, boxes: Box[]): string => {
   if (doc.format.kind === 'webtoon') {
     return `Measured heights, top to bottom: ${boxes.map((b, i) => `panel ${label(i)} ${pct(b.h)}%`).join(', ')} of the image height.`;
   }
-  const tops = rowTopsOf(boxes);
+  const insets = insetHostsOf(boxes);
+  const tops = rowTopsOf(insets.size ? boxes.filter((_, k) => !insets.has(k)) : boxes);
   const spans = boxes.map((b) => rowSpanOf(tops, b));
   const rows: string[] = [];
   tops.forEach((_, r) => {
-    const items = boxes.map((b, i) => ({ b, i })).filter(({ i }) => spans[i][0] === r);
+    const items = boxes.map((b, i) => ({ b, i })).filter(({ i }) => spans[i][0] === r && !insets.has(i));
     if (!items.length) return;
     const single = items.filter(({ i }) => spans[i][1] === r);
     const height = Math.min(...(single.length ? single : items).map(({ b }) => b.h));
@@ -1203,6 +1224,9 @@ const measuredLayout = (doc: ComicDoc, page: Page, boxes: Box[]): string => {
     }
     rows.push(`${head}: ${body}.`);
   });
+  for (const [i, host] of insets) {
+    rows.push(`Inset: panel ${label(i)}, a small panel drawn over the ${insetCorner(boxes[host], boxes[i])} corner of panel ${label(host)}, ${pct(boxes[i].w)}% wide × ${pct(boxes[i].h)}% tall.`);
+  }
   return rows.length ? `Measured proportions: ${rows.join(' ')}` : '';
 };
 

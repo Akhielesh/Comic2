@@ -35,7 +35,35 @@ export interface LayoutCell {
 export interface ParsedLayout {
   mode: 'rows' | 'stack' | 'single';
   rows: LayoutCell[];
+  /** Insets (B9's layout sentence: "… (panel 1) with a small inset panel in its lower right corner (panel 2)"): panels
+   *  drawn inside a corner of another panel, outside every row. Absent when the sentence names none. */
+  insets?: LayoutInset[];
 }
+
+/** A small panel inside a corner of its host panel (indexes are 0-based, reading order). */
+export interface LayoutInset {
+  panel: number;
+  host: number;
+  vert: 'upper' | 'lower';
+  horiz: 'left' | 'right';
+}
+
+/** An inset's size against its host, and its distance from the host's corner beyond one gutter. The same numbers as
+ *  the editor's layoutText (shared/comic/editor/layoutText.ts INSET / insetBox), so the plan and the frames agree. */
+export const LAYOUT_INSET = { wShare: 1 / 3, hShare: 0.26, pad: 0.01 } as const;
+
+/** The inset box in one corner of its host (page fractions, rounded like every estimated box). */
+export const layoutInsetBox = (host: Box, vert: LayoutInset['vert'], horiz: LayoutInset['horiz'], gutter = GUTTER): Box => {
+  const w = host.w * LAYOUT_INSET.wShare;
+  const h = host.h * LAYOUT_INSET.hShare;
+  const pad = gutter + LAYOUT_INSET.pad;
+  return {
+    x: round4(horiz === 'right' ? host.x + host.w - w - pad : host.x + pad),
+    y: round4(vert === 'lower' ? host.y + host.h - h - pad : host.y + pad),
+    w: round4(w),
+    h: round4(h)
+  };
+};
 
 const NUMBER_WORDS: Record<string, number> = {
   a: 1, an: 1, one: 1, single: 1, two: 2, pair: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9
@@ -149,10 +177,58 @@ const countInSegment = (segment: string): number => {
   return phrases.reduce((sum, p) => sum + p.n, 0);
 };
 
-/** Parse a row blueprint into rows (mirrors server prompts.ts parseLayout). Null when unreadable. */
+/**
+ * The inset clause exactly as the editor's layoutText writes it: "with a small inset panel in its lower right corner
+ * (panel 2)", or "… in the upper left corner of panel 3 (panel 4)" when the host is not the panel just named.
+ */
+const INSET_RE = /,?\s*with an? small inset panel in (?:its|the) (upper|lower) (left|right) corner(?: of panel (\d+))? \(panel (\d+)\)/gi;
+
+/**
+ * Parse a row blueprint into rows (mirrors server prompts.ts parseLayout). Null when unreadable.
+ *
+ * A sentence with the inset clause parses without it (the rows), then each inset takes its own reading number and its
+ * host (named, or the nearest panel before it that is not an inset) — the editor's framesFromLayoutText rule. A
+ * sentence without the clause, or whose clause does not add up (a number used twice, out of range, an inset hosting
+ * an inset), parses exactly as before.
+ */
 export const parseLayout = (layout: string): ParsedLayout | null => {
   const text = clean(layout);
   if (!text) return null;
+  if (!new RegExp(INSET_RE.source, 'i').test(text)) return parseRows(text);
+  return parseWithInsets(text) ?? parseRows(text);
+};
+
+const parseWithInsets = (text: string): ParsedLayout | null => {
+  const clauses: { vert: LayoutInset['vert']; horiz: LayoutInset['horiz']; host?: number; n: number }[] = [];
+  const rest = clean(
+    text.replace(new RegExp(INSET_RE.source, 'gi'), (_m, vert: string, horiz: string, host: string | undefined, k: string) => {
+      clauses.push({ vert: vert.toLowerCase() as LayoutInset['vert'], horiz: horiz.toLowerCase() as LayoutInset['horiz'], ...(host ? { host: Number(host) } : {}), n: Number(k) });
+      return '';
+    })
+  );
+  const main = rest ? parseRows(rest) : null;
+  if (!main) return null;
+  const total = layoutPanelCount(main) + clauses.length;
+  const insetAt = new Set(clauses.map((c) => c.n - 1));
+  if (insetAt.size !== clauses.length || clauses.some((c) => !(c.n >= 1 && c.n <= total))) return null;
+  // A full-page splash is panel 1 (the single-mode boxes and harmonizePanelSizes write index 0): an inset numbered
+  // first would leave the splash elsewhere and the boxes with a hole, so that sentence does not add up either.
+  if (main.mode === 'single' && insetAt.has(0)) return null;
+  // The rows' panels take the reading numbers the insets leave free, in order.
+  const free: number[] = [];
+  for (let i = 0; i < total; i++) if (!insetAt.has(i)) free.push(i);
+  const insets: LayoutInset[] = [];
+  for (const c of [...clauses].sort((a, b) => a.n - b.n)) {
+    let host = c.host ? c.host - 1 : -1;
+    if (host < 0) for (let i = c.n - 2; i >= 0 && host < 0; i--) if (!insetAt.has(i)) host = i;
+    if (host < 0 || host >= total || insetAt.has(host)) return null;
+    insets.push({ panel: c.n - 1, host, vert: c.vert, horiz: c.horiz });
+  }
+  return { mode: main.mode, rows: main.rows.map((r) => ({ ...r, panels: r.panels.map((i) => free[i]) })), insets };
+};
+
+/** The rows of a blueprint with no inset clause (the parser before insets; unchanged). */
+const parseRows = (text: string): ParsedLayout | null => {
   if (/\bstacked vertically\b|\bvertical stack\b/i.test(text)) {
     const m = /(\d+|one|two|three|four|five|six|seven|eight|nine)\s+(?:[a-z-]+\s+){0,2}panels?/i.exec(text);
     const n = m ? numberFrom(m[1]) : undefined;
@@ -192,7 +268,7 @@ export const parseLayout = (layout: string): ParsedLayout | null => {
 };
 
 export const layoutPanelCount = (parsed: ParsedLayout | null): number =>
-  parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) : 0;
+  parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) + (parsed.insets?.length ?? 0) : 0;
 
 // ── The layout as drawn (moved from server prompts.ts, which re-exports them under the same names) ──
 //
@@ -328,7 +404,16 @@ export const estimatePanelBoxes = (page: Pick<Page, 'panels' | 'layout'>, opts: 
   let parsed = page.layout ? parseLayout(page.layout) : null;
   if (!fits(parsed)) parsed = parseLayout(synthesizeLayout(page.panels, { kind, readingDirection: rtl ? 'rtl' : 'ltr' }));
   if (!fits(parsed)) parsed = gridLayout(n);
-  return boxesFromLayout(parsed, n, rtl).map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) }));
+  const round = (b: Box): Box => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) });
+  const boxes = boxesFromLayout(parsed, n, rtl).map(round);
+  // Insets sit in a corner of their host's (rounded) box, as the editor places them (layoutText framesFromLayoutText).
+  for (const inset of parsed.insets ?? []) {
+    const host = boxes[inset.host];
+    if (host && inset.panel < n) boxes[inset.panel] = layoutInsetBox(host, inset.vert, inset.horiz);
+  }
+  // Every reader indexes one box per panel: a parse that leaves a panel without one (none known) gets the plain grid.
+  if (boxes.length !== n || Array.from({ length: n }, (_, i) => boxes[i]).some((b) => !b)) return boxesFromLayout(gridLayout(n), n, rtl).map(round);
+  return boxes;
 };
 
 const validBox = (b: unknown): b is Box => {

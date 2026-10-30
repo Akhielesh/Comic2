@@ -3,7 +3,9 @@
 **Status:** K2a landed (2026-10-30): the shared contract only — types, normalizers, ops with exact inverses, limits, the
 `'panel'` job kind and its quote, page-space helpers and staleness parts. Nothing a creator sees changes: no stored doc
 has the new fields, no flag is on, and the new ops are not client-patchable until the server sanitizers land (K2b).
-A page enters panels mode only when it opts in (`page.artMode = 'panels'`).
+A page enters panels mode only when it opts in (`page.artMode = 'panels'`). B4 (the consistency core, §9) and B9 (the
+editor engine, §10) landed on top of it as pure shared code that no screen calls yet, so they change nothing a creator
+sees either.
 
 **Owner's words** (2026-10-29): one image call per page (D-OWN-1), fewer and larger panels (D-OWN-2), consistency and
 detail first (D-OWN-3), an Adobe-like editor where everything can be deleted, dragged, resized and customised
@@ -114,7 +116,9 @@ stale from consistency features (I8).
 ## 6. Limits (`shared/comic/limits.ts`)
 
 `EDITOR_LIMITS` and `CONSISTENCY_LIMITS` are the plan §5.5 values; `PRO_PAGE_LIMITS` holds the ranges and text lengths
-the normalizers and the sanitizers share. `PRO_PAGE_LIMITS.maxRefsMax` (16) is at least the largest reference count of
+the normalizers and the sanitizers share. `CONSISTENCY_LIMITS.placeAnchors` and `propAnchors` (2 each, plan §4.2: "≤ 2
+place sheets → ≤ 2 prop sheets") are the per-page anchor caps; `anchors.ts` `ANCHOR_CAPS.placesPerPage` /
+`propsPerPage` read them. `PRO_PAGE_LIMITS.maxRefsMax` (16) is at least the largest reference count of
 any registered model (a contract test holds it); the comic's model lock caps the real call.
 
 ## 7. History (`shared/comic/history/*`)
@@ -141,11 +145,108 @@ inverses (property) · I6 frames carry their lettering · I7 client/server parit
 inverses (property) · the `'panel'` quote · op sets disjoint, `page_panels` server-only · frame/layer paths collected ·
 History's "every key assigned" with scenes and consistency.
 
-## 9. What comes next (not in K2a)
+## 9. After K2a: B4 landed, what comes next
 
-K2b: server sanitizers (`sanitize/{panels,consistency}.ts`), dispatch of the new actions, `versionMeta` stamping of
-cuts/parts/anchor keys, the publication whitelist. Before `PRO_PAGE_OPS_PATCHABLE` flips, the server's `balloons`
-sanitizer must keep `rot` and `minH` (the K2a inverses and the editor send whole-page balloon snapshots), and the cut
-provenance rule above must hold. The History restore filter and forgetting a photo (H3, `sanitize/refs.ts`) must drop
-frame and overlay sources too (`dropPanelSourcePaths`). B1 composition, B2 panelization, B4 continuity and anchors, B9 the
-editor engine, then the C packages (UI).
+**B4, the consistency core** (`shared/comic/{continuity,directions,anchors}.ts`, `plan.ts`; re-exported by the
+`shared/comic` barrel). `resolveContinuity` carries what a page changes (outfits and marks book-wide, holdings per
+scene, where per page); `lintContinuity` and `lintDirections` find contradictions. `normalizeDirection` coerces the lens
+to the shot and keeps off-panel voices out of the page prompt's drawn cast (`drawnCastIds`, so a POV viewer is an
+off-panel voice; `offPanel ∉` drawn). `planAnchors` in `ship1` mode is today's `planPageReferences`; in `anchors` mode
+(any of places, props or styleKey on — sheetV2 alone stays `ship1`) it follows the plan's §4.2 priorities and caps and
+says why each anchor was left out. `staleReasons` / `partsStale` name what changed (never for renders without parts).
+`quoteRenderPages` with `anchors: 'auto'` adds only the anchor sheets some page of the run attaches (the others are
+`unused`, said in words, never quoted): recurring character sheets, place and prop sheets at 1K, and
+`REF_ALLOWANCE_USD` ($0.004) per extra reference (or the model's `perRefUsd`), with the anchor lines returned by kind so
+the server's PriceBook re-prices them. `summarizeBook` has a consistency view (per-page anchors, text-only reasons,
+changed details, lint, and the book's missing anchors as tickable line items).
+
+Around it: the anchor kinds are the server flag `COMIC_CONSISTENCY_ANCHORS` (unset = every kind off), read once per
+request into `StudioCaps.anchorKinds` (`server/src/comic/access.ts` `studioCapsFor`; unset gives `ANCHOR_KINDS_OFF`), so
+the client quotes and summarizes with the kinds the runs use. The Model Lab's A/B allowance is the same number
+(`LAB_AB_REF_ALLOWANCE_USD = REF_ALLOWANCE_USD`). Nothing calls the anchors quote or the consistency view yet.
+
+**Next.** K2b: server sanitizers (`sanitize/{panels,consistency}.ts`), dispatch of the new actions, `versionMeta`
+stamping of cuts/parts/anchor keys, the publication whitelist. Before `PRO_PAGE_OPS_PATCHABLE` flips, the server's
+`balloons` sanitizer must keep `rot` and `minH` (the K2a inverses and the editor send whole-page balloon snapshots), and
+the cut provenance rule above must hold. The History restore filter and forgetting a photo (H3, `sanitize/refs.ts`)
+must drop frame and overlay sources too (`dropPanelSourcePaths`). B1 composition, B2 panelization, B5 (the page prompt
+on `planAnchors`), then the C packages (UI) on the editor engine (§10).
+
+## 10. Editor engine (B9)
+
+Code: `shared/comic/editor/` — pure functions (no React, no server imports, no clock) shared by the editor canvas (C1),
+lettering (C2), the confidence surfaces (C4) and the director's layout tools (B10). The `shared/comic` barrel exposes
+them as one namespace, `comic.editor.*`, so none of their helpers shadows a top-level name.
+
+| Module | What it does |
+|---|---|
+| `scene.ts` | the page's objects in four bands (page, art, overlays, lettering; z is free only within a band), hit tests, locks, ids, the result shape |
+| `transform.ts` | move, resize and rotate math for overlays and balloons |
+| `snap.ts`, `align.ts` | snap targets (margins, safe area, frames, gutters, objects, guides); align and distribute |
+| `frames.ts` | gutter drag, resize, split, join, add, delete, close gap, equalize, make biggest, close-up, takes, swap pictures, crop |
+| `templates.ts`, `layoutText.ts` | the page templates with fit dots and "Best fit"; frames ↔ the layout sentence |
+| `drop.ts` | what a drop from the asset bin does (ops, label, cost) |
+| `checks.ts`, `readingOrder.ts` | the per-page checklist; reading order of frames and balloons, with its free fix |
+
+**The EditResult contract.** Every edit returns `{ok: true, ops, label, undo, notes?}` or `{ok: false, reason}`.
+`ops` are K2a ops; `undo` is `inverseOps(doc, ops)` from `undo.ts` (the one undo path, never a parallel system);
+`label` and `reason` are plain words ("Split panel 2 side by side", "It already looks like that."). A label never holds
+a price or '$': the UI adds " · Free" or the price through `formatCostForUser`. Ids are deterministic by default
+(`pe1`, `le1`, `ly_e1`); the editor UI should pass a random `IdFactory` to split, add, close-up and drop.
+
+**Cuts are named before panels move.** A drawing's cuts that name no panel are matched by position. Before add,
+delete, join, split and the "Renumber the panels to match" fix, `withNamedCuts` puts `nameCutsOp(page)` first: one
+`page_cuts` op (no `keepBy`, `moveBalloons: false`) that names each cut by the panel showing it now, so each picture
+stays with its panel. It is sent only when no cut names a panel yet; its inverse restores the stamped cuts exactly.
+
+**Templates.** Twelve curated layouts led by two to four large panels (Splash, Two tiers, Hero + inset, Big top + two,
+Two + big bottom, Tall left + two, Tall right + two, Three tiers, Four grid, Wide + tall left + two, Wide / two / wide,
+Fast five) and three webtoon stacks; `DEFAULT_TEMPLATE_ID` is `big-top-two`. Each has frames and a layout sentence in
+`parseLayout`'s words; `templatesFor` adds this page's fit dots and marks the best fit; `applyTemplateEdit` writes the
+frames, the sentence and the sizes on a page not drawn yet, and only the frames on a drawn page (the art re-fits).
+**Hero + inset is offered** (`INSET_TEMPLATES_ON = true`): the blueprint geometry reads the inset clause the editor
+writes ("… (panel 1) with a small inset panel in its lower right corner (panel 2)", or "… in the upper left corner of
+panel 3 (panel 4)"). `pageGeometry.parseLayout` parses the rows without it and lists each inset in
+`ParsedLayout.insets` with its reading number and host; `layoutPanelCount` counts it; `estimatePanelBoxes` puts it in
+its host's corner with the editor's numbers (`LAYOUT_INSET`, `layoutInsetBox` = `layoutText`'s `INSET`, `insetBox`).
+The server reads the same module (`vision.ts`, `prompts.ts`), and the page prompt measures the rows without the inset
+and names it in its host's corner. A sentence without the clause reads exactly as before:
+`server/src/comic/layoutSentences.golden.test.ts` pins every sentence the code and the fixtures make (templates,
+synthesized and derived sentences, the plan check's candidate blueprints, and the fixture and test literals). A clause
+that does not add up (a number used twice or out of range, an inset hosting an inset, or an inset numbered before a
+full-page splash) is ignored and the sentence reads as before; `estimatePanelBoxes` always gives one box per panel.
+**Not yet: the lettering does not keep a host's balloons off its inset.** The engine
+(`shared/comic/lettering/place.ts`, called by `vision.ts` and the client's lettering) places each panel's balloons in its
+own box only, and a closing caption's default corner (end-bottom) is the Hero + inset template's inset corner, so a
+hero's closing caption can land on the inset. This is the lettering owner's follow-up (the inset boxes become keep-outs
+for their host panel's lines only). Until it lands a page gets the inset clause only from the editor engine, which no
+screen calls yet, so a creator does not meet it.
+
+**Drops and real people (PD-5).** `PERSON_PHOTO_GUIDE_ONLY` is on: a photo of a real person dropped on a panel offers
+the guide-only sticker first (`choices[0]`, a layer with `print: false`, with a warning for the UI to show once) and
+filling the panel (printed) second. A drop that changes a drawn panel's plan says `NEEDS_REDRAW` (" · needs a redraw to show").
+
+**Language editions.** `buildScene(doc, page, {lang})` gives `PageScene.lang`: balloon edits (`setBoxEdit`,
+`moveEdit`, `alignEdit`, `distributeEdit`) then write that language only (`edition_balloon`); changing only the height
+there is refused (`EDITION_HEIGHT_SHARED`: the height is shared by every language); rotation and z-order stay shared.
+`distributeEdit` refuses when a locked object sits between the first and the last (`DISTRIBUTE_LOCKED`).
+
+**Checks.** `pageChecks(doc, page, opts)` gives text fits, faces clear, characters, speakers drawn, reading order,
+panels match the plan, sharp, empty panels and up to date. Each is `ok`, `look` or `unknown` (checked before that check
+existed: it offers the paid re-check). Fixes list free ones first, then paid ones.
+
+- Free, with ops or resolved by `checkFixEdit`: `make_bigger`, `move_line`, `template`, `shrink_text`, `renumber`,
+  `swap_lines`, `looks_fine`, `off_panel`, `caption`, `delete_panel`, `close_gap`.
+- Free, done by the editor UI or the server (no ops here): `check_edges` (opens "Check the edges"), `move_clear`
+  (`lettering/styleOps.ts` `resetPositionOps`), `widen` (`widenOps`), `smaller` (`resizeFrameEdit`), `rebind` (`rebind_panels` with
+  the order the check read), `accept_state` and `drop_cast` (`apply_finding`), `undo_changes` (the undo stack),
+  `drop_image` (opens the bin).
+- Paid, always quoted and approved through the existing gated actions: `recheck`, `redraw_panel`, `redraw_page`,
+  `edit_ai`.
+
+**The speakers rule.** A speaker the page check found missing counts as still missing only while they speak there (a
+speech, thought, whisper or shout line with words), the shot draws its speakers (not a POV, insert or establishing
+shot) and the panel's cast lists them. A cast member also marked off-panel is contradictory and the cast wins, so the
+check reads `look`, never a false `ok`. Its fixes: make them a voice from off the panel (out of the cast and the
+staging, into `direction.offPanel`, `by: 'user'`), turn their lines into a caption (overlay lettering only), or redraw
+the panel (paid).

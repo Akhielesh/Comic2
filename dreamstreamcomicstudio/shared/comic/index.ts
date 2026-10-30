@@ -32,3 +32,9 @@ export * from './sendable.js';
 // Ship 2 (K2a): a panel's parts fingerprint and the frame ↔ drawing space (panels mode)
 export * from './parts.js';
 export * from './panelize/space.js';
+// Ship 2 (B4): continuity carry rules, panel directions, the per-page anchor plan
+export * from './continuity.js';
+export * from './directions.js';
+export * from './anchors.js';
+// Ship 2 (B9): the pro editor's engine, under one namespace (comic.editor.*) so its many helpers never shadow a name
+export * as editor from './editor/index.js';

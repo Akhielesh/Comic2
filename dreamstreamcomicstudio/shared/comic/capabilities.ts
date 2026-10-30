@@ -1,6 +1,7 @@
 // What a user may do in the studio (contract §3.3). Single source: server access.ts and the client read it.
 // Mode (Easy/Pro) is a VIEW; `proEditor` is the only permission behind the Pro editor.
 
+import type { AnchorKinds } from './anchors.js';
 import type { QualityTier } from './doc.js';
 import type { ContentRating } from './safety.js';
 import { DOC_LIMITS, MAX_ALTERNATIVES } from './limits.js';
@@ -40,6 +41,11 @@ export interface StudioCaps {
   history?: boolean;
   /** "Try another version" lines per comic (default MAX_ALTERNATIVES; the decisions-final #1 pattern). */
   maxAlternatives?: number;
+  // --- consistency anchors (pro plan §4.8; B4) ---
+  /** The anchor kinds the server's runs use: anchorKindsFromFlag(COMIC_CONSISTENCY_ANCHORS), filled by access.ts
+   *  studioCapsFor. Unset env = ANCHOR_KINDS_OFF (every kind off). The client passes it to summarizeBook's
+   *  `consistency` option and quoteRenderPages' `anchors`, so its quotes use the server's kinds. Absent = every kind off. */
+  anchorKinds?: AnchorKinds;
 }
 
 /** "Usage left" for the header meter and quotes (percentages only — no USD ever reaches a governed user). */

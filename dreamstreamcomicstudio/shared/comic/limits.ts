@@ -122,6 +122,10 @@ export const CONSISTENCY_LIMITS = {
   /** Keys a VersionParts record holds (panels + places + props). */
   partsKeys: 80,
   anchorKeys: 16,
+  /** Place sheets one page attaches, then prop sheets (pro plan §4.2: "≤ 2 place sheets → ≤ 2 prop sheets");
+   *  anchors.ts ANCHOR_CAPS.placesPerPage / propsPerPage read them. */
+  placeAnchors: 2,
+  propAnchors: 2,
   maxRefsDefault: 9,
   promptChars: 9000,
   recurringPages: 2,

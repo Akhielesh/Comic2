@@ -81,6 +81,12 @@ creator confidence — no lost work, easy undo and versions.
   changed by a merge restore. Exact mode (alternative switch only) replaces as stored; the trash belongs to the comic:
   it stays, the target line's Deleted pages join it (by page id, newest first, capped at 20 with the overflow
   archived) and a page live in the target is not also deleted, so a switch there and back gives every page back.
+  **I1 and panel pictures (K2a):** `pathHomes` also gives a page's frame pictures (`frame.src.path`) and overlay images
+  (`layer.src.path`) a home under `page:<id>`, labelled "Page N panel picture" / "Page N overlay" ("Deleted page N …"
+  for a page in Deleted; a path a render also holds keeps the render's home, and a frame wins over an overlay). A
+  displaced one is archived with source `upload` and `at: 0` ("date not recorded"); `isPanelSourceArchive(entry)` (with
+  `PANEL_SOURCE_ARCHIVE_WORDS`, re-exported by `history/index.ts`) tells it apart from a drawing of the page, so it is
+  never offered as the page's art.
 - **restore.ts** — `restoreOps(current, versionDoc, scope)` per scope; `restoreEffects` (what goes to Deleted / is
   kept); `exactRestoreSet`; `historyRestoreOp`.
 - **diff.ts** — `diffManifests` (no body loads), `diffBooks` with the semantic filter (QC, variants and safety never
@@ -100,7 +106,7 @@ creator confidence — no lost work, easy undo and versions.
   newest first; every gap says "not recorded"; only paths the doc holds; reference photos, chat uploads and the inbox
   are left out (art you uploaded for a page or the cover is listed); pure (`now` and `tz` are passed in).
   `earlierHistory(doc, {now, tz, before})` with `before` = when History started (the `start` row), so later drawings,
-  which have real rows, are not repeated.
+  which have real rows, are not repeated. Re-exported by `history/index.ts`.
 
 ## 5. The seams (H0 stubs; later packages replace them in place, same names)
 
@@ -248,9 +254,9 @@ while Comic History is off (`caps.history` false, the default): no entry point s
 - **Header** slot `history`, order 240 (after the usage meter, before Read): the History button. It also hosts the
   panel and answers every open request (`OPEN_HISTORY_EVENT` / `requestOpenHistory`).
 - **Narrow phone headers.** A compact header shows the icon only from `HISTORY_HEADER_ICON_MIN_WIDTH` (480 px): below
-  that one more 44 px icon overflows the header. There History is reached from the board's History tab, the card,
-  typed requests and the page and timeline links; a History row in the header's ⋯ menu is a pending wave note for
-  `ComicStudio.tsx`.
+  that one more 44 px icon overflows the header. There History is a row in the header's ⋯ menu (`ComicStudio.tsx`,
+  exactly when the icon is hidden), besides the board's History tab, the card, typed requests and the page and timeline
+  links.
 - **Board tab** `history`, order 510 (after Media).
 - **Conversation card** `history` (ids only; it renders by fetching from the owner API, so an old card always shows
   the moment as stored): views list, moment, compare, confirm and undo_ai.
@@ -272,7 +278,7 @@ call, and never touches the network or spends anything. `history.testkit.tsx` se
 `history` (the panel with filmstrip, scrubber and moments by day, a moment's detail, a compare, the reader),
 `history-sheets` (restore, save version, undo AI with a conflict) and `history-states` (a brand-new comic, a v4 comic
 with "Earlier (images only)", a classic import, and the card in each view). Measured at 360×740 and 1440×900, light
-and dark, `?skin=atlas`. Listing them in `qa/KitScenes.tsx` is a pending wave note.
+and dark, `?skin=atlas`. They are listed in `qa/KitScenes.tsx` (`KIT_SCENES`).
 
 **The RestoreScope each control sends** (every one is a free `history_restore`, with Undo):
 
@@ -304,5 +310,23 @@ and dark, `?skin=atlas`. Listing them in `qa/KitScenes.tsx` is a pending wave no
   yet." A moment, its book or a compare answering 404 is about that moment only: "This moment isn't kept any more
   (older automatic saves are thinned). Nothing in your comic changed."
 - **Earlier (images only).** A comic older than History shows its earlier drawings under "Earlier (images only)", with
-  a note saying only drawings were recorded then. Each opens the timeline's MediaPreview, where "Use for this page"
-  is free.
+  a note saying only drawings were recorded then. It renders `earlierHistory(doc, {now, tz, before: start.createdAt})`
+  (memoised per local day), and a moment's money through the viewer's own formatter (`useCostFormat(studio).exact`),
+  so governed users never read '$'. "Use this version" (`historyModel.earlierUseOf`) opens the timeline's MediaPreview,
+  where "Use for this page" is free. It is offered only for a drawing that is not held back, not already in the book,
+  and whose owner is a live target; the item is matched on path and owner, and when another owner holds the path a
+  one-item list in this moment's owner is opened. It is never offered for a panel picture or an overlay a restore
+  displaced (`isPanelSourceArchive`): using it would print that picture as the whole page's art.
+- **Versions you removed.** A list can hold rows saved on a version you removed. They read "From a version you
+  removed" (`HISTORY_COPY.removedLine`) in the list, a moment, the card (its list and its moment) and the scrubber's
+  spoken value. "You're here" comes from the list's `head` (the list response carries `line` and `head`, read
+  tolerantly; `historyModel.hereRowId`), never simply the newest row; while the server does not send `head`, it is the
+  line's newest own row of an unfiltered list.
+- **The latest AI run and the latest restore** are found with `findOwnRow` (`useHistory.ts`): it lists newest first,
+  skips a removed version's rows (they never use up the window) and reads on to older pages, bounded
+  (`OWN_ROW_MAX_PAGES` = 4: the first window, then the list's normal page size). "Undo the last AI change" in the
+  panel, the moment, the undo sheet and the card uses it; Undo after a restore checks only your newest
+  `UNDO_LOOKUP_LIMIT` (5) rows. The fake API's `head` is the line's newest row (`createdAt`, then `id`), as the store's.
+- **One toast slot.** The restore toast shares the studio's one toast slot with the timeline's Undo toasts
+  (`timeline/UndoToast.tsx` `claimUndoToast`): showing it makes a timeline Undo toast step aside, and a newer toast (a
+  timeline edit's or another restore's) replaces it, so the two never stack.

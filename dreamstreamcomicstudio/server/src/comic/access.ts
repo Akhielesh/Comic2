@@ -15,6 +15,7 @@
 
 import type { Request } from 'express';
 import type { QualityTier } from '../../../shared/comic/doc.js';
+import { ANCHORS_ENV, anchorKindsFromFlag } from '../../../shared/comic/anchors.js';
 import { PAID_PLAN_IDS, resolveStudioCaps, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { isContentRating, type ContentRating } from '../../../shared/comic/safety.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -130,6 +131,8 @@ export async function checkQualityAccess(
 export interface StudioCapsDeps extends QualityAccessDeps {
   /** Account-age ceiling (default: the safety seam, profile_private.dob, 10-min LRU there). */
   accountCeilingFor?: (userId: string) => Promise<ContentRating>;
+  /** Server env (default process.env): COMIC_CONSISTENCY_ANCHORS sets caps.anchorKinds. */
+  env?: Readonly<Record<string, string | undefined>>;
 }
 
 const defaultIsAdminFor = async (req: Request): Promise<boolean> => {
@@ -143,8 +146,17 @@ const defaultIsAdminFor = async (req: Request): Promise<boolean> => {
 /**
  * Resolve what this request's user may do (contract §3.3). Never throws: every lookup has a
  * documented failure mode (plan → fail open for tiers, admin → false, ceiling → PG).
+ *
+ * The caps also carry the consistency-anchor kinds the server's runs use (pro plan §4.8): one env
+ * read, anchorKindsFromFlag(COMIC_CONSISTENCY_ANCHORS). Unset = ANCHOR_KINDS_OFF, every kind off.
  */
 export async function studioCapsFor(req: Request, opts: { byok: boolean }, deps: StudioCapsDeps = {}): Promise<StudioCaps> {
+  const caps = await accessCapsFor(req, opts, deps);
+  return { ...caps, anchorKinds: anchorKindsFromFlag((deps.env ?? process.env)[ANCHORS_ENV]) };
+}
+
+/** Plan, key, admin and ceiling (studioCapsFor without the server flags). */
+async function accessCapsFor(req: Request, opts: { byok: boolean }, deps: StudioCapsDeps): Promise<StudioCaps> {
   const userId = req?.user?.id;
   const billingOn = deps.billingEnabled ?? BILLING_ENABLED;
 
