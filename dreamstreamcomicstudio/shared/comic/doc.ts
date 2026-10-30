@@ -23,10 +23,10 @@ import type { StudioMode } from './capabilities.js';
 import { DEFAULT_LETTERING, sanitizeLetteringStyle, sanitizeLetterStylePatch } from './lettering/style.js';
 import { normalizeI18n } from './i18n.js';
 import { isPublicationMirror } from './publication.js';
-import { hashString } from './hash.js';
+import { hashString, stableStringify } from './hash.js';
 import { DOC_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
-export { hashString } from './hash.js';
+export { hashString, stableStringify } from './hash.js';
 export { MAX_RENDER_HISTORY, MAX_SPEND_ENTRIES, MAX_CONVERSATION, MAX_ARCHIVE, MAX_TRASH } from './limits.js';
 
 export const COMIC_DOC_VERSION = 1;
@@ -162,6 +162,27 @@ export interface QcReport {
   keepOut?: KeepOut[];
   /** Where each speaking character's head/mouth is (tail aiming). */
   heads?: SpeakerMark[];
+  // ── Ship 1 panel checks (plan §5.1; vision.ts). All optional and never hashed; a report without them is an
+  //    older check and means "not measured", never "fine". publicQc copies only panelBoxes (no leak). ──
+  /** Per DRAWN panel in reading order: the script panel number whose moment it shows (0 = none). Stored only
+   *  when answered for every drawn panel. A permutation is reported, never applied. */
+  beats?: number[];
+  /** Drawn panel numbers (1-based, reading order) whose art breaks over their border; [] = none do. */
+  crosses?: number[];
+  /** The panel rectangles the check measured, in reading order — kept even when their count differs from the
+   *  plan (panelBoxes then holds the estimate). */
+  drawnBoxes?: Box[];
+  /** Speakers with lines in a panel whom the check reads as not drawn there (off-panel voices never). */
+  missingSpeakers?: QcMissingSpeaker[];
+  /** Where panelBoxes came from: measured by the check, or estimated from the layout blueprint. */
+  boxesFrom?: 'vision' | 'estimate';
+}
+
+/** A speaker the page check reads as not drawn in a panel (QcReport.missingSpeakers). */
+export interface QcMissingSpeaker {
+  /** Script panel number (1-based). */
+  panel: number;
+  castId: string;
 }
 
 export interface RenderVersion extends AssetRef, VersionMeta {
@@ -711,6 +732,13 @@ export interface OptionChoice {
   visual?: OptionVisual;
 }
 
+/** One fix chip on a notice card (plan §5.1). Free fixes come first; a paid fix's action carries its quote. */
+export interface NoticeFix {
+  label: string;
+  free: boolean;
+  action: import('./ops.js').StudioAction;
+}
+
 /** Interactive cards that live inside the conversation. Every card renders LIVE doc state. */
 export type Card =
   | { type: 'options'; id: string; question: string; choices: OptionChoice[]; multi?: boolean; allowCustom?: boolean; answered?: string[] }
@@ -719,7 +747,9 @@ export type Card =
   | { type: 'plan'; id: string }
   | { type: 'gate'; id: string; gateId: string }
   | { type: 'renders'; id: string; targets: RenderTarget[]; label: string }
-  | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string }
+  /** `fixes` (plan §5.1): chips under the notice, free first; a paid one carries `quotedUsd` on its action and goes
+   *  through the existing spend gate. */
+  | { type: 'notice'; id: string; tone: 'info' | 'warn' | 'error' | 'success'; text: string; fixes?: NoticeFix[] }
   | { type: 'recap'; id: string }
   | { type: 'breakdown'; id: string; pageIds?: string[]; cover?: boolean; view?: 'plan' | 'status' | 'cost'; gateId?: string }
   | { type: 'versions'; id: string; target: RenderTarget }
@@ -1021,8 +1051,37 @@ export const normalizeOutageCard = (value: unknown): Extract<Card, { type: 'mode
   return out;
 };
 
-/** Cards of a message: `model_outage` cards are validated (dropped when malformed); every other card is kept
- *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
+/** At most this many fix chips on one notice card (free first). */
+export const NOTICE_FIXES_MAX = 4;
+const NOTICE_FIX_LABEL_MAX = 80;
+
+const isNoticeFix = (f: unknown): f is NoticeFix =>
+  isObject(f) &&
+  typeof f.label === 'string' &&
+  !!f.label.trim() &&
+  f.label.length <= NOTICE_FIX_LABEL_MAX &&
+  typeof f.free === 'boolean' &&
+  isObject(f.action) &&
+  isStudioActionType(f.action.type);
+
+/**
+ * A notice card's fix chips, validated: entries without a label, a free flag or an action of a known StudioAction
+ * type are dropped, at most NOTICE_FIXES_MAX are kept, and none at all drops the key. Returns the SAME card when it
+ * is already well-formed (the server validates the full action again when a chip is tapped, like every action).
+ */
+export const normalizeNoticeCard = (card: Extract<Card, { type: 'notice' }>): Extract<Card, { type: 'notice' }> => {
+  if (card.fixes === undefined) return card;
+  const fixes = Array.isArray(card.fixes) ? card.fixes.filter(isNoticeFix).slice(0, NOTICE_FIXES_MAX) : [];
+  if (Array.isArray(card.fixes) && fixes.length === card.fixes.length) return card;
+  const out = { ...card };
+  if (fixes.length) out.fixes = fixes;
+  else delete out.fixes;
+  return out;
+};
+
+/** Cards of a message: `model_outage` cards are validated (dropped when malformed) and notice fix chips are
+ *  validated; every other card is kept exactly as stored (their renderers read live doc state). Returns the SAME
+ *  array when nothing changed. */
 const normalizeCards = (cards: unknown): Card[] | undefined => {
   if (!Array.isArray(cards)) return undefined;
   let changed = false;
@@ -1036,6 +1095,10 @@ const normalizeCards = (cards: unknown): Card[] | undefined => {
       }
       out.push(next);
       if (JSON.stringify(next) !== JSON.stringify(card)) changed = true;
+    } else if (isObject(card) && card.type === 'notice' && (card as { fixes?: unknown }).fixes !== undefined) {
+      const next = normalizeNoticeCard(card);
+      if (next !== card) changed = true;
+      out.push(next);
     } else out.push(card);
   }
   return changed ? out : (cards as Card[]);
@@ -1459,6 +1522,14 @@ export const displayAssetPaths = (doc: ComicDoc): string[] => {
 };
 
 // ── Spec hashes (R2: invariance for pageSpecHash) ────────────────────────────
+//
+// Back-compat F1 (plan §5.1): every spec hash serialises its tuple with stableStringify (object keys sorted
+// at every depth, array order kept), so the hash never depends on key order. The TUPLES are unchanged — no
+// field was added or removed — so nothing new is hashed (I1). Postgres jsonb reorders object keys on save,
+// and the earlier JSON.stringify hashes made drawn pages read "Out of date" after a reload. Renders stamped
+// before F1 carry that legacy serialisation: session.ts recoveryOps accepts them once per load (legacySpecHashFor
+// over a few key-order variants) and re-stamps the canonical hash; a genuine edit matches no variant and stays
+// stale, honestly.
 
 /** Keys that never affect drawn art. Lines without them keep object identity → identical JSON. */
 const hashableLine = (l: Line): Line => {
@@ -1468,12 +1539,12 @@ const hashableLine = (l: Line): Line => {
   return rest as Line;
 };
 
-/**
- * Fingerprint of everything a page render depends on. When it changes after a
- * render, the page is shown as "stale" (out of date with its script) — never
- * silently re-rendered.
- */
-export const pageSpecHash = (doc: ComicDoc, page: Page): string => {
+/** CharacterLook keys in the order the writer and the director tools build a look (legacy acceptance). */
+export const CHARACTER_LOOK_KEYS = [
+  'summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes', 'skin', 'outfit', 'palette', 'props', 'marks', 'species', 'markings'
+] as const satisfies readonly (keyof CharacterLook)[];
+
+const pageSpecTuple = (doc: ComicDoc, page: Page): unknown[] => {
   const castIds = new Set(page.panels.flatMap((p) => p.castIds));
   const cast = doc.cast
     .filter((c) => castIds.has(c.id))
@@ -1484,20 +1555,25 @@ export const pageSpecHash = (doc: ComicDoc, page: Page): string => {
     )
     .sort();
   const lettering = doc.format.lettering === 'in_art' ? page.panels.map((p) => p.lines.map(hashableLine)) : [];
-  return hashString(
-    JSON.stringify([
-      page.layout,
-      page.panels.map((p) => [p.size, p.shot, p.angle, p.action, p.castIds, p.placeId, p.mood]),
-      lettering,
-      cast,
-      doc.style.spec,
-      doc.style.board?.path,
-      doc.format.pageAspect,
-      doc.format.colorMode,
-      doc.format.lettering
-    ])
-  );
+  return [
+    page.layout,
+    page.panels.map((p) => [p.size, p.shot, p.angle, p.action, p.castIds, p.placeId, p.mood]),
+    lettering,
+    cast,
+    doc.style.spec,
+    doc.style.board?.path,
+    doc.format.pageAspect,
+    doc.format.colorMode,
+    doc.format.lettering
+  ];
 };
+
+/**
+ * Fingerprint of everything a page render depends on. When it changes after a
+ * render, the page is shown as "stale" (out of date with its script) — never
+ * silently re-rendered. Key-order independent (F1).
+ */
+export const pageSpecHash = (doc: ComicDoc, page: Page): string => hashString(stableStringify(pageSpecTuple(doc, page)));
 
 /** Pages whose current render no longer matches their spec. */
 export const isPageStale = (doc: ComicDoc, page: Page): boolean =>
@@ -1521,26 +1597,77 @@ export const coverCastOf = (doc: ComicDoc): Character[] => {
   return list.slice(0, 6);
 };
 
-export const sheetSpecHash = (doc: ComicDoc, c: Character): string =>
-  hashString(JSON.stringify(['sheet/1', c.look, castKindOf(c), c.count ?? 1, doc.style.spec, doc.style.board?.path, doc.format.colorMode]));
-export const placeSpecHash = (doc: ComicDoc, p: Place): string =>
-  hashString(JSON.stringify(['place/1', p.look, doc.style.spec, doc.style.board?.path, doc.format.colorMode]));
-export const coverSpecHash = (doc: ComicDoc): string => {
+const sheetSpecTuple = (doc: ComicDoc, c: Character): unknown[] => ['sheet/1', c.look, castKindOf(c), c.count ?? 1, doc.style.spec, doc.style.board?.path, doc.format.colorMode];
+const placeSpecTuple = (doc: ComicDoc, p: Place): unknown[] => ['place/1', p.look, doc.style.spec, doc.style.board?.path, doc.format.colorMode];
+const coverSpecTuple = (doc: ComicDoc): unknown[] => {
   const lettering = doc.cover.lettering ?? 'in_art';
-  return hashString(
-    JSON.stringify([
-      'cover/1',
-      lettering,
-      lettering === 'in_art' ? [doc.cover.title ?? doc.brief.title, doc.cover.tagline ?? ''] : [], // overlay titles are software
-      doc.cover.direction ?? '',
-      coverCastOf(doc).map((c) => [c.id, c.look, c.sheet.asset?.path || '', c.count ?? 1]),
-      doc.style.spec,
-      doc.style.board?.path,
-      doc.format.pageAspect,
-      doc.format.colorMode
-    ])
-  );
+  return [
+    'cover/1',
+    lettering,
+    lettering === 'in_art' ? [doc.cover.title ?? doc.brief.title, doc.cover.tagline ?? ''] : [], // overlay titles are software
+    doc.cover.direction ?? '',
+    coverCastOf(doc).map((c) => [c.id, c.look, c.sheet.asset?.path || '', c.count ?? 1]),
+    doc.style.spec,
+    doc.style.board?.path,
+    doc.format.pageAspect,
+    doc.format.colorMode
+  ];
 };
+
+export const sheetSpecHash = (doc: ComicDoc, c: Character): string => hashString(stableStringify(sheetSpecTuple(doc, c)));
+export const placeSpecHash = (doc: ComicDoc, p: Place): string => hashString(stableStringify(placeSpecTuple(doc, p)));
+export const coverSpecHash = (doc: ComicDoc): string => hashString(stableStringify(coverSpecTuple(doc)));
+
+/** The spec tuple of a target (style_option and missing targets → undefined). */
+const specTupleFor = (doc: ComicDoc, target: RenderTarget): unknown[] | undefined => {
+  switch (target.kind) {
+    case 'page': {
+      const page = findPage(doc, target.id);
+      return page ? pageSpecTuple(doc, page) : undefined;
+    }
+    case 'cover':
+      return coverSpecTuple(doc);
+    case 'sheet': {
+      const c = findCharacter(doc, target.id);
+      return c ? sheetSpecTuple(doc, c) : undefined;
+    }
+    case 'place': {
+      const p = findPlace(doc, target.id);
+      return p ? placeSpecTuple(doc, p) : undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+/**
+ * Back-compat F1: the hash a render stamped BEFORE F1 would carry for this doc — the same tuple through
+ * JSON.stringify, so it follows the doc's own object key order. Only the load-time legacy acceptance
+ * (session.ts recoveryOps) reads it, over key-order variants of the doc; staleness never does.
+ */
+export const legacySpecHashFor = (doc: ComicDoc, target: RenderTarget): string | undefined => {
+  const tuple = specTupleFor(doc, target);
+  return tuple ? hashString(JSON.stringify(tuple)) : undefined;
+};
+
+const planInputTuple = (doc: ComicDoc): unknown[] => [
+  'plan/1',
+  doc.brief,
+  doc.cast.map((c) => [c.id, c.name, c.tier, c.look, c.kind ?? 'person', c.count ?? 1, c.role ?? '', c.personality ?? '', c.voice ?? '']),
+  doc.places.map((p) => [p.id, p.name, p.look]),
+  hashString(doc.source.script || ''),
+  doc.format
+];
+
+/**
+ * R5: fingerprint of everything the writer reads for a full plan (brief + notes, cast names and looks, places,
+ * the source script, the format). Unchanged + no instructions ⇒ the existing plan is returned for free.
+ * Key-order independent (F1), so a save and reload never turns a free re-plan into a billed one.
+ */
+export const planInputHashOf = (doc: ComicDoc): string => hashString(stableStringify(planInputTuple(doc)));
+
+/** Back-compat F1: planInputHashOf as it was stamped before F1 (JSON.stringify; the doc's own key order). */
+export const legacyPlanInputHashOf = (doc: ComicDoc): string => hashString(JSON.stringify(planInputTuple(doc)));
 
 /** The current spec hash of a target (style_option and missing targets → undefined). */
 export const specHashFor = (doc: ComicDoc, target: RenderTarget): string | undefined => {
