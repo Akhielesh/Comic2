@@ -136,6 +136,31 @@ describe('with COMIC_HISTORY on', () => {
     expect(historyEvents().map((e) => e.version.kind)).toEqual(['start', 'before_ai', 'ai']);
   });
 
+  it('"Plan the pages" clicked in the UI (origin user) is the AI’s rewrite: before_ai + ai, never "You edited"', async () => {
+    const session = await open(plannedDoc());
+    await session.flush();
+    session.commit(say('pg_1', 'My own line first'), { origin: 'user' });
+    vi.mocked(writePagePlan).mockImplementation(async ({ doc }) => ({
+      pages: doc.pages.map((p) => ({ ...p, summary: `Rewritten by the writer ${p.n}` })),
+      newCast: [],
+      model: 'w'
+    }));
+    const ctx = testContext(session);
+    // The stream runs a UI chip's action with origin 'user'; planPages commits the writer's pages with it.
+    await runAction(ctx, { type: 'plan_pages' }, { origin: 'user' });
+    await ctx.settled();
+    await session.flush();
+    const rows = rowsOf(session.projectId);
+    expect(rows.map((r) => r.kind)).toEqual(['start', 'before_ai', 'ai']);
+    const [, before, ai] = rows;
+    // Your line, written before the click, stays yours and apart from the AI's rewrite.
+    expect(before.changes).toEqual([expect.objectContaining({ what: 'dialogue', by: 'you', pageIds: ['pg_1'] })]);
+    expect(ai).toMatchObject({ kind: 'ai', actor: 'ai', parentId: before.id });
+    expect(ai.label).toMatch(/^AI /);
+    expect(ai.changes.length).toBeGreaterThan(0);
+    expect(ai.changes.every((c) => c.by === 'ai')).toBe(true);
+  });
+
   it('a paid render run never awaits a history write: it finishes while its before_ai put is still pending (BYOK spend kept)', async () => {
     const order: string[] = [];
     let release!: () => void;
