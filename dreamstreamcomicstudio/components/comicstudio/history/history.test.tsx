@@ -29,6 +29,7 @@ import { WordDiff } from './WordDiff';
 import { HISTORY_KIT_SCENES, HistoryKitScene } from './__scenes__/HistoryScenes';
 import { parseQaParams } from '../testing/qaController';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { textColours } from '../../../tests/config/textColours';
 import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, interactive, mountWith, overflowProblems, settle, TARGET_RE, type Mounted } from './history.testkit';
 
 const NOW = HISTORY_NOW;
@@ -158,6 +159,39 @@ describe('every target is at least 44 px', () => {
     // On every pointer, not only on touch (no coarse:-only escape).
     for (const el of els) expect(el.className).toMatch(/(^|\s)(min-)?h-11(\s|$)/);
     expect(screen.getByRole('button', { name: 'History' }).className).toMatch(/min-w-11/);
+  });
+});
+
+describe('segmented controls choose one ink per state (Atlas: never two text colours in one class list)', () => {
+  const check = (radios: HTMLElement[], name: string) => {
+    expect(radios.length, name).toBeGreaterThan(1);
+    expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true'), name).toHaveLength(1);
+    for (const r of radios) {
+      const on = r.getAttribute('aria-checked') === 'true';
+      expect(r.getAttribute('role'), name).toBe('radio');
+      expect(r.className, name).toMatch(TARGET_RE);
+      expect(textColours(r.className), `${name}: ${r.textContent}`).toEqual([on ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]']);
+    }
+  };
+
+  it('the compare view\'s Then | Now | Swipe | Blink and the undo-AI sheet\'s Keep mine | Take the earlier one', async () => {
+    const m = historySetup();
+    const r = panel(m, req({ view: 'compare', versionId: 'ver_ai' }));
+    await settle(6);
+    const compare = view('compare');
+    check(within(compare).getAllByRole('radio'), 'compare');
+    fireEvent.click(within(compare).getByRole('radio', { name: 'Blink' }));
+    check(within(view('compare')).getAllByRole('radio'), 'compare after Blink');
+    r.unmount();
+    resetBackStack();
+
+    const u = historySetup({ fixture: 'v5-conflict' });
+    panel(u, req({ view: 'undo_ai' }));
+    await settle(10);
+    const sheet = document.querySelector<HTMLElement>('[data-undo-ai-sheet]')!;
+    const group = within(sheet).getAllByRole('radiogroup')[0];
+    fireEvent.click(within(group).getByRole('radio', { name: 'Keep mine' }));
+    check(within(group).getAllByRole('radio'), 'undo-AI choice');
   });
 });
 

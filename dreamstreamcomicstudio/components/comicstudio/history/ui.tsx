@@ -16,6 +16,8 @@ import {
   PRIMARY_BTN,
   RADIUS_CONTROL,
   RADIUS_PILL,
+  SEGMENTED_ACTIVE,
+  SEGMENTED_ITEM,
   STATUS_DOT,
   STATUS_INK,
   TOAST,
@@ -87,6 +89,19 @@ export const ChipBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {
     {children}
   </button>
 );
+
+/**
+ * A segmented item's shape — SEGMENTED_ITEM without its inks — so each state CHOOSES its one ink, the house pattern
+ * (share/ShareSheet.tsx, lettering/ProLetteringPanel.tsx): selected → SEGMENTED_ACTIVE, otherwise muted with an ink
+ * hover. Stacking SEGMENTED_ITEM's muted base under SEGMENTED_ACTIVE's ink would leave the applied colour to
+ * stylesheet order (tests/config/statusInkGuard.test.ts).
+ */
+const SEGMENT_SHAPE = SEGMENTED_ITEM.split(/\s+/)
+  .filter((c) => !/^(?:[\w-]+:)*text-\[var\(--ds-(?:muted|ink)\)\]$/.test(c))
+  .join(' ');
+
+/** A 44 px segmented item (role radio + aria-checked at the call site) with one ink per state. */
+export const segmentClass = (on: boolean): string => cx(SEGMENT_SHAPE, 'min-h-11', on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]');
 
 /** A small mark with a word (never colour alone): "Changed", "New", "Draft 2", "Published". */
 export const Mark: React.FC<{ icon?: React.ReactNode; children: React.ReactNode; tone?: 'neutral' | 'active' | 'attention'; className?: string }> = ({ icon, children, tone = 'neutral', className }) => (

@@ -17,13 +17,13 @@ import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
 import type { Balloon, ComicDoc, Line, Page, Panel } from '../../../shared/comic/doc';
 import { localizeDoc } from '../../../shared/comic/i18n';
 import type { LineDiff, PageDiff, PanelDiff, RestorePart, RestoreScope } from '../../../shared/comic/history/types';
-import { FOCUS_RING, RADIUS_CONTROL, SEGMENTED_ACTIVE, SEGMENTED_ITEM, SEGMENTED_TRACK } from '../../chat/studioDesign';
+import { FOCUS_RING, RADIUS_CONTROL, SEGMENTED_TRACK } from '../../chat/studioDesign';
 import { ComicPageView } from '../board/ComicPageView';
 import { compareRows } from '../timeline/CompareView';
 import { versionList } from '../timeline/bookModel';
 import { DRAWN_PANEL_FIELDS, lineLanguageStatus, lineScope, lineTextIn, pageScope, panelScope, type RestoreFollowUp } from './historyModel';
 import { WordDiff } from './WordDiff';
-import { cx, IconBtn, Mark, Overline, QuietBtn } from './ui';
+import { cx, IconBtn, Mark, Overline, QuietBtn, segmentClass } from './ui';
 
 export type PageCompareMode = 'side' | 'then' | 'now' | 'swipe' | 'blink';
 /** Auto-blink period (only when motion is allowed). */
@@ -285,7 +285,7 @@ export const PageCompare: React.FC<PageCompareProps> = ({
       <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 pb-2">
         <div role="radiogroup" aria-label="Show" className={cx(SEGMENTED_TRACK, 'flex-1')}>
           {modes.map((m) => (
-            <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} onClick={() => setMode(m.id)} className={cx(SEGMENTED_ITEM, 'min-h-11', mode === m.id && SEGMENTED_ACTIVE)}>
+            <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} onClick={() => setMode(m.id)} className={segmentClass(mode === m.id)}>
               {m.label}
             </button>
           ))}
