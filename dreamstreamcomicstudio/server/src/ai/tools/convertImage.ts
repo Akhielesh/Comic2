@@ -12,7 +12,8 @@ import { allowedImageWords, checkImageBytes } from '../../services/sharpGuard.js
 // (services/sharpGuard.ts): JPEG, PNG, WebP and GIF only. SVG, HTML, HEIC, AVIF, TIFF, PDF and
 // anything unknown are refused before sharp sees them, and sharp must then decode the bytes as the
 // same format they were sniffed as. The process-wide sharp.block (installed at boot) is the second
-// layer behind this one.
+// layer behind this one. A fetched body is never held past 12 MB: an over-cap Content-Length is refused
+// before reading, and the stream is cancelled as soon as it passes the cap.
 
 const MAX_BYTES = 12 * 1024 * 1024;
 const MAX_DIM = 4096;
@@ -20,10 +21,42 @@ const MAX_INPUT_PIXELS = 50_000_000;
 const FORMATS = ['png', 'jpeg', 'webp', 'avif'] as const;
 type Fmt = (typeof FORMATS)[number];
 
+// A refusal the user can fix (send a different file), so a calm 'warn' hint, like 'Image not loaded'
+// below. 'error' stays for real failures (the conversion itself breaking).
 const refused = (reason: string): ToolExecResult => ({
   content: `Couldn't convert the image: ${reason}.`,
-  notice: { level: 'error', message: 'Image type not allowed', fix: `Use ${allowedImageWords()}.` }
+  notice: { level: 'warn', message: 'Image type not allowed', fix: `Use ${allowedImageWords()}.` }
 });
+
+const TOO_LARGE = 'image is too large (max 12MB)';
+
+/**
+ * Read a fetched body without ever holding more than MAX_BYTES of it: a declared Content-Length over
+ * the cap is refused before reading, and a body that runs past the cap (or never ends) is cancelled
+ * as soon as it does, so a hostile host can't stream gigabytes into the backend's heap.
+ */
+async function readCappedBody(resp: Response): Promise<Buffer> {
+  const declared = Number(resp.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_BYTES) {
+    await resp.body?.cancel().catch(() => undefined);
+    throw new Error(TOO_LARGE);
+  }
+  if (!resp.body) return Buffer.alloc(0);
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(TOO_LARGE);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, total);
+}
 
 async function loadImage(input: string, signal?: AbortSignal): Promise<Buffer> {
   const s = input.trim();
@@ -31,16 +64,19 @@ async function loadImage(input: string, signal?: AbortSignal): Promise<Buffer> {
   if (m) {
     const buf = Buffer.from(m[1], 'base64');
     if (!buf.length) throw new Error('the data URI contained no image bytes');
-    if (buf.length > MAX_BYTES) throw new Error('image is too large (max 12MB)');
+    if (buf.length > MAX_BYTES) throw new Error(TOO_LARGE);
     return buf;
   }
   if (/^https:\/\//i.test(s)) {
     await assertSafePublicUrl(s); // SSRF guard: https + public host + rebind-safe
     const resp = await fetch(s, { redirect: 'error', signal });
-    if (!resp.ok) throw new Error(`couldn't fetch the image (HTTP ${resp.status})`);
-    const ab = await resp.arrayBuffer();
-    if (ab.byteLength > MAX_BYTES) throw new Error('image is too large (max 12MB)');
-    return Buffer.from(ab);
+    if (!resp.ok) {
+      await resp.body?.cancel().catch(() => undefined);
+      throw new Error(`couldn't fetch the image (HTTP ${resp.status})`);
+    }
+    const buf = await readCappedBody(resp);
+    if (!buf.length) throw new Error('the URL returned no image bytes');
+    return buf;
   }
   throw new Error('provide an https image URL or a data:image/... URI');
 }

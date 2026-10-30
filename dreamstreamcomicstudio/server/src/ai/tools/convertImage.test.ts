@@ -29,10 +29,10 @@ const heicBytes = async (): Promise<Buffer> => {
   return buf;
 };
 
-/** The refusal the byte allowlist gives (before sharp sees the input). */
+/** The refusal the byte allowlist gives (before sharp sees the input): a user-fixable hint, so 'warn' (amber), not 'error'. */
 const expectRefused = (res: Awaited<ReturnType<typeof run>>, why: RegExp) => {
   expect(res.images).toBeUndefined();
-  expect(res.notice).toEqual({ level: 'error', message: 'Image type not allowed', fix: 'Use a JPG, PNG, WebP or GIF image.' });
+  expect(res.notice).toEqual({ level: 'warn', message: 'Image type not allowed', fix: 'Use a JPG, PNG, WebP or GIF image.' });
   expect(res.content).toMatch(/^Couldn't convert the image: /);
   expect(res.content).toMatch(why);
 };
@@ -74,10 +74,10 @@ describe('convert_image tool', () => {
     expect(res.content).toMatch(/couldn't load/i);
   });
 
-  it('errors gracefully on non-image bytes', async () => {
+  it('refuses non-image bytes gracefully, with a calm fixable hint (not a red error)', async () => {
     const res = await run({ image: `data:image/png;base64,${Buffer.from('not an image').toString('base64')}` });
     expect(res.images).toBeUndefined();
-    expect(res.notice?.level).toBe('error');
+    expect(res.notice).toMatchObject({ level: 'warn', message: 'Image type not allowed' });
   });
 });
 
@@ -111,7 +111,8 @@ describe('convert_image: inputs are admitted by their bytes (JPEG, PNG, WebP, GI
     const polyglot = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), tiff]);
     const res = await run({ image: dataUri('png', polyglot), to: 'png' });
     expect(res.images).toBeUndefined();
-    expect(res.notice?.level).toBe('error');
+    // A real conversion failure (sharp itself refuses the bytes) stays a red 'error'.
+    expect(res.notice).toEqual({ level: 'error', message: 'Image conversion failed' });
   });
 
   it('HEIC is refused (a real, decodable HEIF file branded heic), and so is AVIF input', async () => {
@@ -145,5 +146,79 @@ describe('convert_image: inputs are admitted by their bytes (JPEG, PNG, WebP, GI
     const proto = (sharp as unknown as { prototype: { metadata: (...a: unknown[]) => Promise<Metadata> } }).prototype;
     vi.spyOn(proto, 'metadata').mockResolvedValueOnce({ format: 'tiff' } as Metadata);
     expectRefused(await run({ image: await pngDataUri(), to: 'jpeg' }), /start like PNG but don't decode as one/);
+  });
+});
+
+describe('convert_image: a fetched body is never read past the 12 MB cap', () => {
+  const MB = 1024 * 1024;
+  /**
+   * A body that never ends: every pull enqueues another 1 MB. The fuse only trips if the code under test
+   * keeps reading far past the cap (it then errors the stream, so unfixed code fails the test instead of
+   * exhausting the worker's heap).
+   */
+  const endlessBody = (fuseMb = 64) => {
+    const cancel = vi.fn();
+    const pulls = { count: 0 };
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls.count += 1;
+        if (pulls.count > fuseMb) controller.error(new Error('test fuse: the body was read far past the cap'));
+        else controller.enqueue(new Uint8Array(MB));
+      },
+      cancel
+    });
+    return { body, cancel, pulls };
+  };
+  const serve = (body: ReadableStream<Uint8Array>, headers: Record<string, string> = {}) => {
+    vi.mocked(assertSafePublicUrl).mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => new Response(body, { status: 200, headers: { 'content-type': 'image/png', ...headers } }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  };
+  const expectTooLarge = (res: Awaited<ReturnType<typeof run>>) => {
+    expect(res.images).toBeUndefined();
+    expect(res.content).toBe("Couldn't load the image: image is too large (max 12MB).");
+    expect(res.notice).toEqual({ level: 'warn', message: 'Image not loaded', fix: 'Pass an https image URL or a data:image/... URI.' });
+  };
+
+  it('a body that never ends is cut off just past 12 MB and its stream is cancelled', async () => {
+    const { body, cancel, pulls } = endlessBody();
+    const fetchMock = serve(body);
+    expectTooLarge(await run({ image: 'https://images.example.com/endless.png' }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // 13 chunks pass the cap; the stream may have queued one more ahead of the reader.
+    expect(pulls.count).toBeLessThanOrEqual(14);
+  });
+
+  it('a declared Content-Length over 12 MB is refused before the body is read', async () => {
+    const { body, cancel, pulls } = endlessBody();
+    serve(body, { 'content-length': String(13 * MB) });
+    expectTooLarge(await run({ image: 'https://images.example.com/huge.png' }));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(pulls.count).toBeLessThanOrEqual(1); // only the stream's own initial fill, never a read
+  });
+
+  it('a body just under the cap still loads and converts', async () => {
+    const png = await canvas(30, 20).png().toBuffer();
+    // A real PNG followed by padding to 12 MB minus one byte, in 1 MB chunks (sharp ignores bytes after IEND).
+    const total = 12 * MB - 1;
+    const bytes = Buffer.concat([png, Buffer.alloc(total - png.byteLength)]);
+    let offset = 0;
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (offset >= bytes.byteLength) return controller.close();
+        controller.enqueue(new Uint8Array(bytes.subarray(offset, offset + MB)));
+        offset += MB;
+      },
+      cancel
+    });
+    serve(body);
+    const res = await run({ image: 'https://images.example.com/padded.png', to: 'webp' });
+    expect(res.notice).toBeUndefined();
+    expect(cancel).not.toHaveBeenCalled();
+    const meta = await sharp(decode(res.images![0].url)).metadata();
+    expect([meta.format, meta.width, meta.height]).toEqual(['webp', 30, 20]);
   });
 });
