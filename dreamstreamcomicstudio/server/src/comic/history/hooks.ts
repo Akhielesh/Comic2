@@ -11,13 +11,16 @@
 // wraps every call). Restore is the only history path that requires a successful write (H3).
 //
 // With COMIC_HISTORY unset (the default) the hooks are the no-op NOOP_HISTORY_HOOKS: behaviour is byte-identical to
-// a studio without history. Nothing here imports a store, an LLM, an image client or billing.
+// a studio without history (no store call, no event). While it is on, createHistoryHooks returns the recorder
+// (recorder.ts, H2) over the process history store. Nothing here imports an LLM, an image client or billing; the
+// store and the session are reached lazily (dynamic import), so this module never sits in an import cycle with them.
 
 import { HISTORY_ENV, historyFlagOn } from '../../../../shared/comic/capabilities.js';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
 import { normalizeTimeZone, type OpsOrigin } from '../../../../shared/comic/events.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { StudioError } from '../types.js';
+import { createHistoryRecorder, historyNoticeMessage } from './recorder.js';
 
 /** Whose history: every history read and write is scoped by project AND user (§12). */
 export interface HistoryScope {
@@ -55,11 +58,34 @@ export const NOOP_HISTORY_HOOKS: HistoryHooks = Object.freeze({
 export const isHistoryEnabled = (env: Readonly<Record<string, string | undefined>> = process.env): boolean => historyFlagOn(env[HISTORY_ENV]);
 
 /**
- * The history hooks of one comic session. H0 STUB: always NOOP_HISTORY_HOOKS. H2 returns the recorder when
- * isHistoryEnabled() and a store is configured (keep this name and signature).
+ * The history hooks of one comic (a session's, or a classic import's without one). NOOP_HISTORY_HOOKS unless
+ * isHistoryEnabled(); then the recorder (H2) over the process store (store.ts getHistoryStore, resolved on first
+ * write; tests swap in the fake with __setHistoryStoreForTests). The live `history` event and the budget notice go
+ * to this comic's open session only when it is the one holding these hooks (same user): never to anyone else.
  */
-export function createHistoryHooks(_scope: HistoryScope): HistoryHooks {
-  return NOOP_HISTORY_HOOKS;
+export function createHistoryHooks(scope: HistoryScope): HistoryHooks {
+  if (!isHistoryEnabled() || !scope || typeof scope.projectId !== 'string' || !scope.projectId || typeof scope.userId !== 'string' || !scope.userId) {
+    return NOOP_HISTORY_HOOKS;
+  }
+  const own = { projectId: scope.projectId, userId: scope.userId };
+  let hooks: HistoryHooks | null = null;
+  const liveSession = async () => {
+    const { peekStudioSession } = await import('../session.js');
+    const session = peekStudioSession(own.projectId);
+    return session && session.userId === own.userId && session.history === hooks ? session : undefined;
+  };
+  hooks = createHistoryRecorder(own, {
+    store: async () => (await import('./store.js')).getHistoryStore(),
+    sink: {
+      emit: async (event) => {
+        (await liveSession())?.emit(event);
+      },
+      notice: async (text) => {
+        (await liveSession())?.commit([historyNoticeMessage(text, Date.now())], { origin: 'job' });
+      }
+    }
+  });
+  return hooks;
 }
 
 /** What a history path that is not built yet answers: nothing changed, nothing spent (code NOT_AVAILABLE, 501). */
