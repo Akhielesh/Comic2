@@ -6,6 +6,7 @@
  */
 import { rfc3986Encode } from '../wire/canonical.js';
 import { PLATFORM_HEADERS } from '../wire/headers.js';
+import { isBytes } from '../wire/bytes.js';
 import { inputFailure } from '../wire/errors.js';
 import type { WireFailure } from '../wire/types.js';
 import type { ClientContext, ResponseMeta, SignedPost } from './request.js';
@@ -34,7 +35,7 @@ export const isPdfBytes = (bytes: Uint8Array): boolean =>
 
 export const convert = (ctx: ClientContext, input: ConvertInput): Promise<ConvertResult> =>
   guard(async () => {
-    if (!input || !(input.bytes instanceof Uint8Array) || !input.bytes.length) return inputFailure('input', 'convert needs the file bytes');
+    if (!input || !isBytes(input.bytes) || !input.bytes.length) return inputFailure('input', 'convert needs the file bytes');
     if (CONVERT_TARGET_FORMATS.indexOf(input.targetFormat) === -1) return inputFailure('input', 'targetFormat must be html or pdf');
     const fileName = encodeFileName(input.fileName, rfc3986Encode);
     if (fileName === null) return inputFailure('input', 'fileName must be 1 to 255 characters with no control characters');

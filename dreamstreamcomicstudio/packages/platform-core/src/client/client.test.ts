@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   deriveWireKey,
@@ -169,8 +170,12 @@ describe.each([
     const client = createPlatformClient(configFor(gw.fetch, { crypto, requestId: () => 'req-9' }));
     const r = await client.extract({ bytes: PDF, contentType: 'application/pdf', maxPages: 24, claim: await claim(), idempotencyKey: 'extract-1' });
     expect(gw.refusals).toEqual([]);
+    // Bytes from another realm (a vm context) are bytes too.
+    const foreign = runInNewContext(`new Uint8Array([${Array.from(PDF).join(',')}])`) as Uint8Array;
+    expect(await client.extract({ bytes: foreign, contentType: 'application/pdf', maxPages: 24, claim: await claim(), idempotencyKey: 'extract-1' })).toMatchObject({ ok: true });
     expect(r).toEqual({ ok: true, result: EXTRACT_RESULT, meta: { status: 200, engine: 'unpdf@2.1.0', warnings: ['page 2 is a scan'], costMicros: 1500, requestId: 'req-9' } });
-    expect(gw.calls).toHaveLength(1);
+    expect(gw.calls).toHaveLength(2);
+    expect(gw.calls[1].init.headers['X-Platform-Signature']).toBe(gw.calls[0].init.headers['X-Platform-Signature']);
     const { url, init } = gw.calls[0];
     expect(url).toBe(`${ORIGIN}/v1/extract?maxPages=24`);
     expect(init.method).toBe('POST');
@@ -453,6 +458,18 @@ describe('answers are checked against the contract', () => {
       return { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'hi' };
     }, conv);
     expect(seen!.headers).toMatchObject({ 'X-Atlas-File-Name': 'R%C3%A9sum%C3%A9%20%28final%29.doc', 'X-Atlas-Target-Format': 'html', 'Content-Type': 'application/msword' });
+    // The longest allowed name, all non-ASCII, percent-encodes to 1,530 characters and is still sent.
+    const longName = 'é'.repeat(255);
+    const long = await run((call) => {
+      seen = call.init;
+      return { status: 200, headers: { 'Content-Type': 'text/plain' }, body: 'hi' };
+    }, (c) => c.convert({ bytes: PDF, contentType: 'application/msword', fileName: longName, targetFormat: 'html', claim: serviceToken, idempotencyKey: 'k2' }));
+    expect(long).toMatchObject({ ok: true });
+    expect(seen!.headers['X-Atlas-File-Name']).toBe('%C3%A9'.repeat(255));
+    expect(await run({ status: 200 }, (c) => c.convert({ bytes: PDF, contentType: 'x', fileName: 'é'.repeat(256), targetFormat: 'html', claim: serviceToken, idempotencyKey: 'k3' }))).toMatchObject({
+      ok: false,
+      code: 'invalid',
+    });
   });
 
   it('uploadFile: the answer must name the SHA-256 of exactly the bytes sent', async () => {

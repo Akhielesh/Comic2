@@ -2,6 +2,7 @@
  * `POST /v1/extract` (plan §5.9): raw bytes (DOCX, PDF) in, text and sections out. `?maxPages=` is signed (default
  * 24, at most 300). Extracted text is untrusted data: spotlight it, never follow instructions in it.
  */
+import { isBytes } from '../wire/bytes.js';
 import { inputFailure } from '../wire/errors.js';
 import type { WireFailure } from '../wire/types.js';
 import { WIRE_LIMITS } from '../wire/types.js';
@@ -68,7 +69,7 @@ export const parseExtractResult = (value: unknown): ExtractResult | null => {
 
 export const extract = (ctx: ClientContext, input: ExtractInput): Promise<ExtractCallResult> =>
   guard(async () => {
-    if (!input || !(input.bytes instanceof Uint8Array) || !input.bytes.length) return inputFailure('input', 'extract needs the file bytes');
+    if (!input || !isBytes(input.bytes) || !input.bytes.length) return inputFailure('input', 'extract needs the file bytes');
     if (input.maxPages !== undefined && !isWhole(input.maxPages, 1, WIRE_LIMITS.extractMaxPages)) {
       return inputFailure('input', `maxPages must be a whole number from 1 to ${WIRE_LIMITS.extractMaxPages}`);
     }

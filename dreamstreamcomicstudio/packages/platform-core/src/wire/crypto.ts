@@ -10,7 +10,7 @@
  * Request signatures use the app secret itself, over a canonical string that always starts `v1\n`, which no label
  * above does.
  */
-import { base64urlDecode, toArrayBuffer, toHex, utf8Encode } from './bytes.js';
+import { base64urlDecode, isBytes, toArrayBuffer, toHex, utf8Encode } from './bytes.js';
 import type { WireCrypto } from './types.js';
 import { WIRE_LIMITS } from './types.js';
 
@@ -59,7 +59,7 @@ export const sha256Hex = async (crypto: WireCrypto, data: Uint8Array): Promise<s
 /** HMAC-SHA256 checked to be 32 bytes (a broken adapter must not yield a short, guessable MAC). */
 export const hmac = async (crypto: WireCrypto, key: Uint8Array, data: Uint8Array): Promise<Uint8Array> => {
   const mac = await crypto.hmacSha256(key, data);
-  if (!(mac instanceof Uint8Array) || mac.length !== 32) throw new Error('WireCrypto.hmacSha256 must return 32 bytes');
+  if (!isBytes(mac) || mac.length !== 32) throw new Error('WireCrypto.hmacSha256 must return 32 bytes');
   return mac;
 };
 
@@ -69,7 +69,7 @@ export const deriveWireKey = (crypto: WireCrypto, secret: Uint8Array, label: key
 
 /** A secret is usable when it is a byte string of at least `WIRE_LIMITS.secretMinBytes` bytes. */
 export const isUsableSecret = (secret: unknown): secret is Uint8Array =>
-  secret instanceof Uint8Array && secret.length >= WIRE_LIMITS.secretMinBytes;
+  isBytes(secret) && secret.length >= WIRE_LIMITS.secretMinBytes;
 
 /**
  * An app secret from its configured text form (base64url, unpadded, as `wrangler secret` or an env var holds it), or

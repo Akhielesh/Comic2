@@ -3,6 +3,7 @@
  * and the engine's report, or `202` with a job to poll. The job's own schema (`PdfJob`) arrives with wave 2; until
  * then the client sends any JSON object with an `op` and the gateway validates it.
  */
+import { isBytes } from '../wire/bytes.js';
 import { inputFailure } from '../wire/errors.js';
 import type { WireFailure } from '../wire/types.js';
 import { FILE_REF } from './files.js';
@@ -30,7 +31,7 @@ export const pdf = (ctx: ClientContext, input: PdfInput): Promise<PdfResult> =>
     if (!input || typeof input.fileRef !== 'string' || !FILE_REF.test(input.fileRef)) return inputFailure('input', 'fileRef is not a platform file reference');
     if (!isRecord(input.job) || typeof input.job.op !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(input.job.op)) return inputFailure('input', 'job must be an object with an op');
     const body = jsonBody({ fileRef: input.fileRef, job: input.job });
-    if (!(body instanceof Uint8Array)) return body;
+    if (!isBytes(body)) return body;
     const r = await send(ctx, { method: 'POST', path: '/v1/pdf', body, contentType: 'application/json', claim: input.claim, idempotencyKey: input.idempotencyKey });
     if (r.ok === false) return r;
     const v = readJson(r.body);

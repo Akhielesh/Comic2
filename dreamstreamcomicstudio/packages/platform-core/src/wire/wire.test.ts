@@ -6,6 +6,7 @@
 // without an Idempotency-Key and a body POST without a claim.
 import { createHash, createHmac, randomBytes, webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import {
   PLATFORM_HEADERS,
@@ -24,6 +25,8 @@ import {
   formatCanonicalRequest,
   fromHex,
   idempotencyScope,
+  isBytes,
+  isUsableSecret,
   mintPollToken,
   mintServiceClaim,
   mintUserClaim,
@@ -170,6 +173,19 @@ describe('byte helpers (no TextEncoder, no Buffer)', () => {
     expect(constantTimeEqualText('abc', 'abc')).toBe(true);
     expect(constantTimeEqualText('abc', 'abd')).toBe(false);
     expect(constantTimeEqualText('abc', 'ab')).toBe(false);
+  });
+
+  it('accepts bytes and secrets made in another realm (a vm context) and Buffers, and nothing else', async () => {
+    const foreign = runInNewContext('new Uint8Array([37, 80, 68, 70, 45])') as Uint8Array;
+    expect(foreign instanceof Uint8Array).toBe(false);
+    expect(isBytes(foreign)).toBe(true);
+    expect(isBytes(Buffer.from('x'))).toBe(true);
+    for (const not of [[1, 2], 'ab', new Uint16Array(2), new ArrayBuffer(2), null]) expect(isBytes(not)).toBe(false);
+    expect(isUsableSecret(runInNewContext('new Uint8Array(32)'))).toBe(true);
+    const req = { method: 'POST', target: '/v1/files', timestamp: NOW_S, claim: CLAIMS.vectors[0].token, idempotencyKey: 'k1' };
+    const a = await signRequest(nodeCrypto, SECRET, { ...req, body: foreign });
+    const b = await signRequest(nodeCrypto, SECRET, { ...req, body: new Uint8Array([37, 80, 68, 70, 45]) });
+    expect(a.ok && b.ok && a.signature === b.signature).toBe(true);
   });
 
   it('decodeSecret reads a base64url secret of at least 32 bytes and nothing shorter', () => {

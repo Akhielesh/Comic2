@@ -64,8 +64,10 @@ const KEY_ID = new RegExp(KEY_ID_PATTERN);
 const ORIGIN = /^(https:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?|http:\/\/(localhost|127\.0\.0\.1)(:[0-9]{1,5})?)$/;
 const ENGINE = /^[A-Za-z0-9._@+-]{1,100}$/;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-/** A header value we send: printable ASCII, no line breaks. */
-const HEADER_VALUE = /^[\x20-\x7e]{1,200}$/;
+/** A media type we send: printable ASCII, no line breaks. */
+const MEDIA_TYPE = /^[\x20-\x7e]{1,200}$/;
+/** Any other header value we send (a percent-encoded file name can reach about 3 KB): printable ASCII, no line breaks. */
+const HEADER_VALUE = /^[\x20-\x7e]{1,4096}$/;
 
 export const createContext = (config: PlatformClientConfig): ClientContext => {
   let configError: string | null = null;
@@ -141,7 +143,7 @@ export const send = async (ctx: ClientContext, spec: SendSpec): Promise<RawRespo
     if (body && body.length && (typeof spec.claim !== 'string' || !spec.claim.length)) return inputFailure('claim-required', 'a POST that carries a body needs a claim');
   }
   if (body && body.length > WIRE_LIMITS.maxRequestBytes) return wireFailure('too-large', `the body is over ${WIRE_LIMITS.maxRequestBytes} bytes`);
-  if (spec.contentType !== undefined && !HEADER_VALUE.test(spec.contentType)) return inputFailure('input', 'contentType must be printable ASCII');
+  if (spec.contentType !== undefined && !MEDIA_TYPE.test(spec.contentType)) return inputFailure('input', 'contentType must be printable ASCII');
   const extra = spec.headers || {};
   const extraNames = Object.keys(extra);
   for (let i = 0; i < extraNames.length; i++) if (!HEADER_VALUE.test(extra[extraNames[i]])) return inputFailure('input', `${extraNames[i]} must be printable ASCII`);

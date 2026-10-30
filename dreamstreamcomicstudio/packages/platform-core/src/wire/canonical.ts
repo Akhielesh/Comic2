@@ -17,7 +17,7 @@
  *
  * Signatures are compared in constant time.
  */
-import { base64urlEncode, constantTimeEqualText, toHex, utf8Decode, utf8Encode } from './bytes.js';
+import { base64urlEncode, constantTimeEqualText, isBytes, toHex, utf8Decode, utf8Encode } from './bytes.js';
 import { hmac, isUsableSecret, sha256Hex } from './crypto.js';
 import { inputFailure, internalFailure, wireFailure } from './errors.js';
 import type { WireCrypto, WireFailure } from './types.js';
@@ -227,7 +227,7 @@ export const canonicalRequest = async (crypto: WireCrypto, req: RequestToSign): 
       bodyHex = req.bodySha256Hex;
     } else {
       const body = req.body === undefined || req.body === null ? new Uint8Array(0) : req.body;
-      if (!(body instanceof Uint8Array)) return inputFailure('input', 'the body must be bytes');
+      if (!isBytes(body)) return inputFailure('input', 'the body must be bytes');
       bodyHex = await sha256Hex(crypto, body);
     }
     const fields: CanonicalFields = {

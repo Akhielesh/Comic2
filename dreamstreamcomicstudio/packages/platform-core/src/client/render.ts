@@ -3,6 +3,7 @@
  * `202` with a job. For attachments only: email bodies never come here (hosts render them with `renderEmail`). The
  * bytes must be the kind asked for (`PK\x03\x04` for DOCX and PPTX, `%PDF-` for PDF) with the matching media type.
  */
+import { isBytes } from '../wire/bytes.js';
 import { inputFailure } from '../wire/errors.js';
 import type { WireFailure } from '../wire/types.js';
 import { isPdfBytes } from './convert.js';
@@ -38,7 +39,7 @@ export const render = (ctx: ClientContext, input: RenderInput): Promise<RenderRe
     if (!input || RENDER_KINDS.indexOf(input.kind) === -1) return inputFailure('input', 'kind must be docx, pdf or pptx');
     if (!isRecord(input.spec)) return inputFailure('input', 'spec must be a JSON object');
     const body = jsonBody({ kind: input.kind, spec: input.spec });
-    if (!(body instanceof Uint8Array)) return body;
+    if (!isBytes(body)) return body;
     const r = await send(ctx, { method: 'POST', path: '/v1/render', body, contentType: 'application/json', claim: input.claim, idempotencyKey: input.idempotencyKey });
     if (r.ok === false) return r;
     if (r.status === 202) {

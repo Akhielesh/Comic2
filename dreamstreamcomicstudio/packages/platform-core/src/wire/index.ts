@@ -10,6 +10,7 @@ export {
   constantTimeEqual,
   constantTimeEqualText,
   fromHex,
+  isBytes,
   toArrayBuffer,
   toHex,
   utf8Decode,

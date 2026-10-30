@@ -7,7 +7,7 @@ import { rfc3986Encode } from '../wire/canonical.js';
 import { verifyRequest } from '../wire/headers.js';
 import type { IncomingRequest } from '../wire/headers.js';
 import { inputFailure, wireFailure } from '../wire/errors.js';
-import { utf8Decode } from '../wire/bytes.js';
+import { isBytes, utf8Decode } from '../wire/bytes.js';
 import type { WireClock, WireCrypto, WireFailure } from '../wire/types.js';
 import { APP_ID_PATTERN, JOB_ID_PATTERN, WIRE_LIMITS } from '../wire/types.js';
 import type { ClientContext, ResponseMeta, SignedPost } from './request.js';
@@ -73,7 +73,7 @@ export const createJob = (ctx: ClientContext, input: CreateJobInput): Promise<Cr
     if (!input || typeof input.op !== 'string' || !OP.test(input.op)) return inputFailure('input', 'op must be a job operation name');
     if (!isRecord(input.input)) return inputFailure('input', 'input must be a JSON object');
     const body = jsonBody({ op: input.op, input: input.input });
-    if (!(body instanceof Uint8Array)) return body;
+    if (!isBytes(body)) return body;
     const r = await send(ctx, {
       method: 'POST',
       path: '/v1/jobs',
@@ -153,7 +153,7 @@ export type VerifyCallbackResult = { ok: true; event: JobCompletedEvent; app: st
  */
 export const verifyCallback = (req: CallbackRequest, opts: VerifyCallbackOptions): Promise<VerifyCallbackResult> =>
   guard(async () => {
-    if (!req || req.method !== 'POST' || !(req.body instanceof Uint8Array)) return inputFailure('input', 'a callback is a POST with a body');
+    if (!req || req.method !== 'POST' || !isBytes(req.body)) return inputFailure('input', 'a callback is a POST with a body');
     if (req.body.length > WIRE_LIMITS.callbackBodyMax) return wireFailure('too-large', 'the callback body is too big');
     const v = await verifyRequest(req, req.body, { ...opts, claim: 'none', maxBodyBytes: WIRE_LIMITS.callbackBodyMax });
     if (v.ok === false) return v;

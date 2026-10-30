@@ -13,7 +13,7 @@
  *   schema DSL (exact fields, caps, unknown keys rejected).
  */
 import { check, s } from '../schema/index.js';
-import { base64urlDecode, base64urlEncode, constantTimeEqualText, toHex, utf8Decode, utf8Encode } from './bytes.js';
+import { base64urlDecode, base64urlEncode, constantTimeEqualText, isBytes, toHex, utf8Decode, utf8Encode } from './bytes.js';
 import { deriveWireKey, hmac, isUsableSecret } from './crypto.js';
 import { inputFailure, internalFailure, wireFailure } from './errors.js';
 import type {
@@ -146,7 +146,7 @@ const jtiOf = (crypto: WireCrypto, jti: unknown): string | null => {
   if (jti !== undefined) return typeof jti === 'string' ? jti : null;
   if (typeof crypto.randomBytes !== 'function') return null;
   const bytes = crypto.randomBytes(16);
-  return bytes instanceof Uint8Array && bytes.length === 16 ? toHex(bytes) : null;
+  return isBytes(bytes) && bytes.length === 16 ? toHex(bytes) : null;
 };
 
 /** `base64url(json).base64url(HMAC(key, base64url(json)))`. */

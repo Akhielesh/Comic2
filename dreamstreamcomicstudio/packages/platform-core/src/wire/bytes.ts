@@ -3,6 +3,13 @@
  * ES2017 library this package compiles against, and not every host has them).
  */
 
+/**
+ * True for a byte string from any realm: a Node Buffer, or a Uint8Array made in another frame, worker or vm context
+ * (where `instanceof Uint8Array` is false).
+ */
+export const isBytes = (value: unknown): value is Uint8Array =>
+  value instanceof Uint8Array || Object.prototype.toString.call(value) === '[object Uint8Array]';
+
 /** UTF-8 bytes of a string. A lone surrogate becomes U+FFFD, as TextEncoder does. */
 export const utf8Encode = (text: string): Uint8Array => {
   const out = new Uint8Array(text.length * 3);

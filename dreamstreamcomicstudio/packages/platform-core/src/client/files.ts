@@ -4,6 +4,7 @@
  */
 import { rfc3986Encode } from '../wire/canonical.js';
 import { PLATFORM_HEADERS } from '../wire/headers.js';
+import { isBytes } from '../wire/bytes.js';
 import { inputFailure } from '../wire/errors.js';
 import type { WireFailure } from '../wire/types.js';
 import { FILE_REF_PATTERN } from '../wire/types.js';
@@ -39,7 +40,7 @@ export type DownloadFileResult = { ok: true; bytes: Uint8Array; contentType: str
 
 export const uploadFile = (ctx: ClientContext, input: UploadFileInput): Promise<UploadFileResult> =>
   guard(async () => {
-    if (!input || !(input.bytes instanceof Uint8Array) || !input.bytes.length) return inputFailure('input', 'uploadFile needs the file bytes');
+    if (!input || !isBytes(input.bytes) || !input.bytes.length) return inputFailure('input', 'uploadFile needs the file bytes');
     const fileName = encodeFileName(input.fileName, rfc3986Encode);
     if (fileName === null) return inputFailure('input', 'fileName must be 1 to 255 characters with no control characters');
     const r = await send(ctx, {

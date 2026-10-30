@@ -17,6 +17,7 @@ import { signRequest, verifySignature } from './canonical.js';
 import type { CanonicalFields, RequestToSign } from './canonical.js';
 import { claimOwner, verifyClaim } from './claim.js';
 import type { ClaimRequirement } from './claim.js';
+import { isBytes } from './bytes.js';
 import { isUsableSecret, sha256Hex } from './crypto.js';
 import { inputFailure, internalFailure, wireFailure } from './errors.js';
 import type { HeaderBag, PlatformClaim, WireClock, WireCrypto, WireFailure } from './types.js';
@@ -99,7 +100,7 @@ export const signedRequestHeaders = async (input: SignedHeadersInput): Promise<S
   const hasClaim = input.claim !== undefined && input.claim !== null;
   if (input.method === 'POST') {
     if (!hasKey) return inputFailure('idempotency-key', 'every POST needs an Idempotency-Key');
-    const bodyBytes = input.body instanceof Uint8Array ? input.body.length : input.bodySha256Hex !== undefined ? -1 : 0;
+    const bodyBytes = isBytes(input.body) ? input.body.length : input.bodySha256Hex !== undefined ? -1 : 0;
     if (input.callback === true) {
       if (hasClaim) return inputFailure('malformed', 'a callback carries no claim');
     } else if (bodyBytes !== 0 && !hasClaim) return inputFailure('claim-required', 'a POST that carries a body needs a claim');
