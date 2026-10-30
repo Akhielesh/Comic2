@@ -41,7 +41,7 @@ import { useFormFactor } from '../mobile/useFormFactor';
 import { ComicReaderView } from '../reader/ComicReaderView';
 import { ShareSheet } from '../share/ShareSheet';
 import { useShareCapabilities } from '../share/useShareCapabilities';
-import { RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
+import { OVERLINE, RADIUS_CONTROL, SHADOW_SOFT } from '../../chat/studioDesign';
 import { CLEAR } from './boardModel';
 import { GhostButton, InlineField, PrimaryButton, Segmented, Surface, SwitchRow, cx } from './ui';
 
@@ -113,7 +113,7 @@ export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc
     // out of view or gets clipped by the pane (the Read tab has no outer scroller).
     <Surface className="mx-3 mt-2 max-h-[55%] shrink-0 overflow-y-auto overscroll-contain p-3" aria-label="Reader look">
       <div className="mb-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Reader look</p>
+        <p className={OVERLINE}>Reader look</p>
         <span className="text-[11px] text-[var(--ds-muted)]">Free · readers can still change it for themselves</span>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2 px-2">
@@ -454,7 +454,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
         className="w-[min(340px,calc(100vw-24px))]"
       >
         <div className="p-1.5" data-testid="share-export-sheet">
-          <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Share</p>
+          <p className={cx('px-2.5 pb-1 pt-1.5', OVERLINE)}>Share</p>
           <SheetRow
             icon={<Share2 className="h-4 w-4" />}
             label="Share…"
@@ -472,7 +472,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
             onClick={preview}
           />
           <SheetRow icon={<BookOpen className="h-4 w-4" />} label="Read full screen" onClick={() => openFullScreen(false)} />
-          <p className="px-2.5 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+          <p className={cx('px-2.5 pb-1 pt-3', OVERLINE)}>
             Download{editionName ? ` · ${editionName} edition` : ''}
           </p>
           <SheetRow icon={<Printer className="h-4 w-4" />} label="Print" hint="Crisp vector lettering — choose “Save as PDF” there" onClick={print} disabled={working} />

@@ -13,6 +13,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Leaf } from 'lucide-react';
+import { OVERLINE } from '../../chat/studioDesign';
 import type { ComicDoc, SpendEntry } from '../../../shared/comic/doc';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { compactUsageShare } from '../../../services/costDisplay';
@@ -66,7 +67,7 @@ export const SavingsBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = 
   const headline = cost.governed ? cost.saved(total) : cost.exact(total);
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+      <div className={cx('flex items-center gap-1.5', OVERLINE)}>
         <Leaf className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" aria-hidden /> Saved by software
       </div>
       <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[18px]' : 'text-[22px]')}>{headline}</div>

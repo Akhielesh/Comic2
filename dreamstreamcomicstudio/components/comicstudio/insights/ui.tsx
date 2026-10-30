@@ -3,7 +3,7 @@
 // overflow from 320 px), 44 px targets on touch, and every figure next to its source.
 
 import React from 'react';
-import { LABEL, RADIUS_CONTROL, RADIUS_PILL, TRANSITION } from '../../chat/studioDesign';
+import { OVERLINE, RADIUS_CONTROL, RADIUS_PILL, TRANSITION } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 
 export const FOCUS = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]';
@@ -21,7 +21,7 @@ export const Section: React.FC<{ title: React.ReactNode; aside?: React.ReactNode
 }) => (
   <section aria-label={label} className={cx('min-w-0', className)}>
     <div className="mb-1 flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
-      <h4 className={cx(LABEL, 'min-w-0', WRAP)}>{title}</h4>
+      <h4 className={cx(OVERLINE, 'min-w-0', WRAP)}>{title}</h4>
       {aside && <span className={cx('min-w-0 text-[11px] text-[var(--ds-muted)]', WRAP)}>{aside}</span>}
     </div>
     {children}

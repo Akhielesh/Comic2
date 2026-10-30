@@ -26,6 +26,7 @@ import {
   type LibraryStepView
 } from '../../../../shared/comic/library';
 import { getStylePreset } from '../../../../shared/comic/stylePresets';
+import { OVERLINE } from '../../../chat/studioDesign';
 import {
   cancelLibraryRun,
   getLibraryManifest,
@@ -400,7 +401,7 @@ export const LibraryConsole: React.FC = () => {
             ['Spent (all builds)', usd(totals.spent)]
           ].map(([k, v]) => (
             <div key={k} className="min-w-0 rounded-xl bg-[var(--ds-well)] px-2 py-2">
-              <dt className="truncate text-[10.5px] uppercase tracking-wide text-[var(--ds-muted)]">{k}</dt>
+              <dt className={cx('truncate', OVERLINE)}>{k}</dt>
               <dd className="mt-0.5 text-[16px] font-semibold tabular-nums">{v}</dd>
             </div>
           ))}

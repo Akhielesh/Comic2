@@ -15,6 +15,7 @@ import { capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { effectiveRating } from '../../../shared/comic/safety';
 import { byokFromDoc } from '../board/boardModel';
 import { SlideOver } from '../conversation/PopSheet';
+import { OVERLINE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import type { StudioController } from '../types';
 import { ACCEPT_ATTR } from './downscale';
@@ -319,7 +320,7 @@ export const RefsDrawerBody: React.FC<RefsDrawerInternalProps> = ({ studio, owne
 
       {character && character.tier !== 'extra' && (
         <fieldset className="min-w-0 space-y-2">
-          <legend className="text-[12px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Pages use</legend>
+          <legend className={OVERLINE}>Pages use</legend>
           <div className="flex min-w-0 flex-wrap gap-2" role="radiogroup" aria-label="What pages use">
             {LIKENESS_OPTIONS.map((o) => {
               const on = (character.likeness ?? 'auto') === o.value;

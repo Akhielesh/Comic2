@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 
@@ -37,7 +37,7 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; right?: React.R
   id
 }) => (
   <div className={cx('mb-2 flex items-center justify-between gap-3', className)}>
-    <h3 id={id} className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+    <h3 id={id} className={cx('flex min-w-0 items-center gap-1.5', OVERLINE)}>
       {icon && <span className="shrink-0" aria-hidden>{icon}</span>}
       <span className="truncate">{children}</span>
     </h3>

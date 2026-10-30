@@ -42,7 +42,7 @@ import { deriveLock } from '../../shared/comic/modelLock';
 import type { StudioCaps } from '../../shared/comic/capabilities';
 import { CountUp } from '../studio/kit/streamMotion';
 import { Skeleton } from '../studio/kit/Shimmer';
-import { CANVAS_BG, HAIRLINE, RADIUS_CONTROL, TRANSITION } from '../chat/studioDesign';
+import { CANVAS_BG, HAIRLINE, OVERLINE, RADIUS_CONTROL, TRANSITION } from '../chat/studioDesign';
 import { initTheme } from '../../services/theme';
 import { COMIC_STUDIO_SKIN } from '../../services/productHost';
 import { BoardPane } from './board/BoardPane';
@@ -189,7 +189,7 @@ export const SpendBreakdown: React.FC<{ doc: ComicDoc; cost?: CostFormat }> = ({
   const row = (usd: number) => shortSpend(cost, usd) ?? '—';
   return (
     <div className="w-[min(20rem,calc(100vw-2rem))] p-4">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Spent on this comic</div>
+      <div className={OVERLINE}>Spent on this comic</div>
       <div className={cx('mt-1 font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]', cost.governed ? 'text-[20px]' : 'text-[24px]')}>
         {spend.totalUsd > 0 || !cost.governed ? amountInSentence(cost.exact(spend.totalUsd), 'Some of your usage') : 'Nothing yet'}
       </div>

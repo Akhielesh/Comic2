@@ -10,6 +10,7 @@ import {
   HAIRLINE,
   INK,
   MUTED,
+  OVERLINE,
   RADIUS_PANEL,
   SEGMENTED_ACTIVE,
   SHADOW_SOFT,
@@ -194,11 +195,11 @@ export function Segmented<T extends string | number>({
 /** Quiet section label inside panels and sheets. */
 export const SectionLabel: React.FC<{ children: React.ReactNode; htmlFor?: string; className?: string }> = ({ children, htmlFor, className }) =>
   htmlFor ? (
-    <label htmlFor={htmlFor} className={cx('mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]', className)}>
+    <label htmlFor={htmlFor} className={cx('mb-1.5 block', OVERLINE, className)}>
       {children}
     </label>
   ) : (
-    <div className={cx('mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]', className)}>{children}</div>
+    <div className={cx('mb-1.5', OVERLINE, className)}>{children}</div>
   );
 
 /** Tiny aspect-ratio glyph ("▭" drawn at the real ratio). */

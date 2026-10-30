@@ -16,7 +16,7 @@ import { ExternalLink, Languages, Link2Off, QrCode as QrIcon, RefreshCw, X } fro
 import { ratedDescription, type PublicationOwnerView, type PublishRequest } from '../../../shared/comic/publication';
 import { publishComic, regeneratePublicationLink, unpublishComic, updatePublication } from '../studioApi';
 import type { StudioController } from '../types';
-import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
+import { OVERLINE, SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 import { cx } from '../conversation/ui';
 import { EmbedSnippet } from './EmbedSnippet';
 import { LinkPreviewMock } from './LinkPreviewMock';
@@ -383,7 +383,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view && (
             // Settings the server changes in place (PATCH): the link, the snapshot and readers' places stay.
             <section aria-label="Link settings" className="min-w-0">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Link settings</div>
+              <div className={cx('mb-1', OVERLINE)}>Link settings</div>
               <div className="divide-y divide-[var(--ds-hairline-soft)]">
                 <Toggle label="Readers can download" hint="PDF and page images of the published version" checked={view.allowDownload} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowDownload: v }))} />
                 <Toggle label="Allow embedding" hint="Lets websites show it in a frame" checked={view.allowEmbed} disabled={busy} onChange={(v) => void run(() => updatePublication(doc.id, { allowEmbed: v }))} />
@@ -412,7 +412,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view?.allowEmbed && <EmbedSnippet url={url} title={title} aspect={doc.format?.pageAspect} />}
           {live && (
             <section aria-label="Reader stats" className="min-w-0">
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Readers</div>
+              <div className={cx('mb-1.5', OVERLINE)}>Readers</div>
               <ShareStats stats={view?.stats} />
             </section>
           )}

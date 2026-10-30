@@ -9,6 +9,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, Globe2, Link2 } from 'lucide
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { languageSpec } from '../../../shared/comic/languages';
 import type { PublicationOwnerView, PublishReadiness, PublishRequest } from '../../../shared/comic/publication';
+import { OVERLINE } from '../../chat/studioDesign';
 import { cx, plural } from '../conversation/ui';
 import { pageIdsFor } from './shareModel';
 
@@ -128,7 +129,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
       </ul>
       {(editions.length > 0 || languages.length > 1) && (
         <fieldset className="m-0 min-w-0 border-0 p-0">
-          <legend className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Languages</legend>
+          <legend className={cx('mb-1.5', OVERLINE)}>Languages</legend>
           <div className="flex flex-wrap gap-2">
             {/* Every edition, plus a ticked language whose edition is gone (so it can still be unticked). */}
             {[source, ...editions.filter((e) => e !== source), ...languages.filter((l) => l !== source && !editions.includes(l))].map((lang) => {

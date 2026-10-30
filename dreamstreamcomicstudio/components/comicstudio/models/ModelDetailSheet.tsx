@@ -12,7 +12,7 @@ import { ArrowLeft, RefreshCw } from 'lucide-react';
 import type { ComicDoc, Resolution } from '../../../shared/comic/doc';
 import type { ModelCatalogRow, QualityBoard, QualityEntry } from '../../../shared/comic/modelCatalog';
 import { PLATFORM_MARKUP, formatUsd, getImageModel } from '../../../shared/comic/models';
-import { HEADING, LABEL } from '../../chat/studioDesign';
+import { HEADING, OVERLINE } from '../../chat/studioDesign';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import type { StudioCaps } from '../../../shared/comic/capabilities';
@@ -122,7 +122,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
       )}
 
       <section className={SECTION} aria-label="Prices">
-        <h4 className={LABEL}>Prices{byok ? ' (your own key)' : ''}</h4>
+        <h4 className={OVERLINE}>Prices{byok ? ' (your own key)' : ''}</h4>
         {priceRows.length ? (
           <ul className="space-y-0.5">
             {priceRows.map((p) => (
@@ -139,7 +139,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
       </section>
 
       <section className={SECTION} aria-label="Providers">
-        <h4 className={LABEL}>Providers</h4>
+        <h4 className={OVERLINE}>Providers</h4>
         {data && data.endpoints.length ? (
           <>
             <ul className="space-y-0.5">
@@ -161,7 +161,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
       </section>
 
       <section className={SECTION} aria-label="Leaderboards">
-        <h4 className={LABEL}>Leaderboards</h4>
+        <h4 className={OVERLINE}>Leaderboards</h4>
         {data && data.quality.length ? (
           <ul className="space-y-1">
             {data.quality.map((q, i) => (
@@ -178,7 +178,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
       </section>
 
       <section className={SECTION} aria-label="Real cost">
-        <h4 className={LABEL}>Real cost</h4>
+        <h4 className={OVERLINE}>Real cost</h4>
         {observed.length ? (
           <ul className="space-y-0.5">
             {observed.map((o, i) => (
@@ -200,7 +200,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
 
       {(facts || spec) && (
         <section className={SECTION} aria-label="Facts">
-          <h4 className={LABEL}>Facts</h4>
+          <h4 className={OVERLINE}>Facts</h4>
           <ul className="space-y-0.5">
             <li className={ROW}>
               {holdsCharacters((facts?.refs ?? spec?.refs)?.characters ?? 0)} · up to {(facts?.refs ?? spec?.refs)?.total ?? 0} reference images
@@ -222,7 +222,7 @@ export const ModelDetailView: React.FC<ModelDetailViewProps> = ({ modelId, doc, 
 
       {view.detail && view.detail.priceHistory.length > 0 && (
         <section className={SECTION} aria-label="Price changes">
-          <h4 className={LABEL}>Price changes we recorded</h4>
+          <h4 className={OVERLINE}>Price changes we recorded</h4>
           <ul className="space-y-0.5">
             {view.detail.priceHistory.slice(0, 8).map((h, i) => (
               <li key={`${h.at}-${h.res}-${i}`} className={cx(ROW, 'tabular-nums')}>
