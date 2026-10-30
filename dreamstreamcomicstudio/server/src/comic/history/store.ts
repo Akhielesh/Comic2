@@ -178,7 +178,14 @@ export const mapHistoryDbError = (err: unknown, action: string): StudioError => 
   const token = TOKENS.find((t) => message.includes(`COMIC_HISTORY_${t}`));
   if (token) return historyStoreError(token, err);
   const missing = code === '42P01' || code === 'PGRST205' || code === '42883' || code === 'PGRST202';
-  logger.error('comic_history_store_error', { action, code, message: message.slice(0, 300), hint: missing ? 'apply server/sql/comic_history.sql' : undefined });
+  // A request cut by HISTORY_RPC_TIMEOUT_MS (or aborted) arrives as a fetch error: INTERNAL retryable below.
+  const timedOut = /^(TimeoutError|AbortError)\b/.test(message);
+  logger.error('comic_history_store_error', {
+    action,
+    code,
+    message: message.slice(0, 300),
+    hint: missing ? 'apply server/sql/comic_history.sql' : timedOut ? 'timed out (HISTORY_RPC_TIMEOUT_MS); retried at the next commit or flush' : undefined
+  });
   if (missing) return new StudioError('NOT_AVAILABLE', HISTORY_NOT_AVAILABLE_MESSAGE, { status: 503, cause: err });
   if (code === '22000') return historyStoreError('HASH', err);
   if (code === '40001' || code === '40P01' || code === '55P03') {
@@ -407,22 +414,35 @@ const newestRowFirst = (a: Record<string, unknown>, b: Record<string, unknown>):
 /** The rows of a comic's list: one line's own rows, or (for "Original") also the rows of removed lines. */
 type ListPart = { kind: 'line'; line: string | null } | { kind: 'removed'; live: string[] };
 
+/**
+ * Every History store request (each RPC and each read) is bounded by this I/O timeout (H2 FIX note 2; required before
+ * COMIC_HISTORY=1): a hung request fails as INTERNAL retryable (mapHistoryDbError), the recorder keeps the capture and
+ * retries it at the next commit or flush. It is the real bound on the stream's 'done', the publication flushes and the
+ * sweeper's final flushes. AbortSignal.timeout per request: no timer of the store's or the recorder's own.
+ */
+export const HISTORY_RPC_TIMEOUT_MS = 10_000;
+
 export interface SupabaseHistoryStoreOptions {
   /** The service-role client (default: getSupabaseAdmin). */
   admin?: () => SupabaseClient;
   /** Lines allowed per comic, counting "Original" (default MAX_ALTERNATIVES; StudioCaps.maxAlternatives). */
   maxAlternatives?: number;
+  /** The per-request I/O timeout (default HISTORY_RPC_TIMEOUT_MS; tests shorten it). */
+  timeoutMs?: number;
 }
 
 export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {}): HistoryStore {
   const admin = opts.admin || getSupabaseAdmin;
   const maxAlternatives = opts.maxAlternatives ?? MAX_ALTERNATIVES;
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs as number) > 0 ? (opts.timeoutMs as number) : HISTORY_RPC_TIMEOUT_MS;
+  /** A fresh timeout signal for one request (each query builder gets its own). */
+  const bounded = (): AbortSignal => AbortSignal.timeout(timeoutMs);
 
   /** Both ids must be uuids: anything else is simply not found (no query, no oracle). */
   const scoped = (scope: HistoryScope): boolean => !!scope && isUuid(scope.projectId) && isUuid(scope.userId);
 
   const rpc = async <T>(name: string, args: Record<string, unknown>, action: string): Promise<T> => {
-    const { data, error } = await admin().rpc(name, args);
+    const { data, error } = await admin().rpc(name, args).abortSignal(bounded());
     if (error) throw mapHistoryDbError(error, action);
     return data as T;
   };
@@ -435,7 +455,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       .eq('user_id', scope.userId)
       .eq('is_active', true)
       .is('removed_at', null)
-      .limit(1);
+      .limit(1)
+      .abortSignal(bounded());
     if (error) throw mapHistoryDbError(error, 'read the active line');
     return Array.isArray(data) && data[0] ? String((data[0] as { id: unknown }).id) : null;
   };
@@ -454,7 +475,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       .eq('project_id', scope.projectId)
       .eq('user_id', scope.userId)
       .is('removed_at', null)
-      .limit(1);
+      .limit(1)
+      .abortSignal(bounded());
     if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
     return Array.isArray(data) && data[0] ? { line: alternativeId } : null;
   };
@@ -464,7 +486,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
       .from('comic_alternatives')
       .select('id,removed_at')
       .eq('project_id', scope.projectId)
-      .eq('user_id', scope.userId);
+      .eq('user_id', scope.userId)
+      .abortSignal(bounded());
     if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
     const out = { live: [] as string[], removed: [] as string[] };
     for (const r of (Array.isArray(data) ? data : []) as { id: unknown; removed_at: unknown }[]) {
@@ -482,7 +505,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .select('hash,content,paths')
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
-        .in('hash', wanted.slice(i, i + HASH_BATCH));
+        .in('hash', wanted.slice(i, i + HASH_BATCH))
+        .abortSignal(bounded());
       if (error) throw mapHistoryDbError(error, 'read history');
       if (Array.isArray(data)) out.push(...(data as { hash: string; content: unknown; paths: unknown }[]));
     }
@@ -516,7 +540,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
           .select('hash')
           .eq('project_id', scope.projectId)
           .eq('user_id', scope.userId)
-          .in('hash', wanted.slice(i, i + HASH_BATCH));
+          .in('hash', wanted.slice(i, i + HASH_BATCH))
+          .abortSignal(bounded());
         if (error) throw mapHistoryDbError(error, 'read history');
         for (const r of (data as { hash: string }[] | null) || []) have.add(r.hash);
       }
@@ -586,7 +611,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId);
       q = line === null ? q.is('alternative_id', null) : q.eq('alternative_id', line);
-      const { data, error } = await q.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1);
+      const { data, error } = await q.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(1).abortSignal(bounded());
       if (error) throw mapHistoryDbError(error, 'read history');
       const r = Array.isArray(data) ? (data[0] as Record<string, unknown> | undefined) : undefined;
       if (!r) return null;
@@ -621,7 +646,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         if (typeof filter.pageId === 'string' && filter.pageId) q = q.contains('changes', JSON.stringify([{ pageIds: [filter.pageId] }]));
         // Keyset on (content_at, id); the timestamp is quoted (PostgREST reserves '.' and ':' inside or()).
         if (cursor && isUuid(cursor.id)) q = q.or(`content_at.lt."${cursor.contentAt}",and(content_at.eq."${cursor.contentAt}",id.lt.${cursor.id})`);
-        const { data, error } = await q.order('content_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1);
+        const { data, error } = await q.order('content_at', { ascending: false }).order('id', { ascending: false }).limit(limit + 1).abortSignal(bounded());
         if (error) throw mapHistoryDbError(error, 'read history');
         return (Array.isArray(data) ? data : []) as Record<string, unknown>[];
       };
@@ -643,7 +668,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .eq('id', versionId)
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
-        .maybeSingle();
+        .maybeSingle()
+        .abortSignal(bounded());
       if (error) throw mapHistoryDbError(error, 'read history');
       if (!isRecord(data) || !isRecord(data.manifest)) return null;
       const manifest = data.manifest as unknown as Manifest;
@@ -715,7 +741,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
         .is('removed_at', null)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .abortSignal(bounded());
       if (error) throw mapHistoryDbError(error, 'read the versions you are trying');
       return ((Array.isArray(data) ? data : []) as Record<string, unknown>[]).map(alternativeRowFromDb);
     },

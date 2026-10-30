@@ -21,6 +21,7 @@ import type { Manifest } from '../../../../shared/comic/history/types.js';
 import { assembleBook, chunkBook, historyHash, manifestHashes } from './hash.js';
 import type { HistoryScope } from './hooks.js';
 import {
+  HISTORY_RPC_TIMEOUT_MS,
   createSupabaseHistoryStore,
   decodeHistoryCursor,
   encodeHistoryCursor,
@@ -525,4 +526,77 @@ describe('rows and errors', () => {
     // Not applied yet: honest NOT_AVAILABLE, nothing else.
     await expect(store.forgetPath(ME, 'a/b')).rejects.toMatchObject({ code: 'NOT_AVAILABLE', status: 503 });
   });
+});
+
+// H2 FIX note 2 (required before COMIC_HISTORY=1): every RPC and read carries its own I/O timeout, so a hung request
+// can never hold the stream's 'done', a publication flush or the sweeper's final flushes; it fails INTERNAL retryable.
+describe('every request is bounded by HISTORY_RPC_TIMEOUT_MS', () => {
+  /** A Supabase client whose every request hangs until its signal aborts (a dead network that never answers). */
+  const hangingClient = () => {
+    const seen: { path: string; signal: boolean }[] = [];
+    const fetch = (input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+        const signal = init?.signal ?? undefined;
+        seen.push({ path: url.pathname.replace(/^\/rest\/v1\//, ''), signal: !!signal });
+        if (!signal) return; // never answers
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    const client = createClient('https://placeholder.supabase.co', 'service-role-placeholder', {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      global: { fetch: fetch as typeof globalThis.fetch }
+    }) as unknown as SupabaseClient;
+    return { client, seen };
+  };
+
+  it('the default bound is 10 s, a fresh AbortSignal.timeout on every request (reads and RPCs)', async () => {
+    expect(HISTORY_RPC_TIMEOUT_MS).toBe(10_000);
+    const timeouts = vi.spyOn(AbortSignal, 'timeout');
+    const db = makeDb();
+    db.rpcs.comic_history_delete = () => ({ status: 200, body: true });
+    const store = storeOn(db);
+    await store.list(ME);
+    await store.missing(ME, [historyHash('x')]);
+    await store.get(ME, V1);
+    await store.alternatives(ME);
+    await store.delete(ME, V1);
+    expect(db.requests.length).toBeGreaterThanOrEqual(6);
+    expect(timeouts.mock.calls.length).toBe(db.requests.length);
+    expect(timeouts.mock.calls.every(([ms]) => ms === HISTORY_RPC_TIMEOUT_MS)).toBe(true);
+  });
+
+  it('a hung request fails INTERNAL retryable (never hangs), for every method; the recorder retries it later', async () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const { client, seen } = hangingClient();
+    const store = createSupabaseHistoryStore({ admin: () => client, timeoutMs: 20 });
+    const book = chunkBook(historyV5Doc());
+    const calls: [string, () => Promise<unknown>][] = [
+      ['missing', () => store.missing(ME, book.hashes)],
+      ['put', () => store.put(ME, versionOf(book), book.chunks)],
+      ['head', () => store.head(ME)],
+      ['list', () => store.list(ME)],
+      ['get', () => store.get(ME, V1)],
+      ['chunks', () => store.chunks(ME, book.hashes)],
+      ['label', () => store.label(ME, V1, { name: 'Draft' })],
+      ['delete', () => store.delete(ME, V1)],
+      ['forgetPath', () => store.forgetPath(ME, 'u/x/p/y/img/a.webp')],
+      ['alternatives', () => store.alternatives(ME)],
+      ['createAlternative', () => store.createAlternative(ME, { name: 'Try', headVersionId: V1 })],
+      ['updateAlternative', () => store.updateAlternative(ME, ALT, { name: 'Try 2' })],
+      ['removeAlternative', () => store.removeAlternative(ME, ALT)],
+      ['setHead', () => store.setHead(ME, null, V1)]
+    ];
+    for (const [name, call] of calls) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(err, name).toBeInstanceOf(StudioError);
+      expect(err, name).toMatchObject({ code: 'INTERNAL', status: 503, retryable: true, userMessage: "History isn't reachable right now. Nothing in your comic changed." });
+    }
+    expect(seen.length).toBeGreaterThanOrEqual(calls.length);
+    expect(seen.every((r) => r.signal)).toBe(true);
+    expect(mapHistoryDbError({ code: '', message: 'TimeoutError: The operation was aborted due to timeout' }, 'save a moment')).toMatchObject({ code: 'INTERNAL', retryable: true });
+  }, 4_000);
 });
