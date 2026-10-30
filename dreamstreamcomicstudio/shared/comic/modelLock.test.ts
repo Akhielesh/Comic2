@@ -145,6 +145,29 @@ describe('redrawQuote (models.md §3.5 example 1, the owner comic f8312c86 with 
     expect(all.lines[2]).toEqual({ label: 'Character sheets', count: 4, usd: 0.5376 });
   });
 
+  it('PriceBook.unit has one signature, so a book written as an object literal type-checks its parameters', () => {
+    // With two unit signatures (ImageJobKind and AnyImageJobKind) TypeScript gives an object-literal book no
+    // contextual signature: modelId, res and kind turn into implicit `any` and a swapped argument compiles. Each
+    // directive below is an error only while the parameters keep their types (typecheck fails on an unused one).
+    const seen: string[] = [];
+    const book: PriceBook = {
+      unit: (modelId, res, kind, refs) => {
+        // @ts-expect-error modelId is a string
+        const m: number = modelId;
+        // @ts-expect-error res is a Resolution
+        const r: number = res;
+        // @ts-expect-error kind is an image job kind
+        const k: number = kind;
+        seen.push(`${m}|${r}|${k}|${refs ?? 0}`);
+        return { usd: kind === 'panel' ? 0.02 : 0.04, basis: 'test' };
+      },
+      qcUsd: 0.003
+    };
+    expect(book.unit('nano-banana-pro', '1K', 'panel')).toEqual({ usd: 0.02, basis: 'test' });
+    expect(book.unit('nano-banana-pro', '2K', 'page', 2)).toEqual({ usd: 0.04, basis: 'test' });
+    expect(seen).toEqual(['nano-banana-pro|1K|panel|0', 'nano-banana-pro|2K|page|2']);
+  });
+
   it('platform-paid quotes carry the markup ($1.08 / $1.78); scope none is free', () => {
     const doc = makeLakeComic();
     expect(redrawQuote(doc, 'nano-banana-pro', 'pages_cover', prices, false).usd).toBeCloseTo(1.08, 2);

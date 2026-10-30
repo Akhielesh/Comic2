@@ -97,12 +97,10 @@ export const drawnModels = (doc: ComicDoc): { modelId: string; images: number }[
  * again. usd null = no basis at all ("can't price yet").
  *
  * `kind` takes any image job kind, Ship 2's 'panel' included, so a panel quote reads the observed median of panel
- * calls (matched by kind) instead of being asked as a page. The ImageJobKind signature is transitional, like
- * AnyImageJobKind itself (models.ts): it keeps book implementations whose own quote still takes ImageJobKind
- * (server models/pricing.ts) compiling until they take AnyImageJobKind; then it folds into the second one.
+ * calls (matched by kind) instead of being asked as a page. `unit` has exactly one signature: a book written as an
+ * object literal then gets typed parameters from it (with two signatures they would be implicit `any`).
  */
 export interface PriceBook {
-  unit(modelId: string, res: Resolution, kind: ImageJobKind, refs?: number): { usd: number | null; basis: string };
   unit(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): { usd: number | null; basis: string };
   /** QC per page (observed median when n ≥ 5, else QC_USD_PER_PAGE). */
   qcUsd: number;

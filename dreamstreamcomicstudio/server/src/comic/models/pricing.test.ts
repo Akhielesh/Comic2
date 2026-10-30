@@ -2,7 +2,7 @@
 // Price mapping (models.md §4.3 rules over the real 17:51Z OpenRouter shapes) and the server PriceBook (§2.3).
 import { describe, expect, it } from 'vitest';
 import { redrawQuote } from '../../../../shared/comic/modelLock.js';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel } from '../../../../shared/comic/models.js';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, estimateJobs, getImageModel, resolveImageJob } from '../../../../shared/comic/models.js';
 import { makeLakeComic } from '../../../../shared/comic/__fixtures__/lakeComic.js';
 import { loadOpenRouterFixture } from './__fixtures__/catalogFakes.js';
 import {
@@ -211,6 +211,25 @@ describe('PriceBook (models.md §2.3)', () => {
     expect(book.jobQuote('nano-banana-2.1', '1K', 'page', { byok: true }).usd).toBe(0.0385);
     expect(book.jobQuote('nano-banana-2.1', '1K', 'sheet', { byok: true })).toMatchObject({ usd: 0.0336, qcUsd: 0 });
     expect(book.jobQuote('seedream-5-pro', '2K', 'page').usd).toBeNull();
+  });
+
+  it("a 'panel' job (Ship 2): QC once like a page, its own observed median by kind, and estimateJobs' number at list", () => {
+    const book = priceBookFromSources({ rows: liveRows(), qc: { medianUsd: 0.0049, n: 7 } });
+    const panel = book.jobQuote('nano-banana-2.1', '1K', 'panel');
+    expect(panel).toMatchObject({ providerUsd: 0.0336, qcUsd: 0.0049, markup: PLATFORM_MARKUP });
+    expect(panel.usd).toBe(Math.round((0.0336 + 0.0049) * PLATFORM_MARKUP * 10000) / 10000);
+    expect(panel.basis).toContain('QC $0.0049 (your last 7 checks)');
+    expect(panel.basisDetail.qc).toEqual({ usd: 0.0049, source: 'observed', n: 7 });
+    expect(book.jobQuote('nano-banana-2.1', '1K', 'panel', { byok: true }).usd).toBe(0.0385);
+    // Panel calls are priced from panel observations only: a page median never prices a panel, nor the reverse.
+    const seen = priceBookFromSources({ rows: liveRows(), observed: [obs({ kind: 'panel', n: 5, medianUsd: 0.041, minUsd: 0.039, maxUsd: 0.044 })] });
+    expect(seen.unit('nano-banana-2.1', '1K', 'panel')).toEqual({ usd: 0.041, basis: 'your last 5 panels: $0.039–$0.044; list $0.0336' });
+    expect(seen.unit('nano-banana-2.1', '1K', 'page').usd).toBe(0.0336);
+    expect(priceBookFromSources({ rows: liveRows(), observed: [obs({})] }).unit('nano-banana-2.1', '1K', 'panel').usd).toBe(0.0336);
+    // At the registry list (no live rows, default QC) a panel job equals the shared estimate for one panel.
+    const lock = { modelId: 'nano-banana-2.1', lockedAt: 0, origin: 'user_change' } as const;
+    const { resolution } = resolveImageJob('panel', 'draft', undefined, lock);
+    expect(priceBookFromSources({ rows: [] }).jobQuote('nano-banana-2.1', resolution, 'panel').usd).toBeCloseTo(estimateJobs([{ kind: 'panel', count: 1 }], 'draft', { lock }).usd, 4);
   });
 
   it('every quote carries its basis as data too, so governed copy never has to print the dollar text', () => {
