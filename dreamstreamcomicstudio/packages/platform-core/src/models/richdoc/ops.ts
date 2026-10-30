@@ -11,7 +11,7 @@
  * - Caps: `RICHDOC_LIMITS.sections` sections and `RICHDOC_LIMITS.blocksPerSection` blocks per section (`limit`).
  */
 import type { OpId } from '../../contract/schema.js';
-import type { DocBlock, DocOp, DocOpResult, DocSection, DocSuggestion, RichDoc } from '../../contract/richdoc.js';
+import type { DocOp, DocOpResult, DocSection, DocSuggestion, RichDoc } from '../../contract/richdoc.js';
 import { RICHDOC_LIMITS } from '../../contract/richdoc.js';
 import type { ApplyOptions, InverseMeta, OpKernel, Step } from '../common.js';
 import {
@@ -104,7 +104,7 @@ const invert = (before: RichDoc, op: DocOp, id: OpId, baseRev: number): DocOp | 
       const where = findBlock(before, op.blockId);
       if (!where) return null;
       const section = before.sections[where.section];
-      return { op: 'insert_block', id, baseRev, sectionId: section.id, index: where.block, block: section.blocks[where.block] as DocBlock };
+      return { op: 'insert_block', id, baseRev, sectionId: section.id, index: where.block, block: section.blocks[where.block] };
     }
     case 'insert_section':
       return { op: 'remove_section', id, baseRev, sectionId: op.section.id };
@@ -117,15 +117,14 @@ const invert = (before: RichDoc, op: DocOp, id: OpId, baseRev: number): DocOp | 
   }
 };
 
-/** The RichDoc op kernel (models/common.ts runs it). */
-export const DOC_OP_KERNEL: OpKernel<RichDoc, DocOp> = { noun: 'document', schema: DocOpSchema, refine: refineDocOp, step, invert };
+const KERNEL: OpKernel<RichDoc, DocOp> = { noun: 'document', schema: DocOpSchema, refine: refineDocOp, step, invert };
 
 /**
  * Apply `ops` to `doc`: pure, immutable, never throws. Returns the next document (the same object when nothing
  * applied), the ops that applied (checked copies) and the ones refused, with why: `invalid`, `stale`, `duplicate`,
  * `not-found` or `limit`. See the op rules in models/common.ts.
  */
-export const applyDocOps = (doc: RichDoc, ops: readonly DocOp[], options?: ApplyOptions): DocOpResult => applyOpsWith(DOC_OP_KERNEL, doc, ops, options);
+export const applyDocOps = (doc: RichDoc, ops: readonly DocOp[], options?: ApplyOptions): DocOpResult => applyOpsWith(KERNEL, doc, ops, options);
 
 /**
  * The undo batch for the ops one `applyDocOps(before, …)` call applied (its `applied`): newest first, each stamped
@@ -134,10 +133,10 @@ export const applyDocOps = (doc: RichDoc, ops: readonly DocOp[], options?: Apply
  * old value. Null when an op does not apply to `before`.
  */
 export const invertDocOps = (before: RichDoc, applied: readonly DocOp[], meta: InverseMeta<DocOp>): DocOp[] | null =>
-  invertOpsWith(DOC_OP_KERNEL, before, applied, meta);
+  invertOpsWith(KERNEL, before, applied, meta);
 
 /** The exact inverse of one op as applied to `before`, or null. */
-export const invertDocOp = (before: RichDoc, op: DocOp, meta: { id: OpId; baseRev: number }): DocOp | null => invertOpWith(DOC_OP_KERNEL, before, op, meta);
+export const invertDocOp = (before: RichDoc, op: DocOp, meta: { id: OpId; baseRev: number }): DocOp | null => invertOpWith(KERNEL, before, op, meta);
 
 /** The block or section id an op targets, when it names one (`insert_section` and `set_title` name none). */
 const targetOf = (op: DocOp): { kind: 'section' | 'block'; id: string } | null => {

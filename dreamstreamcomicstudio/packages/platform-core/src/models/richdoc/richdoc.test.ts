@@ -59,7 +59,8 @@ describe('RichDoc schema', () => {
   });
 
   it('migrate() refuses a version it does not know, and a value with no version', () => {
-    expect(migrateRichDoc({ ...minimal(), v: 2 })).toMatchObject({ ok: false, errors: [{ path: 'v', code: 'literal' }] });
+    expect(migrateRichDoc({ ...minimal(), v: 2 })).toMatchObject({ ok: false, errors: [{ path: 'v', code: 'literal', message: 'RichDoc v2 is not supported (this build reads v1)' }] });
+    expect(migrateRichDoc({ ...minimal(), v: '1' })).toMatchObject({ ok: false, errors: [{ path: 'v', code: 'literal', message: 'this RichDoc version is not supported (this build reads v1)' }] });
     const noVersion: Record<string, unknown> = { ...minimal() };
     delete noVersion.v;
     expect(migrateRichDoc(noVersion)).toMatchObject({ ok: false, errors: [{ path: 'v', code: 'required' }] });

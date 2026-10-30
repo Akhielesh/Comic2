@@ -310,8 +310,8 @@ export const migrateV1 = <T>(value: unknown, noun: string, checkV1: (value: unkn
   if (!isRecord(value)) return { ok: false, errors: [{ path: '', code: 'type', message: `must be a ${noun} object` }] };
   if (value.v === undefined) return { ok: false, errors: [{ path: 'v', code: 'required', message: `is required (this build reads ${noun} v1)` }] };
   if (value.v !== 1) {
-    const shown = typeof value.v === 'number' ? String(value.v) : 'that version';
-    return { ok: false, errors: [{ path: 'v', code: 'literal', message: `${noun} v${shown} is not supported (this build reads v1)` }] };
+    const shown = typeof value.v === 'number' && isFinite(value.v) ? `${noun} v${value.v}` : `this ${noun} version`;
+    return { ok: false, errors: [{ path: 'v', code: 'literal', message: `${shown} is not supported (this build reads v1)` }] };
   }
   return checkV1(value);
 };
