@@ -302,9 +302,11 @@ export const isServerArtForComic = (path: string, doc: Pick<ComicDoc, 'id'>, use
   return lane.test(path) && !path.includes('..');
 };
 
-const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
+/** A path outside this comic's server lanes (a classic or another comic's photo): the render_use refusal, shared with the
+ *  frame and overlay sanitizers (sanitize/panels.ts). */
+export const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
 /** This comic's own lane, but an `upload` in the public img lane: the publish boundary (isServerArt) refuses it, so say so now. */
-const UNPUBLISHABLE_IMAGE_MESSAGE = 'That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.';
+export const UNPUBLISHABLE_IMAGE_MESSAGE = 'That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.';
 
 const renderUse: OpSanitizer<Op<'render_use'>> = {
   op: 'render_use',

@@ -68,6 +68,12 @@ export function readinessRows(r: PublishReadiness | undefined, doc: ComicDoc): A
   else if (coverWord && !NO_COVER_ART_WORDS.has(coverWord)) rows.push({ ok: 'warn', text: `Cover ${coverWord}` });
   else rows.push({ ok: 'warn', text: 'No cover yet — the preview uses page 1' });
   if (r?.stalePages.length) rows.push({ ok: 'warn', text: `${r.stalePages.length === 1 ? 'Page' : 'Pages'} ${r.stalePages.join(', ')} changed since drawing (the drawn version is published)` });
+  // PD-5: printed photos and frame pictures that can't go out (from outside the studio, never checked, or over the
+  // rating) are left out of the published page. Said before publishing; it never blocks.
+  for (const p of (r?.leftOutPictures || []).slice(0, 4)) {
+    const what = [p.photos ? plural(p.photos, 'printed photo') : '', p.frames ? plural(p.frames, 'panel picture') : ''].filter(Boolean).join(' and ');
+    if (what) rows.push({ ok: 'warn', text: `Page ${p.n}: ${what} can’t be published — readers see the drawing there` });
+  }
   if (r?.safety.status === 'blocked') rows.push({ ok: false, text: `Page ${r.safety.blockedPages.join(', ')} ${r.safety.blockedPages.length === 1 ? "doesn't" : "don't"} fit the content rules` });
   else if (r?.safety.status === 'needs_check') rows.push({ ok: 'warn', text: 'A quick safety check runs when you publish (free)' });
   else if (r) rows.push({ ok: true, text: 'Safety check passed' });

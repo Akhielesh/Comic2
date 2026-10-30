@@ -4,6 +4,8 @@
 // 25 overlays, 3 extra pictures, NaN), the page_cuts provenance rule (keepBy keeps `by` only for server-stamped cuts; an unproven claim is written as the user's), and one
 // acceptance test per op shape the editor engine sends (B9 wave notes). Everything goes through the real entry point,
 // jobs.ts sanitizePatchOps, the way a client batch reaches the doc.
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { applyOps, CLIENT_PATCHABLE_OPS, PRO_PAGE_OPS_PATCHABLE, PRO_PAGE_PATCH_OPS, type DocOp } from '../../../../shared/comic/ops.js';
 import { inverseOps } from '../../../../shared/comic/undo.js';
@@ -16,6 +18,7 @@ import { StudioError } from '../types.js';
 import { opSanitizerFor } from './index.js';
 import { CONSISTENCY_SANITIZERS } from './consistency.js';
 import { PANELS_SANITIZERS, __resetStampedCutsForTests } from './panels.js';
+import { OUTSIDE_IMAGE_MESSAGE, UNPUBLISHABLE_IMAGE_MESSAGE } from './timeline.js';
 
 const NOW = 1_800_000_000_000;
 const sctx = (over: Partial<SanitizeCtx> = {}): SanitizeCtx => ({ userId: 'user-1', caps: DEFAULT_CAPS, rating: 'PG-13', now: NOW, ...over });
@@ -164,6 +167,15 @@ describe('every sanitizer rejection (pro plan §10 K2b tests)', () => {
     const planted = fixture();
     planted.conversation = [{ id: 'm2', role: 'user', text: 'x', at: 1, attachments: [{ path: own('planted'), source: 'upload', at: 3 }] }];
     expect(rejects(() => sanitize(planted, [frameOp({ box, src: { path: own('planted') } })]), 400).userMessage).toMatch(/outside the studio/);
+  });
+
+  it('the refusal words have one home: timeline.ts exports them, panels.ts imports them (no copy to drift)', () => {
+    expect(OUTSIDE_IMAGE_MESSAGE).toBe('That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.');
+    expect(UNPUBLISHABLE_IMAGE_MESSAGE).toBe('That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.');
+    const source = fs.readFileSync(path.join(__dirname, 'panels.ts'), 'utf8');
+    expect(source).not.toContain(OUTSIDE_IMAGE_MESSAGE);
+    expect(source).not.toContain(UNPUBLISHABLE_IMAGE_MESSAGE);
+    expect(source).toMatch(/import \{[^}]*\bOUTSIDE_IMAGE_MESSAGE\b[^}]*\bUNPUBLISHABLE_IMAGE_MESSAGE\b[^}]*\} from '\.\/timeline\.js'/);
   });
 
   it('frames and overlays refuse an image with the very words "Use for page" (render_use) uses for it', () => {

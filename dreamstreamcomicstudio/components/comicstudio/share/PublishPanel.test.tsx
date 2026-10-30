@@ -48,6 +48,34 @@ describe('readinessRows — the cover line', () => {
   });
 });
 
+describe('readinessRows — pictures publishing leaves out (Ship 2, PD-5)', () => {
+  it('lists each page’s printed photos and panel pictures in plain words, as a warning that never blocks', () => {
+    const r: PublishReadiness = { ...readiness([]), leftOutPictures: [{ n: 1, photos: 1, frames: 0 }, { n: 3, photos: 2, frames: 1 }, { n: 4, photos: 0, frames: 2 }] };
+    const rows = readinessRows(r, makeSampleDoc()).filter((row) => /can’t be published/.test(row.text));
+    expect(rows).toEqual([
+      { ok: 'warn', text: 'Page 1: 1 printed photo can’t be published — readers see the drawing there' },
+      { ok: 'warn', text: 'Page 3: 2 printed photos and 1 panel picture can’t be published — readers see the drawing there' },
+      { ok: 'warn', text: 'Page 4: 2 panel pictures can’t be published — readers see the drawing there' }
+    ]);
+    // No git words and no money in the copy.
+    for (const row of rows) expect(row.text).not.toMatch(/\$|commit|branch|merge|diff/i);
+  });
+
+  it('says nothing when there is nothing left out (older views have no field) and caps the list at four pages', () => {
+    expect(readinessRows(readiness([]), makeSampleDoc()).some((row) => /can’t be published/.test(row.text))).toBe(false);
+    const many: PublishReadiness = { ...readiness([]), leftOutPictures: [1, 2, 3, 4, 5, 6].map((n) => ({ n, photos: 1, frames: 0 })) };
+    expect(readinessRows(many, makeSampleDoc()).filter((row) => /can’t be published/.test(row.text))).toHaveLength(4);
+  });
+
+  it('renders inside the Readiness list with the warning icon (the same row as every other readiness line)', () => {
+    const view = { readiness: { ...readiness([]), leftOutPictures: [{ n: 2, photos: 1, frames: 1 }] }, languages: [], allowDownload: true, allowEmbed: true, showCreator: false } as unknown as PublicationOwnerView;
+    render(<PublishPanel doc={makeSampleDoc()} view={view} visibility="unlisted" onPublish={() => undefined} />);
+    const item = screen.getByText('Page 2: 1 printed photo and 1 panel picture can’t be published — readers see the drawing there').closest('li')!;
+    expect(item.closest('ul')!.getAttribute('aria-label')).toBe('Readiness');
+    expect(item.querySelector('[aria-label="Needs attention"]')).not.toBeNull();
+  });
+});
+
 /** A complete, reviewed Hindi edition (what the server's editionReadiness() calls publishable). */
 const withHindi = (doc: ComicDoc): ComicDoc => {
   doc.format = { ...doc.format, language: 'en', lettering: 'overlay' };

@@ -21,7 +21,7 @@
 //    suspended row after the hold is lifted copies everything again under a fresh asset key.
 
 import crypto from 'node:crypto';
-import { newId, versionsOf, type AssetRef, type Card, type ComicDoc, type Msg, type RenderState, type SafetyBlocker } from '../../../../shared/comic/doc.js';
+import { mapAssetRefs, newId, pageSourcePaths, versionsOf, type AssetRef, type Card, type ComicDoc, type Msg, type Page, type RenderState, type SafetyBlocker } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { editionReadiness } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
@@ -37,7 +37,7 @@ import {
   type PublishRequest,
   type ShareCard
 } from '../../../../shared/comic/publication.js';
-import { effectiveRating, isContentRating, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../../shared/comic/safety.js';
+import { canServeToPublic, effectiveRating, isContentRating, safetyStatusOf, type ContentRating, type SafetyStatus } from '../../../../shared/comic/safety.js';
 import { comicShareUrl } from '../../../../services/productHost.js';
 import { logger } from '../../lib/logger.js';
 import { runPublishGate, type PublishGateResult } from '../safety/index.js';
@@ -370,6 +370,40 @@ function outsideImageError(pages: number[], cover: boolean): PublishError {
   return new PublishError('NOT_READY', message, { status: 422, code: 'NOT_READY', details: { outsideImages: { pages, cover } } });
 }
 
+/**
+ * Ship 2 (pro plan §8; PD-5): per drawn page, the printed photo overlays and frame pictures publishing leaves out — the
+ * rule planSnapshot applies to them (snapshot.ts extraSourceCopies): only checked server art at the publication's
+ * rating goes out (isServerArt, S6; canServeToPublic). The page's own drawing in a frame always goes out with the page;
+ * guide-only overlays (print: false) never go out and are not listed. Pure; never a blocker.
+ */
+export const leftOutPicturesOf = (doc: ComicDoc, pages: readonly Page[], rating: ContentRating): NonNullable<PublishReadiness['leftOutPictures']> => {
+  let index: Map<string, AssetRef> | null = null;
+  const assetAt = (path: string): AssetRef | undefined => {
+    if (!index) {
+      const found = new Map<string, AssetRef>();
+      mapAssetRefs(doc, (a) => {
+        if (a?.path && !found.has(a.path)) found.set(a.path, a);
+        return a;
+      });
+      index = found;
+    }
+    return index.get(path);
+  };
+  const out: NonNullable<PublishReadiness['leftOutPictures']> = [];
+  for (const page of pages) {
+    if (!hasPublishableArt(page.render) || !pageSourcePaths(page, { printOnly: true }).length) continue;
+    const leftOut = (path: unknown): boolean => {
+      if (typeof path !== 'string' || !path || path === page.render.asset?.path) return false;
+      const asset = assetAt(path);
+      return !asset || !isServerArt(asset) || !canServeToPublic(asset, rating);
+    };
+    const frames = (page.panels || []).filter((pn) => leftOut(pn?.frame?.src?.path)).length;
+    const photos = (page.layers || []).filter((l) => l?.print !== false && leftOut(l?.src?.path)).length;
+    if (frames || photos) out.push({ n: page.n, photos, frames });
+  }
+  return out;
+};
+
 /** The published languages: the source first, always (readers always get the original), then the requested editions. */
 const withSource = (source: string, requested: readonly string[]): string[] => [source, ...requested.filter((l) => !sameLanguage(l, source))];
 
@@ -414,6 +448,8 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
     return { lang, publishable: r.publishable, blocking: r.issues.filter((i) => i.blocking).map((i) => i.text), requested: wanted.some((w) => sameLanguage(w, lang)) };
   });
   const safetyStatus: PublishReadiness['safety']['status'] = blockedPages.length ? 'blocked' : unchecked ? 'needs_check' : 'cleared';
+  // PD-5: pictures publishing will leave out are listed (never a blocker), so nobody is surprised by the published page.
+  const leftOutPictures = leftOutPicturesOf(doc, drawn, rating);
   return {
     ok: drawn.length > 0 && missing.length === 0 && stalePages.length === 0 && safetyStatus !== 'blocked' && languages.every((l) => !l.requested || l.publishable),
     drawnPages: drawn.length,
@@ -421,7 +457,8 @@ export async function getReadiness(ctx: StudioContext, doc: ComicDoc, req?: Publ
     missing,
     stalePages,
     safety: { status: safetyStatus, blockedPages, reasons: [...reasons] },
-    languages
+    languages,
+    ...(leftOutPictures.length ? { leftOutPictures } : {})
   };
 }
 
@@ -802,7 +839,8 @@ export async function publishWithOutcome(ctx: StudioContext, rawReq: PublishRequ
     const assetKey = fresh ? d.newAssetKey() : live!.assetKey;
     const publicationId = existing?.id || crypto.randomUUID();
     const prepared = await withVariants(ctx, doc, decision.pageIds, decision.includeCover);
-    const basePlan = planSnapshot(prepared, { assetKey, pageIds: decision.pageIds, includeCover: decision.includeCover, languages, defaultLang });
+    // Frame and overlay pictures go out only when they pass the rating the gate verified (else the doc's own rating).
+    const basePlan = planSnapshot(prepared, { assetKey, pageIds: decision.pageIds, includeCover: decision.includeCover, languages, defaultLang, ...(rating ? { rating } : {}) });
     const prevSnapshotPaths = live?.snapshot ? snapshotPaths(live.snapshot) : [];
     const prevOg = live ? pubPathsOfCard(live.card) : [];
     const have = new Set(fresh ? [] : prevSnapshotPaths);

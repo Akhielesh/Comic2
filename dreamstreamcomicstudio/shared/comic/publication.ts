@@ -104,6 +104,13 @@ export interface PublishReadiness {
    * about; absent means requested (older views). `ok` considers requested entries only.
    */
   languages: Array<{ lang: string; publishable: boolean; blocking: string[]; requested?: boolean }>;
+  /**
+   * Ship 2 (pro plan §8; PD-5): per drawn page, the printed photo overlays (`photos`) and frame pictures (`frames`)
+   * publishing leaves out — any that is not checked studio art at this rating (an image from outside the studio, a photo
+   * never checked, one over the rating). Never a blocker: a frame shows its cut of the page's drawing and an overlay is
+   * not printed. Guide-only overlays are never published and never listed. Absent when there are none (older views too).
+   */
+  leftOutPictures?: Array<{ n: number; photos: number; frames: number }>;
 }
 export interface PublicationOwnerView {
   visibility: Visibility;

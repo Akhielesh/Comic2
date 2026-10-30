@@ -898,6 +898,84 @@ describe('content rating (G / PG / PG-13), frozen at publish time, end to end', 
   });
 });
 
+describe('Ship 2 pictures at publish: the gate rating decides frame pictures; readiness lists what is left out (PD-5)', () => {
+  const withGate = (gate: ReturnType<typeof gateFor>) => {
+    restore();
+    restore = configurePublication({ store, gate: gate as never, now: () => clock, renderOg: fakeOg, publicUrl: (p) => `https://cdn.test/${p}` });
+  };
+  const ref = (name: string, extra: Partial<AssetRef> = {}): AssetRef => ({ path: `u/${USER}/p/proj-1/ref/${name}.webp`, source: 'upload', at: 2, ...extra });
+  const BOXES = [{ x: 0.02, y: 0.02, w: 0.96, h: 0.46 }, { x: 0.02, y: 0.52, w: 0.46, h: 0.46 }, { x: 0.52, y: 0.52, w: 0.46, h: 0.46 }];
+  /**
+   * richDoc rated G with page 1 shown in frames: frame 1 shows another take of the page (assessed `takeRating`),
+   * frame 2 an image brought in from outside the studio (an upload in the img lane), frame 3 the page's own cut; overlays:
+   * a printed sticker never checked, a printed sticker checked G, and a real person's photo kept as a guide (print: false).
+   */
+  const framedDoc = (takeRating: 'G' | 'PG' = 'G'): ComicDoc => {
+    const doc = richDoc();
+    doc.settings = { ...doc.settings, rating: 'G' };
+    const take = asset('p1-take', { safety: { assessed: takeRating, at: 1, by: 'qc' } });
+    const outside = asset('pasted', { source: 'upload' });
+    doc.cast[0].refs = [ref('sticker-unchecked'), ref('sticker-ok', { safety: { assessed: 'G', at: 1, by: 'qc' } }), ref('face', { safety: { assessed: 'G', at: 1, by: 'qc' } })];
+    const p1 = doc.pages[0];
+    doc.pages[0] = {
+      ...p1,
+      artMode: 'panels',
+      render: { ...p1.render, history: [...p1.render.history, take, outside] },
+      panels: p1.panels.map((pn, j) => ({ ...pn, frame: { box: BOXES[j], ...(j === 0 ? { src: { path: take.path } } : j === 1 ? { src: { path: outside.path } } : {}) } })),
+      layers: [
+        { id: 'ly_unchecked', kind: 'image', box: { x: 0.7, y: 0.05, w: 0.2, h: 0.2 }, src: { path: ref('sticker-unchecked').path } },
+        { id: 'ly_ok', kind: 'image', box: { x: 0.1, y: 0.7, w: 0.2, h: 0.2 }, src: { path: ref('sticker-ok').path } },
+        { id: 'ly_face', kind: 'image', box: { x: 0.4, y: 0.1, w: 0.2, h: 0.2 }, src: { path: ref('face').path }, print: false }
+      ]
+    };
+    return doc;
+  };
+
+  it('publish passes the gate rating to planSnapshot: a frame picture checked PG goes out under a PG gate though the comic reads G', async () => {
+    const doc = framedDoc('PG');
+    expect(effectiveRating(doc).rating).toBe('G');
+    setup(doc);
+    withGate(gateFor({}, undefined, 'PG'));
+    await publish(ctx, { visibility: 'unlisted' });
+    const row = store.rows.get('proj-1')!;
+    const frame = row.snapshot!.pages[0].panels[0].frame!;
+    expect(frame.src?.path).toMatch(new RegExp(`^pub/${row.assetKey}/`));
+    // The outside image never goes out (S6), whatever the rating: frame 2 shows its cut of the page's drawing.
+    expect(row.snapshot!.pages[0].panels[1].frame!.src).toBeUndefined();
+  });
+
+  it('…and under a G gate the same PG picture stays out (frame 1 then shows its cut of the page)', async () => {
+    setup(framedDoc('PG'));
+    withGate(gateFor({}, undefined, 'G'));
+    await publish(ctx, { visibility: 'unlisted' });
+    expect(store.rows.get('proj-1')!.snapshot!.pages[0].panels[0].frame!.src).toBeUndefined();
+  });
+
+  it('readiness lists, per page, the printed photos and frame pictures publishing leaves out — never as a blocker', async () => {
+    const doc = framedDoc('G');
+    setup(doc);
+    const readiness = await getReadiness(ctx, doc);
+    // Frame 2 (outside image) and the unchecked printed sticker; not the checked take, the checked sticker, the guide photo.
+    expect(readiness.leftOutPictures).toEqual([{ n: 1, photos: 1, frames: 1 }]);
+    expect(readiness.ok).toBe(true);
+    expect(readiness.missing).toEqual([]);
+    // Parity with the snapshot plan: exactly the listed pictures get no public copy.
+    const plan = planSnapshot(doc, { assetKey: 'K'.repeat(22), pageIds: doc.pages.map((p) => p.id), includeCover: true, languages: ['en'], rating: 'G' });
+    const p1 = doc.pages[0];
+    const notCopied = [...p1.panels.map((pn) => pn.frame?.src?.path), ...(p1.layers || []).filter((l) => l.print !== false).map((l) => l.src?.path)].filter((path): path is string => !!path && !plan.paths[path]);
+    expect(notCopied).toEqual([`u/${USER}/p/proj-1/img/pasted.webp`, `u/${USER}/p/proj-1/ref/sticker-unchecked.webp`]);
+    // A comic without frames or overlays lists nothing (the field is absent, as in older views).
+    expect('leftOutPictures' in (await getReadiness(ctx, richDoc()))).toBe(false);
+  });
+
+  it('an excluded page is not listed; a PG take is listed when the comic reads G', async () => {
+    const doc = framedDoc('PG');
+    setup(doc);
+    expect((await getReadiness(ctx, doc)).leftOutPictures).toEqual([{ n: 1, photos: 1, frames: 2 }]);
+    expect((await getReadiness(ctx, doc, { visibility: 'unlisted', excludePageIds: ['pg_1'] })).leftOutPictures).toBeUndefined();
+  });
+});
+
 describe('S6: only art the server wrote to a lane clients cannot rewrite is published', () => {
   const spyGate = () => {
     const calls: unknown[] = [];

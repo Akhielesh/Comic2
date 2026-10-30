@@ -210,12 +210,9 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
       return { op: 'ref_transfer', from: owner, to, path: ref?.path || 'ghost', ...(chance(0.5) ? { index: 0 } : {}) };
     }
     case 'edition':
-      // Removing an edition while a translated page sits in Deleted is a known v5 gap (its undo can't put that page's
-      // translations back: applyOp 'translation' only sees live pages; reproduced at base with seed 77).
-      // TODO(K2b wave note "ops.ts lineIdsOf includes trashed pages' lines"): this `!trashOf(doc).length` guard only
-      // narrows the generator around that gap. Revert it in the SAME change that makes ops.ts lineIdsOf (translation and
-      // edition_balloon inverses) include trashed pages' lines, so the property test covers it again.
-      return { op: 'edition', lang, patch: chance(0.3) && !trashOf(doc).length ? null : chance(0.5) ? {} : { register: pick(['formal', 'everyday', 'code_mixed'] as const) } };
+      // Removing an edition while a translated page sits in Deleted is covered too: applyOp 'translation' and
+      // 'edition_balloon' see the trashed pages' lines, so the undo puts that page's translations back (seed 77).
+      return { op: 'edition', lang, patch: chance(0.3) ? null : chance(0.5) ? {} : { register: pick(['formal', 'everyday', 'code_mixed'] as const) } };
     case 'translation':
       return chance(0.3)
         ? { op: 'translation', lang, lineId: anyLine?.id || 'ghost', patch: null }
@@ -341,6 +338,22 @@ describe('inverseOps (contract §6)', () => {
     // except render_use (whose inverse restores the asset but not the exact history order; tested below).
     expect(effective).toBeGreaterThan(1200);
     expect([...CLIENT_PATCHABLE_OPS].filter((k) => k !== 'render_use' && !kinds.has(k))).toEqual([]);
+  });
+
+  it('removing an edition while a translated page sits in Deleted: undo puts that page\'s translation and balloon back', () => {
+    // pg_1 (with the hi translation and edition balloon of pg_1_l2) is deleted, then the hi edition is removed.
+    const before = applyOps(sampleV5(), [{ op: 'page_delete', id: 'pg_1', deletedAt: 7 }], 2);
+    expect(trashOf(before).map((t) => t.page.id)).toEqual(['pg_1']);
+    expect(before.i18n?.editions.hi.lines.pg_1_l2?.text).toBe('बस एक और…');
+    const remove: DocOp = { op: 'edition', lang: 'hi', patch: null };
+    const after = applyOps(before, [remove], 3);
+    expect(after.i18n?.editions.hi).toBeUndefined();
+    const undone = applyOps(after, inverseOps(before, [remove]), 4);
+    expect(undone.i18n?.editions.hi.lines.pg_1_l2).toEqual(before.i18n?.editions.hi.lines.pg_1_l2);
+    expect(undone.i18n?.editions.hi.balloons.pg_1_l2).toEqual(before.i18n?.editions.hi.balloons.pg_1_l2);
+    expect(comparable(undone)).toEqual(comparable(before));
+    // A line id that is on no page, live or deleted, still changes nothing (R6).
+    expect(applyOp(undone, { op: 'translation', lang: 'hi', lineId: 'ghost', patch: { text: 'x', status: 'machine', sourceHash: 'h', at: 1 } })).toBe(undone);
   });
 
   it('ignores non-patchable ops and reports undoability', () => {

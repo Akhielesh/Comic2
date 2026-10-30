@@ -51,7 +51,7 @@ import { isServerArt } from '../publication/snapshot.js';
 import { StudioError } from '../types.js';
 import { pageOf, safeIdOf, safeText, sanitizeDirection } from './consistency.js';
 import { clipText, enteredText, storableText } from './text.js';
-import { assetIndex, isServerArtForComic, type AssetIndexEntry } from './timeline.js';
+import { OUTSIDE_IMAGE_MESSAGE, UNPUBLISHABLE_IMAGE_MESSAGE, assetIndex, isServerArtForComic, type AssetIndexEntry } from './timeline.js';
 
 type Op<K extends DocOp['op']> = Extract<DocOp, { op: K }>;
 
@@ -115,10 +115,8 @@ const intIn = (v: unknown, lo: number, hi: number, what: string): number => {
 
 // ── Image paths (the render_use rule) ─────────────────────────────────────────
 
-// The render_use rule's own words (sanitize/timeline.ts, word for word; pro plan §5.3 "the render_use rule and messages").
-// Wave note: once timeline.ts exports its two constants, import them here instead (sanitize/panels.test.ts pins parity).
-const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
-const UNPUBLISHABLE_IMAGE_MESSAGE = 'That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.';
+// The render_use rule's own words (OUTSIDE_IMAGE_MESSAGE, UNPUBLISHABLE_IMAGE_MESSAGE from sanitize/timeline.ts; pro plan
+// §5.3 "the render_use rule and messages").
 
 /**
  * A frame or overlay image path a client may set: the page's own current drawing; or an image this comic already holds

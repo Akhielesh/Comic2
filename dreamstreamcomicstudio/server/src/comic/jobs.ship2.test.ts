@@ -452,9 +452,10 @@ describe('the new spend actions go through the existing gate (zero paid calls)',
     }
   });
 
-  it('the action registry is unchanged until shared/comic/doc.ts names the Ship 2 types (then it lists them)', () => {
-    for (const type of ['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page', 'enrich_pages']) expect(ACTION_HANDLERS[type]).toBeUndefined();
-    expect(CORE_ACTION_TYPES.has('fix_panel')).toBe(false);
+  it('the action registry lists the Ship 2 types now that shared/comic/doc.ts names them (fix_panel stays core)', () => {
+    for (const type of ['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page', 'enrich_pages']) expect(ACTION_HANDLERS[type]?.type).toBe(type);
+    expect(CORE_ACTION_TYPES.has('fix_panel')).toBe(true);
+    expect(ACTION_HANDLERS.fix_panel).toBeUndefined();
   });
 });
 

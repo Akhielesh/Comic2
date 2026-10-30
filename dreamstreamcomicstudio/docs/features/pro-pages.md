@@ -79,9 +79,9 @@ frame box to frame box. Balloons move by their top-centre and keep their width (
 balloons stay; pinned flags are untouched.
 
 **Cut provenance:** `keepBy` exists so an undo restores the detector's cuts exactly. Once the ops are patchable, the
-server must not trust a client's `by`: K2b refuses a `page_cuts` batch with `keepBy` unless its cuts deep-equal cuts
-the server itself stamped for that same drawing, and the automatic-panelization shadow counts read only cuts the
-server stamped (at stamping time), never `by` from a stored doc.
+server must not trust a client's `by`: K2b keeps `keepBy` only when its cuts deep-equal cuts the server itself stamped
+for that same drawing, and otherwise drops it and writes the cuts as the user's (§11); the automatic-panelization
+shadow counts read only cuts the server stamped (at stamping time), never `by` from a stored doc.
 
 **The re-stamp rule (I5):** a structural edit of a page shown in frames keeps a fresh drawing fresh (the frames are the
 display truth), and leaves a stale one stale. A page shown as drawn is never re-stamped: reordering its script panels
@@ -165,12 +165,10 @@ request into `StudioCaps.anchorKinds` (`server/src/comic/access.ts` `studioCapsF
 the client quotes and summarizes with the kinds the runs use. The Model Lab's A/B allowance is the same number
 (`LAB_AB_REF_ALLOWANCE_USD = REF_ALLOWANCE_USD`). Nothing calls the anchors quote or the consistency view yet.
 
-**Next.** K2b: server sanitizers (`sanitize/{panels,consistency}.ts`), dispatch of the new actions, `versionMeta`
-stamping of cuts/parts/anchor keys, the publication whitelist. Before `PRO_PAGE_OPS_PATCHABLE` flips, the server's
-`balloons` sanitizer must keep `rot` and `minH` (the K2a inverses and the editor send whole-page balloon snapshots), and
-the cut provenance rule above must hold. The History restore filter and forgetting a photo (H3, `sanitize/refs.ts`)
-must drop frame and overlay sources too (`dropPanelSourcePaths`). B1 composition, B2 panelization, B5 (the page prompt
-on `planAnchors`), then the C packages (UI) on the editor engine (§10).
+K2b landed: see §11 (seams, sanitizers, keepBy, the run engine and the stub table). Next: B1 composition, B2
+panelization, B5 (the page prompt on `planAnchors`), then the C packages on the editor engine (§10). Still for H3: the
+History restore filter and forgetting a photo (`sanitize/refs.ts`) drop frame and overlay sources too
+(`dropPanelSourcePaths`).
 
 ## 10. Editor engine (B9)
 
@@ -250,3 +248,102 @@ shot) and the panel's cast lists them. A cast member also marked off-panel is co
 check reads `look`, never a false `ok`. Its fixes: make them a voice from off the panel (out of the cast and the
 staging, into `direction.offPanel`, `by: 'user'`), turn their lines into a caption (overlay lettering only), or redraw
 the panel (paid).
+
+## 11. Seams and sanitizers (K2b)
+
+K2b made the Ship 2 client ops patchable (`PRO_PAGE_OPS_PATCHABLE = true`) together with their server sanitizers, put
+the six Ship 2 actions in the shared contract, and wired every seam the B packages fill. Nothing a creator meets changes
+yet: every seam calls a stub that keeps today's behaviour, and every new action is refused by its stub.
+
+**The actions** (`shared/comic/ops.ts`; `doc.ts` names them, so the stream accepts them and the action registry lists
+their handlers):
+
+| Action | Kind | Where it runs | Today (stub) |
+|---|---|---|---|
+| `fix_panel {pageId, panelId, mode, instruction?, region?}` | spend (image) | core: `jobs.ts startSpend` (quote, gate, budget, lock, preflight, reservation, `RenderRun.panelFix`) | `fixPanelProblem` refuses before any quote: "Fixing a single panel isn't available yet. Nothing was drawn or charged." |
+| `enrich_pages {pageIds}` | spend (text, `ENRICH_USD_PER_PAGE` = $0.006 a page before the markup) | `actions/consistency.ts`, through the gate like `translate` | a UI click is refused (`NOT_AVAILABLE`, nothing charged). Until the stub declares `unavailable` (below), a director start, or a click on a budget with less than the quote left, still shows its gate card first; approving it is refused the same way |
+| `panelize_page`, `rebind_panels`, `apply_finding`, `flatten_page` | free | `actions/{panels,consistency,editor}.ts` | refused with `NOT_AVAILABLE`, nothing changed |
+
+**Refused before any quote.** A registered handler may answer `unavailable(ctx, action)` with its refusal words
+(`jobs.ts PreQuoteCheck`). `runFeatureAction` asks it before the estimate and the gate, and `approveGate` before it
+re-quotes: the same calm notice an inert stub gives, no card, no quote, no spend, and an open card is left as it was.
+Open: `extensions.ts ActionHandler` declares the hook (then `PreQuoteCheck` folds into it), and B7's `enrich_pages` stub
+returns `CONSISTENCY_NOT_AVAILABLE` from it; until then that stub can still show a gate card before it refuses.
+
+`render_pages` carries `followFrames` ("Redraw with my layout") and `anchors` ('auto' | 'none'); `edit_page` carries
+`pasteBack` ('region', the default whenever a region is marked, or 'page'). The stream parser keeps them on the action.
+`fix_panel` and `enrich_pages` are spends everywhere spends are checked: refused for restricted accounts and during a
+safety cooldown, and governed users read usage, never '$'. `jobs.ts` re-exports the action types for its importers.
+
+**Sanitizers** (`server/src/comic/sanitize/{panels,consistency}.ts`, registered in `sanitize/index.ts`). Every Ship 2
+op is free (no spend, no render, no new asset). A sanitizer rebuilds the op from known keys with bounded values or
+rejects the whole batch: 400 malformed (a NaN or out-of-range box, a non-hex colour, an unknown panel, 13 cuts, a line
+of another page), 409 `CONFLICT` (cuts for a drawing the page no longer shows), `LIMIT` (25 overlays, 3 extra
+pictures) or `CONTENT_POLICY` (a blocked image). Sanitizers see the batch as built so far, so a panel or scene added
+earlier in a batch exists for the ops after it.
+
+- **Image paths** (`frame.src`, `layer.src`) follow the "Use for page" (`render_use`) rule, with its very words
+  (`OUTSIDE_IMAGE_MESSAGE`, `UNPUBLISHABLE_IMAGE_MESSAGE`, exported by `sanitize/timeline.ts`): an image this comic
+  already holds, not blocked, written by the server for this comic and publishable. The page's own drawing is always
+  allowed in a frame and does not count as an extra picture.
+- `page_frames`: boxes, fit, border (hex colours), z on insets. `page_cuts`: the path must be the page's current
+  drawing; at most `EDITOR_LIMITS.maxCuts`; `moveBalloons` boolean only. `panels_order`; `panel_add` (a frameless panel
+  is allowed: it is the exact undo of removing one); `panel_remove` (`linesTo` exists, lines per panel held, valid line
+  homes); `layer` (`LAYER_ID_RE`, at most 24, the path rule, the name through safeText; `print: false` is a guide-only
+  overlay: PD-5 real-person photos default to it); `continuity`, `scene`, `consistency` (safeText; `sceneId` and
+  `styleKeyPageId` must exist); `finding` (`dismissed` only).
+- Core ops in `jobs.ts`: a `panel` patch accepts `direction` (normalized, never `frame`); `balloon` and the whole-page
+  `balloons` keep `rot` and `minH` within the editor limits; a `page` patch drops `artMode`, `frameStyle`, `layers`
+  and `continuity` (they have their own ops).
+- **Text is stored as written.** `safeText` makes text jsonb-safe, one line and clipped, and never rewrites it:
+  `SOFTEN_SAFE_TEXT_ON_STORE` stays `false`. Lead decision: softening for a safe take happens when B5 compiles the text
+  into a prompt (`prompts.ts safeText`; `SAFE_TEXT_RATINGS` / `isSafeMode` name safe mode, G and PG), never lossily at
+  store time. The whole-batch safety screen still reads every string.
+
+**Who wrote the cuts (`keepBy`).** The server never trusts a client's `by`. `keepBy` (the undo inverse that puts the
+detector's cuts back) keeps the incoming `by` only when the cuts deep-equal cuts the server stamped for that drawing:
+the page's current cuts while still server-stamped, a version of that drawing in `render.history` (its
+`VersionMeta.cuts`), or the process record `STAMPED_CUTS` (remembered when a client first replaces stamped cuts; lost on
+a restart). **After a restart** a claim the server can't prove is not refused: `keepBy` is dropped and the cuts are
+written as the user's (`by: 'user'`). Undo always works and nothing reads `cuts.by` today. B2 may call
+`rememberStampedCuts` when it stamps; exact provenance across restarts (a `cutsStamped` hash in RenderState) is optional.
+
+**The run engine.**
+
+- `versionMeta` stamps `parts`, `cuts` and the anchor keys actually attached on each new page version.
+- `followFrames` changes where the layout guide comes from (the page's frames instead of the blueprint) **only while
+  `COMIC_LAYOUT_GUIDE` is on**; it is off by default (PD-8), so a redraw with my layout draws as before.
+- Place and prop anchor sheets draw at `ANCHOR_SHEET_RES` (`anchorSheetJobFor`; billed as `comic.image.sheet`), the
+  resolution the quote prices, and run only when `runDrawsAnchors()` says so (the stub says no).
+- `runAfter`: a page's predecessor that throws stops its own dependents; a recorded failure never blocks the chain.
+- `prepare()` resolves the generated references (`PANEL_REFERENCE_PATH` `__panel__`, `PAGE_REFERENCE_PATH` `__page__`,
+  `BOARD_REFERENCE_PATH` `__board__`) and throws `NOT_FOUND` ("nothing was charged") before any reservation when one
+  can't be made.
+- Publishing: the public snapshot copies Ship 2 geometry only (art mode, frame style, frames, cut boxes without the
+  detector's diagnostics, printed overlays; balloons keep `rot` and `minH`). Frame and overlay pictures go out only as
+  checked server art at the rating the publish check verified (`planSnapshot({rating})`); the readiness list names the
+  printed photos and panel pictures a page will publish without (`leftOutPictures`, never a blocker).
+
+**The seams and their stubs** (fixed export names; the B packages replace the bodies in place). Every stub is a no-op
+that keeps today's behaviour:
+
+| Seam | Owner | Stub behaviour |
+|---|---|---|
+| `panelize/raster.ts` `cropForPanel`, `pasteIntoCut`, `pasteRegion`, `bakeComposition`, `REGION_FEATHER`, `PANEL_CROP_CONTEXT` | B8 | `null` (a panel fix fails before any reservation); `pasteRegion` returns the whole edited image (today's edit) |
+| `actions/panelFix.ts` `fixPanelProblem`, `fixPanelJobs`, `compileFixPanel`, `finishFixPanel`, `fixPanelMeta`, `PANEL_FIX_ACTIONS` | B8 | refuses every fix (nothing quoted as runnable) |
+| `actions/panels.ts`, `actions/consistency.ts` (`rebind_panels`, `apply_finding`, `enrich_pages`), `actions/editor.ts` | B2, B7, B8 | `NOT_AVAILABLE`, nothing changed or charged |
+| `consistency/contactSheet.ts` `boardForCheck`, `boardImage` | B3 | no board (the page check runs as today) |
+| `consistency/findings.ts` `withFindings` | B3 | the QC report unchanged |
+| `consistency/schedule.ts` `runDrawsAnchors`, `scheduleRun`, `previousPageFor` | B7 | no anchors; today's order (page 1 alone, then the rest and the cover); the nearest drawn page before |
+| `panelize/server.ts` `panelizeAfterLetter`, `AUTO_PANELIZE_FLAG` | B2 | no ops (tracked, never awaited by the page job) |
+
+Still open for B7: whether settle `stored` may use a predecessor whose safety check is still pending as the next
+page's reference (the stub uses `done`), and `unavailable` on the `enrich_pages` stub (above). For B5: honour
+`board: false`, emit the generated reference paths, list `__region__` after `__page__`, and soften directions and
+continuity on a safe take. For B8, before `fixPanelProblem` stops refusing: `routes/comic.ts actionInputText` screens a
+`fix_panel` instruction like an `edit_page` one (`if (a.type === 'fix_panel') return flatText(a.instruction,
+ACTION_TEXT_LIMITS.instruction);`), with a `comic.routes.test` S15 case (a blocked instruction: 422, nothing drawn).
+Today the stub refuses first, so that text never reaches a prompt and is not screened. For `sanitize/i18n.ts`: shared
+`applyOp` brings back the translated lines of a page in Deleted when removing a language is undone (`lineIdsOf(doc,
+true)` for `translation` and `edition_balloon`), but the server's `findLine` searches live pages only, so that undo is
+still refused ("That line no longer exists.") until it also searches `trashOf(doc)`.

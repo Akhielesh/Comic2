@@ -28,7 +28,13 @@ import {
   type FakeImages,
   type ScriptedLlm
 } from '../comic/orchestrator.fakes.js';
-import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
+import { JOB_TIMINGS, noticeCard, type PreQuoteCheck } from '../comic/jobs.js';
+import { actionHandlerFor } from '../comic/actions/index.js';
+import type { ActionHandler } from '../comic/extensions.js';
+import { CONSISTENCY_NOT_AVAILABLE } from '../comic/actions/consistency.js';
+import { FLATTEN_NOT_AVAILABLE } from '../comic/actions/editor.js';
+import { FIX_PANEL_NOT_AVAILABLE } from '../comic/actions/panelFix.js';
+import { PANELIZE_NOT_AVAILABLE } from '../comic/actions/panels.js';
 import { __setModelHealthForTests, type ModelHealthPort } from '../comic/models/health.js';
 import { fakeModelHealth } from '../comic/models/health.fakes.js';
 import { registryPriceBook } from '../comic/models/index.js';
@@ -1393,6 +1399,134 @@ describe('P2-SERVER route integration', () => {
     const signedBefore = assets.signed.length;
     await api('/api/comic/projects/proj-1', { user: 'user-1' });
     expect(assets.signed.length).toBe(signedBefore + 1); // only the display signing
+  });
+});
+
+// ── Ship 2 (K2b): the six new actions are sendable; their stubs refuse them, nothing is quoted, drawn or spent ──────
+describe('Ship 2 actions through the route parser and the stream (stubs refuse; zero spend, zero provider calls)', () => {
+  const PANEL_CUTS = {
+    status: 'ok' as const,
+    by: 'detect' as const,
+    at: 1,
+    cuts: [1, 2, 3].map((k) => ({ panelId: `pn_1_${k}`, drawn: k, box: k === 1 ? { x: 0, y: 0, w: 1, h: 0.5 } : { x: k === 2 ? 0 : 0.5, y: 0.5, w: 0.5, h: 0.5 }, conf: 0.9 }))
+  };
+  /** Page 1 drawn (checked, with detector cuts), the cast drawn, the plan approved; the strictest confirm policy. */
+  const ship2Doc = () => {
+    const doc = plannedDoc();
+    doc.planStatus = 'approved';
+    doc.settings = { ...doc.settings, confirm: 'always' };
+    const art = (name: string) => ({ path: `u/user-1/p/proj-1/img/${name}.webp`, source: 'generated' as const, at: 1, w: 800, h: 1200, safety: { assessed: 'G' as const, at: 1 } });
+    doc.cast = doc.cast.map((c) => ({ ...c, sheet: { ...emptyRender(), status: 'ready' as const, asset: art(`sheet-${c.id}`) } }));
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: art('p1'), qc: { score: 0.9, issues: [], checkedAt: 1 }, cuts: PANEL_CUTS };
+    return seed(doc);
+  };
+  const SHIP2_ACTIONS: { action: Record<string, unknown>; says: string }[] = [
+    { action: { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix', instruction: 'Make the scarf red', region: { x: 0.1, y: 0.6, w: 0.2, h: 0.2 } }, says: FIX_PANEL_NOT_AVAILABLE },
+    { action: { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] }, says: CONSISTENCY_NOT_AVAILABLE },
+    { action: { type: 'panelize_page', pageId: 'pg_1' }, says: PANELIZE_NOT_AVAILABLE },
+    { action: { type: 'rebind_panels', pageId: 'pg_1', order: [2, 1, 3] }, says: CONSISTENCY_NOT_AVAILABLE },
+    { action: { type: 'apply_finding', pageId: 'pg_1', findingId: 'f_1' }, says: CONSISTENCY_NOT_AVAILABLE },
+    { action: { type: 'flatten_page', pageId: 'pg_1' }, says: FLATTEN_NOT_AVAILABLE }
+  ];
+
+  it('the parser accepts each new type and keeps the action whole (followFrames, pasteBack and anchors included)', () => {
+    for (const { action } of SHIP2_ACTIONS) expect(parseStreamRequest({ kind: 'action', action }), String(action.type)).toEqual({ kind: 'action', action });
+    const redraw = { type: 'render_pages', pageIds: ['pg_1'], force: true, followFrames: true, anchors: 'none' };
+    expect(parseStreamRequest({ kind: 'action', action: redraw })).toEqual({ kind: 'action', action: redraw });
+    const edit = { type: 'edit_page', pageId: 'pg_1', instruction: 'Red scarf', region: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, pasteBack: 'page' };
+    expect(parseStreamRequest({ kind: 'action', action: edit })).toEqual({ kind: 'action', action: edit });
+  });
+
+  it('the two paid ones are spends: refused for restricted accounts and during a cooldown like every spend', () => {
+    for (const action of [SHIP2_ACTIONS[0].action, SHIP2_ACTIONS[1].action]) {
+      const request = parseStreamRequest({ kind: 'action', action });
+      expect(restrictedRefusal(request), String(action.type)).toBe(RESTRICTED_SPEND_MESSAGE);
+      expect(isCostlyRequest(request), String(action.type)).toBe(true);
+    }
+    for (const { action } of SHIP2_ACTIONS.slice(2)) expect(restrictedRefusal(parseStreamRequest({ kind: 'action', action })), String(action.type)).toBeNull();
+  });
+
+  it.each(SHIP2_ACTIONS.map((a) => [a.action.type as string, a] as const))('%s: a UI click is refused by its stub before any quote; nothing drawn, written or spent; no "$" for a governed user', async (_type, { action, says }) => {
+    usage = { governed: true, pctLeft: 64, exhausted: false, pctPerStandardPage: 1.5 };
+    const doc = ship2Doc();
+    const pagesBefore = structuredClone(doc.pages);
+    const { res, events } = await stream('proj-1', { kind: 'action', action });
+    expect(res.status).toBe(200);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+    const saved = store.docs.get('proj-1')!.doc;
+    // Refused in plain words, as a notice — before any gate (no quote is ever shown for work that can't run).
+    const last = saved.conversation.at(-1)!;
+    expect(last).toMatchObject({ role: 'assistant', text: says });
+    expect(last.cards?.[0]).toMatchObject({ type: 'notice', text: says });
+    expect(saved.gate ?? null).toBeNull();
+    // Zero spend entries, zero provider calls (image, writer, vision), nothing changed on the pages.
+    expect(saved.spend.entries).toEqual([]);
+    expect(saved.spend.totalUsd).toBe(0);
+    expect(images.calls).toHaveLength(0);
+    expect(llm.calls).toHaveLength(0);
+    expect(saved.pages).toEqual(pagesBefore);
+    // A governed user never reads a price in dollars: not in the conversation, not in any streamed event.
+    for (const m of saved.conversation) expect(m.text).not.toContain('$');
+    expect(JSON.stringify(events.filter((e) => e.type !== 'done'))).not.toContain('$');
+  });
+
+  it('approving an open Ship 2 gate (from an earlier director turn) runs nothing: refused, no spend, no provider call', async () => {
+    usage = { governed: true, pctLeft: 64, exhausted: false, pctPerStandardPage: 1.5 };
+    for (const { action, says } of SHIP2_ACTIONS.slice(0, 2)) {
+      const doc = ship2Doc();
+      // The gate a director turn would have left (quoted generously, so the approval re-check holds).
+      doc.gate = { id: 'gate_1', action: action as never, estimateUsd: 1, imageCount: 1, model: 'Writer', title: 'Ship 2', summary: 'Ship 2', reason: 'policy', status: 'open', createdAt: Date.now() };
+      const { events } = await stream('proj-1', { kind: 'action', action: { type: 'approve_gate', gateId: 'gate_1' } });
+      expect(events.some((e) => e.type === 'error'), String(action.type)).toBe(false);
+      expect(events.at(-1), String(action.type)).toMatchObject({ type: 'done', spentUsd: 0 });
+      const saved = store.docs.get('proj-1')!.doc;
+      expect(saved.spend.entries, String(action.type)).toEqual([]);
+      expect(images.calls).toHaveLength(0);
+      expect(llm.calls).toHaveLength(0);
+      expect(saved.conversation.map((m) => m.text), String(action.type)).toContain(says);
+      for (const m of saved.conversation) expect(m.text).not.toContain('$');
+      __resetSessionsForTests();
+    }
+  });
+
+  it('a handler that says it can’t run is refused before any quote: no budget card on a click, no re-quote on an approval', async () => {
+    usage = { governed: true, pctLeft: 64, exhausted: false, pctPerStandardPage: 1.5 };
+    // What B7's enrich_pages stub declares (wave note): its refusal, before any quote. Restored after the test.
+    const handler = actionHandlerFor('enrich_pages') as ActionHandler & PreQuoteCheck;
+    expect(handler?.spend).toBe(true);
+    handler.unavailable = () => CONSISTENCY_NOT_AVAILABLE;
+    try {
+      // A budget with less than one page of room left: the quote alone would stop at a 'budget' card.
+      const doc = ship2Doc();
+      doc.settings = { ...doc.settings, budgetUsd: 0.001 };
+      const { events } = await stream('proj-1', { kind: 'action', action: { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] } });
+      expect(events.some((e) => e.type === 'error')).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+      let saved = store.docs.get('proj-1')!.doc;
+      expect(saved.gate ?? null).toBeNull();
+      expect(saved.conversation.at(-1)).toMatchObject({ role: 'assistant', text: CONSISTENCY_NOT_AVAILABLE, cards: [expect.objectContaining({ type: 'notice', text: CONSISTENCY_NOT_AVAILABLE })] });
+      expect(saved.spend.entries).toEqual([]);
+      expect(llm.calls).toHaveLength(0);
+      for (const m of saved.conversation) expect(m.text).not.toContain('$');
+      expect(JSON.stringify(events.filter((e) => e.type !== 'done'))).not.toContain('$');
+      __resetSessionsForTests();
+
+      // A card an earlier director turn left: approving it is refused before the re-quote, and the card is not flipped.
+      const gated = ship2Doc();
+      gated.gate = { id: 'gate_1', action: { type: 'enrich_pages', pageIds: ['pg_1'] } as never, estimateUsd: 1, imageCount: 0, model: 'Writer', title: 'Add detail', summary: 'Add detail', reason: 'policy', status: 'open', createdAt: Date.now() };
+      const approval = await stream('proj-1', { kind: 'action', action: { type: 'approve_gate', gateId: 'gate_1' } });
+      expect(approval.events.some((e) => e.type === 'error')).toBe(false);
+      expect(approval.events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+      saved = store.docs.get('proj-1')!.doc;
+      expect(saved.gate).toMatchObject({ id: 'gate_1', status: 'open' });
+      expect(JSON.stringify(approval.events)).not.toContain('"approved"');
+      expect(saved.conversation.at(-1)).toMatchObject({ role: 'assistant', text: CONSISTENCY_NOT_AVAILABLE });
+      expect(saved.spend.entries).toEqual([]);
+      expect(llm.calls).toHaveLength(0);
+    } finally {
+      delete handler.unavailable;
+    }
   });
 });
 

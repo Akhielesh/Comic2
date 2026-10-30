@@ -6,7 +6,7 @@ import { historyV5Doc } from './__fixtures__/books';
 import { changeItemsFromDiff, describeChanges, pageRangeText } from './describe';
 import { diffBooks } from './diff';
 import { sectionSignatures } from './sections';
-import { CAPTURE_NEUTRAL_OPS, opActor, touchedKeys } from './touched';
+import { AI_ACTIONS, CAPTURE_NEUTRAL_OPS, EDITOR_ACTIONS, opActor, touchedKeys } from './touched';
 
 const v5 = () => normalizeDoc(historyV5Doc());
 
@@ -51,6 +51,50 @@ describe('touchedKeys', () => {
     expect(opActor({ op: 'translations', lang: 'te', lines: { pg_3_l1: { text: 't', status: 'machine', sourceHash: 'h', at: 1 } } }, 'job', doc)).toBe('ai');
     expect(opActor({ op: 'image_model', lock: { modelId: 'm', lockedAt: 1, origin: 'user_change' } }, 'job', doc)).toBe('ai');
     expect(opActor({ op: 'spend', entry: { id: 's', at: 1, kind: 'page', label: 'x', usd: 1, byok: false, estimated: false } }, 'job', doc)).toBeNull();
+  });
+
+  it('H2 wave amendments: a derived image is the editor’s whoever asked; plan_pages is the AI’s; fit and re-fit actions the editor’s', () => {
+    const doc = v5();
+    const derived: DocOp = { op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: 'f.webp', source: 'derived', at: 1 }, origin: 'derived' } };
+    // A UI click (origin user) or the director: the fitted image is still the editor's free work (§4.2).
+    for (const origin of ['user', 'director', 'job'] as const) expect(opActor(derived, origin, doc), origin).toBe('editor');
+    expect(EDITOR_ACTIONS.has('fit_render') && EDITOR_ACTIONS.has('relayout_balloons')).toBe(true);
+    expect(AI_ACTIONS.has('plan_pages')).toBe(true);
+    const balloons: DocOp = { op: 'balloons', pageId: 'pg_1', balloons: [] };
+    const line: DocOp = { op: 'line', pageId: 'pg_2', panelId: 'pg_2_p2', id: 'pg_2_l2', patch: { text: 'x' } };
+    for (const action of ['fit_render', 'relayout_balloons']) expect(opActor(balloons, 'user', doc, action), action).toBe('editor');
+    // "Plan the pages" clicked in the UI is the writer's rewrite: the AI's, by its action alone.
+    expect(opActor({ op: 'pages', pages: doc.pages }, 'user', doc, 'plan_pages')).toBe('ai');
+    expect(opActor(line, 'user', doc, 'plan_pages')).toBe('ai');
+    // Without an action nothing else moved: your own edits stay yours.
+    expect(opActor(balloons, 'user', doc)).toBe('you');
+    expect(opActor({ op: 'pages', pages: doc.pages }, 'user', doc)).toBe('you');
+  });
+});
+
+describe('opActor: an action never re-attributes what a job writes around the work', () => {
+  it('render statuses and QC reports stay "system" and the job’s balloon placement the editor’s, whatever the action', () => {
+    const doc = v5();
+    const page = { kind: 'page' as const, id: 'pg_1' };
+    const bookkeeping: DocOp[] = [
+      { op: 'render', target: page, patch: { status: 'queued', error: undefined, updatedAt: 5 } },
+      { op: 'render', target: page, patch: { status: 'rendering', updatedAt: 5 } },
+      { op: 'render', target: page, patch: { qc: { score: 0.9, issues: [], checkedAt: 5 } } },
+      { op: 'render', target: page, patch: { status: 'failed', error: 'No', attempts: 2, updatedAt: 5 } }
+    ];
+    const placement: DocOp[] = [{ op: 'balloons', pageId: 'pg_1', balloons: [] }, { op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l1', patch: { x: 0.5 } }];
+    for (const action of [undefined, 'fix_panel', 'enrich_pages', 'plan_pages', 'fit_render', 'panelize_page', 'render_pages']) {
+      for (const op of bookkeeping) expect(opActor(op, 'job', doc, action), `${action}: ${JSON.stringify(op)}`).toBe('system');
+      for (const op of placement) expect(opActor(op, 'job', doc, action), `${action}: ${op.op}`).toBe('editor');
+    }
+    // The action still decides the work itself: a drawing, a stamp of cuts, your click.
+    const drawn: DocOp = { op: 'render', target: page, patch: { status: 'ready', asset: { path: 'p.webp', source: 'generated', at: 5 } } };
+    const cuts: DocOp = { op: 'render', target: page, patch: { cuts: { status: 'ok', by: 'detect', at: 5, cuts: [] } } };
+    expect(opActor(drawn, 'job', doc)).toBe('system'); // no origin and no action: as before
+    expect(opActor(drawn, 'job', doc, 'fix_panel')).toBe('ai');
+    expect(opActor(cuts, 'job', doc, 'panelize_page')).toBe('editor');
+    expect(opActor(placement[0], 'user', doc, 'fix_panel')).toBe('ai');
+    expect(opActor(bookkeeping[0], 'user', doc)).toBe('you');
   });
 });
 
