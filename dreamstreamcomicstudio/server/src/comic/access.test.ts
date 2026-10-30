@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
+import { ANCHOR_KINDS_OFF, ANCHORS_ENV, anchorKindsFromFlag } from '../../../shared/comic/anchors.js';
 import { PAID_PLAN_IDS } from '../../../shared/comic/capabilities.js';
 import { toEffectiveTier } from '../services/modelAccessPolicy.js';
 import {
@@ -147,5 +148,49 @@ describe('studioCapsFor', () => {
     expect([...PAID_PLAN_TIERS].sort()).toEqual([...PAID_PLAN_IDS].sort());
     for (const plan of PAID_PLAN_IDS) expect(toEffectiveTier(plan)).toBe('pro');
     for (const plan of ['free', 'starter', '', 'enterprise-trial']) expect(toEffectiveTier(plan)).toBe('free');
+  });
+});
+
+// StudioCaps.anchorKinds (B4 amendment 2): the server fills it from COMIC_CONSISTENCY_ANCHORS, so the client passes the
+// same kinds to summarizeBook's consistency view and quoteRenderPages' anchors. Unset = every kind off, the same object
+// as ANCHOR_KINDS_OFF.
+describe('studioCapsFor · consistency anchor kinds', () => {
+  const deps = (over: Partial<Parameters<typeof studioCapsFor>[2]> = {}) => ({
+    billingEnabled: true,
+    planFor: async () => 'free',
+    isAdminFor: async () => false,
+    accountCeilingFor: async () => 'PG-13' as const,
+    ...over
+  });
+
+  it('env unset → every kind off: caps.anchorKinds is ANCHOR_KINDS_OFF itself', async () => {
+    const caps = await studioCapsFor(req('k1'), { byok: false }, deps({ env: {} }));
+    expect(caps.anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect(caps.anchorKinds).toEqual({ places: false, props: false, styleKey: false, sheetV2: false });
+    // Every return path carries it: billing off (governed and admin), own key, no user.
+    const off = { billingEnabled: false, meteringEnabled: true, budgetFlagsFor: async () => ({ governed: true, allowPro: false }), env: {} };
+    expect((await studioCapsFor(req('k2'), { byok: false }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req('k3'), { byok: false }, deps({ ...off, isAdminFor: async () => true }))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req('k4'), { byok: true }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req(), { byok: false }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+  });
+
+  it('reads process.env by default: unset → off, set → the named kinds', async () => {
+    vi.stubEnv(ANCHORS_ENV, undefined as unknown as string);
+    try {
+      expect((await studioCapsFor(req('k5'), { byok: false }, deps())).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+      vi.stubEnv(ANCHORS_ENV, 'places,styleKey');
+      expect((await studioCapsFor(req('k6'), { byok: false }, deps())).anchorKinds).toEqual({ places: true, props: false, styleKey: true, sheetV2: false });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('set → the kinds anchorKindsFromFlag gives (the same rule the runs use)', async () => {
+    for (const value of ['all', '1', 'props', 'places, props', 'sheetV2', 'nonsense', '']) {
+      const caps = await studioCapsFor(req(`k-${value}`), { byok: false }, deps({ env: { [ANCHORS_ENV]: value } }));
+      expect(caps.anchorKinds, value).toEqual(anchorKindsFromFlag(value));
+    }
+    expect((await studioCapsFor(req('k7'), { byok: false }, deps({ env: { [ANCHORS_ENV]: 'all' } }))).anchorKinds).toEqual({ places: true, props: true, styleKey: true, sheetV2: true });
   });
 });
