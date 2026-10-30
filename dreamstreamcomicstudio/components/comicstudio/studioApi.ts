@@ -601,10 +601,11 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
       };
       return done;
     }
-    // --- history: a moment was saved. Only a plain object passes; the reducer stores it as lastHistoryVersion (an open
-    //     History panel updates live) and resyncs after a restore or a switch. Never sent while COMIC_HISTORY is off. ---
+    // --- history: a moment was saved. Only a plain object that names its moment (a non-empty string id: the panel merges
+    //     live rows by id) passes; the reducer stores it as lastHistoryVersion (an open History panel updates live) and
+    //     resyncs after a restore or a switch. Never sent while COMIC_HISTORY is off. ---
     case 'history':
-      return isObject(parsed.version) ? { type: 'history', version: parsed.version as unknown as VersionRow } : null;
+      return isObject(parsed.version) && str(parsed.version.id) ? { type: 'history', version: parsed.version as unknown as VersionRow } : null;
     default:
       return null;
   }

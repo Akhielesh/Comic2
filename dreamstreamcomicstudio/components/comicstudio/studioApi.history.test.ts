@@ -38,8 +38,8 @@ describe('the history event', () => {
     expect(parseStudioEvent('message', JSON.stringify({ type: 'history', version: VERSION }))).toEqual({ type: 'history', version: VERSION });
   });
 
-  it('drops it unless version is a plain object', () => {
-    for (const version of [undefined, null, 'ver_9', 9, true, [VERSION], []]) {
+  it('drops it unless version is a plain object that names its moment', () => {
+    for (const version of [undefined, null, 'ver_9', 9, true, [VERSION], [], {}, { ...VERSION, id: '' }, { ...VERSION, id: 9 }]) {
       expect(parseStudioEvent('history', JSON.stringify({ version })), JSON.stringify(version)).toBeNull();
     }
     expect(parseStudioEvent('history', '{}')).toBeNull();
