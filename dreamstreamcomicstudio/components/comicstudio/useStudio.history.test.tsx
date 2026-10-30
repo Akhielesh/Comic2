@@ -272,3 +272,65 @@ describe('a restore\'s beforeVersionId reaches the act outcome and the History a
     }
   });
 });
+
+describe('the History board tab (StudioTab gained "history")', () => {
+  const BUILT_INS = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'] as const;
+
+  it('every older tab value still opens, with History off or on', async () => {
+    for (const caps of [OFF, ON]) {
+      const { result, unmount } = await setup(caps);
+      for (const t of BUILT_INS) {
+        act(() => result.current.setTab(t));
+        expect(result.current.tab).toBe(t);
+      }
+      unmount();
+    }
+  });
+
+  it('while History is off, setTab("history") and an open_tab chip naming it change nothing', async () => {
+    const { result } = await setup(OFF);
+    act(() => result.current.setTab('cast'));
+    act(() => result.current.setTab('history'));
+    expect(result.current.tab).toBe('cast');
+    act(() => result.current.runClientAction({ type: 'open_tab', tab: 'history' }));
+    expect(result.current.tab).toBe('cast');
+  });
+
+  it('while History is on, setTab and an open_tab chip open it', async () => {
+    const { result } = await setup(ON);
+    act(() => result.current.setTab('history'));
+    expect(result.current.tab).toBe('history');
+    act(() => result.current.setTab('story'));
+    act(() => result.current.runClientAction({ type: 'open_tab', tab: 'history' }));
+    expect(result.current.tab).toBe('history');
+  });
+
+  it('a reload that turns History off moves the board off its tab at once (no render shows it), and turning it back on never jumps back', async () => {
+    server = normalizeDoc(makeSampleDoc());
+    api.loadStudioProject.mockImplementation(async () => ({ doc: server, urls: {}, caps: ON }));
+    // Every render's (tab, History on?) pair: BoardPane keeps the ACTIVE tab in its strip, so one render is enough to show it.
+    const renders: { tab: string; on: boolean }[] = [];
+    const { result } = renderHook(() => {
+      const s = useStudio('proj_1');
+      renders.push({ tab: s.tab, on: s.caps.history === true });
+      return s;
+    });
+    await waitFor(() => expect(result.current.caps).toEqual(ON));
+    act(() => result.current.setTab('history'));
+    expect(result.current.tab).toBe('history');
+    api.loadStudioProject.mockImplementation(async () => ({ doc: server, urls: {}, caps: OFF }));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.caps).toEqual(OFF));
+    // The sample comic has pages, so the board lands where a fresh load would: Pages.
+    expect(result.current.tab).toBe('pages');
+    expect(renders.filter((r) => r.tab === 'history' && !r.on)).toEqual([]);
+    api.loadStudioProject.mockImplementation(async () => ({ doc: server, urls: {}, caps: ON }));
+    await act(async () => {
+      await result.current.refresh();
+    });
+    await waitFor(() => expect(result.current.caps).toEqual(ON));
+    expect(result.current.tab).toBe('pages');
+  });
+});

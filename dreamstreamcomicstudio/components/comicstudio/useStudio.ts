@@ -168,8 +168,14 @@ const OPEN_SHARE_EVENT = 'ds:open-share';
 export const OPEN_MODEL_PICKER_REQUEST = 'ds:open-model-picker';
 /** A suggestion from a chip, the outage card or the banner: a registry id only (a route id maps to its registry id). */
 const pickerSuggestion = (value: unknown): string | undefined => (typeof value === 'string' && value ? getImageModel(value.slice(0, 160))?.id : undefined);
-/** Every board tab (an `open_tab` chip naming anything else is ignored). */
+/** Every built-in board tab (an `open_tab` chip naming anything else — but History, below — is ignored). */
 const STUDIO_TABS: ReadonlySet<string> = new Set<BoardTab>(['story', 'cast', 'style', 'pages', 'media', 'languages', 'read']);
+/**
+ * Comic History's board tab (history/index.ts HISTORY_TAB_ID; a local literal so a module cycle can never see it
+ * uninitialized). It is opened, kept and shown only while caps.history is on: with History off, setTab('history') and
+ * an `open_tab` chip naming it change nothing, and a reload that turns History off moves the board off it at once.
+ */
+const HISTORY_TAB: BoardTab = 'history';
 
 /**
  * Offline fallback only: guess "own key" from the latest image spend. The server's caps.byok is
@@ -329,8 +335,13 @@ export function useStudio(projectId: string): ComicStudioController {
   const [notice, setNotice] = useState<StudioNotice | null>(null);
   const [readerRequest, setReaderRequest] = useState<ReaderRequest | null>(null);
   const manualTabAtRef = useRef(0);
-  const tabRef = useRef(tab);
-  tabRef.current = tab;
+  // The tab every consumer sees: History's tab never shows while caps.history is off (BoardPane always keeps the
+  // ACTIVE registered tab in its strip, so the stored value must not leak out), not even for the one render before the
+  // effect below moves the stored tab.
+  const historyOn = historyEnabled(caps);
+  const shownTab: BoardTab = tab === HISTORY_TAB && !historyOn ? initialTabFor(state) : tab;
+  const tabRef = useRef(shownTab);
+  tabRef.current = shownTab;
   const focusedRef = useRef(focusedPageId);
   focusedRef.current = focusedPageId;
   /** The project whose load has started. A render where it differs is a project switch. */
@@ -1062,9 +1073,16 @@ export function useStudio(projectId: string): ComicStudioController {
   // ── Board navigation ───────────────────────────────────────────────────────
 
   const setTab = useCallback((next: BoardTab) => {
+    if (next === HISTORY_TAB && !historyEnabled(capsRef.current)) return; // no History tab while History is off
     manualTabAtRef.current = Date.now();
     setTabState(next);
   }, []);
+
+  // History turned off while its tab was open (a reload's caps): move the stored tab too, so turning History back on
+  // later never jumps the board back to it.
+  useEffect(() => {
+    if (!historyOn && tab === HISTORY_TAB) setTabState(tabRef.current);
+  }, [historyOn, tab]);
 
   const openPage = useCallback((pageId: string | null) => {
     setFocusedPageId(pageId);
@@ -1109,8 +1127,8 @@ export function useStudio(projectId: string): ComicStudioController {
           if (typeof action.pageId === 'string' && action.pageId) openPage(action.pageId);
           return;
         case 'open_tab':
-          // Chips come from the model: only a real board tab moves the board.
-          if (typeof action.tab === 'string' && STUDIO_TABS.has(action.tab)) setTab(action.tab);
+          // Chips come from the model: only a real board tab moves the board (History's only while it is on: setTab).
+          if (typeof action.tab === 'string' && (STUDIO_TABS.has(action.tab) || action.tab === HISTORY_TAB)) setTab(action.tab);
           return;
         case 'open_share': {
           // The mounted Share button opens its sheet on this event (and may preventDefault to say
@@ -1287,7 +1305,7 @@ export function useStudio(projectId: string): ComicStudioController {
       patch,
       cancel,
       refresh,
-      tab,
+      tab: shownTab,
       setTab,
       focusedPageId,
       openPage,
@@ -1340,7 +1358,7 @@ export function useStudio(projectId: string): ComicStudioController {
       patch,
       cancel,
       refresh,
-      tab,
+      shownTab,
       setTab,
       focusedPageId,
       openPage,

@@ -926,7 +926,8 @@ export interface Gate {
 
 // ── Conversation ─────────────────────────────────────────────────────────────
 
-export type StudioTab = 'story' | 'cast' | 'style' | 'pages' | 'media' | 'languages' | 'read';
+/** Board tabs. 'history' (Comic History, versions plan §8) is a registered tab shown only while caps.history is on. */
+export type StudioTab = 'story' | 'cast' | 'style' | 'pages' | 'media' | 'languages' | 'read' | 'history';
 
 /** Client-only actions (never sent to the server). */
 export type ClientAction =
