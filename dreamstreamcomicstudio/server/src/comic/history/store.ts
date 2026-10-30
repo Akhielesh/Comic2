@@ -668,8 +668,8 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         .eq('id', versionId)
         .eq('project_id', scope.projectId)
         .eq('user_id', scope.userId)
-        .maybeSingle()
-        .abortSignal(bounded());
+        .abortSignal(bounded())
+        .maybeSingle();
       if (error) throw mapHistoryDbError(error, 'read history');
       if (!isRecord(data) || !isRecord(data.manifest)) return null;
       const manifest = data.manifest as unknown as Manifest;
