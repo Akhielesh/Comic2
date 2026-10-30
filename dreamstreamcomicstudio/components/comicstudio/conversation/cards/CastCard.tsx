@@ -20,8 +20,13 @@ import { useAction } from './useAction';
 type CastCardData = Extract<Card, { type: 'cast' }>;
 
 export const sheetStatus = (c: Character): { text: string; tone: 'ok' | 'busy' | 'bad' | 'none' } => {
-  // An extra is described in words until it has a ready sheet; a ready sheet is attached on every page it is on.
-  if (c.tier === 'extra') return c.sheet.status === 'ready' ? { text: 'Sheet ready · used on pages', tone: 'ok' } : { text: 'Described in text', tone: 'none' };
+  // An extra is described in words until it has a ready sheet; a ready sheet is attached on every page it is on —
+  // except a prop's (prompts.ts castReferences never spends a character slot on an extra prop), so a prop's card
+  // only says its sheet is ready. A sheet the user asked for that is still queued or drawing shows its progress.
+  if (c.tier === 'extra') {
+    if (c.sheet.status === 'ready') return kindOf(c) === 'object' ? { text: 'Sheet ready', tone: 'ok' } : { text: 'Sheet ready · used on pages', tone: 'ok' };
+    if (c.sheet.status !== 'queued' && c.sheet.status !== 'rendering') return { text: 'Described in text', tone: 'none' };
+  }
   switch (c.sheet.status) {
     case 'ready':
       return { text: 'Sheet ready', tone: 'ok' };
