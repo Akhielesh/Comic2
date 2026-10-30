@@ -54,6 +54,17 @@ jobs:
           npm run build:server
       - name: Build (frontend)
         run: npm run build
+        env:
+          # licenceModules() (vite.config.ts) writes the npm packages that are really in the browser
+          # bundle (main entries and workers) here, outside dist/, for the licence gate below.
+          LICENCE_MODULES_OUT: ${{ runner.temp }}/licence/browser-modules.json
+      # One licence policy (scripts/licence-policy.json) over every lockfile, the browser bundle above,
+      # platform-engine/engines.lock.json and the data assets (fonts, ICC). Browser: MIT/Apache/BSD/ISC/
+      # MPL/OFL only; GPL/LGPL server-only from an allowlist; AGPL/SSPL/BUSL/PolyForm/CC-NC/source-available/
+      # no licence blocked everywhere. Owner decisions on known violations print as KNOWN and do not fail.
+      # It also checks that dist/THIRD-PARTY-NOTICES.txt names every bundled package.
+      - name: Licence gate
+        run: node scripts/licence-check.mjs --browser-modules "$RUNNER_TEMP/licence/browser-modules.json" --require-browser-modules --notices dist/THIRD-PARTY-NOTICES.txt
       - name: Unit tests
         run: npm test -- --run
 
@@ -62,3 +73,31 @@ jobs:
   # every rollout. No secrets.
   server-boot:
     uses: ./.github/workflows/server-boot.yml
+
+  # The Workers' strict typecheck (@cloudflare/workers-types, no DOM lib): the same `npm ci` + `tsc`
+  # the deploy workflows run right before `wrangler deploy`. api-proxy bundles services/productHost.ts
+  # and shared/comic/doc.ts, which the client typecheck above checks with the DOM lib, so a `window`
+  # or `globalThis.crypto` read that is fine for the client turned the backend deploy red AFTER merge
+  # (gate F7). Here it fails the pull request instead. Read-only; needs no secrets.
+  workers-typecheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: [api-proxy, comics-edge]
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio/${{ matrix.worker }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/${{ matrix.worker }}/package-lock.json
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts
+      - name: Typecheck worker (${{ matrix.worker }})
+        run: npx tsc -p tsconfig.json

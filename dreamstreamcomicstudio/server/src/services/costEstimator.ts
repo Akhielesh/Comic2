@@ -196,6 +196,11 @@ export type UsagePayload = {
   estimatedTokens?: number;
   /** Real provider cost in USD when reported (e.g. OpenRouter usage.cost). Overrides the token estimate. */
   providerCostUsd?: number;
+  /**
+   * The cost the provider DID report when only some calls of a multi-call turn reported one (see
+   * ai/usage.ts MeteredUsage). Not exact, so it never overrides the token estimate — it is a floor.
+   */
+  partialProviderCostUsd?: number;
 };
 
 export const buildSettleEstimateFromUsage = async (
@@ -223,13 +228,31 @@ export const buildSettleEstimateFromUsage = async (
 
   // When the provider reports a real cost (e.g. OpenRouter usage.cost), trust it
   // over the token-derived estimate so the settled (and comic) cost is exact.
-  // A `:free` model is exempt: it must settle to $0 even if a cost is reported.
+  // This holds even when the seed (the final served model) is `:free`: a chat turn's usage sums
+  // every call it made, and a paid tool round, a paid retry or the per-request web plugin can sit
+  // in front of a free final answer. A genuinely free call reports $0, and with no positive
+  // reported cost the token path above still charges a `:free` model nothing.
   const realProviderCostUsd = resolveNumber(usage?.providerCostUsd, 0);
-  if (realProviderCostUsd > 0 && !hasFreeSuffix(seed.model)) {
+  if (realProviderCostUsd > 0) {
     const billableUsd = Number((realProviderCostUsd * estimate.markup).toFixed(6));
     return {
       ...estimate,
       estimatedProviderCostUsd: Number(realProviderCostUsd.toFixed(6)),
+      estimatedBillableUsd: billableUsd,
+      estimatedCt: Math.max(0, Math.round(billableUsd * estimate.ctPerUsd))
+    };
+  }
+
+  // Only part of the turn reported a cost (e.g. paid tool rounds, then a final stream cut before
+  // its usage chunk): the summed tokens are priced at the final served model above, which can be
+  // a `:free` or cheap model — far below what the reporting calls already cost. Never settle below
+  // the part the provider did report.
+  const partialProviderCostUsd = resolveNumber(usage?.partialProviderCostUsd, 0);
+  if (partialProviderCostUsd > estimate.estimatedProviderCostUsd) {
+    const billableUsd = Number((partialProviderCostUsd * estimate.markup).toFixed(6));
+    return {
+      ...estimate,
+      estimatedProviderCostUsd: Number(partialProviderCostUsd.toFixed(6)),
       estimatedBillableUsd: billableUsd,
       estimatedCt: Math.max(0, Math.round(billableUsd * estimate.ctPerUsd))
     };

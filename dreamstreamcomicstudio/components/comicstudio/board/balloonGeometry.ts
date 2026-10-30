@@ -1,45 +1,50 @@
-// Balloon geometry for overlay lettering (pure, dependency-free).
+// Balloon geometry for overlay lettering — the board's thin layer over the shared lettering engine
+// (contract §10.2: "balloonGeometry.ts becomes a thin re-export plus client-only helpers").
 //
-// One source of truth for how a lettered balloon looks, shared by the live board
-// (BalloonLayer, SVG), the print view (HTML + SVG) and the PNG exporter (canvas, via
-// Path2D on the same path strings) — so what the user arranges on the board is exactly
-// what prints and exports.
+// - Shapes, tails, seeds, outline bleed, the render-time page fit and placement live once in
+//   shared/comic/lettering/ (shapes.ts, place.ts) and are re-exported here under their old names, so the
+//   board, print view and PNG exporter keep importing from this file unchanged.
+// - The pixel helpers below (balloonFontPx, strokePx, sfxFontPx, wrapText…) and the server-mirroring
+//   estimates (balloonWidthForText, estimateBalloonHeight) stay here as the regression reference the
+//   shared textLayout estimates are tested against (byte-identical for 'en').
+// - resolveBalloons places lines without a stored balloon with the SAME deterministic placer the board's
+//   planLettering uses (page-wide obstacles: a stored balloon of panel 2 sitting over panel 5 is avoided),
+//   and flags the ones that could not avoid an overlap as `crowded`.
 //
-// Coordinates:
-//  - A Balloon (shared/comic/doc.ts) is page-normalized: x, y = top-left corner, w = width
-//    as a fraction of the page WIDTH, tailX/tailY = the tail tip. Its height is not stored:
-//    it follows from the text at the lettering metrics below.
-//  - Shape helpers work in balloon-local pixels: (0, 0) is the balloon's top-left corner,
-//    (w, h) its size, and the tail tip is given relative to that corner.
-//
-// The lettering metrics mirror the server's balloon sizing (server/src/comic/vision.ts:
-// one glyph ≈ 1/95 of the page width, line ≈ 0.022 page widths, 0.03/0.026 total padding),
-// so balloons the vision pass sized from the text fit the text we actually draw.
+// Coordinates: a Balloon is page-normalized (x, y = top-left, w = fraction of the page WIDTH, tail tip
+// in page fractions); its height follows the text. Shape helpers work in balloon-local units.
 
 import type { AspectRatio, Balloon, ComicDoc, Line, LineKind, Page } from '../../../shared/comic/doc';
 import { panelBoxesFor } from './pageLayout';
+import { KIND_FONT_SCALE as SHARED_KIND_FONT_SCALE, LETTER_METRICS, DEFAULT_LETTERING, DEFAULT_SAFE_MARGIN } from '../../../shared/comic/lettering/style';
+import { burstPath, captionPath, cloudPath, speechBodyPath, tailPath, thoughtBubbles, type Circle, type Pt, type TextInset } from '../../../shared/comic/lettering/shapes';
+import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place';
+import { estimateMeasure, letteringSizer, sfxAutoStyle } from '../../../shared/comic/lettering/layout';
+import { composeAspect, type ComposePageShape } from '../../../shared/comic/panelize/space';
+
+export { OUTLINE_BLEED, OUTLINE_BLEED_XY, SHAPE_BLEED, fitBalloonOnPage, outlineBounds, safeAreaBox } from '../../../shared/comic/lettering/place';
 
 export const LETTERING = {
   /** Font size as a fraction of the rendered page width (≈ 1.7%). */
-  fontScale: 0.017,
+  fontScale: LETTER_METRICS.fontScale,
   /** Never letter smaller than this (readability on small thumbnails is handled by hiding detail, not shrinking text). */
   minFontPx: 9,
   /** Line height in ems. 1.7% × 1.3 ≈ the server's 0.022 page-width line. */
-  lineHeight: 1.3,
+  lineHeight: LETTER_METRICS.lineHeight,
   /** Inner padding per side (fractions of the page WIDTH): 2 × 0.015 = the server's 0.03. */
-  padX: 0.015,
+  padX: LETTER_METRICS.padX,
   /** 2 × 0.013 = the server's 0.026. */
-  padY: 0.013,
+  padY: LETTER_METRICS.padY,
   /** Server sizing metrics (page-width units). */
-  charW: 0.0105,
-  lineH: 0.022,
+  charW: LETTER_METRICS.charW,
+  lineH: LETTER_METRICS.lineH,
   padW: 0.03,
   padH: 0.026,
   /** Balloon width bounds (fraction of page width). */
   minW: 0.04,
   maxW: 0.95,
   /** Outline weight as a fraction of page width (≈ 2px on a 700px page). */
-  strokeScale: 0.0028,
+  strokeScale: LETTER_METRICS.strokeScale,
   minStrokePx: 1.25,
   fill: '#ffffff',
   captionFill: '#fff6c8',
@@ -55,14 +60,8 @@ export const isSpokenKind = (kind: LineKind) => SPOKEN.has(kind);
 /** Kinds drawn with a tail (or a thought trail) toward the speaker. */
 export const hasTail = (kind: LineKind) => SPOKEN.has(kind);
 
-const KIND_FONT_SCALE: Record<LineKind, number> = {
-  speech: 1,
-  thought: 1,
-  whisper: 0.94,
-  shout: 1.08,
-  caption: 0.95,
-  sfx: 2.4
-};
+/** Kind base sizes (the shared constant; unchanged values). */
+export const KIND_FONT_SCALE: Record<LineKind, number> = SHARED_KIND_FONT_SCALE;
 
 // ── Numbers ──────────────────────────────────────────────────────────────────
 
@@ -73,7 +72,6 @@ const round = (n: number, places = 2) => {
   return Math.round(n * f) / f;
 };
 const round4 = (n: number) => round(n, 4);
-const fmt = (n: number) => String(round(n));
 
 const clean = (value: unknown): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
 
@@ -84,12 +82,9 @@ export const aspectNumber = (aspect?: AspectRatio | string | null): number => {
   return w > 0 && h > 0 ? w / h : 2 / 3;
 };
 
-/** A page's width/height: the render's pixel size when known, else the format's aspect. */
-export const pageAspectOf = (doc: Pick<ComicDoc, 'format'>, page?: Pick<Page, 'render'> | null): number => {
-  const a = page?.render?.asset;
-  if (a?.w && a?.h && a.w > 0 && a.h > 0) return a.w / a.h;
-  return aspectNumber(doc.format.pageAspect);
-};
+/** A page's width/height as shown: the render's pixel size when known, else the format's aspect; in panels mode
+ *  (Ship 2) the book aspect its frames are laid out on (shared/comic/panelize/space.ts composeAspect). */
+export const pageAspectOf = (doc: Pick<ComicDoc, 'format'>, page?: ComposePageShape | null): number => composeAspect(doc, page);
 
 // ── Type ─────────────────────────────────────────────────────────────────────
 
@@ -221,266 +216,23 @@ export const wrapBalanced = (text: string, maxWidth: number, measure: (s: string
   return wrapText(text, hi, measure);
 };
 
-// ── Shapes ───────────────────────────────────────────────────────────────────
+// ── Shapes (the shared vector library; byte-identical classic generators) ────
 
-export interface Pt {
-  x: number;
-  y: number;
-}
-
-export interface Circle {
-  cx: number;
-  cy: number;
-  r: number;
-}
-
-/** Deterministic 32-bit seed from a string (stable shapes across re-renders and exports). */
-export const hashSeed = (input: string): number => {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < input.length; i += 1) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-};
-
-/** Small seeded PRNG (mulberry32) → [0, 1). */
-const rng = (seed: number) => {
-  let a = seed >>> 0 || 1;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-};
-
-/**
- * Points on a superellipse filling a w×h box (exponent n: 2 = ellipse, higher = squarer).
- * A squircle-ish balloon hugs a block of centered text far better than an ellipse, so the
- * letters never touch the outline. `scaleX/scaleY` let the outline bleed past the text box.
- */
-export const superellipsePoints = (
-  w: number,
-  h: number,
-  opts: { n?: number; steps?: number; scaleX?: number; scaleY?: number; phase?: number } = {}
-): Pt[] => {
-  const n = opts.n ?? 3;
-  const steps = Math.max(8, opts.steps ?? 32);
-  const a = (w / 2) * (opts.scaleX ?? 1.04);
-  const b = (h / 2) * (opts.scaleY ?? 1.1);
-  const e = 2 / n;
-  const out: Pt[] = [];
-  for (let i = 0; i < steps; i += 1) {
-    const t = (opts.phase ?? 0) + (2 * Math.PI * i) / steps;
-    const c = Math.cos(t);
-    const s = Math.sin(t);
-    out.push({ x: w / 2 + a * Math.sign(c) * Math.abs(c) ** e, y: h / 2 + b * Math.sign(s) * Math.abs(s) ** e });
-  }
-  return out;
-};
-
-/** Smooth closed path through points (Catmull-Rom → cubic Bézier). */
-export const smoothClosedPath = (points: Pt[]): string => {
-  const n = points.length;
-  if (n < 3) return '';
-  const p = (i: number) => points[(i + n) % n];
-  let d = `M${fmt(p(0).x)} ${fmt(p(0).y)}`;
-  for (let i = 0; i < n; i += 1) {
-    const p0 = p(i - 1);
-    const p1 = p(i);
-    const p2 = p(i + 1);
-    const p3 = p(i + 2);
-    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
-    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
-    d += `C${fmt(c1.x)} ${fmt(c1.y)} ${fmt(c2.x)} ${fmt(c2.y)} ${fmt(p2.x)} ${fmt(p2.y)}`;
-  }
-  return `${d}Z`;
-};
-
-const polygonPath = (points: Pt[]): string =>
-  points.length < 3 ? '' : `M${points.map((pt) => `${fmt(pt.x)} ${fmt(pt.y)}`).join('L')}Z`;
-
-/** Approximate perimeter of the ellipse inscribed in w×h (Ramanujan). */
-const perimeter = (w: number, h: number) => {
-  const a = w / 2;
-  const b = h / 2;
-  return Math.PI * (3 * (a + b) - Math.sqrt((3 * a + b) * (a + 3 * b)));
-};
-
-/** Text inset inside a balloon box, in px (defaults approximate the lettering padding). */
-export interface TextInset {
-  x: number;
-  y: number;
-}
-
-const defaultInset = (w: number, h: number): TextInset => ({ x: w * 0.06, y: h * 0.2 });
-
-/**
- * Outline scale (relative to the w×h box) that keeps the text block's corners inside a
- * superellipse of exponent n with some breathing room. Short balloons keep the base bleed;
- * tall, full ones grow just enough that lettering never touches the outline.
- */
-export const fitOutlineScale = (
-  w: number,
-  h: number,
-  n: number,
-  base: { x: number; y: number },
-  inset: TextInset = defaultInset(w, h),
-  fill = 0.86
-): { x: number; y: number } => {
-  if (w <= 0 || h <= 0) return base;
-  const rx = clamp(1 - (2 * inset.x) / w, 0, 1);
-  const ry = clamp(1 - (2 * inset.y) / h, 0, 1);
-  const v = (rx / base.x) ** n + (ry / base.y) ** n;
-  if (v <= fill) return base;
-  const f = (v / fill) ** (1 / n);
-  return { x: base.x * f, y: base.y * f };
-};
-
-/** Rounded balloon outline (speech / whisper). */
-export const speechBodyPath = (w: number, h: number, inset?: TextInset): string => {
-  const scale = fitOutlineScale(w, h, 3, { x: 1.04, y: 1.1 }, inset);
-  return smoothClosedPath(superellipsePoints(w, h, { n: 3, steps: 32, scaleX: scale.x, scaleY: scale.y }));
-};
-
-/** Scalloped thought cloud around the text box. */
-export const cloudPath = (w: number, h: number, seed = 1, inset?: TextInset): string => {
-  const bump = clamp(Math.min(w, h) * 0.42, 7, 36);
-  const count = Math.round(clamp(perimeter(w * 1.04, h * 1.12) / bump, 7, 18));
-  const phase = rng(seed)() * ((2 * Math.PI) / count);
-  const scale = fitOutlineScale(w, h, 2.6, { x: 1.02, y: 1.08 }, inset);
-  const pts = superellipsePoints(w, h, { n: 2.6, steps: count, scaleX: scale.x, scaleY: scale.y, phase });
-  const cx = w / 2;
-  const cy = h / 2;
-  let d = `M${fmt(pts[0].x)} ${fmt(pts[0].y)}`;
-  for (let i = 0; i < pts.length; i += 1) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    // Bulge outward, perpendicular to the chord (away from the center).
-    let nx = -(b.y - a.y);
-    let ny = b.x - a.x;
-    const len = Math.hypot(nx, ny) || 1;
-    nx /= len;
-    ny /= len;
-    if (nx * (mx - cx) + ny * (my - cy) < 0) {
-      nx = -nx;
-      ny = -ny;
-    }
-    const chord = Math.hypot(b.x - a.x, b.y - a.y);
-    d += `Q${fmt(mx + nx * chord * 0.55)} ${fmt(my + ny * chord * 0.55)} ${fmt(b.x)} ${fmt(b.y)}`;
-  }
-  return `${d}Z`;
-};
-
-/** Spiky burst points for shouts (deterministic per seed): bold radial spikes of steady length. */
-export const burstPoints = (w: number, h: number, seed = 1, inset?: TextInset): Pt[] => {
-  const short = Math.min(w, h);
-  const count = Math.round(clamp(perimeter(w, h) / clamp(short * 0.55, 10, 34), 10, 20));
-  const rand = rng(seed);
-  const scale = fitOutlineScale(w, h, 2.4, { x: 1.06, y: 1.18 }, inset);
-  const inner = superellipsePoints(w, h, { n: 2.4, steps: count, scaleX: scale.x, scaleY: scale.y });
-  const cx = w / 2;
-  const cy = h / 2;
-  const spike = clamp(short * 0.32, 6, 20);
-  const out: Pt[] = [];
-  for (let i = 0; i < count; i += 1) {
-    const a = inner[i];
-    const b = inner[(i + 1) % count];
-    out.push(a);
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    const len = Math.hypot(mx - cx, my - cy) || 1;
-    const reach = spike * (0.75 + rand() * 0.5);
-    out.push({ x: mx + ((mx - cx) / len) * reach, y: my + ((my - cy) / len) * reach });
-  }
-  return out;
-};
-
-export const burstPath = (w: number, h: number, seed = 1, inset?: TextInset): string => polygonPath(burstPoints(w, h, seed, inset));
-
-/** Rectangular caption box. */
-export const captionPath = (w: number, h: number): string => polygonPath([
-  { x: 0, y: 0 },
-  { x: w, y: 0 },
-  { x: w, y: h },
-  { x: 0, y: h }
-]);
-
-/** True when a balloon-local point falls inside the ellipse inscribed in the w×h box. */
-export const insideBody = (w: number, h: number, pt: Pt): boolean => {
-  const a = w / 2;
-  const b = h / 2;
-  if (a <= 0 || b <= 0) return false;
-  const dx = (pt.x - a) / a;
-  const dy = (pt.y - b) / b;
-  return dx * dx + dy * dy <= 1;
-};
-
-/** Radius of the ellipse inscribed in w×h along a direction. */
-const ellipseRadius = (w: number, h: number, theta: number) => {
-  const a = w / 2;
-  const b = h / 2;
-  return (a * b) / Math.sqrt((b * Math.cos(theta)) ** 2 + (a * Math.sin(theta)) ** 2);
-};
-
-/**
- * Tail wedge toward the tip (balloon-local px). Its base sits just inside the outline so
- * it leaves the balloon at full width; drawn under the body and filled again over it, it
- * merges seamlessly with the outline. Null when the tip is inside the balloon.
- */
-export const tailPath = (w: number, h: number, tip: Pt, style: 'curved' | 'straight' = 'curved'): string | null => {
-  if (!Number.isFinite(tip.x) || !Number.isFinite(tip.y) || insideBody(w, h, tip)) return null;
-  const cx = w / 2;
-  const cy = h / 2;
-  const dx = tip.x - cx;
-  const dy = tip.y - cy;
-  const len = Math.hypot(dx, dy);
-  const theta = Math.atan2(dy, dx);
-  const edge = ellipseRadius(w, h, theta);
-  if (len <= edge * 1.02) return null;
-  const baseR = edge * 0.7;
-  const base = { x: cx + Math.cos(theta) * baseR, y: cy + Math.sin(theta) * baseR };
-  const nx = -Math.sin(theta);
-  const ny = Math.cos(theta);
-  // Longer tails get a slightly wider root so they never read as needles.
-  const half = clamp(Math.min(w, h) * 0.22 + (len - edge) * 0.025, 4, 20);
-  const b1 = { x: base.x + nx * half, y: base.y + ny * half };
-  const b2 = { x: base.x - nx * half, y: base.y - ny * half };
-  if (style === 'straight') return `M${fmt(b1.x)} ${fmt(b1.y)}L${fmt(tip.x)} ${fmt(tip.y)}L${fmt(b2.x)} ${fmt(b2.y)}Z`;
-  // Both edges bow the same way: a gently hooked, tapering tail.
-  const bend = (len - baseR) * 0.1;
-  const c1 = { x: (b1.x + tip.x) / 2 + nx * bend, y: (b1.y + tip.y) / 2 + ny * bend };
-  const c2 = { x: (b2.x + tip.x) / 2 + nx * bend * 0.6, y: (b2.y + tip.y) / 2 + ny * bend * 0.6 };
-  return `M${fmt(b1.x)} ${fmt(b1.y)}Q${fmt(c1.x)} ${fmt(c1.y)} ${fmt(tip.x)} ${fmt(tip.y)}Q${fmt(c2.x)} ${fmt(c2.y)} ${fmt(b2.x)} ${fmt(b2.y)}Z`;
-};
-
-/** Thought trail: three shrinking bubbles leaving the cloud toward the tip (kept close to the cloud). */
-export const thoughtBubbles = (w: number, h: number, tip: Pt): Circle[] => {
-  if (!Number.isFinite(tip.x) || !Number.isFinite(tip.y) || insideBody(w, h, tip)) return [];
-  const cx = w / 2;
-  const cy = h / 2;
-  const theta = Math.atan2(tip.y - cy, tip.x - cx);
-  // Where the direction leaves the cloud (scallops bulge ~12% past the ellipse).
-  const r = ellipseRadius(w, h, theta) * 1.12;
-  const edge = { x: cx + Math.cos(theta) * r, y: cy + Math.sin(theta) * r };
-  const run = Math.hypot(tip.x - edge.x, tip.y - edge.y);
-  const r0 = clamp(Math.min(w, h) * 0.16, 4, 13);
-  if (run < r0 * 1.2) return [];
-  const steps = [
-    { d: r0 * 1.4, r: r0 },
-    { d: r0 * 3.4, r: r0 * 0.66 },
-    { d: r0 * 4.9, r: r0 * 0.42 }
-  ];
-  const ux = Math.cos(theta);
-  const uy = Math.sin(theta);
-  return steps
-    .filter((s, i) => i === 0 || s.d <= run + r0 * 0.5)
-    .map((s) => ({ cx: round(edge.x + ux * Math.min(s.d, run)), cy: round(edge.y + uy * Math.min(s.d, run)), r: round(s.r) }));
-};
+export {
+  burstPath,
+  burstPoints,
+  captionPath,
+  cloudPath,
+  fitOutlineScale,
+  hashSeed,
+  insideBody,
+  smoothClosedPath,
+  speechBodyPath,
+  superellipsePoints,
+  tailPath,
+  thoughtBubbles
+} from '../../../shared/comic/lettering/shapes';
+export type { Circle, Pt, TextInset } from '../../../shared/comic/lettering/shapes';
 
 export interface BalloonShape {
   kind: LineKind;
@@ -530,13 +282,8 @@ export const dashArray = (stroke: number) => `${round(stroke * 3)} ${round(strok
 
 // ── Sound effects ────────────────────────────────────────────────────────────
 
-const SFX_COLORS = ['#e63946', '#ffb703', '#fb5607', '#3a86ff', '#8338ec', '#06d6a0'];
-
-/** Color and tilt for a sound effect (deterministic per line). */
-export const sfxStyle = (lineId: string): { color: string; rotate: number } => {
-  const h = hashSeed(lineId || 'sfx');
-  return { color: SFX_COLORS[h % SFX_COLORS.length], rotate: ((h >>> 8) % 13) - 6 };
-};
+/** Color and tilt for a sound effect (deterministic per line; the shared classic SFX palette). */
+export const sfxStyle = (lineId: string): { color: string; rotate: number } => sfxAutoStyle(lineId);
 
 // ── Lines → balloons ─────────────────────────────────────────────────────────
 
@@ -547,98 +294,64 @@ export interface ResolvedBalloon {
   balloon: Balloon;
   /** True when the page had no balloon for this line and we placed it ourselves. */
   fallback: boolean;
+  /** A placed balloon that could not avoid an overlap (the editor offers free fixes). */
+  crowded?: boolean;
 }
 
 const validBalloon = (b?: Balloon): b is Balloon =>
   !!b && [b.x, b.y, b.w].every((v) => typeof v === 'number' && Number.isFinite(v)) && b.w > 0;
 
-/** How far each kind's outline reaches past its text box (fractions of the box). */
-const OUTLINE_BLEED: Record<LineKind, { x: number; y: number }> = {
-  speech: { x: 0.04, y: 0.12 },
-  whisper: { x: 0.04, y: 0.12 },
-  thought: { x: 0.08, y: 0.25 },
-  shout: { x: 0.12, y: 0.45 },
-  caption: { x: 0, y: 0 },
-  sfx: { x: 0, y: 0.1 }
-};
-
-/** A balloon's text box grown to the outline it draws (used to keep placed balloons apart). */
-const outlineBounds = (kind: LineKind, r: { x: number; y: number; w: number; h: number }) => {
-  const b = OUTLINE_BLEED[kind] || OUTLINE_BLEED.speech;
-  const dx = r.w * b.x;
-  const dy = r.h * b.y;
-  return { x: r.x - dx, y: r.y - dy, w: r.w + 2 * dx, h: r.h + 2 * dy };
-};
+const isFullDoc = (doc: Pick<ComicDoc, 'format'>): doc is ComicDoc => Array.isArray((doc as ComicDoc).pages);
 
 /**
- * Every non-empty line of a page with the balloon to draw for it, in reading order. Lines
- * without a balloon (new lines, an unfinished layout) get a fallback position stacked at
- * the top of their panel, so no text is ever lost.
+ * Every non-empty line of a page with the balloon to draw for it, in reading order. Lines without a
+ * balloon (new lines, an unfinished layout) are placed by the shared deterministic placer around
+ * EVERY stored balloon on the page (outlines, not text boxes), inside their panel and the safe area,
+ * so no text is ever lost and nothing is placed off-page.
  */
 export const resolveBalloons = (doc: Pick<ComicDoc, 'format'>, page: Page): ResolvedBalloon[] => {
-  const byId = new Map(page.balloons.map((b) => [b.lineId, b]));
-  const boxes = panelBoxesFor(doc, page);
+  const byId = new Map<string, Balloon>();
+  for (const b of page.balloons || []) if (validBalloon(b) && !byId.has(b.lineId)) byId.set(b.lineId, b);
   const aspect = pageAspectOf(doc, page);
-  const rtl = doc.format.readingDirection === 'rtl';
-  const pad = 0.012;
-  const gap = 0.01;
-  const out: ResolvedBalloon[] = [];
-  page.panels.forEach((panel, i) => {
-    const box = boxes[i] || { x: 0.02, y: 0.02, w: 0.96, h: 0.96 };
-    const lines = panel.lines.filter((l) => clean(l.text));
-    // Balloons the page already has are obstacles for the ones we place — measured by the
-    // outline they actually draw (bursts and clouds reach well past their text box).
-    const taken: { x: number; y: number; w: number; h: number }[] = [];
-    for (const line of lines) {
-      const b = byId.get(line.id);
-      if (validBalloon(b)) {
-        const c = clampBalloon(b);
-        taken.push(outlineBounds(line.kind, { x: c.x, y: c.y, w: c.w, h: estimateBalloonHeight(line.text, c.w, aspect) }));
-      }
-    }
-    const overlapping = (r: { x: number; y: number; w: number; h: number }) =>
-      taken.find((t) => r.x < t.x + t.w + gap && t.x < r.x + r.w + gap && r.y < t.y + t.h + gap && t.y < r.y + r.h + gap);
-    let cursor = box.y + pad;
-    let spoken = 0;
-    for (const line of lines) {
-      const existing = byId.get(line.id);
-      if (validBalloon(existing)) {
-        out.push({ line, panelN: panel.n, balloon: clampBalloon(existing), fallback: false });
-        continue;
-      }
-      const w = Math.min(balloonWidthForText(line.text), Math.max(0.08, box.w - 2 * pad));
-      const hFrac = estimateBalloonHeight(line.text, w, aspect);
-      const left = box.x + pad;
-      const right = box.x + box.w - pad - w;
-      let x: number;
-      if (line.kind === 'caption') x = rtl ? right : left;
-      else if (line.kind === 'sfx') x = box.x + (box.w - w) / 2;
-      else {
-        const onStart = spoken % 2 === 0;
-        x = onStart !== rtl ? left : right;
-        spoken += 1;
-      }
-      const maxY = Math.max(box.y + pad, box.y + box.h - pad - hFrac);
-      let y = clamp(cursor, box.y + pad, maxY);
-      // Stack below anything already there (stays in the panel; a full panel accepts overlap).
-      const bleedTop = y - outlineBounds(line.kind, { x, y, w, h: hFrac }).y;
-      for (let guard = 0; guard < 12; guard += 1) {
-        const hit = overlapping(outlineBounds(line.kind, { x, y, w, h: hFrac }));
-        if (!hit) break;
-        const below = hit.y + hit.h + gap + bleedTop;
-        if (below > maxY) break;
-        y = below;
-      }
-      taken.push(outlineBounds(line.kind, { x, y, w, h: hFrac }));
-      cursor = y + hFrac + gap;
-      const balloon: Balloon = { lineId: line.id, x: round4(x), y: round4(y), w: round4(w) };
-      if (isSpokenKind(line.kind)) {
-        balloon.tailX = round4(clamp01(x + w / 2));
-        balloon.tailY = round4(clamp(y + hFrac + 0.05, 0, box.y + box.h - pad));
-      }
-      out.push({ line, panelN: panel.n, balloon: clampBalloon(balloon), fallback: true });
-    }
+  const items: { line: Line; panelN: number }[] = [];
+  page.panels.forEach((panel) => {
+    for (const line of panel.lines) if (clean(line.text)) items.push({ line, panelN: panel.n });
   });
+  const placed = new Map<string, Balloon>();
+  const crowded = new Set<string>();
+  if (items.some((it) => !byId.has(it.line.id))) {
+    const letterStyle = (doc as Partial<ComicDoc>).letterStyle ?? DEFAULT_LETTERING;
+    const qc = page.render?.qc;
+    const result = placeBalloonsDetailed({
+      page,
+      boxes: panelBoxesFor(doc, page),
+      aspect,
+      rtl: doc.format.readingDirection === 'rtl',
+      // Real plan metrics when we have the whole doc (styles, fonts); estimates otherwise.
+      plansFor: isFullDoc(doc) ? letteringSizer(doc, page, aspect, estimateMeasure) : () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } }),
+      keepOut: qc?.keepOut,
+      heads: qc?.heads,
+      safeMargin: typeof letterStyle.safeMargin === 'number' ? letterStyle.safeMargin : DEFAULT_SAFE_MARGIN,
+      existing: page.balloons || [],
+      keep: 'all',
+      lang: doc.format.language
+    });
+    for (const b of result.balloons) if (!byId.has(b.lineId)) placed.set(b.lineId, b);
+    for (const id of result.crowded) crowded.add(id);
+  }
+  const out: ResolvedBalloon[] = [];
+  for (const { line, panelN } of items) {
+    const stored = byId.get(line.id);
+    if (stored) {
+      out.push({ line, panelN, balloon: clampBalloon(stored), fallback: false });
+      continue;
+    }
+    const b = placed.get(line.id);
+    if (!b) continue;
+    const r: ResolvedBalloon = { line, panelN, balloon: clampBalloon(b), fallback: true };
+    if (crowded.has(line.id)) r.crowded = true;
+    out.push(r);
+  }
   return out;
 };
 

@@ -1,0 +1,33 @@
+{
+  "name": "shinchan-homage",
+  "about": "Named IP (decisions-final #5): the director warmly steers to an original homage — new name, distinct design, same spirit — says so once, never refuses silently.",
+  "doc": "empty",
+  "turns": [
+    {
+      "say": "make a funny comic of Shin-chan pranking his dad at the beach",
+      "userContentIncludes": "IP NOTE: Shin-chan is trademarked",
+      "expectTools": ["update_brief", "upsert_character"],
+      "director": [
+        {
+          "toolCalls": [
+            { "name": "update_brief", "args": { "premise": "A cheeky five-year-old pranks his dad at the beach.", "genre": "comedy" } },
+            { "name": "upsert_character", "args": { "name": "Chintu", "tier": "lead", "look": { "summary": "A cheeky 5-year-old with a round face, red tee and yellow shorts" } } },
+            { "name": "upsert_character", "args": { "name": "Papa", "tier": "support", "look": { "summary": "A tired, good-natured dad in a striped beach shirt" } } }
+          ]
+        },
+        { "text": "" }
+      ],
+      "expect": { "replyIncludes": "Shin-chan is trademarked, so I'm making an original homage — Chintu", "ipNoted": ["Shin-chan"], "cast": [["Chintu", "person", 1], ["Papa", "person", 1]] }
+    },
+    {
+      "say": "add Shin-chan's little white dog too",
+      "userContentExcludes": "IP NOTE",
+      "expectTools": ["upsert_character"],
+      "director": [
+        { "text": "Added Pookie, Chintu's fluffy sidekick.", "toolCalls": [{ "name": "upsert_character", "args": { "name": "Pookie", "kind": "animal", "look": { "summary": "A small fluffy white dog with a curly tail", "species": "puppy" } } }] },
+        { "text": "" }
+      ],
+      "expect": { "replyIncludes": "Pookie", "cast": [["Chintu", "person", 1], ["Papa", "person", 1], ["Pookie", "animal", 1]] }
+    }
+  ]
+}

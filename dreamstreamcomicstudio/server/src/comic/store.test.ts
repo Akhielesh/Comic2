@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createEmptyDoc, type ComicDoc, type Page } from '../../../shared/comic/doc.js';
-import { buildLegacyProjectState, createMemoryDocStore, createSupabaseDocStore, sanitizePublicDoc } from './store.js';
+import { buildLegacyProjectState, createMemoryDocStore, createSupabaseDocStore, jsonbSafe, jsonbSafeText, sanitizePublicDoc } from './store.js';
 import { StudioError } from './types.js';
 
 const USER = 'user-a';
@@ -12,9 +12,31 @@ const PID = '33333333-3333-4333-8333-333333333333';
 type Row = Record<string, any>;
 type PgErr = { code: string; message: string };
 
+/**
+ * What Postgres says about a written row (P2-GATE L5): jsonb (and text) reject `\u0000` — 22P05
+ * "unsupported Unicode escape sequence" — and jsonb rejects an unpaired surrogate — 22P02. Checked on
+ * the JSON the client would send, in every string and every object key.
+ */
+const pgRejects = (payload: unknown): PgErr | null => {
+  let found: PgErr | null = null;
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  const check = (s: string) => {
+    if (found) return;
+    if (s.includes('\u0000')) found = { code: '22P05', message: 'unsupported Unicode escape sequence' };
+    else if (lone.test(s)) found = { code: '22P02', message: 'invalid input syntax for type json' };
+  };
+  const walk = (v: unknown) => {
+    if (typeof v === 'string') return check(v);
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) (check(k), walk(x));
+  };
+  walk(JSON.parse(JSON.stringify(payload ?? null)));
+  return found;
+};
+
 /** A tiny PostgREST look-alike: enough of the builder API for store.ts. */
 const makeDb = () => {
-  const tables: Record<string, Row[]> = { projects: [], comic_docs: [] };
+  const tables: Record<string, Row[]> = { projects: [], comic_docs: [], comic_publications: [] };
   const failures: { table: string; op: string; error: PgErr }[] = [];
   const calls: { table: string; op: string; payload?: unknown }[] = [];
 
@@ -71,6 +93,10 @@ const makeDb = () => {
       if (failure >= 0) {
         const [f] = failures.splice(failure, 1);
         return { data: null, error: f.error };
+      }
+      if (this.op === 'insert' || this.op === 'update') {
+        const rejected = pgRejects(this.payload);
+        if (rejected) return { data: null, error: rejected };
       }
       const rows = tables[this.table];
       const match = (r: Row) => this.filters.every((f) => f(r));
@@ -412,6 +438,45 @@ describe('createSupabaseDocStore', () => {
     });
   });
 
+  // P2-GATE L5 (HIGH reliability): a str()-sanitized field can still carry \u0000 or half an emoji (a pasted
+  // PDF script, a clipped brief). Postgres jsonb rejects both, and the bad character stays in the live doc —
+  // so before this fix EVERY later save of the project failed and edits were lost on eviction.
+  it('a NUL or a lone surrogate in a brief field never breaks this save or any later one', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    const brief = { title: 'Moon\u0000 Fox \uD83E\uDD8A', logline: 'A fox\u0000 chases the moon \uD83C', premise: '\uDF19 night', notes: ['keep\u0000 it calm'] };
+    const dirty = docWith({ rev: 1, brief });
+    await expect(store.save({ projectId: PID, userId: USER, doc: dirty, summary: { title: brief.title, logline: brief.logline } })).resolves.toBeUndefined();
+    const stored = db.tables.comic_docs[0];
+    expect(stored.rev).toBe(1);
+    expect(stored.doc.brief).toMatchObject({ title: 'Moon Fox \uD83E\uDD8A', logline: 'A fox chases the moon \uFFFD', premise: '\uFFFD night', notes: ['keep it calm'] });
+    // The listing mirror (text name + jsonb state) is written too, cleaned the same way.
+    expect(db.tables.projects[0].name).toBe('Moon Fox \uD83E\uDD8A');
+    expect(db.tables.projects[0].state.overview).toBe('A fox chases the moon \uFFFD');
+    // The live doc is not rewritten under the session (the caller's object is untouched)…
+    expect(dirty.brief.logline).toBe('A fox\u0000 chases the moon \uD83C');
+    // …and the NEXT save — the bad characters still in the live doc, plus a real edit — lands as well.
+    const next = docWith({ rev: 2, brief: { ...brief, genre: 'fable' }, pages: [page(1, 'ready', 'u/a/p1\u0000.webp')] });
+    await expect(store.save({ projectId: PID, userId: USER, doc: next, summary: { title: brief.title } })).resolves.toBeUndefined();
+    expect(db.tables.comic_docs[0]).toMatchObject({ rev: 2, doc: { brief: { genre: 'fable' } } });
+    expect(db.tables.comic_docs[0].doc.pages[0].render.asset.path).toBe('u/a/p1.webp');
+  });
+
+  it('a new comic whose title carries a NUL is created (both rows), not refused', async () => {
+    const { db, store } = setup();
+    await expect(store.create({ projectId: PID, userId: USER, doc: docWith({ brief: { title: 'Spice\u0000 Run \uD83C', notes: [] } }) })).resolves.toBeUndefined();
+    expect(db.tables.projects[0].name).toBe('Spice Run \uFFFD');
+    expect(db.tables.comic_docs[0].doc.brief.title).toBe('Spice Run \uFFFD');
+  });
+
+  it('a bad character another flow left in projects.state never fails the mirror', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    db.tables.projects[0].state.legacyNote = 'old\u0000 note';
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1, brief: { title: 'Renamed', notes: [] } }), summary: { title: 'Renamed' } });
+    expect(db.tables.projects[0]).toMatchObject({ name: 'Renamed', state: { legacyNote: 'old note' } });
+  });
+
   it('treats a failed mirror as non-fatal', async () => {
     const { db, store } = setup();
     await store.create({ projectId: PID, userId: USER, doc: docWith() });
@@ -453,6 +518,24 @@ describe('createSupabaseDocStore', () => {
     expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p4.webp');
   });
 
+  it('a PUBLIC row keeps the published title and blurb; live edits stay private until republish (P1-PUBLISH)', async () => {
+    const { db, store } = setup({ mirrorIntervalMs: 0 });
+    await store.create({ projectId: PID, userId: USER, doc: docWith() });
+    db.tables.projects[0].is_public = true;
+    db.tables.projects[0].name = 'Published Title';
+    db.tables.projects[0].state = { ...db.tables.projects[0].state, overview: 'Published blurb.' };
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 1 }), summary: { title: 'UNREVIEWED live rename', logline: 'UNREVIEWED live blurb' } });
+    expect(db.tables.projects[0].name).toBe('Published Title');
+    expect(db.tables.projects[0].state.overview).toBe('Published blurb.');
+    expect(db.tables.projects[0].state.studioVersion).toBe(4);
+    expect(JSON.stringify(db.tables.projects[0])).not.toContain('UNREVIEWED');
+    // Private again (unpublished / unlisted): the owner's live text mirrors as before.
+    db.tables.projects[0].is_public = false;
+    await store.save({ projectId: PID, userId: USER, doc: docWith({ rev: 2 }), summary: { title: 'Live Title', logline: 'Live blurb' } });
+    expect(db.tables.projects[0].name).toBe('Live Title');
+    expect(db.tables.projects[0].state.overview).toBe('Live blurb');
+  });
+
   it('writes the public-safe state when the row turns public between the read and the write', async () => {
     const { db, store } = setup({ mirrorIntervalMs: 0 });
     await store.create({ projectId: PID, userId: USER, doc: docWith() });
@@ -485,22 +568,46 @@ describe('createSupabaseDocStore', () => {
     expect(db.tables.projects[0].state.coverImageId).toBe('u/a/p/x/img/p1.webp');
   });
 
-  it('serves public docs only when published and not force-private, sanitized', async () => {
+  it('serves ONLY the frozen snapshot of a live, public, non-force-private publication (P1-PUBLISH)', async () => {
     const { db, store } = setup();
     await store.create({ projectId: PID, userId: USER, doc: docWith({ conversation: [{ id: 'm', role: 'user', text: 'hi', at: 1 }] }) });
-    expect(await store.loadPublic(PID)).toBeNull();
+    // A public listing row alone (no publication) never exposes the live doc.
     db.tables.projects[0].is_public = true;
+    expect(await store.loadPublic(PID)).toBeNull();
+    const snapshot = { ...createEmptyDoc('pub-1', 'Spice Market', 5), conversation: [] };
+    db.tables.comic_publications.push({ project_id: PID, user_id: USER, status: 'live', visibility: 'unlisted', snapshot });
+    // Unlisted is reachable by slug only, never by project id.
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.tables.comic_publications[0].visibility = 'public';
+    const doc = await store.loadPublic(PID);
+    expect(doc?.id).toBe('pub-1');
+    expect(doc?.id).not.toBe(PID);
+    expect(doc?.conversation).toEqual([]);
     db.tables.projects[0].is_forced_private = true;
     expect(await store.loadPublic(PID)).toBeNull();
     db.tables.projects[0].is_forced_private = false;
-    const doc = await store.loadPublic(PID);
-    expect(doc?.id).toBe(PID);
-    expect(doc?.conversation).toEqual([]);
-    // Databases without the moderation columns fall back to is_public alone.
+    db.tables.comic_publications[0].status = 'suspended';
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.tables.comic_publications[0].status = 'live';
+    // Databases without the moderation columns fall back to the publication alone.
     db.failNext('projects', 'select', { code: '42703', message: 'column projects.is_forced_private does not exist' });
-    expect((await store.loadPublic(PID))?.id).toBe(PID);
-    db.failNext('projects', 'select', { code: '22P02', message: 'invalid uuid' });
+    expect((await store.loadPublic(PID))?.id).toBe('pub-1');
+    // Any other moderation lookup error fails closed.
+    db.failNext('projects', 'select', { code: 'XX000', message: 'boom' });
+    expect(await store.loadPublic(PID)).toBeNull();
+    // An unmigrated database (no publications table) and bad ids serve nothing.
+    db.failNext('comic_publications', 'select', { code: '42P01', message: 'relation does not exist' });
+    expect(await store.loadPublic(PID)).toBeNull();
+    db.failNext('comic_publications', 'select', { code: '22P02', message: 'invalid uuid' });
     expect(await store.loadPublic('bad')).toBeNull();
+  });
+
+  it('re-asserts the live share slug in the listing mirror (P1-PUBLISH)', () => {
+    const live = docWith({ publication: { visibility: 'unlisted', status: 'live', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 3, publishedAt: 9, languages: ['en'] } });
+    expect(buildLegacyProjectState(live).shareSlug).toBe('Ab3dEf6hIj9kLm2nP');
+    expect(buildLegacyProjectState(docWith()).shareSlug).toBeUndefined();
+    const suspended = docWith({ publication: { visibility: 'public', status: 'suspended', slug: 'Ab3dEf6hIj9kLm2nP', publishedRev: 3, publishedAt: 9, languages: ['en'] } });
+    expect(buildLegacyProjectState(suspended).shareSlug).toBeUndefined();
   });
 
   it('loads the legacy state for its owner only', async () => {
@@ -508,6 +615,40 @@ describe('createSupabaseDocStore', () => {
     db.tables.projects.push({ id: PID, user_id: USER, name: 'Classic', state: { script: 'INT. MARKET' } });
     expect(await store.loadLegacyState(PID, USER)).toEqual({ name: 'Classic', state: { script: 'INT. MARKET' } });
     expect(await store.loadLegacyState(PID, OTHER)).toBeNull();
+  });
+});
+
+describe('jsonbSafe (P2-GATE L5)', () => {
+  it('removes NULs and turns lone surrogates into U+FFFD, keeping every valid pair', () => {
+    expect(jsonbSafeText('a\u0000b')).toBe('ab');
+    expect(jsonbSafeText('x \uD83D')).toBe('x \uFFFD'); // a high surrogate cut off at the end
+    expect(jsonbSafeText('\uDE00 y')).toBe('\uFFFD y'); // a low surrogate with no high one
+    expect(jsonbSafeText('\uDE00\uD83D')).toBe('\uFFFD\uFFFD'); // reversed pair = two lone halves
+    expect(jsonbSafeText('fox \uD83E\uDD8A తెలుగు नमस्ते')).toBe('fox \uD83E\uDD8A తెలుగు नमस्ते');
+    expect(jsonbSafeText('\u0000')).toBe('');
+  });
+
+  it('cleans every string and object key, deep; a clean value comes back as the same reference', () => {
+    const clean = { a: ['x', { b: 'y' }], n: 1, t: true, z: null };
+    expect(jsonbSafe(clean)).toBe(clean);
+    const dirty = { ok: 'fine', 'k\u0000ey': 'v', list: ['p', 'q\u0000', { deep: ['\uD800'] }], same: { s: 't' }, n: 2 };
+    const out = jsonbSafe(dirty);
+    expect(out).toEqual({ ok: 'fine', key: 'v', list: ['p', 'q', { deep: ['\uFFFD'] }], same: { s: 't' }, n: 2 });
+    expect(Object.keys(out)).toEqual(['ok', 'key', 'list', 'same', 'n']); // order kept
+    expect(out.same).toBe(dirty.same); // untouched branches are shared, not copied
+    expect(dirty.list[1]).toBe('q\u0000'); // the input is never mutated
+    expect(pgRejects(out)).toBeNull();
+    expect(pgRejects(dirty)).toMatchObject({ code: '22P05' });
+  });
+
+  it('a whole comic doc with bad characters in many places passes the database check', () => {
+    const doc = docWith({
+      brief: { title: 'T\u0000', logline: 'L \uD83C', notes: ['n\u0000'] },
+      pages: [{ ...page(1, 'ready', 'u/a/p1.webp'), summary: 'S\uDC00', panels: [{ id: 'pn', n: 1, size: 'wide', shot: 'medium', action: 'A\u0000', castIds: [], lines: [{ id: 'l1', kind: 'speech', text: 'Hi\u0000 \uD83D' }] }] }]
+    });
+    expect(pgRejects(doc)).not.toBeNull();
+    expect(pgRejects(jsonbSafe(doc))).toBeNull();
+    expect(jsonbSafe(doc).pages[0].panels[0].lines[0].text).toBe('Hi \uFFFD');
   });
 });
 

@@ -1,0 +1,770 @@
+{
+  "note": "Golden apply and undo cases: `before` and `ops` (inline or a {\"$ref\"} to another fixture) go through apply*Ops(before, ops, options); the call must give exactly `applied` (op ids, in order), `rejected` (index, opId, code; messages are for people and may change) and `after`. `undo` is invert*Ops(before, applied, {baseRev: after.rev, id: op => \"undo-\" + op.id}); applying it to `after` gives `before` back (apart from rev).",
+  "cases": [
+    {
+      "name": "every contract op in one call (detaching the only attachment removes the field; set_recipients with cc [] keeps an empty cc)",
+      "before": {
+        "$ref": "contract/email/minimal.json"
+      },
+      "ops": {
+        "$ref": "contract/email/ops.json"
+      },
+      "applied": [
+        "op-1",
+        "op-2",
+        "op-3",
+        "op-4",
+        "op-5",
+        "op-6",
+        "op-7",
+        "op-8"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "mode": "compose",
+        "subject": "Hello again",
+        "to": [
+          {
+            "address": "editor@example.com",
+            "name": "Sam Editor"
+          }
+        ],
+        "blocks": [
+          {
+            "type": "heading",
+            "id": "h-new",
+            "level": 2,
+            "runs": [
+              {
+                "text": "News"
+              }
+            ]
+          }
+        ],
+        "cc": [],
+        "attachments": [
+          {
+            "id": "a2",
+            "name": "Deck",
+            "kind": "pptx",
+            "spec": {
+              "type": "deck",
+              "deck": {
+                "v": 1,
+                "title": "Deck",
+                "size": "16:9",
+                "theme": {
+                  "preset": "light"
+                },
+                "slides": []
+              }
+            }
+          }
+        ],
+        "rev": 1
+      },
+      "undo": [
+        {
+          "op": "detach",
+          "id": "undo-op-8",
+          "baseRev": 1,
+          "attachmentId": "a2"
+        },
+        {
+          "op": "set_recipients",
+          "id": "undo-op-7",
+          "baseRev": 1,
+          "actor": "user",
+          "to": []
+        },
+        {
+          "op": "attach",
+          "id": "undo-op-6",
+          "baseRev": 1,
+          "index": 0,
+          "attachment": {
+            "id": "a1",
+            "name": "Notes",
+            "kind": "pdf",
+            "spec": {
+              "type": "doc",
+              "doc": {
+                "v": 1,
+                "title": "Notes",
+                "sections": []
+              }
+            }
+          }
+        },
+        {
+          "op": "detach",
+          "id": "undo-op-5",
+          "baseRev": 1,
+          "attachmentId": "a1"
+        },
+        {
+          "op": "insert_block",
+          "id": "undo-op-4",
+          "baseRev": 1,
+          "index": 1,
+          "block": {
+            "type": "paragraph",
+            "id": "p1",
+            "runs": [
+              {
+                "text": "Hi again,"
+              }
+            ]
+          }
+        },
+        {
+          "op": "update_block",
+          "id": "undo-op-3",
+          "baseRev": 1,
+          "actor": "agent",
+          "blockId": "p1",
+          "block": {
+            "type": "paragraph",
+            "id": "p1",
+            "runs": [
+              {
+                "text": "Hi there,"
+              }
+            ]
+          }
+        },
+        {
+          "op": "remove_block",
+          "id": "undo-op-2",
+          "baseRev": 1,
+          "blockId": "h-new"
+        },
+        {
+          "op": "set_subject",
+          "id": "undo-op-1",
+          "baseRev": 1,
+          "subject": "Hello"
+        }
+      ]
+    },
+    {
+      "name": "detach the first attachment and replace the recipients; the undo attaches it back at index 0 and restores to, cc and bcc",
+      "before": {
+        "$ref": "contract/email/full.json"
+      },
+      "ops": [
+        {
+          "op": "detach",
+          "id": "op-dt",
+          "baseRev": 1,
+          "actor": "agent",
+          "attachmentId": "a1"
+        },
+        {
+          "op": "set_recipients",
+          "id": "op-to",
+          "baseRev": 1,
+          "actor": "user",
+          "to": [
+            {
+              "address": "sam@example.com",
+              "name": "Sam"
+            }
+          ]
+        }
+      ],
+      "applied": [
+        "op-dt",
+        "op-to"
+      ],
+      "rejected": [],
+      "after": {
+        "v": 1,
+        "rev": 2,
+        "mode": "compose",
+        "subject": "The Lighthouse Keeper: pitch, sample pages and next steps",
+        "preheader": "24 pages, all ages, ready for your list",
+        "to": [
+          {
+            "address": "sam@example.com",
+            "name": "Sam"
+          }
+        ],
+        "brand": "dreamstream",
+        "blocks": [
+          {
+            "type": "heading",
+            "id": "h1",
+            "level": 1,
+            "runs": [
+              {
+                "text": "The Lighthouse Keeper"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "id": "p1",
+            "runs": [
+              {
+                "text": "Hi Sam, "
+              },
+              {
+                "text": "thanks",
+                "marks": [
+                  "b"
+                ]
+              },
+              {
+                "text": " for the call. The "
+              },
+              {
+                "text": "sample pages",
+                "link": {
+                  "href": "https://example.com/samples?issue=1"
+                }
+              },
+              {
+                "text": " are ready."
+              }
+            ]
+          },
+          {
+            "type": "heading",
+            "id": "h2",
+            "level": 2,
+            "runs": [
+              {
+                "text": "What is in the pack"
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "id": "l1",
+            "ordered": false,
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "A one-page pitch"
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Six sample pages"
+                  }
+                ],
+                "indent": 1
+              },
+              {
+                "runs": [
+                  {
+                    "text": "A pitch deck"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "button",
+            "id": "b1",
+            "label": "Open the samples",
+            "href": "https://example.com/samples"
+          },
+          {
+            "type": "quote",
+            "id": "q1",
+            "cite": "Sam Editor",
+            "runs": [
+              {
+                "text": "Send me the first issue when it is ready."
+              }
+            ]
+          },
+          {
+            "type": "divider",
+            "id": "d1"
+          },
+          {
+            "type": "columns",
+            "id": "c1",
+            "columns": [
+              {
+                "blocks": [
+                  {
+                    "type": "image",
+                    "id": "img1",
+                    "ref": {
+                      "kind": "data",
+                      "dataUri": "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=="
+                    },
+                    "alt": "Cover",
+                    "width": 240
+                  }
+                ]
+              },
+              {
+                "blocks": [
+                  {
+                    "type": "heading",
+                    "id": "h3",
+                    "level": 3,
+                    "runs": [
+                      {
+                        "text": "Schedule"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "paragraph",
+                    "id": "p2",
+                    "runs": [
+                      {
+                        "text": "Issue one in March; questions to "
+                      },
+                      {
+                        "text": "me",
+                        "link": {
+                          "href": "mailto:creator@example.com"
+                        }
+                      },
+                      {
+                        "text": "."
+                      }
+                    ]
+                  },
+                  {
+                    "type": "button",
+                    "id": "b2",
+                    "label": "Reply",
+                    "href": "mailto:creator@example.com?subject=Lighthouse"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "image",
+            "id": "img2",
+            "ref": {
+              "kind": "asset",
+              "id": "user-0001/assets/page-1.png"
+            },
+            "alt": "Page one"
+          }
+        ],
+        "signature": "Sample Creator\nThe Lighthouse Keeper",
+        "attachments": [
+          {
+            "id": "a2",
+            "name": "Lighthouse deck",
+            "kind": "pdf",
+            "spec": {
+              "type": "deck",
+              "deck": {
+                "v": 1,
+                "title": "Deck",
+                "size": "4:3",
+                "theme": {
+                  "preset": "dark"
+                },
+                "slides": [
+                  {
+                    "id": "sl1",
+                    "layout": "title",
+                    "elements": []
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "undo": [
+        {
+          "op": "set_recipients",
+          "id": "undo-op-to",
+          "baseRev": 2,
+          "actor": "user",
+          "to": [
+            {
+              "address": "editor@example.com",
+              "name": "Sam Editor"
+            }
+          ],
+          "cc": [
+            {
+              "address": "agent@example.org"
+            }
+          ],
+          "bcc": []
+        },
+        {
+          "op": "attach",
+          "id": "undo-op-dt",
+          "baseRev": 2,
+          "actor": "agent",
+          "index": 0,
+          "attachment": {
+            "id": "a1",
+            "name": "Lighthouse pitch",
+            "kind": "docx",
+            "spec": {
+              "type": "doc",
+              "doc": {
+                "v": 1,
+                "title": "Pitch",
+                "sections": [
+                  {
+                    "id": "s1",
+                    "pageBreakBefore": false,
+                    "blocks": [
+                      {
+                        "type": "paragraph",
+                        "id": "p1",
+                        "runs": [
+                          {
+                            "text": "One page."
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "refusals: an agent (or unstamped) set_recipients is forbidden, a block inside columns is not top-level, a block id used inside columns is taken",
+      "before": {
+        "$ref": "contract/email/full.json"
+      },
+      "ops": [
+        {
+          "op": "set_recipients",
+          "id": "op-agent",
+          "baseRev": 1,
+          "actor": "agent",
+          "to": [
+            {
+              "address": "evil@example.net"
+            }
+          ]
+        },
+        {
+          "op": "set_recipients",
+          "id": "op-unstamped",
+          "baseRev": 1,
+          "to": [
+            {
+              "address": "evil@example.net"
+            }
+          ]
+        },
+        {
+          "op": "remove_block",
+          "id": "op-inner",
+          "baseRev": 1,
+          "blockId": "p2"
+        },
+        {
+          "op": "insert_block",
+          "id": "op-taken",
+          "baseRev": 1,
+          "block": {
+            "type": "divider",
+            "id": "h3"
+          }
+        },
+        {
+          "op": "set_subject",
+          "id": "op-ok",
+          "baseRev": 1,
+          "actor": "agent",
+          "subject": "Pitch: The Lighthouse Keeper"
+        }
+      ],
+      "applied": [
+        "op-ok"
+      ],
+      "rejected": [
+        {
+          "index": 0,
+          "opId": "op-agent",
+          "code": "forbidden"
+        },
+        {
+          "index": 1,
+          "opId": "op-unstamped",
+          "code": "forbidden"
+        },
+        {
+          "index": 2,
+          "opId": "op-inner",
+          "code": "not-found"
+        },
+        {
+          "index": 3,
+          "opId": "op-taken",
+          "code": "invalid"
+        }
+      ],
+      "after": {
+        "v": 1,
+        "rev": 2,
+        "mode": "compose",
+        "subject": "Pitch: The Lighthouse Keeper",
+        "preheader": "24 pages, all ages, ready for your list",
+        "to": [
+          {
+            "address": "editor@example.com",
+            "name": "Sam Editor"
+          }
+        ],
+        "cc": [
+          {
+            "address": "agent@example.org"
+          }
+        ],
+        "bcc": [],
+        "brand": "dreamstream",
+        "blocks": [
+          {
+            "type": "heading",
+            "id": "h1",
+            "level": 1,
+            "runs": [
+              {
+                "text": "The Lighthouse Keeper"
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "id": "p1",
+            "runs": [
+              {
+                "text": "Hi Sam, "
+              },
+              {
+                "text": "thanks",
+                "marks": [
+                  "b"
+                ]
+              },
+              {
+                "text": " for the call. The "
+              },
+              {
+                "text": "sample pages",
+                "link": {
+                  "href": "https://example.com/samples?issue=1"
+                }
+              },
+              {
+                "text": " are ready."
+              }
+            ]
+          },
+          {
+            "type": "heading",
+            "id": "h2",
+            "level": 2,
+            "runs": [
+              {
+                "text": "What is in the pack"
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "id": "l1",
+            "ordered": false,
+            "items": [
+              {
+                "runs": [
+                  {
+                    "text": "A one-page pitch"
+                  }
+                ]
+              },
+              {
+                "runs": [
+                  {
+                    "text": "Six sample pages"
+                  }
+                ],
+                "indent": 1
+              },
+              {
+                "runs": [
+                  {
+                    "text": "A pitch deck"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "button",
+            "id": "b1",
+            "label": "Open the samples",
+            "href": "https://example.com/samples"
+          },
+          {
+            "type": "quote",
+            "id": "q1",
+            "cite": "Sam Editor",
+            "runs": [
+              {
+                "text": "Send me the first issue when it is ready."
+              }
+            ]
+          },
+          {
+            "type": "divider",
+            "id": "d1"
+          },
+          {
+            "type": "columns",
+            "id": "c1",
+            "columns": [
+              {
+                "blocks": [
+                  {
+                    "type": "image",
+                    "id": "img1",
+                    "ref": {
+                      "kind": "data",
+                      "dataUri": "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=="
+                    },
+                    "alt": "Cover",
+                    "width": 240
+                  }
+                ]
+              },
+              {
+                "blocks": [
+                  {
+                    "type": "heading",
+                    "id": "h3",
+                    "level": 3,
+                    "runs": [
+                      {
+                        "text": "Schedule"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "paragraph",
+                    "id": "p2",
+                    "runs": [
+                      {
+                        "text": "Issue one in March; questions to "
+                      },
+                      {
+                        "text": "me",
+                        "link": {
+                          "href": "mailto:creator@example.com"
+                        }
+                      },
+                      {
+                        "text": "."
+                      }
+                    ]
+                  },
+                  {
+                    "type": "button",
+                    "id": "b2",
+                    "label": "Reply",
+                    "href": "mailto:creator@example.com?subject=Lighthouse"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "image",
+            "id": "img2",
+            "ref": {
+              "kind": "asset",
+              "id": "user-0001/assets/page-1.png"
+            },
+            "alt": "Page one"
+          }
+        ],
+        "signature": "Sample Creator\nThe Lighthouse Keeper",
+        "attachments": [
+          {
+            "id": "a1",
+            "name": "Lighthouse pitch",
+            "kind": "docx",
+            "spec": {
+              "type": "doc",
+              "doc": {
+                "v": 1,
+                "title": "Pitch",
+                "sections": [
+                  {
+                    "id": "s1",
+                    "pageBreakBefore": false,
+                    "blocks": [
+                      {
+                        "type": "paragraph",
+                        "id": "p1",
+                        "runs": [
+                          {
+                            "text": "One page."
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "a2",
+            "name": "Lighthouse deck",
+            "kind": "pdf",
+            "spec": {
+              "type": "deck",
+              "deck": {
+                "v": 1,
+                "title": "Deck",
+                "size": "4:3",
+                "theme": {
+                  "preset": "dark"
+                },
+                "slides": [
+                  {
+                    "id": "sl1",
+                    "layout": "title",
+                    "elements": []
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "undo": [
+        {
+          "op": "set_subject",
+          "id": "undo-op-ok",
+          "baseRev": 2,
+          "actor": "agent",
+          "subject": "The Lighthouse Keeper: pitch, sample pages and next steps"
+        }
+      ]
+    }
+  ]
+}

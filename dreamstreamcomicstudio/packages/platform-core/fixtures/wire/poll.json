@@ -1,0 +1,47 @@
+{
+  "note": "Golden vectors for poll tokens (plan §5.8). Computed once by an independent node:crypto script and pinned: a change here is a contract change (ADR 0008). Synthetic secrets only.",
+  "secret": "zoCviGCT0E5FtgPDS-rKegNJApSWYH3oaSjfx51FKRk",
+  "pollKeyHex": "2aa5f9d44de318cb0584131f8d136927c432b9a1a1faa56d8525738d5f754927",
+  "now": 1793610000,
+  "vectors": [
+    {
+      "name": "default lifetime",
+      "input": {
+        "app": "dreamstream",
+        "kid": "ds-fixture-1",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "jobId": "job-0001"
+      },
+      "payload": {
+        "v": 1,
+        "kind": "poll",
+        "app": "dreamstream",
+        "kid": "ds-fixture-1",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "jobId": "job-0001",
+        "exp": 1793610900
+      },
+      "token": "eyJ2IjoxLCJraW5kIjoicG9sbCIsImFwcCI6ImRyZWFtc3RyZWFtIiwia2lkIjoiZHMtZml4dHVyZS0xIiwic3ViIjoiODJiYTQxYTJiOTRhZmNlNzBmMzQ3NWRlMWRhYTliYTYiLCJqb2JJZCI6ImpvYi0wMDAxIiwiZXhwIjoxNzkzNjEwOTAwfQ.dJRlomlEbdZaYVvypLvIJ6_SWnr3Ed0t1_JFM2h_wwI"
+    },
+    {
+      "name": "one hour, a hash-shaped job id",
+      "input": {
+        "app": "dreamstream",
+        "kid": "ds-fixture-1",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "jobId": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "ttlSeconds": 3600
+      },
+      "payload": {
+        "v": 1,
+        "kind": "poll",
+        "app": "dreamstream",
+        "kid": "ds-fixture-1",
+        "sub": "82ba41a2b94afce70f3475de1daa9ba6",
+        "jobId": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "exp": 1793613600
+      },
+      "token": "eyJ2IjoxLCJraW5kIjoicG9sbCIsImFwcCI6ImRyZWFtc3RyZWFtIiwia2lkIjoiZHMtZml4dHVyZS0xIiwic3ViIjoiODJiYTQxYTJiOTRhZmNlNzBmMzQ3NWRlMWRhYTliYTYiLCJqb2JJZCI6ImMwZmZlZTAwYzBmZmVlMDBjMGZmZWUwMGMwZmZlZTAwYzBmZmVlMDBjMGZmZWUwMGMwZmZlZTAwYzBmZmVlMDAiLCJleHAiOjE3OTM2MTM2MDB9.lQXNC9ekUOpNMeYx3jEYO2PguLzZSiw-DwRvaVR0oa8"
+    }
+  ]
+}

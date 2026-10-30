@@ -14,6 +14,8 @@ import { runSwarm } from '../agents/orchestrator.js';
 import { runDeepResearch, type ResearchDepth } from '../research/deepResearch.js';
 import { resolveTools, type ToolContext } from '../tools/registry.js';
 import { TEXT_FALLBACK } from '../autoRouter.js';
+import { spentUsageOf } from '../usage.js';
+import { safeClientMessage } from '../providers/errors.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { withAgentPersona } from '../persona.js';
 import type { ChatMessage, AIProviderId } from '../providers/types.js';
@@ -35,7 +37,11 @@ export interface RunRecipeParams {
   values?: Record<string, unknown>;
   provider: AIProviderId;
   apiKey: string;
-  /** Model for the answer/synthesis (recipe.settings.model overrides when set). */
+  /**
+   * Model for the answer/synthesis — already resolved, checked and priced by the caller. A
+   * recipe's own `settings.model` pin is resolved by the route (routes/recipes.ts makes it the
+   * requested model before prepareChat), never here: the runner only ever calls this model.
+   */
   model: string;
   /** Prior conversation, if running a recipe inside an existing chat. */
   priorMessages?: ChatMessage[];
@@ -43,6 +49,11 @@ export interface RunRecipeParams {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /**
+   * Free-only (X-Free-Only): the run is offered no paid retry in any engine — no `fallbackModel`,
+   * `freeOnly` on every provider request, and a free planner/agents pick (RunSwarmParams.noPaidRetry).
+   */
+  noPaidRetry?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
@@ -103,9 +114,14 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
   }
   const r = resolution.resolved;
   const wantsJson = Boolean(recipe.response?.json_schema);
-  const model = recipe.settings?.model || params.model;
+  // Never recipe.settings.model: an unchecked pin here would run a model nobody priced (S11).
+  const model = params.model;
   const temperature = recipe.settings?.temperature;
   const userMemory = params.systemPrompt?.trim();
+  // Free-only: no engine gets the paid retry (each one also sends `freeOnly` to the provider).
+  const freeOnly = params.noPaidRetry === true;
+  const fallbackModel = freeOnly ? undefined : params.fallbackModel || TEXT_FALLBACK;
+  const retry = { fallbackModel, ...(freeOnly ? { noPaidRetry: true } : {}) };
 
   // Effective kickoff message: the templated prompt, or — if the recipe is
   // instructions-only — a minimal nudge so the agent acts on the instructions.
@@ -146,7 +162,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         model,
         priorMessages: params.priorMessages,
         systemPrompt: userMemory,
-        fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+        ...retry,
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         onDelta: params.onDelta,
@@ -183,7 +199,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         messages,
         systemPrompt: swarmSystem || undefined,
         clientContext: params.clientContext,
-        fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+        ...retry,
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         onDelta: params.onDelta,
@@ -227,7 +243,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
       tools: resolveTools(recipe.tools, toolCtxFrom(params.clientContext)),
       temperature,
       maxTokens: 3072,
-      fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+      ...retry,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       onDelta: params.onDelta
@@ -254,10 +270,12 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
       recipeId: recipe.id,
       title: recipe.title,
       missing: [],
-      text: `The recipe "${recipe.title}" failed: ${(err as Error)?.message || 'unknown error'}`,
+      // A calm sentence, never the raw provider/engine error.
+      text: `The recipe "${recipe.title}" couldn't finish. ${safeClientMessage(err, 'Please try again in a moment.')}`,
       model,
       artifacts: [baseArtifact('error')],
-      usage: {},
+      // What the failed run had already spent still settles (S9); nothing spent → nothing billed.
+      usage: spentUsageOf(err) ?? {},
       activities: r.activities
     };
   }

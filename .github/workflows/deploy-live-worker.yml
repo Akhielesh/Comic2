@@ -14,6 +14,11 @@ on:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/live-worker/**'
+      # Bundled into the worker (usage metering / fair use). tests/config/deployPaths.test.ts
+      # enforces that every bundled file is listed here.
+      - 'dreamstreamcomicstudio/shared/stream/usage.ts'
+      # The monitor wire/glance contract (ADR 0006 WS-6/7): devices, members, origin and index import it.
+      - 'dreamstreamcomicstudio/packages/monitor-core/**'
       - '.github/workflows/deploy-live-worker.yml'
   workflow_dispatch:
 

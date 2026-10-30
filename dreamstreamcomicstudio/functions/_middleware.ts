@@ -19,10 +19,21 @@
  * (questionnaire, synthetic sample record, logging). Everyone else — people, search engines,
  * link-preview bots, plain HTTP clients like the ops smoke scripts — gets the app as before.
  *
+ * It also sends the hosts that only redirect (www and the Pages production alias) to the
+ * custom domain first, so there is one site and one sign-in. Requests the Comic Studio front
+ * door (comics-edge Worker, comics.dreamstreamstudio.ai) proxies to the Pages origin carry
+ * X-Forwarded-Host: comics.dreamstreamstudio.ai and are served, not redirected.
+ *
+ * Legacy reader links (`/?view=read&id=<uuid>`) of PUBLIC published comics get the comic's
+ * preview head with canonical /c/<slug> (the anon RPC only answers for public publications,
+ * so an id can never reveal an unlisted slug). Everything else passes through untouched.
+ *
  * public/_routes.json keeps this function off static assets, so it only runs for page loads.
  * Detection lives in api-proxy/src/agent-gate.ts so the page and API halves never drift.
  */
 import { detectAgent } from '../api-proxy/src/agent-gate';
+import { injectHead, PROXIED_HOSTS, publicOrigin, renderShareHead, validateShareCardRpc } from './_shared/shareHead';
+import { rpc, type SupabaseEnv } from './_shared/supabaseRpc';
 import {
   MAIN_HOSTNAME,
   MAIN_ORIGIN,
@@ -43,7 +54,7 @@ interface AssetFetcher {
 interface PagesContext {
   request: Request;
   next: () => Promise<Response>;
-  env?: { ASSETS?: AssetFetcher } & SecurityEnv & CspReportEnv;
+  env?: SupabaseEnv & { ASSETS?: AssetFetcher } & SecurityEnv & CspReportEnv;
 }
 
 /* ===================================================================== security headers
@@ -346,12 +357,28 @@ const CANONICAL_ORIGIN = 'https://dreamstreamstudio.ai';
  *  session (localStorage is per host). Exact match, so preview and branch deploys
  *  (<hash>.comic2.pages.dev, <branch>.comic2.pages.dev) keep serving. */
 const REDIRECT_HOSTS = new Set(['www.dreamstreamstudio.ai', 'comic2.pages.dev']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STREAM_ALIASES = new Set(STREAM_ALIAS_HOSTS);
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 /** Crawl policy files and the pretty check-in URL stay reachable for every client. */
 function isOpenPath(pathname: string): boolean {
   return pathname === '/robots.txt' || pathname === '/llms.txt' || pathname.startsWith('/.well-known/');
+}
+
+/** `/?view=read&id=<uuid>` of a PUBLIC publication → the same preview head as /c/<slug>. */
+async function legacyReaderHead(request: Request, url: URL, env: SupabaseEnv | undefined, next: () => Promise<Response>): Promise<Response> {
+  const id = url.searchParams.get('id') || '';
+  const [res, card] = await Promise.all([next(), UUID_RE.test(id) ? rpc<unknown>(env, 'comic_share_card_by_project', { p_project: id.toLowerCase() }) : Promise.resolve(null)]);
+  const rpcCard = card && card.ok ? validateShareCardRpc(card.data) : null;
+  if (!rpcCard || rpcCard.visibility !== 'public') return res;
+  const type = res.headers.get('content-type') || '';
+  if (res.status !== 200 || !type.includes('text/html')) return res;
+  const html = injectHead(await res.text(), renderShareHead(rpcCard, { origin: publicOrigin(request, url) }));
+  const headers = new Headers(res.headers);
+  headers.delete('content-length');
+  headers.set('cache-control', 'no-store');
+  return new Response(request.method === 'HEAD' ? null : html, { status: 200, headers });
 }
 
 /** A page of the app (not an API call, not a file like /favicon.ico or /assets/x.js). */
@@ -433,7 +460,9 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
     const movedLiveApp = streamHostOn && isPage && isLegacyLivePath(url.pathname) && url.searchParams.get('legacy') !== '1';
     // One site, one sign-in. Path and query are kept; browsers re-attach the #fragment
     // (host keys, guest keys, auth tokens) to a fragment-less Location (RFC 9110 §10.2.2).
-    if (REDIRECT_HOSTS.has(host)) {
+    // The Comic Studio front door proxies to the Pages origin (a redirect host): serve it.
+    const forwardedHost = (request.headers.get('x-forwarded-host') || '').trim().toLowerCase();
+    if (REDIRECT_HOSTS.has(host) && !PROXIED_HOSTS.has(forwardedHost)) {
       // Stream Studio links go straight to its host (one hop, not two).
       if (movedLiveApp) return moved(toStreamUrl(`${url.pathname}${url.search}`), { 'cache-control': 'public, max-age=86400' });
       return moved(`${CANONICAL_ORIGIN}${url.pathname}${url.search}`);
@@ -478,6 +507,10 @@ export function createOnRequest({ streamHostOn, enforceLive = ENFORCE_LIVE }: Mi
     // Pages sign-in links land on are never shown in a frame: the security headers first, then the
     // frame block merged into whatever policy they set (so an enforced CSP is never replaced).
     if (onStreamHost && isPage && isAppPage(url.pathname)) return blockFraming(await secured(serveLiveApp(request, url, env, next)));
+    // A legacy share link (/?view=read&id=…) gets its preview head; it is a main-app page like any other.
+    if (isPage && url.pathname === '/' && url.searchParams.get('view') === 'read' && url.searchParams.has('id')) {
+      return secured(legacyReaderHead(request, url, env, next));
+    }
     if (isPage && isSignInLandingPath(url.pathname)) return blockFraming(await secured(next()));
     if (isPage && isAlertsBridgePath(url.pathname)) return alertsBridgeHeaders(await secured(next()));
     return secured(next());

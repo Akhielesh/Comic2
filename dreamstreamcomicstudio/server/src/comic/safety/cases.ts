@@ -1,0 +1,703 @@
+// Reader reports, owner appeals (second opinion → human queue) and the moderator case flow
+// (safety.md §3.4, §8). Owner: P1-SAFETY.
+//
+// Reports arrive by SLUG (never by project id) and are always accepted silently: the caller
+// answers 202 before any of this runs, so an unknown slug and a real one are indistinguishable.
+// Appeals and moderator decisions write verdicts through the live session, so the owner's
+// open studio updates at once. Every moderator action is audited.
+
+import {
+  collectAssetPaths,
+  getRender,
+  newId,
+  renderTargetKey,
+  targetLabel,
+  type Card,
+  type ComicDoc,
+  type Msg,
+  type NextStep,
+  type RenderTarget
+} from '../../../../shared/comic/doc.js';
+import { SLUG_RE } from '../../../../shared/comic/publication.js';
+import {
+  PLATFORM_CEILING,
+  ZERO_TOLERANCE,
+  isContentRating,
+  ratingRank,
+  safetyStatusOf,
+  type AssessedRating,
+  type ContentRating,
+  type SafetyCategory,
+  type SafetyVerdict
+} from '../../../../shared/comic/safety.js';
+import { logger } from '../../lib/logger.js';
+import { sha12 } from '../publication/snapshot.js';
+import { isLibraryPath, isPublicationPath } from '../storagePaths.js';
+import { StudioError, type AssetStore, type StudioContext, type StudioSessionApi } from '../types.js';
+import { SAFETY_CHECK_USD, SECOND_OPINION_TIMEOUT_MS, SECOND_OPINION_USD, checkImage } from './check.js';
+import { categoryWords } from './contentPolicy.js';
+import { CAPS, DAY, errorFacts, quarantineAsset, ratingOf, recordDecision, restoreFromQuarantine, safetyDeps, takeSlot } from './deps.js';
+import type { CaseTarget, SafetyCase } from './store.js';
+
+// ── Reports ──────────────────────────────────────────────────────────────────
+
+/** Reasons a reader may give (client chips + the share sheet's names). */
+export const REPORT_REASONS = ['sexual', 'violent', 'hateful', 'self_harm', 'real_person', 'copyright', 'kids_unsafe', 'spam', 'other'] as const;
+export type ReportReasonCode = (typeof REPORT_REASONS)[number];
+const REASON_ALIASES: Record<string, ReportReasonCode> = {
+  violence: 'violent',
+  gore: 'violent',
+  hate: 'hateful',
+  harassment: 'hateful',
+  ip: 'copyright',
+  selfharm: 'self_harm'
+};
+export const normalizeReportReason = (raw: unknown): ReportReasonCode | null => {
+  const key = typeof raw === 'string' ? raw.trim().toLowerCase().replace(/[-\s]/g, '_') : '';
+  if ((REPORT_REASONS as readonly string[]).includes(key)) return key as ReportReasonCode;
+  return REASON_ALIASES[key.replace(/_/g, '')] || REASON_ALIASES[key] || null;
+};
+/** Reasons serious enough to re-check the reported page right away (platform key). */
+const RECHECK_REASONS: ReadonlySet<ReportReasonCode> = new Set(['sexual', 'violent', 'hateful', 'self_harm', 'real_person', 'kids_unsafe']);
+
+/** 3 distinct signed-in reporters (anonymous counts 0.5) within 24 h hold the comic for review. */
+export const AUTO_HOLD_WEIGHT = 3;
+
+export interface ReportInput {
+  slug: string;
+  reason: string;
+  note?: string;
+  page?: number;
+  reporterUserId?: string;
+  ipHash: string;
+}
+
+const cleanNote = (note: unknown): string | undefined => {
+  if (typeof note !== 'string') return undefined;
+  // Control characters out, whitespace folded, ≤ 300 (the DB checks it too). Rendered as text only.
+  const t = note.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim().slice(0, 300);
+  return t || undefined;
+};
+
+/**
+ * A held comic's publication is suspended (projects trigger): its pub/<key>/ copies (pages, cover,
+ * share images) come down too, so a direct bucket URL stops answering. Best effort: a failure is
+ * logged and never undoes or blocks the hold. Republishing after a lifted hold copies them again.
+ */
+async function takeDownPublishedCopies(projectId: string): Promise<void> {
+  try {
+    await safetyDeps().removePublicationObjects(projectId);
+  } catch (err) {
+    logger.warn('comic_hold_pub_remove_failed', { projectId, ...errorFacts(err) });
+  }
+}
+
+/** Pause a comic while moderators look (publication suspends via the projects trigger). */
+async function autoHold(projectId: string, ownerUserId: string, reason: string, metadata: Record<string, unknown>): Promise<void> {
+  const deps = safetyDeps();
+  const info = await deps.store.projectInfo(projectId).catch(() => null);
+  if (info?.isForcedPrivate) return;
+  await deps.store.forcePrivate(projectId, reason, null);
+  await takeDownPublishedCopies(projectId);
+  await deps.store.moderationAction({ projectId, ownerUserId, action: 'auto_hold', reason, actedBy: null, metadata });
+  await deps.store.notify({
+    userId: ownerUserId,
+    entityId: projectId,
+    title: 'Your comic is paused for a review',
+    message: 'Readers flagged your published comic, so it is hidden while a moderator takes a look. You will hear back here.',
+    metadata: { action: 'auto_hold' }
+  });
+  await deps.audit({ action: 'comic.auto_hold', targetType: 'project', targetId: projectId, detail: { reason, ...metadata } });
+}
+
+/** A reader's report on a published comic (always accepted; deduped into cases). Never throws. */
+export async function recordReportImpl(r: ReportInput): Promise<void> {
+  const deps = safetyDeps();
+  try {
+    if (typeof r?.slug !== 'string' || !SLUG_RE.test(r.slug)) return;
+    const reason = normalizeReportReason(r.reason);
+    if (!reason) return;
+    const pub = await deps.store.publicationBySlug(r.slug);
+    if (!pub || pub.status !== 'live') return;
+    const page = Number.isInteger(r.page) && (r.page as number) >= 1 && (r.page as number) <= 500 ? (r.page as number) : undefined;
+    const snapPage = page && pub.snapshot?.pages ? pub.snapshot.pages[page - 1] : undefined;
+    const path = snapPage?.render?.asset?.path;
+    const target: CaseTarget = {
+      publicationId: pub.publicationId,
+      ...(page ? { page } : {}),
+      ...(snapPage?.id ? { pageId: snapPage.id } : {}),
+      ...(path ? { path } : {})
+    };
+    const reporterId = typeof r.reporterUserId === 'string' && r.reporterUserId ? r.reporterUserId : null;
+    const opened = await deps.store.openCase({
+      kind: 'report',
+      projectId: pub.projectId,
+      ownerUserId: pub.ownerUserId,
+      reporterId,
+      reporterFingerprint: reporterId ? null : r.ipHash || null,
+      target,
+      reason,
+      note: cleanNote(r.note) ?? null
+    });
+    if (opened.deduped || !opened.id) return;
+
+    // Re-check the reported page now (platform key, ≤ 20 per comic per day).
+    const llm = deps.platformLlm();
+    if (path && RECHECK_REASONS.has(reason) && llm && deps.classifierOn() && takeSlot(`report:${pub.projectId}`, CAPS.reportChecksPerProjectDay, DAY)) {
+      const assets = await deps.assets();
+      const dataUrl = await assets.previewDataUrl(path, 768).catch(() => assets.loadDataUrl(path).catch(() => ''));
+      const check = dataUrl ? await checkImage(llm, { dataUrl, by: 'report', now: deps.now() }) : null;
+      if (check) {
+        const v = check.verdict;
+        await deps.store.updateCase(opened.id, { status: 'open', target: { ...target, check: { ...(v.assessed ? { assessed: v.assessed } : {}), categories: v.categories || [], by: 'report' } } });
+        await recordDecision({
+          userId: pub.ownerUserId,
+          projectId: pub.projectId,
+          surface: 'report',
+          layer: 'vision_check',
+          decision: v.assessed === 'X' ? 'withhold' : 'allow',
+          categories: v.categories || [],
+          ...(v.assessed ? { assessed: v.assessed } : {}),
+          severity: 0,
+          model: check.model,
+          costUsd: check.costUsd ?? SAFETY_CHECK_USD,
+          operation: 'comic.safety.report_check'
+        });
+        if (v.assessed === 'X') {
+          await autoHold(pub.projectId, pub.ownerUserId, 'auto: a reported page failed the safety check', { caseId: opened.id, categories: v.categories || [] });
+          return;
+        }
+      }
+    }
+
+    // Enough distinct readers in 24 h → hold for review.
+    const recent = await deps.store.reportsSince(pub.projectId, deps.now() - DAY);
+    const seen = new Set<string>();
+    let weight = 0;
+    for (const rep of recent) {
+      const key = rep.reporterId ? `u:${rep.reporterId}` : rep.fingerprint ? `a:${rep.fingerprint}` : '';
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      weight += rep.reporterId ? 1 : 0.5;
+    }
+    if (weight >= AUTO_HOLD_WEIGHT) await autoHold(pub.projectId, pub.ownerUserId, 'auto: reader reports', { reporters: seen.size });
+  } catch (err) {
+    logger.warn('comic_report_failed', { ...errorFacts(err) });
+  }
+}
+
+// ── Appeals ──────────────────────────────────────────────────────────────────
+
+export interface AppealResult {
+  status: 'cleared' | 'queued' | 'checked' | 'fine' | 'missing';
+  message: string;
+  rating?: AssessedRating;
+  nextSteps?: NextStep[];
+}
+
+type AppealCtx = Pick<StudioContext, 'session' | 'userId' | 'projectId' | 'assets' | 'rating' | 'caps' | 'publishUrls' | 'signal'>;
+
+const redrawSafer = (target: RenderTarget): NextStep | null => {
+  if (target.kind === 'page') return { label: 'Redraw it safer', action: { type: 'render_pages', pageIds: [target.id], force: true, safe: true } };
+  if (target.kind === 'cover') return { label: 'Redraw it safer', action: { type: 'render_cover', safe: true } };
+  if (target.kind === 'sheet') return { label: 'Redraw the sheet', action: { type: 'render_sheets', characterIds: [target.id], force: true } };
+  return null;
+};
+
+/** The steps offered with a flagged render. */
+export const flaggedSteps = (target: RenderTarget, opts: { checkAgain?: boolean; changeRating?: ContentRating } = {}): NextStep[] => {
+  const steps: NextStep[] = [];
+  const redraw = redrawSafer(target);
+  if (redraw) steps.push(redraw);
+  if (opts.changeRating) steps.push({ label: `Set the rating to ${opts.changeRating}`, action: { type: 'patch', ops: [{ op: 'settings', patch: { rating: opts.changeRating } }] }, usd: 0 });
+  if (opts.checkAgain !== false) steps.push({ label: 'This looks fine — check again', action: { type: 'safety_recheck', target }, usd: 0 });
+  return steps;
+};
+
+/**
+ * "This looks fine — check again": a free second look on a different model (platform key),
+ * auto-clearing only when it rates the image within the comic's rating AND the first verdict
+ * was neither zero-tolerance nor a moderator's own; otherwise a human reviews it. 5 per day per
+ * owner. The second look sees the IMAGE only: the owner's note goes to the human reviewer (case
+ * note), never into a classifier prompt it could argue with or break out of.
+ */
+export async function runAppeal(ctx: AppealCtx, target: RenderTarget, note?: string): Promise<AppealResult> {
+  const deps = safetyDeps();
+  const doc = ctx.session.doc;
+  const asset = getRender(doc, target)?.asset;
+  const label = targetLabel(doc, target);
+  if (!asset) return { status: 'missing', message: `There's no drawn image for ${label} to check yet.` };
+  const rating = ratingOf(ctx, doc);
+  const first = asset.safety;
+  const status = safetyStatusOf(first, rating);
+  if (status === 'pass') return { status: 'fine', message: `${label} already passed the check — nothing to review.` };
+
+  const now = deps.now();
+  const used = Math.max(await deps.store.appealsSince(ctx.userId, now - DAY).catch(() => 0), 0);
+  if (used >= CAPS.appealsPerDay || !takeSlot(`appeal:${ctx.userId}`, CAPS.appealsPerDay, DAY)) {
+    throw new StudioError('RATE_LIMIT', "You've asked for 5 second looks today — try again tomorrow, or redraw it safer now.", { status: 429 });
+  }
+
+  const llm = deps.platformLlm();
+  const quarantinePath = first?.quarantined ? await deps.store.quarantineFor(asset.path).catch(() => null) : null;
+  const source = quarantinePath || asset.path;
+  const zeroTolerance = (first?.categories || []).some((c) => ZERO_TOLERANCE.has(c));
+  // A moderator's verdict is final for the robots: only another human can overturn it.
+  const byModerator = first?.by === 'admin';
+  const humanOnly = zeroTolerance || byModerator;
+  const cleanNoteText = cleanNote(note);
+
+  let second: Awaited<ReturnType<typeof checkImage>> = null;
+  if (llm && deps.classifierOn() && !humanOnly) {
+    const dataUrl = await ctx.assets.previewDataUrl(source, 768).catch(() => ctx.assets.loadDataUrl(source).catch(() => ''));
+    if (dataUrl) {
+      second = await checkImage(llm, {
+        dataUrl,
+        rating,
+        by: 'second_opinion',
+        role: 'writer',
+        timeoutMs: SECOND_OPINION_TIMEOUT_MS,
+        now
+      });
+    }
+  }
+  const secondOk = !!second?.verdict.assessed && ratingRank(second.verdict.assessed) <= ratingRank(rating) && !humanOnly;
+  const caseTarget: CaseTarget = {
+    target,
+    path: asset.path,
+    ...(quarantinePath ? { quarantinePath } : {}),
+    check: { ...(first?.assessed ? { assessed: first.assessed } : {}), categories: first?.categories || [], by: first?.by || 'qc' }
+  };
+
+  if (second && secondOk) {
+    const restored = quarantinePath ? await restoreFromQuarantine(ctx.assets, quarantinePath, asset.path, ctx.projectId) : true;
+    if (!restored) {
+      // The second look cleared it, but the image is still in the safety vault: say exactly that,
+      // keep it hidden (a pass verdict would point at a missing object), and let a human restore it.
+      await deps.store.openCase({
+        kind: 'appeal',
+        projectId: ctx.projectId,
+        ownerUserId: ctx.userId,
+        target: { ...caseTarget, check: { ...caseTarget.check, ...(second.verdict.assessed ? { assessed: second.verdict.assessed } : {}), categories: second.verdict.categories || [], by: 'second_opinion' } },
+        reason: 'second opinion cleared; restore needed',
+        note: cleanNoteText ?? null
+      });
+      await deps.store.moderationAction({ projectId: ctx.projectId, ownerUserId: ctx.userId, action: 'appeal', reason: renderTargetKey(target), actedBy: ctx.userId, metadata: { source: 'owner_appeal', secondOpinion: 'cleared', restore: 'failed' } });
+      await recordDecision({
+        userId: ctx.userId,
+        projectId: ctx.projectId,
+        surface: 'appeal',
+        layer: 'second_opinion',
+        decision: 'allow',
+        categories: second.verdict.categories || [],
+        effective: rating,
+        ...(second.verdict.assessed ? { assessed: second.verdict.assessed } : {}),
+        severity: 0,
+        model: second.model,
+        costUsd: second.costUsd ?? SECOND_OPINION_USD,
+        operation: 'comic.safety.second_opinion'
+      });
+      return {
+        status: 'queued',
+        message: `Second look: ${label} looks fine (${second.verdict.assessed}), but I couldn't bring the image back automatically, so a human reviewer will restore it (usually within a day). Or redraw it now.`,
+        ...(second.verdict.assessed ? { rating: second.verdict.assessed } : {}),
+        nextSteps: flaggedSteps(target, { checkAgain: false })
+      };
+    }
+    const verdict: SafetyVerdict = { ...second.verdict, by: 'second_opinion' };
+    ctx.session.commit([{ op: 'asset_meta', path: asset.path, patch: { safety: verdict } }], { origin: 'job' });
+    await deps.store.openCase({ kind: 'appeal', projectId: ctx.projectId, ownerUserId: ctx.userId, target: caseTarget, reason: 'second opinion cleared', note: cleanNoteText ?? null, status: 'auto_cleared' });
+    await recordDecision({
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+      surface: 'appeal',
+      layer: 'second_opinion',
+      decision: 'restore',
+      categories: second.verdict.categories || [],
+      effective: rating,
+      ...(second.verdict.assessed ? { assessed: second.verdict.assessed } : {}),
+      severity: 0,
+      model: second.model,
+      costUsd: second.costUsd ?? SECOND_OPINION_USD,
+      operation: 'comic.safety.second_opinion'
+    });
+    await ctx.publishUrls([asset.path]).catch(() => undefined);
+    return { status: 'cleared', rating: second.verdict.assessed, message: `Second look: ${label} is fine (${second.verdict.assessed}) — it's back.` };
+  }
+
+  // A human decides (usually within a day).
+  await deps.store.openCase({
+    kind: 'appeal',
+    projectId: ctx.projectId,
+    ownerUserId: ctx.userId,
+    target: { ...caseTarget, ...(second ? { check: { ...caseTarget.check, assessed: second.verdict.assessed, categories: second.verdict.categories || [], by: 'second_opinion' } } : {}) },
+    reason: second ? 'second opinion agreed' : byModerator ? 'moderator verdict appealed' : 'second opinion unavailable',
+    note: cleanNoteText ?? null
+  });
+  await deps.store.moderationAction({ projectId: ctx.projectId, ownerUserId: ctx.userId, action: 'appeal', reason: renderTargetKey(target), actedBy: ctx.userId, metadata: { source: 'owner_appeal' } });
+  if (second) {
+    await recordDecision({
+      userId: ctx.userId,
+      projectId: ctx.projectId,
+      surface: 'appeal',
+      layer: 'second_opinion',
+      decision: 'withhold',
+      categories: second.verdict.categories || [],
+      effective: rating,
+      ...(second.verdict.assessed ? { assessed: second.verdict.assessed } : {}),
+      severity: 0,
+      model: second.model,
+      costUsd: second.costUsd ?? SECOND_OPINION_USD,
+      operation: 'comic.safety.second_opinion'
+    });
+  }
+  const ceiling = ctx.caps?.ratingCeiling ?? PLATFORM_CEILING;
+  // A moderator's own rating stands; it can still be met by raising the comic's rating.
+  const assessed = second?.verdict.assessed ?? (byModerator ? first?.assessed : undefined);
+  const canRaise = status === 'over_rating' && assessed && assessed !== 'X' && ratingRank(assessed) <= ratingRank(ceiling) ? (assessed as ContentRating) : undefined;
+  const steps = flaggedSteps(target, { checkAgain: false, ...(canRaise ? { changeRating: canRaise } : {}) });
+  const message = second
+    ? `Second look agrees ${label} goes past ${rating}, so I've sent it to a human reviewer (usually within a day).${canRaise ? ` Or set the comic to ${canRaise}.` : ''}`
+    : byModerator
+      ? `A moderator already reviewed ${label}, so I've sent your request to a human reviewer (usually within a day).${canRaise ? ` Or set the comic to ${canRaise}.` : ' Or redraw it safer now.'}`
+      : `I couldn't run a second look right now, so I've sent ${label} to a human reviewer (usually within a day).`;
+  return { status: 'queued', message, ...(assessed ? { rating: assessed } : {}), nextSteps: steps };
+}
+
+/** Commit the appeal outcome as an assistant message (UI taps and the REST route). */
+export const appealMessage = (session: StudioSessionApi, result: AppealResult): Msg => {
+  const card: Card = { type: 'notice', id: newId('card'), tone: result.status === 'cleared' ? 'success' : result.status === 'queued' ? 'info' : 'info', text: result.message };
+  const msg: Msg = { id: newId('msg'), role: 'assistant', text: result.message, at: Date.now(), cards: [card], ...(result.nextSteps?.length ? { nextSteps: result.nextSteps } : {}) };
+  session.commit([{ op: 'message', msg }]);
+  return msg;
+};
+
+// ── Moderator cases ──────────────────────────────────────────────────────────
+
+export interface CaseView {
+  id: string;
+  kind: SafetyCase['kind'];
+  status: SafetyCase['status'];
+  projectId: string;
+  projectName?: string;
+  reason: string;
+  note?: string;
+  reporter: 'user' | 'anonymous' | 'owner' | 'system';
+  target: { kind?: RenderTarget['kind']; page?: number; label?: string; hasAsset: boolean; check?: CaseTarget['check'] };
+  resolution?: string;
+  createdAt: number;
+  resolvedAt?: number;
+}
+
+export const caseView = (c: SafetyCase, names: Record<string, string> = {}): CaseView => {
+  const t = c.target || {};
+  const label = t.target ? (t.target.kind === 'cover' ? 'Cover' : t.target.kind === 'page' ? 'Page' : t.target.kind) : t.page ? `Page ${t.page}` : undefined;
+  return {
+    id: c.id,
+    kind: c.kind,
+    status: c.status,
+    projectId: c.projectId,
+    ...(names[c.projectId] ? { projectName: names[c.projectId] } : {}),
+    reason: c.reason,
+    ...(c.note ? { note: c.note } : {}),
+    reporter: c.kind === 'report' ? (c.reporterId ? 'user' : 'anonymous') : c.kind === 'appeal' ? 'owner' : 'system',
+    target: {
+      ...(t.target ? { kind: t.target.kind } : t.page ? { kind: 'page' as const } : {}),
+      ...(t.page ? { page: t.page } : {}),
+      ...(label ? { label } : {}),
+      hasAsset: !!(t.path || t.quarantinePath),
+      ...(t.check ? { check: t.check } : {})
+    },
+    ...(c.resolution ? { resolution: c.resolution } : {}),
+    createdAt: c.createdAt,
+    ...(c.resolvedAt ? { resolvedAt: c.resolvedAt } : {})
+  };
+};
+
+export const CASE_URL_TTL_SEC = 300;
+
+/**
+ * The evidence behind a reader report whose pub/ copy is gone: a hold (removePublicationObjects) or
+ * a withhold takes every published copy down, but the case still names only that copy. The owner's
+ * source it was made from is found by the hash in the copy's name (liveSourceOfPubPath) — in the
+ * vault when it was withheld, otherwise still live. undefined when the comic can't be opened or the
+ * source is no longer in it (redrawn and gone): then there is nothing left to show.
+ */
+async function evidenceSourceOfCopy(c: SafetyCase, copy: string): Promise<string | undefined> {
+  const deps = safetyDeps();
+  const owner = c.ownerUserId || (await deps.store.projectInfo(c.projectId).catch(() => null))?.ownerUserId;
+  if (!owner) return undefined;
+  const session = await deps.liveSession(c.projectId, owner);
+  const source = session ? liveSourceOfPubPath(session.doc, copy) : undefined;
+  if (!source) return undefined;
+  return (await deps.store.quarantineFor(source).catch(() => null)) || source;
+}
+
+/**
+ * A 5-minute signed URL for a case's image, audited. The vault copy first, then the object the case
+ * names; when that was a published copy that has since been taken down, the owner's source it was
+ * made from (held or live), so a moderator can still review the reported image. null = nothing left
+ * to show — never a dead link. The audit says which evidence was shown ('target' or 'source').
+ */
+export async function caseAssetUrl(actorId: string, caseId: string): Promise<{ url: string; expiresAt: number } | null> {
+  const deps = safetyDeps();
+  const c = await deps.store.getCase(caseId);
+  if (!c) return null;
+  const target = c.target?.quarantinePath || (c.target?.path ? (await deps.store.quarantineFor(c.target.path).catch(() => null)) || c.target.path : null);
+  if (!target) return null;
+  const assets = await deps.assets();
+  // Production signs only objects that exist (Storage answers a per-path error for a missing one).
+  const sign = async (path: string): Promise<string | undefined> =>
+    (await assets.signUrls([path], { ttlSec: CASE_URL_TTL_SEC }).catch(() => ({}) as Record<string, string>))[path];
+  let path = target;
+  let evidence: 'target' | 'source' = 'target';
+  let url = await sign(target);
+  if (!url && isPublicationPath(target)) {
+    const source = await evidenceSourceOfCopy(c, target);
+    if (source) {
+      path = source;
+      evidence = 'source';
+      url = await sign(source);
+    }
+  }
+  await deps.audit({
+    actorId,
+    action: 'comic.safety.asset_view',
+    targetType: 'comic_safety_case',
+    targetId: caseId,
+    detail: { projectId: c.projectId, quarantined: path.startsWith('q/'), evidence }
+  });
+  return url ? { url, expiresAt: deps.now() + CASE_URL_TTL_SEC * 1000 } : null;
+}
+
+export type ResolveAction = 'dismiss' | 'withhold' | 'restore' | 'force_private';
+export const RESOLVE_ACTIONS: readonly ResolveAction[] = ['dismiss', 'withhold', 'restore', 'force_private'];
+
+const OWNER_COPY: Record<ResolveAction | 'hold_lifted', { title: string; message: string }> = {
+  dismiss: { title: 'Review finished', message: 'A moderator reviewed the flag on your comic and kept it as it was.' },
+  withhold: { title: 'An image was withheld', message: "A moderator withheld an image from your comic because it didn't fit the content rules. Redraw it safer from the studio." },
+  restore: { title: 'Your image is back', message: 'A moderator reviewed your image and restored it.' },
+  force_private: { title: 'Your comic is paused', message: "A moderator made your comic private because it didn't fit the content rules. You can ask for a review from the studio." },
+  hold_lifted: {
+    title: 'Your comic is no longer paused',
+    // Honest whatever else the review decided: a page withheld in the same review was already
+    // announced on its own ("An image was withheld"), so this never claims nothing was wrong.
+    message: 'A moderator finished reviewing the reports on your comic. Publish it again from the studio to bring the link back.'
+  }
+};
+
+type LiveOutcome = 'ok' | 'no_target' | 'no_session' | 'restore_failed';
+
+/** The source hash a publication copy carries in its name (copiesFor: <slot>-<sha12>[-w480|-w1080].webp). */
+const PUB_SOURCE_HASH_RE = /-([0-9a-f]{12})(?:-w(?:480|1080))?\.webp$/;
+
+/**
+ * The owner's own image a published copy was made from: the doc path whose sha12 the pub/ name
+ * carries — wherever it sits now (current render, history, archive, trash). Never a guess by page:
+ * a page the owner has since redrawn keeps its new, different image untouched.
+ */
+export const liveSourceOfPubPath = (doc: ComicDoc, pubPath: string | undefined): string | undefined => {
+  const hash = pubPath && isPublicationPath(pubPath) ? PUB_SOURCE_HASH_RE.exec(pubPath)?.[1] : undefined;
+  return hash ? collectAssetPaths(doc).find((p) => !p.startsWith('pub/') && sha12(p) === hash) : undefined;
+};
+
+async function liveVerdict(
+  c: SafetyCase,
+  verdict: SafetyVerdict,
+  assets: AssetStore,
+  opts: { restoreObject?: boolean; path?: string; ownerUserId?: string | null; session?: StudioSessionApi } = {}
+): Promise<LiveOutcome> {
+  const deps = safetyDeps();
+  // `opts.path` is a live path the caller resolved (a reader report names only the pub/ copy).
+  const path = opts.path ?? c.target?.path;
+  const owner = opts.ownerUserId ?? c.ownerUserId;
+  if (!path || (!opts.path && !c.target?.target) || !owner) return 'no_target';
+  const session = opts.session ?? (await deps.liveSession(c.projectId, owner));
+  if (!session) return 'no_session';
+  if (opts.restoreObject) {
+    const q = c.target.quarantinePath || (await deps.store.quarantineFor(path).catch(() => null));
+    // Never mark an image servable while its object is still in the vault.
+    if (q && !(await restoreFromQuarantine(assets, q, path, c.projectId))) return 'restore_failed';
+  }
+  session.commit([{ op: 'asset_meta', path, patch: { safety: verdict } }], { origin: 'job' });
+  await session.flush().catch(() => undefined);
+  return 'ok';
+}
+
+/** Remove a withheld page's public copies (pub/… object and its variants) from a live publication. */
+async function removePublishedCopy(c: SafetyCase, assets: AssetStore): Promise<number> {
+  const deps = safetyDeps();
+  const pub = await deps.store.publicationByProject(c.projectId).catch(() => null);
+  const snapshot = pub?.snapshot as ComicDoc | null | undefined;
+  if (!snapshot?.pages) return 0;
+  const page = c.target.pageId ? snapshot.pages.find((p) => p.id === c.target.pageId) : c.target.page ? snapshot.pages[c.target.page - 1] : undefined;
+  const asset = page?.render?.asset;
+  if (!asset?.path) return 0;
+  const paths = [asset.path, ...(asset.variants || []).map((v) => v.path)].filter((p) => typeof p === 'string' && p.startsWith('pub/'));
+  if (!paths.length) return 0;
+  await assets.remove(paths).catch((err) => logger.warn('comic_case_pub_remove_failed', { projectId: c.projectId, ...errorFacts(err) }));
+  return paths.length;
+}
+
+/**
+ * Resolve a case: dismiss | withhold (X by admin + quarantine on the owner's own image — for a
+ * reader report, the source the published copy was made from — so no later publish can ship it;
+ * a published copy is removed and the comic paused) | restore (admin verdict, object moved back)
+ * | force_private. Audited, logged in project_moderation_actions, and the owner is told only what
+ * really happened. When the last open case of an automatically held comic is dismissed or
+ * restored, the hold is lifted (the owner can publish again).
+ */
+export async function resolveCase(
+  actorId: string,
+  caseId: string,
+  body: { action: ResolveAction; assessed?: AssessedRating; reason: string }
+): Promise<{ case: CaseView; effects: string[] }> {
+  const deps = safetyDeps();
+  const c = await deps.store.getCase(caseId);
+  if (!c) throw new StudioError('NOT_FOUND', 'That case no longer exists.', { status: 404 });
+  if (c.status !== 'open') throw new StudioError('BAD_REQUEST', 'That case is already closed.', { status: 409 });
+  const reason = String(body.reason || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  const info = await deps.store.projectInfo(c.projectId).catch(() => null);
+  const ownerUserId = c.ownerUserId || info?.ownerUserId || null;
+  const assets = await deps.assets();
+  const effects: string[] = [];
+  const now = deps.now();
+  const categories: SafetyCategory[] = c.target?.check?.categories || [];
+  let action: string | null = 'appeal_resolved';
+  let status: SafetyCase['status'] = 'resolved';
+
+  switch (body.action) {
+    case 'dismiss':
+      status = 'dismissed';
+      action = c.kind === 'appeal' ? 'appeal_resolved' : null;
+      effects.push('dismissed');
+      break;
+    case 'withhold': {
+      action = 'withhold_page';
+      const casePath = c.target?.path;
+      let livePath: string | undefined;
+      let session: StudioSessionApi | undefined;
+      if (casePath && c.target.target) {
+        livePath = casePath;
+      } else if (casePath && isPublicationPath(casePath) && ownerUserId) {
+        // A reader report names only the published copy. Withholding just that copy would not
+        // last: the owner's source keeps its old 'pass' and the next publish copies it out again.
+        // Mark the source itself — or, when the comic can't be opened, change nothing yet.
+        session = (await deps.liveSession(c.projectId, ownerUserId)) ?? undefined;
+        // Only a comic that is really gone (its row no longer exists) has no source left to mark.
+        // A lookup that failed (info null from an error) is not proof of that: it waits too.
+        const gone = !session && !info && (await deps.store.projectInfo(c.projectId).then((p) => !p, () => false));
+        if (!session && !gone) {
+          throw new StudioError(
+            'NOT_AVAILABLE',
+            "The comic couldn't be opened to withhold the image right now — the case stays open. Try again later, or pause the comic now.",
+            { status: 503, retryable: true }
+          );
+        }
+        if (session) livePath = liveSourceOfPubPath(session.doc, casePath);
+      }
+      if (livePath) {
+        // Only the owner's own object goes to the vault. A platform-library image is shared by
+        // other comics (and a restore can never send it back there), so it is marked X in this
+        // comic only — the verdict alone keeps it out of every later publish.
+        const vaultable = !livePath.startsWith('pub/') && !isLibraryPath(livePath);
+        const q = vaultable ? await quarantineAsset(assets, { path: livePath, projectId: c.projectId, userId: ownerUserId, categories }) : null;
+        const held = !!q || (livePath === casePath && !!c.target.quarantinePath);
+        const live = await liveVerdict(c, { assessed: 'X', categories, by: 'admin', at: now, ...(held ? { quarantined: true } : {}) }, assets, {
+          path: livePath,
+          ownerUserId,
+          ...(session ? { session } : {})
+        });
+        if (live === 'ok') effects.push('verdict_x');
+        if (q) effects.push('quarantined');
+      }
+      const removed = await removePublishedCopy(c, assets);
+      if (removed) {
+        effects.push('public_copy_removed');
+        if (!info?.isForcedPrivate) {
+          await deps.store.forcePrivate(c.projectId, 'moderator: a published page was withheld', actorId);
+          effects.push('paused');
+        }
+        // The comic is paused either way (now or by an earlier hold): its publication is suspended.
+        await takeDownPublishedCopies(c.projectId);
+      }
+      break;
+    }
+    case 'restore': {
+      action = c.kind === 'appeal' ? 'appeal_resolved' : 'restore_page';
+      const assessed: ContentRating = isContentRating(body.assessed) ? body.assessed : 'PG';
+      const live = await liveVerdict(c, { assessed, by: 'admin', at: now }, assets, { restoreObject: true });
+      // Fail loudly to the moderator (the case stays open) rather than tell the owner a lie.
+      if (live === 'restore_failed') {
+        throw new StudioError('NOT_AVAILABLE', "The image couldn't be moved back from the safety vault right now — the case stays open. Try again later.", { status: 503, retryable: true });
+      }
+      if (live === 'no_session') {
+        throw new StudioError('NOT_AVAILABLE', "The comic couldn't be opened to restore the image right now — the case stays open. Try again later.", { status: 503, retryable: true });
+      }
+      effects.push(live === 'ok' ? 'restored' : 'no_image_to_restore');
+      break;
+    }
+    case 'force_private':
+      action = 'force_private';
+      await deps.store.forcePrivate(c.projectId, reason || 'moderator decision', actorId);
+      effects.push('paused');
+      await takeDownPublishedCopies(c.projectId);
+      break;
+    default:
+      throw new StudioError('BAD_REQUEST', 'Unknown action.', { status: 400 });
+  }
+
+  await deps.store.updateCase(c.id, { status, resolution: `${body.action}${reason ? `: ${reason}` : ''}`, resolvedBy: actorId });
+  if (action) await deps.store.moderationAction({ projectId: c.projectId, ownerUserId, action, reason: reason || null, actedBy: actorId, metadata: { source: 'comic_safety_case', caseId: c.id, effects } });
+
+  // An automatic hold (reader reports / a failed report re-check) ends with the last open case.
+  let holdLifted = false;
+  if ((body.action === 'dismiss' || body.action === 'restore') && info?.isForcedPrivate) {
+    // This comic's own open cases; an unknown count (a failed lookup) never lifts the hold.
+    const open = await deps.store.openCaseCounts(1000, c.projectId).catch(() => null);
+    if (open && !open[c.projectId]) {
+      holdLifted = await deps.store.liftAutoHold(c.projectId).catch((err) => {
+        logger.warn('comic_case_lift_hold_failed', { projectId: c.projectId, ...errorFacts(err) });
+        return false;
+      });
+      if (holdLifted) {
+        effects.push('hold_lifted');
+        await deps.store.moderationAction({ projectId: c.projectId, ownerUserId, action: 'approve_republish', reason: reason || 'reports reviewed', actedBy: actorId, metadata: { source: 'comic_safety_case', caseId: c.id, lifted: 'auto_hold' } });
+      }
+    }
+  }
+  await deps.audit({ actorId, action: 'comic.safety.resolve', targetType: 'comic_safety_case', targetId: c.id, detail: { projectId: c.projectId, action: body.action, effects } });
+
+  // Tell the owner only what changed for them.
+  const changed: ResolveAction | 'hold_lifted' | null = holdLifted
+    ? 'hold_lifted'
+    : body.action === 'restore'
+      ? effects.includes('restored')
+        ? 'restore'
+        : null
+      : body.action === 'withhold'
+        ? effects.length
+          ? 'withhold'
+          : null
+        : body.action === 'dismiss'
+          ? c.kind === 'appeal'
+            ? 'dismiss'
+            : null
+          : body.action;
+  if (ownerUserId && changed) {
+    await deps.store.notify({ userId: ownerUserId, actorId, entityId: c.projectId, title: OWNER_COPY[changed].title, message: OWNER_COPY[changed].message, metadata: { action: changed } });
+  }
+  await recordDecision({
+    userId: ownerUserId,
+    projectId: c.projectId,
+    surface: c.kind === 'report' ? 'report' : 'appeal',
+    layer: 'admin',
+    decision: body.action === 'restore' || body.action === 'dismiss' ? 'restore' : 'withhold',
+    categories,
+    severity: 0
+  });
+  const updated = (await deps.store.getCase(c.id)) || { ...c, status };
+  return { case: caseView(updated), effects };
+}
+
+export const describeCategories = categoryWords;

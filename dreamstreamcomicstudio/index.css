@@ -413,7 +413,7 @@
   --ds-surface-strong: rgba(255,255,255,0.95); /* menus, sticky headers */
   --ds-raised: #ffffff;            /* active segmented pill, raised chips */
   --ds-ink: #1a1915;               /* primary text */
-  --ds-muted: #6e6a60;             /* secondary text */
+  --ds-muted: #67635a;             /* secondary text: ≥ 4.5:1 on every tinted row, well and track (was #6e6a60, 4.1–4.4 on some) */
   --ds-hairline: rgba(0,0,0,0.10); /* standard hairline */
   --ds-hairline-soft: rgba(0,0,0,0.05);
   --ds-well: rgba(0,0,0,0.03);     /* recessed wells */
@@ -422,6 +422,77 @@
   --ds-faint: rgba(0,0,0,0.28);    /* lowest-emphasis ink: placeholders, dots, idle glyphs */
   --ds-accent: #D97757;            /* terracotta — same in both themes */
   --ds-accent-hover: #c2643f;
+  /* Readable accent (tests/config/tokenContrast.test.ts). The brand terracotta measures only ~3:1
+     against the paper, so accent-coloured TEXT (links, counters, "Change" buttons, icons beside
+     text) reads --ds-accent-text: same hue, lower lightness, ≥ 4.5:1 on every paper, glass, well,
+     hover/active and accent-tint surface. Buttons keep the brand: a solid accent fill that CARRIES
+     TEXT (primary buttons, badges, chips) reads --ds-accent-fill (= the brand terracotta) and its
+     label reads --ds-on-accent (ink, 5.6:1; white was 3.1:1); --ds-accent-fill-hover is a hair
+     deeper and still ≥ 4.5:1 under it. The "accent contrast" block below routes the existing
+     utilities to these tokens. (The alternative — a deeper fill under white labels — is a pure
+     token swap: --ds-accent-fill #AE5132, -fill-hover #96462c, --ds-on-accent #ffffff; the test
+     measures whichever pairing is set.) Under the Atlas skin all three are the ink accent. */
+  --ds-accent-text: #A0472A;
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: #d66d4b;
+  /* Semantic tokens added for the Atlas skin (docs/design/atlas-skin.md). Their defaults keep
+     today's look except where a text pairing fell below 4.5:1 (tests/config/tokenContrast.test.ts):
+     the label on an accent fill, and the success/warning text below. A skin
+     (`[data-ds-skin="…"]`, end of this file) overrides them as one block. Status hues are always
+     paired with a word or icon; the `-text` variants are the readable (≥ 4.5:1) text mixes, the
+     base ones are for fills and borders. */
+  --ds-on-accent: #1a1915;                   /* label on a solid accent fill: ink, 5.6:1 on the brand (white was 3.1:1) */
+  --ds-accent-soft: rgba(217,119,87,0.10);   /* = bg-[#D97757]/10: active rows, selected chips */
+  --ds-active: rgba(0,0,0,0.07);             /* pressed / current-item tint (stronger than hover) */
+  --ds-success: #16a34a;
+  --ds-success-text: #157a3a;                /* green-700 nudged darker: ≥ 4.5:1 on its own 10 % tint */
+  --ds-warning: #d97706;
+  --ds-warning-text: #a84e0a;                /* amber-700 nudged darker: ≥ 4.5:1 on hover and tint rows */
+  --ds-danger: #dc2626;
+  --ds-danger-text: #b91c1c;
+  --ds-info: #2563eb;
+  --ds-info-text: #1d4ed8;
+  --ds-ring: #c2643f;                        /* focus ring: the accent hover, ≥ 3:1 (non-text) on paper, glass and wells (the old 45 % tint was 1.6:1) */
+  --ds-font-sans: Inter, sans-serif;         /* = tailwind `font-sans` */
+  --ds-font-display: Inter, sans-serif;      /* headings inherit the body face today */
+  --ds-radius-panel: 1rem;                   /* = rounded-2xl */
+  --ds-radius-control: 0.75rem;              /* = rounded-xl */
+  --ds-radius-chip: 9999px;                  /* = rounded-full */
+  --ds-radius-sm: 0.25rem;                   /* = rounded */
+  --ds-shadow-soft: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);   /* = SHADOW_SOFT */
+  --ds-shadow-panel: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  --ds-shadow-lift: 0 4px 16px rgba(0,0,0,0.16);
+  --ds-motion-fast: 120ms;
+  --ds-motion-medium: 200ms;                 /* = duration-200 (TRANSITION) */
+  --ds-motion-slow: 300ms;
+  --ds-motion-panel: 220ms;
+  --ds-motion-modal: 180ms;
+  --ds-motion-theme: 0ms;                    /* no theme cross-fade outside a skin */
+  --ds-ease: cubic-bezier(0.4, 0, 0.2, 1);   /* = tailwind's default transition curve */
+  --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ds-tooltip-delay: 300ms;
+  --ds-surface-blur: 12px;                   /* = backdrop-blur-md (GLASS) */
+  /* Wave 5 port (Atlas acd9fdfc, docs/design/atlas-skin.md "Wave 5 port"). Nothing outside a skin reads
+     these yet except through the new studioDesign recipes; the defaults are what the page paints today. */
+  --ds-control-border: var(--ds-hairline);       /* a field's edge (FIELD); the skin makes it 3:1 */
+  --ds-control-border-hover: var(--ds-hairline);
+  --ds-focus: var(--ds-ring);                    /* keyboard focus colour (FOCUS_RING, FIELD) */
+  --ds-overlay-edge: var(--ds-hairline);         /* menus, popovers, dialogs, sheets, toasts (OVERLAY) */
+  --ds-shadow-overlay: var(--ds-shadow-soft);
+  --ds-scrim: rgba(0,0,0,0.40);                  /* the dim behind a modal (SCRIM), no blur */
+  --ds-danger-mark: var(--ds-danger);            /* danger as a mark: dots, bars, status edges */
+  --ds-skeleton: rgba(148,163,184,0.12);         /* = .studio-shimmer's own block and glint */
+  --ds-skeleton-glint: rgba(148,163,184,0.22);
+  --ds-segment-pill: var(--ds-raised);           /* = the live segmented controls' raised pill (SEGMENTED_ACTIVE) */
+  --ds-shadow-segment: 0 1px 2px rgba(0,0,0,0.08);
+  --ds-segment-track: var(--ds-well-strong);     /* = their well (the track under the pill) */
+  --ds-overlay-hover: var(--ds-hover);           /* a highlighted row in a menu or list (MENU_ITEM, FOCUS_ITEM) */
+  --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 35%, transparent); /* STATUS_SURFACE.error */
+  --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 6%, transparent);
+  --ds-toast-edge: var(--ds-overlay-edge);       /* TOAST's border */
+  --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1); /* long-tail ease-out for entrances */
+  --ds-motion-enter: 280ms;                      /* fades, scale-ins, slide-ins */
+  --ds-motion-exit: 160ms;                       /* anything leaving (quicker than it arrived) */
 }
 .dark {
   --ds-canvas: #262624;
@@ -431,7 +502,7 @@
   --ds-surface-strong: rgba(48,48,46,0.97);
   --ds-raised: #3a3a37;
   --ds-ink: #eeece8;
-  --ds-muted: #a8a29a;
+  --ds-muted: #b8b2a9;             /* ≥ 4.5:1 on the glass, wells and hover/active tints */
   --ds-hairline: rgba(255,255,255,0.10);
   --ds-hairline-soft: rgba(255,255,255,0.06);
   --ds-well: rgba(255,255,255,0.04);
@@ -440,8 +511,56 @@
   --ds-faint: rgba(255,255,255,0.34);
   --ds-accent: #D97757;
   --ds-accent-hover: #e08a6d;
+  --ds-accent-text: #eda38c;       /* light terracotta: ≥ 4.5:1 on the dark glass and tints */
+  --ds-accent-fill-hover: var(--ds-accent-hover); /* the dark theme's hover lightens: ink on it 6.7:1 */
+  --ds-active: rgba(255,255,255,0.09);
+  --ds-success: #4ade80;
+  --ds-success-text: #4ade80;
+  --ds-warning: #fbbf24;
+  --ds-warning-text: #fbbf24;
+  --ds-danger: #f87171;
+  --ds-danger-text: #fca5a5;       /* red-300: ≥ 4.5:1 on dark glass, its tint and a highlighted menu row on a raised sheet (wave 8; #fb8b8b was 4.15 there) */
+  --ds-info: #60a5fa;
+  --ds-info-text: #93c5fd;
+  --ds-ring: #D97757;              /* the brand, ≥ 3:1 (non-text) on the dark paper, glass and raised chips (the 50 % tint was 2.2:1) */
+  --ds-shadow-lift: 0 8px 24px rgba(0,0,0,0.5);
+  --ds-scrim: rgba(0,0,0,0.60);
 }
 .dark { color-scheme: dark; }
+
+/* ---- Accent contrast: route the existing accent utilities to the readable tokens ----
+   tests/config/tokenContrast.test.ts proves the token pairs (≥ 4.5:1, both themes, both skins) and
+   that every accent text / text-bearing fill utility in the tree has a rule here. Until the
+   components spell ACCENT_TEXT / ACCENT_FILL (studioDesign.ts) themselves, these rules keep the
+   brand terracotta for decoration and give text the readable variants:
+   - accent-coloured TEXT (and the icons that inherit it) → --ds-accent-text, including the literal
+     hover terracotta #c2643f (3.84:1 on the paper; no shim rule competes, so it is ink in the skin);
+   - a solid accent fill that carries white / on-accent text → --ds-accent-fill (+ -fill-hover) under
+     --ds-on-accent. By default the fill IS the brand and only the label changes (white → ink); the
+     85 % badge becomes solid so its label never depends on the image under it.
+     `:not(:disabled)` leaves a component's own disabled styling (disabled:bg-…, opacity) alone.
+   Under the Atlas skin the tokens are the skin's accent / on-accent, so the skin paints exactly what
+   it painted before (tokenContrast.test.ts proves it rule by rule); where a rule here outranks a shim
+   rule with a different result, the skin section restores it (the 85 % badge). Specificity, not
+   order, decides:
+   Tailwind emits plain utilities where `@tailwind utilities` sits (above, so a plain-class rule
+   here wins a tie) but APPENDS every variant (hover:, group-hover:, md:, disabled:, …) after this
+   whole file — so the hover / group-hover text forms repeat their class to outrank the variant
+   utility, and the fills are compound selectors (utility + its text colour) that outrank both. */
+.text-\[var\(--ds-accent\)\],
+.text-\[\#D97757\],
+.text-\[\#c2643f\],
+.hover\:text-\[var\(--ds-accent\)\].hover\:text-\[var\(--ds-accent\)\]:hover,
+.hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover,
+.group:hover .group-hover\:text-\[var\(--ds-accent\)\].group-hover\:text-\[var\(--ds-accent\)\],
+.group\/icon:hover .group-hover\/icon\:text-\[var\(--ds-accent\)\].group-hover\/icon\:text-\[var\(--ds-accent\)\] { color: var(--ds-accent-text); }
+.bg-\[var\(--ds-accent\)\].text-white:not(:disabled),
+.bg-\[var\(--ds-accent\)\].text-\[var\(--ds-on-accent\)\]:not(:disabled),
+.bg-\[\#D97757\].text-white:not(:disabled),
+.bg-\[\#D97757\]\/85.text-white:not(:disabled) { background-color: var(--ds-accent-fill); color: var(--ds-on-accent); }
+.hover\:bg-\[var\(--ds-accent-hover\)\].text-white:hover:not(:disabled),
+.hover\:bg-\[var\(--ds-accent-hover\)\].text-\[var\(--ds-on-accent\)\]:hover:not(:disabled),
+.group:hover .group-hover\:bg-\[var\(--ds-accent-hover\)\].text-white:not(:disabled) { background-color: var(--ds-accent-fill-hover); color: var(--ds-on-accent); }
 
 /* ==========================================================================
    Device & layout tokens (Comic Studio v5, contract §13.5). Components only
@@ -595,3 +714,502 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   backdrop-filter: blur(6px);
 }
 .ds-map .ds-map-label::before { display: none; }
+
+/* ==========================================================================
+   ATLAS SKIN — `[data-ds-skin="atlas"]` (docs/design/atlas-skin.md)
+   The Atlas design language (atlasd, branch claude/quirky-darwin-fpx23q @ 98240e5b, wave 8) applied to
+   Comic Studio as ONE block of token overrides over the semantic `--ds-*` layer above. The
+   attribute goes on <html> at boot on the comics host (index.tsx → services/dsSkin.ts) and on the
+   Comic Studio, public-reader and immersive-reader roots wherever they render, so the overrides
+   are written against the attribute, never against `html`. Everything in this section is inert
+   without the attribute: nothing outside the skin changes. A later "fun" skin is a sibling block
+   (`[data-ds-skin="fun"]`) over the same tokens. Reader-room tokens (`--ds-reader-*`) are
+   content, not chrome, and stay as they are.
+   ========================================================================== */
+
+/* Chrome fonts (self-hosted, SIL OFL — public/fonts/LICENSE-OFL.md). Latin subsets, swap. The 400
+   and 600 body weights are preloaded by the boot code on the comics host. Bangers / Comic Neue /
+   Inter keep lettering the comic pages (content), so index.html's Google Fonts link stays. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-400-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-500-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-600-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-700-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-500-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-600-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-700-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---- Tokens, light (Atlas :root → Comic Studio token; see the mapping table in the doc) ---- */
+[data-ds-skin="atlas"] {
+  --ds-canvas: #ffffff;                 /* --background */
+  --ds-sidebar: #fafafa;                /* --sidebar */
+  --ds-surface: #ffffff;                /* --card (opaque: flat surfaces, no frosted glass) */
+  --ds-surface-soft: #f4f4f4;           /* --secondary */
+  --ds-surface-strong: #ffffff;         /* --popover */
+  --ds-raised: #ffffff;                 /* --surface-elevated */
+  --ds-ink: #0a0a0a;                    /* --foreground */
+  --ds-muted: #5c5c5c;                  /* --muted-foreground */
+  --ds-hairline: rgba(0,0,0,0.10);      /* --border */
+  --ds-hairline-soft: rgba(0,0,0,0.06); /* border at 60 % */
+  --ds-well: #fafafa;                   /* --surface-subtle */
+  --ds-well-strong: #f4f4f4;            /* --muted */
+  --ds-hover: #f2f2f2;                  /* --menu-hover */
+  --ds-faint: rgba(10,10,10,0.35);      /* foreground at 35 % */
+  --ds-accent: #0a0a0a;                 /* --primary: ink — hue never decorates */
+  --ds-accent-hover: #2f2f2f;           /* primary at 85 % over the background */
+  --ds-on-accent: #ffffff;              /* --primary-foreground */
+  --ds-accent-soft: #efefef;            /* --accent */
+  --ds-accent-text: var(--ds-accent);   /* the readable accent IS the ink accent here (and fades with it) */
+  --ds-accent-fill: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
+  --ds-active: rgba(0,0,0,0.07);        /* --menu-active */
+  --ds-success: #16a34a;
+  --ds-success-text: color-mix(in srgb, var(--ds-success) 60%, var(--ds-ink));
+  --ds-warning: #f59e0b;
+  --ds-warning-text: color-mix(in srgb, var(--ds-warning) 57%, var(--ds-ink)); /* 57 % (Atlas 60 %): ≥ 4.5:1 on its tint over the soft glass and on a highlighted menu row (wave 8) */
+  --ds-danger: #d4183d;                 /* --destructive */
+  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 60%, var(--ds-ink));
+  --ds-info: #262626;
+  --ds-info-text: color-mix(in srgb, var(--ds-info) 60%, var(--ds-ink));
+  --ds-ring: oklch(0.55 0 0);           /* --ring: 3:1 non-text contrast on white */
+  --ds-font-sans: "IBM Plex Sans", sans-serif;
+  --ds-font-display: "Space Grotesk", sans-serif;
+  --ds-radius-panel: 0.75rem;           /* 12 px cards (--radius-xl) */
+  --ds-radius-control: 0.625rem;        /* 10 px controls (--radius-lg = radius − 2) */
+  --ds-radius-chip: 0.625rem;           /* 10 px chips and badges */
+  --ds-radius-sm: 0.25rem;              /* 4 px */
+  --ds-shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.05);                                   /* --atlas-soft-shadow */
+  --ds-shadow-panel: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);   /* --atlas-panel-shadow */
+  --ds-shadow-lift: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);   /* --atlas-lift-shadow */
+  --ds-motion-fast: 100ms;
+  --ds-motion-medium: 150ms;
+  --ds-motion-slow: 200ms;
+  --ds-motion-panel: 220ms;
+  --ds-motion-modal: 180ms;
+  --ds-motion-theme: 260ms;
+  --ds-ease: cubic-bezier(0.2, 0.8, 0.2, 1);           /* --motion-ease */
+  --ds-ease-spring: cubic-bezier(0.34, 1.36, 0.64, 1); /* --motion-spring */
+  --ds-tooltip-delay: 300ms;
+  --ds-surface-blur: 18px;              /* the sticky header's blur (its only frosted glass) */
+  /* Wave 5 (acd9fdfc). Fields: an edge that clears 3:1 against the page (--control-border; the
+     hairline is for cards and dividers). Focus: the solid ink (Atlas draws keyboard focus on every
+     primitive as a 2 px foreground outline; --ds-ring stays its --ring for inset item rings).
+     Overlays: Atlas shadow-lg and border/80, the dark step below. Scrims dim without a blur. */
+  --ds-control-border: color-mix(in srgb, var(--ds-ink) 45%, transparent);
+  --ds-control-border-hover: color-mix(in srgb, var(--ds-ink) 60%, transparent);
+  --ds-focus: var(--ds-ink);
+  --ds-overlay-edge: rgba(0,0,0,0.08);
+  --ds-shadow-overlay: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --ds-scrim: rgba(0,0,0,0.40);
+  --ds-danger-mark: var(--ds-danger);
+  --ds-skeleton: color-mix(in srgb, var(--ds-ink) 4.5%, transparent); /* = --muted #f4f4f4 over the white card, but translucent: .studio-shimmer overlays content */
+  --ds-skeleton-glint: color-mix(in srgb, var(--ds-canvas) 55%, transparent);
+  --ds-segment-pill: #ffffff;                                          /* PanelTabs pill: bg-background */
+  --ds-shadow-segment: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --ds-segment-track: color-mix(in srgb, var(--ds-well-strong) 60%, transparent); /* PanelTabs track: bg-muted/60 */
+  --ds-overlay-hover: var(--ds-accent-soft);                           /* menu / select items: focus:bg-accent */
+  --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 35%, transparent); /* status error: border-destructive/35 */
+  --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 6%, transparent);  /* bg-destructive/[0.06] */
+  --ds-toast-edge: color-mix(in srgb, var(--ds-hairline) 70%, transparent);           /* toast: border-border/70 */
+  --ds-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);                      /* --motion-ease-enter */
+  --ds-motion-enter: 280ms;                                            /* --motion-enter-quick */
+  --ds-motion-exit: 160ms;                                             /* --motion-exit */
+  /* Chrome type scale. Atlas's body is 14 px (--text-sm) and its large step 16 px; the 11 and
+     13 px steps have no Atlas equivalent and stay (Atlas uses 11 px for its own micro labels). */
+  --ds-text-xs: 0.6875rem;
+  --ds-text-sm: 0.8125rem;
+  --ds-text-base: 0.875rem;             /* --text-sm: the Atlas body size */
+  --ds-text-lg: 1rem;                   /* --text-base */
+}
+
+/* ---- Tokens, dark (Atlas .dark: the same system inverted — #0a0a0a paper, #fafafa ink) ---- */
+.dark[data-ds-skin="atlas"],
+.dark [data-ds-skin="atlas"] {
+  --ds-canvas: #0a0a0a;
+  --ds-sidebar: #0d0d0d;
+  --ds-surface: #111111;
+  --ds-surface-soft: #1a1a1a;
+  --ds-surface-strong: #1a1a1a;         /* wave 5: overlays sit a step above cards (#111111) */
+  --ds-raised: #1a1a1a;
+  --ds-ink: #fafafa;
+  --ds-muted: #a3a3a3;
+  --ds-hairline: rgba(255,255,255,0.12);
+  --ds-hairline-soft: rgba(255,255,255,0.072);
+  --ds-well: #0f0f0f;
+  --ds-well-strong: #1a1a1a;
+  --ds-hover: #1f1f1f;
+  --ds-faint: rgba(250,250,250,0.35);
+  --ds-accent: #fafafa;
+  --ds-accent-hover: #d6d6d6;
+  --ds-on-accent: #0a0a0a;
+  --ds-accent-soft: #1f1f1f;
+  --ds-accent-text: var(--ds-accent);
+  --ds-accent-fill-hover: var(--ds-accent-hover);
+  --ds-active: #262626;
+  --ds-success: oklch(0.5 0.15 142);
+  --ds-success-text: color-mix(in srgb, var(--ds-success) 60%, var(--ds-ink));
+  --ds-warning: oklch(0.7 0.15 85);
+  --ds-warning-text: color-mix(in srgb, var(--ds-warning) 60%, var(--ds-ink));
+  --ds-danger: oklch(0.396 0.141 25.723);
+  --ds-danger-text: color-mix(in srgb, var(--ds-danger-mark) 65%, var(--ds-ink)); /* from the brighter MARK (Atlas's destructive-foreground), not the deep fill red: the deep red needs half ink to reach 4.5:1 and then reads as the muted grey; the mark at 65 % keeps the hue (wave 8 review) */
+  --ds-info: #e5e5e5;
+  --ds-info-text: color-mix(in srgb, var(--ds-info) 60%, var(--ds-ink));
+  --ds-ring: #8a8a8a;
+  --ds-shadow-soft: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --ds-shadow-panel: 0 16px 36px -16px rgb(0 0 0 / 0.7);
+  --ds-shadow-lift: 0 22px 44px -18px rgb(0 0 0 / 0.8);
+  /* Wave 5: a 10 %-black shadow vanishes on black, so overlays get a lighter edge, a 1 px light catch
+     along the top and a deeper shadow (Atlas dark --shadow-lg); the danger MARK is the brighter red
+     (dots and edges; the deep red stays for fills); skeletons lift with ink; the segmented pill is the
+     accent step on a half-strength track, ringed in white 8 %; a highlighted menu row is white 8 % (the
+     #1f1f1f hover was only a hair above the #1a1a1a overlay); the error surface and the toast edge take
+     Atlas's dark values. */
+  --ds-overlay-edge: rgba(255,255,255,0.14);
+  --ds-shadow-overlay: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 18px 40px -12px rgb(0 0 0 / 0.75);
+  --ds-scrim: rgba(0,0,0,0.60);
+  --ds-danger-mark: oklch(0.637 0.237 25.331);                         /* --destructive-foreground */
+  --ds-skeleton: color-mix(in srgb, var(--ds-ink) 9%, transparent);
+  --ds-skeleton-glint: color-mix(in srgb, var(--ds-ink) 7%, transparent);
+  --ds-segment-pill: #1f1f1f;                                          /* bg-accent */
+  --ds-shadow-segment: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --ds-segment-track: color-mix(in srgb, var(--ds-well-strong) 50%, transparent); /* dark:bg-muted/50 */
+  --ds-overlay-hover: rgba(255,255,255,0.08);                          /* dark:focus:bg-white/[0.08] */
+  --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 40%, transparent); /* dark:border-destructive-foreground/40 */
+  --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 8%, transparent);  /* dark:bg-destructive-foreground/[0.08] */
+  --ds-toast-edge: rgba(255,255,255,0.12);                             /* toast: dark:border-white/[0.12] */
+}
+
+/* ---- OS "increase contrast" (Atlas wave 5: prefers-contrast: more applies its high-contrast
+   tokens): hairlines become real edges, secondary text darkens, field edges and focus go to full
+   ink. Only under the skin; Atlas's own Settings toggle (.atlas-high-contrast) has no Comic Studio
+   counterpart. ---- */
+@media (prefers-contrast: more) {
+  [data-ds-skin="atlas"] {
+    --ds-hairline: rgba(0,0,0,0.32);
+    --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
+    --ds-muted: #404040;
+    --ds-ring: #000000;
+    --ds-control-border: color-mix(in srgb, var(--ds-ink) 70%, transparent);
+    --ds-control-border-hover: var(--ds-ink);
+  }
+  .dark[data-ds-skin="atlas"],
+  .dark [data-ds-skin="atlas"] {
+    --ds-hairline: oklch(0.52 0 0);
+    /* The dark base block (0,2,0) outranks the light high-contrast one (0,1,0), so the soft hairline is
+       restated here or it would stay the base dark 7.2 % white. */
+    --ds-hairline-soft: color-mix(in srgb, var(--ds-hairline) 60%, transparent);
+    --ds-muted: #d4d4d4;
+    --ds-ring: #ffffff;
+  }
+}
+
+/* ---- Theme switch (Atlas wave 5: one cross-fade of the whole page, not a transition per element) ----
+   services/dsSkin.ts switchDsTheme flips `.dark` inside document.startViewTransition: the root
+   snapshot cross-fades over --ds-motion-theme on the compositor, and `ds-no-transitions` holds every
+   element's own transition for that one style change, so the hundreds of TRANSITION colour fades
+   never start. Under reduced motion, without the API, for a boot sync or a system-theme correction
+   the theme simply switches (still with transitions held). Only on the comics host, where <html>
+   carries the skin; the apex roots switch at once as before. The tokens are plain custom
+   properties on purpose: registered and transitioned (D0) they restyled every element per frame. */
+html[data-ds-skin="atlas"].ds-theme-transition::view-transition-old(root),
+html[data-ds-skin="atlas"].ds-theme-transition::view-transition-new(root) {
+  animation-duration: var(--ds-motion-theme);
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+[data-ds-skin="atlas"].ds-no-transitions,
+[data-ds-skin="atlas"].ds-no-transitions *,
+[data-ds-skin="atlas"].ds-no-transitions *::before,
+[data-ds-skin="atlas"].ds-no-transitions *::after {
+  transition: none !important;
+}
+
+/* ---- Base rules under the skin (Atlas @layer base, scoped) ---- */
+[data-ds-skin="atlas"] {
+  font-family: var(--ds-font-sans);
+  font-kerning: normal;
+  font-feature-settings: "kern", "liga", "calt";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Atlas draws its own pressed states (.ds-press): no grey tap flash on touch. */
+  -webkit-tap-highlight-color: transparent;
+  /* Thin ink-tinted scrollbars on a clear track; scrollbar-color inherits to every scroller. */
+  scrollbar-color: color-mix(in srgb, var(--ds-ink) 22%, transparent) transparent;
+}
+[data-ds-skin="atlas"] * {
+  -webkit-tap-highlight-color: transparent;
+  scrollbar-width: thin;
+}
+/* Tailwind's `font-sans` (Inter) inside the skin is the chrome face too; lettering fonts
+   (font-comic / font-display = Comic Neue / Bangers) are content and untouched. */
+[data-ds-skin="atlas"] .font-sans { font-family: var(--ds-font-sans); }
+/* Headings in the display face (HEADING carries .ds-font-display); they wrap into even lines,
+   running text avoids a lone last word. The text-wrap-style longhands on purpose: the shorthand
+   would also reset text-wrap-mode and break a `whitespace-nowrap` parent. */
+[data-ds-skin="atlas"] :is(h1, h2, h3, h4, .ds-font-display) {
+  font-family: var(--ds-font-display);
+  text-wrap-style: balance;
+}
+[data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote) { text-wrap-style: pretty; }
+/* Selection is inverted ink; inverted surfaces (ink or accent fills) flip it back so a selection
+   never disappears into its own background. */
+[data-ds-skin="atlas"] *::selection,
+[data-ds-skin="atlas"]::selection {
+  background-color: var(--ds-ink);
+  color: var(--ds-canvas);
+}
+[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\], .bg-\[var\(--ds-accent-fill\)\])::selection,
+[data-ds-skin="atlas"] :is(.bg-\[var\(--ds-ink\)\], .bg-\[var\(--ds-accent\)\], .bg-\[\#D97757\], .bg-\[var\(--ds-accent-fill\)\]) *::selection {
+  background-color: var(--ds-canvas);
+  color: var(--ds-ink);
+}
+/* Where the default theme's accent-contrast block (after the default tokens) outranks a skin rule
+   or a token utility with a different result, the skin restores its own paint here
+   (tests/config/tokenContrast.test.ts checks every rule of that block by specificity):
+   - the 85 % accent badge, which the block makes solid: (0,3,0) beats the shim's 85 % (0,2,0);
+   - accent-hover text, which the block reads as the readable accent (= the skin accent, not its hover). */
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/85.text-white:not(:disabled) { background-color: color-mix(in srgb, var(--ds-accent) 85%, transparent); }
+[data-ds-skin="atlas"] .hover\:text-\[var\(--ds-accent-hover\)\].hover\:text-\[var\(--ds-accent-hover\)\]:hover { color: var(--ds-accent-hover); }
+/* WebKit browsers that predate scrollbar-width / scrollbar-color. */
+@supports not (scrollbar-width: thin) {
+  [data-ds-skin="atlas"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+  [data-ds-skin="atlas"] ::-webkit-scrollbar-track,
+  [data-ds-skin="atlas"] ::-webkit-scrollbar-corner { background: transparent; }
+  [data-ds-skin="atlas"] ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: padding-box color-mix(in srgb, var(--ds-ink) 22%, transparent);
+  }
+  [data-ds-skin="atlas"] ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--ds-ink) 38%, transparent); }
+}
+/* Keyboard focus: a crisp 2 px ink outline set off by a hairline of page colour. In the base
+   layer with a zero-weight ancestor so components that draw their own ring (focus-visible:ring-*,
+   outline-none) still win, exactly as in Atlas. */
+@layer base {
+  :where([data-ds-skin="atlas"]) :focus-visible {
+    outline: 2px solid var(--ds-ink);
+    outline-offset: 2px;
+  }
+  @media (prefers-contrast: more) {
+    :where([data-ds-skin="atlas"]) :focus-visible { outline-width: 3px; }
+  }
+  @media (forced-colors: active) {
+    :where([data-ds-skin="atlas"]) :focus-visible { outline: 3px solid Highlight; }
+  }
+}
+/* Press feedback (studioDesign PRESS): dips while pressed, springs back. Motion-safe only, and
+   nothing happens outside the skin (today's `.press` keeps the coarse-pointer dip). */
+@media (prefers-reduced-motion: no-preference) {
+  [data-ds-skin="atlas"] .ds-press,
+  [data-ds-skin="atlas"] .ds-press-soft {
+    transition:
+      transform var(--ds-motion-panel) var(--ds-ease-spring),
+      color var(--ds-motion-medium) var(--ds-ease),
+      background-color var(--ds-motion-medium) var(--ds-ease),
+      border-color var(--ds-motion-medium) var(--ds-ease),
+      box-shadow var(--ds-motion-medium) var(--ds-ease),
+      opacity var(--ds-motion-medium) var(--ds-ease);
+  }
+  [data-ds-skin="atlas"] .ds-press:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.97);
+    transition-duration: var(--ds-motion-fast);
+    transition-timing-function: var(--ds-ease);
+  }
+  [data-ds-skin="atlas"] .ds-press-soft:active:not(:disabled):not([aria-disabled="true"]) {
+    transform: scale(0.98);
+    transition-duration: var(--ds-motion-fast);
+    transition-timing-function: var(--ds-ease);
+  }
+}
+
+/* ---- Wave 5 base rules (Atlas acd9fdfc) ---- */
+/* Reduced motion, extended as Atlas did: hover nudges written as transition-transform land without
+   travelling, and Tailwind's own loops hold still (a spinner's icon and label still say "loading").
+   Comic Studio has no tailwindcss-animate, so Atlas's animate-in / animate-out rules have nothing to
+   match here. */
+@media (prefers-reduced-motion: reduce) {
+  [data-ds-skin="atlas"] .transition-transform { transition-duration: 0s !important; }
+  [data-ds-skin="atlas"] :is(.animate-spin, .animate-ping, .animate-bounce) { animation: none; }
+}
+/* Overlay entrances run on the app's enter curve (Atlas wave 5 moved its Radix overlays off the
+   browser's plain `ease`): .animate-scale-in is the popover / sheet / toast pop-in here. Its
+   duration and its reduced-motion rule are unchanged. */
+[data-ds-skin="atlas"] .animate-scale-in { animation-timing-function: var(--ds-ease-enter); }
+/* Skeletons: the kit's .studio-shimmer is a slate (blue-grey) block — hue decorating. Under the skin
+   it is Atlas's: the muted block with a page-colour glint in light, lifted with ink in dark (the
+   muted step on a card measured 1.1:1 there). Its motion and reduced-motion rule are unchanged. */
+[data-ds-skin="atlas"] .studio-shimmer {
+  background-color: var(--ds-skeleton);
+  background-image: linear-gradient(100deg, transparent 30%, var(--ds-skeleton-glint) 50%, transparent 70%);
+}
+/* Toasts (studioDesign TOAST*): a time-left bar that drains as one compositor animation over
+   --ds-toast-duration (set inline per toast), held while the toast carries data-paused (set with its
+   dismiss clock, not CSS :hover, which sticks to a tapped toast on touch); arrival on the enter curve,
+   a quicker exit — Atlas's GlobalNotificationBar times: 300 ms in, 200 ms out (studioDesign
+   TOAST_EXIT_MS; its removal fallback, TOAST_EXIT_FALLBACK_MS, leaves a frame of slack). Under reduced
+   motion the toast still leaves on time; its bar just does not drain on screen, and it appears and
+   leaves without travelling (pair .ds-toast-exit with that removal timer: no animationend fires then). */
+@keyframes ds-toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+@keyframes ds-toast-in {
+  from { opacity: 0; transform: translateY(-12px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ds-toast-out {
+  from { opacity: 1; }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+[data-ds-skin="atlas"] .ds-toast-countdown {
+  transform-origin: left center;
+  animation: ds-toast-countdown var(--ds-toast-duration, 4s) linear forwards;
+}
+[data-ds-skin="atlas"] .ds-toast[data-paused] .ds-toast-countdown { animation-play-state: paused; }
+[data-ds-skin="atlas"] .ds-toast-enter { animation: ds-toast-in 300ms var(--ds-ease-enter) backwards; }
+[data-ds-skin="atlas"] .ds-toast-exit { animation: ds-toast-out 200ms var(--ds-ease) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  [data-ds-skin="atlas"] .ds-toast-countdown { display: none; }
+  [data-ds-skin="atlas"] :is(.ds-toast-enter, .ds-toast-exit) { animation: none; }
+}
+/* The inverse surface (studioDesign INVERSE_SURFACE): the inverted ink panel — a black CTA or brand
+   panel on white. In dark it would be a white slab, the brightest thing on a page someone chose to
+   keep dark, so there it is a raised dark surface with a light rim: the ink and page tokens are
+   swapped back inside it (exactly Atlas's --foreground / --background swap), which carries every child
+   written for the inverted panel along. The accent is NOT swapped, as in Atlas: the accent-derived
+   tokens (--ds-accent-fill, -fill-hover, -text) are computed once at the skin root, so a swapped
+   --ds-accent would leave them behind and put the paper label on a paper fill. A primary button in the
+   dark panel stays the paper fill under the ink label. The page focus colour is the panel's own colour
+   there, so focus inside it draws in the page colour. */
+[data-ds-skin="atlas"] .ds-inverse-surface { --ds-focus: var(--ds-canvas); }
+[data-ds-skin="atlas"] .ds-inverse-surface :focus-visible { outline-color: var(--ds-canvas); }
+.dark[data-ds-skin="atlas"] .ds-inverse-surface,
+.dark [data-ds-skin="atlas"] .ds-inverse-surface {
+  --ds-ink: #161616;
+  --ds-canvas: #fafafa;
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 55%);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.1), var(--ds-shadow-panel);
+}
+
+/* ==== ATLAS SKIN · TRANSITIONAL ACCENT SHIM (generated: node scripts/design/atlas-skin-shim.mjs) ==== */
+/* Phase D0 of docs/design/atlas-skin.md. The files below still hard-code the terracotta literal in
+   Tailwind utilities; under the Atlas skin those exact classes become the accent (ink), accent-soft,
+   hover/active and ring tokens so nothing terracotta leaks through before Phase D1 rewrites the
+   files themselves. One rule per literal utility found by scripts/design/atlas-skin-shim.mjs;
+   tests/config/atlasSkinShim.test.ts fails when a literal utility has no rule here. Solid accent
+   fills that pair with `text-white` also get the on-accent text colour (dark Atlas ink is light).
+   A literal inside a larger arbitrary value (a gradient) gets a hand-written rule, marked as such.
+   DELETE this whole block (and the generator) when the literal count in that test reaches zero. */
+[data-ds-skin="atlas"] .accent-\[\#D97757\] { accent-color: var(--ds-accent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\] { background-color: var(--ds-accent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\].text-white { color: var(--ds-on-accent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/10 { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/12 { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/15 { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/30 { background-color: color-mix(in srgb, var(--ds-accent) 30%, transparent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/35 { background-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/5 { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/70 { background-color: color-mix(in srgb, var(--ds-accent) 70%, transparent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/70.text-white { color: var(--ds-on-accent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/85 { background-color: color-mix(in srgb, var(--ds-accent) 85%, transparent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/85.text-white { color: var(--ds-on-accent); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.06\] { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.07\] { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.08\] { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.12\] { background-color: var(--ds-accent-soft); }
+[data-ds-skin="atlas"] .bg-\[\#D97757\]\/\[0\.14\] { background-color: var(--ds-accent-soft); }
+/* Hand-written: the Director's gradient mark (conversation/MessageItem.tsx) — solid ink disc, soft shadow. */
+[data-ds-skin="atlas"] .bg-\[linear-gradient\(135deg\,\#E8916F_0\%\,\#D97757_55\%\,\#B8573A_100\%\)\] { background-image: none; background-color: var(--ds-accent); color: var(--ds-on-accent); --tw-shadow: var(--ds-shadow-soft); }
+[data-ds-skin="atlas"] .border-\[\#D97757\] { border-color: var(--ds-accent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/30 { border-color: color-mix(in srgb, var(--ds-accent) 30%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/35 { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/40 { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/45 { border-color: color-mix(in srgb, var(--ds-accent) 45%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/50 { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/55 { border-color: color-mix(in srgb, var(--ds-accent) 55%, transparent); }
+[data-ds-skin="atlas"] .border-\[\#D97757\]\/60 { border-color: color-mix(in srgb, var(--ds-accent) 60%, transparent); }
+[data-ds-skin="atlas"] .enabled\:hover\:border-\[\#D97757\]\/35:enabled:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
+[data-ds-skin="atlas"] .fill-\[\#D97757\] { fill: var(--ds-accent); }
+[data-ds-skin="atlas"] .focus-visible\:outline-\[\#D97757\]:focus-visible { outline-color: var(--ds-ink); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/30:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/40:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/45:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/50:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-visible\:ring-\[\#D97757\]\/60:focus-visible { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus-within\:border-\[\#D97757\]\/40:focus-within { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
+[data-ds-skin="atlas"] .focus-within\:border-\[\#D97757\]\/45:focus-within { border-color: color-mix(in srgb, var(--ds-accent) 45%, transparent); }
+[data-ds-skin="atlas"] .focus-within\:ring-\[\#D97757\]\/45:focus-within { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus\:border-\[\#D97757\]\/40:focus { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
+[data-ds-skin="atlas"] .focus\:border-\[\#D97757\]\/45:focus { border-color: color-mix(in srgb, var(--ds-accent) 45%, transparent); }
+[data-ds-skin="atlas"] .focus\:border-\[\#D97757\]\/50:focus { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
+[data-ds-skin="atlas"] .focus\:border-\[\#D97757\]\/60:focus { border-color: color-mix(in srgb, var(--ds-accent) 60%, transparent); }
+[data-ds-skin="atlas"] .focus\:ring-\[\#D97757\]\/25:focus { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .focus\:ring-\[\#D97757\]\/30:focus { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .group\/place:hover .group-hover\/place\:ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .hover\:bg-\[\#D97757\]\/20:hover { background-color: var(--ds-active); }
+[data-ds-skin="atlas"] .hover\:bg-\[\#D97757\]\/25:hover { background-color: var(--ds-active); }
+[data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/35:hover { border-color: color-mix(in srgb, var(--ds-accent) 35%, transparent); }
+[data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/40:hover { border-color: color-mix(in srgb, var(--ds-accent) 40%, transparent); }
+[data-ds-skin="atlas"] .hover\:border-\[\#D97757\]\/50:hover { border-color: color-mix(in srgb, var(--ds-accent) 50%, transparent); }
+[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\] { background-color: var(--ds-accent); }
+[data-ds-skin="atlas"] .peer:checked ~ .peer-checked\:bg-\[\#D97757\].text-white { color: var(--ds-on-accent); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/25 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/30 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/40 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/45 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/50 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/60 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .ring-\[\#D97757\]\/70 { --tw-ring-color: var(--ds-ring); }
+[data-ds-skin="atlas"] .text-\[\#D97757\] { color: var(--ds-accent); }
+/* Token-driven solid accent + hard-coded white text (studioDesign PRIMARY_BTN consumers and friends). */
+[data-ds-skin="atlas"] .bg-\[var\(--ds-accent\)\].text-white,
+[data-ds-skin="atlas"] .hover\:bg-\[var\(--ds-accent-hover\)\].text-white:hover { color: var(--ds-on-accent); }
+/* ==== END ATLAS SKIN TRANSITIONAL SHIM ==== */

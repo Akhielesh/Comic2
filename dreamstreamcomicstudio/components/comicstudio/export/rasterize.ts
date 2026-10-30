@@ -1,37 +1,30 @@
-// Raster export: a page's art plus its overlay lettering, flattened into a PNG on a canvas.
+// Raster export: one book slot — a page's art with its overlay lettering, the cover with its overlay
+// title, or a software plate — flattened onto a canvas and encoded (PNG, or JPEG for PDFs).
 //
-// Uses the board's balloon geometry (balloonGeometry) through Path2D on the very same
-// path strings, wraps text with the same metrics, so the PNG matches what the user laid
-// out. Images are fetched with CORS (Supabase signed URLs allow it) so the canvas stays
-// exportable; a cache-busted <img crossOrigin> load is the fallback.
+// Lettering is drawn from the shared engine's LetterPlans (`planLettering`) through the canvas
+// renderer in canvasDraw.ts, which draws the very node tree the board's SVG draws — same wrap, same
+// outlines, same draw order — after the exact faces have loaded (fonts.ts). Images are fetched with
+// CORS and no credentials (signed or public URLs allow it) so the canvas stays exportable; a
+// cache-busted <img crossOrigin> load is the fallback.
 
 import type { ComicDoc, LineKind, Page } from '../../../shared/comic/doc';
-import {
-  LETTERING,
-  balloonFontPx,
-  balloonPaddingPx,
-  balloonShape,
-  dashArray,
-  hashSeed,
-  letteringText,
-  resolveBalloons,
-  sfxFontPx,
-  sfxStyle,
-  strokePx,
-  tailTipOf,
-  wrapBalanced,
-  type BalloonShape
-} from '../board/balloonGeometry';
+import { letteringAspect, planLettering, type Measure } from '../../../shared/comic/lettering/layout';
+import { fontString, resolveLetteringFont } from '../../../shared/comic/lettering/fonts';
+import { dirOf } from '../../../shared/comic/languages';
+import { plateLayout, type PlateKind } from '../timeline/plates';
+import { drawLetteringOnPage, drawSvgNodes, type LayerFactory, type PathFactory } from './canvasDraw';
+import { coverTitleNodes } from './coverTitle';
+import { CANCELLED, ExportError } from './errors';
+import { prepareExportFonts, type ExportFonts } from './fonts';
+import { drawPlate, type PlateArtImage } from './plateDraw';
+import type { ExportSlot } from './sequence';
 
-export class ExportError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ExportError';
-  }
-}
+export { ExportError } from './errors';
 
 /** Largest edge we will draw (canvas memory limits on mobile browsers). */
 export const MAX_EXPORT_EDGE = 4096;
+/** Default width of a software plate when no page sets the book's resolution. */
+export const DEFAULT_PLATE_WIDTH = 1600;
 
 export interface RasterOptions {
   /** Scale so the longest edge is this many px (default: the image's own size, capped). */
@@ -41,159 +34,43 @@ export interface RasterOptions {
   mime?: 'image/png' | 'image/jpeg';
   /** JPEG quality 0–1 (default 0.9). */
   quality?: number;
+  /** Measure prepared after the fonts loaded (batch exports prepare once; otherwise prepared here). */
+  measure?: Measure;
+  /** Width in px of a software plate (default: DEFAULT_PLATE_WIDTH). */
+  plateWidth?: number;
+  /**
+   * Never draw an image or plate with a long edge above this (px), and never upscale to reach it.
+   * The ZIP memory guard sets it when a big book would not fit in the device's memory (zipMemory.ts).
+   */
+  maxEdge?: number;
+  /** Tests / special canvases. */
+  makePath?: PathFactory;
+  createLayer?: LayerFactory;
 }
 
-/** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE). */
-export const rasterSize = (naturalW: number, naturalH: number, longEdge?: number): { width: number; height: number } => {
+/** Output canvas size for an image (keeps aspect; never above MAX_EXPORT_EDGE, nor above `maxEdge`). */
+export const rasterSize = (naturalW: number, naturalH: number, longEdge?: number, maxEdge?: number): { width: number; height: number } => {
   const w = Math.max(1, naturalW || 1);
   const h = Math.max(1, naturalH || 1);
   const long = Math.max(w, h);
-  const target = Math.min(MAX_EXPORT_EDGE, longEdge && longEdge > 0 ? longEdge : long);
+  const cap = maxEdge && maxEdge > 0 ? maxEdge : Infinity;
+  const target = Math.min(MAX_EXPORT_EDGE, cap, longEdge && longEdge > 0 ? longEdge : long);
   const scale = target / long;
   return { width: Math.max(1, Math.round(w * scale)), height: Math.max(1, Math.round(h * scale)) };
 };
 
-export const fontFor = (kind: LineKind, fontPx: number): string =>
-  kind === 'sfx'
-    ? `${fontPx}px "Bangers", Impact, sans-serif`
-    : `${kind === 'whisper' ? 'italic ' : ''}700 ${fontPx}px "Comic Neue", "Comic Sans MS", cursive`;
-
-export interface CanvasBalloonPlan {
-  lineId: string;
-  kind: LineKind;
-  /** Top-left corner and size in canvas px. */
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  fontPx: number;
-  lineHeightPx: number;
-  padX: number;
-  padY: number;
-  lines: string[];
-  shape: BalloonShape;
-  stroke: number;
-  sfx?: { color: string; rotate: number };
-}
-
 /**
- * Everything to draw for a page's lettering on a W×H canvas. `measure` returns a string's
- * width at a font size for a line kind (ctx.measureText in the browser; a stub in tests).
+ * Canvas font shorthand for a line kind in a language — the face the lettering engine resolves for
+ * the classic style (Comic Neue dialogue, Bangers SFX; the script's Noto face for Telugu, Hindi…).
  */
-export const planCanvasBalloons = (
-  doc: ComicDoc,
-  page: Page,
-  W: number,
-  H: number,
-  measure: (text: string, fontPx: number, kind: LineKind) => number
-): CanvasBalloonPlan[] => {
-  if (doc.format.lettering !== 'overlay') return [];
-  const stroke = strokePx(W);
-  return resolveBalloons(doc, page).map(({ line, balloon: b }) => {
-    const kind = line.kind;
-    const text = letteringText(line.text, doc.format.language);
-    const bw = b.w * W;
-    let fontPx: number;
-    let lineHeightPx: number;
-    let padX = 0;
-    let padY = 0;
-    let lines: string[];
-    if (kind === 'sfx') {
-      fontPx = sfxFontPx(text, bw, W);
-      lineHeightPx = fontPx;
-      lines = wrapBalanced(text, bw, (s) => measure(s, fontPx, kind));
-    } else {
-      fontPx = balloonFontPx(W, kind);
-      lineHeightPx = fontPx * LETTERING.lineHeight;
-      const pad = balloonPaddingPx(W);
-      padX = pad.x;
-      padY = pad.y;
-      lines = wrapBalanced(text, Math.max(1, bw - 2 * padX), (s) => measure(s, fontPx, kind));
-    }
-    const h = Math.max(lineHeightPx, lines.length * lineHeightPx + 2 * padY);
-    const tip = tailTipOf(b, kind, H ? h / H : 0);
-    const local = tip ? { x: (tip.tailX - b.x) * W, y: (tip.tailY - b.y) * H } : null;
-    return {
-      lineId: line.id,
-      kind,
-      x: b.x * W,
-      y: b.y * H,
-      w: bw,
-      h,
-      fontPx,
-      lineHeightPx,
-      padX,
-      padY,
-      lines,
-      shape: balloonShape(kind, bw, h, { tip: local, seed: hashSeed(line.id), inset: { x: padX, y: padY } }),
-      stroke,
-      ...(kind === 'sfx' ? { sfx: sfxStyle(line.id) } : {})
-    };
-  });
+export const fontFor = (kind: LineKind, fontPx: number, lang = 'en'): string => {
+  const r = resolveLetteringFont(kind === 'sfx' ? 'bangers' : 'comic-neue', kind, lang, { weight: kind === 'sfx' ? 400 : 700, italic: kind === 'whisper' });
+  return fontString(r.fontId, fontPx, r.weight, r.italic);
 };
 
-type PathFactory = (d: string) => Path2D;
-
-/** Draw planned balloons onto a 2D context (Path2D from the shared SVG path data). */
-export const drawCanvasBalloons = (ctx: CanvasRenderingContext2D, plans: CanvasBalloonPlan[], makePath: PathFactory = (d) => new Path2D(d)): void => {
-  for (const p of plans) {
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.lineJoin = 'round';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (p.kind === 'sfx' && p.sfx) {
-      ctx.translate(p.w / 2, p.h / 2);
-      ctx.rotate((p.sfx.rotate * Math.PI) / 180);
-      ctx.font = fontFor('sfx', p.fontPx);
-      const top = -p.h / 2;
-      const shadow = Math.max(1, p.fontPx * 0.05);
-      p.lines.forEach((text, i) => {
-        const y = top + p.lineHeightPx * (i + 0.5);
-        ctx.fillStyle = LETTERING.ink;
-        ctx.fillText(text, shadow, y + shadow);
-        ctx.lineWidth = Math.max(1, p.fontPx * 0.12);
-        ctx.strokeStyle = LETTERING.ink;
-        ctx.strokeText(text, 0, y);
-        ctx.fillStyle = p.sfx!.color;
-        ctx.fillText(text, 0, y);
-      });
-      ctx.restore();
-      continue;
-    }
-    const s = p.shape;
-    const dash = s.dashed ? dashArray(p.stroke).split(' ').map(Number) : [];
-    ctx.fillStyle = s.fill;
-    ctx.strokeStyle = s.stroke;
-    if (s.tail) {
-      const tail = makePath(s.tail);
-      ctx.setLineDash(dash);
-      ctx.lineWidth = p.stroke * 2;
-      ctx.fill(tail);
-      ctx.stroke(tail);
-    }
-    ctx.setLineDash([]);
-    ctx.lineWidth = p.stroke;
-    for (const c of s.bubbles) {
-      ctx.beginPath();
-      ctx.arc(c.cx, c.cy, c.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-    if (s.body) {
-      const body = makePath(s.body);
-      ctx.setLineDash(dash);
-      ctx.fill(body);
-      ctx.stroke(body);
-      ctx.setLineDash([]);
-    }
-    if (s.tail) ctx.fill(makePath(s.tail));
-    ctx.fillStyle = LETTERING.ink;
-    ctx.font = fontFor(p.kind, p.fontPx);
-    p.lines.forEach((text, i) => ctx.fillText(text, p.w / 2, p.padY + p.lineHeightPx * (i + 0.5)));
-    ctx.restore();
-  }
-};
+/** Load the faces these docs letter with; resolves with a measure to plan with (never rejects). */
+export const ensureLetteringFonts = (docs: ComicDoc | readonly ComicDoc[] = [], timeoutMs?: number): Promise<ExportFonts> =>
+  prepareExportFonts(Array.isArray(docs) ? docs : [docs as ComicDoc], { timeoutMs });
 
 export interface LoadedImage {
   source: CanvasImageSource;
@@ -207,7 +84,7 @@ const loadViaImg = (url: string, signal?: AbortSignal): Promise<LoadedImage> =>
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.decoding = 'async';
-    const onAbort = () => reject(new ExportError('Export cancelled.'));
+    const onAbort = () => reject(new ExportError(CANCELLED));
     signal?.addEventListener('abort', onAbort, { once: true });
     img.onload = () => {
       signal?.removeEventListener('abort', onAbort);
@@ -221,15 +98,15 @@ const loadViaImg = (url: string, signal?: AbortSignal): Promise<LoadedImage> =>
     img.src = /^(data|blob):/i.test(url) ? url : `${url}${url.includes('?') ? '&' : '?'}cs_export=1`;
   });
 
-/** Load an image for canvas drawing without tainting the canvas. */
+/** Load an image for canvas drawing without tainting the canvas (no cookies, no credentials). */
 export const loadExportImage = async (url: string, signal?: AbortSignal): Promise<LoadedImage> => {
-  if (signal?.aborted) throw new ExportError('Export cancelled.');
+  if (signal?.aborted) throw new ExportError(CANCELLED);
   if (typeof fetch === 'function' && !/^(data|blob):/i.test(url)) {
     let res: Response | null = null;
     try {
       res = await fetch(url, { mode: 'cors', credentials: 'omit', signal });
     } catch (err) {
-      if (signal?.aborted) throw new ExportError('Export cancelled.');
+      if (signal?.aborted) throw new ExportError(CANCELLED);
       // CORS/network failure: fall back to an <img crossOrigin> load below.
       void err;
     }
@@ -254,21 +131,7 @@ export const loadExportImage = async (url: string, signal?: AbortSignal): Promis
   return loadViaImg(url, signal);
 };
 
-/** Make sure the lettering fonts are ready before measuring/drawing text (bounded wait). */
-export const ensureLetteringFonts = async (timeoutMs = 5000): Promise<void> => {
-  const fonts = typeof document !== 'undefined' ? (document as Document & { fonts?: FontFaceSet }).fonts : undefined;
-  if (!fonts?.load) return;
-  try {
-    await Promise.race([
-      Promise.all([fonts.load('700 32px "Comic Neue"'), fonts.load('italic 700 32px "Comic Neue"'), fonts.load('32px "Bangers"')]),
-      new Promise((resolve) => setTimeout(resolve, timeoutMs))
-    ]);
-  } catch {
-    /* draw with fallbacks */
-  }
-};
-
-const canvasToPng = (canvas: HTMLCanvasElement, mime: 'image/png' | 'image/jpeg' = 'image/png', quality = 0.9): Promise<Blob> =>
+const encode = (canvas: HTMLCanvasElement, mime: 'image/png' | 'image/jpeg' = 'image/png', quality = 0.9): Promise<Blob> =>
   new Promise((resolve, reject) => {
     try {
       canvas.toBlob(
@@ -280,47 +143,151 @@ const canvasToPng = (canvas: HTMLCanvasElement, mime: 'image/png' | 'image/jpeg'
       reject(
         (err as Error)?.name === 'SecurityError'
           ? new ExportError('Your browser blocked reading this image for export. Use Print / PDF instead.')
-          : new ExportError('The browser couldn’t encode this page as PNG.')
+          : new ExportError('The browser couldn’t encode this page as an image.')
       );
     }
   });
 
-const drawToBlob = async (
-  url: string,
-  opts: RasterOptions,
-  letter?: (ctx: CanvasRenderingContext2D, width: number, height: number) => Promise<void> | void
-): Promise<Blob> => {
-  const image = await loadExportImage(url, opts.signal);
+/** A white canvas of this size, tagged with the language (engines that read `lang` pick fallbacks by it). */
+const makeCanvas = (width: number, height: number, lang?: string): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } => {
+  if (typeof document === 'undefined') throw new ExportError('Exports run in the browser.');
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  if (lang) {
+    canvas.setAttribute('lang', lang);
+    canvas.setAttribute('dir', dirOf(lang));
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new ExportError('This browser can’t draw images for export.');
+  if (lang && 'lang' in ctx) (ctx as CanvasRenderingContext2D & { lang: string }).lang = lang;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.imageSmoothingQuality = 'high';
+  return { canvas, ctx };
+};
+
+type Letter = (ctx: CanvasRenderingContext2D, width: number, height: number) => Promise<void> | void;
+
+/** Draw an already-loaded image (plus optional lettering) and encode it. The image is not released. */
+export async function rasterizeImage(image: Pick<LoadedImage, 'source' | 'width' | 'height'>, opts: RasterOptions = {}, letter?: Letter, lang?: string): Promise<Blob> {
+  const { width, height } = rasterSize(image.width, image.height, opts.longEdge, opts.maxEdge);
+  const { canvas, ctx } = makeCanvas(width, height, lang);
+  ctx.drawImage(image.source, 0, 0, width, height);
+  if (letter) await letter(ctx, width, height);
+  if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+  return encode(canvas, opts.mime, opts.quality);
+}
+
+const withImage = async <T>(url: string, signal: AbortSignal | undefined, use: (image: LoadedImage) => Promise<T>): Promise<T> => {
+  const image = await loadExportImage(url, signal);
   try {
-    const { width, height } = rasterSize(image.width, image.height, opts.longEdge);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new ExportError('This browser can’t draw images for export.');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(image.source, 0, 0, width, height);
-    if (letter) await letter(ctx, width, height);
-    if (opts.signal?.aborted) throw new ExportError('Export cancelled.');
-    return await canvasToPng(canvas, opts.mime, opts.quality);
+    return await use(image);
   } finally {
     image.release();
   }
 };
 
-/** A page's art with its overlay lettering as a PNG blob. */
-export const renderPageToBlob = (doc: ComicDoc, page: Page, imageUrl: string, opts: RasterOptions = {}): Promise<Blob> =>
-  drawToBlob(imageUrl, opts, async (ctx, width, height) => {
-    if (doc.format.lettering !== 'overlay') return;
-    await ensureLetteringFonts();
-    const measure = (text: string, fontPx: number, kind: LineKind) => {
-      ctx.font = fontFor(kind, fontPx);
-      return ctx.measureText(text).width;
-    };
-    drawCanvasBalloons(ctx, planCanvasBalloons(doc, page, width, height, measure));
-  });
+/** The aspect the lettering is planned at: the art's recorded size (as on the board) unless the file disagrees. */
+export const pageAspectFor = (doc: ComicDoc, page: Page, width: number, height: number): number => {
+  const recorded = letteringAspect(doc, page);
+  const actual = width > 0 && height > 0 ? width / height : recorded;
+  return Math.abs(Math.log(actual / recorded)) <= 0.01 ? recorded : actual;
+};
 
-/** A plain image (the cover, lettered in-art) as a PNG blob. */
-export const renderImageToBlob = (imageUrl: string, opts: RasterOptions = {}): Promise<Blob> => drawToBlob(imageUrl, opts);
+const measureFor = async (doc: ComicDoc, opts: RasterOptions): Promise<Measure> => opts.measure ?? (await prepareExportFonts([doc])).measure;
+
+/** Lettering for a page drawn over (0,0,width,height) — overlay comics only. */
+export async function letterPage(ctx: CanvasRenderingContext2D, doc: ComicDoc, page: Page, width: number, height: number, opts: RasterOptions = {}): Promise<void> {
+  if (doc.format.lettering !== 'overlay') return;
+  const measure = await measureFor(doc, opts);
+  const plans = planLettering(doc, page, pageAspectFor(doc, page, width, height), measure);
+  drawLetteringOnPage(ctx, plans, { x: 0, y: 0, width, height }, { makePath: opts.makePath, createLayer: opts.createLayer });
+}
+
+/** The overlay cover title over (0,0,width,height) — textless covers only. */
+export async function letterCover(ctx: CanvasRenderingContext2D, doc: ComicDoc, width: number, height: number, opts: RasterOptions = {}): Promise<void> {
+  if (doc.cover?.lettering !== 'overlay') return;
+  const measure = await measureFor(doc, opts);
+  const nodes = coverTitleNodes(doc, width / height, measure);
+  if (!nodes.length) return;
+  ctx.save();
+  ctx.scale(width / 1000, width / 1000);
+  drawSvgNodes(ctx, nodes, { makePath: opts.makePath, createLayer: opts.createLayer });
+  ctx.restore();
+}
+
+/** A page's art with its overlay lettering. */
+export const renderPageToBlob = (doc: ComicDoc, page: Page, imageUrl: string, opts: RasterOptions = {}): Promise<Blob> =>
+  withImage(imageUrl, opts.signal, (image) => rasterizeImage(image, opts, (ctx, w, h) => letterPage(ctx, doc, page, w, h, opts), doc.format.language));
+
+/** The cover art; a textless cover gets its overlay title (localized doc ⇒ that language's title). */
+export const renderCoverToBlob = (doc: ComicDoc, imageUrl: string, opts: RasterOptions = {}): Promise<Blob> =>
+  withImage(imageUrl, opts.signal, (image) => rasterizeImage(image, opts, (ctx, w, h) => letterCover(ctx, doc, w, h, opts), doc.format.language));
+
+/** A plain image as is. */
+export const renderImageToBlob = (imageUrl: string, opts: RasterOptions = {}): Promise<Blob> => withImage(imageUrl, opts.signal, (image) => rasterizeImage(image, opts));
+
+/**
+ * A software plate (title page, "The End", back cover) at `plateWidth` px. The back cover's art
+ * vignette is the cover image: pass it loaded (`art`) or by URL (`artUrl`); if it can't be loaded the
+ * frame keeps its calm placeholder — a plate never fails because of its vignette.
+ */
+export async function renderPlateToBlob(
+  doc: ComicDoc,
+  kind: PlateKind,
+  opts: RasterOptions & { art?: PlateArtImage | null; artUrl?: string } = {}
+): Promise<Blob> {
+  const layout = plateLayout(doc, kind);
+  let width = Math.round(Math.min(MAX_EXPORT_EDGE, Math.max(200, opts.plateWidth ?? opts.longEdge ?? DEFAULT_PLATE_WIDTH)));
+  let height = Math.round((width * layout.height) / layout.width);
+  const plateCap = Math.min(MAX_EXPORT_EDGE, opts.maxEdge && opts.maxEdge > 0 ? Math.max(200, opts.maxEdge) : Infinity);
+  if (Math.max(width, height) > plateCap) {
+    const scale = plateCap / Math.max(width, height);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
+  }
+  let art: PlateArtImage | null | undefined = opts.art;
+  let loaded: LoadedImage | null = null;
+  if (art === undefined && layout.art && opts.artUrl) {
+    try {
+      loaded = await loadExportImage(opts.artUrl, opts.signal);
+      art = loaded;
+    } catch (err) {
+      if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+      art = null;
+    }
+  }
+  try {
+    const { canvas, ctx } = makeCanvas(width, height, doc.format.language);
+    ctx.save();
+    ctx.scale(width / layout.width, width / layout.width);
+    drawPlate(ctx, layout, art);
+    ctx.restore();
+    if (opts.signal?.aborted) throw new ExportError(CANCELLED);
+    return await encode(canvas, opts.mime, opts.quality);
+  } finally {
+    loaded?.release();
+  }
+}
+
+/** Render one export slot of a (localized) doc. `image` reuses an art image already loaded. */
+export async function renderSlotToBlob(
+  doc: ComicDoc,
+  slot: ExportSlot,
+  opts: RasterOptions & { image?: Pick<LoadedImage, 'source' | 'width' | 'height'>; coverUrl?: string; coverArt?: PlateArtImage | null } = {}
+): Promise<Blob> {
+  if (slot.plate) return renderPlateToBlob(doc, slot.plate, { ...opts, art: opts.coverArt, artUrl: opts.coverUrl });
+  const lang = doc.format.language;
+  // The slot may come from another language's copy of the book: letter THIS doc's page.
+  const page = slot.page ? (doc.pages.find((p) => p.id === slot.page!.id) ?? slot.page) : undefined;
+  const letter: Letter | undefined =
+    slot.kind === 'cover'
+      ? (ctx, w, h) => letterCover(ctx, doc, w, h, opts)
+      : page
+        ? (ctx, w, h) => letterPage(ctx, doc, page, w, h, opts)
+        : undefined;
+  if (opts.image) return rasterizeImage(opts.image, opts, letter, lang);
+  if (!slot.url) throw new ExportError(`${slot.label} has no image to export.`);
+  return withImage(slot.url, opts.signal, (image) => rasterizeImage(image, opts, letter, lang));
+}

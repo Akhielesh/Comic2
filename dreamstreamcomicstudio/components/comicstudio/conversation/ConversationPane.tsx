@@ -2,11 +2,13 @@
 // composer. Auto-scrolls while the user is at the bottom; if they scrolled up to read,
 // new content waits behind a "Jump to latest" button instead of yanking them down.
 //
-// On narrow screens the shell can swap the message list for the board (`replaceList`)
-// while the composer stays docked — the user can keep talking while they look.
+// The v5 shell keeps this pane mounted (hidden + inert) when phones show the board, so scroll
+// position and the composer draft survive; `replaceList` stays for compatibility only.
+// Keyboard-safe: the bottom inset follows --sa-bottom-eff (0 while the keyboard is up), and a
+// pinned conversation stays pinned when the keyboard opens or closes.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, RefreshCw, X } from 'lucide-react';
+import { ArrowDown } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { conversationEntries } from '../studioReducer';
 import { ActivityLine } from './ActivityLine';
@@ -14,7 +16,9 @@ import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
 import { AssistantMessage, DirectorMark, UserBubble } from './MessageItem';
 import { StudioComposer, type StudioComposerHandle } from './StudioComposer';
+import { SavedByEditorNote, StudioErrorBanner, StudioNoticeToast } from './StudioNotices';
 import { AgentThinking } from '../../studio/kit/streamMotion';
+import { subscribeKeyboardInset } from '../mobile/useKeyboardInset';
 import { cx } from './ui';
 
 const NEAR_BOTTOM_PX = 96;
@@ -26,13 +30,41 @@ export interface ConversationPaneProps {
   /** Extra content just above the composer (e.g. the mobile "3 pages rendering · View" pill). */
   aboveComposer?: React.ReactNode;
   className?: string;
+  /**
+   * Pad the composer dock by the bottom safe area (default true). The phone shell turns it off
+   * because its tab bar owns that inset.
+   */
+  insetBottom?: boolean;
+  /** The composer's imperative handle, for the shell ("Ask the Director…" focuses it in-gesture). */
+  composerApiRef?: React.Ref<StudioComposerHandle>;
+  /**
+   * Phones with the board hidden: the activity line's status opens the board (one status row instead
+   * of the line plus a "N pages rendering · View" pill).
+   */
+  onViewActivity?: () => void;
 }
 
-export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className }) => {
+/** Messages before the last few skip offscreen rendering (`content-visibility: auto`). */
+const CV_KEEP_LIVE = 6;
+
+const assignRef = <T,>(ref: React.Ref<T> | undefined, value: T | null) => {
+  if (!ref) return;
+  if (typeof ref === 'function') ref(value);
+  else (ref as React.MutableRefObject<T | null>).current = value;
+};
+
+export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, replaceList, aboveComposer, className, insetBottom = true, composerApiRef, onViewActivity }) => {
   const { doc, drafts, pendingMessage, messageBusy } = studio;
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<StudioComposerHandle>(null);
+  const composerRef = useRef<StudioComposerHandle | null>(null);
+  const setComposer = useCallback(
+    (handle: StudioComposerHandle | null) => {
+      composerRef.current = handle;
+      assignRef(composerApiRef, handle);
+    },
+    [composerApiRef]
+  );
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
 
@@ -71,10 +103,24 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
   const lastCards = lastEntry?.msg.cards?.length || 0;
   const signature = `${entries.length}|${draftLength}|${lastCards}|${pendingMessage?.id || ''}|${showThinking}`;
 
-  // Stick to the bottom while pinned.
+  // Stick to the bottom while pinned. The empty state is a welcome, not a log: it starts at the top
+  // (scrolling it "to the bottom" hid the heading on short phones — visualqa P2-1).
   useLayoutEffect(() => {
-    if (pinnedRef.current) scrollToBottom();
-  }, [signature, scrollToBottom]);
+    if (pinnedRef.current && !isEmpty) scrollToBottom();
+  }, [signature, scrollToBottom, isEmpty]);
+
+  // The keyboard opening/closing resizes the log: keep a pinned conversation on the latest message.
+  // Subscribed directly (it also keeps --app-h/--kb written while the pane is mounted): re-rendering
+  // every message on each frame of the keyboard animation would make typing janky on a phone.
+  const isEmptyRef = useRef(isEmpty);
+  isEmptyRef.current = isEmpty;
+  useEffect(
+    () =>
+      subscribeKeyboardInset(() => {
+        if (pinnedRef.current && !isEmptyRef.current) scrollToBottom();
+      }),
+    [scrollToBottom]
+  );
 
   // Sending always brings the conversation back to the latest.
   useEffect(() => {
@@ -94,7 +140,8 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
 
   // Back from the board view (mobile): land at the latest message.
   useEffect(() => {
-    if (!replaceList) scrollToBottom();
+    if (!replaceList && !isEmpty) scrollToBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replaceList, scrollToBottom]);
 
   // ── Drop anywhere on the conversation ──────────────────────────────────────
@@ -114,25 +161,40 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
         <div className="min-h-0 flex-1 overflow-hidden">{replaceList}</div>
       ) : (
         <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div ref={contentRef} role="log" aria-label="Messages" aria-live="polite" aria-relevant="additions" className="mx-auto flex min-h-full w-full max-w-3xl flex-col gap-6 px-4 pb-6 pt-6 sm:px-6">
+          <div
+            ref={contentRef}
+            role="log"
+            aria-label="Messages"
+            aria-live="polite"
+            aria-relevant="additions"
+            className={cx('mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col gap-6 px-4 pt-6 sm:px-6', pinned ? 'pb-6' : 'pb-14')}
+          >
             {isEmpty ? (
               <EmptyConversation onSend={(t) => void studio.send(t)} disabled={!doc || messageBusy} />
             ) : (
               <>
-                {docEntries.map(({ msg, draft }) =>
-                  msg.role === 'user' ? (
-                    <UserBubble key={msg.id} text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} />
+                {docEntries.map(({ msg, draft }, i) => {
+                  const item =
+                    msg.role === 'user' ? (
+                      <UserBubble text={msg.text} attachments={msg.attachments} urlFor={studio.urlFor} studio={studio} />
+                    ) : (
+                      <AssistantMessage
+                        msg={msg}
+                        draft={draft}
+                        streaming={!!draft && messageBusy}
+                        showSuggestions={msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage}
+                        studio={studio}
+                      />
+                    );
+                  // Older messages skip rendering while offscreen (cheap on long conversations).
+                  return i < docEntries.length - CV_KEEP_LIVE ? (
+                    <div key={msg.id} className="cv-auto min-w-0">
+                      {item}
+                    </div>
                   ) : (
-                    <AssistantMessage
-                      key={msg.id}
-                      msg={msg}
-                      draft={draft}
-                      streaming={!!draft && messageBusy}
-                      showSuggestions={msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage}
-                      studio={studio}
-                    />
-                  )
-                )}
+                    <React.Fragment key={msg.id}>{item}</React.Fragment>
+                  );
+                })}
                 {pendingMessage && (
                   <UserBubble
                     text={pendingMessage.text}
@@ -167,41 +229,27 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
         </div>
       )}
 
-      <div className="relative shrink-0 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-1 sm:px-4">
+      <div className={cx('relative shrink-0 px-3 pt-0.5 sm:px-4', insetBottom ? 'pb-[max(0.75rem,var(--sa-bottom-eff,0px))]' : 'pb-2')} data-composer-dock>
         {!replaceList && !pinned && (
           <div className="pointer-events-none absolute inset-x-0 bottom-full z-20 mb-2 flex justify-center">
             <button
               type="button"
               onClick={() => scrollToBottom(true)}
-              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md animate-scale-in hover:bg-[var(--ds-raised)]"
+              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-3 py-1.5 text-[12px] font-medium text-[var(--ds-ink)] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-md animate-scale-in hover:bg-[var(--ds-raised)] coarse:min-h-[44px] coarse:px-4"
             >
               <ArrowDown className="h-3.5 w-3.5" aria-hidden /> Jump to latest
             </button>
           </div>
         )}
         <div className="mx-auto w-full max-w-3xl">
-          {studio.error && (
-            <div role="alert" className="mb-2 flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-[12.5px] text-[var(--ds-ink)]">
-              <span className="min-w-0 flex-1">{studio.error}</span>
-              <button
-                type="button"
-                onClick={() => {
-                  studio.clearError();
-                  void studio.refresh();
-                }}
-                className="inline-flex shrink-0 items-center gap-1 font-semibold hover:underline"
-                title="Reload the latest state of this comic"
-              >
-                <RefreshCw className="h-3 w-3" aria-hidden /> Resync
-              </button>
-              <button type="button" onClick={studio.clearError} aria-label="Dismiss error" className="shrink-0 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-          <ActivityLine studio={studio} className="mb-1" />
+          {/* Calm, docked messages: the last error (tailored by its code), the undo/redo notice and
+              the "done by the editor" savings line — never a silent studio. */}
+          <StudioErrorBanner studio={studio} className="mb-2" />
+          <StudioNoticeToast studio={studio} className="mb-2" />
+          <SavedByEditorNote studio={studio} className="mb-1" />
+          <ActivityLine studio={studio} className="mb-0.5" onView={onViewActivity} />
           {aboveComposer}
-          <StudioComposer studio={studio} apiRef={composerRef} />
+          <StudioComposer studio={studio} apiRef={setComposer} />
         </div>
       </div>
     </section>

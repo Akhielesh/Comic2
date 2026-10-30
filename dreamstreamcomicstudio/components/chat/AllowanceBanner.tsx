@@ -1,27 +1,26 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { AlertTriangle, Gauge, X } from 'lucide-react';
 import {
   dismissThreshold,
-  fetchAllowanceStatus,
-  getLastAllowanceStatus,
+  formatPctLeft,
   highestCrossedThreshold,
   isThresholdDismissed,
   patchBillingPrefs,
   resetsLabel,
-  subscribeAllowanceStatus,
-  type AllowanceStatus
+  showsUsageMeter,
+  USAGE_EXHAUSTED_COPY
 } from '../../services/usageAllowance';
+import { useUsageAllowance } from '../usage/useUsageAllowance';
 
-// Slim, dismissible allowance alert across the top of the chat shell. Appears when
-// monthly platform-allowance usage crosses 30/70/90/100% (info → warn → rose), and at
-// 100% (mode 'ask' + a personal key on file) it becomes the consent prompt to fall
-// back to the user's own key. Dismissals are remembered in localStorage PER threshold
-// and per reset period, so each newly-crossed threshold re-shows exactly once.
-// Hides entirely while the /api/usage/allowance backend doesn't exist or errors.
+// Slim, dismissible "usage left" alert across the top of the chat shell (P1-LIMITS). Appears when
+// the user's DreamStream usage crosses 30/70/90/100% (info → warn → rose). At 100% it is the
+// honest hard stop: nothing more is spent; ask for a top-up or add your own key — and, with a
+// personal key on file and mode 'ask', it becomes the consent prompt to continue on that key.
+// Percent only (never dollars). Dismissals are remembered per threshold (and per period for
+// monthly usage). Hidden for admins/exempt accounts and while the backend can't answer.
+// Refreshed on mount and window focus — never polled on a timer.
 
-const POLL_MS = 5 * 60_000;
-
-// Deep link into Settings → API & Models (App.tsx restores ?view=settings&tab=settings).
+// Deep link into Settings → API keys (App.tsx restores ?view=settings&tab=settings).
 const openApiSettings = () => {
   try {
     window.location.assign('/?view=settings&tab=settings');
@@ -33,24 +32,12 @@ const openApiSettings = () => {
 export const AllowanceBanner: React.FC = () => {
   // Render from the shared store so settings-panel changes (mode/toggle) reflect here
   // immediately — e.g. the consent CTA hides the moment the mode stops being 'ask'.
-  const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
+  const status = useUsageAllowance();
   const [saving, setSaving] = useState(false);
   const [, bump] = useState(0); // re-render after a localStorage dismissal
 
-  useEffect(() => {
-    const unsubscribe = subscribeAllowanceStatus(setStatus);
-    // The banner's own poll cadence remains a refresh source feeding the store
-    // (fetch publishes on success and keeps the last good status on failure).
-    void fetchAllowanceStatus();
-    const id = setInterval(() => void fetchAllowanceStatus(), POLL_MS);
-    return () => {
-      unsubscribe();
-      clearInterval(id);
-    };
-  }, []);
-
-  // Nothing to alert about while the feature is off / endpoint missing / allowance unused.
-  if (!status || !status.enabled || !status.usePlatformAllowance) return null;
+  // Nothing to alert about while the meter is off / not governed / platform usage switched off.
+  if (!showsUsageMeter(status) || !status.usePlatformAllowance) return null;
   const threshold = highestCrossedThreshold(status);
   if (!threshold || isThresholdDismissed(threshold, status.resetsAt)) return null;
 
@@ -79,10 +66,17 @@ export const AllowanceBanner: React.FC = () => {
         ? 'border-amber-500/40 bg-amber-500/10'
         : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)]';
 
+  const left = formatPctLeft(status.pctLeft);
+  const units = status.friendlyUnits?.label;
+  // The hard stop must be readable in full on a 320 px phone (it carries the two ways forward),
+  // so it wraps instead of truncating, its actions drop to a second line when the row is too
+  // narrow (the sentence keeps a readable width), and its "API keys" path stays visible.
+  const hardStop = threshold >= 100;
+
   return (
     <div
       role="status"
-      className={`flex items-center gap-2.5 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${toneClasses}`}
+      className={`flex gap-x-2.5 gap-y-1 border-b px-3 py-1.5 text-[12px] text-[var(--ds-ink)] backdrop-blur-md sm:px-4 ${hardStop ? 'flex-wrap items-start sm:items-center' : 'items-center'} ${toneClasses}`}
     >
       {tone === 'info' ? (
         <Gauge className="h-3.5 w-3.5 shrink-0 text-[var(--ds-accent)]" />
@@ -90,49 +84,56 @@ export const AllowanceBanner: React.FC = () => {
         <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${tone === 'rose' ? 'text-rose-500' : 'text-amber-500'}`} />
       )}
 
-      <span className="min-w-0 flex-1 truncate">
+      <span
+        className={`flex-1 ${hardStop ? 'min-w-[11rem] leading-snug' : 'min-w-0 truncate'}`}
+        title={hardStop && !showConsent ? USAGE_EXHAUSTED_COPY : undefined}
+      >
         {showConsent ? (
           <>
-            <span className="font-semibold">You've used 100% of this month's allowance.</span> Continue with your own key?{' '}
+            <span className="font-semibold">You've used all of your DreamStream usage.</span> Continue with your own key?{' '}
             <span className="text-[var(--ds-muted)]">Your key's own limits still apply.</span>
           </>
         ) : threshold >= 100 ? (
           <>
-            <span className="font-semibold">You've used 100% of this month's DreamStream allowance.</span>{' '}
+            <span className="font-semibold">You've used all of your DreamStream usage.</span>{' '}
             <span className="text-[var(--ds-muted)]">
               {status.byokFallbackMode === 'auto' && status.byokAvailable
-                ? 'Generation now runs on your own key'
-                : 'Platform generation is paused'}
-              {reset ? ` · resets ${reset}` : ''}
+                ? 'Generation now runs on your own key.'
+                : reset
+                  ? `Nothing more is spent — it comes back ${reset}, or add your own key.`
+                  : 'Nothing more is spent — ask us for a top-up, or add your own key.'}
             </span>
           </>
         ) : (
           <>
-            <span className="font-semibold">You've used {threshold}% of this month's DreamStream allowance.</span>
-            {reset && <span className="text-[var(--ds-muted)]"> · resets {reset}</span>}
+            <span className="font-semibold">{left} of your DreamStream usage left.</span>
+            {units && <span className="text-[var(--ds-muted)]"> · {units}</span>}
           </>
         )}
       </span>
 
       {showConsent && (
         <button
+          type="button"
           onClick={() => void consent()}
           disabled={saving}
-          className="shrink-0 rounded-full bg-rose-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-all duration-200 hover:bg-rose-700 disabled:opacity-50"
+          className="shrink-0 rounded-full bg-rose-600 px-2.5 py-0.5 text-[11px] font-semibold text-white transition-all duration-200 hover:bg-rose-700 disabled:opacity-50 coarse:min-h-11 coarse:px-3"
         >
           Continue with my key
         </button>
       )}
       <button
+        type="button"
         onClick={openApiSettings}
-        className="hidden shrink-0 text-[11px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-all duration-200 hover:text-[var(--ds-ink)] hover:underline sm:inline"
+        className={`shrink-0 text-[11px] font-medium text-[var(--ds-muted)] underline-offset-2 transition-all duration-200 hover:text-[var(--ds-ink)] hover:underline coarse:min-h-11 coarse:px-1 ${hardStop ? 'inline-flex items-center' : 'hidden sm:inline-flex sm:items-center'}`}
       >
-        API settings
+        API keys
       </button>
       <button
+        type="button"
         onClick={dismiss}
-        aria-label="Dismiss allowance alert"
-        className="shrink-0 rounded-md p-0.5 text-[var(--ds-muted)] transition-all duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+        aria-label="Dismiss usage alert"
+        className="inline-flex shrink-0 items-center justify-center rounded-md p-0.5 text-[var(--ds-muted)] transition-all duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] coarse:h-11 coarse:w-11"
       >
         <X className="h-3.5 w-3.5" />
       </button>

@@ -38,6 +38,15 @@ const parseTrustProxy = (raw: string | undefined, fallback: boolean | number): b
 export const NODE_ENV = process.env.NODE_ENV || 'development';
 export const IS_PRODUCTION = NODE_ENV === 'production';
 export const BILLING_ENABLED = parseBooleanEnv(process.env.BILLING_ENABLED, true);
+/**
+ * Usage METERING, independent of Stripe BILLING (P1-LIMITS). When on (the default), every
+ * platform-paid call in every studio — Comic Studio included — reserves against the user's
+ * usage budget before it runs and settles its real provider cost after. Production keeps
+ * BILLING_ENABLED="false" (no Stripe secrets; validateRuntimeConfig would throw) while metering
+ * stays on. Set METERING_ENABLED=false only as an emergency kill switch: it removes the budget
+ * gate entirely.
+ */
+export const METERING_ENABLED = parseBooleanEnv(process.env.METERING_ENABLED, true);
 
 export const PORT = parseIntegerEnv(process.env.PORT, 7071, 'PORT', 1);
 export const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);

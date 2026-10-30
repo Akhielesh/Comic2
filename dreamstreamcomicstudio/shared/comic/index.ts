@@ -22,3 +22,19 @@ export * from './library.js';
 export * from './refRanking.js';
 export * from './textLayout.js';
 export * from './translationPlan.js';
+// W-M (models · reliability): the model lock, per-comic insights and provider health contracts
+export * from './modelHealth.js';
+export * from './modelLock.js';
+export * from './modelInsights.js';
+export * from './modelCatalog.js';
+// Ship 1 wave 2: what a page job may send to an image model (the runner and the Model Lab share it)
+export * from './sendable.js';
+// Ship 2 (K2a): a panel's parts fingerprint and the frame ↔ drawing space (panels mode)
+export * from './parts.js';
+export * from './panelize/space.js';
+// Ship 2 (B4): continuity carry rules, panel directions, the per-page anchor plan
+export * from './continuity.js';
+export * from './directions.js';
+export * from './anchors.js';
+// Ship 2 (B9): the pro editor's engine, under one namespace (comic.editor.*) so its many helpers never shadow a name
+export * as editor from './editor/index.js';

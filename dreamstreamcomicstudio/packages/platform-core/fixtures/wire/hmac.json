@@ -1,0 +1,104 @@
+{
+  "note": "Golden vectors for request signing (plan §5.8): base64url(HMAC-SHA256(secret, \"v1\\n\" + METHOD + \"\\n\" + PATH + \"?\" + CANONICAL_QUERY + \"\\n\" + TS + \"\\n\" + hex(sha256(body)) + \"\\n\" + (claim ? hex(sha256(claim)) : \"-\") + \"\\n\" + IDEMPOTENCY_KEY)). Computed once by an independent node:crypto + URLSearchParams script and pinned: a change here is a contract change (ADR 0008). Synthetic secret only.",
+  "secret": "zoCviGCT0E5FtgPDS-rKegNJApSWYH3oaSjfx51FKRk",
+  "app": "dreamstream",
+  "keyId": "ds-fixture-1",
+  "vectors": [
+    {
+      "name": "GET a job, no query, no body, no claim",
+      "method": "GET",
+      "target": "/v1/jobs/job-0001",
+      "timestamp": "1793610000",
+      "body": {
+        "utf8": ""
+      },
+      "claim": null,
+      "idempotencyKey": null,
+      "canonicalPath": "/v1/jobs/job-0001",
+      "canonicalQuery": "",
+      "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "v1\nGET\n/v1/jobs/job-0001?\n1793610000\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n-\n",
+      "signature": "Oqq625YePpLcRQiVZxK5_u-_zwSs0lFxoj46yD1qNjw"
+    },
+    {
+      "name": "POST extract: query sorted, claim and key signed",
+      "method": "POST",
+      "target": "/v1/extract?maxPages=24&lang=en",
+      "timestamp": "1793610000",
+      "body": {
+        "hex": "255044462d312e370a252073796e74686574696320666978747572652c206e6f74206120646f63756d656e740a"
+      },
+      "claim": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJzdWIiOiI4MmJhNDFhMmI5NGFmY2U3MGYzNDc1ZGUxZGFhOWJhNiIsInRpZXIiOiJjcmVhdG9yIiwicHVycG9zZSI6ImV4dHJhY3QiLCJjYXBzIjpbImRvYy5leHRyYWN0Il0sImV4cCI6MTc5MzYxMDEyMCwianRpIjoianRpLXVzZXItMDAwMSJ9.in6CIlOfIZ3_xBbvSGVHR7RF8FPMrkMa5iuFqsv4h5E",
+      "idempotencyKey": "extract-0001",
+      "canonicalPath": "/v1/extract",
+      "canonicalQuery": "lang=en&maxPages=24",
+      "bodySha256Hex": "b285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d",
+      "canonical": "v1\nPOST\n/v1/extract?lang=en&maxPages=24\n1793610000\nb285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d\n2fc226e938f7b6fcfab7a277a4b190cb059c6bde0c056e8c6856f1d7a33c6815\nextract-0001",
+      "signature": "npeTfHp4BZLHlhm1pa1nUcs0n0sH-G69VXn0B3jA66g"
+    },
+    {
+      "name": "the same request with maxPages=300",
+      "method": "POST",
+      "target": "/v1/extract?maxPages=300&lang=en",
+      "timestamp": "1793610000",
+      "body": {
+        "hex": "255044462d312e370a252073796e74686574696320666978747572652c206e6f74206120646f63756d656e740a"
+      },
+      "claim": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJzdWIiOiI4MmJhNDFhMmI5NGFmY2U3MGYzNDc1ZGUxZGFhOWJhNiIsInRpZXIiOiJjcmVhdG9yIiwicHVycG9zZSI6ImV4dHJhY3QiLCJjYXBzIjpbImRvYy5leHRyYWN0Il0sImV4cCI6MTc5MzYxMDEyMCwianRpIjoianRpLXVzZXItMDAwMSJ9.in6CIlOfIZ3_xBbvSGVHR7RF8FPMrkMa5iuFqsv4h5E",
+      "idempotencyKey": "extract-0001",
+      "canonicalPath": "/v1/extract",
+      "canonicalQuery": "lang=en&maxPages=300",
+      "bodySha256Hex": "b285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d",
+      "canonical": "v1\nPOST\n/v1/extract?lang=en&maxPages=300\n1793610000\nb285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d\n2fc226e938f7b6fcfab7a277a4b190cb059c6bde0c056e8c6856f1d7a33c6815\nextract-0001",
+      "signature": "ILRBui9FGdW2ZGWnq31zyndXyCKvmBRtvFJFLwLoqqQ"
+    },
+    {
+      "name": "query: + is a space, escapes normalised, empty values, UTF-8",
+      "method": "POST",
+      "target": "/v1/extract?z=%7e&q=a+b&name=caf%c3%a9&empty=&flag&plus=1%2B1",
+      "timestamp": "1793610000",
+      "body": {
+        "hex": "255044462d312e370a252073796e74686574696320666978747572652c206e6f74206120646f63756d656e740a"
+      },
+      "claim": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJzdWIiOiI4MmJhNDFhMmI5NGFmY2U3MGYzNDc1ZGUxZGFhOWJhNiIsInRpZXIiOiJjcmVhdG9yIiwicHVycG9zZSI6ImV4dHJhY3QiLCJjYXBzIjpbImRvYy5leHRyYWN0Il0sImV4cCI6MTc5MzYxMDEyMCwianRpIjoianRpLXVzZXItMDAwMSJ9.in6CIlOfIZ3_xBbvSGVHR7RF8FPMrkMa5iuFqsv4h5E",
+      "idempotencyKey": "extract-0002",
+      "canonicalPath": "/v1/extract",
+      "canonicalQuery": "empty=&flag=&name=caf%C3%A9&plus=1%2B1&q=a%20b&z=~",
+      "bodySha256Hex": "b285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d",
+      "canonical": "v1\nPOST\n/v1/extract?empty=&flag=&name=caf%C3%A9&plus=1%2B1&q=a%20b&z=~\n1793610000\nb285f3d2fee4df069014e7a3fde58a7381eebdf6c69ffa14c91b32bcedeb698d\n2fc226e938f7b6fcfab7a277a4b190cb059c6bde0c056e8c6856f1d7a33c6815\nextract-0002",
+      "signature": "Dp8No0SBRVchj5ueVPE6ym2kCGrDl5NpRRcP9XdmX8A"
+    },
+    {
+      "name": "path escapes: unreserved decoded, the rest upper-cased",
+      "method": "GET",
+      "target": "/v1/files/%61bc%2fdef",
+      "timestamp": "1793610000",
+      "body": {
+        "utf8": ""
+      },
+      "claim": null,
+      "idempotencyKey": null,
+      "canonicalPath": "/v1/files/abc%2Fdef",
+      "canonicalQuery": "",
+      "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "v1\nGET\n/v1/files/abc%2Fdef?\n1793610000\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n-\n",
+      "signature": "VzztHiOuyc2q1SVwGjYoyg-PAll49OxvZONNSGndP5k"
+    },
+    {
+      "name": "POST JSON with non-ASCII text",
+      "method": "POST",
+      "target": "/v1/jobs",
+      "timestamp": "1793610000",
+      "body": {
+        "utf8": "{\"op\":\"print_book\",\"input\":{\"title\":\"Ünïcödé — 漫画\"}}"
+      },
+      "claim": "eyJ2IjoxLCJraW5kIjoidXNlciIsImFwcCI6ImRyZWFtc3RyZWFtIiwicHJvZHVjdCI6ImNoYXQiLCJzdWIiOiI4MmJhNDFhMmI5NGFmY2U3MGYzNDc1ZGUxZGFhOWJhNiIsInRpZXIiOiJjcmVhdG9yIiwicHVycG9zZSI6ImV4dHJhY3QiLCJjYXBzIjpbImRvYy5leHRyYWN0Il0sImV4cCI6MTc5MzYxMDEyMCwianRpIjoianRpLXVzZXItMDAwMSJ9.in6CIlOfIZ3_xBbvSGVHR7RF8FPMrkMa5iuFqsv4h5E",
+      "idempotencyKey": "job:2026-11-02:0001",
+      "canonicalPath": "/v1/jobs",
+      "canonicalQuery": "",
+      "bodySha256Hex": "109c7b6b261a2b6ed1dbe2fa56235012f5699a2ba71d1154073f4d27c2d7c84c",
+      "canonical": "v1\nPOST\n/v1/jobs?\n1793610000\n109c7b6b261a2b6ed1dbe2fa56235012f5699a2ba71d1154073f4d27c2d7c84c\n2fc226e938f7b6fcfab7a277a4b190cb059c6bde0c056e8c6856f1d7a33c6815\njob:2026-11-02:0001",
+      "signature": "x0xNfs9jPxdEZsSwK1St7yfYDyMrASPG8yHM97vSx_8"
+    }
+  ]
+}

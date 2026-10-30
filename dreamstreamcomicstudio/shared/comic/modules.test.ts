@@ -1,4 +1,5 @@
-// Wave-0 shared modules with working implementations (pageGeometry is real; plan/book/textLayout/refRanking minimal).
+// The wave-1 shared modules (pageGeometry, plan, book, textLayout, refRanking, the lettering engine, library,
+// translationPlan) against the client copies they replaced and the real behaviour their consumers rely on.
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import * as board from '../../components/comicstudio/board/pageLayout';
@@ -12,8 +13,8 @@ import { estimateTextHeight, estimateWidthForText, graphemes, wrapLines } from '
 import { dhashDistance, isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged } from './refRanking';
 import { hashSeed } from './lettering/shapes';
 import { fontString, fontsForDoc, resolveLetteringFont, FONT_REGISTRY } from './lettering/fonts';
-import { planLettering } from './lettering/layout';
-import { fitBalloonOnPage, placeBalloons } from './lettering/place';
+import { estimateMeasure, letteringSizer, planLettering } from './lettering/layout';
+import { fitBalloonOnPage, placeBalloons, placeBalloonsDetailed, placeBalloonsWholeWords } from './lettering/place';
 import { LIBRARY_ID_RE, clampLibraryBudget, libraryStatusForScore, stylePreviewId } from './library';
 import { planTranslation } from './translationPlan';
 
@@ -120,8 +121,8 @@ describe('refRanking stub', () => {
   });
 });
 
-describe('lettering engine stubs + library constants', () => {
-  it('shapes/fonts/layout/place have working inert implementations', () => {
+describe('lettering engine + library constants', () => {
+  it('shapes/fonts/layout/place are the real engine (wave-1 P1-LETTER-ENGINE)', () => {
     expect(hashSeed('pg_1_l5')).toBe(boardHashSeed('pg_1_l5'));
     expect(resolveLetteringFont('comic-neue', 'speech', 'te')).toMatchObject({ fontId: 'noto-sans-telugu', family: 'Noto Sans Telugu', weight: 700 });
     expect(resolveLetteringFont('bangers', 'sfx', 'en').fontId).toBe('bangers');
@@ -130,14 +131,69 @@ describe('lettering engine stubs + library constants', () => {
     const doc = normalizeDoc(makeSampleDoc());
     expect(fontsForDoc(doc)).toEqual(['comic-neue', 'bangers']);
     expect(fontsForDoc(doc, ['hi'])).toEqual(['comic-neue', 'bangers', 'noto-sans-devanagari']);
-    expect(planLettering(doc, doc.pages[0], 2 / 3, () => 0)).toEqual([]);
-    expect(placeBalloons({ page: doc.pages[0], boxes: [], aspect: 2 / 3, rtl: false, plansFor: () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } }), safeMargin: 0.03, existing: doc.pages[0].balloons })).toEqual(doc.pages[0].balloons);
+    expect(planLettering(doc, doc.pages[0], 2 / 3, estimateMeasure).map((p) => p.lineId).sort()).toEqual(['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l4', 'pg_1_l5']);
+    expect(
+      placeBalloons({ page: doc.pages[0], boxes: [], aspect: 2 / 3, rtl: false, plansFor: () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } }), safeMargin: 0.03, existing: doc.pages[0].balloons, keep: 'all' }).filter(
+        (b) => b.lineId !== 'pg_1_l4'
+      )
+    ).toEqual(doc.pages[0].balloons);
     expect(fitBalloonOnPage({ x: 0.1, y: 0.1, w: 0.2 }, 'speech', 0.1, 2 / 3)).toEqual({ x: 0.1, y: 0.1, w: 0.2, crowded: false });
-    expect(planTranslation(doc, 'hi')).toMatchObject({ lang: 'hi', calls: 0, toTranslate: [] });
+    // Real translation planner (P1-I18N): one chunk for page 1; repeated text on later pages is deferred, not re-billed.
+    const tp = planTranslation(doc, 'hi');
+    expect(tp).toMatchObject({ lang: 'hi', calls: 1, freeLines: [] });
+    expect(tp.toTranslate).toEqual([{ pageId: 'pg_1', lineIds: ['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l4', 'pg_1_l5'] }]);
+    expect(tp.deferred.length).toBeGreaterThan(0);
     expect(LIBRARY_ID_RE.test(stylePreviewId('noir-ink'))).toBe(true);
     expect(libraryStatusForScore(0.8)).toBe('published');
     expect(libraryStatusForScore(0.5)).toBe('needs_review');
     expect(clampLibraryBudget(100)).toBe(25);
     expect(clampLibraryBudget(undefined)).toBe(5);
+  });
+});
+
+describe('LetterPlan amendments (P2-AMEND: tip + crowded)', () => {
+  it('every tailed balloon carries its absolute tip inside the page; tailless ones have none', () => {
+    const doc = normalizeDoc(makeSampleDoc());
+    const plans = planLettering(doc, doc.pages[0], 2 / 3, estimateMeasure);
+    const H = 1000 / (2 / 3);
+    const tailed = plans.filter((p) => p.tip);
+    expect(tailed.length).toBeGreaterThan(0);
+    for (const p of tailed) {
+      expect(p.tip!.x).toBeGreaterThanOrEqual(0);
+      expect(p.tip!.x).toBeLessThanOrEqual(1000);
+      expect(p.tip!.y).toBeGreaterThanOrEqual(0);
+      expect(p.tip!.y).toBeLessThanOrEqual(H);
+    }
+    for (const p of plans.filter((x) => x.kind === 'caption' || x.kind === 'sfx')) expect(p.tip).toBeUndefined();
+  });
+
+  it('crowded mirrors the placement at the density the planner chose for software-placed lines; stored balloons never are', () => {
+    const doc = normalizeDoc(makeSampleDoc());
+    const page = doc.pages[0];
+    for (const p of planLettering(doc, page, 2 / 3, estimateMeasure)) if (!p.fallback) expect(p.crowded).toBeUndefined();
+    // Eight very long lines squeezed into the last panel of a three-panel page, nothing stored.
+    const long = 'This is a very long line of dialogue that goes on and on and on, far longer than any balloon should ever be, honestly too long.';
+    const lines = Array.from({ length: 8 }, (_, i) => ({ id: `cr_${i}`, kind: 'speech' as const, text: long }));
+    const crowdedPage = { ...page, balloons: [], panels: page.panels.map((pn, i) => (i === page.panels.length - 1 ? { ...pn, lines } : { ...pn, lines: [] })) };
+    const plans = planLettering(doc, crowdedPage, 2 / 3, estimateMeasure);
+    // A crowded page is lettered at a smaller density step (DENSITY_STEPS) when that helps, and a line whose only
+    // spot splits a word is retried in whole words: mirror the same step and the same whole-word placement.
+    const scale = plans.find((p) => p.densityScale)?.densityScale ?? 1;
+    const expected = placeBalloonsWholeWords({
+      page: crowdedPage,
+      boxes: geo.panelBoxesFor(doc, crowdedPage),
+      aspect: 2 / 3,
+      rtl: false,
+      plansFor: letteringSizer(doc, crowdedPage, 2 / 3, estimateMeasure, scale),
+      keepOut: crowdedPage.render?.qc?.keepOut,
+      heads: crowdedPage.render?.qc?.heads,
+      safeMargin: 0.03,
+      existing: [],
+      keep: 'all',
+      lang: doc.format.language
+    }).crowded;
+    expect(expected.length).toBeGreaterThan(0);
+    expect(plans.filter((p) => p.crowded).map((p) => p.lineId).sort()).toEqual([...expected].sort());
+    for (const p of plans) expect(p.crowded === undefined || p.crowded === true).toBe(true);
   });
 });

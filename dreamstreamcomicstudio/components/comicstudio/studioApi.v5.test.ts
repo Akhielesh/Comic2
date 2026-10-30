@@ -64,6 +64,23 @@ describe('caps', () => {
     });
   });
 
+  it('asCaps keeps the optional usage, history, alternatives and anchor fields the server sends, and nothing malformed', () => {
+    const caps = asCaps({
+      usage: { governed: true, pctLeft: 140, exhausted: false, pctPerStandardPage: 1.5 },
+      history: true,
+      maxAlternatives: 3.7,
+      anchorKinds: { places: true, props: 'yes', styleKey: true, junk: true }
+    });
+    expect(caps?.usage).toEqual({ governed: true, pctLeft: 100, exhausted: false, pctPerStandardPage: 1.5 });
+    expect(caps?.history).toBe(true);
+    expect(caps?.maxAlternatives).toBe(3);
+    expect(caps?.anchorKinds).toEqual({ places: true, props: false, styleKey: true, sheetV2: false });
+    // Absent or malformed: the field stays absent (off / unknown), exactly as before.
+    const bare = asCaps({ usage: { governed: 'x' }, history: 'true', maxAlternatives: 0, anchorKinds: ['places'] });
+    expect(bare).toEqual(DEFAULT_CAPS);
+    expect(asCaps({ maxAlternatives: 99 })?.maxAlternatives).toBe(5);
+  });
+
   it('loadStudioProject returns caps only when the server sends them', async () => {
     api.get.mockResolvedValueOnce({ doc: sampleDoc, urls: {} });
     expect(await loadStudioProject('proj_1')).not.toHaveProperty('caps');
@@ -163,6 +180,40 @@ describe('public edge endpoints', () => {
 
     fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
     await expect(trackPublicEvent('abcdefghijklmnopq', { type: 'complete' })).resolves.toBeUndefined();
+  });
+
+  it('a signed-in report carries the bearer token (weight 1), still no cookies or provider keys', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 202 }));
+    await reportPublicComic('abcdefghijklmnopq', { reason: 'violent', pageN: 2 });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/comic/public/s/abcdefghijklmnopq/report');
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('omit');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok_123', 'Content-Type': 'application/json' });
+    expect(JSON.stringify(init.headers)).not.toMatch(/x-.*key/i);
+    expect(JSON.parse(init.body)).toEqual({ reason: 'violent', pageN: 2 });
+  });
+
+  it('getTranslationQuote sends an optional page/line scope (sanitised) and force', async () => {
+    api.get.mockResolvedValue({ perLanguage: [], usd: 0.002, byok: false });
+    await getTranslationQuote('p1', ['te'], { lineIds: ['pg_1_l1', 'pg_1_l1', 'bad id!', 'pg_1_l2'], pageIds: ['pg_1'], force: true });
+    expect(api.get).toHaveBeenLastCalledWith('/api/comic/projects/p1/translation-quote?langs=te&pageIds=pg_1&lineIds=pg_1_l1%2Cpg_1_l2&force=1', {});
+  });
+
+  it('a restricted-account refusal (FORBIDDEN) reads as calm copy, never the code', () => {
+    const e = toStudioApiError({ status: 403, message: 'FORBIDDEN', details: { error: { code: 'FORBIDDEN', message: 'FORBIDDEN' } } }, 'project');
+    expect(e.kind).toBe('forbidden');
+    expect(e.code).toBe('FORBIDDEN');
+    expect(e.message).toBe("Your account can't do that right now. You can keep reading and editing your comic.");
+    expect(e.message).not.toMatch(/FORBIDDEN|review|moderat/i);
+  });
+
+  it("a FORBIDDEN with the server's own calm text keeps it (restricted accounts, someone else's comic)", () => {
+    const limited = 'Your account is limited right now, so publishing is paused. You can still read and edit your comic.';
+    const e = toStudioApiError({ status: 403, message: limited, details: { error: { code: 'FORBIDDEN', message: limited } } }, 'project');
+    expect(e.message).toBe(limited);
+    const other = toStudioApiError({ status: 403, message: "You don't have access to this comic.", details: { error: { code: 'FORBIDDEN', message: "You don't have access to this comic." } } }, 'project');
+    expect(other.message).toBe("You don't have access to this comic.");
   });
 
   it('reports return on 202; the library never fails the UI', async () => {

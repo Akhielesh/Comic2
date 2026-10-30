@@ -37,6 +37,9 @@ const segment = (value: string, what: string): string => {
 export const isPrivatePath = (path: string): boolean =>
   typeof path === 'string' && (REF_PATH_RE.test(path) || QUARANTINE_PATH_RE.test(path));
 
+/** Quarantine lane (q/…): moderators only, never served to readers or owners. */
+export const isQuarantinePath = (path: string): boolean => typeof path === 'string' && QUARANTINE_PATH_RE.test(path);
+
 /** The bucket that holds a path. Anything not private is in the public bucket. */
 export const bucketForPath = (path: string): string => (isPrivatePath(path) ? PRIVATE_BUCKET : PUBLIC_BUCKET);
 

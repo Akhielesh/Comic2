@@ -73,8 +73,32 @@ as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
 `border-[var(--ds-hairline)]`/`[var(--ds-hairline-soft)]`,
 `hover:bg-[var(--ds-hover)]`, accent `bg-[var(--ds-accent)]`
 `hover:bg-[var(--ds-accent-hover)]`. Never hardcode the paper/ink hexes; never put
-a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use the
-literal `bg-[#D97757]/10` form since the accent is theme-invariant.
+a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use
+`bg-[var(--ds-accent-soft)]` (`ACCENT_SOFT_BG`), not the old literal `bg-[#D97757]/10`.
+
+**Design skins** (`docs/design/atlas-skin.md`): Comic Studio renders in the Atlas
+language through one attribute, `data-ds-skin="atlas"`, set on `<html>` at boot on the
+comics host (`services/dsSkin.ts`) and on the Comic Studio / reader roots everywhere; a
+skin is one block of `--ds-*` overrides at the end of `index.css`, so nothing outside
+the attribute changes. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
+`--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
+readable status text, always with a word or icon; `--ds-danger-mark` for dots and edges),
+`--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge|hover`, `--ds-scrim`,
+`--ds-segment-pill|track`,
+`--ds-font-sans|display`, `--ds-radius-panel|control|chip|sm`,
+`--ds-shadow-soft|panel|lift|overlay`, `--ds-motion-fast|medium|slow|panel|modal|theme|enter|exit`,
+`--ds-ease(-enter)`, `--ds-surface-blur` — via the `studioDesign.ts` constants (`RADIUS_*`,
+`SHADOW_SOFT`, `TRANSITION`, `TONE_*`, `PRESS`, and the Atlas wave 5 recipes `FOCUS_RING`,
+`FIELD*`, `OVERLAY`, `SCRIM`, `CHIP*`, `STATUS_*`, `SEGMENTED_*`, `SECTION_*`, `TOAST*`, and the
+wave 8 recipes `OVERLINE` (every small uppercase eyebrow label), `STATUS_EDGE` and `DIALOG_TITLE` /
+`DIALOG_TITLE_FROM_SM` (centred modal titles only; sheet headers stay 15 px)),
+never by spelling out `rounded-2xl` / `duration-200` / a hue (a selected segment is
+`SEGMENTED_ACTIVE` on `bg-[var(--ds-segment-track)]`, never a raised fill). Status text and icons use
+the readable `TONE_TEXT` / `TONE_CHIP` / `STATUS_*` inks, never a raw `text-red-…`/`text-amber-…`:
+`tests/config/statusInkGuard.test.ts` and `overlineGuard.test.ts` fail on a new hand-rolled use (their
+allowlists pin each entry, with the reason). A token derived with
+`var()` inherits as a computed colour: a skin block or a subtree that changes its source must restate
+it. Theme changes go through `services/theme.ts` (under the skin: one view-transition cross-fade).
 
 ### Two versions per widget (density)
 

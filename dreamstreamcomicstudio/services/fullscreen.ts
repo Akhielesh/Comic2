@@ -1,4 +1,5 @@
-// One full-screen helper for every reader (classic ComicReader, the v4 ComicReaderView).
+// One full-screen helper for every reader (classic ComicReader, the v4 ComicReaderView, the immersive reader's
+// useImmersive).
 //
 // Rules (mobile-reading hotfix, 2026-10-29):
 // - Capability detection first: iPhone browsers (Safari and Chrome for iOS) have no element full screen at all, an
@@ -10,10 +11,10 @@
 // - Full-screen STATE comes only from fullscreenchange / webkitfullscreenchange (onFullscreenChange +
 //   isFullscreenActive) or the caller's own reading-mode flag — never optimistically from the tap, so a refused
 //   request can never leave an "Exit" label behind.
-// - Back leaves a fallback before it closes the reader: a reader that owns a history entry provides
-//   FullscreenFallbackHistoryContext, and a view inside it gives its fallback one entry through it.
-
-import { createContext } from 'react';
+// - Back leaves a fallback before it closes the reader: each fallback (the classic reading mode, the v4 viewport mode)
+//   is a 'fullscreen' layer on the Back stack (components/comicstudio/mobile/backStack.ts useBackLayer), above the
+//   reader's own 'reader:<id>' layer; native full screen needs none (the browser leaves it on Back itself). The
+//   immersive reader is an 'immersive' layer on the same stack (useImmersive): one history owner for every reader.
 
 type WebkitElement = Element & {
   webkitRequestFullscreen?: () => void | Promise<void>;
@@ -77,6 +78,11 @@ export const onFullscreenChange = (cb: () => void): (() => void) => {
 export interface EnterFullscreenOptions {
   /** The reader's own reading mode: runs at most once, when native full screen is missing or refused. */
   onFallback: (reason: FullscreenFallbackReason) => void;
+  /**
+   * Runs at most once when the request succeeded (its promise resolved, or a change event arrived): a caller that
+   * reads its state there (isFullscreenActive / fullscreenElement) reads the browser's own answer, never a guess.
+   */
+  onEntered?: () => void;
 }
 
 /**
@@ -84,12 +90,21 @@ export interface EnterFullscreenOptions {
  * Returns 'fallback' when the reading mode ran synchronously (no API), else 'requested' — the outcome then arrives
  * as a fullscreenchange event, or as onFallback('rejected').
  */
-export const enterFullscreen = (el: Element | null | undefined, { onFallback }: EnterFullscreenOptions): 'requested' | 'fallback' => {
+export const enterFullscreen = (el: Element | null | undefined, { onFallback, onEntered }: EnterFullscreenOptions): 'requested' | 'fallback' => {
   let settled = false;
   const cleanups: Array<() => void> = [];
   const settle = () => {
     settled = true;
     cleanups.splice(0).forEach((fn) => fn());
+  };
+  const entered = () => {
+    if (settled) return;
+    settle();
+    try {
+      onEntered?.();
+    } catch {
+      /* a caller bug must never escape */
+    }
   };
   const fallback = (reason: FullscreenFallbackReason) => {
     if (settled) return;
@@ -112,7 +127,7 @@ export const enterFullscreen = (el: Element | null | undefined, { onFallback }: 
   const watchEvents = () => {
     if (!d) return;
     const onChange = () => {
-      if (isFullscreenActive()) settle();
+      if (isFullscreenActive()) entered();
     };
     const onError = () => fallback('rejected');
     const names: Array<[string, () => void]> = [
@@ -124,7 +139,7 @@ export const enterFullscreen = (el: Element | null | undefined, { onFallback }: 
     names.forEach(([n, fn]) => d.addEventListener(n, fn));
     cleanups.push(() => names.forEach(([n, fn]) => d.removeEventListener(n, fn)));
     const timer = setTimeout(() => {
-      if (isFullscreenActive()) settle();
+      if (isFullscreenActive()) entered();
       else fallback('rejected');
     }, WEBKIT_SETTLE_MS);
     cleanups.push(() => clearTimeout(timer));
@@ -136,7 +151,7 @@ export const enterFullscreen = (el: Element | null | undefined, { onFallback }: 
     try {
       watchEvents();
       const result = fn.call(target);
-      if (isThenable(result)) result.then(() => settle(), () => fallback('rejected'));
+      if (isThenable(result)) result.then(() => entered(), () => fallback('rejected'));
       return true;
     } catch {
       return false;
@@ -148,7 +163,7 @@ export const enterFullscreen = (el: Element | null | undefined, { onFallback }: 
       const result = target.requestFullscreen({ navigationUI: 'hide' });
       if (isThenable(result)) {
         result.then(
-          () => settle(),
+          () => entered(),
           () => fallback('rejected')
         );
       } else {
@@ -236,18 +251,3 @@ export const resetIosFullscreenNoteForTests = (opts: { keepStorage?: boolean } =
     /* ignore */
   }
 };
-
-// ── Back leaves a fallback first ────────────────────────────────────────────────────────────────────────────
-/**
- * The history entry of a full-screen fallback (the classic reading mode, the v4 full-viewport mode), so the phone
- * Back gesture leaves the fallback before it closes the comic. The reader that owns the history entries (ComicReader)
- * provides it; a view rendered inside that reader (the v4 ComicReaderView under ComicReader's v4 delegate) calls
- * `push(onBack)` when its fallback starts (`onBack` runs if Back pops that entry) and `pop()` when a control leaves the
- * fallback. Without a provider (the studio's reader tab) the fallback simply has no entry of its own.
- */
-export interface FullscreenFallbackHistory {
-  push: (onBack: () => void) => void;
-  pop: () => void;
-}
-
-export const FullscreenFallbackHistoryContext = createContext<FullscreenFallbackHistory | null>(null);

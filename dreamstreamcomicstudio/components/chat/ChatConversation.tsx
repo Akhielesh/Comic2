@@ -46,6 +46,11 @@ interface ChatConversationProps {
   /** Catalog (text models) for the "help me pick" suggester in the empty state. */
   suggestModels: CatalogModel[];
   onStartWithModel: (model: CatalogModel, goal: string) => void;
+  /**
+   * Rendered first in the header's right-hand cluster (e.g. the usage meter). Keep it compact on
+   * phones — the header row is one line at 320–360 px.
+   */
+  headerAccessory?: React.ReactNode;
 }
 
 const SUGGESTIONS = [
@@ -85,12 +90,13 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
 
   return (
     <div ref={ref} className="relative flex items-center">
-      {/* Primary: copy the short session ID */}
+      {/* Primary: copy the short session ID. Phones (< sm) get the caret menu only — its first
+          item is the same "Copy chat ID" — so the header row fits beside the usage meter. */}
       <button
         onClick={() => copy('id')}
         title={`Copy chat ID (${session.id})`}
         aria-label="Copy chat ID"
-        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
+        className={`hidden sm:flex items-center gap-1 rounded-l-xl border border-r-0 border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
         {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Hash className="h-3.5 w-3.5" />}
         {done === 'id' ? 'Copied' : 'ID'}
@@ -98,10 +104,14 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
       {/* Secondary: the full debug bundle */}
       <button
         onClick={() => setOpen((v) => !v)}
-        title="More copy options"
-        aria-label="More copy options"
-        className={`flex items-center rounded-r-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
+        title="Chat ID and debug options"
+        aria-label="Chat ID and debug options"
+        // A disclosure (plain buttons inside), not an ARIA menu — so no aria-haspopup="menu",
+        // which would promise arrow-key menu navigation the popup doesn't have.
+        aria-expanded={open}
+        className={`tap-target flex items-center gap-0.5 rounded-xl sm:rounded-l-none sm:rounded-r-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
+        {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600 sm:hidden" /> : <Hash className="h-3.5 w-3.5 sm:hidden" />}
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open && (
@@ -146,7 +156,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onToggleMcpServer,
   onRenameTitle,
   suggestModels,
-  onStartWithModel
+  onStartWithModel,
+  headerAccessory
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -252,14 +263,19 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         </button>
 
         {showModelSelector !== false && (
-          <ChatModelChip
-            modelId={session.modelId}
-            modelName={session.modelName}
-            source={session.source}
-            autoMode={session.autoMode}
-            lockedSource={session.lockedSource}
-            onClick={onOpenModelPicker}
-          />
+          // Below 360 px the chip's name/status lines truncate a little sooner, so the one-line
+          // header (toggle · model · usage meter · chat-ID menu) fits a 320 px phone with no
+          // overlap even for a long pinned model name.
+          <div className="flex min-w-0 [@media(max-width:359px)]:[&_span]:max-w-[76px]">
+            <ChatModelChip
+              modelId={session.modelId}
+              modelName={session.modelName}
+              source={session.source}
+              autoMode={session.autoMode}
+              lockedSource={session.lockedSource}
+              onClick={onOpenModelPicker}
+            />
+          </div>
         )}
 
         {/* Editable session title */}
@@ -291,7 +307,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-2 shrink-0">
+        <div className="ml-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {headerAccessory}
           <ChatDebugMenu session={session} />
           <ChatContextMeter usedTokens={usedTokens} contextLength={features.contextLength} features={features} />
           <div className={`hidden lg:flex items-center gap-1.5 text-[11px] ${MUTED}`}>

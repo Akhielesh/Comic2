@@ -1,0 +1,377 @@
+{
+ "v": 1,
+ "rev": 0,
+ "title": "Night Shift — issue 1 script",
+ "meta": {
+  "author": "Sample Writer",
+  "subject": "Comic script",
+  "keywords": [
+   "comic",
+   "script"
+  ],
+  "lang": "te-IN"
+ },
+ "sections": [
+  {
+   "id": "s-cover",
+   "pageBreakBefore": false,
+   "blocks": [
+    {
+     "type": "heading",
+     "id": "h-title",
+     "level": 1,
+     "runs": [
+      {
+       "text": "Night Shift"
+      }
+     ]
+    },
+    {
+     "type": "paragraph",
+     "id": "p-lead",
+     "style": "lead",
+     "runs": [
+      {
+       "text": "A 22-page "
+      },
+      {
+       "text": "slice-of-life",
+       "marks": [
+        "i"
+       ]
+      },
+      {
+       "text": " comic about a night bus."
+      }
+     ]
+    },
+    {
+     "type": "paragraph",
+     "id": "p-escape",
+     "runs": [
+      {
+       "text": "Text that looks like markup stays text: <script>alert(1)</script> & \"quotes\"."
+      }
+     ]
+    },
+    {
+     "type": "paragraph",
+     "id": "p-te",
+     "runs": [
+      {
+       "text": "రాత్రి బస్సు"
+      },
+      {
+       "text": " (Telugu: night bus)",
+       "marks": [
+        "u"
+       ]
+      }
+     ]
+    },
+    {
+     "type": "list",
+     "id": "l-beats",
+     "ordered": true,
+     "items": [
+      {
+       "runs": [
+        {
+         "text": "Act one: the last stop"
+        }
+       ]
+      },
+      {
+       "runs": [
+        {
+         "text": "Mara boards with a parcel"
+        }
+       ],
+       "indent": 1
+      },
+      {
+       "runs": [
+        {
+         "text": "The parcel ticks"
+        }
+       ],
+       "indent": 2
+      },
+      {
+       "runs": [
+        {
+         "text": "Act two: the detour"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "list",
+     "id": "l-cast",
+     "ordered": false,
+     "items": [
+      {
+       "runs": [
+        {
+         "text": "Mara",
+         "marks": [
+          "b"
+         ]
+        },
+        {
+         "text": ", the driver"
+        }
+       ]
+      },
+      {
+       "runs": [
+        {
+         "text": "Ode",
+         "marks": [
+          "b"
+         ]
+        },
+        {
+         "text": ", the passenger"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "table",
+     "id": "t-pages",
+     "rows": [
+      {
+       "cells": [
+        {
+         "runs": [
+          {
+           "text": "Pages 1–6"
+          }
+         ]
+        },
+        {
+         "runs": [
+          {
+           "text": "The route"
+          }
+         ]
+        },
+        {
+         "runs": [
+          {
+           "text": "draft",
+           "marks": [
+            "code"
+           ]
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "cells": [
+        {
+         "runs": [
+          {
+           "text": "Pages 7–22"
+          }
+         ]
+        },
+        {
+         "runs": [
+          {
+           "text": "The detour"
+          }
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "type": "image",
+     "id": "img-cover",
+     "ref": {
+      "kind": "data",
+      "dataUri": "data:image/jpeg;base64,/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAADAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAABv/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AK4Aydv/2Q=="
+     },
+     "alt": "Cover rough: a bus at night",
+     "caption": "Cover rough",
+     "width": 0.4
+    },
+    {
+     "type": "divider",
+     "id": "d-1"
+    }
+   ]
+  },
+  {
+   "id": "s-p1",
+   "pageBreakBefore": true,
+   "blocks": [
+    {
+     "type": "heading",
+     "id": "h-p1",
+     "level": 2,
+     "runs": [
+      {
+       "text": "Page 1"
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-1",
+     "kind": "scene",
+     "runs": [
+      {
+       "text": "INT. NIGHT BUS — 2 A.M."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-2",
+     "kind": "panel",
+     "runs": [
+      {
+       "text": "Wide. The bus is empty except for MARA at the wheel."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-3",
+     "kind": "dialogue",
+     "speaker": "MARA",
+     "runs": [
+      {
+       "text": "Last stop.\nEveryone off."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-4",
+     "kind": "panel",
+     "runs": [
+      {
+       "text": "Close on the parcel on seat 12."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-5",
+     "kind": "caption",
+     "runs": [
+      {
+       "text": "It had been ticking since midnight."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-6",
+     "kind": "sfx",
+     "runs": [
+      {
+       "text": "tik tik tik"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s-p1-notes",
+   "pageBreakBefore": false,
+   "blocks": [
+    {
+     "type": "heading",
+     "id": "h-notes",
+     "level": 3,
+     "runs": [
+      {
+       "text": "Notes on page 1"
+      }
+     ]
+    },
+    {
+     "type": "paragraph",
+     "id": "p-quote",
+     "style": "quote",
+     "runs": [
+      {
+       "text": "Keep the bus lit from below."
+      }
+     ]
+    },
+    {
+     "type": "paragraph",
+     "id": "p-cap",
+     "style": "caption",
+     "runs": [
+      {
+       "text": "Reference: "
+      },
+      {
+       "text": "lighting guide",
+       "link": {
+        "href": "https://example.com/lighting"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s-p2",
+   "pageBreakBefore": true,
+   "blocks": [
+    {
+     "type": "heading",
+     "id": "h-p2",
+     "level": 2,
+     "runs": [
+      {
+       "text": "Page 2"
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-7",
+     "kind": "panel",
+     "runs": [
+      {
+       "text": "Ode leans in."
+      }
+     ]
+    },
+    {
+     "type": "script",
+     "id": "sc-8",
+     "kind": "dialogue",
+     "speaker": "ODE",
+     "runs": [
+      {
+       "text": "Is that yours?"
+      }
+     ]
+    },
+    {
+     "type": "image",
+     "id": "img-p2",
+     "ref": {
+      "kind": "asset",
+      "id": "user-0001/assets/p2-thumb.webp"
+     },
+     "alt": "Page 2 thumbnail"
+    }
+   ]
+  }
+ ]
+}

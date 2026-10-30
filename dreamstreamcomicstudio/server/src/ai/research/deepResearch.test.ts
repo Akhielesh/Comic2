@@ -18,6 +18,7 @@ const fetchReadableMock = vi.fn();
 vi.mock('./readable.js', () => ({ fetchReadable: (...args: unknown[]) => fetchReadableMock(...args) }));
 
 import { runDeepResearch } from './deepResearch.js';
+import { spentUsageOf, withSpentUsage } from '../usage.js';
 
 const base = { provider: 'openrouter' as const, apiKey: 'k', model: 'user/model' };
 
@@ -98,5 +99,78 @@ describe('runDeepResearch', () => {
     expect(res.citations).toBeUndefined();
     expect(res.notices?.[0].level).toBe('error');
     expect(res.text.toLowerCase()).toContain("couldn't retrieve");
+  });
+
+  // Gate follow-up (F1 review, L3 residual): planner and synthesis spend is never dropped — a
+  // failed planner's spend joins the result's usage, and a synthesis failure rethrows with the
+  // merged spend so the chat turn settles it (ai/usage.ts withSpentUsage / spentUsageOf).
+  describe('never drops spend', () => {
+    const oneSource = { results: [{ title: 'T', url: 'https://a.com', snippet: 's' }], provider: 'ddg', tried: [], status: 'ok' };
+    const cost = (providerCostUsd: number, totalTokens: number) => ({ promptTokens: totalTokens - 2, candidatesTokens: 2, totalTokens, providerCostUsd });
+
+    it('a planner that failed after spending still bills that spend (and the run falls back to the bare topic)', async () => {
+      runChatMock
+        .mockRejectedValueOnce(withSpentUsage(new Error('planner cut off'), cost(0.01, 10)))
+        .mockResolvedValueOnce({ text: 'brief [1]', model: 'm', usage: cost(0.02, 20) });
+      webSearchMock.mockResolvedValue(oneSource);
+      const res = await runDeepResearch({ ...base, topic: 'Solo Topic', depth: 'quick' });
+      expect(webSearchMock).toHaveBeenCalledWith('Solo Topic', undefined, 5);
+      expect(res.text).toBe('brief [1]');
+      expect(res.usage.providerCostUsd).toBeCloseTo(0.03, 9);
+      expect(res.usage.totalTokens).toBe(30);
+    });
+
+    it('a synthesis failure rethrows with the planner’s spend and its own', async () => {
+      runChatMock
+        .mockResolvedValueOnce({ text: '["Q1"]', usage: cost(0.01, 10) })
+        .mockRejectedValueOnce(withSpentUsage(new Error('synth failed'), cost(0.05, 50)));
+      webSearchMock.mockResolvedValue(oneSource);
+      const err = await runDeepResearch({ ...base, topic: 'X', depth: 'quick' }).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toBe('synth failed');
+      expect(spentUsageOf(err)?.providerCostUsd).toBeCloseTo(0.06, 9);
+      expect(spentUsageOf(err)?.totalTokens).toBe(60);
+    });
+
+    it('a run that spent nothing rethrows unchanged; parts without a reported cost never make a fake exact cost', async () => {
+      runChatMock.mockRejectedValue(new Error('provider down'));
+      webSearchMock.mockResolvedValue(oneSource);
+      const err = await runDeepResearch({ ...base, topic: 'X', depth: 'quick' }).catch((e) => e);
+      expect(err.message).toBe('provider down');
+      expect(spentUsageOf(err)).toBeUndefined();
+
+      runChatMock.mockReset();
+      runChatMock
+        .mockResolvedValueOnce({ text: '["Q1"]', usage: { totalTokens: 10 } })
+        .mockResolvedValueOnce({ text: 'brief [1]', usage: cost(0.02, 20) });
+      const res = await runDeepResearch({ ...base, topic: 'X', depth: 'quick' });
+      expect(res.usage.providerCostUsd).toBeUndefined();
+      expect((res.usage as { partialProviderCostUsd?: number }).partialProviderCostUsd).toBeCloseTo(0.02, 9);
+      expect(res.usage.totalTokens).toBe(30);
+    });
+  });
+});
+
+describe('runDeepResearch in free-only mode (noPaidRetry)', () => {
+  beforeEach(() => {
+    runChatMock.mockReset();
+    webSearchMock.mockReset().mockResolvedValue({ results: [{ title: 'T', url: 'https://a.com', snippet: 's' }], provider: 'duckduckgo', tried: ['duckduckgo'], status: 'ok' });
+    fetchReadableMock.mockReset().mockResolvedValue(null);
+  });
+
+  it('plans on a verified-free model (else the caller’s) and never sends a paid retry', async () => {
+    const { pickTextModel } = await import('../autoRouter.js');
+    vi.mocked(pickTextModel).mockRejectedValueOnce(new Error('no free model'));
+    runChatMock
+      .mockResolvedValueOnce({ text: '["Q?"]', usage: { totalTokens: 10 } })
+      .mockResolvedValueOnce({ text: 'Brief [1].', model: 'user/model', usage: { totalTokens: 20 } });
+    await runDeepResearch({ ...base, topic: 'X', depth: 'quick', noPaidRetry: true, fallbackModel: 'fallback/model' });
+    expect(vi.mocked(pickTextModel)).toHaveBeenLastCalledWith({ costPref: 'free-only' });
+    expect(runChatMock).toHaveBeenCalledTimes(2);
+    for (const [req] of runChatMock.mock.calls) {
+      expect(req.fallbackModel).toBeUndefined();
+      expect(req.noPaidRetry).toBe(true);
+      expect(req.model).toBe('user/model');
+    }
   });
 });

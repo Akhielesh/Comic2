@@ -9,6 +9,11 @@ import type { StudioEvent } from '../../../shared/comic/events.js';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import { REF_LIMITS, UPLOAD_MIME } from '../../../shared/comic/refs.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
+import type { PriceBook } from '../../../shared/comic/modelLock.js';
+import { setImageCallRecorder, type ImageCallRecord, type ImageCallRecorder } from './billing.js';
+import { __setModelHealthForTests } from './models/health.js';
+import { fakeModelHealth, type FakeModelHealth } from './models/health.fakes.js';
+import { registryPriceBook } from './models/index.js';
 import { StudioSession } from './session.js';
 import { buildQuarantinePath, buildRefPath } from './storagePaths.js';
 import {
@@ -93,9 +98,16 @@ export interface FakeAssetStore extends AssetStore {
   crops: { path: string; aspect?: string }[];
   fits: { path: string; aspect: AspectRatio; mode: string }[];
   quarantined: { path: string; reason: string; quarantinePath: string }[];
+  /** restoreQuarantined calls that brought an object back (appeal cleared / moderator restore); a no-op repeat is not logged. */
+  restored: { quarantinePath: string; originalPath: string }[];
   removed: string[];
   copies: { src: string; dst: string }[];
   puts: { path: string; contentType: string; cacheControl?: string; bytes: number }[];
+  /**
+   * Pixel size saveGenerated reports (default 1024×1536). A function gets the 1-based save
+   * number and the model, so a test can make one image come back square (bug 4:5 → 1:1).
+   */
+  generatedSize: { w: number; h: number } | ((n: number, model?: string) => { w: number; h: number });
 }
 
 const dataUrlOf = (mime: string, buffer: Buffer) => `data:${mime};base64,${buffer.toString('base64')}`;
@@ -107,7 +119,18 @@ const ownerOf = (path: string) => {
   return m ? { userId: m[1], projectId: m[2] } : { userId: 'unknown', projectId: 'unknown' };
 };
 
-export function fakeAssetStore(): FakeAssetStore {
+/** The production store's answer when nothing is held any more (assets.ts HOLD_GONE_MESSAGE). */
+const HOLD_GONE = "That image is no longer in the safety hold, so it can't be restored.";
+
+/**
+ * opts.restoreQuarantined: the AssetStore.restoreQuarantined the production store has (P2-SERVER-FOLLOWUP),
+ * ON by default so restore paths are tested the way they run. It mirrors the production guard and
+ * answers: only a q/ object this store quarantined comes back, and only to the path it left (anything
+ * else is a 400 BAD_REQUEST); the held bytes win over anything put at that path meanwhile; a repeat
+ * after a finished restore resolves (idempotent); nothing held → 404 NOT_FOUND. `false` removes the
+ * method — only for a test of a store without it (the copyObject fallback).
+ */
+export function fakeAssetStore(opts: { restoreQuarantined?: boolean } = {}): FakeAssetStore {
   let n = 0;
   const store: FakeAssetStore = {
     files: new Map(),
@@ -118,7 +141,8 @@ export function fakeAssetStore(): FakeAssetStore {
       n += 1;
       const path = `u/${userId}/p/${projectId}/img/gen-${n}.webp`;
       store.files.set(path, dataUrl);
-      return { path, source: 'generated', at: Date.now(), w: 1024, h: 1536, ...(model ? { model } : {}) };
+      const size = typeof store.generatedSize === 'function' ? store.generatedSize(n, model) : store.generatedSize;
+      return { path, source: 'generated', at: Date.now(), w: size.w, h: size.h, ...(model ? { model } : {}) };
     },
     async saveUpload({ userId, projectId, dataUrl }) {
       if (!dataUrl.startsWith('data:image/')) throw new StudioError('BAD_REQUEST', 'Upload a PNG, JPEG, WebP or GIF image.', { status: 400 });
@@ -142,11 +166,13 @@ export function fakeAssetStore(): FakeAssetStore {
     },
 
     // ── v5 ──
+    generatedSize: { w: 1024, h: 1536 },
     signedTtl: [],
     encodeSize: { w: 1024, h: 1024 },
     crops: [],
     fits: [],
     quarantined: [],
+    restored: [],
     removed: [],
     copies: [],
     puts: [],
@@ -209,6 +235,32 @@ export function fakeAssetStore(): FakeAssetStore {
       store.quarantined.push({ path, reason, quarantinePath });
       return { quarantinePath };
     },
+    async restoreQuarantined(quarantinePath, originalPath) {
+      // The production guard (assets.ts assertRestorePair): a q/ source, sent back only to the path it was
+      // taken from. Production proves the pairing by its deterministic q/ name; the fake by its own log.
+      if (typeof quarantinePath !== 'string' || !quarantinePath.startsWith('q/')) {
+        throw new StudioError('BAD_REQUEST', 'Only an image in the safety hold can be restored.', { status: 400 });
+      }
+      const held = store.quarantined.find((q) => q.quarantinePath === quarantinePath);
+      const done = store.restored.find((r) => r.quarantinePath === quarantinePath);
+      const from = held?.path ?? done?.originalPath;
+      if (from !== undefined && from !== originalPath) {
+        throw new StudioError('BAD_REQUEST', 'A held image can only go back to the place it was taken from.', { status: 400 });
+      }
+      if (!held || !store.files.has(quarantinePath)) {
+        // Idempotent like production: a repeat after a finished restore (the original is back) resolves.
+        if (from !== undefined && store.files.has(originalPath)) return;
+        throw new StudioError('NOT_FOUND', HOLD_GONE, { status: 404 });
+      }
+      // Copy then delete. Bytes that landed at the original path while it was held LOSE to the held
+      // bytes (production 'exists' → upsert of the held copy): the verdict being restored must describe
+      // the bytes that are served again (S6), never something swapped in after the check.
+      store.files.set(originalPath, store.files.get(quarantinePath)!);
+      store.files.delete(quarantinePath);
+      store.missing.delete(originalPath);
+      store.quarantined = store.quarantined.filter((q) => q !== held);
+      store.restored.push({ quarantinePath, originalPath });
+    },
     async remove(paths) {
       for (const p of paths || []) {
         store.files.delete(p);
@@ -236,6 +288,7 @@ export function fakeAssetStore(): FakeAssetStore {
       return removed;
     }
   };
+  if (opts.restoreQuarantined === false) delete store.restoreQuarantined;
   return store;
 }
 
@@ -383,9 +436,81 @@ export function plannedDoc(id = 'proj-1'): ComicDoc {
   return doc;
 }
 
+/**
+ * The owner's first real v4 session, "Playtime at the Lake" (2026-10-22, data-insights.md):
+ * a 1-page kids storybook (ages 2–6) at 4:5 with 4 panels — a toddler by a lake with three
+ * ducklings, a frog and a bunny — watercolor storybook style, the plan still a draft, the
+ * default confirm policy ('big', $0.50) and nothing drawn yet. Synthetic fixture: no real
+ * user data, only the shape of the session.
+ */
+export function lakeDoc(id = 'lake-1'): ComicDoc {
+  const doc = createEmptyDoc(id, 'Playtime at the Lake', 1_792_670_000_000);
+  doc.brief = {
+    ...doc.brief,
+    logline: 'A baby plays by a lake with three ducklings, a frog and a bunny.',
+    premise: 'A cheerful toddler spends a sunny afternoon by a lily-pad lake making animal friends.',
+    genre: 'kids storybook',
+    tone: 'gentle, playful',
+    audience: 'kids 2–6',
+    setting: 'a grassy lake bank with lily pads'
+  };
+  doc.format = { ...doc.format, kind: 'storybook', pageCount: 1, pageAspect: '4:5', panelsPerPage: 4, lettering: 'overlay' };
+  doc.style = { ...doc.style, status: 'drafted', name: 'Watercolor Storybook', spec: 'Soft watercolor washes, gentle ink outlines, warm pastel palette, picture-book feel.' };
+  doc.cast = [
+    { id: 'c_baby', name: 'The Baby', tier: 'lead', look: { summary: 'A cheerful toddler in a striped onesie with a tuft of curly hair' }, refs: [], sheet: emptyRender() }
+  ];
+  const actions = [
+    'Three fluffy yellow ducklings waddle up to the baby on the grassy bank.',
+    'A small green frog hops onto a lily pad; the baby claps and giggles.',
+    'A brown bunny peeks out from the reeds at the baby and the ducklings.',
+    'At sunset the baby, the ducklings, the frog and the bunny sit together watching fireflies.'
+  ];
+  doc.pages = [
+    {
+      id: 'pg_lake_1',
+      n: 1,
+      summary: 'The baby makes animal friends by the lake.',
+      layout: 'Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.',
+      panels: actions.map((action, i) => ({
+        id: `pn_lake_${i + 1}`,
+        n: i + 1,
+        size: i === 0 || i === 3 ? 'wide' : 'medium',
+        shot: i === 0 ? 'establishing' : 'medium',
+        action,
+        castIds: ['c_baby'],
+        lines: i === 1 ? [{ id: 'ln_lake_giggle', kind: 'sfx', text: 'Giggle!' }] : i === 0 ? [{ id: 'ln_lake_quack', kind: 'sfx', text: 'Quack quack!' }] : []
+      })),
+      render: emptyRender(),
+      balloons: []
+    }
+  ];
+  doc.planStatus = 'draft';
+  return doc;
+}
+
 export function newSession(doc: ComicDoc, store: DocStore = fakeDocStore(), userId = 'user-1'): StudioSession {
   if ((store as FakeDocStore).docs && !(store as FakeDocStore).docs.has(doc.id)) (store as FakeDocStore).docs.set(doc.id, { userId, doc: clone(doc) });
   return new StudioSession({ projectId: doc.id, userId, doc, store, saveDebounceMs: 5 });
+}
+
+// ── Per-call recording (comic_image_calls) ──────────────────────────────────
+
+export interface FakeImageCalls extends ImageCallRecorder {
+  rows: ImageCallRecord[];
+  /** Make record() throw (sync) or the write fail — recording must never fail a job. */
+  failWith?: 'throw' | null;
+}
+
+export function fakeImageCalls(): FakeImageCalls {
+  const fake: FakeImageCalls = {
+    rows: [],
+    failWith: null,
+    record(row) {
+      if (fake.failWith === 'throw') throw new Error('comic_image_calls is down');
+      fake.rows.push({ ...row });
+    }
+  };
+  return fake;
 }
 
 export interface TestContext extends StudioContext {
@@ -396,6 +521,12 @@ export interface TestContext extends StudioContext {
   llmFake: ScriptedLlm;
   billingFake: FakeBilling;
   qualityDenied?: string;
+  /** The model-health port installed for this context (preflight, breaker): a fake, never the network. */
+  healthFake: FakeModelHealth;
+  /** comic_image_calls rows the run recorded. */
+  callsFake: FakeImageCalls;
+  /** The PriceBook quotes use (registry list prices unless a test passes its own): no I/O. */
+  prices: () => Promise<PriceBook>;
 }
 
 export function testContext(
@@ -410,9 +541,22 @@ export function testContext(
     /** v5: request caps / resolved rating (absent ⇒ DEFAULT_CAPS / computed from the doc). */
     caps?: StudioCaps;
     rating?: ContentRating;
+    /** Model health (preflight + breaker); default a fresh fake with no public data (state unknown = never blocks). */
+    health?: FakeModelHealth;
+    /** comic_image_calls recorder; default a fresh capturing fake. */
+    calls?: FakeImageCalls;
+    /** Quote prices; default the registry list (no catalog fetch, no observed costs). */
+    prices?: PriceBook;
   } = {}
 ): TestContext {
   const events: StudioEvent[] = [];
+  // The job runner reaches process-wide ports (health, call recording): a test context installs fakes so no test
+  // ever touches the network or the database through them.
+  const health = opts.health || fakeModelHealth();
+  __setModelHealthForTests(health);
+  const calls = opts.calls || fakeImageCalls();
+  setImageCallRecorder(calls);
+  const prices = opts.prices || registryPriceBook();
   session.subscribe((e) => events.push(e));
   const assets = opts.assets || fakeAssetStore();
   const images = opts.images || fakeImages();
@@ -434,6 +578,9 @@ export function testContext(
     imagesFake: images,
     llmFake: llm,
     billingFake: billing,
+    healthFake: health,
+    callsFake: calls,
+    prices: async () => prices,
     ...(opts.caps ? { caps: opts.caps } : {}),
     ...(opts.rating ? { rating: opts.rating } : {}),
     async publishUrls(paths) {

@@ -11,7 +11,9 @@
 // Safety properties:
 //  - every read/write is owner-scoped; a save can never re-home another user's row,
 //  - a stale writer (lower rev than stored) never clobbers a newer document,
-//  - the projects mirror is best-effort and throttled — the doc row is the truth.
+//  - the projects mirror is best-effort and throttled — the doc row is the truth,
+//  - every write is jsonb-safe (jsonbSafe): one \u0000 or half an emoji anywhere in the doc can
+//    never make this and every later save of the project fail.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from '../services/supabase.js';
@@ -26,6 +28,68 @@ const MIRROR_CACHE_MAX = 1000;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// ── jsonb safety ─────────────────────────────────────────────────────────────
+
+/** A NUL or a UTF-16 surrogate: the only characters that need a second look. */
+const JSONB_SUSPECT = /[\u0000\uD800-\uDFFF]/;
+/** A high surrogate with no low one after it, or a low surrogate with no high one before it. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** One string as Postgres text/jsonb accepts it: NULs removed, lone surrogates → U+FFFD (pairs kept). */
+export const jsonbSafeText = (s: string): string =>
+  JSONB_SUSPECT.test(s) ? s.replace(/\u0000/g, '').replace(LONE_SURROGATE, '\uFFFD') : s;
+
+/**
+ * A value as Postgres jsonb accepts it (P2-GATE L5). jsonb rejects `\u0000` (22P05) and an unpaired
+ * surrogate (22P02) anywhere — in a string or an object key — and a rejected doc write fails EVERY
+ * later save of that project too (the bad character stays in the live doc), so edits are lost when
+ * the session is evicted. Every comic_docs / projects write goes through this: NULs are removed and
+ * lone surrogates become U+FFFD (whole emoji and other valid pairs are kept).
+ *
+ * Copy-on-write: a value with nothing to fix is returned as is (same reference, nothing copied), so
+ * the common save pays one regex test per string; only the branches holding a bad character are
+ * copied, and the caller's doc is never mutated. Non-plain objects (a Date, a Buffer) and values JSON
+ * drops (functions, undefined) are left exactly as they were.
+ */
+export function jsonbSafe<T>(value: T): T {
+  return cleanJsonb(value, 0) as T;
+}
+
+/** Deeper than any real doc; a pathological structure is left for the database to judge. */
+const MAX_JSONB_DEPTH = 200;
+
+function cleanJsonb(value: unknown, depth: number): unknown {
+  if (typeof value === 'string') return jsonbSafeText(value);
+  if (!value || typeof value !== 'object' || depth > MAX_JSONB_DEPTH) return value;
+  if (Array.isArray(value)) {
+    let out: unknown[] | undefined;
+    for (let i = 0; i < value.length; i += 1) {
+      const next = cleanJsonb(value[i], depth + 1);
+      if (next !== value[i]) {
+        out ??= value.slice();
+        out[i] = next;
+      }
+    }
+    return out ?? value;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const entries = Object.entries(value as Record<string, unknown>);
+  let out: Record<string, unknown> | undefined;
+  for (let i = 0; i < entries.length; i += 1) {
+    const [key, v] = entries[i];
+    const k = jsonbSafeText(key);
+    const next = cleanJsonb(v, depth + 1);
+    if (!out && (k !== key || next !== v)) {
+      // First change: copy the untouched entries before it (original key order kept).
+      out = {};
+      for (let j = 0; j < i; j += 1) out[entries[j][0]] = entries[j][1];
+    }
+    if (out) out[k] = next;
+  }
+  return out ?? value;
+}
 
 const projectName = (title?: string): string => {
   const name = (title || '').replace(/\s+/g, ' ').trim();
@@ -69,6 +133,10 @@ export function buildLegacyProjectState(doc: ComicDoc, opts: { isPublic?: boolea
     studioRendered: readyPages.length
   };
   if (coverImageId) state.coverImageId = coverImageId;
+  // Server-written share mirror (P1-PUBLISH): re-asserted on every save so a racing listing
+  // write can never drop it. Unlisted slugs stay owner-only (projects RLS hides private rows).
+  const pub = doc?.publication;
+  if (pub && pub.status === 'live' && typeof pub.slug === 'string' && /^[A-Za-z0-9]{17}$/.test(pub.slug)) state.shareSlug = pub.slug;
   return state;
 }
 
@@ -77,7 +145,9 @@ const isPublishedAssetPath = (value: unknown): value is string => typeof value =
 
 /**
  * Merge a freshly built legacy state over the stored one. On a public row any live
- * (non-`pub/`) coverImageId is removed, so the gallery mirror never exposes a draft path.
+ * (non-`pub/`) coverImageId is removed, so the gallery mirror never exposes a draft path,
+ * and the blurb (`overview`) stays the PUBLISHED logline the publish flow wrote: a later,
+ * unreviewed edit of the live doc never reaches the public gallery (P1-PUBLISH).
  */
 export function mergeLegacyProjectState(
   existing: Record<string, unknown>,
@@ -89,6 +159,8 @@ export function mergeLegacyProjectState(
     if (isPublishedAssetPath(existing.coverImageId)) state.coverImageId = existing.coverImageId;
     else delete state.coverImageId;
     state.stylePrompt = '';
+    if (typeof existing.overview === 'string') state.overview = existing.overview;
+    else delete state.overview;
   } else if (!legacy.coverImageId) {
     delete state.coverImageId;
   }
@@ -297,12 +369,13 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
    * row that turns public between the read and the write never receives one.
    */
   const mirrorProject = async (projectId: string, userId: string, doc: ComicDoc, summary?: ProjectRowSummary) => {
-    const name = projectName(summary?.title || doc.brief.title);
-    const legacy = buildLegacyProjectState(doc);
-    const coverPath = summary?.coverPath || (legacy.coverImageId as string | undefined);
-    if (coverPath) legacy.coverImageId = coverPath;
-    else delete legacy.coverImageId;
-    if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
+    const name = jsonbSafeText(projectName(summary?.title || doc.brief.title));
+    const built = buildLegacyProjectState(doc);
+    const coverPath = summary?.coverPath || (built.coverImageId as string | undefined);
+    if (coverPath) built.coverImageId = coverPath;
+    else delete built.coverImageId;
+    if (summary?.logline !== undefined) built.overview = summary.logline || '';
+    const legacy = jsonbSafe(built);
     const fingerprint = hashString(JSON.stringify([name, legacy]));
     const last = mirrored.get(projectId);
     if (last && last.fingerprint === fingerprint && now() - last.at < mirrorIntervalMs) return;
@@ -321,7 +394,8 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         return;
       }
       const stored = row as { state?: unknown; is_public?: boolean | null };
-      const existing = isRecord(stored.state) ? stored.state : {};
+      // Keys other flows wrote are kept; a bad character already stored there can't fail this write either.
+      const existing = isRecord(stored.state) ? jsonbSafe(stored.state) : {};
       const updatedAt = new Date(now()).toISOString();
 
       if (stored.is_public !== true) {
@@ -343,10 +417,12 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
         // write the public-safe state instead.
       }
 
+      // Public row: the listing name is the PUBLISHED title (written by the publish flow), so a
+      // live rename never reaches the gallery without passing the publish gate.
       const state = mergeLegacyProjectState(existing, legacy, true);
       const { error: updateError } = await db
         .from('projects')
-        .update({ name, state, updated_at: updatedAt })
+        .update({ state, updated_at: updatedAt })
         .eq('id', projectId)
         .eq('user_id', userId);
       if (updateError) throw updateError;
@@ -375,8 +451,8 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
   const create: DocStore['create'] = async ({ projectId, userId, doc }) => {
     const db = admin();
     const stamp = new Date(now()).toISOString();
-    const name = projectName(doc.brief?.title);
-    const state = buildLegacyProjectState(doc);
+    const name = jsonbSafeText(projectName(doc.brief?.title));
+    const state = jsonbSafe(buildLegacyProjectState(doc));
     const { error: projectError } = await db.from('projects').insert({
       id: projectId,
       user_id: userId,
@@ -395,7 +471,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const { error: docError } = await db.from('comic_docs').insert({
       project_id: projectId,
       user_id: userId,
-      doc: { ...doc, id: projectId },
+      doc: jsonbSafe({ ...doc, id: projectId }),
       rev: doc.rev || 0,
       created_at: stamp,
       updated_at: stamp
@@ -430,7 +506,7 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     const db = admin();
     const rev = typeof doc.rev === 'number' ? doc.rev : 0;
     const stamp = new Date(now()).toISOString();
-    const payload = { doc: { ...doc, id: projectId }, rev, updated_at: stamp };
+    const payload = { doc: jsonbSafe({ ...doc, id: projectId }), rev, updated_at: stamp };
 
     // Owner-scoped, never-backwards update. Zero rows → missing, stale, or not ours.
     const { data: updated, error } = await db
@@ -470,28 +546,35 @@ export function createSupabaseDocStore(opts: SupabaseDocStoreOptions = {}): DocS
     await mirrorProject(projectId, userId, doc, summary);
   };
 
+  /**
+   * Public read by project id: ONLY the frozen, allow-listed snapshot of a live + PUBLIC
+   * publication of a project that is not force-private (P1-PUBLISH). The live doc is never
+   * served to readers any more; unlisted comics are reachable only by their slug at the edge.
+   * Fails closed: any lookup error or an unmigrated database serves nothing.
+   */
   const loadPublic: DocStore['loadPublic'] = async (projectId) => {
     if (!projectId) return null;
     const db = admin();
-    let project: { is_public?: boolean | null; is_forced_private?: boolean | null } | null = null;
-    const first = await db.from('projects').select('id, is_public, is_forced_private').eq('id', projectId).maybeSingle();
-    if (first.error) {
-      if (isInvalidId(first.error)) return null;
-      if (pgCode(first.error) !== '42703') throw storeError(first.error, 'load');
-      // Moderation columns not migrated on this database — visibility is is_public alone.
-      const fallback = await db.from('projects').select('id, is_public').eq('id', projectId).maybeSingle();
-      if (fallback.error) throw storeError(fallback.error, 'load');
-      project = fallback.data as typeof project;
-    } else {
-      project = first.data as typeof project;
+    const pub = await db
+      .from('comic_publications')
+      .select('snapshot, status, visibility')
+      .eq('project_id', projectId)
+      .eq('status', 'live')
+      .eq('visibility', 'public')
+      .maybeSingle();
+    if (pub.error) {
+      if (isInvalidId(pub.error) || isMissingTable(pub.error)) return null;
+      throw storeError(pub.error, 'load');
     }
-    if (!project || project.is_public !== true || project.is_forced_private === true) return null;
-
-    const { data, error } = await db.from('comic_docs').select('project_id, doc, rev').eq('project_id', projectId).maybeSingle();
-    if (error) throw storeError(error, 'load');
-    if (!data) return null;
-    const doc = hydrateDoc(projectId, (data as { doc?: unknown }).doc, (data as { rev?: unknown }).rev);
-    return doc ? sanitizePublicDoc(doc) : null;
+    const snapshot = (pub.data as { snapshot?: unknown } | null)?.snapshot;
+    if (!isRecord(snapshot)) return null;
+    const flags = await db.from('projects').select('id, is_forced_private').eq('id', projectId).maybeSingle();
+    if (flags.error) {
+      if (pgCode(flags.error) !== '42703') return null;
+    } else if (!flags.data || (flags.data as { is_forced_private?: boolean | null }).is_forced_private === true) {
+      return null;
+    }
+    return normalizeDoc({ ...(snapshot as Partial<ComicDoc>), id: String((snapshot as { id?: unknown }).id || 'publication') });
   };
 
   const loadLegacyState: DocStore['loadLegacyState'] = async (projectId, userId) => {
@@ -566,11 +649,11 @@ export function createMemoryDocStore(): MemoryDocStore {
       if (rows.has(projectId)) throw new StudioError('BAD_REQUEST', 'A project with this id already exists.', { status: 409 });
       rows.set(projectId, {
         userId,
-        name: projectName(doc.brief?.title),
-        state: buildLegacyProjectState(doc),
+        name: jsonbSafeText(projectName(doc.brief?.title)),
+        state: jsonbSafe(buildLegacyProjectState(doc)),
         isPublic: false,
         forcedPrivate: false,
-        doc: clone({ ...doc, id: projectId }),
+        doc: clone(jsonbSafe({ ...doc, id: projectId })),
         rev: doc.rev || 0
       });
     },
@@ -580,13 +663,14 @@ export function createMemoryDocStore(): MemoryDocStore {
       if (row.userId !== userId) throw new StudioError('FORBIDDEN', "You don't have access to this comic.", { status: 403 });
       const rev = doc.rev || 0;
       if (row.doc && row.rev > rev) return; // stale writer never clobbers a newer doc
-      row.doc = clone({ ...doc, id: projectId });
+      // The same jsonb-safe write as the Supabase store, so tests read back what production stores.
+      row.doc = clone(jsonbSafe({ ...doc, id: projectId }));
       row.rev = rev;
-      row.name = projectName(summary?.title || doc.brief.title);
+      row.name = jsonbSafeText(projectName(summary?.title || doc.brief.title));
       const legacy = buildLegacyProjectState(doc);
       if (summary?.coverPath) legacy.coverImageId = summary.coverPath;
       if (summary?.logline !== undefined) legacy.overview = summary.logline || '';
-      row.state = mergeLegacyProjectState(row.state, legacy, row.isPublic);
+      row.state = mergeLegacyProjectState(row.state, jsonbSafe(legacy), row.isPublic);
       saveCount += 1;
     },
     async loadPublic(projectId) {

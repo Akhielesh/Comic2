@@ -1,0 +1,72 @@
+{
+  "name": "lake-kids",
+  "about": "The owner's real session (2026-10-22): a baby by a lake with 'other animals', a kids comic, single page. The director must understand out loud, cast the animals (ducklings, frog, bunny) as first-class cast, never reply with empty text, and 'generate all pages' on the drawn page must cost $0.",
+  "doc": "empty",
+  "turns": [
+    {
+      "say": "baby playing near a lake with other naimals a kids commic single page.",
+      "expectTools": ["update_brief", "set_format", "upsert_character", "ask_user"],
+      "director": [
+        {
+          "text": "",
+          "toolCalls": [
+            { "name": "update_brief", "args": { "premise": "A baby plays near a lake with friendly animals.", "audience": "kids 2–6", "setting": "a sunny lake shore" } },
+            { "name": "set_format", "args": { "kind": "storybook", "pageCount": 1, "pageAspect": "4:5" } },
+            { "name": "upsert_character", "args": { "name": "The Baby", "tier": "lead", "look": { "summary": "A chubby toddler in a yellow sunhat and blue romper" } } },
+            { "name": "upsert_character", "args": { "name": "Ducklings", "kind": "animal", "count": 3, "look": { "summary": "Three fluffy yellow ducklings", "species": "mallard duckling" } } },
+            { "name": "upsert_character", "args": { "name": "Frog", "kind": "animal", "look": { "summary": "A round green frog with a pale belly", "species": "tree frog" } } },
+            { "name": "upsert_character", "args": { "name": "Bunny", "kind": "animal", "look": { "summary": "A small grey bunny with a white tail", "species": "rabbit" } } },
+            { "name": "ask_user", "args": { "question": "Which art style?", "options": [{ "label": "Watercolor storybook" }, { "label": "Bright cartoon" }, { "label": "Soft crayon" }] } }
+          ]
+        }
+      ],
+      "expect": {
+        "replyStartsWith": "Got it — a 1-page storybook for kids 2–6",
+        "replyEndsWith": "Which art style?",
+        "cards": ["recap", "options"],
+        "cast": [["The Baby", "person", 1], ["Ducklings", "animal", 3], ["Frog", "animal", 1], ["Bunny", "animal", 1]],
+        "imageCalls": 0
+      }
+    },
+    {
+      "say": "Use watercolor storybook style",
+      "expectTools": ["set_style", "plan_pages", "ask_user"],
+      "director": [
+        { "toolCalls": [{ "name": "set_style", "args": { "presetId": "watercolor-storybook" } }, { "name": "plan_pages", "args": {} }] },
+        { "toolCalls": [{ "name": "ask_user", "args": { "question": "Ready to draw?", "options": [{ "label": "Draw it", "reply": "Draw it", "description": "≈ $0.20" }, { "label": "Change something" }] } }] }
+      ],
+      "writer": [
+        {
+          "json": {
+            "pages": [
+              {
+                "n": 1,
+                "summary": "The baby splashes at the lake edge while ducklings, a frog and a bunny join in.",
+                "layout": "Row 1: one wide panel. Row 2: two equal panels.",
+                "turnHook": "",
+                "panels": [
+                  { "n": 1, "size": "wide", "shot": "establishing", "angle": "", "action": "The Baby splashes at the lake edge; three Ducklings paddle close.", "castIds": ["The Baby", "Ducklings"], "placeId": "", "mood": "sunny", "lines": [] },
+                  { "n": 2, "size": "medium", "shot": "medium", "angle": "", "action": "Frog hops onto a lily pad beside the Baby, who giggles.", "castIds": ["The Baby", "Frog"], "placeId": "", "mood": "", "lines": [{ "kind": "caption", "speakerId": "", "text": "Splish! Splash!" }] },
+                  { "n": 3, "size": "medium", "shot": "medium", "angle": "", "action": "Bunny peeks from the reeds; everyone waves goodbye.", "castIds": ["The Baby", "Bunny", "Ducklings"], "placeId": "", "mood": "golden hour", "lines": [{ "kind": "speech", "speakerId": "The Baby", "text": "Bye-bye, friends!" }] }
+                ]
+              }
+            ],
+            "newCast": []
+          }
+        }
+      ],
+      "expect": { "replyIncludes": "Here's the plan — 1 page, 3 panels", "replyEndsWith": "Ready to draw?", "imageCalls": 0 }
+    },
+    {
+      "action": { "type": "render_pages" },
+      "about": "The user taps the plan card's Approve & render all (a confirmed UI action)."
+    },
+    {
+      "say": "generate all pages",
+      "routeIntent": "nothing_to_draw",
+      "expectTools": ["render_pages"],
+      "director": [{ "toolCalls": [{ "name": "render_pages", "args": { "pages": [1] } }] }, { "text": "" }],
+      "expect": { "replyIncludes": "The page is already drawn and up to date — nothing was spent.", "outcome": "nothing", "newImageCalls": 0, "newSpendUsd": 0, "nextSteps": ["Read it", "Make the cover"] }
+    }
+  ]
+}

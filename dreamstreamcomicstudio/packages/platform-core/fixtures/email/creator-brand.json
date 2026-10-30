@@ -1,0 +1,31 @@
+{
+  "id": "creator-lighthouse",
+  "name": "Lighthouse Comics",
+  "skin": "dreamstream",
+  "colors": {
+    "canvas": "#f3eee4",
+    "surface": "#ffffff",
+    "ink": "#1b1a17",
+    "muted": "#5f5a50",
+    "accent": "#1f4e79",
+    "accentText": "#1f4e79",
+    "onAccent": "#ffffff",
+    "border": "#e2dccf"
+  },
+  "fonts": { "body": "comic-neue", "display": "bangers" },
+  "wordmark": "Lighthouse Comics",
+  "logo": { "kind": "data", "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" },
+  "emailTheme": { "header": "logo", "footer": "Lighthouse Comics: stories from the edge of the map", "radius": 8, "buttonRadius": 6 },
+  "docStyles": {
+    "headingFont": "bangers",
+    "bodyFont": "comic-neue",
+    "headingColor": "#1b1a17",
+    "bodyColor": "#1b1a17",
+    "mutedColor": "#5f5a50",
+    "linkColor": "#1f4e79",
+    "accentColor": "#1f4e79",
+    "sizes": { "body": 11, "lead": 13, "caption": 9, "h1": 24, "h2": 18, "h3": 14 },
+    "lineSpacing": 1.15
+  },
+  "deckTheme": { "theme": { "preset": "brand", "background": "#f3eee4", "text": "#1b1a17", "accent": "#1f4e79" }, "titleFont": "bangers", "bodyFont": "comic-neue" }
+}

@@ -42,7 +42,10 @@ export interface DirectorTool {
   execute(args: Record<string, unknown>): Promise<string>;
 }
 
-export type ToolGroupId = 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader';
+export type ToolGroupId =
+  | 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader' | 'models' | 'history'
+  // --- Ship 2 (pro plan §4.7; B10) ---
+  | 'layout' | 'consistency';
 
 export interface ToolGroup {
   id: ToolGroupId;
@@ -123,6 +126,11 @@ export interface ActionHandler<A extends StudioAction = StudioAction> {
   spend: boolean;
   estimate?(ctx: StudioContext, action: A): Promise<SpendEstimate>;
   run(ctx: StudioContext, action: A, opts: RunActionOptions): Promise<StartedAction>;
+  /**
+   * Optional: the plain refusal when this action can't run at all (an inert stub), checked BEFORE any quote, gate card
+   * or spend (pro plan §5.3). null / undefined = it can run.
+   */
+  unavailable?(ctx: StudioContext, action: A): string | null | undefined;
 }
 
 // ── Client patch sanitizers ──────────────────────────────────────────────────
@@ -163,6 +171,8 @@ export function notAvailableAction<A extends StudioAction>(type: A['type'], spen
   return {
     type,
     spend,
+    // An inert stub refuses before any quote, gate card or spend (jobs.ts runFeatureAction / approveGate read this).
+    unavailable: () => message,
     async run(ctx, _action, opts) {
       const card: Card = { type: 'notice', id: newId('card'), tone: 'info', text: message };
       if (opts?.collectCard) opts.collectCard(card);

@@ -12,6 +12,7 @@ import type { ChatTool } from '../tools/registry.js';
 import type { AIProviderId, ChatMessage } from '../providers/types.js';
 import type { ChatClientContext } from '../../../../apiTypes.js';
 import { runSwarm } from './orchestrator.js';
+import { spentUsageOf } from '../usage.js';
 import type { AgentDefinition } from './registry.js';
 
 export interface SwarmToolContext {
@@ -27,6 +28,13 @@ export interface SwarmToolContext {
   /** User-defined agents to add to the deployable pool. */
   extraAgents?: AgentDefinition[];
   fallbackModel?: string;
+  /**
+   * Free-only turn (X-Free-Only): the swarm runs with no paid model anywhere (RunSwarmParams.noPaidRetry);
+   * `fallbackModel` is ignored.
+   */
+  noPaidRetry?: boolean;
+  /** Free-only: the turn's free chain, carried by the synthesis (RunSwarmParams.fallbackModels). */
+  fallbackModels?: string[];
   timeoutMs?: number;
 }
 
@@ -57,7 +65,8 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         systemPrompt: ctx.systemPrompt,
         clientContext: ctx.clientContext,
         extraAgents: ctx.extraAgents,
-        fallbackModel: ctx.fallbackModel,
+        fallbackModel: ctx.noPaidRetry ? undefined : ctx.fallbackModel,
+        ...(ctx.noPaidRetry ? { noPaidRetry: true, fallbackModels: ctx.fallbackModels } : {}),
         timeoutMs: ctx.timeoutMs,
         signal
       });
@@ -65,9 +74,11 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         .map((a) => `${a.name} (${a.status})`)
         .join(', ');
       const content = `The agent swarm completed. Agents: ${agentList}.\n\nSynthesized result:\n${result.text || '(no answer)'}`;
-      return { content, citations: result.citations, artifacts: result.artifacts };
+      // The swarm's own planner/agent/synthesis calls bill to the chat turn that ran it.
+      return { content, citations: result.citations, artifacts: result.artifacts, usage: result.usage };
     } catch (err) {
-      return { content: `Agent swarm failed: ${(err as Error)?.message || 'unknown error'}.` };
+      // What the failed run had already spent still bills to the turn.
+      return { content: `Agent swarm failed: ${(err as Error)?.message || 'unknown error'}.`, usage: spentUsageOf(err) };
     }
   }
 });

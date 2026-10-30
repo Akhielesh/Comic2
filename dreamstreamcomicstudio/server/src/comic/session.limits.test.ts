@@ -18,7 +18,10 @@ describe('document size limits', () => {
     expect(enforceDocLimits(doc, lines)).toHaveLength(DOC_LIMITS.linesPerPanel); // the per-panel cap applies within a single batch too
     const refs = Array.from({ length: 30 }, (_, i) => ({ path: `u/a/p/b/img/${i}.webp`, source: 'upload' as const, at: 1 }));
     const [op] = enforceDocLimits(doc, [{ op: 'character', id: 'c_maya', patch: { refs } }]);
-    expect((op as Extract<DocOp, { op: 'character' }>).patch.refs).toHaveLength(DOC_LIMITS.refsPerEntity);
+    expect((op as Extract<DocOp, { op: 'character' }>).patch.refs).toHaveLength(DOC_LIMITS.refsPerCharacter);
+    // Places have their own (smaller) cap — the same one capFor() uses.
+    const [placeOp] = enforceDocLimits(doc, [{ op: 'place', id: 'pl_market', patch: { refs } }]);
+    expect((placeOp as Extract<DocOp, { op: 'place' }>).patch.refs).toHaveLength(DOC_LIMITS.refsPerPlace);
   });
 
   it('lets a batch replace a full panel: earlier deletes free room for the new lines', () => {

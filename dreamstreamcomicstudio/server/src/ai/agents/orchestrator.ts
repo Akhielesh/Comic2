@@ -12,7 +12,7 @@ import type { ChatMessage, AIProviderId } from '../providers/types.js';
 import { resolveTools, type ToolContext } from '../tools/registry.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
-import { buildUsage } from '../usage.js';
+import { spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
 import {
   AGENTS,
   agentCatalogForPlanner,
@@ -62,6 +62,19 @@ export interface RunSwarmParams {
   systemPrompt?: string;
   clientContext?: ChatClientContext;
   fallbackModel?: string;
+  /**
+   * Free-only (the client's X-Free-Only): no paid model, ever. No provider-level `fallbackModel`
+   * is sent, every call's own timeout/empty retry stays free (`freeOnly` on the provider request),
+   * and the planner and agents run on a verified-free model — the caller's model when none is free
+   * (the model the route resolved and priced), never the paid TEXT_FALLBACK.
+   */
+  noPaidRetry?: boolean;
+  /**
+   * Free-only: the caller's free chain (OpenRouter `models`), carried by the synthesis so one throttled
+   * free model falls through to the next free one instead of failing the turn. Ignored without
+   * `noPaidRetry` (a paid run keeps its single paid net).
+   */
+  fallbackModels?: string[];
   timeoutMs?: number;
   signal?: AbortSignal;
   /** User-defined agents to add to the deployable pool for this run. */
@@ -105,26 +118,52 @@ const dedupeCitations = (citations: ChatCitation[]): ChatCitation[] => {
 };
 
 // Combine token/cost usage across the planner, every agent and the synthesizer so
-// billing settles on the swarm's true footprint, not just the final call.
-const mergeUsage = (parts: ApiUsage[]): ApiUsage => {
-  const out: ApiUsage = {};
-  const addNum = (key: keyof ApiUsage) => {
+// billing settles on the swarm's true footprint, not just the final call. The exact
+// `providerCostUsd` is kept only when EVERY part reported one — a partial sum would be settled
+// as if it were the whole bill; otherwise what was reported survives as `partialProviderCostUsd`,
+// the floor the settle never goes below (ai/usage.ts MeteredUsage).
+const mergeUsage = (parts: ApiUsage[]): MeteredUsage => {
+  const out: MeteredUsage = {};
+  const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  for (const key of ['promptTokens', 'candidatesTokens', 'totalTokens', 'estimatedTokens', 'promptChars'] as const) {
     let sum = 0;
     let any = false;
     for (const p of parts) {
-      const v = p[key];
-      if (typeof v === 'number') { sum += v; any = true; }
+      const v = num(p[key]);
+      if (v !== undefined) {
+        sum += v;
+        any = true;
+      }
     }
-    if (any) (out as Record<string, number>)[key as string] = sum;
-  };
-  addNum('promptTokens');
-  addNum('candidatesTokens');
-  addNum('totalTokens');
-  addNum('estimatedTokens');
-  addNum('promptChars');
-  addNum('providerCostUsd');
+    if (any) out[key] = sum;
+  }
+  let reported = 0;
+  let complete = parts.length > 0;
+  for (const p of parts) {
+    const cost = num(p.providerCostUsd);
+    if (cost !== undefined) {
+      reported += cost;
+      continue;
+    }
+    complete = false;
+    const partial = num((p as MeteredUsage).partialProviderCostUsd);
+    if (partial !== undefined) reported += partial;
+  }
+  const rounded = Math.round(reported * 1e9) / 1e9;
+  if (complete) out.providerCostUsd = rounded;
+  else if (rounded > 0) out.partialProviderCostUsd = rounded;
   return out;
 };
+
+/** Add what a failed call had already spent (ai/usage.ts spentUsageOf) to the run's usage parts. */
+const pushSpent = (parts: ApiUsage[], err: unknown) => {
+  const spent = spentUsageOf(err);
+  if (spent) parts.push(spent);
+};
+
+/** True when a merged usage holds anything worth settling. */
+const hasUsage = (u: MeteredUsage): boolean =>
+  (u.providerCostUsd ?? 0) > 0 || (u.partialProviderCostUsd ?? 0) > 0 || (u.totalTokens ?? 0) > 0 || (u.estimatedTokens ?? 0) > 0;
 
 const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
   ctx
@@ -135,17 +174,24 @@ const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
 // shouldn't drop a whole specialist from the answer. Retry the agent's call once on
 // failure with a short backoff; if it fails again, the caller records it as errored and
 // the verifier weights it to ~zero. Aborts (user cancelled) are never retried.
-const runWithRetry = async <T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+const runWithRetry = async <T>(fn: () => Promise<T>, signal?: AbortSignal, onFailedAttempt?: (err: unknown) => void): Promise<T> => {
   try {
     return await fn();
   } catch (err) {
     if (signal?.aborted || (err as Error)?.name === 'AbortError') throw err;
+    // The failed attempt may have spent (a tool round before the blip): the caller records it.
+    onFailedAttempt?.(err);
     await new Promise((r) => setTimeout(r, 400));
     return fn();
   }
 };
 
-export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> => {
+/**
+ * The swarm run. `usageParts` collects every part's usage — planner, each agent (failed attempts
+ * included), synthesis — and is shared with the exported wrapper, so a throw anywhere after the
+ * first model call still carries the spend to the chat turn's settle.
+ */
+const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Promise<RunSwarmResult> => {
   const goal = lastUserText(params.messages).trim();
   // Prior conversation (everything before the current goal). Passing this to the planner
   // and to each agent is what stops the swarm being "context-blind" on follow-ups like
@@ -154,11 +200,13 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   const priorMessages = params.messages.slice(0, -1);
   const userMemory = params.systemPrompt?.trim();
   const toolCtx = toolCtxFrom(params.clientContext);
+  const freeOnly = params.noPaidRetry === true;
   const baseReq = {
     provider: params.provider,
     apiKey: params.apiKey,
     timeoutMs: params.timeoutMs,
-    fallbackModel: params.fallbackModel ?? TEXT_FALLBACK,
+    fallbackModel: freeOnly ? undefined : (params.fallbackModel ?? TEXT_FALLBACK),
+    ...(freeOnly ? { noPaidRetry: true } : {}),
     signal: params.signal
   };
 
@@ -167,11 +215,13 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   for (const a of params.extraAgents || []) pool[a.id] = a;
 
   // Planner + agents run on a free model by default (the swarm is meant to run on
-  // open/free models); synthesis uses the user's chosen model.
-  const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+  // open/free models); synthesis uses the user's chosen model. Free-only never falls back to a
+  // paid pick: a verified-free model, else the caller's own (already priced) model.
+  const workerModel = freeOnly
+    ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
+    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
 
   // 1) PLAN
-  const usageParts: ApiUsage[] = [];
   let plan: { agent: string; task: string }[] = [];
   try {
     const planRes = await runChat({
@@ -184,8 +234,9 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     });
     usageParts.push(planRes.usage);
     plan = sanitizePlan(coerceJsonOrNull(planRes.text), goal, pool);
-  } catch {
-    /* fall back to heuristic below */
+  } catch (err) {
+    // A planner that failed after spending (e.g. its timeout retry) still bills; the heuristic plans.
+    pushSpent(usageParts, err);
   }
   if (!plan.length) plan = selectAgentsHeuristic(goal);
   plan = plan.slice(0, MAX_AGENTS);
@@ -227,7 +278,9 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
               temperature: 0.4,
               maxTokens: 1400
             }),
-          params.signal
+          params.signal,
+          // The first attempt's spend bills even when the retry succeeds.
+          (err) => pushSpent(usageParts, err)
         );
         usageParts.push(r.usage);
         if (r.artifacts) agentArtifacts.push(...r.artifacts);
@@ -252,6 +305,8 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
           toolEvents: r.toolEvents
         };
       } catch (err) {
+        // What the failed agent (its last attempt) had already spent still bills.
+        pushSpent(usageParts, err);
         agents[i] = { ...agents[i], status: 'error', summary: (err as Error)?.message || 'agent failed' };
         emit();
         return {
@@ -301,6 +356,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   const synthRes = await runChat({
     ...baseReq,
     model: params.model,
+    ...(freeOnly && params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
     messages: synthMessages,
     systemPrompt: synthSystem,
     clientContext: params.clientContext,
@@ -339,4 +395,21 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     usage: mergeUsage(usageParts),
     trace: finalTrace
   };
+};
+
+/**
+ * Run the swarm. `result.usage` sums every model call the run made (planner, agents — failed
+ * attempts included —, synthesis). If the run throws after spending — synthesis failed, a progress
+ * callback threw once the agents had run — the error carries the merged spend (ai/usage.ts
+ * spentUsageOf), so the chat turn settles it instead of releasing its hold over real spend.
+ */
+export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> => {
+  const usageParts: ApiUsage[] = [];
+  try {
+    return await runSwarmWith(params, usageParts);
+  } catch (err) {
+    pushSpent(usageParts, err);
+    const spent = mergeUsage(usageParts);
+    throw hasUsage(spent) ? withSpentUsage(err, spent) : err;
+  }
 };

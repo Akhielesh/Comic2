@@ -1,4 +1,6 @@
-// Wave-0 server stubs (buildplan §10): final signatures, inert behaviour.
+// The wave-0 server seams (buildplan §10) with their wave-1 owners landed (P2-AMEND rewrote the stub
+// assertions): same signatures, real behaviour — and in a test environment with no platform keys and no
+// Supabase, every seam fails SAFE and HONEST (nothing blocks by accident, nothing spends, nothing pretends).
 import express from 'express';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -13,6 +15,8 @@ import { measureImage } from './imageMeasure.js';
 import { routeIntent } from './intents.js';
 import { createLibraryAdminRouter, createLibraryPublicRouter } from './library/index.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
+import { configurePublication } from './publication/publication.js';
+import { createMemoryPublicationStore } from './publication/store.js';
 import {
   buildPublicSnapshot,
   getPublicationView,
@@ -48,19 +52,26 @@ afterEach(() => vi.restoreAllMocks());
 
 const ref = (n: number): RefAsset => ({ path: `u/user-1/p/proj-1/ref/r${n}.webp`, source: 'upload', at: n });
 
-describe('safety stubs: allow / unchecked', () => {
-  it('never blocks, never spends', async () => {
+describe('safety (P1-SAFETY) without a classifier key', () => {
+  it('clean input passes, unavailable checks say so, nothing spends', async () => {
     const ctx = testContext(newSession(plannedDoc()));
     expect(prefilterText('anything', 'PG-13')).toEqual({ decision: 'clear', categories: [], ip: [] });
+    expect(prefilterText('Shin-chan dances', 'PG-13').ip).toEqual(['Shin-chan']);
     expect(await screenTurnInput(ctx, { text: 'hi', attachments: [], rating: 'G' })).toMatchObject({ decision: 'allow', strike: 0, blockedAttachmentPaths: [] });
     await expect(screenPatch(ctx, [], 'PG')).resolves.toBeUndefined();
-    expect(await screenUploadPreview(ctx, Buffer.from('x'), 'upload')).toEqual({ decision: 'allow' });
+    // No vision key: the upload preview check is honestly "unavailable" (the route decides), never a fake "allow".
+    expect(await screenUploadPreview(ctx, Buffer.from('x'), 'upload')).toEqual({ decision: 'unavailable' });
     expect(await checkRenderSafety(ctx, { kind: 'cover' }, ref(1))).toBeUndefined();
-    expect(verdictFromVision({ safety: { rating: 'X' } })).toBeUndefined();
     await expect(onRenderVerdict(ctx, { kind: 'cover' }, ref(1), undefined)).resolves.toBeUndefined();
     expect(await accountCeilingFor('user-1')).toBe('PG-13');
     expect(await cooldownFor('user-1')).toBeNull();
     expect(ctx.billingFake.reserves).toEqual([]);
+  });
+
+  it('verdictFromVision reads the vision safety block (rating or assessed), ignores junk', () => {
+    expect(verdictFromVision({ rating: 'X', categories: ['gore'] }, 'vision-model')).toMatchObject({ assessed: 'X', by: 'qc', model: 'vision-model' });
+    expect(verdictFromVision({ assessed: 'G' })).toMatchObject({ assessed: 'G' });
+    for (const junk of [undefined, null, 'X', [], { rating: 'NC-17' }, { safety: { rating: 'X' } }]) expect(verdictFromVision(junk)).toBeUndefined();
   });
 
   it('isServableToOwner hides only blocked assets', () => {
@@ -69,14 +80,18 @@ describe('safety stubs: allow / unchecked', () => {
     expect(isServableToOwner({ ...ref(1), safety: { pending: true, at: 1 } as never })).toBe(true);
   });
 
-  it('the publish gate answers needs_check with every requested page unchecked', async () => {
+  it('the publish gate answers needs_check (never "pass") when pages are undrawn and the text can\'t be checked', async () => {
     const ctx = testContext(newSession(plannedDoc()));
     const gate = await runPublishGate(ctx, ctx.session.doc, { pageIds: ['pg_1', 'pg_2'], includeCover: true, languages: ['en'] });
-    expect(gate).toMatchObject({ status: 'needs_check', costUsd: 0, cover: { status: 'unchecked' } });
-    expect(Object.keys(gate.pages)).toEqual(['pg_1', 'pg_2']);
+    expect(gate).toMatchObject({ status: 'needs_check', costUsd: 0, rating: 'PG-13', cover: null, text: { status: 'unchecked' } });
+    expect(gate.pages).toEqual({
+      pg_1: { status: 'unchecked', reasons: ['Not drawn yet'] },
+      pg_2: { status: 'unchecked', reasons: ['Not drawn yet'] }
+    });
+    expect(ctx.billingFake.reserves).toEqual([]);
   });
 
-  it('requireActiveUser lets everyone through; respondBlocked always speaks', async () => {
+  it('requireActiveUser leaves anonymous requests to requireAuth; respondBlocked always speaks', async () => {
     const next = vi.fn();
     requireActiveUser()({} as never, {} as never, next);
     expect(next).toHaveBeenCalledWith();
@@ -86,15 +101,40 @@ describe('safety stubs: allow / unchecked', () => {
   });
 });
 
-describe('publication stubs', () => {
-  it('every operation is NOT_AVAILABLE; the legacy public read finds nothing', async () => {
+describe('publication (P1-PUBLISH) on the in-memory store', () => {
+  let restore: (() => void) | undefined;
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  it('an undrawn comic is private with honest readiness; publish refuses NOT_READY (422); nothing is public', async () => {
+    const store = createMemoryPublicationStore();
     const ctx = testContext(newSession(plannedDoc()));
-    await expect(getPublicationView(ctx)).rejects.toMatchObject({ code: 'NOT_AVAILABLE', status: 501 });
-    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
-    await expect(unpublish(ctx)).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
-    expect(() => buildPublicSnapshot(ctx.session.doc, { assetKey: newAssetKey(), pageIds: [], includeCover: false, languages: [], paths: {} })).toThrow();
-    await expect(renderOgImage({ title: 't', subtitle: '', kindLabel: 'Comic', pageCount: 1, lang: 'en', coverBuf: null, fallbackPageBuf: null, showMark: true })).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
-    expect(await loadPublicByProjectId('proj-1')).toBeNull();
+    store.seedProject(ctx.session.doc.id, ctx.userId);
+    restore = configurePublication({ store, publicUrl: (p) => `https://cdn.test/${p}` });
+    const view = await getPublicationView(ctx);
+    expect(view).toMatchObject({ visibility: 'private', status: null, readiness: { ok: false, drawnPages: 0, plannedPages: 3 } });
+    expect(view.readiness.missing.filter((m) => m.kind === 'page')).toHaveLength(3);
+    await expect(publish(ctx, { visibility: 'unlisted' })).rejects.toMatchObject({ status: 422, reason: 'NOT_READY', message: expect.stringMatching(/Draw at least one page/) });
+    expect(store.rows.size).toBe(0);
+    expect(await loadPublicByProjectId(ctx.session.doc.id)).toBeNull();
+    // Unpublishing something that was never published is an idempotent no-op that reports "private".
+    expect(await unpublish(ctx)).toMatchObject({ visibility: 'private', status: null });
+    expect(store.rows.size).toBe(0);
+    expect(ctx.billingFake.reserves).toEqual([]);
+  });
+
+  it('the snapshot is the §9.3 allow-list (no conversation, memory, spend or source); the OG card is a real 1200×630 JPEG', async () => {
+    const ctx = testContext(newSession(plannedDoc()));
+    const snap = buildPublicSnapshot(ctx.session.doc, { assetKey: newAssetKey(), pageIds: [], includeCover: false, languages: [], paths: {} });
+    for (const k of ['memory', 'safety', 'publication', 'planInputHash', 'refInbox', 'archive', 'trash']) expect(k in snap, k).toBe(false);
+    expect(snap.conversation).toEqual([]);
+    expect(snap.pages).toEqual([]);
+    const og = await renderOgImage({ title: 't', subtitle: '', kindLabel: 'Comic', pageCount: 1, lang: 'en', coverBuf: null, fallbackPageBuf: null, showMark: true });
+    expect([og.w, og.h]).toEqual([1200, 630]);
+    expect((await sharp(og.jpeg).metadata()).format).toBe('jpeg');
+    expect(og.themeColor).toMatch(/^#[0-9A-F]{6}$/i);
   });
 
   it('mints slugs and asset keys of the contract shape, never repeating', () => {
@@ -106,7 +146,7 @@ describe('publication stubs', () => {
   });
 });
 
-describe('refs stubs: honest minimal', () => {
+describe('refs (P1-REFS): honest adds, caps and inbox moves', () => {
   const docWithMaya = (refs: number): ComicDoc => {
     const doc = plannedDoc();
     doc.cast[0].refs = Array.from({ length: refs }, (_, i) => ref(100 + i));
@@ -166,37 +206,56 @@ describe('refs stubs: honest minimal', () => {
     expect(out.note).toMatch(/Added BUNNY to the cast/);
   });
 
-  it('carries nothing yet', () => {
+  it('carries nothing without images; refIntentHint resolves cast names only when given the doc (P2-AMEND §12.8)', () => {
     expect(carriedImages(plannedDoc(), [])).toEqual([]);
     expect(refIntentHint('this is maya', 2)).toBeUndefined();
+    expect(refIntentHint('this is maya', 2, plannedDoc())).toBe('(software, may be wrong) images 1–2 → MAYA (existing, 0 refs).');
   });
 });
 
-describe('director, i18n and storage helper stubs', () => {
-  it('castScan finds nothing; intents never match', () => {
+describe('director, i18n, derive, measure and library seams (real)', () => {
+  it('castScan finds no uncast beings in a fully cast plan; "show me the pages" is answered by software ($0)', () => {
     const doc = plannedDoc();
     expect(findUncastBeings(doc)).toEqual([]);
     expect(castOpsForUncast(doc, [])).toEqual([]);
-    expect(routeIntent(doc, 'show me the pages')).toBeNull();
+    const routed = routeIntent(doc, 'show me the pages');
+    expect(routed).toMatchObject({ kind: 'show_pages', reply: expect.stringMatching(/^Here are the pages: 3 pages/) });
+    expect(routed!.cards).toEqual([expect.objectContaining({ type: 'breakdown', view: 'plan' })]);
+    // The "draw" chip carries its quote so the server re-gates instead of billing blind.
+    expect(routed!.nextSteps?.[0]).toMatchObject({ action: { type: 'render_pages', pageIds: ['pg_1', 'pg_2', 'pg_3'], quotedUsd: expect.any(Number) } });
+    expect(routeIntent(doc, 'draw a dragon on page 2')).toBeNull();
   });
 
-  it('translation is NOT_AVAILABLE', async () => {
+  it('translation quotes without spending and refuses unknown languages honestly', async () => {
     const ctx = testContext(newSession(plannedDoc()));
-    await expect(estimateTranslation(ctx, { type: 'translate', languages: ['hi'] })).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
-    await expect(runTranslation(ctx, { type: 'translate', languages: ['hi'] }, { confirmed: true })).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
+    const est = await estimateTranslation(ctx, { type: 'translate', languages: ['hi'] });
+    expect(est).toMatchObject({ imageCount: 0, lines: [{ label: 'Hindi', usd: expect.any(Number) }] });
+    expect(est.usd).toBeGreaterThan(0);
+    expect(est.usd).toBeLessThan(0.05);
+    await expect(estimateTranslation(ctx, { type: 'translate', languages: ['xx-bogus'] })).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 400 });
+    const run = await runTranslation(ctx, { type: 'translate', languages: ['xx-bogus'] }, { confirmed: true });
+    expect(run.outcome).toMatchObject({ status: 'blocked', code: 'BAD_REQUEST', message: expect.stringMatching(/don't know xx-bogus/) });
+    expect(ctx.billingFake.reserves).toEqual([]);
   });
 
-  it('derive is NOT_AVAILABLE; measureImage reads real metadata', async () => {
-    await expect(fitToAspect(Buffer.from('x'), '4:5', 'pad')).rejects.toMatchObject({ code: 'NOT_AVAILABLE' });
+  it('derive pads to the requested aspect (free) and rejects unreadable input; measureImage reads real metadata', async () => {
+    await expect(fitToAspect(Buffer.from('x'), '4:5', 'pad')).rejects.toMatchObject({ code: 'BAD_REQUEST', status: 400 });
+    const patch = await sharp({ create: { width: 50, height: 50, channels: 3, background: '#ffcc00' } }).png().toBuffer();
+    const pic = await sharp({ create: { width: 200, height: 100, channels: 3, background: '#336699' } }).composite([{ input: patch, left: 20, top: 20 }]).png().toBuffer();
+    const fitted = await fitToAspect(pic, '4:5', 'pad');
+    expect(fitted).toMatchObject({ mime: 'image/webp', w: 160, h: 200 });
+    expect((await sharp(fitted.buffer).metadata()).format).toBe('webp');
     const square = await sharp({ create: { width: 64, height: 64, channels: 3, background: '#808080' } }).png().toBuffer();
     const m = await measureImage(square, '4:5');
-    expect(m).toMatchObject({ w: 64, h: 64, aspectWanted: '4:5', aspectOk: false, blank: false });
+    // A uniform grey square is flagged blank (a failed render, never billed as art).
+    expect(m).toMatchObject({ w: 64, h: 64, aspectWanted: '4:5', aspectOk: false, blank: true, palette: ['#808080'] });
     expect(m.bytes).toBe(square.byteLength);
     expect((await measureImage(square)).aspectOk).toBe(true);
+    expect((await measureImage(pic)).blank).toBe(false);
     await expect(measureImage(Buffer.from('not an image'))).rejects.toMatchObject({ status: 400 });
   });
 
-  it('library routers answer 501 NOT_AVAILABLE', async () => {
+  it('library: the public index answers (cacheable, empty until the owner builds); the admin router is honest without storage', async () => {
     const app = express();
     app.use('/pub', createLibraryPublicRouter());
     app.use('/admin', createLibraryAdminRouter());
@@ -204,11 +263,15 @@ describe('director, i18n and storage helper stubs', () => {
     await new Promise<void>((r) => server.once('listening', () => r()));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
-      for (const path of ['/pub', '/admin/runs/r1/step']) {
-        const res = await fetch(`${base}${path}`, { method: path.includes('step') ? 'POST' : 'GET' });
-        expect(res.status).toBe(501);
-        expect(await res.json()).toEqual({ error: { message: expect.any(String), code: 'NOT_AVAILABLE' } });
-      }
+      const pub = await fetch(`${base}/pub`);
+      expect(pub.status).toBe(200);
+      expect(pub.headers.get('cache-control')).toBe('public, max-age=60');
+      expect(await pub.json()).toEqual({ manifestVersion: 1, generatedAt: 0, assets: [] });
+      const runs = await fetch(`${base}/admin/runs`);
+      expect(runs.status).toBe(503);
+      expect(await runs.json()).toEqual({ error: { code: 'NOT_AVAILABLE', message: expect.any(String) } });
+      const step = await fetch(`${base}/admin/runs/r1/step`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      expect(step.status).toBe(404);
     } finally {
       await new Promise<void>((r) => (server as http.Server).close(() => r()));
     }

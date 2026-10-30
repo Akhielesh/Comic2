@@ -1,0 +1,55 @@
+Create one finished comic page as a single image: an illustrated storybook page, full color. It must look like a professionally drawn and colored published page.
+FRAME: a tall 4:5 portrait page, taller than wide (4 wide by 5 tall); fill the whole frame — never square, no letterboxing.
+
+ART STYLE — apply identically in every panel:
+Children's picture-book watercolor: soft pencil outlines, transparent washes, rounded friendly shapes, gentle light. Palette: mustard and leaf green. Linework: Soft pencil, loose. Never: photorealism, muddy or blurry rendering, warped anatomy or extra fingers, watermarks or signatures, nudity, sexualized poses or outfits, gore or exposed wounds, slurs or hate symbols, real-world brand logos, likeness of real celebrities, weapons aimed at anyone, blood or injury, menacing villains, scary imagery.
+
+CONTENT RATING G — Soft, friendly shapes. No weapons aimed at anyone. No blood or injury. Villains look goofy rather than menacing. Bright, safe settings.
+
+REFERENCE IMAGES (in the order attached):
+Image 1 — CHARACTER SHEET: MINA. Match her face, hairstyle, body type, outfit and colors exactly.
+Image 2 — PHOTO OF MINA (likeness). Real-life likeness reference: keep face shape, markings and proportions; draw in the page's art style — never photographic, ignore its background and lighting.
+Image 3 — CHARACTER SHEET: PUDDLE. Match its species, face, markings, proportions and colors exactly.
+Image 4 — STYLE BOARD. Match its rendering style, line quality and color treatment (not its content).
+
+CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate characters. Each keeps the same look, markings and colors in every panel:
+- MINA (Images 1 and 2): Curious toddler with round cheeks and a gap-toothed grin; 2-year-old female; hair: short curly auburn hair with a green clip; outfit: yellow raincoat over striped leggings; colors: sunny yellow, leaf green; always visible: a freckle on her left cheek.
+- PUDDLE (Image 3): A small fluffy yellow duckling with an orange bill; kind: animal; colors: butter yellow, orange; always visible: one white feather on its crown.
+
+LOCATIONS:
+- LILY POND: A sunny grassy bank beside a lily pond with smooth pebbles.
+
+PAGE LAYOUT — 4 panels, read left-to-right, top-to-bottom:
+Row 1: one wide panel. Row 2: two equal panels. Row 3: one wide panel.
+Measured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 31%): panels 2 and 3 side by side, 47% wide each. Row 3 (next 31%): panel 4, full width.
+Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
+
+PANELS:
+PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).
+Camera: establishing shot (the whole location), eye level. Place: LILY POND.
+Must show: Mina toddles along a grassy path toward the sparkling lily pond.
+Who: MINA (Images 1 and 2 — short curly auburn hair, yellow raincoat over striped leggings).
+Speaks: nobody (narration only); fill the panel with art to its borders.
+Detail: Yellow wildflowers dot the bank; bright, warm, joyful.
+PANEL 2 of 4 — box 2 in the layout (row 2, left; 47% wide × 31% tall).
+Camera: insert shot (close detail of an object), high angle. Place: LILY POND.
+Must show: Mina's bare toes dip into the shallow water over smooth pebbles.
+Who: MINA (Images 1 and 2 — short curly auburn hair, yellow raincoat over striped leggings).
+Speaks: nobody (narration only); fill the panel with art to its borders.
+Detail: Ripples spread out; cool, sparkling.
+PANEL 3 of 4 — box 3 in the layout (row 2, right; 47% wide × 31% tall).
+Camera: medium shot (waist up), eye level. Place: LILY POND.
+Must show: Mina sits at the edge of the water while Puddle paddles toward her, looking back over its wing.
+Who: MINA (Images 1 and 2 — short curly auburn hair, yellow raincoat over striped leggings), on the left; PUDDLE (Image 3 — small fluffy yellow duckling, one white feather on its crown), on the right.
+Speaks: nobody (narration only); fill the panel with art to its borders.
+Detail: delighted, sunny.
+PANEL 4 of 4 — box 4 in the layout (row 3, full width; 96% wide × 31% tall).
+Camera: close-up (head and shoulders), eye level. Place: LILY POND.
+Must show: Mina giggles with sparkling eyes as Puddle bobs right beside her.
+Who: MINA (Images 1 and 2 — short curly auburn hair, yellow raincoat over striped leggings); PUDDLE (Image 3 — small fluffy yellow duckling, one white feather on its crown).
+Speaks: nobody (narration only); fill the panel with art to its borders.
+Detail: A yellow butterfly flutters behind them; giggly, golden light.
+
+LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
+
+Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them).

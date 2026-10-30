@@ -1,0 +1,8 @@
+[
+  { "op": "add_slide", "id": "op-1", "baseRev": 0, "index": 1, "slide": { "id": "sl2", "layout": "content", "elements": [] } },
+  { "op": "add_slide", "id": "op-2", "baseRev": 0, "slide": { "id": "sl3", "layout": "end", "notes": "Thanks", "elements": [] } },
+  { "op": "update_slide", "id": "op-3", "baseRev": 0, "slideId": "sl1", "slide": { "id": "sl1", "layout": "section", "elements": [] } },
+  { "op": "remove_slide", "id": "op-4", "baseRev": 0, "slideId": "sl1" },
+  { "op": "move_slide", "id": "op-5", "baseRev": 0, "slideId": "sl1", "index": 0 },
+  { "op": "set_theme", "id": "op-6", "baseRev": 0, "theme": { "preset": "dark", "accent": "#22C55E" } }
+]

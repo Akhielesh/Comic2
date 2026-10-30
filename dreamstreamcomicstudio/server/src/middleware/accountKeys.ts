@@ -118,7 +118,10 @@ export const hasAccountKeyFor = async (userId: string, provider: string): Promis
  */
 export const attachAccountKeys = async (req: Request, _res: Response, next: NextFunction) => {
   try {
-    const userId = req.user?.id;
+    // Read the auth user structurally: this module is also type-checked from scopes that never
+    // load middleware/auth.ts's `Request.user` augmentation (the root client typecheck), and it
+    // must compile there too.
+    const userId = (req as Request & { user?: { id?: string } }).user?.id;
     const k = req.apiKeys;
     if (!userId || !k || !isSecureStoreAvailable()) return next();
     if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return next();
@@ -143,6 +146,14 @@ export const attachAccountKeys = async (req: Request, _res: Response, next: Next
     // (k[keyField] already set from env by attachKeys) — without one, the account key
     // remains the only way to serve the request at all. Header BYOK keys are an
     // explicit per-request choice and keep their precedence untouched.
+    //
+    // The decision needs a READABLE status. getAllowanceStatus fails soft — it reports
+    // `enabled:false` whenever the budget database cannot answer — and metering is already
+    // known to be on here (allowanceEnabled()), so inside this block `enabled:false` can only
+    // mean "unreadable". That keeps the platform key too (fail closed): the usage enforcer
+    // then refuses with usage_budget_unavailable and nothing is spent on either key. Only an
+    // explicit 'auto' consent together with a status that was READ as used up injects the
+    // stored key — an outage must never route a request onto the user's wallet.
     let suppressPlatformFunded = false;
     if (allowanceEnabled()) {
       const wouldInjectPlatformFunded = PROVIDER_FIELDS.some(
@@ -153,7 +164,10 @@ export const attachAccountKeys = async (req: Request, _res: Response, next: Next
         const prefs = await getBillingPrefs(userId);
         if (prefs.usePlatformAllowance) {
           const status = await getAllowanceStatus(userId);
-          if (status.enabled) {
+          if (!status.enabled) {
+            logger.warn('account_keys_status_unavailable', { byokFallbackMode: prefs.byokFallbackMode });
+            suppressPlatformFunded = true;
+          } else {
             suppressPlatformFunded = !status.exhausted || prefs.byokFallbackMode !== 'auto';
           }
         }

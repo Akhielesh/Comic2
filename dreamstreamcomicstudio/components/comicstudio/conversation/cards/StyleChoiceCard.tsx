@@ -1,15 +1,18 @@
 // "style_choice" card: the candidate style boards, live. Boards develop in as they
 // finish; tap one to lock it as the comic's style (pick_style). "More options" draws a
-// fresh set (a gated spend like any other).
+// fresh set (a gated spend like any other). Failed boards read calm (when + why, details on
+// tap) and, when several failed, one "Retry N failed" redraws just those directions.
 
 import React from 'react';
-import { Lock, Palette, RefreshCw } from 'lucide-react';
+import { Lock, Palette, RefreshCw, RotateCcw } from 'lucide-react';
 import type { Card, ComicDoc, StyleOption } from '../../../../shared/comic/doc';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
 import type { ComicStudioController } from '../../useStudio';
-import { CardShell, GhostButton } from '../ui';
+import { useCostFormat } from '../cost';
+import { CardShell, GhostButton, plural } from '../ui';
+import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
 import { RenderThumb } from './renderTile';
-import { useAction } from './useAction';
+import { failureSummary, retryAllFailed } from './RendersCard';
+import { useAction, useStudioSequenceGuard } from './useAction';
 
 type StyleChoiceData = Extract<Card, { type: 'style_choice' }>;
 
@@ -27,13 +30,19 @@ export const lockedOptionId = (doc: ComicDoc): string | null => {
 
 export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStudioController }> = ({ studio }) => {
   const doc = studio.doc;
-  const { run, isPending } = useAction(studio.act);
+  const guard = useStudioSequenceGuard(studio);
+  const { run, isPending } = useAction(studio.act, { guard });
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const options = doc.style.options;
   const locked = lockedOptionId(doc);
   const drawing = options.filter(isBusy).length;
   const picking = options.some((o) => isPending(`pick:${o.id}`));
-  const more = estimateJobs([{ kind: 'style_option', count: 3, label: 'style options' }], doc.settings.quality, { byok: studio.byok });
+  const moreUsd = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, studio.byok);
+  const failed = options
+    .filter((o) => o.render.status === 'failed')
+    .map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }));
+  const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
 
   const status = locked
     ? `Locked: ${doc.style.name || 'style'}`
@@ -61,8 +70,19 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
                 aspect="4 / 5"
                 url={url}
                 selected={selected}
-                onRetry={() => void run(`retry:${o.id}`, { type: 'render_style_options', directions: [{ name: o.name, spec: o.spec }] })}
-                retryBusy={isPending(`retry:${o.id}`)}
+                onRetry={() =>
+                  void run(`retry:${o.id}`, {
+                    type: 'render_style_options',
+                    directions: [{ name: o.name, spec: o.spec }],
+                    quotedUsd: quoteStyleOptions(doc, 1, studio.byok, true)
+                  })
+                }
+                // The server draws one batch of options at a time: retries wait for the current one.
+                retryBusy={isPending(`retry:${o.id}`) || isPending('retry-all')}
+                retryDisabled={drawing > 0}
+                // Three 4:5 tiles side by side on a phone are ~64 px wide: icon + Retry only in the
+                // frame; when and why sit in the caption under it.
+                compact
                 badge={
                   selected ? (
                     <span className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-[var(--ds-accent)] text-white shadow" aria-hidden>
@@ -90,15 +110,32 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
           })}
         </div>
       )}
+      {failed.length > 0 && drawing === 0 && (
+        <p className="mt-2.5 text-[11.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{failureSummary(failed)}</p>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        {retry && retry.actions.length > 0 && (
+          <GhostButton
+            size="sm"
+            className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
+            busy={isPending('retry-all')}
+            disabled={drawing > 0}
+            title={drawing > 0 ? 'Waiting for the options that are drawing now' : undefined}
+            onClick={() => void run('retry-all', ...retry.actions)}
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Retry {plural(retry.count, 'failed style', 'failed styles')}
+            <span className="text-[var(--ds-muted)]">{cost.approx(retry.usd)}</span>
+          </GhostButton>
+        )}
         <GhostButton
           size="sm"
+          className="tap-target !h-auto min-h-8 max-w-full flex-wrap py-1 text-center coarse:min-h-11"
           busy={isPending('more')}
           disabled={drawing > 0}
-          onClick={() => void run('more', { type: 'render_style_options' })}
+          onClick={() => void run('more', { type: 'render_style_options', quotedUsd: moreUsd })}
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden />
-          More options <span className="text-[var(--ds-muted)]">≈ {formatUsd(more.usd)}</span>
+          More options <span className="text-[var(--ds-muted)]">{cost.approx(moreUsd)}</span>
         </GhostButton>
         {locked && (
           <span className="text-[11.5px] text-[var(--ds-muted)]">Every page will be drawn in this style.</span>

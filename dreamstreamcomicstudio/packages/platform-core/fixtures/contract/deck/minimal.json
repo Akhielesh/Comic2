@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "title": "Untitled deck",
+  "size": "16:9",
+  "theme": { "preset": "light" },
+  "slides": [
+    {
+      "id": "sl1",
+      "layout": "title",
+      "elements": [
+        { "kind": "text", "id": "t1", "rect": [0.1, 0.35, 0.8, 0.2], "layer": "content", "role": "title", "paragraphs": [{ "runs": [{ "text": "Hello" }] }] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "v": 1,
+  "rev": 2,
+  "title": "The Lighthouse Keeper — pitch",
+  "size": "16:9",
+  "theme": { "preset": "brand", "background": "#0F172A", "text": "#F8FAFC", "accent": "#D97757" },
+  "slides": [
+    {
+      "id": "sl-title",
+      "layout": "title",
+      "notes": "Open with the storm.",
+      "elements": [
+        { "kind": "shape", "id": "bg", "rect": [0, 0, 1, 1], "layer": "background", "shape": "rect", "fill": "#0F172A" },
+        { "kind": "text", "id": "title", "rect": [0.08, 0.3, 0.84, 0.2], "layer": "content", "role": "title", "align": "center", "fontSize": 54, "paragraphs": [{ "runs": [{ "text": "The Lighthouse Keeper" }] }] },
+        { "kind": "text", "id": "sub", "rect": [0.08, 0.55, 0.84, 0.1], "layer": "content", "role": "subtitle", "align": "center", "paragraphs": [{ "runs": [{ "text": "An all-ages mystery in 24 pages" }] }] }
+      ]
+    },
+    {
+      "id": "sl-section",
+      "layout": "section",
+      "elements": [
+        { "kind": "text", "id": "sec", "rect": [0.1, 0.4, 0.8, 0.2], "layer": "content", "role": "title", "paragraphs": [{ "runs": [{ "text": "The story" }] }] }
+      ]
+    },
+    {
+      "id": "sl-content",
+      "layout": "content",
+      "elements": [
+        { "kind": "text", "id": "c-head", "rect": [0.06, 0.06, 0.88, 0.12], "layer": "content", "role": "title", "paragraphs": [{ "runs": [{ "text": "Why now" }] }] },
+        {
+          "kind": "text",
+          "id": "c-body",
+          "rect": [0.06, 0.22, 0.88, 0.6],
+          "layer": "content",
+          "role": "body",
+          "align": "left",
+          "paragraphs": [
+            { "runs": [{ "text": "Cozy mysteries are " }, { "text": "growing", "marks": ["b"] }], "bullet": true },
+            { "runs": [{ "text": "Read the market note", "link": { "href": "https://example.com/market" } }], "bullet": true, "indent": 1 },
+            { "runs": [{ "text": "Quote: the light never lies.", "marks": ["i"] }] }
+          ]
+        },
+        { "kind": "shape", "id": "rule", "rect": [0.06, 0.86, 0.88, 0], "layer": "content", "shape": "line", "stroke": "#D97757" }
+      ]
+    },
+    {
+      "id": "sl-image",
+      "layout": "image-full",
+      "elements": [
+        { "kind": "image", "id": "cover", "rect": [0, 0, 1, 1], "layer": "background", "fit": "cover", "alt": "Cover art", "ref": { "kind": "data", "dataUri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q==" } },
+        { "kind": "text", "id": "cover-cap", "rect": [0.05, 0.85, 0.9, 0.1], "layer": "content", "role": "caption", "paragraphs": [{ "runs": [{ "text": "Cover, final" }] }] }
+      ]
+    },
+    {
+      "id": "sl-two",
+      "layout": "two-col",
+      "elements": [
+        {
+          "kind": "table",
+          "id": "tbl",
+          "rect": [0.05, 0.15, 0.42, 0.7],
+          "layer": "content",
+          "header": true,
+          "rows": [
+            { "cells": [{ "runs": [{ "text": "Issue" }] }, { "runs": [{ "text": "Pages" }] }] },
+            { "cells": [{ "runs": [{ "text": "#1" }] }, { "runs": [{ "text": "24" }] }] }
+          ]
+        },
+        { "kind": "chart", "id": "ch", "rect": [0.53, 0.15, 0.42, 0.7], "layer": "content", "chart": "bar", "title": "Readers by month", "categories": ["Jan", "Feb", "Mar"], "series": [{ "name": "Readers", "values": [120, 340, 910] }] },
+        { "kind": "image", "id": "logo", "rect": [0.9, 0.02, 0.08, 0.08], "layer": "content", "fit": "contain", "alt": "Logo", "ref": { "kind": "asset", "id": "brand/logo.webp" } },
+        { "kind": "shape", "id": "badge", "rect": [0.02, 0.02, 0.06, 0.06], "layer": "content", "shape": "ellipse", "fill": "#D97757" },
+        { "kind": "shape", "id": "frame", "rect": [0.02, 0.9, 0.2, 0.06], "layer": "content", "shape": "roundRect", "stroke": "#F8FAFC" }
+      ]
+    },
+    {
+      "id": "sl-charts",
+      "layout": "content",
+      "elements": [
+        { "kind": "chart", "id": "line", "rect": [0.05, 0.1, 0.42, 0.8], "layer": "content", "chart": "line", "categories": ["Q1", "Q2"], "series": [{ "name": "A", "values": [1, 2] }, { "name": "B", "values": [2.5, 1.5] }] },
+        { "kind": "chart", "id": "pie", "rect": [0.53, 0.1, 0.42, 0.8], "layer": "content", "chart": "pie", "categories": ["Print", "Digital"], "series": [{ "name": "Share", "values": [40, 60] }] }
+      ]
+    },
+    {
+      "id": "sl-end",
+      "layout": "end",
+      "elements": [
+        { "kind": "text", "id": "thanks", "rect": [0.1, 0.4, 0.8, 0.2], "layer": "content", "role": "quote", "align": "right", "paragraphs": [{ "runs": [{ "text": "Thank you" }] }] }
+      ]
+    }
+  ]
+}

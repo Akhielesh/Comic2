@@ -1,37 +1,75 @@
-// Comic Director tools (v4): the only way the director changes the comic.
+// Comic Director tools (v4/v5): the only way the director changes the comic.
 //
 // Each tool validates its arguments defensively, turns them into DocOps (or a job-runner
 // action), and returns a SHORT string the model can act on ("Saved MAYA (lead). Cast:
 // MAYA, ARJUN."). Tools never throw: bad arguments come back as an "Error: …" sentence
 // the model can correct on the next round. Spend tools go through the job runner's gate
 // — when the user must approve, the result says so with the estimate. See
-// docs/features/comic-studio-v4.md §6.8.
+// docs/features/comic-studio-v4.md §6.8 and contract §12.2.
+//
+// v5 guards (all deterministic, $0): a turn whose user never asked to draw only ever QUOTES
+// (forced gate); a plan written this turn is never drawn in the same turn; page numbers never
+// redraw a drawn, current page (redraw needs the user's own "another take"); "draw everything"
+// on a finished book returns `nothing` for $0 with next steps. Every description carries its
+// cost class ("FREE — …", "TEXT ≈$0.01 — …", "PAID (quoted) — …").
 
 import {
+  CAST_KINDS,
+  castNoun,
+  findPage,
+  isPageStale,
+  isTargetStale,
   newId,
   pageByNumber,
   resolveCharacter,
   type AssetRef,
   type Card,
+  type CastKind,
   type Character,
   type CharacterLook,
   type ComicDoc,
+  type Gate,
   type Line,
   type LineKind,
   type Msg,
   type NextStep,
   type OptionChoice,
   type Page,
+  type Panel,
   type Place,
   type RefAsset,
+  type RefOwner,
+  type RenderTarget,
   type StyleBible
 } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
-import type { ContentRating } from '../../../shared/comic/safety.js';
-import type { DocOp, SpendAction } from '../../../shared/comic/ops.js';
-import { formatUsd } from '../../../shared/comic/models.js';
+import { canServeToOwner, type ContentRating } from '../../../shared/comic/safety.js';
+import { applyOps, type DocOp, type SpendAction } from '../../../shared/comic/ops.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import { lineLengthRule } from '../../../shared/comic/languages.js';
+import {
+  BUBBLE_SHAPES,
+  DEFAULT_LETTERING,
+  FONT_IDS,
+  normalizeColor,
+  presetForComic,
+  resolveLetterStyle,
+  sanitizeLetterStylePatch,
+  type LetterStylePatch
+} from '../../../shared/comic/lettering/style.js';
+import { estimateJobs, getImageModel, resolveImageJob } from '../../../shared/comic/models.js';
+import { deriveLock } from '../../../shared/comic/modelLock.js';
+import { REF_LIMITS } from '../../../shared/comic/refs.js';
+import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
+import { panelBudgetSentence } from '../../../shared/comic/pagePlanCheck.js';
+import { OFF_PANEL_SHOTS, PANEL_LIMITS, panelCountNote } from '../../../shared/comic/panelRules.js';
+import { coverNeedsDraw, pageTargets as drawablePages } from '../../../shared/comic/plan.js';
+import { sheetRefsChanged } from '../../../shared/comic/refRanking.js';
 import { STYLE_PRESETS, getStylePreset } from '../../../shared/comic/stylePresets.js';
 import { logger } from '../lib/logger.js';
+import { castOpsForUncast, describeUncast, findUncastBeings } from './castScan.js';
+import { costFormatterFor } from './costText.js';
+import { clipText, enteredText, storableText } from './sanitize/text.js';
 import {
   ASPECT_RATIOS,
   COLOR_MODES,
@@ -41,12 +79,14 @@ import {
   LINE_KINDS,
   QUALITY_TIERS,
   billedLlm,
+  imageRouteFor,
   newTextSpendTracker,
   planPages,
   recordTextSpend,
   sanitizeFormatPatch,
   sanitizeLook,
   sanitizeSettingsPatch,
+  spendIsByok,
   startAction,
   type ActionOutcome
 } from './jobs.js';
@@ -58,6 +98,10 @@ import {
   type ToolCost,
   type ToolGroup
 } from './extensions.js';
+import { addRefs } from './refs/index.js';
+import { LETTERING_STYLE_ARGS_SCHEMA, balloonAtPosition, styleArgsToPatch } from './tools/lettering.js';
+import { MODEL_ASK_RE } from './tools/models.js';
+import { SKIP_REVIEW_RE, joinList, nothingNextSteps } from './replies.js';
 import { StudioError, type StudioContext } from './types.js';
 import { analyzeSource } from './writer.js';
 
@@ -110,16 +154,28 @@ export interface DirectorTurn {
   safetyNote?: string;
   /** effectiveRating() at turn start. */
   rating: ContentRating;
+  // ── P1-DIRECTOR bookkeeping (optional; filled by runDirectorTurn) ──
+  /** Turn start (ms): render failures recorded after it belong to this turn's runs. */
+  startedAt?: number;
+  /** Render targets this turn queued (re-read before the reply is committed — honest outcomes). */
+  runs?: RenderTarget[];
+  /** Error notices background work posted while the turn was running. */
+  bgErrors?: string[];
+  /** Status of the turn's last spend tool ('nothing' = everything already drawn, $0). */
+  outcome?: ActionOutcome['status'];
+  /** Trademarked names this turn steers to an original homage (said once). */
+  ipNames?: string[];
 }
 
 /** Source material shorter than this is stored without a (paid) writer analysis. */
 export const ANALYZE_SOURCE_MIN_CHARS = 1500;
 /** Paid writer calls (plan/revise/source analysis) allowed in a single director turn. */
 export const MAX_PAID_TEXT_PER_TURN = 2;
-const MAX_REFS_PER_ENTITY = 4;
 const MAX_SOURCE_CHARS = 200_000;
 const SPOKEN = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
-const LOOK_KEYS = ['summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes', 'skin', 'outfit', 'palette', 'props', 'marks'] as const;
+const LOOK_KEYS = ['summary', 'age', 'gender', 'build', 'face', 'hair', 'eyes', 'skin', 'outfit', 'palette', 'props', 'marks', 'species', 'markings'] as const;
+const POSITIONS = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const;
+type Position = (typeof POSITIONS)[number];
 
 const latestUserMessage = (doc: ComicDoc): Msg | undefined => [...doc.conversation].reverse().find((m) => m.role === 'user');
 
@@ -142,10 +198,23 @@ export const createDirectorTurn = (init: Partial<DirectorTurn> = {}): DirectorTu
   ...init
 });
 
+/** The images a turn can reference by number: attachments, then carried unassigned images. */
+export const turnImages = (turn: DirectorTurn): RefAsset[] => (turn.images.length ? turn.images : (turn.attachments as RefAsset[]));
+
+/** Add next-step chips to the turn (deduped by label, capped). */
+export const pushNextSteps = (turn: DirectorTurn, steps: NextStep[] = []) => {
+  for (const step of steps) {
+    if (!step?.label || turn.nextSteps.some((s) => s.label === step.label)) continue;
+    if (turn.nextSteps.length >= DOC_LIMITS.nextSteps) break;
+    turn.nextSteps.push(step);
+  }
+};
+
 // ── Arg helpers ──────────────────────────────────────────────────────────────
 
 const isObject = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-const text = (v: unknown, max = 2000): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+/** Director-written text as it enters the doc (P2-GATE L5): jsonb-safe (sanitize/text.ts), whitespace collapsed, clipped without splitting a pair. */
+const text = (v: unknown, max = 2000): string => (typeof v === 'string' ? clipText(storableText(v).replace(/\s+/g, ' ').trim(), max) : '');
 const int = (v: unknown): number | undefined => {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN;
   return Number.isFinite(n) ? Math.round(n) : undefined;
@@ -160,8 +229,6 @@ const placeList = (doc: ComicDoc) => (doc.places.length ? doc.places.map((p) => 
 
 const argError = (message: string) => new ToolArgError(message);
 
-const outcomeText = (outcome: ActionOutcome): string => outcome.message;
-
 const schema = (properties: Record<string, unknown>, required: string[] = []) => ({
   type: 'object',
   properties,
@@ -173,36 +240,26 @@ const I = (description: string) => ({ type: 'integer', description });
 const B = (description: string) => ({ type: 'boolean', description });
 const A = (items: Record<string, unknown>, description: string) => ({ type: 'array', items, description });
 
+const LOOK_HINTS: Partial<Record<(typeof LOOK_KEYS)[number], string>> = {
+  summary: 'One dense, drawable visual sentence.',
+  marks: 'Marks that must never drift.',
+  species: 'Non-humans: what they are (mallard duckling).',
+  markings: 'Non-humans: markings that never drift.'
+};
 const lookSchema = {
   type: 'object',
-  description: 'Visual description. Fill every field the user gave; summary is one dense, drawable sentence.',
-  properties: Object.fromEntries(
-    LOOK_KEYS.map((k) => [
-      k,
-      {
-        type: 'string',
-        description:
-          k === 'summary'
-            ? 'One dense visual sentence an artist could draw from.'
-            : k === 'marks'
-              ? 'Distinguishing marks that must never drift (scar over left eye, red scarf).'
-              : k
-      }
-    ])
-  )
+  description: 'Fill every field the user gave.',
+  properties: Object.fromEntries(LOOK_KEYS.map((k) => [k, LOOK_HINTS[k] ? { type: 'string', description: LOOK_HINTS[k] } : { type: 'string' }]))
 };
 
-/**
- * A core tool. Cost is recorded on the tool (turn log, trimming); the description is kept
- * verbatim in wave 0 — P1-DIRECTOR switches core tools to the cost prefix (defineTool's default).
- */
+/** A core tool: the description gets its cost prefix ("FREE — …"), the cost is logged per call. */
 const define = (
   name: string,
   cost: ToolCost,
   description: string,
   parameters: Record<string, unknown>,
   run: (args: Record<string, unknown>) => Promise<string> | string
-): DirectorTool => defineTool(name, cost, description, parameters, run, { prefix: false });
+): DirectorTool => defineTool(name, cost, description, parameters, run);
 
 // ── Resolution helpers ───────────────────────────────────────────────────────
 
@@ -226,28 +283,33 @@ const pagesByNumbers = (doc: ComicDoc, numbers: number[]): Page[] => {
   return [...new Set(numbers)].map((n) => pageByNumber(doc, n)!).sort((a, b) => a.n - b.n);
 };
 
-const attachmentRefs = (turn: DirectorTurn, raw: unknown): AssetRef[] => {
+const attachmentRefs = (turn: DirectorTurn, raw: unknown): RefAsset[] => {
   const numbers = intList(raw);
   if (!numbers.length) return [];
-  const out: AssetRef[] = [];
+  const images = turnImages(turn);
+  const carried = images.length > turn.attachments.length;
+  const out: RefAsset[] = [];
   for (const n of numbers) {
-    const ref = turn.attachments[n - 1];
+    const ref = images[n - 1];
     if (!ref) {
       throw argError(
-        turn.attachments.length
-          ? `There are only ${turn.attachments.length} image(s) attached to this message (use 1–${turn.attachments.length}).`
+        images.length
+          ? `There are only ${images.length} image(s) ${carried ? 'available (this message and earlier unassigned ones)' : 'attached to this message'} (use 1–${images.length}).`
           : 'No images are attached to this message.'
       );
     }
-    out.push(ref);
+    if (!out.some((r) => r.path === ref.path)) out.push(ref);
   }
   return out;
 };
 
-const mergeRefs = (existing: AssetRef[], added: AssetRef[]): AssetRef[] => {
-  const seen = new Set<string>();
-  return [...existing, ...added].filter((a) => a?.path && !seen.has(a.path) && seen.add(a.path)).slice(-MAX_REFS_PER_ENTITY);
-};
+/** Images the user attached to a cast member/place/style go through the refs package (honest caps). */
+async function attachRefs(ctx: StudioContext, owner: RefOwner, refs: RefAsset[]): Promise<string> {
+  if (!refs.length) return '';
+  const added = await addRefs(ctx, owner, refs.map((r) => ({ ...r, addedBy: r.addedBy ?? 'user' })));
+  if (added.ops.length) ctx.session.commit(added.ops, { origin: 'director', label: 'Attach photos' });
+  return added.message;
+}
 
 const summaryFromLook = (look: Partial<CharacterLook>): string =>
   [
@@ -263,6 +325,13 @@ const summaryFromLook = (look: Partial<CharacterLook>): string =>
 const lookChanged = (before: CharacterLook, patch: Partial<CharacterLook>) =>
   Object.entries(patch).some(([k, v]) => (before as unknown as Record<string, unknown>)[k] !== v);
 
+const castKindArg = (v: unknown): CastKind | undefined => (typeof v === 'string' && (CAST_KINDS as readonly string[]).includes(v) ? (v as CastKind) : undefined);
+/** 2–12 for a group; 1 / absent = a single being. */
+const countArg = (v: unknown): number | undefined => {
+  const n = int(v);
+  return n !== undefined && n >= 2 ? Math.min(12, n) : undefined;
+};
+
 // ── Source analysis ──────────────────────────────────────────────────────────
 
 async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, args: Record<string, unknown>): Promise<string> {
@@ -277,8 +346,9 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   const fromStore = !script;
   if (fromStore) script = stored;
   if (!script) throw argError('No source text: pass text, set useMessage:true to save the user’s message, or ask the user to paste their script.');
-  script = script.slice(0, MAX_SOURCE_CHARS);
-  if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }]);
+  // Kept as typed (line breaks, spacing); only what jsonb rejects goes, and the clip never splits a pair (P2-GATE L5).
+  script = clipText(storableText(script), MAX_SOURCE_CHARS);
+  if (!fromStore) ctx.session.commit([{ op: 'source', patch: { script, updatedAt: Date.now() } }], { origin: 'director', label: 'Save the script' });
 
   const words = (script.match(/\S+/g) || []).length;
   const analyze = args.analyze === true || (args.analyze !== false && script.length >= ANALYZE_SOURCE_MIN_CHARS);
@@ -337,12 +407,17 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
       continue;
     }
     const tier = c.tier === 'lead' || c.tier === 'support' || c.tier === 'extra' ? c.tier : 'support';
+    const kind = castKindArg((c as { kind?: unknown }).kind);
+    const count = countArg((c as { count?: unknown }).count);
     ops.push({
       op: 'character',
       id: newId('c'),
       patch: {
         name,
         tier,
+        ...(kind && kind !== 'person' ? { kind } : {}),
+        ...(count ? { count } : {}),
+        // sanitizeLook already carries species / markings, cleaned (NUL, C1 controls, split surrogates).
         look: { summary: look.summary || summaryFromLook(look), ...look } as CharacterLook,
         ...(c.role ? { role: text(c.role, 200) } : {}),
         ...(c.personality ? { personality: text(c.personality, 1000) } : {}),
@@ -373,7 +448,7 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
   } else if (analysis.suggestedPageCount) {
     pagesNote = `; suggested ${analysis.suggestedPageCount} pages`;
   }
-  if (ops.length) ctx.session.commit(ops);
+  if (ops.length) ctx.session.commit(ops, { origin: 'director', label: 'Read the script' });
 
   const after = ctx.session.doc;
   return [
@@ -390,7 +465,53 @@ async function storeAndAnalyzeSource(ctx: StudioContext, turn: DirectorTurn, arg
 
 // ── Spend helpers ────────────────────────────────────────────────────────────
 
-async function spend(ctx: StudioContext, turn: DirectorTurn, action: SpendAction): Promise<string> {
+type SpendKind = 'pages' | 'cover' | 'sheets' | 'edit' | 'style';
+
+/**
+ * The comic has at least one drawn image of any kind, style swatches included. Not a lock test: style swatches
+ * never lock the model (models.md §3.1) — set_settings uses hasLockedImage. Kept for callers that ask "anything drawn?".
+ */
+export const hasComicImage = (doc: ComicDoc): boolean => {
+  const drawn = (r?: { status?: string; asset?: unknown; history?: unknown[] }) => !!r && (r.status === 'ready' || !!r.asset || !!r.history?.length);
+  return (
+    doc.pages.some((p) => drawn(p.render)) ||
+    drawn(doc.cover.render) ||
+    doc.cast.some((c) => drawn(c.sheet)) ||
+    doc.places.some((p) => drawn(p.sheet)) ||
+    doc.style.options.some((o) => drawn(o.render))
+  );
+};
+
+/**
+ * The comic's image model is fixed (models.md §3.1): it has a lock (persisted, or derived from a legacy doc's
+ * generated assets), or a drawn comic image — sheet, place, page or cover — whose model is unknown. Style
+ * swatches never lock.
+ */
+const hasLockedImage = (doc: ComicDoc): boolean => {
+  if (deriveLock(doc)) return true;
+  const drawn = (r?: { status?: string; asset?: unknown; history?: unknown[] }) => !!r && (r.status === 'ready' || !!r.asset || !!r.history?.length);
+  return doc.pages.some((p) => drawn(p.render)) || drawn(doc.cover.render) || doc.cast.some((c) => drawn(c.sheet)) || doc.places.some((p) => drawn(p.sheet));
+};
+
+/** No page of the book has ever been drawn (the first render gates for a review). */
+const neverDrawn = (doc: ComicDoc) => doc.pages.every((p) => p.render.status !== 'ready' && !p.render.history.length);
+
+/**
+ * Why a director-initiated spend must wait for the user's tap even below the 'big' threshold
+ * (contract §12.3 gates): a redraw, an unreviewed plan, the first render, or no draw intent.
+ * Never when the user turned confirmations off — except a redraw, which always asks.
+ */
+export function forcedGateReason(doc: ComicDoc, turn: DirectorTurn, kind: SpendKind, opts: { redraw?: boolean } = {}): Gate['reason'] | undefined {
+  if (opts.redraw) return 'redraw';
+  if (doc.settings.confirm === 'never') return undefined;
+  const skip = SKIP_REVIEW_RE.test(turn.userText);
+  if (kind === 'pages' && doc.planStatus === 'draft' && !skip) return 'plan_review';
+  if (kind === 'pages' && doc.settings.reviewFirstRender !== false && neverDrawn(doc) && !skip) return 'first_render';
+  if (turn.drawIntent === 'none' && !(kind === 'style' && doc.style.status === 'empty')) return 'no_intent';
+  return undefined;
+}
+
+async function spend(ctx: StudioContext, turn: DirectorTurn, action: SpendAction, forceGate?: Gate['reason']): Promise<string> {
   // One approval per turn: once a spend is waiting on the user, stop starting more so a turn
   // can't slip many individually-small spends past the 'big' threshold while one is unapproved.
   if (turn.gated) {
@@ -398,12 +519,23 @@ async function spend(ctx: StudioContext, turn: DirectorTurn, action: SpendAction
   }
   // priorUsd lets the 'big' gate weigh this spend against what the turn has already started,
   // not just this one call — so N small edits in a turn still gate once their total is "big".
-  const started = await startAction(ctx, action, { confirmed: false, priorUsd: turn.spentUsd, collectCard: (card) => turn.cards.push(card) });
-  if (started.outcome.status === 'started') turn.spentUsd += started.outcome.estimate.usd;
-  else if (started.outcome.status === 'gated') turn.gated = true;
+  const started = await startAction(ctx, action, {
+    confirmed: false,
+    priorUsd: turn.spentUsd,
+    collectCard: (card) => turn.cards.push(card),
+    collectNextSteps: (steps) => pushNextSteps(turn, steps),
+    ...(forceGate ? { forceGate } : {}),
+    ...(ctx.caps ? { caps: ctx.caps } : {}),
+    origin: 'director'
+  });
+  const outcome = started.outcome;
+  turn.outcome = outcome.status;
+  if (outcome.status === 'started') turn.spentUsd += outcome.estimate.usd;
+  else if (outcome.status === 'gated') turn.gated = true;
+  else if (outcome.status === 'nothing') pushNextSteps(turn, outcome.nextSteps);
   // Renders continue after the turn; the stream stays open until they settle.
   void ctx.track(started.done);
-  return outcomeText(started.outcome);
+  return outcome.message;
 }
 
 /**
@@ -423,7 +555,134 @@ function guardPaidText(ctx: StudioContext, turn: DirectorTurn): void {
   turn.paidText += 1;
 }
 
+/**
+ * Whether an image of this kind draws on the user's own key: the route of the model that will draw it,
+ * exactly as its gate prices it (an own Gemini key draws Google models even beside the platform
+ * OpenRouter key). Keys-level when the route can't be resolved.
+ */
+const imageQuoteIsByok = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet'): boolean => {
+  const doc = ctx.session.doc;
+  try {
+    return imageRouteFor(resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride, lockOfDoc(doc)).spec, ctx.keys)?.byok ?? spendIsByok(ctx.keys);
+  } catch {
+    return spendIsByok(ctx.keys);
+  }
+};
+
+/** The comic's model lock (persisted, or derived from a legacy doc's drawn art): every quote and slot count follows it
+ *  (models.md §3.4 item 1), so the director quotes the model that will really draw. */
+const lockOfDoc = (doc: ComicDoc) => doc.imageModel ?? deriveLock(doc);
+
+const priceOf = (ctx: StudioContext, kind: 'page' | 'cover' | 'sheet', count = 1): number => {
+  const doc = ctx.session.doc;
+  const lock = lockOfDoc(doc);
+  return estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok: imageQuoteIsByok(ctx, kind), ...(lock ? { lock } : {}) }).usd;
+};
+
+const pageWord = (pages: Page[]) => (pages.length === 1 ? `Page ${pages[0].n}` : `Pages ${joinList(pages.map((p) => String(p.n)))}`);
+
+/** Free safety net after a plan: recurring animals/props drawn in the panels become text-locked cast. */
+function castUncastBeings(ctx: StudioContext): string {
+  const beings = findUncastBeings(ctx.session.doc);
+  if (!beings.length) return '';
+  const ops = castOpsForUncast(ctx.session.doc, beings);
+  if (!ops.length) return '';
+  ctx.session.commit(ops, { origin: 'director', label: 'Add cast' });
+  // Companions (tier support) get a model sheet with the next drawing: say what that costs.
+  const companions = ops.flatMap((o) => (o.op === 'character' && o.patch.tier === 'support' && o.patch.name ? [o.patch.name] : []));
+  const sheetNote = companions.length
+    ? ` ${joinList(companions)} ${companions.length === 1 ? 'gets' : 'get'} a model sheet with the next drawing (${costFormatterFor(ctx).approx(priceOf(ctx, 'sheet', companions.length))}); make ${companions.length === 1 ? 'it' : 'them'} text-only (tier extra) to skip that.`
+    : '';
+  return ` Also added to the cast so they stay consistent: ${describeUncast(beings)} (free; the user can change or remove them).${sheetNote}`;
+}
+
+// ── Lettering helpers for edit_panel_text ────────────────────────────────────
+
+/**
+ * The lettering engine's style args (tools/lettering.ts), trimmed to the six keys a dialogue edit
+ * needs so the core prompt stays small; the engine parses them (plain words, relative sizes).
+ */
+const LETTERING_STYLE_ARGS_COMPACT = {
+  type: 'object',
+  description: 'Optional lettering (free).',
+  properties: Object.fromEntries(
+    ['font', 'size', 'bold', 'text_color', 'fill_color', 'shape'].map((k) => [k, (LETTERING_STYLE_ARGS_SCHEMA.properties as Record<string, unknown>)[k]])
+  )
+};
+
+/** The compact styleArgs subset → a sanitized LetterStylePatch (undefined when nothing valid). */
+export function styleFromArgs(raw: unknown): LetterStylePatch | undefined {
+  if (!isObject(raw)) return undefined;
+  const out: Record<string, unknown> = {};
+  if (typeof raw.font === 'string' && (FONT_IDS as readonly string[]).includes(raw.font.trim().toLowerCase())) out.font = raw.font.trim().toLowerCase();
+  const size = raw.size;
+  if (size === 'larger' || size === 'bigger') out.sizeScale = 1.25;
+  else if (size === 'smaller') out.sizeScale = 0.85;
+  else if (typeof size === 'number' || (typeof size === 'string' && /^\d+(\.\d+)?$/.test(size))) out.sizeScale = Number(size);
+  if (raw.bold === true) out.weight = 700;
+  if (raw.bold === false) out.weight = 400;
+  const textColor = normalizeColor(raw.text_color);
+  if (textColor) out.textColor = textColor;
+  const fill = normalizeColor(raw.fill_color);
+  if (fill) out.fill = fill;
+  if (typeof raw.shape === 'string' && (BUBBLE_SHAPES as readonly string[]).includes(raw.shape.trim().toLowerCase())) out.shape = raw.shape.trim().toLowerCase();
+  return sanitizeLetterStylePatch(out);
+}
+
+/**
+ * The sheet's photo slots, exactly as compileCharacterSheet counts them: the shared cap, the model's
+ * character (else object) slots, and the total minus the style board when one is attached.
+ */
+const sheetRefSlots = (doc: ComicDoc): number => {
+  // The locked model's slots (prompts.ts resolveJob follows the lock too), so the count matches what is attached.
+  const { spec } = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride, lockOfDoc(doc));
+  const board = doc.style.board && canServeToOwner(doc.style.board) ? 1 : 0;
+  return Math.max(0, Math.min(REF_LIMITS.sheetAuthorRefs, spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects, spec.refs.total - board));
+};
+
+/** A line's lettering patch from the compact style args, parsed by the lettering engine itself (same words as restyle_balloons). */
+const lineStyleFromArgs = (doc: ComicDoc, line: Line, raw: unknown): LetterStylePatch | undefined => {
+  if (!isObject(raw) || !Object.keys(raw).length) return undefined;
+  const patch = styleArgsToPatch(raw, resolveLetterStyle(doc, line));
+  return Object.keys(patch).length ? patch : undefined;
+};
+
+/** A 9-grid position inside the line's panel → a pinned balloon (page-normalized, clamped). */
+function balloonAt(doc: ComicDoc, page: Page, panel: Panel, lineId: string, position: Position): DocOp {
+  const boxes = panelBoxesFor(doc, page);
+  const box = boxes[panel.n - 1] ?? { x: 0, y: 0, w: 1, h: 1 };
+  const existing = page.balloons.find((b) => b.lineId === lineId);
+  const w = Math.min(existing?.w ?? 0.28, Math.max(0.12, box.w - 0.04));
+  const h = 0.09;
+  const m = 0.02;
+  const col = position.endsWith('left') ? 0 : position.endsWith('right') ? 1 : 0.5;
+  const row = position.startsWith('top') ? 0 : position.startsWith('bottom') ? 1 : 0.5;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const x = clamp(box.x + m + (box.w - w - 2 * m) * col, 0, 1 - w);
+  const y = clamp(box.y + m + (box.h - h - 2 * m) * row, 0, 1 - h);
+  return { op: 'balloon', pageId: page.id, lineId, patch: { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000, w: Math.round(w * 1000) / 1000, pinned: true } };
+}
+
+const tooLong = (doc: ComicDoc, lines: Pick<Line, 'text'>[]): number => {
+  const rule = lineLengthRule(doc.format.language, doc.format.lettering === 'in_art');
+  return lines.filter((l) => (rule.unit === 'chars' ? [...l.text.replace(/\s+/g, '')].length : (l.text.match(/\S+/g) || []).length) > rule.perLine).length;
+};
+
 // ── Tool set ─────────────────────────────────────────────────────────────────
+
+/**
+ * Plan §4.1/§4.7: a director line edit reports the panel's word budget, measured on the boxes the words are lettered
+ * into ("That makes panel 6 about 34 words; it holds about 32."). Free; never blocks the edit (undefined on failure).
+ */
+const panelBudgetNote = (d: ComicDoc, pageId: string, panelId: string): string | undefined => {
+  try {
+    const page = findPage(d, pageId);
+    const index = page ? page.panels.findIndex((p) => p.id === panelId) : -1;
+    return page && index >= 0 ? panelBudgetSentence(d, page, index) : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): DirectorTool[] {
   const state =
@@ -433,7 +692,24 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       userText: latestUserMessage(ctx.session.doc)?.text || ''
     });
   const doc = () => ctx.session.doc;
-  const commit = (ops: DocOp[]) => ctx.session.commit(ops);
+  // Every director edit is one undoable step with a short human label (origin 'director', contract §7).
+  const commit = (ops: DocOp[], label?: string) => ctx.session.commit(ops, { origin: 'director', ...(label ? { label } : {}) });
+  const byok = () => spendIsByok(ctx.keys);
+  // Prices in the user's terms (governed users: "≈2% of your usage", never dollars).
+  const cost = costFormatterFor(ctx);
+  /** letterStyle.auto: the preset follows the comic (kids → storybook, manga, webtoon, noir) — free, never over a manual pick. */
+  const followLetteringPreset = (): string => {
+    const d = doc();
+    const ls = d.letterStyle ?? DEFAULT_LETTERING;
+    if (!ls.auto || d.format.lettering === 'in_art') return '';
+    const fit = presetForComic(d.format, d.brief);
+    if (fit === ls.presetId) return '';
+    commit([{ op: 'letter_style', patch: { presetId: fit, auto: true, keepOverrides: true } }], 'Lettering preset');
+    return ` Lettering now uses the ${fit.replace(/_/g, ' ')} preset to fit (free; it was on automatic).`;
+  };
+  const captured = (fact: string) => {
+    if (fact && !state.captured.includes(fact) && state.captured.length < 12) state.captured.push(fact);
+  };
 
   return [
     define(
@@ -458,8 +734,14 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         }
         if (args.themes !== undefined) patch.themes = strList(args.themes, 12, 120);
         if (!Object.keys(patch).length) throw argError('Pass at least one brief field.');
-        commit([{ op: 'brief', patch }]);
-        return `Brief updated: ${Object.keys(patch).join(', ')}.`;
+        commit([{ op: 'brief', patch }], 'Story details');
+        if (typeof patch.title === 'string') captured(`the title “${patch.title}”`);
+        if (typeof patch.audience === 'string') captured(`for ${patch.audience}`);
+        if (typeof patch.setting === 'string') captured(`set at ${String(patch.setting).slice(0, 60)}`);
+        if (typeof patch.genre === 'string') captured(String(patch.genre));
+        if (!state.captured.length) captured('the story notes');
+        const lettering = patch.audience !== undefined || patch.genre !== undefined || patch.tone !== undefined ? followLetteringPreset() : '';
+        return `Brief updated: ${Object.keys(patch).join(', ')}.${lettering}`;
       }
     ),
 
@@ -471,7 +753,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const notes = strList(args.notes, 12, 500);
         if (!notes.length) throw argError('Pass notes as a list of short strings.');
-        commit(notes.map((n): DocOp => ({ op: 'note_add', text: n })));
+        commit(notes.map((n): DocOp => ({ op: 'note_add', text: n })), notes.length === 1 ? 'Note' : 'Notes');
+        captured(notes.length === 1 ? 'your note' : 'your notes');
         return `Noted (${doc().brief.notes.length} notes total).`;
       }
     ),
@@ -479,22 +762,32 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'set_format',
       'free',
-      'Set the format: kind, page count (1–40), page aspect, panels per page, reading direction, lettering, color mode, dialogue language.',
+      'Set the format. If drawn pages would go out of date, the first call only reports it (confirm:true applies).',
       schema({
         kind: S('Comic kind.', { enum: COMIC_KINDS }),
         pageCount: I('Number of pages, 1–40.'),
         pageAspect: S('Page aspect ratio (2:3 is a standard comic page).', { enum: ASPECT_RATIOS }),
-        panelsPerPage: S('"auto" (writer varies 3–6) or a number like "4".'),
+        panelsPerPage: S(`"auto" (${PANEL_LIMITS.autoTypical}–4 big panels; the dialogue decides) or ${PANEL_LIMITS.uiChoices.join(', ')} panels a page.`, {
+          enum: ['auto', ...PANEL_LIMITS.uiChoices.map(String)]
+        }),
         readingDirection: S('ltr, or rtl for manga.', { enum: ['ltr', 'rtl'] }),
-        lettering: S('overlay = editable balloons added on top (default); in_art = the model letters the page (best on Pro).', { enum: LETTERING_MODES }),
-        colorMode: S('color, bw (black and white) or limited palette.', { enum: COLOR_MODES }),
-        language: S('BCP-47 language for dialogue, e.g. en, es, ja.')
+        lettering: S('overlay = editable balloons (default); in_art = the model letters the page.', { enum: LETTERING_MODES }),
+        colorMode: S('Color mode.', { enum: COLOR_MODES }),
+        language: S('BCP-47 dialogue language, e.g. en, hi, te.'),
+        confirm: B('Apply although drawn pages go out of date.')
       }),
       (args) => {
         const raw: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(args)) if (v !== undefined && v !== null && v !== '') raw[k] = v;
+        for (const [k, v] of Object.entries(args)) if (k !== 'confirm' && v !== undefined && v !== null && v !== '') raw[k] = v;
         if (typeof raw.pageCount === 'string') raw.pageCount = int(raw.pageCount);
-        if (raw.panelsPerPage !== undefined && raw.panelsPerPage !== 'auto') raw.panelsPerPage = int(raw.panelsPerPage);
+        if (raw.panelsPerPage !== undefined && raw.panelsPerPage !== 'auto') {
+          raw.panelsPerPage = int(raw.panelsPerPage);
+          // Plan §4.1 / §4.7: the director offers the Format panel's choices (2–6; the fit check still applies). Old
+          // docs and authors' own scripts keep up to PANEL_LIMITS.codeMax; nothing here rewrites them.
+          if (!(PANEL_LIMITS.uiChoices as readonly number[]).includes(raw.panelsPerPage as number)) {
+            throw argError(`panelsPerPage is "auto" or one of ${PANEL_LIMITS.uiChoices.join(', ')} (bigger panels fit their words better).`);
+          }
+        }
         let patch;
         try {
           patch = sanitizeFormatPatch(raw);
@@ -502,16 +795,33 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           throw argError(err instanceof StudioError ? err.userMessage : 'Invalid format.');
         }
         if (!Object.keys(patch).length) throw argError('Pass at least one format field.');
-        commit([{ op: 'format', patch }]);
+        const before = doc();
+        // Tell BEFORE staling paid art (director.md §3.8.4): count drawn pages this change would make out of date.
+        const preview: ComicDoc = { ...before, format: { ...before.format, ...patch } };
+        const staled = before.pages.filter((p) => p.render.status === 'ready' && !isPageStale(before, p) && isPageStale(preview, p));
+        const coverStaled = before.cover.render.status === 'ready' && !isTargetStale(before, { kind: 'cover' }) && isTargetStale(preview, { kind: 'cover' });
+        if ((staled.length || coverStaled) && args.confirm !== true) {
+          const usd = priceOf(ctx, 'page', staled.length) + (coverStaled ? priceOf(ctx, 'cover') : 0);
+          const what = [staled.length ? `${staled.length} drawn page${staled.length === 1 ? '' : 's'}` : '', coverStaled ? 'the cover' : ''].filter(Boolean).join(' and ');
+          return `Not changed yet: this makes ${what} out of date (redrawing ${cost.approx(usd)}). Tell the user and ask; call again with confirm:true to apply (they can also keep the drawings as they are).`;
+        }
+        commit([{ op: 'format', patch }], 'Format');
         const f = doc().format;
-        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.`;
+        logger.info('comic_format_changed', { projectId: ctx.projectId, by: 'director', keys: Object.keys(patch) });
+        if (patch.pageCount !== undefined || patch.pageAspect) captured(`${f.pageCount} page${f.pageCount === 1 ? '' : 's'}, ${f.pageAspect}`);
+        else captured('the format');
+        const stale = staled.length ? ` ${staled.length} drawn page${staled.length === 1 ? ' is' : 's are'} now out of date (redraw ${cost.approx(priceOf(ctx, 'page', staled.length))}, or keep them).` : '';
+        const lettering = patch.kind !== undefined || patch.lettering !== undefined ? followLetteringPreset() : '';
+        // A storybook set above its new-plan maximum: say what new plans will do (PD-2; existing pages untouched).
+        const clamp = patch.panelsPerPage !== undefined || patch.kind !== undefined ? panelCountNote(f) : undefined;
+        return `Format: ${f.kind}, ${f.pageCount} pages, ${f.pageAspect}, panels ${f.panelsPerPage}, ${f.readingDirection}, ${f.lettering} lettering, ${f.colorMode}, ${f.language}.${stale}${lettering}${clamp ? ` ${clamp}` : ''}`;
       }
     ),
 
     define(
       'save_source',
       'text',
-      "Store the user's script/story/notes as the source. If the message says it was already saved as the source (a long paste or text attachment), call with no arguments to read the full text — the message shows only an excerpt. Otherwise: text = the material, or useMessage:true for the current message. Long material is analyzed (brief, cast, places).",
+      "Store the user's script/story/notes as the source. If the message says it was already saved, call with no arguments to read the full text. Otherwise text = the material, or useMessage:true for the current message. Long material is analyzed (brief, cast, places).",
       schema({
         text: S('The source material (omit when useMessage is true).'),
         useMessage: B("Store the user's current message text as the source."),
@@ -523,22 +833,24 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'upsert_character',
       'free',
-      'Create or update a character (matched by id or name). Fill every look field the user gave. attachmentRefs = numbers of images attached to this message that show this character (1 = first).',
+      'Create/update a cast member — people AND recurring animals, creatures, robots, toys, vehicles, key props (matched by id or name). attachmentRefs = image numbers showing them (all kept).',
       schema(
         {
-          id: S('Existing character id (from the doc summary).'),
-          name: S('Character name (matches an existing one case-insensitively, else creates).'),
+          id: S('Existing character id.'),
+          name: S('Name (matches case-insensitively). Unnamed beings: a descriptive name ("Ducklings").'),
           newName: S('Rename to this.'),
-          tier: S('lead/support get a model sheet; extra = background, text only.', { enum: ['lead', 'support', 'extra'] }),
+          kind: S('Absent = person.', { enum: CAST_KINDS }),
+          count: I('2–12 = a group drawn as one identity.'),
+          tier: S('lead/support get a model sheet; extra = text only.', { enum: ['lead', 'support', 'extra'] }),
           role: S('Role in the story.'),
           look: lookSchema,
           personality: S('Personality.'),
           voice: S('How they talk.'),
-          attachmentRefs: A({ type: 'integer' }, 'Attached image numbers to use as this character’s reference.')
+          attachmentRefs: A({ type: 'integer' }, 'Image numbers to use as references.')
         },
         ['name']
       ),
-      (args) => {
+      async (args) => {
         const d = doc();
         const existing = findCharacterArg(d, args);
         const name = text(args.name, 80);
@@ -547,39 +859,58 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const finalName = newName || existing?.name || name;
         const clash = d.cast.find((c) => c.id !== existing?.id && c.name.trim().toLowerCase() === finalName.toLowerCase());
         if (clash) throw argError(`There is already a character named ${upper(clash.name)} (id ${clash.id}).`);
-        const look = sanitizeLook(args.look) || {};
+        // sanitizeLook covers every look line incl. species / markings (cleaned; never re-read raw).
+        const look: Record<string, string> = { ...(sanitizeLook(args.look) || {}) };
         for (const k of Object.keys(look)) if (!look[k]) delete look[k];
         const refs = attachmentRefs(state, args.attachmentRefs);
         const tier = args.tier === 'lead' || args.tier === 'support' || args.tier === 'extra' ? args.tier : undefined;
+        const kind = castKindArg(args.kind);
+        const count = args.count === undefined ? undefined : countArg(args.count) ?? 1;
         const patch: Partial<Character> = {};
         if (!existing || newName) patch.name = finalName;
         if (tier) patch.tier = tier;
+        if (kind && (existing ? (existing.kind ?? 'person') !== kind : kind !== 'person')) patch.kind = kind;
+        if (count !== undefined && (existing ? (existing.count ?? 1) !== count : count > 1)) patch.count = count;
         for (const key of ['role', 'personality', 'voice'] as const) {
           const v = text(args[key], key === 'role' ? 200 : 1000);
           if (v) patch[key] = v;
         }
-        const ops: DocOp[] = [];
+        let id: string;
         let note = '';
         if (existing) {
+          id = existing.id;
           if (Object.keys(look).length) patch.look = look as unknown as CharacterLook;
-          if (refs.length) patch.refs = mergeRefs(existing.refs, refs);
-          if (!Object.keys(patch).length) throw argError(`Nothing to change for ${upper(existing.name)}.`);
-          ops.push({ op: 'character', id: existing.id, patch });
+          if (!Object.keys(patch).length && !refs.length) throw argError(`Nothing to change for ${upper(existing.name)}.`);
+          const ops: DocOp[] = Object.keys(patch).length ? [{ op: 'character', id, patch }] : [];
           const changedLook = patch.look && lookChanged(existing.look, patch.look);
-          if ((changedLook || refs.length) && existing.sheet.status === 'ready') {
-            ops.push({ op: 'render', target: { kind: 'sheet', id: existing.id }, patch: { status: 'stale' } });
-            note = ` ${upper(finalName)}'s sheet is now out of date (redrawn with the next pages, or call render_character_sheets).`;
+          if ((changedLook || patch.count !== undefined || patch.kind) && existing.sheet.status === 'ready') {
+            ops.push({ op: 'render', target: { kind: 'sheet', id }, patch: { status: 'stale' } });
+            note = ` ${upper(finalName)}'s sheet is now out of date (redraw ${cost.approx(priceOf(ctx, 'sheet'))} when the user wants it).`;
           }
+          if (ops.length) commit(ops, `Cast: ${upper(finalName)}`);
         } else {
-          patch.tier = tier || (d.cast.some((c) => c.tier === 'lead') ? 'support' : 'lead');
+          const nonHuman = !!kind && kind !== 'person';
+          patch.tier = tier || (nonHuman ? 'support' : d.cast.some((c) => c.tier === 'lead') ? 'support' : 'lead');
           patch.look = { ...look, summary: look.summary || summaryFromLook(look) } as CharacterLook;
-          if (refs.length) patch.refs = mergeRefs([], refs);
-          ops.push({ op: 'character', id: newId('c'), patch });
+          id = newId('c');
+          commit([{ op: 'character', id, patch }], `Add ${upper(finalName)}`);
         }
-        commit(ops);
-        const saved = resolveCharacter(doc(), finalName);
+        // Every attached photo is kept (honest caps from the refs package) — never a silent slice.
+        const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'character', id }, refs)}` : '';
+        const saved = doc().cast.find((c) => c.id === id);
+        if (refs.length && saved) {
+          // The compiler's own photo cap (models differ in character slots; a style board takes one).
+          const slots = sheetRefSlots(doc());
+          if (saved.tier !== 'extra' && saved.sheet.status === 'ready' && sheetRefsChanged(saved, slots)) {
+            note += ` The sheet was drawn from older photos — offer a redraw (${cost.approx(priceOf(ctx, 'sheet'))}); do not redraw without asking.`;
+          } else if (saved.tier !== 'extra' && !saved.sheet.asset) {
+            note += ` No sheet yet — offer to make ${upper(finalName)}'s model sheet from these photos (${cost.approx(priceOf(ctx, 'sheet'))}).`;
+          }
+        }
         const missing = saved && !saved.look.summary ? ' No look yet — ask for or propose one.' : '';
-        return `Saved ${upper(finalName)} (${saved?.tier || patch.tier})${refs.length ? ` with ${refs.length} reference image${refs.length > 1 ? 's' : ''}` : ''}. Cast: ${castList(doc())}.${note}${missing}`;
+        const what = saved ? [saved.tier, saved.kind && saved.kind !== 'person' ? saved.kind : '', saved.count && saved.count > 1 ? `×${saved.count}` : ''].filter(Boolean).join(', ') : patch.tier;
+        captured(saved ? castNoun(saved) : finalName);
+        return `Saved ${upper(finalName)} (${what}).${refNote} Cast: ${castList(doc())}.${note}${missing}`;
       }
     ),
 
@@ -591,7 +922,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const c = findCharacterArg(doc(), args);
         if (!c) throw argError(`No such character. Cast: ${castList(doc())}.`);
-        commit([{ op: 'character_remove', id: c.id }]);
+        commit([{ op: 'character_remove', id: c.id }], `Remove ${upper(c.name)}`);
+        captured(`removed ${c.name}`);
         return `Removed ${upper(c.name)}. Cast: ${castList(doc())}.`;
       }
     ),
@@ -599,18 +931,18 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'upsert_place',
       'free',
-      'Create or update a recurring location (matched by id or name). attachmentRefs = attached image numbers showing it.',
+      'Create or update a recurring location (matched by id or name). attachmentRefs = image numbers showing it.',
       schema(
         {
           id: S('Existing place id.'),
           name: S('Place name.'),
           newName: S('Rename to this.'),
           look: S('What it looks like: architecture, props, light, palette.'),
-          attachmentRefs: A({ type: 'integer' }, 'Attached image numbers to use as reference.')
+          attachmentRefs: A({ type: 'integer' }, 'Image numbers to use as reference.')
         },
         ['name']
       ),
-      (args) => {
+      async (args) => {
         const d = doc();
         const existing = findPlaceArg(d, args);
         const name = text(args.name, 80);
@@ -622,14 +954,14 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const patch: Partial<Place> = {};
         if (!existing || newName) patch.name = finalName;
         if (look) patch.look = look;
-        if (refs.length) patch.refs = mergeRefs(existing?.refs || [], refs);
-        if (existing && !Object.keys(patch).length) throw argError(`Nothing to change for ${upper(existing.name)}.`);
-        const ops: DocOp[] = [{ op: 'place', id: existing?.id || newId('pl'), patch }];
-        if (existing && (look || refs.length) && existing.sheet.status === 'ready') {
-          ops.push({ op: 'render', target: { kind: 'place', id: existing.id }, patch: { status: 'stale' } });
-        }
-        commit(ops);
-        return `Saved place ${upper(finalName)}. Places: ${placeList(doc())}.`;
+        if (existing && !Object.keys(patch).length && !refs.length) throw argError(`Nothing to change for ${upper(existing.name)}.`);
+        const id = existing?.id || newId('pl');
+        const ops: DocOp[] = Object.keys(patch).length || !existing ? [{ op: 'place', id, patch }] : [];
+        if (existing && look && existing.sheet.status === 'ready') ops.push({ op: 'render', target: { kind: 'place', id }, patch: { status: 'stale' } });
+        if (ops.length) commit(ops, `${existing ? 'Place' : 'Add place'}: ${upper(finalName)}`);
+        const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'place', id }, refs)}` : '';
+        captured(finalName);
+        return `Saved place ${upper(finalName)}.${refNote} Places: ${placeList(doc())}.`;
       }
     ),
 
@@ -641,7 +973,8 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
       (args) => {
         const p = findPlaceArg(doc(), args);
         if (!p) throw argError(`No such place. Places: ${placeList(doc())}.`);
-        commit([{ op: 'place_remove', id: p.id }]);
+        commit([{ op: 'place_remove', id: p.id }], `Remove ${upper(p.name)}`);
+        captured(`removed ${p.name}`);
         return `Removed ${upper(p.name)}. Places: ${placeList(doc())}.`;
       }
     ),
@@ -649,7 +982,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'set_style',
       'free',
-      `Set the art style: presetId (one of: ${STYLE_PRESETS.map((p) => p.id).join(', ')}), OR a custom name + spec (medium, linework, color, shading, influences as visible traits). lock:true locks the style. attachmentRefs adds attached images as style references.`,
+      `Set the art style: presetId (${STYLE_PRESETS.map((p) => p.id).join(', ')}), OR a custom name + spec (medium, linework, color, shading). lock:true locks it. attachmentRefs = style reference images.`,
       schema({
         presetId: S('Preset id.', { enum: STYLE_PRESETS.map((p) => p.id) }),
         name: S('Custom style name (2–4 words).'),
@@ -658,9 +991,9 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         linework: S('Linework description.'),
         avoid: A({ type: 'string' }, 'Things the art must never do.'),
         lock: B('Lock this style for every render.'),
-        attachmentRefs: A({ type: 'integer' }, 'Attached image numbers to use as style references.')
+        attachmentRefs: A({ type: 'integer' }, 'Image numbers to use as style references.')
       }),
-      (args) => {
+      async (args) => {
         const d = doc();
         const refs = attachmentRefs(state, args.attachmentRefs);
         const patch: Partial<Omit<StyleBible, 'options'>> = {};
@@ -692,29 +1025,30 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           throw argError('A custom style needs a spec (medium, linework, color, shading).');
         }
         if (args.avoid !== undefined) patch.avoid = strList(args.avoid, 12, 120);
-        if (refs.length) patch.refs = mergeRefs(d.style.refs, refs);
         const specChanged = patch.spec !== undefined && patch.spec !== d.style.spec;
         // A new look invalidates the old board (it was drawn in the previous style).
         if (specChanged) patch.board = undefined;
         if (args.lock === true) {
           if (!patch.spec && !d.style.spec) throw argError('There is no style to lock yet — pick a preset or describe one.');
           patch.status = 'locked';
-        } else if (patch.spec || patch.refs || patch.avoid) {
+        } else if (patch.spec || refs.length || patch.avoid) {
           patch.status = specChanged || d.style.status === 'empty' ? 'drafted' : d.style.status;
         }
-        if (!Object.keys(patch).length) throw argError('Pass presetId, or name + spec, or lock:true.');
-        ops.unshift({ op: 'style', patch });
-        commit(ops);
+        if (!Object.keys(patch).length && !refs.length) throw argError('Pass presetId, or name + spec, or lock:true.');
+        if (Object.keys(patch).length) ops.unshift({ op: 'style', patch });
+        if (ops.length) commit(ops, 'Style');
+        const refNote = refs.length ? ` ${await attachRefs(ctx, { kind: 'style' }, refs)}` : '';
         const s = doc().style;
         const short = !presetId && patch.spec && (patch.spec.match(/\S+/g) || []).length < 15 ? ' The spec is short — a fuller description (medium, linework, color, shading) draws more consistently.' : '';
-        return `Style: ${s.name || label || 'custom'} (${s.status})${refs.length ? `, ${s.refs.length} style reference image(s)` : ''}${ops.some((o) => o.op === 'format') ? `; color mode set to ${doc().format.colorMode}` : ''}.${short}`;
+        captured(`${s.name || label || 'custom'} style`);
+        return `Style: ${s.name || label || 'custom'} (${s.status})${refs.length ? `, ${s.refs.length} style reference image(s)` : ''}${ops.some((o) => o.op === 'format') ? `; color mode set to ${doc().format.colorMode}` : ''}.${refNote}${short}`;
       }
     ),
 
     define(
       'propose_styles',
       'paid',
-      'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock. Spends a little money; may need approval.',
+      'Draw 3 cheap style-test images (or the given 2–4 directions) so the user can tap one to lock.',
       schema({
         directions: A(
           { type: 'object', properties: { name: S('2–4 word name.'), spec: S('Concrete art direction, 35–80 words.') }, required: ['name', 'spec'] },
@@ -727,17 +1061,17 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
           .map((d) => ({ name: text(d.name, 60), spec: text(d.spec, 1500) }))
           .filter((d) => d.name && d.spec)
           .slice(0, 4);
-        return spend(ctx, state, { type: 'render_style_options', ...(directions.length ? { directions } : {}) });
+        return spend(ctx, state, { type: 'render_style_options', ...(directions.length ? { directions } : {}) }, forcedGateReason(doc(), state, 'style'));
       }
     ),
 
     define(
       'render_character_sheets',
       'paid',
-      'Draw model sheets (turnaround + expressions) for lead/support characters that lack one, or for the named characters/places (force:true redraws). Spends money; may need approval.',
+      'Draw model sheets (turnaround + expressions) for lead/support cast that lack one, or for the named characters/places (force:true redraws).',
       schema({
         names: A({ type: 'string' }, 'Character (or place) names; omit for every lead/support missing a sheet.'),
-        force: B('Redraw even if a sheet exists.')
+        force: B('Redraw even if a sheet exists (only when the user asked).')
       }),
       (args) => {
         const d = doc();
@@ -753,14 +1087,21 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         }
         if (unknown.length) throw argError(`Unknown: ${unknown.join(', ')}. Cast: ${castList(d)}. Places: ${placeList(d)}.`);
         if (!d.cast.length && !ids.length) throw argError('There is no cast yet — add characters first.');
-        return spend(ctx, state, { type: 'render_sheets', ...(ids.length ? { characterIds: ids } : {}), ...(args.force === true ? { force: true } : {}) });
+        const force = args.force === true;
+        const redraw = force && state.drawIntent === 'redraw';
+        return spend(
+          ctx,
+          state,
+          { type: 'render_sheets', ...(ids.length ? { characterIds: ids } : {}), ...(redraw ? { force: true } : {}) },
+          forcedGateReason(d, state, 'sheets', { redraw })
+        );
       }
     ),
 
     define(
       'plan_pages',
       'text',
-      'Write the page-by-page script (layout, panels, shots, cast, dialogue) for the whole comic from the doc. No image spend. Replaces the current plan (drawn pages are kept and marked out of date).',
+      'Write the page-by-page script (layout, panels, cast, dialogue). No image spend; drawn pages are kept (out of date). Show it before drawing.',
       schema({ instructions: S('Extra direction for the writer (pacing, what to emphasize).') }),
       async (args) => {
         const d = doc();
@@ -768,14 +1109,18 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!hasStory) throw argError('Nothing to plan yet — capture the story (brief, cast or source) first.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions: text(args.instructions, 4000) }, { collectCard: (c) => state.cards.push(c) });
-        return `${outcome.message} The user can review and edit the plan on the board before any page is drawn.`;
+        // A refused plan (budget cap, drawn pages) is not a plan: nothing for the user to review.
+        if (outcome.status === 'blocked') return outcome.message;
+        state.plannedThisTurn = true;
+        const cast = castUncastBeings(ctx);
+        return `${outcome.message}${cast} The user reviews the plan on the board before any page is drawn.`;
       }
     ),
 
     define(
       'revise_pages',
       'text',
-      'Rewrite specific pages of the plan following instructions (e.g. "make page 2 a splash", "Maya should be angrier"). Drawn pages become out of date, never wiped.',
+      'Rewrite specific pages of the plan following instructions (e.g. "make page 2 a splash"). Drawn pages become out of date, never wiped.',
       schema({ pages: A({ type: 'integer' }, 'Page numbers to rewrite.'), instructions: S('What to change.') }, ['pages', 'instructions']),
       async (args) => {
         const d = doc();
@@ -786,14 +1131,16 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!pages.length) throw argError('Pass the page numbers to rewrite.');
         guardPaidText(ctx, state);
         const outcome = await planPages(ctx, { instructions, pageIds: pages.map((p) => p.id) }, { collectCard: (c) => state.cards.push(c) });
-        return outcome.message;
+        if (outcome.status === 'blocked') return outcome.message;
+        state.plannedThisTurn = true;
+        return `${outcome.message}${castUncastBeings(ctx)}`;
       }
     ),
 
     define(
       'read_pages',
       'free',
-      'Read the full script of planned pages (panels, cast, dialogue with line kinds) before editing them.',
+      'Read the full script of planned pages (panels, cast, numbered lines) before editing them.',
       schema({ pages: A({ type: 'integer' }, 'Page numbers.') }, ['pages']),
       (args) => {
         const d = doc();
@@ -807,7 +1154,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
               ...p.panels.map(
                 (panel) =>
                   `  Panel ${panel.n} (${panel.size}, ${panel.shot}): ${panel.action}${panel.castIds.length ? ` | Cast: ${panel.castIds.map(name).join(', ')}` : ''}` +
-                  panel.lines.map((l) => `\n    ${l.kind}${l.speakerId ? ` ${name(l.speakerId)}` : ''}: "${l.text}"`).join('')
+                  panel.lines.map((l, i) => `\n    ${i + 1}. ${l.kind}${l.speakerId ? ` ${name(l.speakerId)}` : ''}: "${l.text}"`).join('')
               )
             ].join('\n')
           )
@@ -819,7 +1166,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
     define(
       'edit_panel_text',
       'free',
-      "Replace ALL dialogue/captions of one panel with the given lines (exact text). Use [] to make it silent.",
+      'Set one panel\'s lines (exact text; [] = silent). Matching lines keep their balloon and translations.',
       schema(
         {
           page: I('Page number.'),
@@ -830,11 +1177,13 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
               properties: {
                 kind: S('Line kind.', { enum: LINE_KINDS }),
                 speaker: S('Speaker name (speech/thought/whisper/shout).'),
-                text: S('Exact text, ≤ 25 words.')
+                text: S('Exact text.'),
+                style: LETTERING_STYLE_ARGS_COMPACT,
+                position: S('Balloon spot.', { enum: POSITIONS })
               },
               required: ['kind', 'text']
             },
-            'The panel’s new lines in reading order (≤ 3 balloons).'
+            'The panel’s lines in reading order (≤ 3 balloons).'
           )
         },
         ['page', 'panel', 'lines']
@@ -846,57 +1195,203 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         const panel = page.panels.find((p) => p.n === int(args.panel));
         if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
         if (!Array.isArray(args.lines)) throw argError('Pass lines as a list (empty for a silent panel).');
-        const lines: Line[] = [];
+        type Wanted = Omit<Line, 'id'> & { position?: Position };
+        const wanted: Wanted[] = [];
         const addCast = new Set<string>();
+        const offPanel = new Set<string>();
         for (const raw of args.lines.slice(0, 6)) {
           if (!isObject(raw)) continue;
           const kind = LINE_KINDS.includes(raw.kind as LineKind) ? (raw.kind as LineKind) : 'speech';
-          const lineText = typeof raw.text === 'string' ? raw.text.trim().slice(0, 600) : '';
+          const lineText = typeof raw.text === 'string' ? enteredText(raw.text, 600) : '';
           if (!lineText) continue;
-          const line: Line = { id: newId('l'), kind, text: lineText };
+          const line: Wanted = { kind, text: lineText };
           if (SPOKEN.has(kind)) {
             const speaker = resolveCharacter(d, text(raw.speaker, 80));
             if (!speaker) throw argError(`Unknown speaker "${text(raw.speaker, 80)}". Cast: ${castList(d)}.`);
             line.speakerId = speaker.id;
-            if (!panel.castIds.includes(speaker.id)) addCast.add(speaker.id);
+            // A speaker in a pov / insert / establishing shot is a legitimate off-panel voice (heard, not drawn):
+            // never pushed into castIds (that would change the drawn spec and ask for them to be drawn).
+            if (!panel.castIds.includes(speaker.id)) (OFF_PANEL_SHOTS.has(panel.shot) ? offPanel : addCast).add(speaker.id);
           }
-          lines.push(line);
+          const style = lineStyleFromArgs(d, { id: '', kind, text: lineText, ...(line.speakerId ? { speakerId: line.speakerId } : {}) } as Line, raw.style);
+          if (style) line.style = style;
+          if (typeof raw.position === 'string' && (POSITIONS as readonly string[]).includes(raw.position)) line.position = raw.position as Position;
+          wanted.push(line);
         }
-        const ops: DocOp[] = [
-          ...panel.lines.map((l): DocOp => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: null })),
-          ...lines.map((l): DocOp => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: l }))
-        ];
+        // Keep line ids positionally when kind + speaker match (i18n.md §4.3): balloons keep their
+        // pins, translations go stale instead of vanishing, and history shows an edit.
+        const old = panel.lines;
+        const reused = wanted.map((w, i) => (old[i] && old[i].kind === w.kind && (old[i].speakerId ?? '') === (w.speakerId ?? '') ? old[i] : undefined));
+        const keep = new Set(reused.filter((l): l is Line => !!l).map((l) => l.id));
+        const ops: DocOp[] = old.filter((l) => !keep.has(l.id)).map((l): DocOp => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: null }));
+        const finalIds: string[] = [];
+        const positioned: { id: string; position: Position }[] = [];
+        wanted.forEach((w, i) => {
+          const prev = reused[i];
+          const { position, ...line } = w;
+          if (prev) {
+            const patch: Partial<Line> = {};
+            if (prev.text !== line.text) patch.text = line.text;
+            if (line.style) patch.style = line.style;
+            if (Object.keys(patch).length) ops.push({ op: 'line', pageId: page.id, panelId: panel.id, id: prev.id, patch });
+            finalIds.push(prev.id);
+          } else {
+            const id = newId('l');
+            ops.push({ op: 'line', pageId: page.id, panelId: panel.id, id, patch: { ...line, id }, index: i });
+            finalIds.push(id);
+          }
+          if (position && d.format.lettering === 'overlay') positioned.push({ id: finalIds[i], position });
+        });
         if (addCast.size) ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, ...addCast] } });
-        commit(ops);
-        const long = lines.filter((l) => (l.text.match(/\S+/g) || []).length > 25).length;
-        return `Page ${page.n} panel ${panel.n} now has ${lines.length} line${lines.length === 1 ? '' : 's'}.${addCast.size ? ' Added the speaker to the panel.' : ''}${long ? ' Some lines exceed 25 words — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date.' : ''}`;
+        if (positioned.length) {
+          // Placed on the page as it will be after this edit (new lines exist), by the lettering engine:
+          // the balloon's real outline stays inside its panel and the safe area. A 9-grid box is the fallback.
+          const preview = applyOps(d, ops);
+          const previewPage = preview.pages.find((p) => p.id === page.id);
+          for (const { id, position } of positioned) {
+            const b = previewPage ? balloonAtPosition(preview, previewPage, id, position) : undefined;
+            ops.push(
+              b
+                ? { op: 'balloon', pageId: page.id, lineId: id, patch: { x: b.x, y: b.y, w: b.w, ...(typeof b.tailX === 'number' && typeof b.tailY === 'number' ? { tailX: b.tailX, tailY: b.tailY } : {}), pinned: true } }
+                : balloonAt(d, page, panel, id, position)
+            );
+          }
+        }
+        if (ops.length) commit(ops, `Page ${page.n} panel ${panel.n} text`);
+        const kept = reused.filter(Boolean).length;
+        const long = tooLong(d, wanted);
+        captured(`page ${page.n} panel ${panel.n}'s text`);
+        const budget = panelBudgetNote(doc(), page.id, panel.id);
+        const voices = [...offPanel].map((id) => doc().cast.find((c) => c.id === id)?.name).filter((n): n is string => !!n);
+        return `Page ${page.n} panel ${panel.n} now has ${wanted.length} line${wanted.length === 1 ? '' : 's'}${kept ? ` (${kept} kept in place)` : ''}.${addCast.size ? ' Added the speaker to the panel.' : ''}${voices.length ? ` ${joinList(voices.map(upper))} ${voices.length === 1 ? 'speaks' : 'speak'} off-panel (heard, not drawn — a ${panel.shot} shot).` : ''}${budget ? ` ${budget}` : ''}${long ? ' Some lines are long for a balloon — consider trimming.' : ''}${page.render.status === 'ready' && d.format.lettering === 'in_art' ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ''}`;
+      }
+    ),
+
+    define(
+      'set_line',
+      'free',
+      'Change ONE line in place (kind e.g. thought bubble, speaker or text); its balloon stays. line = number from read_pages.',
+      schema(
+        {
+          page: I('Page number.'),
+          panel: I('Panel number.'),
+          line: I('1-based line in the panel.'),
+          kind: S('Kind.', { enum: LINE_KINDS }),
+          speaker: S('Speaker name.'),
+          text: S('Exact text.')
+        },
+        ['page', 'panel', 'line']
+      ),
+      (args) => {
+        const d = doc();
+        const page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
+        if (!page) throw argError('Pass the page number.');
+        const panel = page.panels.find((p) => p.n === int(args.panel));
+        if (!panel) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
+        const n = int(args.line);
+        const line = n !== undefined ? panel.lines[n - 1] : undefined;
+        if (!line) throw argError(panel.lines.length ? `Page ${page.n} panel ${panel.n} has lines 1–${panel.lines.length}.` : `Page ${page.n} panel ${panel.n} has no lines — use edit_panel_text.`);
+        const patch: Partial<Line> = {};
+        const kind = LINE_KINDS.includes(args.kind as LineKind) ? (args.kind as LineKind) : undefined;
+        const newText = typeof args.text === 'string' ? args.text.trim().slice(0, 600) : '';
+        if (kind && kind !== line.kind) patch.kind = kind;
+        if (newText && newText !== line.text) patch.text = newText;
+        const finalKind = kind ?? line.kind;
+        let speakerId = line.speakerId;
+        if (text(args.speaker, 80)) {
+          const speaker = resolveCharacter(d, text(args.speaker, 80));
+          if (!speaker) throw argError(`Unknown speaker "${text(args.speaker, 80)}". Cast: ${castList(d)}.`);
+          speakerId = speaker.id;
+        }
+        if (SPOKEN.has(finalKind)) {
+          if (!speakerId) throw argError(`A ${finalKind} line needs a speaker. Cast: ${castList(d)}.`);
+          if (speakerId !== line.speakerId) patch.speakerId = speakerId;
+        } else if (line.speakerId) {
+          patch.speakerId = undefined;
+        }
+        if (!Object.keys(patch).length) throw argError('Nothing to change on that line.');
+        const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: panel.id, id: line.id, patch }];
+        // An off-panel voice (pov / insert / establishing shot) stays out of castIds (heard, not drawn).
+        if (patch.speakerId && !panel.castIds.includes(patch.speakerId) && !OFF_PANEL_SHOTS.has(panel.shot)) {
+          ops.push({ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: [...panel.castIds, patch.speakerId] } });
+        }
+        commit(ops, `Page ${page.n} panel ${panel.n} line ${n}`);
+        captured(`page ${page.n} panel ${panel.n} line ${n}`);
+        const inArt = d.format.lettering === 'in_art' && page.render.status === 'ready';
+        // A changed text or kind changes what the panel must hold: report its budget like edit_panel_text (plan §4.1).
+        const budget = 'text' in patch || 'kind' in patch ? panelBudgetNote(doc(), page.id, panel.id) : undefined;
+        return `Updated page ${page.n} panel ${panel.n} line ${n}${patch.kind ? ` (now ${patch.kind})` : ''}.${budget ? ` ${budget}` : ''}${inArt ? ' The page is lettered in the art, so it is now out of date (redraw is PAID).' : ' Free — no redraw needed.'}`;
       }
     ),
 
     define(
       'render_pages',
       'paid',
-      'Draw pages from the plan: by default every undrawn or out-of-date page; with page numbers, those pages are (re)drawn. Draws missing character sheets first. Spends money; may need approval. Only after the user saw the plan.',
-      schema({ pages: A({ type: 'integer' }, 'Page numbers to (re)draw; omit for all that need it.') }),
+      'Draw undrawn/out-of-date pages (no pages = all; "draw everything" adds include_cover). Never redraws a current page unless redraw:true (only when the user asked for another take). $0 when nothing needs drawing.',
+      schema({
+        pages: A({ type: 'integer' }, 'Limit to these pages.'),
+        redraw: B('New take of current pages.'),
+        include_cover: B('Also draw a missing cover.'),
+        safe: B('A tamer take.'),
+        draw_anyway: A({ type: 'integer' }, 'Pages held back for too many words to draw anyway (only when the user says so).')
+      }),
       (args) => {
         const d = doc();
         if (d.planStatus === 'none' || !d.pages.length) {
           return 'Refused: there is no page plan yet. Call plan_pages first and let the user review the plan before drawing.';
         }
+        if (state.plannedThisTurn && !SKIP_REVIEW_RE.test(state.userText)) {
+          return "Refused: the user hasn't seen this plan yet — it is on the board now. Show it in one line and ask before drawing.";
+        }
         const numbers = intList(args.pages);
         const pages = numbers.length ? pagesByNumbers(d, numbers) : [];
-        return spend(ctx, state, {
-          type: 'render_pages',
-          ...(pages.length ? { pageIds: pages.map((p) => p.id), force: true } : {})
-        });
+        const ids = pages.map((p) => p.id);
+        const anyway = pagesByNumbers(d, intList(args.draw_anyway)).map((p) => p.id);
+        const safe = args.safe === true;
+        const wantsRedraw = args.redraw === true;
+        const redraw = wantsRedraw && state.drawIntent === 'redraw';
+        const scope = pages.length ? pages : [...d.pages].sort((a, b) => a.n - b.n);
+        const current = scope.filter((p) => p.render.status === 'ready' && !isPageStale(d, p));
+        if (wantsRedraw && !redraw && current.length) {
+          const first = current[0];
+          return `Not redrawn: ${pageWord(current)} ${current.length === 1 ? 'is' : 'are'} already drawn and current, and the user didn't ask for a new take. Offer: read it, ${coverNeedsDraw(d) ? 'make the cover, ' : ''}or a new take of page ${first.n} (${cost.approx(priceOf(ctx, 'page'))}).`;
+        }
+        // A safer take re-draws only the pages named (flagged ones), never the whole book.
+        const saferRedraw = safe && ids.length > 0;
+        const targets = drawablePages(d, { ...(ids.length ? { pageIds: ids } : {}), force: redraw || saferRedraw });
+        const coverToo = args.include_cover === true && coverNeedsDraw(d);
+        if (!targets.length && !coverToo) {
+          // $0: nothing to draw — say so, show the book, offer next steps (never a redundant redraw).
+          state.outcome = 'nothing';
+          state.cards.push({ type: 'breakdown', id: newId('card'), view: 'status', cover: true, ...(ids.length ? { pageIds: ids } : {}) });
+          pushNextSteps(state, nothingNextSteps(d, byok()));
+          const busy = scope.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering');
+          if (busy.length) return `Nothing new to start: ${pageWord(busy)} ${busy.length === 1 ? 'is' : 'are'} already drawing. Nothing was spent.`;
+          return `Nothing to draw: ${pages.length ? pageWord(current.length ? current : scope) : 'every page'} ${pages.length === 1 ? 'is' : 'are'} already drawn and up to date — nothing was spent.${coverNeedsDraw(d) ? ` The cover isn't drawn yet (${cost.approx(priceOf(ctx, 'cover'))}).` : ''} Offer: read it, add a page, or a new take only if the user asks.`;
+        }
+        if (!targets.length && coverToo) return spend(ctx, state, { type: 'render_cover', ...(safe ? { safe: true } : {}) }, forcedGateReason(d, state, 'cover'));
+        return spend(
+          ctx,
+          state,
+          {
+            type: 'render_pages',
+            ...(ids.length ? { pageIds: ids } : {}),
+            ...(redraw || saferRedraw ? { force: true } : {}),
+            ...(coverToo ? { includeCover: true } : {}),
+            ...(safe ? { safe: true } : {}),
+            // "Render all" holds back overfull pages (plan §4.1, PD-1); the user's "draw it anyway" names them.
+            ...(!ids.length && anyway.length ? { drawOverfull: anyway } : {})
+          },
+          forcedGateReason(d, state, 'pages', { redraw: redraw || (saferRedraw && current.some((p) => targets.includes(p))) })
+        );
       }
     ),
 
     define(
       'edit_page',
       'paid',
-      'Change part of a DRAWN page with an instruction (e.g. "make it night", "Maya smiles"), optionally limited to one panel. Everything else is kept. Spends money; may need approval.',
-      schema({ page: I('Page number.'), instruction: S('What to change, concretely.'), panel: I('Panel number (optional).') }, ['page', 'instruction']),
+      'Change part of a DRAWN page ("make it night"), optionally one panel. Never for text or balloons (free).',
+      schema({ page: I('Page number.'), instruction: S('What to change, concretely.'), panel: I('Panel number (optional).'), safe: B('A tamer take.') }, ['page', 'instruction']),
       (args) => {
         const d = doc();
         const page = pagesByNumbers(d, intList(args.page).slice(0, 1))[0];
@@ -908,32 +1403,63 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         if (!instruction) throw argError('Say what to change.');
         const panelN = int(args.panel);
         if (panelN !== undefined && !page.panels.some((p) => p.n === panelN)) throw argError(`Page ${page.n} has panels 1–${page.panels.length}.`);
-        return spend(ctx, state, { type: 'edit_page', pageId: page.id, instruction, ...(panelN !== undefined ? { panelN } : {}) });
+        return spend(
+          ctx,
+          state,
+          { type: 'edit_page', pageId: page.id, instruction, ...(panelN !== undefined ? { panelN } : {}), ...(args.safe === true ? { safe: true } : {}) },
+          forcedGateReason(d, state, 'edit')
+        );
       }
     ),
 
     define(
       'render_cover',
       'paid',
-      'Draw the cover. Optional title/tagline/direction override what is shown. Spends money; may need approval.',
-      schema({ title: S('Cover title (defaults to the comic title).'), tagline: S('Short tagline.'), direction: S('Cover composition idea.') }),
+      'Draw the cover. Title/tagline edits on a textless cover are FREE. textless:true = one-time re-render with an editable title.',
+      schema({
+        title: S('Cover title (defaults to the comic title).'),
+        tagline: S('Short tagline.'),
+        direction: S('Cover composition idea.'),
+        textless: B('Re-render without painted text.'),
+        safe: B('A tamer take.')
+      }),
       (args) => {
+        const d = doc();
+        const cover = d.cover;
         const patch: Record<string, string> = {};
         const title = text(args.title, 200);
         const tagline = text(args.tagline, 300);
         const direction = text(args.direction, 1500);
-        if (title) patch.title = title;
-        if (tagline) patch.tagline = tagline;
-        if (direction) patch.direction = direction;
-        if (Object.keys(patch).length) commit([{ op: 'cover', patch }]);
-        return spend(ctx, state, { type: 'render_cover' });
+        if (title && title !== cover.title) patch.title = title;
+        if (tagline && tagline !== cover.tagline) patch.tagline = tagline;
+        if (direction && direction !== cover.direction) patch.direction = direction;
+        const overlay = (cover.lettering ?? 'in_art') === 'overlay';
+        const drawn = cover.render.status === 'ready' && !!cover.render.asset;
+        const textOnly = (!!patch.title || !!patch.tagline) && !patch.direction;
+        if (Object.keys(patch).length) commit([{ op: 'cover', patch }], 'Cover text');
+        if (drawn && overlay && textOnly && args.textless !== true) {
+          captured('the cover title');
+          return 'Updated the cover text — free, it is lettered on top of the art (no redraw).';
+        }
+        const safe = args.safe === true ? { safe: true } : {};
+        if (args.textless === true) {
+          if (overlay && drawn) return 'The cover is already textless with an editable title — title changes are free.';
+          return spend(ctx, state, { type: 'render_cover', textless: true, ...safe }, forcedGateReason(d, state, 'cover'));
+        }
+        const current = drawn && !isTargetStale(doc(), { kind: 'cover' });
+        if (current && !Object.keys(patch).length && !args.safe && state.drawIntent !== 'redraw') {
+          state.outcome = 'nothing';
+          return `Nothing to draw: the cover is already drawn and up to date — nothing was spent. A new take (${cost.approx(priceOf(ctx, 'cover'))}) only if the user asks.`;
+        }
+        const redraw = current && !Object.keys(patch).length && state.drawIntent === 'redraw';
+        return spend(ctx, state, { type: 'render_cover', ...safe }, forcedGateReason(d, state, 'cover', { redraw }));
       }
     ),
 
     define(
       'set_settings',
       'free',
-      'Tighten money settings: lower the quality tier, require more confirmations, lower the "big spend" threshold, or set/lower a budget cap in USD. Upgrading quality or loosening confirmations/budget is the user\'s call — tell them to use the quality chip or Settings.',
+      'Tighten money settings: lower the quality tier, require more confirmations, lower the "big spend" threshold, or set/lower a budget cap in USD. Loosening is the user\'s call (quality chip or Settings).',
       schema({
         quality: S('Quality tier.', { enum: QUALITY_TIERS }),
         confirm: S('always = confirm every spend; big = only above the threshold; never = only the budget stops spend.', { enum: CONFIRM_POLICIES }),
@@ -968,16 +1494,51 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
             `Only the user can change ${loosened.join(', ')} (it raises what can be spent). Tell them to tap the quality chip under the message box or open Settings — one tap — and do not retry this call.`
           );
         }
-        commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }]);
+        // Model lock (decisions-final, owner 2026-10-22 evening; models.md §3.4 #6): no director tool can
+        // change the image model. Once the comic has its first comic image (a sheet, place, page or cover —
+        // style swatches never lock), the director never changes the quality tier: on a locked comic it only
+        // changes the resolution of new pages (light confirm, §3.6 E). Before the lock, a lower tier is allowed
+        // only when it keeps the same model (resolution only) — a tier that picks another model (Pro → Standard
+        // while Pro is Nano Banana Pro) would change the model the comic locks to.
+        if (patch.quality && patch.quality !== current.quality) {
+          const lock = deriveLock(doc());
+          if (lock) {
+            const name = getImageModel(lock.modelId)?.nickname ?? lock.modelId;
+            const res = resolveImageJob('page', patch.quality, current.imageModelOverride, lock).resolution;
+            throw argError(
+              `Locked comic: resolution changes are the user's call. Offer the quality chip. The comic stays on ${name} (locked so every page matches); ${patch.quality} would only draw new pages at ${res}, and the user confirms that in the quality chip. No tool can change the image model — for another model, use model_options and offer the picker chip. Do not retry this call.`
+            );
+          }
+          const tierModels = (tier: typeof current.quality) =>
+            (['page', 'cover', 'sheet'] as const).map((kind) => resolveImageJob(kind, tier, current.imageModelOverride).spec);
+          const before = tierModels(current.quality);
+          const after = tierModels(patch.quality);
+          const changed = after.findIndex((spec, i) => spec.id !== before[i].id);
+          if (hasLockedImage(doc())) {
+            // A drawn comic image whose model is unknown: its model is fixed even though no lock names it.
+            const from = before[0].nickname;
+            const to = after[0].nickname;
+            throw argError(
+              `Locked comic: its images are drawn on ${from}${from !== to ? ` and ${patch.quality} would switch to ${to}` : ` at ${current.quality} quality`}, which can change how the characters look. Quality changes are the user's call — tell them to tap the quality chip (it shows the consistency warning and the real redraw cost). Do not retry this call.`
+            );
+          }
+          if (changed >= 0) {
+            throw argError(
+              `${patch.quality} would switch the image model from ${before[changed].nickname} to ${after[changed].nickname}, which can change how the characters look. The image model is the user's call (it locks at the first comic image) — tell them to tap the quality chip; it shows the model and asks first. No tool can change the image model. Do not retry this call.`
+            );
+          }
+        }
+        commit([{ op: 'settings', patch: clearsBudget ? { ...patch, budgetUsd: undefined } : patch }], 'Money settings');
         const s = doc().settings;
-        return `Settings: ${s.quality} quality; confirm ${s.confirm}${s.confirm === 'big' ? ` (above ${formatUsd(s.bigSpendUsd)})` : ''}; budget ${s.budgetUsd ? formatUsd(s.budgetUsd) : 'none'}.`;
+        captured('your money settings');
+        return `Settings: ${s.quality} quality; confirm ${s.confirm}${s.confirm === 'big' ? ` (above ${cost(s.bigSpendUsd)})` : ''}; budget ${s.budgetUsd ? cost(s.budgetUsd) : 'none'}.`;
       }
     ),
 
     define(
       'ask_user',
       'free',
-      'Ask the user ONE question with 2–5 tappable options (propose a sensible default first). End your turn right after calling this.',
+      'Ask ONE question with 2–5 tappable options (default first; price in descriptions of options that spend).',
       schema(
         {
           question: S('The question, short.'),
@@ -986,7 +1547,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
               type: 'object',
               properties: {
                 label: S('Chip label, ≤ 5 words.'),
-                description: S('Optional one-line detail.'),
+                description: S('Optional one-line detail (price when it spends).'),
                 reply: S('Message sent when tapped (defaults to the label).')
               },
               required: ['label']
@@ -1026,7 +1587,7 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
         });
         state.askedUser = true;
         state.question = question;
-        return 'Asked — the question and options are shown to the user. End your turn now with at most one short sentence.';
+        return 'Asked — the options are on screen. (Your reply in this message is what the user reads; if you wrote none, the studio adds a one-line recap.)';
       }
     )
   ];
@@ -1050,12 +1611,43 @@ export interface TurnToolset {
   activity: Record<string, string>;
 }
 
+/**
+ * Words that make a feature group relevant to THIS turn. When the per-turn cap must trim,
+ * relevant groups are kept first (then by priority), so "make the shouts red" never loses the
+ * lettering tools to an unrelated group. Tuned on the golden set (golden/scenarios/*.json).
+ */
+export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
+  lettering: /\b(fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?)\b/i,
+  timeline: /\b(move|swap|switch|insert|add (?:a|one|another) page|delete|remove (?:page|it)|duplicate|copy|versions?|undo|restore|earlier|previous|original|fit|square|book|back cover|title page)\b/i,
+  publish: /\b(publish|share|link|unpublish|public|unlisted|readers?|post it|send (?:it|the link)|whats ?app|instagram)\b/i,
+  i18n: /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|portuguese|edition)\b|[\u0900-\u0DFF]/i,
+  refs: /\b(photos?|pictures?|images?|pics?|references?|refs?|selfie)\b/i,
+  safety: /\b(rating|pg-?13|pg\b|safe|safety|gore|violent|violence|scary|horror|blood)\b/i,
+  library: /\b(presets?|styles?|looks?|library)\b/i,
+  reader: /\b(reader|page turn|chapters?|dedication|credits|guided)\b/i,
+  breakdown: /\b(pages?|panels?|breakdown|plan|cost|price|quote|how much|status|left)\b/i,
+  // models.md §3.8: a model ask ("just switch it to GPT") also wakes the timeline ("switch"); the models group must stay
+  // in the budget so model_options is offered. Only an explicit model ask (MODEL_ASK_RE): the wider MODEL_HINT_RE
+  // ("too expensive", "consistent", "sharper") put models ahead of the timeline on page actions and the cap trimmed
+  // move/insert/duplicate/delete_page and use_version. A getter: tools/models.ts imports this module, so its hint is
+  // read when a turn is built, never while the two modules load.
+  get models() {
+    return MODEL_ASK_RE;
+  }
+};
+
+const groupRelevant = (g: ToolGroup, turn: DirectorTurn): boolean => {
+  const hint = GROUP_HINTS[g.id];
+  if (g.id === 'refs' && (turn.attachments.length || turn.images.length)) return true;
+  return !!hint && hint.test(turn.userText || '');
+};
+
 const groupFailed = (ctx: StudioContext, id: string, stage: string, err: unknown) =>
   logger.warn('comic_tool_group_failed', { projectId: ctx.projectId, group: id, stage, message: (err as Error)?.message });
 
 /**
- * Merge the core tools with the feature groups that pass their phase gate, by priority
- * (lower first; ties keep registration order). Groups are kept or dropped WHOLE so a
+ * Merge the core tools with the feature groups that pass their phase gate — groups relevant to
+ * this turn's words first (GROUP_HINTS), then by priority (lower first; ties keep registration order). Groups are kept or dropped WHOLE so a
  * feature is never half-offered; one that would push the turn past MAX_TOOLS_PER_TURN
  * is skipped (a smaller, lower-priority group may still fit). Tool names are unique:
  * a feature tool can never shadow a core tool or an earlier group's. A group that throws
@@ -1073,7 +1665,9 @@ export function buildTurnToolset(
   const names = new Set(tools.map((t) => t.spec.function.name));
   const out: TurnToolset = { tools, groups: [], promptRules: [], summaryLines: [], activity: {} };
   const doc = ctx.session.doc;
-  const ordered = groups.map((g, i) => ({ g, i })).sort((a, b) => a.g.priority - b.g.priority || a.i - b.i);
+  const ordered = groups
+    .map((g, i) => ({ g, i, hot: groupRelevant(g, turn) ? 0 : 1 }))
+    .sort((a, b) => a.hot - b.hot || a.g.priority - b.g.priority || a.i - b.i);
   for (const { g } of ordered) {
     if (g.activity) Object.assign(out.activity, g.activity);
     let offered: DirectorTool[];

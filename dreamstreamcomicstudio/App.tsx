@@ -21,6 +21,14 @@ const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
+// Comic Studio's own front page on comics.dreamstreamstudio.ai (components/comicshost).
+const ComicsLanding = lazyImportWithRetry(() => import('./components/comicshost/ComicsLanding').then(module => ({ default: module.ComicsLanding })));
+// The public, read-only share reader for /c/<slug> (sharing.md §7.1).
+const PublicComicReader = lazyImportWithRetry(() => import('./components/comicstudio/PublicComicReader').then(module => ({ default: module.PublicComicReader })));
+// Font QA lab (per-script lettering faces) — development builds only; production never ships the chunk.
+const FontLab = import.meta.env.DEV
+  ? lazyImportWithRetry(() => import('./components/comicstudio/i18n/FontLab').then(module => ({ default: module.FontLab })))
+  : null;
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -58,6 +66,9 @@ import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
+import { useComicsHost } from './components/comicshost/useComicsHost';
+import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
+import { subscribeKeyboardInset } from './components/comicstudio/mobile/useKeyboardInset';
 import { STREAM_HOST_ON, STREAM_ORIGIN, isStreamUrl } from './shared/streamHost';
 import { openLiveApp } from './services/liveLink';
 import { safeNext } from './services/safeNext';
@@ -88,7 +99,11 @@ type AppView =
   | 'pagestudio'
   | 'comicstudio'
   | 'ventures'
-  | 'shared';
+  | 'shared'
+  // The public, read-only share reader: /c/<slug>[/<title-tail>|/embed]. Its own URL; no suite chrome.
+  | 'publiccomic'
+  // Development-only font lab (?view=fontlab).
+  | 'fontlab';
 
 // Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
 // Path/param-managed views (reader, shared, auth-callback, models) are intentionally excluded —
@@ -208,8 +223,18 @@ const App: React.FC = () => {
   const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
   const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
 
-  // Simple routing state
-  const [currentView, setCurrentView] = useState<AppView>('home');
+  // Simple routing state. A /c/<slug> share link is decided before the first paint (no flash of the
+  // home page under the reader's boot card).
+  const [publicComicRoute] = useState<PublicComicRoute | null>(() => (typeof window === 'undefined' ? null : parsePublicComicPath(window.location.pathname)));
+  const [currentView, setCurrentView] = useState<AppView>(() => (publicComicRoute ? 'publiccomic' : 'home'));
+  // comics.dreamstreamstudio.ai = Comic Studio's own host: signed-in visitors boot into their comics,
+  // signed-out ones see the Comic Studio landing, other products open on the main site. Inert elsewhere.
+  const comicsHost = useComicsHost({ view: currentView, setView: setCurrentView, signedIn: !!user, ready: !authLoading && !isCheckingKey });
+  // Full-screen surfaces size to the visible height (--app-h) and keep sheets above the keyboard (--kb).
+  // App only needs the CSS variables, so it attaches the shared store without subscribing to its
+  // value: a keyboard animation or a viewport pan never re-renders the whole app tree.
+  const keyboardInsetHost = currentView === 'comicstudio' || currentView === 'reader' || currentView === 'publiccomic';
+  useEffect(() => (keyboardInsetHost ? subscribeKeyboardInset(() => undefined) : undefined), [keyboardInsetHost]);
 
   // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
   // (window.opener is set) and the callback bounced back with a result, post it to the
@@ -241,6 +266,7 @@ const App: React.FC = () => {
   // so the check stays in the deps).
   useEffect(() => {
     if (streamOnlyRedirectedRef.current) return;
+    if (publicComicRoute) return; // a share link is read by anyone, whatever their account can do
     if (authLoading || !user || isAdmin) return;
     if (!allowedProducts) return; // unrestricted or still unknown
     if (allowedProducts.size === 1 && allowedProducts.has('stream_studio')) {
@@ -259,6 +285,8 @@ const App: React.FC = () => {
   // 15 minutes so a stale value can't ambush a later, unrelated sign-in.
   useEffect(() => {
     if (authLoading) return;
+    // A share link never turns into a sign-in page (it is read-only, for anyone).
+    if (publicComicRoute) return;
     // An emailed or handoff sign-in link finishes in the /auth/callback handler, which
     // follows its own `next` once the link is verified.
     if (window.location.pathname.replace(/\/+$/, '') === '/auth/callback') return;
@@ -274,6 +302,8 @@ const App: React.FC = () => {
   }, [authLoading]);
   useEffect(() => {
     if (!user) return;
+    // A share link is never redirected away; a pending hand-back waits for the next app load.
+    if (publicComicRoute) return;
     let saved: { path?: string; at?: number } | null = null;
     try {
       const raw = localStorage.getItem(POST_LOGIN_NEXT_KEY);
@@ -303,6 +333,9 @@ const App: React.FC = () => {
   const inviteRedeemInFlightRef = useRef(false);
   useEffect(() => {
     if (authLoading) return;
+    // A share link is read-only for everyone: it never captures or redeems an invite (a crafted
+    // /c/<slug>?invite=… must not act on the reader's account). Real invites land on /?invite=.
+    if (publicComicRoute) return;
     captureInviteCodeFromUrl();
     const code = getPendingInviteCode();
     if (!code) return;
@@ -336,7 +369,9 @@ const App: React.FC = () => {
   const [pendingReaderTarget, setPendingReaderTarget] = useState<PendingReaderTarget | null>(null);
   // A shared reader link opened cold (?view=read&id=…): held until the reader deep-link effect below has read it,
   // so the URL-sync effect cannot rewrite it to '/' first (which sent every cold shared link to the home page).
-  const readerDeepLinkRef = useRef<string | null>(typeof window === 'undefined' ? null : readerDeepLinkId(window.location.search));
+  const readerDeepLinkRef = useRef<string | null>(
+    typeof window === 'undefined' || isPublicComicPath(window.location.pathname) ? null : readerDeepLinkId(window.location.search)
+  );
   const [pendingStudioTarget, setPendingStudioTarget] = useState<PendingStudioTarget | null>(null);
   const [shareToken, setShareToken] = useState<string | null>(null);
   const hasWarnedDobProfileCheckRef = useRef(false);
@@ -421,6 +456,9 @@ const App: React.FC = () => {
   useEffect(() => {
     // Surface backend/config problems to the console only — never block entry with a
     // full-screen error. Admins still get actionable details via checkSystemDiagnostics.
+    // Not on a share link: its whole read path runs at the edge, and a console-only status
+    // probe must not wake the backend container for every reader (sharing.md §1.4–1.5).
+    if (publicComicRoute) return;
     checkSystemStatus()
       .then((res) => {
         if (res.status === 'error') {
@@ -443,6 +481,8 @@ const App: React.FC = () => {
     } else if (path === '/models') {
       // Public, shareable model catalog — reachable logged-out (no auth gate on 'models').
       setCurrentView('models');
+    } else if (import.meta.env.DEV && new URLSearchParams(window.location.search).get('view') === 'fontlab') {
+      setCurrentView('fontlab');
     }
   }, []);
 
@@ -451,9 +491,10 @@ const App: React.FC = () => {
   // reads the param before the sync effect can rewrite it. Path/param-managed routes are skipped.
   useEffect(() => {
     const path = window.location.pathname;
-    if (path.startsWith('/share/') || path === '/models' || path.replace(/\/+$/, '') === '/auth/callback') return;
+    if (path.startsWith('/share/') || isPublicComicPath(path) || path === '/models' || path.replace(/\/+$/, '') === '/auth/callback') return;
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'read') return; // reader deep-link handled separately
+    if (params.get('view') === 'fontlab') return; // dev-only route, handled above
     const v = params.get('view');
     const studioTarget = resolveStudioDeepLink(params);
     if (studioTarget) {
@@ -480,7 +521,9 @@ const App: React.FC = () => {
   // their own URL (reader/shared/auth-callback/models) are left untouched. Uses replaceState so it
   // doesn't spam browser history on every transition.
   useEffect(() => {
-    if (currentView === 'reader' || currentView === 'shared' || currentView === 'auth-callback' || currentView === 'models') return;
+    // The public share reader owns its URL (?p=, ?lang=, and the immersive reader's own history entry).
+    if (currentView === 'reader' || currentView === 'shared' || currentView === 'auth-callback' || currentView === 'models' || currentView === 'publiccomic') return;
+    if (isPublicComicPath(window.location.pathname)) return;
     // A cold shared reader link is still waiting for the deep-link effect (it waits for auth): leave its URL alone.
     if (readerDeepLinkRef.current) return;
     try {
@@ -550,6 +593,8 @@ const App: React.FC = () => {
 
   // Sign-in links (/auth/callback, or the Site URL fallback '/'): a link this browser asked for
   // completes at once; any other link asks "Finish signing in?" first (hooks/useAuthLinkCallback).
+  // The hook reads links on those two paths only, so a share link (/c/<slug>) carrying
+  // auth-looking params — pasted, tracked or crafted — stays the comic, never an auth screen.
   const authLink = useAuthLinkCallback({
     onOpen: () => setCurrentView('auth-callback'),
     // "Not now": the link is dropped and whoever was signed in stays signed in.
@@ -592,12 +637,13 @@ const App: React.FC = () => {
   // Open shared links (?view=read&id=...) straight into the reader — no login required.
   useEffect(() => {
     if (authLoading || isCheckingKey) return;
+    // The deep link has been read (opened below, or the URL no longer asks for the reader): the URL-sync effect may run.
+    readerDeepLinkRef.current = null;
+    if (publicComicRoute) return; // /c/<slug> is its own reader; ?view=read on it means nothing
 
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view');
     const id = params.get('id');
-    // The deep link has been read (opened below, or the URL no longer asks for the reader): the URL-sync effect may run.
-    readerDeepLinkRef.current = null;
     if (view !== 'read' || !id) return;
 
     if (currentView === 'reader' && activeProjectId === id) return;
@@ -665,7 +711,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures'];
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'editor', 'pagestudio', 'comicstudio', 'reader', 'ventures', 'publiccomic'];
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
@@ -846,6 +892,8 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
+    // A share link never turns into a studio deep link (or a sign-in page for one).
+    if (publicComicRoute) return;
     let target = pendingStudioTarget;
     if (!target) {
       const params = new URLSearchParams(window.location.search);
@@ -962,8 +1010,11 @@ const App: React.FC = () => {
     );
   }
 
-  if (isCheckingKey || isHydratingProject || authLoading) {
-    return <AppLoader label={isHydratingProject ? 'Opening project…' : 'Loading…'} />;
+  // The share reader paints at once from its boot card; it never waits for auth or key checks
+  // (owner detection catches up through identityReady).
+  const publicComicActive = currentView === 'publiccomic' && !!publicComicRoute;
+  if (!publicComicActive && (isCheckingKey || isHydratingProject || authLoading || comicsHost.leaving)) {
+    return <AppLoader label={comicsHost.leaving ? 'Opening DreamStream…' : isHydratingProject ? 'Opening project…' : 'Loading…'} />;
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
@@ -987,19 +1038,25 @@ const App: React.FC = () => {
   // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
   // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
+  const showSharedHeader = !comicsHost.ownsChrome(effectiveView) && !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio', 'publiccomic'].includes(effectiveView);
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat' && effectiveView !== 'publiccomic';
   // Where the floating Universal Assistant appears (services/assistantChrome.ts).
   const assistant = assistantChrome(effectiveView);
   const showUniversalAssistant = assistant.mounted;
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
-  const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';
+  const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared' && effectiveView !== 'publiccomic';
   // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat
   // surface (it has its own inline feedback) and on the bare auth-callback / shared
   // viewer screens.
   // The v4 Comic Studio keeps its composer docked at the bottom, where the pill would sit on it.
-  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
+  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'publiccomic';
+  // Owner detection needs no request: the signed-in user's own listing rows carry their share slug.
+  const publicComicIsOwner =
+    !!publicComicRoute?.slug &&
+    !!user &&
+    projects.some((project) => isStudioV4Project(project) && (project.state as unknown as { shareSlug?: unknown })?.shareSlug === publicComicRoute.slug);
+  const publicComicIdentityReady = !authLoading && (!user || projectsLoaded);
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -1064,7 +1121,17 @@ const App: React.FC = () => {
         ) : (
         <Suspense fallback={<AppLoader />}>
           {/* Views */}
-          {effectiveView === 'home' && (
+          {effectiveView === 'home' && (comicsHost.active ? (
+            <ComicsLanding
+              signedIn={!!user}
+              onSignIn={() => goToAuth('signin')}
+              onRequestAccess={() => goToAuth('request-access')}
+              onOpenComics={() => handleNavigate('dashboard')}
+              onBrowseGallery={() => handleNavigate('gallery')}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+            />
+          ) : (
             <HomePage
               onEnterStudio={() => (user ? setCurrentView('dashboard') : setCurrentView('auth'))}
               onViewComics={() => setCurrentView('gallery')}
@@ -1072,7 +1139,7 @@ const App: React.FC = () => {
               onOpenTerms={() => setCurrentView('terms')}
               onNavigate={handleNavigate}
             />
-          )}
+          ))}
 
           {effectiveView === 'auth' && (
             <AuthPage
@@ -1180,7 +1247,7 @@ const App: React.FC = () => {
           {effectiveView === 'comicstudio' && activeProjectId && (
             // Full-bleed: the studio lays itself out in a viewport-tall box (h-screen is the
             // fallback where dynamic viewport units aren't supported).
-            <div className="h-screen w-full overflow-hidden" style={{ height: '100dvh' }}>
+            <div className="h-screen w-full overflow-hidden" style={{ height: 'var(--app-h, 100dvh)' }}>
               <StudioErrorBoundary onBack={leaveComicStudio}>
                 <ComicStudio key={activeProjectId} projectId={activeProjectId} onBack={leaveComicStudio} />
               </StudioErrorBoundary>
@@ -1236,6 +1303,21 @@ const App: React.FC = () => {
               onNavigate={handleNavigate}
             />
           )}
+
+          {effectiveView === 'publiccomic' && publicComicRoute && (
+            // Full-bleed and sized to the visible height; the reader pads its own safe areas.
+            <div className="w-full overflow-hidden bg-[var(--ds-canvas)]" style={{ height: 'var(--app-h, 100dvh)' }}>
+              <Suspense fallback={<div className="h-full w-full bg-[var(--ds-canvas)]" role="status" aria-label="Opening the comic" />}>
+                <PublicComicReader
+                  source={{ kind: 'slug', slug: publicComicRoute.slug, embed: publicComicRoute.embed }}
+                  isOwner={publicComicIsOwner}
+                  identityReady={publicComicIdentityReady}
+                />
+              </Suspense>
+            </div>
+          )}
+
+          {FontLab && effectiveView === 'fontlab' && <FontLab />}
 
           {effectiveView === 'shared' && shareToken && (
             <SharedViewer

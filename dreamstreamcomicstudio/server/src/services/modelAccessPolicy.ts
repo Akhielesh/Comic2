@@ -7,6 +7,7 @@ import {
   resolveFreeTextModel
 } from '../../../shared/freeModelPolicy.js';
 import { IMAGE_MODELS } from '../../../shared/comic/models.js';
+import { PAID_PLAN_IDS } from '../../../shared/comic/capabilities.js';
 
 export type ModelAccessScope = 'text' | 'vision' | 'assistant' | 'image';
 
@@ -45,8 +46,9 @@ const isMissingTableError = (error: unknown) => {
 };
 
 /** Paid plans get the full model list. 'creator' and 'custom' are paid too (they were
- *  previously capped as free — a paying Creator user hit the free image list). */
-const PAID_PLAN_TIERS = new Set(['creator', 'pro', 'studio', 'custom', 'admin']);
+ *  previously capped as free — a paying Creator user hit the free image list). Single
+ *  source with Comic Studio's caps: shared/comic/capabilities.ts PAID_PLAN_IDS. */
+const PAID_PLAN_TIERS: ReadonlySet<string> = new Set<string>(PAID_PLAN_IDS);
 
 export const toEffectiveTier = (planTier: BillingPlanTier | string | undefined): EffectiveModelTier => {
   const normalized = String(planTier || 'free').trim().toLowerCase();

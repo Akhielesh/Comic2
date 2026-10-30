@@ -1,12 +1,12 @@
-// Platform asset library HTTP surface (contract §14.1; assets.md). Wave-0 stub by P0-B;
-// owned in wave 1 by P1-LIBRARY, which replaces it IN PLACE (keep the export names). The
+// Platform asset library HTTP surface (contract §14.1; assets.md). Owned by P1-LIBRARY. The
 // router logic lives in ../comic/library/index.ts (createLibraryPublicRouter /
 // createLibraryAdminRouter); this file is what routes/comicMounts.ts mounts:
 //
 //   public  GET /api/comic/public/library                       ETag; 5-minute cache; mounted BEFORE /api/comic/public
 //   admin   /api/comic/admin/library/*                          requireAdmin; client-driven steps (n ≤ 3 per call)
 //
-// Stub behaviour: 501 NOT_AVAILABLE.
+// Both routers build their Supabase/storage/image dependencies lazily on the first request,
+// so importing this module never needs Supabase env (tests, the public build).
 
 import type { Router } from 'express';
 import { createLibraryAdminRouter, createLibraryPublicRouter } from '../comic/library/index.js';

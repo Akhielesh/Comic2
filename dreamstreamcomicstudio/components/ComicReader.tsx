@@ -14,16 +14,16 @@ import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
+import { halftone } from './comicstudio/library/procedural/textures';
+import { useBackLayer } from './comicstudio/mobile/backStack';
 import {
-  FullscreenFallbackHistoryContext,
   IOS_FULLSCREEN_NOTE,
   enterFullscreen,
   exitFullscreen,
   isFullscreenActive,
   markIosFullscreenNoteSeen,
   onFullscreenChange,
-  shouldShowIosFullscreenNote,
-  type FullscreenFallbackHistory
+  shouldShowIosFullscreenNote
 } from '../services/fullscreen';
 
 // Phones read in a "phone reading mode": no site header or footer inside the reader, Close and Full screen pinned
@@ -86,152 +86,30 @@ const PhoneSheet: React.FC<{ title: string; onClose: () => void; children: React
 
 // ── Back closes the reader ──────────────────────────────────────────────────────────────────────────────────
 // The app pushes ?view=read&id=… when a comic opens but never listens for Back, so on phones the Back gesture
-// changed the URL under an open reader and a second Back left the site. The reader now pushes ONE entry of its
-// own (same URL, state[READER_KEY] = project id); popping it (Back) closes the reader. The reading mode adds a
-// second entry so Back leaves it first. Every exit the reader controls (Close, the review prompt, Library, the
-// header, legal links) pops the reader's entries before acting, so a later Back never lands on a stale entry.
-const READER_KEY = '__dsReader';
-const READING_KEY = '__dsReadingMode';
-/** If a requested traversal never reports back (no popstate), the exit still happens after this long. */
-const HISTORY_SETTLE_MS = 800;
-
-const historyState = (): Record<string, unknown> => {
-  try {
-    const s: unknown = window.history.state;
-    return s && typeof s === 'object' ? (s as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-};
-
-interface ReaderHistory {
-  /**
-   * Leave the reader (close or navigate away): pop the reader's entries first, then run `action` once. A navigation
-   * (`final: false`) re-arms the reader afterwards, so if the app keeps it open its controls still work.
-   */
-  leave: (action: () => void, opts?: { final?: boolean }) => void;
-  /** The reading mode gets its own entry so the Back gesture leaves it before it closes the comic. */
-  pushReadingMode: () => void;
-  /** Leaving the reading mode with a control pops its entry (no-op when Back already did). */
-  popReadingMode: () => void;
-}
-
-const useReaderHistory = (id: string, onBack: () => void, onReadingModeBack?: () => void): ReaderHistory => {
-  const onBackRef = useRef(onBack);
-  const onReadingModeBackRef = useRef(onReadingModeBack);
-  onBackRef.current = onBack;
-  onReadingModeBackRef.current = onReadingModeBack;
-  const pendingRef = useRef<{ action: () => void; final: boolean } | null>(null);
-  const inFlightRef = useRef(false);
-  const doneRef = useRef(false);
-  const settleTimerRef = useRef<number | null>(null);
-
-  const ours = (s = historyState()) => s[READER_KEY] === id;
-
-  const runPending = useCallback(() => {
-    const pending = pendingRef.current;
-    if (!pending) return;
-    pendingRef.current = null;
-    doneRef.current = true;
-    if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current);
-    settleTimerRef.current = null;
-    pending.action();
-    if (!pending.final) doneRef.current = false;
-  }, []);
-
-  const goBack = useCallback(() => {
-    inFlightRef.current = true;
-    try {
-      window.history.back();
-    } catch {
-      inFlightRef.current = false;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.history) return;
-    doneRef.current = false;
-    // StrictMode (mount, unmount, mount) or a re-render with the same comic adopts the entry it already pushed.
-    if (!ours()) {
-      try {
-        const next: Record<string, unknown> = { ...historyState(), [READER_KEY]: id };
-        delete next[READING_KEY];
-        window.history.pushState(next, '', window.location.href);
-      } catch {
-        /* history unavailable (sandboxed frame): exits still work, Back just isn't intercepted */
-      }
-    }
-    const onPop = () => {
-      inFlightRef.current = false;
-      const s = historyState();
-      if (pendingRef.current) {
-        // Still on one of ours (the reading-mode entry, then the reader entry): keep unwinding, one step at a time.
-        if (ours(s)) goBack();
-        else runPending();
-        return;
-      }
-      if (doneRef.current) return;
-      if (!ours(s)) {
-        // The reader's entry was popped by Back: close (no review prompt in the way of a Back gesture).
-        doneRef.current = true;
-        onBackRef.current();
-        return;
-      }
-      if (s[READING_KEY] !== true) onReadingModeBackRef.current?.();
-    };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  useEffect(
-    () => () => {
-      if (settleTimerRef.current != null) window.clearTimeout(settleTimerRef.current);
-    },
-    []
-  );
-
-  const leave = useCallback(
-    (action: () => void, opts?: { final?: boolean }) => {
-      if (doneRef.current) return;
-      pendingRef.current = { action, final: opts?.final ?? true };
-      if (inFlightRef.current) return; // the traversal already under way continues the unwinding when it lands
-      if (!ours()) {
-        runPending();
-        return;
-      }
-      if (settleTimerRef.current == null) settleTimerRef.current = window.setTimeout(runPending, HISTORY_SETTLE_MS);
-      goBack();
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [id, goBack, runPending]
-  );
-
-  const pushReadingMode = useCallback(() => {
-    const s = historyState();
-    if (!ours(s) || s[READING_KEY] === true || doneRef.current) return;
-    try {
-      window.history.pushState({ ...s, [READING_KEY]: true }, '', window.location.href);
-    } catch {
-      /* ignore */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
-
-  const popReadingMode = useCallback(() => {
-    if (inFlightRef.current || doneRef.current) return;
-    const s = historyState();
-    if (ours(s) && s[READING_KEY] === true) goBack();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, goBack]);
-
-  return { leave, pushReadingMode, popReadingMode };
-};
+// changed the URL under an open reader and a second Back left the site. The reader is a layer on the Back stack
+// (components/comicstudio/mobile/backStack.ts): it holds ONE entry of its own ('reader:<project id>', same URL);
+// Back pops it and closes the reader. A full-screen fallback (the classic reading mode, the v4 viewport mode) is a
+// 'fullscreen' layer above it, so Back leaves that first. Every exit the reader controls (Close, the review prompt,
+// Library, the header, legal links) leaves through `leave`, which pops the reader's entries BEFORE it acts, so the
+// app rewrites the right entry and a later Back never lands on a stale one.
+const readerLayerKey = (projectId: string) => `reader:${projectId}`;
 
 // Comic Studio v4 comics (state.studioVersion === 4) keep their pages in a server-side
 // ComicDoc, not in the legacy panels this reader draws — they read in the v4 reader.
 const PublicComicReader = lazyImportWithRetry(() =>
   import('./comicstudio/PublicComicReader').then((module) => ({ default: module.PublicComicReader }))
+);
+
+// The FX toggle's halftone screen: the library's seamless dot tile (no seams on any screen size), laid
+// over the art like the old .comic-halftone (multiply at 16%), never catching taps.
+const HALFTONE_TILE = halftone({ cell: 4, angle: 45, color: '#000000', opacity: 0.55, radius: 0.3 });
+const HalftoneOverlay: React.FC = () => (
+  <span
+    aria-hidden
+    data-testid="reader-halftone"
+    className="pointer-events-none absolute inset-0 mix-blend-multiply"
+    style={{ backgroundImage: HALFTONE_TILE.css, backgroundSize: `${HALFTONE_TILE.size}px ${HALFTONE_TILE.size}px`, opacity: 0.16 }}
+  />
 );
 
 // Reveals its children with a comic "pop-in" the first time they scroll into view.
@@ -305,37 +183,35 @@ interface ComicReaderProps {
  * dashboard's Read). Classic comics render below; v4 studio comics delegate to the v4
  * PublicComicReader, which loads the published doc (or the signed-in owner's own,
  * unpublished one) from /api/comic/public/:id.
+ *
+ * Safe areas: both readers are full-screen layers, so they keep their chrome out of the notch,
+ * the rounded corners and the home indicator (env(safe-area-inset-*) via the --sa-* tokens; the
+ * v4 reader pads its own header and reader, the classic reader pads its frame on desktop and its
+ * floating phone chrome on phones).
  */
 export const ComicReader: React.FC<ComicReaderProps> = (props) => {
-  if (isStudioV4Project(props.project)) return <StudioComicReader projectId={props.project.id} onClose={props.onClose} />;
+  if (isStudioV4Project(props.project)) return <StudioComicReader projectId={props.project.id} isReadOnly={props.isReadOnly} onClose={props.onClose} />;
   return <ClassicComicReader {...props} />;
 };
 
-const StudioComicReader: React.FC<{ projectId: string; onClose: () => void }> = ({ projectId, onClose }) => {
-  // The v4 view's full-viewport fallback gets the reading-mode entry, so Back leaves it before closing the comic
-  // (as in the classic reading mode); a control leaving it pops the entry.
-  const viewportBackRef = useRef<(() => void) | null>(null);
-  const history = useReaderHistory(projectId, onClose, () => {
-    const onBack = viewportBackRef.current;
-    viewportBackRef.current = null;
-    onBack?.();
-  });
-  const { pushReadingMode, popReadingMode } = history;
-  const fallbackHistory = useMemo<FullscreenFallbackHistory>(
-    () => ({
-      push: (onBack) => {
-        viewportBackRef.current = onBack;
-        pushReadingMode();
-      },
-      pop: () => {
-        viewportBackRef.current = null;
-        popReadingMode();
-      }
-    }),
-    [pushReadingMode, popReadingMode]
-  );
+/** The classic reader's full-screen frame, inset by the device safe areas. */
+const SAFE_FRAME: React.CSSProperties = {
+  paddingTop: 'var(--sa-top)',
+  paddingRight: 'var(--sa-right)',
+  paddingBottom: 'var(--sa-bottom)',
+  paddingLeft: 'var(--sa-left)'
+};
+
+const StudioComicReader: React.FC<{ projectId: string; isReadOnly?: boolean; onClose: () => void }> = ({ projectId, isReadOnly, onClose }) => {
+  // Back closes the comic; the v4 view's own full-viewport fallback is a 'fullscreen' layer above this one, so Back
+  // leaves that first. Closing from the reader pops the entries before onClose runs.
+  const leave = useBackLayer(true, onClose, readerLayerKey(projectId));
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-[var(--ds-canvas)]" data-testid="studio-comic-reader">
+    <div
+      className="fixed inset-x-0 top-0 z-50 overflow-hidden bg-[var(--ds-canvas)]"
+      style={{ height: 'var(--app-h, 100dvh)' }}
+      data-testid="studio-comic-reader"
+    >
       <Suspense
         fallback={
           <div className="flex h-full items-center justify-center text-sm text-[var(--ds-muted)]" role="status">
@@ -343,9 +219,8 @@ const StudioComicReader: React.FC<{ projectId: string; onClose: () => void }> = 
           </div>
         }
       >
-        <FullscreenFallbackHistoryContext.Provider value={fallbackHistory}>
-          <PublicComicReader projectId={projectId} onClose={() => history.leave(onClose)} />
-        </FullscreenFallbackHistoryContext.Provider>
+        {/* The owner reads their own comic (isReadOnly is false only for a local project): no Report, no analytics. */}
+        <PublicComicReader source={{ kind: 'project', projectId }} isOwner={!isReadOnly} onClose={() => leave(onClose)} />
       </Suspense>
     </div>
   );
@@ -396,7 +271,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     if (shouldPrompt) {
       setShowReviewModal(true);
     } else {
-      readerHistory.leave(onClose);
+      leaveReader(onClose);
     }
   };
 
@@ -405,7 +280,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       ...data,
       projectId: project.id
     });
-    readerHistory.leave(onClose); // Close after review
+    leaveReader(onClose); // Close after review
   };
 
   const [pageIndex, setPageIndex] = useState(0);
@@ -421,16 +296,25 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
   const [chromeTick, setChromeTick] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const chromeHidden = phoneUi && !chromeVisible;
-  // Back pops the reading mode first (its controls come back), then closes the comic.
-  const readerHistory = useReaderHistory(project.id, onClose, () => {
-    setReadingMode(false);
-    setChromeVisible(true);
-    setChromeTick((n) => n + 1);
-  });
-  /** Navigation out of the reader pops the reader's history entries first. */
-  const leaveTo = (fn: () => void) => () => readerHistory.leave(fn, { final: false });
-  const navigate = (view: string, id?: string) =>
-    readerHistory.leave(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)), { final: false });
+  // Back closes the comic (no review prompt in the way of a Back gesture); in the reading mode Back leaves the reading
+  // mode first (its controls come back), then closes the comic.
+  const leaveReader = useBackLayer(true, onClose, readerLayerKey(project.id));
+  useBackLayer(
+    readingMode,
+    () => {
+      setReadingMode(false);
+      setChromeVisible(true);
+      setChromeTick((n) => n + 1);
+    },
+    'fullscreen'
+  );
+  /**
+   * Navigation out of the reader pops the reader's history entries first. Not final: if the app keeps the reader open
+   * (a view it does not handle, or the comic that is already open), the reader takes a fresh entry, so Back and Close
+   * still close it.
+   */
+  const leaveTo = (fn: () => void) => () => leaveReader(fn, { final: false });
+  const navigate = (view: string, id?: string) => leaveReader(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)), { final: false });
   // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
   // so we collapse every layout to a single vertical column — the standard way comics are
   // read on mobile. Tracked reactively so rotating the device re-flows immediately.
@@ -752,21 +636,20 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     return () => window.removeEventListener('keydown', onKey);
   }, [readerMode, pageIndex, pages.length, menuOpen, readingMode]);
 
+  // The reading mode's Back-stack layer ('fullscreen') comes and goes with readingMode: entering pushes its entry,
+  // leaving with a control pops it (useBackLayer above).
   const enterReadingMode = useCallback(() => {
     setReadingMode(true);
     setMenuOpen(false);
     setChromeVisible(false);
-    readerHistory.pushReadingMode();
     if (shouldShowIosFullscreenNote()) {
       markIosFullscreenNoteSeen();
       setShowIosNote(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readerHistory.pushReadingMode]);
+  }, []);
 
   // Leaving the reading mode brings the controls back (that is what the reader asked for by tapping Exit).
   const exitReadingMode = () => {
-    readerHistory.popReadingMode();
     setReadingMode(false);
     setChromeVisible(true);
     setChromeTick((n) => n + 1);
@@ -863,14 +746,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       style={
         phoneUi
           ? {
-              // Edge-to-edge on notched phones (viewport-fit=cover): keep the art out of the cut-outs.
+              // Edge-to-edge on notched phones (viewport-fit=cover): keep the art out of the cut-outs. The floating
+              // chrome pads itself for the notch and the home indicator (bar, menu, Exit, note, scroller).
               paddingLeft: 'var(--sa-left)',
               paddingRight: 'var(--sa-right)',
               ...(readingMode ? { height: '100dvh', bottom: 'auto' } : null)
             }
-          : readingMode
-            ? { height: '100dvh', bottom: 'auto' }
-            : undefined
+          : { ...SAFE_FRAME, ...(readingMode ? { height: '100dvh', bottom: 'auto' } : null) }
       }
     >
       {phoneUi && (
@@ -1106,7 +988,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
 	                  )}
                   {project.state.panels.map((panel, idx) => (
                     <RevealOnScroll key={idx} className={getPanelClass(idx)}>
-                      <div className={`border-2 border-black shadow-sm relative ${fxOn ? 'comic-halftone' : ''}`}>
+                      <div className="border-2 border-black shadow-sm relative">
                         {panel.imageUrl ? (
                           <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
                         ) : (
@@ -1120,6 +1002,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                           </div>
                         )}
                         <PanelDialogue panel={panel} layout={textLayout} placement="auto" reader />
+                        {fxOn && <HalftoneOverlay />}
 	                      </div>
 	                    </RevealOnScroll>
 	                  ))}
@@ -1171,7 +1054,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                       className={`flex max-h-full w-full flex-col items-center ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
                       style={{ gap: FLIP_GAP_PX }}
                     >
-                      <div data-testid="flip-art" className={`relative inline-flex max-w-full shrink-0 ${fxOn ? 'comic-halftone' : ''}`}>
+                      <div data-testid="flip-art" className="relative inline-flex max-w-full shrink-0">
                         {pages[pageIndex]?.imageUrl ? (
                           <img
                             src={pages[pageIndex].imageUrl}
@@ -1184,6 +1067,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                             {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
                           </div>
                         )}
+                        {fxOn && <HalftoneOverlay />}
                       </div>
                       {flipHasDialogue && (
                         <div
@@ -1210,7 +1094,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                   >
                     <div
                       key={pageIndex}
-                      className={`relative inline-flex max-h-full max-w-full ${fxOn ? 'comic-halftone' : ''} ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
+                      className={`relative inline-flex max-h-full max-w-full ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
                     >
 	                      {pages[pageIndex]?.imageUrl ? (
 	                        <img
@@ -1224,6 +1108,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
                         </div>
                       )}
                       {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} placement="overlay" reader />}
+                      {fxOn && <HalftoneOverlay />}
                     </div>
                   </div>
                 ) : (
@@ -1304,7 +1189,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       )}
 
       {showComments && (
-        <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col">
+        <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col" style={{ paddingTop: 'var(--sa-top)', paddingBottom: 'var(--sa-bottom)', paddingLeft: 'var(--sa-left)' }}>
           <div className="p-4 border-b-4 border-black flex items-center justify-between bg-white shrink-0">
             <div className="font-display text-xl">Comments</div>
             <button onClick={() => setShowComments(false)} className="p-2 coarse:p-3 rounded-full hover:bg-slate-100" aria-label="Close comments">
@@ -1319,7 +1204,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
       {/* Review Modal */}
       <ReviewModal
         isOpen={showReviewModal}
-        onClose={() => readerHistory.leave(onClose)} // If they skip/close modal, we just close the reader
+        onClose={() => leaveReader(onClose)} // If they skip/close modal, we just close the reader
         onSubmit={handleReviewSubmit}
         projectName={project.name}
       />

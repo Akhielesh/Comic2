@@ -16,6 +16,15 @@ const safeContextJson = (context: UniversalAssistantContext) => {
   }
 };
 
+export type UniversalAssistantOptions = {
+  /**
+   * Free models only (S10): the platform key, or a user who turned Free-only on. No paid
+   * TEXT_FALLBACK retry — a busy free model surfaces as an error the route answers calmly —
+   * and, without a model override, only a verified-free model is picked.
+   */
+  freeOnly?: boolean;
+};
+
 // The Universal Assistant runs on a FREE OpenRouter model through the gateway.
 // Guardrails: the system prompt below + route-level off-topic blocking and context
 // sanitization (see routes/assistant.ts and ai/assistantPolicy.ts).
@@ -24,9 +33,13 @@ export const queryUniversalAssistant = async (
   userMessage: string,
   history: AssistantMessage[],
   context: UniversalAssistantContext,
-  modelOverride?: string
+  modelOverride?: string,
+  opts?: UniversalAssistantOptions
 ): Promise<{ text: string; usage?: ReturnType<typeof buildUsage>; model: string }> => {
-  const model = modelOverride?.trim() || (await pickTextModel({ preferFree: true }));
+  const freeOnly = opts?.freeOnly === true;
+  const model =
+    modelOverride?.trim() ||
+    (await pickTextModel(freeOnly ? { costPref: 'free-only', stageHint: 'assistant' } : { preferFree: true }));
   const knowledgeBase = buildPublicKnowledgeBlock();
 
   const systemPrompt = `
@@ -79,7 +92,9 @@ Keep it concise and avoid unnecessary sections.
       maxTokens: 1200,
       timeoutMs: ASSISTANT_REQUEST_TIMEOUT_MS,
       retries: 2,
-      fallbackModel: TEXT_FALLBACK
+      // The paid safety net only on the user's own key (BYOK, Free-only off): on the platform key
+      // nothing reserves for it, so a free-model miss must never become a paid call.
+      ...(freeOnly ? { freeOnly: true } : { fallbackModel: TEXT_FALLBACK })
     },
     resolveProviderContext(apiKey)
   );

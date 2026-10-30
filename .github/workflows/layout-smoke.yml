@@ -1,0 +1,93 @@
+# Comic Studio layout smoke (P1-QA; visualqa.md §7) — READ-ONLY per-PR check, ~2–3 minutes.
+#
+# Builds the QA entry (qa/comic-qa.html, QA_BUILD=1 → dist-qa/, never part of the production build)
+# and runs the Playwright layout harness (dreamstreamcomicstudio/tests/e2e) at 360×740, 768×1024,
+# 1024×768 and 1440×900 on Chromium: no horizontal overflow, no visible collisions, balloons inside
+# the page, the editor aside inside its dialog, the phone board ≥ 45 % of the height, one <main> —
+# plus the component scenes (breakdown card, refs drawer + upload queue, timeline, procedural art in
+# both themes) and the scanner's own self-tests. Known failures are allowlisted per owner package in
+# tests/e2e/allowlist.json (empty for new components by wave 3).
+#
+# The harness is offline by construction (fixtures are synthetic, sharp-generated; every external
+# request is blocked), so no secrets are needed. The Supabase values below are FAKE placeholders
+# (the client throws at import on an empty URL) — see ci.yml. The full 14-device matrix runs nightly
+# in e2e-mobile.yml.
+
+name: layout-smoke
+
+on:
+  pull_request:
+    paths:
+      - 'dreamstreamcomicstudio/components/comicstudio/**'
+      - 'dreamstreamcomicstudio/components/studio/kit/**'
+      - 'dreamstreamcomicstudio/shared/comic/**'
+      - 'dreamstreamcomicstudio/index.css'
+      - 'dreamstreamcomicstudio/index.html'
+      - 'dreamstreamcomicstudio/tailwind.config.cjs'
+      - 'dreamstreamcomicstudio/vite.config.ts'
+      - 'dreamstreamcomicstudio/qa/**'
+      - 'dreamstreamcomicstudio/tests/e2e/**'
+      - 'dreamstreamcomicstudio/scripts/layout-smoke.mjs'
+      - 'dreamstreamcomicstudio/package-lock.json'
+      - '.github/workflows/layout-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: layout-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio
+    env:
+      CI: 'true'
+      VITE_SUPABASE_URL: https://placeholder.supabase.co
+      VITE_SUPABASE_ANON_KEY: placeholder-anon-key
+      QA_ARTIFACTS: qa-artifacts
+      QA_WORKERS: '3'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright Chromium
+        id: pw-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - name: Install Chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium system deps (cache hit)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+      - name: Layout smoke (build + 4 viewports + harness self-tests)
+        run: node scripts/layout-smoke.mjs
+      - name: Upload report and findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: layout-smoke-report
+          path: |
+            dreamstreamcomicstudio/qa-artifacts/report
+            dreamstreamcomicstudio/qa-artifacts/test-results
+            dreamstreamcomicstudio/qa-artifacts/findings.jsonl
+            dreamstreamcomicstudio/qa-artifacts/summary.md
+          if-no-files-found: ignore
+          retention-days: 14

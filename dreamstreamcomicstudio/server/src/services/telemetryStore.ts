@@ -13,6 +13,7 @@
 import type { FeedbackInput, TelemetryEventInput, TelemetrySeverity } from '../../../apiTypes.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import { logger } from '../lib/logger.js';
+import { loggablePath, maskCapabilityUrls } from '../../../shared/capabilityPath.js';
 
 export interface TelemetryContext {
   userId: string | null;
@@ -42,10 +43,14 @@ const isoTs = (value: unknown): string | null => {
 // Keep metadata to a sane object and cap its serialized size so a runaway payload
 // (a giant stack or pasted blob) can't bloat the table.
 const METADATA_MAX_BYTES = 8_000;
+/** Strings anywhere in the metadata: a capability URL inside them is masked (S19 — an error thrown
+ *  by an inline or extension-injected script reports the PAGE URL, /c/<slug>…, as its filename
+ *  and stack frame). Every other value is kept as sent. */
+const maskStrings = (_key: string, v: unknown): unknown => (typeof v === 'string' ? maskCapabilityUrls(v) : v);
 const sanitizeMetadata = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   try {
-    let json = JSON.stringify(value);
+    let json = JSON.stringify(value, maskStrings);
     if (json.length > METADATA_MAX_BYTES) {
       json = JSON.stringify({ truncated: true, preview: json.slice(0, METADATA_MAX_BYTES) });
     }
@@ -67,8 +72,10 @@ const normalizeEvent = (raw: unknown, ctx: TelemetryContext) => {
     event_type: eventType,
     severity,
     source: str(e.source, 40) || 'unknown',
-    surface: str(e.surface, 120),
-    message: str(e.message, 2000),
+    // The client sends window.location.pathname: a /c/<slug> or /share/<token> page is a read
+    // capability, and old cached bundles keep sending it raw — masked here, server-side (S19).
+    surface: str(loggablePath(e.surface), 120),
+    message: str(typeof e.message === 'string' ? maskCapabilityUrls(e.message) : e.message, 2000),
     metadata: sanitizeMetadata(e.metadata),
     request_id: str(ctx.requestId, 128),
     ip: str(ctx.ip, 64),
@@ -139,7 +146,7 @@ const normalizeFeedback = (raw: unknown, ctx: TelemetryContext) => {
     sentiment,
     comment: str(f.comment, 4000),
     source: str(f.source, 40) || 'unknown',
-    surface: str(f.surface, 120),
+    surface: str(loggablePath(f.surface), 120),
     metadata: sanitizeMetadata(f.metadata),
     request_id: str(ctx.requestId, 128),
     ip: str(ctx.ip, 64),

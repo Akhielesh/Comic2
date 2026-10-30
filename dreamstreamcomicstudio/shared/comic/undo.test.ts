@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { createEmptyDoc, normalizeDoc, trashOf, type ComicDoc, type RefOwner } from './doc';
-import { applyOps, CLIENT_PATCHABLE_OPS, type DocOp } from './ops';
+import { applyOp, applyOps, CLIENT_PATCHABLE_OPS, type DocOp } from './ops';
 import { describeOps, inverseOps, isUndoable } from './undo';
 import { refsOf } from './refs';
 
@@ -97,10 +97,19 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
   const historyPaths = pages.flatMap((p) => p.render.history.map((v) => v.path));
   const kinds = [
     'brief', 'note_add', 'format', 'settings', 'source', 'style', 'cover', 'plan_status', 'character', 'character_remove', 'place',
-    'place_remove', 'page', 'panel', 'line', 'line_del', 'line_style', 'letter_style', 'balloon', 'balloons', 'pages_reorder',
+    'place_remove', 'page', 'panel', 'line', 'line_del', 'line_move', 'line_style', 'letter_style', 'balloon', 'balloons', 'pages_reorder',
     'page_insert', 'page_duplicate', 'page_delete', 'page_restore', 'book', 'reader', 'version_star', 'ref_add', 'ref_patch',
-    'ref_move', 'ref_remove', 'ref_transfer', 'edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term'
+    'ref_move', 'ref_remove', 'ref_transfer', 'edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term',
+    // --- Ship 2 (K2b): the ten panels/consistency ops, client-patchable since PRO_PAGE_OPS_PATCHABLE (shapes from
+    //     comic.contract.test.ts k2Op) ---
+    'k2_frames', 'k2_mode', 'k2_style', 'k2_cuts', 'k2_order', 'k2_add', 'k2_remove', 'k2_layer', 'k2_continuity', 'k2_scene',
+    'k2_consistency', 'k2_finding'
   ] as const;
+  const k2Box = () => {
+    const w = 0.1 + r() * 0.5;
+    const h = 0.1 + r() * 0.4;
+    return { x: Math.round(r() * (1 - w) * 1000) / 1000, y: Math.round(r() * (1 - h) * 1000) / 1000, w: Math.round(w * 1000) / 1000, h: Math.round(h * 1000) / 1000 };
+  };
   switch (pick(kinds)) {
     case 'brief':
       return { op: 'brief', patch: chance(0.5) ? { logline: `L${step}` } : { title: `T${step}`, tone: chance(0.5) ? 'warm' : undefined } };
@@ -141,6 +150,10 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
       return { op: 'line', pageId: page!.id, panelId: panel!.id, id: line.id, patch: chance(0.5) ? { text: `edit ${step}` } : { style: { fill: '#ffeeaa' }, kind: 'shout' } };
     case 'line_del':
       return { op: 'line', pageId: page?.id || 'ghost', panelId: panel?.id || 'ghost', id: line?.id || 'ghost', patch: null };
+    case 'line_move': {
+      const to = page?.panels.length ? pick(page.panels) : undefined;
+      return { op: 'line_move', pageId: page?.id || 'ghost', id: line?.id || 'ghost', toPanelId: to?.id || 'ghost', ...(chance(0.7) ? { index: Math.floor(r() * 4) } : {}) };
+    }
     case 'line_style': {
       const ids = page ? page.panels.flatMap((p) => p.lines.map((l) => l.id)).filter(() => chance(0.5)) : [];
       const mode = pick(['merge', 'replace', undefined] as const);
@@ -197,6 +210,8 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
       return { op: 'ref_transfer', from: owner, to, path: ref?.path || 'ghost', ...(chance(0.5) ? { index: 0 } : {}) };
     }
     case 'edition':
+      // Removing an edition while a translated page sits in Deleted is covered too: applyOp 'translation' and
+      // 'edition_balloon' see the trashed pages' lines, so the undo puts that page's translations back (seed 77).
       return { op: 'edition', lang, patch: chance(0.3) ? null : chance(0.5) ? {} : { register: pick(['formal', 'everyday', 'code_mixed'] as const) } };
     case 'translation':
       return chance(0.3)
@@ -210,6 +225,63 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
       return chance(0.3)
         ? { op: 'glossary_term', id: pick(['g_maya', 'g_new']), patch: null }
         : { op: 'glossary_term', id: pick(['g_maya', 'g_new']), patch: { term: 'Term', forms: { te: `f${step}` }, ...(chance(0.5) ? { note: 'n' } : {}) } };
+    case 'k2_frames':
+      return { op: 'page_frames', pageId: page?.id || 'ghost', frames: [{ panelId: panel?.id ?? 'ghost', frame: chance(0.15) ? null : { box: k2Box(), ...(chance(0.3) ? { fit: { s: 1 + Math.round(r() * 100) / 100, x: 0, y: 0 } } : {}) } }], ...(chance(0.2) ? { moveBalloons: false } : {}) };
+    case 'k2_mode':
+      return { op: 'page_frames', pageId: page?.id || 'ghost', artMode: chance(0.5) ? 'panels' : null };
+    case 'k2_style':
+      return { op: 'page_frames', pageId: page?.id || 'ghost', frameStyle: chance(0.3) ? null : { gutter: Math.round(r() * 60) / 1000, color: '#223344' } };
+    case 'k2_cuts': {
+      const path = page?.render.asset?.path;
+      return {
+        op: 'page_cuts',
+        pageId: page?.id || 'ghost',
+        path: chance(0.9) && path ? path : 'u/other.webp',
+        cuts: chance(0.2) ? null : { status: 'unsure', by: 'detect', at: step, cuts: (page?.panels || []).map((pn, j) => ({ panelId: pn.id, drawn: j + 1, box: k2Box(), conf: 0.8 })) }
+      };
+    }
+    case 'k2_order':
+      return { op: 'panels_order', pageId: page?.id || 'ghost', order: (page?.panels || []).map((p) => p.id).sort(() => r() - 0.5) };
+    case 'k2_add': {
+      const take = panel?.lines.length && chance(0.5) ? [panel.lines[0]] : [];
+      return {
+        op: 'panel_add',
+        pageId: page?.id || 'ghost',
+        index: Math.floor(r() * ((page?.panels.length || 0) + 1)),
+        panel: { id: uid('pn'), n: 0, size: 'medium', shot: 'medium', action: 'A new beat', castIds: [], lines: [...take, ...(chance(0.5) ? [{ id: uid('ln'), kind: 'speech' as const, text: 'Hey!' }] : [])], ...(chance(0.7) ? { frame: { box: k2Box() } } : {}) }
+      };
+    }
+    case 'k2_remove': {
+      const others = (page?.panels || []).filter((p) => p.id !== panel?.id);
+      return { op: 'panel_remove', pageId: page?.id || 'ghost', id: panel?.id ?? 'ghost', ...(others.length && chance(0.5) ? { linesTo: pick(others).id } : {}) };
+    }
+    case 'k2_layer': {
+      const existing = page?.layers || [];
+      if (existing.length && chance(0.6)) {
+        const l = pick(existing);
+        if (chance(0.3)) return { op: 'layer', pageId: page?.id || 'ghost', id: l.id, patch: null };
+        return { op: 'layer', pageId: page?.id || 'ghost', id: l.id, patch: chance(0.5) ? { box: k2Box(), opacity: chance(0.5) ? null : 0.5 } : { name: `Sticker ${step}`, print: chance(0.5) ? false : null } };
+      }
+      return { op: 'layer', pageId: page?.id || 'ghost', id: uid('ly'), index: 0, patch: { kind: 'shape', box: k2Box(), shape: { type: 'rect', fill: '#ff0000' }, ...(panel && chance(0.6) ? { clip: panel.id } : {}) } };
+    }
+    case 'k2_continuity':
+      return { op: 'continuity', pageId: page?.id || 'ghost', patch: chance(0.2) ? null : { ...(chance(0.5) ? { notes: [`note ${step}`] } : {}), cast: { [char?.id ?? 'c_x']: { outfit: 'red coat' } }, ...(chance(0.3) ? { sceneId: 'sc_a' } : {}) } };
+    case 'k2_scene': {
+      const scenes = doc.scenes || [];
+      if (scenes.length && chance(0.5)) {
+        const s = pick(scenes);
+        return chance(0.4) ? { op: 'scene', id: s.id, patch: null } : { op: 'scene', id: s.id, patch: { light: chance(0.5) ? 'golden' : null } };
+      }
+      return { op: 'scene', id: uid('sc'), patch: { name: `Scene ${step}`, time: 'dusk' }, index: 0 };
+    }
+    case 'k2_consistency':
+      return { op: 'consistency', patch: chance(0.3) ? { maxRefs: null, skip: null } : { maxRefs: 1 + Math.floor(r() * 10), skip: [`place:${step}`] } };
+    case 'k2_finding': {
+      const withFindings = pages.filter((p) => p.render.qc?.findings?.length);
+      const p = withFindings.length ? pick(withFindings) : page;
+      const f = p?.render.qc?.findings?.length ? pick(p.render.qc.findings) : undefined;
+      return { op: 'finding', pageId: p?.id || 'ghost', id: f?.id ?? 'ghost', patch: { dismissed: chance(0.5) ? true : null } };
+    }
     default:
       return { op: 'note_add', text: 'x' };
   }
@@ -217,7 +289,18 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
 
 describe('inverseOps (contract §6)', () => {
   it('property: 500 random patchable sequences on two fixtures undo exactly (wire equality)', () => {
-    const fixtures = [sampleV5(), ownerV4()];
+    // Ship 2 (K2b): each fixture carries a check finding on its first drawn page and a scene, so `finding` and `scene`
+    // ops have something to change (no client op creates a finding).
+    const withShip2Seed = (doc: ComicDoc): ComicDoc => {
+      const drawn = doc.pages.findIndex((p) => !!p.render.asset);
+      const pages = doc.pages.map((p, i) =>
+        i === drawn
+          ? { ...p, render: { ...p.render, qc: { score: 0.8, issues: [], checkedAt: 1, ...(p.render.qc || {}), checkV: 2 as const, findings: [{ id: 'f_1', kind: 'identity' as const, panel: 1, severity: 'minor' as const, note: 'Scarf colour' }, { id: 'f_2', kind: 'beat' as const, panel: 2, severity: 'major' as const, note: 'Panel 2 shows another moment', dismissed: true as const }] } } }
+          : p
+      );
+      return normalizeDoc({ ...doc, pages, scenes: [{ id: 'sc_a', name: 'Market' }] });
+    };
+    const fixtures = [withShip2Seed(sampleV5()), withShip2Seed(ownerV4())];
     let checked = 0;
     let effective = 0;
     const kinds = new Set<string>();
@@ -257,6 +340,22 @@ describe('inverseOps (contract §6)', () => {
     expect([...CLIENT_PATCHABLE_OPS].filter((k) => k !== 'render_use' && !kinds.has(k))).toEqual([]);
   });
 
+  it('removing an edition while a translated page sits in Deleted: undo puts that page\'s translation and balloon back', () => {
+    // pg_1 (with the hi translation and edition balloon of pg_1_l2) is deleted, then the hi edition is removed.
+    const before = applyOps(sampleV5(), [{ op: 'page_delete', id: 'pg_1', deletedAt: 7 }], 2);
+    expect(trashOf(before).map((t) => t.page.id)).toEqual(['pg_1']);
+    expect(before.i18n?.editions.hi.lines.pg_1_l2?.text).toBe('बस एक और…');
+    const remove: DocOp = { op: 'edition', lang: 'hi', patch: null };
+    const after = applyOps(before, [remove], 3);
+    expect(after.i18n?.editions.hi).toBeUndefined();
+    const undone = applyOps(after, inverseOps(before, [remove]), 4);
+    expect(undone.i18n?.editions.hi.lines.pg_1_l2).toEqual(before.i18n?.editions.hi.lines.pg_1_l2);
+    expect(undone.i18n?.editions.hi.balloons.pg_1_l2).toEqual(before.i18n?.editions.hi.balloons.pg_1_l2);
+    expect(comparable(undone)).toEqual(comparable(before));
+    // A line id that is on no page, live or deleted, still changes nothing (R6).
+    expect(applyOp(undone, { op: 'translation', lang: 'hi', lineId: 'ghost', patch: { text: 'x', status: 'machine', sourceHash: 'h', at: 1 } })).toBe(undone);
+  });
+
   it('ignores non-patchable ops and reports undoability', () => {
     const doc = sampleV5();
     const ops: DocOp[] = [
@@ -276,6 +375,34 @@ describe('inverseOps (contract §6)', () => {
     expect(undone.pages[0].render.asset?.path).toBe('u/proj/pages/p1.png');
     const adopt: DocOp = { op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path: 'u/proj/pages/p1.png', at: 9 };
     expect(isUndoable(doc, [adopt])).toBe(false);
+  });
+
+  it('line_move: across panels and within one, undo is exact; balloons and editions are never touched', () => {
+    const before = sampleV5();
+    const page = before.pages[0];
+    const order = (d: ComicDoc) => d.pages[0].panels.map((p) => p.lines.map((l) => l.id));
+    const move: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l2', toPanelId: 'pg_1_p3', index: 1 };
+    const after = applyOp(before, move);
+    expect(order(after)).toEqual([['pg_1_l1'], [], ['pg_1_l3', 'pg_1_l2', 'pg_1_l4', 'pg_1_l5']]);
+    expect(after.pages[0].panels[2].lines[1]).toBe(page.panels[1].lines[0]); // the same Line object
+    expect(after.pages[0].balloons).toBe(page.balloons);
+    expect(after.i18n).toBe(before.i18n); // the hi translation and edition balloon of pg_1_l2 stay
+    expect(inverseOps(before, [move])).toEqual([{ op: 'line_move', pageId: 'pg_1', id: 'pg_1_l2', toPanelId: 'pg_1_p2', index: 0 }]);
+    expect(comparable(applyOps(after, inverseOps(before, [move])))).toEqual(comparable(before));
+    expect(isUndoable(before, [move])).toBe(true);
+    // Within one panel: no index = last; moving to where it already sits is a no-op (nothing to undo).
+    const reorder: DocOp = { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'pg_1_p3' };
+    const reordered = applyOp(before, reorder);
+    expect(order(reordered)[2]).toEqual(['pg_1_l4', 'pg_1_l5', 'pg_1_l3']);
+    expect(comparable(applyOps(reordered, inverseOps(before, [reorder])))).toEqual(comparable(before));
+    expect(applyOp(before, { op: 'line_move', pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'pg_1_p3', index: 0 })).toBe(before);
+    // Unknown page, line or panel: no-op (R6), so no inverse.
+    for (const ghost of [{ pageId: 'ghost', id: 'pg_1_l3', toPanelId: 'pg_1_p3' }, { pageId: 'pg_1', id: 'ghost', toPanelId: 'pg_1_p3' }, { pageId: 'pg_1', id: 'pg_1_l3', toPanelId: 'ghost' }]) {
+      expect(applyOp(before, { op: 'line_move', ...ghost })).toBe(before);
+      expect(inverseOps(before, [{ op: 'line_move', ...ghost }])).toEqual([]);
+    }
+    expect(describeOps([move])).toBe('move a line to another panel');
+    expect(describeOps([move, reorder])).toBe('move 2 lines to other panels');
   });
 
   it('describeOps labels', () => {

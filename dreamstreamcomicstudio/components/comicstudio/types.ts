@@ -4,8 +4,9 @@
 // cache and the live stream; every pane renders from the StudioController it returns
 // and talks back through it. Panes never call the API directly.
 //
-// Contract §13.1: the members below "v5" were added in wave 0 (P0-C) with minimal working
-// implementations; P1-CLIENTSTATE completes them (undo stack, variants, upload progress).
+// Contract §13.1: the members below "v5" were added in wave 0 (P0-C) and completed by
+// P1-CLIENTSTATE (undo stack, variants, upload progress, publication). Members added after the
+// contract froze are OPTIONAL so every existing consumer and test fake keeps compiling.
 
 import type { AssetRef, ClientAction, ComicDoc, NextStep, RefAsset, RefLabel, RefOwner, RenderTarget, StudioTab } from '../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../shared/comic/ops';
@@ -17,12 +18,64 @@ export type { StudioTab };
 /** Alias kept for existing imports (contract §1: `BoardTab = StudioTab`). */
 export type BoardTab = StudioTab;
 
+/** What a finished stream reported (re-exported by useStudio.ts, where it is produced). */
+export interface StreamOutcome {
+  ok: boolean;
+  error?: string;
+  code?: string;
+  aborted: boolean;
+  /** Trying the same request again could succeed (network, busy, rate limit, server hiccup). */
+  retryable: boolean;
+}
+
+/**
+ * What `act()` resolves to: the stream's outcome plus `gated` — this action's stream committed an
+ * OPEN approval gate (the spend waits for the user). Card sequences (conversation/cards/useAction
+ * `stopsSequence`) stop on `ok: false`, `aborted` or `gated`, so a second spend never runs behind a
+ * refusal and a second gate never replaces the first. Call sites that ignore the value keep working
+ * (`void studio.act(…)`).
+ */
+export interface StudioActOutcome extends StreamOutcome {
+  gated: boolean;
+  /** The action never reached the server (a duplicate click, an invalid action, no comic loaded). */
+  skipped?: boolean;
+  /**
+   * Comic History: the moment the server saved just before a `history_restore` (its stream's `done` event, versions
+   * plan §6.1 step 8). The restore toast's Undo brings it back (history/historyActions.ts). Absent for every other
+   * action and from servers that don't send it.
+   */
+  beforeVersionId?: string;
+}
+
 export interface ActivityItem {
   id: string;
   label: string;
   phase: 'start' | 'end';
   ok?: boolean;
   at: number;
+  /** Tiny badge on the status line: free software work, a text-model call or an image. */
+  cost?: 'free' | 'text' | 'image';
+}
+
+/**
+ * A calm, transient studio notice (not an error): "Undid: move a balloon · Redo",
+ * "Nothing to undo yet". Shown by the conversation/editor chrome and dismissible.
+ */
+export interface StudioNotice {
+  id: string;
+  kind: 'undo' | 'redo' | 'info';
+  text: string;
+  /** The follow-up the notice offers as a button. */
+  action?: 'undo' | 'redo';
+  at: number;
+}
+
+/** A request to open the reader (chips, cards, the director): the Read tab host consumes it. */
+export interface ReaderRequest {
+  /** Changes on every request, so the same request twice still opens it. */
+  seq: number;
+  immersive: boolean;
+  guided: boolean;
 }
 
 export interface PendingAttachment {
@@ -45,7 +98,18 @@ export interface StudioSelection {
   lineIds: string[];
   panelN?: number;
   surface: 'page_editor' | 'board';
+  // --- Ship 2 (pro plan §4.5; K2b registration, C1 fills them): the pro editor's selected panels (frames) and overlays
+  //     ('ly_…') on pageId. A director focus derived from the selection carries them (StudioFocus.panelIds / layerIds). ---
+  panelIds?: string[];
+  layerIds?: string[];
 }
+
+/**
+ * Ship 2 (pro plan §4.6 "Never lose work"; K2b registration, C3 fills it): where the editor's edits are. 'saved' = on the
+ * server; 'saving' = sending; 'local' = saved on this device, will sync; 'offline' = waiting for the network; 'error' =
+ * the server refused one (rolled back, with its sentence).
+ */
+export type StudioSaveState = 'saved' | 'saving' | 'local' | 'offline' | 'error';
 
 export interface SendOptions {
   /** Legacy data URLs (still accepted). */
@@ -66,9 +130,14 @@ export interface RefUploadResult {
 export interface RefUploadOptions {
   label?: RefLabel;
   name?: string;
+  /** 0-based insert position (0 = main ref). */
   index?: number;
+  /** 0..1: bytes sent map to 0..0.95, 1 once the server has checked and stored the image. */
   onProgress?: (fraction: number) => void;
+  /** Aborts the upload (the XHR is cancelled; the promise rejects with kind 'aborted'). */
   signal?: AbortSignal;
+  /** sha256(original bytes) first 16 hex — exact-duplicate hint (the server re-checks). */
+  hash?: string;
 }
 
 export interface StudioController {
@@ -95,8 +164,12 @@ export interface StudioController {
 
   /** Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. */
   send(text: string, opts?: SendOptions | PendingAttachment[]): Promise<void>;
-  /** Run a direct action (button clicks): renders, gates, picks, patches. */
-  act(action: StudioAction): Promise<void>;
+  /**
+   * Run a direct action (button clicks): renders, gates, picks, patches. The live controller resolves the
+   * action's StudioActOutcome (`ok`, `aborted`, `gated`, …) so card sequences can stop on a refusal or an
+   * open gate; `void` stays allowed for test fakes and older controllers (read it with `actOutcomeOf`).
+   */
+  act(action: StudioAction): Promise<StudioActOutcome | void>;
   /** Instant local+server content edit (dialogue text, names, settings). Undo defaults to true for user edits. */
   patch(ops: DocOp[], opts?: PatchOptions): Promise<void>;
   cancel(): Promise<void>;
@@ -129,7 +202,26 @@ export interface StudioController {
   runNextStep(step: NextStep): Promise<void>;
   runClientAction(action: ClientAction): void;
   uploadRef(file: Blob, target: RefOwner, opts?: RefUploadOptions): Promise<RefUploadResult>;
-  /** Fetched lazily (Share sheet / ReaderTab). */
+  /** Fetched lazily (Share sheet / ReaderTab); refreshed when the doc's publication mirror changes. */
   publication: PublicationOwnerView | null;
   refreshPublication(): Promise<void>;
+
+  // ── P1-CLIENTSTATE additions (optional; see the header note) ─────────────
+
+  /** What redo would re-apply ("move a balloon"). */
+  redoLabel?: string;
+  /** Calm transient notice (typed "undo", chip undo, nothing to undo). */
+  notice?: StudioNotice | null;
+  clearNotice?(): void;
+  /** Latest "open the reader" request (chips/cards); the Read tab host opens the immersive reader on a new seq. */
+  readerRequest?: ReaderRequest | null;
+  /** Server code of the last error (`COOLDOWN`, `CONTENT_POLICY`, `LIMIT`, `NOT_READY`, …), for tailored UI. */
+  errorCode?: string | null;
+  /** True while the owner's publication view is being fetched. */
+  publicationLoading?: boolean;
+
+  // ── Ship 2 (pro plan §4.6; optional: C3 fills it, absent = today's behaviour) ─────────────────────────────
+
+  /** The save pill's state (always visible in the pro editor once C3 ships). */
+  saveState?: StudioSaveState;
 }

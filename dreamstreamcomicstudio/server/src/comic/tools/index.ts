@@ -9,11 +9,17 @@ import { breakdownToolGroup } from './breakdown.js';
 import { i18nToolGroup } from './i18n.js';
 import { letteringToolGroup } from './lettering.js';
 import { libraryToolGroup } from './library.js';
+import { modelsToolGroup } from './models.js';
 import { publishToolGroup } from './publish.js';
 import { readerToolGroup } from './reader.js';
 import { refsToolGroup } from './refs.js';
 import { safetyToolGroup } from './safety.js';
 import { timelineToolGroup } from './timeline.js';
+// --- history (versions plan §9; H0 stub, H4 replaces it). Listed only while COMIC_HISTORY is on. ---
+import { historyToolGroup, historyToolGroupEnabled } from './history.js';
+// --- Ship 2 (pro plan §4.7; K2b stubs, B10 replaces them). Listed only once their package enables them. ---
+import { consistencyToolGroup, consistencyToolGroupEnabled } from './consistency.js';
+import { layoutToolGroup, layoutToolGroupEnabled } from './layout.js';
 
 const registry = createKeyedRegistry<ToolGroup>({
   what: 'tool group',
@@ -29,7 +35,11 @@ const registry = createKeyedRegistry<ToolGroup>({
       publishToolGroup,
       i18nToolGroup,
       libraryToolGroup,
-      readerToolGroup
+      readerToolGroup,
+      modelsToolGroup,
+      ...(historyToolGroupEnabled() ? [historyToolGroup] : []),
+      ...(layoutToolGroupEnabled() ? [layoutToolGroup] : []),
+      ...(consistencyToolGroupEnabled() ? [consistencyToolGroup] : [])
     ]
   ]
 });

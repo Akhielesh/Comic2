@@ -272,6 +272,38 @@ describe('project endpoints', () => {
     await expect(loadPublicComic('proj_2')).rejects.toMatchObject({ kind: 'not_found', message: expect.stringMatching(/private/) });
   });
 
+  it('keeps the amended public fields: languages, lang and a live publication (legacy ?view=read&id=)', async () => {
+    api.get.mockResolvedValueOnce({
+      doc: rawDoc,
+      urls: {},
+      languages: [
+        { code: 'en', endonym: 'English', english: 'English', complete: true, isSource: true },
+        { code: 'te', endonym: 'తెలుగు', english: 'Telugu', complete: true, isSource: false },
+        { code: '<script>', endonym: 'x', english: 'x', complete: true, isSource: false }
+      ],
+      lang: 'te',
+      publication: { slug: 'abcdefghijklmnopq', visibility: 'public', languages: ['en', 'te'], allowDownload: true, allowEmbed: true, publishedAt: 1, updatedAt: 1, card: {} }
+    });
+    const res = await loadPublicComic('proj_1', { lang: 'te' });
+    expect(api.get).toHaveBeenCalledWith('/api/comic/public/proj_1?lang=te', expect.anything());
+    expect(res.languages.map((l) => l.code)).toEqual(['en', 'te']);
+    expect(res.lang).toBe('te');
+    expect(res.publication?.slug).toBe('abcdefghijklmnopq');
+    expect(res.preview).toBeUndefined();
+  });
+
+  it('the owner preview carries preview:true and never a publication; a junk slug is dropped', async () => {
+    api.get.mockResolvedValueOnce({ doc: rawDoc, urls: {}, languages: [], preview: true, publication: { slug: 'abcdefghijklmnopq', visibility: 'public' } });
+    const owner = await loadPublicComic('proj_1');
+    expect(owner.preview).toBe(true);
+    expect(owner.publication).toBeUndefined();
+    api.get.mockResolvedValueOnce({ doc: rawDoc, urls: {}, publication: { slug: '../../x', visibility: 'public' } });
+    const junk = await loadPublicComic('proj_1', { lang: 'not a lang' });
+    expect(api.get).toHaveBeenLastCalledWith('/api/comic/public/proj_1', expect.anything());
+    expect(junk.publication).toBeUndefined();
+    expect(junk.languages).toEqual([]);
+  });
+
   it('creates a project', async () => {
     api.post.mockResolvedValue({ projectId: 'proj_9', doc: { ...rawDoc, id: 'proj_9' }, urls: {} });
     const res = await createStudioProject({ title: 'New' });

@@ -3,13 +3,17 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { FullscreenFallbackHistoryContext, resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
+import { resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
+import { pageImageCache } from '../immersive/pageImageCache';
+import { historyLayers, layerKey, resetBackStack } from '../mobile/backStack';
 import { ComicReaderView } from './ComicReaderView';
 
 // The v4 reader on phones (mobile-reading hotfix, F1/F4/F5): Full screen did nothing on iPhone (no API, a silently
 // swallowed TypeError), buttons were 32 px, and turning a page preloaded several full-size pages in parallel with the
 // one on screen. Full screen now uses services/fullscreen.ts with a full-viewport fallback, buttons are 44 px on
 // coarse pointers, and only the next page preloads, after the current one has loaded.
+// v5: the viewport mode's history entry is a 'fullscreen' layer on the Back stack (mobile/backStack.ts), and pages
+// load through the shared page-image cache (fetch → decode), so preloading is observed as fetches.
 
 const drawnDoc = (mutate?: (d: ComicDoc) => void) =>
   makeSampleDoc((d) => {
@@ -33,8 +37,18 @@ beforeEach(() => {
   window.localStorage.clear();
   resetIosFullscreenNoteForTests();
   removeFsApi();
+  // v5 pages load through the shared page-image cache (fetch → object URL → decode): give it the same instant fakes
+  // ComicReaderView.test.tsx uses, so no download is left hanging (the cache runs at most 3 at once).
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['img'], { type: 'image/png' }), { status: 200 })));
+  let n = 0;
+  (URL as unknown as { createObjectURL: (b: Blob) => string }).createObjectURL = () => `blob:test/${(n += 1)}`;
+  (URL as unknown as { revokeObjectURL: (u: string) => void }).revokeObjectURL = () => undefined;
+  (HTMLImageElement.prototype as unknown as { decode: () => Promise<void> }).decode = () => Promise.resolve();
 });
 afterEach(() => {
+  vi.unstubAllGlobals();
+  pageImageCache.clear();
+  resetBackStack();
   Object.defineProperty(window.navigator, 'userAgent', { value: realUA, configurable: true });
   removeFsApi();
   document.documentElement.style.overflow = '';
@@ -109,77 +123,112 @@ describe('Full screen always does something', () => {
   });
 });
 
-// Back leaves the viewport mode before it closes the comic: inside the public reader (ComicReader's v4 delegate
-// provides FullscreenFallbackHistoryContext) the mode gets the reader's reading-mode entry, as the classic reading mode
-// does. The end-to-end Back behaviour is in components/ComicReader.back.test.tsx.
-describe('the viewport mode has a history entry inside a reader that provides one', () => {
-  const renderWithHistory = () => {
-    const push = vi.fn<(onBack: () => void) => void>();
-    const pop = vi.fn<() => void>();
-    const utils = render(
-      <FullscreenFallbackHistoryContext.Provider value={{ push, pop }}>
-        <ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />
-      </FullscreenFallbackHistoryContext.Provider>
-    );
-    return { push, pop, ...utils };
+// Back leaves the viewport mode before it closes the comic: the mode is a 'fullscreen' layer on the Back stack, above
+// the reader's own layer where there is one (ComicReader's v4 delegate), as the classic reading mode is. The
+// end-to-end Back behaviour inside the public reader is in components/ComicReader.back.test.tsx.
+describe('the viewport mode has a history entry of its own (a Back-stack layer)', () => {
+  const fullscreenLayers = () => historyLayers().filter((l) => layerKey(l) === 'fullscreen');
+  let opening: Record<string, unknown> = {};
+  let entryNo = 0;
+  beforeEach(() => {
+    opening = { __viewportEntry: ++entryNo };
+    window.history.pushState(opening, '', window.location.href);
+  });
+  /** Let every traversal under way land. */
+  const settle = async () => {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+  };
+  const back = async () => {
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
   };
 
-  it('entering pushes once; Back (the entry popped) leaves the mode and pops nothing more', () => {
-    const { push, pop } = renderWithHistory();
+  it('entering pushes once; Back (the entry popped) leaves the mode and pops nothing more', async () => {
+    const before = window.history.length;
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.click(fsButton());
     expect(reader()).toHaveAttribute('data-fullscreen', 'viewport');
-    expect(push).toHaveBeenCalledTimes(1);
-    act(() => push.mock.calls[0][0]());
+    expect(window.history.length).toBe(before + 1);
+    expect(fullscreenLayers()).toHaveLength(1);
+    await back();
     expect(reader()).toHaveAttribute('data-fullscreen', 'off');
     expect(reader().style.position).toBe('');
     expect(document.documentElement.style.overflow).toBe('');
-    expect(pop).not.toHaveBeenCalled();
+    await settle();
+    // Back took exactly its entry: still on the entry the mode was entered from, nothing further popped.
+    expect(window.history.state).toEqual(opening);
+    expect(window.history.length).toBe(before + 1);
   });
 
-  it('leaving with Exit or Esc pops the entry', () => {
-    const { push, pop } = renderWithHistory();
+  it('leaving with Exit or Esc pops the entry', async () => {
+    const before = window.history.length;
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.click(fsButton());
+    expect(fullscreenLayers()).toHaveLength(1);
     fireEvent.click(fsButton());
     expect(reader()).toHaveAttribute('data-fullscreen', 'off');
-    expect(pop).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(fullscreenLayers()).toHaveLength(0);
+    expect(window.history.state).toEqual(opening);
     fireEvent.click(fsButton());
+    expect(fullscreenLayers()).toHaveLength(1);
     fireEvent.keyDown(reader(), { key: 'Escape' });
     expect(reader()).toHaveAttribute('data-fullscreen', 'off');
-    expect(push).toHaveBeenCalledTimes(2);
-    expect(pop).toHaveBeenCalledTimes(2);
+    await settle();
+    expect(fullscreenLayers()).toHaveLength(0);
+    expect(window.history.state).toEqual(opening);
+    // Two entries were pushed and both popped: the next Back is the page's own, not a dead one.
+    expect(window.history.length).toBe(before + 1);
   });
 
   it('native full screen gets no entry (the browser leaves it on Back itself)', () => {
     (HTMLElement.prototype as unknown as Record<string, unknown>).requestFullscreen = vi.fn(() => Promise.resolve());
-    const { push } = renderWithHistory();
+    const before = window.history.length;
+    render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.click(fsButton());
     act(() => {
       Object.defineProperty(document, 'fullscreenElement', { value: reader(), configurable: true });
       document.dispatchEvent(new Event('fullscreenchange'));
     });
     expect(reader()).toHaveAttribute('data-fullscreen', 'native');
-    expect(push).not.toHaveBeenCalled();
+    expect(fullscreenLayers()).toHaveLength(0);
+    expect(window.history.length).toBe(before);
     act(() => {
       Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
       document.dispatchEvent(new Event('fullscreenchange'));
     });
   });
 
-  it('unmounted in the viewport mode: its entry goes too; unmounted outside it: nothing', () => {
-    const a = renderWithHistory();
+  it('unmounted in the viewport mode: its entry goes too; unmounted outside it: nothing', async () => {
+    const a = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.click(fsButton());
+    expect(fullscreenLayers()).toHaveLength(1);
     a.unmount();
-    expect(a.pop).toHaveBeenCalledTimes(1);
-    const b = renderWithHistory();
+    await settle();
+    expect(fullscreenLayers()).toHaveLength(0);
+    expect(window.history.state).toEqual(opening);
+    const lengthBefore = window.history.length;
+    const b = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     b.unmount();
-    expect(b.pop).not.toHaveBeenCalled();
+    await settle();
+    expect(window.history.state).toEqual(opening);
+    expect(window.history.length).toBe(lengthBefore);
   });
 
-  it('the studio tab (no provider) keeps working without an entry', () => {
+  it('the studio Read tab (no reader layer under it) keeps working, and Back leaves its viewport mode too', async () => {
     render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.click(fsButton());
     expect(reader()).toHaveAttribute('data-fullscreen', 'viewport');
     fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'off');
+    await settle();
+    fireEvent.click(fsButton());
+    expect(reader()).toHaveAttribute('data-fullscreen', 'viewport');
+    await back();
     expect(reader()).toHaveAttribute('data-fullscreen', 'off');
   });
 });
@@ -193,58 +242,86 @@ describe('44 px targets on coarse pointers', () => {
       expect(b.className).toMatch(/\bcoarse:h-11\b/);
       expect(b.className).toMatch(/\bcoarse:w-11\b/);
     }
-    expect(screen.getByRole('radiogroup', { name: 'Reading mode' }).className).toMatch(/coarse:\[&>button\]:min-h-\[44px\]/);
+    // v5: every segment of the switch carries its own 44 px touch size (board/ui Segmented).
+    const segments = within(screen.getByRole('radiogroup', { name: 'Reading mode' })).getAllByRole('radio');
+    expect(segments.length).toBeGreaterThan(1);
+    for (const seg of segments) expect(seg.className).toMatch(/coarse:min-h-\[44px\]/);
   });
 });
 
 describe('preload: only the next page, after the current one', () => {
-  const created: Array<{ src: string; fire: (ok?: boolean) => void }> = [];
-  const RealImage = globalThis.Image;
+  // v5 pages load through the shared page-image cache: each download is a fetch (then a decode). Downloads here stay
+  // pending until a test lets them land.
+  const fetched: Array<{ url: string; land: (ok?: boolean) => void }> = [];
+  /** Every download not yet landed (a test may reset `fetched` to watch what comes next). */
+  const pending = new Set<(ok?: boolean) => void>();
   beforeEach(() => {
-    created.length = 0;
-    const Stub = class {
-      onload: (() => void) | null = null;
-      onerror: (() => void) | null = null;
-      decoding = 'auto';
-      private _src = '';
-      set src(v: string) {
-        this._src = v;
-        created.push({ src: v, fire: (ok = true) => (ok ? this.onload?.() : this.onerror?.()) });
-      }
-      get src() {
-        return this._src;
-      }
-    };
-    (globalThis as unknown as { Image: unknown }).Image = Stub;
-    (window as unknown as { Image: unknown }).Image = Stub;
+    // The cache is shared: pages earlier tests showed must not count as already loaded here.
+    pageImageCache.clear();
+    fetched.length = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (url: string) =>
+          new Promise<Response>((resolve) => {
+            const land = (ok = true) => {
+              pending.delete(land);
+              resolve(ok ? new Response(new Blob(['img'], { type: 'image/png' }), { status: 200 }) : new Response('', { status: 500 }));
+            };
+            pending.add(land);
+            fetched.push({ url, land });
+          })
+      )
+    );
   });
-  afterEach(() => {
-    (globalThis as unknown as { Image: unknown }).Image = RealImage;
-    (window as unknown as { Image: unknown }).Image = RealImage;
+  // Downloads a test left pending land now, so none holds one of the cache's 3 download slots into the next test.
+  afterEach(async () => {
+    await act(async () => {
+      [...pending].forEach((land) => land());
+      fetched.length = 0;
+      await new Promise((r) => setTimeout(r, 0));
+    });
   });
+  const land = async (match: RegExp, ok = true) => {
+    await act(async () => {
+      fetched.filter((f) => match.test(f.url)).forEach((f) => f.land(ok));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  };
 
-  it('waits for the page on screen, then fetches just the next one (never two ahead, never behind)', () => {
+  it('waits for the page on screen, then fetches just the next one (never two ahead, never behind)', async () => {
     render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
     fireEvent.keyDown(reader(), { key: 'ArrowRight' }); // page 1
-    created.length = 0;
+    fetched.length = 0;
     fireEvent.keyDown(reader(), { key: 'ArrowRight' }); // page 2
-    const now = created.map((c) => c.src);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const now = fetched.map((f) => f.url);
     expect(now.length).toBeGreaterThan(0);
     // Only the current page is touched until it has loaded.
-    expect(now.every((src) => src.endsWith('/u/p2.png'))).toBe(true);
-    act(() => created.filter((c) => c.src.endsWith('/u/p2.png')).forEach((c) => c.fire()));
-    const after = created.map((c) => c.src);
-    expect(after.filter((src) => src.endsWith('/u/p3.png'))).toHaveLength(1);
-    expect(after.some((src) => /\/p4\.png$|\/p1\.png$|cover/.test(src))).toBe(false);
+    expect(now.every((url) => url.endsWith('/u/p2.png'))).toBe(true);
+    await land(/\/u\/p2\.png$/);
+    const after = fetched.map((f) => f.url);
+    expect(after.filter((url) => url.endsWith('/u/p3.png'))).toHaveLength(1);
+    expect(after.some((url) => /\/p4\.png$|\/p1\.png$|cover/.test(url))).toBe(false);
   });
 
-  it('a failed current page still lets the next one load; scroll mode preloads nothing', () => {
+  it('a failed current page still lets the next one load; scroll mode preloads nothing', async () => {
     const { unmount } = render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="page" />);
-    act(() => created.forEach((c) => c.fire(false)));
-    expect(created.map((c) => c.src).some((src) => /\/p1\.png$/.test(src))).toBe(true);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(fetched.map((f) => f.url).some((url) => /\/p1\.png$/.test(url))).toBe(false);
+    await land(/cover/, false);
+    expect(fetched.map((f) => f.url).some((url) => /\/p1\.png$/.test(url))).toBe(true);
     unmount();
-    created.length = 0;
+    pageImageCache.clear();
+    fetched.length = 0;
     render(<ComicReaderView doc={drawnDoc()} urlFor={fakeUrlFor} initialMode="scroll" />);
-    expect(created).toHaveLength(0);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(fetched).toHaveLength(0);
   });
 });

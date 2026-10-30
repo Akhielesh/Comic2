@@ -1,0 +1,100 @@
+name: Deploy Comic Studio edge (comics.dreamstreamstudio.ai)
+
+# dreamstream-comics is the front door of Comic Studio at comics.dreamstreamstudio.ai
+# (dreamstreamcomicstudio/comics-edge): health, https + canonical-host redirects, /api/* through a
+# service binding to dreamstream-api, everything else proxied to the Pages project `comic2` with
+# Comic Studio branding and security headers. See comics-edge/README.md.
+#
+# Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, zone Workers Routes:Edit)
+# and CLOUDFLARE_ACCOUNT_ID — the same token the other Worker deploys use. The Worker itself has
+# no secrets (and wrangler.jsonc must never hold one: the repo is public).
+#
+# DNS precondition: the routes only run while a PROXIED (orange-cloud) DNS record covers
+# comics.* and comic.* (today the zone's wildcard record does). The smoke step below says so
+# loudly when the custom host does not reach this Worker.
+
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/comics-edge/**'
+      # The page half of the AI-agent gate is bundled from the API Worker's detector.
+      - 'dreamstreamcomicstudio/api-proxy/src/agent-gate.ts'
+      - '.github/workflows/deploy-comics-edge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-comics-edge
+  cancel-in-progress: false
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    # The job that holds the Cloudflare token runs in the production-deploy Environment (ADR 0006 WS-1).
+    environment: production-deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # wrangler 4.98+ requires Node >= 22.
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install worker dependencies
+        working-directory: dreamstreamcomicstudio/comics-edge
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck worker
+        working-directory: dreamstreamcomicstudio/comics-edge
+        run: npx tsc -p tsconfig.json
+
+      - name: Deploy with wrangler
+        working-directory: dreamstreamcomicstudio/comics-edge
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy
+
+      # The workers.dev URL is the definitive check (the custom host's bot protection may
+      # challenge GitHub's datacenter IPs). The custom host is probed best-effort: a 302 to the
+      # apex there means the old *.dreamstreamstudio.ai catch-all Worker still answers (route
+      # not active), and a DNS failure means no proxied record covers comics.* any more.
+      - name: Smoke-test the edge
+        run: |
+          for attempt in $(seq 1 12); do
+            body=$(curl -s --max-time 20 https://dreamstream-comics.akhieleshsrirangam.workers.dev/__edge/health || true)
+            if echo "$body" | grep -q '"service":"dreamstream-comics"'; then
+              echo "GET workers.dev /__edge/health -> ${body:0:200}"
+              break
+            fi
+            echo "attempt $attempt: ${body:0:160}"
+            if [ "$attempt" = 12 ]; then
+              echo '::error::dreamstream-comics did not answer /__edge/health on workers.dev within ~2 minutes'
+              exit 1
+            fi
+            sleep 10
+          done
+
+          host=comics.dreamstreamstudio.ai
+          if ! getent hosts "$host" >/dev/null 2>&1; then
+            echo "::warning::$host does not resolve. Add a PROXIED DNS record for it (e.g. AAAA comics -> 100::, orange cloud) — the Worker route only runs on proxied hostnames. See comics-edge/README.md."
+            exit 0
+          fi
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' --max-time 20 "https://$host/__edge/health" || true)
+          body=$(cat /tmp/health.json 2>/dev/null || true)
+          echo "GET https://$host/__edge/health -> $code ${body:0:200}"
+          if echo "$body" | grep -q '"service":"dreamstream-comics"'; then
+            echo "Custom host route active."
+          elif echo "$body" | grep -qi 'challenge-platform\|Just a moment'; then
+            echo "::warning::Cloudflare served a bot challenge to the CI runner on $host (the route could not be verified from CI)."
+          else
+            location=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 20 "https://$host/" || true)
+            echo "::warning::$host is not answered by dreamstream-comics yet (HTTP $code; / redirects to '${location}'). Check the Worker route comics.dreamstreamstudio.ai/* and that a proxied DNS record covers $host."
+          fi

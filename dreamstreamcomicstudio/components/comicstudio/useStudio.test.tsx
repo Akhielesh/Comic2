@@ -17,7 +17,14 @@ vi.mock('./studioApi', async (importOriginal) => {
 });
 
 import { StudioApiError } from './studioApi';
-import { useStudio } from './useStudio';
+import { actOutcomeOf, useStudio } from './useStudio';
+import { stopsSequence } from './conversation/cards/useAction';
+import type { StudioActOutcome, StudioController } from './types';
+
+// Compile-time (npm run typecheck): the shared StudioController contract says what act() resolves to —
+// the live controller needs no `as unknown as` cast and typed callers read the outcome directly.
+type ActResolves = Awaited<ReturnType<StudioController['act']>>;
+const actContractCarriesOutcome: StudioActOutcome extends ActResolves ? true : false = true;
 
 interface FakeStream {
   id: string;
@@ -123,6 +130,47 @@ describe('useStudio — director turns', () => {
     expect(api.streamStudio).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts the next message as soon as the reply lands, while the first stream still carries the renders', async () => {
+    const { result } = await setup();
+    act(() => void result.current.send('draw page 1'));
+    const s1 = lastStream();
+    emit(s1, { type: 'hello', rev: 5, turnId: 't1' });
+    emit(s1, { type: 'ops', rev: 6, ops: [{ op: 'message', msg: { id: 'u1', role: 'user', text: 'draw page 1', at: 1 } }] });
+    expect(result.current.messageBusy).toBe(true);
+    emit(s1, { type: 'ops', rev: 7, ops: [{ op: 'message', msg: { id: 'a1', role: 'assistant', text: 'On its way.', at: 2 } }] });
+    // The reply landed: the director is free although the stream stays open for the page's progress.
+    expect(result.current.messageBusy).toBe(false);
+    expect(result.current.busy).toBe(true);
+    // Before the fix send() returned silently here until every render had finished.
+    act(() => void result.current.send('what is left?'));
+    expect(api.streamStudio).toHaveBeenCalledTimes(2);
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'what is left?' });
+    expect(result.current.messageBusy).toBe(true);
+    const s2 = lastStream();
+    // The first stream closes (renders done) while the second turn is still running: still locked, one turn at a time.
+    await finish(s1, 7);
+    expect(result.current.messageBusy).toBe(true);
+    act(() => void result.current.send('three'));
+    expect(api.streamStudio).toHaveBeenCalledTimes(2);
+    emit(s2, { type: 'ops', rev: 8, ops: [{ op: 'message', msg: { id: 'u2', role: 'user', text: 'what is left?', at: 3 } }] });
+    emit(s2, { type: 'ops', rev: 9, ops: [{ op: 'message', msg: { id: 'a2', role: 'assistant', text: 'Page 1 is drawing.', at: 4 } }] });
+    await finish(s2, 9);
+    expect(result.current.messageBusy).toBe(false);
+    expect(result.current.busy).toBe(false);
+    expect(result.current.doc?.conversation.map((m) => m.id)).toEqual(['u1', 'a1', 'u2', 'a2']);
+  });
+
+  it('a tapped option names its card on the request, and "Try again" re-sends it', async () => {
+    const { result } = await setup();
+    const card = { id: 'card_1', choiceIds: ['opt_1'] };
+    act(() => void result.current.send('Make it funny', { card }));
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'Make it funny', card });
+    await act(async () => lastStream().reject(new StudioApiError('billing', 'Out of credit.', { status: 402 })));
+    expect(result.current.pendingMessage).toMatchObject({ status: 'failed', card });
+    act(() => result.current.retryPendingMessage());
+    expect(lastStream().req).toEqual({ kind: 'message', text: 'Make it funny', card });
+  });
+
   it('sends images as attachments', async () => {
     const { result } = await setup();
     const att = { name: 'maya.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAA' };
@@ -185,6 +233,140 @@ describe('useStudio — actions', () => {
     emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'render', target: { kind: 'page', id: 'pg_2' }, patch: { status: 'rendering' } }] });
     expect(result.current.isRendering({ kind: 'page', id: 'pg_2' })).toBe(true);
     expect(result.current.renderingTotal).toBe(2); // + the style option already drawing
+  });
+});
+
+describe('useStudio — act() resolves its outcome (P2-STUDIO-CORE)', () => {
+  const gate = {
+    id: 'g9',
+    action: { type: 'render_pages' as const },
+    title: 'Draw 3 pages',
+    summary: '3 pages',
+    estimateUsd: 0.2,
+    imageCount: 3,
+    model: 'nano-banana',
+    createdAt: 1,
+    status: 'open' as const,
+    reason: 'policy' as const
+  };
+
+  it('a clean stream resolves ok and not gated', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_cover' });
+    });
+    await finish(lastStream(), 6);
+    await expect(p).resolves.toMatchObject({ ok: true, gated: false, aborted: false });
+    expect(stopsSequence(await p)).toBe(false);
+  });
+
+  it('act() is typed by the shared contract as resolving its outcome', async () => {
+    expect(actContractCarriesOutcome).toBe(true);
+    const { result } = await setup();
+    const controller: StudioController = result.current;
+    let p!: Promise<StudioActOutcome | void>;
+    act(() => {
+      p = controller.act({ type: 'render_cover' });
+    });
+    await finish(lastStream(), 6);
+    const out: StudioActOutcome | void = await p;
+    expect(out).toMatchObject({ ok: true, gated: false, aborted: false, retryable: false });
+  });
+
+  it('a stream that commits an open gate resolves gated (sequences stop)', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_pages' });
+    });
+    emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'gate', gate }] });
+    await finish(lastStream(), 6);
+    const out = actOutcomeOf(await p);
+    expect(out).toMatchObject({ ok: true, gated: true });
+    expect(stopsSequence(out)).toBe(true);
+  });
+
+  it('closing a gate (status approved / null) is not "gated"', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'approve_gate', gateId: 'g9' });
+    });
+    emit(lastStream(), { type: 'ops', rev: 6, ops: [{ op: 'gate', gate: { ...gate, status: 'approved' } }, { op: 'gate', gate: null }] });
+    await finish(lastStream(), 6);
+    expect(actOutcomeOf(await p)).toMatchObject({ ok: true, gated: false });
+  });
+
+  it('a refusal inside the stream resolves ok:false with its code', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_pages' });
+    });
+    emit(lastStream(), { type: 'error', message: 'x', code: 'COOLDOWN' });
+    await act(async () => lastStream().resolve());
+    const out = actOutcomeOf(await p);
+    expect(out).toMatchObject({ ok: false, code: 'COOLDOWN', gated: false });
+    expect(stopsSequence(out)).toBe(true);
+  });
+
+  it('a transport failure resolves ok:false (never throws to the card)', async () => {
+    const { result } = await setup();
+    let p!: Promise<unknown>;
+    act(() => {
+      p = result.current.act({ type: 'render_cover' });
+    });
+    await act(async () => lastStream().reject(new StudioApiError('billing', 'Out of credit.', { status: 402 })));
+    expect(actOutcomeOf(await p)).toMatchObject({ ok: false, error: 'Out of credit.' });
+  });
+
+  it('a duplicate click resolves skipped (no second stream); local edits resolve ok', async () => {
+    const { result } = await setup();
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    act(() => {
+      first = result.current.act({ type: 'render_cover' });
+      second = result.current.act({ type: 'render_cover' });
+    });
+    expect(streams).toHaveLength(1);
+    expect(actOutcomeOf(await second)).toMatchObject({ ok: false, skipped: true });
+    await finish(lastStream(), 6);
+    expect(actOutcomeOf(await first)).toMatchObject({ ok: true });
+    let local!: Promise<unknown>;
+    act(() => {
+      local = result.current.act({ type: 'patch', ops: [{ op: 'note_add', text: 'n' }] });
+    });
+    await waitFor(() => expect(streams).toHaveLength(2));
+    await finish(lastStream(), 7);
+    expect(actOutcomeOf(await local)).toMatchObject({ ok: true, gated: false });
+  });
+
+  it('void call sites keep working: actOutcomeOf(undefined) is null', () => {
+    expect(actOutcomeOf(undefined)).toBeNull();
+    expect(actOutcomeOf({ ok: true })).toBeNull();
+  });
+});
+
+describe('useStudio — send() object form (the composer)', () => {
+  it('sends inline photos, inbox paths, targets and an explicit focus in one turn', async () => {
+    const { result } = await setup();
+    const att = { name: 'a.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' };
+    act(() =>
+      void result.current.send('These are Maya', {
+        attachments: [att],
+        inboxPaths: ['u/x/p/ref/b.webp'],
+        attachmentTargets: [{ kind: 'character', id: 'c_maya' }, { kind: 'character', id: 'c_maya' }],
+        focus: { pageId: 'pg_1' }
+      })
+    );
+    expect(lastStream().req).toEqual({
+      kind: 'message',
+      text: 'These are Maya',
+      attachments: [att, { inboxPath: 'u/x/p/ref/b.webp' }],
+      attachmentTargets: [{ kind: 'character', id: 'c_maya' }, { kind: 'character', id: 'c_maya' }],
+      focus: { pageId: 'pg_1' }
+    });
   });
 });
 
@@ -320,6 +502,37 @@ describe('useStudio — cancel and cleanup', () => {
     expect(api.cancelStudio).toHaveBeenCalledWith('proj_1');
     expect(result.current.cancelling).toBe(true);
     await finish(lastStream(), 5);
+    expect(result.current.cancelling).toBe(false);
+  });
+
+  it('stopping the director ends "Stopping…" with that turn while an earlier turn keeps drawing; then Stop is "Stop drawing"', async () => {
+    const { result } = await setup();
+    act(() => void result.current.send('draw page 1'));
+    const s1 = lastStream();
+    emit(s1, { type: 'hello', rev: 5, turnId: 't1' });
+    emit(s1, {
+      type: 'ops',
+      rev: 6,
+      ops: [
+        { op: 'message', msg: { id: 'u1', role: 'user', text: 'draw page 1', at: 1 } },
+        { op: 'message', msg: { id: 'a1', role: 'assistant', text: 'On its way.', at: 2 } }
+      ]
+    });
+    act(() => void result.current.send('make it moodier'));
+    const s2 = lastStream();
+    expect(result.current.messageBusy).toBe(true);
+    await act(async () => result.current.cancel());
+    expect(result.current.cancelling).toBe(true);
+    // The server stopped turn 2 only: its stream closes, turn 1's stays open for page 1.
+    await finish(s2, 6);
+    expect(result.current.busy).toBe(true);
+    // Before: "Stopping…" stayed on (hiding the activity line's Stop) until every stream had closed.
+    expect(result.current.cancelling).toBe(false);
+    // No turn in flight now: this Stop is "Stop drawing", and it lasts until the render stream closes.
+    await act(async () => result.current.cancel());
+    expect(api.cancelStudio).toHaveBeenCalledTimes(2);
+    expect(result.current.cancelling).toBe(true);
+    await finish(s1, 6);
     expect(result.current.cancelling).toBe(false);
   });
 
