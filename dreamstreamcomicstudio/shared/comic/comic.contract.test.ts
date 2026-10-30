@@ -1501,7 +1501,7 @@ import {
 import { INVERTIBLE_OPS, PRO_PAGE_OPS_PATCHABLE, PRO_PAGE_PATCH_OPS, clampBalloonPatch } from './ops';
 import { describeOps } from './undo';
 import { PANEL_RES_STEP, tierPanelPrice } from './models';
-import { CONSISTENCY_LIMITS, EDITOR_LIMITS } from './limits';
+import { CONSISTENCY_LIMITS, EDITOR_LIMITS, PRO_PAGE_LIMITS } from './limits';
 import { drawnPanelBoxes, estimatePanelBoxes, panelBoxesFor } from './pageGeometry';
 import { letteringAspect, planLettering, estimateMeasure } from './lettering/layout';
 import { composeAspect, frameAffine, pageSpaceQc } from './panelize/space';
@@ -1769,7 +1769,7 @@ describe('Ship 2 contract (K2a)', () => {
     expect(clampBalloonPatch({ rot: -80, minH: 2 })).toEqual({ rot: -45, minH: 0.6 });
     expect(normalizeConsistencyFinding({ id: 'f', kind: 'identity', panel: 2, severity: 'major', note: ' x ', fix: { kind: 'rebind', order: [2, 1] } })).toEqual({ id: 'f', kind: 'identity', panel: 2, severity: 'major', note: 'x', fix: { kind: 'rebind', order: [2, 1] } });
     expect(normalizeVersionParts({ panels: { p1: { c: 'abcdef', a: 'abcdef', p: 'abcdef', s: 'abcdef', m: 'xyz' } } })).toBeUndefined();
-    expect(normalizeConsistencySettings({ maxRefs: 40, skip: [] })).toEqual({ maxRefs: 14 });
+    expect(normalizeConsistencySettings({ maxRefs: 40, skip: [] })).toEqual({ maxRefs: PRO_PAGE_LIMITS.maxRefsMax });
     expect(frameStyleOf({ frameStyle: { gutter: 0.05 } })).toEqual({ ...DEFAULT_FRAME_STYLE, gutter: 0.05 });
     expect(scenesOf(createEmptyDoc('x'))).toEqual([]);
     expect(consistencyOf(createEmptyDoc('x'))).toEqual({});
@@ -2284,6 +2284,18 @@ describe('Ship 2 contract (K2a)', () => {
     const rebind = panelMomentsOfOps([{ op: 'page_panels', id: doc.pages[0].id, panels: doc.pages[0].panels }], 'editor', doc, 'rebind_panels');
     expect(describeChanges(rebind, 'edits')).toBe("Matched page 1's script to its art (free)");
     expect(describeChanges(panelMomentsOfOps([{ op: 'scene', id: 'sc', patch: { name: 'S' } }], 'you', doc), 'edits')).toBe('You updated the scenes');
+    // Dismissing a check and bringing one back read differently; "Show as drawn" is named as such.
+    const finding = (dismissed: boolean | null): DocOp => ({ op: 'finding', pageId: p2.id, id: 'f', patch: { dismissed } });
+    expect(describeChanges(panelMomentsOfOps([finding(true)], 'you', doc), 'edits')).toBe('You dismissed a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([finding(null)], 'you', doc), 'edits')).toBe('You brought back a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([finding(false)], 'you', doc), 'edits')).toBe('You brought back a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: null }], 'you', doc), 'edits')).toBe('You showed page 2 as drawn');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: undefined }], 'you', doc), 'edits')).toBe('You showed page 2 as drawn');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: null, frames: [{ panelId: p2.panels[0].id, frame: null }] }], 'you', doc), 'edits')).toBe(
+      'You rearranged the panels on page 2'
+    );
+    expect(describeOps([finding(true)])).toBe('change a check');
+    expect(describeOps([finding(null), { ...finding(true), id: 'g' } as DocOp])).toBe('change 2 checks');
     // The moments stand in for the diff's page items; a dialogue edit in the same row is still named.
     const merged = withPanelMoments(
       [
@@ -2297,6 +2309,12 @@ describe('Ship 2 contract (K2a)', () => {
     // Existing labels are unchanged.
     expect(describeChanges([{ what: 'balloons', by: 'editor', pageNs: [2] }], 'edits')).toBe('The editor re-fitted balloons on page 2, no AI cost');
     for (const label of [you, editable, fix, rebind].map((l) => describeChanges(l, 'edits'))) expect(label).not.toMatch(/\b(branch|merge|commit|checkout|fork|HEAD|diff|rebase|revert)\b/i);
+  });
+
+  it('consistency.maxRefs can reach every reference slot of every registered model (the lock caps the real call)', () => {
+    const most = Math.max(...IMAGE_MODELS.map((m) => m.refs.total));
+    expect(PRO_PAGE_LIMITS.maxRefsMax).toBeGreaterThanOrEqual(most);
+    expect(normalizeConsistencySettings({ maxRefs: most })).toEqual({ maxRefs: most });
   });
 
   it('limits are the plan §5.5 values, one constant each', () => {

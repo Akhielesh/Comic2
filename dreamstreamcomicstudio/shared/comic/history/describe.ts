@@ -33,7 +33,11 @@ export type PanelMoment =
   | 'overlays'
   | 'continuity'
   | 'scenes'
-  | 'finding';
+  | 'finding'
+  /** A dismissed check brought back (finding op with dismissed false/null). */
+  | 'check_back'
+  /** "Show as drawn": the page left panels mode, nothing else changed. */
+  | 'as_drawn';
 
 /** A ChangeItem refined by its panel moment (additive: `what` stays an ordinary ChangeWhat). */
 export interface PanelChangeItem extends ChangeItem {
@@ -43,7 +47,8 @@ export interface PanelChangeItem extends ChangeItem {
 }
 
 const PANEL_MOMENTS: ReadonlySet<string> = new Set<PanelMoment>([
-  'layout', 'editable', 'rebind', 'flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'overlays', 'continuity', 'scenes', 'finding'
+  'layout', 'editable', 'rebind', 'flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'overlays', 'continuity', 'scenes', 'finding',
+  'check_back', 'as_drawn'
 ]);
 export const isPanelChangeItem = (c: unknown): c is PanelChangeItem =>
   !!c && typeof c === 'object' && typeof (c as PanelChangeItem).moment === 'string' && PANEL_MOMENTS.has((c as PanelChangeItem).moment);
@@ -61,9 +66,12 @@ const MOMENT_WHAT: Record<PanelMoment, ChangeWhat> = {
   overlays: 'page_text',
   continuity: 'page_text',
   scenes: 'details',
-  finding: 'art'
+  finding: 'art',
+  check_back: 'art',
+  as_drawn: 'panels'
 };
-const ART_MOMENTS: ReadonlySet<PanelMoment> = new Set<PanelMoment>(['flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'finding']);
+const ART_MOMENTS: ReadonlySet<PanelMoment> = new Set<PanelMoment>(['flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'finding', 'check_back']);
+const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 
 /** One moment item for a page (none for 'scenes', a book-wide moment). */
 export const panelMomentItem = (
@@ -152,7 +160,10 @@ export const panelMomentsOfOps = (
     if (!op || typeof op !== 'object') continue;
     switch (op.op) {
       case 'page_frames':
-        add(op.artMode === 'panels' && by === 'editor' ? 'editable' : 'layout', op.pageId);
+        // "Show as drawn": the display leaves frames (artMode cleared) and no frame or style changes with it.
+        if (hasOwn(op, 'artMode') && (op.artMode === null || op.artMode === undefined) && !(Array.isArray(op.frames) && op.frames.length) && !hasOwn(op, 'frameStyle'))
+          add('as_drawn', op.pageId);
+        else add(op.artMode === 'panels' && by === 'editor' ? 'editable' : 'layout', op.pageId);
         break;
       case 'panels_order':
       case 'panel_add':
@@ -173,7 +184,8 @@ export const panelMomentsOfOps = (
         add('scenes');
         break;
       case 'finding':
-        add('finding', op.pageId);
+        // Only `dismissed: true` dismisses; false or null brings the check back.
+        add(op.patch && op.patch.dismissed === true ? 'finding' : 'check_back', op.pageId);
         break;
       default:
         break;
@@ -232,13 +244,18 @@ const momentPhrase = (moment: PanelMoment, list: PanelChangeItem[], actor: Histo
       return 'updated the scenes';
     case 'finding':
       return actor === 'you' ? `dismissed a check on ${pages}` : `applied a fix on ${pages}`;
+    case 'check_back':
+      return `brought back a check on ${pages}`;
+    case 'as_drawn':
+      return `showed ${pages} as drawn`;
     default:
       return `changed ${pages}`;
   }
 };
 
 const MOMENT_ORDER: readonly PanelMoment[] = [
-  'redraw_panel', 'draw_panel', 'enrich', 'flatten', 'editable', 'rebind', 'layout', 'cuts', 'overlays', 'finding', 'continuity', 'scenes'
+  'redraw_panel', 'draw_panel', 'enrich', 'flatten', 'editable', 'rebind', 'layout', 'as_drawn', 'cuts', 'overlays', 'finding', 'check_back',
+  'continuity', 'scenes'
 ];
 const momentPhrases = (items: PanelChangeItem[], actor: HistoryActor): string[] =>
   MOMENT_ORDER.flatMap((m) => {

@@ -156,6 +156,7 @@ export const PRO_PAGE_LIMITS = {
   anchorKeyChars: 80,
   /** consistency.skip entries (anchor keys the user unticked). */
   skipItems: 60,
-  /** consistency.maxRefs ceiling (the largest reference count any registered model takes). */
-  maxRefsMax: 14
+  /** consistency.maxRefs ceiling: at least the largest reference count any registered model takes (models.ts
+   *  IMAGE_MODELS refs.total; a contract test holds it). The comic's model lock caps the real call. */
+  maxRefsMax: 16
 } as const;

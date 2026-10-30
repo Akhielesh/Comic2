@@ -523,7 +523,8 @@ const LABELS: Partial<Record<DocOp['op'], [string, string?]>> = {
   continuity: ['edit continuity', 'edit continuity on {n} pages'],
   scene: ['edit a scene', 'edit {n} scenes'],
   consistency: ['change consistency settings'],
-  finding: ['dismiss a check', 'dismiss {n} checks']
+  // Neutral: a finding op both dismisses a check and brings one back.
+  finding: ['change a check', 'change {n} checks']
 };
 
 /** Human label for an undo entry ("restyle 3 balloons", "move page 4"). */
