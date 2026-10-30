@@ -64,7 +64,8 @@ import {
   signStudioUrls,
   streamStudio,
   toStudioApiError,
-  uploadStudioRef
+  uploadStudioRef,
+  type StudioDoneEvent
 } from './studioApi';
 import {
   assetPath,
@@ -249,6 +250,17 @@ const opensGate = (event: StudioEvent): boolean =>
   event.type === 'ops' &&
   Array.isArray(event.ops) &&
   event.ops.some((op) => !!op && op.op === 'gate' && !!op.gate && typeof op.gate === 'object' && op.gate.status === 'open');
+
+/**
+ * Comic History: the moment a `history_restore` stream's `done` event names as saved just before it (§6.1 step 8),
+ * copied onto the act outcome so the restore toast's Undo needs no lookup. Read defensively here (not through a
+ * studioApi helper) so tests that stub studioApi keep working.
+ */
+const doneBeforeVersionId = (event: StudioEvent): string | undefined => {
+  if (event.type !== 'done') return undefined;
+  const before = (event as StudioDoneEvent).beforeVersionId;
+  return typeof before === 'string' && before ? before : undefined;
+};
 
 /** Server codes that mean "try again later", not "this can never be saved". */
 const RETRYABLE_CODES = new Set(['CONFLICT', 'RATE_LIMIT', 'COOLDOWN', 'TIMEOUT', 'INTERNAL', 'NOT_AVAILABLE', 'PROVIDER_ERROR']);
@@ -850,6 +862,7 @@ export function useStudio(projectId: string): ComicStudioController {
       actionsInFlightRef.current.add(key);
       const generation = generationRef.current;
       let gated = false;
+      let beforeVersionId: string | undefined;
       try {
         const outcome = await runStream(
           'action',
@@ -858,10 +871,12 @@ export function useStudio(projectId: string): ComicStudioController {
             actionType: action.type,
             onEvent: (event) => {
               if (opensGate(event)) gated = true;
+              const before = doneBeforeVersionId(event);
+              if (before) beforeVersionId = before;
             }
           }
         );
-        return { ...outcome, gated };
+        return { ...outcome, gated, ...(beforeVersionId ? { beforeVersionId } : {}) };
       } finally {
         if (generation === generationRef.current) actionsInFlightRef.current.delete(key);
       }

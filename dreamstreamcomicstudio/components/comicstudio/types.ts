@@ -39,6 +39,12 @@ export interface StudioActOutcome extends StreamOutcome {
   gated: boolean;
   /** The action never reached the server (a duplicate click, an invalid action, no comic loaded). */
   skipped?: boolean;
+  /**
+   * Comic History: the moment the server saved just before a `history_restore` (its stream's `done` event, versions
+   * plan §6.1 step 8). The restore toast's Undo brings it back (history/historyActions.ts). Absent for every other
+   * action and from servers that don't send it.
+   */
+  beforeVersionId?: string;
 }
 
 export interface ActivityItem {

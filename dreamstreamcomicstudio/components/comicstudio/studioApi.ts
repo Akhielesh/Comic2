@@ -20,6 +20,7 @@ import { CONTENT_RATINGS, type ContentRating } from '../../shared/comic/safety';
 import { refOwnerKey } from '../../shared/comic/refs';
 import type { LibraryIndex, LibraryKind, LibraryQuote, LibraryRunView } from '../../shared/comic/library';
 import { SLUG_RE } from '../../shared/comic/publication';
+import type { VersionRow } from '../../shared/comic/history/types';
 import type {
   PublicComicPayload,
   PublicPublicationInfo,
@@ -512,6 +513,14 @@ export async function getStudioModels(): Promise<{ models: ImageModelSpec[]; tie
 const EVENT_NAMES = new Set<string>(STREAM_EVENT_NAMES);
 
 /**
+ * The `done` event as this client reads it: the shared shape plus `beforeVersionId` — a `history_restore` stream names
+ * the moment the server saved just before the restore (versions plan §6.1 step 8), so the restore toast's Undo needs no
+ * lookup. Additive and optional: an older server simply never sends it. (Wave amendment: shared/comic/events.ts `done`
+ * gains `beforeVersionId?: string`; this type then equals the shared one.)
+ */
+export type StudioDoneEvent = Extract<StudioEvent, { type: 'done' }> & { beforeVersionId?: string };
+
+/**
  * Parse one SSE block into a StudioEvent. The data is the event JSON; its `type` wins,
  * else the SSE `event:` name is used. Returns null for unknown or malformed events so a
  * newer server never breaks an older client.
@@ -581,8 +590,21 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
     }
     case 'done': {
       const saved = num(parsed.savedUsd);
-      return { type: 'done', rev: num(parsed.rev) ?? -1, spentUsd: num(parsed.spentUsd) ?? 0, ...(saved !== undefined && saved > 0 ? { savedUsd: saved } : {}) };
+      // Comic History: only a non-empty string id passes (anything else is dropped, never coerced).
+      const before = str(parsed.beforeVersionId);
+      const done: StudioDoneEvent = {
+        type: 'done',
+        rev: num(parsed.rev) ?? -1,
+        spentUsd: num(parsed.spentUsd) ?? 0,
+        ...(saved !== undefined && saved > 0 ? { savedUsd: saved } : {}),
+        ...(before ? { beforeVersionId: before } : {})
+      };
+      return done;
     }
+    // --- history: a moment was saved. Only a plain object passes; the reducer stores it as lastHistoryVersion (an open
+    //     History panel updates live) and resyncs after a restore or a switch. Never sent while COMIC_HISTORY is off. ---
+    case 'history':
+      return isObject(parsed.version) ? { type: 'history', version: parsed.version as unknown as VersionRow } : null;
     default:
       return null;
   }
