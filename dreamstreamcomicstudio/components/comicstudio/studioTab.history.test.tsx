@@ -1,7 +1,10 @@
-// StudioTab gained 'history' (shared/comic/doc.ts; the H5 amendment). Every existing consumer stays correct: the board
-// still shows exactly the old tabs while Comic History is off — whichever tab is open — and gains History (after Media,
-// before Read) only while it is on; the QA harness's persisted ?tab= values still load; the history feature's tab id is
-// a plain typed StudioTab.
+// Regression guard: every existing StudioTab consumer stays correct now that StudioTab includes 'history'
+// (shared/comic/doc.ts; the H5 amendment). These tests pass with or without that change. They pin what must not move:
+// while Comic History is off, the board shows exactly the old tabs whichever one is open; while it is on, History sits
+// after Pages and before Read; the QA harness's stored ?tab= values still load; the tab id is 'history'.
+// The proofs that fail without the new code live elsewhere: typecheck (history/index.ts declares
+// `HISTORY_TAB_ID: StudioTab = 'history'` with no cast, and useStudio.ts's `const HISTORY_TAB: BoardTab = 'history'`)
+// and useStudio.history.test.tsx (the setTab and chip gates, and the derived tab when History turns off).
 
 import React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,8 +26,8 @@ const tabNames = () =>
 
 afterEach(() => cleanup());
 
-describe("StudioTab 'history'", () => {
-  it('is the history feature\'s tab id, typed without a cast', () => {
+describe("StudioTab 'history' — regression guard: every existing StudioTab consumer stays correct", () => {
+  it('the history feature\'s tab id is \'history\' at order 510 (that it needs no cast is a typecheck proof)', () => {
     const id: StudioTab = HISTORY_TAB_ID;
     expect(id).toBe('history');
     expect(HISTORY_TAB_ORDER).toBe(510);
