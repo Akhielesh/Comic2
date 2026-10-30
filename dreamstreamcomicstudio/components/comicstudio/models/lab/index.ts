@@ -33,3 +33,6 @@ export const labAdminSection: AdminSectionRegistration = {
 
 export { MODEL_LAB_PATH, fetchLabOverview, runLabCheck, setLabWatermark, voteBlindPair, formatLabUsd, newClickId } from './labApi';
 export type { LabOverview, LabItem, LabRun, BlindPair, LabRunAnswer } from './labApi';
+// P1 · Pro pages A/B, part 1: rendered inside the lazy lab section (ProPagesSection.tsx), so only its types are
+// re-exported here — a value export would pull it into the studio bundle.
+export type { ProPagesOverview, ProPagesArmItem, ProPagesPage, LabAbRun, LabPageCheck } from './labApi';
