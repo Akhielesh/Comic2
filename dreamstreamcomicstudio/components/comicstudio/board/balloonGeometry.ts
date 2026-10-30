@@ -20,6 +20,7 @@ import { KIND_FONT_SCALE as SHARED_KIND_FONT_SCALE, LETTER_METRICS, DEFAULT_LETT
 import { burstPath, captionPath, cloudPath, speechBodyPath, tailPath, thoughtBubbles, type Circle, type Pt, type TextInset } from '../../../shared/comic/lettering/shapes';
 import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place';
 import { estimateMeasure, letteringSizer, sfxAutoStyle } from '../../../shared/comic/lettering/layout';
+import { composeAspect, type ComposePageShape } from '../../../shared/comic/panelize/space';
 
 export { OUTLINE_BLEED, OUTLINE_BLEED_XY, SHAPE_BLEED, fitBalloonOnPage, outlineBounds, safeAreaBox } from '../../../shared/comic/lettering/place';
 
@@ -81,12 +82,9 @@ export const aspectNumber = (aspect?: AspectRatio | string | null): number => {
   return w > 0 && h > 0 ? w / h : 2 / 3;
 };
 
-/** A page's width/height: the render's pixel size when known, else the format's aspect. */
-export const pageAspectOf = (doc: Pick<ComicDoc, 'format'>, page?: Pick<Page, 'render'> | null): number => {
-  const a = page?.render?.asset;
-  if (a?.w && a?.h && a.w > 0 && a.h > 0) return a.w / a.h;
-  return aspectNumber(doc.format.pageAspect);
-};
+/** A page's width/height as shown: the render's pixel size when known, else the format's aspect; in panels mode
+ *  (Ship 2) the book aspect its frames are laid out on (shared/comic/panelize/space.ts composeAspect). */
+export const pageAspectOf = (doc: Pick<ComicDoc, 'format'>, page?: ComposePageShape | null): number => composeAspect(doc, page);
 
 // ── Type ─────────────────────────────────────────────────────────────────────
 

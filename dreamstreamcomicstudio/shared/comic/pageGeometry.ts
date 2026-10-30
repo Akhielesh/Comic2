@@ -8,6 +8,8 @@
 // All boxes are page-normalized (0..1, origin top-left).
 
 import type { Box, ComicDoc, ComicKind, Format, Page, Panel, PanelSize } from './doc.js';
+// --- Ship 2 (K2a): panels mode reads its frames (artModeOf is pure; doc.ts never imports this module) ---
+import { artModeOf } from './doc.js';
 
 /** Outer page margin and gutter between panels (fractions of the page). */
 const MARGIN = 0.02;
@@ -343,11 +345,21 @@ const validBox = (b: unknown): b is Box => {
 export const drawnLayoutBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout'>): Box[] =>
   estimatePanelBoxes({ panels: page.panels, layout: effectiveLayout(page, doc.format) }, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
 
+/** Ship 2 (K2a; pro plan §4.3): the page shape the box readers take — artMode is optional (absent = as drawn). */
+export type PanelBoxesPage = Pick<Page, 'panels' | 'layout' | 'render'> & Partial<Pick<Page, 'artMode'>>;
+
+/** The frames of a page shown in panels mode (artModeOf), in reading order; undefined in page mode. */
+export const frameBoxesFor = (page: PanelBoxesPage): Box[] | undefined =>
+  artModeOf(page) === 'panels' ? page.panels.map((p) => ({ ...p.frame!.box })) : undefined;
+
 /**
- * The best panel rectangles we know for a page: the vision pass's measured boxes when
- * they match the panel count, else the blueprint estimate.
+ * The best panel rectangles we know for a page: in panels mode its frames (the page as shown — balloons, Guided
+ * View, the transcript, motion export and wireframes follow them with no code of their own); else the vision pass's
+ * measured boxes when they match the panel count, else the blueprint estimate.
  */
-export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout' | 'render'>): Box[] => {
+export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: PanelBoxesPage): Box[] => {
+  const frames = frameBoxesFor(page);
+  if (frames) return frames;
   const measured = page.render?.qc?.panelBoxes;
   if (Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
   return estimatePanelBoxes(page, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
@@ -362,7 +374,10 @@ export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'p
  * the stored layout text — so those boxes are not a measurement and never stand in for the layout as drawn. QC
  * written before boxesFrom existed has no marker and is read as measured, as before.
  */
-export const drawnPanelBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout' | 'render'>): Box[] => {
+export const drawnPanelBoxes = (doc: Pick<ComicDoc, 'format'>, page: PanelBoxesPage): Box[] => {
+  // Ship 2: in panels mode the frames are where the lettering goes, so a fit is judged on them.
+  const frames = frameBoxesFor(page);
+  if (frames) return frames;
   const qc = page.render?.qc;
   const measured = qc?.panelBoxes;
   if (qc?.boxesFrom !== 'estimate' && Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;

@@ -24,7 +24,7 @@ import { DEFAULT_LETTERING, sanitizeLetteringStyle, sanitizeLetterStylePatch } f
 import { normalizeI18n } from './i18n.js';
 import { isPublicationMirror } from './publication.js';
 import { hashString, stableStringify } from './hash.js';
-import { DOC_LIMITS } from './limits.js';
+import { CONSISTENCY_LIMITS, DOC_LIMITS, EDITOR_LIMITS, PRO_PAGE_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
 // --- history (versions plan §3.3; H0): type-only, so doc.ts stays the dependency root ---
 import type { HistoryCard } from './history/types.js';
@@ -131,10 +131,20 @@ export interface VersionMeta {
   parentPath?: string; // edits: the version it was made from
   continuityPath?: string; // previous-page reference actually attached
   refPaths?: string[]; // user ref paths actually attached ("drawn from older photos" hint)
+  // ── Ship 2 (K2a; pro plan §5.2, I3): they describe THIS raster, so a new asset clears them and history keeps them.
+  //    Never hashed. ──
+  /** Where each drawn panel sits on this raster (page renders; panelization). */
+  cuts?: PanelCuts;
+  /** Staleness fingerprints of what this raster was drawn from (parts.ts partsOf). */
+  parts?: VersionParts;
+  /** The consistency anchors attached to the call that drew it (≤ CONSISTENCY_LIMITS.anchorKeys). */
+  anchorKeys?: string[];
 }
 /** Every VersionMeta key (asset replacement clears exactly these). */
 export const VERSION_META_KEYS: readonly (keyof VersionMeta)[] = [
-  'specHash', 'qc', 'costUsd', 'resolution', 'aspect', 'jobHash', 'origin', 'note', 'parentPath', 'continuityPath', 'refPaths'
+  'specHash', 'qc', 'costUsd', 'resolution', 'aspect', 'jobHash', 'origin', 'note', 'parentPath', 'continuityPath', 'refPaths',
+  // --- Ship 2 (K2a) ---
+  'cuts', 'parts', 'anchorKeys'
 ];
 
 export type RenderStatus = 'none' | 'queued' | 'rendering' | 'ready' | 'failed' | 'stale';
@@ -179,6 +189,11 @@ export interface QcReport {
   missingSpeakers?: QcMissingSpeaker[];
   /** Where panelBoxes came from: measured by the check, or estimated from the layout blueprint. */
   boxesFrom?: 'vision' | 'estimate';
+  // ── Ship 2 (K2a; pro plan §5.2): the check v2 (B3). A report without them is an older check ("not checked yet"). ──
+  /** 2 = the check read the reference board (identity, continuity, style). */
+  checkV?: 2;
+  /** What the check found, with free/paid fix offers (≤ CONSISTENCY_LIMITS.findings). */
+  findings?: ConsistencyFinding[];
 }
 
 /** A speaker the page check reads as not drawn in a panel (QcReport.missingSpeakers). */
@@ -412,6 +427,11 @@ export interface Panel {
   placeId?: string;
   mood?: string;
   lines: Line[];
+  // ── Ship 2 (K2a; pro plan §5.2). Never hashed. ──
+  /** The panel as an object on the page (panels mode). Moves only through `page_frames`, so its lettering follows. */
+  frame?: PanelFrame;
+  /** Per-panel art direction (lens, light, staging…). */
+  direction?: PanelDirection;
 }
 
 /** A lettered balloon placed on a page (overlay lettering). Coordinates are page-normalized 0..1. */
@@ -433,6 +453,11 @@ export interface Balloon {
    *  Direction (P2-AMEND): `linkTo` points to the PREVIOUS line in reading order — a chain l1←l2←l3
    *  is drawn as one group; unlinking a balloon clears the links at both of its ends. */
   linkTo?: string;
+  // ── Ship 2 (K2a; pro plan §5.2). Shared across languages. ──
+  /** Rotation in degrees (body and text together; the tail tip stays put), ±EDITOR_LIMITS.balloonRot. */
+  rot?: number;
+  /** Minimum height (page fraction, ≤ EDITOR_LIMITS.minHMax): the height handle. */
+  minH?: number;
 }
 
 export interface Page {
@@ -449,6 +474,216 @@ export interface Page {
   balloons: Balloon[];
   /** Starts a chapter here (reader scrubber marks, End-card TOC). ≤ 60 chars. Not hashed. */
   chapterTitle?: string;
+  // ── Ship 2 (K2a; pro plan §5.2). Optional and never hashed: a page without them renders exactly as before. ──
+  /** 'panels' = the page is shown as its panel frames (read through artModeOf, which falls back to 'page'). */
+  artMode?: 'panels';
+  /** Gutters, margins and borders of the frames; a missing field is its DEFAULT_FRAME_STYLE value (read: frameStyleOf). */
+  frameStyle?: Partial<FrameStyle>;
+  /** Overlays: stickers, images and shapes (≤ EDITOR_LIMITS.layersPerPage). */
+  layers?: PageLayer[];
+  /** What changes from this page on (outfits, props, where people are). */
+  continuity?: PageContinuity;
+}
+
+// ── Ship 2 (K2a; pro plan §5.2): panels as objects, consistency, staleness parts ─────────────────────────────
+//
+// Every field is optional and NEVER hashed (I1): pageSpecHash, sheetSpecHash, placeSpecHash and coverSpecHash read
+// explicit tuples that none of these enter. normalizeDoc drops malformed values, clamps ranges and is idempotent; a
+// doc without them normalizes deep-equal to what it did before.
+
+/** How a page shows its art: as drawn ('page'), or cut into editable panel frames ('panels'). */
+export type ArtMode = 'page' | 'panels';
+
+/** Frame look for a panels-mode page. Page fractions (gutter, margin, border, radius) and '#RRGGBB' colours. */
+export interface FrameStyle {
+  gutter: number;
+  margin: number;
+  border: number;
+  color: string;
+  bg: string;
+  radius: number;
+}
+export const DEFAULT_FRAME_STYLE: FrameStyle = { gutter: 0.02, margin: 0.02, border: 0.004, color: '#111111', bg: '#ffffff', radius: 0 };
+
+/** Zoom 1..EDITOR_LIMITS.fitZoomMax and pan −1..1 of the picture inside its frame. */
+export interface PanelFrameFit {
+  s: number;
+  x: number;
+  y: number;
+}
+/** Another picture in this frame: an earlier take or an image (box = its crop, normalized on that image). */
+export interface PanelFrameSource {
+  path: string;
+  box?: Box;
+}
+export interface PanelFrameBorder {
+  none?: true;
+  w?: number;
+  color?: string;
+}
+export interface PanelFrame {
+  /** Page-normalized at the BOOK aspect (format.pageAspect); shortest side EDITOR_LIMITS.frameMin. */
+  box: Box;
+  /** Absent = the picture covers the frame, centred. */
+  fit?: PanelFrameFit;
+  /** Absent = this panel's cut of the page's current drawing. */
+  src?: PanelFrameSource;
+  border?: PanelFrameBorder;
+  z?: number;
+  locked?: true;
+}
+
+/** One drawn panel found on a raster (image-normalized box). */
+export interface PanelCut {
+  /** The script panel it shows (set by matching or by the user). */
+  panelId?: string;
+  /** Drawn panel number on the raster, 1-based reading order. */
+  drawn: number;
+  box: Box;
+  /** 0..1 detection confidence. */
+  conf: number;
+  /** The script panel number whose moment it shows (QC beats). */
+  shows?: number;
+  /** The art breaks over this panel's border. */
+  crosses?: true;
+}
+export type PanelCutsStatus = 'ok' | 'unsure' | 'mismatch';
+export type PanelCutsBy = 'detect' | 'vision' | 'both' | 'user' | 'estimate';
+export interface PanelCuts {
+  status: PanelCutsStatus;
+  by: PanelCutsBy;
+  at: number;
+  /** ≤ EDITOR_LIMITS.maxCuts. */
+  cuts: PanelCut[];
+  note?: string;
+}
+
+export type LayerShapeType = 'rect' | 'ellipse' | 'line';
+export interface PageLayerShape {
+  type: LayerShapeType;
+  fill?: string;
+  stroke?: string;
+  strokeW?: number;
+  radius?: number;
+}
+/** An overlay on a page: an image (sticker, prop, photo) or a shape. Page-normalized at the book aspect. */
+export interface PageLayer {
+  /** 'ly_…' (unique on its page). */
+  id: string;
+  kind: 'image' | 'shape';
+  name?: string;
+  box: Box;
+  /** Degrees, ±EDITOR_LIMITS.layerRot. */
+  rot?: number;
+  z?: number;
+  /** Keep inside this panel (its frame); the overlay follows the frame. */
+  clip?: string;
+  opacity?: number;
+  flip?: 'h' | 'v';
+  locked?: true;
+  /** false = guide only: shown in the editor, never printed, exported or published. */
+  print?: false;
+  src?: { path: string; crop?: Box };
+  shape?: PageLayerShape;
+}
+
+/** A scene: where and when a run of pages happens (doc.scenes). */
+export interface Scene {
+  id: string;
+  name: string;
+  placeId?: string;
+  time?: string;
+  weather?: string;
+  light?: string;
+  palette?: string;
+}
+/** What changes for one character from a page on (null = back to their default). */
+export interface CastStateChange {
+  outfit?: string | null;
+  holding?: string[] | null;
+  marks?: string[] | null;
+  where?: string | null;
+}
+export interface PageContinuity {
+  sceneId?: string;
+  /** castId → the change (null = clears every change carried for them). ≤ CONSISTENCY_LIMITS.castChanges. */
+  cast?: Record<string, CastStateChange | null>;
+  /** prop name → its state (null = gone). ≤ CONSISTENCY_LIMITS.propChanges. */
+  props?: Record<string, string | null>;
+  /** ≤ CONSISTENCY_LIMITS.notes. */
+  notes?: string[];
+  by?: 'writer' | 'user' | 'fix';
+}
+
+export type DirectionLens = 'wide' | 'normal' | 'long' | 'macro';
+export interface PanelCastDirection {
+  expression?: string;
+  pose?: string;
+  gaze?: string;
+  holding?: string[];
+  pos?: 'left' | 'center' | 'right';
+  depth?: 'fg' | 'mid' | 'bg';
+}
+export interface PanelDirection {
+  lens?: DirectionLens;
+  composition?: string;
+  light?: string;
+  palette?: string;
+  focus?: string;
+  /** ≤ CONSISTENCY_LIMITS.directionBackground details. */
+  background?: string[];
+  cast?: Record<string, PanelCastDirection>;
+  /** Cast heard but not drawn in this panel. */
+  offPanel?: string[];
+  by?: 'writer' | 'user' | 'derived';
+}
+
+export type ConsistencyFindingKind = 'identity' | 'beat' | 'missing' | 'extra' | 'continuity' | 'style';
+export type FixOffer =
+  | { kind: 'rebind'; order: number[] }
+  | { kind: 'off_panel' }
+  | { kind: 'drop_cast' }
+  | { kind: 'accept_state'; patch: PageContinuity }
+  | { kind: 'panel_fix'; panelN: number; instruction: string }
+  | { kind: 'redraw' };
+export interface ConsistencyFinding {
+  id: string;
+  kind: ConsistencyFindingKind;
+  /** Script panel number (1-based; 0 = the whole page). */
+  panel: number;
+  characterId?: string;
+  severity: 'minor' | 'major';
+  note: string;
+  fix?: FixOffer;
+  /** "Looks fine" for this version. */
+  dismissed?: true;
+}
+
+/** Six-hex fingerprints of one panel's parts: cast, action, place, shot, mood, direction. */
+export interface PanelParts {
+  c: string;
+  a: string;
+  p: string;
+  s: string;
+  m: string;
+  d?: string;
+}
+/** What a page version was drawn from, part by part (one record per page version; parts.ts partsOf). */
+export interface VersionParts {
+  panels?: Record<string, PanelParts>;
+  cont?: string;
+  places?: Record<string, string>;
+  props?: Record<string, string>;
+}
+
+/** Book-wide consistency settings (doc.consistency). */
+export interface ConsistencySettings {
+  /** Reference images per page call (default CONSISTENCY_LIMITS.maxRefsDefault; the lock's model caps it). */
+  maxRefs?: number;
+  /** The page whose drawing is the style key for the others. */
+  styleKeyPageId?: string;
+  /** Anchor keys the user unticked (≤ PRO_PAGE_LIMITS.skipItems). */
+  skip?: string[];
 }
 
 export interface CoverTitleStyle {
@@ -863,6 +1098,11 @@ export interface ComicDoc {
   planInputHash?: string;
   /** SERVER-ONLY. The locked image model (models.md §3); read through imageModelOf(). Never in public snapshots. */
   imageModel?: ImageModelLock;
+  // ── Ship 2 (K2a; pro plan §5.2). Never part of any spec hash; History keeps them in the book section. ──
+  /** ≤ CONSISTENCY_LIMITS.scenes. Read through scenesOf(). */
+  scenes?: Scene[];
+  /** Read through consistencyOf(). */
+  consistency?: ConsistencySettings;
 }
 
 export const emptyRender = (): RenderState => ({ status: 'none', history: [] });
@@ -925,7 +1165,7 @@ const asRender = (value: unknown): RenderState => {
     if (detail) out.errorDetail = detail;
     else delete out.errorDetail;
   }
-  return out;
+  return normalizeRenderShip2(out); // Ship 2 meta (cuts, parts, anchorKeys, findings): only when present
 };
 
 /** Every RefLabel (local copy: doc.ts may not import refs.ts — §2 cycle rule). */
@@ -951,6 +1191,554 @@ export const normalizeRefs = (value: unknown): RefAsset[] => {
     });
 };
 
+// ── Ship 2 normalizers (K2a; pro plan §5.2) ─────────────────────────────────
+//
+// Each drops what is malformed, clamps ranges, rounds geometry to 4 decimals and is idempotent. They run only on keys
+// that are present, so a doc without Ship 2 data normalizes exactly as before (old docs deep-equal). applyOp runs the
+// same functions on op payloads, so a value an op writes is already normal and a reload never changes it.
+
+/** Ids the server accepts for new entities (ops.ts SAFE_ID_RE; local copy: doc.ts may not import ops.ts). */
+const SHIP2_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** Overlay ids: 'ly_…'. */
+export const LAYER_ID_RE = /^ly_[A-Za-z0-9_-]{1,61}$/;
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const HEX6_RE = /^[0-9a-f]{6}$/;
+/** Object keys a record built from stored data never takes (prototype pollution). */
+const UNSAFE_RECORD_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const r4 = (n: number) => Math.round(n * 10000) / 10000;
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const safeId = (v: unknown): string | undefined => (typeof v === 'string' && SHIP2_ID_RE.test(v) && !UNSAFE_RECORD_KEYS.has(v) ? v : undefined);
+const safeKey = (k: string, max: number): boolean => !!k && k.length <= max && !UNSAFE_RECORD_KEYS.has(k) && k === k.trim();
+const textIn = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== 'string') return undefined;
+  const s = oneLine(v, max);
+  return s || undefined;
+};
+const intIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : undefined);
+const rangeIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? r4(Math.min(hi, Math.max(lo, v))) : undefined);
+const hexColor = (v: unknown): string | undefined => (typeof v === 'string' && HEX_COLOR_RE.test(v) ? v : undefined);
+const isHex6 = (v: unknown): v is string => typeof v === 'string' && HEX6_RE.test(v);
+const textList = (v: unknown, maxItems: number, maxChars: number): string[] | undefined => {
+  if (!Array.isArray(v)) return undefined;
+  const out: string[] = [];
+  for (const item of v) {
+    const t = textIn(item, maxChars);
+    if (t && !out.includes(t)) out.push(t);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+};
+const oneOfList = <T extends string>(v: unknown, list: readonly T[]): T | undefined => (typeof v === 'string' && (list as readonly string[]).includes(v) ? (v as T) : undefined);
+
+/**
+ * A box inside the unit square: finite, positive, each side at least `minSide`, moved inside [0, 1], 4 decimals.
+ * Undefined when malformed (NaN, zero or negative size). Idempotent.
+ */
+export const normalizeUnitBox = (raw: unknown, minSide: number): Box | undefined => {
+  if (!isObject(raw)) return undefined;
+  const { x, y, w, h } = raw;
+  if (!finite(x) || !finite(y) || !finite(w) || !finite(h) || w <= 0 || h <= 0) return undefined;
+  const bw = r4(Math.min(1, Math.max(minSide, w)));
+  const bh = r4(Math.min(1, Math.max(minSide, h)));
+  return { x: r4(Math.min(1 - bw, Math.max(0, x))), y: r4(Math.min(1 - bh, Math.max(0, y))), w: bw, h: bh };
+};
+
+/**
+ * A page's frame style as stored: the valid fields given (ranges clamped, '#RRGGBB' colours), or undefined when none is
+ * valid. A missing field means its DEFAULT_FRAME_STYLE value — frameStyleOf fills them on read.
+ */
+export const normalizeFrameStyle = (raw: unknown): Partial<FrameStyle> | undefined => {
+  if (!isObject(raw)) return undefined;
+  const L = PRO_PAGE_LIMITS;
+  const out: Partial<FrameStyle> = {};
+  const gutter = rangeIn(raw.gutter, 0, L.frameGutterMax);
+  if (gutter !== undefined) out.gutter = gutter;
+  const margin = rangeIn(raw.margin, 0, L.frameMarginMax);
+  if (margin !== undefined) out.margin = margin;
+  const border = rangeIn(raw.border, 0, L.frameBorderMax);
+  if (border !== undefined) out.border = border;
+  const color = hexColor(raw.color);
+  if (color) out.color = color;
+  const bg = hexColor(raw.bg);
+  if (bg) out.bg = bg;
+  const radius = rangeIn(raw.radius, 0, L.frameRadiusMax);
+  if (radius !== undefined) out.radius = radius;
+  return Object.keys(out).length ? out : undefined;
+};
+
+/** A well-formed PanelFrame (box clamped to the page, shortest side EDITOR_LIMITS.frameMin), or undefined. */
+export const normalizePanelFrame = (raw: unknown): PanelFrame | undefined => {
+  if (!isObject(raw)) return undefined;
+  const box = normalizeUnitBox(raw.box, EDITOR_LIMITS.frameMin);
+  if (!box) return undefined;
+  const out: PanelFrame = { box };
+  if (isObject(raw.fit)) {
+    const s = rangeIn(raw.fit.s, 1, EDITOR_LIMITS.fitZoomMax);
+    const x = rangeIn(raw.fit.x, -1, 1);
+    const y = rangeIn(raw.fit.y, -1, 1);
+    if (s !== undefined && x !== undefined && y !== undefined) out.fit = { s, x, y };
+  }
+  if (isObject(raw.src) && typeof raw.src.path === 'string' && raw.src.path) {
+    const src: PanelFrameSource = { path: raw.src.path };
+    const crop = normalizeUnitBox(raw.src.box, PRO_PAGE_LIMITS.boxMin);
+    if (crop) src.box = crop;
+    out.src = src;
+  }
+  if (isObject(raw.border)) {
+    const border: PanelFrameBorder = {};
+    if (raw.border.none === true) border.none = true;
+    const w = rangeIn(raw.border.w, 0, PRO_PAGE_LIMITS.frameBorderMax);
+    if (w !== undefined) border.w = w;
+    const color = hexColor(raw.border.color);
+    if (color) border.color = color;
+    if (Object.keys(border).length) out.border = border;
+  }
+  const z = intIn(raw.z, -PRO_PAGE_LIMITS.zMax, PRO_PAGE_LIMITS.zMax);
+  if (z !== undefined) out.z = z;
+  if (raw.locked === true) out.locked = true;
+  return out;
+};
+
+const CUT_STATUSES: readonly PanelCutsStatus[] = ['ok', 'unsure', 'mismatch'];
+const CUT_BY: readonly PanelCutsBy[] = ['detect', 'vision', 'both', 'user', 'estimate'];
+
+/** A well-formed PanelCut (image-normalized box), or undefined. */
+export const normalizePanelCut = (raw: unknown): PanelCut | undefined => {
+  if (!isObject(raw)) return undefined;
+  const drawn = intIn(raw.drawn, 1, 99);
+  const box = normalizeUnitBox(raw.box, PRO_PAGE_LIMITS.boxMin);
+  const conf = rangeIn(raw.conf, 0, 1);
+  if (!drawn || !box || conf === undefined) return undefined;
+  const out: PanelCut = { drawn, box, conf };
+  const panelId = safeId(raw.panelId);
+  if (panelId) out.panelId = panelId;
+  const shows = intIn(raw.shows, 0, 99);
+  if (shows !== undefined) out.shows = shows;
+  if (raw.crosses === true) out.crosses = true;
+  return out;
+};
+
+/** Well-formed PanelCuts (≤ EDITOR_LIMITS.maxCuts cuts; malformed cuts dropped), or undefined. */
+export const normalizePanelCuts = (raw: unknown): PanelCuts | undefined => {
+  if (!isObject(raw) || !Array.isArray(raw.cuts) || !finite(raw.at)) return undefined;
+  const status = oneOfList(raw.status, CUT_STATUSES);
+  const by = oneOfList(raw.by, CUT_BY);
+  if (!status || !by) return undefined;
+  const cuts = raw.cuts.map(normalizePanelCut).filter((c): c is PanelCut => !!c).slice(0, EDITOR_LIMITS.maxCuts);
+  const out: PanelCuts = { status, by, at: raw.at, cuts };
+  const note = textIn(raw.note, PRO_PAGE_LIMITS.cutNoteChars);
+  if (note) out.note = note;
+  return out;
+};
+
+const LAYER_SHAPES: readonly LayerShapeType[] = ['rect', 'ellipse', 'line'];
+
+/** A well-formed PageLayer (an image layer needs `src`, a shape layer `shape`), or undefined. */
+export const normalizePageLayer = (raw: unknown): PageLayer | undefined => {
+  if (!isObject(raw) || typeof raw.id !== 'string' || !LAYER_ID_RE.test(raw.id)) return undefined;
+  const kind = oneOfList(raw.kind, ['image', 'shape'] as const);
+  const box = normalizeUnitBox(raw.box, PRO_PAGE_LIMITS.boxMin);
+  if (!kind || !box) return undefined;
+  const out: PageLayer = { id: raw.id, kind, box };
+  if (kind === 'image') {
+    if (!isObject(raw.src) || typeof raw.src.path !== 'string' || !raw.src.path) return undefined;
+    const src: PageLayer['src'] = { path: raw.src.path };
+    const crop = normalizeUnitBox(raw.src.crop, PRO_PAGE_LIMITS.boxMin);
+    if (crop) src.crop = crop;
+    out.src = src;
+  } else {
+    const type = isObject(raw.shape) ? oneOfList(raw.shape.type, LAYER_SHAPES) : undefined;
+    if (!type || !isObject(raw.shape)) return undefined;
+    const shape: PageLayerShape = { type };
+    const fill = hexColor(raw.shape.fill);
+    if (fill) shape.fill = fill;
+    const stroke = hexColor(raw.shape.stroke);
+    if (stroke) shape.stroke = stroke;
+    const strokeW = rangeIn(raw.shape.strokeW, 0, PRO_PAGE_LIMITS.layerStrokeMax);
+    if (strokeW !== undefined) shape.strokeW = strokeW;
+    const radius = rangeIn(raw.shape.radius, 0, PRO_PAGE_LIMITS.layerRadiusMax);
+    if (radius !== undefined) shape.radius = radius;
+    out.shape = shape;
+  }
+  const name = textIn(raw.name, PRO_PAGE_LIMITS.layerNameChars);
+  if (name) out.name = name;
+  if (finite(raw.rot)) out.rot = r2(Math.min(EDITOR_LIMITS.layerRot, Math.max(-EDITOR_LIMITS.layerRot, raw.rot)));
+  const z = intIn(raw.z, -PRO_PAGE_LIMITS.zMax, PRO_PAGE_LIMITS.zMax);
+  if (z !== undefined) out.z = z;
+  const clip = safeId(raw.clip);
+  if (clip) out.clip = clip;
+  const opacity = rangeIn(raw.opacity, 0, 1);
+  if (opacity !== undefined) out.opacity = opacity;
+  const flip = oneOfList(raw.flip, ['h', 'v'] as const);
+  if (flip) out.flip = flip;
+  if (raw.locked === true) out.locked = true;
+  if (raw.print === false) out.print = false;
+  return out;
+};
+
+/** A page's overlays: malformed and duplicate ids dropped, ≤ EDITOR_LIMITS.layersPerPage. Undefined when none. */
+export const normalizePageLayers = (raw: unknown): PageLayer[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: PageLayer[] = [];
+  for (const item of raw) {
+    const layer = normalizePageLayer(item);
+    if (!layer || seen.has(layer.id)) continue;
+    seen.add(layer.id);
+    out.push(layer);
+    if (out.length >= EDITOR_LIMITS.layersPerPage) break;
+  }
+  return out.length ? out : undefined;
+};
+
+const normalizeCastStateChange = (raw: unknown): CastStateChange | null | undefined => {
+  if (raw === null) return null;
+  if (!isObject(raw)) return undefined;
+  const L = PRO_PAGE_LIMITS;
+  const out: CastStateChange = {};
+  for (const k of ['outfit', 'where'] as const) {
+    if (raw[k] === null) out[k] = null;
+    else {
+      const t = textIn(raw[k], L.continuityTextChars);
+      if (t) out[k] = t;
+    }
+  }
+  for (const k of ['holding', 'marks'] as const) {
+    if (raw[k] === null) out[k] = null;
+    else {
+      const list = textList(raw[k], L.continuityListItems, L.continuityTextChars);
+      if (list) out[k] = list;
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
+const CONTINUITY_BY = ['writer', 'user', 'fix'] as const;
+
+/** A well-formed PageContinuity (caps from CONSISTENCY_LIMITS), or undefined when nothing valid is left. */
+export const normalizePageContinuity = (raw: unknown): PageContinuity | undefined => {
+  if (!isObject(raw)) return undefined;
+  const L = PRO_PAGE_LIMITS;
+  const out: PageContinuity = {};
+  const sceneId = safeId(raw.sceneId);
+  if (sceneId) out.sceneId = sceneId;
+  if (isObject(raw.cast)) {
+    const cast: Record<string, CastStateChange | null> = {};
+    let n = 0;
+    for (const [id, value] of Object.entries(raw.cast)) {
+      if (n >= CONSISTENCY_LIMITS.castChanges) break;
+      if (!safeId(id)) continue;
+      const change = normalizeCastStateChange(value);
+      if (change === undefined) continue;
+      cast[id] = change;
+      n += 1;
+    }
+    if (n) out.cast = cast;
+  }
+  if (isObject(raw.props)) {
+    const props: Record<string, string | null> = {};
+    let n = 0;
+    for (const [name, value] of Object.entries(raw.props)) {
+      if (n >= CONSISTENCY_LIMITS.propChanges) break;
+      if (!safeKey(name, L.sceneNameChars)) continue;
+      if (value === null) props[name] = null;
+      else {
+        const t = textIn(value, L.continuityTextChars);
+        if (!t) continue;
+        props[name] = t;
+      }
+      n += 1;
+    }
+    if (n) out.props = props;
+  }
+  const notes = textList(raw.notes, CONSISTENCY_LIMITS.notes, L.continuityNoteChars);
+  if (notes && notes.length) out.notes = notes;
+  const by = oneOfList(raw.by, CONTINUITY_BY);
+  if (by) out.by = by;
+  return Object.keys(out).length ? out : undefined;
+};
+
+const LENSES: readonly DirectionLens[] = ['wide', 'normal', 'long', 'macro'];
+
+/** A well-formed PanelDirection, or undefined when nothing valid is left. */
+export const normalizePanelDirection = (raw: unknown): PanelDirection | undefined => {
+  if (!isObject(raw)) return undefined;
+  const L = PRO_PAGE_LIMITS;
+  const out: PanelDirection = {};
+  const lens = oneOfList(raw.lens, LENSES);
+  if (lens) out.lens = lens;
+  for (const k of ['composition', 'light', 'palette', 'focus'] as const) {
+    const t = textIn(raw[k], L.directionTextChars);
+    if (t) out[k] = t;
+  }
+  const background = textList(raw.background, CONSISTENCY_LIMITS.directionBackground, L.sceneTextChars);
+  if (background && background.length) out.background = background;
+  if (isObject(raw.cast)) {
+    const cast: Record<string, PanelCastDirection> = {};
+    let n = 0;
+    for (const [id, value] of Object.entries(raw.cast)) {
+      if (n >= CONSISTENCY_LIMITS.castChanges) break;
+      if (!safeId(id) || !isObject(value)) continue;
+      const one: PanelCastDirection = {};
+      for (const k of ['expression', 'pose', 'gaze'] as const) {
+        const t = textIn(value[k], L.directionCastTextChars);
+        if (t) one[k] = t;
+      }
+      const holding = textList(value.holding, L.directionListItems, L.directionCastTextChars);
+      if (holding && holding.length) one.holding = holding;
+      const pos = oneOfList(value.pos, ['left', 'center', 'right'] as const);
+      if (pos) one.pos = pos;
+      const depth = oneOfList(value.depth, ['fg', 'mid', 'bg'] as const);
+      if (depth) one.depth = depth;
+      if (!Object.keys(one).length) continue;
+      cast[id] = one;
+      n += 1;
+    }
+    if (n) out.cast = cast;
+  }
+  if (Array.isArray(raw.offPanel)) {
+    const offPanel = [...new Set(raw.offPanel.map(safeId).filter((id): id is string => !!id))].slice(0, CONSISTENCY_LIMITS.castChanges);
+    if (offPanel.length) out.offPanel = offPanel;
+  }
+  const by = oneOfList(raw.by, ['writer', 'user', 'derived'] as const);
+  if (by) out.by = by;
+  return Object.keys(out).length ? out : undefined;
+};
+
+const FINDING_KINDS: readonly ConsistencyFindingKind[] = ['identity', 'beat', 'missing', 'extra', 'continuity', 'style'];
+
+/** A well-formed FixOffer, or undefined. */
+export const normalizeFixOffer = (raw: unknown): FixOffer | undefined => {
+  if (!isObject(raw)) return undefined;
+  switch (raw.kind) {
+    case 'rebind': {
+      if (!Array.isArray(raw.order) || !raw.order.length || raw.order.length > DOC_LIMITS.panelsPerPage) return undefined;
+      const order = raw.order.map((n) => intIn(n, 1, 99));
+      return order.every((n): n is number => n !== undefined) ? { kind: 'rebind', order } : undefined;
+    }
+    case 'off_panel':
+    case 'drop_cast':
+    case 'redraw':
+      return { kind: raw.kind };
+    case 'accept_state': {
+      const patch = normalizePageContinuity(raw.patch);
+      return patch ? { kind: 'accept_state', patch } : undefined;
+    }
+    case 'panel_fix': {
+      const panelN = intIn(raw.panelN, 1, 99);
+      const instruction = textIn(raw.instruction, PRO_PAGE_LIMITS.fixInstructionChars);
+      return panelN && instruction ? { kind: 'panel_fix', panelN, instruction } : undefined;
+    }
+    default:
+      return undefined;
+  }
+};
+
+/** A well-formed ConsistencyFinding, or undefined. */
+export const normalizeConsistencyFinding = (raw: unknown): ConsistencyFinding | undefined => {
+  if (!isObject(raw)) return undefined;
+  const id = safeId(raw.id);
+  const kind = oneOfList(raw.kind, FINDING_KINDS);
+  const panel = intIn(raw.panel, 0, 99);
+  const severity = oneOfList(raw.severity, ['minor', 'major'] as const);
+  const note = textIn(raw.note, PRO_PAGE_LIMITS.findingNoteChars);
+  if (!id || !kind || panel === undefined || !severity || !note) return undefined;
+  const out: ConsistencyFinding = { id, kind, panel, severity, note };
+  const characterId = safeId(raw.characterId);
+  if (characterId) out.characterId = characterId;
+  const fix = normalizeFixOffer(raw.fix);
+  if (fix) out.fix = fix;
+  if (raw.dismissed === true) out.dismissed = true;
+  return out;
+};
+
+/** A report's findings: malformed and duplicate ids dropped, ≤ CONSISTENCY_LIMITS.findings ([] is kept: checked, none). */
+export const normalizeConsistencyFindings = (raw: unknown): ConsistencyFinding[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: ConsistencyFinding[] = [];
+  for (const item of raw) {
+    const f = normalizeConsistencyFinding(item);
+    if (!f || seen.has(f.id)) continue;
+    seen.add(f.id);
+    out.push(f);
+    if (out.length >= CONSISTENCY_LIMITS.findings) break;
+  }
+  return out;
+};
+
+/** Well-formed VersionParts (six-hex fingerprints; ≤ CONSISTENCY_LIMITS.partsKeys keys in all), or undefined. */
+export const normalizeVersionParts = (raw: unknown): VersionParts | undefined => {
+  if (!isObject(raw)) return undefined;
+  let budget: number = CONSISTENCY_LIMITS.partsKeys;
+  const out: VersionParts = {};
+  if (isObject(raw.panels)) {
+    const panels: Record<string, PanelParts> = {};
+    for (const [id, v] of Object.entries(raw.panels)) {
+      if (budget <= 0) break;
+      if (!safeId(id) || !isObject(v) || ![v.c, v.a, v.p, v.s, v.m].every(isHex6)) continue;
+      panels[id] = { c: v.c as string, a: v.a as string, p: v.p as string, s: v.s as string, m: v.m as string, ...(isHex6(v.d) ? { d: v.d } : {}) };
+      budget -= 1;
+    }
+    if (Object.keys(panels).length) out.panels = panels;
+  }
+  if (isHex6(raw.cont)) out.cont = raw.cont;
+  for (const k of ['places', 'props'] as const) {
+    const src = raw[k];
+    if (!isObject(src)) continue;
+    const rec: Record<string, string> = {};
+    for (const [key, v] of Object.entries(src)) {
+      if (budget <= 0) break;
+      const ok = k === 'places' ? !!safeId(key) : safeKey(key, PRO_PAGE_LIMITS.sceneNameChars);
+      if (!ok || !isHex6(v)) continue;
+      rec[key] = v;
+      budget -= 1;
+    }
+    if (Object.keys(rec).length) out[k] = rec;
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
+/** Anchor keys of a version: strings, unique, ≤ CONSISTENCY_LIMITS.anchorKeys ([] kept: drawn with none). */
+export const normalizeAnchorKeys = (raw: unknown): string[] | undefined => textList(raw, CONSISTENCY_LIMITS.anchorKeys, PRO_PAGE_LIMITS.anchorKeyChars);
+
+/** A well-formed Scene, or undefined. */
+export const normalizeScene = (raw: unknown): Scene | undefined => {
+  if (!isObject(raw)) return undefined;
+  const id = safeId(raw.id);
+  const name = textIn(raw.name, PRO_PAGE_LIMITS.sceneNameChars);
+  if (!id || !name) return undefined;
+  const out: Scene = { id, name };
+  const placeId = safeId(raw.placeId);
+  if (placeId) out.placeId = placeId;
+  for (const k of ['time', 'weather', 'light', 'palette'] as const) {
+    const t = textIn(raw[k], PRO_PAGE_LIMITS.sceneTextChars);
+    if (t) out[k] = t;
+  }
+  return out;
+};
+
+/** The book's scenes (unique ids, ≤ CONSISTENCY_LIMITS.scenes), or undefined when none. */
+export const normalizeScenes = (raw: unknown): Scene[] | undefined => {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: Scene[] = [];
+  for (const item of raw) {
+    const s = normalizeScene(item);
+    if (!s || seen.has(s.id)) continue;
+    seen.add(s.id);
+    out.push(s);
+    if (out.length >= CONSISTENCY_LIMITS.scenes) break;
+  }
+  return out.length ? out : undefined;
+};
+
+/** Well-formed consistency settings, or undefined when nothing valid is left. */
+export const normalizeConsistencySettings = (raw: unknown): ConsistencySettings | undefined => {
+  if (!isObject(raw)) return undefined;
+  const out: ConsistencySettings = {};
+  const maxRefs = intIn(raw.maxRefs, 1, PRO_PAGE_LIMITS.maxRefsMax);
+  if (maxRefs !== undefined) out.maxRefs = maxRefs;
+  const styleKeyPageId = safeId(raw.styleKeyPageId);
+  if (styleKeyPageId) out.styleKeyPageId = styleKeyPageId;
+  const skip = textList(raw.skip, PRO_PAGE_LIMITS.skipItems, PRO_PAGE_LIMITS.anchorKeyChars);
+  if (skip && skip.length) out.skip = skip;
+  return Object.keys(out).length ? out : undefined;
+};
+
+/** A balloon with its Ship 2 keys made valid (rot ±EDITOR_LIMITS.balloonRot, 0 < minH ≤ minHMax). Same object when it has none. */
+export const normalizeBalloonShip2 = (b: Balloon): Balloon => {
+  if (!isObject(b) || (!('rot' in b) && !('minH' in b))) return b;
+  const out: Balloon = { ...b };
+  if ('rot' in b) {
+    if (finite(b.rot)) out.rot = r2(Math.min(EDITOR_LIMITS.balloonRot, Math.max(-EDITOR_LIMITS.balloonRot, b.rot)));
+    else delete out.rot;
+  }
+  if ('minH' in b) {
+    if (finite(b.minH) && b.minH > 0) out.minH = r4(Math.min(EDITOR_LIMITS.minHMax, b.minH));
+    else delete out.minH;
+  }
+  return out;
+};
+
+const hasShip2Meta = (v: unknown): boolean =>
+  isObject(v) && ('cuts' in v || 'parts' in v || 'anchorKeys' in v || (isObject(v.qc) && ('findings' in v.qc || 'checkV' in v.qc)));
+
+/** Normalize the Ship 2 VersionMeta keys of a render or version IN PLACE (the caller passes a fresh copy). */
+const normalizeShip2Meta = <T extends VersionMeta>(m: T): T => {
+  if (m.cuts !== undefined) {
+    const cuts = normalizePanelCuts(m.cuts);
+    if (cuts) m.cuts = cuts;
+    else delete m.cuts;
+  }
+  if (m.parts !== undefined) {
+    const parts = normalizeVersionParts(m.parts);
+    if (parts) m.parts = parts;
+    else delete m.parts;
+  }
+  if (m.anchorKeys !== undefined) {
+    const keys = normalizeAnchorKeys(m.anchorKeys);
+    if (keys) m.anchorKeys = keys;
+    else delete m.anchorKeys;
+  }
+  if (isObject(m.qc) && ('findings' in m.qc || 'checkV' in m.qc)) {
+    const qc: QcReport = { ...m.qc };
+    if ('findings' in qc) {
+      const findings = normalizeConsistencyFindings(qc.findings);
+      if (findings) qc.findings = findings;
+      else delete qc.findings;
+    }
+    if ('checkV' in qc && qc.checkV !== 2) delete qc.checkV;
+    m.qc = qc;
+  }
+  return m;
+};
+
+/** A render's Ship 2 meta (current and history versions) made valid. Same history array when no version has any. */
+const normalizeRenderShip2 = (r: RenderState): RenderState => {
+  if (hasShip2Meta(r)) normalizeShip2Meta(r);
+  if (r.history.some(hasShip2Meta)) r.history = r.history.map((v) => (hasShip2Meta(v) ? normalizeShip2Meta({ ...v }) : v));
+  return r;
+};
+
+/** A panel's Ship 2 keys made valid (the panel is a fresh copy). */
+const normalizePanelShip2 = (panel: Panel): Panel => {
+  if (panel.frame !== undefined) {
+    const frame = normalizePanelFrame(panel.frame);
+    if (frame) panel.frame = frame;
+    else delete panel.frame;
+  }
+  if (panel.direction !== undefined) {
+    const direction = normalizePanelDirection(panel.direction);
+    if (direction) panel.direction = direction;
+    else delete panel.direction;
+  }
+  return panel;
+};
+
+/** A page's Ship 2 keys made valid (the page is a fresh copy). */
+const normalizePageShip2 = (page: Page): Page => {
+  if (page.artMode !== undefined && page.artMode !== 'panels') delete page.artMode;
+  if (page.frameStyle !== undefined) {
+    const style = normalizeFrameStyle(page.frameStyle);
+    if (style) page.frameStyle = style;
+    else delete page.frameStyle;
+  }
+  if (page.layers !== undefined) {
+    const layers = normalizePageLayers(page.layers);
+    if (layers) page.layers = layers;
+    else delete page.layers;
+  }
+  if (page.continuity !== undefined) {
+    const continuity = normalizePageContinuity(page.continuity);
+    if (continuity) page.continuity = continuity;
+    else delete page.continuity;
+  }
+  if (page.balloons.some((b) => isObject(b) && ('rot' in b || 'minH' in b))) page.balloons = page.balloons.map(normalizeBalloonShip2);
+  return page;
+};
+
 const normalizeLine = (l: Line): Line => {
   if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l; // identity
   const next: Line = { ...l }; // key order kept
@@ -969,22 +1757,24 @@ export const normalizePage = (p: Page, i: number): Page => {
     n: typeof p.n === 'number' ? p.n : i + 1,
     summary: p.summary || '',
     layout: p.layout || '',
-    panels: asArray<Panel>(p.panels).map((panel, j) => ({
-      ...panel,
-      n: typeof panel.n === 'number' ? panel.n : j + 1,
-      size: panel.size || 'medium',
-      shot: panel.shot || 'medium',
-      action: panel.action || '',
-      castIds: asArray<string>(panel.castIds),
-      lines: asArray<Line>(panel.lines).map(normalizeLine)
-    })),
+    panels: asArray<Panel>(p.panels).map((panel, j) =>
+      normalizePanelShip2({
+        ...panel,
+        n: typeof panel.n === 'number' ? panel.n : j + 1,
+        size: panel.size || 'medium',
+        shot: panel.shot || 'medium',
+        action: panel.action || '',
+        castIds: asArray<string>(panel.castIds),
+        lines: asArray<Line>(panel.lines).map(normalizeLine)
+      })
+    ),
     render: asRender(p.render),
     balloons: asArray<Balloon>(p.balloons)
   };
   if (typeof page.chapterTitle === 'string' && page.chapterTitle.trim()) {
     page.chapterTitle = page.chapterTitle.trim().slice(0, DOC_LIMITS.chapterTitleChars);
   } else delete page.chapterTitle;
-  return page;
+  return normalizePageShip2(page); // Ship 2 (frames, layers, continuity, balloon rot/minH): only when present
 };
 
 /** Stable sort by (n, original index) then n = i+1. Idempotent; repairs gaps/duplicates; n is never hashed. */
@@ -1261,6 +2051,17 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   const lock = normalizeImageModelLock(input.imageModel);
   if (lock) doc.imageModel = lock;
   else delete doc.imageModel; // legacy docs: no key at all (deriveLock reads them; the next image commit persists)
+  // --- Ship 2 (K2a): absent stays absent (old docs deep-equal); malformed or empty is dropped ---
+  if (input.scenes !== undefined) {
+    const scenes = normalizeScenes(input.scenes);
+    if (scenes) doc.scenes = scenes;
+    else delete doc.scenes;
+  }
+  if (input.consistency !== undefined) {
+    const consistency = normalizeConsistencySettings(input.consistency);
+    if (consistency) doc.consistency = consistency;
+    else delete doc.consistency;
+  }
   return doc;
 };
 
@@ -1276,6 +2077,145 @@ export const safetyOf = (doc: ComicDoc): DocSafety => doc.safety ?? {};
 /** The persisted lock only (undefined until the first comic image, or on a legacy doc: see modelLock.ts). */
 export const imageModelOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel;
 // i18nOf lives in i18n.ts (re-exported by index.ts).
+
+// --- Ship 2 (K2a; pro plan §5.2) ---
+export const scenesOf = (doc: Pick<ComicDoc, 'scenes'>): Scene[] => doc.scenes ?? [];
+export const consistencyOf = (doc: Pick<ComicDoc, 'consistency'>): ConsistencySettings => doc.consistency ?? {};
+/** The page's full frame style (each missing field is its DEFAULT_FRAME_STYLE value). */
+export const frameStyleOf = (page: Pick<Page, 'frameStyle'>): FrameStyle => (page.frameStyle ? { ...DEFAULT_FRAME_STYLE, ...page.frameStyle } : DEFAULT_FRAME_STYLE);
+export const layersOf = (page: Pick<Page, 'layers'>): PageLayer[] => page.layers ?? [];
+
+const usableBox = (b: unknown): b is Box =>
+  isObject(b) && finite(b.x) && finite(b.y) && finite(b.w) && finite(b.h) && b.w > 0 && b.h > 0 && b.x >= -1e-9 && b.y >= -1e-9 && b.x + b.w <= 1 + 1e-6 && b.y + b.h <= 1 + 1e-6;
+
+/** The page shape the panel helpers read (artMode is optional: a page without it is shown as drawn). */
+export type PanelPageShape = Pick<Page, 'panels' | 'render'> & Partial<Pick<Page, 'artMode' | 'id'>>;
+
+/**
+ * The cut of the page's CURRENT drawing that shows this panel: the cut naming its id, else — when no cut names any
+ * panel — the cut at the panel's index. Undefined when the drawing has no cuts (a new drawing clears them, I3).
+ */
+export const cutFor = (page: Pick<Page, 'panels' | 'render'>, panel: Pick<Panel, 'id'> | string): PanelCut | undefined => {
+  const cuts = page?.render?.cuts?.cuts;
+  if (!Array.isArray(cuts) || !cuts.length) return undefined;
+  const id = typeof panel === 'string' ? panel : panel?.id;
+  const named = cuts.find((c) => isObject(c) && c.panelId === id && usableBox(c.box));
+  if (named) return named;
+  if (cuts.some((c) => isObject(c) && c.panelId)) return undefined;
+  const index = (page.panels || []).findIndex((p) => p.id === id);
+  const at = index >= 0 ? cuts[index] : undefined;
+  return at && usableBox(at.box) ? at : undefined;
+};
+
+/**
+ * How the page is shown (I2): 'panels' only when the page opted in (artMode 'panels'), every panel has a usable frame,
+ * and the frames that show the page's own drawing can be cut from it — the drawing exists, it carries cuts, and at
+ * least one of those panels has its cut (a panel without one is an empty frame). Anything missing or inconsistent
+ * (a redraw cleared the cuts, a frame is broken, no panels) falls back to 'page': the drawing as drawn, never a crash
+ * or a blank page.
+ */
+export const artModeOf = (page: PanelPageShape | null | undefined): ArtMode => {
+  if (!page || page.artMode !== 'panels') return 'page';
+  const panels = Array.isArray(page.panels) ? page.panels : [];
+  if (!panels.length || !panels.every((p) => isObject(p) && isObject(p.frame) && usableBox(p.frame.box))) return 'page';
+  const raster = panels.filter((p) => !(isObject(p.frame!.src) && typeof p.frame!.src.path === 'string' && p.frame!.src.path));
+  if (!raster.length) return 'panels';
+  const cuts = page.render?.cuts;
+  if (!page.render?.asset?.path || !cuts || !Array.isArray(cuts.cuts) || !cuts.cuts.length) return 'page';
+  return raster.some((p) => !!cutFor(page, p)) ? 'panels' : 'page';
+};
+
+/**
+ * Storage paths a page's panel objects show besides its drawing: frame sources (another take, an image) and image
+ * overlays. `printOnly` leaves out guide-only overlays (print: false), which readers and exports never draw.
+ */
+export const pageSourcePaths = (page: Pick<Page, 'panels' | 'layers'>, opts: { printOnly?: boolean } = {}): string[] => {
+  const out: string[] = [];
+  const add = (path: unknown) => {
+    if (typeof path === 'string' && path && !out.includes(path)) out.push(path);
+  };
+  for (const panel of page?.panels || []) add(panel?.frame?.src?.path);
+  for (const layer of page?.layers || []) if (!(opts.printOnly && layer?.print === false)) add(layer?.src?.path);
+  return out;
+};
+
+/** Every frame-source and overlay path of the doc mapped by fn (live and trashed pages). Returns the SAME doc when
+ *  fn changed nothing. The companion of mapAssetRefs for server path rewrites: these are plain paths, not AssetRefs. */
+export const mapPanelSourcePaths = (doc: ComicDoc, fn: (path: string) => string): ComicDoc => {
+  let changed = false;
+  const mapPage = (page: Page): Page => {
+    let panels = page.panels;
+    page.panels.forEach((panel, i) => {
+      const path = panel.frame?.src?.path;
+      if (!path) return;
+      const next = fn(path);
+      if (next === path) return;
+      if (panels === page.panels) panels = page.panels.slice();
+      panels[i] = { ...panel, frame: { ...panel.frame!, src: { ...panel.frame!.src!, path: next } } };
+    });
+    let layers = page.layers;
+    page.layers?.forEach((layer, i) => {
+      const path = layer.src?.path;
+      if (!path) return;
+      const next = fn(path);
+      if (next === path) return;
+      if (layers === page.layers) layers = page.layers!.slice();
+      layers![i] = { ...layer, src: { ...layer.src!, path: next } };
+    });
+    if (panels === page.panels && layers === page.layers) return page;
+    changed = true;
+    return { ...page, panels, ...(layers ? { layers } : {}) };
+  };
+  const pages = doc.pages.map(mapPage);
+  const trash = doc.trash?.map((t) => {
+    const page = mapPage(t.page);
+    return page === t.page ? t : { ...t, page };
+  });
+  if (!changed) return doc;
+  const out: ComicDoc = { ...doc, pages: pages.some((p, i) => p !== doc.pages[i]) ? pages : doc.pages };
+  if (doc.trash !== undefined) out.trash = trash && trash.some((t, i) => t !== doc.trash![i]) ? trash : doc.trash;
+  return out;
+};
+
+/**
+ * Removes every frame source and image overlay whose path `drop` names (live and trashed pages): the frame loses its
+ * `src` (it shows its cut of the page's drawing again) and the overlay goes whole, so no dangling path is left. For
+ * the server's image filters — a History restore leaving out blocked, deleted, q/ or forgotten images, and forgetting
+ * a reference photo (V-4) — where mapPanelSourcePaths can only rewrite. Returns the SAME doc when nothing is dropped.
+ */
+export const dropPanelSourcePaths = (doc: ComicDoc, drop: (path: string) => boolean): ComicDoc => {
+  let changed = false;
+  const dropPage = (page: Page): Page => {
+    let panels = page.panels;
+    page.panels.forEach((panel, i) => {
+      const path = panel.frame?.src?.path;
+      if (!path || !drop(path)) return;
+      if (panels === page.panels) panels = page.panels.slice();
+      const frame = { ...panel.frame! };
+      delete frame.src;
+      panels[i] = { ...panel, frame };
+    });
+    const layers = page.layers?.filter((layer) => !(layer.src?.path && drop(layer.src.path)));
+    const layersChanged = !!page.layers && layers!.length !== page.layers.length;
+    if (panels === page.panels && !layersChanged) return page;
+    changed = true;
+    const out: Page = { ...page, panels };
+    if (layersChanged) {
+      if (layers!.length) out.layers = layers;
+      else delete out.layers;
+    }
+    return out;
+  };
+  const pages = doc.pages.map(dropPage);
+  const trash = doc.trash?.map((t) => {
+    const page = dropPage(t.page);
+    return page === t.page ? t : { ...t, page };
+  });
+  if (!changed) return doc;
+  const out: ComicDoc = { ...doc, pages: pages.some((p, i) => p !== doc.pages[i]) ? pages : doc.pages };
+  if (doc.trash !== undefined) out.trash = trash && trash.some((t, i) => t !== doc.trash![i]) ? trash : doc.trash;
+  return out;
+};
 
 // ── Cast helpers ─────────────────────────────────────────────────────────────
 
@@ -1463,7 +2403,8 @@ export const mapAssetRefs = (doc: ComicDoc, fn: (a: AssetRef) => AssetRef): Comi
   return out;
 };
 
-/** Every storage path the doc references (GC protection, /urls allow-list, export). */
+/** Every storage path the doc references (GC protection, /urls allow-list, export). Ship 2: frame sources and
+ *  overlay images too (on live and trashed pages) — the server sanitizer admits only this comic's own server art there. */
 export const collectAssetPaths = (doc: ComicDoc): string[] => {
   const out = new Set<string>();
   const add = (a?: AssetRef | RefAsset) => {
@@ -1495,11 +2436,15 @@ export const collectAssetPaths = (doc: ComicDoc): string[] => {
   archiveOf(doc).forEach(add);
   trashOf(doc).forEach((t) => addRender(t.page.render));
   refInboxOf(doc).forEach(add);
+  // Ship 2 (K2a): frame sources and image overlays are GC-protected on live and trashed pages (guide-only ones too).
+  doc.pages.forEach((p) => pageSourcePaths(p).forEach((path) => out.add(path)));
+  trashOf(doc).forEach((t) => pageSourcePaths(t.page).forEach((path) => out.add(path)));
   return [...out];
 };
 
 /** What GET /projects/:id signs eagerly: current assets (+variants) of pages, cover, sheets, places,
- *  style options, style.board, every ref (+original), refInbox, conversation attachments.
+ *  style options, style.board, every ref (+original), refInbox, conversation attachments, and (Ship 2) the frame
+ *  sources and overlays of live pages.
  *  NOT history/archive/trash (signed lazily through POST /projects/:id/urls). */
 export const displayAssetPaths = (doc: ComicDoc): string[] => {
   const out = new Set<string>();
@@ -1525,6 +2470,8 @@ export const displayAssetPaths = (doc: ComicDoc): string[] => {
   add(doc.cover.render.asset);
   refInboxOf(doc).forEach(add);
   doc.conversation.forEach((m) => m.attachments?.forEach(add));
+  // Ship 2 (K2a): what a live page's frames and overlays show (the editor draws guide-only overlays too).
+  doc.pages.forEach((p) => pageSourcePaths(p).forEach((path) => out.add(path)));
   return [...out];
 };
 

@@ -1078,7 +1078,7 @@ describe('v5 §16.5 sets', () => {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
       expect(SERVER_ONLY_OPS).toContain(op);
     }
-    expect(CLIENT_PATCHABLE_OPS.size).toBe(17 + 22); // + line_move
+    expect(CLIENT_PATCHABLE_OPS.size).toBe(17 + 22 + (PRO_PAGE_OPS_PATCHABLE ? PRO_PAGE_PATCH_OPS.length : 0)); // + line_move; K2a: + Ship 2 when on
   });
 
   it('spend and non-spend action types are disjoint and cover every StudioAction type', () => {
@@ -1413,7 +1413,8 @@ describe('Comic History contract (H0)', () => {
     for (const op of SERVER_ONLY_OPS) expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
     expect(isKnownDocOp({ op: 'history_restore' })).toBe(true);
     expect(isKnownDocOp({ op: 'panel_frames_from_the_future' })).toBe(false);
-    expect(KNOWN_DOC_OPS.size).toBe(CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length);
+    // K2a: the Ship 2 ops are known to every client even while they are not client-patchable yet.
+    expect(KNOWN_DOC_OPS.size).toBe(CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length + (PRO_PAGE_OPS_PATCHABLE ? 0 : PRO_PAGE_PATCH_OPS.length));
     const doc = richDoc();
     const restore: DocOp = { op: 'history_restore', set: { brief: { ...doc.brief, title: 'Then' } }, mode: 'merge', versionId: 'v1', at: 5 };
     expect(isUndoable(doc, [restore])).toBe(false);
@@ -1471,5 +1472,875 @@ describe('Comic History contract (H0)', () => {
     expect(normalizeTimeZone('America/Los_Angeles')).toBe('America/Los_Angeles');
     expect(normalizeTimeZone('Asia/Kolkata')).toMatch(/^Asia\/(Kolkata|Calcutta)$/);
     for (const bad of ['', 'Mars/Olympus', 'UTC; drop table', 42, null, 'a'.repeat(80)]) expect(normalizeTimeZone(bad), String(bad)).toBeUndefined();
+  });
+});
+
+// ── Ship 2 contract (K2a; pro plan §5.2–§5.6) ────────────────────────────────
+import {
+  DEFAULT_FRAME_STYLE,
+  VERSION_META_KEYS,
+  artModeOf,
+  consistencyOf,
+  cutFor,
+  frameStyleOf,
+  dropPanelSourcePaths,
+  mapPanelSourcePaths,
+  normalizeBalloonShip2,
+  normalizeConsistencyFinding,
+  normalizeConsistencySettings,
+  normalizePageContinuity,
+  normalizePageLayers,
+  normalizePanelCuts,
+  normalizePanelDirection,
+  normalizePanelFrame,
+  normalizeScenes,
+  normalizeVersionParts,
+  pageSourcePaths,
+  scenesOf,
+  type PanelCuts
+} from './doc';
+import { INVERTIBLE_OPS, PRO_PAGE_OPS_PATCHABLE, PRO_PAGE_PATCH_OPS, clampBalloonPatch } from './ops';
+import { describeOps } from './undo';
+import { PANEL_RES_STEP, tierPanelPrice } from './models';
+import { CONSISTENCY_LIMITS, EDITOR_LIMITS, PRO_PAGE_LIMITS } from './limits';
+import { drawnPanelBoxes, estimatePanelBoxes, panelBoxesFor } from './pageGeometry';
+import { letteringAspect, planLettering, estimateMeasure } from './lettering/layout';
+import { composeAspect, frameAffine, pageSpaceQc } from './panelize/space';
+import { partsOf } from './parts';
+import { TOP_LEVEL_SECTIONS, TYPED_META_KEYS, excludedOf, isExtraMetaKey, joinSections, sectionSignatures, splitSections, unassignedKeys } from './history/sections';
+import { AI_ACTIONS, EDITOR_ACTIONS, opActor, touchedKeys } from './history/touched';
+import { describeChanges, panelMomentsOfOps, withPanelMoments } from './history/describe';
+import { diffBooks } from './history/diff';
+import { historyV4Doc, historyV5Doc } from './history/__fixtures__/books';
+import { randomBook, rngOf } from './history/__fixtures__/random';
+import type { StudioFocus } from './events';
+
+describe('Ship 2 contract (K2a)', () => {
+  // ── Fixtures (synthetic) ──
+  const K_PATH = 'u/user-k/p/proj-k/img/p1.webp';
+  const bx = (x: number, y: number, w: number, h: number) => ({ x, y, w, h });
+  const FRAMES = [bx(0.02, 0.02, 0.96, 0.46), bx(0.02, 0.5, 0.47, 0.48), bx(0.51, 0.5, 0.47, 0.48)];
+  const CUTS: PanelCuts = { status: 'ok', by: 'detect', at: 11, cuts: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, drawn: i + 1, box, conf: 0.95 })) };
+
+  /** One drawn page (2:3 drawing on a 2:3 book), three panels, balloons, a Hindi override, an overlay; fresh stamp. */
+  const kDoc = (opts: { panels?: boolean; square?: boolean } = {}): ComicDoc => {
+    const raw = {
+      ...createEmptyDoc('proj-k', 'Market', 1000),
+      cast: [{ id: 'ch_k', name: 'Maya', tier: 'lead' as const, look: { summary: 'A wiry girl in a saffron scarf' }, refs: [], sheet: emptyRender() }],
+      pages: [
+        {
+          id: 'pg_k',
+          n: 1,
+          summary: 'Market chase',
+          layout: 'Row 1: one wide panel (panel 1). Row 2: two equal panels side by side (panels 2–3).',
+          panels: [
+            { id: 'pk_1', n: 1, size: 'wide' as const, shot: 'establishing' as const, action: 'The market at dawn.', castIds: ['ch_k'], lines: [{ id: 'lk_1', kind: 'caption' as const, text: 'Dawn.' }] },
+            { id: 'pk_2', n: 2, size: 'medium' as const, shot: 'close_up' as const, action: 'Maya grabs a tin.', castIds: ['ch_k'], lines: [{ id: 'lk_2', kind: 'speech' as const, speakerId: 'ch_k', text: 'Just one more.' }] },
+            { id: 'pk_3', n: 3, size: 'medium' as const, shot: 'medium' as const, action: 'She runs.', castIds: ['ch_k'], lines: [{ id: 'lk_3', kind: 'shout' as const, speakerId: 'ch_k', text: 'Run!' }] }
+          ],
+          render: {
+            status: 'ready' as const,
+            history: [],
+            asset: { path: K_PATH, source: 'generated' as const, at: 10, w: opts.square ? 1024 : 1000, h: opts.square ? 1024 : 1500 },
+            origin: 'render' as const,
+            cuts: CUTS,
+            qc: {
+              score: 0.9,
+              issues: [],
+              checkedAt: 12,
+              panelBoxes: FRAMES,
+              keepOut: [{ panel: 2, box: bx(0.1, 0.6, 0.1, 0.1), kind: 'face' as const }],
+              heads: [{ panel: 2, characterId: 'ch_k', head: { x: 0.2, y: 0.7 } }]
+            }
+          },
+          balloons: [
+            { lineId: 'lk_1', x: 0.05, y: 0.05, w: 0.3 },
+            { lineId: 'lk_2', x: 0.1, y: 0.55, w: 0.25, tailX: 0.2, tailY: 0.8, pinned: true },
+            { lineId: 'lk_3', x: 0.6, y: 0.55, w: 0.2, locked: true, pinned: true }
+          ],
+          layers: [{ id: 'ly_star', kind: 'shape' as const, box: bx(0.6, 0.6, 0.1, 0.1), clip: 'pk_3', shape: { type: 'ellipse' as const, fill: '#ffcc00' } }]
+        }
+      ]
+    };
+    let doc = normalizeDoc(raw as unknown as ComicDoc);
+    doc = applyOps(doc, [
+      { op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { specHash: pageSpecHash(doc, doc.pages[0]) } },
+      { op: 'edition', lang: 'hi', patch: {} },
+      { op: 'translation', lang: 'hi', lineId: 'lk_2', patch: { text: 'बस एक और।', status: 'reviewed', sourceHash: 'h', at: 3 } },
+      { op: 'edition_balloon', lang: 'hi', lineId: 'lk_2', patch: { x: 0.12, y: 0.56 } }
+    ], 5);
+    if (opts.panels) doc = applyOps(doc, [{ op: 'page_frames', pageId: 'pg_k', artMode: 'panels', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box } })), moveBalloons: false }], 6);
+    return doc;
+  };
+
+  /** R4 wire equality (null ≡ unset; updatedAt ignored). */
+  const canon = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, val] of Object.entries(v as Record<string, unknown>)) if (val !== null && val !== undefined) out[k] = canon(val);
+      return out;
+    }
+    return v;
+  };
+  const same = (doc: ComicDoc) => canon({ ...doc, updatedAt: 0 });
+  const wire = (ops: DocOp[]): DocOp[] => (JSON.parse(encodeStudioEvent({ type: 'ops', rev: 1, ops })) as { ops: DocOp[] }).ops;
+  const json = (v: unknown) => JSON.parse(JSON.stringify(v));
+
+  /** A random book with its drawn pages panelized (frames = cuts = the blueprint boxes); every third drawn page is stale;
+   *  on some pages the last panel has no frame. */
+  const panelized = (seed: number): ComicDoc => {
+    const r = rngOf(seed * 31 + 7);
+    const book = randomBook(seed);
+    const pages = book.pages.map((p, i) => {
+      if (!p.render.asset || !p.panels.length || p.render.status !== 'ready') return p;
+      const boxes = estimatePanelBoxes(p, { readingDirection: book.format.readingDirection, kind: book.format.kind });
+      const cuts: PanelCuts = { status: 'ok', by: 'detect', at: 1, cuts: p.panels.map((pn, j) => ({ panelId: pn.id, drawn: j + 1, box: boxes[j], conf: 0.9 })) };
+      const findings = r() < 0.5 ? [{ id: `f_${i}`, kind: 'identity' as const, panel: 1, severity: 'minor' as const, note: 'The scarf is blue here' }] : undefined;
+      return {
+        ...p,
+        ...(r() < 0.8 ? { artMode: 'panels' as const } : {}),
+        ...(r() < 0.5 ? { frameStyle: { gutter: 0.03, color: '#101010' } } : {}),
+        // Some pages leave their last panel without a frame (opted in, shown as drawn until it gets one or goes).
+        panels: p.panels.map((pn, j) => ((seed + i) % 4 === 0 && p.panels.length > 1 && j === p.panels.length - 1 ? pn : { ...pn, frame: { box: boxes[j] } })),
+        render: { ...p.render, cuts, ...(findings ? { qc: { score: 0.9, issues: [], checkedAt: 1, findings } } : {}) }
+      };
+    });
+    const out = normalizeDoc({ ...book, pages, scenes: [{ id: 'sc_a', name: 'Market' }] });
+    return { ...out, pages: out.pages.map((p, i) => (p.render.asset ? { ...p, render: { ...p.render, specHash: i % 3 === 2 ? 'stale000' : pageSpecHash(out, p) } } : p)) };
+  };
+
+  /** A random Ship 2 op (some of them no-ops on purpose: a ghost page, a wrong path). */
+  const k2Op = (doc: ComicDoc, r: () => number, step: number): DocOp => {
+    const pick = <T,>(l: readonly T[]): T => l[Math.floor(r() * l.length)];
+    const chance = (p: number) => r() < p;
+    const page = doc.pages.length ? pick(doc.pages) : undefined;
+    const pageId = page && chance(0.95) ? page.id : 'ghost';
+    const panel = page?.panels.length ? pick(page.panels) : undefined;
+    const box = () => {
+      const w = 0.1 + r() * 0.5;
+      const h = 0.1 + r() * 0.4;
+      return bx(Math.round(r() * (1 - w) * 1000) / 1000, Math.round(r() * (1 - h) * 1000) / 1000, Math.round(w * 1000) / 1000, Math.round(h * 1000) / 1000);
+    };
+    const uid = (p: string) => `${p}_k${step}_${Math.floor(r() * 1e6)}`;
+    switch (pick(['frames', 'frames', 'mode', 'style', 'cuts', 'order', 'add', 'remove', 'layer', 'layer', 'continuity', 'scene', 'consistency', 'finding'] as const)) {
+      case 'frames':
+        return { op: 'page_frames', pageId, frames: [{ panelId: panel?.id ?? 'ghost', frame: chance(0.15) ? null : { box: box(), ...(chance(0.3) ? { fit: { s: 1 + r(), x: r() * 2 - 1, y: 0 } } : {}) } }], ...(chance(0.2) ? { moveBalloons: false } : {}) };
+      case 'mode':
+        return { op: 'page_frames', pageId, artMode: chance(0.5) ? 'panels' : null };
+      case 'style':
+        return { op: 'page_frames', pageId, frameStyle: chance(0.3) ? null : chance(0.2) ? undefined : { gutter: r() * 0.1, color: '#223344' } };
+      case 'cuts': {
+        const path = page?.render.asset?.path;
+        return { op: 'page_cuts', pageId, path: chance(0.85) && path ? path : 'u/other.webp', cuts: chance(0.2) ? null : { status: 'unsure', by: 'detect', at: step, cuts: (page?.panels || []).map((pn, j) => ({ panelId: pn.id, drawn: j + 1, box: box(), conf: 0.8 })) } };
+      }
+      case 'order':
+        return { op: 'panels_order', pageId, order: (page?.panels || []).map((p) => p.id).sort(() => r() - 0.5) };
+      case 'add': {
+        const sibling = page?.panels.length ? pick(page.panels) : undefined;
+        const take = sibling?.lines.length && chance(0.5) ? [sibling.lines[0]] : [];
+        return {
+          op: 'panel_add',
+          pageId,
+          index: Math.floor(r() * ((page?.panels.length || 0) + 1)),
+          panel: { id: uid('pn'), n: 0, size: 'medium', shot: 'medium', action: 'A new beat', castIds: [], lines: [...take, ...(chance(0.5) ? [{ id: uid('ln'), kind: 'speech' as const, text: 'Hey!' }] : [])], ...(chance(0.8) ? { frame: { box: box() } } : {}) }
+        };
+      }
+      case 'remove': {
+        // Half the time a panel without a frame when there is one (on an opted-in page its removal flips the display).
+        const frameless = (page?.panels || []).filter((p) => !p.frame);
+        const gone = frameless.length && chance(0.5) ? pick(frameless) : panel;
+        const others = (page?.panels || []).filter((p) => p.id !== gone?.id);
+        return { op: 'panel_remove', pageId, id: gone?.id ?? 'ghost', ...(others.length && chance(0.5) ? { linesTo: pick(others).id } : {}) };
+      }
+      case 'layer': {
+        const existing = page?.layers || [];
+        if (existing.length && chance(0.6)) {
+          const l = pick(existing);
+          if (chance(0.3)) return { op: 'layer', pageId, id: l.id, patch: null };
+          return { op: 'layer', pageId, id: l.id, patch: chance(0.5) ? { box: box(), opacity: chance(0.5) ? undefined : 0.5 } : { kind: 'image', src: { path: 'u/user-r/sticker.webp' } } };
+        }
+        return { op: 'layer', pageId, id: uid('ly'), index: 0, patch: { kind: 'shape', box: box(), shape: { type: 'rect', fill: '#ff0000' }, ...(panel && chance(0.6) ? { clip: panel.id } : {}) } };
+      }
+      case 'continuity':
+        return { op: 'continuity', pageId, patch: chance(0.2) ? null : { ...(chance(0.5) ? { notes: [`note ${step}`] } : {}), cast: { [doc.cast[0]?.id ?? 'c_x']: { outfit: 'red coat' } }, ...(chance(0.3) ? { sceneId: 'sc_a' } : {}) } };
+      case 'scene': {
+        const scenes = doc.scenes || [];
+        if (scenes.length && chance(0.5)) {
+          const s = pick(scenes);
+          return chance(0.4) ? { op: 'scene', id: s.id, patch: null } : { op: 'scene', id: s.id, patch: { light: chance(0.5) ? 'golden' : null } };
+        }
+        return { op: 'scene', id: uid('sc'), patch: { name: `Scene ${step}`, time: 'dusk' }, index: 0 };
+      }
+      case 'consistency':
+        return { op: 'consistency', patch: chance(0.3) ? { maxRefs: null, skip: null } : { maxRefs: 1 + Math.floor(r() * 10), skip: [`place:${step}`] } };
+      default: {
+        const f = page?.render.qc?.findings?.[0];
+        return { op: 'finding', pageId, id: f?.id ?? 'ghost', patch: { dismissed: chance(0.5) ? true : null } };
+      }
+    }
+  };
+
+  /** Every Ship 2 field filled on a doc (valid values): frames, directions, page objects, balloon rot/minH, raster meta. */
+  const fillShip2 = (base: ComicDoc): ComicDoc => {
+    const d = json(base) as ComicDoc;
+    d.scenes = [{ id: 'sc_1', name: 'Market', placeId: d.places[0]?.id, time: 'dawn', light: 'golden' }];
+    d.consistency = { maxRefs: 8, styleKeyPageId: d.pages[0]?.id, skip: ['place:x'] };
+    for (const page of d.pages) {
+      const boxes = estimatePanelBoxes(page, { readingDirection: d.format.readingDirection, kind: d.format.kind });
+      page.artMode = 'panels';
+      page.frameStyle = { gutter: 0.03, border: 0.006, color: '#202020' };
+      page.layers = [{ id: 'ly_1', kind: 'shape', box: bx(0.4, 0.4, 0.2, 0.1), shape: { type: 'rect', fill: '#ffffff' }, print: false }];
+      page.continuity = { cast: { [d.cast[0]?.id || 'c']: { outfit: 'blue coat', holding: ['lantern'] } }, props: { lantern: 'lit' }, notes: ['rain stops'], by: 'writer' };
+      page.panels.forEach((panel, j) => {
+        panel.frame = { box: boxes[j], fit: { s: 1.2, x: 0, y: -0.5 }, border: { w: 0.004 } };
+        panel.direction = { lens: 'wide', light: 'warm dawn', background: ['awnings'], cast: { [d.cast[0]?.id || 'c']: { expression: 'wary', pos: 'left' } }, by: 'writer' };
+      });
+      page.balloons = page.balloons.map((b) => ({ ...b, rot: 5, minH: 0.1 }));
+      if (page.render.asset) {
+        page.render.cuts = { status: 'ok', by: 'detect', at: 1, cuts: page.panels.map((pn, j) => ({ panelId: pn.id, drawn: j + 1, box: boxes[j], conf: 0.9 })) };
+        page.render.parts = partsOf(d, page);
+        page.render.anchorKeys = ['char:x', 'place:y'];
+        page.render.qc = { ...(page.render.qc || { score: 0.9, issues: [], checkedAt: 1 }), checkV: 2, findings: [{ id: 'f1', kind: 'identity', panel: 1, severity: 'minor', note: 'Scarf colour' }] };
+      }
+    }
+    return normalizeDoc(d);
+  };
+
+  // Spec hashes and the normalized-doc fingerprint, captured on the base (bde91dcb) before any Ship 2 code existed.
+  const GOLDEN = {
+    v4: {
+      pages: ['e4ad3dae', '78c45272', '6dda590e', 'c2ceaab5', 'a07596b1'],
+      sheets: ['1a50eb87', '7d5cad60', 'bf08b1f8', '14819b42'],
+      places: [] as string[],
+      cover: '674ba56c',
+      plan: '89305a3e',
+      norm: '6da9d578'
+    },
+    v5: {
+      pages: ['ef2237d9', '81f85b58', 'e7462403', 'e940374a', '8ae0118d', 'e653234c'],
+      sheets: ['e4acb465', 'd537483e', 'cf4cd9f1'],
+      places: ['1beeaee2', '1a59baa9'],
+      cover: '54f22bff',
+      plan: 'ad156042',
+      norm: '73b6edb8'
+    }
+  };
+  const specHashes = (d: ComicDoc) => ({
+    pages: d.pages.map((p) => pageSpecHash(d, p)),
+    sheets: d.cast.map((c) => sheetSpecHash(d, c)),
+    places: d.places.map((p) => placeSpecHash(d, p)),
+    cover: coverSpecHash(d),
+    plan: planInputHashOf(d)
+  });
+
+  it('I1: golden spec hashes are unchanged on both fixture shapes, and old docs normalize deep-equal', () => {
+    for (const [name, make] of [['v4', historyV4Doc], ['v5', historyV5Doc]] as const) {
+      const old = normalizeDoc(json(make()));
+      const { norm, ...hashes } = GOLDEN[name];
+      expect(specHashes(old), name).toEqual(hashes);
+      // Old docs deep-equal: the normalized doc is byte-for-byte what bde91dcb produced, and normalizing again changes nothing.
+      expect(hashString(stableStringify(old)), name).toBe(norm);
+      expect(normalizeDoc(json(old)), name).toEqual(old);
+      // Every Ship 2 field filled (frames, fits, directions, overlays, continuity, scenes, cuts, parts, findings, rot/minH):
+      // no spec hash moves (nothing new is hashed), the values are kept, and the filled doc is idempotent.
+      const full = fillShip2(old);
+      expect(specHashes(full), name).toEqual(hashes);
+      expect(full.pages.every((p) => p.artMode === 'panels' && p.layers?.length === 1 && p.continuity && p.panels.every((pn) => pn.frame && pn.direction)), name).toBe(true);
+      expect(full.scenes?.length && full.consistency?.maxRefs, name).toBe(8);
+      expect(normalizeDoc(json(full)), name).toEqual(full);
+      for (const p of full.pages.filter((x) => x.render.asset)) expect(isPageStale(full, { ...p, render: { ...p.render, specHash: pageSpecHash(old, old.pages.find((o) => o.id === p.id)!) } }), p.id).toBe(false);
+    }
+  });
+
+  it('normalizers drop the malformed, clamp ranges and are idempotent (property over garbage)', () => {
+    expect(normalizePanelFrame({ box: bx(NaN, 0, 0.5, 0.5) })).toBeUndefined();
+    expect(normalizePanelFrame({ box: bx(0.9, -1, 0.01, 3), fit: { s: 9, x: -3, y: 0.5 }, z: 500, locked: 'yes' })).toEqual({ box: bx(0.9, 0, 0.04, 1), fit: { s: 4, x: -1, y: 0.5 }, z: 100 });
+    expect(normalizePageLayers([{ id: 'nope', kind: 'shape', box: bx(0, 0, 0.1, 0.1), shape: { type: 'rect' } }, { id: 'ly_img', kind: 'image', box: bx(0, 0, 0.1, 0.1) }])).toBeUndefined();
+    const many = Array.from({ length: 30 }, (_, i) => ({ id: `ly_${i % 26}`, kind: 'shape', box: bx(0, 0, 0.1, 0.1), shape: { type: 'rect' } }));
+    expect(normalizePageLayers(many)).toHaveLength(EDITOR_LIMITS.layersPerPage);
+    expect(normalizePanelCuts({ status: 'ok', by: 'detect', at: 1, cuts: Array.from({ length: 13 }, (_, i) => ({ drawn: i + 1, box: bx(0, 0, 0.1, 0.1), conf: 1 })) })!.cuts).toHaveLength(EDITOR_LIMITS.maxCuts);
+    expect(normalizePanelCuts({ status: 'great', by: 'detect', at: 1, cuts: [] })).toBeUndefined();
+    expect(normalizeScenes(Array.from({ length: 61 }, (_, i) => ({ id: `sc_${i}`, name: `S${i}` })))).toHaveLength(CONSISTENCY_LIMITS.scenes);
+    const polluted = normalizePageContinuity(JSON.parse('{"cast":{"__proto__":{"outfit":"x"},"c_1":{"outfit":"red"}},"props":{"constructor":"x","lamp":null}}'));
+    expect(polluted).toEqual({ cast: { c_1: { outfit: 'red' } }, props: { lamp: null } });
+    expect(({} as Record<string, unknown>).outfit).toBeUndefined();
+    expect(normalizeBalloonShip2({ lineId: 'l', x: 0, y: 0, w: 0.2, rot: 90, minH: 0.9 })).toEqual({ lineId: 'l', x: 0, y: 0, w: 0.2, rot: 45, minH: 0.6 });
+    expect(normalizeBalloonShip2({ lineId: 'l', x: 0, y: 0, w: 0.2, minH: -1 } as never)).toEqual({ lineId: 'l', x: 0, y: 0, w: 0.2 });
+    expect(clampBalloonPatch({ rot: -80, minH: 2 })).toEqual({ rot: -45, minH: 0.6 });
+    expect(normalizeConsistencyFinding({ id: 'f', kind: 'identity', panel: 2, severity: 'major', note: ' x ', fix: { kind: 'rebind', order: [2, 1] } })).toEqual({ id: 'f', kind: 'identity', panel: 2, severity: 'major', note: 'x', fix: { kind: 'rebind', order: [2, 1] } });
+    expect(normalizeVersionParts({ panels: { p1: { c: 'abcdef', a: 'abcdef', p: 'abcdef', s: 'abcdef', m: 'xyz' } } })).toBeUndefined();
+    expect(normalizeConsistencySettings({ maxRefs: 40, skip: [] })).toEqual({ maxRefs: PRO_PAGE_LIMITS.maxRefsMax });
+    expect(frameStyleOf({ frameStyle: { gutter: 0.05 } })).toEqual({ ...DEFAULT_FRAME_STYLE, gutter: 0.05 });
+    expect(scenesOf(createEmptyDoc('x'))).toEqual([]);
+    expect(consistencyOf(createEmptyDoc('x'))).toEqual({});
+    // Property: any garbage normalizes to a fixed point.
+    const r = rngOf(99);
+    const junk = (depth: number): unknown => {
+      const k = Math.floor(r() * 8);
+      if (depth > 3 || k === 0) return [null, undefined, NaN, -5, 0.5, 1e9, 'x', '#ffffff', 'ly_a', true][Math.floor(r() * 10)];
+      if (k < 3) return Array.from({ length: Math.floor(r() * 4) }, () => junk(depth + 1));
+      const keys = ['box', 'x', 'y', 'w', 'h', 'fit', 's', 'src', 'path', 'id', 'kind', 'shape', 'type', 'cuts', 'drawn', 'conf', 'status', 'by', 'at', 'cast', 'outfit', 'notes', 'lens', 'name', 'panels', 'c', 'a'];
+      return Object.fromEntries(Array.from({ length: 1 + Math.floor(r() * 6) }, () => [keys[Math.floor(r() * keys.length)], junk(depth + 1)]));
+    };
+    const normalizers: ((v: unknown) => unknown)[] = [normalizePanelFrame, normalizePageLayers, normalizePanelCuts, normalizePageContinuity, normalizePanelDirection, normalizeScenes, normalizeConsistencySettings, normalizeVersionParts, normalizeConsistencyFinding];
+    for (let i = 0; i < 400; i += 1) {
+      const raw = junk(0);
+      for (const n of normalizers) {
+        const once = n(raw);
+        expect(n(json(once ?? null)) ?? undefined).toEqual(once === undefined ? undefined : json(once));
+      }
+    }
+  });
+
+  it('artModeOf falls back to the page as drawn when frames or cuts are missing or inconsistent (I2)', () => {
+    const doc = kDoc({ panels: true });
+    const page = doc.pages[0];
+    expect(artModeOf(page)).toBe('panels');
+    expect(artModeOf(kDoc().pages[0])).toBe('page'); // never opted in
+    expect(artModeOf(null)).toBe('page');
+    expect(artModeOf({ ...page, panels: [] })).toBe('page');
+    // One frame missing.
+    expect(artModeOf(applyOps(doc, [{ op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_2', frame: null }], moveBalloons: false }]).pages[0])).toBe('page');
+    // A new drawing clears the cuts (I3), so the frames have nothing to cut from.
+    const redrawn = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { status: 'ready', asset: { path: 'u/user-k/p/proj-k/img/p1b.webp', source: 'generated', at: 20 } } }]);
+    expect(redrawn.pages[0].render.cuts).toBeUndefined();
+    expect(artModeOf(redrawn.pages[0])).toBe('page');
+    // Cuts naming another plan's panels.
+    expect(artModeOf({ ...page, render: { ...page.render, cuts: { ...CUTS, cuts: CUTS.cuts.map((c) => ({ ...c, panelId: `x_${c.panelId}` })) } } })).toBe('page');
+    // A broken frame is dropped on load, so the page falls back too.
+    const broken = normalizeDoc(json({ ...doc, pages: [{ ...page, panels: page.panels.map((p, i) => (i ? p : { ...p, frame: { box: bx(0, 0, NaN, 1) } })) }] }));
+    expect(broken.pages[0].panels[0].frame).toBeUndefined();
+    expect(artModeOf(broken.pages[0])).toBe('page');
+    // A panel without a cut is an empty frame (still panels mode); frames with their own pictures need no cuts.
+    expect(cutFor(page, 'pk_9')).toBeUndefined();
+    const withEmpty = applyOps(doc, [{ op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_9', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [], frame: { box: bx(0.4, 0.4, 0.2, 0.2) } } }]);
+    expect(artModeOf(withEmpty.pages[0])).toBe('panels');
+    const allSourced = { ...page, render: { ...page.render, cuts: undefined }, panels: page.panels.map((p) => ({ ...p, frame: { ...p.frame!, src: { path: K_PATH } } })) };
+    expect(artModeOf(allSourced)).toBe('panels');
+  });
+
+  it('panelBoxesFor returns the frames only in panels mode', () => {
+    const drawn = kDoc();
+    const moved = bx(0.1, 0.1, 0.8, 0.3);
+    const asDrawn = applyOps(drawn, [{ op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_1', frame: { box: moved } }] }]);
+    // Frames stored but the page never opted in: the measured boxes, as before.
+    expect(panelBoxesFor(asDrawn, asDrawn.pages[0])).toEqual(FRAMES);
+    expect(drawnPanelBoxes(asDrawn, asDrawn.pages[0])).toEqual(FRAMES);
+    const panels = applyOps(kDoc({ panels: true }), [{ op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_1', frame: { box: moved } }] }]);
+    expect(panelBoxesFor(panels, panels.pages[0])).toEqual([moved, FRAMES[1], FRAMES[2]]);
+    expect(drawnPanelBoxes(panels, panels.pages[0])).toEqual([moved, FRAMES[1], FRAMES[2]]);
+    // Falls back with the mode: a redraw clears the cuts → the stored measurement again, never the stale frames.
+    const redrawn = applyOps(panels, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { asset: { path: 'u/new.webp', source: 'generated', at: 30 }, qc: { score: 1, issues: [], checkedAt: 31, panelBoxes: FRAMES } } }]);
+    expect(panelBoxesFor(redrawn, redrawn.pages[0])).toEqual(FRAMES);
+  });
+
+  it('letteringAspect is the book aspect in panels mode (a square drawing panelized onto a 2:3 page)', () => {
+    const drawn = kDoc({ square: true });
+    expect(letteringAspect(drawn, drawn.pages[0])).toBe(1);
+    expect(composeAspect(drawn, drawn.pages[0])).toBe(1);
+    // Page mode: the page check is the stored report itself (the lettering takes today's path, byte for byte).
+    expect(pageSpaceQc(drawn, drawn.pages[0])).toBe(drawn.pages[0].render.qc);
+    const doc = kDoc({ square: true, panels: true });
+    const page = doc.pages[0];
+    expect(letteringAspect(doc, page)).toBeCloseTo(2 / 3, 10);
+    expect(composeAspect(doc, { render: page.render })).toBe(1); // without its panels a page is shown as drawn
+    // Panels mode: keep-outs and heads move from the square drawing into the frame that shows them.
+    const qc = pageSpaceQc(doc, page)!;
+    expect(qc.panelBoxes).toEqual(FRAMES);
+    expect(qc.keepOut).toHaveLength(1);
+    const k = qc.keepOut![0];
+    const f2 = FRAMES[1];
+    expect(k.panel).toBe(2);
+    expect(k.box.x >= f2.x - 1e-9 && k.box.y >= f2.y - 1e-9 && k.box.x + k.box.w <= f2.x + f2.w + 1e-9 && k.box.y + k.box.h <= f2.y + f2.h + 1e-9).toBe(true);
+    const aff = frameAffine(doc, page, 'pk_2')!;
+    expect(aff.toImage(qc.heads![0].head).x).toBeCloseTo(0.2, 3);
+    expect(aff.toImage(qc.heads![0].head).y).toBeCloseTo(0.7, 3);
+    // The lettering plans the page on the book aspect without crashing, one plan per line.
+    const plans = planLettering(doc, page, letteringAspect(doc, page), estimateMeasure);
+    expect(plans.map((p) => p.lineId).sort()).toEqual(['lk_1', 'lk_2', 'lk_3']);
+  });
+
+  it("estimateJobs('panel') at Standard = 0.0476 and BYOK = 0.0366 (the page tier one step down, one QC run)", () => {
+    expect(estimateJobs([{ kind: 'panel', count: 1 }], 'standard').usd).toBe(0.0476);
+    expect(estimateJobs([{ kind: 'panel', count: 1 }], 'standard', { byok: true }).usd).toBe(0.0366);
+    expect(resolveImageJob('panel', 'standard')).toMatchObject({ resolution: '1K' });
+    expect(resolveImageJob('panel', 'standard').spec.id).toBe(resolveImageJob('page', 'standard').spec.id);
+    expect(resolveImageJob('panel', 'draft').resolution).toBe('1K');
+    expect(PANEL_RES_STEP).toEqual({ '512': '512', '1K': '1K', '2K': '1K', '4K': '2K' });
+    // The lock's model, one step down (Nano Banana Pro: 2K page → 1K panel).
+    const lock = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'first_render' as const };
+    expect(resolveImageJob('panel', 'standard', undefined, lock)).toMatchObject({ resolution: '1K' });
+    expect(estimateJobs([{ kind: 'panel', count: 2 }], 'standard', { lock, byok: true }).usd).toBe(Math.round((0.1344 + 0.003) * 2 * 10000) / 10000);
+    expect(tierPanelPrice('standard')).toBeCloseTo(0.0476, 4);
+    // The page quote is unchanged.
+    expect(estimateJobs([{ kind: 'page', count: 1 }], 'standard').usd).toBe(Math.round((0.0504 + 0.003) * PLATFORM_MARKUP * 10000) / 10000);
+  });
+
+  it('CLIENT_PATCHABLE_OPS ∩ SERVER_ONLY_OPS = ∅, page_panels stays server-only, and every Ship 2 op is known and invertible', () => {
+    expect([...CLIENT_PATCHABLE_OPS].filter((op) => SERVER_ONLY_OPS.includes(op))).toEqual([]);
+    expect(PRO_PAGE_PATCH_OPS.filter((op) => SERVER_ONLY_OPS.includes(op))).toEqual([]);
+    expect(SERVER_ONLY_OPS).toContain('page_panels');
+    expect(CLIENT_PATCHABLE_OPS.has('page_panels')).toBe(false);
+    expect(PRO_PAGE_PATCH_OPS).not.toContain('page_panels');
+    expect([...PRO_PAGE_PATCH_OPS].sort()).toEqual(['consistency', 'continuity', 'finding', 'layer', 'page_cuts', 'page_frames', 'panel_add', 'panel_remove', 'panels_order', 'scene']);
+    // No flag flip in K2a: they become patchable with the server sanitizers (one constant).
+    expect(PRO_PAGE_OPS_PATCHABLE).toBe(false);
+    for (const op of PRO_PAGE_PATCH_OPS) {
+      expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(PRO_PAGE_OPS_PATCHABLE);
+      expect(isKnownDocOp({ op }), op).toBe(true);
+      expect(INVERTIBLE_OPS.has(op), op).toBe(true);
+    }
+    expect(describeOps([{ op: 'panels_order', pageId: 'p', order: [] }])).toBe('reorder panels');
+    expect(describeOps([{ op: 'layer', pageId: 'p', id: 'ly_a', patch: null }, { op: 'layer', pageId: 'p', id: 'ly_b', patch: null }])).toBe('edit 2 overlays');
+    // The editor's selection rides on the focus (ids only).
+    const focus: StudioFocus = { pageId: 'pg_k', panelIds: ['pk_2'], layerIds: ['ly_star'] };
+    expect(focus.panelIds).toEqual(['pk_2']);
+  });
+
+  it('collectAssetPaths includes frame and layer sources (trash included); displayAssetPaths shows live pages only', () => {
+    const TAKE = 'u/user-k/p/proj-k/img/p1-take1.webp';
+    const STICKER = 'u/user-k/p/proj-k/refs/sticker.webp';
+    const GUIDE = 'u/user-k/p/proj-k/refs/guide.webp';
+    let doc = kDoc({ panels: true });
+    doc = applyOps(doc, [
+      { op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_2', frame: { box: FRAMES[1], src: { path: TAKE } } }], moveBalloons: false },
+      { op: 'layer', pageId: 'pg_k', id: 'ly_sticker', patch: { kind: 'image', box: bx(0.1, 0.1, 0.2, 0.2), src: { path: STICKER } } },
+      { op: 'layer', pageId: 'pg_k', id: 'ly_guide', patch: { kind: 'image', box: bx(0.5, 0.1, 0.2, 0.2), src: { path: GUIDE }, print: false } }
+    ]);
+    expect(pageSourcePaths(doc.pages[0])).toEqual([TAKE, STICKER, GUIDE]);
+    expect(pageSourcePaths(doc.pages[0], { printOnly: true })).toEqual([TAKE, STICKER]);
+    for (const p of [TAKE, STICKER, GUIDE]) {
+      expect(collectAssetPaths(doc), p).toContain(p);
+      expect(displayAssetPaths(doc), p).toContain(p);
+    }
+    const trashed = applyOps(doc, [{ op: 'page_delete', id: 'pg_k', deletedAt: 50 }]);
+    expect(trashOf(trashed)).toHaveLength(1);
+    for (const p of [TAKE, STICKER, GUIDE]) {
+      expect(collectAssetPaths(trashed), p).toContain(p);
+      expect(displayAssetPaths(trashed), p).not.toContain(p);
+    }
+    // Server path rewrites reach them too (and change nothing when nothing moves).
+    expect(mapPanelSourcePaths(trashed, (p) => p)).toBe(trashed);
+    const rewritten = mapPanelSourcePaths(trashed, (p) => p.replace('proj-k', 'proj-copy'));
+    expect(pageSourcePaths(trashOf(rewritten)[0].page).every((p) => p.includes('proj-copy'))).toBe(true);
+    // Image filters (a restore leaving out forgotten or blocked images; forgetting a photo, V-4) drop them whole:
+    // the frame loses its source, the overlay goes; no dangling path, nothing else touched.
+    expect(dropPanelSourcePaths(trashed, () => false)).toBe(trashed);
+    for (const d of [doc, trashed]) {
+      const out = dropPanelSourcePaths(d, (p) => p === TAKE || p === STICKER);
+      const page = out.pages.find((p) => p.id === 'pg_k') ?? trashOf(out)[0].page;
+      const was = d.pages.find((p) => p.id === 'pg_k') ?? trashOf(d)[0].page;
+      expect(pageSourcePaths(page)).toEqual([GUIDE]);
+      expect(collectAssetPaths(out)).not.toContain(TAKE);
+      expect(collectAssetPaths(out)).not.toContain(STICKER);
+      expect(page.panels[1].frame).toEqual({ box: FRAMES[1] });
+      expect(page.layers!.map((l) => l.id)).toEqual(was.layers!.filter((l) => l.id !== 'ly_sticker').map((l) => l.id));
+      expect(page.balloons).toBe(was.balloons);
+    }
+    expect(dropPanelSourcePaths(doc, () => true).pages[0].layers!.map((l) => l.id)).toEqual(['ly_star']);
+  });
+
+  it("the versions 'every key assigned' test passes with scenes and consistency (book section; generic extra meta keys)", () => {
+    expect(TOP_LEVEL_SECTIONS.scenes).toBe('meta');
+    expect(TOP_LEVEL_SECTIONS.consistency).toBe('meta');
+    expect(TYPED_META_KEYS).not.toContain('scenes');
+    expect(TYPED_META_KEYS).not.toContain('consistency');
+    expect(isExtraMetaKey('scenes') && isExtraMetaKey('consistency')).toBe(true);
+    const doc = normalizeDoc({ ...historyV5Doc(), scenes: [{ id: 'sc_1', name: 'Market' }], consistency: { maxRefs: 7 } });
+    expect(unassignedKeys(doc)).toEqual([]);
+    expect(Object.keys(doc).sort()).toEqual(Object.keys(TOP_LEVEL_SECTIONS).sort());
+    const s = splitSections(doc);
+    expect(s.meta.scenes).toEqual([{ id: 'sc_1', name: 'Market' }]);
+    const back = joinSections(s, excludedOf(doc));
+    expect([back.scenes, back.consistency]).toEqual([doc.scenes, doc.consistency]);
+    expect(diffBooks(doc, applyOps(doc, [{ op: 'scene', id: 'sc_2', patch: { name: 'Rooftops' } }])).meta).toEqual(['scenes']);
+  });
+
+  it('I3: cuts, parts and anchorKeys belong to their drawing — a new drawing clears them, history keeps them, switching back restores them', () => {
+    expect(VERSION_META_KEYS).toEqual(expect.arrayContaining(['cuts', 'parts', 'anchorKeys']));
+    let doc = kDoc({ panels: true });
+    const parts = partsOf(doc, doc.pages[0]);
+    doc = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { parts, anchorKeys: ['char:ch_k'] } }]);
+    const meta = { cuts: doc.pages[0].render.cuts, parts, anchorKeys: ['char:ch_k'] };
+    // A meta-only patch keeps them.
+    const checked = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { qc: { score: 1, issues: [], checkedAt: 40 } } }]);
+    expect(checked.pages[0].render).toMatchObject(meta);
+    const NEW = 'u/user-k/p/proj-k/img/p1-v2.webp';
+    const redrawn = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { status: 'ready', asset: { path: NEW, source: 'generated', at: 41 } } }]);
+    for (const k of ['cuts', 'parts', 'anchorKeys'] as const) expect(redrawn.pages[0].render[k], k).toBeUndefined();
+    expect(redrawn.pages[0].render.history[0]).toMatchObject({ path: K_PATH, ...meta });
+    const back = applyOps(redrawn, [{ op: 'render_use', target: { kind: 'page', id: 'pg_k' }, path: K_PATH, at: 42 }]);
+    expect(back.pages[0].render).toMatchObject({ asset: { path: K_PATH }, ...meta });
+    expect(artModeOf(back.pages[0])).toBe('panels');
+    // page_cuts is path-guarded and written as the user's; its inverse restores the detector's cuts exactly.
+    expect(applyOps(redrawn, [{ op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: CUTS }], 0).pages[0].render.cuts).toBeUndefined();
+    const edit: DocOp = { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: { ...CUTS, by: 'detect', status: 'unsure' } };
+    const edited = applyOps(doc, [edit]);
+    expect(edited.pages[0].render.cuts).toMatchObject({ by: 'user', status: 'unsure' });
+    expect(same(applyOps(edited, inverseOps(doc, [edit])))).toEqual(same(doc));
+  });
+
+  it('I5 (property): structural ops re-stamp only a fresh page shown in frames; op then inverse restores the original hash and doc', () => {
+    let restamped = 0;
+    let stale = 0;
+    let flipped = 0;
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const doc = panelized(seed);
+      const r = rngOf(seed);
+      for (const page of doc.pages) {
+        if (!page.render.asset || page.panels.length < 2) continue;
+        const ids = page.panels.map((p) => p.id);
+        const others = ids.slice(1);
+        const frameless = page.panels.find((p) => !p.frame);
+        const ops: DocOp[] = [
+          { op: 'panels_order', pageId: page.id, order: [...ids].reverse() },
+          { op: 'panel_remove', pageId: page.id, id: ids[0], ...(r() < 0.5 ? { linesTo: others[0] } : {}) },
+          { op: 'panel_add', pageId: page.id, index: 1, panel: { id: `pn_add_${seed}`, n: 0, size: 'small', shot: 'insert', action: 'An insert', castIds: [], lines: page.panels[0].lines.slice(0, 1), frame: { box: bx(0.3, 0.3, 0.3, 0.3) } } },
+          // Removing the one frameless panel of an opted-in page brings the page into frames; its undo adds it back.
+          ...(frameless ? [{ op: 'panel_remove', pageId: page.id, id: frameless.id } as DocOp] : [])
+        ];
+        for (const op of ops) {
+          const fresh = !!page.render.specHash && page.render.specHash === pageSpecHash(doc, page);
+          const after = applyOps(doc, [op], 2);
+          if (JSON.stringify(same(after)) === JSON.stringify(same(doc))) continue; // refused (a cap): nothing to check
+          const now = after.pages.find((p) => p.id === page.id)!;
+          if (op.op === 'panel_remove' && frameless && op.id === frameless.id && page.artMode === 'panels') flipped += 1;
+          if (fresh && (artModeOf(page) === 'panels' || artModeOf(now) === 'panels')) {
+            expect(now.render.specHash, `${seed} ${op.op}`).toBe(pageSpecHash(after, now));
+            restamped += 1;
+          } else {
+            expect(now.render.specHash, `${seed} ${op.op}`).toBe(page.render.specHash);
+            if (!fresh) stale += 1;
+          }
+          const undone = applyOps(after, inverseOps(doc, [op]), 3);
+          expect(undone.pages.find((p) => p.id === page.id)!.render.specHash, `${seed} ${op.op}`).toBe(page.render.specHash);
+          expect(same(undone), `${seed} ${op.op}`).toEqual(same(doc));
+        }
+      }
+    }
+    expect(restamped).toBeGreaterThan(40);
+    expect(stale).toBeGreaterThan(10);
+    expect(flipped).toBeGreaterThan(5);
+    // A page shown as drawn is never re-stamped: reordering its script panels is a real change (Out of date).
+    const drawn = kDoc();
+    const moved = applyOps(drawn, [{ op: 'panels_order', pageId: 'pg_k', order: ['pk_2', 'pk_1', 'pk_3'] }]);
+    expect(isPageStale(moved, moved.pages[0])).toBe(true);
+    const panels = kDoc({ panels: true });
+    const reordered = applyOps(panels, [{ op: 'panels_order', pageId: 'pg_k', order: ['pk_2', 'pk_1', 'pk_3'] }]);
+    expect(isPageStale(reordered, reordered.pages[0])).toBe(false);
+  });
+
+  it('I5/I7: removing the one frameless panel of an opted-in page (it flips to frames) undoes exactly, its lines and lettering included', () => {
+    // Opted in, but panel 3 has no frame, so the page is shown as drawn (I2). Removing panel 3 leaves every panel framed.
+    const doc = applyOps(kDoc({ panels: true }), [
+      { op: 'translation', lang: 'hi', lineId: 'lk_3', patch: { text: 'भागो!', status: 'reviewed', sourceHash: 'h', at: 3 } },
+      { op: 'page_frames', pageId: 'pg_k', frames: [{ panelId: 'pk_3', frame: null }] }
+    ]);
+    expect(artModeOf(doc.pages[0])).toBe('page');
+    expect(isPageStale(doc, doc.pages[0])).toBe(false);
+    const op: DocOp = { op: 'panel_remove', pageId: 'pg_k', id: 'pk_3' };
+    const after = applyOps(doc, [op]);
+    expect(after.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2']);
+    expect(artModeOf(after.pages[0])).toBe('panels');
+    expect(after.pages[0].balloons.some((b) => b.lineId === 'lk_3')).toBe(false);
+    expect(after.i18n!.editions.hi.lines.lk_3).toBeUndefined();
+    // The inverse (a frameless panel_add on a page now shown in frames) is applied: panel, line, balloon, translation.
+    const inverse = inverseOps(doc, [op]);
+    const undone = applyOps(after, inverse, 9);
+    expect(undone.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2', 'pk_3']);
+    expect(undone.pages[0].panels[2].lines.map((l) => l.text)).toEqual(['Run!']);
+    expect(undone.pages[0].render.specHash).toBe(doc.pages[0].render.specHash);
+    expect(same(undone)).toEqual(same(doc));
+    // Client and server agree on the undo (the wire turns undefined into null).
+    expect(json(applyOps(json(after), wire(inverse), 9))).toEqual(json(undone));
+  });
+
+  it('I6: balloons, clipped overlays and every edition override follow their frame; locked balloons stay; pinned flags unchanged', () => {
+    const doc = kDoc({ panels: true });
+    const before = doc.pages[0];
+    const dx = 0.08;
+    const dy = 0.02;
+    const op: DocOp = {
+      op: 'page_frames',
+      pageId: 'pg_k',
+      frames: [
+        { panelId: 'pk_2', frame: { box: bx(FRAMES[1].x + dx, FRAMES[1].y + dy, FRAMES[1].w - dx, FRAMES[1].h - dy) } },
+        { panelId: 'pk_3', frame: { box: bx(FRAMES[2].x, FRAMES[2].y + dy, FRAMES[2].w, FRAMES[2].h - dy) } }
+      ]
+    };
+    const after = applyOps(doc, [op]);
+    const page = after.pages[0];
+    const b2 = page.balloons.find((b) => b.lineId === 'lk_2')!;
+    const was2 = before.balloons.find((b) => b.lineId === 'lk_2')!;
+    // The tail tip stays on the same point of the art (through the picture: page → image → page).
+    const a0 = frameAffine(doc, before, 'pk_2')!;
+    const a1 = frameAffine(after, page, 'pk_2')!;
+    const tailArt0 = a0.toImage({ x: was2.tailX!, y: was2.tailY! });
+    const tailArt1 = a1.toImage({ x: b2.tailX!, y: b2.tailY! });
+    expect(tailArt1.x).toBeCloseTo(tailArt0.x, 3);
+    expect(tailArt1.y).toBeCloseTo(tailArt0.y, 3);
+    expect(b2.w).toBe(was2.w); // lettering never rescales
+    expect(b2.pinned).toBe(true); // flags untouched
+    expect(b2.x).not.toBe(was2.x);
+    // Locked stays; the untouched panel's balloon stays.
+    expect(page.balloons.find((b) => b.lineId === 'lk_3')).toEqual(before.balloons.find((b) => b.lineId === 'lk_3'));
+    expect(page.balloons.find((b) => b.lineId === 'lk_1')).toEqual(before.balloons.find((b) => b.lineId === 'lk_1'));
+    // The overlay clipped to panel 3 moved with its frame and stays inside it.
+    const star = page.layers!.find((l) => l.id === 'ly_star')!;
+    expect(star.box.y).toBeGreaterThan(before.layers![0].box.y);
+    const f3 = page.panels[2].frame!.box;
+    expect(star.box.y >= f3.y && star.box.y + star.box.h <= f3.y + f3.h + 1e-9).toBe(true);
+    // The Hindi override of line 2 followed the same mapping as its balloon.
+    const ov = after.i18n!.editions.hi.balloons.lk_2;
+    expect(a1.toImage({ x: ov.x! + was2.w / 2, y: ov.y! }).x).toBeCloseTo(a0.toImage({ x: 0.12 + was2.w / 2, y: 0.56 }).x, 3);
+    // moveBalloons: false moves only the frames.
+    const still = applyOps(doc, [{ ...op, moveBalloons: false } as DocOp]);
+    expect(still.pages[0].balloons).toEqual(before.balloons);
+    expect(still.i18n).toEqual(doc.i18n);
+    // The inverse puts everything back exactly (snapshots, not a reverse affine).
+    expect(same(applyOps(after, inverseOps(doc, [op])))).toEqual(same(doc));
+    // Entering panels mode maps lettering from the drawing into the frames (here a square drawing on a 2:3 book).
+    const sq = kDoc({ square: true });
+    const entered = applyOps(sq, [{ op: 'page_frames', pageId: 'pg_k', artMode: 'panels', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box } })) }]);
+    const aff = frameAffine(entered, entered.pages[0], 'pk_2')!;
+    const tail = entered.pages[0].balloons.find((b) => b.lineId === 'lk_2')!;
+    expect(aff.toImage({ x: tail.tailX!, y: tail.tailY! }).x).toBeCloseTo(0.2, 3);
+    expect(aff.toImage({ x: tail.tailX!, y: tail.tailY! }).y).toBeCloseTo(0.8, 3);
+  });
+
+  it('I6: page_cuts carries lettering along when new cuts bring the page into frames or change what a frame shows', () => {
+    // A square drawing on a 2:3 book with frames, opted in, but a redraw cleared the cuts: shown as drawn (I2).
+    const doc = applyOps(kDoc({ square: true }), [
+      { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: null },
+      { op: 'page_frames', pageId: 'pg_k', artMode: 'panels', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box } })), moveBalloons: false }
+    ], 1);
+    expect(artModeOf(doc.pages[0])).toBe('page');
+    const before = doc.pages[0];
+    const was2 = before.balloons.find((b) => b.lineId === 'lk_2')!;
+    const enter: DocOp = { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: CUTS };
+    const after = applyOps(doc, [enter], 2);
+    const page = after.pages[0];
+    expect(artModeOf(page)).toBe('panels');
+    // The tail stays on its point of the drawing (0.2, 0.8), as when page_frames enters frames.
+    const aff = frameAffine(after, page, 'pk_2')!;
+    const b2 = page.balloons.find((b) => b.lineId === 'lk_2')!;
+    expect(aff.toImage({ x: b2.tailX!, y: b2.tailY! }).x).toBeCloseTo(0.2, 3);
+    expect(aff.toImage({ x: b2.tailX!, y: b2.tailY! }).y).toBeCloseTo(0.8, 3);
+    expect(b2.w).toBe(was2.w);
+    expect(b2.pinned).toBe(true);
+    expect(page.balloons.find((b) => b.lineId === 'lk_3')).toEqual(before.balloons.find((b) => b.lineId === 'lk_3')); // locked
+    // The Hindi override followed with it; the overlay clipped to panel 3 moved into its frame.
+    const ov = after.i18n!.editions.hi.balloons.lk_2;
+    expect(aff.toImage({ x: ov.x! + was2.w / 2, y: ov.y! }).x).toBeCloseTo(0.12 + was2.w / 2, 3);
+    expect(page.layers![0].box).not.toEqual(before.layers![0].box);
+    // History names every section the move touched.
+    const a = sectionSignatures(doc);
+    const b = sectionSignatures(after);
+    const changed = [...new Set([...Object.keys(a), ...Object.keys(b)])].filter((k) => a[k] !== b[k]);
+    for (const k of changed) expect(touchedKeys(enter, doc), k).toContain(k);
+    // The inverse restores the cuts it replaced and the lettering exactly; client and server agree.
+    const inverse = inverseOps(doc, [enter]);
+    const undone = applyOps(after, inverse, 3);
+    expect(same(undone)).toEqual(same(doc));
+    expect(json(applyOps(json(after), wire(inverse), 3))).toEqual(json(undone));
+    // moveBalloons: false moves only the cuts.
+    const still = applyOps(doc, [{ ...enter, moveBalloons: false } as DocOp], 2);
+    expect(still.pages[0].balloons).toEqual(before.balloons);
+    expect(still.i18n).toEqual(doc.i18n);
+    expect(touchedKeys({ ...enter, moveBalloons: false } as DocOp, doc)).toEqual(['art:pg_k']);
+    // Staying in frames, a moved cut changes what panel 2 shows: its balloon stays on the same point of the art.
+    const framed = kDoc({ panels: true });
+    const shifted: DocOp = { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: { ...CUTS, cuts: CUTS.cuts.map((c, i) => (i === 1 ? { ...c, box: { ...c.box, y: c.box.y - 0.05 } } : c)) } };
+    const moved = applyOps(framed, [shifted], 2);
+    const f0 = framed.pages[0].balloons.find((x) => x.lineId === 'lk_2')!;
+    const f1 = moved.pages[0].balloons.find((x) => x.lineId === 'lk_2')!;
+    const a0 = frameAffine(framed, framed.pages[0], 'pk_2')!.toImage({ x: f0.tailX!, y: f0.tailY! });
+    const a1 = frameAffine(moved, moved.pages[0], 'pk_2')!.toImage({ x: f1.tailX!, y: f1.tailY! });
+    expect(f1.tailY).not.toBe(f0.tailY);
+    expect(a1.x).toBeCloseTo(a0.x, 3);
+    expect(a1.y).toBeCloseTo(a0.y, 3);
+    expect(moved.pages[0].balloons.find((x) => x.lineId === 'lk_1')).toEqual(framed.pages[0].balloons.find((x) => x.lineId === 'lk_1')); // its cut did not move
+    expect(same(applyOps(moved, inverseOps(framed, [shifted]), 3))).toEqual(same(framed));
+  });
+
+  it('I7 (property): applyOps gives deep-equal docs on client and server for Ship 2 sequences, and every inverse undoes them exactly', () => {
+    let effective = 0;
+    const kinds = new Set<string>();
+    for (let seed = 1; seed <= 80; seed += 1) {
+      const doc = panelized(seed);
+      const r = rngOf(seed * 7919);
+      const ops: DocOp[] = [];
+      let cur = doc;
+      for (let i = 0; i < 1 + Math.floor(r() * 8); i += 1) {
+        const op = k2Op(cur, r, i);
+        ops.push(op);
+        const next = applyOps(cur, [op], 2);
+        if (JSON.stringify(same(next)) !== JSON.stringify(same(cur))) {
+          effective += 1;
+          kinds.add(op.op);
+        }
+        cur = next;
+      }
+      // Server applies the ops as built; the client applies what the wire delivers (undefined → null).
+      const server = applyOps(doc, ops, 9);
+      const client = applyOps(json(doc), wire(ops), 9);
+      expect(json(client), `seed ${seed}`).toEqual(json(server));
+      const inverse = inverseOps(doc, ops);
+      for (const op of inverse) expect(INVERTIBLE_OPS.has(op.op), op.op).toBe(true);
+      const undoneServer = applyOps(server, inverse, 10);
+      const undoneClient = applyOps(client, wire(inverse), 10);
+      expect(json(undoneClient), `seed ${seed}`).toEqual(json(undoneServer));
+      if (JSON.stringify(same(undoneServer)) !== JSON.stringify(same(doc))) expect({ seed, ops, inverse, got: same(undoneServer) }).toEqual({ seed, ops, inverse, got: same(doc) });
+    }
+    expect(effective).toBeGreaterThan(150);
+    expect([...PRO_PAGE_PATCH_OPS].filter((k) => !kinds.has(k))).toEqual([]);
+    // Deterministic wire cases: a key present as undefined on the server arrives as null, and both clear it.
+    const base = applyOps(kDoc({ panels: true }), [
+      { op: 'page_frames', pageId: 'pg_k', frameStyle: { gutter: 0.05 } },
+      { op: 'layer', pageId: 'pg_k', id: 'ly_star', patch: { opacity: 0.4 } },
+      { op: 'continuity', pageId: 'pg_k', patch: { notes: ['rain stops'] } },
+      { op: 'scene', id: 'sc_k', patch: { name: 'Market', light: 'dawn' } },
+      { op: 'consistency', patch: { maxRefs: 6 } }
+    ]);
+    const tricky: DocOp[] = [
+      { op: 'page_frames', pageId: 'pg_k', frameStyle: undefined },
+      { op: 'layer', pageId: 'pg_k', id: 'ly_star', patch: { opacity: undefined, z: 3 } },
+      { op: 'scene', id: 'sc_k', patch: { light: undefined } },
+      { op: 'consistency', patch: { maxRefs: undefined } },
+      { op: 'continuity', pageId: 'pg_k', patch: undefined as never },
+      { op: 'page_frames', pageId: 'pg_k', artMode: undefined },
+      { op: 'page_cuts', pageId: 'pg_k', path: K_PATH, cuts: undefined as never }
+    ];
+    const server = applyOps(base, tricky, 9);
+    expect(json(applyOps(json(base), wire(tricky), 9))).toEqual(json(server));
+    expect([server.pages[0].frameStyle, server.pages[0].layers![0].opacity, server.scenes![0].light, server.consistency, server.pages[0].continuity, server.pages[0].artMode, server.pages[0].render.cuts]).toEqual(Array(7).fill(undefined));
+  });
+
+  it('tolerance: missing pages, wrong paths, broken caps and malformed payloads are no-ops (the same doc)', () => {
+    const doc = kDoc({ panels: true });
+    const noops: DocOp[] = [
+      { op: 'page_frames', pageId: 'ghost', artMode: 'panels' },
+      { op: 'page_frames', pageId: 'pg_k', frames: 'nope' as never },
+      { op: 'page_cuts', pageId: 'pg_k', path: 'u/another.webp', cuts: CUTS },
+      { op: 'panels_order', pageId: 'pg_k', order: ['pk_1', 'pk_2', 'pk_3'] },
+      { op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_1', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [] } },
+      { op: 'panel_remove', pageId: 'pg_k', id: 'pk_1', linesTo: 'pk_ghost' },
+      { op: 'layer', pageId: 'pg_k', id: 'not-a-layer-id', patch: { kind: 'shape', box: bx(0, 0, 0.1, 0.1), shape: { type: 'rect' } } },
+      { op: 'layer', pageId: 'pg_k', id: 'ly_new', patch: { kind: 'image', box: bx(0, 0, 0.1, 0.1) } },
+      { op: 'continuity', pageId: 'pg_k', patch: null },
+      { op: 'scene', id: 'sc_ghost', patch: null },
+      { op: 'consistency', patch: { maxRefs: null } },
+      { op: 'finding', pageId: 'pg_k', id: 'f_ghost', patch: { dismissed: true } }
+    ];
+    for (const op of noops) expect(applyOps(doc, [op], 1).pages, op.op).toBe(doc.pages);
+    // A panel without a frame is not refused on a page shown in frames: it shows the page as drawn again (I2), and its
+    // removal brings the frames back (this pair is how undo restores a removed frameless panel).
+    const bare: DocOp = { op: 'panel_add', pageId: 'pg_k', panel: { id: 'pk_new', n: 0, size: 'small', shot: 'insert', action: '', castIds: [], lines: [] } };
+    const added = applyOps(doc, [bare], 1);
+    expect(added.pages[0].panels.map((p) => p.id)).toEqual(['pk_1', 'pk_2', 'pk_3', 'pk_new']);
+    expect(added.pages[0].panels[3].frame).toBeUndefined();
+    expect(artModeOf(added.pages[0])).toBe('page');
+    expect(artModeOf(applyOps(added, [{ op: 'panel_remove', pageId: 'pg_k', id: 'pk_new' }], 1).pages[0])).toBe('panels');
+    // ≤ 2 extra picture sources per page.
+    const three = applyOps(doc, [{ op: 'page_frames', pageId: 'pg_k', frames: FRAMES.map((box, i) => ({ panelId: `pk_${i + 1}`, frame: { box, src: { path: `u/take${i}.webp` } } })) }], 1);
+    expect(three.pages).toBe(applyOps(doc, [], 1).pages);
+    // The generic page and panel ops never write frames or page objects (their own ops do, so lettering follows).
+    const sneaky = applyOps(doc, [
+      { op: 'page', id: 'pg_k', patch: { summary: 'S', artMode: undefined, layers: [] } as never },
+      { op: 'panel', pageId: 'pg_k', id: 'pk_1', patch: { frame: { box: bx(0, 0, 1, 1) }, direction: { lens: 'macro', by: 'user' } } }
+    ]);
+    expect(sneaky.pages[0].summary).toBe('S');
+    expect(sneaky.pages[0].artMode).toBe('panels');
+    expect(sneaky.pages[0].layers).toEqual(doc.pages[0].layers);
+    expect(sneaky.pages[0].panels[0].frame).toEqual(doc.pages[0].panels[0].frame);
+    expect(sneaky.pages[0].panels[0].direction).toEqual({ lens: 'macro', by: 'user' });
+  });
+
+  it('page_duplicate carries frames, overlays, cuts and parts onto the copy with its new panel ids', () => {
+    const doc = kDoc({ panels: true });
+    const withParts = applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_k' }, patch: { parts: partsOf(doc, doc.pages[0]) } }]);
+    const dup = applyOps(withParts, [{ op: 'page_duplicate', id: 'pg_k', newId: 'pg_d' }]);
+    const copy = dup.pages.find((p) => p.id === 'pg_d')!;
+    expect(copy.panels.map((p) => p.id)).toEqual(['pg_d_p0', 'pg_d_p1', 'pg_d_p2']);
+    expect(copy.layers![0].clip).toBe('pg_d_p2');
+    expect(copy.render.cuts!.cuts.map((c) => c.panelId)).toEqual(['pg_d_p0', 'pg_d_p1', 'pg_d_p2']);
+    expect(Object.keys(copy.render.parts!.panels!)).toEqual(['pg_d_p0', 'pg_d_p1', 'pg_d_p2']);
+    expect(artModeOf(copy)).toBe('panels');
+  });
+
+  it('history: Ship 2 ops touch the right sections, have the right actor and read in plain words', () => {
+    const doc = normalizeDoc(historyV5Doc());
+    const p2 = doc.pages[1];
+    expect(touchedKeys({ op: 'page_frames', pageId: p2.id, artMode: 'panels' }, doc)).toEqual(expect.arrayContaining([`page:${p2.id}`, `art:${p2.id}`]));
+    expect(touchedKeys({ op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null })).toEqual([`art:${p2.id}`, `page:${p2.id}`]);
+    expect(touchedKeys({ op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null, moveBalloons: false })).toEqual([`art:${p2.id}`]);
+    expect(touchedKeys({ op: 'finding', pageId: p2.id, id: 'f', patch: { dismissed: true } })).toEqual([`art:${p2.id}`]);
+    expect(touchedKeys({ op: 'layer', pageId: p2.id, id: 'ly_a', patch: null })).toEqual([`page:${p2.id}`]);
+    expect(touchedKeys({ op: 'continuity', pageId: p2.id, patch: null })).toEqual([`page:${p2.id}`]);
+    expect(touchedKeys({ op: 'panels_order', pageId: p2.id, order: [] })).toEqual([`art:${p2.id}`, `page:${p2.id}`]);
+    expect(touchedKeys({ op: 'scene', id: 'sc', patch: null })).toEqual(['meta']);
+    expect(touchedKeys({ op: 'consistency', patch: {} })).toEqual(['meta']);
+    // Actors: the user's own edits are 'you'; free software actions the editor; paid panel work the AI.
+    const frames: DocOp = { op: 'page_frames', pageId: p2.id, artMode: 'panels' };
+    expect(opActor(frames, 'user', doc)).toBe('you');
+    expect(opActor(frames, 'job', doc)).toBe('editor');
+    expect(opActor({ op: 'page_panels', id: p2.id, panels: p2.panels }, 'job', doc)).toBe('ai'); // the writer, as before
+    for (const a of EDITOR_ACTIONS) expect(opActor({ op: 'page_panels', id: p2.id, panels: p2.panels }, 'job', doc, a), a).toBe('editor');
+    for (const a of AI_ACTIONS) expect(opActor({ op: 'render', target: { kind: 'page', id: p2.id }, patch: {} }, 'job', doc, a), a).toBe('ai');
+    expect(opActor({ op: 'message', msg: { id: 'm', role: 'user', text: 'x', at: 1 } }, 'job', doc, 'panelize_page')).toBeNull();
+    // Words (pro plan §5.6).
+    const you = panelMomentsOfOps([{ op: 'panels_order', pageId: p2.id, order: [] }], 'you', doc);
+    expect(describeChanges(you, 'edits')).toBe('You rearranged the panels on page 2');
+    const editable = panelMomentsOfOps([frames, { op: 'page_cuts', pageId: p2.id, path: 'x', cuts: null }], 'editor', doc, 'panelize_page');
+    expect(describeChanges(editable, 'edits')).toBe("The editor made page 2's panels editable (no AI cost)");
+    const fix = panelMomentsOfOps([{ op: 'render', target: { kind: 'page', id: p2.id }, patch: {} }], 'ai', doc, { type: 'fix_panel', pageId: p2.id, panelId: p2.panels[2].id, mode: 'redraw' });
+    expect(describeChanges(fix, 'ai')).toBe('AI redrew panel 3 on page 2');
+    expect(describeChanges(fix, 'before_ai')).toBe('Before the AI redrew panel 3 on page 2');
+    const rebind = panelMomentsOfOps([{ op: 'page_panels', id: doc.pages[0].id, panels: doc.pages[0].panels }], 'editor', doc, 'rebind_panels');
+    expect(describeChanges(rebind, 'edits')).toBe("Matched page 1's script to its art (free)");
+    expect(describeChanges(panelMomentsOfOps([{ op: 'scene', id: 'sc', patch: { name: 'S' } }], 'you', doc), 'edits')).toBe('You updated the scenes');
+    // Dismissing a check and bringing one back read differently; "Show as drawn" is named as such.
+    const finding = (dismissed: boolean | null): DocOp => ({ op: 'finding', pageId: p2.id, id: 'f', patch: { dismissed } });
+    expect(describeChanges(panelMomentsOfOps([finding(true)], 'you', doc), 'edits')).toBe('You dismissed a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([finding(null)], 'you', doc), 'edits')).toBe('You brought back a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([finding(false)], 'you', doc), 'edits')).toBe('You brought back a check on page 2');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: null }], 'you', doc), 'edits')).toBe('You showed page 2 as drawn');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: undefined }], 'you', doc), 'edits')).toBe('You showed page 2 as drawn');
+    expect(describeChanges(panelMomentsOfOps([{ op: 'page_frames', pageId: p2.id, artMode: null, frames: [{ panelId: p2.panels[0].id, frame: null }] }], 'you', doc), 'edits')).toBe(
+      'You rearranged the panels on page 2'
+    );
+    expect(describeOps([finding(true)])).toBe('change a check');
+    expect(describeOps([finding(null), { ...finding(true), id: 'g' } as DocOp])).toBe('change 2 checks');
+    // The moments stand in for the diff's page items; a dialogue edit in the same row is still named.
+    const merged = withPanelMoments(
+      [
+        { what: 'panels', by: 'you', key: `page:${p2.id}`, pageIds: [p2.id], pageNs: [2] },
+        { what: 'art', by: 'you', key: `art:${p2.id}`, pageIds: [p2.id], pageNs: [2] },
+        { what: 'dialogue', by: 'you', key: `page:${doc.pages[2].id}`, pageIds: [doc.pages[2].id], pageNs: [3] }
+      ],
+      you
+    );
+    expect(describeChanges(merged, 'edits')).toBe('You rearranged the panels on page 2 and edited dialogue on page 3');
+    // Existing labels are unchanged.
+    expect(describeChanges([{ what: 'balloons', by: 'editor', pageNs: [2] }], 'edits')).toBe('The editor re-fitted balloons on page 2, no AI cost');
+    for (const label of [you, editable, fix, rebind].map((l) => describeChanges(l, 'edits'))) expect(label).not.toMatch(/\b(branch|merge|commit|checkout|fork|HEAD|diff|rebase|revert)\b/i);
+  });
+
+  it('consistency.maxRefs can reach every reference slot of every registered model (the lock caps the real call)', () => {
+    const most = Math.max(...IMAGE_MODELS.map((m) => m.refs.total));
+    expect(PRO_PAGE_LIMITS.maxRefsMax).toBeGreaterThanOrEqual(most);
+    expect(normalizeConsistencySettings({ maxRefs: most })).toEqual({ maxRefs: most });
+  });
+
+  it('limits are the plan §5.5 values, one constant each', () => {
+    expect(EDITOR_LIMITS).toEqual({
+      layersPerPage: 24, sourcesPerPage: 2, frameMin: 0.04, fitZoomMax: 4, maxCuts: 12, balloonRot: 45, layerRot: 180, minHMax: 0.6,
+      outboxOpsMax: 2000, outboxDays: 7, undoPersistMax: 100, detectConfOk: 0.85, upscaleSoft: 1.5, upscaleBad: 2.0
+    });
+    expect(CONSISTENCY_LIMITS).toEqual({
+      scenes: 60, castChanges: 12, propChanges: 8, notes: 3, directionBackground: 4, findings: 16, partsKeys: 80, anchorKeys: 16,
+      maxRefsDefault: 9, promptChars: 9000, recurringPages: 2, recurringPanels: 3
+    });
   });
 });

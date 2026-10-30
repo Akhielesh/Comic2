@@ -17,6 +17,7 @@
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
 import { panelBoxesFor } from '../pageGeometry.js';
+import { composeAspect, pageSpaceQc, type ComposePageShape } from '../panelize/space.js';
 import { PUBLIC_QC_CHECKED_AT } from '../publication.js';
 import { PANEL_LIMITS, panelWords, textBudget, textUnitFor } from '../panelRules.js';
 import { isKidsAudience } from '../safety.js';
@@ -210,12 +211,10 @@ const clampV = (n: number, lo: number, hi: number) => (Number.isFinite(n) ? Math
 
 // ── Small pure helpers ───────────────────────────────────────────────────────
 
-/** Width / height of a page: the render's pixel size when known, else the format's aspect. */
-export function letteringAspect(doc: Pick<ComicDoc, 'format'>, page?: Pick<Page, 'render'> | null): number {
-  const a = page?.render?.asset;
-  if (a?.w && a?.h && a.w > 0 && a.h > 0) return a.w / a.h;
-  const [w, h] = String(doc.format?.pageAspect || '').split(':').map(Number);
-  return w > 0 && h > 0 ? w / h : 2 / 3;
+/** Width / height of a page as shown: the render's pixel size when known, else the format's aspect; in panels mode
+ *  (Ship 2) the book aspect the frames are laid out on. */
+export function letteringAspect(doc: Pick<ComicDoc, 'format'>, page?: ComposePageShape | null): number {
+  return composeAspect(doc, page);
 }
 
 const SFX_COLORS = ['#e63946', '#ffb703', '#fb5607', '#3a86ff', '#8338ec', '#06d6a0'];
@@ -926,7 +925,7 @@ function planAtDensity(
   /** Lines the placement lettered narrower than their whole words allow (it found no wider spot). */
   let narrowed: ReadonlySet<string> = new Set<string>();
   if (items.some((it) => !stored.has(it.line.id) || repacks(it.line.id))) {
-    const qc = page.render?.qc;
+    const qc = pageSpaceQc(doc, page); // Ship 2: keep-outs and heads in page space (the stored report in page mode)
     /** The cap letters each of its panels at that panel's own step (one sizer per step). */
     const capSized = !!capPass && [...capPass.scales.values()].some((s) => s < scale);
     const result = placeBalloonsDetailed({

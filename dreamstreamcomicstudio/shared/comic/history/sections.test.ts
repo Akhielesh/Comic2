@@ -81,7 +81,8 @@ describe('split → join → normalizeDoc', () => {
 
 describe('every top-level key is assigned or excluded', () => {
   it('lists every key a fully populated doc carries, and nothing else', () => {
-    const full = normalizeDoc(historyV5Doc());
+    // The fixture sets every optional top-level field; Ship 2's book keys (K2a: scenes, consistency) are added here.
+    const full = normalizeDoc({ ...historyV5Doc(), scenes: [{ id: 'sc_market', name: 'Spice market at dawn' }], consistency: { maxRefs: 9 } });
     expect(unassignedKeys(full)).toEqual([]);
     expect(unassignedKeys(createEmptyDoc('x'))).toEqual([]);
     // Every key a v5 doc can carry is in the table (the fixture sets every optional top-level field).
