@@ -10,6 +10,9 @@ import { collectMedia } from '../timeline/bookModel';
 import {
   earlierUseOf,
   filterRows,
+  hereRowId,
+  HISTORY_COPY,
+  isRemovedLineRow,
   languageScope,
   lineScope,
   mergeLiveRow,
@@ -204,5 +207,33 @@ describe('"Earlier (images only)": what "Use this version" opens (H6a FIX note 1
       versionN: m5.versionN,
       versionLabel: `v${m5.versionN}`
     });
+  });
+});
+
+describe('rows of a version you removed (H1 FIX note 4): never "you\'re here", never the top of Original', () => {
+  const rows = () => {
+    const f = historyFixture('v5');
+    const own = f.versions.map((v) => v.row);
+    const gone = { ...own[0], id: 'ver_gone', alternativeId: 'alt_gone', contentAt: HISTORY_NOW - 60_000, createdAt: HISTORY_NOW - 60_000 };
+    return [gone, ...own];
+  };
+
+  it('in Original\'s list a row with a non-null alternativeId came from a removed version; in a line\'s own list it did not', () => {
+    expect(isRemovedLineRow({ alternativeId: 'alt_gone' })).toBe(true);
+    expect(isRemovedLineRow({ alternativeId: 'alt_gone' }, null)).toBe(true);
+    expect(isRemovedLineRow({ alternativeId: null })).toBe(false);
+    expect(isRemovedLineRow({})).toBe(false);
+    expect(isRemovedLineRow({ alternativeId: 'alt_live' }, 'alt_live')).toBe(false);
+    expect(HISTORY_COPY.removedLine).toBe('From a version you removed');
+  });
+
+  it('"you\'re here" is the head the server read; without it, the line\'s newest own row — never rows[0] when that was removed', () => {
+    const list = rows();
+    expect(list[0].id).toBe('ver_gone');
+    expect(hereRowId(list, 'ver_draw')).toBe('ver_draw'); // head() wins, whatever the list order
+    expect(hereRowId(list, null)).toBeNull();
+    expect(hereRowId(list, undefined)).toBe(list[1].id); // Original's own newest row
+    expect(hereRowId(list, undefined, null, true)).toBeNull(); // a filtered list alone can't tell
+    expect(hereRowId(list.map((r) => ({ ...r, alternativeId: 'alt_live' })), undefined, 'alt_live')).toBe('ver_gone');
   });
 });

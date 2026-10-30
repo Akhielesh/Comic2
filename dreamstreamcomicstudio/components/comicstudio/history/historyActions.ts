@@ -9,6 +9,7 @@
 import type { StudioAction } from '../../../shared/comic/ops';
 import type { RestoreScope, VersionRow } from '../../../shared/comic/history/types';
 import type { HistoryApi } from './historyApi';
+import { isRemovedLineRow } from './historyModel';
 import type { HistoryStudio } from './useHistory';
 
 export interface ActResult {
@@ -48,7 +49,9 @@ export const beforeRestoreId = async (studio: HistoryStudio, api: HistoryApi, kn
   let listed: VersionRow | null = null;
   if (studio.doc) {
     try {
-      listed = (await api.list(studio.doc.id, { limit: UNDO_LOOKUP_LIMIT })).rows.find((r) => r.kind === 'restore') ?? null;
+      const res = await api.list(studio.doc.id, { limit: UNDO_LOOKUP_LIMIT });
+      // Never a removed version's restore: its before-copy belongs to a version you're no longer on.
+      listed = res.rows.find((r) => r.kind === 'restore' && !isRemovedLineRow(r, res.line ?? null)) ?? null;
     } catch {
       listed = null;
     }

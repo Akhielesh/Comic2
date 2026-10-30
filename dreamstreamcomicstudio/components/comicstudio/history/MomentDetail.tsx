@@ -2,18 +2,18 @@
 //
 // "What changed", grouped ("Page 3 — Dialogue: 2 lines · Art: redrawn", "Telugu — 12 lines changed"), each group
 // with [Compare]; a sticky bar (safe-area padded) with [Read this version] [Compare with now] [Restore…]; and More:
-// Name this version (the newest moment of the comic), Undo this AI change (the comic's latest AI run — the one
-// history_undo_ai reverts, never merely the first AI row a filtered list shows). Reading, comparing and restoring
-// are free.
+// Name this version ("you're here": the line's head), Undo this AI change (the comic's latest AI run — the one
+// history_undo_ai reverts, never merely the first AI row a filtered list shows). A moment from a version the creator
+// removed says so in plain words and is neither. Reading, comparing and restoring are free.
 
 import React, { useEffect, useState } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { Layers, MoreHorizontal } from 'lucide-react';
 import type { ChangeGroup, VersionRow } from '../../../shared/comic/history/types';
 import { MENU, MENU_ITEM, FOCUS_ITEM } from '../../chat/studioDesign';
 import { historyErrorText, useHistoryApi } from './historyApi';
-import { ACTOR_INFO, changeGroupsOf, rowMetaText, type MoneyWords } from './historyModel';
+import { ACTOR_INFO, changeGroupsOf, hereRowId, HISTORY_COPY, isRemovedLineRow, rowMetaText, type MoneyWords } from './historyModel';
 import { useLatestAiRow, type HistoryStudio } from './useHistory';
-import { ActorGlyph, cx, IconBtn, Note, Overline, PrimaryBtn, QuietBtn } from './ui';
+import { ActorGlyph, cx, IconBtn, Mark, Note, Overline, PrimaryBtn, QuietBtn } from './ui';
 
 export interface MomentDetailProps {
   studio: HistoryStudio;
@@ -21,10 +21,13 @@ export interface MomentDetailProps {
   /** The list as loaded (newest first): the row itself when known. */
   rows: readonly VersionRow[];
   /**
-   * The comic's newest moment (Name this version names the book as it is now). Default rows[0] — pass null when the
-   * list is filtered, so a filtered list's first row is never taken for the newest.
+   * "You're here": the line's head (Name this version names the book as it is now). Default: the newest row of the
+   * line in `rows` (never a removed version's row, never merely rows[0]) — pass null when the list is filtered and
+   * the head is unknown, so a filtered list's first row is never taken for it.
    */
   newestId?: string | null;
+  /** The line listed (null / absent = "Original"): a row of another line came from a version the creator removed. */
+  line?: string | null;
   /** The comic's latest AI run (Undo this AI change). Omitted: read here, whatever the list shows. */
   latestAiId?: string | null;
   money: MoneyWords;
@@ -36,7 +39,7 @@ export interface MomentDetailProps {
   onName(): void;
 }
 
-export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, rows, newestId, latestAiId, money, tz, onRead, onCompare, onRestore, onUndoAi, onName }) => {
+export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, rows, newestId, line = null, latestAiId, money, tz, onRead, onCompare, onRestore, onUndoAi, onName }) => {
   const api = useHistoryApi();
   const ownLatestAi = useLatestAiRow(studio, latestAiId === undefined);
   const projectId = studio.doc?.id;
@@ -69,8 +72,9 @@ export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, r
   if (error) return <Note tone="attention">{error}</Note>;
   if (!row) return <Note>Opening this moment…</Note>;
   const actor = ACTOR_INFO[row.actor] ?? ACTOR_INFO.system;
-  const newest = (newestId === undefined ? rows[0]?.id : newestId) === row.id;
-  const latestAi = row.kind === 'ai' && (latestAiId === undefined ? ownLatestAi.row?.id : latestAiId) === row.id;
+  const removed = isRemovedLineRow(row, line);
+  const newest = !removed && (newestId === undefined ? hereRowId(rows, undefined, line) : newestId) === row.id;
+  const latestAi = !removed && row.kind === 'ai' && (latestAiId === undefined ? ownLatestAi.row?.id : latestAiId) === row.id;
   const more = [
     ...(newest ? [{ id: 'name', label: 'Name this version', run: onName }] : []),
     ...(latestAi ? [{ id: 'undo', label: 'Undo this AI change', run: onUndoAi }] : [])
@@ -89,6 +93,11 @@ export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, r
           </p>
           {row.name && row.label && row.label !== row.name && <p className="m-0 mt-0.5 text-[12.5px] text-[var(--ds-muted)] [overflow-wrap:anywhere]">{row.label}</p>}
           {row.note && <p className="m-0 mt-1 text-[13px] text-[var(--ds-ink)] [overflow-wrap:anywhere]">“{row.note}”</p>}
+          {removed && (
+            <p className="m-0 mt-1" data-moment-removed>
+              <Mark icon={<Layers className="h-3 w-3" aria-hidden />}>{HISTORY_COPY.removedLine}</Mark>
+            </p>
+          )}
         </div>
         {more.length > 0 && (
           <div className="relative shrink-0">

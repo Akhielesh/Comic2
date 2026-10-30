@@ -59,7 +59,9 @@ export const HISTORY_COPY = {
   readOnly: 'read-only',
   useThenFree: 'Taking back a piece is free and instant — no AI.',
   /** After a panel's "Use then" when its action, shot or cast changed: the drawing is still the newer one. */
-  panelDrawing: 'The drawing still shows the newer panel.'
+  panelDrawing: 'The drawing still shows the newer panel.',
+  /** A row in Original's list that came from a version the creator removed (H1: its rows keep their line). */
+  removedLine: 'From a version you removed'
 } as const;
 
 /**
@@ -183,6 +185,25 @@ export const filterRows = (rows: readonly VersionRow[], filter: HistoryFilter, p
   if (filter === 'ai') return rows.filter(isAiRow);
   if (filter === 'page' && pageId) return rows.filter((r) => touchesPage(r, pageId));
   return rows.slice();
+};
+
+/**
+ * A row of a version (line) the creator removed. Original's list carries them — each keeps its non-null alternativeId —
+ * while the list of the line you're on holds only that line's rows (H1). `line` = the line listed (null = Original).
+ */
+export const isRemovedLineRow = (row: Pick<VersionRow, 'alternativeId'>, line: string | null = null): boolean =>
+  row.alternativeId !== undefined && row.alternativeId !== null && row.alternativeId !== line;
+
+/**
+ * "You're here" (the book as it is now): the listed line's head as the server read it (store.head()), never simply
+ * rows[0] — a removed version's row can be newer than Original's own newest one. When the server did not say: the
+ * newest row of the line in an unfiltered list (Original's head is by definition its own newest row); a filtered list
+ * alone can't tell, so null.
+ */
+export const hereRowId = (rows: readonly VersionRow[], head: string | null | undefined, line: string | null = null, filtered = false): string | null => {
+  if (head !== undefined) return head;
+  if (filtered) return null;
+  return rows.find((r) => !isRemovedLineRow(r, line))?.id ?? null;
 };
 
 /** Merge a live row (the `history` event) into a newest-first list: replaces the same id, else goes first. */

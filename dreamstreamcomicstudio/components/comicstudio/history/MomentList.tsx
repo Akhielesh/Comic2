@@ -7,7 +7,7 @@
 import React from 'react';
 import type { VersionRow } from '../../../shared/comic/history/types';
 import type { HistoryFilter } from './historyApi';
-import { FILTER_LABEL, groupRowsByDay, type MoneyWords } from './historyModel';
+import { FILTER_LABEL, groupRowsByDay, isRemovedLineRow, type MoneyWords } from './historyModel';
 import { MomentRow } from './MomentRow';
 import { ChipBtn, Overline, QuietBtn } from './ui';
 
@@ -27,9 +27,11 @@ export interface MomentListProps {
   hasMore?: boolean;
   loadingMore?: boolean;
   onLoadMore?(): void;
+  /** The line listed (null / absent = "Original"): its rows of other lines came from versions the creator removed. */
+  line?: string | null;
 }
 
-export const MomentList: React.FC<MomentListProps> = ({ rows, selectedId, money, now, tz, urlFor, onOpen, onFocusRow, filter, onFilter, pageLabel, hasMore, loadingMore, onLoadMore }) => {
+export const MomentList: React.FC<MomentListProps> = ({ rows, selectedId, money, now, tz, urlFor, onOpen, onFocusRow, filter, onFilter, pageLabel, hasMore, loadingMore, onLoadMore, line = null }) => {
   const filters: HistoryFilter[] = pageLabel ? ['all', 'saved', 'ai', 'page'] : ['all', 'saved', 'ai'];
   const groups = groupRowsByDay(rows, now, tz);
   return (
@@ -50,7 +52,7 @@ export const MomentList: React.FC<MomentListProps> = ({ rows, selectedId, money,
           <ul className="m-0 list-none px-1 pb-1">
             {g.rows.map((row) => (
               <li key={row.id} className="min-w-0">
-                <MomentRow row={row} selected={row.id === selectedId} money={money} tz={tz} urlFor={urlFor} onOpen={onOpen} onFocusRow={onFocusRow} />
+                <MomentRow row={row} selected={row.id === selectedId} removed={isRemovedLineRow(row, line)} money={money} tz={tz} urlFor={urlFor} onOpen={onOpen} onFocusRow={onFocusRow} />
               </li>
             ))}
           </ul>

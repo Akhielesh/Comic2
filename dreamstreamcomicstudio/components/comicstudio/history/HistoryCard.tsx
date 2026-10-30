@@ -21,10 +21,10 @@ import type { CardProps } from '../extensions';
 import { CardShell } from '../conversation/ui';
 import { useCostFormat } from '../conversation/cost';
 import { historyErrorText, useHistoryApi } from './historyApi';
-import { changeGroupsOf, restorableId, restoredText, rowMetaText, scopeThing, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, viewerTimeZone, whenText } from './historyModel';
+import { changeGroupsOf, isRemovedLineRow, restorableId, restoredText, rowMetaText, scopeThing, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, viewerTimeZone, whenText } from './historyModel';
 import { runHistoryAction, undoLastRestore } from './historyActions';
 import { requestOpenHistory } from './openHistory';
-import type { HistoryStudio } from './useHistory';
+import { LATEST_AI_LOOKUP, type HistoryStudio } from './useHistory';
 import { Note, PrimaryBtn, QuietBtn, RestoredToast } from './ui';
 
 const scopeWords = (scope: RestoreScope | undefined, doc: HistoryStudio['doc']): string => {
@@ -107,8 +107,10 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         };
       }
       if (view === 'undo_ai') {
-        const res = await api.list(projectId, { filter: 'ai', limit: 1 }, { signal });
-        return { ...(res.rows[0] ? { row: res.rows[0] } : {}) };
+        // The latest AI run of the book you're on — never a removed version's (the same lookup as the panel's).
+        const res = await api.list(projectId, { filter: 'ai', limit: LATEST_AI_LOOKUP }, { signal });
+        const row = res.rows.find((r) => r.kind === 'ai' && !isRemovedLineRow(r, res.line ?? null));
+        return { ...(row ? { row } : {}) };
       }
       const res = await api.list(projectId, { limit: 3 }, { signal });
       return { rows: res.rows };

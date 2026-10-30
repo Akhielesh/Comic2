@@ -1,6 +1,9 @@
 // The in-memory HistoryApi (package H5): the History UI's tests and QA scenes run on it until the owner routes (H3)
 // land. Same shapes as historyApi.ts; compare uses the shared diffBooks, so "what changed" is what the server will
 // say. Records every call (the card-renders-from-ids test reads them). No network, no timers, nothing spends.
+// Lines follow H1's store (server/src/comic/history/store.fake.ts): the list is the line you're on; "Original"'s list
+// also carries the rows of removed lines (each keeps its alternativeId) but never a live line's; a removed line is
+// not found (empty); the head is Original's own newest row, or a line's pinned head.
 
 import { displayAssetPaths, type ComicDoc } from '../../../shared/comic/doc';
 import { diffBooks, HISTORY_MANIFEST_VERSION, type CompareRef, type Manifest, type VersionRow } from '../../../shared/comic/history/index';
@@ -22,6 +25,20 @@ export interface FakeHistoryOptions {
   fail?: Partial<Record<keyof HistoryApi, Error>>;
   /** Rows per list page (default 50). */
   pageSize?: number;
+  /** Lines besides "Original" (rows name theirs in row.alternativeId). Absent: Original only. */
+  lines?: FakeHistoryLine[];
+  /** The line you're on (default null = "Original"). */
+  activeLine?: string | null;
+}
+
+/** A line ("a version you're trying"), as H1's store keeps it. */
+export interface FakeHistoryLine {
+  id: string;
+  name?: string;
+  /** comic_alternatives.removed_at: never deleted, only marked (H1). */
+  removed?: boolean;
+  /** Its pinned head; default its newest row. */
+  headVersionId?: string;
 }
 
 export interface FakeHistoryCall {
@@ -67,22 +84,36 @@ export const createFakeHistoryApi = (opts: FakeHistoryOptions): FakeHistoryApi =
     return { doc: v.doc, kind: 'version', row: v.row };
   };
   const size = opts.pageSize ?? 50;
+  const lines = opts.lines ?? [];
+  const liveLine = (id: string | null | undefined): boolean => !!id && lines.some((l) => l.id === id && !l.removed);
+  /** The rows the list of `line` holds (H1 store.list): Original adds the rows of removed lines, never a live line's. */
+  const inLine = (row: VersionRow, line: string | null): boolean =>
+    line === null ? row.alternativeId == null || !liveLine(row.alternativeId) : row.alternativeId === line;
+  /** H1 store.head(line): Original's own newest row; a live line's pinned head, else its newest row; a removed line: null. */
+  const headOf = (line: string | null): string | null => {
+    if (line !== null && !liveLine(line)) return null;
+    const own = opts.versions.map((v) => v.row).filter((r) => (line === null ? r.alternativeId == null : r.alternativeId === line));
+    const pinned = line === null ? undefined : lines.find((l) => l.id === line)?.headVersionId;
+    if (pinned && own.some((r) => r.id === pinned)) return pinned;
+    return [...own].sort((a, b) => b.createdAt - a.createdAt || b.contentAt - a.contentAt)[0]?.id ?? null;
+  };
 
   const api: FakeHistoryApi = {
     calls,
     async list(projectId, query = {}) {
       record('list', [projectId, query]);
-      const rows = filterRows(
-        opts.versions.map((v) => v.row),
-        query.filter ?? 'all',
-        query.pageId
-      );
+      const line = opts.activeLine ?? null;
+      // A removed (or unknown) line is not found: nothing listed (a stale tab can never show it as current).
+      const onLine = line === null || liveLine(line) ? opts.versions.map((v) => v.row).filter((r) => inLine(r, line)) : [];
+      const rows = filterRows(onLine, query.filter ?? 'all', query.pageId);
       const start = query.cursor ? Number(query.cursor) || 0 : 0;
       const pageRows = rows.slice(start, start + (query.limit ?? size));
       const res: HistoryListResponse = {
         rows: pageRows,
         next: start + pageRows.length < rows.length ? String(start + pageRows.length) : null,
-        urls: urlsFor(pageRows.flatMap((r) => r.thumbs.map((t) => t.path)))
+        urls: urlsFor(pageRows.flatMap((r) => r.thumbs.map((t) => t.path))),
+        line,
+        head: headOf(line)
       };
       return res;
     },

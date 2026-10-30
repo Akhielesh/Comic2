@@ -19,7 +19,7 @@ import { displayAssetPaths, type AssetRef } from '../../../shared/comic/doc';
 import type { CompareRef, CompareResult, VersionRow } from '../../../shared/comic/history/types';
 import type { StudioController } from '../types';
 import { historyErrorText, useHistoryApi, type HistoryFilter, type VersionBookResponse } from './historyApi';
-import { filterRows, mergeLiveRow } from './historyModel';
+import { filterRows, isRemovedLineRow, mergeLiveRow } from './historyModel';
 
 /** The studio controller as History reads it (the live `history` event rides on the full controller). */
 export type HistoryStudio = StudioController & { lastHistoryVersion?: VersionRow };
@@ -41,6 +41,10 @@ export interface HistoryListState {
   reload(): void;
   /** A signed URL for a thumb path (the list's map, else the live studio's). */
   urlFor: UrlFor;
+  /** The line listed (null = "Original"): rows of other lines in it came from versions the creator removed. */
+  line: string | null;
+  /** "You're here" as the server read it (store.head); undefined when it did not say (historyModel hereRowId). */
+  head?: string | null;
 }
 
 export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter: HistoryFilter; pageId?: string | null }): HistoryListState {
@@ -56,6 +60,8 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [line, setLine] = useState<string | null>(null);
+  const [head, setHead] = useState<string | null | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -71,11 +77,14 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
         setRows(res.rows);
         setUrls(res.urls);
         setNext(res.next);
+        setLine(res.line ?? null);
+        setHead(res.head);
       })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
         setRows([]);
         setNext(null);
+        setHead(undefined);
         setError(historyErrorText(err) || null);
       })
       .finally(() => {
@@ -91,6 +100,8 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
   const liveId = live ? `${live.id}:${live.createdAt}:${live.label}` : '';
   useEffect(() => {
     if (!open || !live) return;
+    // A moment saved on the line you're on is where you are now (whatever the filter shows).
+    if (!isRemovedLineRow(live, line)) setHead((cur) => (cur === undefined ? cur : live.id));
     if (!filterRows([live], filter, pageId).length) return;
     setRows((cur) => mergeLiveRow(cur, live));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,7 +132,7 @@ export function useHistory(studio: HistoryStudio, opts: { open: boolean; filter:
     return (p && urls[p]) || studioUrlFor(asset, o);
   }, [urls, studioUrlFor]);
 
-  return { rows, loading, loaded, error, hasMore: !!next, loadingMore, loadMore, reload, urlFor };
+  return { rows, loading, loaded, error, hasMore: !!next, loadingMore, loadMore, reload, urlFor, line, ...(head !== undefined ? { head } : {}) };
 }
 
 // ── One moment's book ────────────────────────────────────────────────────────
@@ -317,7 +328,8 @@ export function useLatestAiRow(studio: HistoryStudio, active: boolean, refresh: 
       .list(projectId, { filter: 'ai', limit: LATEST_AI_LOOKUP }, { signal: ctrl.signal })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setState({ row: res.rows.find((r) => r.kind === 'ai') ?? null, loading: false, loaded: true, error: null });
+        // Never a removed version's AI run: it is not the last AI change of the book you're on.
+        setState({ row: res.rows.find((r) => r.kind === 'ai' && !isRemovedLineRow(r, res.line ?? null)) ?? null, loading: false, loaded: true, error: null });
       })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
