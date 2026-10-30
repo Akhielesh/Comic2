@@ -199,6 +199,23 @@ describe('renderPptx: export is refused while content elements overlap', () => {
     expect(pair.area).toBeCloseTo(0.0625, 10);
   });
 
+  it('a flat element that is not a line shape is squashed: it collides with whatever it touches, as platform-core overlapCheck says', async () => {
+    const slide = (elements: DeckElement[]): Slide => ({ id: 's', layout: 'content', elements });
+    const text = (id: string, rect: [number, number, number, number]): DeckElement => ({ kind: 'text', id, rect, layer: 'content', paragraphs: [{ runs: [{ text: id }] }] });
+    const chart: DeckElement = { kind: 'chart', id: 'chart', rect: [0.1, 0.2, 0.8, 0.7], layer: 'content', chart: 'bar', categories: ['a'], series: [{ name: 's', values: [1] }] };
+    // A zero-height text box beside a box it only touches: drawn down from its top edge, across the box. Refused.
+    const err = await refusal(renderPptx(deckOf([text('label', [0.1, 0.85, 0.8, 0]), { kind: 'shape', id: 'box', rect: [0.1, 0.85, 0.2, 0.1], layer: 'content', shape: 'rect' }])));
+    expect(err.code).toBe('overlap');
+    expect(err.overlaps).toEqual([{ slideId: 's1', slideNumber: 1, a: 'label', b: 'box', area: 0 }]);
+    // The same cases platform-core's overlapCheck pins: on a chart's top edge, two stacked at one y, a flat table.
+    expect(contentOverlaps(slide([chart, text('label', [0.1, 0.2, 0.8, 0])]))).toEqual([{ a: 'chart', b: 'label', area: 0 }]);
+    expect(contentOverlaps(slide([text('one', [0.1, 0.5, 0.8, 0]), text('two', [0.1, 0.5, 0.8, 0])]))).toEqual([{ a: 'one', b: 'two', area: 0 }]);
+    expect(contentOverlaps(slide([chart, { kind: 'table', id: 'tbl', rect: [0.9, 0.3, 0, 0.05], layer: 'content', rows: [] }]))).toEqual([{ a: 'chart', b: 'tbl', area: 0 }]);
+    // A squashed box that touches nothing is no overlap; a line shape lying on the chart's edge still is none either.
+    expect(contentOverlaps(slide([chart, text('far', [0.1, 0.95, 0.8, 0])]))).toEqual([]);
+    expect(contentOverlaps(slide([chart, { kind: 'shape', id: 'rule', rect: [0.1, 0.2, 0.8, 0], layer: 'content', shape: 'line' }]))).toEqual([]);
+  });
+
   it('a host can pass its own overlap rule (platform-core overlapCheck)', async () => {
     const seen: string[] = [];
     const err = await refusal(renderPptx(deckOf([]), { overlapCheck: (s) => (seen.push(s.id), [{ a: 'x', b: 'y', area: 0.5 }]) }));

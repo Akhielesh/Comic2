@@ -36,55 +36,83 @@ export interface PptxRenderOptions extends ImageOptions {
 }
 
 // ── Overlaps (the rule of platform-core models/deck `overlapCheck`) ─────────────────────────────────────────────
+// A copy until W1.2 merges (then `contentOverlaps` becomes a re-export of `overlapCheck`): same epsilon, same
+// line and squashed-box rules, same order of pairs.
 
 const E = 1e-6;
 
+const isRecord = (v: unknown): v is { [k: string]: unknown } => !!v && typeof v === 'object' && !Array.isArray(v);
+
 const rectOf = (el: unknown): DeckRect | null => {
-  const r = el && typeof el === 'object' ? (el as { rect?: unknown }).rect : undefined;
+  const r = isRecord(el) ? el.rect : undefined;
   if (!Array.isArray(r) || r.length !== 4) return null;
   for (const n of r) if (typeof n !== 'number' || !isFinite(n)) return null;
   return r as DeckRect;
 };
 
-const isLine = (r: DeckRect): boolean => r[2] <= E || r[3] <= E;
+/** A rect with no width or no height. */
+const isFlat = (r: DeckRect): boolean => r[2] <= E || r[3] <= E;
+
+/** A `line` shape: the only element that may have no width or no height. */
+const isLineShape = (el: { [k: string]: unknown }): boolean => el.kind === 'shape' && el.shape === 'line';
+
+/** A content element as the overlap rule sees it. */
+interface Box {
+  id: string;
+  rect: DeckRect;
+  /** A `line` shape with no width or no height: it collides only with a box it runs through. */
+  line: boolean;
+  /** Any other element with no width or no height: it collides with whatever it touches. */
+  squashed: boolean;
+}
+
+/** How much `[lo1, lo1 + len1]` and `[lo2, lo2 + len2]` share (negative for a gap). */
 const shared = (lo1: number, len1: number, lo2: number, len2: number): number => Math.min(lo1 + len1, lo2 + len2) - Math.max(lo1, lo2);
 
+/** A line crosses a box when it runs through the box's inside (lying along its edge does not count). */
 const crosses = (line: DeckRect, box: DeckRect): boolean => {
   const [lx, ly, lw, lh] = line;
   const [bx, by, bw, bh] = box;
-  if (lw <= E && lh <= E) return false;
+  if (lw <= E && lh <= E) return false; // a point
   if (lh <= E) return ly > by + E && ly < by + bh - E && shared(lx, lw, bx, bw) > E;
   return lx > bx + E && lx < bx + bw - E && shared(ly, lh, by, bh) > E;
 };
 
-const overlapOf = (a: DeckRect, b: DeckRect): number | null => {
-  const lineA = isLine(a);
-  const lineB = isLine(b);
-  if (lineA && lineB) return null;
-  if (lineA) return crosses(a, b) ? 0 : null;
-  if (lineB) return crosses(b, a) ? 0 : null;
-  const w = shared(a[0], a[2], b[0], b[2]);
-  const h = shared(a[1], a[3], b[1], b[3]);
+/** Two rects meet, edges and corners included. */
+const touches = (a: DeckRect, b: DeckRect): boolean => shared(a[0], a[2], b[0], b[2]) >= -E && shared(a[1], a[3], b[1], b[3]) >= -E;
+
+const overlapOf = (a: Box, b: Box): number | null => {
+  // A flat text box or table is still drawn down from its top edge, so it collides with anything it touches.
+  if (a.squashed || b.squashed) return touches(a.rect, b.rect) ? 0 : null;
+  if (a.line && b.line) return null; // two rules crossing is a drawing, not a collision
+  if (a.line) return crosses(a.rect, b.rect) ? 0 : null;
+  if (b.line) return crosses(b.rect, a.rect) ? 0 : null;
+  const w = shared(a.rect[0], a.rect[2], b.rect[0], b.rect[2]);
+  const h = shared(a.rect[1], a.rect[3], b.rect[1], b.rect[3]);
   return w > E && h > E ? w * h : null;
 };
 
 /**
  * Every pair of `content` elements on `slide` whose rects overlap (element order, `a` before `b`), with the overlap's
- * area as a fraction of the slide. `background` elements never count; a line (a rect with no width or no height)
- * overlaps a box it runs through, with area 0; edges that only touch do not overlap. Never throws.
+ * area as a fraction of the slide. `background` elements never count; edges that only touch do not overlap. A `line`
+ * shape with no width or no height overlaps a box it runs through, with area 0, and never another line. Any other
+ * element with no width or no height (which the contract's check refuses) is "squashed": it overlaps whatever it
+ * touches, with area 0, because its text or table is still drawn down from its top edge. Never throws.
  */
 export const contentOverlaps = (slide: Slide): OverlapPair[] => {
   const out: OverlapPair[] = [];
-  if (!slide || !Array.isArray(slide.elements)) return out;
-  const boxes: { id: string; rect: DeckRect }[] = [];
+  if (!isRecord(slide) || !Array.isArray(slide.elements)) return out;
+  const boxes: Box[] = [];
   for (const el of slide.elements as unknown[]) {
     const rect = rectOf(el);
-    const e = el as { layer?: unknown; id?: unknown };
-    if (rect && e.layer === 'content' && typeof e.id === 'string') boxes.push({ id: e.id, rect });
+    if (!rect || !isRecord(el) || el.layer !== 'content' || typeof el.id !== 'string') continue;
+    const flat = isFlat(rect);
+    const line = flat && isLineShape(el);
+    boxes.push({ id: el.id, rect, line, squashed: flat && !line });
   }
   for (let i = 0; i < boxes.length; i++) {
     for (let j = i + 1; j < boxes.length; j++) {
-      const area = overlapOf(boxes[i].rect, boxes[j].rect);
+      const area = overlapOf(boxes[i], boxes[j]);
       if (area !== null) out.push({ a: boxes[i].id, b: boxes[j].id, area });
     }
   }
@@ -268,7 +296,8 @@ const addElement = async (slide: PptSlide, el: DeckElement, theme: Theme, W: num
     case 'shape': {
       const b = box(el.rect, W, H);
       const name = nameOf('shape', el.id);
-      if (el.shape === 'line' || isLine(el.rect)) {
+      // A flat shape of another kind (which the contract refuses) is still drawn, as the rule it looks like.
+      if (el.shape === 'line' || isFlat(el.rect)) {
         slide.addShape('line', { ...b, line: { color: hexOf(el.stroke, hexOf(el.fill, theme.accent)), width: 1.5 }, objectName: name });
         return;
       }
