@@ -10,7 +10,7 @@
 import React from 'react';
 import { AlertTriangle, Check, Users } from 'lucide-react';
 import type { Card, Character } from '../../../../shared/comic/doc';
-import { estimateJobs } from '../../../../shared/comic/models';
+import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, cx, plural } from '../ui';
@@ -65,10 +65,8 @@ export const CastCard: React.FC<{ card: CastCardData; studio: ComicStudioControl
   const sheeted = cast.filter((c) => c.tier !== 'extra').length;
   // Only worth saying while a companion still needs its sheet.
   const companions = cast.filter((c) => castRoleLabel(c) === 'Companion' && needsSheet(c)).length;
-  const estimate = estimateJobs([{ kind: 'sheet', count: missing.length, label: 'character sheets' }], doc.settings.quality, {
-    override: doc.settings.imageModelOverride,
-    byok: studio.byok
-  });
+  // On the comic's locked model when it has one (the server draws and gates the sheets there).
+  const estimate = estimateDocJobs(doc, [{ kind: 'sheet', count: missing.length, label: 'character sheets' }], { byok: studio.byok });
 
   return (
     <CardShell

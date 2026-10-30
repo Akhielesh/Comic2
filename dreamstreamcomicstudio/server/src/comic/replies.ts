@@ -28,8 +28,8 @@ import {
   type RenderTarget
 } from '../../../shared/comic/doc.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
-import { estimateJobs, formatUsd, type ImageJobKind } from '../../../shared/comic/models.js';
-import { coverNeedsDraw, pageTargets } from '../../../shared/comic/plan.js';
+import { formatUsd, type ImageJobKind } from '../../../shared/comic/models.js';
+import { coverNeedsDraw, estimateDocJobs, pageTargets } from '../../../shared/comic/plan.js';
 import type { DirectorTurn } from './tools.js';
 
 // ── Text helpers ─────────────────────────────────────────────────────────────
@@ -399,8 +399,8 @@ export function reconcileReply(text: string, i: { after: ComicDoc; turn: Directo
 
 // ── Next steps ───────────────────────────────────────────────────────────────
 
-const estimateOf = (doc: ComicDoc, kind: ImageJobKind, count: number, byok: boolean): number =>
-  estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd;
+/** Registry quote for a chip, on the comic's locked model when it has one (the same price the gate re-quotes). */
+const estimateOf = (doc: ComicDoc, kind: ImageJobKind, count: number, byok: boolean): number => estimateDocJobs(doc, [{ kind, count }], { byok }).usd;
 
 /** Chips for the $0 "everything is drawn" outcome (Read it · cover · add a page · new take · share). */
 export function nothingNextSteps(doc: ComicDoc, byok = false): NextStep[] {

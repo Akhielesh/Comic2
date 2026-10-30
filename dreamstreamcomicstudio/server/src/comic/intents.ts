@@ -10,8 +10,8 @@
 // "swap pages 2 and 3", "delete page 4", "make the shouts red" → one FREE tool call with its args.
 
 import { isPageStale, isTargetStale, totalPanels, type Card, type ComicDoc, type LineKind, type NextStep } from '../../../shared/comic/doc.js';
-import { estimateJobs, formatUsd } from '../../../shared/comic/models.js';
-import { coverNeedsDraw, pageTargets, quoteRenderPages } from '../../../shared/comic/plan.js';
+import { formatUsd } from '../../../shared/comic/models.js';
+import { coverNeedsDraw, pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan.js';
 import { costFormatter, type CostFormatter } from './costText.js';
 import { drawnBookLine, nothingNextSteps } from './replies.js';
 import { breakdownCardFor } from './tools/breakdown.js';
@@ -125,7 +125,7 @@ function breakdownNextSteps(doc: ComicDoc, byok: boolean): NextStep[] {
   }
   if (!quote.pageIds.length) return nothingNextSteps(doc, byok);
   if (coverNeedsDraw(doc) && doc.pages.some((p) => p.render.status === 'ready')) {
-    const usd = estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd;
+    const usd = unitPrice(doc, 'cover', { byok }).usd;
     steps.push({ label: 'Make the cover', action: { type: 'render_cover', quotedUsd: usd }, usd });
   }
   if (doc.pages.some((p) => p.render.status === 'ready')) steps.push({ label: 'Read it', client: { type: 'open_reader' } });
