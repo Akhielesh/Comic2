@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { AssetRef, ComicDoc } from '../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
-import { HISTORY_LAYERS_KEY, historyLayers, leaveLayer, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
+import { HISTORY_LAYERS_KEY, historyLayers, layerKey, leaveLayer, openLayers, popLayer, pushLayer, resetBackStack, useBackLayer } from './backStack';
 import { VARIANT_SCREEN_W, VARIANT_THUMB_W, heavyImageAttr, pickVariant, srcSetFor, variantWidthFor } from './media/imageVariants';
 import { BUDGET_DEFAULT, BUDGET_LOW, releasePlan, resetImageBudget, trackedImageCount, useImageBudget } from './media/imageBudget';
 import { useThemeColor } from './useThemeColor';
@@ -22,7 +22,10 @@ const DESKTOP = formFactorFor({ w: 1440, h: 900 });
 
 describe('backStack (the back gesture closes the top layer first)', () => {
   beforeEach(() => resetBackStack());
-  afterEach(() => resetBackStack());
+  afterEach(() => {
+    resetBackStack();
+    vi.restoreAllMocks();
+  });
 
   it('pushes one tagged history entry per layer and closes the topmost on popstate', async () => {
     const closeEditor = vi.fn();
@@ -96,10 +99,10 @@ describe('backStack (the back gesture closes the top layer first)', () => {
     go.mockRestore();
   });
 
-  it('unwinds through an entry someone else pushed above the layer (the immersive reader), never further', async () => {
+  it('unwinds through an entry some other script pushed above the layer, never further', async () => {
     const opening = openFrom();
     const reader = pushLayer('reader:c2', vi.fn());
-    // A foreign entry that copies the state (as useImmersive does): it still lists the reader's layer.
+    // A foreign entry that copies the state: it still lists the reader's layer.
     window.history.pushState({ ...(window.history.state as object), __foreign: 1 }, '');
     const action = vi.fn();
     leaveLayer(reader, action);
@@ -165,6 +168,147 @@ describe('backStack (the back gesture closes the top layer first)', () => {
     rerender({ open: false });
     expect(openLayers()).toEqual([]);
     unmount();
+  });
+
+  // Reloads (history.state survives them: pull-to-refresh, iOS evicting the tab): the entry a layer pushed comes back
+  // while nothing owns it. Ids are unique per page load and a layer opening again with the same key adopts it.
+  it('layer ids are unique per page load: never the bare <key>#<n> an earlier load (or build) left in history', () => {
+    const a = pushLayer('sheet:a', vi.fn());
+    const b = pushLayer('sheet:a', vi.fn());
+    expect(a).not.toBe(b);
+    expect(layerKey(a)).toBe('sheet:a');
+    expect(layerKey(b)).toBe('sheet:a');
+    expect(a).not.toMatch(/^sheet:a#\d+$/);
+    expect(layerKey('reader:c1#1')).toBe('reader:c1');
+  });
+
+  it('after a reload, a layer adopts the entry it left behind instead of stacking a dead one under it', async () => {
+    const opening = openFrom();
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: ['reader:c1#1'] }, ''); // what the reload brought back
+    const before = window.history.length;
+    const push = vi.spyOn(window.history, 'pushState');
+    const close = vi.fn();
+    const id = pushLayer('reader:c1', close);
+    expect(push).not.toHaveBeenCalled();
+    expect(window.history.length).toBe(before);
+    expect(historyLayers()).toEqual([id]);
+    expect(id).not.toBe('reader:c1#1');
+    push.mockRestore();
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(close).toHaveBeenCalledTimes(1); // the first Back closes it
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('the stale layers above it (a reading mode open at the reload) go with the adopted entry', () => {
+    openFrom();
+    window.history.pushState({ [HISTORY_LAYERS_KEY]: ['reader:c1#1'] }, '');
+    window.history.pushState({ [HISTORY_LAYERS_KEY]: ['reader:c1#1', 'fullscreen#2'] }, '');
+    const before = window.history.length;
+    const id = pushLayer('reader:c1', vi.fn());
+    expect(window.history.length).toBe(before);
+    expect(historyLayers()).toEqual([id]);
+  });
+
+  it("never adopts a live layer's entry, nor a left-behind entry of another key", () => {
+    openFrom();
+    const before = window.history.length;
+    const a = pushLayer('sheet:a', vi.fn());
+    const a2 = pushLayer('sheet:a', vi.fn()); // the first one is still open: stack on it
+    expect(window.history.length).toBe(before + 2);
+    expect(historyLayers()).toEqual([a, a2]);
+    resetBackStack();
+    openFrom();
+    window.history.pushState({ [HISTORY_LAYERS_KEY]: ['sheet:b#1'] }, '');
+    const len = window.history.length;
+    const c = pushLayer('reader:c1', vi.fn());
+    expect(window.history.length).toBe(len + 1);
+    expect(historyLayers()).toEqual(['sheet:b#1', c]);
+  });
+
+  it('a layer re-opened while its old entry is still being popped stacks a new entry (never adopts one about to go)', async () => {
+    openFrom();
+    const first = pushLayer('sheet:menu', vi.fn());
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined); // the traversal has not landed yet
+    popLayer(first);
+    await settle(); // its deferred back() is under way
+    expect(back).toHaveBeenCalledTimes(1);
+    const before = window.history.length;
+    const again = pushLayer('sheet:menu', vi.fn());
+    expect(window.history.length).toBe(before + 1);
+    expect(historyLayers()).toEqual([first, again]);
+    back.mockRestore();
+  });
+
+  it('layers closed from the UI in the same tick leave in one traversal, in either order', async () => {
+    for (const order of ['top first', 'bottom first'] as const) {
+      const opening = openFrom();
+      const reader = pushLayer('reader', vi.fn());
+      const immersive = pushLayer('immersive', vi.fn());
+      const go = vi.spyOn(window.history, 'go');
+      const back = vi.spyOn(window.history, 'back');
+      if (order === 'top first') {
+        popLayer(immersive);
+        popLayer(reader);
+      } else {
+        popLayer(reader);
+        popLayer(immersive);
+      }
+      await settle();
+      await settle();
+      expect(go).toHaveBeenCalledTimes(1);
+      expect(go).toHaveBeenCalledWith(-2);
+      expect(back).not.toHaveBeenCalled();
+      expect(window.history.state).toEqual(opening);
+      go.mockRestore();
+      back.mockRestore();
+    }
+  });
+
+  it('a non-final leave the host ignores registers the layer again: Back and Close keep working', async () => {
+    const opening = openFrom();
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useBackLayer(true, onClose, 'reader:c5'));
+    const before = window.history.length;
+    const action = vi.fn();
+    act(() => result.current(action, { final: false }));
+    await settle();
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(openLayers()).toEqual(['reader:c5']);
+    expect(historyLayers().map(layerKey)).toEqual(['reader:c5']); // a fresh entry where the left one was
+    expect(window.history.length).toBe(before);
+    await act(async () => {
+      window.history.back();
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('a final leave (a close) never registers again, even when the host stays', async () => {
+    const opening = openFrom();
+    const { result } = renderHook(() => useBackLayer(true, vi.fn(), 'reader:c6'));
+    const action = vi.fn();
+    act(() => result.current(action));
+    await settle();
+    expect(action).toHaveBeenCalledTimes(1);
+    expect(openLayers()).toEqual([]);
+    expect(window.history.state).toEqual(opening);
+  });
+
+  it('a non-final leave whose action closes the host does not register again', async () => {
+    const opening = openFrom();
+    const { result } = renderHook(() => {
+      const [open, setOpen] = React.useState(true);
+      return { leave: useBackLayer(open, vi.fn(), 'reader:c7'), close: () => setOpen(false) };
+    });
+    act(() => result.current.leave(() => result.current.close(), { final: false }));
+    await settle();
+    expect(openLayers()).toEqual([]);
+    expect(window.history.state).toEqual(opening);
   });
 });
 

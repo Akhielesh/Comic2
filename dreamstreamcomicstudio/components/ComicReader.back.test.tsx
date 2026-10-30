@@ -3,12 +3,13 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 import { ComicReader } from './ComicReader';
-import { historyLayers, resetBackStack } from './comicstudio/mobile/backStack';
+import { HISTORY_LAYERS_KEY, historyLayers, layerKey, resetBackStack } from './comicstudio/mobile/backStack';
 
 // The phone Back gesture (iOS edge swipe, Android system Back) closes the reader instead of changing the URL
 // under an open reader; the reader's own exits pop its history entry so a later Back behaves.
 // v5: the reader's entry is a layer on the Back stack (components/comicstudio/mobile/backStack.ts) named after its
-// comic ('reader:<id>'), and a full-screen fallback is a 'fullscreen' layer above it.
+// comic ('reader:<id>'), and a full-screen fallback is a 'fullscreen' layer above it. Layer ids are '<key>#<load>.<n>'
+// (unique per page load); layerKey() reads the key back.
 
 // The v4 delegate's PublicComicReader loads the doc over the network; here it is a stub, which for 'v4view…' ids
 // renders the real v4 ComicReaderView (its full-viewport mode is what Back must leave first).
@@ -95,9 +96,33 @@ const handlers = () => ({
 });
 
 /** The comic whose reader entry the current history entry holds (its Back-stack layer), or undefined. */
-const readerState = () => historyLayers().map((l) => /^reader:(.+)#\d+$/.exec(l)?.[1]).find(Boolean);
+const readerState = () => historyLayers().map((l) => /^reader:(.+)$/.exec(layerKey(l))?.[1]).find(Boolean);
 /** The current entry holds a full-screen fallback layer (the classic reading mode, the v4 viewport mode). */
-const fullscreenEntry = () => historyLayers().some((l) => /^fullscreen#\d+$/.test(l));
+const fullscreenEntry = () => historyLayers().some((l) => layerKey(l) === 'fullscreen');
+/**
+ * The reader as App renders it: a navigation or a legal link replaces it with another view (App's setCurrentView), so
+ * the reader unmounts as the action runs.
+ */
+const AppLikeHost: React.FC<{ project: Project; h: ReturnType<typeof handlers> }> = ({ project: p, h }) => {
+  const [elsewhere, setElsewhere] = React.useState(false);
+  if (elsewhere) return <div data-testid="elsewhere" />;
+  const away =
+    <A extends unknown[]>(fn: (...args: A) => void) =>
+    (...args: A) => {
+      fn(...args);
+      setElsewhere(true);
+    };
+  return (
+    <ComicReader
+      project={p}
+      {...h}
+      onNavigate={away(h.onNavigate)}
+      onOpenPrivacy={away(h.onOpenPrivacy)}
+      onOpenTerms={away(h.onOpenTerms)}
+      onOpenFaq={away(h.onOpenFaq)}
+    />
+  );
+};
 const back = async () => {
   await act(async () => {
     window.history.back();
@@ -190,12 +215,13 @@ describe('Back closes the classic reader', () => {
     h.onNavigate.mockImplementation(() => {
       atNavigate = readerState();
     });
-    render(<ComicReader project={project('c5')} {...h} />);
+    render(<AppLikeHost project={project('c5')} h={h} />);
     expect(readerState()).toBe('c5');
     expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Library' }));
     await waitFor(() => expect(h.onNavigate).toHaveBeenCalledWith('gallery'));
     expect(atNavigate).toBeUndefined();
+    expect(screen.getByTestId('elsewhere')).toBeInTheDocument();
     await expectBackWhereOpened();
     expect(h.onNavigate).toHaveBeenCalledTimes(1);
     expect(h.onClose).not.toHaveBeenCalled();
@@ -208,28 +234,56 @@ describe('Back closes the classic reader', () => {
     h.onOpenPrivacy.mockImplementation(() => {
       atOpen = readerState();
     });
-    render(<ComicReader project={project('c6')} {...h} />);
+    render(<AppLikeHost project={project('c6')} h={h} />);
     expect(readerState()).toBe('c6');
     expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Footer privacy' }));
     await waitFor(() => expect(h.onOpenPrivacy).toHaveBeenCalledTimes(1));
     expect(atOpen).toBeUndefined();
+    expect(screen.getByTestId('elsewhere')).toBeInTheDocument();
     await expectBackWhereOpened();
     expect(h.onClose).not.toHaveBeenCalled();
   });
 
-  it('a navigation the app ignores leaves the reader working: Close still closes', async () => {
+  // App keeps the reader open for a navigation it does not act on (e.g. a notification for the comic already open).
+  const ignoredLibraryNavigation = async (id: string) => {
     const h = handlers(); // onNavigate is a mock: the reader stays open, as if the app ignored the view
     const before = window.history.length;
-    render(<ComicReader project={project('c10')} {...h} />);
-    expect(readerState()).toBe('c10');
+    let atNavigate: unknown = 'not called';
+    h.onNavigate.mockImplementation(() => {
+      atNavigate = window.history.state;
+    });
+    render(<ComicReader project={project(id)} {...h} />);
+    expect(readerState()).toBe(id);
     expect(window.history.length).toBe(before + 1);
     fireEvent.click(screen.getByRole('button', { name: 'Library' }));
     await waitFor(() => expect(h.onNavigate).toHaveBeenCalledWith('gallery'));
-    await expectBackWhereOpened();
-    // The entry is already gone: Close closes at once and never traverses further back than the opening entry.
+    // The navigation ran on the opening entry (the reader's own entry was popped first)…
+    expect(atNavigate).toEqual(opening);
+    // …and the reader, still open, took a fresh entry in place of the popped one (never one more).
+    await waitFor(() => expect(readerState()).toBe(id));
+    expect(window.history.length).toBe(before + 1);
+    return { h, before };
+  };
+
+  it('a navigation the app ignores leaves the reader working: Close still closes', async () => {
+    const { h, before } = await ignoredLibraryNavigation('c10');
     fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
     await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(1));
+    await expectBackWhereOpened();
+    expect(window.history.length).toBe(before + 1);
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a navigation the app ignores leaves the reader working: Back still closes it, on the first Back', async () => {
+    const { h, before } = await ignoredLibraryNavigation('c11');
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
+    // Still mounted (onClose is a mock) with its entry gone: Close closes at once and never traverses further back
+    // than the opening entry.
+    fireEvent.click(screen.getByRole('button', { name: 'Close reader' }));
+    await waitFor(() => expect(h.onClose).toHaveBeenCalledTimes(2));
     await expectBackWhereOpened();
     expect(window.history.length).toBe(before + 1);
   });
@@ -347,5 +401,89 @@ describe('the v4 full-viewport mode: Back leaves it before it closes the comic',
     await expectBackWhereOpened();
     expect(window.history.length).toBe(before + 2);
     expect(h.onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// history.state survives a reload (pull-to-refresh, iOS evicting the tab, a cold return to it): the entry the reader
+// had pushed comes back while nothing owns it. The reader adopts it (production's reader did the same with its own
+// marker), so the first Back closes the comic and history.length does not grow.
+describe('after a reload with the reader open', () => {
+  /** An entry the reader (and its full-screen fallback) pushed before the reload: an older page load's layer ids. */
+  const reloadedEntry = (layers: string[]) => {
+    window.history.pushState({ ...opening, [HISTORY_LAYERS_KEY]: layers }, '', '/?view=read&id=x');
+  };
+
+  it('the classic reader adopts the entry it left behind: no new entry, and the first Back closes it', async () => {
+    reloadedEntry(['reader:r1#1']);
+    const before = window.history.length;
+    const h = handlers();
+    render(<ComicReader project={project('r1')} {...h} />);
+    expect(window.history.length).toBe(before);
+    expect(readerState()).toBe('r1');
+    expect(historyLayers()).toHaveLength(1);
+    expect(historyLayers()).not.toContain('reader:r1#1');
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reload in the reading mode: the first Back still closes the comic (the old reading mode leaves no dead Back)', async () => {
+    reloadedEntry(['reader:r2#1']);
+    reloadedEntry(['reader:r2#1', 'fullscreen#2']);
+    const before = window.history.length;
+    const h = handlers();
+    render(<ComicReader project={project('r2')} {...h} />);
+    expect(window.history.length).toBe(before);
+    expect(readerState()).toBe('r2');
+    expect(fullscreenEntry()).toBe(false);
+    expect(screen.getByTestId('classic-reader')).toHaveAttribute('data-reading-mode', 'false');
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('the v4 reader too, after a reload in its viewport mode', async () => {
+    reloadedEntry(['reader:v4r#1']);
+    reloadedEntry(['reader:v4r#1', 'fullscreen#2']);
+    const before = window.history.length;
+    const h = handlers();
+    render(<ComicReader project={project('v4r', { studioVersion: 4 })} {...h} />);
+    expect(await screen.findByTestId('v4-reader')).toBeInTheDocument();
+    expect(window.history.length).toBe(before);
+    expect(readerState()).toBe('v4r');
+    expect(fullscreenEntry()).toBe(false);
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('StrictMode after a reload: still one entry, still the first Back', async () => {
+    reloadedEntry(['reader:r3#1']);
+    const before = window.history.length;
+    const h = handlers();
+    render(
+      <React.StrictMode>
+        <ComicReader project={project('r3')} {...h} />
+      </React.StrictMode>
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(window.history.length).toBe(before);
+    expect(h.onClose).not.toHaveBeenCalled();
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    await expectBackWhereOpened();
+  });
+
+  it("another comic's left-behind entry is never taken over: this reader pushes its own", async () => {
+    reloadedEntry(['reader:other#1']);
+    const before = window.history.length;
+    const h = handlers();
+    render(<ComicReader project={project('r4')} {...h} />);
+    expect(window.history.length).toBe(before + 1);
+    expect(historyLayers().map(layerKey)).toEqual(['reader:other', 'reader:r4']);
+    await back();
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    expect(historyLayers()).toEqual(['reader:other#1']);
   });
 });

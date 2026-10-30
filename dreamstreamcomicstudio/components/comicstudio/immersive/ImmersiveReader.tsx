@@ -561,8 +561,9 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     () => () => {
       if (!syncUrlRef.current || typeof window === 'undefined') return urlSync.cancel();
       // The link keeps the page the reader closed on. Closing pops the reader's own history entry
-      // (Back, or Close calling history.back()), so the position is written onto the entry underneath —
-      // right away when it is already gone, else once the pop lands (bounded wait).
+      // (its 'immersive' Back-stack layer: Back, or Close as the reader unmounts), so the position is
+      // written onto the entry underneath — right away when it is already gone, else once the pop
+      // lands (bounded wait).
       if (!readerEntryOnTop()) return urlSync.reapply();
       let t: ReturnType<typeof setTimeout> | null = null;
       const once = () => {

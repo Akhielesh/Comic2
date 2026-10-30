@@ -8,15 +8,24 @@
 // never fills with dead entries; a layer opened right as another closes (menu → sheet) REUSES the
 // closing layer's entry (replaceState) instead of stacking a new one. The URL never changes.
 //
+// Layers closed from the UI together (the immersive reader and the studio's 'reader' layer behind it) leave in ONE
+// traversal, so a second back() never races a first one that has not landed yet.
+//
 // Leaving from the UI and THEN acting (a reader's Close, Library, a legal link — mobile-reading hotfix):
 // `leaveLayer` / the function `useBackLayer` returns pops the layer's entry (and every entry above it) FIRST
 // and runs the action once that traversal lands, so whatever the host does next (App rewriting its
 // ?view=read entry, a navigation) happens on the entry under the layer and a later Back never lands on a
-// stale one. If the traversal never reports back, the action still runs after a short settle time.
+// stale one. If the traversal never reports back, the action still runs after a short settle time. A navigation
+// the host may ignore (`{ final: false }`) registers the layer again when the host is still open afterwards.
+//
+// Reloads: history.state survives a reload (pull-to-refresh, iOS evicting the tab), so the entry a layer pushed
+// comes back while nothing owns it. Layer ids carry a per-page-load token, so such an entry never counts as a live
+// layer, and a layer that opens again with the same key ADOPTS it (replaceState) instead of stacking a second
+// one — the first Back then closes it, as before the reload, and history.length does not grow.
 //
 // StrictMode-safe: a dev double-mount revives the same layer instead of pushing twice.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface Layer {
   id: string;
@@ -31,8 +40,12 @@ const stack: Layer[] = [];
 const closing = new Map<string, { layer: Layer; timer: ReturnType<typeof setTimeout> }>();
 /** The layer being left with leaveLayer (its traversal is under way) and the action that runs when it lands. */
 let leaving: { id: string; action: () => void; timer: ReturnType<typeof setTimeout> } | null = null;
+/** Layer ids whose entry a traversal of ours is popping right now (until it lands): never adopted. */
+const popping = new Set<string>();
 let listening = false;
 let seq = 0;
+/** Unique per page load: an entry a reload brings back can never hold the id of a layer opened in this load. */
+const LOAD_TOKEN = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 /** How long a leave waits for its traversal to report back (popstate) before it closes anyway. */
 export const LEAVE_SETTLE_MS = 800;
 
@@ -53,7 +66,34 @@ export const historyLayers = (): string[] => {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 };
 
+/** The key a layer id was made from ('reader:c1#<load>.3' → 'reader:c1'; an older build's 'reader:c1#3' too). */
+export const layerKey = (id: string): string => {
+  const at = id.lastIndexOf('#');
+  return at < 0 ? id : id.slice(0, at);
+};
+
+/** Some layer of this page load still owns the id (open, closing from the UI, being left, or its entry popping). */
+const owned = (id: string): boolean => stack.some((l) => l.id === id) || closing.has(id) || leaving?.id === id || popping.has(id);
+
+/**
+ * Where a layer opening with `key` takes over an entry nothing owns (one a reload brought back): the lowest slot of
+ * the unowned run on top of the current entry that has the same key, else -1. The unowned layers above that slot (a
+ * reading mode or a sheet that was open at the reload) go with it, so the first Back closes the layer.
+ */
+const staleSlot = (layers: string[], key: string): number => {
+  let slot = -1;
+  for (let i = layers.length - 1; i >= 0 && !owned(layers[i]); i -= 1) if (layerKey(layers[i]) === key) slot = i;
+  return slot;
+};
+
+/** Pop the top `n` entries in one traversal (back() for one, as every caller always did). */
+const traverseBack = (n: number) => {
+  if (n === 1) window.history.back();
+  else window.history.go(-n);
+};
+
 const onPopState = () => {
+  popping.clear();
   const live = new Set(historyLayers());
   for (let i = stack.length - 1; i >= 0; i -= 1) {
     const layer = stack[i];
@@ -65,8 +105,8 @@ const onPopState = () => {
       console.error('[comicstudio] closing a layer on back failed', err);
     }
   }
-  // A leave landed on an entry that still holds its layer (an entry someone else pushed sat above it, e.g. the
-  // immersive reader's): keep unwinding, one step at a time, until the layer's own entry is gone.
+  // A leave landed on an entry that still holds its layer (an entry some other script pushed with a copy of the
+  // state sat above it): keep unwinding, one step at a time, until the layer's own entry is gone.
   if (leaving && live.has(leaving.id)) {
     try {
       window.history.back();
@@ -93,18 +133,21 @@ const stopListening = () => {
 /** Register an open layer; returns its id. */
 export const pushLayer = (key: string, close: () => void): string => {
   seq += 1;
-  const id = `${key}#${seq}`;
-  stack.push({ id, key, close });
+  const id = `${key}#${LOAD_TOKEN}.${seq}`;
   if (canUseHistory()) {
     const layers = historyLayers();
     const top = layers[layers.length - 1];
     const reusing = top !== undefined && closing.has(top);
+    const adopt = reusing ? -1 : staleSlot(layers, key);
     try {
       if (reusing) {
         // The layer on top is closing (menu → sheet): take over its entry instead of stacking.
         clearTimeout(closing.get(top)!.timer);
         closing.delete(top);
         window.history.replaceState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers.slice(0, -1), id] }, '');
+      } else if (adopt >= 0) {
+        // The entry this layer left behind before a reload: take it over instead of stacking a dead one under it.
+        window.history.replaceState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers.slice(0, adopt), id] }, '');
       } else {
         window.history.pushState({ ...historyState(), [HISTORY_LAYERS_KEY]: [...layers, id] }, '');
       }
@@ -113,6 +156,7 @@ export const pushLayer = (key: string, close: () => void): string => {
     }
     startListening();
   }
+  stack.push({ id, key, close });
   return id;
 };
 
@@ -120,9 +164,21 @@ const finishClose = (id: string) => {
   closing.delete(id);
   if (canUseHistory()) {
     const layers = historyLayers();
-    if (layers[layers.length - 1] === id) {
+    const at = layers.lastIndexOf(id);
+    // Its entry goes when it is on top, or when every layer above it is closing too. Closing layers right under it
+    // (closed in the same tick: the immersive reader and the studio's 'reader' layer behind it) go in the same
+    // traversal, never in a second back() that could fire before the first one lands.
+    if (at >= 0 && layers.slice(at + 1).every((l) => closing.has(l))) {
+      let from = at;
+      while (from > 0 && closing.has(layers[from - 1])) from -= 1;
+      for (const l of layers.slice(from)) {
+        const pending = closing.get(l);
+        if (pending) clearTimeout(pending.timer);
+        closing.delete(l);
+        popping.add(l);
+      }
       try {
-        window.history.back();
+        traverseBack(layers.length - from);
       } catch {
         /* sandboxed */
       }
@@ -200,9 +256,11 @@ export const leaveLayer = (id: string, action: () => void, settleMs = LEAVE_SETT
   // Entries above it whose layers are already closing (an Exit tapped just before Close) go with this traversal.
   for (const above of layers.slice(at)) {
     const pending = closing.get(above);
-    if (!pending) continue;
-    clearTimeout(pending.timer);
-    closing.delete(above);
+    if (pending) {
+      clearTimeout(pending.timer);
+      closing.delete(above);
+    }
+    if (above !== id) popping.add(above);
   }
   startListening();
   try {
@@ -238,18 +296,40 @@ export const resetBackStack = (): void => {
   closing.clear();
   if (leaving) clearTimeout(leaving.timer);
   leaving = null;
+  popping.clear();
   stopListening();
 };
 
+export interface LeaveOptions {
+  /**
+   * false for a navigation the host may ignore (a reader's Library, header and legal links): when the host is still
+   * mounted and open once `action` has run, its layer registers again with a fresh entry, so Back and Close keep
+   * working. Default true (a close: the host goes away).
+   */
+  final?: boolean;
+}
+
 /**
  * While `open`, the back gesture calls `onClose` (topmost layer first). `key` names the layer
- * (e.g. 'page-editor', 'sheet:settings'). Returns `leave(action)`: leave the layer from the UI and run
+ * (e.g. 'page-editor', 'sheet:settings'). Returns `leave(action, opts)`: leave the layer from the UI and run
  * `action` once its history entry is gone (see leaveLayer); without an open layer `action` runs at once.
  */
-export function useBackLayer(open: boolean, onClose: () => void, key: string): (action: () => void) => void {
+export function useBackLayer(open: boolean, onClose: () => void, key: string): (action: () => void, opts?: LeaveOptions) => void {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const idRef = useRef<string | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const mountedRef = useRef(false);
+  /** Bumped to register the layer again after a non-final leave the host ignored. */
+  const [armed, setArmed] = useState(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return;
@@ -263,16 +343,31 @@ export function useBackLayer(open: boolean, onClose: () => void, key: string): (
       // Deferred one tick: a StrictMode re-run revives it; a real close or unmount lets it finish.
       popLayer(mine);
     };
-  }, [open, key]);
+  }, [open, key, armed]);
 
   useEffect(() => {
     if (!open) idRef.current = null;
   }, [open]);
 
-  return useCallback((action: () => void) => {
+  return useCallback((action: () => void, opts?: LeaveOptions) => {
     const id = idRef.current;
-    if (!id) action();
-    else leaveLayer(id, action);
+    if (!id) {
+      action();
+      return;
+    }
+    if (opts?.final !== false) {
+      leaveLayer(id, action);
+      return;
+    }
+    leaveLayer(id, () => {
+      action();
+      // Still here and still open (the app ignored the navigation, or the view it opened keeps this host): register
+      // the layer again. When the action unmounts the host, React drops this update with it.
+      if (mountedRef.current && openRef.current && idRef.current === id) {
+        idRef.current = null;
+        setArmed((n) => n + 1);
+      }
+    });
   }, []);
 }
 

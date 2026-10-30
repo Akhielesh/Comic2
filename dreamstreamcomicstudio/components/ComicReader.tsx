@@ -308,9 +308,13 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
     },
     'fullscreen'
   );
-  /** Navigation out of the reader pops the reader's history entries first. */
-  const leaveTo = (fn: () => void) => () => leaveReader(fn);
-  const navigate = (view: string, id?: string) => leaveReader(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)));
+  /**
+   * Navigation out of the reader pops the reader's history entries first. Not final: if the app keeps the reader open
+   * (a view it does not handle, or the comic that is already open), the reader takes a fresh entry, so Back and Close
+   * still close it.
+   */
+  const leaveTo = (fn: () => void) => () => leaveReader(fn, { final: false });
+  const navigate = (view: string, id?: string) => leaveReader(() => (id === undefined ? onNavigate?.(view) : onNavigate?.(view, id)), { final: false });
   // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
   // so we collapse every layout to a single vertical column — the standard way comics are
   // read on mobile. Tracked reactively so rotating the device re-flows immediately.

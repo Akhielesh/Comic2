@@ -13,7 +13,8 @@
 //   request can never leave an "Exit" label behind.
 // - Back leaves a fallback before it closes the reader: each fallback (the classic reading mode, the v4 viewport mode)
 //   is a 'fullscreen' layer on the Back stack (components/comicstudio/mobile/backStack.ts useBackLayer), above the
-//   reader's own 'reader:<id>' layer; native full screen needs none (the browser leaves it on Back itself).
+//   reader's own 'reader:<id>' layer; native full screen needs none (the browser leaves it on Back itself). The
+//   immersive reader is an 'immersive' layer on the same stack (useImmersive): one history owner for every reader.
 
 type WebkitElement = Element & {
   webkitRequestFullscreen?: () => void | Promise<void>;

@@ -5,7 +5,7 @@ import type { ComicDoc } from '../../../shared/comic/doc';
 import { fakeUrlFor, makeSampleDoc } from '../board/__fixtures__/sampleDoc';
 import { resetIosFullscreenNoteForTests } from '../../../services/fullscreen';
 import { pageImageCache } from '../immersive/pageImageCache';
-import { historyLayers, resetBackStack } from '../mobile/backStack';
+import { historyLayers, layerKey, resetBackStack } from '../mobile/backStack';
 import { ComicReaderView } from './ComicReaderView';
 
 // The v4 reader on phones (mobile-reading hotfix, F1/F4/F5): Full screen did nothing on iPhone (no API, a silently
@@ -127,7 +127,7 @@ describe('Full screen always does something', () => {
 // the reader's own layer where there is one (ComicReader's v4 delegate), as the classic reading mode is. The
 // end-to-end Back behaviour inside the public reader is in components/ComicReader.back.test.tsx.
 describe('the viewport mode has a history entry of its own (a Back-stack layer)', () => {
-  const fullscreenLayers = () => historyLayers().filter((l) => /^fullscreen#\d+$/.test(l));
+  const fullscreenLayers = () => historyLayers().filter((l) => layerKey(l) === 'fullscreen');
   let opening: Record<string, unknown> = {};
   let entryNo = 0;
   beforeEach(() => {

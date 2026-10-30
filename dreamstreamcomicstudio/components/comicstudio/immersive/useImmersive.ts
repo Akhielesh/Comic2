@@ -1,7 +1,10 @@
 // The immersive surface's platform glue (reader.md §11.3): Fullscreen API with an overlay fallback
 // (iPhone Safari has no element fullscreen), page scroll lock, `theme-color` matched to the room, a
-// screen wake lock while reading, and a history entry so the phone's Back gesture closes the reader
-// instead of leaving the page. Everything degrades silently on older browsers.
+// screen wake lock while reading, and a layer on the Back stack (mobile/backStack.ts, key 'immersive') so the
+// phone's Back gesture closes the reader instead of leaving the page. Everything degrades silently on older browsers.
+//
+// One history owner: the reader's entry is the Back stack's like every other layer's (the readers' own 'reader:<id>'
+// layer, the 'fullscreen' fallbacks, sheets), so Back closes the topmost first and a reload never leaves a dead entry.
 //
 // Full screen goes through the one helper every reader shares (services/fullscreen.ts): requested inside
 // the opening tap, standard then webkit, never throws; the state is the browser's own (fullscreenchange,
@@ -10,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { enterFullscreen, exitFullscreen, fullscreenApi, fullscreenElement, onFullscreenChange, type FullscreenFallbackReason } from '../../../services/fullscreen';
+import { historyLayers, layerKey, useBackLayer } from '../mobile/backStack';
 
 export { fullscreenElement };
 
@@ -20,16 +24,10 @@ interface WakeLockSentinelLike {
 }
 type WakeNavigator = Navigator & { wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> } };
 
-/** Marks the history entry the open reader pushed (Back closes the reader). */
-export const HISTORY_KEY = '__dsReader';
-/** The reader's own history entry is on top (it is popped as the reader closes). */
-export const readerEntryOnTop = (): boolean => {
-  try {
-    return typeof window !== 'undefined' && !!(window.history.state as Record<string, unknown> | null)?.[HISTORY_KEY];
-  } catch {
-    return false;
-  }
-};
+/** The immersive reader's layer on the Back stack (Back closes the reader). */
+export const IMMERSIVE_LAYER = 'immersive';
+/** The reader's own history entry is still the current one (it is popped as the reader closes). */
+export const readerEntryOnTop = (): boolean => historyLayers().some((id) => layerKey(id) === IMMERSIVE_LAYER);
 
 /** The browser can show an element full screen here (standard or webkit; not in an iframe that forbids it). */
 export const fullscreenSupported = (): boolean => fullscreenApi() !== 'none';
@@ -53,7 +51,7 @@ export interface ImmersiveApi {
   fullscreenSupported: boolean;
   wakeLockActive: boolean;
   toggleFullscreen(): Promise<void>;
-  /** Leave the reader (removes the history entry, exits fullscreen, restores the page). */
+  /** Leave the reader (exits fullscreen; as the host unmounts it, its history entry goes and the page is restored). */
   exit(): void;
 }
 
@@ -65,9 +63,7 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
   onFallbackRef.current = opts.onFullscreenFallback;
   const [fullscreen, setFullscreen] = useState(false);
   const [wakeLockActive, setWakeLockActive] = useState(false);
-  const token = useRef(`r${Math.random().toString(36).slice(2, 10)}`);
   const closing = useRef(false);
-  const cleanupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fullscreen (best effort) + scroll lock + fullscreen state.
   useEffect(() => {
@@ -92,42 +88,18 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
-  // Back gesture exits: one history entry for the reader (StrictMode-safe: a remount reuses it).
+  // Back gesture exits: the reader is one layer on the Back stack (one history entry above whatever opened it;
+  // StrictMode-safe: a remount revives it). Back pops it and the reader closes; closing from the reader (exit) lets
+  // the host unmount it, and the layer's entry goes with it (the Back stack's close-from-the-UI, one tick later).
   useEffect(() => {
-    if (!active || typeof window === 'undefined') return;
-    if (cleanupTimer.current) {
-      clearTimeout(cleanupTimer.current);
-      cleanupTimer.current = null;
-    }
-    const ours = () => (window.history.state as Record<string, unknown> | null)?.[HISTORY_KEY] === token.current;
-    try {
-      if (!ours()) window.history.pushState({ ...((window.history.state as object) || {}), [HISTORY_KEY]: token.current }, '');
-    } catch {
-      /* sandboxed */
-    }
-    closing.current = false;
-    const onPop = () => {
-      if (ours()) return;
-      if (closing.current) return;
-      closing.current = true;
-      onExitRef.current();
-    };
-    window.addEventListener('popstate', onPop);
-    return () => {
-      window.removeEventListener('popstate', onPop);
-      cleanupTimer.current = setTimeout(() => {
-        cleanupTimer.current = null;
-        if (!closing.current && ours()) {
-          closing.current = true;
-          try {
-            window.history.back();
-          } catch {
-            /* sandboxed */
-          }
-        }
-      }, 0);
-    };
+    if (active) closing.current = false;
   }, [active]);
+  const exitOnBack = useCallback(() => {
+    if (closing.current) return;
+    closing.current = true;
+    onExitRef.current();
+  }, []);
+  useBackLayer(active, exitOnBack, IMMERSIVE_LAYER);
 
   // theme-color follows the room.
   useEffect(() => {
@@ -196,11 +168,7 @@ export function useImmersive(root: RefObject<HTMLElement | null>, opts: Immersiv
     if (closing.current) return;
     closing.current = true;
     exitFullscreen();
-    try {
-      if ((window.history.state as Record<string, unknown> | null)?.[HISTORY_KEY] === token.current) window.history.back();
-    } catch {
-      /* sandboxed */
-    }
+    // The host unmounts the reader: its Back-stack layer closes from the UI and pops its entry.
     onExitRef.current();
   }, []);
 

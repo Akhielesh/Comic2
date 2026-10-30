@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render } from '@testing-library/react';
 import React, { useRef } from 'react';
-import { useImmersive, type ImmersiveApi } from './useImmersive';
+import { readerEntryOnTop, useImmersive, type ImmersiveApi } from './useImmersive';
+import { openLayers, resetBackStack } from '../mobile/backStack';
 
 let api: ImmersiveApi | null = null;
 const Host: React.FC<{ onExit(): void; themeColor?: string }> = ({ onExit, themeColor }) => {
@@ -15,6 +16,7 @@ const Host: React.FC<{ onExit(): void; themeColor?: string }> = ({ onExit, theme
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 afterEach(() => {
+  resetBackStack();
   api = null;
   vi.restoreAllMocks();
   document.head.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.remove());
@@ -37,7 +39,9 @@ describe('useImmersive', () => {
     const onExit = vi.fn();
     render(<Host onExit={onExit} />);
     await act(tick);
-    expect((window.history.state as Record<string, unknown>)?.__dsReader).toBeTruthy();
+    // Its own entry: the reader is a layer on the Back stack.
+    expect(readerEntryOnTop()).toBe(true);
+    expect(openLayers()).toEqual(['immersive']);
     // The user presses Back: the entry is gone, the reader closes.
     window.history.replaceState(null, '', '/c/abc');
     act(() => {
@@ -52,11 +56,16 @@ describe('useImmersive', () => {
   it('explicit exit goes back over its own entry and calls onExit once', async () => {
     const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
     const onExit = vi.fn();
-    render(<Host onExit={onExit} />);
+    const view = render(<Host onExit={onExit} />);
     await act(tick);
     act(() => api!.exit());
+    expect(onExit).toHaveBeenCalledTimes(1);
+    // The host closes the reader on onExit (every host does): its layer's entry is popped as it goes.
+    view.unmount();
+    await act(tick);
     expect(back).toHaveBeenCalledTimes(1);
     expect(onExit).toHaveBeenCalledTimes(1);
+    expect(openLayers()).toEqual([]);
   });
 
   it('sets theme-color while open and restores it after', async () => {
