@@ -29,3 +29,6 @@ export * from './modelInsights.js';
 export * from './modelCatalog.js';
 // Ship 1 wave 2: what a page job may send to an image model (the runner and the Model Lab share it)
 export * from './sendable.js';
+// Ship 2 (K2a): a panel's parts fingerprint and the frame ↔ drawing space (panels mode)
+export * from './parts.js';
+export * from './panelize/space.js';
