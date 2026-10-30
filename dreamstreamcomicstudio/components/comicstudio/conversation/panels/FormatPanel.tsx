@@ -5,13 +5,21 @@
 // Tell before staling (director.md §3.8.4): when pages are already drawn, the panel says up
 // front that a new shape / lettering mode marks them out of date and what a redraw would cost;
 // after such a change it says how many are now out of date and offers "Switch back" (free).
+//
+// Panels per page (plan §4.1, §5.1): Auto — "3–4 big panels", the beats decide (2–4; 5 only for a fast,
+// nearly silent sequence) — or a fixed 2, 3, 4, 5 or 6 (PANEL_LIMITS.uiChoices; the free fit check still
+// flags a panel with too many words). A storybook set above 3 plans its NEW pages with at most 3 and says so
+// (decision PD-2, panelCountNote). The choices are a wrapping grid sized by the panel, never the viewport:
+// this panel also opens inside the narrow recap card.
 
 import React from 'react';
 import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
 import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
 import { estimateJobs, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import { PANEL_LIMITS, panelCountNote } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
+import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
 import { useCostFormat } from '../cost';
 import { AspectGlyph, Segmented, SectionLabel, cx } from '../ui';
 
@@ -56,7 +64,21 @@ export const ASPECTS_BY_KIND: Record<ComicKind, { value: AspectRatio; label: str
 export const PAGE_PRESETS = [1, 4, 6, 12, 24];
 export const MIN_PAGES = 1;
 export const MAX_PAGES = 40;
-const PANEL_OPTIONS: (Format['panelsPerPage'])[] = ['auto', 3, 4, 5, 6];
+/** Auto, then the fixed counts Format offers (plan §5.1 PANEL_LIMITS.uiChoices: 2–6). */
+export const PANEL_OPTIONS: Format['panelsPerPage'][] = ['auto', ...PANEL_LIMITS.uiChoices];
+/** What Auto plans (plan §4.1): usually 3 big panels, sometimes 2 or 4. */
+export const AUTO_PANELS_LABEL = '3–4 big panels';
+
+/** The words under the panel choice: what the current setting plans. */
+export const panelChoiceHint = (format: Pick<Format, 'kind' | 'panelsPerPage'>): string => {
+  const v = format.panelsPerPage;
+  if (v === 'auto' || typeof v !== 'number') {
+    return format.kind === 'storybook'
+      ? `Auto: usually ${PANEL_LIMITS.storybookTypical} large panels a page (at most ${PANEL_LIMITS.storybookMax}), so every picture has room.`
+      : `Auto: usually ${PANEL_LIMITS.autoTypical} big panels a page (${PANEL_LIMITS.autoMin}–${PANEL_LIMITS.autoUsualMax}; ${PANEL_LIMITS.autoMax} only for a fast, nearly silent moment), so the art and the words both fit.`;
+  }
+  return `${v} panel${v === 1 ? '' : 's'} on every new page. Fewer, bigger panels leave more room for detail and words; a panel with too many words is flagged before anything is drawn.`;
+};
 
 const clampPages = (n: number) => Math.min(MAX_PAGES, Math.max(MIN_PAGES, Math.round(n)));
 
@@ -128,6 +150,63 @@ const PageCountInput: React.FC<{ id: string; value: number; onCommit: (n: number
   );
 };
 
+/**
+ * Panels per page: Auto ("3–4 big panels") and 2–6 as a radio group of tiles that WRAPS with its container
+ * (Auto spans two columns), arrow keys move and choose like a native radio group, 44 px targets on touch.
+ * A stored count outside the offered ones (an old doc's 9, say) stays visible as its own "current" tile.
+ */
+const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; onChange(v: Format['panelsPerPage']): void }> = ({ value, onChange }) => {
+  const options: Format['panelsPerPage'][] = PANEL_OPTIONS.includes(value) ? PANEL_OPTIONS : [...PANEL_OPTIONS, value];
+  const checked = options.findIndex((o) => o === value);
+  const focusIndex = checked >= 0 ? checked : 0;
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = (focusIndex + step + options.length) % options.length;
+    onChange(options[next]);
+    e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-label="Panels per page" onKeyDown={onKeyDown} className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(2.75rem,1fr))] gap-1">
+      {options.map((v, i) => {
+        const on = v === value;
+        const auto = v === 'auto';
+        const extra = !auto && !PANEL_OPTIONS.includes(v);
+        return (
+          <button
+            key={String(v)}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            tabIndex={i === focusIndex ? 0 : -1}
+            // The name starts with the visible words: "Auto · 3–4 big panels", "2 panels" (WCAG 2.5.3).
+            aria-label={auto ? `Auto · ${AUTO_PANELS_LABEL}` : `${v} panels${extra ? ' (current)' : ''}`}
+            title={auto ? `Auto · ${AUTO_PANELS_LABEL} — the story's beats decide` : `${v} panels on every page${extra ? ' (current setting)' : ''}`}
+            onClick={() => onChange(v)}
+            className={cx(
+              `flex min-w-0 flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-center ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]`,
+              auto && 'col-span-2',
+              on
+                ? `border-[var(--ds-accent)] ${ACCENT_SOFT_BG} text-[var(--ds-ink)]`
+                : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+            )}
+          >
+            {auto ? (
+              <>
+                <span className="w-full truncate text-[12px] font-semibold">Auto</span>
+                <span className="w-full truncate text-[10px] leading-tight">{AUTO_PANELS_LABEL}</span>
+              </>
+            ) : (
+              <span className="text-[13px] font-semibold tabular-nums">{v}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+};
+
 export interface FormatPanelProps {
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
@@ -164,7 +243,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
   return (
     <div className="space-y-5 p-4">
       {undoStale && staleNow > 0 ? (
-        <div role="status" className="flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2.5 text-[12px] leading-snug text-[var(--ds-ink)]">
+        <div role="status" className={cx('flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border px-3 py-2.5 text-[12px] leading-snug text-[var(--ds-ink)]', TONE_SURFACE.warning)}>
           <p className="min-w-0 flex-1 basis-[12rem] [overflow-wrap:anywhere]">
             {staleNow === 1 ? '1 drawn page is' : `${staleNow} drawn pages are`} now out of date — redraw {cost.approx(redrawQuoteUsd(doc, staleNow, byok))} when you’re
             ready, or switch back to keep {staleNow === 1 ? 'it' : 'them'} as {staleNow === 1 ? 'it is' : 'they are'}.
@@ -176,7 +255,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
               setUndoStale(null);
               void patch([{ op: 'format', patch: before }]);
             }}
-            className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 py-1 text-[11.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+            className="tap-target inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2.5 py-1 text-[11.5px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]"
           >
             <RotateCcw className="h-3 w-3" aria-hidden /> Switch back
           </button>
@@ -208,9 +287,9 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 title={k.label}
                 onClick={() => set(kindPatch(format, k.value))}
                 className={cx(
-                  'flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-1.5 py-1.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]',
+                  'flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl border px-1.5 py-1.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]',
                   on
-                    ? 'border-[#D97757]/50 bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 )}
               >
@@ -235,9 +314,9 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 aria-checked={on}
                 onClick={() => set({ pageAspect: s.value })}
                 className={cx(
-                  'flex min-w-0 flex-col items-center gap-1.5 rounded-xl border px-1.5 py-2.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
+                  'flex min-w-0 flex-col items-center gap-1.5 rounded-xl border px-1.5 py-2.5 text-center transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
                   on
-                    ? 'border-[#D97757]/50 bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 )}
               >
@@ -289,7 +368,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 className={cx(
                   'tap-target rounded-full border px-2.5 py-1 text-[12px] font-medium tabular-nums transition-all duration-200 coarse:min-h-[36px] coarse:min-w-[36px]',
                   format.pageCount === n
-                    ? 'border-[#D97757]/40 bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)] text-[var(--ds-ink)]'
                     : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 )}
               >
@@ -306,12 +385,17 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
       <div>
         <SectionLabel>Panels per page</SectionLabel>
-        <Segmented
-          label="Panels per page"
-          value={format.panelsPerPage}
-          onChange={(panelsPerPage) => set({ panelsPerPage })}
-          options={PANEL_OPTIONS.map((v) => ({ value: v, label: v === 'auto' ? 'Auto' : String(v), title: v === 'auto' ? 'Vary by pacing (3–6)' : `${v} panels` }))}
-        />
+        <PanelCountChoice value={format.panelsPerPage} onChange={(panelsPerPage) => set({ panelsPerPage })} />
+        <p className="mt-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{panelChoiceHint(format)}</p>
+        {panelCountNote(format) && (
+          <p
+            role="note"
+            className={cx('mt-2 flex items-start gap-2 rounded-xl border px-3 py-2 text-[11.5px] leading-snug text-[var(--ds-ink)]', TONE_SURFACE.info)}
+          >
+            <Info className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0 [overflow-wrap:anywhere]">{panelCountNote(format)}</span>
+          </p>
+        )}
       </div>
 
       <div>
@@ -329,8 +413,8 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
                 aria-checked={on}
                 onClick={() => set({ lettering: o.value })}
                 className={cx(
-                  'min-w-0 rounded-xl border px-3 py-2.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40',
-                  on ? 'border-[#D97757]/50 bg-[#D97757]/10' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+                  'min-w-0 rounded-xl border px-3 py-2.5 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
+                  on ? 'border-[var(--ds-accent)] bg-[var(--ds-accent-soft)]' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
                 )}
               >
                 <span className="block text-[13px] font-semibold text-[var(--ds-ink)] [overflow-wrap:anywhere]">{o.title}</span>
