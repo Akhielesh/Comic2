@@ -278,7 +278,9 @@ call, and never touches the network or spends anything. `history.testkit.tsx` se
 `history` (the panel with filmstrip, scrubber and moments by day, a moment's detail, a compare, the reader),
 `history-sheets` (restore, save version, undo AI with a conflict) and `history-states` (a brand-new comic, a v4 comic
 with "Earlier (images only)", a classic import, and the card in each view). Measured at 360×740 and 1440×900, light
-and dark, `?skin=atlas`. They are listed in `qa/KitScenes.tsx` (`KIT_SCENES`).
+and dark, `?skin=atlas`. They are listed in `qa/KitScenes.tsx` (`KIT_SCENES`). The whole studio with History on runs
+offline at `?surface=studio&history=1` (`caps.history` on, a fake HistoryApi over `historyFixture('v5')`); it was
+measured at 320×640 and 360×740 touch and at 1440×900, light and dark, `?skin=atlas`: no overflow, no page errors.
 
 **The RestoreScope each control sends** (every one is a free `history_restore`, with Undo):
 
@@ -305,7 +307,8 @@ and dark, `?skin=atlas`. They are listed in `qa/KitScenes.tsx` (`KIT_SCENES`).
   (`{kind: 'page', part: 'art'}`) or "Redraw page N" with its quote, sent as the timeline's normal `render_pages`
   (the confirm policy applies). With no known price it only opens the page, so a paid redraw is never called free.
 - **Undo after a restore** restores the moment saved just before it, with the same scope: the outcome's
-  `beforeVersionId` when the stream carries it, else the restore row's `undoId`.
+  `beforeVersionId` when the stream carries it, else the restore row's `undoId`. `beforeVersionId` is part of the
+  shared `done` event (`shared/comic/events.ts`), so H3's emit is typed.
 - **404s.** The list answering 404 means History can't be read for this comic: "History isn't available for this comic
   yet." A moment, its book or a compare answering 404 is about that moment only: "This moment isn't kept any more
   (older automatic saves are thinned). Nothing in your comic changed."
@@ -317,6 +320,12 @@ and dark, `?skin=atlas`. They are listed in `qa/KitScenes.tsx` (`KIT_SCENES`).
   and whose owner is a live target; the item is matched on path and owner, and when another owner holds the path a
   one-item list in this moment's owner is opened. It is never offered for a panel picture or an overlay a restore
   displaced (`isPanelSourceArchive`): using it would print that picture as the whole page's art.
+- **Panel pictures and overlays a restore displaced** are left out of the shared `versionList` before numbering
+  (`shared/comic/book.ts`): v-numbers count drawings only, and the director, the timeline, VersionStack and the
+  board's strip never offer one as page art. Earlier lists it under its page as "A panel picture from page N" /
+  "An overlay from page N", with no v-number and its maker and date "not recorded" (two on one page read "(1 of 2)").
+  The media bin lists it under its page as "Page 3 overlay · date not recorded" and offers reference, star and
+  download only; "Use for this page" elsewhere starts on the image's own page.
 - **Versions you removed.** A list can hold rows saved on a version you removed. They read "From a version you
   removed" (`HISTORY_COPY.removedLine`) in the list, a moment, the card (its list and its moment) and the scrubber's
   spoken value. "You're here" comes from the list's `head` (the list response carries `line` and `head`, read

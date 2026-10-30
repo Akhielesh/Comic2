@@ -64,6 +64,23 @@ describe('caps', () => {
     });
   });
 
+  it('asCaps keeps the optional usage, history, alternatives and anchor fields the server sends, and nothing malformed', () => {
+    const caps = asCaps({
+      usage: { governed: true, pctLeft: 140, exhausted: false, pctPerStandardPage: 1.5 },
+      history: true,
+      maxAlternatives: 3.7,
+      anchorKinds: { places: true, props: 'yes', styleKey: true, junk: true }
+    });
+    expect(caps?.usage).toEqual({ governed: true, pctLeft: 100, exhausted: false, pctPerStandardPage: 1.5 });
+    expect(caps?.history).toBe(true);
+    expect(caps?.maxAlternatives).toBe(3);
+    expect(caps?.anchorKinds).toEqual({ places: true, props: false, styleKey: true, sheetV2: false });
+    // Absent or malformed: the field stays absent (off / unknown), exactly as before.
+    const bare = asCaps({ usage: { governed: 'x' }, history: 'true', maxAlternatives: 0, anchorKinds: ['places'] });
+    expect(bare).toEqual(DEFAULT_CAPS);
+    expect(asCaps({ maxAlternatives: 99 })?.maxAlternatives).toBe(5);
+  });
+
   it('loadStudioProject returns caps only when the server sends them', async () => {
     api.get.mockResolvedValueOnce({ doc: sampleDoc, urls: {} });
     expect(await loadStudioProject('proj_1')).not.toHaveProperty('caps');

@@ -15,7 +15,9 @@ import { STREAM_EVENT_NAMES, type StreamRequest, type StudioEvent } from '../../
 import { getImageModel, type ImageModelSpec, type TierPreset } from '../../shared/comic/models';
 import type { DocOp, StudioAction } from '../../shared/comic/ops';
 import type { StudioActOutcome } from './types';
-import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
+import { DEFAULT_CAPS, sanitizeStudioUsage, type StudioCaps } from '../../shared/comic/capabilities';
+import { anchorKindsOf } from '../../shared/comic/anchors';
+import { MAX_ALTERNATIVES } from '../../shared/comic/limits';
 import { CONTENT_RATINGS, type ContentRating } from '../../shared/comic/safety';
 import { refOwnerKey } from '../../shared/comic/refs';
 import type { LibraryIndex, LibraryKind, LibraryQuote, LibraryRunView } from '../../shared/comic/library';
@@ -333,6 +335,17 @@ export const asCaps = (v: unknown): StudioCaps | undefined => {
   if (typeof v.customFonts === 'boolean') caps.customFonts = v.customFonts;
   if (typeof v.ratingCeiling === 'string' && (CONTENT_RATINGS as readonly string[]).includes(v.ratingCeiling)) caps.ratingCeiling = v.ratingCeiling as ContentRating;
   if (typeof v.admin === 'boolean') caps.admin = v.admin;
+  // Optional fields: absent on the wire = off / unknown, so they are copied only when well formed.
+  const usage = sanitizeStudioUsage(v.usage);
+  if (usage) caps.usage = usage;
+  if (v.history === true) caps.history = true;
+  if (typeof v.maxAlternatives === 'number' && Number.isFinite(v.maxAlternatives) && v.maxAlternatives >= 1) {
+    caps.maxAlternatives = Math.min(Math.floor(v.maxAlternatives), MAX_ALTERNATIVES);
+  }
+  if (isObject(v.anchorKinds)) {
+    const k = v.anchorKinds;
+    caps.anchorKinds = anchorKindsOf({ places: k.places === true, props: k.props === true, styleKey: k.styleKey === true, sheetV2: k.sheetV2 === true });
+  }
   return caps;
 };
 

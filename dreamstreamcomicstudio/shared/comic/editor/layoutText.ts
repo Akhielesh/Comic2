@@ -2,11 +2,11 @@
 // sentence is DERIVED from the frames ("Row 1: one wide panel… Row 2: two equal panels side by side…"), in the exact
 // vocabulary `parseLayout` (pageGeometry.ts) reads, so the writer, the image prompt and the editor describe the same
 // page. The other way, a sentence becomes frames with the same geometry as `estimatePanelBoxes`, at the page's own
-// margin and gutter. Insets ("with a small inset panel in its lower right corner") are the one thing parseLayout has no
-// geometry for: the clause keeps the panel count right for the prompt, and this module places the inset. Pure.
+// margin and gutter. Insets ("with a small inset panel in its lower right corner") use pageGeometry's own inset geometry
+// (LAYOUT_INSET / layoutInsetBox), so the editor, the board, the wireframes and the lettering place an inset alike. Pure.
 
 import { DEFAULT_FRAME_STYLE, type Box, type ComicKind } from '../doc.js';
-import { layoutPanelCount, parseLayout, type ParsedLayout } from '../pageGeometry.js';
+import { LAYOUT_INSET, layoutInsetBox, layoutPanelCount, parseLayout, type ParsedLayout } from '../pageGeometry.js';
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000;
 const TOL = 0.012;
@@ -20,7 +20,7 @@ export interface LayoutGeometry {
 }
 
 /** The inset's size against its host frame, and its distance from the host's corner (beyond one gutter). */
-export const INSET = { wShare: 1 / 3, hShare: 0.26, pad: 0.01 } as const;
+export const INSET = LAYOUT_INSET;
 
 /**
  * Boxes for a parsed blueprint: the same geometry as pageGeometry's estimate (rows by weight, a tall panel 45% of the
@@ -82,17 +82,8 @@ interface InsetClause {
 }
 
 /** The inset box inside a host frame, in one of its corners. */
-export const insetBox = (host: Box, vert: 'upper' | 'lower', horiz: 'left' | 'right', gutter = DEFAULT_FRAME_STYLE.gutter): Box => {
-  const w = host.w * INSET.wShare;
-  const h = host.h * INSET.hShare;
-  const pad = gutter + INSET.pad;
-  return roundB({
-    x: horiz === 'right' ? host.x + host.w - w - pad : host.x + pad,
-    y: vert === 'lower' ? host.y + host.h - h - pad : host.y + pad,
-    w,
-    h
-  });
-};
+export const insetBox = (host: Box, vert: 'upper' | 'lower', horiz: 'left' | 'right', gutter = DEFAULT_FRAME_STYLE.gutter): Box =>
+  layoutInsetBox(host, vert, horiz, gutter);
 
 /**
  * The frames a layout sentence describes for `n` panels (reading order), at the page's margin and gutter; insets

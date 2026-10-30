@@ -63,7 +63,7 @@ export const PAGE_TEMPLATES: readonly PageTemplate[] = [
     name: 'Hero + inset',
     panels: 2,
     sentence: 'Row 1: one dominant splash panel across the full page (panel 1) with a small inset panel in its lower right corner (panel 2).',
-    sizes: ['medium', 'small'],
+    sizes: ['wide', 'small'],
     note: 'The inset is for a silent reaction.'
   },
   {
@@ -161,10 +161,9 @@ export function templateLayout(t: PageTemplate, opts: { rtl?: boolean; margin?: 
 }
 
 /**
- * Templates with an inset ("Hero + inset") are offered only once the blueprint geometry (pageGeometry's parseLayout and
- * estimatePanelBoxes) understands the inset clause. Until then a page planned with one would show the inset in the
- * editor but its two panels side by side on the board, the wireframes and the lettering: two layout truths for one
- * page. Turning them on is this one line.
+ * Templates with an inset ("Hero + inset"). pageGeometry's parseLayout and estimatePanelBoxes place the inset inside its
+ * host, so the editor, the board, the wireframes and the lettering share one layout truth. Turning them off is this
+ * one line.
  */
 export const INSET_TEMPLATES_ON = true;
 const INSET_TEMPLATE_IDS: ReadonlySet<TemplateId> = new Set<TemplateId>(['hero-inset']);
