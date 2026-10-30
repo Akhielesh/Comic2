@@ -49,8 +49,10 @@ describe('resolveDrop: every row of the drop table', () => {
     const { doc, drawn } = fixture();
     const r = okOf(resolveDrop(doc, drawn, { kind: 'cast', id: 'c_ravi' }, { point: { x: 0.5, y: 0.75 } }));
     expect(r.ops).toEqual([{ op: 'panel', pageId: 'pg_a', id: 'p2', patch: { direction: { cast: { c_ravi: { pos: 'center' } }, by: 'user' }, castIds: ['c_maya', 'c_ravi'] } }]);
-    expect(r.label).toBe('Add Ravi to panel 2, in the middle (shows after a redraw)');
+    expect(r.label).toBe('Put Ravi in panel 2 · needs a redraw to show');
     expect(r.cost).toEqual({ redraw: 'panel' });
+    expect(okOf(resolveDrop(doc, drawn, { kind: 'cast', id: 'c_maya' }, { point: { x: 0.9, y: 0.75 } })).label).toBe('Move Maya on the right in panel 2 · needs a redraw to show');
+    expect(okOf(resolveDrop(doc, drawn, { kind: 'place', id: 'pl_park' }, { point: { x: 0.5, y: 0.75 } })).label).toBe('Set panel 2 in the park · needs a redraw to show');
   });
 
   it('character on a balloon: the speaker, and the tail aimed at their mouth', () => {
@@ -101,8 +103,8 @@ describe('resolveDrop: every row of the drop table', () => {
     const target = { point: { x: 0.5, y: 0.25 }, ref: { kind: 'frame' as const, id: 'p1' } };
     const both = okOf(resolveDrop(doc, drawn, { kind: 'image', path: PHOTO }, target));
     expect(both.choices!.map((c) => [c.key, c.label])).toEqual([
-      ['fill', 'Fill panel 1 with this image'],
-      ['sticker', 'Place as a sticker in panel 1']
+      ['fill', 'Fill panel 1'],
+      ['sticker', 'Place as sticker']
     ]);
     const fill = okOf(resolveDrop(doc, drawn, { kind: 'image', path: PHOTO }, target, { as: 'fill' }));
     expect(fill.ops).toEqual([{ op: 'page_frames', pageId: 'pg_a', frames: [{ panelId: 'p1', frame: { box: drawn.panels[0].frame!.box, src: { path: PHOTO } } }] }]);
@@ -127,6 +129,23 @@ describe('resolveDrop: every row of the drop table', () => {
     const r = okOf(resolveDrop(doc, drawn, { kind: 'image', path: PERSON }, { point: { x: 0.5, y: 0.25 } }, { as: 'sticker' }));
     expect((r.ops[0] as { patch: { print?: boolean } }).patch.print).toBe(false);
     expect(r.warning).toMatch(/guide only/);
+  });
+
+  it("a real person's photo dropped on a frame defaults to the guide-only sticker (PD-5); filling the panel is the second choice", () => {
+    const { doc, drawn } = fixture();
+    const r = okOf(resolveDrop(doc, drawn, { kind: 'image', path: PERSON }, { point: { x: 0.5, y: 0.25 }, ref: { kind: 'frame', id: 'p1' } }));
+    expect(r.choices!.map((c) => c.key)).toEqual(['sticker', 'fill']);
+    expect(r.label).toBe('Place as sticker');
+    expect(r.ops).toHaveLength(1);
+    expect(r.ops[0]).toMatchObject({ op: 'layer', pageId: 'pg_a', patch: { kind: 'image', src: { path: PERSON }, clip: 'p1', print: false } });
+    expect(r.warning).toMatch(/guide only/);
+    undoes(doc, r);
+    // Printing it is an explicit choice, and it says who will see it.
+    const fill = r.choices![1];
+    expect(fill.ops[0]).toMatchObject({ op: 'page_frames', frames: [{ panelId: 'p1', frame: { src: { path: PERSON } } }] });
+    expect(fill.warning).toMatch(/Anyone you share the comic with will see it/);
+    // An ordinary photo still fills first.
+    expect(okOf(resolveDrop(doc, drawn, { kind: 'image', path: PHOTO }, { point: { x: 0.5, y: 0.25 }, ref: { kind: 'frame', id: 'p1' } })).choices![0].key).toBe('fill');
   });
 
   it('image on the page outside the frames: a page overlay', () => {

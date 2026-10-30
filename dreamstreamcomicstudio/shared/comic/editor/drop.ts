@@ -64,8 +64,14 @@ import {
   type SceneRef
 } from './scene.js';
 
-/** PD-5 (provisional default): a photo of a real person placed as a sticker starts as "Guide only" (never printed). */
+/**
+ * PD-5 (provisional default): a photo of a real person dropped on the page starts as "Guide only" (never printed): the
+ * guide-only sticker is the default choice, filling a panel with it (printed) stays an explicit second choice.
+ */
 export const PERSON_PHOTO_GUIDE_ONLY = true;
+
+/** Design §6.4: what a drop that changes a drawn panel's plan adds to its label (the price is the editor's). */
+export const NEEDS_REDRAW = ' · needs a redraw to show';
 
 export type DropItem =
   /** A character or a prop (a cast member of kind 'object'). */
@@ -98,7 +104,10 @@ export interface DropChoice {
 
 export interface DropOk extends EditOk {
   cost: DropCost;
-  /** Two ways to drop an image on a frame (fill, sticker): `ops` and `label` are the first. */
+  /**
+   * Two ways to drop an image on a frame: `ops`, `label` and `warning` are the first. Fill comes first, except for a
+   * real person's photo (PD-5), where the guide-only sticker does.
+   */
   choices?: DropChoice[];
   /** The new line whose text editor opens (lettering presets). */
   focusLineId?: string;
@@ -109,7 +118,7 @@ export type DropResult = DropOk | EditRefused;
 const refusalOf = (r: EditResult): EditRefused => ({ ok: false, reason: (r as EditRefused).reason });
 
 export interface DropOptions {
-  /** For an image on a frame: pick fill or sticker (default: both offered, fill first when the page shows frames). */
+  /** For an image on a frame: pick fill or sticker (default: both offered; fill first, a real person's photo sticker first). */
   as?: 'fill' | 'sticker';
   ids?: IdFactory;
   scene?: PageScene;
@@ -189,8 +198,13 @@ export function resolveDrop(doc: ComicDoc, page: Page, item: DropItem, target: D
       const direction: PanelDirection = { ...dir, cast: castDir, by: 'user' };
       const patch: Partial<Panel> = { direction };
       if (!has) patch.castIds = [...panel.castIds, who.id];
-      const base = has ? `Move ${who.name} ${POS_WORD[pos]} in ${panelWord(page, panel.id)}` : `Add ${who.name} to ${panelWord(page, panel.id)}, ${POS_WORD[pos]}`;
-      return ok(doc, [{ op: 'panel', pageId: page.id, id: panel.id, patch }], drawn ? `${base} (shows after a redraw)` : base, drawn ? { redraw: 'panel' } : 'free');
+      // Design §6.4 on a drawn page: "Put Meera in panel 2 · needs a redraw to show".
+      const label = has
+        ? `Move ${who.name} ${POS_WORD[pos]} in ${panelWord(page, panel.id)}${drawn ? NEEDS_REDRAW : ''}`
+        : drawn
+          ? `Put ${who.name} in ${panelWord(page, panel.id)}${NEEDS_REDRAW}`
+          : `Add ${who.name} to ${panelWord(page, panel.id)}, ${POS_WORD[pos]}`;
+      return ok(doc, [{ op: 'panel', pageId: page.id, id: panel.id, patch }], label, drawn ? { redraw: 'panel' } : 'free');
     }
     case 'place': {
       const place = doc.places.find((p) => p.id === item.id);
@@ -199,7 +213,7 @@ export function resolveDrop(doc: ComicDoc, page: Page, item: DropItem, target: D
       if (!panel) return refuse(`Drop ${place.name} on a panel.`);
       if (panel.placeId === place.id) return refuse(NOTHING_TO_CHANGE);
       const base = `Set ${panelWord(page, panel.id)} in ${place.name}`;
-      return ok(doc, [{ op: 'panel', pageId: page.id, id: panel.id, patch: { placeId: place.id } }], drawn ? `${base} (shows after a redraw)` : base, drawn ? { redraw: 'panel' } : 'free');
+      return ok(doc, [{ op: 'panel', pageId: page.id, id: panel.id, patch: { placeId: place.id } }], drawn ? `${base}${NEEDS_REDRAW}` : base, drawn ? { redraw: 'panel' } : 'free');
     }
     case 'lettering': {
       const frame = hit?.kind === 'frame' ? hit : frameUnder(scene, target.point);
@@ -317,7 +331,8 @@ function overlayDrop(
   if (person && PERSON_PHOTO_GUIDE_ONLY) layerPatch.print = false;
   const stickerOps: DocOp[] = [{ op: 'layer', pageId: page.id, id, patch: layerPatch as never }];
   const what = item.kind === 'image' ? 'image' : item.shape === 'rect' ? 'rectangle' : item.shape === 'ellipse' ? 'ellipse' : 'line';
-  const stickerLabel = item.kind === 'image' ? (frame ? `Place as a sticker in ${where}` : 'Place the image on the page') : `Add a ${what} ${frame ? `in ${where}` : 'on the page'}`;
+  // Design §6.4: "Fill panel 2" · "Place as sticker" (the editor adds " · Free").
+  const stickerLabel = item.kind === 'image' ? (frame ? 'Place as sticker' : 'Place the image on the page') : `Add a ${what} ${frame ? `in ${where}` : 'on the page'}`;
   const stickerWarning = person
     ? PERSON_PHOTO_GUIDE_ONLY
       ? 'This is a photo of a real person. It is placed as a guide only: you see it in the editor, but it is never printed or shared. You can choose to print it.'
@@ -345,7 +360,7 @@ function overlayDrop(
       fillOps = [{ op: 'page_frames', pageId: page.id, frames }];
     }
   }
-  const fillLabel = `Fill ${where} with this image`;
+  const fillLabel = `Fill ${where}`;
   const fillWarning = person ? 'This photo will appear on the page exactly as it is. Anyone you share the comic with will see it.' : undefined;
   if (opts.as === 'fill') {
     if (!fillOps) return refuse(fillRefusal!);
@@ -355,7 +370,11 @@ function overlayDrop(
     const r = editOf(doc, ops, label);
     return r.ok ? { key, label, ops: r.ops, undo: r.undo, ...(warning ? { warning } : {}) } : undefined;
   };
-  const choices = [fillOps ? choice('fill', fillLabel, fillOps, fillWarning) : undefined, choice('sticker', stickerLabel, stickerOps, stickerWarning)].filter((c): c is DropChoice => !!c);
+  const fill = fillOps ? choice('fill', fillLabel, fillOps, fillWarning) : undefined;
+  const sticker = choice('sticker', stickerLabel, stickerOps, stickerWarning);
+  // PD-5: a real person's photo defaults to the guide-only sticker (never printed); filling the panel prints it.
+  const ordered = person && PERSON_PHOTO_GUIDE_ONLY ? [sticker, fill] : [fill, sticker];
+  const choices = ordered.filter((c): c is DropChoice => !!c);
   const first = choices[0];
   if (!first) return refuse(fillRefusal ?? NOTHING_TO_CHANGE);
   return { ok: true, ops: first.ops, undo: first.undo, label: first.label, cost: 'free', choices, ...(first.warning ? { warning: first.warning } : {}) };
