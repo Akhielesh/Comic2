@@ -52,7 +52,7 @@ import { BLOCKED_COPY, type UploadItem } from '../refs/useRefUpload';
 import { AssignMenu, targetLabel } from './AssignMenu';
 import { DictationButton } from '../../chat/DictationButton';
 import { voiceInputSupported } from '../../../hooks/useDictation';
-import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TRANSITION } from '../../chat/studioDesign';
+import { CONTROL_BTN, GLASS_STRONG, HAIRLINE, MUTED, RADIUS_PANEL, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TRANSITION } from '../../chat/studioDesign';
 import type { PendingAttachment, SendOptions } from '../types';
 import type { ComicStudioController } from '../useStudio';
 import { COMPOSE_EVENT, type ComposeRequest } from './composerBus';
@@ -1338,7 +1338,7 @@ export const StudioComposer: React.FC<StudioComposerProps> = ({ studio, apiRef, 
                       )}
                       {busy && <UploadRing name={a.name} state={a.upload} progress={a.progress} />}
                       {a.upload === 'failed' && (
-                        <span className="absolute bottom-1 left-1 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-white shadow" title={a.error} aria-hidden>
+                        <span className={`absolute bottom-1 left-1 grid h-5 w-5 place-items-center rounded-full border shadow ${TONE_CHIP_ON_ART.warning}`} title={a.error} aria-hidden>
                           <AlertTriangle className="h-3 w-3" />
                         </span>
                       )}

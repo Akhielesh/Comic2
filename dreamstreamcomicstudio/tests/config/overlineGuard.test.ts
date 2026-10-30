@@ -7,96 +7,65 @@
  * components/chat/studioDesign.ts (11 px, semibold, leading 1rem, 0.12em, uppercase, muted), so every
  * eyebrow in the studio shares one size, weight, tracking and colour and follows the skin.
  *
- * This fails on any NEW hand-rolled eyebrow in components/comicstudio/**: a class list that spells
- * `uppercase` together with `tracking-wider`, `tracking-widest` or an arbitrary `tracking-[0.…]`
- * (on one line, in one `className={…}` expression, or in one template literal), outside the
- * commented allowlist below. It also fails when a studio file imports the pre-Atlas `LABEL`
- * (10 px, 0.05em) instead of OVERLINE. Comments are not class names.
+ * This fails on any NEW hand-rolled eyebrow in components/comicstudio/**: an `uppercase` class whose
+ * class list also spells a wide tracking (`tracking-wide|wider|widest`, any positive arbitrary
+ * `tracking-[…]`), or a plain `uppercase` at an eyebrow size (9–12.5 px, `text-xs`) with no tracking
+ * class at all, outside the commented allowlist below. A class list is one literal, one template, one
+ * `cx(…)` / `clsx(…)` call with its conditionals, or one JSX `{…}` expression, however many lines it
+ * spans and wherever it lives (an attribute, a constant): the files are read with TypeScript's parser
+ * (tests/config/classLists.ts), so comments, JSX text and code are never mistaken for class names.
+ * It also fails when a studio file imports the pre-Atlas `LABEL` (10 px, 0.05em) instead of OVERLINE.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { findHandRolledOverlines, matchPinned } from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCANNED_DIR = 'components/comicstudio';
 const SOURCE_FILE = /\.(tsx?|jsx?|mjs)$/;
 
 /**
- * Small uppercase text that is deliberately NOT an overline, keyed by app-relative path; the value
- * is the exact number of hand-rolled hits the file may contain. Status chips, badges, kbd hints, the
+ * Small uppercase text that is deliberately NOT an overline, keyed by app-relative path. Each entry
+ * pins the exact source lines (trimmed) it permits, not a count: a new hand-rolled eyebrow in an
+ * allowlisted file fails even when it replaces an allowed one. Status chips, badges, kbd hints, the
  * wordmark, tab labels and page numbers keep their own styles (as in Atlas wave 8).
  */
-const ALLOWLIST: Record<string, { count: number; reason: string }> = {
+const ALLOWLIST: Record<string, { lines: string[]; reason: string }> = {
   'components/comicstudio/breakdown/BreakdownCard.tsx': {
-    count: 1,
+    lines: ['<span className="text-[9px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Cover</span>'],
     // The "Cover" word inside a cover TILE that has no art yet: an aria-hidden miniature of the cover
     // page drawn at tile scale (9 px over a 12 px title in a ~100 px thumbnail), part of the page
     // thumbnail like a page number, not a label in the chrome.
     reason: 'aria-hidden stand-in for the cover inside a page thumbnail, drawn at tile scale'
+  },
+  'components/comicstudio/board/PageScript.tsx': {
+    lines: ['<span className="font-semibold uppercase tracking-wide text-[var(--ds-muted)]">{lineSpeakerLabel(doc, l)}:</span>{\' \'}'],
+    // The speaker's name opening a line of the script ("ANNA: …"), in the line's own 12 px: script
+    // CONTENT set the way a comic script is typed, not a label above a group of controls.
+    reason: "script speaker names, part of the script's content in the line's own size"
+  },
+  'components/comicstudio/timeline/CompareView.tsx': {
+    lines: ['<tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ds-muted)]">'],
+    // The compare table's column names are the version numbers being compared ("V3", "V5"): table
+    // headers that are numbers, which Atlas wave 8 also kept off .atlas-overline (its spreadsheet
+    // column letters); Atlas's own tables have no eyebrow headers.
+    reason: 'column headers that are version numbers, as Atlas kept spreadsheet column letters off the overline'
+  },
+  'components/comicstudio/board/ComicPageView.tsx': {
+    lines: [
+      '<span className="truncate text-[0.85em] font-medium uppercase tracking-wide text-[var(--ds-muted)]">{SHOT_LABEL[panel.shot] || panel.shot}</span>'
+    ],
+    // The shot type ("CLOSE-UP") written inside a wireframe panel, scaled with the page thumbnail
+    // (em-sized): content of the drawn wireframe, like the panel number beside it.
+    reason: 'wireframe shot labels drawn inside the page thumbnail at its scale'
   }
 };
 
-/** `uppercase` as a class (any variant prefix). */
-const UPPERCASE = /(?<![\w-])(?:[\w\-[\]&:()>.*]+:)?uppercase(?![\w-])/g;
-/** The wide trackings eyebrows are hand-rolled with (any variant prefix). */
-const WIDE_TRACKING = /(?<![\w-])(?:[\w\-[\]&:()>.*]+:)?tracking-(?:wider|widest|\[0?\.[^\]\s]*\])(?![\w-])/;
-
-/** Comments blanked out (lengths and line numbers kept), as the Atlas guards do. */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, ' '))
-    .replace(/(^|[\s;{}(),])\/\/.*$/gm, (match, lead: string) => lead + ' '.repeat(match.length - lead.length));
-}
-
-/** The index just past the brace that closes the one opened at `open`. */
-function closingBrace(src: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < src.length; i++) {
-    if (src[i] === '{') depth += 1;
-    else if (src[i] === '}' && --depth === 0) return i + 1;
-  }
-  return src.length;
-}
-
-/** The spans one class list can live in: each line, each `className={…}` expression, each template literal. */
-function classSpans(src: string): Array<[number, number]> {
-  const spans: Array<[number, number]> = [];
-  let at = 0;
-  for (const line of src.split('\n')) {
-    spans.push([at, at + line.length]);
-    at += line.length + 1;
-  }
-  for (const m of src.matchAll(/className=\{/g)) {
-    const open = m.index! + m[0].length - 1;
-    spans.push([open, closingBrace(src, open)]);
-  }
-  for (const m of src.matchAll(/`(?:[^`\\]|\\.)*`/g)) spans.push([m.index!, m.index! + m[0].length]);
-  return spans;
-}
-
-/** String and template literals: a class name lives in one (JSX text such as "no uppercase" does not). */
-const LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
-
-/** Hand-rolled eyebrows: each `uppercase` class (inside a literal) that shares a span with a wide tracking. */
-export function findHandRolledOverlines(source: string): Array<{ line: number; snippet: string }> {
-  const src = stripComments(source);
-  const spans = classSpans(src).filter(([a, b]) => WIDE_TRACKING.test(src.slice(a, b)));
-  const literals = [...src.matchAll(LITERAL)].map((m) => [m.index!, m.index! + m[0].length] as const);
-  const hits: Array<{ line: number; snippet: string }> = [];
-  for (const m of src.matchAll(UPPERCASE)) {
-    const i = m.index!;
-    if (!literals.some(([a, b]) => i > a && i < b)) continue;
-    if (!spans.some(([a, b]) => i >= a && i < b)) continue;
-    const lineStart = src.lastIndexOf('\n', i) + 1;
-    const lineEnd = src.indexOf('\n', i);
-    hits.push({ line: src.slice(0, i).split('\n').length, snippet: src.slice(lineStart, lineEnd < 0 ? undefined : lineEnd).trim().slice(0, 160) });
-  }
-  return hits;
-}
-
 /** A studio file importing the pre-Atlas LABEL recipe from studioDesign. */
 const IMPORTS_LEGACY_LABEL = /import\s*\{[^}]*\bLABEL\b[^}]*\}\s*from\s*['"][^'"]*chat\/studioDesign['"]/;
+const stripComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[\s;{}(),])\/\/.*$/gm, '$1');
 
 function listSourceFiles(dir: string): string[] {
   const files: string[] = [];
@@ -110,6 +79,21 @@ function listSourceFiles(dir: string): string[] {
 }
 const relative = (file: string) => path.relative(ROOT, file).split(path.sep).join('/');
 
+/** The hits in one file the allowlist does not permit (`rel:line  snippet`), and its stale pinned lines. */
+export function overlineOffenders(rel: string, source: string): { offenders: string[]; stale: string[] } {
+  const hits = findHandRolledOverlines(source);
+  const { extra, missing } = matchPinned(
+    hits.map((h) => h.snippet),
+    ALLOWLIST[rel]?.lines
+  );
+  const offenders: string[] = [];
+  for (const snippet of extra) {
+    const hit = hits.find((h) => h.snippet === snippet && !offenders.includes(`${rel}:${h.line}  ${snippet}`))!;
+    offenders.push(`${rel}:${hit.line}  ${snippet}`);
+  }
+  return { offenders, stale: missing };
+}
+
 describe('overline guard (components/comicstudio/**)', () => {
   it('recognises hand-rolled eyebrows and leaves the recipe, lettering and other uppercase alone', () => {
     const flagged = [
@@ -122,11 +106,30 @@ describe('overline guard (components/comicstudio/**)', () => {
     ];
     for (const src of flagged) expect(findHandRolledOverlines(src), src).toHaveLength(1);
 
+    // What the regex guard missed (review of wave 8): the normal-wide tracking two converted labels used
+    // before the port, a class list in a multi-line cx(…) constant outside className={…}, a multi-line
+    // double-quoted JSX attribute, a pixel tracking, and small uppercase with no tracking at all.
+    const missedBefore = [
+      '<dt className="truncate text-[10.5px] uppercase tracking-wide text-[var(--ds-muted)]">{k}</dt>',
+      '<span className="min-w-0 truncate text-[11.5px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">x</span>',
+      "const EYEBROW = cx(\n  'text-[11px] font-semibold',\n  'uppercase',\n  'tracking-wider text-[var(--ds-muted)]'\n);",
+      '<p\n  className="text-[11px] font-semibold\n    uppercase tracking-wider"\n>x</p>',
+      '<span className="text-[11px] uppercase tracking-[1px]">x</span>',
+      '<span className="text-[10.5px] font-semibold uppercase text-[var(--ds-muted)]">x</span>',
+      "<span className={cx('text-xs', busy ? 'uppercase' : 'normal-case')}>x</span>"
+    ];
+    for (const src of missedBefore) expect(findHandRolledOverlines(src), src).toHaveLength(1);
+
     const allowed = [
       '<p className={OVERLINE}>Recent</p>',
       "<p className={cx('mb-1', OVERLINE)}>Recent</p>",
-      // Script speaker names and wireframe shot labels: uppercase with the normal-wide tracking.
-      '<span className="font-semibold uppercase tracking-wide">ANNA:</span>',
+      // Tracking that is not wide, and a sentence's first capital.
+      '<span className="text-[11px] font-semibold uppercase tracking-normal">ANNA:</span>',
+      '<p className="text-[11px] first-letter:uppercase">sentence</p>',
+      // Uppercase at a reading size (a wordmark, a title) is not an eyebrow.
+      '<span className="text-[15px] font-semibold uppercase">Studio</span>',
+      // Two class lists: the tracking belongs to another element.
+      '<p className="text-[13px] uppercase">a</p><p className="tracking-wider">b</p>',
       // Lettering case is content (a CSS value, not a class).
       "const CASE = { upper: 'uppercase', lower: 'lowercase' };",
       '<p className="first-letter:uppercase tracking-tight">x</p>',
@@ -143,24 +146,36 @@ describe('overline guard (components/comicstudio/**)', () => {
     expect(IMPORTS_LEGACY_LABEL.test("const LABEL = 'text-[11.5px]';\nimport { cx } from './ui';")).toBe(false);
   });
 
+  it('an allowlist entry permits its pinned lines only: a new eyebrow cannot take an allowed one\'s place', () => {
+    const rel = 'components/comicstudio/breakdown/BreakdownCard.tsx';
+    const source = readFileSync(path.join(ROOT, rel), 'utf8');
+    expect(overlineOffenders(rel, source)).toEqual({ offenders: [], stale: [] });
+    // The "Cover" word moves onto OVERLINE and, in the same edit, a hand-rolled eyebrow appears: still
+    // one hit in the file (a count-based allowlist passed this), now an offender plus a stale entry.
+    const allowed = ALLOWLIST[rel].lines[0];
+    const swapped = `${source.replace(allowed, '<span className={OVERLINE}>Cover</span>')}\nconst PAGES_EYEBROW = 'text-[11px] font-semibold uppercase tracking-wider';\n`;
+    expect(findHandRolledOverlines(swapped)).toHaveLength(1);
+    const { offenders, stale } = overlineOffenders(rel, swapped);
+    expect(offenders).toHaveLength(1);
+    expect(offenders[0]).toContain('PAGES_EYEBROW');
+    expect(stale).toEqual([allowed]);
+  });
+
   it('finds no hand-rolled small uppercase eyebrow outside the allowlist (use OVERLINE from studioDesign)', () => {
     const offenders: string[] = [];
-    const counts = new Map<string, number>();
+    const seen = new Set<string>();
     const files = listSourceFiles(path.join(ROOT, SCANNED_DIR));
     expect(files.length).toBeGreaterThan(200);
     for (const file of files) {
       const rel = relative(file);
-      const hits = findHandRolledOverlines(readFileSync(file, 'utf8'));
-      if (hits.length === 0) continue;
-      counts.set(rel, hits.length);
-      if (ALLOWLIST[rel]?.count === hits.length) continue;
-      for (const hit of hits) offenders.push(`${rel}:${hit.line}  ${hit.snippet}`);
+      seen.add(rel);
+      const result = overlineOffenders(rel, readFileSync(file, 'utf8'));
+      offenders.push(...result.offenders);
+      // An allowlisted line that no longer matches anything is stale: remove it (or re-pin it).
+      expect(result.stale, `${rel}: allowlisted lines no longer hand-rolled (${ALLOWLIST[rel]?.reason})`).toEqual([]);
     }
     expect(offenders, 'An eyebrow label is OVERLINE (components/chat/studioDesign.ts), keeping the element, its margins and its copy.').toEqual([]);
-    // An allowlist entry that no longer matches anything is stale: remove it.
-    for (const [file, entry] of Object.entries(ALLOWLIST)) {
-      expect(counts.get(file), `${file} is allowlisted for ${entry.count} hand-rolled uppercase labels (${entry.reason})`).toBe(entry.count);
-    }
+    for (const file of Object.keys(ALLOWLIST)) expect(seen.has(file), `${file} is allowlisted but no longer exists`).toBe(true);
   });
 
   it('no studio file imports the pre-Atlas LABEL recipe (10 px, 0.05em); eyebrows read OVERLINE', () => {

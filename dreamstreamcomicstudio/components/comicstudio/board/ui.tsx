@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, OVERLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TONE_CHIP, TONE_CHIP_ON_ART, TONE_TEXT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 
@@ -664,7 +664,7 @@ export const RenderOverlay: React.FC<RenderOverlayProps> = ({
                 e.stopPropagation();
                 onRerender();
               }}
-              className={`tap-target shrink-0 rounded-full bg-amber-500 px-2 py-0.5 text-[10.5px] font-semibold text-white hover:bg-amber-600 ${FOCUS_RING}`}
+              className={`tap-target shrink-0 rounded-full border ${TONE_CHIP_ON_ART.warning} px-2 py-0.5 text-[10.5px] font-semibold hover:bg-[var(--ds-hover)] ${FOCUS_RING}`}
             >
               Re-render
             </button>

@@ -899,7 +899,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   --ds-warning: oklch(0.7 0.15 85);
   --ds-warning-text: color-mix(in srgb, var(--ds-warning) 60%, var(--ds-ink));
   --ds-danger: oklch(0.396 0.141 25.723);
-  --ds-danger-text: color-mix(in srgb, var(--ds-danger) 50%, var(--ds-ink)); /* 50 % (Atlas 60 %): the deep dark red needs more ink to reach 4.5:1 on hover rows and on a highlighted menu row (wave 8; 55 % was 4.17) */
+  --ds-danger-text: color-mix(in srgb, var(--ds-danger-mark) 65%, var(--ds-ink)); /* from the brighter MARK (Atlas's destructive-foreground), not the deep fill red: the deep red needs half ink to reach 4.5:1 and then reads as the muted grey; the mark at 65 % keeps the hue (wave 8 review) */
   --ds-info: #e5e5e5;
   --ds-info-text: color-mix(in srgb, var(--ds-info) 60%, var(--ds-ink));
   --ds-ring: #8a8a8a;

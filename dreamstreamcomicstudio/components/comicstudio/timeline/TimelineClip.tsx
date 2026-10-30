@@ -259,8 +259,8 @@ export const AddClip: React.FC<{
       <div
         aria-hidden
         className={cx(
-          'flex items-center justify-center rounded-lg border border-dashed text-[var(--ds-muted)]',
-          ghost ? 'border-[var(--ds-hairline)] bg-transparent' : 'border-[#D97757]/45 bg-[#D97757]/5 text-[var(--ds-accent)]'
+          'flex items-center justify-center rounded-lg border border-dashed',
+          ghost ? 'border-[var(--ds-hairline)] bg-transparent text-[var(--ds-muted)]' : 'border-[#D97757]/45 bg-[#D97757]/5 text-[var(--ds-accent)]'
         )}
         style={{ width: compact ? 36 : ghost ? 56 : 44, height: h }}
       >

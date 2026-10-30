@@ -96,7 +96,7 @@ The semantic tokens Atlas has that Comic Studio lacked were added to `:root` / `
 | `--ds-warning` | `--warning` | `#f59e0b` | `oklch(0.7 0.15 85)` |
 | `--ds-danger` | `--destructive` | `#d4183d` | `oklch(0.396 0.141 25.723)` |
 | `--ds-info` | `--info` | `#262626` | `#e5e5e5` |
-| `--ds-{success,warning,danger,info}-text` | `ui-generated/tone.ts` `toneText` | `color-mix(in srgb, var(--ds-<tone>) 60%, var(--ds-ink))`; warning **57 %** (wave 8) | same; danger **50 %** (wave 8) |
+| `--ds-{success,warning,danger,info}-text` | `ui-generated/tone.ts` `toneText` | `color-mix(in srgb, var(--ds-<tone>) 60%, var(--ds-ink))`; warning **57 %** (wave 8) | same; danger: the **mark** at **65 %** (wave 8 review) |
 | `--ds-ring` | `--ring` | `oklch(0.55 0 0)` | `#8a8a8a` |
 | `--ds-focus` (wave 5) | `--foreground` as `.atlas-focus-ring` / the primitives' `outline-foreground` | `var(--ds-ink)` | same |
 | `--ds-control-border` (wave 5) | `--control-border` | `color-mix(in srgb, var(--ds-ink) 45%, transparent)` | same |
@@ -231,6 +231,7 @@ them):
 | `CHIP`, `CHIP_VARIANT` | `MetaChip` outline / filled / dashed | neutral chips |
 | `StatusState`, `STATUS_INK`, `STATUS_SURFACE`, `STATUS_DOT`, `STATUS_CHIP(_TONE)` | `components/connectors/status.tsx` | one status vocabulary: healthy / active / waiting / attention / error |
 | `STATUS_EDGE` (wave 8) | the status surfaces' border alone | a neutral surface (a toast, a hint bubble) that borders in a state's colour; `STATUS_SURFACE` is this edge plus the tint (same strings as before) |
+| `TONE_CHIP_ON_ART` (wave 8 review) | `TONE_CHIP` over an image | the tone's 10 % tint mixed into the opaque `--ds-raised` (neutral: raised + muted), so a status pill on a thumbnail is the measured "tone surface on raised" pairing over any art |
 | `SEGMENTED_TRACK`, `_ITEM`, `_ACTIVE`, `_PILL` | `PanelTabs` (CSS-positioned gliding pill; track `bg-muted/60 dark:bg-muted/50 border-border/70`) | segmented tabs on `--ds-segment-track` with a 70 % hairline; the pill (`--ds-segment-pill` + the `--ds-shadow-segment` ring) glides on `--ds-motion-panel` + spring, jumps under reduced motion. **Live now:** every Comic Studio segmented control paints `SEGMENTED_ACTIVE` on a `--ds-segment-track` well (below) |
 | `SECTION_CARD`, `_HEADER`, `_ICON_TILE`, `_TITLE`, `_DESCRIPTION`, `_BODY` | `SectionCard` with `icon` | settings-style section header |
 | `TOAST`, `TOAST_EDGE`, `TOAST_COUNTDOWN`, `TOAST_ENTER` / `_EXIT`, `TOAST_TITLE` / `_MESSAGE`, `TOAST_SLOT(_OPEN/_CLOSED)`, `TOAST_EXIT_MS`, `TOAST_EXIT_FALLBACK_MS` | `GlobalNotificationBar` | monochrome toast — `rounded-2xl`, the raised step (Atlas `bg-card`, dark `bg-surface-elevated`), `--ds-toast-edge`, `shadow-panel`; title clamped to 2 lines, message to 3; in over 300 ms (12 px, zoom .98), out over 200 ms (8 px), removed after 240 ms even without an `animationend`; hue only on the edge, bar and icon; the stack glides closed |
@@ -256,9 +257,13 @@ track — the first wave 5 port had left the raised `#1a1a1a` pill on the `#1a1a
 - `FIELD_GROUP` focus: Atlas's pills show focus as ink 70 % plus a 20 % ring. Under "increase
   contrast" (and against a 3:1 resting edge) that is under a 3:1 change, so the group shows focus as
   a field does (the focus-colour edge and a 2 px ring); its resting edge is Atlas's hairline.
-- `--ds-danger-text` in dark mixes 50 % (Atlas 60 %): the deep dark red at 60 % is 4.36:1 on a hover row
-  and at 55 % (wave 5's value) 4.17:1 on a highlighted menu row, where the studio's danger menu items
-  sit since wave 8; at 50 % it is 6.71:1 on the page and ≥ 4.71:1 everywhere it is measured.
+- `--ds-danger-text` in dark mixes the danger **mark** (Atlas's `--destructive-foreground`) at 65 % into
+  the ink, not Atlas's 60 % of the deep fill red: the deep red at 60 % is 4.36:1 on a hover row, and the
+  50 % that cleared 4.5:1 (wave 8) was rgb(190,137,138), OKLCH chroma 0.065 beside the muted grey's 0, so
+  the studio's danger menu rows read as dim secondary items. The mark at 65 % is rgb(250,116,123),
+  chroma ≈ 0.16: 7.41:1 on the page and ≥ 5.20:1 everywhere it is measured (lowest: a highlighted
+  menu row). `tokenContrast.test.ts` holds the danger text ≥ 0.1 chroma, and ≥ 0.08 above the muted
+  grey's, in every context (wave 8 review).
 - `--ds-warning-text` in light mixes 57 % (Atlas 60 %, wave 8): at 60 % it is 4.35:1 on its own tint over
   the soft glass (`#f4f4f4`) and 4.46:1 on a highlighted menu row; at 57 % 5.52:1 on the page and
   ≥ 4.69:1 everywhere it is measured.
@@ -303,12 +308,21 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 - `services/dsSkin.theme.test.ts` — the theme switch: outside the skin exactly the old toggle; under
   it one view-transition cross-fade for a change the person asked for, instant (transitions held one
   frame) for boot syncs, system corrections, reduced motion, hidden pages and missing / failing APIs.
-- `tests/config/overlineGuard.test.ts` (wave 8) — no hand-rolled `uppercase` + `tracking-wider|widest|[0.…]`
-  eyebrow in `components/comicstudio/**` outside its commented allowlist, and no studio file imports the
-  pre-Atlas `LABEL`.
+- `tests/config/overlineGuard.test.ts` (wave 8) — no hand-rolled eyebrow in `components/comicstudio/**`:
+  an `uppercase` class whose class list also spells `tracking-wide|wider|widest` or a positive arbitrary
+  tracking, or a plain `uppercase` at 9–12.5 px with no tracking at all. A class list is one literal, one
+  template, one `cx(…)` call with its conditionals or one JSX `{…}` expression, however many lines it
+  spans and wherever it lives; files are read with TypeScript's parser (`tests/config/classLists.ts`).
+  Its commented allowlist pins the exact source lines it permits (not a count), and no studio file
+  imports the pre-Atlas `LABEL`.
 - `tests/config/statusInkGuard.test.ts` (wave 8) — Atlas's status-ink guard for `components/comicstudio/**`:
   no raw chromatic Tailwind text colour (`text-amber-700`, `dark:text-red-300`, …) outside its commented
-  allowlist.
+  allowlist, which pins each permitted use (token and line), not a count. Also (wave 8 review): no class
+  list in which two different unvariant text colours can apply together — `cx` joins, it does not
+  merge, and Tailwind emits `--ds-danger-text` / `--ds-info-text` before `--ds-ink` / `--ds-muted`, so a
+  tone stacked on a base constant's ink rendered plain ink; a tone or an emphasis is chosen against the
+  neutral ink instead (`danger ? TONE_TEXT.danger : 'text-[var(--ds-ink)]'`). And no white text or icon
+  on a light amber / yellow fill (2.15:1).
 - `tests/config/dialogTitle.test.ts` (wave 8) — the recipe; every `aria-modal` surface in the studio is
   classified, centred dialogs title with `DIALOG_TITLE(_FROM_SM)`, sheet and popover headers stay 15 px.
 - `tests/config/tokenContrast.test.ts` measures every status `-text` token on the page, cards, the soft
@@ -382,15 +396,20 @@ change. Comic Studio's chrome scale maps onto them as before: `--ds-text-base` 1
 (`tailwind.config.cjs` has no `fontSize`), so the inversion Atlas fixed (its `text-2xl` above `text-3xl`)
 never existed here. No `--ds-text-*` value changed.
 
-**2. Overlines — adopted, with a guard.** 36 eyebrows in `components/comicstudio/**` now use `OVERLINE`,
-keeping their element, margins and copy: 27 hand-rolled labels (10.5–12 px, `uppercase` with
+**2. Overlines — adopted, with a guard.** 35 eyebrows in `components/comicstudio/**` now use `OVERLINE`,
+keeping their element, margins and copy: 26 hand-rolled labels (10.5–12 px, `uppercase` with
 `tracking-wide` / `tracking-wider`, including the shared `SectionLabel` (conversation/ui) and
-`SectionTitle` (board/ui), the recap card's row labels, the compare table's column headers and the media
-bin's group toggles) and the 9 uses of the pre-Atlas `LABEL` recipe (10 px, 0.05em) in the model detail
-sheet, the model picker and the cost insights. Not overlines, left as they are: the script's speaker
-names and the wireframe shot labels (`tracking-wide`; content of the script and the thumbnail), lettering
-case, first-letter capitals, and the "Cover" word drawn at tile scale inside a cover thumbnail (the
-guard's one allowlist entry). `OVERLINE_DISPLAY` (`.atlas-overline-display`, 12 px medium 0.18em, Atlas's
+`SectionTitle` (board/ui), the recap card's row labels and the media bin's group toggles) and the 9 uses
+of the pre-Atlas `LABEL` recipe (10 px, 0.05em) in the model detail sheet, the model picker and the cost
+insights. Not overlines, left as they are and allowlisted (each pinned to its line): the script's speaker
+names and the wireframe shot labels (`tracking-wide`; content of the script and the thumbnail), the
+compare table's column headers (the version numbers being compared — Atlas wave 8 kept its spreadsheet
+column letters off `.atlas-overline` too; wave 8 review) and the "Cover" word drawn at tile scale inside a
+cover thumbnail; lettering case and first-letter capitals are not class-list eyebrows. Two eyebrows got
+room for the wider overline (wave 8 review): the cost insights' "Where it went · share of your usage"
+breaks at the dot on a 320 px phone (the suffix is one unbreakable span), and the library console's stat
+labels wrap instead of truncating, in as many 5.75rem columns as fit (three from about 350 px, two on the
+narrowest phones), values aligned along the bottom. `OVERLINE_DISPLAY` (`.atlas-overline-display`, 12 px medium 0.18em, Atlas's
 public-page section labels) was not added: no Comic Studio surface has a matching larger eyebrow.
 `components/usage/UsageMeter.tsx` also hand-rolls one but is shared with chat, so it stays.
 Guard: `tests/config/overlineGuard.test.ts`.
@@ -410,12 +429,31 @@ starred glyph on the black scrim over a media thumbnail. Content colours (letter
 swatches, pickers, art, the link-preview mock) are inline styles or hex, never hue classes.
 Tokens: no new token was needed (`--ds-info-text` already existed); three values moved so the text
 clears 4.5:1 on the menus, overlays and soft glass it now sits on — Atlas light `--ds-warning-text` 57 %,
-Atlas dark `--ds-danger-text` 50 % (deviations above) and the default dark `--ds-danger-text` `#fca5a5`.
+Atlas dark `--ds-danger-text` from the mark at 65 % (deviations above; wave 8 review — the first port's
+50 % of the deep red read as the muted grey) and the default dark `--ds-danger-text` `#fca5a5`.
 Measured (WCAG 2.x, `tokenContrast.test.ts` cascade), on the page / lowest anywhere: default dark danger
 7.99 / 5.00 (a hovered row on a raised sheet); Atlas light warning 5.52 / 4.69 (its tint over the soft
-glass); Atlas dark danger 6.71 / 4.71 (a highlighted menu row). On the surfaces the matrix measures, every
+glass); Atlas dark danger 7.41 / 5.20 (a highlighted menu row). On the surfaces the matrix measures, every
 status text in all six contexts is 4.61–17.26:1 (the `STATUS_*` 6 % / 8 % tints are held to ≥ 4.5:1 by the
 vocabulary test). Guard: `tests/config/statusInkGuard.test.ts`.
+
+Review fixes (same port): three destructive buttons — the Easy and Pro lettering panels' Delete and a
+reference photo's Remove — had `TONE_TEXT.danger` stacked on a shared button constant that already said
+`text-[var(--ds-ink)]`; `cx` joins without merging and Tailwind emits the danger ink first, so they
+rendered plain ink. The constants are now a shape without an ink plus the neutral button
+(`BTN_SHAPE` / `BTN`), and the tone is chosen, not stacked (also the lettering toolbar's Fix edges).
+The guard's class-list check found six older lists with the same accident, where an emphasis on a muted
+base never showed (the plan and breakdown cards' "Drawing…" note, the picked add-balloon segment, the
+phone editor's active tool, the model row's price line, the timeline's add-clip glyph); each now
+chooses its ink. Pills drawn OVER ART use the new `TONE_CHIP_ON_ART` (studioDesign): the tone's 10 % tint
+mixed into the opaque `--ds-raised` instead of transparency, so the words are the measured "tone
+surface on raised" pairing (≥ 4.5:1, every context) over any image — the media bin tile's Deleted /
+Archived / Out of date badges (`Badge onArt`), the library console's entry pill, the page tile's Out of
+date pill and quality-warning dot, the board's stale-page Re-render pill (inside a glass pill over the
+page), the image frame's aspect-mismatch badge and the composer's failed-upload dot; the phone editor's
+counter, which overlaps its tool's icon, uses it too. The first port had moved the first two onto the
+translucent `TONE_CHIP` (whose page-tuned ink measured 1.1–2.3:1 over sample art) and described them as
+left as before; the other six were white on `amber-500` (2.15:1).
 
 **4. Dialog titles — `DIALOG_TITLE`.** Atlas's dialog and alert-dialog titles default to 20 px
 semibold. Comic Studio's five centred modal dialogs title with `DIALOG_TITLE`: the immersive reader's
@@ -427,15 +465,16 @@ its header (the 16 px headings are the admin console's sections and page heading
 dialog is a full-screen workspace with a toolbar header, not a titled dialog. Test:
 `tests/config/dialogTitle.test.ts`.
 
-Deferred (not wave 8's rule, which covers text ink): 79 raw hue fill, border and ring classes remain in
-`components/comicstudio/**` across 22 files — solid `bg-red-600` / `bg-amber-500` buttons and badges under
-white text (the confirm strips, the timeline clip badges, the stale-page Re-render pill), status and
-quality dots (the share button, the publish checklist, the phone tab bar), the page editor's red marquee
-over the art, the colour field's "no colour" slash (content), the timeline clip's warning / failure
-rings, and `role="alert"` / `role="status"` banners with ink text such as
+Deferred (not wave 8's rule, which covers text ink): raw hue fill, border and ring classes remain in
+`components/comicstudio/**` — solid `bg-red-600` / `bg-amber-700` buttons and badges under white text
+(the confirm strips, the timeline clip badges; these pass, 4.8:1 and 5.0:1), status and quality dots
+(the share button, the publish checklist, the phone tab bar, the stale-page pill's dot), the page
+editor's red marquee over the art, the colour field's "no colour" slash (content), the timeline clip's
+warning / failure rings, and `role="alert"` / `role="status"` banners with ink text such as
 `border-red-500/30 bg-red-500/[0.07]`. Atlas leaves fills and tints alone too; moving the banners onto
-`STATUS_SURFACE` and the fills onto a token is D2 work. The library
-console's status pills and the media bin's badges sit translucent over thumbnails (as before the port).
+`STATUS_SURFACE` and the fills onto a token is D2 work. The white-on-`amber-500` fills that failed
+(2.15:1) are not deferred: they moved onto `TONE_CHIP_ON_ART` in the review fixes above,
+and the status ink guard now fails on white text or icons on a light amber or yellow fill.
 `UsageMeter` and `DictationButton` (shared with chat) keep their own hues.
 
 ### Wave 5 port (Atlas `07935fcf` → `acd9fdfc`, 2026-10-29)

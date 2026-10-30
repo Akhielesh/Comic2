@@ -38,7 +38,7 @@ describe('FrameBadge', () => {
     expect(pill).toHaveAttribute('title', 'This sheet was drawn before your newest photos.');
   });
 
-  it('keeps its tone on the pill (warn is the amber aspect-mismatch badge)', () => {
+  it('keeps its tone on the pill (warn is the aspect-mismatch badge: the opaque warning surface, readable over the art)', () => {
     render(
       <>
         <FrameBadge tone="warn">1:1 · book is 4:5</FrameBadge>
@@ -47,7 +47,8 @@ describe('FrameBadge', () => {
     );
     const warn = screen.getByText('1:1 · book is 4:5').closest('[data-frame-badge]')!;
     const info = screen.getByText('From older photos').closest('[data-frame-badge]')!;
-    expect(tokens(warn)).toContain('bg-amber-500/90');
+    expect(tokens(warn)).toEqual(expect.arrayContaining(['bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,var(--ds-raised))]', 'text-[var(--ds-warning-text)]']));
+    expect(tokens(warn)).not.toContain('text-white');
     expect(tokens(info)).toContain('bg-[var(--ds-surface-strong)]');
     expect(flexTruncating(warn)).toEqual([]);
     expect(flexTruncating(info)).toEqual([]);

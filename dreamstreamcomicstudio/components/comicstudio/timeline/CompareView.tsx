@@ -6,7 +6,6 @@ import React, { useId, useState } from 'react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import type { StudioController } from '../types';
 import { ORIGIN_LABEL, versionCostLabel, type VersionItem } from './bookModel';
-import { OVERLINE } from '../../chat/studioDesign';
 import { Badge, BlockedTile, cx, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
 
@@ -98,7 +97,9 @@ export const CompareView: React.FC<CompareViewProps> = ({ studio, doc, a, b, rat
       <table className="w-full table-fixed border-collapse text-[12px]">
         <caption className="sr-only">What was recorded for each version</caption>
         <thead>
-          <tr className={cx('text-left', OVERLINE)}>
+          {/* Column names that are version numbers (v3 / v5), not eyebrows: kept off OVERLINE as Atlas wave 8 kept its
+              spreadsheet column letters off .atlas-overline (allowlisted in tests/config/overlineGuard.test.ts). */}
+          <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--ds-muted)]">
             <th scope="col" className="w-[28%] py-1 font-semibold" />
             <th scope="col" className="py-1 font-semibold">v{a.n}</th>
             <th scope="col" className="py-1 font-semibold">v{b.n}</th>

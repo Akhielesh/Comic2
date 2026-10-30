@@ -974,7 +974,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
           )}
         </div>
       )}
-      {note && <p className={cx('mt-2 break-words text-[11.5px] text-[var(--ds-muted)]', (drawing > 0 || heldNs.length > 0) && 'text-[var(--ds-ink)]')}>{note}</p>}
+      {note && <p className={cx('mt-2 break-words text-[11.5px]', drawing > 0 || heldNs.length > 0 ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>{note}</p>}
       {moments && (
         <p className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1 text-[11.5px] text-[var(--ds-muted)]" data-testid="breakdown-moments">
           <span>Want more moments?</span>{' '}

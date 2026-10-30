@@ -150,6 +150,21 @@ export const TONE_CHIP: Record<StatusTone, string> = {
   neutral: `${TONE_SURFACE.neutral} ${TONE_TEXT.neutral}`
 };
 
+/**
+ * TONE_CHIP for a pill drawn OVER ART (a status badge on a thumbnail or a library tile): the same
+ * 10 % tint mixed into the opaque raised surface instead of into transparency, so whatever the image
+ * underneath, the pill is the measured "tone surface on raised" pairing (tokenContrast.test.ts,
+ * ≥ 4.5:1 in every context). The translucent TONE_CHIP is tuned for page surfaces; over a dark panel
+ * its light-theme ink vanished (1.4–2.3:1). Neutral is the raised surface and the muted ink.
+ */
+export const TONE_CHIP_ON_ART: Record<StatusTone, string> = {
+  success: `border-[color:color-mix(in_srgb,var(--ds-success)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-success)_10%,var(--ds-raised))] ${TONE_TEXT.success}`,
+  warning: `border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_10%,var(--ds-raised))] ${TONE_TEXT.warning}`,
+  danger: `border-[color:color-mix(in_srgb,var(--ds-danger-mark)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_10%,var(--ds-raised))] ${TONE_TEXT.danger}`,
+  info: `border-[color:color-mix(in_srgb,var(--ds-info)_30%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-info)_10%,var(--ds-raised))] ${TONE_TEXT.info}`,
+  neutral: `border-[var(--ds-hairline)] bg-[var(--ds-raised)] ${TONE_TEXT.neutral}`
+};
+
 // ---------------------------------------------------------------------------
 // Motion
 // ---------------------------------------------------------------------------

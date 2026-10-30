@@ -61,9 +61,18 @@ const MediaTile: React.FC<{ item: MediaItem; studio: StudioController; onOpen():
       </span>
       {(item.archived || item.role === 'deleted_page' || item.stale) && (
         <span className="absolute left-1 top-1 flex gap-0.5">
-          {item.role === 'deleted_page' && <Badge tone="danger">Deleted</Badge>}
-          {item.archived && <Badge>Archived</Badge>}
-          {item.stale && item.current && <Badge tone="warn">Out of date</Badge>}
+          {/* Over the thumbnail: opaque tone surfaces (TONE_CHIP_ON_ART), readable on any art. */}
+          {item.role === 'deleted_page' && (
+            <Badge tone="danger" onArt>
+              Deleted
+            </Badge>
+          )}
+          {item.archived && <Badge onArt>Archived</Badge>}
+          {item.stale && item.current && (
+            <Badge tone="warn" onArt>
+              Out of date
+            </Badge>
+          )}
         </span>
       )}
     </button>

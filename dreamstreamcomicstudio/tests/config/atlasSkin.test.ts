@@ -133,12 +133,16 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
     expect(ATLAS_DARK.get('--ds-danger')).toBe('oklch(0.396 0.141 25.723)');
     for (const block of [ATLAS_LIGHT, ATLAS_DARK]) {
       for (const tone of ['success', 'warning', 'danger', 'info']) {
-        // Two deliberate deviations from Atlas's 60 % (tests/config/tokenContrast.test.ts measures every
-        // status text on its surfaces): dark danger mixes 50 % — the deep dark red at 60 % is 4.36:1 on a
-        // hover row and at 55 % 4.17:1 on a highlighted menu row (wave 8, the studio's danger menu items);
-        // light warning mixes 57 % — at 60 % it is 4.35:1 on its own tint over the soft glass (wave 8).
-        const pct = block === ATLAS_DARK && tone === 'danger' ? 50 : block === ATLAS_LIGHT && tone === 'warning' ? 57 : 60;
-        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(--ds-${tone}) ${pct}%, var(--ds-ink))`);
+        // Two deliberate deviations from Atlas's 60 % of the tone (tests/config/tokenContrast.test.ts
+        // measures every status text on its surfaces): dark danger mixes the brighter danger MARK
+        // (Atlas's destructive-foreground) at 65 % — the deep dark red at 60 % is 4.36:1 on a hover row,
+        // and the 50 % that cleared 4.5:1 read as the muted grey (OKLCH C 0.065 next to muted's 0) on the
+        // studio's danger menu rows (wave 8 review); light warning mixes 57 % — at 60 % it is 4.35:1 on
+        // its own tint over the soft glass (wave 8).
+        const darkDanger = block === ATLAS_DARK && tone === 'danger';
+        const source = darkDanger ? '--ds-danger-mark' : `--ds-${tone}`;
+        const pct = darkDanger ? 65 : block === ATLAS_LIGHT && tone === 'warning' ? 57 : 60;
+        expect(block.get(`--ds-${tone}-text`)).toBe(`color-mix(in srgb, var(${source}) ${pct}%, var(--ds-ink))`);
       }
     }
   });

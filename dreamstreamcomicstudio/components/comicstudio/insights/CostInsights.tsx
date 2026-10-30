@@ -291,7 +291,16 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
         </div>
         {summary.kinds.length > 0 && (
           <div className="mt-2">
-            <div className={cx('mb-1', OVERLINE)}>Where it went{cost.governed ? ' · share of your usage' : ''}</div>
+            <div className={cx('mb-1', OVERLINE)}>
+              Where it went
+              {/* On a narrow phone the suffix moves to its own line whole, never "USAGE" alone. */}
+              {cost.governed && (
+                <>
+                  {' '}
+                  <span className="whitespace-nowrap">· share of your usage</span>
+                </>
+              )}
+            </div>
             <SpendByKindList rows={summary.kinds} format={cell} label="Where it went" bars />
           </div>
         )}

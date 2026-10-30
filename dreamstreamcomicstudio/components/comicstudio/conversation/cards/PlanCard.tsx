@@ -186,7 +186,7 @@ export const PlanList: React.FC<{ card: PlanCardData; studio: ComicStudioControl
           </GhostButton>
         )}
       </div>
-      <p className={cx('mt-2 text-[11.5px] text-[var(--ds-muted)] [overflow-wrap:anywhere]', drawing > 0 && 'text-[var(--ds-ink)]')}>
+      <p className={cx('mt-2 text-[11.5px] [overflow-wrap:anywhere]', drawing > 0 ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]')}>
         {drawing > 0
           ? `Drawing ${plural(drawing, 'page')} — they appear on the board as they finish.`
           : allDrawn
