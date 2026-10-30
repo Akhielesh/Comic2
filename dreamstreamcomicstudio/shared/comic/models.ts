@@ -395,6 +395,16 @@ export const STYLE_OPTION_MODEL = 'nano-banana-2.1';
 export const STYLE_OPTION_RES: Resolution = '1K';
 
 export type ImageJobKind = 'style_option' | 'sheet' | 'place' | 'page' | 'edit' | 'cover';
+/**
+ * Ship 2 (K2a; pro plan §5.2 "ImageJobKind += 'panel'"): one panel of a page redrawn or drawn (fix_panel) — the lock's
+ * model at the page tier one step down (PANEL_RES_STEP), with one QC run in the quote. It is a separate union for now
+ * because exhaustive maps key on ImageJobKind (server jobs.ts imageOperation): once that map lists 'panel' (K2b),
+ * fold it into ImageJobKind and keep this name as an alias. Every resolver and quote below already takes it.
+ */
+export type AnyImageJobKind = ImageJobKind | 'panel';
+export const PANEL_JOB_KIND = 'panel' as const;
+/** A panel draws one resolution step below its page (2K → 1K, 4K → 2K; 1K and 512 stay). */
+export const PANEL_RES_STEP: Readonly<Record<Resolution, Resolution>> = { '512': '512', '1K': '1K', '2K': '1K', '4K': '2K' };
 
 export interface ResolvedImageJob {
   spec: ImageModelSpec;
@@ -418,14 +428,27 @@ export const nearestResolution = (spec: ImageModelSpec, want: Resolution): Resol
  * through to the unlocked resolution — the server's invariant (spec.id === doc.imageModel.modelId) then
  * refuses the job with MODEL_LOCKED before any provider call, so nothing is ever drawn on another model.
  */
-export const resolveImageJob = (kind: ImageJobKind, tier: QualityTier, override?: string, lock?: ImageModelLock): ResolvedImageJob => {
+export const resolveImageJob = (kind: AnyImageJobKind, tier: QualityTier, override?: string, lock?: ImageModelLock): ResolvedImageJob => {
   const preset = TIER_PRESETS[tier] || TIER_PRESETS.standard;
   const overrideSpec = getImageModel(override);
   const locked = lock ? getImageModel(lock.modelId) : undefined;
   if (locked) {
     const want: Resolution =
-      kind === 'style_option' ? STYLE_OPTION_RES : kind === 'cover' ? preset.coverRes : kind === 'page' || kind === 'edit' ? preset.pageRes : preset.sheetRes;
+      kind === 'style_option'
+        ? STYLE_OPTION_RES
+        : kind === 'cover'
+          ? preset.coverRes
+          : kind === 'page' || kind === 'edit'
+            ? preset.pageRes
+            : kind === 'panel'
+              ? PANEL_RES_STEP[preset.pageRes]
+              : preset.sheetRes;
     return { spec: locked, resolution: nearestResolution(locked, want) };
+  }
+  if (kind === 'panel') {
+    // Ship 2: the page's model (as a page job resolves it) one resolution step down.
+    const spec = overrideSpec || getImageModel(preset.model)!;
+    return { spec, resolution: nearestResolution(spec, PANEL_RES_STEP[preset.pageRes]) };
   }
   if (kind === 'style_option') {
     const spec = getImageModel(STYLE_OPTION_MODEL)!;
@@ -482,7 +505,7 @@ export interface SpendEstimate {
 }
 
 export const estimateJobs = (
-  jobs: { kind: ImageJobKind; count: number; label?: string }[],
+  jobs: { kind: AnyImageJobKind; count: number; label?: string }[],
   tier: QualityTier,
   opts: { override?: string; byok?: boolean; lock?: ImageModelLock } = {}
 ): SpendEstimate => {
@@ -491,7 +514,8 @@ export const estimateJobs = (
     .filter((j) => j.count > 0)
     .map((j) => {
       const { spec, resolution } = resolveImageJob(j.kind, tier, opts.override, opts.lock);
-      const per = imagePriceUsd(spec, resolution) + (j.kind === 'page' || j.kind === 'edit' ? QC_USD_PER_PAGE : 0);
+      // Page, edit and (Ship 2) panel jobs carry one QC run each.
+      const per = imagePriceUsd(spec, resolution) + (j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? QC_USD_PER_PAGE : 0);
       return {
         label: j.label || j.kind,
         count: j.count,
@@ -557,5 +581,11 @@ export const libraryAssetCostUsd = (modelId: string, res: Resolution): number =>
 
 export const tierPagePrice = (tier: QualityTier, byok = false): number => {
   const { spec, resolution } = resolveImageJob('page', tier);
+  return (imagePriceUsd(spec, resolution) + QC_USD_PER_PAGE) * (byok ? 1 : PLATFORM_MARKUP);
+};
+
+/** Ship 2: per-panel display price for a tier (one panel one resolution step down + its QC; markup unless BYOK). */
+export const tierPanelPrice = (tier: QualityTier, byok = false): number => {
+  const { spec, resolution } = resolveImageJob('panel', tier);
   return (imagePriceUsd(spec, resolution) + QC_USD_PER_PAGE) * (byok ? 1 : PLATFORM_MARKUP);
 };
