@@ -68,6 +68,12 @@ describe('recipients', () => {
     });
   }
 
+  it("the host's mode decides: a draft that claims compose inside a reply still pre-fills nothing", () => {
+    const r = reviewEmail({ ...doc, mode: 'compose' }, ctx('reply'));
+    expect(r.prefill).toEqual({ to: [], cc: [], bcc: [] });
+    expect(r.warnings.map((w) => w.code)).toEqual(['reply-recipients', 'mode-mismatch']);
+  });
+
   it('an address the user pasted from the thread is not trusted, even if also extracted as typed; a participant stays trusted', () => {
     const d = draft('compose', [{ address: 'quoted@example.net' }, { address: 'sam@example.com' }]);
     const r = reviewEmail(d, ctx('compose', { userTyped: ['quoted@example.net'], pasted: ['quoted@example.net', 'sam@example.com'] }));
@@ -168,6 +174,13 @@ describe('helpers', () => {
   it("addressesIn finds plain addresses in the user's own text", () => {
     expect(addressesIn('Send it to Jane@Example.com and bob@team.example.org. Not "evil"@x or a@b.')).toEqual(['jane@example.com', 'bob@team.example.org']);
     expect(addressesIn('')).toEqual([]);
+  });
+
+  it('addressesIn is linear: 100,000 characters without an address is quick', () => {
+    const started = Date.now();
+    expect(addressesIn('a'.repeat(100000))).toEqual([]);
+    expect(addressesIn(`${'a.'.repeat(50000)}@`)).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
   });
 });
 

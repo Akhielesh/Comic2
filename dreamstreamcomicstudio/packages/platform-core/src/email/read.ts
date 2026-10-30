@@ -63,7 +63,8 @@ const own = (o: unknown, key: string): unknown => {
 
 const items = (v: unknown, max: number): unknown[] => (Array.isArray(v) ? v.slice(0, max) : []);
 
-const text = (v: unknown, max: number): string => cleanText(v).slice(0, max);
+/** Cap first, then clean: the work is bounded by the cap whatever the input holds. */
+const text = (v: unknown, max: number): string => cleanText(typeof v === 'string' ? v.slice(0, max) : v);
 
 const line = (v: unknown, max: number): string => text(v, max).replace(/\n/g, ' ');
 

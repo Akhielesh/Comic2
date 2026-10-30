@@ -37,6 +37,7 @@ export const EMAIL_WARNING_CODES = {
   'reply-recipients': 'In a reply your mail app chooses the recipients, so the draft fills in none of its own.',
   'invalid-recipient': 'A recipient is not one plain email address, so it was left out.',
   'duplicate-recipient': 'A recipient appears more than once; only the first is used.',
+  'mode-mismatch': 'The draft names a different mode (compose, reply, reply-all, forward) than the one the person chose; the choice is used.',
   'unsafe-link': 'A link that was not https: or mailto: was removed; its text stays.',
   'link-text-mismatch': 'A link shows one address but goes to another.',
   'mailto-untrusted': 'A link starts a new email to an address that is not in the thread and that you did not type.',
@@ -59,18 +60,20 @@ export const mailtoRecipients = (href: string): string[] => {
   return path ? path.split(',').filter((a) => a !== '') : [];
 };
 
-const ADDRESS_LIKE = /[A-Za-z0-9_+.-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+/** Text longer than this is not scanned for addresses (an instruction is at most a few thousand characters). */
+const ADDRESS_SCAN_MAX = 100000;
 
 /**
  * The plain email addresses in a piece of text (lower-cased, de-duplicated, in order, at most
- * `EMAIL_LIMITS.recipients`). For a host deriving `ctx.userTyped` from the user's OWN instruction only.
+ * `EMAIL_LIMITS.recipients`). For a host deriving `ctx.userTyped` from the user's OWN instruction only. Linear: the
+ * text is split on spaces and punctuation that never occurs in an address, and each piece is checked whole.
  */
 export const addressesIn = (text: string): string[] => {
   const out: string[] = [];
   if (typeof text !== 'string') return out;
-  const found = text.match(ADDRESS_LIKE) || [];
-  for (const raw of found) {
-    const a = norm(raw.replace(/^[.]+|[.]+$/g, ''));
+  for (const piece of text.slice(0, ADDRESS_SCAN_MAX).split(/[\s,;:<>()"'`\[\]{}|\\/!?*&=^~#$]+/)) {
+    if (piece.indexOf('@') === -1) continue;
+    const a = norm(piece.replace(/^[.]+|[.]+$/g, ''));
     if (isAddress(a) && out.indexOf(a) === -1) out.push(a);
     if (out.length >= EMAIL_LIMITS.recipients) break;
   }
@@ -80,6 +83,7 @@ export const addressesIn = (text: string): string[] => {
 /** `https://www.Example.com/x` / `www.example.com/x` / `example.com` → `example.com`; `undefined` when it names no site. */
 const siteOf = (v: string): string | undefined => {
   const t = v.trim().toLowerCase();
+  if (t.length > 300 || /\s/.test(t)) return undefined; // a site name is one short word
   const m = /^(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z][a-z0-9-]*)(?::\d+)?(?:[/?#]\S*)?$/.exec(t);
   if (!m) return undefined;
   if (!/^https?:\/\//.test(t) && !/^www\./.test(t) && !/^(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/\S*)?$/.test(t)) return undefined;
@@ -95,7 +99,9 @@ const list = (v: unknown): unknown[] => (Array.isArray(v) ? v.slice(0, 1000) : [
 export const reviewEmail = (doc: EmailDoc, ctx: EmailReviewContext): EmailReview => {
   const d = readDoc(doc);
   const c = (typeof ctx === 'object' && ctx !== null ? ctx : {}) as Partial<EmailReviewContext>;
-  const reply = d.mode === 'reply' || d.mode === 'reply-all';
+  // The HOST's mode decides (the person chose it); a draft that claims another mode never widens the prefill.
+  const isReply = (m: unknown): boolean => m === 'reply' || m === 'reply-all';
+  const reply = isReply(c.mode) || isReply(d.mode);
 
   const participantName: { [address: string]: string | undefined } = {};
   const participants: string[] = [];
@@ -152,6 +158,7 @@ export const reviewEmail = (doc: EmailDoc, ctx: EmailReviewContext): EmailReview
     }
   }
   if (reply && named > 0) warn('reply-recipients', EMAIL_WARNING_CODES['reply-recipients']);
+  if (c.mode !== undefined && c.mode !== d.mode) warn('mode-mismatch', `The draft was written as "${d.mode}" but you chose "${String(c.mode).slice(0, 20)}"; your choice is used.`);
 
   const links: ReviewedLink[] = [];
   const addLink = (href: string, text: string, blockId: string, source: 'run' | 'button'): void => {
