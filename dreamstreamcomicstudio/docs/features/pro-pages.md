@@ -52,15 +52,18 @@ name another plan's panels — shows the page as drawn. Never a crash, never a b
 
 **Asset paths:** `collectAssetPaths` includes frame sources and overlay images on live **and** trashed pages
 (GC-protected); `displayAssetPaths` includes those of live pages. `pageSourcePaths(page, {printOnly})` lists them
-(readers and exports pass `printOnly`). `mapPanelSourcePaths` is the companion of `mapAssetRefs` for path rewrites.
+(readers and exports pass `printOnly`). `mapPanelSourcePaths` is the companion of `mapAssetRefs` for path rewrites;
+`dropPanelSourcePaths(doc, drop)` removes the ones an image filter rejects (a History restore leaving out blocked,
+deleted, `q/` or forgotten images; forgetting a reference photo, V-4): the frame loses its source, the overlay goes
+whole, so no path is left dangling.
 
 ## 3. Ops (`shared/comic/ops.ts`) and undo (`shared/comic/undo.ts`)
 
 | Op | Effect |
 |---|---|
 | `page_frames {pageId, artMode?, frameStyle?, frames?, moveBalloons?}` | frames of one page; everything on a panel whose frame or display changed follows it (I6) unless `moveBalloons: false` |
-| `page_cuts {pageId, path, cuts, keepBy?}` | only when `path` is the current drawing; written as the user's (`keepBy`: the exact inverse) |
-| `panels_order`, `panel_add`, `panel_remove` | structural; re-stamp the drawing's `specHash` only on a fresh page shown in frames (I5) |
+| `page_cuts {pageId, path, cuts, keepBy?, moveBalloons?}` | only when `path` is the current drawing; written as the user's (`keepBy`: the exact inverse). New cuts can bring the page into frames or change what a frame shows, so the lettering on those panels follows as for `page_frames` (I6) unless `moveBalloons: false` |
+| `panels_order`, `panel_add`, `panel_remove` | structural; re-stamp the drawing's `specHash` only on a fresh page shown in frames, before or after (I5). A panel added without a frame shows the page as drawn again (I2); that is how undo brings back a removed frameless panel |
 | `layer`, `continuity`, `scene`, `consistency`, `finding` | overlays and consistency data |
 | `balloon` | gains `rot`, `minH` (clamped; null clears) |
 | `panel` | accepts `direction`; never writes `frame` (frames move only through `page_frames`) |
@@ -72,6 +75,11 @@ name another plan's panels — shows the page as drawn. Never a crash, never a b
 point → image point (old frame) → page point (new frame), so a balloon's tail stays on the head it points at. Otherwise
 frame box to frame box. Balloons move by their top-centre and keep their width (lettering never rescales); locked
 balloons stay; pinned flags are untouched.
+
+**Cut provenance:** `keepBy` exists so an undo restores the detector's cuts exactly. Once the ops are patchable, the
+server must not trust a client's `by`: K2b refuses a `page_cuts` batch with `keepBy` unless its cuts deep-equal cuts
+the server itself stamped for that same drawing, and the automatic-panelization shadow counts read only cuts the
+server stamped (at stamping time), never `by` from a stored doc.
 
 **The re-stamp rule (I5):** a structural edit of a page shown in frames keeps a fresh drawing fresh (the frames are the
 display truth), and leaves a stale one stale. A page shown as drawn is never re-stamped: reordering its script panels
@@ -106,20 +114,24 @@ stale from consistency features (I8).
 ## 6. Limits (`shared/comic/limits.ts`)
 
 `EDITOR_LIMITS` and `CONSISTENCY_LIMITS` are the plan §5.5 values; `PRO_PAGE_LIMITS` holds the ranges and text lengths
-the normalizers and the sanitizers share.
+the normalizers and the sanitizers share. `PRO_PAGE_LIMITS.maxRefsMax` (16) is at least the largest reference count of
+any registered model (a contract test holds it); the comic's model lock caps the real call.
 
 ## 7. History (`shared/comic/history/*`)
 
 - `scenes` and `consistency` are book-section (`meta`) keys, captured, compared and restored generically (not typed
   meta keys). Frames, overlays, continuity and directions ride in the `page:` chunk by exclusion; cuts, parts, anchor
   keys and findings in the `art:` chunk.
-- `touchedKeys`: frames/overlays/continuity → `page:`; cuts and findings → `art:`; a frame move also touches `art:`
-  (balloons) and the page's translated overrides; scenes/consistency → `meta`.
+- `touchedKeys`: frames/overlays/continuity → `page:`; cuts and findings → `art:`; a frame move, or new cuts that carry
+  lettering, also touches `art:` (balloons), `page:` (clipped overlays) and the page's translated overrides;
+  scenes/consistency → `meta`.
 - `opActor(op, origin, doc, action?)`: `panelize_page`, `flatten_page`, `rebind_panels`, `apply_finding` batches are the
   editor's; `fix_panel`, `enrich_pages` the AI's; server panel ops without an action are the editor's.
 - Words (`describe.ts` panel moments): "You rearranged the panels on page 2", "The editor made page 2's panels editable
-  (no AI cost)", "AI redrew panel 3 on page 2", "Matched page 1's script to its art (free)". The recorder adds
-  `panelMomentsOfOps(ops, by, doc, action)` to a row's diff items with `withPanelMoments`.
+  (no AI cost)", "AI redrew panel 3 on page 2", "Matched page 1's script to its art (free)", "You dismissed a check on
+  page 2" / "You brought back a check on page 2", "You showed page 2 as drawn". The recorder adds
+  `panelMomentsOfOps(ops, by, doc, action)` to a row's diff items with `withPanelMoments`. The undo label of a finding
+  op is neutral ("change a check"): the same op dismisses a check and brings one back.
 
 ## 8. Invariants (contract tests in `shared/comic/comic.contract.test.ts`)
 
@@ -132,5 +144,8 @@ History's "every key assigned" with scenes and consistency.
 ## 9. What comes next (not in K2a)
 
 K2b: server sanitizers (`sanitize/{panels,consistency}.ts`), dispatch of the new actions, `versionMeta` stamping of
-cuts/parts/anchor keys, the publication whitelist. B1 composition, B2 panelization, B4 continuity and anchors, B9 the
+cuts/parts/anchor keys, the publication whitelist. Before `PRO_PAGE_OPS_PATCHABLE` flips, the server's `balloons`
+sanitizer must keep `rot` and `minH` (the K2a inverses and the editor send whole-page balloon snapshots), and the cut
+provenance rule above must hold. The History restore filter and forgetting a photo (H3, `sanitize/refs.ts`) must drop
+frame and overlay sources too (`dropPanelSourcePaths`). B1 composition, B2 panelization, B4 continuity and anchors, B9 the
 editor engine, then the C packages (UI).

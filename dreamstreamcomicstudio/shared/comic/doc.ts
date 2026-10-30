@@ -2177,6 +2177,46 @@ export const mapPanelSourcePaths = (doc: ComicDoc, fn: (path: string) => string)
   return out;
 };
 
+/**
+ * Removes every frame source and image overlay whose path `drop` names (live and trashed pages): the frame loses its
+ * `src` (it shows its cut of the page's drawing again) and the overlay goes whole, so no dangling path is left. For
+ * the server's image filters — a History restore leaving out blocked, deleted, q/ or forgotten images, and forgetting
+ * a reference photo (V-4) — where mapPanelSourcePaths can only rewrite. Returns the SAME doc when nothing is dropped.
+ */
+export const dropPanelSourcePaths = (doc: ComicDoc, drop: (path: string) => boolean): ComicDoc => {
+  let changed = false;
+  const dropPage = (page: Page): Page => {
+    let panels = page.panels;
+    page.panels.forEach((panel, i) => {
+      const path = panel.frame?.src?.path;
+      if (!path || !drop(path)) return;
+      if (panels === page.panels) panels = page.panels.slice();
+      const frame = { ...panel.frame! };
+      delete frame.src;
+      panels[i] = { ...panel, frame };
+    });
+    const layers = page.layers?.filter((layer) => !(layer.src?.path && drop(layer.src.path)));
+    const layersChanged = !!page.layers && layers!.length !== page.layers.length;
+    if (panels === page.panels && !layersChanged) return page;
+    changed = true;
+    const out: Page = { ...page, panels };
+    if (layersChanged) {
+      if (layers!.length) out.layers = layers;
+      else delete out.layers;
+    }
+    return out;
+  };
+  const pages = doc.pages.map(dropPage);
+  const trash = doc.trash?.map((t) => {
+    const page = dropPage(t.page);
+    return page === t.page ? t : { ...t, page };
+  });
+  if (!changed) return doc;
+  const out: ComicDoc = { ...doc, pages: pages.some((p, i) => p !== doc.pages[i]) ? pages : doc.pages };
+  if (doc.trash !== undefined) out.trash = trash && trash.some((t, i) => t !== doc.trash![i]) ? trash : doc.trash;
+  return out;
+};
+
 // ── Cast helpers ─────────────────────────────────────────────────────────────
 
 export const castKindOf = (c: Character): CastKind => c.kind ?? 'person';

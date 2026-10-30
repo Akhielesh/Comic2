@@ -1483,6 +1483,7 @@ import {
   consistencyOf,
   cutFor,
   frameStyleOf,
+  dropPanelSourcePaths,
   mapPanelSourcePaths,
   normalizeBalloonShip2,
   normalizeConsistencyFinding,
@@ -1923,6 +1924,21 @@ describe('Ship 2 contract (K2a)', () => {
     expect(mapPanelSourcePaths(trashed, (p) => p)).toBe(trashed);
     const rewritten = mapPanelSourcePaths(trashed, (p) => p.replace('proj-k', 'proj-copy'));
     expect(pageSourcePaths(trashOf(rewritten)[0].page).every((p) => p.includes('proj-copy'))).toBe(true);
+    // Image filters (a restore leaving out forgotten or blocked images; forgetting a photo, V-4) drop them whole:
+    // the frame loses its source, the overlay goes; no dangling path, nothing else touched.
+    expect(dropPanelSourcePaths(trashed, () => false)).toBe(trashed);
+    for (const d of [doc, trashed]) {
+      const out = dropPanelSourcePaths(d, (p) => p === TAKE || p === STICKER);
+      const page = out.pages.find((p) => p.id === 'pg_k') ?? trashOf(out)[0].page;
+      const was = d.pages.find((p) => p.id === 'pg_k') ?? trashOf(d)[0].page;
+      expect(pageSourcePaths(page)).toEqual([GUIDE]);
+      expect(collectAssetPaths(out)).not.toContain(TAKE);
+      expect(collectAssetPaths(out)).not.toContain(STICKER);
+      expect(page.panels[1].frame).toEqual({ box: FRAMES[1] });
+      expect(page.layers!.map((l) => l.id)).toEqual(was.layers!.filter((l) => l.id !== 'ly_sticker').map((l) => l.id));
+      expect(page.balloons).toBe(was.balloons);
+    }
+    expect(dropPanelSourcePaths(doc, () => true).pages[0].layers!.map((l) => l.id)).toEqual(['ly_star']);
   });
 
   it("the versions 'every key assigned' test passes with scenes and consistency (book section; generic extra meta keys)", () => {
