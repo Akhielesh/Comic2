@@ -8,9 +8,9 @@
 //              run a change of yours closed, and the gap rule's `edits` row (content_at = when the book last
 //              changed: before.updatedAt unless a chat message, spend, gate or QC commit moved it since).
 //   onFlush    the `ai` row of a finished run (stats.spend from the run's new spend entries, BYOK flagged), quiet
-//              edits, and "Where you left off" on the final flush; awaited by flush(), so it waits only for its own
-//              captures (never for an older write another request started, never for a timer); the final flush
-//              waits for everything still queued.
+//              edits, and "Where you left off" on the final flush; awaited by flush(), so it waits for what was queued
+//              since the last flush (never again for an older write an earlier flush already waits for, never for a
+//              timer); the final flush waits for everything still queued.
 //   onLoad     "History starts here" (a pinned `start` row) for a comic with no rows; otherwise it reads the head.
 //   onImported a pinned `import` row for a comic brought in from the classic editor (no session needed).
 //
@@ -483,6 +483,10 @@ class Recorder implements HistoryRecorder {
             if (isPermanent(err)) {
               if (err instanceof StudioError && err.code === 'NOT_FOUND') this.headStale = true; // a removed line, a moved comic
               this.log('write', err, c);
+            } else if (c.superseded && !c.pinned) {
+              // The write in flight at a restore failed: a retry would land after the restore row. Its book is in H3's
+              // before_restore row, so it goes like the rest of what was queued then.
+              logger.warn('comic_history_capture_dropped', { projectId: this.scope.projectId, kind: c.kind, reason: 'restore', attempts: c.attempts });
             } else {
               if (c.attempts === 1 || c.attempts % 10 === 0) this.log('write', err, c);
               return; // stays first in line: the next commit or flush retries it

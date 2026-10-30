@@ -894,6 +894,35 @@ describe('a restore (H3) never lets an older capture become the line’s head', 
     expect(newest.changes).toEqual([expect.objectContaining({ what: 'dialogue', by: 'you', pageIds: ['pg_3'] })]);
   });
 
+  it('the write in flight at a restore is not retried when it fails: it goes like the rest of what was queued', async () => {
+    let fail: ((err: Error) => void) | undefined;
+    const r = await loaded(undefined, {
+      store: (fake) => ({
+        ...fake,
+        async put(s, v, c, p) {
+          if (v.kind === 'before_ai') await new Promise<void>((_resolve, reject) => (fail = reject));
+          return fake.put(s, v, c, p);
+        }
+      })
+    });
+    const original = r.doc();
+    r.clock.t += MIN;
+    r.commit([say('pg_1', 'x')], 'user');
+    r.commit([drawn('pg_1', 'p1.webp')], 'job'); // the run's before_ai write starts
+    for (let i = 0; i < 50 && !fail; i += 1) await Promise.resolve();
+    expect(fail).toBeDefined();
+    await putRow(r, 'before_restore', r.doc());
+    r.clock.t += 1000;
+    r.commit([restoreTo(original, r.clock.t)], 'user');
+    expect(r.rec.pending).toBe(1); // a write in flight can't be called back
+    fail!(new Error('socket hang up')); // a failure that is normally retried
+    await r.rec.settled();
+    expect(r.rec.pending).toBe(0);
+    await putRow(r, 'restore', r.doc());
+    await r.flush(true);
+    expect(r.store.rows(scope).map((x) => x.kind)).toEqual(['restore', 'before_restore', 'start']);
+  });
+
   it('a pinned moment waiting at a restore is still written (before H3’s restore row) but never taken as the head', async () => {
     const r = await loaded();
     const original = r.doc();
