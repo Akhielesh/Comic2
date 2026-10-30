@@ -282,7 +282,8 @@ export const ModelsTab: React.FC<ModelsTabProps> = ({ doc, money, pro, openPicke
   const lockRow = lockId ? rowFor(rows, lockId) : undefined;
   const newerBuild =
     lock?.canonicalSlug && lockRow?.canonicalSlug && lockRow.canonicalSlug !== lock.canonicalSlug && lockNick ? newerBuildCopy(lockNick, lockRow.canonicalSlug) : undefined;
-  const pendingNick = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec.nickname;
+  // What the next page is drawn on: the lock when there is one (as plan.ts quoteLockOf and the runner resolve it).
+  const pendingNick = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, lock).spec.nickname;
   return (
     <div className="min-w-0 space-y-3">
       {pro && (

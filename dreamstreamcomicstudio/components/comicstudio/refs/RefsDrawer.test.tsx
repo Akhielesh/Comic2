@@ -228,10 +228,11 @@ describe('governed users never see dollars (P2-STUDIO-CORE)', () => {
 });
 
 describe('honest usage badges (the compiler’s own picks)', () => {
-  const style = (refs: RefAsset[], override: string | undefined, board: boolean) =>
+  // The page model a comic really draws on: its lock (the sample is drawn, so it is locked), as prompts.ts compiles it.
+  const style = (refs: RefAsset[], model: string, board: boolean) =>
     makeSampleDoc((d) => {
       d.style.refs = refs;
-      d.settings.imageModelOverride = override;
+      d.imageModel = { modelId: model, lockedAt: 1, origin: 'user_change' };
       if (!board) delete d.style.board;
     });
   it('style photos: none while the board is the only anchor; 1 without a board; up to 2 beside the board on Pro', () => {
@@ -242,6 +243,23 @@ describe('honest usage badges (the compiler’s own picks)', () => {
     expect(used(style(four, 'nano-banana-2.1', false))).toBe(1);
     expect(used(style(four, 'nano-banana-pro', true))).toBe(2);
     expect(used(style(four, 'nano-banana-pro', false))).toBe(2);
+  });
+
+  it('the badges follow the lock, never the override a locked comic no longer draws with (A7 note 1)', () => {
+    const four = [ref(1), ref(2), ref(3), ref(4)];
+    // Drawn on Nano Banana 2.1 (the legacy lock) with a Pro override: pages still go to Nano Banana 2.1, one anchor.
+    const legacy = makeSampleDoc((d) => {
+      d.style.refs = four;
+      d.settings.imageModelOverride = 'nano-banana-pro';
+    });
+    expect(styleRefsUsed(legacy)).toBe(0);
+    // Locked to Pro with a Nano Banana 2.1 override: Pro's style slots are used.
+    const pro = makeSampleDoc((d) => {
+      d.style.refs = four;
+      d.settings.imageModelOverride = 'nano-banana-2.1';
+      d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
+    });
+    expect(styleRefsUsed(pro)).toBe(2);
   });
 });
 

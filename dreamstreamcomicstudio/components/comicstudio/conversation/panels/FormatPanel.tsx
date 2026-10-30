@@ -17,7 +17,8 @@ import React from 'react';
 import { BookHeart, BookOpen, GalleryHorizontal, Info, Minus, Plus, RotateCcw, ScrollText, Smartphone } from 'lucide-react';
 import { isPageStale, type AspectRatio, type ComicDoc, type ComicKind, type Format, type LetteringMode, type Page } from '../../../../shared/comic/doc';
 import type { DocOp } from '../../../../shared/comic/ops';
-import { estimateJobs, nearestAspect, resolveImageJob, tierPagePrice } from '../../../../shared/comic/models';
+import { nearestAspect, resolveImageJob } from '../../../../shared/comic/models';
+import { estimateDocJobs, quoteLockOf, unitPrice } from '../../../../shared/comic/plan';
 import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { ACCENT_SOFT_BG, TONE_SURFACE, TRANSITION } from '../../../chat/studioDesign';
@@ -114,9 +115,9 @@ export const isStalingChange = (format: Format, patch: Partial<Format>): boolean
 export const drawnCurrentPages = (doc: ComicDoc): Page[] =>
   doc.pages.filter((p) => p.render.status === 'ready' && !!p.render.asset && !isPageStale(doc, p));
 
-/** Honest registry quote for redrawing `count` pages on the comic's tier/model. */
+/** Honest registry quote for redrawing `count` pages on the comic's locked model (else its tier/override). */
 export const redrawQuoteUsd = (doc: ComicDoc, count: number, byok: boolean): number =>
-  count > 0 ? estimateJobs([{ kind: 'page', count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd : 0;
+  count > 0 ? estimateDocJobs(doc, [{ kind: 'page', count }], { byok }).usd : 0;
 
 const pagesWord = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
 
@@ -246,9 +247,11 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
   const shapeList = shapes.some((s) => s.value === format.pageAspect)
     ? shapes
     : [{ value: format.pageAspect, label: 'Current' }, ...shapes];
-  const pageModel = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec;
+  // The model and price the next page really gets: the comic's locked model, else its tier/override — the same
+  // numbers as the breakdown card (plan.ts unitPrice).
+  const pageModel = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
   const drawnAspect = nearestAspect(pageModel, format.pageAspect);
-  const perPage = tierPagePrice(doc.settings.quality, byok);
+  const perPage = unitPrice(doc, 'page', { byok }).usd;
 
   return (
     <div className="space-y-5 p-4">

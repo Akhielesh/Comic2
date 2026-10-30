@@ -20,7 +20,8 @@ import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, Lin
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
 import { placeBalloonsWholeWords } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
-import { estimatePanelBoxes as sharedPanelBoxes } from '../../../shared/comic/pageGeometry.js';
+import { quoteLockOf } from '../../../shared/comic/plan.js';
+import { effectiveLayout, estimatePanelBoxes as sharedPanelBoxes } from '../../../shared/comic/pageGeometry.js';
 import { SAFETY_CATEGORIES, effectiveRating, type SafetyCategory, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout.js';
 import type { MessagePart } from '../ai/providers/types.js';
@@ -830,11 +831,13 @@ export const layoutBalloonsFromVision = (
   return place(page, panelBoxes, opts, { suggestions });
 };
 
-const pageAspectForDoc = (doc: ComicDoc, page: Page): number => {
+/** Page width / height for the estimates: the render's pixel size, else the shape the page model really draws. */
+export const pageAspectForDoc = (doc: ComicDoc, page: Page): number => {
   const a = page.render?.asset;
   if (a?.w && a?.h) return a.w / a.h;
   try {
-    const { spec } = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride);
+    // The shape the page model really draws: the comic's locked model, else tier + override.
+    const { spec } = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc));
     return ratioOf(pageAspectFor(doc, spec, page.panels.length) as AspectRatio);
   } catch {
     return ratioOf(doc.format.pageAspect || '2:3');
@@ -918,7 +921,10 @@ export async function analyzePageRender(args: {
   const { doc, page } = args;
   const overlay = doc.format.lettering !== 'in_art';
   const opts: LayoutOptions = { doc, readingDirection: doc.format.readingDirection, kind: doc.format.kind, pageAspect: pageAspectForDoc(doc, page) };
-  const estimated = estimatePanelBoxes(page, opts);
+  // The fallback boxes (stored as the QC's panelBoxes when the reading is unusable or the panel count differs, and
+  // used for the fallback balloons) follow the layout as drawn — effectiveLayout, what the page prompt drew — never
+  // layout text the prompt didn't draw.
+  const estimated = estimatePanelBoxes({ ...page, layout: effectiveLayout(page, doc.format) }, opts);
   const lineCount = page.panels.reduce((n, p) => n + p.lines.length, 0);
   // Author text travels inside a per-call random fence the system prompt names (S14).
   const tag = fenceTag();

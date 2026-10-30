@@ -4797,7 +4797,7 @@ const publicationBehind = (doc: ComicDoc): boolean => {
 export const planPagesUsd = (doc: ComicDoc, byok: boolean): number =>
   round4(PLAN_USD_PER_PAGE * Math.max(1, doc.format.pageCount || 1) * (byok ? 1 : PLATFORM_MARKUP));
 
-/** "≈ $0.10 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
+/** "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" in the user's cost terms. */
 export const planPagesQuoteText = (doc: ComicDoc, cost: Pick<CostFormatter, 'approx'>, byok: boolean): string => {
   const pages = Math.max(1, doc.format.pageCount || 1);
   const usd = planPagesUsd(doc, byok);

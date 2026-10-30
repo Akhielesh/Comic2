@@ -4,9 +4,11 @@ import { getStylePreset } from '../../../shared/comic/stylePresets';
 import {
   byokFromDoc,
   estimateDraw,
+  estimateOne,
   formatElapsed,
   formatSpend,
   initials,
+  jobModel,
   pageProgress,
   pageVisualStatus,
   pagesForIds,
@@ -76,8 +78,43 @@ describe('what a click would draw', () => {
   it('names the model that drew (or will draw) a render', () => {
     const doc = makeSampleDoc();
     expect(renderModelNickname(doc, doc.pages[0].render, 'page')).toBe('Nano Banana 2.1');
-    const pro = makeSampleDoc((d) => (d.settings.quality = 'pro'));
+    // Nothing drawn yet (no lock): the tier picks the model.
+    const pro = makeSampleDoc((d) => {
+      d.settings.quality = 'pro';
+      d.pages = d.pages.map((p) => ({ ...p, render: { status: 'none', history: [] } }));
+      d.cast = d.cast.map((c) => ({ ...c, sheet: { status: 'none', history: [] } }));
+      d.places = d.places.map((pl) => ({ ...pl, sheet: { status: 'none', history: [] } }));
+      d.cover = { ...d.cover, render: { status: 'none', history: [] } };
+    });
     expect(renderModelNickname(pro, undefined, 'page')).toBe('Nano Banana Pro');
+    // A comic drawn on Nano Banana 2.1 is locked to it: the Pro tier only raises the resolution (A7 note 1).
+    const lockedPro = makeSampleDoc((d) => (d.settings.quality = 'pro'));
+    expect(renderModelNickname(lockedPro, undefined, 'page')).toBe('Nano Banana 2.1');
+  });
+
+  it('prices and names the locked model, whatever the tier or override say (as the server draws it)', () => {
+    const locked = makeSampleDoc((d) => {
+      d.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
+      d.settings.imageModelOverride = 'nano-banana-2.1';
+    });
+    const lock = locked.imageModel!;
+    expect(jobModel(locked, 'page').nickname).toBe('Nano Banana Pro');
+    expect(jobModel(locked, 'cover').nickname).toBe('Nano Banana Pro');
+    const pages = pagesToDraw(locked);
+    const expected = estimateJobs(
+      [
+        { kind: 'page', count: pages.length, label: 'pages' },
+        { kind: 'sheet', count: 1, label: 'character sheets' }
+      ],
+      'standard',
+      { override: 'nano-banana-2.1', lock }
+    );
+    expect(estimateDraw(locked, pages, false).estimate.usd).toBe(expected.usd);
+    expect(estimateDraw(locked, pages, false).estimate.model).toBe('Nano Banana Pro');
+    // The tier/override price is lower; the board never shows it for a locked comic.
+    const unlockedUsd = estimateJobs([{ kind: 'page', count: pages.length }, { kind: 'sheet', count: 1 }], 'standard', { override: 'nano-banana-2.1' }).usd;
+    expect(expected.usd).toBeGreaterThan(unlockedUsd);
+    expect(estimateOne(locked, 'cover', false).usd).toBe(estimateJobs([{ kind: 'cover', count: 1 }], 'standard', { override: 'nano-banana-2.1', lock }).usd);
   });
 });
 

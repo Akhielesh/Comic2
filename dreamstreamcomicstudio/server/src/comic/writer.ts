@@ -28,6 +28,7 @@ import { needMeter, type NeedMeter } from '../../../shared/comic/density.js';
 import { languageSpec, lineLengthRule } from '../../../shared/comic/languages.js';
 import { letteringAspect } from '../../../shared/comic/lettering/layout.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
+import { quoteLockOf } from '../../../shared/comic/plan.js';
 import { checkPagePlan, splashIssues, type LayoutChoice } from '../../../shared/comic/pagePlanCheck.js';
 import {
   OFF_PANEL_SHOTS,
@@ -263,9 +264,9 @@ export const PAGE_PLAN_SCHEMA = obj({
 
 // ── Writer prompt ────────────────────────────────────────────────────────────
 
-/** How many named characters a page can hold on model (the page model's character refs). */
+/** How many named characters a page can hold on model (the character refs of the model that draws it: the lock, else tier + override). */
 const characterSlots = (doc: ComicDoc): number => {
-  const { spec } = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride);
+  const { spec } = resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc));
   return spec.refs.characters > 0 ? spec.refs.characters : 4;
 };
 

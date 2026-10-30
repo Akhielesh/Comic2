@@ -21,14 +21,13 @@ import {
 } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import {
-  estimateJobs,
   getImageModel,
   resolveImageJob,
   type ImageJobKind,
   type ImageModelSpec,
   type SpendEstimate
 } from '../../../shared/comic/models';
-import { missingSheetsFor, pageTargets } from '../../../shared/comic/plan';
+import { estimateDocJobs, missingSheetsFor, pageTargets, quoteLockOf } from '../../../shared/comic/plan';
 import type { StylePreset } from '../../../shared/comic/stylePresets';
 
 // ── Render states ────────────────────────────────────────────────────────────
@@ -105,26 +104,27 @@ export interface DrawPlan {
 
 export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean): DrawPlan => {
   const sheets = sheetsNeededFor(doc, pages);
-  const estimate = estimateJobs(
+  // Lock-aware (plan.ts estimateDocJobs): a locked comic prices on its locked model, as the server draws it.
+  const estimate = estimateDocJobs(
+    doc,
     [
       { kind: 'page', count: pages.length, label: 'pages' },
       { kind: 'sheet', count: sheets.length, label: 'character sheets' }
     ],
-    doc.settings.quality,
-    { override: doc.settings.imageModelOverride, byok }
+    { byok }
   );
   return { pages, sheets, estimate };
 };
 
-/** Estimate for one image job of a kind (edit, cover, a sheet, style options). */
+/** Estimate for one image job of a kind (edit, cover, a sheet, style options), on the comic's locked model if any. */
 export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1): SpendEstimate =>
-  estimateJobs([{ kind, count, label: kind }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok });
 
 // ── Models ───────────────────────────────────────────────────────────────────
 
-/** The registry model a job of this kind runs on right now (tier + override). */
+/** The registry model a job of this kind runs on right now: the comic's locked model, else tier + override. */
 export const jobModel = (doc: ComicDoc, kind: ImageJobKind): ImageModelSpec =>
-  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride).spec;
+  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
 
 /** Friendly model name for a render: what drew it, else what will. */
 export const renderModelNickname = (doc: ComicDoc, render: RenderState | undefined, kind: ImageJobKind): string =>

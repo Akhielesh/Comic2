@@ -16,7 +16,7 @@ import { BookA, CheckCircle2, ChevronRight, Globe, Languages, LoaderCircle, Sear
 import type { ComicDoc, TranslationRegister } from '../../../shared/comic/doc';
 import { editionProgress, editionReadiness, i18nOf } from '../../../shared/comic/i18n';
 import { LANGUAGES, dirOf, languageSpec, sameLanguage, scriptOf, type LanguageSpec } from '../../../shared/comic/languages';
-import { estimateJobs } from '../../../shared/comic/models';
+import { estimateDocJobs } from '../../../shared/comic/plan';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
 import { getTranslationQuote, type TranslationQuote } from '../studioApi';
@@ -41,8 +41,8 @@ export function inArtPages(doc: ComicDoc) {
 
 const paintedCover = (doc: ComicDoc) => (doc.cover.lettering ?? 'in_art') === 'in_art' && !!doc.cover.render.asset;
 
-const priceOf = (doc: ComicDoc, kind: 'page' | 'cover', count: number, byok: boolean) =>
-  estimateJobs([{ kind, count }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd;
+/** Redraw price on the comic's locked model (else its tier/override), as the server quotes it. */
+const priceOf = (doc: ComicDoc, kind: 'page' | 'cover', count: number, byok: boolean) => estimateDocJobs(doc, [{ kind, count }], { byok }).usd;
 
 function useQuote(projectId: string | undefined, langs: string[], key: string) {
   const [state, setState] = useState<{ quote: TranslationQuote | null; loading: boolean; error: string | null }>({ quote: null, loading: false, error: null });

@@ -186,6 +186,6 @@ export {
   type PublishErrorReason,
   type PublishOutcome
 } from './publication.js';
-export { contentFingerprint, isServerArt, planSnapshot, snapshotPaths } from './snapshot.js';
+export { contentFingerprint, fingerprintMatches, isServerArt, legacyContentFingerprint, planSnapshot, snapshotPaths } from './snapshot.js';
 export { escPango, ogHash, ratingMeta, scriptsCovered } from './ogImage.js';
 export { createMemoryPublicationStore, createSupabasePublicationStore, type MemoryPublicationStore, type PublicationBackend } from './store.js';

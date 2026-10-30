@@ -249,7 +249,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
           <InitialsPlaceholder
             name={c.name}
             kind={kind}
-            note={c.tier === 'extra' ? 'Extras are described in words until they have a sheet; a ready sheet is attached on every page they appear on.' : 'The model sheet keeps them on-model on every page.'}
+            note={c.tier === 'extra' ? 'Extras are described in words until they have a sheet; a ready sheet (not a prop’s) is attached on every page they appear on.' : 'The model sheet keeps them on-model on every page.'}
           />
         }
         overlay={
@@ -387,7 +387,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
               <Sparkles className="h-3 w-3" aria-hidden /> Re-roll sheet
             </GhostButton>
           ) : c.tier === 'extra' ? (
-            <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} title="Optional — a ready sheet is attached on every page this extra appears on" aria-describedby={priceId}>
+            <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} title="Optional — a ready sheet (not a prop’s) is attached on every page this extra appears on" aria-describedby={priceId}>
               <Sparkles className="h-3 w-3" aria-hidden /> Draw a sheet anyway
             </GhostButton>
           ) : (

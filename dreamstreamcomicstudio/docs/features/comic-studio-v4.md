@@ -217,7 +217,8 @@ Reference budget per page job (from `refs` caps):
   prop) with a ready sheet or photo is attached within the character slots on every page it appears on. The cast
   card says "Described in text" / "Sheet ready · used on pages" ("Sheet ready" for a prop, whose sheet is never
   attached on a page; "Queued" / "Drawing sheet…" while a sheet the user asked for is being drawn), and the
-  director's summary "text only" / "sheet ready".
+  director's summary "text only" / "sheet ready". The Cast tab's extra note and its optional "Draw a sheet anyway"
+  button say "a ready sheet (not a prop's) is attached on every page they appear on".
 - style: Pro → board + up to 2 user style refs as style refs; others → board as an object ref.
 - objects/places ≤ remaining `refs.objects`: place sheets used on the page, then the
   previous page (continuity) last.
@@ -266,11 +267,15 @@ tier only picks the resolution on the locked model.
   plan card, the Pages tab, the cast card, every next-step and "Try again" chip (`replies.ts estimateOf`), the $0
   intents (`intents.ts`) and the director's DOC SUMMARY, with no call-site change. A caller can pass `lock: null` to
   price a what-if on the unlocked tier model. `BookSummary.pricing.locked` is true when the comic is locked (or has
-  an explicit override). A few displays that still call `estimateJobs` directly (board sheet and redraw prices, the
-  style and format panels, the renders card's style and cover retries, the languages tab, and the translated-edition
-  overlay and textless-cover quotes in the server's `i18n/index.ts`) price the tier model until they switch to
-  `estimateDocJobs`. Chip quotes outside a gate use the registry list; the gate's PriceBook
-  re-quote is still the price that is reserved.
+  an explicit override). Every other display quotes and names the locked model too: the board's draw and sheet
+  prices and its "drawn with / will draw on" model names (`boardModel.ts`), the style panel's boards, the format
+  panel's redraw quote and "≈ $X to draw all N on {model}" line (`unitPrice`, so it matches the breakdown card),
+  the renders card's sheet, style and cover retries, the languages tab and the server's translated-edition overlay
+  and textless-cover quotes (`i18n/index.ts`), all through `estimateDocJobs`. Reference slots follow the lock as
+  well: the refs badges (`refsModel.ts`), the refs tool's sheet photos (`tools/refs.ts`), the writer's per-page
+  cast limit (`writer.ts`) and the page check's estimate of an unsized page's shape (`vision.ts`) resolve the page
+  or sheet model with `quoteLockOf(doc)`, as the prompt compiler does. Chip quotes outside a gate use the registry
+  list; the gate's PriceBook re-quote is still the price that is reserved.
 - **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
   `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
   version) and bumps `model_usage_monthly`. Recording never blocks or fails a job; until
@@ -449,7 +454,10 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   (`pagePlanCheck.ts planBoxes`), the Render-all hold-back and its quote, the breakdown card's fit dots
   (`summarizeBook` planFit; `drawnPanelBoxes` for a drawn page without measured boxes) and the director's line-edit
   budget all measure that layout. So a stored page whose layout text contradicts its panel sizes is held back exactly
-  when it would be drawn overfull, and never because of layout text the prompt does not draw.
+  when it would be drawn overfull, and never because of layout text the prompt does not draw. The prompt's own panel
+  rectangles (`prompts.ts pageLayoutBoxes`) are `drawnLayoutBoxes` — one implementation — and when the page check
+  can't use its reading (no usable reply, or another panel count) the estimate it stores as `panelBoxes`
+  (`boxesFrom: 'estimate'`) and letters the fallback balloons on is made on `effectiveLayout` too (`vision.ts`).
 - **The Render-all hold-back** (PD-1, `PLAN_POLICY.holdBackOverfull`; `server/src/comic/planCheckGate.ts`): applies
   only to "Render all" (`render_pages` with no explicit `pageIds` and no `force`). An overfull page that Render all
   would draw is left out of the run AND its quote; it is never refused. The notice ("Page 2 is held back: panel 3 has

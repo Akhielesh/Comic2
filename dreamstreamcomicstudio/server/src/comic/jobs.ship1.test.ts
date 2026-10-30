@@ -20,7 +20,7 @@ import { resolveImageJob } from '../../../shared/comic/models.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { candidateLayouts, checkPagePlan } from '../../../shared/comic/pagePlanCheck.js';
 import { applyOps, layoutFixOps, type DocOp } from '../../../shared/comic/ops.js';
-import { costFormatterFor } from './costText.js';
+import { costFormatter, costFormatterFor } from './costText.js';
 import {
   JOB_TIMINGS,
   bindSpendAction,
@@ -634,6 +634,9 @@ describe('plan_pages surfaces the plan-fit notes; the estimate says "up to one w
     const usd = planPagesUsd(doc, false);
     expect(planPagesQuoteText(doc, cost, false)).toBe(`${cost.approx(usd)} for 6 pages (up to ${cost.approx(Math.round(2 * usd * 10000) / 10000)} if the plan needs its one writer repair)`);
     expect(planPagesQuoteText(doc, cost, false)).not.toMatch(/pages, up to one writer repair/);
+    // The figure the docs and the jobs.ts doc comment cite: 0.012 × 6 × 1.3 = $0.0936 in dollars (never "$0.10").
+    expect(usd).toBeCloseTo(0.0936, 4);
+    expect(planPagesQuoteText(doc, costFormatter(), false)).toBe('≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)');
   });
 
   it('a whole plan refused at the budget cap says what planning costs, with the repair bound', async () => {

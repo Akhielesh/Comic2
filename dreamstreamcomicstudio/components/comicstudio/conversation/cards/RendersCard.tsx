@@ -12,8 +12,7 @@ import React from 'react';
 import { ImageIcon, RotateCcw } from 'lucide-react';
 import { getRender, renderTargetKey, type Card, type ComicDoc, type RenderState, type RenderTarget } from '../../../../shared/comic/doc';
 import type { SpendAction } from '../../../../shared/comic/ops';
-import { estimateJobs } from '../../../../shared/comic/models';
-import { quoteRenderPages } from '../../../../shared/comic/plan';
+import { estimateDocJobs, quoteRenderPages } from '../../../../shared/comic/plan';
 import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
@@ -33,7 +32,7 @@ export interface FailedItem {
 /**
  * The spend actions that redraw every failed target in one go (sequential), with a quote.
  * Pages use the server gate's own targeting (shared/comic/plan.ts) so missing sheets are
- * included honestly; the rest use the registry estimate.
+ * included honestly; the rest use the registry estimate. Every quote prices the comic's locked model.
  */
 export const retryAllFailed = (
   doc: ComicDoc,
@@ -62,10 +61,10 @@ export const retryAllFailed = (
     // One render_sheets covers characters and places (the server splits them); price each kind.
     const places = sheetItems.filter((f) => f.target.kind === 'place').length;
     const chars = sheetIds.length - places;
-    const est = estimateJobs(
+    const est = estimateDocJobs(
+      doc,
       [...(chars ? [{ kind: 'sheet' as const, count: chars }] : []), ...(places ? [{ kind: 'place' as const, count: places }] : [])],
-      tier,
-      { override, byok }
+      { byok, tier, modelOverride: override }
     );
     actions.push({ type: 'render_sheets', characterIds: sheetIds, force: true, quotedUsd: est.usd });
     usd += est.usd;
@@ -77,13 +76,13 @@ export const retryAllFailed = (
     .filter((o): o is NonNullable<typeof o> => !!o)
     .map((o) => ({ name: o.name, spec: o.spec }));
   if (directions.length) {
-    const est = estimateJobs([{ kind: 'style_option', count: directions.length }], tier, { override, byok });
+    const est = estimateDocJobs(doc, [{ kind: 'style_option', count: directions.length }], { byok, tier, modelOverride: override });
     actions.push({ type: 'render_style_options', directions, quotedUsd: est.usd });
     usd += est.usd;
   }
 
   if (failed.some((f) => f.target.kind === 'cover')) {
-    const est = estimateJobs([{ kind: 'cover', count: 1 }], tier, { override, byok });
+    const est = estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok, tier, modelOverride: override });
     actions.push({ type: 'render_cover', quotedUsd: est.usd });
     usd += est.usd;
   }

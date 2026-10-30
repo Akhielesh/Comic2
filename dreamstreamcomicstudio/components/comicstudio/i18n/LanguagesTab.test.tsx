@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../../shared/comic/doc';
 import { lineSourceHash, textSourceHash } from '../../../shared/comic/i18n';
+import { estimateJobs } from '../../../shared/comic/models';
 import { applyOps } from '../../../shared/comic/ops';
 import { AUTO_CORRECTED_NOTE } from '../../../shared/comic/translationPlan';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
@@ -137,6 +138,25 @@ describe('LanguagesTab', () => {
     const drawn = doc.pages.filter((p) => p.render.asset && p.panels.some((pn) => pn.lines.length)).map((p) => p.id);
     expect(call).toMatchObject({ type: 'render_pages', pageIds: drawn });
     expect(call.quotedUsd).toBeGreaterThan(0);
+  });
+
+  it('the overlay conversion is quoted on the comic’s locked model, as the server re-quotes it (A7 note 1)', async () => {
+    const doc = withTelugu(makeSampleDoc());
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    doc.imageModel = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
+    doc.settings = { ...doc.settings, imageModelOverride: undefined };
+    const studio = makeFakeStudio({ doc });
+    render(<LanguagesTab studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Convert to overlay lettering…' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /^Redraw .* · ≈ \$/ }));
+    });
+    const call = studio.act.mock.calls.find((c) => c[0].type === 'render_pages')![0] as { pageIds: string[]; quotedUsd: number };
+    const count = call.pageIds.length;
+    const byok = !!studio.caps?.byok;
+    const onPro = estimateJobs([{ kind: 'page', count }], doc.settings.quality, { lock: doc.imageModel, byok }).usd;
+    expect(call.quotedUsd).toBe(onPro);
+    expect(onPro).toBeGreaterThan(estimateJobs([{ kind: 'page', count }], doc.settings.quality, { byok }).usd);
   });
 
   it('change the comic language: relabel is free; making a complete translation the original runs the swap', () => {

@@ -16,7 +16,7 @@ import { newId, resolveCharacter, type Card, type CastKind, type Character, type
 import { applyOp, type DocOp } from '../../../../shared/comic/ops.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
 import { formatUsd, resolveImageJob } from '../../../../shared/comic/models.js';
-import { unitPrice } from '../../../../shared/comic/plan.js';
+import { quoteLockOf, unitPrice } from '../../../../shared/comic/plan.js';
 import { REF_LABELS, REF_LABELS_FOR, REF_LABEL_TEXT, REF_LIMITS, capFor, isRefLabel, refOwnerKey, refsOf, totalRefs } from '../../../../shared/comic/refs.js';
 import { sheetRefs, sheetRefsChanged } from '../../../../shared/comic/refRanking.js';
 import { defineTool, toolArgError, type DirectorTool, type ToolGroup } from '../extensions.js';
@@ -187,8 +187,9 @@ const noteFor = (raw: unknown, ctx: StudioContext): string | undefined => {
 
 // ── Sheet offer (quoted, never drawn) ────────────────────────────────────────
 
+/** Photo slots a sheet has on the model it is really drawn on (the comic's locked model, else tier + override). */
 const sheetSlots = (doc: ComicDoc): number => {
-  const spec = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride).spec;
+  const spec = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
   return spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects;
 };
 

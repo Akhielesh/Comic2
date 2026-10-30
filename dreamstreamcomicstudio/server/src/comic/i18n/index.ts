@@ -16,7 +16,8 @@ import { newId, type Card, type ComicDoc, type EditionTextField, type Msg, type 
 import { editionProgress, editionReadiness, i18nOf, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { LANGUAGES, languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
-import { estimateJobs, formatUsd, PLATFORM_MARKUP, type SpendEstimate } from '../../../../shared/comic/models.js';
+import { formatUsd, PLATFORM_MARKUP, type SpendEstimate } from '../../../../shared/comic/models.js';
+import { estimateDocJobs } from '../../../../shared/comic/plan.js';
 import type { DocOp, SpendAction } from '../../../../shared/comic/ops.js';
 import { effectiveRating } from '../../../../shared/comic/safety.js';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities.js';
@@ -374,19 +375,19 @@ async function runLanguage(ctx: StudioContext, lang: string, action: TranslateAc
   return res;
 }
 
-/** In-art lettering: translated editions need overlay lettering (owner rule) — the quoted fix. */
+/** In-art lettering: translated editions need overlay lettering (owner rule) — the quoted fix, on the comic's locked model. */
 export function overlayFix(doc: ComicDoc, byok: boolean): { pages: string[]; usd: number } | null {
   if (doc.format.lettering !== 'in_art') return null;
   const pages = doc.pages.filter((p) => p.panels.some((panel) => panel.lines.some((l) => l.text.trim() && !l.noTranslate)) && (p.render.asset || p.render.history.length));
-  const usd = pages.length ? estimateJobs([{ kind: 'page', count: pages.length }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd : 0;
+  const usd = pages.length ? estimateDocJobs(doc, [{ kind: 'page', count: pages.length }], { byok }).usd : 0;
   return { pages: pages.map((p) => p.id), usd };
 }
 
-/** Painted cover title: the one-time textless cover + editable overlay title (decisions-final #2). */
+/** Painted cover title: the one-time textless cover + editable overlay title (decisions-final #2), on the locked model. */
 export function textlessCoverQuote(doc: ComicDoc, byok: boolean): number | null {
   const painted = (doc.cover.lettering ?? 'in_art') === 'in_art' && !!doc.cover.render.asset;
   if (!painted) return null;
-  return estimateJobs([{ kind: 'cover', count: 1 }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok }).usd;
+  return estimateDocJobs(doc, [{ kind: 'cover', count: 1 }], { byok }).usd;
 }
 
 /**

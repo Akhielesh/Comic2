@@ -23,7 +23,7 @@ import {
 } from './vision.js';
 import { outlineBounds, placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
 import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
-import { panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
+import { drawnLayoutBoxes, effectiveLayout, panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1082,5 +1082,33 @@ describe('K1: the check reads the cast the prompt drew, and saved balloons keep 
     const l4 = pg.panels.flatMap((p) => p.lines).find((l) => l.id === 'pg_1_l4')!;
     const b = placed.find((x) => x.lineId === 'pg_1_l4')!;
     expect(b.w).toBeGreaterThanOrEqual(sizer(l4, b.w).minW! - 1e-4);
+  });
+});
+
+describe('the page check’s fallback boxes follow the layout as drawn (A7 note 6)', () => {
+  // The stored text puts panel 3 on its own row, but panel 1 is "wide" in a shared first row: the page prompt draws
+  // the layout synthesized from the sizes (effectiveLayout), so that is what the fallback must measure.
+  const conflicted = () =>
+    page(
+      [
+        panel(1, ['maya'], [line('l1', 'speech', 'Stop right there.', 'maya')], { size: 'wide', shot: 'wide' }),
+        panel(2, ['arjun'], [line('l2', 'speech', 'Never.', 'arjun')]),
+        panel(3, ['maya'], [line('l3', 'caption', 'The market wakes.')])
+      ],
+      { layout: 'Row 1: two equal panels. Row 2: one large panel.' }
+    );
+
+  it('an unusable reply stores (and letters on) the boxes of effectiveLayout, never the contradicted layout text', async () => {
+    const d = doc();
+    const pg = conflicted();
+    expect(effectiveLayout(pg, d.format)).not.toBe(pg.layout);
+    const drawn = drawnLayoutBoxes(d, pg);
+    const fromText = estimatePanelBoxes(pg, { readingDirection: 'ltr', kind: 'comic' });
+    expect(drawn).not.toEqual(fromText);
+    const { llm } = fakeLlm([{ text: 'I cannot see the image.' }, { text: '???' }]);
+    const out = await analyzePageRender({ doc: d, page: pg, dataUrl: 'data:x', llm });
+    expect(out.qc.boxesFrom).toBe('estimate');
+    expect(out.qc.panelBoxes).toEqual(drawn);
+    expect(out.balloons).toEqual(fallbackBalloons(pg, drawn, { doc: d, readingDirection: 'ltr', kind: 'comic', pageAspect: 1000 / 1500 }));
   });
 });

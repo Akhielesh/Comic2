@@ -8,7 +8,8 @@ import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
 import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
-import { STYLE_DIRECTIONS_USD, estimateJobs, styleDirectionsUsd } from '../../../../shared/comic/models';
+import { STYLE_DIRECTIONS_USD, styleDirectionsUsd } from '../../../../shared/comic/models';
+import { estimateDocJobs } from '../../../../shared/comic/plan';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
 import { stylePreviewId } from '../../../../shared/comic/library';
@@ -44,14 +45,11 @@ export const STYLE_DIRECTIONS_TEXT_USD = STYLE_DIRECTIONS_USD;
 
 /**
  * The same quote the server gate makes for `render_style_options` (jobs.ts estimateSpendAction):
- * the style boards on the comic's tier/override, plus the writer call that proposes directions
- * when none are passed. Shown on the buttons and sent as quotedUsd.
+ * the style boards on the comic's locked model (else its tier/override), plus the writer call that proposes
+ * directions when none are passed. Shown on the buttons and sent as quotedUsd.
  */
 export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, withDirections = false): number => {
-  const est = estimateJobs([{ kind: 'style_option', count, label: 'style options' }], doc.settings.quality, {
-    override: doc.settings.imageModelOverride,
-    byok
-  });
+  const est = estimateDocJobs(doc, [{ kind: 'style_option', count, label: 'style options' }], { byok });
   const text = withDirections ? 0 : styleDirectionsUsd(byok);
   return Math.round((est.usd + text) * 10000) / 10000;
 };

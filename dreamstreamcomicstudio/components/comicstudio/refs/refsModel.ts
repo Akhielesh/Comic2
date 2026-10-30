@@ -4,7 +4,7 @@
 
 import type { Character, ComicDoc, RefAsset, RefLabel, RefOwner } from '../../../shared/comic/doc';
 import { resolveImageJob } from '../../../shared/comic/models';
-import { unitPrice } from '../../../shared/comic/plan';
+import { quoteLockOf, unitPrice } from '../../../shared/comic/plan';
 import { REF_LABELS_FOR, REF_LABEL_TEXT, REF_LIMITS, capFor, refOwnerKey, refsOf } from '../../../shared/comic/refs';
 import { isPhotoLikeness, pickRefs, sheetRefs, sheetRefsChanged } from '../../../shared/comic/refRanking';
 import { canServeToOwner } from '../../../shared/comic/safety';
@@ -71,11 +71,12 @@ export function moveTargets(doc: ComicDoc | null | undefined, from: RefOwner): {
   return out;
 }
 
+// The model each job really draws on: the comic's locked model, else tier + override (as the server resolves it).
 const sheetSlots = (doc: ComicDoc): number => {
-  const spec = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride).spec;
+  const spec = resolveImageJob('sheet', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
   return spec.refs.characters > 0 ? spec.refs.characters : spec.refs.objects;
 };
-const pageSpec = (doc: ComicDoc) => resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride).spec;
+const pageSpec = (doc: ComicDoc) => resolveImageJob('page', doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
 const pageSlots = (doc: ComicDoc): number => pageSpec(doc).refs.characters;
 
 /**

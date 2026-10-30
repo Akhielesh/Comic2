@@ -56,8 +56,8 @@ import {
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { isPhotoLikeness, pickRefs, type RefContext } from '../../../shared/comic/refRanking.js';
 import {
+  drawnLayoutBoxes,
   effectiveLayout,
-  estimatePanelBoxes,
   harmonizePanelSizes,
   layoutConflicts,
   layoutPanelCount,
@@ -1123,13 +1123,10 @@ const finishJob = (resolved: ResolvedImageJob, aspect: AspectRatio, prompt: stri
 /**
  * The page's panel rectangles as the prompt (and the layout guide) describe them: the effective
  * blueprint's estimate, in reading order. Never the previous take's measured boxes — the prompt
- * describes the PLAN, so a drifted drawing is not copied into the next one.
+ * describes the PLAN, so a drifted drawing is not copied into the next one. One implementation:
+ * shared drawnLayoutBoxes, so the plan check, the gate and the free fix measure what this draws.
  */
-export const pageLayoutBoxes = (doc: ComicDoc, page: Page): Box[] =>
-  estimatePanelBoxes(
-    { panels: page.panels, layout: effectiveLayout(page, doc.format) },
-    { readingDirection: doc.format.readingDirection, kind: doc.format.kind }
-  );
+export const pageLayoutBoxes = (doc: ComicDoc, page: Page): Box[] => drawnLayoutBoxes(doc, page);
 
 const ROW_EPS = 0.005;
 const pct = (v: number): number => Math.max(1, Math.min(100, Math.round(v * 100)));

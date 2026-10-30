@@ -5,15 +5,21 @@
 // no call-site change. The expected prices below are computed from the registry with an EXPLICIT lock, never through
 // the helpers under test, so each assertion fails if the helpers ignore the lock.
 import { describe, expect, it } from 'vitest';
-import { pageSpecHash, type ComicDoc, type ImageModelLock } from '../../../shared/comic/doc.js';
+import { pageSpecHash, type ComicDoc, type ImageModelLock, type RefAsset } from '../../../shared/comic/doc.js';
 import { estimateJobs, formatUsd, getImageModel, type ImageJobKind } from '../../../shared/comic/models.js';
 import { estimateDocJobs, quoteLockOf, quoteRenderPages, summarizeBook, unitPrice } from '../../../shared/comic/plan.js';
+import { sheetRefs } from '../../../shared/comic/refRanking.js';
+import { overlayFix, textlessCoverQuote } from './i18n/index.js';
 import { routeIntent } from './intents.js';
 import { estimateSpendAction, nextStepsFor } from './jobs.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
 import { nothingNextSteps, retryNextSteps } from './replies.js';
 import { createDirectorTurn } from './tools.js';
 import { breakdownText, breakdownToolGroup } from './tools/breakdown.js';
+import { refsLine } from './tools/refs.js';
+import { numberRanges } from './refs/addRefs.js';
+import { pageAspectForDoc } from './vision.js';
+import { writerSystemPrompt } from './writer.js';
 
 const PRO: ImageModelLock = { modelId: 'nano-banana-pro', lockedAt: 1, origin: 'user_change' };
 const PRO_NAME = getImageModel('nano-banana-pro')!.nickname;
@@ -164,5 +170,64 @@ describe('$0 intents on a Pro-locked comic', () => {
     const routed = routeIntent(done, 'draw all the pages');
     expect(routed?.kind).toBe('nothing_to_draw');
     expect(routed?.nextSteps?.find((s) => s.label === 'Make the cover')?.usd).toBe(pro(done, [{ kind: 'cover', count: 1 }]));
+  });
+});
+
+// A7 wave note 1: the server's own call sites that still resolved the tier/override model. Each one now asks the
+// comic's lock (quoteLockOf) first, exactly as the runner and the prompt compiler do.
+describe('server call sites resolve the locked model (A7 note 1)', () => {
+  it('i18n: the overlay-lettering redraw and the textless cover are quoted on the locked model', () => {
+    const doc = legacyPro();
+    doc.format = { ...doc.format, lettering: 'in_art' };
+    doc.pages[0].panels[1].lines = [{ id: 'ln_x', kind: 'speech', speakerId: 'c_maya', text: 'Hello there.' }];
+    doc.cover = { ...doc.cover, lettering: 'in_art', render: { status: 'ready', history: [], model: 'nano-banana-pro', asset: { path: 'u/x/cover.webp', source: 'generated', at: 6, model: 'nano-banana-pro' } } };
+    const fix = overlayFix(doc, false)!;
+    expect(fix.pages).toEqual(['pg_1']);
+    expect(fix.usd).toBe(pro(doc, [{ kind: 'page', count: 1 }]));
+    expect(fix.usd).toBeGreaterThan(unlocked(doc, [{ kind: 'page', count: 1 }]));
+    expect(overlayFix(doc, true)!.usd).toBe(pro(doc, [{ kind: 'page', count: 1 }], true));
+    expect(textlessCoverQuote(doc, false)).toBe(pro(doc, [{ kind: 'cover', count: 1 }]));
+  });
+
+  it('writer: the per-page cast limit is the locked model’s character slots', () => {
+    const slotsLine = (doc: ComicDoc) => /At most (\d+) recurring named characters/.exec(writerSystemPrompt(doc))?.[1];
+    expect(slotsLine(plannedDoc())).toBe(String(getImageModel('nano-banana-2.1')!.refs.characters));
+    expect(slotsLine(proLocked())).toBe(String(getImageModel('nano-banana-pro')!.refs.characters));
+    expect(getImageModel('nano-banana-pro')!.refs.characters).not.toBe(getImageModel('nano-banana-2.1')!.refs.characters);
+  });
+
+  it('vision: an unsized page is estimated at the shape the locked model draws', () => {
+    const webtoon = (lock?: ImageModelLock): ComicDoc => {
+      const doc = plannedDoc();
+      doc.format = { ...doc.format, kind: 'webtoon', pageAspect: '2:3' };
+      doc.pages[0].panels = [...doc.pages[0].panels, { ...doc.pages[0].panels[2], id: 'pn_1_4', n: 4 }];
+      if (lock) doc.imageModel = { ...lock };
+      return doc;
+    };
+    const free = webtoon();
+    expect(pageAspectForDoc(free, free.pages[0])).toBeCloseTo(1 / 4, 6);
+    // Nano Banana Pro has no 1:4: a Pro-locked webtoon is drawn 9:16, so its balloons are sized for 9:16.
+    const locked = webtoon(PRO);
+    expect(pageAspectForDoc(locked, locked.pages[0])).toBeCloseTo(9 / 16, 6);
+  });
+
+  it('refs tool: the photos a sheet would use follow the locked model’s character slots', () => {
+    const withPhotos = (lock?: ImageModelLock): ComicDoc => {
+      const doc = plannedDoc();
+      doc.cast[0].refs = [1, 2, 3, 4, 5].map((i): RefAsset => ({ path: `u/x/ref${i}.webp`, source: 'upload', at: i }));
+      if (lock) doc.imageModel = { ...lock };
+      return doc;
+    };
+    const would = (doc: ComicDoc, slots: number) => {
+      const c = doc.cast[0];
+      return ` — no sheet yet (would use ${numberRanges(sheetRefs(c, slots).map((r) => c.refs.indexOf(r) + 1))})`;
+    };
+    const free = withPhotos();
+    expect(refsLine(free, free.cast[0].refs, free.cast[0]).endsWith(would(free, 4))).toBe(true);
+    // A legacy comic locked to Nano Banana (2 character slots) draws its sheet from 2 photos, not the tier model's 4.
+    const legacy = withPhotos({ modelId: 'nano-banana-legacy', lockedAt: 1, origin: 'migrated' });
+    expect(getImageModel('nano-banana-legacy')!.refs.characters).toBe(2);
+    expect(refsLine(legacy, legacy.cast[0].refs, legacy.cast[0]).endsWith(would(legacy, 2))).toBe(true);
+    expect(would(legacy, 2)).not.toBe(would(free, 4));
   });
 });
