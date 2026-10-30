@@ -1,0 +1,192 @@
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "maxLength": 10,
+      "minLength": 1,
+      "description": "A short title."
+    },
+    "code": {
+      "type": "string",
+      "maxLength": 8
+    },
+    "line": {
+      "type": "string",
+      "maxLength": 50
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 5
+      },
+      "maxItems": 3,
+      "minItems": 1
+    },
+    "level": {
+      "type": "integer",
+      "enum": [
+        1,
+        2,
+        3
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "compose",
+        "reply"
+      ]
+    },
+    "v": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10
+    },
+    "ratio": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "flag": {
+      "type": "boolean"
+    },
+    "email": {
+      "type": "string",
+      "maxLength": 254,
+      "description": "One email address, like name@example.com."
+    },
+    "link": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "Where the button goes. An https:// or mailto: link."
+    },
+    "asset": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "data",
+            "asset"
+          ]
+        },
+        "dataUri": {
+          "type": "string",
+          "maxLength": 159,
+          "description": "Only when kind is \"data\". A data:image/png, image/jpeg or image/webp base64 URI."
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Only when kind is \"asset\". An image id the app gave you."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "An image: never a web URL."
+    },
+    "rect": {
+      "type": "array",
+      "items": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "block": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "p",
+            "hr"
+          ]
+        },
+        "runs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "maxLength": 20
+              },
+              "marks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "b",
+                    "i"
+                  ]
+                },
+                "maxItems": 2
+              },
+              "link": {
+                "type": "object",
+                "properties": {
+                  "href": {
+                    "type": "string",
+                    "maxLength": 2048,
+                    "description": "An https:// or mailto: link."
+                  }
+                },
+                "required": [
+                  "href"
+                ]
+              }
+            },
+            "required": [
+              "text"
+            ]
+          },
+          "maxItems": 3,
+          "description": "Only when type is \"p\"."
+        },
+        "weight": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3,
+          "description": "Only when type is \"hr\"."
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 5
+    }
+  },
+  "required": [
+    "title",
+    "code",
+    "line",
+    "tags",
+    "level",
+    "mode",
+    "v",
+    "count",
+    "ratio",
+    "flag",
+    "email",
+    "link",
+    "asset",
+    "rect",
+    "block"
+  ],
+  "description": "Every kind the DSL has."
+}

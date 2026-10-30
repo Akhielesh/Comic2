@@ -11,4 +11,6 @@ export * from './contract/schema.js';
 export * from './contract/richdoc.js';
 export * from './contract/deck.js';
 export * from './contract/email.js';
+export { s, assertSchema, check, formatPath, isSafeHref, toJsonSchema } from './schema/index.js';
+export type { ArrayOptions, AssetRefOptions, IdOptions, InferObject, InferTuple, RangeOptions, TextOptions } from './schema/index.js';
 export * from './errors.js';

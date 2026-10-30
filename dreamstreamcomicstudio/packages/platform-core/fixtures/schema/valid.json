@@ -1,0 +1,201 @@
+{
+  "schema": "kitchen (src/schema/schema.test.ts)",
+  "base": {
+    "title": "Hello",
+    "code": "abc",
+    "line": "one line",
+    "tags": [
+      "a",
+      "b"
+    ],
+    "level": 2,
+    "mode": "compose",
+    "v": 1,
+    "count": 3,
+    "ratio": 0.5,
+    "flag": true,
+    "email": "sam@example.com",
+    "link": "https://example.com/a?b=c#d",
+    "asset": {
+      "kind": "data",
+      "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    },
+    "rect": [
+      0.1,
+      0.2,
+      0.3,
+      0.4
+    ],
+    "block": {
+      "type": "p",
+      "runs": [
+        {
+          "text": "hi",
+          "marks": [
+            "b"
+          ],
+          "link": {
+            "href": "mailto:sam@example.com"
+          }
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "the base value",
+      "at": [],
+      "value": null,
+      "same": true
+    },
+    {
+      "name": "an optional field present",
+      "at": [
+        "note"
+      ],
+      "value": "abc"
+    },
+    {
+      "name": "the other union variant",
+      "at": [
+        "block"
+      ],
+      "value": {
+        "type": "hr"
+      }
+    },
+    {
+      "name": "the other union variant with its optional field",
+      "at": [
+        "block"
+      ],
+      "value": {
+        "type": "hr",
+        "weight": 3
+      }
+    },
+    {
+      "name": "a host asset id",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "asset",
+        "id": "user-0001/assets/a.png"
+      }
+    },
+    {
+      "name": "a JPEG data image",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q=="
+      }
+    },
+    {
+      "name": "a WebP data image",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA=="
+      }
+    },
+    {
+      "name": "a mailto: link with a query",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com,lee@example.org?subject=Hi%20there"
+    },
+    {
+      "name": "an https: link with a port, parentheses and escapes",
+      "at": [
+        "link"
+      ],
+      "value": "https://example.com:8443/path_(1)?q=a+b&r=%C3%A9#x"
+    },
+    {
+      "name": "a sub-addressed email",
+      "at": [
+        "email"
+      ],
+      "value": "first.last+tag@sub.example.co"
+    },
+    {
+      "name": "an emoji (a surrogate pair)",
+      "at": [
+        "title"
+      ],
+      "value": "Hi \ud83d\udc4b"
+    },
+    {
+      "name": "a tab and a right-to-left mark",
+      "at": [
+        "title"
+      ],
+      "value": "a\tb\u200fc"
+    },
+    {
+      "name": "a line break in a multi-line field",
+      "at": [
+        "title"
+      ],
+      "value": "a\nb"
+    },
+    {
+      "name": "a list at its cap",
+      "at": [
+        "tags"
+      ],
+      "value": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "name": "the lowest enum value",
+      "at": [
+        "level"
+      ],
+      "value": 1
+    },
+    {
+      "name": "a rect at the slide edges",
+      "at": [
+        "rect"
+      ],
+      "value": [
+        0,
+        0,
+        1,
+        1
+      ]
+    },
+    {
+      "name": "a whole number at its maximum",
+      "at": [
+        "count"
+      ],
+      "value": 10
+    },
+    {
+      "name": "a number at its minimum",
+      "at": [
+        "ratio"
+      ],
+      "value": 0
+    },
+    {
+      "name": "text at its cap",
+      "at": [
+        "title"
+      ],
+      "value": "1234567890"
+    }
+  ]
+}

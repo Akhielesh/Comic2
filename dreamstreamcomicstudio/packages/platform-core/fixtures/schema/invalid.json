@@ -1,0 +1,541 @@
+{
+  "schema": "kitchen (src/schema/schema.test.ts)",
+  "base": {
+    "title": "Hello",
+    "code": "abc",
+    "line": "one line",
+    "tags": [
+      "a",
+      "b"
+    ],
+    "level": 2,
+    "mode": "compose",
+    "v": 1,
+    "count": 3,
+    "ratio": 0.5,
+    "flag": true,
+    "email": "sam@example.com",
+    "link": "https://example.com/a?b=c#d",
+    "asset": {
+      "kind": "data",
+      "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    },
+    "rect": [
+      0.1,
+      0.2,
+      0.3,
+      0.4
+    ],
+    "block": {
+      "type": "p",
+      "runs": [
+        {
+          "text": "hi",
+          "marks": [
+            "b"
+          ],
+          "link": {
+            "href": "mailto:sam@example.com"
+          }
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "the root is a list",
+      "root": [],
+      "path": "",
+      "code": "type"
+    },
+    {
+      "name": "the root is null",
+      "root": null,
+      "path": "",
+      "code": "type"
+    },
+    {
+      "name": "a required field is missing",
+      "at": [
+        "title"
+      ],
+      "delete": true,
+      "path": "title",
+      "code": "required"
+    },
+    {
+      "name": "an unknown key",
+      "at": [
+        "extra"
+      ],
+      "value": 1,
+      "path": "extra",
+      "code": "unknown-key"
+    },
+    {
+      "name": "an own __proto__ key (prototype pollution)",
+      "at": [
+        "__proto__"
+      ],
+      "value": {
+        "polluted": true
+      },
+      "path": "__proto__",
+      "code": "unknown-key"
+    },
+    {
+      "name": "text of the wrong type",
+      "at": [
+        "title"
+      ],
+      "value": 42,
+      "path": "title",
+      "code": "type"
+    },
+    {
+      "name": "text over its cap",
+      "at": [
+        "title"
+      ],
+      "value": "Hello world",
+      "path": "title",
+      "code": "too-long"
+    },
+    {
+      "name": "text under its minimum",
+      "at": [
+        "title"
+      ],
+      "value": "",
+      "path": "title",
+      "code": "too-short"
+    },
+    {
+      "name": "a NUL character",
+      "at": [
+        "title"
+      ],
+      "value": "a\u0000b",
+      "path": "title",
+      "code": "bad-char"
+    },
+    {
+      "name": "a bidi override (spoofed file name)",
+      "at": [
+        "title"
+      ],
+      "value": "a\u202eexe.pdf",
+      "path": "title",
+      "code": "bad-char"
+    },
+    {
+      "name": "an unpaired surrogate",
+      "at": [
+        "title"
+      ],
+      "value": "a\ud800b",
+      "path": "title",
+      "code": "bad-char"
+    },
+    {
+      "name": "text that misses its pattern",
+      "at": [
+        "code"
+      ],
+      "value": "ABC",
+      "path": "code",
+      "code": "pattern"
+    },
+    {
+      "name": "a line break in a single-line field",
+      "at": [
+        "line"
+      ],
+      "value": "one\ntwo",
+      "path": "line",
+      "code": "single-line"
+    },
+    {
+      "name": "a list of the wrong type",
+      "at": [
+        "tags"
+      ],
+      "value": "a",
+      "path": "tags",
+      "code": "type"
+    },
+    {
+      "name": "a list over its cap",
+      "at": [
+        "tags"
+      ],
+      "value": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "path": "tags",
+      "code": "too-many"
+    },
+    {
+      "name": "a list under its minimum",
+      "at": [
+        "tags"
+      ],
+      "value": [],
+      "path": "tags",
+      "code": "too-few"
+    },
+    {
+      "name": "a list item over its cap",
+      "at": [
+        "tags",
+        1
+      ],
+      "value": "toolong",
+      "path": "tags[1]",
+      "code": "too-long"
+    },
+    {
+      "name": "a number outside its enum",
+      "at": [
+        "level"
+      ],
+      "value": 4,
+      "path": "level",
+      "code": "enum"
+    },
+    {
+      "name": "a numeric enum given as text",
+      "at": [
+        "level"
+      ],
+      "value": "1",
+      "path": "level",
+      "code": "enum"
+    },
+    {
+      "name": "a mode that does not exist (send)",
+      "at": [
+        "mode"
+      ],
+      "value": "send",
+      "path": "mode",
+      "code": "enum"
+    },
+    {
+      "name": "the wrong literal",
+      "at": [
+        "v"
+      ],
+      "value": 2,
+      "path": "v",
+      "code": "literal"
+    },
+    {
+      "name": "a fraction where a whole number belongs",
+      "at": [
+        "count"
+      ],
+      "value": 1.5,
+      "path": "count",
+      "code": "int"
+    },
+    {
+      "name": "a whole number over its maximum",
+      "at": [
+        "count"
+      ],
+      "value": 11,
+      "path": "count",
+      "code": "above-max"
+    },
+    {
+      "name": "a whole number under its minimum",
+      "at": [
+        "count"
+      ],
+      "value": -1,
+      "path": "count",
+      "code": "below-min"
+    },
+    {
+      "name": "a number given as text",
+      "at": [
+        "ratio"
+      ],
+      "value": "0.5",
+      "path": "ratio",
+      "code": "type"
+    },
+    {
+      "name": "a number over its maximum",
+      "at": [
+        "ratio"
+      ],
+      "value": 2,
+      "path": "ratio",
+      "code": "above-max"
+    },
+    {
+      "name": "a boolean given as text",
+      "at": [
+        "flag"
+      ],
+      "value": "true",
+      "path": "flag",
+      "code": "type"
+    },
+    {
+      "name": "not an email address",
+      "at": [
+        "email"
+      ],
+      "value": "not-an-email",
+      "path": "email",
+      "code": "email"
+    },
+    {
+      "name": "an email that smuggles a header line",
+      "at": [
+        "email"
+      ],
+      "value": "a@example.com\r\nBcc: x@evil.example",
+      "path": "email",
+      "code": "email"
+    },
+    {
+      "name": "an email with a display name",
+      "at": [
+        "email"
+      ],
+      "value": "Sam <sam@example.com>",
+      "path": "email",
+      "code": "email"
+    },
+    {
+      "name": "a javascript: link",
+      "at": [
+        "link"
+      ],
+      "value": "javascript:alert(1)",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "an http: link",
+      "at": [
+        "link"
+      ],
+      "value": "http://example.com/",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a data: link",
+      "at": [
+        "link"
+      ],
+      "value": "data:text/html,<script>alert(1)</script>",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a link with user@ before the host",
+      "at": [
+        "link"
+      ],
+      "value": "https://bank.example@evil.example/",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a link over its cap",
+      "at": [
+        "link"
+      ],
+      "value": "https://example.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "path": "link",
+      "code": "too-long"
+    },
+    {
+      "name": "an image given as a URL",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "url",
+        "url": "https://example.com/x.png"
+      },
+      "path": "asset.kind",
+      "code": "tag"
+    },
+    {
+      "name": "an SVG data image",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/svg+xml;base64,PHN2Zy8+"
+      },
+      "path": "asset.dataUri",
+      "code": "asset"
+    },
+    {
+      "name": "PNG declared, JPEG bytes",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/png;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2Q=="
+      },
+      "path": "asset.dataUri",
+      "code": "asset"
+    },
+    {
+      "name": "a data image over its byte cap",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/png;base64,iVBORw0KGgoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "path": "asset.dataUri",
+      "code": "asset-too-large"
+    },
+    {
+      "name": "an asset id that climbs out (..)",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "asset",
+        "id": "user/../../etc/passwd"
+      },
+      "path": "asset.id",
+      "code": "asset"
+    },
+    {
+      "name": "an image with an extra URL field",
+      "at": [
+        "asset"
+      ],
+      "value": {
+        "kind": "data",
+        "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        "url": "https://example.com/x.png"
+      },
+      "path": "asset.url",
+      "code": "unknown-key"
+    },
+    {
+      "name": "a tuple with an item missing",
+      "at": [
+        "rect"
+      ],
+      "value": [
+        0.1,
+        0.2,
+        0.3
+      ],
+      "path": "rect",
+      "code": "too-few"
+    },
+    {
+      "name": "a tuple item over its maximum",
+      "at": [
+        "rect",
+        2
+      ],
+      "value": 1.5,
+      "path": "rect[2]",
+      "code": "above-max"
+    },
+    {
+      "name": "a union tag that names no variant",
+      "at": [
+        "block"
+      ],
+      "value": {
+        "type": "script",
+        "runs": []
+      },
+      "path": "block.type",
+      "code": "tag"
+    },
+    {
+      "name": "a union value without its tag",
+      "at": [
+        "block"
+      ],
+      "value": {
+        "runs": []
+      },
+      "path": "block.type",
+      "code": "required"
+    },
+    {
+      "name": "a nested run over its cap",
+      "at": [
+        "block",
+        "runs",
+        0,
+        "text"
+      ],
+      "value": "xxxxxxxxxxxxxxxxxxxxx",
+      "path": "block.runs[0].text",
+      "code": "too-long"
+    },
+    {
+      "name": "a nested mark outside its enum",
+      "at": [
+        "block",
+        "runs",
+        0,
+        "marks",
+        0
+      ],
+      "value": "z",
+      "path": "block.runs[0].marks[0]",
+      "code": "enum"
+    },
+    {
+      "name": "a nested javascript: link",
+      "at": [
+        "block",
+        "runs",
+        0,
+        "link",
+        "href"
+      ],
+      "value": "javascript:alert(1)",
+      "path": "block.runs[0].link.href",
+      "code": "link"
+    },
+    {
+      "name": "a field of another variant",
+      "at": [
+        "block"
+      ],
+      "value": {
+        "type": "hr",
+        "runs": []
+      },
+      "path": "block.runs",
+      "code": "unknown-key"
+    },
+    {
+      "name": "null for an optional field",
+      "at": [
+        "note"
+      ],
+      "value": null,
+      "path": "note",
+      "code": "type"
+    }
+  ]
+}

@@ -193,8 +193,12 @@ export interface CheckError {
   message: string;
 }
 
-/** `check()` never throws on a bad value; on success `value` is a fresh plain copy (absent optionals dropped). */
-export type CheckResult<T> = { ok: true; value: T } | { ok: false; errors: CheckError[] };
+/**
+ * `check()` never throws on a bad value; on success `value` is a fresh plain copy (absent optionals dropped). Each
+ * branch names the other's field as `undefined`, so `r.errors` / `r.value` read the same with `strict` off (the
+ * backend compiles that way, where `if (!r.ok)` does not narrow) and on.
+ */
+export type CheckResult<T> = { ok: true; value: T; errors?: undefined } | { ok: false; errors: CheckError[]; value?: undefined };
 
 export interface CheckOptions {
   /** Stop after this many errors (default `SCHEMA_LIMITS.maxErrors`). */
