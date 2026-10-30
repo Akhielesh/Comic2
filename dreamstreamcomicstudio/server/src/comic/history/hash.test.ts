@@ -8,8 +8,8 @@
 //   * a chunk whose content was altered never parses; excluded records never reach a chunk.
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { collectAssetPaths, normalizeDoc, pageSpecHash, type ComicDoc, type DocOp } from '../../../../shared/comic/doc.js';
-import { applyOps } from '../../../../shared/comic/ops.js';
+import { collectAssetPaths, normalizeDoc, pageSpecHash, type ComicDoc } from '../../../../shared/comic/doc.js';
+import { applyOps, type DocOp } from '../../../../shared/comic/ops.js';
 import { stableStringify } from '../../../../shared/comic/hash.js';
 import { semanticSectionContent } from '../../../../shared/comic/history/diff.js';
 import {
@@ -205,7 +205,7 @@ describe('the identity cache', () => {
       case 8:
         return { op: 'cover', patch: { title: `Cover ${i}` } };
       default:
-        return page && panel && line ? { op: 'line', pageId: page.id, panelId: panel.id, id: `l_new_${i}`, patch: { kind: 'dialogue', text: `added ${i}` } } : null;
+        return page && panel && line ? { op: 'line', pageId: page.id, panelId: panel.id, id: `l_new_${i}`, patch: { kind: 'speech', text: `added ${i}` } } : null;
     }
   };
 

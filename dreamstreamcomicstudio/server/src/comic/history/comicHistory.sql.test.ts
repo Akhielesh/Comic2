@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-// @ts-expect-error — a plain .mjs script with no type declarations
+// @ts-ignore — a plain .mjs script with no type declarations (an error under some configs, none under others)
 import { testFiles } from '../../../sql/tests/harness.mjs';
 
 const SQL_DIR = resolve(__dirname, '../../../sql');
