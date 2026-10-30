@@ -1,7 +1,7 @@
 // @vitest-environment node
 // K2b (pro plan §5.3, §10 Wave 2): the Ship 2 client-patch sanitizers. Every rejection the plan lists (an out-of-range
 // box, an unknown panel, 13 cuts, a non-hex colour, a stale page_cuts path, a foreign / client-writable / blocked src,
-// 25 overlays, 3 extra pictures, NaN), the page_cuts provenance rule (keepBy only for server-stamped cuts), and one
+// 25 overlays, 3 extra pictures, NaN), the page_cuts provenance rule (keepBy keeps `by` only for server-stamped cuts; an unproven claim is written as the user's), and one
 // acceptance test per op shape the editor engine sends (B9 wave notes). Everything goes through the real entry point,
 // jobs.ts sanitizePatchOps, the way a client batch reaches the doc.
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -237,12 +237,15 @@ describe('every sanitizer rejection (pro plan §10 K2b tests)', () => {
 
 describe('page_cuts provenance: keepBy only for cuts the server stamped', () => {
   const naming = { op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: { ...STAMPED, cuts: STAMPED.cuts.map((c, j) => ({ ...c, panelId: `pn_1_${j + 1}` })) }, moveBalloons: false };
+  const keepByOf = (op: DocOp) => (op as { keepBy?: boolean }).keepBy;
 
-  it('a client cannot forge detector cuts: keepBy with cuts the server never stamped rejects the batch (not stripped)', () => {
+  it('a client cannot forge detector cuts: keepBy on cuts the server never stamped is dropped — they are written as the user’s', () => {
     const doc = fixture();
     const forged = { ...STAMPED, by: 'detect' as const, cuts: STAMPED.cuts.map((c) => ({ ...c, conf: 0.99 })) };
-    rejects(() => sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: forged, keepBy: true }]), 400);
-    // Without keepBy the same cuts are the user's (applyOp writes by: 'user').
+    const ops = sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: forged, keepBy: true }]);
+    expect(keepByOf(ops[0])).toBeUndefined();
+    expect(findPage(applyOps(doc, ops, 3), 'pg_1')!.render.cuts).toEqual({ ...forged, by: 'user' });
+    // Without keepBy the same cuts are the user's too (applyOp writes by: 'user').
     const after = applyOps(doc, sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: forged }]), 3);
     expect(findPage(after, 'pg_1')!.render.cuts!.by).toBe('user');
   });
@@ -251,7 +254,7 @@ describe('page_cuts provenance: keepBy only for cuts the server stamped', () => 
     const doc = fixture();
     const ops = sanitize(doc, [naming]);
     expect(ops[0]).toMatchObject({ op: 'page_cuts', moveBalloons: false });
-    expect((ops[0] as { keepBy?: boolean }).keepBy).toBeUndefined();
+    expect(keepByOf(ops[0])).toBeUndefined();
     const named = applyOps(doc, ops, 3);
     expect(findPage(named, 'pg_1')!.render.cuts!.by).toBe('user');
     const undo = inverseOps(doc, ops);
@@ -261,13 +264,46 @@ describe('page_cuts provenance: keepBy only for cuts the server stamped', () => 
     expect(findPage(back, 'pg_1')!.render.cuts).toEqual(STAMPED);
   });
 
-  it('keepBy for the current server-stamped cuts is accepted; a user-written value is never "stamped"', () => {
+  it('after a restart (the process record is gone) that undo is still accepted — the whole batch, never a 400 — as the user’s cuts', () => {
+    const doc = fixture();
+    const ops = sanitize(doc, [naming]);
+    const named = applyOps(doc, ops, 3);
+    const undo = inverseOps(doc, ops);
+    __resetStampedCutsForTests(); // the backend slept or redeployed; the undo stack (7 days) did not
+    const clean = sanitize(named, undo);
+    expect(clean).toHaveLength(undo.length);
+    expect(keepByOf(clean[0])).toBeUndefined();
+    const back = applyOps(named, clean, 4);
+    expect(findPage(back, 'pg_1')!.render.cuts).toEqual({ ...STAMPED, by: 'user' });
+    expect(findPage(back, 'pg_1')!.balloons).toEqual(findPage(doc, 'pg_1')!.balloons);
+  });
+
+  it('a version of the same drawing in render.history is a durable stamp source (wave note K2a FIX)', () => {
+    const doc = fixture();
+    const page = doc.pages[0];
+    doc.pages[0] = { ...page, render: { ...page.render, cuts: { ...naming.cuts, by: 'user' }, history: [{ ...asset(own('p1-v3')), cuts: STAMPED }, ...page.render.history] } };
+    __resetStampedCutsForTests();
+    const ops = sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: STAMPED, keepBy: true }]);
+    expect(keepByOf(ops[0])).toBe(true);
+    expect(findPage(applyOps(doc, ops, 3), 'pg_1')!.render.cuts).toEqual(STAMPED);
+    // A history version of ANOTHER drawing proves nothing for this one.
+    doc.pages[0] = { ...doc.pages[0], render: { ...doc.pages[0].render, history: [{ ...asset(own('p1-v1')), cuts: STAMPED }] } };
+    expect(keepByOf(sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: STAMPED, keepBy: true }])[0])).toBeUndefined();
+  });
+
+  it('keepBy for the current server-stamped cuts is kept; a user-written value is never "stamped"; the undo of a user edit keeps keepBy', () => {
     const doc = fixture();
     expect(sanitize(doc, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: STAMPED, keepBy: true }])[0]).toMatchObject({ keepBy: true });
     const userCuts = { ...STAMPED, by: 'user' as const };
     const mine = fixture();
     mine.pages[0].render.cuts = userCuts;
-    rejects(() => sanitize(mine, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: { ...STAMPED, at: 99 }, keepBy: true }]), 400);
+    expect(keepByOf(sanitize(mine, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: { ...STAMPED, at: 99 }, keepBy: true }])[0])).toBeUndefined();
+    // Undo of a user → user cuts change: the inverse carries keepBy with cuts that are already the user's (no claim).
+    const edit = sanitize(mine, [{ op: 'page_cuts', pageId: 'pg_1', path: own('p1-v3'), cuts: { ...userCuts, at: 7 } }]);
+    const edited = applyOps(mine, edit, 3);
+    const undo = sanitize(edited, inverseOps(mine, edit));
+    expect(undo[0]).toMatchObject({ op: 'page_cuts', keepBy: true });
+    expect(findPage(applyOps(edited, undo, 4), 'pg_1')!.render.cuts).toEqual(userCuts);
   });
 
   it('moveBalloons and keepBy are booleans only', () => {

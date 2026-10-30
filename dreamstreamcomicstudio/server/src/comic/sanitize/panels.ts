@@ -14,9 +14,13 @@
 // frame source and is not an extra picture (ops.ts extraSourceCount).
 //
 // page_cuts provenance (wave note K2b-5, B9-12): the server never trusts a client's `by`. `keepBy` (the undo inverse that
-// puts the detector's cuts back) is accepted only when the cuts deep-equal cuts the SERVER stamped for that same drawing:
-// the page's current cuts while they are still server-stamped, or ones this process saw stamped on that path earlier
-// (STAMPED_CUTS, remembered the moment a client first replaces them). Anything else rejects the batch, never strips it.
+// puts the detector's cuts back) keeps the incoming `by` only when the cuts deep-equal cuts the SERVER stamped for that
+// same drawing, from what the doc durably holds — the page's current cuts while they are still server-stamped, a version
+// of that same drawing in render.history (its VersionMeta.cuts) — or from this process's record (STAMPED_CUTS, remembered
+// the moment a client first replaces them; lost on a restart). A claim the server can't prove (an Undo after the backend
+// slept or redeployed — undo stacks outlive the process) is NOT refused: the keepBy is dropped and the cuts are written
+// as the user's (by 'user'), the documented K2a fallback. Undo always works, a client never sets `by`, and the committed
+// op (without keepBy) brings the client's mirror to the same value.
 //
 // Sanitizers see the doc as the batch has built it so far (jobs.ts sanitizePatchOps `working`), so a panel added earlier
 // in the batch exists for the frames, cuts and overlays after it.
@@ -260,12 +264,21 @@ export const rememberStampedCuts = (doc: Pick<ComicDoc, 'id'>, path: string, cut
   while (STAMPED_CUTS.size > STAMPED_CUTS_MAX) STAMPED_CUTS.delete(STAMPED_CUTS.keys().next().value as string);
 };
 
-/** Whether `cuts` deep-equal cuts the server stamped for this drawing (the keepBy rule). */
+const stampedHash = (cuts: PanelCuts | undefined): string | null => {
+  if (!cuts || cuts.by === 'user') return null;
+  const normal = normalizePanelCuts(cuts);
+  return normal ? cutsHash(normal) : null;
+};
+
+/**
+ * Whether `cuts` deep-equal cuts the server stamped for this drawing (the keepBy rule). Durable sources first (the live
+ * cuts while server-stamped; a version of the same drawing in render.history), then this process's record.
+ */
 export const isServerStampedCuts = (doc: Pick<ComicDoc, 'id'>, page: Pick<Page, 'render'>, path: string, cuts: PanelCuts): boolean => {
   if (cuts.by === 'user') return false;
   const hash = cutsHash(cuts);
-  const live = page.render.asset?.path === path ? page.render.cuts : undefined;
-  if (live && live.by !== 'user' && cutsHash(live) === hash) return true;
+  if (page.render.asset?.path === path && stampedHash(page.render.cuts) === hash) return true;
+  if (page.render.history.some((v) => v.path === path && stampedHash(v.cuts) === hash)) return true;
   return (STAMPED_CUTS.get(stampKey(doc, path)) || []).includes(hash);
 };
 
@@ -328,13 +341,9 @@ const pageCuts: OpSanitizer<Op<'page_cuts'>> = {
     const out: Op<'page_cuts'> = { op: 'page_cuts', pageId: page.id, path: current, cuts: op.cuts === null || op.cuts === undefined ? null : cutsOf(page, op.cuts, ctx) };
     if (op.keepBy !== undefined) {
       const keepBy = boolOf(op.keepBy, 'cut provenance');
-      if (keepBy) {
-        // Provenance is the server's: keepBy is honoured only for cuts it stamped on this very drawing.
-        if (out.cuts && !isServerStampedCuts(doc, page, current, out.cuts)) {
-          throw bad("Those cuts can't be restored as the detector's — check the cuts again.");
-        }
-        out.keepBy = true;
-      }
+      // Provenance is the server's: keepBy keeps a non-user `by` only for cuts it stamped on this very drawing. Clearing
+      // the cuts, or cuts already the user's, claim nothing. An unproven claim drops keepBy (written as by 'user').
+      if (keepBy && (!out.cuts || out.cuts.by === 'user' || isServerStampedCuts(doc, page, current, out.cuts))) out.keepBy = true;
     }
     if (op.moveBalloons !== undefined) out.moveBalloons = boolOf(op.moveBalloons, 'balloon setting');
     return out;
