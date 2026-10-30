@@ -16,7 +16,7 @@
 
 ## Patches
 
-Every patched spot is marked `[DreamStream Pn]` in `pptxgen.es.js`. Each throws an `Error` whose `code` is `'blocked'`
+Every patched spot is marked `[DreamStream Pn]` in `pptxgen.es.js`. Each of P1–P7 throws an `Error` whose `code` is `'blocked'`
 and whose message starts with `blocked:`; `src/pptx.ts` maps it to `RenderError('blocked')`.
 
 | # | Where | Change |
@@ -29,14 +29,22 @@ and whose message starts with `blocked:`; `src/pptx.ts` maps it to `RenderError(
 | P5 | `createSvgPngPreview` | Replaced: rejects (`<img>` and canvas removed; SVG is refused by P1). |
 | P6 | `createHyperlinkRels` (text and table-cell hyperlinks) | A `url` hyperlink must pass `dsAssertHyperlink` (so `javascript:`, `data:`, `http:` and `file:` links are refused). |
 | P7 | `writeFile`, `writeFileToBrowser` | Replaced: both reject. No `node:fs` write and no DOM download from inside the library; callers use `write({outputType})` and save the bytes themselves. |
+| P8 | `genXmlTextBody` (bug fix) | Upstream writes an `<a:pPr>` before every run of a paragraph (never empty since its ISSUE#589 fix), so a paragraph with two runs (bold inside a sentence, a link) gets a second `<a:pPr>` after its first `<a:r>`, which the DrawingML schema does not allow. Only the first run of a paragraph writes it now. Worth upstreaming. |
 
-Nothing else is changed: XML generation, charts, tables, text and the zip writer are upstream's code.
+P0–P7 are security patches; P8 is a correctness fix. Nothing else is changed: XML generation, charts, tables, text
+and the zip writer are upstream's code.
 
 ## Updating
 
-1. `npm pack pptxgenjs@<ver>` in an empty folder; check the tarball's sha512 against the registry's `dist.integrity`.
-2. Re-apply P0–P7 to `package/dist/pptxgen.es.js` (each anchor must match exactly once; review any upstream change
-   near a patched function by hand), copy `LICENSE` unchanged, and update the version and integrity above.
+`scripts/pptxgenjs-patches.json` holds the exact edits (P0–P8, as `old` → `new` pairs in order) and
+`scripts/vendor-pptxgenjs.mjs` applies them, refusing to run when an `old` no longer matches exactly once. The rest of
+the file stays byte-for-byte upstream (its CRLF line ends included).
+
+1. `npm pack pptxgenjs@<ver>` in an empty folder; check the tarball's sha512 against the registry's `dist.integrity`;
+   `tar -xzf pptxgenjs-<ver>.tgz`.
+2. `node packages/platform-render/scripts/vendor-pptxgenjs.mjs package/dist/pptxgen.es.js`. If an edit no longer
+   matches, read the upstream change near that function and update the edit by hand. Copy `LICENSE` unchanged, and
+   update the version and integrity above and in the JSON.
 3. Update `vendored.records[0].version` in `scripts/licence-policy.json` and run `node scripts/licence-check.mjs`.
-4. Run `npx vitest run packages/platform-render` (the vendor guard test fails if any network or file path comes back)
-   and regenerate the PPTX golden on purpose: `UPDATE_GOLDENS=1 npx vitest run packages/platform-render`.
+4. Run `npx vitest run packages/platform-render` (the vendor guard tests fail if any network or file path comes back)
+   and regenerate the PPTX goldens on purpose: `UPDATE_GOLDENS=1 npx vitest run packages/platform-render/src/golden.test.ts`.

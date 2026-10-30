@@ -22,6 +22,8 @@ export interface TextRunOptions {
   hyperlink?: Hyperlink;
   /** Ends the paragraph after this run. */
   breakLine?: boolean;
+  /** A line break (`<a:br/>`) before this run, inside the same paragraph. */
+  softBreakBefore?: boolean;
   bullet?: boolean | { indent?: number; type?: 'number' };
   indentLevel?: number;
   align?: 'left' | 'center' | 'right' | 'justify';

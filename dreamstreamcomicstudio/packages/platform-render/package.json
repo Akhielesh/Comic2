@@ -1,0 +1,30 @@
+{
+  "name": "@dreamstream/platform-render",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The DreamStream platform's light renderers: RichDoc to DOCX (docx), DeckSpec to PPTX (a vendored PptxGenJS patched to take data: images only) and Markdown to RichDoc (unified + remark). They never fetch a URL or read a path. Loaded lazily in the browser (services/platformExport.ts) and, from wave 4, in the light engine.",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./docx": "./src/docx.ts",
+    "./pptx": "./src/pptx.ts",
+    "./markdown": "./src/markdown.ts",
+    "./fixtures/*": "./fixtures/*",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "docx": "9.11.0",
+    "jszip": "^3.10.1",
+    "remark-gfm": "^4.0.0",
+    "remark-parse": "11.0.0",
+    "unified": "11.0.5"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "cd ../.. && vitest run packages/platform-render",
+    "goldens": "cd ../.. && UPDATE_GOLDENS=1 vitest run packages/platform-render/src/golden.test.ts"
+  }
+}

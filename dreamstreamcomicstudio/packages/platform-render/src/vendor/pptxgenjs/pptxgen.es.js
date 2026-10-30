@@ -1,5 +1,5 @@
 /* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */
-/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P7). */
+/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P8). */
 import JSZip from 'jszip';
 
 // [DreamStream P0] Guards. Images come only as data: URIs (PNG, JPEG or WebP) the host already holds; links only https:/mailto:.
@@ -2751,6 +2751,7 @@ function createHyperlinkRels(target, text, options) {
                 console.log('ERROR: \'hyperlink requires either: `url` or `slide`\'');
             }
             else {
+                // [DreamStream P6] https: and mailto: links only
                 dsAssertHyperlink(text.options.hyperlink, 'text');
                 const relId = getNewRelId(target);
                 target._rels.push({
@@ -6101,7 +6102,9 @@ function genXmlTextBody(slideObj) {
             textObj.options.paraSpaceBefore = textObj.options.paraSpaceBefore || opts.paraSpaceBefore;
             textObj.options.paraSpaceAfter = textObj.options.paraSpaceAfter || opts.paraSpaceAfter;
             paragraphPropXml = genXmlParagraphProperties(textObj, false);
-            strSlideXml += paragraphPropXml.replace('<a:pPr></a:pPr>', ''); // IMPORTANT: Empty "pPr" blocks will generate needs-repair/corrupt msg
+            // [DreamStream P8] one <a:pPr> per paragraph, first (upstream wrote one before every run)
+            if (idx === 0)
+                strSlideXml += paragraphPropXml.replace('<a:pPr></a:pPr>', ''); // IMPORTANT: Empty "pPr" blocks will generate needs-repair/corrupt msg
             // C: Inherit any main options (color, fontSize, etc.)
             // NOTE: We only pass the text.options to genXmlTextRun (not the Slide.options),
             // so the run building function cant just fallback to Slide.color, therefore, we need to do that here before passing options below.
