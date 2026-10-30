@@ -200,13 +200,15 @@ describe('thinning, the budget and the GC grace', () => {
       ids.push((await capture(store, ME, tinyDoc(i), clock.t)).res.id);
     }
     await store.label(ME, ids[1], { name: 'Keep me' });
+    // Named but unpinned by hand: named versions are kept forever all the same.
+    expect(await store.label(ME, ids[3], { name: 'Named', pinned: false })).toMatchObject({ pinned: false, name: 'Named' });
     expect(store.rows(ME)).toHaveLength(12);
     clock.t = t0 + 3 * DAY;
     const res = (await capture(store, ME, tinyDoc(99), clock.t)).res;
     const left = store.rows(ME);
-    // Hours: [0..5] and [6..11] are two buckets. Each keeps its newest; ids[1] is pinned; ids[11] was the newest row.
-    expect(res.thinned).toBe(9);
-    expect(left.map((r) => r.id).sort()).toEqual([ids[1], ids[5], ids[11], res.id].sort());
+    // Hours: [0..5] and [6..11] are two buckets. Each keeps its newest; ids[1] is pinned, ids[3] named; ids[11] was the newest row.
+    expect(res.thinned).toBe(8);
+    expect(left.map((r) => r.id).sort()).toEqual([ids[1], ids[3], ids[5], ids[11], res.id].sort());
   });
 
   it('caps unpinned rows (oldest first) and thins over the byte budget with a report', async () => {

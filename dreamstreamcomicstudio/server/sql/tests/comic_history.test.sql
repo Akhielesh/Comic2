@@ -17,6 +17,10 @@
 \set ON_ERROR_STOP 1
 set client_min_messages = warning;
 
+-- Like Supabase: new tables in public are granted to the API roles unless revoked (the stub already does this for
+-- functions), so a table this file forgets to lock down shows up below.
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+
 -- ── Stand-ins for the production tables (only the columns these files read) ─────────────────────────────────────
 create table public.projects (
   id uuid primary key default gen_random_uuid(),
@@ -353,6 +357,7 @@ declare
   week200 timestamptz := date_trunc('week', now() - interval '200 days');
   alt_head uuid;
   alt_line uuid;
+  named uuid;
   parent uuid;
   child uuid;
   res jsonb;
@@ -366,6 +371,9 @@ begin
   perform pg_temp.row(p, 'b3 newest of its hour', hour3 + interval '30 minutes', c0);
   perform pg_temp.row(p, 'b4 another hour', hour3 - interval '2 hours', c0);
   perform pg_temp.row(p, 'k1 keep_until', hour3 + interval '5 minutes', c0, null, false, now() + interval '1 day');
+  -- A named row that was unpinned by hand: named versions are kept forever all the same.
+  named := pg_temp.row(p, 'n1 named, unpinned', hour3 + interval '7 minutes', c0);
+  update public.comic_versions set name = 'Kept by name' where id = named;
   alt_head := pg_temp.row(p, 'e1 a line head', hour3 + interval '1 minute', c0);
   perform pg_temp.row(p, 'c1', day20 + interval '10 hours', c0);
   perform pg_temp.row(p, 'c2 newest of its day', day20 + interval '15 hours', c0);
@@ -388,6 +396,7 @@ begin
   assert pg_temp.alive('b3 newest of its hour') and pg_temp.alive('b4 another hour'), 'the newest per hour stays';
   assert pg_temp.alive('c2 newest of its day') and pg_temp.alive('d2 newest of its week'), 'the newest per day / week stays';
   assert pg_temp.alive('k1 keep_until') and pg_temp.alive('e1 a line head') and pg_temp.alive('p1 pinned'), 'keep_until, heads and pinned rows stay';
+  assert pg_temp.alive('n1 named, unpinned'), 'a named row is never thinned';
   assert pg_temp.alive('x1 line') and pg_temp.alive('x2 line newest'), 'the newest row of a line stays';
   assert (select parent_id from public.comic_versions where id = child) is null, 'a thinned parent leaves a null parent_id';
 end $$;

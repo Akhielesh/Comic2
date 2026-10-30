@@ -204,6 +204,7 @@ describe('GC roots: collect_active_image_paths()', () => {
     const branch = /history_chunk_paths as \( select nullif\(btrim\(p\), ''\) as path from public\.comic_version_chunks c, unnest\(c\.paths\) p \)/;
     const body = squash(mine.body);
     expect(body).toMatch(branch);
+    expect(body).toMatch(/ union all select path from history_chunk_paths \) combined where path is not null and path <> ''/);
     const without = body
       .replace(/, history_chunk_paths as \( select nullif\(btrim\(p\), ''\) as path from public\.comic_version_chunks c, unnest\(c\.paths\) p \)/, '')
       .replace(/ union all select path from history_chunk_paths/, '');

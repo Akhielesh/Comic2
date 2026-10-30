@@ -233,7 +233,7 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     }
   };
 
-  /** comic_history_deletable: unpinned, past keep_until, not a line's newest row, not a line's head. */
+  /** comic_history_deletable: unpinned, unnamed, past keep_until, not a line's newest row, not a line's head. */
   const deletable = (projectId: string, at: number) => {
     const newest = new Map<string, FakeRow>();
     for (const r of rowsOf(projectId).sort(newestFirst)) {
@@ -241,7 +241,9 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
       if (!newest.has(line)) newest.set(line, r);
     }
     const keep = new Set([...newest.values()].map((r) => r.id));
-    return rowsOf(projectId).filter((r) => !r.pinned && (r.keepUntil === undefined || r.keepUntil <= at) && !keep.has(r.id) && !isHead(projectId, r.id));
+    return rowsOf(projectId).filter(
+      (r) => !r.pinned && !r.name && (r.keepUntil === undefined || r.keepUntil <= at) && !keep.has(r.id) && !isHead(projectId, r.id)
+    );
   };
   const oldestFirst = (a: FakeRow, b: FakeRow) => a.contentAt - b.contentAt || a.createdAt - b.createdAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 

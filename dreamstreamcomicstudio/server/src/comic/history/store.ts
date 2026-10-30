@@ -315,6 +315,11 @@ export const preparePut = (version: VersionInput, chunks: ChunkInput[]): { versi
     thumbs: Array.isArray(version.thumbs) ? version.thumbs.slice(0, HISTORY_LIMITS.thumbsPerRow) : []
   };
   for (const k of ['parentId', 'undoId'] as const) if (out[k] !== undefined && !isUuid(out[k])) delete out[k];
+  if (out.publishedRev !== undefined) {
+    if (Number.isFinite(out.publishedRev)) out.publishedRev = Math.trunc(out.publishedRev);
+    else delete out.publishedRev;
+  }
+  if (out.keepUntil !== undefined && !Number.isFinite(out.keepUntil)) delete out.keepUntil;
   if (out.alternativeId !== undefined && out.alternativeId !== null && !isUuid(out.alternativeId)) throw historyStoreError('NOT_FOUND');
   return { version: out, chunks: outChunks };
 };

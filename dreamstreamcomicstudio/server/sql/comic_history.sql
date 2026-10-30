@@ -279,7 +279,8 @@ as $$
   select to_jsonb(p_row) - 'manifest' - 'chunks' - 'project_id' - 'user_id';
 $$;
 
--- Rows thinning may remove: unpinned, past keep_until, not the newest row of their line, not a line's head.
+-- Rows thinning may remove: unpinned, unnamed (named versions are kept forever), past keep_until, not the newest row
+-- of their line, not a line's head.
 create or replace function public.comic_history_deletable(p_project uuid, p_now timestamptz)
 returns setof public.comic_versions
 language sql
@@ -290,6 +291,7 @@ as $$
     from public.comic_versions v
    where v.project_id = p_project
      and not v.pinned
+     and v.name is null
      and (v.keep_until is null or v.keep_until <= p_now)
      and not exists (select 1 from public.comic_alternatives a where a.project_id = p_project and a.head_version_id = v.id)
      and v.id not in (
@@ -459,11 +461,11 @@ set search_path = public
 as $$
 declare
   v_policy jsonb := case when jsonb_typeof(p_policy) = 'object' then p_policy else '{}'::jsonb end;
-  v_unpinned integer := least(greatest(coalesce((v_policy ->> 'unpinnedRows')::integer, 300), 1), 100000);
-  v_budget bigint := greatest(coalesce((v_policy ->> 'bytesPerComic')::bigint, 25000000), 0);
-  v_named_cap integer := greatest(coalesce((v_policy ->> 'namedRows')::integer, 100), 0);
-  v_saves_cap integer := greatest(coalesce((v_policy ->> 'savesPerHour')::integer, 30), 0);
-  v_restore_days integer := least(greatest(coalesce((v_policy ->> 'beforeRestoreDays')::integer, 30), 1), 3650);
+  v_unpinned integer := least(greatest(coalesce(round((v_policy ->> 'unpinnedRows')::numeric)::integer, 300), 1), 100000);
+  v_budget bigint := greatest(coalesce(round((v_policy ->> 'bytesPerComic')::numeric)::bigint, 25000000), 0);
+  v_named_cap integer := greatest(coalesce(round((v_policy ->> 'namedRows')::numeric)::integer, 100), 0);
+  v_saves_cap integer := greatest(coalesce(round((v_policy ->> 'savesPerHour')::numeric)::integer, 30), 0);
+  v_restore_days integer := least(greatest(coalesce(round((v_policy ->> 'beforeRestoreDays')::numeric)::integer, 30), 1), 3650);
   v_kind text := p_version ->> 'kind';
   v_codec text := coalesce(nullif(p_version ->> 'codec', ''), 'v5');
   v_root text := p_version ->> 'rootHash';
@@ -591,7 +593,7 @@ begin
                name = case when v_kind = 'named' and v_name is not null then v_name else v.name end,
                note = case when v_kind = 'named' and v_note is not null then v_note else v.note end,
                published_rev = case when v_kind = 'publish' and jsonb_typeof(p_version -> 'publishedRev') = 'number'
-                                    then (p_version ->> 'publishedRev')::integer else v.published_rev end,
+                                    then round((p_version ->> 'publishedRev')::numeric)::integer else v.published_rev end,
                keep_until = case when v_kind = 'before_restore' then greatest(v.keep_until, v_keep) else v.keep_until end
          where v.id = v_head.id;
       end if;
@@ -623,7 +625,7 @@ begin
     coalesce((p_version ->> 'pinned')::boolean, false)
       or v_kind in ('start', 'named', 'publish', 'import', 'legacy') or v_name is not null,
     v_keep,
-    coalesce((p_version ->> 'rev')::integer, 0),
+    coalesce(round((p_version ->> 'rev')::numeric)::integer, 0),
     case when jsonb_typeof(p_version -> 'contentAt') = 'number'
          then to_timestamp((p_version ->> 'contentAt')::double precision / 1000.0) else now() end,
     v_manifest, v_root, v_chunks,
@@ -631,7 +633,7 @@ begin
     case when jsonb_typeof(p_version -> 'thumbs') = 'array' then p_version -> 'thumbs' else '[]'::jsonb end,
     case when jsonb_typeof(p_version -> 'stats') = 'object' then p_version -> 'stats' else '{}'::jsonb end,
     nullif(left(coalesce(p_version ->> 'modelId', ''), 120), ''),
-    case when jsonb_typeof(p_version -> 'publishedRev') = 'number' then (p_version ->> 'publishedRev')::integer end,
+    case when jsonb_typeof(p_version -> 'publishedRev') = 'number' then round((p_version ->> 'publishedRev')::numeric)::integer end,
     case when jsonb_typeof(p_version -> 'legacyRef') = 'object' then p_version -> 'legacyRef' end,
     v_bytes_new,
     clock_timestamp()
