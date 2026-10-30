@@ -158,7 +158,7 @@ import { panelizePageAction } from './actions/panels.js';
 import { boardForCheck, boardImage } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
 import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
-import { cropForPanel, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
+import { cropForPanel, PANEL_CROP_CONTEXT, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
 import { panelizeAfterLetter } from './panelize/server.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
@@ -2069,8 +2069,6 @@ export const PAGE_REFERENCE_PATH = '__page__';
 /** The software reference board (consistency/contactSheet.ts boardImage). */
 export const BOARD_REFERENCE_PATH = '__board__';
 const GENERATED_REFERENCES: ReadonlySet<string> = new Set([PANEL_REFERENCE_PATH, PAGE_REFERENCE_PATH, BOARD_REFERENCE_PATH]);
-/** Context kept around a panel's cut in its crop (pro plan §4.4: cut + 4%). */
-const PANEL_CROP_CONTEXT = 0.04;
 
 /** An item of a scheduled run: it starts once the item named by `after` has landed (none, unknown or a cycle: at once). */
 export interface AfterItem {
@@ -3829,7 +3827,10 @@ class RenderRun {
         if (ref.path === '__region__') {
           if (!job.region) continue;
           if (!regionDataUrl) {
-            const current = references[0]?.dataUrl;
+            // The region is in page coordinates: it is outlined on the whole page — Image 1 for an edit, the `__page__`
+            // reference for a panel fix (whose Image 1 is the panel's crop). B5/B8: list `__region__` after `__page__`.
+            const pageAt = job.kind === 'panel' ? attached.findIndex((a) => a.startsWith(`${PAGE_REFERENCE_PATH}:`)) : 0;
+            const current = pageAt >= 0 ? references[pageAt]?.dataUrl : undefined;
             if (!current) throw new StudioError('NOT_FOUND', "Couldn't load the page to mark the area.", { status: 404 });
             regionDataUrl = await this.ctx.assets.outlineRegion(current, job.region);
           }
@@ -4237,14 +4238,15 @@ export async function letterPage(
     const tracker = newTextSpendTracker();
     try {
       // Ship 2 (B3): the software reference board rides the same check call ({ board } once contactSheet.ts builds it).
+      // Only `board` is taken, and before the fixed keys: a helper can never swap the billed LLM, the image or the signal.
       const extras = await checkExtras(ctx, doc, page, signal);
       const analysis = await analyzePageRender({
+        ...extras,
         doc,
         page,
         dataUrl,
         llm: billedLlm(ctx, { stage: 'qc', operation: 'comic.text.vision', tracker }),
-        signal,
-        ...extras
+        signal
       });
       visionRan = true;
       // Ship 2 (B3): readings → findings with fix offers and score caps ($0, pure; the stub keeps the report as it is).
@@ -4298,7 +4300,9 @@ export async function letterPage(
   if (qc) ops.unshift({ op: 'render', target: { kind: 'page', id: pageId }, patch: { qc } });
   commitAs(ctx, ops, 'job');
   // Ship 2 (B2): a fresh drawing is panelized for free (shadow mode stamps cuts; COMIC_AUTO_PANELIZE may show frames).
-  if (dataUrl && current.render.asset?.path && !signal.aborted) await panelizeFresh(ctx, pageId, current.render.asset.path, dataUrl, qc, signal);
+  // Never awaited: the page job (and the next page of its chain) never waits on it; tracked so the stream stays open
+  // until it lands. It commits only while the page still shows this drawing, and never throws.
+  if (dataUrl && current.render.asset?.path && !signal.aborted) void ctx.track(panelizeFresh(ctx, pageId, current.render.asset.path, dataUrl, qc, signal));
   // Plan §3 C14 / §4.3 (qcNotice.ts): a calm "Check panels" notice for a major structured problem (count, beats,
   // a speaker who may not be drawn) or a low score, with fix chips (free first; paid ones carry their quote). None
   // when the safety check withheld the page — its safety card speaks.
@@ -4316,11 +4320,11 @@ export async function letterPage(
   return { ...(safety ? { safety } : {}), visionRan, ...(visionError ? { visionError } : {}) };
 }
 
-/** The page check's extra arguments (contactSheet.boardForCheck); {} when they can't be made. Never throws. */
-const checkExtras = async (ctx: StudioContext, doc: ComicDoc, page: Page, signal: AbortSignal): Promise<Record<string, unknown>> => {
+/** The page check's extra argument (contactSheet.boardForCheck's `board`, nothing else); {} when it can't be made. Never throws. */
+const checkExtras = async (ctx: StudioContext, doc: ComicDoc, page: Page, signal: AbortSignal): Promise<{ board?: unknown }> => {
   try {
     const extras = await boardForCheck(ctx, { doc, page, signal });
-    return extras && typeof extras === 'object' ? extras : {};
+    return extras && typeof extras === 'object' && extras.board !== undefined ? { board: extras.board } : {};
   } catch (err) {
     logger.warn('comic_check_board_failed', { projectId: ctx.projectId, pageId: page.id, message: (err as Error)?.message });
     return {};

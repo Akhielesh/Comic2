@@ -34,7 +34,7 @@ import {
   startAction
 } from './jobs.js';
 import { KEYS, newSession, plannedDoc, testContext, TINY_PNG } from './orchestrator.fakes.js';
-import { cropForPanel, pasteRegion } from './panelize/raster.js';
+import { cropForPanel, PANEL_CROP_CONTEXT, pasteRegion } from './panelize/raster.js';
 import { panelizeAfterLetter } from './panelize/server.js';
 import { renderLayoutGuide } from './panelize/wireframe.js';
 import { checkRenderSafety, onRenderVerdict } from './safety/index.js';
@@ -65,7 +65,8 @@ vi.mock('./actions/panelFix.js', async (importOriginal) => {
 });
 vi.mock('./panelize/raster.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./panelize/raster.js')>();
-  return { ...actual, cropForPanel: vi.fn(actual.cropForPanel), pasteRegion: vi.fn(actual.pasteRegion) };
+  // PANEL_CROP_CONTEXT is B8's to tune: a value other than the stub's shows jobs.ts passes raster's own constant.
+  return { ...actual, PANEL_CROP_CONTEXT: 0.06, cropForPanel: vi.fn(actual.cropForPanel), pasteRegion: vi.fn(actual.pasteRegion) };
 });
 vi.mock('./panelize/server.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./panelize/server.js')>();
@@ -481,7 +482,8 @@ describe('fix_panel through the run engine (B8 hooks mocked): generated referenc
     const ctx = testContext(session);
     const started = await startAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix', instruction: 'Red scarf' } as never, { confirmed: true });
     await started.done;
-    expect(vi.mocked(cropForPanel)).toHaveBeenCalledWith(expect.objectContaining({ box: cutFor(doc.pages[0], 'pn_1_2')!.box, context: 0.04 }));
+    expect(PANEL_CROP_CONTEXT).toBe(0.06);
+    expect(vi.mocked(cropForPanel)).toHaveBeenCalledWith(expect.objectContaining({ box: cutFor(doc.pages[0], 'pn_1_2')!.box, context: PANEL_CROP_CONTEXT }));
     expect(ctx.imagesFake.calls).toHaveLength(0);
     expect(spendEntries(session.doc)).toEqual([]);
     // The page keeps its drawing (keepStatusOnFailure).
@@ -533,6 +535,25 @@ describe('fix_panel through the run engine (B8 hooks mocked): generated referenc
     expect(ctx.billingFake.reserves).toHaveLength(0);
     expect(spendEntries(session.doc)).toEqual([]);
     expect(findPage(session.doc, 'pg_1')!.render).toMatchObject({ status: 'ready', asset: { path: own('p1') } });
+  });
+
+  it('a panel fix with a region outlines it on the whole page (the __page__ reference), never on the panel crop', async () => {
+    vi.mocked(fixPanelProblem).mockReturnValue(null);
+    vi.mocked(compileFixPanel).mockImplementation((doc) => {
+      const c = compiled(doc);
+      return { ...c, references: [...c.references, { label: 'Image 3: AREA TO CHANGE', path: '__region__' }] } as never;
+    });
+    vi.mocked(cropForPanel).mockResolvedValue('data:image/png;base64,CROP');
+    vi.mocked(finishFixPanel).mockImplementation(async ({ base }) => `${await base()}#pasted`);
+    const doc = drawnDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    ctx.assetsFake.files.set(own('p1'), 'data:image/png;base64,PAGE');
+    const region = { x: 0.55, y: 0.6, w: 0.2, h: 0.2 };
+    await (await startAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_3', mode: 'fix', instruction: 'Red scarf', region } as never, { confirmed: true })).done;
+    expect(ctx.assetsFake.outlines).toEqual([{ dataUrl: 'data:image/png;base64,PAGE', box: region }]);
+    expect(ctx.imagesFake.calls[0].references.map((r) => r.dataUrl)).toEqual(['data:image/png;base64,CROP', 'data:image/png;base64,PAGE', 'data:image/png;base64,T1VUTElORUQ=']);
   });
 
   it('a paste-back that cannot be made is billed honestly and changes nothing on the page', async () => {
@@ -589,11 +610,51 @@ describe('letterPage → board, findings, panelize (through their stubs)', () =>
     const session = newSession(doc);
     const ctx = testContext(session);
     await (await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true }, { confirmed: true })).done;
+    await ctx.settled(); // panelize is tracked, not awaited by the page job
     expect(vi.mocked(analyzePageRender).mock.calls[0][0]).toMatchObject({ board: { tiles: 3 } });
     const page = findPage(session.doc, 'pg_1')!;
     expect(page.render.qc).toMatchObject({ checkV: 2, findings: [{ id: 'f_1' }] });
     expect(page.render.cuts).toMatchObject({ by: 'detect', at: 7 });
     expect(vi.mocked(panelizeAfterLetter).mock.calls[0][1]).toMatchObject({ pageId: 'pg_1', path: page.render.asset!.path, dataUrl: TINY_PNG });
+  });
+
+  it('the board helper adds only `board`: it can never replace the billed LLM, the image or the signal', async () => {
+    const rogue = { complete: vi.fn() };
+    vi.mocked(boardForCheck).mockResolvedValue({ board: { tiles: 2 }, llm: rogue, dataUrl: 'data:image/png;base64,EVIL', signal: new AbortController().signal, doc: null });
+    const doc = plannedDoc();
+    doc.cast = doc.cast.map((c) => ({ ...c, sheet: { status: 'ready', asset: drawn(`sheet-${c.id}`), history: [] } }));
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    await (await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true }, { confirmed: true })).done;
+    const args = vi.mocked(analyzePageRender).mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(args.board).toEqual({ tiles: 2 });
+    expect(args.dataUrl).toBe(TINY_PNG);
+    expect(args.llm).not.toBe(rogue);
+    expect((args.doc as ComicDoc).id).toBe(doc.id);
+    expect(args.signal).not.toBe(undefined);
+    expect((args.signal as AbortSignal).aborted).toBe(false);
+  });
+
+  it('a panelize step that never returns holds up neither the page nor the next page of its chain', async () => {
+    vi.mocked(scheduleRun).mockImplementation((_doc, ids) => ({ order: [...ids], after: { pg_1: null, pg_2: 'pg_1' }, coverAfter: null, settle: 'done' }));
+    let release!: () => void;
+    const hang = new Promise<never[]>((r) => (release = () => r([])));
+    vi.mocked(panelizeAfterLetter).mockImplementation(() => hang);
+    const doc = plannedDoc();
+    doc.cast = doc.cast.map((c) => ({ ...c, sheet: { status: 'ready', asset: drawn(`sheet-${c.id}`), history: [] } }));
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    const started = await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1', 'pg_2'], force: true }, { confirmed: true });
+    let finished = false;
+    void started.done.then(() => (finished = true));
+    try {
+      await vi.waitFor(() => expect(finished).toBe(true), { timeout: 3000, interval: 5 });
+      expect(ctx.imagesFake.calls).toHaveLength(2);
+      expect(['pg_1', 'pg_2'].map((id) => findPage(session.doc, id)!.render.status)).toEqual(['ready', 'ready']);
+    } finally {
+      release();
+      await ctx.settled();
+    }
   });
 
   it('a helper that throws never fails the paid render', async () => {
