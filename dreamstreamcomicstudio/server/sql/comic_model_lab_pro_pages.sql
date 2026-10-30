@@ -3,8 +3,9 @@
 -- check 'P2'). Run one image call + one page check per explicit admin click from Admin → Model Lab
 -- (server/src/comic/models/lab.ts), and only while the server-side switch COMIC_LAB_AB_BUDGET_USD is set.
 --
--- Apply AFTER server/sql/comic_model_lab.sql. Re-run this file after any re-run of comic_model_lab.sql (that file
--- re-declares the check_id list as D1–D4 only). Idempotent and guarded: safe to re-run. It adds:
+-- Apply AFTER server/sql/comic_model_lab.sql. That file declares the same check_id list (D1–D4, P1, P2) and its
+-- comic_model_lab_reserve refuses P1/P2, so re-running either file keeps A/B rows valid. Idempotent and guarded:
+-- safe to re-run. It adds:
 --   * 'P1' and 'P2' to comic_model_lab_runs.check_id (A/B votes reuse comic_model_lab_votes, pair ids 'p1-…');
 --   * comic_model_lab_reserve_ab(...): the ONLY way an A/B run row is created. Under the SAME advisory lock as
 --     comic_model_lab_reserve, it returns the existing row for a repeated idempotency key (no second call), refuses

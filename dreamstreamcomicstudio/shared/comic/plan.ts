@@ -29,7 +29,7 @@ import {
 import { needMeter, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect } from './lettering/layout.js';
 import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type ImageJobKind, type SpendEstimate } from './models.js';
-import { deriveLock } from './modelLock.js';
+import { lockOf } from './modelLock.js';
 import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
 import { drawnPanelBoxes } from './pageGeometry.js';
 import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
@@ -76,9 +76,10 @@ export function coverNeedsDraw(doc: ComicDoc): boolean {
 /**
  * The model lock every quote prices on (models.md §3.4 item 1): the comic's persisted lock, else the migration lock
  * of a legacy doc drawn before the lock existed (deriveLock: reads never write); undefined = nothing drawn yet. The
- * server's jobs.ts lockOf is the same rule, so a chip, a card, the director and the gate name one price.
+ * server's jobs.ts lockOf is the same function (modelLock.ts lockOf), so a chip, a card, the director and the gate name
+ * one price.
  */
-export const quoteLockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
+export const quoteLockOf = (doc: ComicDoc): ImageModelLock | undefined => lockOf(doc);
 
 /** `lock` option of the quote helpers: absent = the doc's own lock (quoteLockOf); null = price as if unlocked. */
 const lockFor = (doc: ComicDoc, lock: ImageModelLock | null | undefined): ImageModelLock | undefined =>

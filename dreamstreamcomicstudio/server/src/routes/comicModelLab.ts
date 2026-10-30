@@ -1,13 +1,16 @@
-// Model Lab routes (wm-plan M1-MODEL-LAB; models.md §2.6): the admin-only, click-driven paid checks D1–D4. The logic
-// lives in ../comic/models/lab.ts; this file is the HTTP surface. Mounted once in comicMounts.ts under /api/comic, with
-// requireAdmin + the admin rate limit on the exact /api/comic/models/lab prefix (never the text limiter). This router
-// re-checks sign-in and admin on its own paths too, so it stays admin-only even if it were mounted elsewhere.
-// No timers: every paid call needs an explicit admin click carrying the quoted cost; hard cap $2 per UTC day.
+// Model Lab routes (wm-plan M1-MODEL-LAB; models.md §2.6): the admin-only, click-driven paid checks D1–D4, plus
+// P1 (Pro pages A/B, part 1; off until COMIC_LAB_AB_BUDGET_USD). The logic lives in ../comic/models/lab.ts; this file
+// is the HTTP surface, and P1 runs and votes go through the same endpoints as D1–D4. Mounted once in comicMounts.ts
+// under /api/comic, with requireAdmin + the admin rate limit on the exact /api/comic/models/lab prefix (never the text
+// limiter). This router re-checks sign-in and admin on its own paths too, so it stays admin-only even if it were
+// mounted elsewhere. No timers: every paid call needs an explicit admin click carrying the quoted cost; hard cap $2 per
+// UTC day, and the A/B also stops at its own limit across days (COMIC_LAB_AB_BUDGET_USD, never above $1.20).
 //
 //   GET  /api/comic/models/lab                        overview: every check with its quote, today's spend, results,
-//                                                     blind pairs (names hidden until voted)
+//                                                     blind pairs (names hidden until voted), the P1 section (proPages)
 //   POST /api/comic/models/lab/runs                   { itemId, idempotencyKey, ack: true, quotedUsd } → one call
-//   POST /api/comic/models/lab/runs/:id/watermark     { visible: true | false | null } (the owner's checkbox)
+//   POST /api/comic/models/lab/runs/:id/watermark     { visible: true | false | null } | { guideLines: true | false | null }
+//                                                     (D3/D4 watermark box; P1 copied-guide-lines mark after the vote)
 //   POST /api/comic/models/lab/blind/:pairId/vote     { pick: 'A' | 'B' | 'tie' } → the pair, revealed
 //
 // Every answer is `Cache-Control: private, no-store`. Errors: { error: { code, message, details: { code, … } } } with the

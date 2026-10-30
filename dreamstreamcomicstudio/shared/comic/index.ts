@@ -27,3 +27,5 @@ export * from './modelHealth.js';
 export * from './modelLock.js';
 export * from './modelInsights.js';
 export * from './modelCatalog.js';
+// Ship 1 wave 2: what a page job may send to an image model (the runner and the Model Lab share it)
+export * from './sendable.js';

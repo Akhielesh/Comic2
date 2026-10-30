@@ -278,6 +278,23 @@ tier only picks the resolution on the locked model.
 - **Model Lab** (Admin → Model Lab, `server/src/comic/models/lab.ts`): the owner's paid checks (D1–D4) run only on
   an explicit admin click, one provider call per click, under a hard $2 per UTC day cap reserved atomically in the
   database before the call. A call that reached the provider is also a `comic_image_calls` row.
+- **Model Lab P1 · Pro pages A/B** (Ship 1, the `COMIC_LAYOUT_GUIDE` decision, PD-8): the owner's 3 golden pages
+  (b4b5774f pages 2 and 4, f8312c86 page 1) are each drawn twice with everything else the same, layout guide off
+  and on, and each drawing gets one page check (beats matched, panels drawn, art crossing a border). The pair is
+  shown blind as A and B; the names appear after the vote, and a voted pair is final (its arms can't be drawn
+  again). After the vote the owner marks, per side, whether the drawing copied the guide's lines. The beats tally
+  and that guide-lines mark are the two inputs to the decision: turn `COMIC_LAYOUT_GUIDE` on only if the guide-on
+  pages bind their beats better and never copy the guide's lines.
+  - Off until the server switch `COMIC_LAB_AB_BUDGET_USD` is set; its value is the A/B's limit, never above the
+    hard cap `LAB_AB_HARD_CAP_USD` ($1.20), shared across days and with part 2 (P2). Every run also counts against
+    the $2 day cap.
+  - A/B runs reserve only through `comic_model_lab_reserve_ab` (`server/sql/comic_model_lab_pro_pages.sql`, applied
+    after `comic_model_lab.sql`; that file's check-id list includes P1/P2 and its `comic_model_lab_reserve` refuses
+    them). The reservation leaves headroom for the unquoted reference cost: it reserves against
+    `limit − images × LAB_AB_REF_ALLOWANCE_USD` ($0.004 per image).
+  - Before the paid call the arm asserts the comic's model lock, withholds blocked, quarantined and not-yet-checked
+    uploads (`shared/comic/sendable.ts`, the same helpers as the runner), and skips the page check when the drawing
+    couldn't be stored. Runs and votes reuse the lab's endpoints and vote table (pair ids `p1-…`).
 - **Tests never reach the network.** `tests/setup.ts` refuses any fetch to a real host and fails the test that tried.
   Server tests that build a real context install `__setModelHealthForTests(fakeModelHealth())` and pass registry
   prices (`testContext()` in `orchestrator.fakes.ts` does both).

@@ -91,6 +91,7 @@ import {
   quoteRenderPages
 } from '../../../shared/comic/plan.js';
 import { PLATFORM_CEILING, canServeToOwner, effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
+import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../shared/comic/sendable.js';
 import {
   IMAGE_MODELS,
   PLAN_USD_PER_PAGE,
@@ -112,7 +113,7 @@ import {
   type ImageRoute,
   type SpendEstimate
 } from '../../../shared/comic/models.js';
-import { FREE_PLAN_IMAGE_MODEL, deriveLock, type PriceBook } from '../../../shared/comic/modelLock.js';
+import { FREE_PLAN_IMAGE_MODEL, deriveLock, lockOf, lockedSpecId, type PriceBook } from '../../../shared/comic/modelLock.js';
 import { STYLE_PRESETS, getStylePreset, type StylePreset } from '../../../shared/comic/stylePresets.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
@@ -372,16 +373,11 @@ export const MODEL_LOCKED: StudioErrorCode = MODEL_LOCKED_CODE;
 export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE';
 
 /**
- * The comic's image-model lock: the persisted one, else the migration lock of a legacy doc drawn before the lock
- * existed (deriveLock: reads never write; it is persisted with the next image commit). undefined = nothing drawn.
+ * The comic's image-model lock (lockOf) and the registry id a lock names (lockedSpecId): one implementation in
+ * shared/comic/modelLock.ts, shared with the quotes (plan.ts) and the Model Lab, re-exported here for the runner's
+ * importers.
  */
-export const lockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
-
-/**
- * The registry id a lock names. Older assets may carry a provider id ('google/gemini-2.5-flash-image') as their
- * model; the registry resolves those to the same entry, so the lock means that entry, never another one.
- */
-export const lockedSpecId = (modelId: string): string => getImageModel(modelId)?.id ?? modelId;
+export { lockOf, lockedSpecId };
 
 /** What a run pins at its start (models.md §3.4 item 4): the tier (resolution), the pre-lock override and the lock. */
 export interface RunPin extends Pick<Settings, 'quality' | 'imageModelOverride'> {
@@ -1922,29 +1918,6 @@ type DrawOutcome = { kind: 'done' } | { kind: 'requeue'; afterMs: number };
 const restoredStatus = (prev: ImageJob['prev']): RenderState['status'] =>
   prev.status === 'queued' || prev.status === 'rendering' ? (prev.hasAsset ? 'ready' : 'none') : prev.status;
 
-/** Doc copy with the given storage paths removed, so a recompile labels only images we can attach. */
-const withoutAssets = (doc: ComicDoc, missing: Set<string>): ComicDoc => {
-  const keep = (a?: AssetRef) => (a && !missing.has(a.path) ? a : undefined);
-  const render = (r: RenderState): RenderState => (r.asset && missing.has(r.asset.path) ? { ...r, asset: undefined, status: 'none' } : r);
-  return {
-    ...doc,
-    style: { ...doc.style, board: keep(doc.style.board), refs: doc.style.refs.filter((a) => !missing.has(a.path)) },
-    cast: doc.cast.map((c) => ({ ...c, refs: c.refs.filter((a) => !missing.has(a.path)), sheet: render(c.sheet) })),
-    places: doc.places.map((p) => ({ ...p, refs: p.refs.filter((a) => !missing.has(a.path)), sheet: render(p.sheet) })),
-    pages: doc.pages.map((p) => ({ ...p, render: render(p.render) }))
-  };
-};
-
-/** Paths that can never be sent to an image model: blocked or quarantined by the content check. */
-const blockedPaths = (doc: ComicDoc): Set<string> => {
-  const out = new Set<string>();
-  mapAssetRefs(doc, (a) => {
-    if (a?.path && !canServeToOwner(a)) out.add(a.path);
-    return a;
-  });
-  return out;
-};
-
 /** Best-matching preset for a doc that never chose a style (genre/tone/kind/color fit). */
 export const pickDefaultPreset = (doc: ComicDoc): StylePreset => {
   const story = [doc.brief.genre, doc.brief.tone, doc.brief.audience, doc.brief.premise, doc.brief.logline, doc.brief.setting]
@@ -1971,11 +1944,6 @@ const presetStylePatch = (preset: StylePreset, status: StyleBible['status']): Pa
   avoid: [...preset.avoid],
   presetId: preset.id
 });
-
-const nearestReadyBefore = (doc: ComicDoc, page: Page): Page | undefined =>
-  doc.pages
-    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && canServeToOwner(p.render.asset))
-    .sort((a, b) => b.n - a.n)[0];
 
 /** Every user reference path (style, cast, places) — the fallback for VersionMeta.refPaths when a compiler reports none. */
 const userRefPaths = (doc: ComicDoc): Set<string> =>

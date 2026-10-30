@@ -34,11 +34,11 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
-import { mapAssetRefs, normalizeDoc, type AspectRatio, type AssetRef, type ComicDoc, type Page, type RenderState, type Resolution } from '../../../../shared/comic/doc.js';
+import { mapAssetRefs, normalizeDoc, type AspectRatio, type ComicDoc, type Page, type Resolution } from '../../../../shared/comic/doc.js';
 import type { HealthState, ModelHealth } from '../../../../shared/comic/modelHealth.js';
-import { deriveLock } from '../../../../shared/comic/modelLock.js';
+import { lockOf, lockedSpecId } from '../../../../shared/comic/modelLock.js';
 import { QC_USD_PER_PAGE, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
-import { canServeToOwner } from '../../../../shared/comic/safety.js';
+import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../../shared/comic/sendable.js';
 import { reasoningBudget } from '../../ai/providers/openrouter.js';
 import { OPENROUTER_APP_TITLE, OPENROUTER_APP_URL, OPENROUTER_BASE_URL } from '../../config.js';
 import { logger } from '../../lib/logger.js';
@@ -1467,38 +1467,18 @@ export function createOwnerProPagesSource(deps: {
 }
 
 /**
- * Images a page job must never send: blocked or quarantined by the content check, and uploads with no safety verdict
- * yet (the studio checks those lazily before first use; the lab never sends one unchecked). Generated images carry
- * their own check.
+ * Images a page job must never send: blocked or quarantined by the content check (the runner's blockedPaths), and
+ * uploads with no safety verdict yet (the studio checks those lazily before first use; the lab never sends one
+ * unchecked, so its gate is stricter). Generated images carry their own check.
  */
 export const labWithheldPaths = (doc: ComicDoc): Set<string> => {
-  const out = new Set<string>();
+  const out = blockedPaths(doc);
   mapAssetRefs(doc, (a) => {
-    if (a?.path && (!canServeToOwner(a) || (a.source === 'upload' && !a.safety))) out.add(a.path);
+    if (a?.path && a.source === 'upload' && !a.safety) out.add(a.path);
     return a;
   });
   return out;
 };
-
-/** A copy of the doc without these images, so the prompt labels only what is attached (as the studio's runner does). */
-const withoutLabAssets = (doc: ComicDoc, gone: ReadonlySet<string>): ComicDoc => {
-  if (!gone.size) return doc;
-  const keep = <T extends AssetRef>(a?: T) => (a && !gone.has(a.path) ? a : undefined);
-  const render = (r: RenderState): RenderState => (r.asset && gone.has(r.asset.path) ? { ...r, asset: undefined, status: 'none' } : r);
-  return {
-    ...doc,
-    style: { ...doc.style, board: keep(doc.style.board), refs: doc.style.refs.filter((a) => !gone.has(a.path)) },
-    cast: doc.cast.map((c) => ({ ...c, refs: c.refs.filter((a) => !gone.has(a.path)), sheet: render(c.sheet) })),
-    places: doc.places.map((p) => ({ ...p, refs: p.refs.filter((a) => !gone.has(a.path)), sheet: render(p.sheet) })),
-    pages: doc.pages.map((p) => ({ ...p, render: render(p.render) }))
-  };
-};
-
-/** The page before this one that a page job attaches for continuity (drawn and servable). */
-const servablePageBefore = (doc: ComicDoc, page: Page): Page | undefined =>
-  doc.pages
-    .filter((p) => p.n < page.n && p.render.status === 'ready' && p.render.asset?.path && canServeToOwner(p.render.asset))
-    .sort((a, b) => b.n - a.n)[0];
 
 /** One arm compiled for drawing. */
 export interface ProPagesPlan {
@@ -1526,10 +1506,10 @@ export const planProPagesArm = (
   missing: ReadonlySet<string> = new Set()
 ): { plan: ProPagesPlan } | { reason: string } => {
   const withheldPaths = labWithheldPaths(loaded);
-  const doc = withoutLabAssets(loaded, new Set([...withheldPaths, ...missing]));
+  const doc = withoutAssets(loaded, new Set([...withheldPaths, ...missing]));
   const page = doc.pages.find((p) => p.n === golden.pageN);
   if (!page) return { reason: `Comic ${golden.comic} has no page ${golden.pageN} now, so this golden page can't be drawn.` };
-  const compileFor = (d: ComicDoc, p: Page) => compilePage(d, p, { previousPage: servablePageBefore(d, p), layoutGuide: arm === 'on' });
+  const compileFor = (d: ComicDoc, p: Page) => compilePage(d, p, { previousPage: nearestReadyBefore(d, p), layoutGuide: arm === 'on' });
   let compiled: CompiledRenderJob;
   try {
     compiled = compileFor(doc, page);
@@ -1539,8 +1519,8 @@ export const planProPagesArm = (
   // The comic's model lock, as the studio asserts it before any provider call (jobs.ts assertLockedModel): a lock the
   // registry doesn't know compiles for the tier's model instead, so refuse rather than draw on another model. The lab
   // never resolves a lock to a replacement and never changes the comic.
-  const lock = loaded.imageModel ?? deriveLock(loaded);
-  if (lock && (getImageModel(lock.modelId)?.id ?? lock.modelId) !== compiled.spec.id) {
+  const lock = lockOf(loaded);
+  if (lock && lockedSpecId(lock.modelId) !== compiled.spec.id) {
     const known = getImageModel(lock.modelId);
     return {
       reason: known

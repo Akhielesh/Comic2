@@ -41,6 +41,19 @@ export const deriveLock = (doc: ComicDoc): ImageModelLock | undefined => {
 /** doc.imageModel?.modelId ?? deriveLock(doc)?.modelId */
 export const lockedModelId = (doc: ComicDoc): string | undefined => doc.imageModel?.modelId ?? deriveLock(doc)?.modelId;
 
+/**
+ * The comic's image-model lock: the persisted one, else the migration lock of a legacy doc drawn before the lock
+ * existed (deriveLock: reads never write; it is persisted with the next image commit). undefined = nothing drawn.
+ * One rule for the runner (jobs.ts), every quote (plan.ts quoteLockOf) and the Model Lab's lock guard.
+ */
+export const lockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
+
+/**
+ * The registry id a lock names. Older assets may carry a provider id ('google/gemini-2.5-flash-image') as their
+ * model; the registry resolves those to the same entry, so the lock means that entry, never another one.
+ */
+export const lockedSpecId = (modelId: string): string => getImageModel(modelId)?.id ?? modelId;
+
 export interface DrawnTargets {
   pages: string[];
   sheets: string[];

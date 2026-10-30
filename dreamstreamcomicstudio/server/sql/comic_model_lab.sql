@@ -73,7 +73,7 @@ alter table public.comic_model_lab_runs add constraint comic_model_lab_runs_stat
   check (status in ('running', 'ok', 'failed'));
 alter table public.comic_model_lab_runs drop constraint if exists comic_model_lab_runs_check_id_check;
 alter table public.comic_model_lab_runs add constraint comic_model_lab_runs_check_id_check
-  check (check_id in ('D1', 'D2', 'D3', 'D4'));
+  check (check_id in ('D1', 'D2', 'D3', 'D4', 'P1', 'P2')); -- P1/P2: the Pro pages A/B (comic_model_lab_pro_pages.sql)
 alter table public.comic_model_lab_runs drop constraint if exists comic_model_lab_runs_quote_check;
 alter table public.comic_model_lab_runs add constraint comic_model_lab_runs_quote_check
   check (quoted_usd > 0 and quoted_usd <= 2);
@@ -151,6 +151,9 @@ begin
   end if;
   if p_quoted is null or p_quoted <= 0 then
     raise exception 'comic_model_lab_reserve: the quote must be positive';
+  end if;
+  if p_check in ('P1', 'P2') then
+    raise exception 'comic_model_lab_reserve: A/B runs reserve through comic_model_lab_reserve_ab';
   end if;
 
   -- One reservation at a time across every server instance: the key lookup, the sum and the insert are one step.
