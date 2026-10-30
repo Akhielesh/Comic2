@@ -10,7 +10,7 @@ import {
   summarizeDocForDirector
 } from './director.js';
 import { lakeBriefDoc, lakeDrawnDoc } from './golden/fixtures.js';
-import { JOB_TIMINGS } from './jobs.js';
+import { JOB_TIMINGS, planPagesQuoteText } from './jobs.js';
 import { fakeBilling, fakeImages, newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { StudioError } from './types.js';
 import { costFormatter, costViewFor } from './costText.js';
@@ -300,6 +300,49 @@ describe('summaries', () => {
     expect(s).toContain('- p1 [out of date, qc 0.82] Page 1 beat (3 panels)');
     expect(s).toContain('Waiting on approval: Draw the cover? ≈ $0.07 (policy)');
     expect(s.length).toBeLessThan(12_000);
+  });
+
+  it('an extra reads "text only" until its sheet is ready, then "sheet ready" (the sheet rides on every page it is on)', () => {
+    const doc = plannedDoc();
+    doc.cast.push(
+      { id: 'c_guard', name: 'Guard', tier: 'extra', look: { summary: 'Market guard in a khaki cap' }, refs: [], sheet: emptyRender() },
+      {
+        id: 'c_cat',
+        name: 'Cat',
+        tier: 'extra',
+        kind: 'animal',
+        look: { summary: 'A ginger market cat' },
+        refs: [],
+        sheet: { ...emptyRender(), status: 'ready', asset: { path: 'cat.webp', source: 'generated', at: 1 } }
+      },
+      { id: 'c_boy', name: 'Boy', tier: 'extra', look: { summary: 'A boy with a kite' }, refs: [], sheet: { ...emptyRender(), status: 'queued' } }
+    );
+    const s = summarizeDocForDirector(doc);
+    expect(s).toContain('- GUARD [c_guard] extra — Market guard in a khaki cap; text only');
+    expect(s).toContain('- CAT [c_cat] extra, animal — A ginger market cat; sheet ready');
+    // A sheet still being drawn is not attached yet: the extra is still described in words.
+    expect(s).toContain('- BOY [c_boy] extra — A boy with a kite; text only');
+    // Leads and supports are unchanged.
+    expect(s).toContain('- ARJUN [c_arjun] support — Bearded spice vendor in a green kurta; sheet not drawn');
+  });
+
+  it('before a plan exists, the summary quotes planning with its honest "up to" bound, in usage words for governed users', () => {
+    const doc = plannedDoc();
+    doc.pages = [];
+    doc.planStatus = 'none';
+    doc.format = { ...doc.format, pageCount: 6 };
+    const dollars = summarizeDocForDirector(doc);
+    expect(dollars).toContain(`Planning the pages: ${planPagesQuoteText(doc, costFormatter(), false)}`);
+    expect(dollars).toMatch(/Planning the pages: ≈ \$\d+\.\d\d for 6 pages \(up to ≈ \$\d+\.\d\d if the plan needs its one writer repair\)/);
+    // The tail is never clipped: the line sits with the money lines, after the body.
+    expect(dollars.indexOf('Planning the pages:')).toBeGreaterThan(dollars.indexOf('Settings:'));
+    // BYOK quotes the provider price (no platform markup).
+    expect(summarizeDocForDirector(doc, true)).toContain(`Planning the pages: ${planPagesQuoteText(doc, costFormatter(), true)}`);
+    const governed = summarizeDocForDirector(doc, false, [], { cost: costFormatter(costViewFor({ ...DEFAULT_CAPS, usage: { governed: true, pctLeft: 50, exhausted: false, pctPerStandardPage: 1 } })) });
+    expect(governed).toMatch(/Planning the pages: (≈[\d.]+|<0\.1)% of your usage for 6 pages \(up to (≈[\d.]+|<0\.1)% of your usage if the plan needs its one writer repair\)/);
+    expect(governed).not.toMatch(/\$/);
+    // Once planned, the line goes away (the "Plan" body line and the draw quotes take over).
+    expect(summarizeDocForDirector(plannedDoc())).not.toContain('Planning the pages:');
   });
 
   it('a big book clips the body, never the tail: settings, spend, the open approval, the focus and the feature lines survive', () => {
