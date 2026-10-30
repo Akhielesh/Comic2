@@ -18,7 +18,9 @@ import { panelBoxesFor } from '../pageGeometry';
 import {
   COVER_STEPS,
   coverCapFor,
+  coverStepsFor,
   estimateMeasure,
+  LETTER_FIT_POLICY,
   letteringAspect,
   letteringSizer,
   panelCoverage,
@@ -29,6 +31,10 @@ import {
 } from './layout';
 import { coverageOf, placeBalloonsWholeWords, settleBalloons, type SettleItem } from './place';
 import { p2ShapedDoc } from './__fixtures__/letterFit';
+import { applyOps, type DocOp } from '../ops';
+import { FIT_FONT_FLOOR } from '../textLayout';
+import { resolvePlacements, withDrawnGeometry } from '../../../components/comicstudio/lettering/useLetterPlans';
+import { keepDrawnSizeOps } from '../../../components/comicstudio/lettering/styleOps';
 
 /** The engine's plans before this change, hashed (see the file's note). */
 const golden = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'letterFit.golden.json'), 'utf8')) as { pages: Record<string, string>; lines: Record<string, Record<string, string>> };
@@ -50,18 +56,44 @@ const withoutDense = (p: LetterPlan) => {
   return rest;
 };
 
+/** Run `fn` with the owner's shrink policy set (LETTER_FIT_POLICY is one constant; tests restore it). */
+const withShrink = <T,>(on: boolean, fn: () => T): T => {
+  const was = LETTER_FIT_POLICY.coverShrink;
+  LETTER_FIT_POLICY.coverShrink = on;
+  try {
+    return fn();
+  } finally {
+    LETTER_FIT_POLICY.coverShrink = was;
+  }
+};
+/** Panel 6's coverage on the engine before the cap (46beb66a): its stored, unpinned balloons placed verbatim. */
+const STORED_COVER_6: Record<string, number> = { est: 0.3433, wide: 0.4354 };
+
 describe('coverage cap on a stored page (F8): the p2-shaped page', () => {
   for (const [name, m] of MEASURES) {
-    it(`panel 6 ends at or under the cap; pinned balloons stay put; nothing overflows or leaves the page (${name})`, () => {
+    it(`panel 6 ends at or under the cap, or flagged with less of it covered; pinned balloons stay put; nothing overflows or leaves the page (${name})`, () => {
       const { doc, page } = p2ShapedDoc();
       const storedBefore = JSON.parse(JSON.stringify(page.balloons));
       const aspect = letteringAspect(doc, page);
       const H = 1000 / aspect;
       const plans = plansOf(doc, page, m);
       const cover = panelCoverage(doc, page, plans, aspect);
-      expect(cover[5], `panel 6 coverage ${cover[5]}`).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
-      // No other panel is pushed over the cap either.
-      for (const c of cover) expect(c).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
+      const six = plans.filter((p) => p.panelN === 6);
+      expect(six.length).toBe(2);
+      // Panel 6 ≤ coverCap, OR flagged dense with less covered than its stored balloons covered (re-placed only: the
+      // shrink is off until the owner decides, FX2/RC8).
+      if (cover[5] > PANEL_LIMITS.coverCap + 1e-9) {
+        for (const p of six) {
+          expect(p.dense, p.lineId).toBeDefined();
+          expect(p.dense!.cover).toBeCloseTo(STORED_COVER_6[name], 3);
+          expect(p.dense!.drawn).toBeCloseTo(cover[5], 3);
+          expect(p.dense!.drawn).toBeLessThan(p.dense!.cover - 0.01);
+        }
+      }
+      // No other panel is pushed over the cap.
+      cover.forEach((c, i) => {
+        if (i !== 5) expect(c, `panel ${i + 1}`).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
+      });
       // Every lettered line is drawn (lines == plans), none overflows, none leaves the page.
       const lines = page.panels.flatMap((p) => p.lines.filter((l) => l.text.trim()).map((l) => l.id));
       expect(plans.map((p) => p.lineId).sort()).toEqual([...lines].sort());
@@ -82,16 +114,22 @@ describe('coverage cap on a stored page (F8): the p2-shaped page', () => {
       }
       // In memory only: the stored balloons are untouched.
       expect(page.balloons).toEqual(storedBefore);
+      // Every movable balloon is lettered at full size: no shrink (phone legibility), no density step.
+      for (const p of plans.filter((q) => !page.balloons.find((b) => b.lineId === q.lineId && b.pinned))) {
+        expect(p.fontSize, p.lineId).toBe(17);
+        expect(p.densityScale, p.lineId).toBeUndefined();
+      }
       // The panel says it has too much text: words, about how many it holds, the cap.
-      const six = plans.filter((p) => p.panelN === 6);
-      expect(six.length).toBe(2);
       for (const p of six) {
         expect(p.dense).toBeDefined();
         expect(p.dense!.panelN).toBe(6);
         expect(p.dense!.cover).toBeGreaterThan(PANEL_LIMITS.coverCap);
-        expect(p.dense!.drawn).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
         expect(p.dense!.words).toBeGreaterThan(p.dense!.fits);
         expect(p.dense!.cap).toBe(PANEL_LIMITS.coverCap);
+        expect(p.dense!.scale).toBeUndefined();
+        // Drawn elsewhere than stored: crowded, reason 'cover' (the editor drags, Keeps and Locks it where it is drawn).
+        expect(p.crowded, p.lineId).toBe(true);
+        expect(p.crowdedReason, p.lineId).toBe('cover');
       }
       // The panels that fit say nothing.
       expect(plans.filter((p) => p.panelN !== 6 && p.dense)).toEqual([]);
@@ -104,29 +142,120 @@ describe('coverage cap on a stored page (F8): the p2-shaped page', () => {
     expect(plansOf(a.doc, a.page)).toEqual(plansOf(b.doc, b.page));
   });
 
-  it("children's books cap at 0.25: as close as the size steps get, and said so", () => {
+  it("children's books cap at 0.25: re-placed at full size, and said so", () => {
     const { doc, page } = p2ShapedDoc({ kids: true });
     expect(coverCapFor(doc)).toBe(PANEL_LIMITS.coverCapKids);
     const plans = plansOf(doc, page);
     const cover = panelCoverage(doc, page, plans);
     const six = plans.find((p) => p.panelN === 6)!;
     expect(six.dense!.cap).toBe(PANEL_LIMITS.coverCapKids);
-    // 29 words in a 0.10 panel cannot fit a children's book even at the smallest step: the panel covers far less
-    // than it did, still a little over, and the editor says so (with how much it holds).
-    expect(cover[5]).toBeLessThan(six.dense!.cover - 0.05);
+    // 26 words in a 0.10 panel cannot fit a children's book: the panel covers less than it did, still over, and the
+    // editor says so (with how much it holds). Nothing is lettered smaller.
+    expect(cover[5]).toBeLessThan(six.dense!.cover - 0.01);
     expect(six.dense!.drawn).toBeCloseTo(cover[5], 3);
-    expect(six.dense!.scale).toBe(Math.min(...COVER_STEPS));
-    // Panel 5 (0.27 of its picture, over the kids' cap too) comes under it.
+    expect(six.dense!.scale).toBeUndefined();
+    expect(plans.every((p) => p.fontSize >= 17 || page.balloons.find((b) => b.lineId === p.lineId && b.pinned))).toBe(true);
+    // Panel 5 (0.27 of its picture, over the kids' cap too) comes under it by re-placement alone.
     expect(cover[4]).toBeLessThanOrEqual(PANEL_LIMITS.coverCapKids + 1e-9);
+    expect(plans.find((p) => p.panelN === 5)!.dense).toBeUndefined();
+  });
+});
+
+describe("letter-fit policy: the cap's shrink is the owner's decision (FX2/RC8)", () => {
+  it('is off by default: the cap only re-places', () => {
+    expect(LETTER_FIT_POLICY.coverShrink).toBe(false);
+    expect(coverStepsFor()).toEqual([1]);
+    // When the owner turns it on, it never goes below the auto-fit floor (children's books included).
+    expect(Math.min(...coverStepsFor({ coverShrink: true }))).toBe(FIT_FONT_FLOOR);
+    expect(COVER_STEPS).not.toContain(0.72);
   });
 
-  it('shrinks no more than the size steps allow (never below the dense-page floor)', () => {
-    const { doc, page } = p2ShapedDoc();
-    for (const [, m] of MEASURES) {
-      const six = plansOf(doc, page, m).filter((p) => p.panelN === 6);
-      for (const p of six) if (p.dense!.scale !== undefined) expect(COVER_STEPS).toContain(p.dense!.scale);
-      expect(Math.min(...six.map((p) => p.fontSize))).toBeGreaterThanOrEqual(17 * Math.min(...COVER_STEPS) - 0.01);
-    }
+  it('turned on, each panel gets its own step: a panel that fits at full size is never lettered smaller for a neighbour', () => {
+    withShrink(true, () => {
+      // 1.2× measure: re-placed at full size, panel 5 comes to just under the cap; panel 6 needs the smallest step.
+      const { doc, page } = p2ShapedDoc();
+      const aspect = letteringAspect(doc, page);
+      const plans = plansOf(doc, page, wide);
+      const cover = panelCoverage(doc, page, plans, aspect);
+      const five = plans.find((p) => p.lineId === 'ln_5')!;
+      expect(five.fontSize).toBe(17);
+      expect(five.densityScale).toBeUndefined();
+      expect(five.dense).toBeUndefined();
+      expect(cover[4]).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
+      for (const p of plans.filter((q) => q.panelN === 6)) {
+        expect(p.dense!.scale).toBe(FIT_FONT_FLOOR);
+        // The drawn size is on the plan, so pinning it (a drag, Keep here, Lock) keeps it (styleOps keptSizes).
+        expect(p.densityScale).toBe(FIT_FONT_FLOOR);
+        expect(p.fontSize).toBeCloseTo(17 * FIT_FONT_FLOOR, 2);
+      }
+      expect(cover[5]).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
+    });
+  });
+
+  it("turned on, children's books step down per panel too, never below the floor", () => {
+    withShrink(true, () => {
+      const { doc, page } = p2ShapedDoc({ kids: true });
+      const plans = plansOf(doc, page, wide);
+      // Every lettered-smaller panel says so (dense with its scale), and none goes below the floor.
+      for (const p of plans.filter((q) => typeof q.densityScale === 'number')) {
+        expect(p.dense?.scale, p.lineId).toBe(p.densityScale);
+        expect(p.densityScale!).toBeGreaterThanOrEqual(FIT_FONT_FLOOR);
+      }
+      expect(plans.find((p) => p.lineId === 'ln_5')!.dense!.scale).toBe(0.9);
+      expect(plans.find((p) => p.lineId === 'ln_6a')!.dense!.scale).toBe(FIT_FONT_FLOOR);
+    });
+  });
+});
+
+describe('the editor pins a cap-moved balloon where it is drawn', () => {
+  /** A zero-distance drag commit, as BalloonLayer builds it: the resolved (drawn) balloon, pinned, plus the size it keeps. */
+  const dragPin = (doc: ComicDoc, page: Page, id: string, m: Measure) => {
+    const aspect = letteringAspect(doc, page);
+    const H = 1000 / aspect;
+    const plans = plansOf(doc, page, m);
+    const resolved = withDrawnGeometry(resolvePlacements(doc, page, aspect, m), plans, H).balloons.get(id)!;
+    const { lineId: _id, ...patch } = resolved;
+    const ops: DocOp[] = [{ op: 'balloon', pageId: page.id, lineId: id, patch: { ...patch, pinned: true } }, ...keepDrawnSizeOps(page, plans, [id])];
+    const doc2 = applyOps(doc, ops);
+    const page2 = doc2.pages.find((p) => p.id === page.id)!;
+    return { before: plans.find((p) => p.lineId === id)!, after: plansOf(doc2, page2, m).find((p) => p.lineId === id)! };
+  };
+  for (const shrink of [false, true])
+    it(`a drag keeps its size, spot and tail (shrink ${shrink ? 'on' : 'off'})`, () => {
+      withShrink(shrink, () => {
+        const { doc, page } = p2ShapedDoc();
+        const { before, after } = dragPin(doc, page, 'ln_6b', estimateMeasure);
+        expect(before.crowdedReason).toBe('cover');
+        expect(after.fontSize).toBe(before.fontSize);
+        expect(after.x).toBeCloseTo(before.x, 0);
+        expect(after.y).toBeCloseTo(before.y, 0);
+        expect(after.tip!.x).toBeCloseTo(before.tip!.x, 0);
+        expect(after.tip!.y).toBeCloseTo(before.tip!.y, 0);
+      });
+    });
+});
+
+describe('near the cap (fails without the cap: the engine before drew the stored balloons verbatim)', () => {
+  it('a panel just over the cap comes under it at full size; pinned balloons are untouched and its neighbour sits as stored', () => {
+    // 1.2× measure, one line in panel 6: panel 5's stored balloon covered 0.3169 of it (0.017 over the cap).
+    const { doc, page } = p2ShapedDoc({ panel6: 'one' });
+    const aspect = letteringAspect(doc, page);
+    const plans = plansOf(doc, page, wide);
+    const cover = panelCoverage(doc, page, plans, aspect);
+    expect(cover.every((c) => c <= PANEL_LIMITS.coverCap + 1e-9)).toBe(true);
+    const five = plans.find((p) => p.lineId === 'ln_5')!;
+    expect(five.fontSize).toBe(17);
+    expect(five.dense).toBeUndefined();
+    expect(five.crowdedReason).toBe('cover');
+    // Pinned balloons are drawn exactly as before; panel 6's balloon (under the cap) is no longer nudged aside for
+    // panel 5's: it is drawn exactly where it is stored.
+    for (const id of ['ln_1', 'ln_2', 'ln_4']) expect(hashString(JSON.stringify(plans.find((p) => p.lineId === id))), id).toBe(golden.lines['p2-one|wide'][id]);
+    const sixA = plans.find((p) => p.lineId === 'ln_6a')!;
+    const stored = page.balloons.find((b) => b.lineId === 'ln_6a')!;
+    expect(sixA.x).toBeCloseTo(stored.x * 1000, 2);
+    expect(sixA.y).toBeCloseTo(stored.y * (1000 / aspect), 2);
+    expect(sixA.crowded).toBeUndefined();
+    expect(sixA.dense).toBeUndefined();
   });
 });
 
@@ -234,6 +363,36 @@ describe('never a balloon over another balloon\'s text (FX2): the stress fixture
   });
 });
 
+describe('the settle fallback never carries a stored balloon away from its panel', () => {
+  // Two pinned clouds fill the page except a 60-unit band far below the movable cloud's panel (the top 300 units).
+  const items = (stored: boolean): SettleItem[] => [
+    { id: 'a', outline: { x: 0, y: 0, w: 1000, h: 500 }, body: { x: 0, y: 0, w: 1000, h: 500 }, text: { x: 300, y: 150, w: 400, h: 200 }, movable: false },
+    { id: 'b', outline: { x: 0, y: 560, w: 1000, h: 440 }, body: { x: 0, y: 560, w: 1000, h: 440 }, text: { x: 300, y: 700, w: 400, h: 150 }, movable: false },
+    {
+      id: 'c',
+      outline: { x: 300, y: 150, w: 300, h: 200 },
+      body: { x: 300, y: 150, w: 300, h: 200 },
+      text: { x: 400, y: 225, w: 100, h: 50 },
+      region: { x: 0, y: 0, w: 1000, h: 300 },
+      movable: true,
+      ...(stored ? { stored: true } : {})
+    }
+  ];
+  const run = (stored: boolean) => settleBalloons(items(stored), { w: 1000, h: 1000 }, { margin: { x: 8, y: 8 }, gap: 10 });
+
+  it('a line software-placed for this render may take the text-free band anywhere on the page', () => {
+    const r = run(false);
+    expect(r.unresolved).toEqual(['c']);
+    expect(r.moves.get('c')!.dy).toBeGreaterThan(150);
+  });
+
+  it("an old comic's stored balloon stays where it is (still reported) when the only text-free spot is panels away", () => {
+    const r = run(true);
+    expect(r.unresolved).toEqual(['c']);
+    expect(r.moves.get('c')).toBeUndefined();
+  });
+});
+
 describe('minimum width for pinned balloons (FX6)', () => {
   const pinnedNarrow = (w: number) =>
     makeSampleDoc((d) => {
@@ -288,9 +447,13 @@ describe('Re-letter page persists the cap (placeBalloonsWholeWords)', () => {
     expect(coverOfBalloons(saved.balloons)).toBeLessThan(coverOfBalloons(uncapped.balloons) - 0.05);
     expect(saved.straddled?.length).toBeGreaterThan(0);
     for (const b of page.balloons.filter((x) => x.pinned)) expect(saved.balloons.find((s) => s.lineId === b.lineId)).toEqual(b);
-    // Drawn from the saved balloons, the page still ends under the cap.
+    // Drawn from the saved balloons, panel 6 covers no more than the render-time cap drew it from the stored ones, and
+    // still says it has too much text when it is over the cap.
+    const drawnBefore = panelCoverage(doc, page, planLettering(doc, page, aspect, estimateMeasure), aspect)[5];
     const after = { ...page, balloons: saved.balloons };
     const plans = planLettering(doc, after, aspect, estimateMeasure);
-    expect(panelCoverage(doc, after, plans, aspect)[5]).toBeLessThanOrEqual(PANEL_LIMITS.coverCap + 1e-9);
+    const coverAfter = panelCoverage(doc, after, plans, aspect)[5];
+    expect(coverAfter).toBeLessThanOrEqual(drawnBefore + 1e-9);
+    if (coverAfter > PANEL_LIMITS.coverCap + 1e-9) expect(plans.filter((p) => p.panelN === 6).every((p) => p.dense)).toBe(true);
   });
 });

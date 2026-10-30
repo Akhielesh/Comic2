@@ -57,8 +57,8 @@ describe('Fix balloon placement (FX3): the paid re-check, quoted in the user\'s 
     const studio = open();
     fireEvent.click(screen.getByTestId('placement-fix-chip'));
     const menu = screen.getByRole('menu');
-    const paid = within(menu).getByRole('menuitem', { name: /Fix balloon placement/ });
-    expect(paid.textContent).toMatch(/% of your usage/);
+    // The quote is on the paid row's label itself ("Fix balloon placement · ≈…% of your usage"), never dollars.
+    const paid = within(menu).getByRole('menuitem', { name: /^Fix balloon placement · .*% of your usage$/ });
     expect(paid.textContent).not.toMatch(/\$/);
     expect(within(menu).getByRole('menuitem', { name: /Place around the art/ }).textContent).toMatch(/Free/);
     fireEvent.click(paid);
@@ -72,11 +72,18 @@ describe('Fix balloon placement (FX3): the paid re-check, quoted in the user\'s 
     allowance.status = { ...GOVERNED, governed: false };
     const { unmount } = render(<PageEditor studio={makeStudio(docP2(), { focusedPageId: 'pg_2' })} doc={docP2()} pageId="pg_2" />);
     fireEvent.click(screen.getByTestId('placement-fix-chip'));
-    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Fix balloon placement/ }).textContent).toMatch(/\$/);
+    expect(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Fix balloon placement · <?\$0\.0\d+$/ })).toBeTruthy();
     unmount();
     const faces = docP2();
     faces.pages[0].render.qc!.keepOut = [{ panel: 6, kind: 'face', box: { x: 0.7, y: 0.75, w: 0.08, h: 0.06 } }];
-    open(faces);
+    const { unmount: unmount2 } = render(<PageEditor studio={makeStudio(faces, { focusedPageId: 'pg_2' })} doc={faces} pageId="pg_2" />);
+    expect(screen.queryByTestId('placement-fix-chip')).toBeNull();
+    unmount2();
+    // A page the face-aware check read and found no face on (scenery, a back view) is measured too: no repeat spend.
+    const noFaces = docP2();
+    noFaces.pages[0].render.qc!.keepOut = [];
+    noFaces.pages[0].render.qc!.heads = [];
+    open(noFaces);
     expect(screen.queryByTestId('placement-fix-chip')).toBeNull();
   });
 
@@ -91,7 +98,7 @@ describe('Too much text for this panel (FX2): the chip and its free fixes', () =
     allowance.status = GOVERNED;
     const studio = open();
     const chip = screen.getByTestId('too-much-text-chip');
-    expect(chip.textContent).toMatch(/Too much text · panel 6/);
+    expect(chip.textContent?.trim()).toBe('Too much text for panel 6');
     fireEvent.click(chip);
     const copy = screen.getByTestId('too-much-text-copy');
     expect(copy.textContent).toMatch(/^Too much text for panel 6: \d+ words cover about \d+% of the picture — it holds about \d+\./);
@@ -116,6 +123,24 @@ describe('Too much text for this panel (FX2): the chip and its free fixes', () =
     fireEvent.click(within(screen.getByTestId('too-much-text')).getByRole('button', { name: 'Move to panel 3' }));
     const [moveOps] = patches(studio).at(-1)!;
     expect(moveOps[0]).toMatchObject({ op: 'line_move', id: 'ln_6b', toPanelId: 'pn_3' });
+    expect(acts(studio)).toHaveLength(0);
+  });
+
+  it('Keep here pins a balloon the cap moved where it is DRAWN (spot, width and tail), never back at its stored spot', () => {
+    allowance.status = GOVERNED;
+    const studio = open();
+    const hit = document.querySelector<HTMLElement>('[data-testid="balloon-hit"][data-line-id="ln_6b"]')!;
+    fireEvent.pointerDown(hit, { clientX: 5, clientY: 5, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerUp(window, { clientX: 5, clientY: 5 });
+    expect(screen.getByTestId('crowded-reason').getAttribute('data-reason')).toBe('cover');
+    fireEvent.click(screen.getByRole('button', { name: 'Keep here' }));
+    const [ops, opts] = patches(studio).at(-1)!;
+    const stored = docP2().pages[0].balloons.find((b) => b.lineId === 'ln_6b')!;
+    expect(opts).toMatchObject({ label: 'Keep balloon here' });
+    expect(ops[0]).toMatchObject({ op: 'balloon', pageId: 'pg_2', lineId: 'ln_6b', patch: { pinned: true } });
+    const patch = ops[0].patch as Record<string, number>;
+    for (const k of ['x', 'y', 'w', 'tailX', 'tailY']) expect(typeof patch[k], k).toBe('number');
+    expect(Math.abs(patch.y - stored.y) + Math.abs(patch.x - stored.x)).toBeGreaterThan(0.01);
     expect(acts(studio)).toHaveLength(0);
   });
 

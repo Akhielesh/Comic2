@@ -13,7 +13,7 @@ import React, { useLayoutEffect, useRef, useState } from 'react';
 import { ScanFace, TriangleAlert, X } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
 import type { DocOp } from '../../../shared/comic/ops';
-import type { Page } from '../../../shared/comic/doc';
+import type { Balloon, Page } from '../../../shared/comic/doc';
 import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
@@ -95,7 +95,8 @@ export const CROWDED_COPY: Record<CrowdedReason, string> = {
   overlap: 'Crowded panel — this balloon overlaps another.',
   order: 'This panel has more words than room, so this balloon is read out of order. Shorten the text, or give the panel more room.',
   outside: 'No room in its panel — the editor moved it beside the panel so nothing overlaps.',
-  moved: 'No room where it was — the editor moved it so nothing overlaps.'
+  moved: 'No room where it was — the editor moved it so nothing overlaps.',
+  cover: 'Its panel has more words than picture — the editor moved this balloon so more of the art shows. Keep here keeps it where it is drawn.'
 };
 
 /** The visible explanation of a dense page's smaller lettering (the chip on the page says the same). */
@@ -118,16 +119,31 @@ const unitWord = (d: Pick<LetterDensity, 'unit'>, n: number) => (d.unit === 'cha
  * editor already did (honest: never "fixed" — the free fixes are the user's).
  */
 export const tooMuchTextCopy = (d: LetterDensity): string => {
-  const pct = Math.round(d.cover * 100);
+  const pct = Math.round(d.drawn * 100);
   const head = `Too much text for panel ${d.panelN}: ${d.words} ${unitWord(d, d.words)} cover about ${pct}% of the picture — it holds about ${d.fits}.`;
-  if (d.scale !== undefined && d.scale < 1) return `${head} Lettered at ${Math.round(d.scale * 100)}% so more of the art shows.`;
-  if (d.drawn < d.cover - 0.005) return `${head} Its balloons are moved partly over the panel's border so more of the art shows.`;
+  if (d.scale !== undefined && d.scale < 1) return `${head} Lettered at ${Math.round(d.scale * 100)}% of its size so more of the art shows.`;
+  if (d.drawn < d.cover - 0.005) return `${head} The editor moved its balloons (partly over the panel's border) so more of the art shows.`;
   return head;
 };
 
-/** The chip's short label: "Too much text · panel 6" / "Too much text · 2 panels". */
+/** The chip's short label (plan: "Too much text for this panel"): "Too much text for panel 6" / "Too much text in 2 panels". */
 export const tooMuchTextLabel = (list: readonly LetterDensity[]): string =>
-  list.length === 1 ? `Too much text · panel ${list[0].panelN}` : `Too much text · ${list.length} panels`;
+  list.length === 1 ? `Too much text for panel ${list[0].panelN}` : `Too much text in ${list.length} panels`;
+
+/**
+ * Keep a balloon where it is DRAWN: an unpinned stored balloon the engine drew elsewhere (the settle, a dense-page
+ * repack or the coverage cap) is pinned at its drawn spot, width and tail — never sent back to its stored spot. {}
+ * for anything else (a software-placed line's full balloon comes from balloonOp; a pinned one is drawn as stored).
+ */
+export const drawnSpotPatch = (page: Page, lineId: string, resolved: ReadonlyMap<string, Balloon>): Partial<Balloon> => {
+  const stored = page.balloons.find((b) => b.lineId === lineId);
+  const drawn = resolved.get(lineId);
+  if (!stored || !drawn || stored.pinned || stored.locked) return {};
+  const out: Partial<Balloon> = {};
+  if (drawn.x !== stored.x || drawn.y !== stored.y || drawn.w !== stored.w) Object.assign(out, { x: drawn.x, y: drawn.y, w: drawn.w });
+  if (typeof drawn.tailX === 'number' && typeof drawn.tailY === 'number' && (drawn.tailX !== stored.tailX || drawn.tailY !== stored.tailY)) Object.assign(out, { tailX: drawn.tailX, tailY: drawn.tailY });
+  return out;
+};
 
 /** "Make it a caption" (free): a spoken line becomes a caption in the same panel (its speaker stays on the line). */
 export const captionOps = (page: Page, lineId: string): DocOp[] => {
@@ -198,7 +214,8 @@ export const PlacementFixChip: React.FC<{
     {
       id: 'free',
       label: 'Place around the art',
-      hint: freeDisabled ?? 'Free — done by the editor, no AI cost',
+      // Hints sit beside the label on one line (never truncated): kept short so a 320 px sheet still shows both.
+      hint: freeDisabled ?? 'Free · no AI cost',
       disabled: !!freeDisabled,
       onSelect: () => {
         setAt(null);
@@ -207,8 +224,8 @@ export const PlacementFixChip: React.FC<{
     },
     {
       id: 'paid',
-      label: 'Fix balloon placement',
-      hint: `${price} · reads the page again for faces`,
+      // The quote is on the label itself (plan: "Fix balloon placement (≈$0.004)"), in the user's terms.
+      label: `Fix balloon placement · ${price}`,
       onSelect: () => {
         setAt(null);
         onPaid();
@@ -412,7 +429,11 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                   type="button"
                   title={crowdedWhy === 'overlap' ? 'Keep this balloon where it is (it may overlap); the editor stops moving it' : 'Keep this balloon where it is drawn, at this size; the editor stops moving it'}
                   className={WARN_BTN}
-                  onClick={() => apply(pinKeepingSizeOps([balloonOp(page, one.id, { pinned: true }, placements.balloons)], page, plans, [one.id], props.editionLang), { label: 'Keep balloon here' })}
+                  onClick={() =>
+                    apply(pinKeepingSizeOps([balloonOp(page, one.id, { ...drawnSpotPatch(page, one.id, placements.balloons), pinned: true }, placements.balloons)], page, plans, [one.id], props.editionLang), {
+                      label: 'Keep balloon here'
+                    })
+                  }
                 >
                   Keep here
                 </button>

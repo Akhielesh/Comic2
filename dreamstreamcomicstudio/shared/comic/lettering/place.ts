@@ -37,7 +37,9 @@
 //  - Never over text (FX2): a balloon may, on an over-full page, touch another balloon's outline or tail, but
 //    its outline never covers another balloon's TEXT and its text never sits under another outline. When no
 //    clean spot exists the placement takes a text-free spot anywhere on the page (a gutter, a margin, read as
-//    late as it can) before it would ever take one over text; the settle pass does the same at render time.
+//    late as it can) before it would ever take one over text; the settle pass does the same at render time
+//    (a balloon drawn where it is stored only within its own tier and panel: an old comic's balloon is never
+//    carried panels away).
 //  - Coverage cap (FX2/F8): a panel's lettering covers at most `coverCap` of its picture (fill × outline ∩
 //    panel ÷ panel area — density.ts units). A panel whose lines would cover more letters them partly across
 //    its border (text still read inside the panel) before it covers more of its picture; under the cap the
@@ -1192,6 +1194,12 @@ export interface SettleItem {
   after?: string;
   /** Later lines of its panel the owner fixed there: a nudge keeps this one read before every one of them. */
   next?: readonly string[];
+  /**
+   * Drawn where a stored (unpinned) balloon is stored, not placed for this render: when no free spot exists, the
+   * never-over-text fallback moves it only within its own tier and near its panel (its region plus the gutter
+   * around it), else it stays where it is, still reported. Only a software-placed line may go anywhere on the page.
+   */
+  stored?: boolean;
 }
 
 export interface SettleMove {
@@ -1481,7 +1489,8 @@ export function settleBalloons(
       unresolved.push(it.id);
       // No room on the page for the whole balloon: it may still touch another outline or tail, but never cover
       // another balloon's text or sit with its text under another outline (FX2). The nearest such spot, reading
-      // order first; where there is none it stays as it is.
+      // order first; where there is none it stays as it is. A stored balloon only looks in its own tier, with its
+      // text centre in its panel or the gutter around it: an old comic's balloon is never carried panels away.
       /** The body (tail-less outline) at outline position (x, y) covers no other text, and no other body covers its text. */
       const clearOfText = (x: number, y: number): boolean => {
         const at = bodyAt(it, x, y);
@@ -1521,9 +1530,17 @@ export function settleBalloons(
         for (let i = list.length - 1; i >= 0; i -= 1) if (inBox(cx, cy, list[i])) return list.length - i;
         return 0;
       };
-      for (const level of [2, 3]) {
+      /** The stored balloon's home: its panel plus the gutter around it (2.5 % of the width). */
+      const home = reg ? inflate(reg, W * 0.025, W * 0.025) : undefined;
+      const nearHome = (k: number): boolean => {
+        if (!home) return true;
+        const t = textAt(it, tx[k], ty[k]);
+        return inBox(t.x + t.w / 2, t.y + t.h / 2, home);
+      };
+      for (const level of it.stored ? [2] : [2, 3]) {
         const order = level === 3 ? sortedByCost(cost2.map((c, k) => c + 0.5 * W * back2(k))) : sortedByCost(cost2);
         for (const k of order) {
+          if (it.stored && !nearHome(k)) continue;
           if (!clearOfText(tx[k], ty[k])) continue;
           if (level < 3 && orderLevel(it, textAt(it, tx[k], ty[k])) > level) continue;
           const c: Box = { x: tx[k], y: ty[k], w: o.w, h: o.h };

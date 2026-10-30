@@ -164,8 +164,12 @@ export function reletterAroundArtOps(doc: ComicDoc, page: Page, aspect: number, 
   return same ? [] : [{ op: 'balloons', pageId: page.id, balloons }];
 }
 
-/** Whether a page's stored check has face data (then the free placement already avoids faces). */
+/**
+ * Whether a page's stored check looked for faces (then the free placement already avoids any it found, and a paid
+ * re-check would only say the same again): its `keepOut` or `heads` is there, even empty — a page with no face in
+ * it (scenery, a back view) is measured too. A check that never asked has neither.
+ */
 export const hasFaceData = (page: Pick<Page, 'render'>): boolean => {
   const qc = page.render?.qc;
-  return !!(qc?.heads?.length || qc?.keepOut?.some((k) => k?.kind === 'face'));
+  return Array.isArray(qc?.keepOut) || Array.isArray(qc?.heads);
 };

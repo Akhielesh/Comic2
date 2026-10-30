@@ -117,4 +117,12 @@ describe('Place around the art (free)', () => {
     page.render.qc = { ...page.render.qc!, keepOut: [{ panel: 1, kind: 'face', box: { x: 0.4, y: 0.2, w: 0.1, h: 0.08 } }] };
     expect(hasFaceData(page)).toBe(true);
   });
+
+  it('a page the face-aware check read and found no face on is measured too (no repeat paid re-check)', () => {
+    const { page } = pageWith();
+    page.render.qc = { ...page.render.qc!, keepOut: [], heads: [] };
+    expect(hasFaceData(page)).toBe(true);
+    page.render.qc = { ...page.render.qc!, keepOut: [{ panel: 1, kind: 'hands', box: { x: 0.4, y: 0.2, w: 0.1, h: 0.08 } }], heads: undefined };
+    expect(hasFaceData(page)).toBe(true);
+  });
 });

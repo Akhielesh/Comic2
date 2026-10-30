@@ -88,24 +88,28 @@ export interface LetterPlan {
    * Why a crowded balloon is flagged (set with `crowded`): 'overlap' — it still overlaps another balloon (a
    * page with no free room left); 'order' — the only free room is where the reader meets it out of turn
    * (before its turn, or after a later line the owner fixed in its panel); 'outside' — no room in its
-   * panel, so it sits beside it; 'moved' — moved to make room.
+   * panel, so it sits beside it; 'moved' — moved to make room; 'cover' — moved (in memory) so its panel's lettering
+   * covers less of the picture (the coverage cap; Keep here keeps it where it is drawn).
    */
   crowdedReason?: CrowdedReason;
   /**
    * Too much text for this panel (FX2): set on every plan of a panel whose lettering covers more of its picture
-   * than the cap (coverCapFor) even at full size where the engine placed it best. Absent under the cap, so a page
-   * whose panels all fit plans exactly as before.
+   * than the cap (coverCapFor) even at full size where the engine placed it best, and on every plan of a panel the
+   * cap lettered smaller (`scale`). Absent under the cap, so a page whose panels all fit plans exactly as before.
    */
   dense?: LetterDensity;
 }
 
-export type CrowdedReason = 'overlap' | 'order' | 'outside' | 'moved';
+export type CrowdedReason = 'overlap' | 'order' | 'outside' | 'moved' | 'cover';
 
 /** What `LetterPlan.dense` says about a panel with more text than its picture can carry. */
 export interface LetterDensity {
   /** The panel's number (panel.n). */
   panelN: number;
-  /** Share of the panel's picture its lettering covers at full size (fill × outline ∩ panel ÷ panel area). */
+  /**
+   * Share of the panel's picture its lettering covers where it was placed before the cap (stored balloons where they
+   * are stored): fill × outline ∩ panel ÷ panel area.
+   */
   cover: number;
   /** About how many words (characters, for Japanese and Chinese) the panel holds at the target fit. */
   fits: number;
@@ -125,11 +129,23 @@ export interface LetterDensity {
 export const PLAN_W = 1000;
 
 /**
- * The coverage cap's size steps (F8/FX2): a panel over the cap is first lettered again at full size (its movable
- * balloons re-placed, partly across its border when that helps), then a little smaller, never below the dense-page
- * floor. Pinned and locked balloons never move or shrink.
+ * Letter-fit policy (an owner decision, still open). `coverShrink`: when re-placing an over-cap panel's movable
+ * balloons at full size cannot bring it under the cap, letter them smaller (COVER_STEPS). OFF by default, as the
+ * investigation's FX2 decided: shrinking takes phone text from about 5.8 px to 4.8 px (RC8), so the cap only re-places
+ * and the panel is flagged `dense` with its free fixes. Turning it on is this one line; it never goes below
+ * FIT_FONT_FLOOR, children's books included.
  */
-export const COVER_STEPS: readonly number[] = [1, 0.9, FIT_FONT_FLOOR, 0.72];
+export const LETTER_FIT_POLICY: { coverShrink: boolean } = { coverShrink: false };
+
+/**
+ * The coverage cap's size steps (F8/FX2), when LETTER_FIT_POLICY.coverShrink is on: each panel over the cap is first
+ * lettered again at full size (its movable balloons re-placed, partly across its border when that helps), then a
+ * little smaller, panel by panel, never below the auto-fit floor. Pinned and locked balloons never move or shrink.
+ */
+export const COVER_STEPS: readonly number[] = [1, 0.9, FIT_FONT_FLOOR];
+
+/** The size steps the cap may use now: full size only, unless the owner turned the shrink on. */
+export const coverStepsFor = (policy: { coverShrink: boolean } = LETTER_FIT_POLICY): readonly number[] => (policy.coverShrink ? COVER_STEPS : [1]);
 
 /** The coverage cap for a doc: PANEL_LIMITS.coverCap (0.30), or coverCapKids (0.25) for children's books. */
 export function coverCapFor(doc: Pick<ComicDoc, 'format' | 'brief'>): number {
@@ -565,9 +581,10 @@ const clampStored = (b: Balloon): Balloon => {
 /**
  * Pure; memoized by (text, font, width, style). Uses textLayout wrap + fit. Works on a localized doc.
  *
- * Letter fit (plan §10 A4): a panel whose lettering covers more of its picture than the doc's cap (coverCapFor) is
- * lettered again in memory — its movable balloons only, stored unpinned ones included (F8) — and flagged `dense`;
- * no balloon is left over another balloon's text while the page has a text-free spot for it (FX2); a pinned balloon
+ * Letter fit (plan §10 A4): a panel whose lettering covers more of its picture than the doc's cap (coverCapFor) has
+ * its movable balloons placed again in memory — stored unpinned ones included (F8), drawn and flagged crowded 'cover'
+ * where they moved — at full size (smaller only when LETTER_FIT_POLICY allows it), and is flagged `dense` while it is
+ * still over; no balloon is left over another balloon's text while the page has a text-free spot for it (FX2); a pinned balloon
  * stored narrower than its longest word is drawn as wide as that word within its panel (FX6). Stored values never
  * change, and a page whose panels are all under the cap plans exactly as before.
  */
@@ -663,11 +680,13 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
 /**
  * The coverage cap (FX2/F8), applied to the page the search chose. A panel whose lettering covers more of its picture
  * than the cap has its MOVABLE balloons — software-placed lines and stored balloons that are neither pinned nor locked —
- * lettered again in memory: re-placed at full size (partly across its border when that helps), then a little smaller
- * (COVER_STEPS). Nothing is written (Re-letter page saves the re-placement for free) and pinned or locked balloons
- * never move. An attempt is kept only when it is no worse a page (overlaps, reading order, split words) and covers
- * less; a panel still over the cap at full size is flagged `dense` with how much it holds. A page whose panels are
- * all under the cap is returned exactly as the search drew it.
+ * placed again in memory at full size (partly across its border when that helps). Only when the owner's policy allows
+ * it (LETTER_FIT_POLICY.coverShrink) does a panel still over the cap go down COVER_STEPS, panel by panel: each panel
+ * keeps the largest step that brings IT under the cap (the smallest when none does), so a panel that fits at full size
+ * is never lettered smaller for a neighbour. Nothing is written (Re-letter page saves the re-placement for free) and
+ * pinned or locked balloons never move. An attempt is kept only when it is no worse a page (text covered, overlaps,
+ * reading order, split words) and covers less. A panel still over the cap, or lettered smaller, is flagged `dense`.
+ * A page whose panels are all under the cap is returned exactly as the search drew it.
  */
 function coverCapped(ctx: PlanCtx, win: PageAttempt): LetterPlan[] {
   const { doc, page, items, stored } = ctx;
@@ -680,54 +699,81 @@ function coverCapped(ctx: PlanCtx, win: PageAttempt): LetterPlan[] {
     return !b || (!b.pinned && !b.locked);
   };
   const over = new Set(page.panels.map((_p, i) => i).filter((i) => cover0[i] > cap + 1e-9 && items.some((it) => it.panelIndex === i && movable(it.line.id))));
-  let chosen = { plans, cover: cover0, scale: 1 };
-  let full = cover0;
+  const noScales = new Map<number, number>();
+  let chosen: { plans: LetterPlan[]; cover: readonly number[]; scales: ReadonlyMap<number, number> } = { plans, cover: cover0, scales: noScales };
+  /** Best coverage at the page's own size (re-placement only). */
+  let full: readonly number[] = cover0;
   if (over.size) {
     // A panel that was under the cap may take a little of a neighbour's balloon, never past the cap (or past what it
     // already carried).
     const excess = (c: readonly number[]) => c.reduce((n, v, i) => n + Math.max(0, v - (over.has(i) ? cap : Math.max(cap, cover0[i]))), 0);
     let least = excess(cover0);
     // A page already lettered at a smaller step letters its capped panels no bigger: each size is tried once.
-    const steps = [...new Set(COVER_STEPS.map((step) => Math.min(step, win.scale)))];
-    for (const step of steps) {
-      const a = planAtDensity(ctx, win.scale, win.keep, win.whole, { panels: over, scale: step });
-      if (worse(a, win)) continue;
+    const steps = [...new Set(coverStepsFor().map((step) => Math.min(step, win.scale)))].sort((a, b) => b - a);
+    /** Each over-cap panel's step (an index into `steps`): all start at the page's own size. */
+    const at = new Map<number, number>([...over].map((i) => [i, 0]));
+    for (let round = 0; round < steps.length; round += 1) {
+      const scales = new Map([...at].map(([i, k]) => [i, steps[k]] as [number, number]));
+      const a = planAtDensity(ctx, win.scale, win.keep, win.whole, { panels: over, scales });
       const ap = a.build();
       const ac = coverOf(ap);
-      if (step >= 1) full = cover0.map((c, i) => Math.min(c, ac[i]));
-      const ex = excess(ac);
-      if (ex < least - 1e-9) {
-        least = ex;
-        chosen = { plans: ap, cover: ac, scale: step };
+      if (!worse(a, win)) {
+        if (round === 0) full = cover0.map((c, i) => Math.min(c, ac[i]));
+        const ex = excess(ac);
+        if (ex < least - 1e-9) {
+          least = ex;
+          chosen = { plans: ap, cover: ac, scales };
+        }
+        if (ex <= 1e-9) break;
       }
-      if (ex <= 1e-9) break;
+      // Only the panels still over the cap go a step smaller; the others keep the step that brought them under it.
+      let lowered = false;
+      for (const [i, k] of at)
+        if (ac[i] > cap + 1e-9 && k + 1 < steps.length) {
+          at.set(i, k + 1);
+          lowered = true;
+        }
+      if (!lowered) break;
     }
   }
-  return markDense(ctx, chosen.plans, full, chosen.cover, chosen.scale < 1 ? over : new Set<number>(), chosen.scale);
+  const shrunk = new Map([...chosen.scales].filter(([, s]) => s < win.scale - 1e-9));
+  return markDense(ctx, chosen.plans, cover0, full, chosen.cover, shrunk);
 }
 
-/** `dense` on every plan of a panel whose lettering covers more than the cap at full size (FX2). */
-function markDense(ctx: PlanCtx, plans: LetterPlan[], full: readonly number[], drawn: readonly number[], shrunk: ReadonlySet<number>, scale: number): LetterPlan[] {
+/**
+ * `dense` on every plan of a panel whose lettering covers more than the cap even re-placed at full size (FX2), and of
+ * every panel the cap lettered smaller (`shrunk`: panel index → size step), so a smaller letter is never unexplained.
+ */
+function markDense(
+  ctx: PlanCtx,
+  plans: LetterPlan[],
+  before: readonly number[],
+  full: readonly number[],
+  drawn: readonly number[],
+  shrunk: ReadonlyMap<number, number>
+): LetterPlan[] {
   const { doc, page, items, boxes } = ctx;
   const cap = ctx.cover.cap;
-  if (!full.some((c) => c > cap + 1e-9)) return plans;
+  const flagged = (i: number) => full[i] > cap + 1e-9 || shrunk.has(i);
+  if (!page.panels.some((_p, i) => flagged(i))) return plans;
   const unit = textUnitFor(doc.format?.language);
   const panelOf = new Map(items.map((it) => [it.line.id, it.panelIndex]));
   const info = new Map<number, LetterDensity>();
   page.panels.forEach((panel, i) => {
-    if (!(full[i] > cap + 1e-9)) return;
+    if (!flagged(i)) return;
     const b = boxes[i];
     const balloons = (panel.lines || []).filter((l) => normalizeLetteringText(l.text)).length;
     const d: LetterDensity = {
       panelN: panel.n,
-      cover: r4(full[i]),
+      cover: r4(before[i]),
       fits: b ? textBudget(b.w * b.h, Math.max(1, balloons), unit) : 0,
       words: panelWords(panel, unit),
       unit: unit.unit,
       cap,
       drawn: r4(drawn[i])
     };
-    if (shrunk.has(i) && scale < 1) d.scale = scale;
+    const s = shrunk.get(i);
+    if (s !== undefined && s < 1) d.scale = s;
     info.set(i, d);
   });
   return plans.map((p) => {
@@ -837,7 +883,7 @@ function planAtDensity(
   scale: number,
   keep: 'all' | 'pinned',
   wholeWords: readonly string[],
-  capPass?: { panels: ReadonlySet<number>; scale: number }
+  capPass?: { panels: ReadonlySet<number>; scales: ReadonlyMap<number, number> }
 ): PageAttempt {
   const { doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, shapes } = ctx;
   const sizer = ctx.sizerAt(scale);
@@ -848,8 +894,8 @@ function planAtDensity(
     const b = stored.get(id);
     return !b || (!b.pinned && !b.locked);
   };
-  /** The size step a line is lettered at: the page's, or the cap's smaller one for its panel. */
-  const lineScale = (id: string): number => (capLine(id) ? Math.min(scale, capPass!.scale) : scale);
+  /** The size step a line is lettered at: the page's, or the cap's smaller one for its own panel. */
+  const lineScale = (id: string): number => (capLine(id) ? Math.min(scale, capPass!.scales.get(panelOfLine.get(id) ?? -1) ?? scale) : scale);
   const repacks = (id: string) => {
     const b = stored.get(id);
     if (!b || b.pinned || b.locked) return false;
@@ -859,17 +905,20 @@ function planAtDensity(
   // movable ones of its panels): deterministic placement around everything else on the page.
   const placed = new Map<string, Balloon>();
   let crowded: ReadonlySet<string> = new Set<string>();
+  /** Lines the coverage cap placed partly across their panel's border. */
+  let straddled: ReadonlySet<string> = new Set<string>();
   /** Lines the placement lettered narrower than their whole words allow (it found no wider spot). */
   let narrowed: ReadonlySet<string> = new Set<string>();
   if (items.some((it) => !stored.has(it.line.id) || repacks(it.line.id))) {
     const qc = page.render?.qc;
-    const capSizer = capPass && capPass.scale < scale ? ctx.sizerAt(Math.min(scale, capPass.scale)) : undefined;
+    /** The cap letters each of its panels at that panel's own step (one sizer per step). */
+    const capSized = !!capPass && [...capPass.scales.values()].some((s) => s < scale);
     const result = placeBalloonsDetailed({
       page,
       boxes: [...boxes],
       aspect: asp,
       rtl,
-      plansFor: capSizer ? (line, w) => (capLine(line.id) ? capSizer(line, w) : sizer(line, w)) : sizer,
+      plansFor: capSized ? (line, w) => ctx.sizerAt(lineScale(line.id))(line, w) : sizer,
       keepOut: qc?.keepOut,
       heads: qc?.heads,
       safeMargin,
@@ -883,9 +932,10 @@ function planAtDensity(
       ...(capPass ? { coverCap: ctx.cover.cap, fillFor: ctx.cover.fillFor } : {})
     });
     for (const b of result.balloons) if (!stored.has(b.lineId) || repacks(b.lineId)) placed.set(b.lineId, b);
-    // A line lettered across its panel's border for the cap is not crowded for that alone: its panel's `dense` says why.
-    const across = new Set(result.straddled ?? []);
-    crowded = new Set(result.crowded.filter((id) => (!stored.has(id) || repacks(id)) && !across.has(id)));
+    // A line lettered across its panel's border for the cap is crowded with the reason 'cover' (the editor draws it,
+    // and pins it, where it is drawn).
+    straddled = new Set(result.straddled ?? []);
+    crowded = new Set(result.crowded.filter((id) => !stored.has(id) || repacks(id)));
     narrowed = new Set(result.split);
   }
 
@@ -918,8 +968,12 @@ function planAtDensity(
   }
   const pre: Pre[] = [];
   const repacked = new Set<string>();
-  /** Lines the coverage cap lettered again (re-placed, or smaller): not "crowded" for that alone. */
+  /**
+   * Stored lines the coverage cap drew somewhere else or smaller (crowded, reason 'cover': the editor's drag, Keep
+   * here and Lock start from the drawn balloon), and those it placed again exactly where they are stored (not crowded).
+   */
   const capMoved = new Set<string>();
+  const capSame = new Set<string>();
   /** Pinned balloons drawn wider than stored so no word breaks (FX6), by line. */
   const widened = new Set<string>();
   const preOf = ({ line, panelIndex, panelN }: (typeof items)[number], order: number, wordFit: boolean): Pre | undefined => {
@@ -977,7 +1031,12 @@ function planAtDensity(
     const p = preOf(it, order, true);
     if (!p) return;
     if (p.again) repacked.add(p.line.id);
-    if (p.again && capLine(p.line.id) && keep !== 'pinned') capMoved.add(p.line.id);
+    if (p.again && capLine(p.line.id) && keep !== 'pinned') {
+      const s = stored.get(p.line.id);
+      const q = placed.get(p.line.id);
+      const same = !!s && !!q && Math.abs(q.x - s.x) < 1e-4 && Math.abs(q.y - s.y) < 1e-4 && Math.abs(q.w - s.w) < 1e-4 && lineScale(p.line.id) >= scale;
+      (same ? capSame : capMoved).add(p.line.id);
+    }
     if (!p.movable && p.w > p.b.w * PLAN_W + 0.01) widened.add(p.line.id);
     pre.push(p);
   });
@@ -1056,7 +1115,9 @@ function planAtDensity(
         group: groupOf.get(p.line.id),
         text: { x: p.x, y: p.y, w: p.w, h: p.h },
         body: outline,
-        before: earlierOf(p.panelIndex)
+        before: earlierOf(p.panelIndex),
+        // Drawn from where the owner's (unpinned) balloon is stored: the never-over-text fallback keeps it near home.
+        ...(p.movable && !p.fallback && !p.again ? { stored: true } : {})
       };
       const after = afterOf.get(p.line.id);
       if (after) item.after = after;
@@ -1200,16 +1261,28 @@ function planAtDensity(
       if (tip) plan.tip = { x: r2(tip.x), y: r2(tip.y) };
       // Crowded: the placement could not keep it clean, the settle pass had to move it off another balloon,
       // an over-full page re-placed it, or it is read out of turn. The reason says which, honestly.
-      // A balloon the coverage cap lettered again is not crowded for that alone (the panel's `dense` says why).
-      if (crowded.has(line.id) || nudged.has(line.id) || (repacked.has(line.id) && !capMoved.has(line.id)) || stuck.has(line.id)) {
+      // A balloon the coverage cap drew elsewhere (or smaller) is crowded too, reason 'cover'; one it placed again
+      // exactly where it is stored is not.
+      if (crowded.has(line.id) || nudged.has(line.id) || (repacked.has(line.id) && !capSame.has(line.id)) || stuck.has(line.id)) {
         plan.crowded = true;
         const reg = planBox(p.panelIndex);
         const cx = x + w / 2;
         const cy = y + h / 2;
         const inPanel = !reg || (cx >= reg.x && cx <= reg.x + reg.w && cy >= reg.y && cy <= reg.y + reg.h);
-        plan.crowdedReason = unresolved.has(line.id) ? 'overlap' : (levels.get(line.id) ?? 0) >= 2 ? 'order' : !inPanel ? 'outside' : 'moved';
+        plan.crowdedReason = unresolved.has(line.id)
+          ? 'overlap'
+          : (levels.get(line.id) ?? 0) >= 2
+            ? 'order'
+            : !inPanel
+              ? 'outside'
+              : capMoved.has(line.id) || straddled.has(line.id)
+                ? 'cover'
+                : 'moved';
       }
-      if (scale < 1 && p.movable) plan.densityScale = scale;
+      // The size it is drawn at, the page's step or its panel's smaller cap step: a drag, nudge, Keep here or Lock
+      // keeps it (styleOps keptSizes / keepDrawnSizeOps read this).
+      const ls = lineScale(line.id);
+      if (p.movable && ls < 1) plan.densityScale = ls;
       plans.push(plan);
     }
     plans.sort((a, b) => a.z - b.z || a.order - b.order);
