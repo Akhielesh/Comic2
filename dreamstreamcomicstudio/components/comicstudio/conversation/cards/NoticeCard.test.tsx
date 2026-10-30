@@ -231,7 +231,12 @@ describe('NoticeCard fix chips', () => {
       expect(chip.className).toMatch(/\bmax-w-full\b/);
       expect(chip.className).toMatch(/\bmin-w-0\b/);
       expect(chip.querySelector('span')!.className).toMatch(/overflow-wrap:anywhere/);
+      // The badge never breaks inside a word ("Fr / ee" at 320 px): no anywhere-wrap, no shrinking below its word.
+      const badge = chip.querySelector('[data-fix-badge]')!;
+      expect(badge.className).not.toMatch(/overflow-wrap:anywhere|\bmin-w-0\b/);
+      if (!/\s/.test(badge.textContent!.trim())) expect(badge.className).toMatch(/\bshrink-0\b.*\bwhitespace-nowrap\b|\bwhitespace-nowrap\b.*\bshrink-0\b/);
     }
+    expect(within(group).getAllByRole('button').map((b) => b.querySelector('[data-fix-badge]')!.textContent)).toContain('Free');
     expect(group.parentElement!.className).toMatch(/\bmin-w-0\b/);
   });
 

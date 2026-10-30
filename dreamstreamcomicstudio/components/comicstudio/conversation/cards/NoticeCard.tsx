@@ -287,9 +287,13 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
             <span className="min-w-0 [overflow-wrap:anywhere]">{chipLabel(c.fix.label, price)}</span>
             {/* The name a screen reader hears is the visible text: "Use the layout that fits, Free". */}
             <span className="sr-only">,</span>{' '}
+            {/* The badge wraps only between words, never inside one (a 320 px chip broke "Free" into "Fr / ee"); a
+                one-word badge (Free, Done, Started) never wraps at all. */}
             <span
+              data-fix-badge
               className={cx(
-                'min-w-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums [overflow-wrap:anywhere]',
+                'rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
+                badge.includes(' ') ? '[overflow-wrap:normal]' : 'shrink-0 whitespace-nowrap',
                 c.paid ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success
               )}
             >
