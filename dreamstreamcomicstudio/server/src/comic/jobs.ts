@@ -144,6 +144,7 @@ import type { ChatMessage } from '../ai/providers/types.js';
 import { BILLING_ENABLED } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { PRO_QUALITY_USAGE_MESSAGE } from './access.js';
+import { withHistoryAction } from './history/recorder.js';
 import { actionHandlerFor } from './actions/index.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
@@ -1204,8 +1205,16 @@ export async function runAction(ctx: StudioContext, action: StudioAction, opts: 
  * Validate, gate and start an action. Doc-only actions complete before this resolves;
  * spend actions resolve once they are gated/blocked or their targets are queued, with
  * `done` settling when the renders finish.
+ *
+ * Comic History (H2 wave note 1; required before COMIC_HISTORY=1): every commit the action makes, renders it starts in
+ * the background included, carries it to the recorder (withHistoryAction: AsyncLocalStorage, no store call of its own),
+ * so a UI-started plan_pages is the AI's, fix_panel names its panel and fit_render / relayout_balloons are the editor's.
  */
 export async function startAction(ctx: StudioContext, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
+  return withHistoryAction(action, () => startActionScoped(ctx, action, opts));
+}
+
+async function startActionScoped(ctx: StudioContext, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
   if (!action || typeof action !== 'object' || typeof (action as { type?: unknown }).type !== 'string') {
     throw badRequest('Unknown action.');
   }
@@ -1316,7 +1325,8 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
-    const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gated, next);
+    // The approved action names its commits for History (not approve_gate's own scope).
+    const started = await withHistoryAction(gate.action, () => (handler ? handler.run(ctx, gate.action, next) : startSpend(ctx, gated, next)));
     if (started.outcome.status === 'blocked') reopen();
     else if (started.outcome.status === 'nothing') close();
     return started;
