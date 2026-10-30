@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "mode": "compose",
+  "subject": "<script>alert(1)</script> Hello \"quoted\" & 'single'",
+  "preheader": "</title><script>x</script>",
+  "to": [{ "address": "friend@example.com", "name": "<b>Friend</b>" }],
+  "blocks": [
+    { "type": "heading", "id": "h1", "level": 1, "runs": [{ "text": "<img src=x onerror=alert(1)>" }] },
+    { "type": "heading", "id": "h3", "level": 2, "runs": [{ "text": "Read the " }, { "text": "heading link", "link": { "href": "https://docs.example.com/heading" } }] },
+    {
+      "type": "paragraph",
+      "id": "p1",
+      "runs": [
+        { "text": "js link", "link": { "href": "javascript:alert(1)" } },
+        { "text": " http link", "link": { "href": "http://insecure.example.com/" } },
+        { "text": " data link", "link": { "href": "data:text/html,<script>alert(1)</script>" } },
+        { "text": " quote breakout", "link": { "href": "https://ok.example.com/\" onmouseover=\"alert(1)" } },
+        { "text": " upper case", "link": { "href": "HTTPS://ok.example.com/" } },
+        { "text": " fine", "link": { "href": "https://ok.example.com/path?a=1&b=2" }, "marks": ["b", "code", "onclick"] },
+        { "text": " controls:\u0000\u0007\u001b[31m and bidi ‮exe.pdf" }
+      ]
+    },
+    { "type": "button", "id": "b1", "label": "Click <me>", "href": "javascript:alert(document.cookie)" },
+    { "type": "button", "id": "b2", "label": "VB", "href": "vbscript:msgbox" },
+    { "type": "image", "id": "i1", "ref": { "kind": "data", "dataUri": "data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+" }, "alt": "\" onerror=\"alert(1)" },
+    { "type": "image", "id": "i2", "ref": { "kind": "url", "url": "http://tracker.example.com/pixel.gif" }, "alt": "pixel" },
+    { "type": "image", "id": "i3", "ref": { "kind": "data", "dataUri": "data:image/png;base64,PHNjcmlwdD4=" }, "alt": "a PNG header lie" },
+    { "type": "image", "id": "i5", "ref": { "kind": "data", "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" }, "alt": "cover\" onerror=\"alert(1)\" x=\"", "width": 9999 },
+    { "type": "image", "id": "i4", "ref": { "kind": "asset", "id": "../../etc/passwd" }, "alt": "path traversal" },
+    { "type": "quote", "id": "q1", "runs": [{ "text": "line one\r\nline two" }, { "text": " quoted reply", "link": { "href": "mailto:quoted@example.org?subject=Re" } }], "cite": "<i>someone</i>" },
+    { "type": "script", "id": "s1", "code": "alert(1)" },
+    {
+      "type": "columns",
+      "id": "c1",
+      "columns": [
+        {
+          "blocks": [
+            { "type": "columns", "id": "c2", "columns": [{ "blocks": [{ "type": "paragraph", "id": "p9", "runs": [{ "text": "nested columns are dropped" }] }] }] },
+            { "type": "paragraph", "id": "p2", "runs": [{ "text": "write to them", "link": { "href": "mailto:someone@evil.example?subject=hi" } }] },
+            { "type": "list", "id": "l2", "ordered": false, "items": [{ "runs": [{ "text": "column list mail", "link": { "href": "mailto:list@example.org" } }] }] }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "list",
+      "id": "l1",
+      "ordered": true,
+      "items": [
+        { "runs": [{ "text": "style=\"x\" on*=y" }], "indent": 9 },
+        { "runs": [{ "text": "see " }, { "text": "the list link", "link": { "href": "https://list.example.com/item" } }, { "text": " and a bad one", "link": { "href": "javascript:alert(2)" } }] }
+      ]
+    },
+    { "type": "paragraph", "id": "p3", "runs": [{ "text": "https://bank.example.com", "link": { "href": "https://evil.example.net/login" } }] },
+    { "type": "heading", "id": "h2", "level": 7, "runs": "not an array" }
+  ],
+  "signature": "Alex\n<script>sig</script>",
+  "brand": "atlas\"><script>"
+}
