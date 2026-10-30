@@ -3,7 +3,7 @@
 
 import type { QualityTier } from './doc.js';
 import type { ContentRating } from './safety.js';
-import { DOC_LIMITS } from './limits.js';
+import { DOC_LIMITS, MAX_ALTERNATIVES } from './limits.js';
 
 export type StudioMode = 'easy' | 'pro';
 export type PlanClass = 'free' | 'paid' | 'admin';
@@ -35,6 +35,11 @@ export interface StudioCaps {
   /** Optional usage snapshot (P2-AMEND, from P1-LIMITS). Never dollars: governed users see "usage left" only.
    *  Absent = unknown; UsageSlot fetches /api/usage/allowance itself, so nothing depends on it. */
   usage?: StudioUsage;
+  // --- history (versions plan §3.3; H0). Optional: absent = off, so caps without them are unchanged on the wire ---
+  /** Comic History is on (server env COMIC_HISTORY=1, set after the client ships). Read via historyEnabled(). */
+  history?: boolean;
+  /** "Try another version" lines per comic (default MAX_ALTERNATIVES; the decisions-final #1 pattern). */
+  maxAlternatives?: number;
 }
 
 /** "Usage left" for the header meter and quotes (percentages only — no USD ever reaches a governed user). */
@@ -82,3 +87,19 @@ export function resolveStudioCaps(i: {
     admin: i.isAdmin
   };
 }
+
+// --- history (versions plan §3.3; H0) ---
+
+/** The server env flag that turns Comic History on ('1' / 'true'). Unset = off: nothing observable changes. */
+export const HISTORY_ENV = 'COMIC_HISTORY';
+export const historyFlagOn = (value: unknown): boolean => value === '1' || value === 'true';
+/** History is on for these caps (absent = off). */
+export const historyEnabled = (caps: Pick<StudioCaps, 'history'> | null | undefined): boolean => caps?.history === true;
+/** "Try another version" lines allowed (always ≥ 1, never above MAX_ALTERNATIVES unless raised there). */
+export const maxAlternativesOf = (caps: Pick<StudioCaps, 'maxAlternatives'> | null | undefined): number => {
+  const n = caps?.maxAlternatives;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 1 ? Math.floor(n) : MAX_ALTERNATIVES;
+};
+/** Caps with history turned on when `on` (and the SAME object when off, so nothing changes on the wire). */
+export const withHistoryCaps = (caps: StudioCaps, on: boolean): StudioCaps =>
+  on ? { ...caps, history: true, maxAlternatives: maxAlternativesOf(caps) } : caps;

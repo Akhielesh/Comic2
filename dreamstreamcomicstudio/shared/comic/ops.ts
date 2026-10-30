@@ -97,6 +97,9 @@ import { languageSpec, sameLanguage } from './languages.js';
 import { harmonizePanelSizes, layoutConflicts, layoutPanelCount, parseLayout } from './pageGeometry.js';
 import { isPublicationMirror, type PublishRequest, type PublicationMirror, type PublicationSettingsPatch } from './publication.js';
 import type { SafetyVerdict } from './safety.js';
+// --- history (versions plan §3.3; H0) ---
+import { applyHistoryRestore, type RestoreKernel } from './history/apply.js';
+import type { HistoryRestoreOp, HistoryStudioAction } from './history/types.js';
 
 export type AssetMetaPatch = { safety?: SafetyVerdict | null; variants?: AssetVariant[] | null };
 /** Keys a ref_patch may touch. `null` clears a key (applyOp deletes it); `path`, `w` and `h` can never be cleared
@@ -210,7 +213,12 @@ export type DocOp =
   /** Set or replace the lock. Committed in the SAME batch as the first comic image (origin 'first_render'),
    *  on the next image commit of a legacy doc ('migrated'), or by `change_image_model` ('user_change').
    *  A malformed lock is a no-op (R6). Never undoable; never client-patchable. */
-  | { op: 'image_model'; lock: ImageModelLock };
+  | { op: 'image_model'; lock: ImageModelLock }
+
+  // --- history (versions plan §3.3; server-only) ---
+  /** Bring back content from a saved version (history/apply.ts). merge: I1–I6 (nothing lost, later additions kept);
+   *  exact: the alternative switch only. Never client-patchable; no inverse — its undo is the before-restore row. */
+  | HistoryRestoreOp;
 
 type Quoted = { quotedUsd?: number };
 /** Spend actions — the ones that may be gated. A confirmed action whose fresh estimate exceeds
@@ -266,7 +274,9 @@ export type StudioAction =
   /** models.md §3.4 item 7: the ONLY path that changes doc.imageModel after the lock. `ack: true` is the user's
    *  confirm ("consistency can be affected"); `quotedUsd` is the redraw quote shown (re-gated on drift). Non-spend:
    *  a redraw it triggers runs as a separate render_* action carrying that quote. */
-  | { type: 'change_image_model'; modelId: string; redraw: RedrawScope; quotedUsd: number; ack: true };
+  | { type: 'change_image_model'; modelId: string; redraw: RedrawScope; quotedUsd: number; ack: true }
+  // --- history (versions plan §3.3): free, non-spend ---
+  | HistoryStudioAction;
 
 /** The type names live in doc.ts (single source for client + server; doc.ts validates a stored card's
  *  `blockedAction` against them and cannot import this module). Re-exported here, where StudioAction is
@@ -291,8 +301,16 @@ export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op'
 /** Server-only (contract test asserts none of these is patchable). */
 export const SERVER_ONLY_OPS: readonly DocOp['op'][] = [
   'pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations',
-  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'image_model'
+  'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'image_model',
+  // --- history ---
+  'history_restore'
 ];
+
+/** Every op name this build applies (patchable ∪ server-only). A client that receives any other op name refetches the
+ *  doc instead of trusting its mirror (versions plan §11: old tabs, newer server). */
+export const KNOWN_DOC_OPS: ReadonlySet<string> = new Set<string>([...CLIENT_PATCHABLE_OPS, ...SERVER_ONLY_OPS]);
+export const isKnownDocOp = (op: unknown): boolean =>
+  !!op && typeof op === 'object' && typeof (op as { op?: unknown }).op === 'string' && KNOWN_DOC_OPS.has((op as { op: string }).op);
 
 /** Ids the server accepts for new entities (jobs.ts SAFE_ID). */
 export const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -409,6 +427,9 @@ const pushArchive = (doc: ComicDoc, entries: ArchivedVersion[]): ComicDoc => {
   if (!entries.length) return doc;
   return evictArchive({ ...doc, archive: [...entries, ...archiveOf(doc)] });
 };
+
+// --- history: the archive primitives the pure restore applier uses (history/apply.ts never imports this module) ---
+const RESTORE_KERNEL: RestoreKernel = { pushArchive, evictArchive, toArchived, metaOf };
 
 interface RenderPatchResult { render: RenderState; overflow: RenderVersion[] }
 
@@ -1457,6 +1478,9 @@ export const applyOp = (doc: ComicDoc, op: DocOp): ComicDoc => {
       const lock = normalizeImageModelLock(op.lock);
       return lock ? { ...doc, imageModel: lock } : doc;
     }
+    // --- history ---
+    case 'history_restore':
+      return applyHistoryRestore(doc, op, RESTORE_KERNEL);
     case 'plan_input_hash': {
       if (op.hash === null) {
         if (doc.planInputHash === undefined) return doc;

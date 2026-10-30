@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
-import { DEFAULT_CAPS, sanitizeStudioUsage, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
+import { DEFAULT_CAPS, sanitizeStudioUsage, withHistoryCaps, type StudioCaps, type StudioUsage } from '../../../shared/comic/capabilities.js';
 import {
   CAST_KINDS,
   collectAssetPaths,
@@ -31,7 +31,7 @@ import {
   type RefAsset,
   type RenderState
 } from '../../../shared/comic/doc.js';
-import { encodeStudioEvent, type AttachmentTarget, type StreamRequest, type StudioEvent, type StudioFocus } from '../../../shared/comic/events.js';
+import { encodeStudioEvent, normalizeTimeZone, type AttachmentTarget, type StreamRequest, type StudioEvent, type StudioFocus } from '../../../shared/comic/events.js';
 import { editionProgress, i18nOf, localizeDoc } from '../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
@@ -69,6 +69,10 @@ import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
 import { ANALYZE_SOURCE_MIN_CHARS, buildTurnToolset, createDirectorTurn } from '../comic/tools.js';
 import { toolGroups } from '../comic/tools/index.js';
 import { StudioError, type AssetStore, type DocStore } from '../comic/types.js';
+// --- history (versions plan §3.3, §11; H0 seams). Only through the owner history route modules, never the history
+//     engine modules directly: this file also holds the public reader router (§12). ---
+import { historyActionOff, historyRoutesEnabled, rememberTurnTimeZone } from './comicHistory.js';
+import { legacyVersionImport, notifyImported, parseFromVersionId } from './comicLegacyHistory.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
 
@@ -334,7 +338,7 @@ const bodyShape = (body: unknown): Pick<RefusalLog, 'kind' | 'action'> => {
   if (body.kind === 'message') return { kind: 'message' };
   if (body.kind === 'action') {
     const type = isObject(body.action) ? body.action.type : undefined;
-    return { kind: 'action', ...(typeof type === 'string' && STREAM_ACTION_TYPES.has(type) ? { action: type } : {}) };
+    return { kind: 'action', ...(typeof type === 'string' && STREAM_ACTION_TYPES.has(type) && !historyActionOff(type) ? { action: type } : {}) };
   }
   return {};
 };
@@ -497,19 +501,24 @@ export function parseStreamRequest(body: unknown): StreamRequest {
     }
     const focus = parseFocus(body.focus);
     if (!text && !attachments.length) throw bad('Type a message or attach something.');
+    // The sender's time zone (history's "this morning"): a hint — kept when Intl knows it, else dropped, never a 400.
+    const tz = normalizeTimeZone(body.tz);
     return {
       kind: 'message',
       text,
       ...(attachments.length ? { attachments } : {}),
       ...(attachmentTargets ? { attachmentTargets } : {}),
-      ...(focus ? { focus } : {})
+      ...(focus ? { focus } : {}),
+      ...(tz ? { tz } : {})
     };
   }
   if (body.kind === 'action') {
     const action = body.action;
     if (!isObject(action) || typeof action.type !== 'string') throw bad('Unknown action.');
-    if (!STREAM_ACTION_TYPES.has(action.type)) throw bad(`Unknown action "${action.type.slice(0, 40)}".`);
-    return { kind: 'action', action: action as unknown as StudioAction };
+    // History actions exist only while Comic History is on; off, they are as unknown as before it shipped.
+    if (!STREAM_ACTION_TYPES.has(action.type) || historyActionOff(action.type)) throw bad(`Unknown action "${action.type.slice(0, 40)}".`);
+    const tz = normalizeTimeZone(body.tz);
+    return { kind: 'action', action: action as unknown as StudioAction, ...(tz ? { tz } : {}) };
   }
   throw bad('Send a message or an action.');
 }
@@ -1024,6 +1033,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       logger.warn('comic_caps_failed', { userId: req.user?.id, message: (err as Error)?.message });
       caps = { ...DEFAULT_CAPS, byok };
     }
+    // Comic History (server env COMIC_HISTORY): off adds nothing to the caps.
+    caps = withHistoryCaps(caps, historyRoutesEnabled());
     // Usage left (percentages only): the header meter and every price the server words for this user.
     const usage = usageFor && req.user?.id ? await usageFor(req.user.id, caps).catch(() => undefined) : undefined;
     return usage ? { ...caps, usage } : caps;
@@ -1049,8 +1060,15 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       /** Private copies made for an import: removed again if the comic is never created. */
       let importedPaths: string[] = [];
       const importFrom = typeof body.importFromProjectId === 'string' ? body.importFromProjectId.trim() : '';
+      // "Open in the new studio" from one classic snapshot kept on the server (history H6; only while it is on).
+      const fromVersionId = importFrom && historyRoutesEnabled() ? parseFromVersionId(body.fromVersionId) : undefined;
       if (importFrom) {
         if (!PROJECT_ID.test(importFrom)) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
+        // A snapshot id that is present but malformed never falls back to the live classic state: the creator asked
+        // for snapshot X, so anything else is the same 404 as a missing snapshot (null/absent = the live state).
+        if (historyRoutesEnabled() && body.fromVersionId !== undefined && body.fromVersionId !== null && !fromVersionId) {
+          throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
+        }
         // One classic import per user at a time: each can re-encode up to ~105 photos through the
         // process-wide image slots, so parallel imports must never multiply that work (the UI already
         // sends one at a time; this holds for forged or multi-tab requests too).
@@ -1059,7 +1077,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
         }
         importingUsers.add(userId);
         try {
-          const legacy = await store().loadLegacyState(importFrom, userId);
+          const legacy = fromVersionId ? await legacyVersionImport(userId, importFrom, fromVersionId) : await store().loadLegacyState(importFrom, userId);
           if (!legacy) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
           if (legacy.state?.studioVersion === 4) throw new StudioError('BAD_REQUEST', 'That comic is already in the new studio.', { status: 400 });
           const { ops: mapped, summary } = legacyImportOps(legacy, userId);
@@ -1090,6 +1108,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           throw err;
         });
       const [caps] = await Promise.all([capsFor(req, byok), created]);
+      // Comic History: the new comic's "Brought into the new studio" moment links its classic project (H6). Never throws.
+      if (importFrom) notifyImported({ projectId, userId, doc, fromProjectId: importFrom, ...(fromVersionId ? { fromVersionId } : {}) });
       logger.info('comic_project_created', { projectId, imported: !!importFrom, ...(kind ? { kind } : {}) });
       res.set('Cache-Control', 'private, no-store');
       res.status(201).json({ projectId, doc, urls: await signDisplay(doc), caps });
@@ -1215,6 +1235,8 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           ...(access.ok === false ? { qualityDenied: access.message } : {}),
           ...(restricted ? { spendBlocked: RESTRICTED_SPEND_MESSAGE } : {})
         });
+        // History's director tools resolve "this morning" in the sender's zone (turnTimeZone of the history hooks).
+        rememberTurnTimeZone(ctx, request.tz);
         // Attachments are validated (and legacy images stored) before the stream opens, so a
         // bad file or a stale inbox path is a plain 400 with nothing persisted.
         if (request.kind === 'message') {

@@ -39,6 +39,8 @@ import { feature as usage } from './usage/index';
 import { feature as models } from './models/index';
 import { feature as insights } from './insights/index';
 import { feature as reliability } from './reliability/index';
+// --- history (versions plan §8; H0 stub, H5 fills it) ---
+import { feature as history } from './history/index';
 
 export type {
   AdminSectionRegistration,
@@ -89,7 +91,17 @@ let cache: Registries | null = null;
 
 /** Every feature module, in precedence order. */
 export const featureModules = (): readonly FeatureModule[] =>
-  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability].map((m) => m || {});
+  [
+    breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability,
+    // Comic History (versions plan §8), last = lowest precedence. Listed once it registers something (H5): the H0 stub
+    // registers nothing, so the registries — and this list — are exactly what they were without it.
+    ...(hasRegistrations(history) ? [history] : [])
+  ].map((m) => m || {});
+
+/** A feature module that contributes at least one registration. */
+function hasRegistrations(mod: FeatureModule | undefined): boolean {
+  return !!mod && [mod.cards, mod.tabs, mod.headerSlots, mod.adminSections].some((list) => Array.isArray(list) && list.length > 0);
+}
 
 const byOrder = <T extends { order: number }>(list: T[]): T[] =>
   list

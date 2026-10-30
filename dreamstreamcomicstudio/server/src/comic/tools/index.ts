@@ -15,6 +15,8 @@ import { readerToolGroup } from './reader.js';
 import { refsToolGroup } from './refs.js';
 import { safetyToolGroup } from './safety.js';
 import { timelineToolGroup } from './timeline.js';
+// --- history (versions plan §9; H0 stub, H4 replaces it). Listed only while COMIC_HISTORY is on. ---
+import { historyToolGroup, historyToolGroupEnabled } from './history.js';
 
 const registry = createKeyedRegistry<ToolGroup>({
   what: 'tool group',
@@ -31,7 +33,8 @@ const registry = createKeyedRegistry<ToolGroup>({
       i18nToolGroup,
       libraryToolGroup,
       readerToolGroup,
-      modelsToolGroup
+      modelsToolGroup,
+      ...(historyToolGroupEnabled() ? [historyToolGroup] : [])
     ]
   ]
 });

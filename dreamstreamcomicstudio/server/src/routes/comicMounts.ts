@@ -11,7 +11,8 @@
 //     /api/moderation/comic-cases moderator queue         — before /api/moderation
 //     /api/comic/models/lab       Model Lab (W-M)         — requireAdmin + admin rate limit, before the owner model routes
 //     /api/comic/models/*         model status + catalog  — W-M routers, text rate limit on their exact paths only
-//     /api/comic                  feature owner routers (publication, refs, i18n, safety appeal, models, model status, lab)
+//     /api/comic                  feature owner routers (publication, refs, i18n, safety appeal, models, model status, lab,
+//                                 classic history before history — so "legacy" is never a version id)
 //     /api/comic                  the studio (existing, text rate limit; also serves the static GET /models)
 //
 // Feature routers answer ONLY their own paths, so everything else falls through to the
@@ -37,6 +38,9 @@ import { comicPublicationRouter } from './comicPublication.js';
 import { comicRefsRouter } from './comicRefs.js';
 import { comicModerationRouter, comicReportRouter, comicSafetyRouter } from './comicSafety.js';
 import { comicStorageAdminRouter } from './comicStorageAdmin.js';
+// --- history (versions plan §12; H0 stubs, H3/H6 replace them) ---
+import { comicHistoryRouter, historyRouteGate } from './comicHistory.js';
+import { comicLegacyHistoryRouter } from './comicLegacyHistory.js';
 
 /** The §14.3 limiters (each may be several windows, e.g. 30/min AND 300/h). */
 export interface ComicRateLimits {
@@ -85,7 +89,9 @@ const STATIC_SEGMENTS: ReadonlySet<string> = new Set([
   'api', 'comic', 'moderation', 'comic-cases', 'public', 'library', 's', 'report', 'admin', 'storage', 'migrate-refs', 'projects',
   'stream', 'publication', 'regenerate', 'refs', 'inbox', 'crop', 'translation-quote', 'safety-review', 'urls', 'cancel', 'runs',
   'step', 'quote', 'assets', 'reject', 'publish', 'manifest', 'appeal', 'og', 'embed', 'tail',
-  'models', 'catalog', 'trends', 'status', 'lab'
+  'models', 'catalog', 'trends', 'status', 'lab',
+  // --- history ---
+  'history', 'compare', 'book', 'legacy', 'alternatives', 'forget'
 ]);
 const MAX_PATTERN_SEGMENTS = 8;
 
@@ -205,7 +211,23 @@ export function mountComicOwnerRoutes(app: Express, deps: ComicOwnerMountDeps): 
   // the studio router's static list and keeps the studio's own limiter, so no request is ever counted twice.
   app.use('/api/comic/models/lab', deps.adminRateLimit, deps.requireAdmin);
   app.use('/api/comic/models', modelRoutesTextLimit(deps.textRateLimit));
-  app.use('/api/comic', ...(deps.featureRouters ?? [comicPublicationRouter, comicRefsRouter, comicI18nRouter, comicSafetyRouter, comicModelLabRouter, comicModelStatusRouter, comicModelsRouter]));
+  // Comic History (owner-only): text-limited on its exact paths while COMIC_HISTORY is on; off, the paths reach the
+  // studio exactly as before (never counted twice).
+  app.use('/api/comic/projects/:id/history', historyRouteGate(deps.textRateLimit));
+  app.use(
+    '/api/comic',
+    ...(deps.featureRouters ?? [
+      comicPublicationRouter,
+      comicRefsRouter,
+      comicI18nRouter,
+      comicSafetyRouter,
+      comicModelLabRouter,
+      comicModelStatusRouter,
+      comicModelsRouter,
+      comicLegacyHistoryRouter,
+      comicHistoryRouter
+    ])
+  );
 
   // Comic Studio (conversational studio) — auth'd, text-tier rate limited; renders are
   // billed per image inside the job runner.
