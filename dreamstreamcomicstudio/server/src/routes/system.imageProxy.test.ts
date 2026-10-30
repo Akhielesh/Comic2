@@ -71,7 +71,7 @@ vi.mock('../services/supabase.js', () => {
   };
 });
 
-const { systemRouter } = await import('./system.js');
+const { systemRouter, publicReaderPathCache } = await import('./system.js');
 
 const app = express();
 app.use('/api/system', systemRouter);
@@ -86,6 +86,7 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
+  publicReaderPathCache.clear();
   db.signed = [];
   db.tokens = { 'owner-token': OWNER, 'stranger-token': STRANGER };
   const project = (id: string, extra: Row = {}): Row => ({
@@ -241,5 +242,58 @@ describe('image proxy: dot-segment / encoding traversal', () => {
     const res = await fetchImage(classicPath('img/page-1.webp'), 'stranger-token');
     expect(res.status).toBe(200);
     expect(db.signed).toEqual([classicPath('img/page-1.webp')]);
+  });
+});
+
+describe('image proxy: legacy paths of a public classic comic (reading is free without an account)', () => {
+  const legacy = (file: string) => `${OWNER}/${file}`;
+  beforeEach(() => {
+    db.tables.projects[1].state = {
+      coverImageId: legacy('cover.png'),
+      panels: [{ imageId: legacy('p1.png'), imageIdHistory: [legacy('p1-old.png')] }, { imageId: legacy('p2') }],
+      characters: [{ imageId: legacy('hero.png'), referenceImageIds: [legacy('selfie.jpg')] }]
+    };
+    db.tables.projects[2].state = { coverImageId: legacy('private-cover.png') };
+    db.tables.projects[3].state = { coverImageId: legacy('moderated-cover.png') };
+  });
+
+  it.each(['cover.png', 'p1.png', 'p2.webp'])('signs %s for a signed-out reader (what the reader shows)', async (file) => {
+    const res = await fetchImage(legacy(file));
+    expect(res.status).toBe(200);
+    expect(db.signed).toEqual([legacy(file)]);
+  });
+
+  it.each(['p1-old.png', 'selfie.jpg', 'hero.png', 'private-cover.png', 'moderated-cover.png', 'unknown.png'])(
+    'refuses %s to a signed-out reader with 401',
+    async (file) => {
+      const res = await fetchImage(legacy(file));
+      expect(res.status).toBe(401);
+      expect(db.signed).toEqual([]);
+    }
+  );
+
+  it('a public v4 listing state never authorizes a legacy path', async () => {
+    db.tables.projects[0].state = { studioVersion: 4, coverImageId: legacy('v4-cover.png') };
+    expect((await fetchImage(legacy('v4-cover.png'))).status).toBe(401);
+  });
+
+  it("signed-in readers keep the broad public rule (a public comic's references), never a force-private comic's", async () => {
+    expect((await fetchImage(legacy('selfie.jpg'), 'stranger-token')).status).toBe(200);
+    expect((await fetchImage(legacy('p1-old.png'), 'stranger-token')).status).toBe(200);
+    expect((await fetchImage(legacy('moderated-cover.png'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(legacy('private-cover.png'), 'stranger-token')).status).toBe(403);
+  });
+
+  it('the owner always may', async () => {
+    expect((await fetchImage(legacy('private-cover.png'), 'owner-token')).status).toBe(200);
+  });
+
+  it("a signed-out reader gets a shown panel's tmp-lane twin, never a tmp path the reader does not show", async () => {
+    expect((await fetchImage(`u/${OWNER}/tmp/p1.png`)).status).toBe(200);
+    expect((await fetchImage(`u/${OWNER}/tmp/selfie.jpg`)).status).toBe(401);
+    db.tables.projects[1].state = { ...(db.tables.projects[1].state as Row), characters: [{ referenceImageIds: [`u/${OWNER}/tmp/ref.webp`] }] };
+    publicReaderPathCache.clear();
+    expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`))).toHaveProperty('status', 401);
+    expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`, 'stranger-token')).status).toBe(200);
   });
 });

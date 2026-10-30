@@ -990,7 +990,9 @@ const App: React.FC = () => {
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces
   // (the v4 Comic Studio is itself a conversation with the Comic Director).
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
+  // The reader is a reading surface, like the shared reader: its launcher sat over the art (and over the reading
+  // mode's notes) on phones.
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio' && effectiveView !== 'reader';
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';

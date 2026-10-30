@@ -10,6 +10,7 @@ import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/wor
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
 import { projectHasComicDoc } from '../comic/store.js';
+import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths } from './publicReaderPaths.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
@@ -189,16 +190,17 @@ const isPathReferencedByPublicProject = async (
   ownerId: string,
   imagePath: string
 ): Promise<boolean> => {
-  const { data, error } = await supabaseAdmin
-    .from('projects')
-    .select('state')
-    .eq('user_id', ownerId)
-    .eq('is_public', true);
-
-  if (error) throw error;
-  if (!Array.isArray(data) || data.length === 0) return false;
-  return data.some((row) => projectStateReferencesImagePath((row as { state?: unknown }).state, imagePath));
+  // A force-private (moderated) project is not public, whatever is_public says: the project-scoped rule below
+  // already treats it so.
+  const states = await loadPublicProjectStates(supabaseAdmin, ownerId);
+  return states.some((state) => projectStateReferencesImagePath(state, imagePath));
 };
+
+/**
+ * What a signed-out reader may sign on legacy and tmp-lane paths: only the art a public classic comic's reader shows
+ * (cover, panels), checked against a short per-owner cache (see publicReaderPaths.ts).
+ */
+export const publicReaderPathCache = createPublicReaderPathCache((ownerId) => loadPublicReaderPaths(getSupabaseAdmin(), ownerId));
 
 type AccessCheckResult =
   | { allowed: true }
@@ -271,14 +273,15 @@ const canAccessImagePath = async (
   const tempScoped = parseTempPath(imagePath);
   if (tempScoped) {
     if (requesterId && requesterId === tempScoped.ownerId) return { allowed: true };
-    // A tmp/ image can still be referenced by a published (public) project — allow any
-    // viewer in that case, mirroring the legacy-path branch below. Without this, panel
-    // images that fell back to the tmp lane 401/403 for everyone but the owner.
+    // A tmp/ image can still be referenced by a published (public) project. Without this, panel images that fell
+    // back to the tmp lane 401/403 for everyone but the owner. A signed-out reader gets only what the public
+    // reader shows (cover, panels); a signed-in one, as before, anything the public project references.
+    if (!requesterId) {
+      if (await publicReaderPathCache.shows(tempScoped.ownerId, imagePath)) return { allowed: true };
+      return { allowed: false, status: 401, message: 'Authentication required for this image.' };
+    }
     if (await isPathReferencedByPublicProject(supabaseAdmin, tempScoped.ownerId, imagePath)) {
       return { allowed: true };
-    }
-    if (!requesterId) {
-      return { allowed: false, status: 401, message: 'Authentication required for this image.' };
     }
     return { allowed: false, status: 403, message: 'Image access denied.' };
   }
@@ -289,6 +292,9 @@ const canAccessImagePath = async (
       return { allowed: true };
     }
     if (!requesterId) {
+      // Reading is free without an account: a signed-out reader of a public classic comic gets its cover and panel
+      // art (and nothing else of the owner's). Without this, every older comic stalled for signed-out readers.
+      if (await publicReaderPathCache.shows(legacyScoped.ownerId, imagePath)) return { allowed: true };
       return { allowed: false, status: 401, message: 'Authentication required for this image.' };
     }
     const referencedByPublicProject = await isPathReferencedByPublicProject(supabaseAdmin, legacyScoped.ownerId, imagePath);

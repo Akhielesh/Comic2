@@ -553,6 +553,9 @@ export const reloadProjects = async (): Promise<Project[]> => {
   return loadProjects();
 };
 
+// The reader shows the cover and each panel's current art, so that is all a public read signs: a panel's older
+// renders (imageIdHistory) are never shown there, and signing them too multiplied the requests the reader waited
+// on before it could open (and a signed-out reader is not allowed them).
 const hydratePublicProjectForRead = async (project: Project): Promise<Project> => {
   const [coverImageUrl, panels] = await Promise.all([
     project.state.coverImageId
@@ -560,10 +563,7 @@ const hydratePublicProjectForRead = async (project: Project): Promise<Project> =
       : Promise.resolve(project.state.coverImageUrl),
     Promise.all(project.state.panels.map(async (panel) => {
       const imageUrl = panel.imageId ? await getImageUrl(panel.imageId) : panel.imageUrl;
-      const imageUrlHistory = panel.imageIdHistory
-        ? await Promise.all(panel.imageIdHistory.map((id) => getImageUrl(id)))
-        : panel.imageUrlHistory;
-      return { ...panel, imageUrl, imageUrlHistory };
+      return { ...panel, imageUrl };
     }))
   ]);
 
