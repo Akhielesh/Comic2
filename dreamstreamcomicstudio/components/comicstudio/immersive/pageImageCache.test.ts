@@ -212,6 +212,26 @@ describe('PageImageCache', () => {
     expect(d.fetch).toHaveBeenCalledTimes(2);
   });
 
+  it('useCachedImage still retries when its timer fires a little early by the wall clock (a busy event loop)', async () => {
+    let calls = 0;
+    const d = deps({ fetch: vi.fn(async () => ((calls += 1) === 1 ? new Response('', { status: 502 }) : new Response(new Blob(['x']), { status: 200 }))) });
+    const c = new PageImageCache(d, 10, 3, [250]);
+    const realNow = Date.now.bind(Date);
+    let lag = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() - lag);
+    try {
+      const { result } = renderHook(() => useCachedImage('u/e.webp', 'https://x/e', 'now', c));
+      await waitFor(() => expect(result.current).toMatchObject({ state: 'error', retrying: true }), { interval: 5 });
+      // Node schedules timers from the loop's cached time: under load the retry timer fires while the wall clock
+      // still reads before failedAt + delay. The hook waits out the remainder instead of giving up.
+      lag = 100;
+      await waitFor(() => expect(result.current.src).toBe('blob:1'), { timeout: 4000 });
+      expect(d.fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it('notifies subscribers', async () => {
     const c = new PageImageCache(deps());
     const fn = vi.fn();

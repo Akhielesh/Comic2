@@ -409,7 +409,17 @@ export function useCachedImage(path: string | undefined, url: string | undefined
   const retrying = !!path && failedAt !== undefined && cache.retryIn(path) !== null;
   useEffect(() => {
     if (!path || !url || !retrying) return;
-    const t = setTimeout(() => void cache.ensure(path, url, prio), cache.retryIn(path) ?? 0);
+    // Timers are scheduled from the event loop's cached time, so on a busy loop one can fire a little before
+    // failedAt + delay by the wall clock that retryIn reads; ensure() would then decline and nothing would ask again.
+    // Check, and wait out the remainder instead.
+    let t: ReturnType<typeof setTimeout>;
+    const attempt = () => {
+      const wait = cache.retryIn(path);
+      if (wait === null) return;
+      if (wait > 0) t = setTimeout(attempt, wait);
+      else void cache.ensure(path, url, prio);
+    };
+    t = setTimeout(attempt, cache.retryIn(path) ?? 0);
     return () => clearTimeout(t);
   }, [path, url, prio, cache, retrying, failedAt]);
   if (!e) return { state: 'waiting', w: 0, h: 0 };

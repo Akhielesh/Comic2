@@ -6,11 +6,12 @@
 // quiet relink of expired signed links.
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ComicDoc } from '../../shared/comic/doc';
 import type { PublicComicPayload } from '../../shared/comic/publication';
 import { makeSampleDoc } from './board/__fixtures__/sampleDoc';
 import { pageImageCache } from './immersive/pageImageCache';
+import { readerEntryOnTop } from './immersive/useImmersive';
 import { markIntroPlayed } from './immersive/readerPrefs';
 import { ExportError } from './export/errors';
 import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
@@ -93,7 +94,14 @@ beforeEach(() => {
   (HTMLImageElement.prototype as unknown as { decode: () => Promise<void> }).decode = () => Promise.resolve();
   window.history.replaceState(null, '', `/c/${SLUG}`);
 });
-afterEach(() => {
+afterEach(async () => {
+  // A test that ends with the full-screen reader open: unmount it now and let its history entry's pop land, since
+  // closing writes the page it closed on (?p=) onto the entry underneath. Left to RTL's own cleanup, the next test's
+  // beforeEach resets the history state before that pop runs, the pop never happens, and the reader's bounded-wait
+  // fallback writes ?p= into a LATER test's address 1 s on, which then opens deep-linked (no cover card).
+  cleanup();
+  await waitFor(() => expect(readerEntryOnTop()).toBe(false));
+  await new Promise((r) => setTimeout(r, 0));
   document.getElementById('ds-share-boot')?.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
