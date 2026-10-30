@@ -8,6 +8,7 @@ import { History as HistoryIcon } from 'lucide-react';
 import { historyEnabled } from '../../../shared/comic/capabilities';
 import type { RenderTarget } from '../../../shared/comic/doc';
 import { FOCUS_RING, RADIUS_CONTROL, TRANSITION } from '../../chat/studioDesign';
+import { FOCUS_RING as TIMELINE_FOCUS_RING } from '../timeline/ui';
 import type { StudioController } from '../types';
 import { requestOpenHistory } from './openHistory';
 
@@ -26,28 +27,26 @@ export const PageHistoryLink: React.FC<{ studio: Pick<StudioController, 'caps' |
   );
 };
 
-/** The focus ring drawn on the visible pill inside a larger hit area (FOCUS_RING's classes, from the group). */
-const PILL_FOCUS =
-  'group-focus-visible:outline group-focus-visible:outline-2 group-focus-visible:outline-offset-2 group-focus-visible:outline-[color:var(--ds-focus)] contrast-more:group-focus-visible:outline-[3px]';
-
-/** "· History" in the book timeline's summary line. */
+/**
+ * "· History" in the book timeline's summary line. It follows its siblings there (the Media link) exactly: a 28 px
+ * pill on fine pointers, so the dock's 36 px summary row (h-9) clips nothing, and a 44 px target on coarse pointers,
+ * where the row itself grows to 44 px (coarse:h-11). BookTimeline.test.tsx pins the class to the Media link's.
+ */
 export const TimelineHistoryLink: React.FC<{ studio: Pick<StudioController, 'caps' | 'doc'> }> = ({ studio }) => {
   if (!historyEnabled(studio.caps) || !studio.doc) return null;
   return (
-    // A 44 px target on every pointer. The dock's summary row is 36 px on fine pointers (its other controls look
-    // 28 px tall), so the button is a transparent 44 px hit area whose -my-1 keeps the row's height, and the visible
-    // 28 px pill (hover fill, focus ring) sits inside it — the same look as the row's other controls.
     <button
       type="button"
-      className={cx('group -my-1 inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center focus-visible:outline-none', RADIUS_CONTROL)}
+      className={cx(
+        'inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3',
+        TIMELINE_FOCUS_RING
+      )}
       onClick={() => requestOpenHistory({ view: 'list' })}
       aria-label="Open History: every saved moment of this comic"
       data-history-entry="timeline"
     >
-      <span className={cx('inline-flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-[var(--ds-ink)] group-hover:bg-[var(--ds-hover)] coarse:h-11 coarse:px-3', RADIUS_CONTROL, TRANSITION, PILL_FOCUS)}>
-        <HistoryIcon className="h-3.5 w-3.5" aria-hidden />
-        <span className="hidden sm:inline">History</span>
-      </span>
+      <HistoryIcon className="h-3.5 w-3.5" aria-hidden />
+      <span className="hidden sm:inline">History</span>
     </button>
   );
 };

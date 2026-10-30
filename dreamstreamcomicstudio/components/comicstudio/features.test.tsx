@@ -110,6 +110,7 @@ import {
 import { feature as modelsFeature } from './models/index';
 import { feature as insightsFeature } from './insights/index';
 import { feature as reliabilityFeature } from './reliability/index';
+import { feature as historyFeature } from './history/index';
 import { CardRenderer } from './conversation/cards/CardRenderer';
 import { BoardPane } from './board/BoardPane';
 import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
@@ -117,14 +118,17 @@ import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
 describe('features registry', () => {
   it('folds feature modules: built-ins win, first registration wins, sorted by order', () => {
     // breakdown (mock) wins over timeline's duplicate; refs is the real P1-REFS card.
-    // model_outage is the real W-M reliability card (registered last, lowest precedence).
-    expect(registeredCardTypes()).toEqual(['breakdown', 'refs', 'model_outage']);
+    // model_outage is the real W-M reliability card; history is Comic History's (registered last, lowest precedence).
+    expect(registeredCardTypes()).toEqual(['breakdown', 'refs', 'model_outage', 'history']);
     expect(registeredCard('notice')).toBeUndefined();
     expect(BUILTIN_CARD_TYPES.has('recap')).toBe(true);
-    expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media']);
-    // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250).
-    // …then M1-RELIABILITY's model-status banner (1000) and M1-PICKER-UI's picker host (1010) after every header control.
-    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'share', 'model-status', 'model-picker']);
+    // history (real, 510) sits right after the mocked media tab (500).
+    expect(registeredTabs().map((t) => t.id)).toEqual(['languages', 'media', 'history']);
+    // usage (real, P1-LIMITS) sits at 220: after the mocked mode/broken slots, before the mocked share (250); Comic
+    // History's button (240) right after it. …then M1-RELIABILITY's model-status banner (1000) and M1-PICKER-UI's picker
+    // host (1010) after every header control.
+    expect(registeredHeaderSlots().map((s) => s.id)).toEqual(['mode', 'broken', 'usage', 'history', 'share', 'model-status', 'model-picker']);
+    expect(registeredHeaderSlots().find((s) => s.id === 'history')?.order).toBe(240);
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
     // Admin sections keep feature order: safety (real) before library (mock).
     expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
@@ -132,7 +136,9 @@ describe('features registry', () => {
 
   it('W-M seams: models, insights and reliability are registered last (lowest precedence) with their real registrations', () => {
     const mods = featureModules();
-    expect(mods.slice(-3)).toEqual([modelsFeature, insightsFeature, reliabilityFeature]);
+    // …followed only by Comic History (versions plan §8), the very last module.
+    expect(mods.slice(-4, -1)).toEqual([modelsFeature, insightsFeature, reliabilityFeature]);
+    expect(mods[mods.length - 1]).toBe(historyFeature);
     // M1-PICKER-UI: the picker host under the header; M1-MODEL-LAB: the admin Model Lab. Insights lives inside the
     // Cost card and the Spending sheet, so it registers nothing.
     expect(modelsFeature.headerSlots?.map((h) => h.id)).toEqual(['model-picker']);
@@ -145,6 +151,20 @@ describe('features registry', () => {
     // `model_outage` is not a built-in, so the reliability feature's card is not ignored.
     expect(BUILTIN_CARD_TYPES.has('model_outage')).toBe(false);
     expect(registeredCard('model_outage')?.Component).toBe(reliabilityFeature.cards?.[0]?.Component);
+  });
+
+  it('Comic History is the last module: its card, tab and header slot are the real ones, and its tab hides while history is off', () => {
+    expect(historyFeature.cards?.map((c) => c.type)).toEqual(['history']);
+    expect(historyFeature.tabs?.map((t) => [t.id, t.order])).toEqual([['history', 510]]);
+    expect(historyFeature.headerSlots?.map((h) => [h.id, h.order])).toEqual([['history', 240]]);
+    expect(historyFeature.adminSections).toBeUndefined();
+    expect(BUILTIN_CARD_TYPES.has('history')).toBe(false);
+    expect(registeredCard('history')?.Component).toBe(historyFeature.cards?.[0]?.Component);
+    const tab = registeredTabs().find((t) => t.id === 'history');
+    expect(tab).toBe(historyFeature.tabs?.[0]);
+    const doc = makeSampleDoc();
+    expect(tab?.visible?.(doc, makeFakeStudio().caps)).toBe(false);
+    expect(tab?.visible?.(doc, { ...makeFakeStudio().caps, history: true })).toBe(true);
   });
 });
 

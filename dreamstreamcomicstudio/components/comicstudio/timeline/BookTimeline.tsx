@@ -42,6 +42,16 @@ import { VersionStack } from './VersionStack';
 import { cx, FOCUS_RING, TimelineDialog, useReducedMotion, useStoredFlag } from './ui';
 import { TimelineHistoryLink } from '../history/EntryLinks';
 
+/**
+ * The summary row's small actions: 28 px on fine pointers, so nothing is clipped by the 36 px row, and a 44 px
+ * target on coarse pointers, where the row itself grows to 44 px (coarse:h-11). History's TimelineHistoryLink
+ * (history/EntryLinks.tsx) draws the same class; BookTimeline.test.tsx pins the two equal.
+ */
+const SUMMARY_ACTION = cx(
+  'inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3',
+  FOCUS_RING
+);
+
 export interface BookTimelineProps {
   studio: StudioController;
   compact?: boolean;
@@ -638,13 +648,14 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           <p className="min-w-0 flex-1 truncate text-[11.5px] tabular-nums text-[var(--ds-muted)]" title={notice || summary} role={notice ? 'status' : undefined}>
             {notice || summary}
           </p>
+          {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off. */}
           <TimelineHistoryLink studio={studio} />
           {/* The Media tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
           {hasMedia(doc) && (
             <button
               type="button"
               onClick={() => studio.setTab('media')}
-              className={cx('inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3', FOCUS_RING)}
+              className={SUMMARY_ACTION}
               aria-label="Open Media: every image in this comic"
             >
               <Images className="h-3.5 w-3.5" aria-hidden />

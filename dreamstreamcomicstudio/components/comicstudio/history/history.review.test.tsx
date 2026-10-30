@@ -466,12 +466,20 @@ describe('a narrow phone header gets no History icon (measured overflow), yet Hi
 // ── Minors: targets, a stray 0, the publish link, the conflict question ──────
 
 describe('small things', () => {
-  it('the timeline History link is a 44 px target on every pointer, not only on touch', () => {
+  it('the timeline History link follows its siblings: 28 px on fine pointers, 44 px on coarse', () => {
     const m = historySetup({ coarse: false, width: 1440, height: 900 });
     const { container } = mountWith(m, <TimelineHistoryLink studio={m.studio} />);
-    const btn = container.querySelector('button')!;
-    expect(btn.className).toMatch(/(^|\s)min-h-11(\s|$)/);
-    expect(btn.className).not.toMatch(/(^|\s)h-7(\s|$)/);
+    // One button, no wrapper: the dock's 36 px summary row (h-9) has nothing taller than 28 px to clip.
+    const buttons = container.querySelectorAll('button');
+    expect(buttons).toHaveLength(1);
+    const btn = buttons[0];
+    expect(btn.className).toMatch(/(^|\s)h-7(\s|$)/);
+    expect(btn.className).toMatch(/(^|\s)coarse:h-11(\s|$)/);
+    expect(btn.className).toMatch(/(^|\s)coarse:min-w-11(\s|$)/);
+    for (const el of [btn, ...Array.from(btn.querySelectorAll('*'))]) {
+      expect(el.getAttribute('class') || '').not.toMatch(/(^|\s)min-h-11(\s|$)/);
+      expect(el.getAttribute('class') || '').not.toMatch(/(^|\s)-my-/);
+    }
   });
 
   it('a moment published at revision 0 with no name shows "Published", never a stray 0', () => {

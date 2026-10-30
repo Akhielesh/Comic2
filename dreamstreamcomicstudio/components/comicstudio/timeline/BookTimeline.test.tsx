@@ -8,6 +8,8 @@ import { BookTimeline, DOCK_OPEN_KEY, LONG_PRESS_MS, dragShift, dropIndex, strip
 import { computeAccessibleName } from 'dom-accessibility-api';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { clipThumbWidth } from './TimelineClip';
+import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import { OPEN_HISTORY_EVENT, type OpenHistoryRequest } from '../history/openHistory';
 
 const setWidth = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true, writable: true });
 
@@ -435,5 +437,61 @@ describe('BookTimeline', () => {
     expect(lastPatch(studio)[0]).toEqual([{ op: 'pages_reorder', order: ['pg_2', 'pg_3', 'pg_1'] }]);
     fireEvent.click(p1);
     expect(studio.openPage).not.toHaveBeenCalled();
+  });
+});
+
+describe('the History link in the summary row (Comic History; lead decision on H5 wave note 13)', () => {
+  const ON = { ...DEFAULT_CAPS, history: true };
+  const HISTORY = 'Open History: every saved moment of this comic';
+  const classOf = (el: Element) => el.getAttribute('class') || '';
+  /** A height class that applies on every pointer (no `coarse:` prefix) and is taller than the 28 px pill. */
+  const FINE_TALLER = /(^|\s)(min-)?h-(8|9|1[0-9]|\[(3[0-9]|4[0-9])px\])(\s|$)|(^|\s)-my-/;
+
+  it('follows its siblings exactly: 28 px on fine pointers (nothing for the 36 px row to clip), 44 px on coarse pointers', () => {
+    setup(makeSampleDoc(), { caps: ON });
+    const history = screen.getByRole('button', { name: HISTORY });
+    const media = screen.getByRole('button', { name: 'Open Media: every image in this comic' });
+    expect(history.className).toBe(media.className);
+    const row = history.parentElement!;
+    expect(row.className).toMatch(/(^|\s)h-9(\s|$)/);
+    expect(row.className).toMatch(/(^|\s)coarse:h-11(\s|$)/);
+    expect(history.className).toMatch(/(^|\s)h-7(\s|$)/);
+    for (const el of [history, ...Array.from(history.querySelectorAll('*'))]) expect(classOf(el), el.tagName).not.toMatch(FINE_TALLER);
+    // Coarse pointers: the row grows to 44 px and so does the target, both ways.
+    expect(history.className).toMatch(/(^|\s)coarse:h-11(\s|$)/);
+    expect(history.className).toMatch(/(^|\s)coarse:min-w-11(\s|$)/);
+    // The label shows from sm; the accessible name always contains it.
+    expect(history.querySelector('span')?.textContent).toBe('History');
+    expect(history).toHaveAttribute('data-history-entry', 'timeline');
+  });
+
+  it('opens the History panel at the list (a free look, nothing sent)', () => {
+    const { studio } = setup(makeSampleDoc(), { caps: ON });
+    const seen: OpenHistoryRequest[] = [];
+    const onOpen = (e: Event) => {
+      e.preventDefault();
+      seen.push((e as CustomEvent<OpenHistoryRequest>).detail);
+    };
+    window.addEventListener(OPEN_HISTORY_EVENT, onOpen);
+    try {
+      fireEvent.click(screen.getByRole('button', { name: HISTORY }));
+    } finally {
+      window.removeEventListener(OPEN_HISTORY_EVENT, onOpen);
+    }
+    expect(seen).toEqual([{ view: 'list' }]);
+    expect(studio.act).not.toHaveBeenCalled();
+    expect(studio.setTab).not.toHaveBeenCalled();
+  });
+
+  it('is not there while Comic History is off (the row is exactly as before)', () => {
+    setup(makeSampleDoc(), { caps: { ...DEFAULT_CAPS } });
+    expect(screen.queryByRole('button', { name: /Open History/ })).toBeNull();
+    expect(document.querySelector('[data-history-entry]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Open Media: every image in this comic' })).toBeInTheDocument();
+  });
+
+  it('the compact dock has no summary row, so no History link', () => {
+    setup(makeSampleDoc(), { caps: ON }, { compact: true });
+    expect(screen.queryByRole('button', { name: HISTORY })).toBeNull();
   });
 });

@@ -38,15 +38,17 @@ afterEach(() => {
 });
 
 describe('feature registries (real wave-1 modules)', () => {
-  it('fold the fourteen feature modules (eleven wave-1/2 modules + the W-M models, insights and reliability modules) into cards, tabs, header slots and admin sections', () => {
-    expect(featureModules()).toHaveLength(14);
+  it('fold the fifteen feature modules (eleven wave-1/2 modules + the W-M models, insights and reliability modules + Comic History) into cards, tabs, header slots and admin sections', () => {
+    expect(featureModules()).toHaveLength(15);
     // Feature order = precedence: breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage.
     // model_outage: M1-RELIABILITY's outage card (the W-M modules come last, lowest precedence).
-    expect(registeredCardTypes()).toEqual(['breakdown', 'versions', 'refs', 'publish', 'share', 'translation', 'style_presets', 'model_outage']);
-    expect(registeredTabs().map((t) => [t.id, t.order])).toEqual([['media', 500], ['languages', 800]]);
+    // history: Comic History's card, tab (510, after Media) and header slot (240) — listed last, lowest precedence.
+    expect(registeredCardTypes()).toEqual(['breakdown', 'versions', 'refs', 'publish', 'share', 'translation', 'style_presets', 'model_outage', 'history']);
+    expect(registeredTabs().map((t) => [t.id, t.order])).toEqual([['media', 500], ['history', 510], ['languages', 800]]);
     // share 10 → mode 60 → savings 210 → usage 220 (P1-LIMITS' meter, registered by P2-AMEND).
-    // … → model-status 1000 (M1-RELIABILITY's one-line banner sits after every header control).
-    expect(registeredHeaderSlots().map((h) => [h.id, h.order])).toEqual([['share', 10], ['mode', 60], ['savings', 210], ['usage', 220], ['model-status', 1000], ['model-picker', 1010]]);
+    // … → history 240 (after the usage meter, before Read) → model-status 1000 (M1-RELIABILITY's one-line banner sits
+    // after every header control).
+    expect(registeredHeaderSlots().map((h) => [h.id, h.order])).toEqual([['share', 10], ['mode', 60], ['savings', 210], ['usage', 220], ['history', 240], ['model-status', 1000], ['model-picker', 1010]]);
     expect(registeredAdminSections().map((a) => a.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
     for (const reg of [...registeredTabs(), ...registeredHeaderSlots(), ...registeredAdminSections()]) expect(typeof reg.Component).toBe('function');
   });

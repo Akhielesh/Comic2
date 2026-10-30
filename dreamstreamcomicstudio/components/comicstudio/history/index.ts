@@ -26,11 +26,8 @@ import { HistoryTab } from './HistoryTab';
 export const HISTORY_HEADER_ORDER = 240;
 /** Board tab order (versions plan §8): after Media (500). */
 export const HISTORY_TAB_ORDER = 510;
-/**
- * The History tab id. AMENDMENT (wave notes): shared/comic/doc.ts StudioTab gains 'history'; until then the id is
- * carried as a StudioTab (BoardPane and setTab treat registered ids as opaque keys).
- */
-export const HISTORY_TAB_ID = 'history' as StudioTab;
+/** The History tab id (a StudioTab since shared/comic/doc.ts gained 'history'; visible only while caps.history is on). */
+export const HISTORY_TAB_ID: StudioTab = 'history';
 
 const HistoryHeaderSlot: React.FC<{ studio: StudioController; compact: boolean }> = (props) => React.createElement(HistoryButton, props);
 const HistoryTabPanel: React.FC<{ studio: StudioController }> = (props) => React.createElement(HistoryTab, props);
