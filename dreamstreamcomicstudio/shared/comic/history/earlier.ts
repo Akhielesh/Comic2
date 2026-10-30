@@ -34,6 +34,7 @@ import { normalizeTimeZone } from '../events.js';
 import { HISTORY_LIMITS } from '../limits.js';
 import { getImageModel } from '../models.js';
 import { canServeToOwner } from '../safety.js';
+import { isPanelSourceArchive, PANEL_SOURCE_ARCHIVE_WORDS } from './apply.js';
 import type { HistoryActor } from './types.js';
 import { dayGroupLabel, localParts } from './when.js';
 
@@ -290,6 +291,20 @@ const drawingLabel = (owner: EarlierOwner, origin: VersionOrigin | null, source:
   }
 };
 
+/**
+ * A page's frame picture or overlay a restore archived under the page (apply.ts isPanelSourceArchive), split from its
+ * label: "Page 3 overlay" → { what: 'overlay', page: 'Page 3' }. null for anything else (a drawing).
+ */
+const panelSourceOf = (v: unknown): { what: string; page: string } | null => {
+  const a = v as ArchivedVersion;
+  if (!a || !isPanelSourceArchive(a)) return null;
+  const what = a.label.endsWith(PANEL_SOURCE_ARCHIVE_WORDS.frame) ? PANEL_SOURCE_ARCHIVE_WORDS.frame : PANEL_SOURCE_ARCHIVE_WORDS.layer;
+  return { what, page: a.label.slice(0, -(what.length + 1)) };
+};
+
+/** "A panel picture from page 3", "An overlay from deleted page 2": from the entry's own label, never a maker. */
+const panelSourceLabel = (p: { what: string; page: string }): string => `${/^[aeiou]/.test(p.what) ? 'An' : 'A'} ${p.what} from ${lowerFirst(p.page)}`;
+
 interface Held {
   version: RenderVersion | ArchivedVersion | AssetRef;
   n: number;
@@ -301,9 +316,13 @@ interface Held {
 const drawingMoment = (owner: EarlierOwner, held: Held): EarlierMoment | null => {
   const v = held.version as Partial<RenderVersion & ArchivedVersion>;
   if (!v || typeof v.path !== 'string' || !v.path) return null;
+  // A frame picture or overlay a restore archived is not an older drawing of the page: its source 'upload' only
+  // records that nothing was known, so it names no maker (by and source null, "not recorded"), no v-number, and its
+  // words come from the entry's own label.
+  const panel = held.archived ? panelSourceOf(v) : null;
   const origin = typeof v.origin === 'string' && ORIGINS.includes(v.origin) ? v.origin : null;
-  const source = typeof v.source === 'string' && SOURCES.includes(v.source) ? v.source : null;
-  const by = earlierActorOf(origin, source);
+  const source = !panel && typeof v.source === 'string' && SOURCES.includes(v.source) ? v.source : null;
+  const by = panel ? null : earlierActorOf(origin, source);
   const at = isDate(v.at) ? v.at : null;
   const model = typeof v.model === 'string' && v.model.trim() ? v.model : null;
   const costUsd = typeof v.costUsd === 'number' && Number.isFinite(v.costUsd) && v.costUsd >= 0 ? v.costUsd : null;
@@ -323,12 +342,12 @@ const drawingMoment = (owner: EarlierOwner, held: Held): EarlierMoment | null =>
     kind: 'drawing',
     at,
     owner,
-    label: clip(drawingLabel(owner, origin, source, owner.kind === 'removed' ? (v as ArchivedVersion).label : undefined)),
+    label: clip(panel ? panelSourceLabel(panel) : drawingLabel(owner, origin, source, owner.kind === 'removed' ? (v as ArchivedVersion).label : undefined)),
     path: v.path,
     ...(thumb?.path ? { thumbPath: thumb.path } : {}),
     ...(isDate(v.w) ? { w: v.w } : {}),
     ...(isDate(v.h) ? { h: v.h } : {}),
-    versionN: held.n,
+    ...(panel ? {} : { versionN: held.n }),
     current: held.current,
     archived: held.archived,
     starred: !!v.starred,
@@ -501,7 +520,8 @@ export const earlierMoments = (doc: ComicDoc, opts: EarlierOptions = {}): Earlie
   for (const targetKey of [...removed.keys()].sort(cmpStr)) {
     const list = removed.get(targetKey)!;
     const newest = [...list].sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0) || cmpStr(a.path, b.path))[0];
-    const label = nameOf(newest.label, 'An earlier image');
+    // The group is the page, not its overlay: "Page 7 overlay" names "Page 7".
+    const label = panelSourceOf(newest)?.page || nameOf(newest.label, 'An earlier image');
     const pageId = /^page:(.+)$/.exec(targetKey)?.[1];
     const owner: EarlierOwner = { key: `archive:${targetKey}`, kind: 'removed', label: `${label} (removed)`, order: order++, ...(pageId ? { pageId } : {}) };
     for (const h of numbered(list.map((version) => ({ version, current: false, archived: true })))) {
