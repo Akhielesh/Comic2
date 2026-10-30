@@ -60,9 +60,11 @@ document's Word file never pays for PptxGenJS). It maps every failure to the app
 the person exporting (`exportDocx`, `exportPptx`, `exportMarkdownDocx`, `downloadPlatformFile`). esbuild estimate,
 minified (gzip): docx 463 KB (136 KB), pptx 376 KB (127 KB), markdown 116 KB (34 KB), plus a 17 KB shared chunk.
 
-Markers for an entry-chunk test (literals that survive minification and live only in one renderer chunk):
-`w:document` (docx), `addMedia() is disabled` (the vendored PptxGenJS's P2 guard). Comments (`[DreamStream P0]`) and
-package names (`remark-gfm`, which the chat already uses) are not markers.
+Markers for an entry-chunk test (literals that survive minification and live only in one renderer chunk, checked with
+an esbuild split build): `w:document` (docx), `addMedia() is disabled` (the vendored PptxGenJS's P2 guard) and
+`PptxGenJS` (the library's own default author string). Comments (`[DreamStream P0]`) and package names (`remark-gfm`,
+which the chat already bundles) are not markers, and `<dc:creator>PptxGenJS</dc:creator>` no longer exists (P9). A
+test should also assert each marker IS in some non-entry chunk, so a marker that vanishes fails instead of passing.
 
 ## Dependencies
 
