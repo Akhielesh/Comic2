@@ -1,0 +1,9 @@
+[
+  { "op": "set_subject", "id": "op-1", "baseRev": 0, "subject": "Hello again" },
+  { "op": "insert_block", "id": "op-2", "baseRev": 0, "index": 0, "block": { "type": "heading", "id": "h-new", "level": 2, "runs": [{ "text": "News" }] } },
+  { "op": "update_block", "id": "op-3", "baseRev": 0, "actor": "agent", "blockId": "p1", "block": { "type": "paragraph", "id": "p1", "runs": [{ "text": "Hi again," }] } },
+  { "op": "remove_block", "id": "op-4", "baseRev": 0, "blockId": "p1" },
+  { "op": "attach", "id": "op-5", "baseRev": 0, "attachment": { "id": "a1", "name": "Notes", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "Notes", "sections": [] } } } },
+  { "op": "detach", "id": "op-6", "baseRev": 0, "attachmentId": "a1" },
+  { "op": "set_recipients", "id": "op-7", "baseRev": 0, "actor": "user", "to": [{ "address": "editor@example.com", "name": "Sam Editor" }], "cc": [] }
+]

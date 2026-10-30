@@ -1,0 +1,37 @@
+{
+  "name": "@dreamstream/platform-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The DreamStream platform contract: the schema DSL, the document models (RichDoc, DeckSpec, EmailDoc), email rendering and review, tools, gates, flows and the wire. Pure TypeScript against ES2017: no DOM, no Node, no dependencies; every relative import ends in .js.",
+  "sideEffects": false,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./errors": "./src/errors.ts",
+    "./contract/*": "./src/contract/*.ts",
+    "./models/*": "./src/models/*/index.ts",
+    "./email": "./src/email/index.ts",
+    "./brand": "./src/brand/index.ts",
+    "./prompts": "./src/prompts/index.ts",
+    "./capabilities": "./src/capabilities.ts",
+    "./products": "./src/products.ts",
+    "./tools": "./src/tools/index.ts",
+    "./gates": "./src/gates/index.ts",
+    "./cost": "./src/cost/index.ts",
+    "./flows": "./src/flows/index.ts",
+    "./wire": "./src/wire/index.ts",
+    "./client": "./src/client/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./fixtures/*": "./fixtures/*",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "check:consumers": "node scripts/check-consumers.mjs",
+    "export": "node scripts/export.mjs --out dist",
+    "test": "cd ../.. && vitest run packages/platform-core"
+  }
+}
