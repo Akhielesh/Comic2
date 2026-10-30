@@ -93,7 +93,7 @@ export const TIME_ZONE_MAX_CHARS = 64;
 
 /**
  * The canonical IANA time zone for `raw`, or undefined when Intl does not know it (or it is not a plain zone name).
- * Pure; never throws. 'Asia/Calcutta' → 'Asia/Kolkata' where the runtime canonicalizes.
+ * Pure; never throws. The runtime's own spelling comes back (ICU may answer 'Asia/Calcutta' for 'Asia/Kolkata').
  */
 export const normalizeTimeZone = (raw: unknown): string | undefined => {
   if (typeof raw !== 'string') return undefined;
