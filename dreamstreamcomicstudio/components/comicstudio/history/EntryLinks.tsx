@@ -30,7 +30,14 @@ export const PageHistoryLink: React.FC<{ studio: Pick<StudioController, 'caps' |
 export const TimelineHistoryLink: React.FC<{ studio: Pick<StudioController, 'caps' | 'doc'> }> = ({ studio }) => {
   if (!historyEnabled(studio.caps) || !studio.doc) return null;
   return (
-    <button type="button" className={cx(LINK, 'coarse:min-w-11 coarse:justify-center')} onClick={() => requestOpenHistory({ view: 'list' })} aria-label="Open History: every saved moment of this comic" data-history-entry="timeline">
+    // The dock's 36 px summary row (its other controls are 28 px on fine pointers, 44 px on touch): the same here.
+    <button
+      type="button"
+      className={cx('inline-flex h-7 shrink-0 items-center gap-1 px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3', RADIUS_CONTROL, FOCUS_RING, TRANSITION)}
+      onClick={() => requestOpenHistory({ view: 'list' })}
+      aria-label="Open History: every saved moment of this comic"
+      data-history-entry="timeline"
+    >
       <HistoryIcon className="h-3.5 w-3.5" aria-hidden />
       <span className="hidden sm:inline">History</span>
     </button>
