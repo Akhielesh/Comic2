@@ -1,7 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import { defineConfig, loadEnv, searchForWorkspaceRoot } from 'vite';
+import { defineConfig, loadEnv, searchForWorkspaceRoot, type Plugin, type Rollup } from 'vite';
 import react from '@vitejs/plugin-react';
+import { browserModulesReport } from './scripts/licence-check.mjs';
+import { webNotices } from './scripts/notices.mjs';
 
 // Comic Studio QA harness entry (P1-QA: qa/comic-qa.html). Built ONLY when QA_BUILD=1
 // (`npm run qa:build` → dist-qa/), so production dist/ never contains it.
@@ -14,8 +16,55 @@ const qaInput = (): Record<string, string> => {
   return { qa: entry };
 };
 
+/** Every source a Rollup output came from: chunk modules, and the files assets were emitted from. */
+const bundleSources = (bundle: Rollup.OutputBundle): string[] => {
+  const ids: string[] = [];
+  for (const item of Object.values(bundle)) {
+    if (item.type === 'chunk') ids.push(...Object.keys(item.modules));
+    else ids.push(...(item.originalFileNames ?? []));
+  }
+  return ids;
+};
+
+/**
+ * W1.6 licence gate, browser side: records the npm packages whose modules (or emitted files: fonts,
+ * wasm) are REALLY in the production bundle — the main entries and every worker bundle — and emits
+ * dist/THIRD-PARTY-NOTICES.txt for exactly those (scripts/notices.mjs). With LICENCE_MODULES_OUT set
+ * (CI) it also writes that module list as JSON for `node scripts/licence-check.mjs --browser-modules`,
+ * which applies the browser rules (MIT/Apache/BSD/ISC/MPL/OFL only) to it. The list is written
+ * outside dist/ so it never ships. `worker()` is the collector for `worker.plugins` (Vite bundles
+ * workers in separate Rollup builds that finish before the main bundle's generateBundle).
+ */
+export function licenceModules(options: { root?: string; reportFile?: string } = {}): Plugin & { worker: () => Plugin } {
+  const root = options.root ?? __dirname;
+  const workerSources = new Set<string>();
+  return {
+    name: 'licence-modules',
+    apply: 'build',
+    enforce: 'post',
+    generateBundle(_output, bundle) {
+      const report = browserModulesReport([...bundleSources(bundle), ...workerSources], { root });
+      this.emitFile({ type: 'asset', fileName: 'THIRD-PARTY-NOTICES.txt', source: webNotices(report, { root }) });
+      const out = options.reportFile ?? process.env.LICENCE_MODULES_OUT;
+      if (out) {
+        fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+        fs.writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
+      }
+    },
+    worker: (): Plugin => ({
+      name: 'licence-modules:worker',
+      apply: 'build',
+      enforce: 'post',
+      generateBundle(_output, bundle) {
+        for (const id of bundleSources(bundle)) workerSources.add(id);
+      }
+    })
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
+  const licence = licenceModules();
   return {
     server: {
       port: Number(env.VITE_PORT) || 7000,
@@ -36,9 +85,10 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react()],
-    // Module workers (the baby monitor's sound-model worker imports ONNX Runtime).
-    worker: { format: 'es' },
+    plugins: [react(), licence],
+    // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
+    // count as browser code for the licence gate too.
+    worker: { format: 'es', plugins: () => [licence.worker()] },
     // ONNX Runtime loads its .wasm next to its own module; pre-bundling it into
     // .vite/deps breaks that path in dev (production builds emit it correctly).
     optimizeDeps: { exclude: ['onnxruntime-web'] },
