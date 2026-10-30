@@ -9,8 +9,7 @@
 import type { StudioAction } from '../../../shared/comic/ops';
 import type { RestoreScope, VersionRow } from '../../../shared/comic/history/types';
 import type { HistoryApi } from './historyApi';
-import { isRemovedLineRow } from './historyModel';
-import type { HistoryStudio } from './useHistory';
+import { findOwnRow, type HistoryStudio } from './useHistory';
 
 export interface ActResult {
   ok: boolean;
@@ -34,7 +33,7 @@ export const runHistoryAction = async (studio: HistoryStudio, action: StudioActi
   }
 };
 
-/** How many of the newest moments the Undo looks through for the restore row. */
+/** How many of the newest moments of the book you're on the Undo looks through for the restore row. */
 export const UNDO_LOOKUP_LIMIT = 5;
 
 /**
@@ -49,9 +48,10 @@ export const beforeRestoreId = async (studio: HistoryStudio, api: HistoryApi, kn
   let listed: VersionRow | null = null;
   if (studio.doc) {
     try {
-      const res = await api.list(studio.doc.id, { limit: UNDO_LOOKUP_LIMIT });
-      // Never a removed version's restore: its before-copy belongs to a version you're no longer on.
-      listed = res.rows.find((r) => r.kind === 'restore' && !isRemovedLineRow(r, res.line ?? null)) ?? null;
+      // Never a removed version's restore: its before-copy belongs to a version you're no longer on. Its rows never
+      // use up the window (findOwnRow reads on past them); only the newest UNDO_LOOKUP_LIMIT rows of yours are
+      // looked through, so an older restore is never undone for the latest one.
+      listed = await findOwnRow(api, studio.doc.id, { limit: UNDO_LOOKUP_LIMIT }, (r) => r.kind === 'restore', { within: UNDO_LOOKUP_LIMIT });
     } catch {
       listed = null;
     }

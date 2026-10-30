@@ -10,6 +10,8 @@
 //   - a phone header narrower than 480 px gets no History icon (it overflowed), yet History still opens
 //   - the timeline link is 44 px on every pointer; a row never renders a stray "0"; the publish link stays quiet
 //     when nothing changed; the undo-AI conflict asks in the plan's words
+//   - rows of a version you removed: said in plain words (list, moment, card, scrubber), never "you're here", and
+//     never hiding the latest AI run or restore of the book you're on, even when they fill the newest window
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +32,7 @@ import { claimUndoToast, UndoToast, useTimelineEdit } from '../timeline/UndoToas
 import { RestoredToast } from './ui';
 import { gitWordsIn } from './historyModel';
 import { beforeRestoreId } from './historyActions';
+import { findLatestAiRow, findOwnRow } from './useHistory';
 import { historyFixture } from './__scenes__/historyFixtures';
 import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, interactive, mountWith, overflowProblems, settle, TARGET_RE, type Mounted } from './history.testkit';
 
@@ -595,6 +598,116 @@ describe('rows of a version you removed (H1 FIX note 4)', () => {
       moment(id, clone(f.live), { kind: 'restore', label: 'Restored page 2', undoId, contentAt: NOW - min * 60_000, createdAt: NOW - min * 60_000, ...(alternativeId ? { alternativeId } : {}) });
     const m = historySetup({ api: { versions: [restoreRow('ver_gone_restore', 'ver_gone_before', 1, 'alt_gone'), restoreRow('ver_restore', 'ver_before', 3), ...f.versions], lines: [{ id: 'alt_gone', removed: true }] } });
     expect(await beforeRestoreId(m.studio, m.api)).toBe('ver_before');
+  });
+
+  /** v5 + `n` AI runs of a removed version, every one newer than Original's own latest AI run (ver_ai). */
+  const withRemovedAiRuns = (n: number, opts: Parameters<typeof historySetup>[0] = {}): Mounted => {
+    const f = historyFixture('v5');
+    const runs = Array.from({ length: n }, (_, i) =>
+      moment(`ver_gone_ai_${i}`, clone(f.live), { kind: 'ai', actor: 'ai', label: `AI tried page ${i + 1} again`, alternativeId: 'alt_gone', contentAt: NOW - (i + 1) * 60_000, createdAt: NOW - (i + 1) * 60_000 })
+    );
+    return historySetup({ ...opts, api: { versions: [...runs, ...f.versions], lines: [{ id: 'alt_gone', removed: true }] } });
+  };
+  const aiLabel = () => historyFixture('v5').versions.find((v) => v.row.id === 'ver_ai')!.row.label;
+
+  it('five AI runs of a removed version (the whole newest window) never hide Original\'s latest: the card names it', async () => {
+    const m = withRemovedAiRuns(5);
+    mountWith(m, <HistoryCardView card={{ type: 'history', id: 'u', view: 'undo_ai' }} message={msg} studio={m.studio} now={NOW} tz={TZ} />);
+    await settle(6);
+    const card = document.querySelector<HTMLElement>('[data-history-card="undo_ai"]')!;
+    expect(card.textContent).toContain(aiLabel());
+    expect(card.textContent).not.toContain('There’s no AI change to undo yet.');
+    expect(card.textContent).not.toContain('AI tried page');
+    expect(screen.getByRole('button', { name: 'Review and undo… · Free' })).toBeInTheDocument();
+  });
+
+  it('… and its moment offers "Undo this AI change"', async () => {
+    const m = withRemovedAiRuns(5, { studio: { act: fakeAct() } });
+    browser(m, req({ view: 'moment', versionId: 'ver_ai' }));
+    await settle(8);
+    fireEvent.click(within(view('moment')).getByRole('button', { name: 'More' }));
+    expect(within(view('moment')).getByRole('button', { name: 'Undo this AI change · Free' })).toBeInTheDocument();
+  });
+
+  it('… the undo-AI sheet previews Original\'s run, not "nothing to undo"', async () => {
+    const m = withRemovedAiRuns(5, { studio: { act: fakeAct() } });
+    panel(m, req({ view: 'undo_ai' }));
+    await settle(10);
+    const sheet = document.querySelector<HTMLElement>('[data-undo-ai-sheet]')!;
+    expect(sheet.textContent).toContain(aiLabel());
+    expect(sheet.textContent).not.toContain('There’s no AI change to undo yet.');
+  });
+
+  it('a dozen removed AI runs: still found, in two reads (the next page is the list\'s normal size)', async () => {
+    const m = withRemovedAiRuns(12);
+    expect((await findLatestAiRow(m.api, m.studio.doc!.id))?.id).toBe('ver_ai');
+    const reads = m.api.calls.filter((c) => c.method === 'list');
+    expect(reads).toHaveLength(2);
+    expect(reads[0].args[1]).toEqual({ filter: 'ai', limit: 5 });
+    expect(reads[1].args[1]).toMatchObject({ filter: 'ai', cursor: '5', limit: 50 });
+  });
+
+  it('findOwnRow is bounded: at most maxPages reads, then null (never an endless walk)', async () => {
+    const m = withRemovedAiRuns(60);
+    // 5 + 50 rows read, all of the removed version: Original's run sits beyond the bound.
+    expect(await findOwnRow(m.api, m.studio.doc!.id, { filter: 'ai', limit: 5 }, (r) => r.kind === 'ai', { maxPages: 2 })).toBeNull();
+    expect(m.api.calls.filter((c) => c.method === 'list')).toHaveLength(2);
+    // With the default bound it is found.
+    expect((await findLatestAiRow(m.api, m.studio.doc!.id))?.id).toBe('ver_ai');
+  });
+
+  it('the Undo\'s restore lookup reads past a removed version\'s rows, yet never reaches an older restore of yours', async () => {
+    const f = historyFixture('v5');
+    const at = (min: number) => ({ contentAt: NOW - min * 60_000, createdAt: NOW - min * 60_000 });
+    const gone = Array.from({ length: 5 }, (_, i) => moment(`ver_gone_${i}`, clone(f.live), { label: 'You edited page 2', alternativeId: 'alt_gone', ...at(i + 1) }));
+    const restoreRow = (id: string, undoId: string, min: number) => moment(id, clone(f.live), { kind: 'restore', label: 'Restored page 2', undoId, ...at(min) });
+    // Five rows of a removed version fill the newest window; Original's restore is right behind them.
+    const m = historySetup({ api: { versions: [...gone, restoreRow('ver_restore', 'ver_before', 6), ...f.versions], lines: [{ id: 'alt_gone', removed: true }] } });
+    expect(await beforeRestoreId(m.studio, m.api)).toBe('ver_before');
+    // An older restore behind five newer moments of yours is not "the latest restore": Undo says so instead.
+    const mine = Array.from({ length: 5 }, (_, i) => moment(`ver_mine_${i}`, clone(f.live), at(i + 1)));
+    const old = historySetup({ api: { versions: [...gone, ...mine, restoreRow('ver_old_restore', 'ver_before', 7), ...f.versions], lines: [{ id: 'alt_gone', removed: true }] } });
+    expect(await beforeRestoreId(old.studio, old.api)).toBeNull();
+  });
+
+  it('the history card marks a removed version\'s rows in its list', async () => {
+    const m = withRemoved();
+    mountWith(m, <HistoryCardView card={{ type: 'history', id: 'l', view: 'list' }} message={msg} studio={m.studio} now={NOW} tz={TZ} />);
+    await settle();
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[data-history-card="list"] li'));
+    // The card's three newest: the removed version's two rows (marked) and Original's own newest (not marked).
+    expect(items.map((li) => [li.textContent!.includes('From a version you removed'), li.hasAttribute('data-moment-removed')])).toEqual([
+      [true, true],
+      [true, true],
+      [false, false]
+    ]);
+    expect(items[2].textContent).toContain('You edited dialogue on page 2');
+    expect(gitWordsIn(document.body.textContent || '')).toEqual([]);
+  });
+
+  it('… and in its moment view (a removed version\'s moment), never on Original\'s own', async () => {
+    const m = withRemoved();
+    const r = mountWith(m, <HistoryCardView card={{ type: 'history', id: 'g', view: 'moment', versionId: 'ver_gone_ai' }} message={msg} studio={m.studio} now={NOW} tz={TZ} />);
+    await settle();
+    expect(document.querySelector('[data-history-card="moment"] [data-moment-removed]')!.textContent).toBe('From a version you removed');
+    r.unmount();
+    mountWith(m, <HistoryCardView card={{ type: 'history', id: 'o', view: 'moment', versionId: 'ver_ai' }} message={msg} studio={m.studio} now={NOW} tz={TZ} />);
+    await settle();
+    expect(document.querySelector('[data-history-card="moment"]')).toBeTruthy();
+    expect(document.querySelector('[data-history-card="moment"] [data-moment-removed]')).toBeNull();
+  });
+
+  it('the scrubber says it too: a removed version\'s moment reads "From a version you removed"', async () => {
+    const m = withRemoved();
+    panel(m, req());
+    await settle();
+    const scrub = document.querySelector<HTMLInputElement>('[data-history-scrubber] input[type="range"]')!;
+    expect(scrub.getAttribute('aria-valuetext')).not.toContain('removed'); // "you're here": Original's own row
+    fireEvent.click(document.querySelector('[data-moment="ver_gone_ai"]')!);
+    await settle();
+    fireEvent.click(within(view('moment')).getAllByRole('button', { name: 'Back' })[0]);
+    await settle();
+    expect(document.querySelector<HTMLInputElement>('[data-history-scrubber] input[type="range"]')!.getAttribute('aria-valuetext')).toMatch(/, AI revised page 2\. From a version you removed$/);
   });
 
   it('the history card\'s "Undo the last AI change" never names a removed version\'s AI run', async () => {

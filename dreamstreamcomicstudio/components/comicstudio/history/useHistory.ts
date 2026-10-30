@@ -10,6 +10,9 @@
 //                                               a new `refresh` re-reads it (after a piece was taken back)
 //   useLatestAiRow(studio, active, refresh?)     the latest AI run of the comic, whatever the list's filter shows
 //                                               (the one "Undo the last AI change" reverts, §6.4)
+//   findOwnRow(api, projectId, query, pred)      the newest row of the book you're on that matches: rows of a version
+//                                               you removed (Original's list carries them) never count, and older
+//                                               pages are read (bounded) while they fill the newest window
 //
 // Every request is a read of the owner's own history (free). Failures become calm sentences; nothing retries by
 // itself. Requests are aborted when the panel closes or the inputs change.
@@ -18,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { displayAssetPaths, type AssetRef } from '../../../shared/comic/doc';
 import type { CompareRef, CompareResult, VersionRow } from '../../../shared/comic/history/types';
 import type { StudioController } from '../types';
-import { historyErrorText, useHistoryApi, type HistoryFilter, type VersionBookResponse } from './historyApi';
+import { HISTORY_PAGE_SIZE, historyErrorText, useHistoryApi, type HistoryApi, type HistoryFilter, type HistoryListQuery, type VersionBookResponse } from './historyApi';
 import { filterRows, isRemovedLineRow, mergeLiveRow } from './historyModel';
 
 /** The studio controller as History reads it (the live `history` event rides on the full controller). */
@@ -296,10 +299,66 @@ export function useCompare(studio: HistoryStudio, a: CompareRef | null, b: Compa
   return { result, loading, error, urlFor, reload: () => setKey((k) => k + 1) };
 }
 
+// ── The newest row of the book you're on ─────────────────────────────────────
+
+/** Pages findOwnRow reads at most (the small newest window, then older pages of the list's normal size). */
+export const OWN_ROW_MAX_PAGES = 4;
+
+export interface FindOwnRowOptions {
+  signal?: AbortSignal;
+  /** Pages to read at most (default OWN_ROW_MAX_PAGES). */
+  maxPages?: number;
+  /**
+   * Look through only this many newest rows of the book you're on (a removed version's rows never count): a match
+   * older than that is not "the latest" (e.g. an older restore must never be undone for the newest one). Default: any.
+   */
+  within?: number;
+}
+
+/**
+ * The newest row of the book you're on that matches `pred`, read from the list newest first. A row of a version you
+ * removed (Original's list carries them, and they can be newer than every row of Original's own) is skipped and does
+ * not use up the window: while no row of yours matches and the list has older rows, the next page is read — the first
+ * page is `query` as given (a small newest window), later ones the list's normal page size — at most `maxPages`.
+ * null when none matches within that.
+ */
+export const findOwnRow = async (
+  api: HistoryApi,
+  projectId: string,
+  query: HistoryListQuery,
+  pred: (row: VersionRow) => boolean,
+  opts: FindOwnRowOptions = {}
+): Promise<VersionRow | null> => {
+  const maxPages = Math.max(1, opts.maxPages ?? OWN_ROW_MAX_PAGES);
+  let seen = 0;
+  let cursor: string | null = null;
+  for (let page = 0; page < maxPages; page += 1) {
+    const q: HistoryListQuery = cursor ? { ...query, cursor, limit: Math.max(query.limit ?? 0, HISTORY_PAGE_SIZE) } : query;
+    const res = await api.list(projectId, q, opts.signal ? { signal: opts.signal } : undefined);
+    const line = res.line ?? null;
+    for (const row of res.rows) {
+      if (isRemovedLineRow(row, line)) continue;
+      if (pred(row)) return row;
+      seen += 1;
+      if (opts.within !== undefined && seen >= opts.within) return null;
+    }
+    if (!res.next || opts.signal?.aborted) return null;
+    cursor = res.next;
+  }
+  return null;
+};
+
 // ── The latest AI run (whatever the list's filter shows) ─────────────────────
 
-/** How many newest "AI changes" rows to look through for the latest `ai` run (its before_ai row sits next to it). */
+/**
+ * The newest "AI changes" rows asked for first when looking for the latest `ai` run (its before_ai row sits next to
+ * it). Rows of a version you removed are skipped and older pages read (findOwnRow), so they never hide it.
+ */
 export const LATEST_AI_LOOKUP = 5;
+
+/** The latest `ai` run of the book you're on (the one history_undo_ai reverts, §6.4), or null. */
+export const findLatestAiRow = (api: HistoryApi, projectId: string, opts: { signal?: AbortSignal } = {}): Promise<VersionRow | null> =>
+  findOwnRow(api, projectId, { filter: 'ai', limit: LATEST_AI_LOOKUP }, (r) => r.kind === 'ai', opts);
 
 export interface LatestAiState {
   /** The latest `ai` row of the comic, null when there is none (or it can't be read). */
@@ -324,12 +383,11 @@ export function useLatestAiRow(studio: HistoryStudio, active: boolean, refresh: 
     if (!active || !projectId) return;
     const ctrl = new AbortController();
     setState((cur) => ({ ...cur, loading: true, error: null }));
-    api
-      .list(projectId, { filter: 'ai', limit: LATEST_AI_LOOKUP }, { signal: ctrl.signal })
-      .then((res) => {
+    // Never a removed version's AI run: it is not the last AI change of the book you're on (findOwnRow skips them).
+    findLatestAiRow(api, projectId, { signal: ctrl.signal })
+      .then((row) => {
         if (ctrl.signal.aborted) return;
-        // Never a removed version's AI run: it is not the last AI change of the book you're on.
-        setState({ row: res.rows.find((r) => r.kind === 'ai' && !isRemovedLineRow(r, res.line ?? null)) ?? null, loading: false, loaded: true, error: null });
+        setState({ row, loading: false, loaded: true, error: null });
       })
       .catch((err) => {
         if (ctrl.signal.aborted) return;

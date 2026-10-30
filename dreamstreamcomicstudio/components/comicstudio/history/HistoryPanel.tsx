@@ -280,7 +280,7 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
       {selected && rows.length > 0 && (
         <div className="min-w-0">
           <Filmstrip row={selected} live={doc} urlFor={(p) => list.urlFor(p, { width: 160 })} reducedMotion={reducedMotion} onOpenPage={(pageId) => push({ kind: 'compare', a: selected.id, b: 'now', pageId })} />
-          <Scrubber rows={rows} selectedId={selected.id} onSelect={setSelectedId} now={now} tz={tz} reducedMotion={reducedMotion} />
+          <Scrubber rows={rows} selectedId={selected.id} onSelect={setSelectedId} line={list.line} now={now} tz={tz} reducedMotion={reducedMotion} />
         </div>
       )}
       {(rows.length > 0 || filter !== 'all') && (

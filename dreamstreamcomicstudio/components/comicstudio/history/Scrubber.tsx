@@ -2,12 +2,13 @@
 //
 // A range slider with a 44 px hit area that drives the same selection as tapping a row. Oldest on the left, newest
 // on the right. Arrow keys step one moment, Page Up / Page Down five, Home / End jump to the ends; aria-valuetext
-// reads "Tuesday 10:42, AI drew pages 1 to 6". Dragging only previews: nothing here changes the live book.
+// reads "Tuesday 10:42, AI drew pages 1 to 6" (and "From a version you removed" for a removed version's row, as the
+// row's own label says). Dragging only previews: nothing here changes the live book.
 
 import React, { useId } from 'react';
 import type { VersionRow } from '../../../shared/comic/history/types';
 import { FOCUS_RING } from '../../chat/studioDesign';
-import { scrubValueText, whenText } from './historyModel';
+import { HISTORY_COPY, isRemovedLineRow, scrubValueText, whenText } from './historyModel';
 import { cx } from './ui';
 
 export interface ScrubberProps {
@@ -15,6 +16,8 @@ export interface ScrubberProps {
   rows: readonly VersionRow[];
   selectedId: string | null;
   onSelect(id: string): void;
+  /** The line listed (null / absent = "Original"): a row of another line came from a version the creator removed. */
+  line?: string | null;
   now: number;
   tz: string;
   reducedMotion?: boolean;
@@ -23,7 +26,7 @@ export interface ScrubberProps {
 /** Moments per Page Up / Page Down. */
 export const SCRUB_PAGE_STEP = 5;
 
-export const Scrubber: React.FC<ScrubberProps> = ({ rows, selectedId, onSelect, now, tz, reducedMotion }) => {
+export const Scrubber: React.FC<ScrubberProps> = ({ rows, selectedId, onSelect, line = null, now, tz, reducedMotion }) => {
   const id = useId();
   if (rows.length < 2) return null;
   // Oldest → newest along the track.
@@ -60,7 +63,7 @@ export const Scrubber: React.FC<ScrubberProps> = ({ rows, selectedId, onSelect, 
         max={ordered.length - 1}
         step={1}
         value={index}
-        aria-valuetext={row ? scrubValueText(row, now, tz) : undefined}
+        aria-valuetext={row ? `${scrubValueText(row, now, tz)}${isRemovedLineRow(row, line) ? `. ${HISTORY_COPY.removedLine}` : ''}` : undefined}
         onChange={(e) => go(Number(e.target.value))}
         onKeyDown={onKeyDown}
         className={cx('block h-11 min-h-11 w-full cursor-pointer accent-[var(--ds-ink)]', FOCUS_RING, reducedMotion ? 'transition-none' : '')}
