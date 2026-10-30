@@ -27,6 +27,8 @@ type UniversalAssistantProps = {
   /** When set, assistant replies show a "Save to story context" action that appends to the
    *  active project's creativeDirection (so the user can talk through their story and capture it). */
   onSaveCreativeDirection?: (text: string) => void;
+  /** Hide the floating launcher (a reading surface: it would sit over the art). An open panel is not closed by it. */
+  hideLauncher?: boolean;
 };
 
 const maskEmail = (email?: string | null) => {
@@ -94,7 +96,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   currentView,
   activeProject,
   projects,
-  onSaveCreativeDirection
+  onSaveCreativeDirection,
+  hideLauncher = false
 }) => {
   const { user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
@@ -297,7 +300,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   return (
     <>
       <AnimatePresence>
-        {!isOpen && (
+        {!isOpen && !hideLauncher && (
           <motion.button
             type="button"
             initial={{ opacity: 0, scale: 0.6 }}
