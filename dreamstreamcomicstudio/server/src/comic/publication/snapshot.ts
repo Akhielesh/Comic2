@@ -11,6 +11,9 @@ import crypto from 'node:crypto';
 import {
   COMIC_DOC_VERSION,
   DEFAULT_SETTINGS,
+  frameStyleOf,
+  mapAssetRefs,
+  pageSourcePaths,
   type AssetRef,
   type AssetVariant,
   type Balloon,
@@ -23,6 +26,9 @@ import {
   type Box,
   type KeepOut,
   type Panel,
+  type PanelCuts,
+  type PanelFrame,
+  type PageLayer,
   type QcReport,
   type SpeakerMark,
   type TextTranslation
@@ -31,7 +37,7 @@ import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import { PUBLIC_KIDS_AUDIENCE, PUBLIC_QC_CHECKED_AT, type ShareCard } from '../../../../shared/comic/publication.js';
-import { isKidsAudience } from '../../../../shared/comic/safety.js';
+import { canServeToPublic, effectiveRating, isKidsAudience, type ContentRating } from '../../../../shared/comic/safety.js';
 import { isSafeStoragePath, variantPathFor } from '../assets.js';
 import { isLibraryPath, pubPath } from '../storagePaths.js';
 import type { SnapshotPlan } from './index.js';
@@ -126,18 +132,58 @@ export function copiesFor(assetKey: string, slot: 'cover' | 'page', asset: Asset
 export const withServerVariants = (asset: AssetRef): AssetRef =>
   asset.variants?.length ? { ...asset, variants: asset.variants.filter((v) => !!v && typeof v.path === 'string' && isServerVariant(asset, v)) } : asset;
 
+/** Every AssetRef the doc holds, by path (first one seen): what a frame or overlay path names. */
+const assetsByPath = (doc: ComicDoc): Map<string, AssetRef> => {
+  const out = new Map<string, AssetRef>();
+  mapAssetRefs(doc, (a) => {
+    if (a?.path && !out.has(a.path)) out.set(a.path, a);
+    return a;
+  });
+  return out;
+};
+
+/**
+ * Ship 2 (pro plan §8 "Publication"): the extra pictures a published page's frames and PRINTED overlays show, when they
+ * may go public — server art in a lane no client can rewrite (isServerArt, S6) that passed the content check at the
+ * publication's rating (canServeToPublic: an unchecked or over-rated picture is never copied). One original each, no
+ * variants. A picture that can't go out is left out: its frame shows its cut of the page's drawing, its overlay is not
+ * printed. Guide-only overlays (print: false) are never published.
+ */
+const extraSourceCopies = (doc: ComicDoc, page: Page, assetKey: string, rating: ContentRating, index: () => Map<string, AssetRef>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const path of pageSourcePaths(page, { printOnly: true })) {
+    if (path === page.render.asset?.path) continue; // the page's own drawing is copied with the page
+    const asset = index().get(path);
+    if (!asset || !isServerArt(asset) || !canServeToPublic(asset, rating)) continue;
+    out[path] = pubPath(assetKey, 'page', sha12(path));
+  }
+  return out;
+};
+
 /** The publish plan: which pages/cover go out and where every live path is copied. */
 export function planSnapshot(
   doc: ComicDoc,
-  opts: { assetKey: string; pageIds: string[]; includeCover: boolean; languages: string[]; defaultLang?: string }
+  opts: {
+    assetKey: string;
+    pageIds: string[];
+    includeCover: boolean;
+    languages: string[];
+    defaultLang?: string;
+    /** The rating the publish gate verified (frame and overlay pictures must pass it); default the doc's effective rating. */
+    rating?: ContentRating;
+  }
 ): SnapshotPlan {
   const paths: Record<string, string> = {};
   const wanted = new Set(opts.pageIds);
   const pageIds: string[] = [];
+  const rating = opts.rating ?? effectiveRating(doc).rating;
+  let index: Map<string, AssetRef> | null = null;
+  const lazyIndex = () => (index ??= assetsByPath(doc));
   for (const page of doc.pages || []) {
     if (!wanted.has(page.id) || !hasPublishableArt(page.render)) continue;
     pageIds.push(page.id);
     Object.assign(paths, copiesFor(opts.assetKey, 'page', withServerVariants(page.render.asset!)));
+    if (pageSourcePaths(page, { printOnly: true }).length) Object.assign(paths, extraSourceCopies(doc, page, opts.assetKey, rating, lazyIndex));
   }
   const includeCover = opts.includeCover && hasPublishableArt(doc.cover?.render);
   if (includeCover) Object.assign(paths, copiesFor(opts.assetKey, 'cover', withServerVariants(doc.cover.render.asset!)));
@@ -189,17 +235,89 @@ const publicLine = (line: Line): Line => {
  * lettering stages a speaker's balloon by them, so the reader letters the panel as the studio does). The shot and
  * the action text stay private.
  */
-const publicPanel = (panel: Panel, castIds: ReadonlySet<string>): Panel => ({
-  id: String(panel.id),
-  n: num(panel.n) ? panel.n : 1,
-  size: panel.size,
-  shot: 'medium',
-  action: '',
-  castIds: (Array.isArray(panel.castIds) ? panel.castIds : []).filter((id): id is string => typeof id === 'string' && castIds.has(id)),
-  lines: (panel.lines || []).map(publicLine)
-});
+const publicPanel = (panel: Panel, castIds: ReadonlySet<string>, plan?: SnapshotPlan): Panel => {
+  const out: Panel = {
+    id: String(panel.id),
+    n: num(panel.n) ? panel.n : 1,
+    size: panel.size,
+    shot: 'medium',
+    action: '',
+    castIds: (Array.isArray(panel.castIds) ? panel.castIds : []).filter((id): id is string => typeof id === 'string' && castIds.has(id)),
+    lines: (panel.lines || []).map(publicLine)
+  };
+  // Ship 2: the frame's geometry only (box, crop, border, stacking). Its own picture goes out as its opaque copy; one
+  // that can't go public is left out (the frame shows its cut of the page). Never `locked` (editor state) or the
+  // direction (prompt text).
+  const frame = plan && panel.frame ? publicFrame(panel.frame, plan) : undefined;
+  if (frame) out.frame = frame;
+  return out;
+};
 
-const BALLOON_KEYS: (keyof Balloon)[] = ['lineId', 'x', 'y', 'w', 'tailX', 'tailY', 'pinned', 'z', 'locked', 'linkTo'];
+const validFrameBox = (b: Box | undefined): b is Box => validBox(b) && b.w > 0 && b.h > 0;
+
+/** A frame as readers draw it (pro plan §8): box, fit, border, z, and src through the plan's copies. */
+const publicFrame = (frame: PanelFrame, plan: SnapshotPlan): PanelFrame | undefined => {
+  if (!validFrameBox(frame.box)) return undefined;
+  const out: PanelFrame = { box: boxOf(frame.box) };
+  if (frame.fit && num(frame.fit.s) && num(frame.fit.x) && num(frame.fit.y)) out.fit = { s: frame.fit.s, x: frame.fit.x, y: frame.fit.y };
+  // Another take, an uploaded image, or a re-crop of the page's own drawing: always its opaque copy.
+  const srcPath = frame.src?.path;
+  if (srcPath && plan.paths[srcPath]) out.src = { path: plan.paths[srcPath], ...(validFrameBox(frame.src!.box) ? { box: boxOf(frame.src!.box) } : {}) };
+  if (frame.border) {
+    const border: NonNullable<PanelFrame['border']> = {};
+    if (frame.border.none === true) border.none = true;
+    if (num(frame.border.w)) border.w = frame.border.w;
+    if (typeof frame.border.color === 'string' && HEX_COLOR_RE.test(frame.border.color)) border.color = frame.border.color;
+    if (Object.keys(border).length) out.border = border;
+  }
+  if (num(frame.z)) out.z = frame.z;
+  return out;
+};
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * The current drawing's cut boxes (pro plan §8), only for a page shown in frames: which part of the drawing each frame
+ * shows. No detector diagnostics: status, provenance and time are constants, every confidence is 1, and `shows`,
+ * `crosses` and the note are left out. Shadow-mode cuts on a page shown as drawn are never published.
+ */
+const publicCuts = (cuts: PanelCuts | undefined): PanelCuts | undefined => {
+  if (!cuts || !Array.isArray(cuts.cuts)) return undefined;
+  const list = cuts.cuts
+    .filter((c) => !!c && num(c.drawn) && validFrameBox(c.box))
+    .map((c) => ({ ...(typeof c.panelId === 'string' && c.panelId ? { panelId: c.panelId } : {}), drawn: c.drawn, box: boxOf(c.box), conf: 1 }));
+  return list.length ? { status: 'ok', by: 'user', at: 0, cuts: list } : undefined;
+};
+
+/**
+ * The printed overlays of a page (pro plan §8): guide-only ones (print: false) never go out, nor an image overlay whose
+ * picture can't go public. Geometry and look only: no name, no lock.
+ */
+const publicLayers = (layers: PageLayer[] | undefined, plan: SnapshotPlan): PageLayer[] => {
+  const out: PageLayer[] = [];
+  for (const l of layers || []) {
+    if (!l || l.print === false || !validFrameBox(l.box) || typeof l.id !== 'string') continue;
+    const layer: PageLayer = { id: l.id, kind: l.kind, box: boxOf(l.box) };
+    if (l.kind === 'image') {
+      const path = l.src?.path ? plan.paths[l.src.path] : undefined;
+      if (!path) continue;
+      layer.src = { path, ...(validFrameBox(l.src!.crop) ? { crop: boxOf(l.src!.crop) } : {}) };
+    } else {
+      if (!l.shape) continue;
+      layer.shape = plain(l.shape);
+    }
+    if (num(l.rot)) layer.rot = l.rot;
+    if (num(l.z)) layer.z = l.z;
+    if (typeof l.clip === 'string' && l.clip) layer.clip = l.clip;
+    if (num(l.opacity)) layer.opacity = l.opacity;
+    if (l.flip === 'h' || l.flip === 'v') layer.flip = l.flip;
+    out.push(layer);
+  }
+  return out;
+};
+
+// Ship 2: rot and minH are lettering geometry, shared by every language (pro plan §8).
+const BALLOON_KEYS: (keyof Balloon)[] = ['lineId', 'x', 'y', 'w', 'tailX', 'tailY', 'pinned', 'z', 'locked', 'linkTo', 'rot', 'minH'];
 const publicBalloon = (b: Balloon): Balloon => {
   const out: Record<string, unknown> = {};
   for (const key of BALLOON_KEYS) if (b[key] !== undefined) out[key] = b[key];
@@ -248,11 +366,21 @@ function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: Readonly
     n,
     summary: '',
     layout: typeof page.layout === 'string' ? page.layout : '',
-    panels: (page.panels || []).map((panel) => publicPanel(panel, castIds)),
+    panels: (page.panels || []).map((panel) => publicPanel(panel, castIds, plan)),
     balloons: (page.balloons || []).map(publicBalloon),
     render: { status: 'ready', asset, history: [], ...(qc ? { qc } : {}) }
   };
   if (typeof page.chapterTitle === 'string' && page.chapterTitle.trim()) out.chapterTitle = page.chapterTitle;
+  // Ship 2 (pro plan §8): how the page is shown, as geometry. Absent on a page without these fields (old snapshots stay
+  // deep-equal); readers fall back to the drawing as drawn (artModeOf) whenever anything here is missing.
+  if (page.artMode === 'panels') {
+    out.artMode = 'panels';
+    const cuts = publicCuts(page.render.cuts);
+    if (cuts) out.render.cuts = cuts;
+  }
+  if (page.frameStyle) out.frameStyle = { ...frameStyleOf(page) };
+  const layers = publicLayers(page.layers, plan);
+  if (layers.length) out.layers = layers;
   return out;
 }
 
@@ -374,7 +502,11 @@ export function snapshotPaths(snapshot: ComicDoc): string[] {
     for (const v of a.variants || []) if (v?.path) out.add(v.path);
   };
   add(snapshot.cover?.render?.asset);
-  for (const p of snapshot.pages || []) add(p.render?.asset);
+  for (const p of snapshot.pages || []) {
+    add(p.render?.asset);
+    // Ship 2: the pictures published frames and printed overlays show (their opaque copies).
+    for (const path of pageSourcePaths(p, { printOnly: true })) out.add(path);
+  }
   return [...out];
 }
 
@@ -388,19 +520,38 @@ const fingerprintView = (doc: ComicDoc, languages: string[]) => {
     brief: [doc.brief?.title, doc.brief?.logline],
     format: [doc.format?.kind, doc.format?.pageAspect, doc.format?.readingDirection, doc.format?.lettering],
     cover: [doc.cover?.title, doc.cover?.tagline, doc.cover?.lettering, doc.cover?.titleStyle, hasPublishableArt(doc.cover?.render) ? doc.cover.render.asset!.path : ''],
-    pages: drawnPages(doc).map((p) => [
-      p.id,
-      p.render.asset!.path,
-      p.chapterTitle,
-      (p.panels || []).map((pn) => (pn.lines || []).map((l) => [l.id, l.kind, l.speakerId, l.text, l.style])),
-      p.balloons
-    ]),
+    pages: drawnPages(doc).map((p) => {
+      const tuple: unknown[] = [
+        p.id,
+        p.render.asset!.path,
+        p.chapterTitle,
+        (p.panels || []).map((pn) => (pn.lines || []).map((l) => [l.id, l.kind, l.speakerId, l.text, l.style])),
+        p.balloons
+      ];
+      // Ship 2: the published layout geometry, appended only when the page has some, so a page without frames,
+      // overlays or a frame style keeps the fingerprint it had (no false "changes since publishing").
+      const geometry = layoutGeometryOf(p);
+      if (geometry) tuple.push(geometry);
+      return tuple;
+    }),
     cast: (doc.cast || []).map((c) => [c.id, c.name]),
     letterStyle: doc.letterStyle,
     book: doc.book,
     reader: doc.reader,
     i18n: publicI18n(i18nOf(doc), editions)
   };
+};
+
+/**
+ * What a reader sees of a page's Ship 2 layout (pro plan §8): display mode, frame style, frames (box, crop, border,
+ * stacking, picture), the current cut boxes in panels mode and the printed overlays. Undefined when the page has none.
+ */
+const layoutGeometryOf = (p: Page): unknown => {
+  const frames = (p.panels || []).filter((pn) => !!pn.frame).map((pn) => [pn.id, pn.frame!.box, pn.frame!.fit, pn.frame!.src?.path, pn.frame!.src?.box, pn.frame!.border, pn.frame!.z]);
+  const printed = (p.layers || []).filter((l) => l.print !== false).map((l) => [l.id, l.kind, l.box, l.rot, l.z, l.clip, l.opacity, l.flip, l.src, l.shape]);
+  const cuts = p.artMode === 'panels' ? (p.render.cuts?.cuts || []).map((c) => [c.panelId, c.drawn, c.box]) : [];
+  if (p.artMode !== 'panels' && !p.frameStyle && !frames.length && !printed.length) return undefined;
+  return { mode: p.artMode ?? null, style: p.frameStyle ?? null, frames, cuts, layers: printed };
 };
 
 /**

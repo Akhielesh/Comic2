@@ -17,6 +17,9 @@ import { safetyToolGroup } from './safety.js';
 import { timelineToolGroup } from './timeline.js';
 // --- history (versions plan §9; H0 stub, H4 replaces it). Listed only while COMIC_HISTORY is on. ---
 import { historyToolGroup, historyToolGroupEnabled } from './history.js';
+// --- Ship 2 (pro plan §4.7; K2b stubs, B10 replaces them). Listed only once their package enables them. ---
+import { consistencyToolGroup, consistencyToolGroupEnabled } from './consistency.js';
+import { layoutToolGroup, layoutToolGroupEnabled } from './layout.js';
 
 const registry = createKeyedRegistry<ToolGroup>({
   what: 'tool group',
@@ -34,7 +37,9 @@ const registry = createKeyedRegistry<ToolGroup>({
       libraryToolGroup,
       readerToolGroup,
       modelsToolGroup,
-      ...(historyToolGroupEnabled() ? [historyToolGroup] : [])
+      ...(historyToolGroupEnabled() ? [historyToolGroup] : []),
+      ...(layoutToolGroupEnabled() ? [layoutToolGroup] : []),
+      ...(consistencyToolGroupEnabled() ? [consistencyToolGroup] : [])
     ]
   ]
 });

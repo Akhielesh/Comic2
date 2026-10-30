@@ -21,7 +21,9 @@ import {
   collectAssetPaths,
   createEmptyDoc,
   displayAssetPaths,
+  LAYER_ID_RE,
   newId,
+  pageSourcePaths,
   type AssetRef,
   type CastKind,
   type CastTier,
@@ -34,9 +36,9 @@ import {
 import { encodeStudioEvent, normalizeTimeZone, type AttachmentTarget, type StreamRequest, type StudioEvent, type StudioFocus } from '../../../shared/comic/events.js';
 import { editionProgress, i18nOf, localizeDoc } from '../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages.js';
-import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import { DOC_LIMITS, EDITOR_LIMITS } from '../../../shared/comic/limits.js';
 import { IMAGE_MODELS, TIER_PRESETS, resolveImageJob } from '../../../shared/comic/models.js';
-import { applyOps, isSpendAction, NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES, type DocOp, type StudioAction } from '../../../shared/comic/ops.js';
+import { applyOps, isSpendAction, NON_SPEND_ACTION_TYPES, SAFE_ID_RE, SPEND_ACTION_TYPES, type DocOp, type StudioAction } from '../../../shared/comic/ops.js';
 import type { PublicComicPayload } from '../../../shared/comic/publication.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
@@ -387,7 +389,11 @@ const readerAssetPaths = (doc: ComicDoc): string[] => {
     out.add(a.path);
     a.variants?.forEach((v) => v?.path && out.add(v.path));
   };
-  doc.pages.forEach((p) => add(p.render));
+  doc.pages.forEach((p) => {
+    add(p.render);
+    // Ship 2: what a page's frames and PRINTED overlays show (another take, an image); guide-only overlays stay out.
+    for (const path of pageSourcePaths(p, { printOnly: true })) out.add(path);
+  });
   add(doc.cover?.render);
   return [...out];
 };
@@ -413,6 +419,15 @@ export function parseFocus(raw: unknown): StudioFocus | undefined {
   }
   if (typeof raw.panelN === 'number' && Number.isInteger(raw.panelN) && raw.panelN >= 1 && raw.panelN <= DOC_LIMITS.panelsPerPage) out.panelN = raw.panelN;
   if (typeof raw.surface === 'string' && (FOCUS_SURFACES as readonly string[]).includes(raw.surface)) out.surface = raw.surface as StudioFocus['surface'];
+  // Ship 2: the editor's selected panels and overlays on focus.pageId (ids only; without a page they mean nothing).
+  if (out.pageId && Array.isArray(raw.panelIds)) {
+    const ids = [...new Set(raw.panelIds.filter((id): id is string => typeof id === 'string' && SAFE_ID_RE.test(id)))].slice(0, DOC_LIMITS.panelsPerPage);
+    if (ids.length) out.panelIds = ids;
+  }
+  if (out.pageId && Array.isArray(raw.layerIds)) {
+    const ids = [...new Set(raw.layerIds.filter((id): id is string => typeof id === 'string' && LAYER_ID_RE.test(id)))].slice(0, EDITOR_LIMITS.layersPerPage);
+    if (ids.length) out.layerIds = ids;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 

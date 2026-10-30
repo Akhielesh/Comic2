@@ -172,7 +172,8 @@ export const PRICE_WAIT_MS = 2_500;
 /** The longest a refresh waits on its own persistence (cache, snapshots, uptime log) before it is done anyway. */
 export const PERSIST_WAIT_MS = 10_000;
 /** Observed kinds a catalog row carries (models.md §4.3 `observed[].kind`). */
-export const ROW_OBSERVED_KINDS: ReadonlySet<string> = new Set(['page', 'sheet', 'cover']);
+/** Ship 2 (K2b): 'panel' joins with the run engine recording panel calls (jobs.ts imageOperation 'comic.image.panel'). */
+export const ROW_OBSERVED_KINDS: ReadonlySet<string> = new Set(['page', 'sheet', 'cover', 'panel']);
 export const CACHE_SOURCE = { list: 'openrouter_images', endpoints: 'openrouter_images_endpoints' } as const;
 /** Models we watch but do not offer (models.md §2.2 watch list): endpoints are fetched so a price change shows up. */
 export const WATCH_LIST_IDS = ['microsoft/mai-image-2.6-flash', 'meta/muse-image', 'bytedance-seed/seedream-5-0-flash'];

@@ -9,7 +9,7 @@
 // usage view and say which view in X-Cost-View).
 
 import type { Resolution } from './doc.js';
-import type { ImageJobKind, ImageModelSpec } from './models.js';
+import type { AnyImageJobKind, ImageModelSpec } from './models.js';
 import type { FitReason } from './modelLock.js';
 
 // ── Prices ───────────────────────────────────────────────────────────────────
@@ -62,7 +62,8 @@ export interface RankMove {
 
 // ── Our own observations (comic_image_calls) ─────────────────────────────────
 
-export type ObservedKind = ImageJobKind | 'qc';
+/** Every image job kind (a panel fix is observed like a page) plus the page check. */
+export type ObservedKind = AnyImageJobKind | 'qc';
 
 export interface ObservedEntry {
   kind: ObservedKind;

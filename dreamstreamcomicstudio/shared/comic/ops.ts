@@ -306,7 +306,17 @@ export type SpendAction =
    *  drawOverfull (plan §4.1, §5.1; decision PD-1): "Render all" (no pageIds, no force) holds back pages whose words
    *  overfill a panel — left out of the run AND its quote, with free fixes first. The ids listed here are drawn
    *  anyway ("Draw anyway"). The server keeps only this doc's page ids (planCheckGate.sanitizeDrawOverfull). */
-  | ({ type: 'render_pages'; pageIds?: string[]; force?: boolean; includeCover?: boolean; safe?: boolean; drawOverfull?: string[] } & Quoted)
+  | ({
+      type: 'render_pages';
+      pageIds?: string[];
+      force?: boolean;
+      includeCover?: boolean;
+      safe?: boolean;
+      drawOverfull?: string[];
+      /** Ship 2 (pro plan §5.3; B4 amendment 3): 'none' draws without consistency anchors; absent or 'auto' draws the
+       *  missing anchor sheets first (ticked line items in the quote) once the run draws anchors at all. */
+      anchors?: 'auto' | 'none';
+    } & Quoted)
   | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)
@@ -368,12 +378,12 @@ export const PRO_PAGE_PATCH_OPS: readonly DocOp['op'][] = [
   'page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'continuity', 'scene', 'consistency', 'finding'
 ];
 /**
- * One-line switch: the Ship 2 ops join CLIENT_PATCHABLE_OPS. Off until the server can sanitize them (K2b registers
- * sanitize/{panels,consistency}.ts — every patchable op needs a sanitizer; extensions.test.ts checks it). While off,
- * a client batch carrying one is refused ("can't be changed directly"); clients still apply them when the server
- * streams them (KNOWN_DOC_OPS), and their inverses are computed (undo.ts) for when the switch is on.
+ * One-line switch: the Ship 2 ops join CLIENT_PATCHABLE_OPS. On since K2b registered the server sanitizers
+ * (server/src/comic/sanitize/{panels,consistency}.ts — every patchable op needs a sanitizer; extensions.test.ts checks
+ * it). Off, a client batch carrying one is refused ("can't be changed directly"); clients still apply them when the
+ * server streams them (KNOWN_DOC_OPS), and their inverses are computed (undo.ts) either way.
  */
-export const PRO_PAGE_OPS_PATCHABLE = false;
+export const PRO_PAGE_OPS_PATCHABLE = true;
 
 /** Ops a client may send in `patch` — free content edits: no spend, no renders, no billing, no new assets. */
 export const CLIENT_PATCHABLE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>([
