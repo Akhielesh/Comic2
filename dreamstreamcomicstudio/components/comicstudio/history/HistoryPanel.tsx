@@ -81,7 +81,9 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   const [sheet, setSheet] = useState<Sheet>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const list = useHistory(studio, { open, filter, pageId: pageFilterId });
-  const now = nowProp ?? Date.now();
+  // The clock the day groups and "Tue 10:42" read: taken when the moments arrive (stable between renders, so the
+  // restore preview is not recomputed on every keystroke).
+  const now = useMemo(() => nowProp ?? Date.now(), [nowProp, open, list.rows]);
   const cost = useCostFormat(studio);
   const money: MoneyWords = useMemo(() => ({ governed: cost.governed, exact: cost.exact }), [cost]);
   const studioRef = useRef(studio);

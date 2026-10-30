@@ -25,6 +25,9 @@ import { gitWordsIn, GIT_WORDS_RE, HISTORY_COPY } from './historyModel';
 import { AUTO_BLINK_MS } from './PageCompare';
 import { Scrubber } from './Scrubber';
 import { WordDiff } from './WordDiff';
+import { HISTORY_KIT_SCENES, HistoryKitScene } from './__scenes__/HistoryScenes';
+import { parseQaParams } from '../testing/qaController';
+import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
 import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, interactive, mountWith, overflowProblems, settle, TARGET_RE, type Mounted } from './history.testkit';
 
 const NOW = HISTORY_NOW;
@@ -621,5 +624,24 @@ describe('with Comic History off, no entry point shows', () => {
     expect(feature.headerSlots?.map((s) => [s.id, s.order])).toEqual([['history', 240]]);
     expect(feature.tabs?.map((t) => [t.id, t.order])).toEqual([['history', 510]]);
     expect(feature.cards?.map((c) => c.type)).toEqual(['history']);
+  });
+});
+
+// ── QA scenes (registered by the qa/KitScenes.tsx owner) ─────────────────────
+
+describe('the QA scenes render offline on the fake API', () => {
+  it('every History kit scene mounts with content and makes no history action', async () => {
+    for (const scene of HISTORY_KIT_SCENES) {
+      const { container, unmount } = render(
+        <FormFactorProvider value={formFactorFor({ w: 360, h: 740, coarse: true })}>
+          <HistoryKitScene params={parseQaParams(`?surface=kit&kit=${scene}`)} scene={scene} />
+        </FormFactorProvider>
+      );
+      await settle(6);
+      expect(container.querySelectorAll('[data-testid^="kit-history"]').length, scene).toBeGreaterThan(0);
+      expect(container.textContent!.length, scene).toBeGreaterThan(40);
+      unmount();
+      resetBackStack();
+    }
   });
 });
