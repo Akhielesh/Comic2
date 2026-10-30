@@ -687,7 +687,9 @@ function coverCapped(ctx: PlanCtx, win: PageAttempt): LetterPlan[] {
     // already carried).
     const excess = (c: readonly number[]) => c.reduce((n, v, i) => n + Math.max(0, v - (over.has(i) ? cap : Math.max(cap, cover0[i]))), 0);
     let least = excess(cover0);
-    for (const step of COVER_STEPS) {
+    // A page already lettered at a smaller step letters its capped panels no bigger: each size is tried once.
+    const steps = [...new Set(COVER_STEPS.map((step) => Math.min(step, win.scale)))];
+    for (const step of steps) {
       const a = planAtDensity(ctx, win.scale, win.keep, win.whole, { panels: over, scale: step });
       if (worse(a, win)) continue;
       const ap = a.build();
