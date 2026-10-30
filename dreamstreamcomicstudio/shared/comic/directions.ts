@@ -9,10 +9,26 @@
 // adds, dropping gaze → extra background → composition → pose (DIRECTION_DROP_ORDER) when the prompt runs over its
 // CONSISTENCY_LIMITS.promptChars budget. lintDirections names contradictions for the card and the editor.
 //
+// Who is DRAWN in a panel follows the page prompt's rule (server/src/comic/prompts.ts drawnCastIds, kept identical and
+// pinned by server/src/comic/directions.parity.test.ts): the panel's castIds minus the viewer of a point-of-view panel
+// whose action names them. The viewer is heard, not seen — an off-panel voice with no "Who" phrase — so a direction can
+// never ask the model to draw someone the prompt says not to draw. Lines with no words never make an off-panel voice.
+//
 // Back-compat (I8): a panel without a direction gets no phrases and no lint, so its prompt is unchanged.
 
 import { CONSISTENCY_LIMITS } from './limits.js';
-import { normalizePanelDirection, type ComicDoc, type DirectionLens, type Page, type Panel, type PanelCastDirection, type PanelDirection, type ShotType } from './doc.js';
+import {
+  normalizePanelDirection,
+  type Character,
+  type ComicDoc,
+  type DirectionLens,
+  type LineKind,
+  type Page,
+  type Panel,
+  type PanelCastDirection,
+  type PanelDirection,
+  type ShotType
+} from './doc.js';
 import { castNameOf, itemKey, itemMatches, resolveContinuity, type ContinuityState } from './continuity.js';
 
 // ── Lens and shot ────────────────────────────────────────────────────────────
@@ -36,29 +52,72 @@ export const lensForShot = (shot: ShotType): DirectionLens => lensesFor(shot)[0]
 /** The lens suits the shot. */
 export const lensFits = (shot: ShotType, lens: DirectionLens): boolean => lensesFor(shot).includes(lens);
 
-const SPOKEN = new Set(['speech', 'thought', 'whisper', 'shout']);
+// ── Who is drawn and who is heard (the page prompt's rule) ───────────────────
 
-/** Speakers with a line in the panel who are not drawn in it (heard, not seen), in line order. */
-export const undrawnSpeakers = (panel: Pick<Panel, 'castIds' | 'lines'>): string[] => {
-  const drawn = new Set(panel.castIds);
+/** Line kinds lettered as balloons beside a speaker (captions and SFX are spoken by no one drawn). */
+const SPOKEN: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
+
+type CastPick = Pick<ComicDoc, 'cast'>;
+/** The panel fields the drawn-cast rule reads; shot and action matter only for a point-of-view panel. */
+export type DrawnPanel = Pick<Panel, 'castIds'> & Partial<Pick<Panel, 'shot' | 'action' | 'lines'>>;
+
+const clean = (value?: string | null): string => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '');
+const escapeName = (name: string) => clean(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The viewer of a point-of-view panel when the action names them ("From Kalyani's view…", "through Ravi's eyes", "Ravi's
+ * POV"): heard, not seen, never drawn. A name the pattern cannot match fails safe (the viewer stays drawn). Same rule
+ * as prompts.ts povViewerOf.
+ */
+export const povViewerOf = (doc: CastPick, panel: DrawnPanel): Character | undefined => {
+  if (panel.shot !== 'pov') return undefined;
+  const action = clean(panel.action);
+  if (!action) return undefined;
+  const ids = new Set([...panel.castIds, ...(panel.lines ?? []).map((l) => l.speakerId).filter((id): id is string => !!id)]);
+  return doc.cast.find((c) => {
+    if (!ids.has(c.id) || !clean(c.name)) return false;
+    const name = escapeName(c.name);
+    return new RegExp(
+      `(?:\\b(?:from|through)\\s+(?:the\\s+)?${name}['’]s\\s+(?:point of view|view|eyes|perspective|pov)\\b|\\b${name}['’]s\\s+(?:pov|point of view)\\b)`,
+      'iu'
+    ).test(action);
+  });
+};
+
+/** The cast drawn in a panel: its castIds without a POV viewer the action names (prompts.ts drawnCastIds). */
+export const drawnCastIds = (doc: CastPick, panel: DrawnPanel): string[] => {
+  const viewer = povViewerOf(doc, panel);
+  return viewer ? panel.castIds.filter((id) => id !== viewer.id) : [...panel.castIds];
+};
+
+/** Without the doc only castIds are known: everyone listed is drawn. */
+const drawnSet = (panel: DrawnPanel, doc?: CastPick): Set<string> => new Set(doc ? drawnCastIds(doc, panel) : panel.castIds);
+
+/**
+ * Speakers with a balloon line that has words in the panel who are not drawn in it (heard, not seen: a speaker missing
+ * from castIds, or the POV viewer), in first-line order, each once. With `doc`, only the book's cast and the POV rule —
+ * exactly prompts.ts offPanelSpeakerIds, the page prompt's "OFF-PANEL VOICE … (do not draw)".
+ */
+export const undrawnSpeakers = (panel: DrawnPanel, doc?: CastPick): string[] => {
+  const drawn = drawnSet(panel, doc);
+  const known = doc ? new Set(doc.cast.map((c) => c.id)) : undefined;
   const out: string[] = [];
-  for (const line of panel.lines) {
-    if (!line.speakerId || !SPOKEN.has(line.kind) || drawn.has(line.speakerId) || out.includes(line.speakerId)) continue;
-    out.push(line.speakerId);
+  for (const line of panel.lines ?? []) {
+    const id = line.speakerId;
+    if (!id || !clean(line.text) || !SPOKEN.has(line.kind) || drawn.has(id) || out.includes(id) || (known && !known.has(id))) continue;
+    out.push(id);
   }
   return out;
 };
 
+/** The page prompt's off-panel voices (prompts.ts offPanelSpeakerIds): undrawnSpeakers with the book's cast. */
+export const offPanelSpeakerIds = (doc: CastPick, panel: DrawnPanel): string[] => undrawnSpeakers(panel, doc);
+
 // ── Normalize and derive ─────────────────────────────────────────────────────
 
-type CastPick = Pick<ComicDoc, 'cast'>;
-
 /** A direction from the panel alone: the shot's lens and its unseen speakers as off-panel voices (by 'derived'). */
-export const deriveDirection = (panel: Pick<Panel, 'shot' | 'castIds' | 'lines'>, doc?: CastPick): PanelDirection => {
-  const known = doc ? new Set(doc.cast.map((c) => c.id)) : undefined;
-  const offPanel = undrawnSpeakers(panel)
-    .filter((id) => !known || known.has(id))
-    .slice(0, CONSISTENCY_LIMITS.castChanges);
+export const deriveDirection = (panel: Pick<Panel, 'shot' | 'castIds' | 'lines'> & Partial<Pick<Panel, 'action'>>, doc?: CastPick): PanelDirection => {
+  const offPanel = undrawnSpeakers(panel, doc).slice(0, CONSISTENCY_LIMITS.castChanges);
   return { lens: lensForShot(panel.shot), ...(offPanel.length ? { offPanel } : {}), by: 'derived' };
 };
 
@@ -66,14 +125,14 @@ export const deriveDirection = (panel: Pick<Panel, 'shot' | 'castIds' | 'lines'>
  * The direction a panel keeps: the contract normalizer (doc.ts normalizePanelDirection: text clipped to
  * PRO_PAGE_LIMITS, lists capped, unknown values dropped), then made consistent with the panel — a missing lens or one
  * that contradicts the shot becomes the shot's lens; per-character entries only for who is drawn; `offPanel` never
- * lists someone drawn (and always lists an unseen speaker); with `doc`, only the book's cast. Nothing valid left →
- * deriveDirection. Deterministic and idempotent.
+ * lists someone drawn (and always lists an unseen speaker); with `doc`, only the book's cast, and a POV panel's named
+ * viewer counts as not drawn (drawnCastIds). Nothing valid left → deriveDirection. Deterministic and idempotent.
  */
-export const normalizeDirection = (raw: unknown, panel: Pick<Panel, 'shot' | 'castIds' | 'lines'>, doc?: CastPick): PanelDirection => {
+export const normalizeDirection = (raw: unknown, panel: Pick<Panel, 'shot' | 'castIds' | 'lines'> & Partial<Pick<Panel, 'action'>>, doc?: CastPick): PanelDirection => {
   const base = normalizePanelDirection(raw);
   if (!base) return deriveDirection(panel, doc);
   const known = doc ? new Set(doc.cast.map((c) => c.id)) : undefined;
-  const drawn = new Set(panel.castIds);
+  const drawn = drawnSet(panel, doc);
   const out: PanelDirection = { ...base };
   if (!out.lens || !lensFits(panel.shot, out.lens)) out.lens = lensForShot(panel.shot);
   if (out.cast) {
@@ -82,7 +141,7 @@ export const normalizeDirection = (raw: unknown, panel: Pick<Panel, 'shot' | 'ca
     if (Object.keys(cast).length) out.cast = cast;
     else delete out.cast;
   }
-  const offPanel = [...new Set([...(out.offPanel ?? []), ...undrawnSpeakers(panel)])]
+  const offPanel = [...new Set([...(out.offPanel ?? []), ...undrawnSpeakers(panel, doc)])]
     .filter((id) => !drawn.has(id) && (!known || known.has(id)))
     .slice(0, CONSISTENCY_LIMITS.castChanges);
   if (offPanel.length) out.offPanel = offPanel;
@@ -127,7 +186,8 @@ const lintPanel = (doc: ComicDoc, page: Page, panel: Panel, state: ContinuitySta
   const out: DirectionIssue[] = [];
   const at = { pageId: page.id, n: page.n, panel: panel.n, panelId: panel.id };
   const known = new Set(doc.cast.map((c) => c.id));
-  const drawn = new Set(panel.castIds);
+  const drawnIds = drawnCastIds(doc, panel);
+  const drawn = new Set(drawnIds);
   const name = (id: string) => castNameOf(doc, id);
   if (d.lens && !lensFits(panel.shot, d.lens)) {
     out.push({ ...at, kind: 'lens_shot', severity: 'minor', text: `Panel ${panel.n} on page ${page.n} is ${SHOT_WORDS[panel.shot]} but asks for a ${d.lens} lens.` });
@@ -141,13 +201,13 @@ const lintPanel = (doc: ComicDoc, page: Page, panel: Panel, state: ContinuitySta
     else if (!drawn.has(id)) out.push({ ...at, kind: 'cast_not_drawn', severity: 'minor', castId: id, text: `Panel ${panel.n} on page ${page.n} directs ${name(id)}, who isn't drawn there.` });
   }
   const off = new Set(d.offPanel ?? []);
-  for (const id of undrawnSpeakers(panel)) {
-    if (off.has(id) || !known.has(id)) continue;
+  for (const id of undrawnSpeakers(panel, doc)) {
+    if (off.has(id)) continue;
     out.push({ ...at, kind: 'speaker_unplaced', severity: 'minor', castId: id, text: `${name(id)} speaks in panel ${panel.n} on page ${page.n} but isn't drawn there or marked as an off-panel voice.` });
   }
   // Two people in one spot.
   const spots = new Map<string, string>();
-  for (const id of panel.castIds) {
+  for (const id of drawnIds) {
     const c = d.cast?.[id];
     if (!c?.pos || !c.depth) continue;
     const spot = `${c.pos}/${c.depth}`;
@@ -228,19 +288,24 @@ const GAZE_LEAD = /^(?:at|to|toward|towards|down|up|away|off|over|into|back|past
 const gazeWords = (gaze: string): string => (GAZE_LEAD.test(gaze) ? `looking ${gaze}` : `looking at ${gaze}`);
 
 /**
- * The words a panel's direction adds to its prompt block: Who (place and state per drawn character), Detail
- * (background, light, palette accent, focus), the camera (lens and composition) and the off-panel voices. `drop`
- * = how many steps of DIRECTION_DROP_ORDER to apply (0 = everything; 'background' keeps the first detail). A panel
- * without a direction has no phrases (I8).
+ * The words a panel's direction adds to its prompt block: Who (place and state per DRAWN character — drawnCastIds, so
+ * a POV panel's viewer never gets one), Detail (background, light, palette accent, focus), the camera (lens and
+ * composition) and the off-panel voices. `drop` = how many steps of DIRECTION_DROP_ORDER to apply (0 = everything;
+ * 'background' keeps the first detail). A panel without a direction has no phrases (I8).
  */
-export const directionPhrases = (panel: Pick<Panel, 'castIds' | 'direction'>, doc: CastPick, opts: { drop?: number } = {}): DirectionPhrases => {
+export const directionPhrases = (
+  panel: Pick<Panel, 'castIds' | 'direction'> & Partial<Pick<Panel, 'shot' | 'action' | 'lines'>>,
+  doc: CastPick,
+  opts: { drop?: number } = {}
+): DirectionPhrases => {
   const d = panel.direction;
   if (!d) return { who: [], detail: [], offPanel: [] };
   const level = Math.max(0, Math.min(DIRECTION_DROP_ORDER.length, Math.floor(opts.drop ?? 0)));
   const dropped = new Set<DirectionDrop>(DIRECTION_DROP_ORDER.slice(0, level));
   const name = (id: string) => castNameOf(doc, id);
   const who: WhoPhrase[] = [];
-  for (const id of panel.castIds) {
+  const drawnIds = drawnCastIds(doc, panel);
+  for (const id of drawnIds) {
     const c = d.cast?.[id];
     if (!c) continue;
     const place = [c.pos ? POS_WORDS[c.pos] : '', c.depth ? DEPTH_WORDS[c.depth] : ''].filter(Boolean).join(', ');
@@ -267,6 +332,7 @@ export const directionPhrases = (panel: Pick<Panel, 'castIds' | 'direction'>, do
     ...(camera ? { camera } : {}),
     who,
     detail,
-    offPanel: (d.offPanel ?? []).map((id) => ({ castId: id, name: name(id) }))
+    // Never someone drawn (a stored direction may predate the POV rule).
+    offPanel: (d.offPanel ?? []).filter((id) => !drawnIds.includes(id)).map((id) => ({ castId: id, name: name(id) }))
   };
 };

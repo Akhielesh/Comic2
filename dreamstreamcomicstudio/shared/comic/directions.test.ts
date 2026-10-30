@@ -7,9 +7,12 @@ import {
   SHOT_LENSES,
   deriveDirection,
   directionPhrases,
+  drawnCastIds,
   lensForShot,
   lintDirections,
   normalizeDirection,
+  offPanelSpeakerIds,
+  povViewerOf,
   undrawnSpeakers,
   type DirectionIssueKind
 } from './directions';
@@ -96,6 +99,55 @@ describe('normalizeDirection — who is drawn and who is heard', () => {
       expect(normalizeDirection(raw, p)).toEqual({ lens: 'macro', offPanel: ['c_meera'], by: 'derived' });
     }
     expect(deriveDirection(panel())).toEqual({ lens: 'normal', by: 'derived' });
+  });
+});
+
+describe('point-of-view panels and empty lines — the page prompt’s drawn cast', () => {
+  const doc = harbourComic();
+  const pov = panel({
+    shot: 'pov',
+    action: "From Ravi's view, Meera backs away from the gate.",
+    castIds: ['c_meera', 'c_ravi'],
+    lines: [
+      { id: 'l1', kind: 'speech', speakerId: 'c_ravi', text: 'Stop!' },
+      { id: 'l2', kind: 'speech', speakerId: 'c_guard', text: '   ' }
+    ]
+  });
+
+  it('the named viewer is heard, not drawn: off-panel, no cast entry, no Who phrase', () => {
+    expect(povViewerOf(doc, pov)?.id).toBe('c_ravi');
+    expect(drawnCastIds(doc, pov)).toEqual(['c_meera']);
+    expect(undrawnSpeakers(pov, doc)).toEqual(['c_ravi']);
+    expect(offPanelSpeakerIds(doc, pov)).toEqual(['c_ravi']);
+    const d = normalizeDirection({ cast: { c_meera: { pos: 'left' }, c_ravi: { pos: 'right', expression: 'angry' } }, by: 'writer' }, pov, doc);
+    expect(d.offPanel).toEqual(['c_ravi']);
+    expect(Object.keys(d.cast!)).toEqual(['c_meera']);
+    expect(normalizeDirection(d, pov, doc)).toEqual(d);
+    expect(deriveDirection(pov, doc)).toEqual({ lens: 'normal', offPanel: ['c_ravi'], by: 'derived' });
+    // A stored direction that still directs the viewer (or lists a drawn character off-panel) never puts them in Who.
+    const stored: PanelDirection = { cast: { c_meera: { pos: 'left' }, c_ravi: { pos: 'right', expression: 'angry' } }, offPanel: ['c_ravi', 'c_meera'] };
+    const phrases = directionPhrases({ ...pov, direction: stored }, doc);
+    expect(phrases.who.map((w) => w.text)).toEqual(['MEERA (left)']);
+    expect(phrases.offPanel).toEqual([{ castId: 'c_ravi', name: 'RAVI' }]);
+    // A POV shot that names nobody keeps its cast drawn.
+    expect(drawnCastIds(doc, { ...pov, action: 'A blur of tarps and sacks.' })).toEqual(['c_meera', 'c_ravi']);
+  });
+
+  it('lint: the viewer marked off-panel is fine; directing the viewer is "not drawn"', () => {
+    const doc2 = withDirections({ pg_2_p1: { offPanel: ['c_ravi'], cast: { c_meera: { pos: 'left' } } } }, (d) => {
+      const p = d.pages[1].panels[0];
+      d.pages[1].panels[0] = { ...p, shot: 'pov', action: "Through Ravi's eyes, Meera turns.", lines: [{ id: 'l1', kind: 'speech', speakerId: 'c_ravi', text: 'Wait.' }] };
+    });
+    expect(lintDirections(doc2)).toEqual([]);
+    doc2.pages[1].panels[0].direction = { cast: { c_meera: { pos: 'left' }, c_ravi: { pos: 'left' } } };
+    expect(lintKinds(doc2)).toEqual(['cast_not_drawn', 'speaker_unplaced']);
+  });
+
+  it('a line with no words never makes an off-panel voice', () => {
+    const blank = panel({ castIds: [], lines: [{ id: 'l1', kind: 'speech', speakerId: 'c_ravi', text: ' \n ' }] });
+    expect(undrawnSpeakers(blank)).toEqual([]);
+    expect(undrawnSpeakers(blank, doc)).toEqual([]);
+    expect(normalizeDirection(undefined, blank, doc)).toEqual({ lens: 'normal', by: 'derived' });
   });
 });
 
