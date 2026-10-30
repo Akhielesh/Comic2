@@ -8,7 +8,10 @@
 //   lake-1p      the owner's real session: a 1-page storybook whose page came back SQUARE under a 4:5
 //                format, with edge-hugging stored balloons (x=0, right edge 1.0, y=0.92, an overlapping pair)
 //   heist-12p    a 12-page comic with every render state, a long conversation with every card type,
-//                next-step chips and an open spend gate — the default studio scene
+//                next-step chips and an open "Render all" gate — the default studio scene. Page 3 (not drawn
+//                yet) is shaped like the owner's b4b5774f page 2 with panels 5 and 6 overfull, so Render all
+//                holds it back: the breakdown's red tile, fit dots, free fixes and the gate extension, and a
+//                notice with fix chips (one free, one paid) in the conversation
 //   deep-40p     40 drawn pages (perf: variants, image budget, long scroll)
 //   webtoon-20p  a 20-panel-strip webtoon (vertical scroll reader)
 //   stress       visualqa's stress doc: 160-char title, unbroken words, 12 long-named cast members,
@@ -36,6 +39,8 @@ import {
   type Panel,
   type RenderState
 } from '../../../shared/comic/doc';
+import { checkPagePlan, heldBackOf } from '../../../shared/comic/pagePlanCheck';
+import { quoteRenderPages } from '../../../shared/comic/plan';
 
 export const QA_NOW = 1_760_000_000_000;
 export const QA_PROJECT_ID = 'proj_qa';
@@ -252,6 +257,59 @@ const makePages = (o: PageOpts): Page[] =>
     return page;
   });
 
+// ── The held-back page (Ship 1 plan fit, PD-1) ──────────────────────────────
+
+/** Made-up dialogue of about `words` words (deterministic). */
+const sayWords = (words: number, seed: number): string => {
+  const pool = 'listen the carrier behind those spice stalls has no plates and nobody has unloaded a single sack since morning which means someone wants us watching it closely tonight'.split(' ');
+  return `${Array.from({ length: words }, (_, i) => pool[(i + seed) % pool.length]).join(' ')}.`.replace(/^./, (c) => c.toUpperCase());
+};
+
+/**
+ * A page shaped like the owner's b4b5774f page 2 (six panels in 2-1-3 rows, the most words in the smallest panels):
+ * panels 5 and 6 carry far more than they hold, so "Render all" holds the page back while it is not drawn yet.
+ */
+const heldBackPanels = (pageId: string, castIds: string[]): Pick<Page, 'layout' | 'panels'> => {
+  const [a, b] = [castIds[0], castIds[1] ?? castIds[0]];
+  const line = (n: number, k: number, kind: Line['kind'], text: string, speakerId?: string): Line => ({ id: `${pageId}_p${n}_l${k}`, kind, text, ...(speakerId ? { speakerId } : {}) });
+  const panel = (n: number, size: Panel['size'], shot: Panel['shot'], action: string, cast: string[], lines: Line[]): Panel => ({ id: `${pageId}_p${n}`, n, size, shot, action, castIds: cast, lines });
+  return {
+    layout: 'Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.',
+    panels: [
+      panel(1, 'medium', 'wide', 'The two reach the market gate at dusk.', [a, b], [line(1, 1, 'speech', sayWords(12, 0), a)]),
+      panel(2, 'medium', 'medium', 'A shutter slams behind them.', [b], [line(2, 1, 'sfx', 'KRRAK!')]),
+      panel(3, 'wide', 'establishing', 'The empty market lane under strings of lights.', [], []),
+      panel(4, 'small', 'insert', 'A wrist console blinks.', [a], [line(4, 1, 'sfx', 'BEEP!')]),
+      panel(5, 'small', 'close_up', 'Arjun frowns at the carrier.', [b], [line(5, 1, 'speech', sayWords(30, 3), b)]),
+      panel(6, 'small', 'pov', 'From behind Arjun: Maya at the plate.', [a, b], [line(6, 1, 'speech', sayWords(18, 7), a), line(6, 2, 'speech', sayWords(18, 12), b)])
+    ]
+  };
+};
+
+/** The held-back notice the render gate posts for such a page, with its fix chips: free first, then the paid one. */
+const heldBackNotices = (doc: ComicDoc): Card[] => {
+  const page = doc.pages.find((p) => p.render.status === 'none' && p.panels.length === 6 && p.layout.startsWith('Row 1: two equal panels. Row 2: one wide'));
+  if (!page) return [];
+  const check = checkPagePlan(doc, page, { fixLayout: false });
+  if (check.state !== 'overfull') return [];
+  const line = page.panels[5].lines[0];
+  // Beside the open "Render all" gate, "Draw anyway" is that same Render all with the page added (quoted as a whole).
+  const anyway = { type: 'render_pages' as const, drawOverfull: [page.id] };
+  const usd = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: { drawOverfull: [page.id] } }).usd;
+  return [
+    {
+      type: 'notice',
+      id: 'n_held',
+      tone: 'info',
+      text: heldBackOf(check).text,
+      fixes: [
+        { label: `Make panel 6's first line a caption`, free: true, action: { type: 'patch', ops: [{ op: 'line', pageId: page.id, panelId: page.panels[5].id, id: line.id, patch: { kind: 'caption' } }] } },
+        { label: `Draw page ${page.n} anyway (with the rest)`, free: false, action: { ...anyway, quotedUsd: usd } }
+      ]
+    }
+  ];
+};
+
 // ── Conversation ─────────────────────────────────────────────────────────────
 
 const makeConversation = (doc: ComicDoc, density: Density): Msg[] => {
@@ -318,6 +376,7 @@ const makeConversation = (doc: ComicDoc, density: Density): Msg[] => {
       { type: 'notice', id: 'n2', tone: 'error', text: 'Rendering failed for page 7. Nothing was charged.' },
       { type: 'notice', id: 'n3', tone: 'success', text: 'Done — page 1 ($0.06)' },
       { type: 'notice', id: 'n4', tone: 'info', text: 'Free — done by the editor, no AI cost.' },
+      ...heldBackNotices(doc),
       { type: 'recap', id: 'rc1' }
     ],
     {
@@ -353,7 +412,10 @@ interface DocOpts {
   balloons: 'edge' | 'tidy' | 'none';
   squareIndex?: number;
   conversation: boolean;
-  gate: boolean;
+  /** An open spend gate: explicit page ids, or 'render_all' (a Render all, which holds overfull pages back). */
+  gate: boolean | 'render_all';
+  /** Page index re-planned as the held-back page (heldBackPanels); it must be one Render all would draw. */
+  heldBackIndex?: number;
   logline: string;
 }
 
@@ -423,6 +485,10 @@ const buildDoc = (o: DocOpts): ComicDoc => {
     squareIndex: o.squareIndex,
     balloons: o.balloons
   });
+  if (o.heldBackIndex !== undefined && doc.pages[o.heldBackIndex]) {
+    const page = doc.pages[o.heldBackIndex];
+    Object.assign(page, heldBackPanels(page.id, doc.cast.map((c) => c.id)), { balloons: [] });
+  }
   doc.pages.forEach((p) => {
     if (p.render.status === 'ready') p.render.specHash = pageSpecHash(doc, p);
     if (p.render.status === 'stale') p.render.specHash = 'stale0000';
@@ -437,7 +503,10 @@ const buildDoc = (o: DocOpts): ComicDoc => {
   doc.gate = o.gate
     ? {
         id: 'gate_qa',
-        action: { type: 'render_pages', pageIds: doc.pages.filter((p) => p.render.status !== 'ready').map((p) => p.id), quotedUsd: 1.31 },
+        action:
+          o.gate === 'render_all'
+            ? { type: 'render_pages', quotedUsd: 1.31 }
+            : { type: 'render_pages', pageIds: doc.pages.filter((p) => p.render.status !== 'ready').map((p) => p.id), quotedUsd: 1.31 },
         title: stress ? 'Draw all twenty pages of the storybook in watercolor at Pro quality' : 'Draw the remaining pages',
         summary: stress ? 'This draws every page that is not drawn yet, plus re-draws the five pages that are out of date because you changed the cast.' : 'Draws the pages that are not drawn yet.',
         estimateUsd: 1.31,
@@ -455,8 +524,12 @@ const buildDoc = (o: DocOpts): ComicDoc => {
 
 const READY_HEAVY: RenderState['status'][] = ['ready', 'ready', 'none', 'queued', 'rendering', 'ready', 'failed', 'ready', 'stale', 'ready', 'ready', 'none'];
 
-/** A fresh copy of a fixture doc (null for the loading scene is the host's choice, not a fixture). */
-export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean } = {}): ComicDoc => {
+/**
+ * A fresh copy of a fixture doc (null for the loading scene is the host's choice, not a fixture). `heldBack: false`
+ * builds heist-12p as it was before its plan-fit page (page 3 as planned, an explicit-pages gate): the lettering
+ * goldens were recorded on those pages.
+ */
+export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean; heldBack?: boolean } = {}): ComicDoc => {
   let doc: ComicDoc;
   switch (name) {
     case 'lake-1p':
@@ -548,7 +621,7 @@ export const makeQaDoc = (name: QaFixtureName, opts: { rtl?: boolean } = {}): Co
         panels: (i) => 3 + (i % 3),
         balloons: 'tidy',
         conversation: true,
-        gate: true,
+        ...(opts.heldBack === false ? { gate: true } : { gate: 'render_all' as const, heldBackIndex: 2 }),
         logline: 'A pickpocket steals saffron to pay for her brother’s surgery.'
       });
       break;

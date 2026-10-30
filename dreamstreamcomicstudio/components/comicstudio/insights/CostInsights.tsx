@@ -229,6 +229,10 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
   const failedValue =
     summary.failed.usd > 0 ? (cost.governed ? (cell(summary.failed.usd) ?? 'a little') : money.spent(summary.failed.usd)) : cost.governed ? 'nothing charged' : money.spent(0);
 
+  // Overfull pages Render all leaves out of the run and this quote (PD-1): never "drawn and up to date".
+  const heldBack = quote.heldBackIds?.length ?? 0;
+  const heldBackWords = heldBack === 1 ? '1 page' : `${heldBack} pages`;
+
   return (
     <>
       <section aria-label="Cost breakdown" className={cx('mt-3 min-w-0 border border-[var(--ds-hairline-soft)] bg-[var(--ds-surface-soft)] px-3 py-2', RADIUS_CONTROL)}>
@@ -248,8 +252,14 @@ export const CostInsights: React.FC<CostInsightsProps> = ({ doc, quote, byok, pr
           )}
           <CostRow
             label="To draw now"
-            value={quote.nothing ? 'Nothing' : cost.badge(quote.usd)}
-            note={quote.nothing ? 'Every page here is drawn and up to date.' : quote.lines.map((l) => lineText(l, cost)).join(' · ')}
+            value={quote.nothing ? (heldBack ? 'Nothing yet' : 'Nothing') : cost.badge(quote.usd)}
+            note={
+              quote.nothing
+                ? heldBack
+                  ? `${heldBackWords} held back — too many words for a panel, not in this price. Fix free or draw anyway.`
+                  : 'Every page here is drawn and up to date.'
+                : `${quote.lines.map((l) => lineText(l, cost)).join(' · ')}${heldBack ? ` · ${heldBackWords} held back (not in this price)` : ''}`
+            }
           />
           <CostRow label="Cover" value={coverLine} />
           <CostRow

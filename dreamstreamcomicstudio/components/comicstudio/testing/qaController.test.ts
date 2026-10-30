@@ -3,7 +3,10 @@
 
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { normalizeDoc } from '../../../shared/comic/doc';
+import { normalizeDoc, type Card } from '../../../shared/comic/doc';
+import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
+import { quoteRenderPages } from '../../../shared/comic/plan';
+import { noticeChipState, noticeChips } from '../conversation/cards/NoticeCard';
 import { QA_FIXTURES, makeQaDoc, parseQaImagePath, qaAsset, qaImagePath, qaImagePaths, qaPageSize } from './qaFixtures';
 import { clearQaOps, makeQaUrlFor, parseQaParams, qaImageUrl, qaOps, qaSceneFromParams, recordQaOp, useQaController } from './qaController';
 import { OPEN_MODEL_PICKER_EVENT } from '../models/openPicker';
@@ -64,6 +67,34 @@ describe('fixtures', () => {
     const doc = makeQaDoc('heist-12p');
     const statuses = new Set(doc.pages.map((p) => p.render.status));
     for (const s of ['ready', 'none', 'queued', 'rendering', 'failed', 'stale']) expect(statuses.has(s as never)).toBe(true);
+  });
+
+  it('heist holds page 3 back from its open Render all, with a notice whose fix chips are live (A5 QA fixtures)', () => {
+    const doc = makeQaDoc('heist-12p');
+    const page = doc.pages[2];
+    expect(page.render.status).toBe('none');
+    const check = checkPagePlan(doc, page, { fixLayout: false });
+    expect(check.state).toBe('overfull');
+    expect(check.panels.filter((p) => p.state === 'overfull').map((p) => p.n)).toEqual([5, 6]);
+    // The gate is a Render all (no page ids), so the hold-back applies and Draw anyway extends it.
+    expect(doc.gate?.action).toEqual({ type: 'render_pages', quotedUsd: 1.31 });
+    const quote = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: {} });
+    expect(quote.heldBackIds).toEqual([page.id]);
+    expect(quote.pageIds).not.toContain(page.id);
+    const notice = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.id === 'n_held') as Extract<Card, { type: 'notice' }>;
+    expect(notice.text).toMatch(/^Page 3 is held back: panel \d has /);
+    const chips = noticeChips(notice.fixes);
+    expect(chips.map((c) => c.paid)).toEqual([false, true]);
+    expect(chips[1].usd).toBeGreaterThan(0);
+    expect(chips[1].action).toMatchObject({ type: 'render_pages', drawOverfull: [page.id] });
+    for (const c of chips) expect(noticeChipState(doc, c)).toBe('live');
+    // heldBack: false is heist as it was before (the lettering goldens were recorded on it): page 3 as planned,
+    // nothing held back, an explicit-pages gate and no held-back notice.
+    const before = makeQaDoc('heist-12p', { heldBack: false });
+    expect(before.pages[2].panels).toHaveLength(5);
+    expect(quoteRenderPages(before, { byok: false, tier: before.settings.quality, holdBack: {} }).heldBackIds).toBeUndefined();
+    expect((before.gate?.action as { pageIds?: string[] }).pageIds).toContain(before.pages[2].id);
+    expect(before.conversation.flatMap((m) => m.cards ?? []).some((c) => c.id === 'n_held')).toBe(false);
   });
 
   it('assets carry the server variants (480w/1080w narrower than the original, ascending)', () => {

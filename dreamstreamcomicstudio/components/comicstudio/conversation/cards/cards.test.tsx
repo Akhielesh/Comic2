@@ -752,6 +752,26 @@ describe('NoticeCard and CardRenderer', () => {
     expect(screen.getByText(url).className).toMatch(/overflow-wrap:anywhere/);
   });
 
+  it('notice fix chips render through the renderer: free first; a paid chip sends its exact action with quotedUsd (A5)', async () => {
+    const card: Card = {
+      type: 'notice',
+      id: 'n_fix',
+      tone: 'info',
+      text: 'Page 2 is held back.',
+      fixes: [
+        { label: 'Draw page 2 anyway', free: false, action: { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.0845 } },
+        { label: 'Make it a caption', free: true, action: { type: 'patch', ops: [{ op: 'line', pageId: 'pg_2', panelId: 'pg_2_p2', id: 'pg_2_l1', patch: { kind: 'caption' } }] } }
+      ]
+    };
+    const studio = renderCard(card);
+    const chips = within(screen.getByRole('group', { name: 'Fixes' })).getAllByRole('button');
+    expect(chips.map((c) => c.getAttribute('data-fix'))).toEqual(['free', 'paid']);
+    expect(chips[0]).toHaveAccessibleName('Make it a caption, Free');
+    expect(chips[1]).toHaveAccessibleName(`Draw page 2 anyway, ≈${formatUsd(0.0845)}`);
+    fireEvent.click(chips[1]);
+    await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.0845 }));
+  });
+
   it('ignores unknown and malformed card types', () => {
     const { container } = render(<CardRenderer card={{ type: 'mystery', id: 'x' } as unknown as Card} studio={makeFakeStudio()} />);
     expect(container).toBeEmptyDOMElement();

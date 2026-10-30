@@ -10,6 +10,8 @@ export const feature: FeatureModule = {
   cards: [{ type: 'breakdown', Component: BreakdownCard }]
 };
 
-export { BreakdownCard } from './BreakdownCard';
+export { BreakdownCard, fitWords, gateRenderAll, layoutFitFix, paidAmount } from './BreakdownCard';
 export type { BreakdownCardData, BreakdownCardProps, BreakdownView, LegacyPlanCardData } from './BreakdownCard';
-export { PageWireframe, SHOT_GLYPH } from './PageWireframe';
+// The fit dot and the free layout fix, for other surfaces that show plan fit (the lettering chip, templates).
+export { FIT_DOT_COLOR, PageWireframe, SHOT_GLYPH, fitDotOf } from './PageWireframe';
+export type { FitDot } from './PageWireframe';

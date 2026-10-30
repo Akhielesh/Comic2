@@ -76,7 +76,7 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController;
       body = <RendersCard card={card} studio={studio} />;
       break;
     case 'notice':
-      body = <NoticeCard card={card} />;
+      body = <NoticeCard card={card} studio={studio} />;
       break;
     case 'recap':
       body = <RecapCard card={card} studio={studio} />;

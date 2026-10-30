@@ -471,6 +471,23 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   A spend retires an open `render_pages` gate only when it draws every page that gate would still draw (and its
   cover), so a single-page draw never silently drops the other pages' approval. The breakdown card shows held-back
   pages in red with the same free fixes and "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
+- **Plan fit in the UI** (Ship 1 A5). Every wireframe panel carries a fit dot: green fits, amber tight, red too
+  full, in the readable status tones (`--ds-success-text`, `--ds-warning-text`, `--ds-danger-text`, `FIT_DOT_COLOR`)
+  and in different shapes (a filled dot, a ring, a diamond), and the tile and its detail row say it in words
+  ("Fits (12 of 18 words)", "Tight — …", "Too full — 34 words, fits about 32"). A held-back page is a red tile, left
+  out of the quote and the run. Its free fixes come first: the layout that fits (`layoutFixOps`), the page editor,
+  then "Split the page…" / "Shorten it…", which only prefill the composer for the director. "Draw anyway" outside a
+  gate is a toggle that adds the page to `drawOverfull` and re-quotes (`summarizeBook(…, { drawOverfull })`); next
+  to an open Render-all gate it sends `render_pages { drawOverfull, includeCover?, safe? }`, quoted as a whole.
+  The cost view never says "drawn and up to date" while pages are held back: "To draw now" reads "Nothing yet"
+  with "N pages held back — too many words for a panel, not in this price. Fix free or draw anyway.", or adds
+  "· N pages held back (not in this price)" after the quote lines. The Format panel offers Auto ("3–4 big panels", the beats decide within the
+  kind's range) or a fixed 2–6, with the storybook note (`panelCountRule`).
+- **Notice fix chips** (`NoticeCard`, rendered through `CardRenderer` with the studio controller): free chips come
+  first; a paid chip shows its quote in the user's terms (a usage share for governed users, never dollars; "on
+  your key" for BYOK) and needs a positive quote, else it isn't offered. Chips are re-checked against the live doc:
+  a free fix already applied reads "Done", a paid one already drawing reads "Started", and a chip with nothing
+  left to do (or a free edit that would put a drawn page out of date) is hidden.
 - **Planning quote.** "Plan the pages" is one writer pass per page; the plan check can send it back for one repair
   round, so the chip and the director's DOC SUMMARY (when `planStatus` is `none`) say the honest bound:
   "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.

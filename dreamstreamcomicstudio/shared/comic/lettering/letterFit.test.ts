@@ -264,7 +264,8 @@ describe('under the cap nothing changes (byte-identical plans)', () => {
   const docs: Record<string, ComicDoc> = {
     sample: normalizeDoc(makeSampleDoc()),
     'lake-1p': makeQaDoc('lake-1p'),
-    'heist-12p': makeQaDoc('heist-12p'),
+    // As recorded: heist page 3 has since become the plan-fit QA page (held back, A5); the guard keeps its pages.
+    'heist-12p': makeQaDoc('heist-12p', { heldBack: false }),
     'deep-40p': makeQaDoc('deep-40p'),
     'deep-40p-rtl': makeQaDoc('deep-40p', { rtl: true }),
     'webtoon-20p': makeQaDoc('webtoon-20p')

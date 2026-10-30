@@ -959,6 +959,11 @@ describe('plan fit: the cost view and the work per render', () => {
     expect(screen.queryByText(/all drawn/)).toBeNull();
     expect(screen.getByText(/Page 2 is held back — a panel has more words than it can hold, so it isn’t in this price\. Fix it free, or draw it anyway\./)).toBeInTheDocument();
     expect(screen.queryByText(/^Every page is drawn/)).toBeNull();
+    // the cost view's "To draw now" row (insights owner, wave note): not "drawn and up to date"
+    const row = screen.getByText('To draw now').parentElement!.parentElement!;
+    expect(row).toHaveTextContent('Nothing yet');
+    expect(row).toHaveTextContent('1 page held back — too many words for a panel, not in this price. Fix free or draw anyway.');
+    expect(screen.queryByText('Every page here is drawn and up to date.')).toBeNull();
   });
 
   it('the selected page’s plan checks run once per doc, not on every render; every hold-back quote shares one need meter', () => {

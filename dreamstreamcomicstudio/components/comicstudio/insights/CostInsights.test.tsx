@@ -113,6 +113,27 @@ describe('L1 — the cost card', () => {
     expect(runClientAction).toHaveBeenCalledWith({ type: 'open_model_picker' });
   });
 
+  it('held-back pages are never "drawn and up to date", and a price that leaves them out says so (A5 note 2)', () => {
+    const doc = makeLakeComic();
+    const cost = costFormat(DOLLAR_CONTEXT);
+    const book = summarizeBook(doc, { byok: true, rating: 'PG-13' });
+    const base = quoteRenderPages(doc, { byok: true, tier: doc.settings.quality, pageIds: [doc.pages[0].id], force: true });
+    const props = { doc, book, byok: true, pro: false, cost, coverLine: 'Drawn', runClientAction: vi.fn() };
+    const row = () => rowOf('To draw now');
+    // Nothing to draw but two pages held back.
+    const { rerender } = render(<CostInsights {...props} quote={{ ...base, usd: 0, lines: [], pageIds: [], sheetIds: [], cover: false, nothing: true, heldBackIds: ['pg_2', 'pg_3'] }} />);
+    expect(row()).toHaveTextContent('Nothing yet');
+    expect(row()).toHaveTextContent('2 pages held back — too many words for a panel, not in this price. Fix free or draw anyway.');
+    expect(within(card()).queryByText('Every page here is drawn and up to date.')).toBeNull();
+    // Something to draw, one page held back: the quote lines, then the held-back page.
+    rerender(<CostInsights {...props} quote={{ ...base, heldBackIds: ['pg_3'] }} />);
+    expect(row()).toHaveTextContent(cost.badge(base.usd));
+    expect(within(row()).getByText(/ · 1 page held back \(not in this price\)$/)).toBeInTheDocument();
+    // Nothing held back: the plain quote lines.
+    rerender(<CostInsights {...props} quote={base} />);
+    expect(row()).not.toHaveTextContent('held back');
+  });
+
   it('saved by software is shown quietly with the owner’s words', () => {
     mount(makeLakeComic((d) => { d.spend.savedUsd = 0.05; }));
     expect(rowOf('Saved by software')).toHaveTextContent('Free — done by the editor, no AI cost.');
