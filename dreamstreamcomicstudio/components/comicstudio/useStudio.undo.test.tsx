@@ -357,17 +357,21 @@ describe('signed URLs', () => {
     expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1-480?v=0');
     let n = 0;
     api.signStudioUrls.mockImplementation(async (_id: string, paths: string[]) => Object.fromEntries(paths.map((p) => [p, `https://cdn/p1-480?v=${++n}`])));
+    // Count only the calls that sign the broken variant: under load an unrelated signing round (another path of the
+    // sample doc) can land inside this window, and it is not what this test is about.
+    const VARIANT = 'u/proj/pages/p1.480.webp';
+    const variantSigns = () => api.signStudioUrls.mock.calls.filter((call) => (call[1] as string[]).includes(VARIANT)).length;
     const img = document.createElement('img');
     document.body.appendChild(img);
     for (let i = 0; i < 6; i += 1) {
       img.src = result.current.urlFor(asset, { width: 300 })!;
       if (img.src === 'https://cdn/p1') break;
-      const calls = api.signStudioUrls.mock.calls.length;
+      const calls = variantSigns();
       act(() => {
         img.dispatchEvent(new Event('error'));
       });
       if (i < 3) {
-        await waitFor(() => expect(api.signStudioUrls.mock.calls.length).toBe(calls + 1), { timeout: 4000 });
+        await waitFor(() => expect(variantSigns()).toBe(calls + 1), { timeout: 4000 });
         // A browser only reports the next error after it loaded the renewed URL, so wait until the round
         // has merged it; firing on the stale src matches no tracked path and the re-sign never happens.
         const failed = img.src;
@@ -379,7 +383,7 @@ describe('signed URLs', () => {
       await new Promise((r) => setTimeout(r, 700)); // past the signing debounce
     });
     // Three re-signs (an expired link is renewed), then the broken variant is dropped for the original.
-    expect(api.signStudioUrls).toHaveBeenCalledTimes(3);
+    expect(variantSigns()).toBe(3);
     expect(result.current.urlFor(asset, { width: 300 })).toBe('https://cdn/p1');
   });
 });
