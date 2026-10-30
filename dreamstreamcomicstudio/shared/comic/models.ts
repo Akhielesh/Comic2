@@ -394,14 +394,14 @@ export const TIER_PRESETS: Record<QualityTier, TierPreset> = tierPresetsFor(PRO_
 export const STYLE_OPTION_MODEL = 'nano-banana-2.1';
 export const STYLE_OPTION_RES: Resolution = '1K';
 
-export type ImageJobKind = 'style_option' | 'sheet' | 'place' | 'page' | 'edit' | 'cover';
 /**
- * Ship 2 (K2a; pro plan §5.2 "ImageJobKind += 'panel'"): one panel of a page redrawn or drawn (fix_panel) — the lock's
- * model at the page tier one step down (PANEL_RES_STEP), with one QC run in the quote. It is a separate union for now
- * because exhaustive maps key on ImageJobKind (server jobs.ts imageOperation): once that map lists 'panel' (K2b),
- * fold it into ImageJobKind and keep this name as an alias. Every resolver and quote below already takes it.
+ * Ship 2 (pro plan §5.2 "ImageJobKind += 'panel'"): 'panel' is one panel of a page redrawn or drawn (fix_panel) — the
+ * lock's model at the page tier one step down (PANEL_RES_STEP), with one QC run in the quote. K2a kept it in a separate
+ * union until the server's exhaustive map (jobs.ts imageOperation) listed it; K2b folded it in.
  */
-export type AnyImageJobKind = ImageJobKind | 'panel';
+export type ImageJobKind = 'style_option' | 'sheet' | 'place' | 'page' | 'edit' | 'cover' | 'panel';
+/** Alias kept for K2a's callers (every image job kind, 'panel' included). */
+export type AnyImageJobKind = ImageJobKind;
 export const PANEL_JOB_KIND = 'panel' as const;
 /** A panel draws one resolution step below its page (2K → 1K, 4K → 2K; 1K and 512 stay). */
 export const PANEL_RES_STEP: Readonly<Record<Resolution, Resolution>> = { '512': '512', '1K': '1K', '2K': '1K', '4K': '2K' };

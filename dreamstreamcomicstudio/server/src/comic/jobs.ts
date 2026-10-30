@@ -26,6 +26,7 @@ import {
   CAST_KINDS,
   archiveOf,
   collectAssetPaths,
+  cutFor,
   emptyRender,
   findCharacter,
   findPage,
@@ -92,15 +93,19 @@ import type { OpsOrigin } from '../../../shared/comic/events.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { hashString } from '../../../shared/comic/hash.js';
 import { mergeStylePatch, sanitizeLetterStylePatch, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
-import { DOC_LIMITS } from '../../../shared/comic/limits.js';
+import { CONSISTENCY_LIMITS, DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { REF_LABELS } from '../../../shared/comic/refs.js';
 import {
   LOW_QC_SCORE as PLAN_LOW_QC_SCORE,
   coverNeedsDraw,
   missingSheetsFor as planMissingSheets,
   pageTargets as planPageTargets,
-  quoteRenderPages
+  quoteRenderPages,
+  type AnchorQuoteLine,
+  type AnchorRunOptions
 } from '../../../shared/comic/plan.js';
+import { ANCHORS_ENV, ANCHOR_SHEET_RES, anchorKindsFromFlag, planAnchors } from '../../../shared/comic/anchors.js';
+import { partsOf } from '../../../shared/comic/parts.js';
 import { PLATFORM_CEILING, canServeToOwner, effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety.js';
 import { blockedPaths, nearestReadyBefore, withoutAssets } from '../../../shared/comic/sendable.js';
 import {
@@ -117,8 +122,10 @@ import {
   getImageModel,
   imagePriceUsd,
   nearestAspect,
+  nearestResolution,
   resolveImageJob,
   styleDirectionsUsd,
+  type AnyImageJobKind,
   type ImageJobKind,
   type ImageModelSpec,
   type ImageRoute,
@@ -141,7 +148,17 @@ import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlocked
 import { recordImageCall } from './billing.js';
 import { planCheckGate, sanitizeDrawOverfull, type HeldBackPage, type PlanGateResult } from './planCheckGate.js';
 import { identityNoticesEnabled, qcNoticeFor } from './qcNotice.js';
-import { LAYOUT_REFERENCE_PATH, layoutGuideEnabled, tryRenderPageLayoutGuide, type LayoutGuideImage } from './panelize/wireframe.js';
+import { LAYOUT_REFERENCE_PATH, layoutGuideEnabled, renderLayoutGuide, tryRenderPageLayoutGuide, type LayoutGuideImage } from './panelize/wireframe.js';
+// --- Ship 2 (pro plan §5.3, §10 K2b): seams into the packages that own each step (stubs until they land) ---
+import { compileFixPanel, finishFixPanel, fixPanelJobs, fixPanelMeta, fixPanelProblem } from './actions/panelFix.js';
+import { applyFindingAction, enrichPagesAction, enrichPagesQuote, rebindPanelsAction } from './actions/consistency.js';
+import { flattenPageAction } from './actions/editor.js';
+import { panelizePageAction } from './actions/panels.js';
+import { boardForCheck, boardImage } from './consistency/contactSheet.js';
+import { withFindings } from './consistency/findings.js';
+import { previousPageFor, runDrawsAnchors, scheduleRun, type RunSchedule } from './consistency/schedule.js';
+import { cropForPanel, pasteRegion, REGION_FEATHER } from './panelize/raster.js';
+import { panelizeAfterLetter } from './panelize/server.js';
 import { compileCharacterSheet, compileCover, compileEdit, compilePage, compilePlaceSheet, compileStyleOption, effectiveLayout } from './prompts.js';
 import { InflightJobs, findJobHashAsset, findSpecHashVersion, jobHashOf, reusedLabel } from './reuse.js';
 import { checkRenderSafety, onRenderVerdict, screenUploadPreview, takeRenderSafetyFollowups } from './safety/index.js';
@@ -355,7 +372,7 @@ export const spendIsByok = (keys: StudioKeys): boolean =>
   keys.openrouter?.key ? Boolean(keys.openrouter.byok) : Boolean(keys.gemini?.byok);
 
 /** BYOK-ness of an image spend: the key of the route that will draw ITS model (an OpenRouter-only model stays platform spend for an own-Gemini-key user). */
-const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
+const imageSpendIsByok = (doc: ComicDoc, action: GatedSpend, keys: StudioKeys): boolean =>
   imageRouteFor(modelLabel(doc, describeSpend(doc, action).kind).spec, keys)?.byok ?? spendIsByok(keys);
 
 /**
@@ -363,19 +380,25 @@ const imageSpendIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys):
  * re-prices like with like: the page re-check is one vision TEXT call (startRecheck prices it on the vision
  * route's key; text routes are OpenRouter-first), everything else is an image drawn on its model's route.
  */
-export const spendActionIsByok = (doc: ComicDoc, action: SpendAction, keys: StudioKeys): boolean =>
-  action.type === 'recheck_page' ? (resolveTextRoute('vision', keys)?.key.byok ?? spendIsByok(keys)) : imageSpendIsByok(doc, action, keys);
+export const spendActionIsByok = (doc: ComicDoc, action: GatedSpend, keys: StudioKeys): boolean =>
+  action.type === 'recheck_page'
+    ? (resolveTextRoute('vision', keys)?.key.byok ?? spendIsByok(keys))
+    : action.type === 'enrich_pages'
+      ? spendIsByok(keys) // a writer (text) call: text routes are OpenRouter-first
+      : imageSpendIsByok(doc, action, keys);
 
 /** Spend in the same unit as estimates: provider cost, plus platform markup unless BYOK. */
 const chargedUsd = (providerUsd: number, byok: boolean) => round4(Math.max(0, providerUsd) * (byok ? 1 : PLATFORM_MARKUP));
 
-const imageOperation: Record<ImageJobKind, string> = {
+const imageOperation: Record<AnyImageJobKind, string> = {
   style_option: 'comic.image.style',
   sheet: 'comic.image.sheet',
   place: 'comic.image.sheet',
   page: 'comic.image.page',
   edit: 'comic.image.edit',
-  cover: 'comic.image.cover'
+  cover: 'comic.image.cover',
+  // Ship 2 (pro plan §4.4): one panel of a page drawn again (fix_panel), billed and observed as its own operation.
+  panel: 'comic.image.panel'
 };
 
 // ── Image-model lock (models.md §3) ──────────────────────────────────────────
@@ -383,6 +406,46 @@ const imageOperation: Record<ImageJobKind, string> = {
 /** models.md §3.4 codes. */
 export const MODEL_LOCKED: StudioErrorCode = MODEL_LOCKED_CODE;
 export const RUN_ACTIVE: StudioErrorCode = 'RUN_ACTIVE';
+
+// ── Ship 2 actions (pro plan §5.3) ───────────────────────────────────────────
+//
+// Declared here until shared/comic/ops.ts lists them in StudioAction / SpendAction (K2b wave note; doc.ts then names them
+// in SPEND_ACTION_TYPES / NON_SPEND_ACTION_TYPES, which is what lets a client send them: until then the stream refuses
+// them as unknown, and only server code can start one). Identical shapes, so the move is a cut-and-paste.
+
+type ProQuoted = { quotedUsd?: number };
+/** fix: repair what is wrong; redraw: draw the panel again; draw: an empty panel; extend: a reshaped frame. */
+export type FixPanelMode = 'fix' | 'redraw' | 'draw' | 'extend';
+/** SPEND: one panel drawn again on the comic's locked model (one tier down) and put back into a copy of the page. */
+export type FixPanelAction = { type: 'fix_panel'; pageId: string; panelId: string; mode: FixPanelMode; instruction?: string; region?: Box } & ProQuoted;
+/** SPEND (text): directions, continuity and scenes for these pages (never story text). */
+export type EnrichPagesAction = { type: 'enrich_pages'; pageIds: string[] } & ProQuoted;
+/** Free: "Make panels editable". */
+export type PanelizePageAction = { type: 'panelize_page'; pageId: string };
+/** Free: "Match the script to the art" (order: the drawn panel each planned panel takes, 1-based). */
+export type RebindPanelsAction = { type: 'rebind_panels'; pageId: string; order: number[] };
+/** Free: a finding's software fix (off-panel voice, drop from the cast, keep the drawn state). */
+export type ApplyFindingAction = { type: 'apply_finding'; pageId: string; findingId: string };
+/** Free: bake frames, art and printed overlays into one raster. */
+export type FlattenPageAction = { type: 'flatten_page'; pageId: string };
+export type ProSpendAction = FixPanelAction | EnrichPagesAction;
+export type ProPageAction = ProSpendAction | PanelizePageAction | RebindPanelsAction | ApplyFindingAction | FlattenPageAction;
+/** Every spend the gate handles: today's SpendActions and the Ship 2 ones. */
+export type GatedSpend = SpendAction | ProSpendAction;
+
+export const PRO_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages']);
+export const PRO_FREE_ACTION_TYPES: ReadonlySet<string> = new Set(['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page']);
+
+export const isProSpendAction = (action: unknown): action is ProSpendAction =>
+  !!action && typeof action === 'object' && PRO_SPEND_ACTION_TYPES.has(String((action as { type?: unknown }).type));
+/** A spend action of either kind (the gate, approvals and quotes treat them alike). */
+export const isGatedSpend = (action: unknown): action is GatedSpend =>
+  !!action && typeof action === 'object' && (isSpendAction(action as StudioAction) || isProSpendAction(action));
+
+/** render_pages as the run reads it: Ship 2's "Redraw with my layout" (the frames become the layout guide). */
+type RenderPagesRun = Extract<SpendAction, { type: 'render_pages' }> & { followFrames?: boolean };
+/** edit_page as the run reads it: Ship 2's region paste-back (the default whenever a region is marked). */
+type EditPageRun = Extract<SpendAction, { type: 'edit_page' }> & { pasteBack?: 'region' | 'page' };
 
 /**
  * The comic's image-model lock (lockOf) and the registry id a lock names (lockedSpecId): one implementation in
@@ -835,23 +898,75 @@ export const priceImageJobs = (
         unit = null;
       }
       const list = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
-      const qc = j.kind === 'page' || j.kind === 'edit' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
+      // A drawn page, an edit and a panel fix each get one page check (estimateJobs prices them the same way).
+      const qc = j.kind === 'page' || j.kind === 'edit' || j.kind === 'panel' ? (Number.isFinite(prices.qcUsd) ? prices.qcUsd : QC_USD_PER_PAGE) : 0;
       return { label: j.label || j.kind, count: j.count, usd: round4((list + qc) * j.count * markup) };
     });
   return { ...base, usd: round4(lines.reduce((s, l) => s + l.usd, 0)), lines };
 };
 
 /**
+ * How a render_pages run treats consistency anchors (pro plan §4.2; B4 FIX note 2a): 'auto' with the
+ * COMIC_CONSISTENCY_ANCHORS kinds and the layout guide flag — but only once the run really draws anchors first
+ * (consistency/schedule.ts runDrawsAnchors) and unless the action says 'none'. Until then: undefined, today's run.
+ */
+export const anchorRunFor = (action: Pick<Extract<SpendAction, { type: 'render_pages' }>, 'anchors'>): AnchorRunOptions | undefined =>
+  runDrawsAnchors() && action.anchors !== 'none'
+    ? { mode: 'auto', kinds: anchorKindsFromFlag(process.env[ANCHORS_ENV]), layoutGuide: layoutGuideEnabled() }
+    : undefined;
+
+/** The shared render_pages quote this run is priced and drawn by (held-back pages out; anchors per anchorRunFor). */
+const renderPagesQuote = (doc: ComicDoc, action: Extract<SpendAction, { type: 'render_pages' }>, byok: boolean, pin: RunPin = runPinOf(doc)) => {
+  // One quote for the chat card, the board and the gate (shared/comic/plan.ts; plan.parity.test.ts). "Render all"
+  // leaves held-back (overfull) pages out of the quote exactly as the run leaves them out (planCheckGate).
+  const holdBack = planGateApplies(action) ? { holdBack: { drawOverfull: sanitizeDrawOverfull(action.drawOverfull, doc) } } : {};
+  const anchors = anchorRunFor(action);
+  return quoteRenderPages(doc, {
+    pageIds: action.pageIds,
+    force: action.force,
+    includeCover: action.includeCover,
+    byok,
+    tier: pin.quality,
+    modelOverride: quoteOverride(pin),
+    ...holdBack,
+    ...(anchors ? { anchors } : {})
+  });
+};
+
+/**
+ * A quote's anchor lines at real prices, by kind (B4 FIX note 2b; plan.anchors.parity.test.ts repriceAnchorLines):
+ * 'sheet' as a character sheet job, 'place' / 'prop' as a 'place' job at ANCHOR_SHEET_RES, 'refs' as quoted.
+ */
+const repriceAnchorLines = (doc: ComicDoc, lines: AnchorQuoteLine[], byok: boolean, prices: PriceBook, pin: RunPin): { label: string; count: number; usd: number }[] => {
+  const markup = byok ? 1 : PLATFORM_MARKUP;
+  return lines.map((l) => {
+    if (l.kind === 'sheet') return priceImageJobs(doc, [{ kind: 'sheet', count: l.count, label: l.label }], byok, prices, pin).lines[0] ?? { label: l.label, count: l.count, usd: 0 };
+    if (l.kind === 'refs') return { label: l.label, count: l.count, usd: l.usd };
+    const { spec } = resolveJobFor(pin, 'place');
+    const res = nearestResolution(spec, ANCHOR_SHEET_RES);
+    let unit: number | null = null;
+    try {
+      unit = prices.unit(spec.id, res, 'place').usd;
+    } catch {
+      unit = null;
+    }
+    const each = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, res);
+    return { label: l.label, count: l.count, usd: round4(each * l.count * markup) };
+  });
+};
+
+/**
  * Estimate for a spend action (counts what would actually be drawn now), on the comic's locked model. Registry
  * prices by default (what chips and the client quote with); with a PriceBook, real prices (gates, budget, run).
  */
-export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: boolean, prices?: PriceBook): SpendEstimate {
+export function estimateSpendAction(doc: ComicDoc, action: GatedSpend, byok: boolean, prices?: PriceBook): SpendEstimate {
   const pin = runPinOf(doc);
+  // Ship 2 seams (pro plan §5.3): a panel fix prices its 'panel' jobs (actions/panelFix.ts: the locked model one tier
+  // down + one check run); adding detail prices its writer pass (actions/consistency.ts). Same functions as their gates.
+  if (action.type === 'fix_panel') return priceImageJobs(doc, fixPanelJobs(doc, action), byok, prices, pin);
+  if (action.type === 'enrich_pages') return enrichPagesQuote(doc, action, byok);
   if (action.type === 'render_pages') {
-    // One quote for the chat card, the board and the gate (shared/comic/plan.ts; plan.parity.test.ts). "Render all"
-    // leaves held-back (overfull) pages out of the quote exactly as the run leaves them out (planCheckGate).
-    const holdBack = planGateApplies(action) ? { holdBack: { drawOverfull: sanitizeDrawOverfull(action.drawOverfull, doc) } } : {};
-    const q = quoteRenderPages(doc, { pageIds: action.pageIds, force: action.force, includeCover: action.includeCover, byok, tier: pin.quality, modelOverride: quoteOverride(pin), ...holdBack });
+    const q = renderPagesQuote(doc, action, byok, pin);
     if (!prices) return { usd: q.usd, imageCount: q.imageCount, model: q.model, lines: q.lines };
     const priced = priceImageJobs(
       doc,
@@ -864,7 +979,12 @@ export function estimateSpendAction(doc: ComicDoc, action: SpendAction, byok: bo
       prices,
       pin
     );
-    return { usd: priced.usd, imageCount: q.imageCount, model: q.model, lines: priced.lines };
+    // Anchors (Ship 2, B4): the quote's anchor lines, re-priced by kind — never a fixed slice of `lines` (the base has
+    // 0–3 lines). Absent until the run draws anchors (runDrawsAnchors), so today's quote is byte for byte unchanged.
+    const anchorLines = q.anchors?.lines.length ? repriceAnchorLines(doc, q.anchors.lines, byok, prices, pin) : [];
+    if (!anchorLines.length) return { usd: priced.usd, imageCount: q.imageCount, model: q.model, lines: priced.lines };
+    const lines = [...priced.lines, ...anchorLines];
+    return { usd: round4(lines.reduce((sum, l) => sum + l.usd, 0)), imageCount: q.imageCount, model: q.model, lines };
   }
   if (action.type === 'recheck_page') {
     // TEXT-priced: one vision call re-reads the page (lettering.md §9). No image is drawn.
@@ -935,7 +1055,7 @@ export function gateDecision(
     forceGate?: Gate['reason'];
     /** The spend would replace a ready, current image (a director redraw always stops). */
     redraw?: boolean;
-    action?: SpendAction;
+    action?: GatedSpend;
   } = {}
 ): Gate['reason'] | null {
   const budget = budgetOf(doc.settings);
@@ -1084,6 +1204,13 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
   const handler = actionHandlerFor(action.type);
   if (handler) return runFeatureAction(ctx, handler, action, opts);
   if (isSpendAction(action)) return startSpend(ctx, action, opts);
+  // Ship 2 (pro plan §5.3): fix_panel is an image spend on the core pipeline (quote, gate, budget, lock, preflight,
+  // reservation); the others go to their package's handler (spend ones through the gate) — the same handlers the action
+  // registry lists once shared/comic/doc.ts names their types.
+  const ship2 = action as StudioAction | ProPageAction;
+  if (ship2.type === 'fix_panel') return startSpend(ctx, ship2, opts);
+  const proHandler = proActionHandlerFor(ship2.type);
+  if (proHandler) return runFeatureAction(ctx, proHandler, action, opts);
   switch (action.type) {
     case 'approve_gate':
       return approveGate(ctx, action.gateId, opts);
@@ -1109,13 +1236,27 @@ export async function startAction(ctx: StudioContext, action: StudioAction, opts
   }
 }
 
+/** The Ship 2 action handlers jobs.ts dispatches (fixed export names of their stub modules). Prototype-safe. */
+const proActionHandlerFor = (type: string): ActionHandler | undefined => {
+  const handlers: Record<string, ActionHandler> = {
+    panelize_page: panelizePageAction,
+    rebind_panels: rebindPanelsAction,
+    apply_finding: applyFindingAction,
+    flatten_page: flattenPageAction,
+    enrich_pages: enrichPagesAction
+  };
+  return Object.prototype.hasOwnProperty.call(handlers, type) ? handlers[type] : undefined;
+};
+
 /**
  * Run a registered feature action. Spend handlers with an estimate (translate) go through
  * estimate → gateDecision → run exactly like the core spends (a stale chip quote re-gates).
  */
 export async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
-  if (!handler.spend || !handler.estimate || !isSpendAction(action)) return handler.run(ctx, action, opts);
-  const estimate = await handler.estimate(ctx, action);
+  // Ship 2's enrich_pages is a spend like translate (quoted, gated, re-gated on a stale quote) before shared/comic/ops.ts
+  // lists it among the SpendActions.
+  if (!handler.spend || !handler.estimate || !isGatedSpend(action)) return handler.run(ctx, action, opts);
+  const estimate = await handler.estimate(ctx, action as SpendAction);
   const stale = opts.confirmed && quoteIsStale(action.quotedUsd, estimate);
   const reason = gateDecision(ctx.session.doc, estimate, opts.confirmed && !stale, {
     budgetApproved: opts.budgetApproved,
@@ -1148,11 +1289,12 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!gate || gate.id !== gateId || gate.status !== 'open') {
     throw new StudioError('BAD_REQUEST', 'That approval is no longer open — ask again to get a fresh estimate.', { status: 409 });
   }
-  if (!isSpendAction(gate.action)) throw badRequest('That approval has nothing to run.');
+  const gated = gate.action as StudioAction | ProPageAction;
+  if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
-  const handler = actionHandlerFor(gate.action.type);
-  const estimate = handler?.estimate ? await handler.estimate(ctx, gate.action) : estimateSpendAction(doc, gate.action, spendActionIsByok(doc, gate.action, ctx.keys), gate.action.type === 'recheck_page' ? undefined : prices);
-  const nickname = handler ? gate.model : gateModelName(doc, gate.action, estimate);
+  const handler = actionHandlerFor(gated.type) ?? proActionHandlerFor(gated.type);
+  const estimate = handler?.estimate ? await handler.estimate(ctx, gated as SpendAction) : estimateSpendAction(doc, gated, spendActionIsByok(doc, gated, ctx.keys), gated.type === 'recheck_page' ? undefined : prices);
+  const nickname = handler ? gate.model : gateModelName(doc, gated, estimate);
   const origin = originOf(opts);
   if (!gateStillHolds(gate, estimate, nickname)) {
     // The plan, quality or model changed since the card was shown: never run a bigger
@@ -1161,7 +1303,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
     // run at once); `staleFrom` makes the new card say the price changed.
     commitAs(ctx, [{ op: 'gate', gate: { ...gate, status: 'declined' } }], origin);
     const requote: RunActionOptions = { ...opts, confirmed: false, budgetApproved: false, forceGate: 'policy', staleFrom: gate.estimateUsd };
-    return handler ? runFeatureAction(ctx, handler, gate.action, requote) : startSpend(ctx, gate.action, requote);
+    return handler ? runFeatureAction(ctx, handler, gate.action, requote) : startSpend(ctx, gated, requote);
   }
   // Commit 'approved' first (before startSpend, so a same-kind open gate isn't flipped to
   // 'declined' by startSpend), then put the card back if the spend never started —
@@ -1183,7 +1325,7 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   };
   const next = { ...opts, confirmed: true, budgetApproved: gate.reason === 'budget' || opts.budgetApproved };
   try {
-    const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gate.action, next);
+    const started = handler ? await handler.run(ctx, gate.action, next) : await startSpend(ctx, gated, next);
     if (started.outcome.status === 'blocked') reopen();
     else if (started.outcome.status === 'nothing') close();
     return started;
@@ -1219,8 +1361,22 @@ const pagesPhrase = (pages: { n: number }[]): string => {
   return `${ns.length} pages`;
 };
 
-const describeSpend = (doc: ComicDoc, action: SpendAction): SpendPlan => {
+const describeSpend = (doc: ComicDoc, action: GatedSpend): SpendPlan => {
   switch (action.type) {
+    case 'fix_panel': {
+      const page = findPage(doc, action.pageId);
+      const n = page?.panels.find((p) => p.id === action.panelId)?.n ?? '?';
+      const where = `panel ${n} on page ${page?.n ?? '?'}`;
+      const what =
+        action.mode === 'redraw' ? `a new drawing of ${where}` : action.mode === 'draw' ? `a drawing for the empty ${where}` : action.mode === 'extend' ? `${where} redrawn to its new shape` : `a fix of ${where}`;
+      return { what, title: `${action.mode === 'fix' ? 'Fix' : 'Redraw'} ${where}?`, kind: 'panel' };
+    }
+    case 'enrich_pages': {
+      const ids = new Set(action.pageIds || []);
+      const pages = doc.pages.filter((p) => !ids.size || ids.has(p.id));
+      const which = pagesPhrase(pages);
+      return { what: `more detail for ${which} (directions, continuity and scenes; your story text stays as it is)`, title: `Add detail to ${which}?`, kind: 'page' };
+    }
     case 'render_style_options': {
       const n = styleDirectionCount(action);
       return { what: plural(n, 'style option'), title: `Draw ${plural(n, 'style option')}?`, kind: 'style_option' };
@@ -1265,11 +1421,13 @@ const modelLabel = (doc: ComicDoc, kind: ImageJobKind) => {
   return { nickname: spec.nickname, resolution, spec };
 };
 
-/** Spends priced in text (feature handlers, the page re-check): no image model, no resolution on the card. */
-const isTextSpend = (action: SpendAction): boolean => !!actionHandlerFor(action.type) || action.type === 'recheck_page';
+/** Spends priced in text (feature handlers, the page re-check, adding detail): no image model, no resolution on the card.
+ *  A panel fix is an image spend on the locked model. */
+const isTextSpend = (action: GatedSpend): boolean =>
+  action.type !== 'fix_panel' && (!!actionHandlerFor(action.type) || action.type === 'recheck_page' || action.type === 'enrich_pages');
 
 /** The model a gate names (and re-checks on approval): the estimate's for text spends, the registry's image model otherwise. */
-const gateModelName = (doc: ComicDoc, action: SpendAction, estimate: SpendEstimate): string =>
+const gateModelName = (doc: ComicDoc, action: GatedSpend, estimate: SpendEstimate): string =>
   isTextSpend(action) ? estimate.model : modelLabel(doc, describeSpend(doc, action).kind).nickname;
 
 /**
@@ -1297,28 +1455,31 @@ export const bindSpendAction = (doc: ComicDoc, action: SpendAction): SpendAction
   }
 };
 
+/** bindSpendAction for either kind (a Ship 2 spend names its exact work already). */
+const bindGated = (doc: ComicDoc, action: GatedSpend): GatedSpend => (isProSpendAction(action) ? action : bindSpendAction(doc, action));
+
 /** A gate's quote is still honest when the work, model and price have not grown. */
 const gateStillHolds = (gate: Gate, estimate: SpendEstimate, nickname: string): boolean =>
   estimate.imageCount <= gate.imageCount && estimate.usd <= gate.estimateUsd * 1.15 + 0.01 && nickname === gate.model;
 
 /** The bound action without its chip quote (the gate card is the new quote). */
-const withoutQuote = (action: SpendAction): SpendAction => {
+const withoutQuote = (action: GatedSpend): GatedSpend => {
   if (!('quotedUsd' in action)) return action;
-  const copy = { ...action } as SpendAction & { quotedUsd?: number };
+  const copy = { ...action } as GatedSpend & { quotedUsd?: number };
   delete copy.quotedUsd;
   return copy;
 };
 
 function createGate(
   ctx: StudioContext,
-  rawAction: SpendAction,
+  rawAction: GatedSpend,
   estimate: SpendEstimate,
   reason: Gate['reason'],
   opts: RunActionOptions,
   extra: { staleFrom?: number; prices?: PriceBook } = {}
 ): StartedAction {
   const doc = ctx.session.doc;
-  const action = withoutQuote(bindSpendAction(doc, rawAction));
+  const action = withoutQuote(bindGated(doc, rawAction));
   const plan = describeSpend(doc, action);
   const textSpend = isTextSpend(action);
   const { nickname, resolution } = textSpend ? { nickname: estimate.model, resolution: '' } : modelLabel(doc, plan.kind);
@@ -1338,7 +1499,8 @@ function createGate(
   const summary = `${plan.what}${textSpend ? '' : ` on ${nickname} (${resolution})`} · ${price}${basis ? `, priced from ${basis}` : ''}${overBudget}`;
   const gate: Gate = {
     id: newId('gate'),
-    action,
+    // A Ship 2 spend rides the gate as its own shape until shared/comic/ops.ts lists it (wave note).
+    action: action as unknown as StudioAction,
     title: plan.title,
     summary,
     estimateUsd: estimate.usd,
@@ -1406,8 +1568,18 @@ function createGate(
 
 // ── Spend actions ────────────────────────────────────────────────────────────
 
-const validateSpendAction = (doc: ComicDoc, action: SpendAction): string | null => {
+const validateSpendAction = (doc: ComicDoc, action: GatedSpend): string | null => {
   switch (action.type) {
+    case 'fix_panel': {
+      const page = typeof action.pageId === 'string' ? findPage(doc, action.pageId) : undefined;
+      if (!page) throw badRequest('That page is no longer in the plan.');
+      const panel = typeof action.panelId === 'string' ? page.panels.find((p) => p.id === action.panelId) : undefined;
+      if (!panel) throw badRequest('That panel is no longer on the page.');
+      if (!['fix', 'redraw', 'draw', 'extend'].includes(action.mode)) throw badRequest('Say how to fix the panel.');
+      if (isBusy(page.render)) return `Page ${page.n} is still drawing — fix panel ${panel.n} when it's done.`;
+      // actions/panelFix.ts (B8): everything else this fix needs (a drawn, checked page; the cut; the instruction).
+      return fixPanelProblem(doc, action);
+    }
     case 'render_pages':
       if (!doc.pages.length) return 'There is no page plan yet — plan the pages first, then draw them.';
       return null;
@@ -1436,7 +1608,7 @@ const validateSpendAction = (doc: ComicDoc, action: SpendAction): string | null 
 };
 
 /** Whether this spend would replace a ready, current image (a director redraw always gates). */
-const replacesCurrentArt = (doc: ComicDoc, action: SpendAction): boolean => {
+const replacesCurrentArt = (doc: ComicDoc, action: GatedSpend): boolean => {
   switch (action.type) {
     case 'render_pages':
       return (
@@ -1462,7 +1634,7 @@ const quoteOf = (doc: ComicDoc, action: SpendAction, byok: boolean, prices?: Pri
 /** A spend that would draw nothing: what exists, what's next ($0). */
 const nothingToDraw = (
   doc: ComicDoc,
-  action: SpendAction,
+  action: GatedSpend,
   byok: boolean,
   cost: CostFormatter,
   prices?: PriceBook
@@ -1566,7 +1738,7 @@ type SpendDecision =
  * Everything startSpend decides before money moves, synchronously (validation, the lock, keys, access, the quote,
  * the gate). Terminal answers are delivered here; 'go' commits nothing.
  */
-function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions, prices: PriceBook): SpendDecision {
+function decideSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOptions, prices: PriceBook): SpendDecision {
   const done = (started: StartedAction): SpendDecision => ({ kind: 'done', started });
   const doc = ctx.session.doc;
   const problem = validateSpendAction(doc, action);
@@ -1631,8 +1803,10 @@ function decideSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOpt
 }
 
 /** The image kinds a spend action can draw (its run's models, for the preflight). */
-const runKinds = (action: SpendAction): ImageJobKind[] => {
+const runKinds = (action: GatedSpend): ImageJobKind[] => {
   switch (action.type) {
+    case 'fix_panel':
+      return ['panel'];
     case 'render_style_options':
       return ['style_option'];
     case 'render_sheets':
@@ -1649,7 +1823,7 @@ const runKinds = (action: SpendAction): ImageJobKind[] => {
 };
 
 /** reliability.md §2: the money-safe preflight. Our own failure to check never blocks a run (null = go). */
-const preflightFor = async (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, prices: PriceBook): Promise<RunPreflight | null> => {
+const preflightFor = async (ctx: StudioContext, opts: RunActionOptions, action: GatedSpend, prices: PriceBook): Promise<RunPreflight | null> => {
   const pin = runPinOf(ctx.session.doc);
   const specs = [...new Map(runKinds(action).map((k) => resolveJobFor(pin, k).spec).map((spec) => [spec.id, spec] as const)).values()];
   if (!specs.length) return null;
@@ -1671,7 +1845,7 @@ const ROUTE_NAMES: Record<ImageRoute, string> = { openrouter: 'OpenRouter', gemi
  * The preflight found the model down on every route this user can reach: start NOTHING (no reservation, no job,
  * no failed tiles, no spend), post ONE calm outage card with real options and a short honest line.
  */
-const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: SpendAction, go: Extract<SpendDecision, { kind: 'go' }>, pre: RunPreflight): StartedAction => {
+const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: GatedSpend, go: Extract<SpendDecision, { kind: 'go' }>, pre: RunPreflight): StartedAction => {
   const doc = ctx.session.doc;
   const first = pre.blocked?.[0];
   const spec = getImageModel(first?.modelId) ?? go.spec;
@@ -1681,7 +1855,7 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Sp
     id: newId('card'),
     modelId: spec.id,
     options: pre.options.length ? pre.options : [{ kind: 'wait_and_retry' }],
-    blockedAction: bindSpendAction(doc, action),
+    blockedAction: bindGated(doc, action) as unknown as StudioAction,
     origin: 'preflight'
   };
   const why = reason.includes(spec.nickname) ? reason : `${spec.nickname} is down right now (${lowerLead(reason)})`;
@@ -1716,7 +1890,7 @@ const preflightBlocked = (ctx: StudioContext, opts: RunActionOptions, action: Sp
  * every page the gate would still draw (and the cover when the gate has it). A single-page draw beside a pending
  * "Render all" leaves that gate open: the other pages keep their approval card instead of silently losing it.
  */
-export const gateMootedBy = (doc: ComicDoc, gated: StudioAction, next: SpendAction): boolean => {
+export const gateMootedBy = (doc: ComicDoc, gated: StudioAction, next: GatedSpend): boolean => {
   if (gated.type !== next.type) return false;
   if (gated.type !== 'render_pages' || next.type !== 'render_pages') return true;
   const waiting = Array.isArray(gated.pageIds) ? (gated.pageIds.length ? pageTargets(doc, gated) : []) : drawTargets(doc, gated);
@@ -1726,7 +1900,7 @@ export const gateMootedBy = (doc: ComicDoc, gated: StudioAction, next: SpendActi
   return true;
 };
 
-async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActionOptions): Promise<StartedAction> {
+async function startSpend(ctx: StudioContext, action: GatedSpend, opts: RunActionOptions): Promise<StartedAction> {
   // The page re-check is TEXT-priced (one vision call, no image): its own runner, same gate.
   if (action.type === 'recheck_page') return startRecheck(ctx, action, opts);
   const prices = await priceBookFor(ctx);
@@ -1772,6 +1946,9 @@ async function startSpend(ctx: StudioContext, action: SpendAction, opts: RunActi
       break;
     case 'render_cover':
       done = runner.cover(action);
+      break;
+    case 'fix_panel':
+      done = runner.panelFix(action);
       break;
     default:
       throw badRequest('Unknown spend action.');
@@ -1862,6 +2039,65 @@ interface CompileOpts {
    * so a kids comic is never drawn above PG whatever is passed (P1-RENDER).
    */
   rating?: ContentRating;
+  /** Ship 2: compile without the `__board__` reference (it could not be made; prepare() recompiles once). */
+  board?: false;
+}
+
+// ── Generated references (pro plan §4.4; prepare() makes them, never stored) ──
+/** The panel's crop of the page's current drawing (fix_panel Image 1; raster.cropForPanel). */
+export const PANEL_REFERENCE_PATH = '__panel__';
+/** The page's current drawing as a reference (fix_panel Image 2). */
+export const PAGE_REFERENCE_PATH = '__page__';
+/** The software reference board (consistency/contactSheet.ts boardImage). */
+export const BOARD_REFERENCE_PATH = '__board__';
+const GENERATED_REFERENCES: ReadonlySet<string> = new Set([PANEL_REFERENCE_PATH, PAGE_REFERENCE_PATH, BOARD_REFERENCE_PATH]);
+/** Context kept around a panel's cut in its crop (pro plan §4.4: cut + 4%). */
+const PANEL_CROP_CONTEXT = 0.04;
+
+/** An item of a scheduled run: it starts once the item named by `after` has landed (none, unknown or a cycle: at once). */
+export interface AfterItem {
+  id: string;
+  after?: string | null;
+}
+
+/**
+ * Run items with a per-item `after` dependency (pro plan §4.2: "inside a chain page k starts when page k−1's image is
+ * stored"). `settle: 'done'` lands an item when its run settles; `'stored'` as soon as it calls `landed()` (its image is
+ * stored) or its run settles, whichever is first — a failed predecessor never blocks its chain. Promises only: no timer,
+ * no polling. Unknown or self dependencies, and cycles, start at once.
+ */
+export async function runAfter<T extends AfterItem>(items: readonly T[], run: (item: T, landed: () => void) => Promise<void>, settle: 'stored' | 'done' = 'done'): Promise<void> {
+  const ids = new Set(items.map((i) => i.id));
+  const dep = new Map<string, string | null>();
+  for (const i of items) dep.set(i.id, i.after && i.after !== i.id && ids.has(i.after) ? i.after : null);
+  for (const i of items) {
+    const seen = new Set([i.id]);
+    for (let at = dep.get(i.id) ?? null; at; at = dep.get(at) ?? null) {
+      if (seen.has(at)) {
+        dep.set(i.id, null);
+        break;
+      }
+      seen.add(at);
+    }
+  }
+  const landed = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+  for (const i of items) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => (resolve = r));
+    landed.set(i.id, { promise, resolve });
+  }
+  await Promise.all(
+    items.map(async (item) => {
+      const before = dep.get(item.id);
+      if (before) await landed.get(before)!.promise;
+      const mine = landed.get(item.id)!;
+      try {
+        await run(item, settle === 'stored' ? mine.resolve : () => undefined);
+      } finally {
+        mine.resolve();
+      }
+    })
+  );
 }
 
 interface ImageJob {
@@ -1895,6 +2131,19 @@ interface ImageJob {
   requeued?: boolean;
   /** What failed attempts before a re-queue were charged (carried into the final failure). */
   failedCharged?: number;
+  // --- Ship 2 (pro plan §4.4, §10 K2b) ---
+  /** The panel a `__panel__` reference crops (fix_panel). */
+  panelId?: string;
+  /** Turn the model's image into what is stored (fix_panel: paste into a copy of the page; edit_page: region paste-back). */
+  finish?: (input: { drawn: string; base: () => Promise<string>; doc: ComicDoc }) => Promise<string | null>;
+  /** The model's image can't be stored as it came: no finished image = the job fails honestly (paid, nothing changed). */
+  finishRequired?: boolean;
+  /** Extra VersionMeta for the new version (fix_panel: the copied cuts, parts, parentPath). */
+  extraMeta?: (doc: ComicDoc) => Partial<VersionMeta>;
+  /** Page jobs: "Redraw with my layout" — the page's frames become the layout guide (render_pages.followFrames). */
+  followFrames?: boolean;
+  /** Called once the image is stored (a scheduled run's `after` dependency with settle 'stored'). */
+  onStored?: () => void;
 }
 
 interface JobResult {
@@ -2030,7 +2279,7 @@ class RenderRun {
     /** The preflight found the primary route down and the same model up on a same-payer route. */
     private readonly preferRoute?: ImageRoute,
     /** The action this run carries out (the mid-run outage card narrows it to what failed). */
-    private readonly action?: SpendAction
+    private readonly action?: GatedSpend
   ) {
     this.session = ctx.session;
     this.signal = ctx.session.abort.signal;
@@ -2043,7 +2292,7 @@ class RenderRun {
   /** Compile options for every compiler: the safe take and the account's rating ceiling (the compiler takes the minimum). */
   private compileOpts(opts: CompileOpts): CompileOpts {
     const rating = this.ctx.caps?.ratingCeiling ?? this.ctx.rating;
-    return { ...(opts.safe ? { safe: true } : {}), ...(rating ? { rating } : {}) };
+    return { ...(opts.safe ? { safe: true } : {}), ...(rating ? { rating } : {}), ...(opts.board === false ? { board: false as const } : {}) };
   }
 
   /** Waiters for a serial turn give up on cancel (removed when the run ends: no listener build-up per session). */
@@ -2102,20 +2351,57 @@ class RenderRun {
     const pages = drawTargets(doc, action);
     const sheets = missingSheetsFor(doc, pages);
     const sheetJobs = sheets.map((c) => this.sheetJob(c, false));
+    // Ship 2 (B4/B7): exactly the anchor sheets the quote listed (never its unused or skipped ones). None until the run
+    // draws anchors (consistency/schedule.ts runDrawsAnchors).
+    const anchorJobs = this.anchorJobs(doc, action, new Set(sheets.map((c) => c.id)));
     const pageJobs = pages.map((p) => this.pageJob(p, action));
     const coverJob = action.includeCover && coverWanted(doc, action.force) ? this.coverJob({ type: 'render_cover', ...(action.safe ? { safe: true } : {}) }, !!action.force) : null;
-    const jobs = [...sheetJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
+    const jobs = [...sheetJobs, ...anchorJobs, ...pageJobs, ...(coverJob ? [coverJob] : [])];
+    // The run's order (B7's schedule.ts; the stub is today's: page 1 alone, then the rest and the cover after it).
+    const schedule = scheduleRun(doc, pages.map((p) => p.id));
     const label = `Drawing ${[pages.length ? pagesPhrase(pages) : '', coverJob ? 'the cover' : ''].filter(Boolean).join(' and ') || 'the pages'}`;
     await this.run(jobs, label, async () => {
       this.ensureStyle();
       if (this.session.doc.planStatus === 'draft') this.commit([{ op: 'plan_status', status: 'approved' }]);
-      // Sheets first: every page uses them as identity anchors.
-      await Promise.all(sheetJobs.map((j) => this.runJob(j)));
-      // Page 1 alone: the continuity anchor for the rest; the cover can then use it too.
-      const [first, ...rest] = pageJobs;
-      if (first) await this.runJob(first);
-      await Promise.all([...rest.map((j) => this.runJob(j)), ...(coverJob ? [this.runJob(coverJob)] : [])]);
+      // Sheets (and anchors) first: every page uses them as identity anchors.
+      await Promise.all([...sheetJobs, ...anchorJobs].map((j) => this.runJob(j)));
+      await this.runScheduled(pageJobs, coverJob, schedule);
     });
+  }
+
+  /** The page jobs (and the cover) in the schedule's order: each starts once its `after` page has landed. */
+  private async runScheduled(pageJobs: ImageJob[], coverJob: ImageJob | null, schedule: RunSchedule): Promise<void> {
+    const pageKey = (pageId: string | null | undefined) => (pageId ? `page:${pageId}` : null);
+    const items = [
+      ...pageJobs.map((job) => ({ id: renderTargetKey(job.target), after: pageKey(schedule.after[(job.target as { id: string }).id]), job })),
+      ...(coverJob ? [{ id: 'cover', after: pageKey(schedule.coverAfter), job: coverJob }] : [])
+    ];
+    await runAfter(
+      items,
+      (item, landed) => {
+        if (schedule.settle === 'stored') item.job.onStored = landed;
+        return this.runJob(item.job);
+      },
+      schedule.settle
+    );
+  }
+
+  /** Sheet jobs for the anchor keys a render_pages quote lists ('char:', 'prop:', 'place:'), skipping sheets already queued. */
+  private anchorJobs(doc: ComicDoc, action: Extract<SpendAction, { type: 'render_pages' }>, queued: ReadonlySet<string>): ImageJob[] {
+    if (!anchorRunFor(action)) return [];
+    const keys = renderPagesQuote(doc, action, this.byok, this.pinned).anchors?.keys ?? [];
+    const out: ImageJob[] = [];
+    for (const key of keys) {
+      const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
+      if ((kind === 'char' || kind === 'prop') && !queued.has(id)) {
+        const c = findCharacter(doc, id);
+        if (c && !isBusy(c.sheet)) out.push(this.sheetJob(c, false));
+      } else if (kind === 'place') {
+        const p = findPlace(doc, id);
+        if (p && !isBusy(p.sheet)) out.push(this.placeJob(p, false));
+      }
+    }
+    return out;
   }
 
   async sheets(action: Extract<SpendAction, { type: 'render_sheets' }>): Promise<void> {
@@ -2260,7 +2546,7 @@ class RenderRun {
     };
   }
 
-  private pageJob(p: Page, action: Extract<SpendAction, { type: 'render_pages' }>): ImageJob {
+  private pageJob(p: Page, action: RenderPagesRun): ImageJob {
     return {
       target: { kind: 'page', id: p.id },
       kind: 'page',
@@ -2270,12 +2556,14 @@ class RenderRun {
       compile: (doc, opts) => {
         const page = findPage(doc, p.id);
         if (!page) throw badRequest(`Page ${p.n} is no longer in the plan.`);
-        return compilePage(doc, page, { previousPage: nearestReadyBefore(doc, page), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
+        // The page it continues from (B7's schedule.ts; the stub is nearestReadyBefore).
+        return compilePage(doc, page, { previousPage: previousPageFor(doc, page), ...this.compileOpts(opts), ...(opts.layoutGuide ? { layoutGuide: true } : {}) });
       },
       prev: this.prevOf({ kind: 'page', id: p.id }),
       qcPageId: p.id,
       implicit: !action.force && !action.safe,
-      ...(action.safe ? { safe: true, note: 'Safer take' } : action.force ? { note: 'New take' } : {})
+      ...(action.safe ? { safe: true, note: 'Safer take' } : action.force ? { note: 'New take' } : {}),
+      ...(action.followFrames === true ? { followFrames: true } : {})
     };
   }
 
@@ -2301,8 +2589,11 @@ class RenderRun {
     };
   }
 
-  private editJob(p: Page, action: Extract<SpendAction, { type: 'edit_page' }>): ImageJob {
+  private editJob(p: Page, action: EditPageRun): ImageJob {
     const region = sanitizeBox(action.region);
+    // Ship 2 (pro plan §4.4): with a marked region the edit is pasted back into it (raster.pasteRegion; the default
+    // whenever a region is marked, unless pasteBack is 'page'). The stub keeps today's behaviour: the whole edited image.
+    const pasteBack = region && action.pasteBack !== 'page' ? region : undefined;
     const panelN = Number.isInteger(action.panelN) && p.panels.some((x) => x.n === action.panelN) ? action.panelN : undefined;
     const instruction = clean(action.instruction, 2000);
     return {
@@ -2322,8 +2613,41 @@ class RenderRun {
       qcPageId: p.id,
       implicit: false,
       note: instruction,
-      ...(action.safe ? { safe: true } : {})
+      ...(action.safe ? { safe: true } : {}),
+      ...(pasteBack
+        ? { finish: async ({ drawn, base }: { drawn: string; base: () => Promise<string> }) => (await pasteRegion({ base, drawn, region: pasteBack, feather: REGION_FEATHER })).dataUrl }
+        : {})
     };
+  }
+
+  /** fix_panel (pro plan §4.4; B8's hooks in actions/panelFix.ts): one panel drawn again and put into a copy of the page. */
+  async panelFix(action: FixPanelAction): Promise<void> {
+    const page = findPage(this.session.doc, action.pageId)!;
+    const panel = page.panels.find((p) => p.id === action.panelId)!;
+    const where = `panel ${panel.n} on page ${page.n}`;
+    const region = sanitizeBox(action.region);
+    const instruction = clean(action.instruction, 2000);
+    const job: ImageJob = {
+      target: { kind: 'page', id: page.id },
+      kind: 'panel',
+      spend: 'edit',
+      label: `Panel ${panel.n} on page ${page.n}`,
+      activityLabel: `Drawing ${where} again`,
+      compile: (doc, opts) => compileFixPanel(doc, action, this.compileOpts(opts)),
+      prev: this.prevOf({ kind: 'page', id: page.id }),
+      keepStatusOnFailure: true,
+      ...(region ? { region } : {}),
+      qcPageId: page.id,
+      implicit: false,
+      ...(instruction ? { note: instruction } : {}),
+      panelId: panel.id,
+      finish: ({ drawn, base, doc }) => finishFixPanel({ doc, action, drawn, base }),
+      finishRequired: true,
+      extraMeta: (doc) => fixPanelMeta(doc, action)
+    };
+    await this.run([job], `Drawing ${where} again`, async () => {
+      await this.runJob(job);
+    });
   }
 
   // ── Orchestration ─────────────────────────────────────────────────────────
@@ -2555,7 +2879,12 @@ class RenderRun {
     } catch (err) {
       logger.warn('comic_outage_options_failed', { projectId: this.ctx.projectId, message: (err as Error)?.message });
     }
-    const blockedAction = this.action ? narrowBlockedAction(this.action, upstream.map((r) => r.job.target), doc) : undefined;
+    // A Ship 2 spend is retried as it was quoted (narrowBlockedAction knows today's actions only).
+    const blockedAction = this.action
+      ? isProSpendAction(this.action)
+        ? (this.action as unknown as StudioAction)
+        : narrowBlockedAction(this.action, upstream.map((r) => r.job.target), doc)
+      : undefined;
     const chargedUsd = round4(upstream.reduce((sum, r) => sum + (r.chargedUsd || 0), 0));
     const card: Card = {
       type: 'model_outage',
@@ -3124,9 +3453,24 @@ class RenderRun {
         latencyMs: typeof result!.latencyMs === 'number' ? result!.latencyMs : 0,
         suffix
       });
+    // Ship 2 (pro plan §4.4): what is stored can be made from the model's image — a panel fix pasted into a copy of the
+    // page (required: a bare panel is never stored as the page), an edit pasted back into its marked region (optional:
+    // without it the whole edited image is stored, as today). Paid already, so a failure is billed and said honestly.
+    let toStore = result.dataUrl;
+    if (job.finish) {
+      const finished = await this.finishImage(job, prepared, result.dataUrl);
+      if (finished === null) {
+        end(false);
+        await reservation.settle({ costUsd: settleUsd, imageUnits: 1 });
+        success(' (not placed)');
+        this.fail(job, `${capitalize(job.label.toLowerCase())} was drawn but couldn't be put into the page. Nothing on the page changed — please try again.`, attempts);
+        return { outcome: { kind: 'done' }, asset: null };
+      }
+      toStore = finished;
+    }
     let saved: AssetRef;
     try {
-      saved = await this.saveImage(result.dataUrl, compiled.spec.id);
+      saved = await this.saveImage(toStore, compiled.spec.id);
     } catch (err) {
       // Paid but lost: bill it honestly and say so.
       end(false);
@@ -3157,7 +3501,7 @@ class RenderRun {
             updatedAt: Date.now(),
             error: undefined,
             ...prepared.meta,
-            ...(job.kind === 'edit' ? { origin: 'edit' as const } : { origin: 'render' as const }),
+            ...(job.kind === 'edit' || job.kind === 'panel' ? { origin: 'edit' as const } : { origin: 'render' as const }),
             ...(safe && !job.note ? { note: 'Safer take' } : {})
           }
         },
@@ -3166,12 +3510,14 @@ class RenderRun {
       ],
       { origin: 'job' }
     );
+    // A scheduled run's next page may start now (settle 'stored'; B7).
+    job.onStored?.();
     this.results.push({ job, ok: true, ...(aspect ? { aspect } : {}), ...(rateLimited ? { rateLimited } : {}), ...(saferTake ? { saferTake } : {}) });
     if (saferTake) logger.info('comic_image_safe_take_ok', { projectId: ctx.projectId, target: renderTargetKey(job.target) });
     end(true);
     // The image is saved and paid for: nothing after this point may fail the render.
     try {
-      const checked = await this.afterSave(job, asset, result.dataUrl);
+      const checked = await this.afterSave(job, asset, toStore);
       if (checked.blocked) {
         const r = this.results.find((x) => x.job === job && x.ok);
         if (r) {
@@ -3183,6 +3529,26 @@ class RenderRun {
       logger.warn('comic_post_render_failed', { projectId: ctx.projectId, target: renderTargetKey(job.target), message: (err as Error)?.message });
     }
     return { outcome: { kind: 'done' }, asset };
+  }
+
+  /**
+   * The image to store from the model's (job.finish), or null when a REQUIRED finish could not be made. The base is the
+   * drawing the job started from (the version's parentPath, else the target's current asset), loaded only on demand.
+   * An optional finish that fails stores the model's image as it came (today's behaviour). Never throws.
+   */
+  private async finishImage(job: ImageJob, prepared: { docAtCompile: ComicDoc; meta: VersionMeta }, drawn: string): Promise<string | null> {
+    const parent = prepared.meta.parentPath ?? getRender(prepared.docAtCompile, job.target)?.asset?.path;
+    const base = async () => {
+      if (!parent) throw new StudioError('NOT_FOUND', 'There is no drawing to paste into.', { status: 404 });
+      return this.ctx.assets.loadDataUrl(parent);
+    };
+    try {
+      const out = await job.finish!({ drawn, base, doc: prepared.docAtCompile });
+      if (typeof out === 'string' && out) return out;
+    } catch (err) {
+      logger.warn('comic_image_finish_failed', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), kind: job.kind, message: (err as Error)?.message });
+    }
+    return job.finishRequired ? null : drawn;
   }
 
   /**
@@ -3345,10 +3711,16 @@ class RenderRun {
     // Plan §4.2: the PAGE LAYOUT GUIDE (Image 1, one object slot inside the locked model's limits) while
     // COMIC_LAYOUT_GUIDE is on — OFF by default (PD-8). Rendered here, never stored; a guide that cannot be drawn
     // drops the guide (recompiled without it: its lines go and the images renumber), never the page job or its quote.
-    let guideOn = job.kind === 'page' && job.target.kind === 'page' && layoutGuideEnabled();
+    // Ship 2: "Redraw with my layout" (render_pages.followFrames) turns the guide on for a page whose every panel has a
+    // frame, and draws it from the frames.
+    const framed = job.followFrames && job.target.kind === 'page' ? framedBoxes(findPage(docAtCompile, job.target.id)) : null;
+    let guideOn = job.kind === 'page' && job.target.kind === 'page' && (layoutGuideEnabled() || !!framed);
     let guide: LayoutGuideImage | null = null;
+    // Ship 2: a `__board__` reference that could not be made is compiled out (never worth failing a paid job).
+    let boardOff = false;
     // The compilers apply the safe take (SAFE TAKE line + softened actions) and the rating ceiling themselves.
-    const compileWith = (doc: ComicDoc) => this.onLockedModel(job, job.compile(doc, guideOn ? { ...opts, layoutGuide: true } : opts));
+    const compileWith = (doc: ComicDoc) =>
+      this.onLockedModel(job, job.compile(doc, { ...opts, ...(guideOn ? { layoutGuide: true } : {}), ...(boardOff ? { board: false as const } : {}) }));
     let regionDataUrl: string | undefined;
     let result: { compiled: CompiledImageJob; references: ImageReference[]; attached: string[] } | null = null;
     let lazyChecked = false;
@@ -3356,7 +3728,14 @@ class RenderRun {
       let compiled = compileWith(missing.size ? withoutAssets(docAtCompile, missing) : docAtCompile);
       if (guideOn && !guide && compiled.references.some((r) => r.path === LAYOUT_REFERENCE_PATH)) {
         const pg = job.target.kind === 'page' ? findPage(docAtCompile, job.target.id) : undefined;
-        guide = pg ? await tryRenderPageLayoutGuide(docAtCompile, pg, compiled.aspect, compiled.resolution, undefined, { projectId: this.ctx.projectId }) : null;
+        guide = !pg
+          ? null
+          : framed
+            ? await renderLayoutGuide(framed, compiled.aspect, compiled.resolution).catch((err: unknown) => {
+                logger.warn('comic_layout_guide_failed', { projectId: this.ctx.projectId, pageId: pg.id, from: 'frames', message: String((err as Error)?.message || err) });
+                return null;
+              })
+            : await tryRenderPageLayoutGuide(docAtCompile, pg, compiled.aspect, compiled.resolution, undefined, { projectId: this.ctx.projectId });
         if (!guide) {
           guideOn = false;
           compiled = compileWith(missing.size ? withoutAssets(docAtCompile, missing) : docAtCompile);
@@ -3382,6 +3761,21 @@ class RenderRun {
           references.push({ label: ref.label, dataUrl: guide.dataUrl });
           attached.push(`__layout__:${hashString(JSON.stringify(guide.rects))}`);
           continue;
+        }
+        // Ship 2 (pro plan §4.4): references the runner makes — the panel's crop, the current page, the reference board.
+        if (GENERATED_REFERENCES.has(ref.path)) {
+          const made = await this.generatedReference(job, ref.path, docAtCompile);
+          if (made) {
+            references.push({ label: ref.label, dataUrl: made.dataUrl });
+            attached.push(`${ref.path}:${made.key}`);
+            continue;
+          }
+          if (ref.path === BOARD_REFERENCE_PATH && !boardOff) {
+            boardOff = true;
+            dropped = true;
+            break;
+          }
+          throw new StudioError('NOT_FOUND', `Couldn't prepare ${job.label.toLowerCase()} to draw — nothing was charged. Try again in a moment.`, { status: 404 });
         }
         if (ref.path === '__region__') {
           if (!job.region) continue;
@@ -3418,14 +3812,43 @@ class RenderRun {
     return { compiled, references, docAtCompile, jobHash, meta: this.versionMeta(job, compiled, docAtCompile, attached, jobHash) };
   }
 
+  /**
+   * A reference prepare() makes for a compiled placeholder (never stored; null = can't be made): `__page__` the page's
+   * current drawing, `__panel__` its crop for the job's panel (raster.cropForPanel; the cut + PANEL_CROP_CONTEXT),
+   * `__board__` the software reference board (contactSheet.boardImage). `key` identifies it in the job hash.
+   */
+  private async generatedReference(job: ImageJob, path: string, doc: ComicDoc): Promise<{ dataUrl: string; key: string } | null> {
+    const page = job.target.kind === 'page' ? findPage(doc, job.target.id) : undefined;
+    if (!page) return null;
+    try {
+      if (path === BOARD_REFERENCE_PATH) {
+        const board = await boardImage(this.ctx, { doc, page, signal: this.signal });
+        return board ? { dataUrl: board, key: hashString(board) } : null;
+      }
+      const asset = page.render.asset;
+      if (!asset?.path || !canServeToOwner(asset)) return null;
+      const pageUrl = await this.ctx.assets.loadDataUrl(asset.path);
+      if (path === PAGE_REFERENCE_PATH) return { dataUrl: pageUrl, key: asset.path };
+      const cut = job.panelId ? cutFor(page, job.panelId) : undefined;
+      if (!cut) return null;
+      const crop = await cropForPanel({ dataUrl: pageUrl, box: cut.box, context: PANEL_CROP_CONTEXT });
+      return crop ? { dataUrl: crop, key: `${asset.path}#${job.panelId}@${cut.box.x},${cut.box.y},${cut.box.w},${cut.box.h}` } : null;
+    } catch (err) {
+      logger.warn('comic_generated_reference_failed', { projectId: this.ctx.projectId, target: renderTargetKey(job.target), ref: path, message: (err as Error)?.message });
+      return null;
+    }
+  }
+
   /** The full VersionMeta for this draw (contract §12.3: specHash for every target kind, aspect, lineage). */
   private versionMeta(job: ImageJob, compiled: CompiledImageJob, docAtCompile: ComicDoc, attached: string[], jobHash: string): VersionMeta {
     const base = getRender(docAtCompile, job.target);
-    // Edits keep the BASE version's spec hash (the edit didn't change the script); renders take today's.
-    const specHash = job.kind === 'edit' ? base?.specHash : specHashFor(docAtCompile, job.target);
+    // Edits (and panel fixes) keep the BASE version's spec hash (the script didn't change); renders take today's.
+    const derived = job.kind === 'edit' || job.kind === 'panel';
+    const specHash = derived ? base?.specHash : specHashFor(docAtCompile, job.target);
     // Continuity by PATH, never by label (a cast member or place named "Previous Page" can't spoof it).
     const page = job.kind === 'page' && job.target.kind === 'page' ? findPage(docAtCompile, job.target.id) : undefined;
-    const previousPath = page ? nearestReadyBefore(docAtCompile, page)?.render.asset?.path : undefined;
+    const previousPage = page ? previousPageFor(docAtCompile, page) : undefined;
+    const previousPath = previousPage?.render.asset?.path;
     const continuityPath = previousPath && attached.includes(previousPath) ? previousPath : undefined;
     // The compiler's own list of USER refs, filtered to what was really attached. An empty list is recorded
     // too: "drawn without photos" lets sheetRefsChanged offer a redraw once photos are added.
@@ -3433,16 +3856,44 @@ class RenderRun {
     const reported = Array.isArray(compiled.refPaths) ? compiled.refPaths.filter((p) => attachedSet.has(p)) : undefined;
     const userRefs = userRefPaths(docAtCompile);
     const refPaths = reported ?? attached.filter((p) => userRefs.has(p));
+    // Ship 2 (pro plan §5.2, I3): what this drawing was made from (parts: per-panel fingerprints), which anchors it
+    // really attached, and the job's own extra meta (a panel fix copies its parent's cuts). Never hashed.
+    const pageNow = job.target.kind === 'page' ? findPage(docAtCompile, job.target.id) : undefined;
+    const parts = pageNow && (job.kind === 'page' || derived) ? partsOf(docAtCompile, pageNow) : undefined;
+    const anchorKeys = page ? this.anchorKeysOf(docAtCompile, page, compiled, attachedSet, previousPage) : undefined;
+    const extra = job.extraMeta ? job.extraMeta(docAtCompile) : {};
     return {
       ...(specHash ? { specHash } : {}),
       resolution: compiled.resolution,
       aspect: compiled.aspect,
       jobHash,
       ...(job.note ? { note: job.note.slice(0, 300) } : {}),
-      ...(job.kind === 'edit' && base?.asset?.path ? { parentPath: base.asset.path } : {}),
+      ...(derived && base?.asset?.path ? { parentPath: base.asset.path } : {}),
       ...(continuityPath ? { continuityPath } : {}),
-      ...(reported || refPaths.length ? { refPaths } : {})
+      ...(reported || refPaths.length ? { refPaths } : {}),
+      ...(parts ? { parts } : {}),
+      ...(anchorKeys ? { anchorKeys } : {}),
+      ...extra
     };
+  }
+
+  /**
+   * VersionMeta.anchorKeys (B4 FIX note 2d): the plan's anchors (planAnchors with the run's kinds, guide and previous page,
+   * the lock passed explicitly) that this job really attached — a reference that could not be loaded is not counted.
+   */
+  private anchorKeysOf(doc: ComicDoc, page: Page, compiled: CompiledImageJob, attached: ReadonlySet<string>, previousPage: Page | undefined): string[] | undefined {
+    try {
+      const guide = [...attached].some((a) => a.startsWith('__layout__:'));
+      const plan = planAnchors(doc, page, compiled.spec, this.pinned.lock ?? null, {
+        kinds: anchorKindsFromFlag(process.env[ANCHORS_ENV]),
+        layoutGuide: guide,
+        previousPage: previousPage ?? null
+      });
+      return plan.attached.filter((a) => (a.source === 'guide' ? guide : !!a.path && attached.has(a.path))).map((a) => a.key).slice(0, CONSISTENCY_LIMITS.anchorKeys);
+    } catch (err) {
+      logger.warn('comic_anchor_keys_failed', { projectId: this.ctx.projectId, pageId: page.id, message: (err as Error)?.message });
+      return undefined;
+    }
   }
 
   /** Lazy safety check of unchecked uploads among `paths` (≤ MAX_LAZY_REF_CHECKS, shared per session). Returns the blocked paths. */
@@ -3621,6 +4072,10 @@ class RenderRun {
   }
 }
 
+/** The page's frame boxes in reading order when EVERY panel has one (the guide "Redraw with my layout" draws), else null. */
+const framedBoxes = (page: Page | undefined): Box[] | null =>
+  page && page.panels.length && page.panels.every((p) => !!p.frame?.box) ? page.panels.map((p) => p.frame!.box) : null;
+
 /** The AssetRef with this path anywhere in the doc (current, history, refs…). */
 const findAsset = (doc: ComicDoc, path: string): AssetRef | undefined => {
   let found: AssetRef | undefined;
@@ -3727,15 +4182,19 @@ export async function letterPage(
     const end = activity(ctx, `Checking page ${page.n}`, 'text');
     const tracker = newTextSpendTracker();
     try {
+      // Ship 2 (B3): the software reference board rides the same check call ({ board } once contactSheet.ts builds it).
+      const extras = await checkExtras(ctx, doc, page, signal);
       const analysis = await analyzePageRender({
         doc,
         page,
         dataUrl,
         llm: billedLlm(ctx, { stage: 'qc', operation: 'comic.text.vision', tracker }),
-        signal
+        signal,
+        ...extras
       });
       visionRan = true;
-      qc = analysis.qc;
+      // Ship 2 (B3): readings → findings with fix offers and score caps ($0, pure; the stub keeps the report as it is).
+      qc = findingsFor(ctx, analysis.qc, doc, page);
       balloons = analysis.balloons;
       // The safety block rides the QC answer (verdictFromVision); absent ⇒ unchecked, never a pass.
       safety = analysis.safety;
@@ -3784,6 +4243,8 @@ export async function letterPage(
   const ops: DocOp[] = [{ op: 'balloons', pageId, balloons: mergeBalloons(current, balloons, overlay) }];
   if (qc) ops.unshift({ op: 'render', target: { kind: 'page', id: pageId }, patch: { qc } });
   commitAs(ctx, ops, 'job');
+  // Ship 2 (B2): a fresh drawing is panelized for free (shadow mode stamps cuts; COMIC_AUTO_PANELIZE may show frames).
+  if (dataUrl && current.render.asset?.path && !signal.aborted) await panelizeFresh(ctx, pageId, current.render.asset.path, dataUrl, qc, signal);
   // Plan §3 C14 / §4.3 (qcNotice.ts): a calm "Check panels" notice for a major structured problem (count, beats,
   // a speaker who may not be drawn) or a low score, with fix chips (free first; paid ones carry their quote). None
   // when the safety check withheld the page — its safety card speaks.
@@ -3800,6 +4261,42 @@ export async function letterPage(
   if (notice) onNotice({ ...noticeCard(notice.tone, notice.text), ...(notice.fixes.length ? { fixes: notice.fixes } : {}) });
   return { ...(safety ? { safety } : {}), visionRan, ...(visionError ? { visionError } : {}) };
 }
+
+/** The page check's extra arguments (contactSheet.boardForCheck); {} when they can't be made. Never throws. */
+const checkExtras = async (ctx: StudioContext, doc: ComicDoc, page: Page, signal: AbortSignal): Promise<Record<string, unknown>> => {
+  try {
+    const extras = await boardForCheck(ctx, { doc, page, signal });
+    return extras && typeof extras === 'object' ? extras : {};
+  } catch (err) {
+    logger.warn('comic_check_board_failed', { projectId: ctx.projectId, pageId: page.id, message: (err as Error)?.message });
+    return {};
+  }
+};
+
+/** A fresh check's findings (consistency/findings.ts); the report as it came when that fails. Never throws. */
+const findingsFor = (ctx: StudioContext, qc: QcReport, doc: ComicDoc, page: Page): QcReport => {
+  try {
+    return withFindings(qc, { doc, page }) ?? qc;
+  } catch (err) {
+    logger.warn('comic_findings_failed', { projectId: ctx.projectId, pageId: page.id, message: (err as Error)?.message });
+    return qc;
+  }
+};
+
+/**
+ * Panelize a fresh drawing (panelize/server.ts): its ops are committed only while the page still shows that drawing (a
+ * redraw that landed meanwhile owns its own cuts). Never throws: a paid render never fails on it.
+ */
+const panelizeFresh = async (ctx: StudioContext, pageId: string, path: string, dataUrl: string, qc: QcReport | undefined, signal: AbortSignal): Promise<void> => {
+  try {
+    const ops = await panelizeAfterLetter(ctx, { pageId, path, dataUrl, ...(qc ? { qc } : {}), signal });
+    if (!Array.isArray(ops) || !ops.length) return;
+    if (findPage(ctx.session.doc, pageId)?.render.asset?.path !== path) return;
+    commitAs(ctx, ops, 'job');
+  } catch (err) {
+    logger.warn('comic_panelize_failed', { projectId: ctx.projectId, pageId, message: (err as Error)?.message });
+  }
+};
 
 // ── Doc-only actions ─────────────────────────────────────────────────────────
 

@@ -306,7 +306,17 @@ export type SpendAction =
    *  drawOverfull (plan §4.1, §5.1; decision PD-1): "Render all" (no pageIds, no force) holds back pages whose words
    *  overfill a panel — left out of the run AND its quote, with free fixes first. The ids listed here are drawn
    *  anyway ("Draw anyway"). The server keeps only this doc's page ids (planCheckGate.sanitizeDrawOverfull). */
-  | ({ type: 'render_pages'; pageIds?: string[]; force?: boolean; includeCover?: boolean; safe?: boolean; drawOverfull?: string[] } & Quoted)
+  | ({
+      type: 'render_pages';
+      pageIds?: string[];
+      force?: boolean;
+      includeCover?: boolean;
+      safe?: boolean;
+      drawOverfull?: string[];
+      /** Ship 2 (pro plan §5.3; B4 amendment 3): 'none' draws without consistency anchors; absent or 'auto' draws the
+       *  missing anchor sheets first (ticked line items in the quote) once the run draws anchors at all. */
+      anchors?: 'auto' | 'none';
+    } & Quoted)
   | ({ type: 'edit_page'; pageId: string; instruction: string; region?: Box; panelN?: number; safe?: boolean } & Quoted)
   /** textless: one-time "textless cover + overlay title" re-render (sets cover.lettering='overlay' when it lands). */
   | ({ type: 'render_cover'; safe?: boolean; textless?: boolean } & Quoted)

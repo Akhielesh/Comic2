@@ -42,7 +42,10 @@ export interface DirectorTool {
   execute(args: Record<string, unknown>): Promise<string>;
 }
 
-export type ToolGroupId = 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader' | 'models' | 'history';
+export type ToolGroupId =
+  | 'core' | 'lettering' | 'timeline' | 'breakdown' | 'safety' | 'publish' | 'i18n' | 'refs' | 'library' | 'reader' | 'models' | 'history'
+  // --- Ship 2 (pro plan §4.7; B10) ---
+  | 'layout' | 'consistency';
 
 export interface ToolGroup {
   id: ToolGroupId;
