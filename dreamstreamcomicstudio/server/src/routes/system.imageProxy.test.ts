@@ -318,6 +318,25 @@ describe('image proxy: legacy paths of a public classic comic (reading is free w
     expect((await fetchImage(`u/${OWNER}/tmp/mod.webp`, 'owner-token')).status).toBe(200);
   });
 
+  it('fails closed on the tmp lane too when the projects cannot be read', async () => {
+    db.tables.projects[1].state = { coverImageId: `u/${OWNER}/tmp/c.webp` };
+    db.failProjects = '57014';
+    const res = await fetchImage(`u/${OWNER}/tmp/c.webp`);
+    expect(res.status).toBe(401);
+    expect(db.signed).toEqual([]);
+    db.failProjects = null;
+    expect((await fetchImage(`u/${OWNER}/tmp/c.webp`)).status).toBe(200);
+  });
+
+  it('a takedown stops a signed-in reader at once, even with the signed-out cache warm', async () => {
+    expect((await fetchImage(legacy('p1.png'))).status).toBe(200); // warms the signed-out cache
+    expect((await fetchImage(legacy('p2.webp'), 'stranger-token')).status).toBe(200);
+    db.tables.projects[1].is_forced_private = true; // moderation takes the comic down
+    expect((await fetchImage(legacy('p1.png'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(legacy('p2.webp'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(`u/${OWNER}/tmp/p1.png`, 'stranger-token')).status).toBe(403);
+  });
+
   it('fails closed when the projects cannot be read (401, nothing signed), and the failure is not cached', async () => {
     db.failProjects = '57014';
     const res = await fetchImage(legacy('p1.png'));

@@ -8,10 +8,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   MAX_PATHS_PER_OWNER,
   MAX_PATH_LENGTH,
+  PUBLIC_READER_CACHE_DEFAULTS,
   createPublicReaderPathCache,
   loadPublicProjectStates,
   loadPublicReaderPaths,
-  readerPathsOfState
+  readerPathsOfState,
+  showsIn,
+  shownPathsOf
 } from './publicReaderPaths.js';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -68,12 +71,14 @@ const classicState = {
   items: [{ imageId: `${OWNER}/sword.png` }],
   locations: [{ imageId: `${OWNER}/castle.png`, referenceImageIds: [`${OWNER}/place.jpg`] }],
   styleVariants: [{ imageId: `${OWNER}/style.png` }],
-  pageStudio: { pages: [{ imageId: `${OWNER}/page1.png`, baseImageId: `${OWNER}/page1-base.png`, edits: [] }, { edits: [] }] },
+  pageStudio: {
+    pages: [{ imageId: `${OWNER}/page1.png`, baseImageId: `${OWNER}/page1-base.png`, edits: [{ id: 'e1', imageId: `${OWNER}/page1-edit1.png` }] }, { edits: [] }]
+  },
   imageTags: { [`${OWNER}/tagged.png`]: ['x'] }
 };
 
 describe('readerPathsOfState', () => {
-  it('is the cover, panels, Page Studio pages and style previews: never history, base pages, references, the cover template, items, locations or tags', () => {
+  it('is the cover, panels, Page Studio pages and style previews: never history, base pages, page edits, references, the cover template, items, locations or tags', () => {
     expect(readerPathsOfState(classicState)).toEqual([`${OWNER}/cover.png`, `${OWNER}/p1.png`, `${OWNER}/p2`, `${OWNER}/page1.png`, `${OWNER}/style.png`]);
   });
 
@@ -122,20 +127,45 @@ describe('loadPublicReaderPaths', () => {
     await expect(loadPublicReaderPaths(admin, OWNER)).rejects.toMatchObject({ code: 'XX001' });
   });
 
-  it("keeps only ids in the owner's own namespaces, of bounded length and number", async () => {
-    const long = `${OWNER}/${'x'.repeat(MAX_PATH_LENGTH)}.png`;
-    const many = Array.from({ length: MAX_PATHS_PER_OWNER + 50 }, (_, i) => ({ imageId: `${OWNER}/m${i}.png` }));
+  it("keeps only the owner's legacy and tmp-lane ids (the only ones this check is asked about), of bounded length", async () => {
+    const atLimit = `${OWNER}/${'x'.repeat(MAX_PATH_LENGTH - OWNER.length - 5)}.png`;
+    const overLimit = `${OWNER}/${'x'.repeat(MAX_PATH_LENGTH - OWNER.length - 4)}.png`;
+    expect(atLimit).toHaveLength(MAX_PATH_LENGTH);
+    expect(overLimit).toHaveLength(MAX_PATH_LENGTH + 1);
     const { admin } = fakeAdmin([
-      { user_id: OWNER, is_public: true, is_forced_private: false, state: { coverImageId: `${OTHER}/foreign.png`, panels: [{ imageId: long }, { imageId: `u/${OWNER}/tmp/t.webp` }, { imageId: `u/${OWNER}/p/${O3}/img/a.webp` }, { imageId: 'library/shared.webp' }] } },
-      { user_id: OWNER, is_public: true, is_forced_private: false, state: { panels: many } }
+      {
+        user_id: OWNER,
+        is_public: true,
+        is_forced_private: false,
+        state: {
+          coverImageId: `${OTHER}/foreign.png`,
+          panels: [
+            { imageId: atLimit },
+            { imageId: overLimit },
+            { imageId: `u/${OWNER}/tmp/t.webp` },
+            { imageId: `u/${OWNER}/p/${O3}/img/a.webp` },
+            { imageId: `${OWNER}/nested/a.png` },
+            { imageId: `x/${OWNER}/a.png` },
+            { imageId: 'library/shared.webp' }
+          ]
+        }
+      }
     ]);
     const paths = await loadPublicReaderPaths(admin, OWNER);
-    expect(paths.has(`${OTHER}/foreign.png`)).toBe(false);
-    expect(paths.has(long)).toBe(false);
-    expect(paths.has('library/shared.webp')).toBe(false);
-    expect(paths.has(`u/${OWNER}/tmp/t.webp`)).toBe(true);
-    expect(paths.has(`u/${OWNER}/p/${O3}/img/a.webp`)).toBe(true);
-    expect(paths.size).toBe(MAX_PATHS_PER_OWNER);
+    expect([...paths].sort()).toEqual([atLimit, `u/${OWNER}/tmp/t.webp`].sort());
+  });
+
+  it('caps the kept ids per owner, counting only ids this check can be asked about', () => {
+    const scoped = Array.from({ length: MAX_PATHS_PER_OWNER + 10 }, (_, i) => ({ imageId: `u/${OWNER}/p/${O3}/img/s${i}.webp` }));
+    const legacyComic = { panels: [{ imageId: `${OWNER}/old.png` }] };
+    // Thousands of project-scoped ids first never crowd out an older comic's legacy art.
+    expect(shownPathsOf([{ panels: scoped }, legacyComic], OWNER).has(`${OWNER}/old.png`)).toBe(true);
+    const many = Array.from({ length: MAX_PATHS_PER_OWNER + 50 }, (_, i) => ({ imageId: `${OWNER}/m${i}.png` }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const capped = shownPathsOf([{ panels: [...many, ...many] }], OWNER);
+    expect(capped.size).toBe(MAX_PATHS_PER_OWNER);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });
 
@@ -240,5 +270,49 @@ describe('createPublicReaderPathCache', () => {
     cache.clear();
     await cache.shows(OWNER, `${OWNER}/x.png`);
     expect(load).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('showsIn', () => {
+  it('is the same matcher the cache uses: stored, extension form, tmp twin; never another owner or spelling', () => {
+    const paths = new Set([`${OWNER}/p1.png`, `${OWNER}/p2`]);
+    expect(showsIn(paths, OWNER, `${OWNER}/p1.png`)).toBe(true);
+    expect(showsIn(paths, OWNER, `${OWNER}/p2.jpg`)).toBe(true);
+    expect(showsIn(paths, OWNER, `u/${OWNER}/tmp/p1.png`)).toBe(true);
+    expect(showsIn(paths, OWNER, `${OWNER}/p1.png.png`)).toBe(false);
+    expect(showsIn(paths, OWNER.toUpperCase(), `${OWNER.toUpperCase()}/p1.png`)).toBe(false);
+    expect(showsIn(paths, OTHER, `u/${OTHER}/tmp/p1.png`)).toBe(false);
+  });
+});
+
+describe('production cache settings', () => {
+  it('are a 60 s TTL, a reload after 5 s on a miss, and 500 owners', async () => {
+    expect(PUBLIC_READER_CACHE_DEFAULTS).toEqual({ ttlMs: 60_000, refreshAfterMs: 5_000, maxOwners: 500 });
+    let t = 0;
+    const load = vi.fn(async (owner: string) => new Set([`${owner}/a.png`]));
+    const cache = createPublicReaderPathCache(load, { now: () => t }); // the defaults, as system.ts builds it
+    await cache.shows(OWNER, `${OWNER}/a.png`);
+    t = 4_999;
+    await cache.shows(OWNER, `${OWNER}/miss.png`);
+    expect(load).toHaveBeenCalledTimes(1);
+    t = 5_000;
+    await cache.shows(OWNER, `${OWNER}/miss.png`);
+    expect(load).toHaveBeenCalledTimes(2);
+    t = 5_000 + 59_999;
+    await cache.shows(OWNER, `${OWNER}/a.png`);
+    expect(load).toHaveBeenCalledTimes(2);
+    t = 5_000 + 60_000;
+    await cache.shows(OWNER, `${OWNER}/a.png`);
+    expect(load).toHaveBeenCalledTimes(3);
+    // 500 owners fit; the 501st evicts the least recently read.
+    const owners = Array.from({ length: 501 }, (_, i) => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`);
+    const big = createPublicReaderPathCache(load, { now: () => t });
+    for (const o of owners.slice(0, 500)) await big.shows(o, `${o}/a.png`);
+    const before = load.mock.calls.length;
+    await big.shows(owners[0], `${owners[0]}/a.png`);
+    expect(load.mock.calls.length).toBe(before);
+    await big.shows(owners[500], `${owners[500]}/a.png`); // evicts owners[1]
+    await big.shows(owners[1], `${owners[1]}/a.png`);
+    expect(load.mock.calls.length).toBe(before + 2);
   });
 });

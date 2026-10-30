@@ -11,8 +11,9 @@
 // once. So the answer is kept per owner for a short while: one load per owner per TTL, shared by concurrent requests,
 // never cached when it fails. A path the cached answer misses triggers one reload once that answer is a few seconds
 // old, so a comic published or drawn a moment ago is not refused for a minute. A comic unpublished or taken down
-// meanwhile stops authorizing new URLs within the TTL (a URL already signed lives for its own lifetime, as for every
-// signed image).
+// meanwhile stops authorizing new URLs for signed-out readers within the TTL (a URL already signed lives for its own
+// lifetime, as for every signed image). Signed-in readers are checked live, against the same rule (showsIn over
+// shownPathsOf), so this lag is the signed-out path's alone.
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -65,28 +66,53 @@ export const loadPublicProjectStates = async (supabaseAdmin: SupabaseClient, own
 };
 
 /**
- * Publicly shown paths of an owner's public, not force-private projects: only ids in the owner's own namespaces
- * (`<owner>/<file>`, `u/<owner>/...`), each at most MAX_PATH_LENGTH long, at most MAX_PATHS_PER_OWNER of them.
+ * The shown paths of these (public, not force-private) states of one owner, as the proxy can be asked about them:
+ * legacy `<owner>/<file>` ids and tmp-lane `u/<owner>/tmp/...` ids only (project-scoped and other paths have rules of
+ * their own and never reach this check), each at most MAX_PATH_LENGTH long, at most MAX_PATHS_PER_OWNER of them.
  */
-export const loadPublicReaderPaths = async (supabaseAdmin: SupabaseClient, ownerId: string): Promise<Set<string>> => {
+export const shownPathsOf = (states: unknown[], ownerId: string): Set<string> => {
   const paths = new Set<string>();
-  for (const state of await loadPublicProjectStates(supabaseAdmin, ownerId)) {
+  const isLegacy = (path: string) => path.startsWith(`${ownerId}/`) && !path.slice(ownerId.length + 1).includes('/');
+  for (const state of states) {
     for (const path of readerPathsOfState(state)) {
-      if (paths.size >= MAX_PATHS_PER_OWNER) return paths;
       if (path.length > MAX_PATH_LENGTH) continue;
-      if (!path.startsWith(`${ownerId}/`) && !path.startsWith(`u/${ownerId}/`)) continue;
+      if (!isLegacy(path) && !path.startsWith(`u/${ownerId}/tmp/`)) continue;
+      if (paths.has(path)) continue;
+      if (paths.size >= MAX_PATHS_PER_OWNER) {
+        console.warn(`[image-url] owner ${ownerId}: more than ${MAX_PATHS_PER_OWNER} shown images; the rest are not signed to signed-out readers`);
+        return paths;
+      }
       paths.add(path);
     }
   }
   return paths;
 };
 
+/** Publicly shown paths of an owner's public, not force-private projects (see shownPathsOf). */
+export const loadPublicReaderPaths = async (supabaseAdmin: SupabaseClient, ownerId: string): Promise<Set<string>> =>
+  shownPathsOf(await loadPublicProjectStates(supabaseAdmin, ownerId), ownerId);
+
+/**
+ * `paths` (an owner's shown paths) show `imagePath`: as stored, with the extension the client adds to an id stored
+ * without one, or as the tmp-lane twin (`u/<owner>/tmp/<file>`) of a legacy `<owner>/<file>` path, which the image
+ * proxy already signs in its place. An owner id not spelled as storage writes it never matches.
+ */
+export const showsIn = (paths: Set<string>, ownerId: string, imagePath: string): boolean => {
+  if (!CANONICAL_UUID.test(ownerId)) return false;
+  const forms = [imagePath, stem(imagePath)];
+  const tmpFile = imagePath.startsWith(`u/${ownerId}/tmp/`) ? imagePath.slice(`u/${ownerId}/tmp/`.length) : null;
+  if (tmpFile && !tmpFile.includes('/')) forms.push(`${ownerId}/${tmpFile}`, stem(`${ownerId}/${tmpFile}`));
+  return forms.some((form) => form !== null && paths.has(form));
+};
+
+/** The production cache settings (system.ts uses them as they are). */
+export const PUBLIC_READER_CACHE_DEFAULTS = { ttlMs: 60_000, refreshAfterMs: 5_000, maxOwners: 500 } as const;
+
 export interface PublicReaderPathCache {
   /**
-   * The owner's public comics show `imagePath`: as stored, with the extension the client adds to an id stored without
-   * one, or as the tmp-lane twin (`u/<owner>/tmp/<file>`) of a legacy `<owner>/<file>` path, which the image proxy
-   * already signs in its place. An owner id not spelled as storage writes it is refused without a query. Rejects when
-   * the owner's projects cannot be read (callers fail closed).
+   * The owner's public comics show `imagePath` (see showsIn), from the cached answer. An owner id not spelled as
+   * storage writes it is refused without a query. Rejects when the owner's projects cannot be read (callers fail
+   * closed).
    */
   shows: (ownerId: string, imagePath: string) => Promise<boolean>;
   clear: () => void;
@@ -95,9 +121,9 @@ export interface PublicReaderPathCache {
 export const createPublicReaderPathCache = (
   load: (ownerId: string) => Promise<Set<string>>,
   {
-    ttlMs = 60_000,
-    refreshAfterMs = 5_000,
-    maxOwners = 500,
+    ttlMs = PUBLIC_READER_CACHE_DEFAULTS.ttlMs,
+    refreshAfterMs = PUBLIC_READER_CACHE_DEFAULTS.refreshAfterMs,
+    maxOwners = PUBLIC_READER_CACHE_DEFAULTS.maxOwners,
     now = Date.now
   }: { ttlMs?: number; refreshAfterMs?: number; maxOwners?: number; now?: () => number } = {}
 ): PublicReaderPathCache => {
@@ -129,10 +155,7 @@ export const createPublicReaderPathCache = (
   return {
     shows: async (ownerId, imagePath) => {
       if (!CANONICAL_UUID.test(ownerId)) return false;
-      const forms = [imagePath, stem(imagePath)];
-      const tmpFile = imagePath.startsWith(`u/${ownerId}/tmp/`) ? imagePath.slice(`u/${ownerId}/tmp/`.length) : null;
-      if (tmpFile && !tmpFile.includes('/')) forms.push(`${ownerId}/${tmpFile}`, stem(`${ownerId}/${tmpFile}`));
-      const matches = (paths: Set<string>) => forms.some((form) => form !== null && paths.has(form));
+      const matches = (paths: Set<string>) => showsIn(paths, ownerId, imagePath);
       const cached = pathsOf(ownerId, ttlMs);
       if (matches(await cached)) return true;
       // A miss on an answer more than a few seconds old: the comic may have been published or drawn since. Reload

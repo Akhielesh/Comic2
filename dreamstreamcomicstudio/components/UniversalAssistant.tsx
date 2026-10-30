@@ -27,7 +27,7 @@ type UniversalAssistantProps = {
   /** When set, assistant replies show a "Save to story context" action that appends to the
    *  active project's creativeDirection (so the user can talk through their story and capture it). */
   onSaveCreativeDirection?: (text: string) => void;
-  /** Hide the floating launcher (a reading surface: it would sit over the art). An open conversation stays open. */
+  /** Hide the floating launcher (a reading surface: it would sit over the art). An open panel is not closed by it. */
   hideLauncher?: boolean;
 };
 

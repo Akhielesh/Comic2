@@ -31,10 +31,13 @@ vi.mock('./supabase', () => {
   };
 });
 
-const { getPublicProject } = await import('./db');
+let getPublicProject: typeof import('./db').getPublicProject;
 
 const signedPaths: string[] = [];
-beforeEach(() => {
+beforeEach(async () => {
+  // db.ts caches signed URLs in a module-level map: a fresh module per test, so every test reaches the proxy itself.
+  vi.resetModules();
+  ({ getPublicProject } = await import('./db'));
   signedPaths.length = 0;
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const path = new URL(url, 'http://local').searchParams.get('path') || '';
@@ -55,9 +58,17 @@ beforeEach(() => {
         { id: 'p2', imageId: `${OWNER}/p2.png` }
       ],
       characters: [{ id: 'c', imageId: `${OWNER}/hero.png`, referenceImageIds: [`${OWNER}/selfie.jpg`] }],
+      items: [{ id: 'i', imageId: `${OWNER}/sword.png` }],
+      locations: [{ id: 'l', imageId: `${OWNER}/castle.png` }],
+      styleVariants: [{ id: 's', imageId: `${OWNER}/style.png` }],
       coverImageId: `${OWNER}/cover.png`,
       coverTemplateImageId: `${OWNER}/template.png`,
-      pageStudio: { pages: [{ id: 'pg1', prompt: '', imageId: `${OWNER}/page1.png`, baseImageId: `${OWNER}/page1-base.png`, edits: [], createdAt: 1 }] }
+      pageStudio: {
+        pages: [
+          { id: 'pg1', prompt: '', imageId: `${OWNER}/page1.png`, baseImageId: `${OWNER}/page1-base.png`, edits: [{ id: 'e1', imageId: `${OWNER}/page1-edit1.png` }], createdAt: 1 },
+          { id: 'pg2', prompt: '', imageUrl: 'https://example.test/pg2.png', edits: [], createdAt: 2 }
+        ]
+      }
     }
   };
 });
@@ -75,9 +86,15 @@ describe('getPublicProject (a public read)', () => {
 
   it('never signs older renders, base pages, references or the cover template', async () => {
     await getPublicProject('c-1');
-    for (const never of ['p1-old.png', 'p1-older.png', 'page1-base.png', 'selfie.jpg', 'hero.png', 'template.png']) {
+    for (const never of ['p1-old.png', 'p1-older.png', 'page1-base.png', 'page1-edit1.png', 'selfie.jpg', 'hero.png', 'template.png', 'sword.png', 'castle.png', 'style.png']) {
       expect(signedPaths).not.toContain(`${OWNER}/${never}`);
     }
+  });
+
+  it('a page with no stored id keeps its stored URL and signs nothing for it', async () => {
+    const project = await getPublicProject('c-1');
+    expect(project!.state.pageStudio?.pages[1].imageUrl).toBe('https://example.test/pg2.png');
+    expect(signedPaths).toHaveLength(4);
   });
 
   it('a comic without Page Studio pages reads as before', async () => {
