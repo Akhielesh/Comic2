@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
 import { clearReaderUrlParams, readerDeepLinkId, setReaderUrlParams } from './services/readerUrl';
+import { assistantChrome } from './services/assistantChrome';
 import { HomePage } from './components/HomePage';
 import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 // Lazy Load Heavy Components
@@ -988,9 +989,9 @@ const App: React.FC = () => {
   // The v4 Comic Studio is full-bleed too (its own header with back, title and Read).
   const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'comicstudio'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'comicstudio' && effectiveView !== 'chat';
-  // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces
-  // (the v4 Comic Studio is itself a conversation with the Comic Director).
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'comicstudio';
+  // Where the floating Universal Assistant appears (services/assistantChrome.ts).
+  const assistant = assistantChrome(effectiveView);
+  const showUniversalAssistant = assistant.mounted;
   // The quick-finder works app-wide (including the chat view — select an answer to
   // explain it), except on the bare auth/share screens.
   const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';
@@ -1260,6 +1261,7 @@ const App: React.FC = () => {
           <Suspense fallback={null}>
             <UniversalAssistant
               currentView={effectiveView}
+              hideLauncher={assistant.hideLauncher}
               activeProject={activeProject}
               projects={projects}
               onSaveCreativeDirection={activeProject ? (text) => updateProject(activeProject.id, (prev) => ({
