@@ -17,7 +17,7 @@
 // Height is derived from the text by the renderer; estimateBalloonHeight() mirrors it.
 
 import type { AspectRatio, Balloon, Box, ComicDoc, ComicKind, KeepOut, Line, LineKind, Page, Panel, QcMissingSpeaker, QcReport, SpeakerMark } from '../../../shared/comic/doc.js';
-import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
+import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions } from '../../../shared/comic/lettering/layout.js';
 import { placeBalloonsWholeWords } from '../../../shared/comic/lettering/place.js';
 import { resolveImageJob } from '../../../shared/comic/models.js';
 import { quoteLockOf } from '../../../shared/comic/plan.js';
@@ -105,6 +105,8 @@ const ESTIMATE_SIZER = () => ({ h: 0, bounds: { x: 0, y: 0, w: 0, h: 0 } });
  * One call into the shared engine with this module's defaults. Every caller here SAVES what it places (the page
  * check's balloons, the fallback, the free re-layout), so it uses placeBalloonsWholeWords: a balloon never keeps a
  * split word ("EXPLANATI / ON"); a page that splits no word is placed exactly as placeBalloonsDetailed places it.
+ * With the comic at hand it is held to the comic's coverage cap and real outline fills (placementCoverOptions:
+ * 0.25 for children's books, else 0.30), the same cap the editor draws with.
  */
 const place = (
   page: Page,
@@ -121,6 +123,7 @@ const place = (
     aspect,
     rtl: rtlOf(page, opts),
     plansFor: doc ? letteringSizer(doc, page, aspect, estimateMeasure) : ESTIMATE_SIZER,
+    ...(doc ? placementCoverOptions(doc) : {}),
     ...(opts.keepOut?.length ? { keepOut: opts.keepOut } : {}),
     ...(opts.heads?.length ? { heads: opts.heads } : {}),
     ...(extra.suggestions?.size ? { suggestions: extra.suggestions } : {}),
@@ -1029,8 +1032,10 @@ export async function analyzePageRender(args: {
     ...(textFound.length ? { textFound: textFound.slice(0, 60) } : {}),
     checkedAt,
     ...(result.model ? { model: result.model } : {}),
-    ...(reading.keepOut.length ? { keepOut: reading.keepOut } : {}),
-    ...(reading.heads.length ? { heads: reading.heads } : {}),
+    // Overlay pages store the face-aware marks even when the check found none: [] means "checked, no faces", so the
+    // editor stops offering the paid "Fix balloon placement" re-check (busyGrid.ts hasFaceData). In-art pages ask
+    // for no marks and store none.
+    ...(overlay ? { keepOut: reading.keepOut, heads: reading.heads } : {}),
     boxesFrom: countOk ? 'vision' : 'estimate',
     ...(reading.panels.length ? { drawnBoxes: reading.panels.map(roundBox) } : {}),
     ...(beats ? { beats } : {}),

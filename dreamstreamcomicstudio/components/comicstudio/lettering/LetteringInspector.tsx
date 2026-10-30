@@ -17,7 +17,9 @@ import type { Balloon, Page } from '../../../shared/comic/doc';
 import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
-import { balloonOp, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
+import { balloonOp, drawnSpotPatch, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
+// drawnSpotPatch moved to styleOps (lockOps uses it too); re-exported here for its existing importers.
+export { drawnSpotPatch } from './styleOps';
 import type { LetteringPanelProps } from './panelTypes';
 import { panelCoverage, type CrowdedReason, type LetterDensity, type LetterPlan } from '../../../shared/comic/lettering/layout';
 import { RADIUS_CONTROL, RADIUS_PILL, TONE_CHIP, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
@@ -129,21 +131,6 @@ export const tooMuchTextCopy = (d: LetterDensity): string => {
 /** The chip's short label (plan: "Too much text for this panel"): "Too much text for panel 6" / "Too much text in 2 panels". */
 export const tooMuchTextLabel = (list: readonly LetterDensity[]): string =>
   list.length === 1 ? `Too much text for panel ${list[0].panelN}` : `Too much text in ${list.length} panels`;
-
-/**
- * Keep a balloon where it is DRAWN: an unpinned stored balloon the engine drew elsewhere (the settle, a dense-page
- * repack or the coverage cap) is pinned at its drawn spot, width and tail — never sent back to its stored spot. {}
- * for anything else (a software-placed line's full balloon comes from balloonOp; a pinned one is drawn as stored).
- */
-export const drawnSpotPatch = (page: Page, lineId: string, resolved: ReadonlyMap<string, Balloon>): Partial<Balloon> => {
-  const stored = page.balloons.find((b) => b.lineId === lineId);
-  const drawn = resolved.get(lineId);
-  if (!stored || !drawn || stored.pinned || stored.locked) return {};
-  const out: Partial<Balloon> = {};
-  if (drawn.x !== stored.x || drawn.y !== stored.y || drawn.w !== stored.w) Object.assign(out, { x: drawn.x, y: drawn.y, w: drawn.w });
-  if (typeof drawn.tailX === 'number' && typeof drawn.tailY === 'number' && (drawn.tailX !== stored.tailX || drawn.tailY !== stored.tailY)) Object.assign(out, { tailX: drawn.tailX, tailY: drawn.tailY });
-  return out;
-};
 
 /** "Make it a caption" (free): a spoken line becomes a caption in the same panel (its speaker stays on the line). */
 export const captionOps = (page: Page, lineId: string): DocOp[] => {

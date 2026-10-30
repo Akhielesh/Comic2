@@ -13,7 +13,7 @@
 import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
-import { estimateMeasure, letteringAspect, letteringSizer } from '../../../../shared/comic/lettering/layout.js';
+import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions } from '../../../../shared/comic/lettering/layout.js';
 import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
 import {
   BORDER_STYLES,
@@ -621,7 +621,8 @@ const pageCtx = (doc: ComicDoc, page: Page): PageCtx => {
   const rtl = doc.format.readingDirection === 'rtl';
   const qc = page.render.qc;
   const filled = placeBalloonsWholeWords({
-    page, boxes, aspect, rtl, plansFor: sizer, keepOut: qc?.keepOut, heads: qc?.heads, safeMargin, existing: page.balloons, keep: 'all', lang: doc.format.language
+    page, boxes, aspect, rtl, plansFor: sizer, keepOut: qc?.keepOut, heads: qc?.heads, safeMargin, existing: page.balloons, keep: 'all', lang: doc.format.language,
+    ...placementCoverOptions(doc)
   });
   const stored = new Set(page.balloons.map((b) => b.lineId));
   return { doc, page, aspect, rtl, boxes, safeMargin, sizer, current: new Map(filled.balloons.map((b) => [b.lineId, b])), stored };
@@ -740,7 +741,9 @@ function arrangeBalloonsTool(ctx: StudioContext, turn: DirectorTurn | undefined)
           const qc = page.render.qc;
           const res = placeBalloonsWholeWords({
             page, boxes: pc.boxes, aspect: pc.aspect, rtl: pc.rtl, plansFor: pc.sizer, keepOut: qc?.keepOut, heads: qc?.heads,
-            safeMargin: pc.safeMargin, existing: page.balloons, only: targetIds, lang: doc.format.language
+            safeMargin: pc.safeMargin, existing: page.balloons, only: targetIds, lang: doc.format.language,
+            // The comic's coverage cap (0.25 for children's books), the same one the editor draws with.
+            ...placementCoverOptions(doc)
           });
           ops.push({ op: 'balloons', pageId: page.id, balloons: res.balloons });
           commit();

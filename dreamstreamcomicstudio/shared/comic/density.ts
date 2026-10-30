@@ -15,8 +15,8 @@
 // pixels — a further ×1.15 here would tighten every threshold by that much (see NEED_SCALE).
 
 import { emptyRender, type Box, type ComicDoc, type Line, type Page, type Panel } from './doc.js';
-import { estimateMeasure, letteringAspect, letteringSizer, type Measure } from './lettering/layout.js';
-import { resolveLetterStyle, type BubbleShape } from './lettering/style.js';
+import { estimateMeasure, letteringAspect, letteringSizer, outlineFill, type Measure } from './lettering/layout.js';
+import { resolveLetterStyle } from './lettering/style.js';
 import { PANEL_LIMITS } from './panelRules.js';
 // The word budget (the speech oracle) lives in panelRules.ts so the lettering engine can import it without a
 // cycle through this file; re-exported here unchanged.
@@ -32,8 +32,6 @@ import { estimateWidthForText, normalizeLetteringText } from './textLayout.js';
 export const NEED_SCALE = 1;
 /** The placer's inset inside a panel (lettering/place.ts PAD): the widest a balloon starts is the panel minus this twice. */
 const PLACE_PAD = 0.012;
-/** Elliptical outlines fill π/4 of their box; boxy ones fill all of it. */
-const BOXY: ReadonlySet<BubbleShape> = new Set<BubbleShape>(['rect', 'rounded_rect', 'notched', 'scroll', 'ribbon', 'electronic', 'none']);
 
 export type FitState = 'roomy' | 'fits' | 'tight' | 'overfull';
 
@@ -67,7 +65,7 @@ export function needMeter(doc: ComicDoc, opts: Omit<NeedOptions, 'box'> = {}): N
     if (!entry || entry.text !== l.text || entry.kind !== l.kind) {
       const lang = l.lang || doc.format?.language || 'en';
       const shape = resolveLetterStyle(doc, l).shape;
-      entry = { text: l.text, kind: l.kind, est: estimateWidthForText(l.text, lang), fill: BOXY.has(shape) ? 1 : Math.PI / 4, byWidth: new Map() };
+      entry = { text: l.text, kind: l.kind, est: estimateWidthForText(l.text, lang), fill: outlineFill(shape), byWidth: new Map() }; // layout.ts outlineFill: the cap's fill, one implementation
       cache.set(l, entry);
     }
     const w = box && Number.isFinite(box.w) && box.w > 0 ? Math.min(entry.est, Math.max(0.08, box.w - 2 * PLACE_PAD)) : entry.est;

@@ -156,7 +156,7 @@ export function coverCapFor(doc: Pick<ComicDoc, 'format' | 'brief'>): number {
   }
 }
 
-/** Elliptical outlines fill π/4 of their box; boxy ones all of it (density.ts uses the same split). */
+/** Elliptical outlines fill π/4 of their box; boxy ones all of it (density.ts needMeter uses outlineFill too). */
 const BOXY_SHAPES: ReadonlySet<BubbleShape> = new Set<BubbleShape>(['rect', 'rounded_rect', 'notched', 'scroll', 'ribbon', 'electronic', 'none']);
 /** Share of its outline box a balloon of this shape fills (coverage). */
 export const outlineFill = (shape: BubbleShape): number => (BOXY_SHAPES.has(shape) ? 1 : Math.PI / 4);

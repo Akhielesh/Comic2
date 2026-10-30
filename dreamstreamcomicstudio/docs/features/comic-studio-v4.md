@@ -481,6 +481,34 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   off-panel voices are never blamed; a page the safety check withheld gets no notice (its safety card speaks).
   Fix chips are free first; paid ones carry their quote and go through the spend gate. Badges and the page's
   quality list always show everything.
+- **Letter fit: the coverage cap** (Ship 1 A4, FX2/F8; `shared/comic/lettering/layout.ts`, `place.ts`). A panel's
+  lettering may cover at most `PANEL_LIMITS.coverCap` (0.30) of its picture, 0.25 for children's books
+  (`coverCapFor`); coverage is fill × (outline ∩ panel) ÷ panel area, with fill π/4 for elliptical outlines and 1 for
+  boxy ones (`outlineFill`, which `density.ts` uses too, so the chip, the plan check and the cap agree).
+  - At render time `planLettering` applies it to stored, unpinned balloons: a panel over the cap is lettered again,
+    its movable balloons re-placed (partly across the panel's border when that helps). Pinned and locked balloons
+    never move. Stored values never change; "Re-letter page" (free) saves the re-placement.
+  - The cap re-places only: it never shrinks text unless the owner flips `LETTER_FIT_POLICY.coverShrink` (off; a
+    one-line edit), and even then never below 82% (`COVER_STEPS` 1, 0.9, 0.82), panel by panel.
+  - A panel still over the cap is flagged `dense` (words, what it holds, coverage before and as drawn). Balloons
+    the cap drew elsewhere are crowded with reason `'cover'`, so a first drag, nudge, "Keep here" or Lock starts
+    from where the balloon is drawn (`drawnSpotPatch`, in `styleOps.ts`; `lockOps` pins the drawn spot too) and
+    never jumps back to its stored spot.
+  - No balloon is left over another balloon's text while the page has a text-free spot for it; the settle
+    fallback keeps a stored balloon within its own tier and panel, never carried panels away.
+  - A pinned balloon stored narrower than its longest word is drawn as wide as that word within its panel (FX6).
+  - Every placement that is SAVED uses the doc's cap and fills (`placementCoverOptions`): the page check's
+    balloons, its fallback and the free re-layout (`vision.ts`), Tidy and Reset position (`styleOps.ts`) and the
+    director's `arrange_balloons` (`tools/lettering.ts`). The board's and lettering hooks' own unsaved placements
+    stay uncapped: the render-time cap is what is drawn.
+  - Two editor chips: "Too much text for panel 6" / "Too much text in N panels" selects the panel, and the
+    inspector says how much it holds ("Too much text for panel N: W words cover about P% of the picture — it holds
+    about M.") with the free fixes; "Fix balloon placement" (drawn pages whose check has no face data)
+    offers the free placement around the art's busy areas first, then the paid face-aware re-check
+    (`recheck_page`) quoted in the user's terms. A face-aware check stores its `keepOut`/`heads` even when it
+    found no faces, so a page re-checked once is not offered the paid re-check again (`busyGrid.ts hasFaceData`).
+  - The board's page script shows each lettered panel's "N words / fits about M" (pagePlanCheck on the panels the
+    words are lettered into), with "too full" said in words on an overfull panel.
 - **Flags, both off.** `COMIC_LAYOUT_GUIDE` attaches a text-free layout-guide image (`panelize/wireframe.ts`) as
   Image 1 on page renders; it stays unset until the owner approves the paid Model Lab A/B (PD-8). With it off, page
   references and quotes are unchanged. `COMIC_IDENTITY_NOTICES` (identity findings in the chat notice) stays unset

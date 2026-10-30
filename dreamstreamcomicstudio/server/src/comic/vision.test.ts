@@ -21,8 +21,10 @@ import {
   placeStoredBalloons,
   visionSpecText
 } from './vision.js';
-import { outlineBounds, placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
-import { estimateMeasure, letteringAspect, letteringSizer } from '../../../shared/comic/lettering/layout.js';
+import { coverageOf, outlineBounds, placeBalloonsDetailed } from '../../../shared/comic/lettering/place.js';
+import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions } from '../../../shared/comic/lettering/layout.js';
+import { p2ShapedDoc } from '../../../shared/comic/lettering/__fixtures__/letterFit.js';
+import { PANEL_LIMITS } from '../../../shared/comic/panelRules.js';
 import { drawnLayoutBoxes, effectiveLayout, panelBoxesFor } from '../../../shared/comic/pageGeometry.js';
 import { StudioError, type LlmClient, type LlmRequest, type LlmResult } from './types.js';
 
@@ -1110,5 +1112,49 @@ describe('the page check’s fallback boxes follow the layout as drawn (A7 note 
     expect(out.qc.boxesFrom).toBe('estimate');
     expect(out.qc.panelBoxes).toEqual(drawn);
     expect(out.balloons).toEqual(fallbackBalloons(pg, drawn, { doc: d, readingDirection: 'ltr', kind: 'comic', pageAspect: 1000 / 1500 }));
+  });
+});
+
+describe('A4 wave notes in the page check', () => {
+  it('an overlay page checked with no faces stores empty marks (so the paid re-check is not offered again)', async () => {
+    const reply = {
+      panels: [{ n: 1, box: { x: 0.02, y: 0.02, w: 0.96, h: 0.96 } }],
+      issues: [],
+      textFound: [],
+      extraOrMissingCharacters: [],
+      score: 0.9,
+      balloons: [{ lineId: 'l1', x: 0.1, y: 0.1, w: 0.2, tailX: 0.3, tailY: 0.3 }],
+      safety: { rating: 'G', categories: [], notes: [] },
+      keepOut: [],
+      heads: []
+    };
+    const { llm } = fakeLlm([{ json: reply, text: JSON.stringify(reply) }]);
+    const pg = page([panel(1, ['maya'], [line('l1', 'speech', 'Hi.', 'maya')])]);
+    const out = await analyzePageRender({ doc: doc(), page: pg, dataUrl: 'data:image/png;base64,AAAA', llm });
+    expect(out.qc.keepOut).toEqual([]);
+    expect(out.qc.heads).toEqual([]);
+  });
+
+  it('the saved placement keeps a children’s book under its 0.25 coverage cap (placementCoverOptions)', () => {
+    const { doc: d, page: pg } = p2ShapedDoc({ kids: true, panel6: 'one' });
+    const aspect = letteringAspect(d, pg);
+    const sizer = letteringSizer(d, pg, aspect, estimateMeasure);
+    const { fillFor } = placementCoverOptions(d);
+    const lines = new Map(pg.panels.flatMap((p) => p.lines).map((l) => [l.id, l]));
+    const panel5 = (balloons: Balloon[]) =>
+      coverageOf(
+        panelBoxesFor(d, pg)[4],
+        balloons.map((b) => {
+          const s = sizer(lines.get(b.lineId)!, b.w);
+          return { outline: { x: b.x + s.bounds.x, y: b.y + s.bounds.y, w: s.bounds.w, h: s.bounds.h }, fill: fillFor(lines.get(b.lineId)!) };
+        })
+      );
+    // Stored, panel 5 covers about 0.27 of its picture: over the kids' cap, under the default 0.30.
+    expect(panel5(pg.balloons)).toBeGreaterThan(PANEL_LIMITS.coverCapKids + 0.01);
+    expect(panel5(pg.balloons)).toBeLessThan(PANEL_LIMITS.coverCap);
+    const free = placeStoredBalloons(d, pg, pg.render.qc);
+    expect(panel5(free)).toBeLessThanOrEqual(PANEL_LIMITS.coverCapKids + 1e-9);
+    const fallback = fallbackBalloons(pg, pg.render.qc!.panelBoxes, { doc: d, readingDirection: 'ltr', kind: d.format.kind, pageAspect: aspect });
+    expect(panel5(fallback)).toBeLessThanOrEqual(PANEL_LIMITS.coverCapKids + 1e-9);
   });
 });

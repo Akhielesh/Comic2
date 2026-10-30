@@ -2,7 +2,7 @@
 // (2:3 book, a drawn 1696×2528 take with measured panel boxes, six panels in a 2/1/3 layout, the last small
 // panel carrying two long speech lines in software-placed, unpinned balloons) — the text is made up.
 
-import { createEmptyDoc, emptyRender, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../doc';
+import { createEmptyDoc, emptyRender, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../doc.js';
 
 const WORDS =
   'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight'.split(
