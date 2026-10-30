@@ -115,7 +115,7 @@ export interface HistoryRecorderOptions {
 }
 
 export interface HistoryRecorder extends HistoryHooks {
-  /** Resolves once every queued capture was tried (a failed one stays queued for the next commit or flush). */
+  /** Resolves when the write in flight (if any) is done. It starts nothing: only a commit or a flush (re)tries. */
   settled(): Promise<void>;
   /** Captures waiting to be written or retried. */
   readonly pending: number;
@@ -228,7 +228,7 @@ class Recorder implements HistoryRecorder {
   }
 
   settled(): Promise<void> {
-    return this.kick();
+    return this.draining ?? Promise.resolve();
   }
 
   // ── Hooks ──────────────────────────────────────────────────────────────────

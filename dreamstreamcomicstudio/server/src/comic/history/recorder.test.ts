@@ -372,19 +372,22 @@ describe('edits (§4.3 #3–5)', () => {
     const start = plannedDoc();
     start.pages[0].render = { status: 'ready', asset: { path: `${IMG}/p1.webp`, source: 'generated', at: 1 }, history: [] };
     const r = await loaded(normalizeDoc(start));
+    r.commit([say('pg_2', 'not recorded yet')], 'user'); // a real change waits for its moment...
     const calls = r.store.calls.length;
-    r.clock.t += 2 * HISTORY_POLICY.gapMs;
+    r.clock.t += 2 * HISTORY_POLICY.gapMs; // ...and none of these commits counts as the first commit after a gap
     r.commit([{ op: 'message', msg: { id: 'm1', role: 'user', text: 'hello', at: r.clock.t } }], 'user');
     r.commit([{ op: 'spend', entry: spend('chat', 0.002, { kind: 'chat' }) }], 'job');
     r.commit([{ op: 'gate', gate: null }], 'job');
     r.commit([{ op: 'memory', text: 'likes teal' }], 'director');
     r.commit([{ op: 'asset_meta', path: `${IMG}/p1.webp`, patch: { safety: { assessed: 'G', at: 1 } } }], 'job');
     r.commit([{ op: 'safety', patch: {} }], 'job');
-    await r.flush();
-    await r.flush(true);
+    await r.rec.settled();
     expect(r.store.calls.length).toBe(calls);
     expect(r.rows().map((x) => x.kind)).toEqual(['start']);
     expect(r.rec.pending).toBe(0);
+    // The edit itself is still recorded at the end of the session.
+    await r.flush(true);
+    expect(r.rows().map((x) => [x.kind, x.label])).toEqual([['start', 'History starts here'], ['edits', 'Where you left off']]);
   });
 });
 
