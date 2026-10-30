@@ -223,6 +223,14 @@ describe('check(): behaviour', () => {
     const r = check(Kitchen, { ...clone(base), 'a b': 1 });
     expect(r).toMatchObject({ ok: false, errors: [{ path: '["a b"]', code: 'unknown-key' }] });
   });
+
+  it('escapes and cuts hostile unknown keys in error paths (no log flooding or bidi spoofing)', () => {
+    const long = check(Kitchen, { ...clone(base), ['k'.repeat(100_000)]: 1 });
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.errors[0].path.length).toBeLessThan(80);
+    const bidi = check(Kitchen, { ...clone(base), 'evil\u202Efdp.exe': 1 });
+    expect(bidi).toMatchObject({ ok: false, errors: [{ path: '["evil\\u202efdp.exe"]', code: 'unknown-key' }] });
+  });
 });
 
 describe('a schema without caps (or otherwise malformed) throws', () => {
@@ -273,6 +281,25 @@ describe('a schema without caps (or otherwise malformed) throws', () => {
     const hand = { kind: 'text', max: 3 } as Schema<string>;
     expect(check(hand, 'abc')).toEqual({ ok: true, value: 'abc' });
     expect(check(hand, 'abcd')).toMatchObject({ ok: false, errors: [{ code: 'too-long' }] });
+  });
+
+  it('a hand-written schema edited after it passed stays capped (check uses a frozen copy)', () => {
+    const hand = { kind: 'text', max: 3 } as { kind: 'text'; max?: number };
+    expect(check(hand as Schema<string>, 'abc').ok).toBe(true);
+    delete hand.max;
+    expect(check(hand as Schema<string>, 'x'.repeat(10_000))).toMatchObject({ ok: false, errors: [{ code: 'too-long' }] });
+    const nested = { kind: 'array', max: 2, items: { kind: 'text', max: 2 } } as unknown as { kind: 'array'; max: number; items: { max?: number } };
+    expect(check(nested as unknown as Schema<string[]>, ['ab']).ok).toBe(true);
+    delete nested.items.max;
+    nested.max = 1e9;
+    expect(check(nested as unknown as Schema<string[]>, ['abc', 'd', 'e'])).toMatchObject({ ok: false, errors: [{ path: '', code: 'too-many' }] });
+  });
+
+  it('s.id takes a smaller max but never a larger one', () => {
+    expect(check(s.id({ max: 4 }), 'abcde')).toMatchObject({ ok: false, errors: [{ code: 'too-long' }] });
+    expect(() => s.id({ max: SCHEMA_LIMITS.idMax + 1 })).toThrow(SchemaDefinitionError);
+    expect(check(s.id(), 'op-1.a:b_c').ok).toBe(true);
+    expect(check(s.id(), '-leading')).toMatchObject({ ok: false, errors: [{ code: 'pattern' }] });
   });
 
   it('freezes what it builds', () => {

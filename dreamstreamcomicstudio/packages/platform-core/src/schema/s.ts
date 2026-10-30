@@ -272,15 +272,23 @@ const normalise = (raw: unknown, path: string): SchemaNode => {
   }
 };
 
+/** Hand-written (or foreign) nodes → their validated, frozen copies. */
+const COPIES = new WeakMap<object, SchemaNode>();
+
 /**
- * Return `node` as a valid schema, or throw `SchemaDefinitionError`. Nodes built by `s` pass at once; anything else
- * is validated in full (caps included) once per object, then remembered.
+ * Return `node` as a valid schema, or throw `SchemaDefinitionError`. A node `s` built is returned as it is (it is
+ * frozen). Anything else is validated in full, caps included, into a frozen copy that is returned (and remembered)
+ * instead: later edits to the caller's object can never un-cap a schema that already passed.
  */
 export const assertSchema = (node: unknown, path = ''): SchemaNode => {
-  if (isRecord(node) && BUILT.has(node)) return node as unknown as SchemaNode;
-  normalise(node, path); // throws when invalid
-  BUILT.add(node as object);
-  return node as unknown as SchemaNode;
+  if (!isRecord(node)) return fail('expected a schema built with s.*', path);
+  if (BUILT.has(node)) return node as unknown as SchemaNode;
+  const known = COPIES.get(node);
+  if (known) return known;
+  const copy = Object.freeze(normalise(node, path)); // throws when invalid
+  BUILT.add(copy);
+  COPIES.set(node, copy);
+  return copy;
 };
 
 const build = <S>(raw: Record<string, unknown>): S => {
@@ -293,9 +301,12 @@ const build = <S>(raw: Record<string, unknown>): S => {
 
 const text = (options: TextOptions): TextSchema => build({ ...(isRecord(options) ? options : {}), kind: 'text' });
 
-/** An id: `ID_PATTERN`, at most `SCHEMA_LIMITS.idMax` (or `max`) characters. */
-const id = (options: IdOptions = {}): TextSchema =>
-  build({ ...docOnly(options), kind: 'text', max: options.max !== undefined ? options.max : SCHEMA_LIMITS.idMax, pattern: ID_PATTERN, singleLine: true });
+/** An id: `ID_PATTERN`, at most `SCHEMA_LIMITS.idMax` (or a smaller `max`) characters. */
+const id = (options: IdOptions = {}): TextSchema => {
+  const max = isRecord(options) && options.max !== undefined ? options.max : SCHEMA_LIMITS.idMax;
+  cap(max, 's.id max', 1, SCHEMA_LIMITS.idMax, '');
+  return build({ ...docOnly(options), kind: 'text', max, pattern: ID_PATTERN, singleLine: true });
+};
 
 const array = <T>(items: Schema<T>, options: ArrayOptions): ArraySchema<T> =>
   build({ ...(isRecord(options) ? options : {}), kind: 'array', items });

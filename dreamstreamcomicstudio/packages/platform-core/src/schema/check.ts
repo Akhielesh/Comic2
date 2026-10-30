@@ -48,13 +48,24 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> => {
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-/** `sections[0].blocks[3].text`; a key that is not an identifier is written `["key"]`. */
+const KEY_SHOWN = 64;
+
+/** A key from the VALUE (it may be anything): quoted, non-ASCII escaped, cut to `KEY_SHOWN` characters. */
+const quoteKey = (key: string): string => {
+  const cut = key.length > KEY_SHOWN ? `${key.slice(0, KEY_SHOWN)}…` : key;
+  return JSON.stringify(cut).replace(/[\u007f-\uffff]/g, (ch) => `\\u${`000${ch.charCodeAt(0).toString(16)}`.slice(-4)}`);
+};
+
+/**
+ * `sections[0].blocks[3].text`; a key that is not a short identifier is written `["key"]`, escaped and cut, so a
+ * hostile key can neither flood nor spoof a log line.
+ */
 export const formatPath = (path: readonly (string | number)[]): string => {
   let out = '';
   for (const seg of path) {
     if (typeof seg === 'number') out += `[${seg}]`;
-    else if (IDENT.test(seg)) out += out ? `.${seg}` : seg;
-    else out += `[${JSON.stringify(seg)}]`;
+    else if (IDENT.test(seg) && seg.length <= KEY_SHOWN) out += out ? `.${seg}` : seg;
+    else out += `[${quoteKey(seg)}]`;
   }
   return out;
 };
@@ -411,14 +422,15 @@ const positive = (v: unknown, fallback: number): number => (typeof v === 'number
  * Validate `value` against `schema`. Returns `{ok: true, value}` (a fresh copy) or `{ok: false, errors}` with at
  * least one `{path, code, message}`. Throws only for a badly DEFINED schema (`SchemaDefinitionError`).
  */
-export const check = <T>(schema: Schema<T>, value: unknown, options: CheckOptions = {}): CheckResult<T> => {
+export const check = <T>(schema: Schema<T>, value: unknown, options?: CheckOptions): CheckResult<T> => {
   const root = assertSchema(schema);
+  const opts: CheckOptions = options || {};
   if (root.kind === 'optional') throw new SchemaDefinitionError('s.optional only marks an object field; check the inner schema');
   const ctx: Ctx = {
     errors: [],
-    maxErrors: positive(options.maxErrors, SCHEMA_LIMITS.maxErrors),
+    maxErrors: positive(opts.maxErrors, SCHEMA_LIMITS.maxErrors),
     nodes: 0,
-    maxNodes: positive(options.maxNodes, SCHEMA_LIMITS.maxNodes),
+    maxNodes: positive(opts.maxNodes, SCHEMA_LIMITS.maxNodes),
     stop: false,
   };
   const out = walk(root, value, [], ctx);
