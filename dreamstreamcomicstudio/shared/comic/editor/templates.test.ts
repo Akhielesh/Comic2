@@ -24,14 +24,14 @@ const PROBE: Record<string, number[]> = {
   'fast-five': [0.294, 0.144, 0.144, 0.144, 0.144]
 };
 const area = (b: { w: number; h: number }) => b.w * b.h;
-const INSET_CLAUSE = / with a small inset panel in its lower right corner \(panel 2\)/;
 
 describe('templates', () => {
   it('twelve curated templates (plus three webtoon stacks), the default first among the three-panel ones', () => {
     expect(PAGE_TEMPLATES.filter((t) => !t.webtoon).map((t) => t.id)).toEqual(Object.keys(PROBE));
-    // Hero + inset waits for the blueprint geometry to learn the inset clause (one layout truth per page).
-    expect(INSET_TEMPLATES_ON).toBe(false);
-    expect(templatesForKind('comic').map((t) => t.id)).toEqual(Object.keys(PROBE).filter((id) => id !== 'hero-inset'));
+    // Hero + inset is offered: the blueprint geometry (pageGeometry parseLayout / estimatePanelBoxes) reads the inset
+    // clause, so the board, the wireframes and the lettering place the inset where the editor does.
+    expect(INSET_TEMPLATES_ON).toBe(true);
+    expect(templatesForKind('comic').map((t) => t.id)).toEqual(Object.keys(PROBE));
     expect(templatesForKind('webtoon').map((t) => t.id)).toEqual(['stack-2', 'stack-3', 'stack-4']);
     expect(DEFAULT_TEMPLATE_ID).toBe('big-top-two');
   });
@@ -49,11 +49,9 @@ describe('templates', () => {
         expect(framesFromLayoutText(sentence, t.panels, { rtl })).toEqual(frames);
         // Against the design's probe table.
         if (PROBE[t.id]) frames.forEach((b, i) => expect(Math.abs(area(b) - PROBE[t.id][i]), `${t.id} panel ${i + 1}`).toBeLessThanOrEqual(0.01));
-        // Against the real blueprint geometry (estimatePanelBoxes), box by box; the inset has no blueprint geometry.
-        const live = estimatePanelBoxes(
-          { layout: t.id === 'hero-inset' ? sentence.replace(INSET_CLAUSE, '') : sentence, panels: t.sizes.slice(0, t.id === 'hero-inset' ? 1 : t.panels).map((size) => ({ size })) as never },
-          { kind, readingDirection: rtl ? 'rtl' : 'ltr' }
-        );
+        // Against the real blueprint geometry (estimatePanelBoxes), box by box — the inset too, in its hero's corner.
+        const live = estimatePanelBoxes({ layout: sentence, panels: t.sizes.map((size) => ({ size })) as never }, { kind, readingDirection: rtl ? 'rtl' : 'ltr' });
+        expect(live, `${t.id} ${rtl}`).toHaveLength(t.panels);
         live.forEach((b, i) => {
           expect(Math.abs(area(b) - area(frames[i])), `${t.id} live ${i + 1}`).toBeLessThanOrEqual(0.01);
           expect(Math.abs(b.x - frames[i].x) + Math.abs(b.y - frames[i].y)).toBeLessThanOrEqual(0.01);
@@ -71,6 +69,12 @@ describe('templates', () => {
     expect(inset.y + inset.h).toBeLessThan(hero.y + hero.h);
     expect(z).toEqual([undefined, 1]);
     expect(layoutTextFits(t.sentence, 2)).toBe(true);
+    // The blueprint reads the clause: the inset is its own panel, in its hero's corner, at the frames' exact boxes.
+    expect(parseLayout(t.sentence)).toEqual({ mode: 'rows', rows: [{ panels: [0], weight: 2.2 }], insets: [{ panel: 1, host: 0, vert: 'lower', horiz: 'right' }] });
+    for (const rtl of [false, true]) {
+      const { frames: f, sentence } = templateLayout(t, { rtl });
+      expect(estimatePanelBoxes({ layout: sentence, panels: t.sizes.map((size) => ({ size })) as never }, { readingDirection: rtl ? 'rtl' : 'ltr' }), `rtl ${rtl}`).toEqual(f);
+    }
   });
 
   it('frames follow the page gutter and margin', () => {
@@ -127,6 +131,19 @@ describe('applying a template', () => {
     expect(strip(apply(after, r.undo))).toEqual(strip(doc));
   });
 
+  it('Hero + inset is offered and applies like any template; the board estimate matches its frames', () => {
+    const two = undrawnPage('pg_u', 1, [panel('u1', 1), panel('u2', 2)]);
+    const doc = withPages(baseDoc(), [two]);
+    expect(templatesFor(doc, two).map((c) => c.template.id)).toEqual(['two-tiers', 'hero-inset']);
+    const r = applyTemplateEdit(doc, two, 'hero-inset') as EditOk;
+    expect(r.ok).toBe(true);
+    expect(r.notes).toContain('The inset is for a silent reaction.');
+    const pa = pageOf(apply(doc, r.ops), 'pg_u');
+    expect(pa.layout).toBe(PAGE_TEMPLATES.find((t) => t.id === 'hero-inset')!.sentence);
+    expect(pa.panels.map((x) => x.frame!.z)).toEqual([undefined, 1]);
+    expect(estimatePanelBoxes(pa, { kind: 'comic', readingDirection: 'ltr' })).toEqual(pa.panels.map((x) => x.frame!.box));
+  });
+
   it('on a drawn page: frames only (the layout text stays, so the page stays up to date)', () => {
     const p = drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1), panel('p2', 2), panel('p3', 3)]);
     const doc = withPages(baseDoc(), [p]);
@@ -140,9 +157,9 @@ describe('applying a template', () => {
     const p = drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1), panel('p2', 2), panel('p3', 3)]);
     const doc = withPages(baseDoc(), [p]);
     expect(applyTemplateEdit(doc, p, 'four-grid')).toEqual({ ok: false, reason: 'This layout has 4 panels; page 1 has 3.' });
-    // Not offered yet (INSET_TEMPLATES_ON): the director cannot apply it by name either.
+    // A template id that does not exist is refused by name.
     const two = undrawnPage('pg_u', 1, [panel('u1', 1), panel('u2', 2)]);
-    expect(applyTemplateEdit(withPages(doc, [two]), two, 'hero-inset')).toEqual({ ok: false, reason: 'That layout is not available.' });
+    expect(applyTemplateEdit(withPages(doc, [two]), two, 'hero-overlay')).toEqual({ ok: false, reason: 'That layout is not available.' });
     const locked = { ...p, panels: p.panels.map((x, i) => (i === 1 ? { ...x, frame: { ...x.frame!, locked: true as const } } : x)) };
     expect(applyTemplateEdit(withPages(doc, [locked]), locked, 'tall-left-two')).toEqual({ ok: false, reason: 'Panel 2 is locked. Unlock it to change it.' });
     const asDrawn = { ...p, artMode: undefined, render: { ...p.render, cuts: undefined } };

@@ -166,7 +166,7 @@ export function templateLayout(t: PageTemplate, opts: { rtl?: boolean; margin?: 
  * editor but its two panels side by side on the board, the wireframes and the lettering: two layout truths for one
  * page. Turning them on is this one line.
  */
-export const INSET_TEMPLATES_ON = false;
+export const INSET_TEMPLATES_ON = true;
 const INSET_TEMPLATE_IDS: ReadonlySet<TemplateId> = new Set<TemplateId>(['hero-inset']);
 /** A template the picker, "Best fit" and the director may offer now. */
 export const templateOffered = (t: PageTemplate): boolean => INSET_TEMPLATES_ON || !INSET_TEMPLATE_IDS.has(t.id);
