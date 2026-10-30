@@ -31,7 +31,7 @@ import { letteringAspect } from './lettering/layout.js';
 import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type ImageJobKind, type SpendEstimate } from './models.js';
 import { deriveLock } from './modelLock.js';
 import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
-import { panelBoxesFor } from './pageGeometry.js';
+import { drawnPanelBoxes } from './pageGeometry.js';
 import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
 
@@ -204,8 +204,9 @@ export function spendByTarget(doc: ComicDoc): Map<string, TargetSpend> {
 }
 
 export interface PanelSummary {
-  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), its blueprint — the plan as it will be
-   *  drawn, the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels. */
+  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), the layout as drawn (effectiveLayout) —
+   *  the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels (else the
+   *  layout as drawn). */
   n: number; box: Box; shot: ShotType; size: PanelSize; castIds: string[]; speech: number; captions: number; sfx: number; words: number;
   /** How much of the panel its lettering covers (density.ts need ÷ area, on `box`), its state and what it holds
    *  (in BookSummary.budgetUnit: words, or characters for Japanese and Chinese). Same boxes as the page's planFit. */
@@ -344,12 +345,13 @@ export function summarizeBook(
       const castIds = [...new Set(p.panels.flatMap((panel) => panel.castIds))];
       const asset = p.render.asset;
       // One plan check per page, on one set of boxes, feeds the per-panel dots AND the page verdict, so they never
-      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on its blueprint — the plan
-      // as it will be drawn, the gate's boxes — even when an older take left measured boxes; a drawn, current (or
-      // busy) page on the panels it was drawn with, and is never held back.
+      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on the layout as drawn
+      // (pagePlanCheck planBoxes: effectiveLayout, the gate's boxes) even when an older take left measured boxes; a
+      // drawn, current (or busy) page on the panels it was drawn with (measured, else the layout as drawn), and is
+      // never held back.
       const about = drawable.has(p.id);
       const check = p.panels.length
-        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: panelBoxesFor(doc, p), fixLayout: false })
+        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: drawnPanelBoxes(doc, p), fixLayout: false })
         : undefined;
       const summary: PageSummary = {
         id: p.id,

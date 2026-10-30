@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Line, type Page, type Panel } from './doc';
 import { candidateLayouts, checkBookPlan, checkPagePlan, chooseLayout, heldBackOf, holdBackApplies, panelBudgetSentence, planBoxes, splashIssues, splitHeldBack } from './pagePlanCheck';
-import { parseLayout, layoutPanelCount } from './pageGeometry';
+import { effectiveLayout, harmonizePanelSizes, parseLayout, layoutPanelCount } from './pageGeometry';
 
 const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight'.split(' ');
 const text = (n: number, seed = 0) => Array.from({ length: n }, (_, i) => WORDS[(seed + i) % WORDS.length]).join(' ');
@@ -96,8 +96,13 @@ describe('chooseLayout', () => {
     expect(fix.worst).toBeLessThanOrEqual(0.22);
     expect(fix.fits).toHaveLength(6);
     expect(fix.shrunk).toBe(1); // the writer's wide panel 3 had to give up its row
-    const after = checkPagePlan(doc, { ...page, layout: fix.layout });
+    // Applied the way layoutFixOps applies it (the sizes follow the blueprint), the page is drawn on that layout and fits.
+    const after = checkPagePlan(doc, { ...page, layout: fix.layout, panels: harmonizePanelSizes(page.panels, parseLayout(fix.layout)!) });
     expect(after.worst).toBeLessThanOrEqual(0.22);
+    // The layout text alone puts the wide panel 3 in a shared row: the prompt would draw the layout synthesized from
+    // the sizes (the old, overfull one), and the check measures the layout as drawn, so it says so.
+    expect(effectiveLayout({ ...page, layout: fix.layout }, doc.format)).not.toBe(fix.layout);
+    expect(checkPagePlan(doc, { ...page, layout: fix.layout }, { fixLayout: false }).state).toBe('overfull');
     expect(checkPagePlan(doc, page).layoutFix?.layout).toBe(fix.layout);
     // The overfull issue then needs no writer repair: it names the layout instead.
     expect(checkPagePlan(doc, page).issues.find((i) => i.kind === 'overfull')).toMatchObject({ severity: 'note', panel: 6 });
