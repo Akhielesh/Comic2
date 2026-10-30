@@ -211,7 +211,16 @@ panel 3 (panel 4)"). `pageGeometry.parseLayout` parses the rows without it and l
 its host's corner with the editor's numbers (`LAYOUT_INSET`, `layoutInsetBox` = `layoutText`'s `INSET`, `insetBox`).
 The server reads the same module (`vision.ts`, `prompts.ts`), and the page prompt measures the rows without the inset
 and names it in its host's corner. A sentence without the clause reads exactly as before:
-`server/src/comic/layoutSentences.golden.test.ts` pins every sentence the code and the fixtures make.
+`server/src/comic/layoutSentences.golden.test.ts` pins every sentence the code and the fixtures make (templates,
+synthesized and derived sentences, the plan check's candidate blueprints, and the fixture and test literals). A clause
+that does not add up (a number used twice or out of range, an inset hosting an inset, or an inset numbered before a
+full-page splash) is ignored and the sentence reads as before; `estimatePanelBoxes` always gives one box per panel.
+**Not yet: the lettering does not keep a host's balloons off its inset.** The engine
+(`shared/comic/lettering/place.ts`, called by `vision.ts` and the client's lettering) places each panel's balloons in its
+own box only, and a closing caption's default corner (end-bottom) is the Hero + inset template's inset corner, so a
+hero's closing caption can land on the inset. This is the lettering owner's follow-up (the inset boxes become keep-outs
+for their host panel's lines only). Until it lands a page gets the inset clause only from the editor engine, which no
+screen calls yet, so a creator does not meet it.
 
 **Drops and real people (PD-5).** `PERSON_PHOTO_GUIDE_ONLY` is on: a photo of a real person dropped on a panel offers
 the guide-only sticker first (`choices[0]`, a layer with `print: false`, with a warning for the UI to show once) and
