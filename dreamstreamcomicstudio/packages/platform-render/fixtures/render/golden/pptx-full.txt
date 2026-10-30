@@ -1063,6 +1063,269 @@ ppt/viewProps.xml
 </c:externalData>
 </c:chartSpace>
 
+## ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx parts
+[Content_Types].xml
+_rels/.rels
+docProps/app.xml
+docProps/core.xml
+xl/_rels/workbook.xml.rels
+xl/sharedStrings.xml
+xl/styles.xml
+xl/tables/table1.xml
+xl/theme/theme1.xml
+xl/workbook.xml
+xl/worksheets/_rels/sheet1.xml.rels
+xl/worksheets/sheet1.xml
+
+## ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx ! xl/worksheets/sheet1.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac">
+<dimension ref="A1:B4"/>
+<sheetViews>
+<sheetView tabSelected="1" workbookViewId="0">
+<selection activeCell="B1" sqref="B1"/>
+</sheetView>
+</sheetViews>
+<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/>
+<sheetData>
+<row r="1" spans="1:2">
+<c r="A1" t="s">
+<v>0</v>
+</c>
+<c r="B1" t="s">
+<v>1</v>
+</c>
+</row>
+<row r="2" spans="1:2">
+<c r="A2" t="s">
+<v>2</v>
+</c>
+<c r="B2">
+<v>120</v>
+</c>
+</row>
+<row r="3" spans="1:2">
+<c r="A3" t="s">
+<v>3</v>
+</c>
+<c r="B3">
+<v>340</v>
+</c>
+</row>
+<row r="4" spans="1:2">
+<c r="A4" t="s">
+<v>4</v>
+</c>
+<c r="B4">
+<v>910</v>
+</c>
+</row>
+</sheetData>
+<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx ! xl/sharedStrings.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="5" uniqueCount="5">
+<si>
+<t xml:space="preserve">
+</t>
+</si>
+<si>
+<t>Readers</t>
+</si>
+<si>
+<t>Jan</t>
+</si>
+<si>
+<t>Feb</t>
+</si>
+<si>
+<t>Mar</t>
+</si>
+</sst>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet1.xlsx ! docProps/core.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:creator>DreamStream</dc:creator>
+<cp:lastModifiedBy>DreamStream</cp:lastModifiedBy>
+<dcterms:created xsi:type="dcterms:W3CDTF">(time)</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">(time)</dcterms:modified>
+</cp:coreProperties>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx parts
+[Content_Types].xml
+_rels/.rels
+docProps/app.xml
+docProps/core.xml
+xl/_rels/workbook.xml.rels
+xl/sharedStrings.xml
+xl/styles.xml
+xl/tables/table1.xml
+xl/theme/theme1.xml
+xl/workbook.xml
+xl/worksheets/_rels/sheet1.xml.rels
+xl/worksheets/sheet1.xml
+
+## ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx ! xl/worksheets/sheet1.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac">
+<dimension ref="A1:C3"/>
+<sheetViews>
+<sheetView tabSelected="1" workbookViewId="0">
+<selection activeCell="B1" sqref="B1"/>
+</sheetView>
+</sheetViews>
+<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/>
+<sheetData>
+<row r="1" spans="1:3">
+<c r="A1" t="s">
+<v>0</v>
+</c>
+<c r="B1" t="s">
+<v>1</v>
+</c>
+<c r="C1" t="s">
+<v>2</v>
+</c>
+</row>
+<row r="2" spans="1:3">
+<c r="A2" t="s">
+<v>3</v>
+</c>
+<c r="B2">
+<v>1</v>
+</c>
+<c r="C2">
+<v>2.5</v>
+</c>
+</row>
+<row r="3" spans="1:3">
+<c r="A3" t="s">
+<v>4</v>
+</c>
+<c r="B3">
+<v>2</v>
+</c>
+<c r="C3">
+<v>1.5</v>
+</c>
+</row>
+</sheetData>
+<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx ! xl/sharedStrings.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="5" uniqueCount="5">
+<si>
+<t xml:space="preserve">
+</t>
+</si>
+<si>
+<t>A</t>
+</si>
+<si>
+<t>B</t>
+</si>
+<si>
+<t>Q1</t>
+</si>
+<si>
+<t>Q2</t>
+</si>
+</sst>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet2.xlsx ! docProps/core.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:creator>DreamStream</dc:creator>
+<cp:lastModifiedBy>DreamStream</cp:lastModifiedBy>
+<dcterms:created xsi:type="dcterms:W3CDTF">(time)</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">(time)</dcterms:modified>
+</cp:coreProperties>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx parts
+[Content_Types].xml
+_rels/.rels
+docProps/app.xml
+docProps/core.xml
+xl/_rels/workbook.xml.rels
+xl/sharedStrings.xml
+xl/styles.xml
+xl/tables/table1.xml
+xl/theme/theme1.xml
+xl/workbook.xml
+xl/worksheets/_rels/sheet1.xml.rels
+xl/worksheets/sheet1.xml
+
+## ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx ! xl/worksheets/sheet1.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac">
+<dimension ref="A1:B3"/>
+<sheetViews>
+<sheetView tabSelected="1" workbookViewId="0">
+<selection activeCell="B1" sqref="B1"/>
+</sheetView>
+</sheetViews>
+<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/>
+<sheetData>
+<row r="1" spans="1:2">
+<c r="A1" t="s">
+<v>0</v>
+</c>
+<c r="B1" t="s">
+<v>1</v>
+</c>
+</row>
+<row r="2" spans="1:2">
+<c r="A2" t="s">
+<v>2</v>
+</c>
+<c r="B2">
+<v>40</v>
+</c>
+</row>
+<row r="3" spans="1:2">
+<c r="A3" t="s">
+<v>3</v>
+</c>
+<c r="B3">
+<v>60</v>
+</c>
+</row>
+</sheetData>
+<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+</worksheet>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx ! xl/sharedStrings.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">
+<si>
+<t xml:space="preserve">
+</t>
+</si>
+<si>
+<t>Share</t>
+</si>
+<si>
+<t>Print</t>
+</si>
+<si>
+<t>Digital</t>
+</si>
+</sst>
+
+## ppt/embeddings/Microsoft_Excel_Worksheet3.xlsx ! docProps/core.xml
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:creator>DreamStream</dc:creator>
+<cp:lastModifiedBy>DreamStream</cp:lastModifiedBy>
+<dcterms:created xsi:type="dcterms:W3CDTF">(time)</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">(time)</dcterms:modified>
+</cp:coreProperties>
+
 ## ppt/media/image-4-1.jpeg sha256=d20f6ffd523b78a86cd2f916fa34af5d1918d75f7b142237c752ad6b254213ab bytes=22
 
 ## ppt/media/image-5-1.png sha256=3961afa075757350731e97fa41217a09b908bc124cd897560e84912650216231 bytes=94

@@ -10,7 +10,7 @@
   {
    "patch": "P0",
    "old": "/* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */\nimport JSZip from 'jszip';\n",
-   "new": "/* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */\n/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P8). */\nimport JSZip from 'jszip';\n\n// [DreamStream P0] Guards. Images come only as data: URIs (PNG, JPEG or WebP) the host already holds; links only https:/mailto:.\nconst DS_IMAGE_DATA = /^(?:data:)?image\\/(?:png|jpeg|webp);base64,/i;\nfunction dsBlocked(what) {\n    const err = new Error(`blocked: ${what}`);\n    err.code = 'blocked';\n    return err;\n}\nfunction dsAssertImageData(data, where) {\n    if (typeof data !== 'string' || !DS_IMAGE_DATA.test(data))\n        throw dsBlocked(`${where} takes only a data: image (PNG, JPEG or WebP); paths and URLs are never read`);\n}\nfunction dsAssertHyperlink(link, where) {\n    if (link && typeof link === 'object' && link.url !== undefined && !/^(?:https:\\/\\/|mailto:)/.test(String(link.url)))\n        throw dsBlocked(`${where}: a hyperlink must be https: or mailto:`);\n}\n"
+   "new": "/* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */\n/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P9). */\nimport JSZip from 'jszip';\n\n// [DreamStream P0] Guards. Images come only as data: URIs (PNG, JPEG or WebP) the host already holds; links only https:/mailto:.\nconst DS_IMAGE_DATA = /^(?:data:)?image\\/(?:png|jpeg|webp);base64,/i;\nfunction dsBlocked(what) {\n    const err = new Error(`blocked: ${what}`);\n    err.code = 'blocked';\n    return err;\n}\nfunction dsAssertImageData(data, where) {\n    if (typeof data !== 'string' || !DS_IMAGE_DATA.test(data))\n        throw dsBlocked(`${where} takes only a data: image (PNG, JPEG or WebP); paths and URLs are never read`);\n}\nfunction dsAssertHyperlink(link, where) {\n    if (link && typeof link === 'object' && link.url !== undefined && !/^(?:https:\\/\\/|mailto:)/.test(String(link.url)))\n        throw dsBlocked(`${where}: a hyperlink must be https: or mailto:`);\n}\n"
   },
   {
    "patch": "P1",
@@ -61,6 +61,21 @@
    "patch": "P8",
    "old": "            paragraphPropXml = genXmlParagraphProperties(textObj, false);\n            strSlideXml += paragraphPropXml.replace('<a:pPr></a:pPr>', ''); // IMPORTANT: Empty \"pPr\" blocks will generate needs-repair/corrupt msg",
    "new": "            paragraphPropXml = genXmlParagraphProperties(textObj, false);\n            // [DreamStream P8] one <a:pPr> per paragraph, first (upstream wrote one before every run)\n            if (idx === 0)\n                strSlideXml += paragraphPropXml.replace('<a:pPr></a:pPr>', ''); // IMPORTANT: Empty \"pPr\" blocks will generate needs-repair/corrupt msg"
+  },
+  {
+   "patch": "P9",
+   "old": "function createExcelWorksheet(chartObject, zip) {\n",
+   "new": "function createExcelWorksheet(chartObject, zip, author) {\n    // [DreamStream P9] the chart's \"Edit Data\" workbook names the deck's author, like the presentation does (upstream wrote PptxGenJS)\n"
+  },
+  {
+   "patch": "P9",
+   "old": "                    '<dc:creator>PptxGenJS</dc:creator>' +\n                    '<cp:lastModifiedBy>PptxGenJS</cp:lastModifiedBy>' +\n",
+   "new": "                    '<dc:creator>' + encodeXmlEntities(author || '') + '</dc:creator>' +\n                    '<cp:lastModifiedBy>' + encodeXmlEntities(author || '') + '</cp:lastModifiedBy>' +\n"
+  },
+  {
+   "patch": "P9",
+   "old": "            slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip)));\n",
+   "new": "            slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip, this.author)));\n"
   }
  ]
 }

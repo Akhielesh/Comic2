@@ -107,15 +107,15 @@ describe('vendored PptxGenJS: never reads a path or fetches a URL (PATCHES.md)',
     };
     visit(sf);
     expect(found).toEqual([]);
-    for (const n of [0, 1, 2, 3, 4, 5, 6, 7, 8]) expect(source, `P${n}`).toContain(`[DreamStream P${n}]`);
+    for (const n of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) expect(source, `P${n}`).toContain(`[DreamStream P${n}]`);
     expect(source.split('\n')[0]).toBe('/* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */');
   });
 
-  it('every edit of scripts/pptxgenjs-patches.json is in the vendored file, once, and P0–P8 are all there', () => {
+  it('every edit of scripts/pptxgenjs-patches.json is in the vendored file, once, and P0–P9 are all there', () => {
     const source = readFileSync(VENDORED, 'utf8');
     const { edits, upstream } = JSON.parse(readFileSync(here('../scripts/pptxgenjs-patches.json'), 'utf8')) as { edits: { patch: string; new: string }[]; upstream: { version: string } };
     for (const e of edits) expect(source.split(e.new).length - 1, e.patch).toBe(1);
-    expect(Array.from(new Set(edits.map((e) => e.patch)))).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
+    expect(Array.from(new Set(edits.map((e) => e.patch)))).toEqual(['P0', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8', 'P9']);
     expect(upstream.version).toBe(/PptxGenJS (\d+\.\d+\.\d+)/.exec(source)![1]);
   });
 
@@ -298,11 +298,26 @@ describe('renderPptx: theme, text and structure', () => {
     expect(text(parts, 'ppt/slides/slide1.xml')).toContain('&lt;td&gt;&amp;');
   });
 
-  it('metadata names the deck and the kit, never the library', async () => {
-    const core = text(await zipParts(await renderPptx(deckOf([]), { brand: BRAND })), 'docProps/core.xml');
+  it('metadata names the deck and the kit, never the library: the presentation and every chart workbook (P9)', async () => {
+    const chart: DeckElement = { kind: 'chart', id: 'c', rect: [0.1, 0.1, 0.8, 0.8], layer: 'content', chart: 'bar', categories: ['Jan', 'Feb'], series: [{ name: 'Readers', values: [3, 5] }] };
+    const parts = await zipParts(await renderPptx(deckOf([chart]), { brand: BRAND }));
+    const core = text(parts, 'docProps/core.xml');
     expect(core).toContain('<dc:title>Test deck</dc:title>');
     expect(core).toContain('<dc:creator>Harbor Press</dc:creator>');
     expect(core).not.toMatch(/PptxGenJS/i);
+    // PowerPoint's "Edit Data" opens the chart's embedded workbook; its own properties name the kit too.
+    const workbooks = Object.keys(parts).filter((n) => /^ppt\/embeddings\/.+\.xlsx$/.test(n));
+    expect(workbooks).toHaveLength(1);
+    const inner = await zipParts(parts[workbooks[0]]);
+    const innerCore = text(inner, 'docProps/core.xml');
+    expect(innerCore).toContain('<dc:creator>Harbor Press</dc:creator>');
+    expect(innerCore).toContain('<cp:lastModifiedBy>Harbor Press</cp:lastModifiedBy>');
+    for (const name of Object.keys(inner)) if (/\.(xml|rels)$/.test(name)) expect(text(inner, name), name).not.toMatch(/PptxGenJS/i);
+    // A kit name is escaped there like everywhere else, and the workbook stays well-formed.
+    const tricky = await zipParts(await renderPptx(deckOf([chart]), { brand: { ...BRAND, name: 'Ink & <Paper>' } }));
+    const trickyCore = text(await zipParts(tricky[Object.keys(tricky).filter((n) => /\.xlsx$/.test(n))[0]]), 'docProps/core.xml');
+    expect(trickyCore).toContain('<dc:creator>Ink &amp; &lt;Paper&gt;</dc:creator>');
+    parseXml(trickyCore, 'workbook docProps/core.xml');
   });
 
   it('not a DeckSpec v1 is invalid; more slides or elements than the contract allows is too-large', async () => {

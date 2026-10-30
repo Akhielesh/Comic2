@@ -1,7 +1,8 @@
 /**
  * Test helpers for the renderers (not shipped: tsconfig.json and the purity test leave `*.testkit.ts` out). Reads
  * fixtures, unzips outputs and normalises them into golden text: every part name, the XML of the parts that carry
- * content (one tag per line), and the sha256 of each media file. Run-to-run noise is normalised: timestamps, the
+ * content (one tag per line), the sha256 of each media file, and inside each chart's embedded workbook (PowerPoint's
+ * "Edit Data") its part names, its sheet, its shared strings and its document properties. Run-to-run noise is normalised: timestamps, the
  * random relationship ids docx gives hyperlinks, chart GUIDs, and PptxGenJS's process-wide chart counter.
  */
 import { createHash } from 'node:crypto';
@@ -76,6 +77,10 @@ const GOLDEN_PARTS = [
 
 const MEDIA = /^(word|ppt)\/media\//;
 
+/** A chart's embedded workbook, and the parts of it a golden prints: the chart's data and who the file names. */
+const EMBEDDED_XLSX = /^ppt\/embeddings\/.+\.xlsx$/;
+const XLSX_GOLDEN_PARTS = ['xl/worksheets/sheet1.xml', 'xl/sharedStrings.xml', 'docProps/core.xml'];
+
 /**
  * The golden text of a docx/pptx: deterministic for the same input whatever ran before it in the process.
  */
@@ -116,6 +121,13 @@ export const goldenOf = async (bytes: Uint8Array, title: string): Promise<string
       out.push('', `## ${shown} sha256=${createHash('sha256').update(parts[name]).digest('hex')} bytes=${parts[name].length}`);
     } else if (XML_PART.test(name) && GOLDEN_PARTS.some((re) => re.test(name))) {
       out.push('', `## ${shown}`, norm(text(parts, name)).replace(/>\s*</g, '>\n<').trim());
+    } else if (EMBEDDED_XLSX.test(name)) {
+      // The workbook's bytes carry zip dates and timestamps, so it is unzipped and printed like the outer file.
+      const inner = await zipParts(parts[name]);
+      out.push('', `## ${shown} parts`, ...Object.keys(inner));
+      for (const part of XLSX_GOLDEN_PARTS) {
+        out.push('', `## ${shown} ! ${part}`, inner[part] ? norm(text(inner, part)).replace(/>\s*</g, '>\n<').trim() : '(missing)');
+      }
     }
   }
   return `${out.join('\n')}\n`;

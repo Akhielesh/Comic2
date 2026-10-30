@@ -22,9 +22,10 @@ Every refusal is a `RenderError` with a stable `code`: `blocked`, `overlap`, `in
   browser passes a canvas one) or refused as `unsupported`, because not every Word and PowerPoint reader takes it.
   Before any decode its header is measured: over 12,000 px a side or 50 megapixels (plan §9) is `too-large`, and a
   size that cannot be read is `unsupported`, so a tiny file declaring a gigapixel canvas never reaches the canvas.
-- **The vendored PptxGenJS refuses the same things itself** (`src/vendor/pptxgenjs/PATCHES.md`, P0–P8): no `path`,
+- **The vendored PptxGenJS refuses the same things itself** (`src/vendor/pptxgenjs/PATCHES.md`, P0–P9): no `path`,
   no URL or SVG image, no media, no background path, `https:`/`mailto:` hyperlinks only, no `node:fs`, `node:https`,
-  `XMLHttpRequest` or `writeFile`. P8 fixes an upstream bug (one `<a:pPr>` per paragraph).
+  `XMLHttpRequest` or `writeFile`. P8 fixes an upstream bug (one `<a:pPr>` per paragraph); P9 makes each chart's
+  embedded workbook name the deck's author instead of the library.
 - **Links survive only as `https:` or `mailto:`** (`isSafeHref` from platform-core); any other link keeps its text and
   loses the link. Text is escaped by the writers and cleaned of characters XML cannot carry and of bidi overrides.
 - **Markdown is data.** Raw HTML is dropped at any depth, list items and table cells included (with the content of
@@ -75,7 +76,8 @@ vendored PptxGenJS 4.0.1 (MIT, `src/vendor/pptxgenjs`, with its `LICENSE` and `P
 `npx vitest run packages/platform-render` (from the app root):
 
 - `golden.test.ts`: three DOCX and two PPTX outputs as normalised XML (`render.testkit.ts`: every part name, the
-  content parts one tag per line, media by sha256; timestamps, random relationship ids, GUIDs and PptxGenJS's chart
+  content parts one tag per line, media by sha256, and each chart's embedded workbook unzipped: its sheet, shared
+  strings and properties; timestamps, random relationship ids, GUIDs and PptxGenJS's chart
   counter normalised). **Regenerate them on purpose only**, and review the diff:
   `UPDATE_GOLDENS=1 npx vitest run packages/platform-render/src/golden.test.ts` (also `npm run goldens` here).
 - `docx.test.ts`, `pptx.test.ts`, `markdown.test.ts`: brand styles, blocked image sources (with `fetch` and

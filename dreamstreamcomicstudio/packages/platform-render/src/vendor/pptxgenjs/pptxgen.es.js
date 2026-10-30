@@ -1,5 +1,5 @@
 /* PptxGenJS 4.0.1 @ 2025-06-25T23:35:35.098Z */
-/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P8). */
+/* Vendored for DreamStream (packages/platform-render): patched so it never reads a path or fetches a URL. See PATCHES.md (P0-P9). */
 import JSZip from 'jszip';
 
 // [DreamStream P0] Guards. Images come only as data: URIs (PNG, JPEG or WebP) the host already holds; links only https:/mailto:.
@@ -2940,7 +2940,8 @@ class Slide {
  * @param {JSZip} zip - file that the resulting XLSX should be added to
  * @return {Promise} promise of generating the XLSX file
  */
-function createExcelWorksheet(chartObject, zip) {
+function createExcelWorksheet(chartObject, zip, author) {
+    // [DreamStream P9] the chart's "Edit Data" workbook names the deck's author, like the presentation does (upstream wrote PptxGenJS)
     return __awaiter(this, void 0, void 0, function* () {
         const data = chartObject.data;
         return yield new Promise((resolve, reject) => {
@@ -2984,8 +2985,8 @@ function createExcelWorksheet(chartObject, zip) {
                     '<Company></Company><LinksUpToDate>false</LinksUpToDate><SharedDoc>false</SharedDoc><HyperlinksChanged>false</HyperlinksChanged><AppVersion>16.0300</AppVersion>' +
                     '</Properties>\n');
                 zipExcel.file('docProps/core.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
-                    '<dc:creator>PptxGenJS</dc:creator>' +
-                    '<cp:lastModifiedBy>PptxGenJS</cp:lastModifiedBy>' +
+                    '<dc:creator>' + encodeXmlEntities(author || '') + '</dc:creator>' +
+                    '<cp:lastModifiedBy>' + encodeXmlEntities(author || '') + '</cp:lastModifiedBy>' +
                     '<dcterms:created xsi:type="dcterms:W3CDTF">' +
                     new Date().toISOString() +
                     '</dcterms:created>' +
@@ -6817,7 +6818,7 @@ class PptxGenJS {
          * @param {Promise<string>[]} chartPromises - promise array
          */
         this.createChartMediaRels = (slide, zip, chartPromises) => {
-            slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip)));
+            slide._relsChart.forEach(rel => chartPromises.push(createExcelWorksheet(rel, zip, this.author)));
             slide._relsMedia.forEach(rel => {
                 if (rel.type !== 'online' && rel.type !== 'hyperlink') {
                     // A: Loop vars

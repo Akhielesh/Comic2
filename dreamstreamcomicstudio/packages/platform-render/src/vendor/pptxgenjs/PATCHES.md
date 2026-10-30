@@ -30,13 +30,14 @@ and whose message starts with `blocked:`; `src/pptx.ts` maps it to `RenderError(
 | P6 | `createHyperlinkRels` (text and table-cell hyperlinks) | A `url` hyperlink must pass `dsAssertHyperlink` (so `javascript:`, `data:`, `http:` and `file:` links are refused). |
 | P7 | `writeFile`, `writeFileToBrowser` | Replaced: both reject. No `node:fs` write and no DOM download from inside the library; callers use `write({outputType})` and save the bytes themselves. |
 | P8 | `genXmlTextBody` (bug fix) | Upstream writes an `<a:pPr>` before every run of a paragraph (never empty since its ISSUE#589 fix), so a paragraph with two runs (bold inside a sentence, a link) gets a second `<a:pPr>` after its first `<a:r>`, which the DrawingML schema does not allow. Only the first run of a paragraph writes it now. Worth upstreaming. |
+| P9 | `createExcelWorksheet` and its call in `createChartMediaRels` (metadata) | Each chart's embedded workbook (PowerPoint's "Edit Data") wrote `PptxGenJS` as its `dc:creator` and `cp:lastModifiedBy`; it now writes the presentation's `author` (the BrandKit's name, set by `src/pptx.ts`), XML-escaped, like the presentation's own `docProps/core.xml`. |
 
-P0–P7 are security patches; P8 is a correctness fix. Nothing else is changed: XML generation, charts, tables, text
-and the zip writer are upstream's code.
+P0–P7 are security patches; P8 is a correctness fix; P9 keeps the library's name out of the files we hand out.
+Nothing else is changed: XML generation, charts, tables, text and the zip writer are upstream's code.
 
 ## Updating
 
-`scripts/pptxgenjs-patches.json` holds the exact edits (P0–P8, as `old` → `new` pairs in order) and
+`scripts/pptxgenjs-patches.json` holds the exact edits (P0–P9, as `old` → `new` pairs in order) and
 `scripts/vendor-pptxgenjs.mjs` applies them, refusing to run when an `old` no longer matches exactly once. The rest of
 the file stays byte-for-byte upstream (its CRLF line ends included).
 

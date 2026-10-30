@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
 // Goldens (plan §12 W1.7): three DOCX and two PPTX files rendered from fixed fixtures, compared as normalised XML
-// (render.testkit.ts `goldenOf`: every part name, the content-bearing XML one tag per line, media by sha256).
+// (render.testkit.ts `goldenOf`: every part name, the content-bearing XML one tag per line, media by sha256, and each
+// chart's embedded workbook unzipped: its sheet data, shared strings and properties).
 //
 // They fail on ANY change to what the renderers write. When a change is intended (a renderer change, or the
 // W1.2/W1.3 merge wiring BrandKit and overlapCheck in), regenerate them on purpose and review the diff:
