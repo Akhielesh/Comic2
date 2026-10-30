@@ -147,7 +147,7 @@ describe('with COMIC_HISTORY on', () => {
     }));
     const ctx = testContext(session);
     // The stream runs a UI chip's action with origin 'user'; planPages commits the writer's pages with it.
-    await runAction(ctx, { type: 'plan_pages' }, { origin: 'user' });
+    await runAction(ctx, { type: 'plan_pages' }, { confirmed: true, origin: 'user' });
     await ctx.settled();
     await session.flush();
     const rows = rowsOf(session.projectId);
