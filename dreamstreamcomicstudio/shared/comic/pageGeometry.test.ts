@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import * as board from '../../components/comicstudio/board/pageLayout';
-import type { Page, Panel, PanelSize } from './doc';
+import type { ComicDoc, Page, Panel, PanelSize } from './doc';
 import * as geo from './pageGeometry';
 
 const panelsOf = (sizes: PanelSize[]): Panel[] =>
@@ -123,5 +123,25 @@ describe('the inset clause', () => {
     const broken = 'Row 1: one wide panel across the full width (panel 1) with a small inset panel in its lower right corner (panel 7).';
     // (The old reading: two panels side by side, the word "small" making the row short.)
     expect(geo.parseLayout(broken)).toEqual({ mode: 'rows', rows: [{ panels: [0, 1], weight: 0.85 }] });
+  });
+
+  it('a full-page splash whose inset is numbered first does not add up: the old reading, and one box per panel', () => {
+    // The splash would be panel 2, but the single-mode boxes and harmonizePanelSizes write panel 1: the boxes had a
+    // hole and the page prompt threw. The old reading is one splash panel, so a 2-panel page synthesizes its layout.
+    const s = 'One full-page splash panel with a small inset panel in the upper left corner of panel 2 (panel 1).';
+    expect(geo.parseLayout(s)).toEqual({ mode: 'single', rows: [{ panels: [0], weight: 1 }] });
+    expect(geo.parseLayout(s)!.insets).toBeUndefined();
+    const page = pageWith(s, 2);
+    const doc = { format: { kind: 'comic', readingDirection: 'ltr' } } as Pick<ComicDoc, 'format'>;
+    expect(geo.effectiveLayout(page, doc.format)).not.toBe(s);
+    for (const boxes of [geo.estimatePanelBoxes(page), geo.drawnLayoutBoxes(doc, page), geo.panelBoxesFor(doc, { ...page, render: { status: 'none', history: [] } })]) {
+      expect(boxes).toHaveLength(2);
+      expect(Array.from({ length: 2 }, (_, i) => boxes[i]).every((b) => !!b && b.w > 0 && b.h > 0)).toBe(true);
+    }
+    // Numbered after its splash, the same inset adds up: the splash is panel 1, the inset panel 2 in its corner.
+    const ok = 'One full-page splash panel with a small inset panel in its upper left corner (panel 2).';
+    expect(geo.parseLayout(ok)).toEqual({ mode: 'single', rows: [{ panels: [0], weight: 1 }], insets: [{ panel: 1, host: 0, vert: 'upper', horiz: 'left' }] });
+    const [splash, inset] = geo.estimatePanelBoxes(pageWith(ok, 2));
+    expect(inset).toEqual(geo.layoutInsetBox(splash, 'upper', 'left'));
   });
 });

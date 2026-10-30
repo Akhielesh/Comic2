@@ -211,6 +211,9 @@ const parseWithInsets = (text: string): ParsedLayout | null => {
   const total = layoutPanelCount(main) + clauses.length;
   const insetAt = new Set(clauses.map((c) => c.n - 1));
   if (insetAt.size !== clauses.length || clauses.some((c) => !(c.n >= 1 && c.n <= total))) return null;
+  // A full-page splash is panel 1 (the single-mode boxes and harmonizePanelSizes write index 0): an inset numbered
+  // first would leave the splash elsewhere and the boxes with a hole, so that sentence does not add up either.
+  if (main.mode === 'single' && insetAt.has(0)) return null;
   // The rows' panels take the reading numbers the insets leave free, in order.
   const free: number[] = [];
   for (let i = 0; i < total; i++) if (!insetAt.has(i)) free.push(i);
@@ -401,12 +404,15 @@ export const estimatePanelBoxes = (page: Pick<Page, 'panels' | 'layout'>, opts: 
   let parsed = page.layout ? parseLayout(page.layout) : null;
   if (!fits(parsed)) parsed = parseLayout(synthesizeLayout(page.panels, { kind, readingDirection: rtl ? 'rtl' : 'ltr' }));
   if (!fits(parsed)) parsed = gridLayout(n);
-  const boxes = boxesFromLayout(parsed, n, rtl).map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) }));
+  const round = (b: Box): Box => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) });
+  const boxes = boxesFromLayout(parsed, n, rtl).map(round);
   // Insets sit in a corner of their host's (rounded) box, as the editor places them (layoutText framesFromLayoutText).
   for (const inset of parsed.insets ?? []) {
     const host = boxes[inset.host];
     if (host && inset.panel < n) boxes[inset.panel] = layoutInsetBox(host, inset.vert, inset.horiz);
   }
+  // Every reader indexes one box per panel: a parse that leaves a panel without one (none known) gets the plain grid.
+  if (boxes.length !== n || Array.from({ length: n }, (_, i) => boxes[i]).some((b) => !b)) return boxesFromLayout(gridLayout(n), n, rtl).map(round);
   return boxes;
 };
 

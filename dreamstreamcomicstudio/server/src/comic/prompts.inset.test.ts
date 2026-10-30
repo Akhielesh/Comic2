@@ -41,6 +41,17 @@ describe('the page prompt and insets', () => {
     expect(all.find((l) => l.startsWith('PANEL 4 of 4'))).toContain('a small inset in the upper left corner of box 3, drawn over it;');
   });
 
+  it('a full-page splash with its inset numbered first does not add up: the page compiles on its synthesized layout', () => {
+    // The blueprint once placed the splash as panel 2 with no box for panel 1, and rowTopsOf threw on the hole.
+    const s = 'One full-page splash panel with a small inset panel in the upper left corner of panel 2 (panel 1).';
+    const { doc, page } = withLayout(s, 2, ['splash', 'small']);
+    const prompt = compilePage(doc, page).prompt;
+    expect(prompt).not.toContain(s);
+    expect(prompt).not.toMatch(/\binset\b/i);
+    expect(prompt).toMatch(/PANEL 1 of 2/);
+    expect(prompt).toMatch(/PANEL 2 of 2/);
+  });
+
   it('a page without an inset never mentions one', () => {
     const { doc, page } = withLayout('Row 1: one wide panel across the full width (panel 1). Row 2: two equal panels side by side (panels 2–3).', 3, ['wide', 'medium', 'medium']);
     const prompt = compilePage(doc, page).prompt;

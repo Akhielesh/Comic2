@@ -147,11 +147,28 @@ describe('golden: the inset clause, client and server alike', () => {
     for (const s of [
       'Row 1: one wide panel across the full width (panel 1) with a small inset panel in its lower right corner (panel 5).',
       'Row 1: one wide panel across the full width (panel 1) with a small inset panel in its lower right corner (panel 1).',
-      'Row 1: two equal panels side by side (panels 1–2) with a small inset panel in the lower right corner of panel 3 (panel 3).'
+      'Row 1: two equal panels side by side (panels 1–2) with a small inset panel in the lower right corner of panel 3 (panel 3).',
+      // A full-page splash is panel 1: an inset numbered before it leaves the splash nowhere (the boxes had a hole).
+      'One full-page splash panel with a small inset panel in the upper left corner of panel 2 (panel 1).'
     ]) {
       const parsed = geo.parseLayout(s);
       expect(parsed?.insets, s).toBeUndefined();
       expect(serverParse(s), s).toEqual(parsed);
+    }
+  });
+
+  it('a full-page splash with its inset numbered first: one defined box per panel, client and server alike', () => {
+    const s = 'One full-page splash panel with a small inset panel in the upper left corner of panel 2 (panel 1).';
+    const page = pageOf(s, ['splash', 'small']);
+    for (const kind of ['comic', 'webtoon', 'strip'] as const) {
+      for (const readingDirection of ['ltr', 'rtl'] as const) {
+        const shared = geo.estimatePanelBoxes(page, { kind, readingDirection });
+        expect(Array.from({ length: 2 }, (_, i) => shared[i]).every(Boolean), `${kind} ${readingDirection}`).toBe(true);
+        expect(serverBoxes(page, { kind, readingDirection })).toEqual(shared);
+        const doc = { format: { ...plannedDoc().format, kind, readingDirection } };
+        const drawn = geo.drawnLayoutBoxes(doc, page);
+        expect(Array.from({ length: 2 }, (_, i) => drawn[i]).every(Boolean), `${kind} ${readingDirection}`).toBe(true);
+      }
     }
   });
 });
