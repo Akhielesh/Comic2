@@ -8,7 +8,7 @@ import { FlaskConical, Loader2 } from 'lucide-react';
 import { TONE_TEXT } from '../../../chat/studioDesign';
 import { cx } from '../../conversation/ui';
 import { LabResultCard, costLine } from './LabResultCard';
-import { LabApiError, formatLabUsd, newClickId, runLabCheck, type LabItem, type LabQuote, type LabRun, type LabRunAnswer } from './labApi';
+import { LabApiError, formatLabUsd, newClickId, runLabCheck, type LabAbRun, type LabBlindRun, type LabItem, type LabQuote, type LabRunAnswer } from './labApi';
 import { LAB_PANEL, LAB_PRIMARY_BTN, LAB_SECONDARY_BTN, WRAP } from './labStyles';
 
 export interface RunConfirmDialogProps {
@@ -18,13 +18,17 @@ export interface RunConfirmDialogProps {
   onClose(): void;
   /** A run finished (or was replayed): the section re-reads the overview. */
   onDone?(answer: LabRunAnswer): void;
+  /** Pro pages A/B arms (P1): the A/B's own budget (every day, shared with part 2), shown next to the daily one. */
+  abBudget?: { spentUsd: number | null; limitUsd: number | null; capUsd: number };
 }
 
 type Phase = 'confirm' | 'running' | 'done' | 'error';
 
-const isBlindRun = (run: LabRunAnswer['run']): run is Exclude<LabRunAnswer['run'], LabRun> => run.checkId === 'D4' && !('facts' in run);
+const isBlindRun = (run: LabRunAnswer['run']): run is LabBlindRun => run.checkId === 'D4' && !('facts' in run);
+const isAbRun = (run: LabRunAnswer['run']): run is LabAbRun => (run.checkId === 'P1' || run.checkId === 'P2') && !('facts' in run);
+const isAbItem = (item: LabItem) => item.check === 'P1' || item.check === 'P2';
 
-export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentUsd, capUsd, onClose, onDone }) => {
+export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentUsd, capUsd, onClose, onDone, abBudget }) => {
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -115,12 +119,23 @@ export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentU
                 {quote.refsUnpriced && <span className="ml-1 text-[13px] font-normal text-[var(--ds-muted)]">+ reference input (price unpublished)</span>}
               </p>
               <p className={cx('text-[12px] text-[var(--ds-muted)]', WRAP)}>{quote.basis}</p>
-              <p className={WRAP}>
-                One paid call to {item.nickname} on the platform key: {item.res} · {item.aspect} · {item.refsNote}. No retries — if it fails, the failure is recorded and nothing is sent again.
-              </p>
+              {isAbItem(item) ? (
+                <p className={WRAP} data-lab-ab-call="">
+                  One drawing of this page on {item.nickname || 'its model'} ({item.res} · {item.aspect} · {item.refsNote}), then one page check of it — on the platform key. No retries: if either fails, the failure is recorded and nothing is sent again. Which drawing is which stays hidden until you vote.
+                </p>
+              ) : (
+                <p className={WRAP}>
+                  One paid call to {item.nickname} on the platform key: {item.res} · {item.aspect} · {item.refsNote}. No retries — if it fails, the failure is recorded and nothing is sent again.
+                </p>
+              )}
               <p className="tabular-nums">
                 Today (UTC): {formatLabUsd(spentUsd)} of {formatLabUsd(capUsd)} used → about {formatLabUsd(after)} after this run.
               </p>
+              {isAbItem(item) && abBudget && abBudget.limitUsd !== null && abBudget.spentUsd !== null && (
+                <p className="tabular-nums" data-lab-ab-budget="">
+                  A/B budget (every day, shared with part 2): {formatLabUsd(abBudget.spentUsd)} of {formatLabUsd(abBudget.limitUsd)} used → about {formatLabUsd(abBudget.spentUsd + quote.usd)} after this drawing.
+                </p>
+              )}
             </div>
           )}
 
@@ -141,7 +156,18 @@ export const RunConfirmDialog: React.FC<RunConfirmDialogProps> = ({ item, spentU
           {phase === 'done' && answer && (
             <div role="status" aria-live="polite" className="mt-3 space-y-2">
               {answer.replayed && <p className="text-[12.5px] text-[var(--ds-muted)]">This click had already run — here is its stored result. No second call was made.</p>}
-              {isBlindRun(answer.run) ? (
+              {isAbRun(answer.run) ? (
+                <div className="space-y-1 text-[13px] text-[var(--ds-ink)]" data-lab-ab-done="">
+                  <p className={WRAP}>
+                    {answer.run.status === 'ok'
+                      ? `Drawn${answer.run.checked ? ' and checked' : ''}. It joins the side-by-side for ${answer.run.pair.label} once both drawings are made — which one had the guide${answer.run.checked ? ', and what its check found,' : ''} stays hidden until you vote.`
+                      : answer.run.status === 'running'
+                        ? 'Still drawing. Its result shows in the side-by-side when it finishes; it will not be sent twice.'
+                        : answer.run.message || 'It did not draw.'}
+                  </p>
+                  <p className="tabular-nums text-[12.5px]">{costLine({ ...answer.run, facts: { callMade: answer.run.callMade, costReported: answer.run.costReported } })}</p>
+                </div>
+              ) : isBlindRun(answer.run) ? (
                 <div className="space-y-1 text-[13px] text-[var(--ds-ink)]">
                   <p className={WRAP}>
                     {answer.run.status === 'ok'

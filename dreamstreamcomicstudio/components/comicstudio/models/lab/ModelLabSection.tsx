@@ -11,6 +11,7 @@ import { cx } from '../../conversation/ui';
 import { ModelHealthDot } from '../../reliability/ModelHealthDot';
 import { BlindPairCard } from './BlindPairCard';
 import { LabResultCard } from './LabResultCard';
+import { ProPagesSection } from './ProPagesSection';
 import { RunConfirmDialog } from './RunConfirmDialog';
 import { fetchLabOverview, formatLabUsd, type LabCheck, type LabItem, type LabOverview, type LabRun } from './labApi';
 import { LAB_PANEL, LAB_PRIMARY_BTN, LAB_SECONDARY_BTN, LAB_WELL, WRAP } from './labStyles';
@@ -209,6 +210,8 @@ export const ModelLabSection: React.FC = () => {
             </section>
           ))}
 
+          {overview.proPages && <ProPagesSection view={overview.proPages} onRun={setConfirming} />}
+
           <section aria-labelledby="model-lab-results" className={cx(LAB_PANEL, 'min-w-0 p-3')}>
             <h3 id="model-lab-results" className="text-[14.5px] font-semibold tracking-tight text-[var(--ds-ink)]">
               Results (D1–D3)
@@ -235,6 +238,7 @@ export const ModelLabSection: React.FC = () => {
           capUsd={overview.capUsd}
           onClose={() => setConfirming(null)}
           onDone={() => load()}
+          {...((confirming.check === 'P1' || confirming.check === 'P2') && overview.proPages ? { abBudget: overview.proPages.budget } : {})}
         />
       )}
     </section>
