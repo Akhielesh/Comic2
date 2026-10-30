@@ -339,3 +339,69 @@ measured at 320×640 and 360×740 touch and at 1440×900, light and dark, `?skin
 - **One toast slot.** The restore toast shares the studio's one toast slot with the timeline's Undo toasts
   (`timeline/UndoToast.tsx` `claimUndoToast`): showing it makes a timeline Undo toast step aside, and a newer toast (a
   timeline edit's or another restore's) replaces it, so the two never stack.
+
+## 10. Recorder (H2)
+
+Code: `server/src/comic/history/{recorder,policy}.ts` (the session's `HistoryHooks` while `COMIC_HISTORY` is on;
+`createHistoryHooks` in `hooks.ts` builds one per open comic). With `COMIC_HISTORY` unset the session keeps
+`NOOP_HISTORY_HOOKS`: no store call, no event, nothing observable changes.
+
+**Who made a change** (`policy.ts classifyBatch` over `touched.ts opActor`, §4.2):
+
+- The action behind the batch decides first. `jobs.ts startAction` runs every action inside `withHistoryAction`
+  (AsyncLocalStorage, no store call of its own), and `approveGate` runs the approved action inside its own, so every
+  commit an action makes, renders still drawing in the background included, reaches the recorder with it. The
+  recorder passes `action.type` to `opActor` (4th argument) and the action to `panelMomentsOfOps`.
+  - `EDITOR_ACTIONS` → the editor ("no AI cost"): `panelize_page`, `flatten_page`, `rebind_panels`, `apply_finding`,
+    `fit_render` (a fitted image) and `relayout_balloons` (balloon re-fits).
+  - `AI_ACTIONS` → the AI: `fix_panel` (its words name the panel: "AI redrew panel 3 on page 1"), `enrich_pages` and
+    `plan_pages` ("Plan the pages" clicked in the UI is the writer's rewrite, never "You edited").
+- A derived image (`render` with `origin: 'derived'`) is the editor's whoever asked.
+- Without an action: your clicks are yours, the director's changes are the AI's, job renders that set an AI image and
+  the writer's pages, panels, translations, style options and model switches are the AI's, server panel ops and
+  balloon placement are the editor's. Two batch rules remain for a commit made outside an action: the writer's commit
+  labels ("Plan pages", "Revise pages", "Add cast" with a `pages` or `character` op) name the AI's batch, and a batch
+  holding a fitted image (its remapped balloons included) is the editor's.
+- QC reports, variants, safety verdicts and render statuses (`system`) are no change to the book: they never make a
+  row, never restart the gap clock or trigger the gap row, and leave nothing for "Where you left off".
+
+**AI runs.** The `before_ai` row is written at a run's first AI commit and never awaited (a paid run never waits for
+History); its label comes from that commit plus the drawings already queued, without translation counts. The `ai` row
+is written at the flush after the run, or earlier when a change of yours or 10 quiet minutes (`aiRunGapMinutes`)
+close it. Its parent is the `before_ai` row, or the head when nothing changed before the run. `stats.spend`: the run
+adopts the spend recorded since the last flush (the writer is paid before its plan lands). A run paid only on your own
+key is `byok: true`; a mixed run keeps only the part that counted toward usage.
+
+**Your edits.** `content_at` is when the book last changed (a chat message, spend, gate or QC commit no longer dates a
+row). The first change 30 minutes after the line's last change (`gapMinutes`) first records the book as it was
+(`content_at = before.updatedAt`). Quiet edits (yours and the editor's) become an `edits` row at a flush once the
+oldest is 10 minutes old, or after 25 commits, or once they touch 3 pages. The final flush (the sweeper's eviction,
+shutdown) writes "Where you left off".
+
+**Other rows.** "History starts here" (a pinned `start` row) on the first load of a comic with no rows; a pinned
+`publish` row only when `publishedRev` changes; the classic import's pinned `import` row ("Brought into the new
+studio", `onImported`; the new comic's first load waits for it, so there is no extra `start` row).
+
+**Writes, failures and the queue.** `chunkBook(doc)` → `store.missing(hashes)` → `store.put` with only the missing
+chunks; a retryable `CONFLICT` (MISSING_CHUNKS) is retried once with every chunk. A failed capture is logged
+(`comic_history_capture_failed`) and kept in a queue of at most 5 (`HISTORY_PENDING_MAX`; a pinned capture is never
+dropped), retried at the next commit or flush, never on a timer. `NOT_AVAILABLE` (the tables are not applied) stops
+recording for the session; any other non-retryable StudioError drops that capture; network errors are retried. A
+flush waits for what was queued since the last flush; the final flush waits for everything. Every store request is
+bounded by `HISTORY_RPC_TIMEOUT_MS` (10 s, `AbortSignal.timeout` per request in `store.ts`): a hung request fails
+`INTERNAL` retryable and is retried later, so it never holds a stream's `done`, a publication flush or the
+sweeper's final flushes. The budget notice ("History made room for new moments…") is said once per open comic.
+
+**Restores.** After a `history_restore` op the recorder writes nothing itself and reads the head again; H3 writes its
+own `before_restore` and `restore` rows (flushing before each). Unpinned captures still queued at the restore are
+dropped (`comic_history_capture_dropped`, reason `restore`; H3's `before_restore` holds their book); the write in
+flight and pinned leftovers are written but never become the head. An AI run still open at the restore loses its `ai`
+row (logged); its result is in `before_restore`.
+
+**The live event.** The `history` SSE event carries the VersionRow (with `alternativeId`, null for "Original") and
+reaches only this comic's own open session (same user, the session holding these hooks). Its thumbs carry raw storage
+paths, which the client signs through the owner routes. `historyNoticeMessage` and the `HistoryEvent` type are
+exported for H3.
+
+**Before `COMIC_HISTORY=1`:** H1's SQL is applied, the client has shipped, and both of these are in (they are):
+the `withHistoryAction` wrap in `jobs.ts` and the store's request timeout.
