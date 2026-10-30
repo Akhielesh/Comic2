@@ -7,10 +7,12 @@
  *
  * Verifying runs in two phases, so a gateway never writes a byte of an unauthenticated body anywhere:
  *   1. `preflightRequest` — everything that does not need the body: the headers' shape, the app allowlist and key
- *      id, the contract, the timestamp skew, the Idempotency-Key, the claim (MAC, app, time window, purpose,
- *      capability) and the Content-Length cap;
+ *      id, the contract, the timestamp skew, the method, the Idempotency-Key, the Content-Length cap and the claim
+ *      (MAC, app, time window, purpose, capability). Its result (`stage: 'preflight'`) is NOT authenticated: the
+ *      signature has not been checked yet;
  *   2. `verifyRequestSignature` — the signature, once the body has been hashed (while streaming it to staging; a
- *      mismatch means the staged copy is deleted).
+ *      mismatch means the staged copy is deleted), and the hashed byte count against Content-Length. Only its result
+ *      (`stage: 'verified'`, a `VerifiedRequest`) is an authenticated request.
  * `verifyRequest` runs both for a body already in memory (a GET, a small POST, the fake platform).
  */
 import { signRequest, verifySignature } from './canonical.js';
@@ -51,6 +53,10 @@ const APP_ID = new RegExp(APP_ID_PATTERN);
 const KEY_ID = new RegExp(KEY_ID_PATTERN);
 const CONTENT_LENGTH = /^(0|[1-9][0-9]{0,15})$/;
 const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/** True for the only two methods a signed request may use. */
+const isSignedMethod = (method: unknown): method is 'GET' | 'POST' => method === 'GET' || method === 'POST';
 
 /** A header from a `Headers`-like getter or a plain record (case-insensitive); null when absent. */
 export const readHeader = (bag: HeaderBag | null | undefined, name: string): string | null => {
@@ -89,8 +95,8 @@ export interface SignedHeadersInput extends RequestToSign {
 export type SignedHeadersResult = { ok: true; headers: Record<string, string>; canonical: string; fields: CanonicalFields } | WireFailure;
 
 /**
- * The headers of a signed request. Refuses (`invalid`) a POST without an Idempotency-Key and a POST with a body but
- * no claim, so such a request is never built, let alone sent.
+ * The headers of a signed request. Refuses (`invalid`) any method but GET and POST (in `canonicalRequest`), a POST
+ * without an Idempotency-Key and a POST with a body but no claim, so such a request is never built, let alone sent.
  */
 export const signedRequestHeaders = async (input: SignedHeadersInput): Promise<SignedHeadersResult> => {
   if (typeof input !== 'object' || input === null) return inputFailure('input', 'no request to sign');
@@ -145,15 +151,14 @@ export interface PreflightOptions {
   claim: ClaimRequirement | 'none';
   /** A claim is required even without a body (a GET that must know its owner). */
   claimRequired?: boolean;
-  /** The Content-Length cap for a POST body. */
+  /** The Content-Length cap for a POST body (default `WIRE_LIMITS.maxRequestBytes`, so leaving it out never uncaps). */
   maxBodyBytes?: number;
   /** The contract majors this side serves (default: the current one). */
   contracts?: readonly string[];
 }
 
-/** What phase 1 established; phase 2 (`verifyRequestSignature`) completes it. */
-export interface Preflight {
-  ok: true;
+/** What the two phases establish about a request. */
+export interface SignedRequestFacts {
   app: string;
   kid: string;
   /** The key the request must be signed with (kept for phase 2; never log it). */
@@ -171,15 +176,39 @@ export interface Preflight {
   contentLength: number;
 }
 
+/**
+ * What phase 1 established. NOT authenticated until `verifyRequestSignature` (phase 2) has checked the signature:
+ * the claim's MAC holds, but anyone who has seen one claim can attach it to a request with a made-up signature.
+ * Never act on a `Preflight` beyond staging the body for phase 2; gateway code downstream takes a `VerifiedRequest`.
+ */
+export interface Preflight extends SignedRequestFacts {
+  ok: true;
+  stage: 'preflight';
+}
+
 export type PreflightResult = Preflight | WireFailure;
+
+/** A request whose signature verified over the body actually received: the only authenticated request. */
+export interface VerifiedRequest extends SignedRequestFacts {
+  ok: true;
+  stage: 'verified';
+}
+
+export type VerifiedRequestResult = VerifiedRequest | WireFailure;
+
+/** Phase 2's input: the body's bytes, or the SHA-256 hex and the byte count measured while streaming it. */
+export type ReceivedBody = { bytes: Uint8Array } | { sha256Hex: string; length: number };
 
 /**
  * Phase 1: every check that does not need the body. Run it before staging a single byte. The order is: headers
  * present and well formed, key ring (app allowlist and key id), contract, timestamp skew (±300 s), method,
- * Idempotency-Key and Content-Length (POST), the body cap, then the claim.
+ * Idempotency-Key and Content-Length (POST), the body cap (`maxBodyBytes`, by default `WIRE_LIMITS.maxRequestBytes`),
+ * then the claim. The result is not authenticated yet: see `Preflight`.
  */
 export const preflightRequest = async (req: IncomingRequest, opts: PreflightOptions): Promise<PreflightResult> => {
   if (!req || typeof req !== 'object' || !opts || typeof opts.keys !== 'function') return inputFailure('input', 'preflightRequest needs a request and options');
+  const cap = opts.maxBodyBytes !== undefined ? opts.maxBodyBytes : WIRE_LIMITS.maxRequestBytes;
+  if (typeof cap !== 'number' || !Number.isSafeInteger(cap) || cap < 0) return inputFailure('input', 'maxBodyBytes must be a whole number of bytes');
   const h = (name: string) => readHeader(req.headers, name);
   const app = h(PLATFORM_HEADERS.app);
   const kid = h(PLATFORM_HEADERS.keyId);
@@ -213,16 +242,16 @@ export const preflightRequest = async (req: IncomingRequest, opts: PreflightOpti
   }
 
   const method = req.method;
-  if (method !== 'GET' && method !== 'POST') return wireFailure('input', 'only GET and POST are signed requests', { code: 'invalid' });
+  if (!isSignedMethod(method)) return wireFailure('input', 'only GET and POST are signed requests', { code: 'invalid' });
   const keyHeader = h(PLATFORM_HEADERS.idempotencyKey);
   let contentLength = 0;
   if (method === 'POST') {
-    if (keyHeader === null || !/^[A-Za-z0-9._:-]{1,128}$/.test(keyHeader)) return wireFailure('idempotency-key', 'every POST needs a valid Idempotency-Key');
+    if (keyHeader === null || !IDEMPOTENCY_KEY.test(keyHeader)) return wireFailure('idempotency-key', 'every POST needs a valid Idempotency-Key');
     const cl = h('Content-Length');
     if (cl === null || !CONTENT_LENGTH.test(cl)) return wireFailure('length-required', 'a POST needs a decimal Content-Length');
     contentLength = Number(cl);
-    if (opts.maxBodyBytes !== undefined && contentLength > opts.maxBodyBytes) return wireFailure('too-large', `the body is over ${opts.maxBodyBytes} bytes`);
-  } else if (keyHeader !== null && !/^[A-Za-z0-9._:-]{1,128}$/.test(keyHeader)) {
+    if (contentLength > cap) return wireFailure('too-large', `the body is over ${cap} bytes`);
+  } else if (keyHeader !== null && !IDEMPOTENCY_KEY.test(keyHeader)) {
     return wireFailure('idempotency-key', 'Idempotency-Key is malformed');
   }
 
@@ -243,6 +272,7 @@ export const preflightRequest = async (req: IncomingRequest, opts: PreflightOpti
 
   return {
     ok: true,
+    stage: 'preflight',
     app,
     kid,
     secret,
@@ -259,21 +289,31 @@ export const preflightRequest = async (req: IncomingRequest, opts: PreflightOpti
 };
 
 /**
- * Phase 2: the signature over the request as received, given the body's bytes or the SHA-256 hex computed while
- * streaming them. Constant-time compare.
+ * Phase 2: the signature over the request as received, given the body's bytes or the SHA-256 hex and byte count
+ * measured while streaming them. The body must be exactly the declared Content-Length (0 for a GET), so the cap
+ * phase 1 checked is the size of what was hashed. Constant-time compare. On success, the request is authenticated.
  */
-export const verifyRequestSignature = async (
-  pre: Preflight,
-  crypto: WireCrypto,
-  body: { bytes: Uint8Array } | { sha256Hex: string },
-): Promise<{ ok: true } | WireFailure> => {
-  if (!pre || pre.ok !== true) return inputFailure('input', 'run preflightRequest first');
+export const verifyRequestSignature = async (pre: Preflight, crypto: WireCrypto, body: ReceivedBody): Promise<VerifiedRequestResult> => {
+  if (!pre || pre.ok !== true || pre.stage !== 'preflight') return inputFailure('input', 'run preflightRequest first');
+  if (!body || typeof body !== 'object') return inputFailure('input', 'phase 2 needs the body or its streamed hash and length');
+  const bytes = 'bytes' in body ? body.bytes : null;
+  let length: number;
+  if (bytes !== null) {
+    if (!isBytes(bytes)) return inputFailure('input', 'the body must be bytes');
+    length = bytes.length;
+  } else {
+    // The hash itself is checked (64 lower-case hex characters) when the signed string is rebuilt.
+    const streamed = body as { length: unknown };
+    if (typeof streamed.length !== 'number' || !Number.isSafeInteger(streamed.length) || streamed.length < 0) {
+      return inputFailure('input', 'a streamed body needs the number of bytes that were hashed');
+    }
+    length = streamed.length;
+  }
+  // The cap phase 1 checked was the declared length: what was hashed must be exactly that many bytes.
+  if (length !== pre.contentLength) return wireFailure('bad-signature', 'the body is not the declared length');
   let bodySha256Hex: string;
   try {
-    if ('bytes' in body) {
-      if (pre.method === 'POST' && body.bytes.length !== pre.contentLength) return wireFailure('bad-signature', 'the body is not the declared length');
-      bodySha256Hex = await sha256Hex(crypto, body.bytes);
-    } else bodySha256Hex = body.sha256Hex;
+    bodySha256Hex = bytes !== null ? await sha256Hex(crypto, bytes) : (body as { sha256Hex: string }).sha256Hex;
   } catch (e) {
     return internalFailure(e instanceof Error ? e.message : 'crypto failed');
   }
@@ -284,16 +324,29 @@ export const verifyRequestSignature = async (
     pre.signature,
   );
   if (v.ok === false) return v;
-  return { ok: true };
+  return {
+    ok: true,
+    stage: 'verified',
+    app: pre.app,
+    kid: pre.kid,
+    secret: pre.secret,
+    method: pre.method,
+    target: pre.target,
+    timestamp: pre.timestamp,
+    signature: pre.signature,
+    claimToken: pre.claimToken,
+    claim: pre.claim,
+    owner: pre.owner,
+    idempotencyKey: pre.idempotencyKey,
+    contentLength: pre.contentLength,
+  };
 };
 
 /** Both phases for a body already in memory (a GET, a small POST, the fake platform). */
-export const verifyRequest = async (req: IncomingRequest, body: Uint8Array | null, opts: PreflightOptions): Promise<PreflightResult> => {
+export const verifyRequest = async (req: IncomingRequest, body: Uint8Array | null, opts: PreflightOptions): Promise<VerifiedRequestResult> => {
   const pre = await preflightRequest(req, opts);
   if (pre.ok === false) return pre;
-  const sig = await verifyRequestSignature(pre, opts.crypto, { bytes: body || new Uint8Array(0) });
-  if (sig.ok === false) return sig;
-  return pre;
+  return verifyRequestSignature(pre, opts.crypto, { bytes: body || new Uint8Array(0) });
 };
 
 // ── Response headers ────────────────────────────────────────────────────────────────────────────────────────────

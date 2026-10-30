@@ -81,10 +81,11 @@ export const decodeSecret = (text: string): Uint8Array | null => {
 };
 
 /**
- * The pseudonymous subject a user claim carries: `hex(HMAC(subKey, userId))[0..32]`. The platform never sees the
- * host's user id. Derive it from a secret that does NOT rotate with the request-signing key: a new sub would orphan
- * the user's jobs, files and quotas. Null on a bad secret, an empty / over-long user id or a failing crypto; it
- * never throws.
+ * The pseudonymous subject a user claim carries: `hex(HMAC(subKey, userId))[0..32]`, `subKey = HMAC(subSecret,
+ * "platform-sub-v1")`. The platform never sees the host's user id. `subSecret` is the host's own sub secret: at least
+ * 32 bytes, distinct from every app signing secret, never sent to the gateway, and it does NOT rotate with the
+ * request-signing key (a new sub would orphan the user's jobs, files and quotas). Null on a bad secret, an empty /
+ * over-long user id or a failing crypto; it never throws.
  */
 export const pseudonymousSub = async (crypto: WireCrypto, subSecret: Uint8Array, userId: string): Promise<string | null> => {
   if (!isUsableSecret(subSecret) || typeof userId !== 'string' || !userId.length || userId.length > 256) return null;

@@ -1,6 +1,8 @@
 /**
  * Poll tokens (plan §5.8, §9): a browser may `GET /v1/jobs/:id?t=` and `GET /v1/files/:ref?t=` with one, and nothing
- * else. A token is bound to one job of one (app, sub), lives at most an hour, and is good for GET only.
+ * else. A token is bound to one job of one (app, sub), lives at most an hour, and is good for GET only. The verifier
+ * takes the job record's own owner (`owner`, from the JobDO) and refuses a token whose app or sub differs, so a token
+ * minted under another app's key (a compromised secret, another tenant) never reaches a job it does not own.
  *
  *   token = base64url(json) + "." + base64url(HMAC-SHA256(pollKey, base64url(json)))
  *   pollKey = HMAC-SHA256(appSecret, "platform-poll-v1")
@@ -76,6 +78,8 @@ export interface VerifyPollTokenOptions {
   now: WireClock;
   /** The job the request path names (for `/v1/files/:ref`, the job that owns the file). */
   jobId: string;
+  /** That job's owner, from the job record (never from the token): the app and the sub that created it. */
+  owner: { app: string; sub: string };
   /** The request's method: only GET is allowed. */
   method: string;
 }
@@ -84,10 +88,14 @@ export type VerifyPollTokenResult = { ok: true; payload: PollTokenPayload } | Wi
 
 /**
  * Verify a poll token: GET only, shape and size, key lookup, MAC (constant time), payload schema, time window
- * (`exp` after now and at most an hour ahead) and the job, in that order.
+ * (`exp` after now and at most an hour ahead), then the job and its owner (app and sub), in that order.
  */
 export const verifyPollToken = async (token: string, opts: VerifyPollTokenOptions): Promise<VerifyPollTokenResult> => {
   if (!opts || typeof opts.keys !== 'function') return inputFailure('input', 'verifyPollToken needs a key ring');
+  const owner = opts.owner;
+  if (!owner || typeof owner !== 'object' || typeof owner.app !== 'string' || typeof owner.sub !== 'string') {
+    return inputFailure('input', "verifyPollToken needs the job record's owner (app and sub)");
+  }
   if (opts.method !== 'GET') return wireFailure('method', 'a poll token allows GET only');
   if (typeof token !== 'string' || token.length > WIRE_LIMITS.pollTokenMax) return wireFailure('malformed', 'the poll token is missing or too long');
   const dot = token.indexOf('.');
@@ -134,5 +142,6 @@ export const verifyPollToken = async (token: string, opts: VerifyPollTokenOption
   if (payload.exp <= now) return wireFailure('expired', 'the poll token has expired');
   if (payload.exp > now + WIRE_LIMITS.pollTtlMaxSeconds) return wireFailure('exp-too-far', 'the poll token lives longer than an hour');
   if (payload.jobId !== opts.jobId) return wireFailure('wrong-job', 'the poll token is for another job');
+  if (payload.app !== owner.app || payload.sub !== owner.sub) return wireFailure('wrong-job', "the poll token is not the job owner's");
   return { ok: true, payload };
 };

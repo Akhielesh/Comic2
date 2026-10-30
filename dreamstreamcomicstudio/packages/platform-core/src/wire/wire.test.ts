@@ -240,7 +240,8 @@ describe.each(ADAPTERS)('golden vectors (%s)', (_name, crypto) => {
     for (const v of POLL.vectors) {
       const minted = await mintPollToken({ secret, crypto, now: at(POLL.now) }, v.input as never);
       expect(minted, v.name).toEqual({ ok: true, token: v.token, payload: v.payload });
-      const checked = await verifyPollToken(v.token, { keys: () => secret, crypto, now: at(POLL.now), jobId: v.payload.jobId as string, method: 'GET' });
+      const owner = { app: v.payload.app as string, sub: v.payload.sub as string };
+      const checked = await verifyPollToken(v.token, { keys: () => secret, crypto, now: at(POLL.now), jobId: v.payload.jobId as string, owner, method: 'GET' });
       expect(checked, v.name).toEqual({ ok: true, payload: v.payload });
     }
   });
@@ -472,11 +473,18 @@ describe('claims', () => {
 
 describe('poll tokens', () => {
   const v = POLL.vectors[0];
-  const opts = (over: Partial<{ jobId: string; method: string; now: () => number; keys: () => Uint8Array | undefined }> = {}) => ({
-    keys: over.keys ?? ((app: string, kid: string) => (app === 'dreamstream' && kid === 'ds-fixture-1' ? SECRET : undefined)),
+  const OWNER = { app: v.payload.app as string, sub: v.payload.sub as string };
+  /** Two apps' keys, as the gateway's key ring holds them. */
+  const ATLAS_SECRET = new Uint8Array(32).fill(9);
+  const ring = (app: string, kid: string) => (app === 'dreamstream' && kid === 'ds-fixture-1' ? SECRET : app === 'atlas' && kid === 'at-fixture-1' ? ATLAS_SECRET : undefined);
+  const opts = (
+    over: Partial<{ jobId: string; owner: { app: string; sub: string }; method: string; now: () => number; keys: (app: string, kid: string) => Uint8Array | undefined }> = {},
+  ) => ({
+    keys: over.keys ?? ring,
     crypto: nodeCrypto,
     now: over.now ?? at(POLL.now),
     jobId: over.jobId ?? (v.payload.jobId as string),
+    owner: over.owner ?? OWNER,
     method: over.method ?? 'GET',
   });
 
@@ -498,6 +506,23 @@ describe('poll tokens', () => {
     const otherJob = base64urlEncode(utf8Encode(JSON.stringify({ ...v.payload, jobId: 'job-0002' })));
     expect(await verifyPollToken(`${otherJob}.${mac}`, opts({ jobId: 'job-0002' }))).toMatchObject({ ok: false, reason: 'bad-signature' });
     expect(await verifyPollToken(await forgePoll(v.payload, OTHER_SECRET), opts())).toMatchObject({ ok: false, reason: 'bad-signature' });
+  });
+
+  it("is bound to the job record's owner: another app's key or another sub never reaches this job", async () => {
+    // Minted with app atlas's own (valid) key for this job's id: the MAC verifies, the owner does not match.
+    const atlasRing = { secret: ATLAS_SECRET, crypto: nodeCrypto, now: at(POLL.now) };
+    const foreign = await mintPollToken(atlasRing, { app: 'atlas', kid: 'at-fixture-1', sub: OWNER.sub, jobId: v.payload.jobId as string });
+    if (foreign.ok === false) throw new Error(foreign.message);
+    expect(await verifyPollToken(foreign.token, opts())).toMatchObject({ ok: false, code: 'forbidden', reason: 'wrong-job' });
+    expect((await verifyPollToken(foreign.token, opts({ owner: { app: 'atlas', sub: OWNER.sub } }))).ok).toBe(true);
+    // The same app, another user's sub.
+    const otherSub = await mintPollToken({ secret: SECRET, crypto: nodeCrypto, now: at(POLL.now) }, { app: 'dreamstream', kid: 'ds-fixture-1', sub: 'f'.repeat(32), jobId: v.payload.jobId as string });
+    if (otherSub.ok === false) throw new Error(otherSub.message);
+    expect(await verifyPollToken(otherSub.token, opts())).toMatchObject({ ok: false, reason: 'wrong-job' });
+    // The owner comes from the job record and is required.
+    const noOwner: Record<string, unknown> = { ...opts() };
+    delete noOwner.owner;
+    expect(await verifyPollToken(v.token, noOwner as never)).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
   });
 
   it('a claim is never a poll token, and a token sealed with the claim key never verifies', async () => {
@@ -543,7 +568,7 @@ describe('signed requests (headers, preflight and signature)', () => {
     const h = await sign();
     expect(h).toMatchObject({ 'X-Platform-App': 'dreamstream', 'X-Platform-Key-Id': 'ds-fixture-1', 'X-Platform-Contract': '1', 'Idempotency-Key': 'extract-0001' });
     const r = await verifyRequest(request(h), body, options());
-    expect(r).toMatchObject({ ok: true, app: 'dreamstream', kid: 'ds-fixture-1', owner: SUB, idempotencyKey: 'extract-0001', claim: { tier: 'creator' } });
+    expect(r).toMatchObject({ ok: true, stage: 'verified', app: 'dreamstream', kid: 'ds-fixture-1', owner: SUB, idempotencyKey: 'extract-0001', claim: { tier: 'creator' } });
     // Headers read case-insensitively from a plain record and from a Headers object.
     const lower: Record<string, string> = {};
     for (const [k, val] of Object.entries(h)) lower[k.toLowerCase()] = val;
@@ -627,8 +652,78 @@ describe('signed requests (headers, preflight and signature)', () => {
     expect(pre.ok).toBe(true);
     if (pre.ok === false) return;
     expect(hashSpy).not.toHaveBeenCalled();
-    expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex: createHash('sha256').update(body).digest('hex') })).toEqual({ ok: true });
-    expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex: '0'.repeat(64) })).toMatchObject({ ok: false, reason: 'bad-signature' });
+    const sha256Hex = createHash('sha256').update(body).digest('hex');
+    expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex, length: body.length })).toMatchObject({ ok: true, stage: 'verified', owner: SUB });
+    expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex: '0'.repeat(64), length: body.length })).toMatchObject({ ok: false, reason: 'bad-signature' });
+    // The streamed form must say how many bytes were hashed.
+    expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex } as never)).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+  });
+
+  it('the hashed byte count must be the declared Content-Length, whether the bytes are in memory or streamed', async () => {
+    // Signed over exactly these bytes, so their hash matches the signed hash; only the declared length differs.
+    const h = await sign();
+    for (const declared of [body.length + 5, body.length - 1, 10000000]) {
+      const lying = { ...h, 'Content-Length': String(declared) };
+      expect(await verifyRequest(request(lying), body, options()), String(declared)).toMatchObject({ ok: false, code: 'unauthorized', reason: 'bad-signature' });
+      const pre = await preflightRequest(request(lying), options());
+      if (pre.ok === false) throw new Error(pre.message);
+      const sha256Hex = createHash('sha256').update(body).digest('hex');
+      expect(await verifyRequestSignature(pre, nodeCrypto, { sha256Hex, length: body.length }), String(declared)).toMatchObject({ ok: false, reason: 'bad-signature' });
+      expect(await verifyRequestSignature(pre, nodeCrypto, { bytes: body }), String(declared)).toMatchObject({ ok: false, reason: 'bad-signature' });
+    }
+  });
+
+  it('a preflight is not an authenticated request: only phase 2 returns stage verified', async () => {
+    const h = await sign();
+    // A made-up signature of the right shape passes phase 1 (which never reads it) and is marked as such.
+    const fake = { ...h, 'X-Platform-Signature': 'A'.repeat(43) };
+    const pre = await preflightRequest(request(fake), options());
+    expect(pre).toMatchObject({ ok: true, stage: 'preflight', owner: SUB });
+    if (pre.ok === false) return;
+    expect(await verifyRequestSignature(pre, nodeCrypto, { bytes: body })).toMatchObject({ ok: false, reason: 'bad-signature' });
+    expect(await verifyRequest(request(fake), body, options())).toMatchObject({ ok: false, reason: 'bad-signature' });
+    // Phase 2 takes a preflight only: not a verified request, not a hand-made object.
+    const real = await preflightRequest(request(h), options());
+    if (real.ok === false) throw new Error(real.message);
+    const verified = await verifyRequestSignature(real, nodeCrypto, { bytes: body });
+    expect(verified).toMatchObject({ ok: true, stage: 'verified' });
+    expect(await verifyRequestSignature(verified as never, nodeCrypto, { bytes: body })).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+    expect(await verifyRequestSignature({ ...real, stage: undefined } as never, nodeCrypto, { bytes: body })).toMatchObject({ ok: false, reason: 'input' });
+  });
+
+  it('the body cap applies when the options leave maxBodyBytes out: 50,000,000 bytes', async () => {
+    const h = await sign();
+    const uncapped = options();
+    delete uncapped.maxBodyBytes;
+    expect(await preflightRequest(request({ ...h, 'Content-Length': '50000001' }), uncapped)).toMatchObject({ ok: false, code: 'too-large', reason: 'too-large' });
+    expect(await preflightRequest(request({ ...h, 'Content-Length': '10000000000' }), uncapped)).toMatchObject({ ok: false, reason: 'too-large' });
+    expect(await preflightRequest(request({ ...h, 'Content-Length': '50000000' }), uncapped)).toMatchObject({ ok: true, stage: 'preflight' });
+    // A cap that is not a whole number of bytes fails closed.
+    for (const bad of [NaN, -1, 1.5, '100' as never]) {
+      expect(await preflightRequest(request(h), options({ maxBodyBytes: bad })), String(bad)).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+    }
+  });
+
+  it('only GET and POST are signed requests: the verifier and the signer refuse every other method', async () => {
+    const h = await sign();
+    for (const method of ['PUT', 'DELETE', 'PATCH', 'get']) {
+      expect(await preflightRequest(request(h, '/v1/extract?maxPages=24', method), options()), method).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+    }
+    for (const method of ['PUT', 'PATCH', 'DELETE']) {
+      const unsigned = await signedRequestHeaders({ app: 'dreamstream', keyId: 'ds-fixture-1', secret: SECRET, crypto: nodeCrypto, method, target: '/v1/files', timestamp: NOW_S, body: new Uint8Array([1, 2, 3]) });
+      expect(unsigned, method).toMatchObject({ ok: false, code: 'invalid', reason: 'input' });
+      expect(await signRequest(nodeCrypto, SECRET, { method, target: '/v1/files', timestamp: NOW_S, body: new Uint8Array([1, 2, 3]) }), method).toMatchObject({ ok: false, code: 'invalid' });
+    }
+  });
+
+  it('a GET with a malformed Idempotency-Key is refused (a GET may omit it)', async () => {
+    const g = await signedRequestHeaders({ app: 'dreamstream', keyId: 'ds-fixture-1', secret: SECRET, crypto: nodeCrypto, method: 'GET', target: '/v1/jobs/job-0001', timestamp: NOW_S, claim: CLAIMS.vectors[0].token });
+    if (g.ok === false) throw new Error(g.message);
+    const getOpts = options({ claim: { purposes: ['extract'] } });
+    expect((await preflightRequest(request(g.headers, '/v1/jobs/job-0001', 'GET'), getOpts)).ok).toBe(true);
+    for (const key of ['has space', 'x'.repeat(129), '']) {
+      expect(await preflightRequest(request({ ...g.headers, 'Idempotency-Key': key }, '/v1/jobs/job-0001', 'GET'), getOpts), key).toMatchObject({ ok: false, code: 'invalid', reason: 'idempotency-key' });
+    }
   });
 
   it('refuses unsigned, unknown-key, wrong-contract, oversized and unmeasured requests before the claim', async () => {
@@ -680,6 +775,9 @@ describe('errors and response headers', () => {
     const body = utf8Encode(JSON.stringify({ error: { code: 'input-rejected', message: 'zip bomb', retryable: true, requestId: 'req-1' } }));
     expect(failureFromResponse(422, body, 'req-header')).toMatchObject({ code: 'input-rejected', message: 'zip bomb', retryable: false, requestId: 'req-1', status: 422 });
     expect(failureFromResponse(503, utf8Encode('{"error":{"code":"not-a-code"}}'), 'req-2')).toMatchObject({ code: 'disabled', requestId: 'req-2' });
+    // A platform body names the code even when the status says otherwise: the gateway's own vocabulary wins.
+    const invalid = utf8Encode(JSON.stringify({ error: { code: 'invalid', message: 'bad maxPages', retryable: false, requestId: 'req-3' } }));
+    expect(failureFromResponse(504, invalid)).toMatchObject({ code: 'invalid', retryable: false, status: 504, message: 'bad maxPages' });
     expect(parseErrorBody('{"error":{"code":"quota","message":"slow down","requestId":"bad id!"}}')).toEqual({ code: 'quota', message: 'slow down', retryable: true, requestId: '' });
     expect(parseErrorBody('[]')).toBeNull();
     expect(parseErrorBody(utf8Encode('x'.repeat(70000)))).toBeNull();

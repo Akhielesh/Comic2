@@ -48,7 +48,18 @@ export {
   verifyRequest,
   verifyRequestSignature,
 } from './headers.js';
-export type { IncomingRequest, Preflight, PreflightOptions, PreflightResult, SignedHeadersInput, SignedHeadersResult } from './headers.js';
+export type {
+  IncomingRequest,
+  Preflight,
+  PreflightOptions,
+  PreflightResult,
+  ReceivedBody,
+  SignedHeadersInput,
+  SignedHeadersResult,
+  SignedRequestFacts,
+  VerifiedRequest,
+  VerifiedRequestResult,
+} from './headers.js';
 export {
   WIRE_REASON_CODES,
   errorResponse,

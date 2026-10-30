@@ -47,6 +47,11 @@ export interface FetchInitLike {
   redirect: 'error';
 }
 
+/**
+ * What the client reads from fetch's answer. A response that also has a WHATWG `body` stream (`body.getReader()`, as
+ * fetch's own Response does) is read chunk by chunk and abandoned as soon as it passes the size cap; one that offers
+ * only `arrayBuffer()` is read whole before the cap is checked (unless Content-Length already says it is too big).
+ */
 export interface FetchResponseLike {
   readonly status: number;
   readonly headers: { get(name: string): string | null };
@@ -86,7 +91,10 @@ export const WIRE_LIMITS = {
   queryParamsMax: 64,
   /** The biggest request body the client sends (plan §5.9: convert, extract and files take at most 50 MB). */
   maxRequestBytes: 50000000,
-  /** The biggest response body the client reads, unless its config says otherwise. */
+  /**
+   * The biggest response body the client accepts, unless its config says otherwise. Refused before reading when
+   * Content-Length says so; while reading when the response has a body stream; otherwise only after reading it whole.
+   */
   maxResponseBytes: 64000000,
   /** `?maxPages=` on `/v1/extract`: default 24, at most 300. */
   extractDefaultPages: 24,

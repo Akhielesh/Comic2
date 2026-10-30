@@ -5,6 +5,7 @@
  *     "v1\n" + METHOD + "\n" + PATH + "?" + CANONICAL_QUERY + "\n" + TS + "\n" + hex(sha256(body)) + "\n" +
  *     (claim ? hex(sha256(claim)) : "-") + "\n" + IDEMPOTENCY_KEY))
  *
+ * - METHOD is GET or POST: no other method is signed (or accepted by the verifier).
  * - PATH is the request path in RFC 3986 normal form: percent-escapes of unreserved characters decoded, every other
  *   escape upper-cased; no dot segments and no empty segments (`//`). Anything else is refused, not repaired.
  * - CANONICAL_QUERY is the query parameters sorted by key and RFC 3986-encoded (`key=value` joined by `&`, empty
@@ -26,7 +27,8 @@ import { APP_ID_PATTERN, IDEMPOTENCY_KEY_PATTERN, SUB_PATTERN, WIRE_LIMITS } fro
 const IDEMPOTENCY_KEY = new RegExp(IDEMPOTENCY_KEY_PATTERN);
 const APP_ID = new RegExp(APP_ID_PATTERN);
 const SUB = new RegExp(SUB_PATTERN);
-const METHOD = /^[A-Z]{1,16}$/;
+/** A signed request is a GET or a POST; the verifier refuses every other method too. */
+const METHOD = /^(GET|POST)$/;
 const TIMESTAMP = /^(0|[1-9][0-9]{0,11})$/;
 /** A claim or token as it travels: base64url, a dot, base64url. */
 const TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -206,7 +208,7 @@ const HEX64 = /^[0-9a-f]{64}$/;
 /** Validate and canonicalise a request, hashing its body and claim. Refusals are `invalid` (the signer's input). */
 export const canonicalRequest = async (crypto: WireCrypto, req: RequestToSign): Promise<CanonicalResult> => {
   if (typeof req !== 'object' || req === null) return inputFailure('input', 'no request to sign');
-  if (typeof req.method !== 'string' || !METHOD.test(req.method)) return inputFailure('input', 'method must be an upper-case HTTP method');
+  if (typeof req.method !== 'string' || !METHOD.test(req.method)) return inputFailure('input', 'only GET and POST are signed requests');
   const split = splitTarget(req.target);
   if (!split) return inputFailure('path', 'the request target is not a path with an optional query');
   const path = canonicalPath(split.path);
