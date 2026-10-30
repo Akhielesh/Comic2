@@ -99,12 +99,12 @@ let cache: Registries | null = null;
 export const featureModules = (): readonly FeatureModule[] =>
   [
     breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability,
-    // Comic History (versions plan §8), last = lowest precedence. Listed once it registers something (H5): the H0 stub
-    // registers nothing, so the registries — and this list — are exactly what they were without it.
-    ...(hasRegistrations(history) ? [history] : []),
-    // The pro editor and its companions (pro plan §10 Waves 3), after History. Each is listed once it registers
+    // The pro editor and its companions (pro plan §10 Wave 3), before History. Each is listed once it registers
     // something: the K2b stubs register nothing, so the registries are exactly what they were without them.
-    ...[editor, confidence, consistency, save, guide].filter(hasRegistrations)
+    ...[editor, confidence, consistency, save, guide].filter(hasRegistrations),
+    // Comic History (versions plan §8), LAST = lowest precedence (H0's rule; features.test.tsx). Listed once it registers
+    // something (H5): the H0 stub registers nothing, so the registries — and this list — are exactly what they were.
+    ...(hasRegistrations(history) ? [history] : [])
   ].map((m) => m || {});
 
 /** A feature module that contributes at least one registration. */

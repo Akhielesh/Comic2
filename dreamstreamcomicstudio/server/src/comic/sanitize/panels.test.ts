@@ -166,6 +166,21 @@ describe('every sanitizer rejection (pro plan §10 K2b tests)', () => {
     expect(rejects(() => sanitize(planted, [frameOp({ box, src: { path: own('planted') } })]), 400).userMessage).toMatch(/outside the studio/);
   });
 
+  it('frames and overlays refuse an image with the very words "Use for page" (render_use) uses for it', () => {
+    const doc = fixture();
+    const box = { x: 0.1, y: 0.1, w: 0.3, h: 0.3 };
+    const planted = fixture();
+    planted.conversation = [{ id: 'm2', role: 'user', text: 'x', at: 1, attachments: [{ path: own('planted'), source: 'upload', at: 3 }] }];
+    for (const [d, path] of [
+      [doc, 'user-1/classic-photo.webp'],
+      [planted, own('planted')]
+    ] as const) {
+      const useForPage = rejects(() => sanitize(d, [{ op: 'render_use', target: { kind: 'page', id: 'pg_2' }, path }]), 400).userMessage;
+      expect(rejects(() => sanitize(d, [frameOp({ box, src: { path } })]), 400).userMessage).toBe(useForPage);
+      expect(rejects(() => sanitize(d, [{ op: 'layer', pageId: 'pg_1', id: 'ly_a', patch: { kind: 'image', box, src: { path } } }]), 400).userMessage).toBe(useForPage);
+    }
+  });
+
   it('25 overlays (EDITOR_LIMITS.layersPerPage is 24): 409 LIMIT; an existing overlay still edits', () => {
     const doc = fixture();
     const box = { x: 0.1, y: 0.1, w: 0.1, h: 0.1 };
@@ -418,15 +433,21 @@ describe('the op shapes the editor engine sends are accepted (B9 wave notes; one
     expect(findPage(back, 'pg_1')!.layers![0].clip).toBe('pn_1_2');
   });
 
-  it('a scene created earlier in the batch exists for a continuity op after it; safe mode softens direction text', () => {
+  it('a scene created earlier in the batch exists for a continuity op after it; direction text is stored as written, like action text', () => {
     const doc = fixture();
     const ops = sanitize(doc, [
       { op: 'scene', id: 'sc_alley', patch: { name: 'Back alley', light: 'neon' } },
       { op: 'continuity', pageId: 'pg_2', patch: { sceneId: 'sc_alley', cast: { c_maya: { holding: ['lantern'] } } } }
     ]);
     expect(ops.map((o) => o.op)).toEqual(['scene', 'continuity']);
-    const kids = sanitize(doc, [{ op: 'panel', pageId: 'pg_2', id: 'pn_2_1', patch: { direction: { focus: 'the bloody blade' } } }], sctx({ rating: 'G' }));
-    expect((kids[0] as Extract<DocOp, { op: 'panel' }>).patch.direction).toEqual({ focus: 'the blade' });
+    // A G comic (safe mode) keeps what the user wrote, exactly as it keeps a panel's action text: softening is lossy, so
+    // it happens where the text reaches the image model (prompts.ts on a safe take), never in the doc.
+    const kids = sanitize(doc, [{ op: 'panel', pageId: 'pg_2', id: 'pn_2_1', patch: { action: 'the bloody blade', direction: { focus: 'the bloody blade' } } }], sctx({ rating: 'G' }));
+    const patch = (kids[0] as Extract<DocOp, { op: 'panel' }>).patch;
+    expect(patch.direction).toEqual({ focus: 'the bloody blade' });
+    expect(patch.direction!.focus).toBe(patch.action);
+    const kidsCont = sanitize(doc, [{ op: 'continuity', pageId: 'pg_2', patch: { cast: { c_maya: { holding: ['the bloody blade'] } } } }], sctx({ rating: 'PG' }));
+    expect(JSON.stringify(kidsCont[0])).toContain('the bloody blade');
     const teen = sanitize(doc, [{ op: 'panel', pageId: 'pg_2', id: 'pn_2_1', patch: { direction: { focus: 'the bloody blade' } } }]);
     expect((teen[0] as Extract<DocOp, { op: 'panel' }>).patch.direction).toEqual({ focus: 'the bloody blade' });
   });

@@ -115,7 +115,9 @@ const intIn = (v: unknown, lo: number, hi: number, what: string): number => {
 
 // ── Image paths (the render_use rule) ─────────────────────────────────────────
 
-const OUTSIDE_IMAGE_MESSAGE = 'That picture came from outside this comic, so it can’t go on a page as it is — upload it again in Media first.';
+// The render_use rule's own words (sanitize/timeline.ts, word for word; pro plan §5.3 "the render_use rule and messages").
+// Wave note: once timeline.ts exports its two constants, import them here instead (sanitize/panels.test.ts pins parity).
+const OUTSIDE_IMAGE_MESSAGE = 'That photo came from an older comic, so it can’t go on a page as it is — upload it again in Media first.';
 const UNPUBLISHABLE_IMAGE_MESSAGE = 'That image was brought in from outside the studio, so it can’t go on a page as it is — upload it again in Media first.';
 
 /**

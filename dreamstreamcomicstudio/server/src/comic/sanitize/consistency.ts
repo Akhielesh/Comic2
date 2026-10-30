@@ -5,8 +5,10 @@
 //
 // Every op is FREE (no spend, no render, no new asset; I10). A sanitizer rebuilds the op from known keys with bounded
 // values, or throws a StudioError that rejects the WHOLE batch (400 malformed, 409 LIMIT at a cap). Text goes through
-// safeText: jsonb-safe, one line, clipped, and softened in safe mode (a G or PG comic: the direction and continuity
-// text reaches the image model). The whole-batch safety screen (sanitize/safety.ts) still reads every string after.
+// safeText: jsonb-safe, one line, clipped, and STORED AS WRITTEN — like a panel's action text, it is softened where it
+// reaches the image model (prompts.ts safeText on a safe take; SAFE_TEXT_RATINGS / isSafeMode name safe mode for B5),
+// never rewritten in the doc (SOFTEN_SAFE_TEXT_ON_STORE). The whole-batch safety screen (sanitize/safety.ts) still
+// reads every string after.
 // Sanitizers see the doc as the batch has built it so far (jobs.ts sanitizePatchOps `working`), so a scene created
 // earlier in the same batch exists for a continuity op after it.
 
@@ -37,8 +39,8 @@ const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnPropert
 const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
- * Ratings whose direction and continuity text is softened on the way in ("safe mode": the comic's effective rating is
- * below the platform ceiling, a G or PG book). One constant: a policy change is a one-line edit.
+ * Ratings in "safe mode" (the comic's effective rating is below the platform ceiling, a G or PG book): the single switch
+ * for where direction and continuity text is softened. One constant: a policy change is a one-line edit.
  */
 export const SAFE_TEXT_RATINGS: ReadonlySet<ContentRating> = new Set<ContentRating>(['G', 'PG']);
 
@@ -46,14 +48,22 @@ export const SAFE_TEXT_RATINGS: ReadonlySet<ContentRating> = new Set<ContentRati
 export const isSafeMode = (ctx?: Pick<SanitizeCtx, 'rating'>): boolean => !!ctx?.rating && ctx.rating !== PLATFORM_CEILING && SAFE_TEXT_RATINGS.has(ctx.rating);
 
 /**
+ * Whether safe-mode text is also softened as it is STORED. Off: the doc keeps what the user wrote (softening is lossy —
+ * "the bloody blade" would become "the blade" for good), exactly as panel action text is kept, and the compilers soften
+ * it for the image model (pro plan §5.3 "safeText in safe mode", read as prompts.ts's compile-time safeText). Lead to
+ * confirm the reading; the other one is this line set to true.
+ */
+export const SOFTEN_SAFE_TEXT_ON_STORE = false;
+
+/**
  * Free text of a Ship 2 field as it enters the doc: a string only (else undefined), NUL and lone surrogates removed,
- * whitespace collapsed to one line, clipped without splitting a pair; softened (softenAction) in safe mode. '' when
- * nothing is left.
+ * whitespace collapsed to one line, clipped without splitting a pair; softened (softenAction) only when
+ * SOFTEN_SAFE_TEXT_ON_STORE and in safe mode. '' when nothing is left.
  */
 export const safeText = (v: unknown, max: number, ctx?: Pick<SanitizeCtx, 'rating'>): string | undefined => {
   if (typeof v !== 'string') return undefined;
   const line = enteredText(v.replace(/\s+/g, ' '), max);
-  return isSafeMode(ctx) ? enteredText(softenAction(line), max) : line;
+  return SOFTEN_SAFE_TEXT_ON_STORE && isSafeMode(ctx) ? enteredText(softenAction(line), max) : line;
 };
 
 /** A SAFE_ID, or a 400 naming what it is. */

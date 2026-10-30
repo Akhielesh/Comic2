@@ -211,7 +211,10 @@ function randomOp(doc: ComicDoc, r: () => number, step: number): DocOp {
     }
     case 'edition':
       // Removing an edition while a translated page sits in Deleted is a known v5 gap (its undo can't put that page's
-      // translations back: applyOp 'translation' only sees live pages; K2b wave note), outside these generators' reach.
+      // translations back: applyOp 'translation' only sees live pages; reproduced at base with seed 77).
+      // TODO(K2b wave note "ops.ts lineIdsOf includes trashed pages' lines"): this `!trashOf(doc).length` guard only
+      // narrows the generator around that gap. Revert it in the SAME change that makes ops.ts lineIdsOf (translation and
+      // edition_balloon inverses) include trashed pages' lines, so the property test covers it again.
       return { op: 'edition', lang, patch: chance(0.3) && !trashOf(doc).length ? null : chance(0.5) ? {} : { register: pick(['formal', 'everyday', 'code_mixed'] as const) } };
     case 'translation':
       return chance(0.3)
