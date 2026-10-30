@@ -78,6 +78,11 @@ export interface SignedHeadersInput extends RequestToSign {
   secret: Uint8Array;
   crypto: WireCrypto;
   requestId?: string;
+  /**
+   * Only for the gateway's own completion callback to a host, which carries no claim (`verifyCallback` refuses one).
+   * Every request TO the gateway leaves it unset, so a body POST without a claim is never built.
+   */
+  callback?: true;
 }
 
 export type SignedHeadersResult = { ok: true; headers: Record<string, string>; canonical: string; fields: CanonicalFields } | WireFailure;
@@ -95,7 +100,9 @@ export const signedRequestHeaders = async (input: SignedHeadersInput): Promise<S
   if (input.method === 'POST') {
     if (!hasKey) return inputFailure('idempotency-key', 'every POST needs an Idempotency-Key');
     const bodyBytes = input.body instanceof Uint8Array ? input.body.length : input.bodySha256Hex !== undefined ? -1 : 0;
-    if (bodyBytes !== 0 && !hasClaim) return inputFailure('claim-required', 'a POST that carries a body needs a claim');
+    if (input.callback === true) {
+      if (hasClaim) return inputFailure('malformed', 'a callback carries no claim');
+    } else if (bodyBytes !== 0 && !hasClaim) return inputFailure('claim-required', 'a POST that carries a body needs a claim');
   }
   if (input.requestId !== undefined && (typeof input.requestId !== 'string' || !REQUEST_ID.test(input.requestId))) {
     return inputFailure('input', 'X-Request-Id must be 1 to 128 characters of [A-Za-z0-9._:-]');
