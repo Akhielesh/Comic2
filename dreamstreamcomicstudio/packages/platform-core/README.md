@@ -14,9 +14,11 @@ keep their own auth, models, money and consent; nothing here calls an LLM, holds
   `Node16` resolution, where an extensionless import is error TS2835. `src/purity.test.ts` fails on one.
 - **Every string and array has a cap.** `s.text({max})` and `s.array(items, {max})` throw `SchemaDefinitionError`
   without one; `s.email()`, `s.link()`, `s.id()` and `s.assetRef()` carry built-in caps.
-- **No URL fields.** Links are `https:` or `mailto:` only (`s.link()`); images are `data:` URIs (PNG, JPEG or WebP,
-  sniffed, at most 5 MB) or host asset ids (`s.assetRef()`). Renderers never fetch or read paths.
-- **No send.** There is no send tool, mode, op or field. Agents draft; people send from their own client.
+- **No URL fields.** Links are `https:` or `mailto:` only (`s.link()`; a `mailto:` query may set only `subject` and
+  `body`, never another recipient); images are `data:` URIs (PNG, JPEG or WebP, sniffed, at most 5 MB = 5,000,000
+  bytes decoded) or host asset ids (`s.assetRef()`). Renderers never fetch or read paths.
+- **No send.** There is no send tool, mode, op or field. Agents draft; people send from their own client. A
+  model-facing tool takes `AgentEmailOp` (every email op except `set_recipients`), never `EmailOp`.
 
 ## Layout
 
@@ -28,7 +30,7 @@ keep their own auth, models, money and consent; nothing here calls an LLM, holds
 | `src/index.ts` | The kernel barrel: contract, schema, errors |
 | `src/models/*`, `src/email`, `src/brand`, `src/prompts`, `src/tools`, `src/gates`, `src/cost`, `src/flows`, `src/wire`, `src/client`, `src/testing` | Built on the contract by the following wave-1 packages; each has its own entry point in `package.json` `exports` |
 | `fixtures/contract/` | Valid documents and ops for every block, element, layout and op: **the contract by example** |
-| `fixtures/schema/` | The DSL's 50 invalid and 19 valid cases (path and code), and the `toJsonSchema` snapshots |
+| `fixtures/schema/` | The DSL's 55 invalid and 20 valid cases (path and code), and the `toJsonSchema` snapshots |
 | `scripts/check-consumers.mjs` | Compiles the sources the way each consumer does |
 | `scripts/export.mjs` | Writes the two release tarballs, `MANIFEST.json` and `SHA256SUMS` |
 
@@ -58,8 +60,11 @@ Constructors: `s.object`, `s.array({max})`, `s.tuple`, `s.text({max})`, `s.id`, 
 
 `check()` never throws on a bad value. It rejects unknown keys (an own `__proto__` key included), non-plain objects,
 control characters, bidi overrides and unpaired surrogates in text, line breaks in `singleLine` text, `http:`,
-`javascript:` and `data:` links, links with `user@` before the host, email addresses that carry a display name or a
-header line, and `data:` images whose bytes are not what their MIME type says. `maxNodes` (default 200,000) bounds the
+`javascript:` and `data:` links, links with `user@` before the host, `mailto:` links whose query sets anything but
+`subject` and `body` (a `to`, `cc` or `bcc` there would add a recipient), email addresses that carry a display name or
+a header line, and `data:` images whose bytes are not what their MIME type says. `toJsonSchema(…, {target: 'llm'})`
+throws when two union variants (or tuple items) give one field two JSON types, because the flat form would leave that
+property without a `type`. `maxNodes` (default 200,000) bounds the
 work. With `strict` off (the backend), narrow a result with `r.ok === false`; `r.errors` and `r.value` are readable
 either way.
 
@@ -87,6 +92,18 @@ either way.
   is a contract change and needs a note in ADR 0008.
 - Every model carries `v` and gets a pure, fixture-tested `migrate()`; prompt packs are versioned by name
   (`emailDraft.v1`).
+
+## Op rules (contract/schema.ts `OpBase`)
+
+- An op applies only while `op.baseRev === doc.rev` (absent `rev` is 0) at the start of the `apply*Ops` call; a call
+  that applies at least one op bumps `rev` by 1, so a replayed batch is refused as `stale`.
+- Accepting a `DocSuggestion` re-stamps its op's `baseRev` to the current `doc.rev` after checking that its target ids
+  still exist, so accepting one suggestion never makes the others stale.
+- Every op has an exact inverse in its own union: `insert_block` ↔ `remove_block`, `insert_section` ↔
+  `remove_section`, `add_slide` ↔ `remove_slide`, `attach` ↔ `detach` (the inverse `attach` carries the old
+  `index`); `update_*`, `set_*` and `move_slide` invert to themselves.
+- Email block ops address top-level blocks only (a block inside `columns` changes through an `update_block` of its
+  `columns` block); `set_recipients` replaces `to`, `cc` and `bcc` together, and an absent `cc` / `bcc` clears it.
 
 ## Tests
 
