@@ -278,9 +278,10 @@ describe('"Use the layout that fits" puts the page on the layout it is drawn on'
     expect(doc.pages[0].panels.map((p) => p.size)).toEqual(['wide', 'medium', 'medium']);
     const layout = check.layoutFix!.layout;
     expect(layout).toBe('Row 1: two equal panels. Row 2: one large panel.');
-    // The bug: a layout-only patch passes the gate, but the prompt rejects it (a wide panel in a shared row).
+    // A layout-only patch: the prompt rejects it (a wide panel in a shared row) and draws the old layout — and the
+    // gate, which measures the layout as drawn (pageGeometry effectiveLayout), agrees that the page is still overfull.
     const layoutOnly = applyOps(doc, [{ op: 'page', id: 'pg_1', patch: { layout } }]);
-    expect(checkPagePlan(layoutOnly, layoutOnly.pages[0]).state).not.toBe('overfull');
+    expect(checkPagePlan(layoutOnly, layoutOnly.pages[0]).state).toBe('overfull');
     expect(effectiveLayout(layoutOnly.pages[0], layoutOnly.format)).not.toBe(layout);
     const asDrawn = { ...layoutOnly.pages[0], layout: effectiveLayout(layoutOnly.pages[0], layoutOnly.format) };
     expect(checkPagePlan(layoutOnly, asDrawn).state).toBe('overfull');

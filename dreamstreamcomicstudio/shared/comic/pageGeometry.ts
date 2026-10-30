@@ -7,7 +7,7 @@
 //
 // All boxes are page-normalized (0..1, origin top-left).
 
-import type { Box, ComicDoc, ComicKind, Page, Panel, PanelSize } from './doc.js';
+import type { Box, ComicDoc, ComicKind, Format, Page, Panel, PanelSize } from './doc.js';
 
 /** Outer page margin and gutter between panels (fractions of the page). */
 const MARGIN = 0.02;
@@ -192,6 +192,73 @@ export const parseLayout = (layout: string): ParsedLayout | null => {
 export const layoutPanelCount = (parsed: ParsedLayout | null): number =>
   parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) : 0;
 
+// ── The layout as drawn (moved from server prompts.ts, which re-exports them under the same names) ──
+//
+// The page prompt draws `effectiveLayout`: the page's blueprint when it agrees with its panels (count, format and
+// sizes), else a blueprint synthesized from the panel sizes. Every measure of "the plan as it will be drawn" (the
+// page-plan check, the Render-all hold-back, the breakdown card's fit dots) reads this same layout, so the gate and
+// the drawing never disagree about a stored page whose layout text and panel sizes conflict.
+
+const FULL_WIDTH_SIZES: ReadonlySet<PanelSize> = new Set<PanelSize>(['wide', 'large', 'splash']);
+
+/** True when a panel's size contradicts its row (a wide/large/splash panel sharing a row). */
+export const layoutConflicts = (parsed: ParsedLayout, panels: Pick<Panel, 'size'>[]): boolean =>
+  parsed.mode === 'rows' &&
+  parsed.rows.some((r) => !r.span && r.panels.length > 1 && r.panels.some((i) => FULL_WIDTH_SIZES.has(panels[i]?.size)));
+
+/** Index (into the page's panels) of the tall panel of a span row, by reading order. */
+const tallIndexOf = (row: LayoutCell, rtl: boolean): number => {
+  const startSide = rtl ? 'right' : 'left';
+  return row.span?.tallSide === startSide ? row.panels[0] : row.panels[1] ?? row.panels[0];
+};
+
+/**
+ * Make panel sizes agree with a parsed blueprint (the writer's layout is the page's
+ * design): full-width single rows are "wide" (unless large/splash/tall), shared rows never
+ * hold wide/large/splash panels, a span row's tall panel is "tall", a single-panel page is
+ * a "splash". Returns new panel objects; unchanged sizes are kept.
+ */
+export const harmonizePanelSizes = <P extends Pick<Panel, 'size'>>(panels: P[], parsed: ParsedLayout, rtl = false): P[] => {
+  const out = panels.map((p) => ({ ...p }));
+  const set = (i: number, size: PanelSize) => {
+    if (out[i]) out[i].size = size;
+  };
+  if (parsed.mode === 'single') {
+    set(0, 'splash');
+    return out;
+  }
+  if (parsed.mode === 'stack') return out;
+  for (const row of parsed.rows) {
+    if (row.span) {
+      const tall = tallIndexOf(row, rtl);
+      for (const i of row.panels) {
+        if (i === tall) set(i, 'tall');
+        else if (out[i] && out[i].size !== 'small' && out[i].size !== 'medium') set(i, 'medium');
+      }
+    } else if (row.panels.length > 1) {
+      for (const i of row.panels) if (out[i] && FULL_WIDTH_SIZES.has(out[i].size)) set(i, 'medium');
+    } else {
+      const i = row.panels[0];
+      if (out[i] && (out[i].size === 'small' || out[i].size === 'medium')) set(i, 'wide');
+    }
+  }
+  return out;
+};
+
+/**
+ * The page's layout when it matches its panels (count, format and sizes), else a
+ * blueprint synthesized from the panel sizes — so the prompt never describes a layout
+ * that contradicts its own panel list. This is the layout the page is DRAWN on.
+ */
+export const effectiveLayout = (page: Pick<Page, 'panels' | 'layout'>, format: Pick<Format, 'kind' | 'readingDirection'>): string => {
+  const layout = clean(page.layout);
+  const parsed = layout ? parseLayout(layout) : null;
+  // Webtoon segments must be a vertical stack; a row grid would contradict the format.
+  const fits = parsed && (format.kind !== 'webtoon' || parsed.mode === 'stack');
+  if (fits && layoutPanelCount(parsed) === page.panels.length && !layoutConflicts(parsed, page.panels)) return layout;
+  return synthesizeLayout(page.panels, format);
+};
+
 const boxesFromLayout = (parsed: ParsedLayout, n: number, rtl: boolean): Box[] => {
   const boxes: Box[] = new Array(n);
   const contentW = 1 - 2 * MARGIN;
@@ -269,6 +336,14 @@ const validBox = (b: unknown): b is Box => {
 };
 
 /**
+ * The panel rectangles a page is DRAWN at, from its plan: the boxes of `effectiveLayout` (never a drawn take's
+ * measured boxes). Equal to estimatePanelBoxes(page) unless the page's layout text contradicts its panel sizes,
+ * where the prompt draws the layout synthesized from the sizes — and so do these boxes.
+ */
+export const drawnLayoutBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout'>): Box[] =>
+  estimatePanelBoxes({ panels: page.panels, layout: effectiveLayout(page, doc.format) }, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+
+/**
  * The best panel rectangles we know for a page: the vision pass's measured boxes when
  * they match the panel count, else the blueprint estimate.
  */
@@ -276,6 +351,22 @@ export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'p
   const measured = page.render?.qc?.panelBoxes;
   if (Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
   return estimatePanelBoxes(page, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+};
+
+/**
+ * Like panelBoxesFor, but the fallback is the layout as drawn (drawnLayoutBoxes): the vision pass's boxes when it
+ * really measured them (not `boxesFrom: 'estimate'`) and they match the panel count, else the boxes of
+ * effectiveLayout. Used where a fit is judged (the breakdown card's dots on a drawn page, the director's line-edit
+ * budget), so a page whose layout text contradicts its panel sizes is measured on the panels the prompt drew. A
+ * check that fell back (no usable reading, or another panel count) stored an ESTIMATE as panelBoxes — one made on
+ * the stored layout text — so those boxes are not a measurement and never stand in for the layout as drawn. QC
+ * written before boxesFrom existed has no marker and is read as measured, as before.
+ */
+export const drawnPanelBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout' | 'render'>): Box[] => {
+  const qc = page.render?.qc;
+  const measured = qc?.panelBoxes;
+  if (qc?.boxesFrom !== 'estimate' && Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
+  return drawnLayoutBoxes(doc, page);
 };
 
 // ── Regions (Mark-up) ────────────────────────────────────────────────────────

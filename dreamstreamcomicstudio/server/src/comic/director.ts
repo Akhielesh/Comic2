@@ -10,13 +10,14 @@
 
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
-import { aspectFromSize, aspectMatches, estimateJobs, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
+import { unitPrice } from '../../../shared/comic/plan.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { costFormatter, costFormatterFor, governCard, governDollars, type CostFormatter } from './costText.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
 import type { ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { logger } from '../lib/logger.js';
-import { billedLlm, newTextSpendTracker, noticeCard, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
+import { billedLlm, newTextSpendTracker, noticeCard, planPagesQuoteText, recordTextSpend, spendIsByok, suggestNextSteps, type TextSpendTracker } from './jobs.js';
 import { isProviderRefusal, looksLikeRefusal } from './llm.js';
 import { carriedImages, refIntentHint, unassignedImages, whoIsInTheseCard } from './refs/index.js';
 import {
@@ -105,6 +106,12 @@ const upper = (s?: string) => (s || '').trim().toUpperCase() || 'UNNAMED';
 
 const renderWord = (status: string, stale = false) => (stale ? 'out of date' : status === 'none' ? 'not drawn' : status);
 
+/**
+ * How a cast member reaches the page. An extra is described in words until it has a ready sheet; from then on
+ * the sheet is attached on every page it appears on (prompts.ts castReferences), so it reads "sheet ready".
+ */
+const castSheetWord = (c: ComicDoc['cast'][number]): string => (c.tier === 'extra' && c.sheet.status !== 'ready' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`);
+
 /** Non-person cast reads "animal ×3" in the summary (people stay as before). */
 const castKindTag = (c: ComicDoc['cast'][number]): string => {
   const kind = castKindOf(c);
@@ -154,11 +161,16 @@ export function summarizeDocForDirector(
   // The comic's model (models.md §3.4 #1): with a lock every tier draws on it; the tier only picks the resolution.
   const lock = deriveLock(doc);
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride, lock);
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok, ...(lock ? { lock } : {}) }).usd;
-  const pageUsd = lock ? estimateJobs([{ kind: 'page', count: 1 }], set.quality, { override: set.imageModelOverride, byok, lock }).usd : tierPagePrice(set.quality, byok);
+  // The prices come from the same source as every other quote (unitPrice: the lock, else the model override, else
+  // the tier preset), so an unlocked comic with a model override is quoted on that model, as named above.
+  const pageUsd = unitPrice(doc, 'page', { byok }).usd;
+  const coverUsd = unitPrice(doc, 'cover', { byok }).usd;
   tail.push(
     `Settings: ${set.quality} quality (${spec.nickname}${lock ? ' (locked)' : ''} ${resolution}, ${c.approx(pageUsd)}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
   );
+  // Before a plan exists, the director quotes planning honestly: one writer pass, and the bound when the plan
+  // check sends it back for its one repair round (plan §7) — the same figure the "Plan the pages" chip carries.
+  if (doc.planStatus === 'none') tail.push(`Planning the pages: ${planPagesQuoteText(doc, c, byok)}`);
   tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
   if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
   const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
@@ -203,7 +215,7 @@ function summaryBody(doc: ComicDoc, compact: boolean): string {
       lines.push(
         compact
           ? `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}`
-          : `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${c.tier === 'extra' ? 'text only' : `sheet ${renderWord(c.sheet.status)}`}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
+          : `- ${upper(c.name)} [${c.id}] ${c.tier}${castKindTag(c)}${c.role ? `, ${clip(c.role, 60)}` : ''} — ${clip(c.look.summary, 170) || '(no look yet)'}; ${castSheetWord(c)}${c.refs.length ? `; ${c.refs.length} reference photo(s)` : ''}`
       );
     }
     if (doc.cast.length > 24) lines.push(`- …and ${doc.cast.length - 24} more`);

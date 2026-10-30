@@ -13,7 +13,7 @@
 import { isPageStale, type Box, type ComicDoc, type Page, type PanelSize } from './doc.js';
 import { balloonCount, boxArea, fitState, hardFitLimit, needMeter, panelFit, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect, type Measure } from './lettering/layout.js';
-import { estimatePanelBoxes, layoutPanelCount, panelBoxesFor, parseLayout } from './pageGeometry.js';
+import { drawnLayoutBoxes, drawnPanelBoxes, estimatePanelBoxes, layoutPanelCount, parseLayout } from './pageGeometry.js';
 import {
   minAreaFor,
   PANEL_LIMITS,
@@ -115,9 +115,13 @@ const BIG_SIZES: ReadonlySet<PanelSize> = new Set<PanelSize>(['wide', 'large', '
 /** A box at least this wide spans the page (the content width is 0.96). */
 const FULL_WIDTH = 0.9;
 
-/** The boxes a page will be drawn at: its blueprint (never a drawn take's measured boxes). */
+/**
+ * The boxes a page will be drawn at: the layout the prompt really draws (pageGeometry effectiveLayout — the page's
+ * blueprint, or the one synthesized from its panel sizes when the two conflict), never a drawn take's measured
+ * boxes. So the check, the Render-all hold-back and the breakdown card measure exactly what is drawn.
+ */
 export function planBoxes(doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout'>): Box[] {
-  return estimatePanelBoxes(page, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+  return drawnLayoutBoxes(doc, page);
 }
 
 const meterFor = (doc: ComicDoc, page: Pick<Page, 'render'> | null, opts: PlanCheckOptions): NeedMeter =>
@@ -521,10 +525,10 @@ export function heldBackOf(check: PagePlanCheck): HeldBackPage {
 
 /**
  * "That makes panel 6 about 34 words; it holds about 32." — the director's line-edit report (K1). Measured on the
- * boxes the words are lettered into: a drawn page's measured panels, else its blueprint.
+ * boxes the words are lettered into: a drawn page's measured panels, else the layout as drawn.
  */
 export function panelBudgetSentence(doc: ComicDoc, page: Page, panelIndex: number): string | undefined {
-  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: panelBoxesFor(doc, page) });
+  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: drawnPanelBoxes(doc, page) });
   const p = check.panels[panelIndex];
   if (!p) return undefined;
   const base = `That makes panel ${p.n} about ${plural(p.words, nounOf(check.unit))}; it holds about ${p.budget}.`;

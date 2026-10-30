@@ -18,6 +18,7 @@ import {
   type Box,
   type Character,
   type ComicDoc,
+  type ImageModelLock,
   type LetteringMode,
   type Page,
   type PanelSize,
@@ -27,9 +28,10 @@ import {
 } from './doc.js';
 import { needMeter, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect } from './lettering/layout.js';
-import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type SpendEstimate } from './models.js';
+import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type ImageJobKind, type SpendEstimate } from './models.js';
+import { deriveLock } from './modelLock.js';
 import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
-import { panelBoxesFor } from './pageGeometry.js';
+import { drawnPanelBoxes } from './pageGeometry.js';
 import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
 
@@ -71,6 +73,36 @@ export function coverNeedsDraw(doc: ComicDoc): boolean {
   return !!r.specHash && r.specHash !== coverSpecHash(doc);
 }
 
+/**
+ * The model lock every quote prices on (models.md §3.4 item 1): the comic's persisted lock, else the migration lock
+ * of a legacy doc drawn before the lock existed (deriveLock: reads never write); undefined = nothing drawn yet. The
+ * server's jobs.ts lockOf is the same rule, so a chip, a card, the director and the gate name one price.
+ */
+export const quoteLockOf = (doc: ComicDoc): ImageModelLock | undefined => doc.imageModel ?? deriveLock(doc);
+
+/** `lock` option of the quote helpers: absent = the doc's own lock (quoteLockOf); null = price as if unlocked. */
+const lockFor = (doc: ComicDoc, lock: ImageModelLock | null | undefined): ImageModelLock | undefined =>
+  lock === null ? undefined : (lock ?? quoteLockOf(doc));
+
+/**
+ * Registry estimate for image jobs on THIS comic's model: with a lock every kind (style swatches included) prices
+ * on the locked model and the tier only picks the resolution — exactly what the server draws (jobs.ts
+ * resolveJobFor). Tier and override default to the doc's settings. The one lock-aware entry point for quotes that
+ * are not a render_pages action (cover, sheet, style-option and retry chips).
+ */
+export function estimateDocJobs(
+  doc: ComicDoc,
+  jobs: { kind: ImageJobKind; count: number; label?: string }[],
+  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null }
+): SpendEstimate {
+  const lock = lockFor(doc, opts.lock);
+  return estimateJobs(jobs, opts.tier ?? doc.settings.quality, {
+    override: opts.modelOverride ?? doc.settings.imageModelOverride,
+    byok: opts.byok,
+    ...(lock ? { lock } : {})
+  });
+}
+
 export interface RenderQuote extends SpendEstimate {
   pageIds: string[];
   sheetIds: string[];
@@ -97,6 +129,9 @@ export function quoteRenderPages(
     /** Leave overfull pages out of the run and the quote (the render gate's rule), except `drawOverfull`.
      *  `meter` reuses a caller's need meter (same doc) so a summary measures each line once. */
     holdBack?: { drawOverfull?: readonly string[]; meter?: NeedMeter };
+    /** Absent: the comic's own lock (quoteLockOf) — a locked comic always quotes its locked model, whatever the
+     *  tier or override say (the tier picks the resolution). null: price as if unlocked. */
+    lock?: ImageModelLock | null;
   }
 ): RenderQuote {
   let pages = pageTargets(doc, opts);
@@ -111,6 +146,7 @@ export function quoteRenderPages(
   }
   const sheets = missingSheetsFor(doc, pages);
   const cover = !!opts.includeCover && (opts.force ? !isBusy(doc.cover.render) : coverNeedsDraw(doc));
+  const lock = lockFor(doc, opts.lock);
   const est = estimateJobs(
     [
       { kind: 'page', count: pages.length, label: 'pages' },
@@ -118,7 +154,7 @@ export function quoteRenderPages(
       { kind: 'cover', count: cover ? 1 : 0, label: 'cover' }
     ],
     opts.tier,
-    { override: opts.modelOverride, byok: opts.byok }
+    { override: opts.modelOverride, byok: opts.byok, ...(lock ? { lock } : {}) }
   );
   return {
     ...est,
@@ -130,16 +166,20 @@ export function quoteRenderPages(
   };
 }
 
-/** Registry price of ONE image of a kind for this doc right now (tier + model override; QC included for pages/edits). */
+/**
+ * Registry price of ONE image of a kind for this doc right now (QC included for pages/edits): on the comic's locked
+ * model when it has one (the tier picks the resolution), else the tier preset or the model override.
+ */
 export function unitPrice(
   doc: ComicDoc,
   kind: 'page' | 'cover' | 'sheet' | 'edit',
-  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string }
+  opts: { byok: boolean; tier?: QualityTier; modelOverride?: string; lock?: ImageModelLock | null }
 ): { usd: number; model: string } {
   const tier = opts.tier ?? doc.settings.quality;
   const override = opts.modelOverride ?? doc.settings.imageModelOverride;
-  const est = estimateJobs([{ kind, count: 1, label: kind }], tier, { override, byok: opts.byok });
-  return { usd: est.usd, model: resolveImageJob(kind, tier, override).spec.nickname };
+  const lock = lockFor(doc, opts.lock);
+  const est = estimateJobs([{ kind, count: 1, label: kind }], tier, { override, byok: opts.byok, ...(lock ? { lock } : {}) });
+  return { usd: est.usd, model: resolveImageJob(kind, tier, override, lock).spec.nickname };
 }
 
 /** Real money recorded against one render target (renders, edits, reuses) from the spend ledger. */
@@ -164,8 +204,9 @@ export function spendByTarget(doc: ComicDoc): Map<string, TargetSpend> {
 }
 
 export interface PanelSummary {
-  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), its blueprint — the plan as it will be
-   *  drawn, the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels. */
+  /** `box`: for a page "Render all" would draw (undrawn, failed or stale), the layout as drawn (effectiveLayout) —
+   *  the boxes the hold-back is decided on; for a drawn, current (or busy) page, its measured panels (else the
+   *  layout as drawn). */
   n: number; box: Box; shot: ShotType; size: PanelSize; castIds: string[]; speech: number; captions: number; sfx: number; words: number;
   /** How much of the panel its lettering covers (density.ts need ÷ area, on `box`), its state and what it holds
    *  (in BookSummary.budgetUnit: words, or characters for Japanese and Chinese). Same boxes as the page's planFit. */
@@ -219,7 +260,8 @@ export interface BookSummary {
     /** Pages "Render all" holds back (overfull), when any. */
     heldBack?: number;
   };
-  /** What the next drawing runs on (registry facts, no guesses). */
+  /** What the next drawing runs on (registry facts, no guesses). `locked`: the model is fixed — the comic's model
+   *  lock (quoteLockOf) or an explicit model override; `model` is then that model. */
   pricing?: { model: string; pageUsd: number; coverUsd: number; tier: QualityTier; byok: boolean; locked: boolean };
   /** "6 pages · 19 panels. Want more moments? Add a page." — the page count stays the user's choice; the UI
    *  formats `addPageUsd` (usage words for governed users). */
@@ -303,12 +345,13 @@ export function summarizeBook(
       const castIds = [...new Set(p.panels.flatMap((panel) => panel.castIds))];
       const asset = p.render.asset;
       // One plan check per page, on one set of boxes, feeds the per-panel dots AND the page verdict, so they never
-      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on its blueprint — the plan
-      // as it will be drawn, the gate's boxes — even when an older take left measured boxes; a drawn, current (or
-      // busy) page on the panels it was drawn with, and is never held back.
+      // disagree: a page "Render all" would draw (undrawn, failed or stale) is checked on the layout as drawn
+      // (pagePlanCheck planBoxes: effectiveLayout, the gate's boxes) even when an older take left measured boxes; a
+      // drawn, current (or busy) page on the panels it was drawn with (measured, else the layout as drawn), and is
+      // never held back.
       const about = drawable.has(p.id);
       const check = p.panels.length
-        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: panelBoxesFor(doc, p), fixLayout: false })
+        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: drawnPanelBoxes(doc, p), fixLayout: false })
         : undefined;
       const summary: PageSummary = {
         id: p.id,
@@ -391,7 +434,7 @@ export function summarizeBook(
       savedUsd: doc.spend.savedUsd ?? 0,
       ...renderAllTotals(doc, { byok: opts.byok, tier, modelOverride: override, drawOverfull: [...anyway], meter })
     },
-    pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override },
+    pricing: { model: page1.model, pageUsd: page1.usd, coverUsd: cover1.usd, tier, byok: opts.byok, locked: !!override || !!quoteLockOf(doc) },
     moments: momentsLine(doc, page1.usd),
     budgetUnit: textUnitFor(doc.format.language).unit
   };

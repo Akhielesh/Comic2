@@ -34,12 +34,10 @@ import {
   type Character,
   type ComicDoc,
   type ComicKind,
-  type Format,
   type Line,
   type LineKind,
   type Page,
   type Panel,
-  type PanelSize,
   type Place,
   type RefAsset,
   type RefLabel,
@@ -58,7 +56,10 @@ import {
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { isPhotoLikeness, pickRefs, type RefContext } from '../../../shared/comic/refRanking.js';
 import {
+  effectiveLayout,
   estimatePanelBoxes,
+  harmonizePanelSizes,
+  layoutConflicts,
   layoutPanelCount,
   parseLayout,
   synthesizeLayout,
@@ -753,65 +754,10 @@ export const stagePanel = (page: Page, panel: Panel): StagedCharacter[] => {
 export type { LayoutCell, ParsedLayout };
 export { layoutPanelCount, parseLayout, synthesizeLayout };
 
-const FULL_WIDTH_SIZES = new Set<PanelSize>(['wide', 'large', 'splash']);
-
-/** True when a panel's size contradicts its row (a wide/large/splash panel sharing a row). */
-export const layoutConflicts = (parsed: ParsedLayout, panels: Pick<Panel, 'size'>[]): boolean =>
-  parsed.mode === 'rows' &&
-  parsed.rows.some((r) => !r.span && r.panels.length > 1 && r.panels.some((i) => FULL_WIDTH_SIZES.has(panels[i]?.size)));
-
-/** Index (into the page's panels) of the tall panel of a span row, by reading order. */
-const tallIndexOf = (row: LayoutCell, rtl: boolean): number => {
-  const startSide = rtl ? 'right' : 'left';
-  return row.span?.tallSide === startSide ? row.panels[0] : row.panels[1] ?? row.panels[0];
-};
-
-/**
- * Make panel sizes agree with a parsed blueprint (the writer's layout is the page's
- * design): full-width single rows are "wide" (unless large/splash/tall), shared rows never
- * hold wide/large/splash panels, a span row's tall panel is "tall", a single-panel page is
- * a "splash". Returns new panel objects; unchanged sizes are kept.
- */
-export const harmonizePanelSizes = <P extends Pick<Panel, 'size'>>(panels: P[], parsed: ParsedLayout, rtl = false): P[] => {
-  const out = panels.map((p) => ({ ...p }));
-  const set = (i: number, size: PanelSize) => {
-    if (out[i]) out[i].size = size;
-  };
-  if (parsed.mode === 'single') {
-    set(0, 'splash');
-    return out;
-  }
-  if (parsed.mode === 'stack') return out;
-  for (const row of parsed.rows) {
-    if (row.span) {
-      const tall = tallIndexOf(row, rtl);
-      for (const i of row.panels) {
-        if (i === tall) set(i, 'tall');
-        else if (out[i] && out[i].size !== 'small' && out[i].size !== 'medium') set(i, 'medium');
-      }
-    } else if (row.panels.length > 1) {
-      for (const i of row.panels) if (out[i] && FULL_WIDTH_SIZES.has(out[i].size)) set(i, 'medium');
-    } else {
-      const i = row.panels[0];
-      if (out[i] && (out[i].size === 'small' || out[i].size === 'medium')) set(i, 'wide');
-    }
-  }
-  return out;
-};
-
-/**
- * The page's layout when it matches its panels (count, format and sizes), else a
- * blueprint synthesized from the panel sizes — so the prompt never describes a layout
- * that contradicts its own panel list.
- */
-export const effectiveLayout = (page: Page, format: Pick<Format, 'kind' | 'readingDirection'>): string => {
-  const layout = clean(page.layout);
-  const parsed = layout ? parseLayout(layout) : null;
-  // Webtoon segments must be a vertical stack; a row grid would contradict the format.
-  const fits = parsed && (format.kind !== 'webtoon' || parsed.mode === 'stack');
-  if (fits && layoutPanelCount(parsed) === page.panels.length && !layoutConflicts(parsed, page.panels)) return layout;
-  return synthesizeLayout(page.panels, format);
-};
+// The layout as drawn — layoutConflicts, harmonizePanelSizes and effectiveLayout — lives in the same shared module
+// (one implementation for the prompt, the writer, the plan check, the Render-all gate and layoutFixOps); it is
+// re-exported here under its old names.
+export { effectiveLayout, harmonizePanelSizes, layoutConflicts };
 
 // ── References ───────────────────────────────────────────────────────────────
 

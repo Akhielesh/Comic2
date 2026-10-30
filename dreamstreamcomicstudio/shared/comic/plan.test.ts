@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
 import { createEmptyDoc, emptyRender, normalizeDoc, pageSpecHash, type ComicDoc, type Page } from './doc';
 import { estimateJobs } from './models';
-import { LOW_QC_SCORE, coverNeedsDraw, missingSheetsFor, pageTargets, quoteRenderPages, sheetTargets, spendByTarget, summarizeBook, unitPrice } from './plan';
+import { LOW_QC_SCORE, coverNeedsDraw, missingSheetsFor, pageTargets, quoteLockOf, quoteRenderPages, sheetTargets, spendByTarget, summarizeBook, unitPrice } from './plan';
 
 /** Same shape as server/src/comic/orchestrator.fakes.ts plannedDoc(): "Spice Run", 2 cast, 1 place, 3 planned pages. */
 function plannedDoc(id = 'proj-1'): ComicDoc {
@@ -152,7 +152,9 @@ describe('summarizeBook', () => {
     expect(s.pages[0].model).toBeTruthy();
     expect(s.pages[0].quoteUsd).toBeUndefined();
     expect(s.totals.toDrawUsd).toBe(quoteRenderPages(sample, { byok: false, tier: sample.settings.quality }).usd);
-    expect(s.pricing).toMatchObject({ pageUsd: perPage, tier: sample.settings.quality, byok: false, locked: false });
+    // pg_1 was drawn on a recorded model, so the comic is locked to it (quoteLockOf derives the migration lock).
+    expect(quoteLockOf(sample)).toBeDefined();
+    expect(s.pricing).toMatchObject({ pageUsd: perPage, tier: sample.settings.quality, byok: false, locked: true });
     expect(s.cover.quoteUsd).toBe(unitPrice(sample, 'cover', { byok: false }).usd);
     expect(LOW_QC_SCORE).toBe(0.45); // equality with jobs.ts: server/src/comic/plan.parity.test.ts
   });
