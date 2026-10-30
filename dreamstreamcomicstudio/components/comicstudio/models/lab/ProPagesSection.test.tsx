@@ -6,16 +6,18 @@
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BlindPair, LabOverview, LabRunAnswer, ProPagesArmItem, ProPagesOverview } from './labApi';
+import type { BlindPair, LabOverview, LabRun, LabRunAnswer, ProPagesArmItem, ProPagesOverview } from './labApi';
 
 const fetchOverview = vi.fn<() => Promise<LabOverview>>();
 const runCheck = vi.fn<(input: { itemId: string; idempotencyKey: string; quotedUsd: number }) => Promise<LabRunAnswer>>();
 const vote = vi.fn<(pairId: string, pick: string, seen?: string) => Promise<BlindPair>>();
+const markGuideLines = vi.fn<(runId: string, copied: boolean | null) => Promise<LabRun>>();
 vi.mock('./labApi', async (orig) => ({
   ...(await orig<typeof import('./labApi')>()),
   fetchLabOverview: () => fetchOverview(),
   runLabCheck: (input: { itemId: string; idempotencyKey: string; quotedUsd: number }) => runCheck(input),
-  voteBlindPair: (pairId: string, pick: string, seen?: string) => vote(pairId, pick, seen)
+  voteBlindPair: (pairId: string, pick: string, seen?: string) => vote(pairId, pick, seen),
+  setLabGuideLines: (runId: string, copied: boolean | null) => markGuideLines(runId, copied)
 }));
 
 const { ModelLabSection } = await import('./ModelLabSection');
@@ -93,6 +95,7 @@ beforeEach(() => {
   fetchOverview.mockReset().mockResolvedValue(overview(proPages()));
   runCheck.mockReset();
   vote.mockReset();
+  markGuideLines.mockReset();
 });
 
 describe('P1 · Pro pages A/B — switch off (the default)', () => {
@@ -188,17 +191,37 @@ describe('P1 · Pro pages A/B — switch on', () => {
       createdAt: '2026-10-30T11:58:00Z',
       finishedAt: '2026-10-30T11:59:00Z'
     });
-    vote.mockResolvedValueOnce({
+    const votedPair: BlindPair = {
       id: 'p1-b4b5774f-p2',
       label: 'b4b5774f · page 2',
       state: 'voted',
       pick: 'B',
       a: { slot: 'A', imageUrl: 'https://signed.example/1.webp', run: run('r-off', 'b4b5774f · page 2 · guide off'), arm: { id: 'off', label: 'Guide off' }, check: { ok: true, callMade: true, costReported: true, panelsPlanned: 6, panelsDrawn: 6, beatsMatched: 4, crosses: [], score: 0.81 } },
       b: { slot: 'B', imageUrl: 'https://signed.example/2.webp', run: run('r-on', 'b4b5774f · page 2 · guide on'), arm: { id: 'on', label: 'Guide on' }, check: { ok: true, callMade: true, costReported: true, panelsPlanned: 6, panelsDrawn: 6, beatsMatched: 6, crosses: [1], score: 0.9 } }
+    };
+    vote.mockResolvedValueOnce(votedPair);
+    // What the server says after the vote: the pair voted, its arms final, and a tally.
+    const votedCopy = 'You voted on b4b5774f · page 2; its two drawings are final, so a new drawing here would never be shown.';
+    const tally = { voted: 1, pairs: 3, picks: { on: 1, off: 0, tie: 0 }, beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } }, guideLinesCopied: { on: 0, off: 0 }, guideLinesChecked: { on: 0, off: 0 } };
+    const afterVote = proPages({
+      pairs: [votedPair, ...proPages().pairs.slice(1)],
+      tally,
+      pages: GOLDEN.map((g, i) => ({ ...g, pairId: `p1-${g.key}`, available: true, arms: i === 0 ? [arm(g, 'off', { canRun: false, reason: votedCopy }), arm(g, 'on', { canRun: false, reason: votedCopy })] : [arm(g, 'off'), arm(g, 'on')] }))
     });
+    fetchOverview.mockResolvedValue(overview(afterVote));
+    expect(fetchOverview).toHaveBeenCalledTimes(1);
     fireEvent.click(within(pair).getByRole('button', { name: 'B is better' }));
     await act(async () => undefined);
     expect(vote).toHaveBeenCalledWith('p1-b4b5774f-p2', 'B', 'feedfacecafebeef01234567');
+    // The section re-reads the lab after the vote: the tally appears and the page's arms say why they can't be drawn again.
+    expect(fetchOverview).toHaveBeenCalledTimes(2);
+    expect(section().querySelector('[data-ab-tally]')).toHaveTextContent('Your votes so far (1 of 3 pages): guide on 1');
+    expect(section().querySelector('[data-ab-guide-lines-tally]')).toHaveTextContent('Copied guide lines: not marked yet.');
+    for (const id of ['p1-b4b5774f-p2-guide-off', 'p1-b4b5774f-p2-guide-on']) {
+      const row = section().querySelector(`[data-ab-arm="${id}"]`) as HTMLElement;
+      expect(row).toHaveTextContent(votedCopy);
+      expect(within(row).queryByRole('button')).toBeNull();
+    }
     const after = section().querySelector('[data-ab-pair="p1-b4b5774f-p2"]') as HTMLElement;
     expect(after).toHaveTextContent('You picked B — guide on.');
     expect(after.querySelector('[data-ab-revealed="on"]')).toHaveTextContent('Beats matched6 of 6 drawn panels show their planned moment');
@@ -207,13 +230,41 @@ describe('P1 · Pro pages A/B — switch on', () => {
     expect(after.querySelector('[data-ab-revealed="off"]')).toHaveTextContent('Art over a bordernone');
     expect(after.querySelector('[data-ab-revealed="on"]')).toHaveTextContent('Cost $0.0635 (provider-reported) · quoted $0.0534');
     expect(within(after).queryByRole('button', { name: 'A is better' })).toBeNull();
+
+    // Each revealed drawing gets the owner's "copied the guide's lines?" mark (yes / no / not checked); a mark is sent for
+    // that run only and the lab is re-read so the tally counts it.
+    const onSide = after.querySelector('[data-ab-revealed="on"]') as HTMLElement;
+    expect(onSide.querySelector('[data-ab-guide-lines]')).toHaveAttribute('data-ab-guide-lines', 'unchecked');
+    const marked = { ...run('r-on', 'b4b5774f · page 2 · guide on'), facts: { callMade: true, costReported: true, refsSent: 5, guideLinesCopied: { value: false, at: '2026-10-30T12:01:00Z', by: 'admin' } } };
+    markGuideLines.mockResolvedValueOnce(marked);
+    fetchOverview.mockResolvedValue(
+      overview({
+        ...afterVote,
+        pairs: [{ ...votedPair, b: { ...votedPair.b!, run: marked } }, ...afterVote.pairs.slice(1)],
+        tally: { ...tally, guideLinesChecked: { on: 1, off: 0 } }
+      })
+    );
+    fireEvent.click(within(onSide).getByRole('radio', { name: 'B · Guide on: No' }));
+    await act(async () => undefined);
+    expect(markGuideLines).toHaveBeenCalledWith('r-on', false);
+    expect(fetchOverview).toHaveBeenCalledTimes(3);
+    expect(section().querySelector('[data-ab-revealed="on"] [data-ab-guide-lines]')).toHaveAttribute('data-ab-guide-lines', 'no');
+    expect(section().querySelector('[data-ab-guide-lines-tally]')).toHaveTextContent('Copied guide lines: guide on 0 (of 1 marked) · guide off 0 (of 0 marked).');
+    for (const label of ['Yes, copied', 'No', 'Not checked']) expect(within(onSide).getByText(label).closest('label')!.className).toMatch(/(?:^|\s)min-h-11(?:\s|$)/);
   });
 
   it('the tally (voted pairs only), a page that is not this admin’s, and a refused arm say why', async () => {
     fetchOverview.mockResolvedValue(
       overview(
         proPages({
-          tally: { voted: 1, pairs: 3, picks: { on: 1, off: 0, tie: 0 }, beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } } },
+          tally: {
+            voted: 1,
+            pairs: 3,
+            picks: { on: 1, off: 0, tie: 0 },
+            beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } },
+            guideLinesCopied: { on: 1, off: 0 },
+            guideLinesChecked: { on: 1, off: 1 }
+          },
           pages: [
             { ...GOLDEN[0], pairId: 'p1-b4b5774f-p2', available: true, arms: [arm(GOLDEN[0], 'off', { canRun: false, reason: 'Vote on b4b5774f · page 2 first — a new drawing now would show which side is which.' }), arm(GOLDEN[0], 'on')] },
             { ...GOLDEN[2], pairId: 'p1-f8312c86-p1', available: false, reason: "Comic f8312c86 isn't one of your comics on this server, so its page can't be drawn here.", arms: [] }
@@ -226,6 +277,7 @@ describe('P1 · Pro pages A/B — switch on', () => {
     const p1 = section();
     expect(p1.querySelector('[data-ab-tally]')).toHaveTextContent('Your votes so far (1 of 3 pages): guide on 1 · guide off 0 · about the same 0.');
     expect(p1.querySelector('[data-ab-tally]')).toHaveTextContent('Beats matched: guide on 6 of 6 panels · guide off 4 of 6 panels.');
+    expect(p1.querySelector('[data-ab-guide-lines-tally]')).toHaveTextContent('Copied guide lines: guide on 1 (of 1 marked) · guide off 0 (of 1 marked).');
     expect(p1.querySelector('[data-ab-page="f8312c86-p1"]')).toHaveTextContent("isn't one of your comics on this server");
     expect(p1.querySelector('[data-ab-quote]')).toHaveTextContent('The 2 drawings that can be quoted: ≈ $0.1068 (2 pages + 2 page checks, provider price)');
     const refused = p1.querySelector('[data-ab-arm="p1-b4b5774f-p2-guide-off"]') as HTMLElement;
@@ -238,6 +290,17 @@ describe('P1 · Pro pages A/B — switch on', () => {
     expect(ready).toEqual({ id: 'p1-b4b5774f-p2', label: 'b4b5774f · page 2', state: 'ready', seen: 'feedfacecafebeef01234567', a: { slot: 'A', imageUrl: 'https://x.example/a.webp' }, b: { slot: 'B', imageUrl: 'https://x.example/b.webp' } });
     const voted = asBlindPair({ id: 'p1-b4b5774f-p2', label: 'b4b5774f · page 2', state: 'voted', pick: 'A', a: { slot: 'A', arm: { id: 'on', label: 'Guide on' }, check: { panelsPlanned: 6, beatsMatched: 6, ok: true, beats: [1, 2, 'x', 3] } } });
     expect(voted?.a).toMatchObject({ arm: { id: 'on', label: 'Guide on' }, check: { panelsPlanned: 6, beatsMatched: 6, ok: true, beats: [1, 2, 3] } });
+    // The owner's guide-lines mark rides on the revealed run's facts; a tally from an older server reads as nothing marked.
+    const marked = asBlindPair({
+      id: 'p1-b4b5774f-p2',
+      label: 'b4b5774f · page 2',
+      state: 'voted',
+      pick: 'tie',
+      a: { slot: 'A', run: { id: 'r1', checkId: 'P1', status: 'ok', quotedUsd: 0.0534, model: { id: 'nano-banana-2.1', nickname: 'Nano Banana 2.1' }, facts: { callMade: true, refsSent: 5, proPages: { guideLinesCopied: { value: true, at: '2026-10-30T12:01:00Z', by: 'admin' } } } } }
+    });
+    expect(marked?.a?.run?.facts.guideLinesCopied).toEqual({ value: true, at: '2026-10-30T12:01:00Z', by: 'admin' });
+    const oldTally = asProPages(JSON.parse(JSON.stringify(proPages({ tally: { voted: 1, pairs: 3, picks: { on: 1, off: 0, tie: 0 }, beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } } } as never }))));
+    expect(oldTally?.tally).toMatchObject({ guideLinesCopied: { on: 0, off: 0 }, guideLinesChecked: { on: 0, off: 0 } });
   });
 
   it('fits 360 px: shrinkable containers, wrapping copy, tokens only, 44 px targets', async () => {

@@ -3,7 +3,8 @@
 // + 6 page checks from the PriceBook) and every drawing's own quote show before anything can run. Until the server-side
 // switch (COMIC_LAB_AB_BUDGET_USD) is set — the owner hasn't approved these test drawings yet (PD-8) — the section is a
 // calm "not enabled yet" with no Draw buttons, and the server refuses a click unsent anyway. A Draw button only opens the
-// shared confirm dialog; nothing is sent from here. No timers.
+// shared confirm dialog; nothing is sent from here. No timers: a vote (or a guide-lines mark) asks the host to re-read
+// the lab once, so the tally and the arms' run state follow it.
 
 import React from 'react';
 import { Columns2, Info, Lock } from 'lucide-react';
@@ -62,6 +63,13 @@ const beatsLine = (t: ProPagesTally): string | null => {
   return parts.length ? `Beats matched: ${parts.join(' · ')}.` : null;
 };
 
+/** "Copied guide lines: guide on 0 (of 2 marked) · guide off 0 (of 2 marked)." — the owner's marks after each vote. */
+export const guideLinesLine = (t: ProPagesTally): string => {
+  if (!t.guideLinesChecked.on && !t.guideLinesChecked.off) return 'Copied guide lines: not marked yet. After each vote, mark whether each drawing copied the guide’s lines.';
+  const part = (label: string, arm: 'on' | 'off') => `${label} ${t.guideLinesCopied[arm]} (of ${t.guideLinesChecked[arm]} marked)`;
+  return `Copied guide lines: ${part('guide on', 'on')} · ${part('guide off', 'off')}.`;
+};
+
 const TallyLine: React.FC<{ tally: ProPagesTally }> = ({ tally }) => {
   const beats = beatsLine(tally);
   return (
@@ -70,11 +78,19 @@ const TallyLine: React.FC<{ tally: ProPagesTally }> = ({ tally }) => {
         Your votes so far ({tally.voted} of {tally.pairs} pages): guide on {tally.picks.on} · guide off {tally.picks.off} · about the same {tally.picks.tie}.
       </p>
       {beats && <p className={cx('mt-0.5 tabular-nums text-[var(--ds-muted)]', WRAP)}>{beats}</p>}
+      <p className={cx('mt-0.5 tabular-nums text-[var(--ds-muted)]', WRAP)} data-ab-guide-lines-tally="">
+        {guideLinesLine(tally)}
+      </p>
     </div>
   );
 };
 
-export const ProPagesSection: React.FC<{ view: ProPagesOverview; onRun: (item: LabItem) => void }> = ({ view, onRun }) => {
+export const ProPagesSection: React.FC<{
+  view: ProPagesOverview;
+  onRun: (item: LabItem) => void;
+  /** After a vote or a guide-lines mark: re-read the lab (the tally, and the arms a vote makes final, change with it). */
+  onVoted?: () => void;
+}> = ({ view, onRun, onVoted }) => {
   const total = view.quote;
   const allSix = total.arms > 0 && total.arms === view.pages.length * 2;
   const pct = view.budget.limitUsd && view.budget.spentUsd !== null ? Math.min(100, Math.round((view.budget.spentUsd / Math.max(0.0001, view.budget.limitUsd)) * 100)) : 0;
@@ -165,12 +181,12 @@ export const ProPagesSection: React.FC<{ view: ProPagesOverview; onRun: (item: L
         <h4 className="text-[13.5px] font-semibold text-[var(--ds-ink)]">Side by side</h4>
         <p className={cx('text-[12px] text-[var(--ds-muted)]', WRAP)}>
           A and B are shuffled per page. Which one had the guide, its cost and its page check appear only after your vote, and a vote is final. While a page waits for your vote,
-          neither drawing can be redrawn.
+          neither drawing can be redrawn, and after it the two drawings you judged stay that page’s result.
         </p>
         {view.tally && <TallyLine tally={view.tally} />}
         <ul className="mt-2 space-y-2" aria-label="A/B pairs">
           {view.pairs.map((pair) => (
-            <ProPagesPairCard key={pair.id} pair={pair} />
+            <ProPagesPairCard key={pair.id} pair={pair} onChange={() => onVoted?.()} />
           ))}
         </ul>
       </div>

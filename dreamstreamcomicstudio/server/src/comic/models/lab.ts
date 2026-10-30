@@ -36,6 +36,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { mapAssetRefs, normalizeDoc, type AspectRatio, type AssetRef, type ComicDoc, type Page, type RenderState, type Resolution } from '../../../../shared/comic/doc.js';
 import type { HealthState, ModelHealth } from '../../../../shared/comic/modelHealth.js';
+import { deriveLock } from '../../../../shared/comic/modelLock.js';
 import { QC_USD_PER_PAGE, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
 import { canServeToOwner } from '../../../../shared/comic/safety.js';
 import { reasoningBudget } from '../../ai/providers/openrouter.js';
@@ -92,6 +93,13 @@ const QUOTE_EPSILON = 0.000_05;
  * the daily cap (server/sql/comic_model_lab_pro_pages.sql); nothing can raise it.
  */
 export const LAB_AB_HARD_CAP_USD = 1.2;
+/**
+ * Headroom held under the A/B limit for each image a drawing attaches (references and the layout guide), because the
+ * quote can't price them: Nano Banana 2.1's reference input is unpublished (plan §7 names this $0.004-per-reference
+ * provider allowance, and real 2K pages bill about 27% over list). The quote shown stays the PriceBook's; only the
+ * limit a run may reserve against shrinks, so a finished run's larger reported cost still lands under the hard cap.
+ */
+export const LAB_AB_REF_ALLOWANCE_USD = 0.004;
 /** The checks that share the A/B cap. */
 export const LAB_AB_CHECKS: readonly LabCheckId[] = ['P1', 'P2'];
 /**
@@ -1175,13 +1183,17 @@ const NOTHING_CHARGED = 'Nothing was charged.';
 //     references, plus one page check (QC) — at the provider price (the platform pays; no markup). The section
 //     shows all six (6 page jobs + QC) before anything can run.
 //   * One click = one arm: ONE image call (oneCallTransport: never retried) and its ONE page check (a single chat call
-//     through the same kind of wrapper: no retry, no repair round). One idempotency key per click; a repeat returns
-//     the stored result.
+//     through the same kind of wrapper: no retry, no repair round), paid only for a drawing that was stored and can be
+//     compared. One idempotency key per click; a repeat returns the stored result.
+//   * The comic's model lock holds (the studio's assertLockedModel): a page whose lock this server can't draw is not
+//     drawn on another model.
 //   * The A/B's own hard cap (LAB_AB_HARD_CAP_USD, every day, parts 1 and 2 together) is reserved atomically with the
-//     lab's daily cap.
+//     lab's daily cap, minus LAB_AB_REF_ALLOWANCE_USD per attached image (their price isn't in the quote), so a run's
+//     reported cost lands under the limit.
 //   * Blind: a page's two drawings are shown side by side as A and B, ordered by their random preview ids. Which arm
-//     is which, every number and the page check appear only after the owner's vote, and while a pair waits for its
-//     vote neither arm can be redrawn.
+//     is which, every number and the page check appear only after the owner's vote. While a pair waits for its vote
+//     neither arm can be redrawn; once voted its two drawings are final (a new one would be paid for and never shown).
+//     After the vote the owner marks, per drawing, whether it copied the guide's lines (plan §4.8's second condition).
 //   * The admin's OWN comics only (comic_docs rows of the admin who clicks, found by the plan's 8-character comic ids;
 //     never another user's). Blocked or quarantined images and uploads with no safety verdict yet are never sent
 //     (the studio's own reference gate); a reference that can't be loaded is left out. Both are counted in the result.
@@ -1239,7 +1251,9 @@ export const PRO_PAGES_CHECK = {
   decision: "Turn on COMIC_LAYOUT_GUIDE (the page layout guide as Image 1) only if the guide-on pages bind their beats better and never copy the guide's lines.",
   answers:
     'Three of your golden pages, each drawn twice with everything else the same — guide off and guide on — and each drawing checked once (beats matched, panels drawn, art crossing a border). Shown side by side as A and B; which is which appears after your vote.',
-  note: `Each drawing is one image call that is never retried, plus its one page check. The A/B has its own hard cap of $${LAB_AB_HARD_CAP_USD.toFixed(2)} over every day, shared with part 2.`
+  note:
+    `Each drawing is one image call that is never retried, plus its one page check. The A/B has its own hard cap of $${LAB_AB_HARD_CAP_USD.toFixed(2)} over every day, shared with part 2. ` +
+    `Each drawing also keeps $${LAB_AB_REF_ALLOWANCE_USD} per attached image free under that cap, because reference input isn't priced yet. After your vote, mark whether each drawing copied the guide's lines.`
 };
 
 /** The A/B's budget switch as read from the server's environment. */
@@ -1310,6 +1324,11 @@ export interface ProPagesRunFacts {
   /** References that couldn't be loaded and were left out. */
   dropped: number;
   check: LabPageCheckFacts;
+  /**
+   * The owner's mark, after the pair's vote: did this drawing copy the layout guide's borders or lines into the art?
+   * (plan §4.8: COMIC_LAYOUT_GUIDE goes on only with "no copied guide lines".) null = not checked.
+   */
+  guideLinesCopied?: { value: boolean | null; at: string; by: string | null } | null;
 }
 
 /** A P1 click's answer: no image and no check numbers (judged blind in the pair view); the money facts stay visible. */
@@ -1367,6 +1386,10 @@ export interface ProPagesTally {
   picks: { on: number; off: number; tie: number };
   /** Beats matched over panels planned, per arm, from the voted pairs' page checks. */
   beats: Record<ProPagesArm, { matched: number; planned: number }>;
+  /** Voted drawings the owner marked as copying the guide's lines, per arm. */
+  guideLinesCopied: Record<ProPagesArm, number>;
+  /** Voted drawings the owner marked either way (yes or no), per arm; the rest aren't checked yet. */
+  guideLinesChecked: Record<ProPagesArm, number>;
 }
 
 export interface ProPagesView {
@@ -1512,6 +1535,18 @@ export const planProPagesArm = (
     compiled = compileFor(doc, page);
   } catch (err) {
     return { reason: err instanceof StudioError ? err.userMessage : `Page ${golden.pageN} couldn't be prepared for drawing.` };
+  }
+  // The comic's model lock, as the studio asserts it before any provider call (jobs.ts assertLockedModel): a lock the
+  // registry doesn't know compiles for the tier's model instead, so refuse rather than draw on another model. The lab
+  // never resolves a lock to a replacement and never changes the comic.
+  const lock = loaded.imageModel ?? deriveLock(loaded);
+  if (lock && (getImageModel(lock.modelId)?.id ?? lock.modelId) !== compiled.spec.id) {
+    const known = getImageModel(lock.modelId);
+    return {
+      reason: known
+        ? `Comic ${golden.comic} is locked to ${known.nickname}, but this page would be drawn on ${compiled.spec.nickname}, so the lab won't draw it on another model.`
+        : `Comic ${golden.comic} is locked to ${lock.modelId.slice(0, 120)}, which this server can't draw, so the lab won't draw it on another model.`
+    };
   }
   const guide = compiled.references.some((r) => r.path === LAYOUT_REFERENCE_PATH);
   if (arm === 'on' && !guide) return { reason: guideNoSlotCopy(compiled.spec.nickname) };
@@ -2396,7 +2431,14 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
   const proTally = (pairs: ProPair[]): ProPagesTally | undefined => {
     const voted = pairs.filter((p) => p.state === 'voted' && p.vote && p.a && p.b);
     if (!voted.length) return undefined;
-    const tally: ProPagesTally = { voted: voted.length, pairs: pairs.length, picks: { on: 0, off: 0, tie: 0 }, beats: { on: { matched: 0, planned: 0 }, off: { matched: 0, planned: 0 } } };
+    const tally: ProPagesTally = {
+      voted: voted.length,
+      pairs: pairs.length,
+      picks: { on: 0, off: 0, tie: 0 },
+      beats: { on: { matched: 0, planned: 0 }, off: { matched: 0, planned: 0 } },
+      guideLinesCopied: { on: 0, off: 0 },
+      guideLinesChecked: { on: 0, off: 0 }
+    };
     const armOf = (r: LabRunRow): ProPagesArm | undefined => proPagesItem(r.itemId)?.arm ?? r.result.proPages?.arm;
     for (const p of voted) {
       const picked = p.vote!.pick === 'tie' ? undefined : armOf(p.vote!.pick === 'A' ? p.a! : p.b!);
@@ -2404,8 +2446,14 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       else if (picked) tally.picks[picked] += 1;
       for (const r of [p.a!, p.b!]) {
         const arm = armOf(r);
+        if (!arm) continue;
+        const copied = r.result.proPages?.guideLinesCopied?.value;
+        if (copied === true || copied === false) {
+          tally.guideLinesChecked[arm] += 1;
+          if (copied) tally.guideLinesCopied[arm] += 1;
+        }
         const check = r.result.proPages?.check;
-        if (!arm || !check || check.beatsMatched === undefined) continue;
+        if (!check || check.beatsMatched === undefined) continue;
         tally.beats[arm].matched += check.beatsMatched;
         tally.beats[arm].planned += check.panelsPlanned;
       }
@@ -2414,9 +2462,14 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
   };
 
   const proPairReadyCopy = (label: string): string => `Vote on ${label} first — a new drawing now would show which side is which.`;
+  /** A voted pair keeps the two drawings the owner judged (proPairsOf pins them): a new one would be paid for and never shown. */
+  const proPairVotedCopy = (label: string): string => `You voted on ${label}; its two drawings are final, so a new drawing here would never be shown.`;
   const dollars = (n: number) => (n >= 1 ? `$${n.toFixed(2)}` : money(n));
-  const abCapCopy = (spent: number, limit: number, quote: number): string =>
-    `The A/B budget can't cover this: ${dollars(spent)} of ${dollars(limit)} used (every day, parts 1 and 2 together), and this drawing is quoted at ${money(quote)}. ${NOTHING_CHARGED}`;
+  /** The headroom a drawing holds under the A/B limit for the images its quote can't price (LAB_AB_REF_ALLOWANCE_USD). */
+  const refAllowance = (images: number): number => round6(Math.max(0, images) * LAB_AB_REF_ALLOWANCE_USD);
+  const abCapCopy = (spent: number, limit: number, quote: number, allowance = 0): string =>
+    `The A/B budget can't cover this: ${dollars(spent)} of ${dollars(limit)} used (every day, parts 1 and 2 together), and this drawing is quoted at ${money(quote)}` +
+    `${allowance > 0 ? `, with ${money(allowance)} more held back for its attached images, whose price isn't published` : ''}. ${NOTHING_CHARGED}`;
   const AB_UNCOUNTED_COPY = `The A/B budget can't be counted on this server right now, so nothing here will run. ${NOTHING_CHARGED}`;
   const NO_SOURCE_COPY = "This server can't read comics (storage isn't configured), so the golden pages can't be drawn here.";
 
@@ -2474,6 +2527,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     const golden = await loadGolden(adminId);
     const pairs = proPairsOf(ctx.runs, ctx.votes);
     const pairState = new Map(pairs.map((p) => [p.pair.id, p.state] as const));
+    // A vote is final even when its drawings have aged out of the recent runs this view reads.
+    const votedPairs = new Set(ctx.votes.map((v) => v.pairId));
     const health = new Map(ctx.healthByModel);
     const healthFor = async (spec: ImageModelSpec): Promise<LabHealthView | null> => {
       if (!health.has(spec.id)) health.set(spec.id, await healthOf(spec, ctx.keys));
@@ -2502,12 +2557,13 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       if (!budget.enabled) reason = budget.reason ?? LAB_AB_NOT_ENABLED_COPY;
       else if (!ctx.keys) reason = "The platform OpenRouter key isn't set on this server.";
       else if (!store || !deps.storage) reason = "Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep.";
+      else if (pairState.get(item.pair.id) === 'voted' || votedPairs.has(item.pair.id)) reason = proPairVotedCopy(item.pair.label);
       else if (pairState.get(item.pair.id) === 'ready') reason = proPairReadyCopy(item.pair.label);
       else if (!quote) reason = `There's no price to quote for ${spec.nickname} at ${plan.compiled.resolution}, so the lab won't run it.`;
       else if (h?.state === 'down') reason = downCopy(spec.nickname, h);
       else if (ctx.spentUsd + quote.usd > capUsd + 1e-9) reason = capCopy(ctx.spentUsd, capUsd, quote.usd);
       else if (abSpent === null || limit === null) reason = AB_UNCOUNTED_COPY;
-      else if (abSpent + quote.usd > limit + 1e-9) reason = abCapCopy(abSpent, limit, quote.usd);
+      else if (abSpent + quote.usd + refAllowance(refs) > limit + 1e-9) reason = abCapCopy(abSpent, limit, quote.usd, refAllowance(refs));
       return {
         ...base,
         modelId: spec.id,
@@ -2617,8 +2673,11 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     if (!store.spentOn) throw labError('NOT_RUNNABLE', 409, AB_UNCOUNTED_COPY);
     claimInflight(input.key);
     try {
-      // Blind: while this page's pair waits for its vote, neither arm may be redrawn (checked inside the in-flight slot).
-      const pair = proPairsOf(await store.recent(LAB_RECENT_LIMIT), await store.votes()).find((p) => p.pair.id === item.pair.id);
+      // Blind: while this page's pair waits for its vote, neither arm may be redrawn; once it is voted its two drawings
+      // are final, and a new one would be paid for and shown nowhere (both checked inside the in-flight slot).
+      const votes = await store.votes();
+      const pair = proPairsOf(await store.recent(LAB_RECENT_LIMIT), votes).find((p) => p.pair.id === item.pair.id);
+      if (pair?.state === 'voted' || votes.some((v) => v.pairId === item.pair.id)) throw labError('NOT_RUNNABLE', 409, `${proPairVotedCopy(item.pair.label)} ${NOTHING_CHARGED}`);
       if (pair?.state === 'ready') throw labError('NOT_RUNNABLE', 409, `${proPairReadyCopy(item.pair.label)} ${NOTHING_CHARGED}`);
 
       const loaded = await source.comic(adminId, item.golden.comic);
@@ -2640,8 +2699,13 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       }
       const spent = await store.spent(utcDay(deps.now()));
       if (spent + quote.usd > capUsd + 1e-9) throw labError('LAB_CAP_REACHED', 409, capCopy(spent, capUsd, quote.usd), { spentUsd: spent, capUsd, quoteUsd: quote.usd });
+      // The quote can't price the attached images, so the run reserves against the limit minus their allowance: a reported
+      // cost above the quote then still fits under the limit (and the $1.20 hard cap).
+      const allowance = refAllowance(references.length);
       const abSpent = await store.spentOn(LAB_AB_CHECKS);
-      if (abSpent + quote.usd > limit + 1e-9) throw labError('AB_CAP_REACHED', 409, abCapCopy(abSpent, limit, quote.usd), { spentUsd: abSpent, limitUsd: limit, capUsd: LAB_AB_HARD_CAP_USD, quoteUsd: quote.usd });
+      if (abSpent + quote.usd + allowance > limit + 1e-9) {
+        throw labError('AB_CAP_REACHED', 409, abCapCopy(abSpent, limit, quote.usd, allowance), { spentUsd: abSpent, limitUsd: limit, capUsd: LAB_AB_HARD_CAP_USD, quoteUsd: quote.usd, allowanceUsd: allowance });
+      }
 
       const reserved = await store.reserve({
         key: input.key,
@@ -2656,20 +2720,35 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         refs: references.length,
         quotedUsd: quote.usd,
         capUsd,
-        ab: { capUsd: limit }
+        ab: { capUsd: round6(Math.max(0, limit - allowance)) }
       });
       if (reserved.outcome === 'existing') return answerFor(reserved.row, true, store);
       if (reserved.outcome === 'cap') throw labError('LAB_CAP_REACHED', 409, capCopy(reserved.spentUsd, capUsd, quote.usd), { spentUsd: reserved.spentUsd, capUsd, quoteUsd: quote.usd });
       if (reserved.outcome === 'ab_cap') {
-        throw labError('AB_CAP_REACHED', 409, abCapCopy(reserved.spentUsd, limit, quote.usd), { spentUsd: reserved.spentUsd, limitUsd: limit, capUsd: LAB_AB_HARD_CAP_USD, quoteUsd: quote.usd });
+        throw labError('AB_CAP_REACHED', 409, abCapCopy(reserved.spentUsd, limit, quote.usd, allowance), {
+          spentUsd: reserved.spentUsd,
+          limitUsd: limit,
+          capUsd: LAB_AB_HARD_CAP_USD,
+          quoteUsd: quote.usd,
+          allowanceUsd: allowance
+        });
       }
 
       // ── The one image call, then its one page check ──
       const drawn = await drawOnce({ logId: item.id, spec, keys, adminId, res, aspect, prompt: plan.compiled.prompt, references });
+      // The check is paid only for a drawing that can be judged: one whose preview was stored (latestOk skips any other,
+      // so it would never reach a pair or the tally).
+      const drewImage = drawn.status === 'ok' && !!drawn.dataUrl;
       const check: LabPageCheckFacts =
-        drawn.status === 'ok' && drawn.dataUrl
-          ? await checkProPageOnce({ doc: plan.doc, page: plan.page, dataUrl: drawn.dataUrl, keys, network: deps.network, now: deps.now })
-          : { ok: false, callMade: false, costReported: false, panelsPlanned: plan.page.panels.length, message: 'Not checked: the page was not drawn.' };
+        drewImage && drawn.facts.imagePath
+          ? await checkProPageOnce({ doc: plan.doc, page: plan.page, dataUrl: drawn.dataUrl!, keys, network: deps.network, now: deps.now })
+          : {
+              ok: false,
+              callMade: false,
+              costReported: false,
+              panelsPlanned: plan.page.panels.length,
+              message: drewImage ? "Not checked: the drawing couldn't be stored, so it can't be compared." : 'Not checked: the page was not drawn.'
+            };
       // The check's own cost when reported; a check that reached the provider without reporting counts its quote (never
       // under-count); no check, nothing.
       const checkUsd = !check.callMade ? 0 : check.costUsd ?? prices?.qcUsd ?? QC_USD_PER_PAGE;
@@ -2714,13 +2793,36 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     }
   };
 
+  /**
+   * P1 only, after its pair's vote: the owner's mark of whether this drawing copied the layout guide's borders or
+   * lines (plan §4.8 turns COMIC_LAYOUT_GUIDE on only with "no copied guide lines"). Same rules as the D4 watermark box:
+   * never before the vote (it would tie a run to a side), and only on a run the vote was cast on.
+   */
+  const setGuideLines = async (adminId: string, store: LabStore, row: LabRunRow, value: boolean | null): Promise<LabRunView> => {
+    if (row.checkId !== 'P1') throw labError('BAD_REQUEST', 400, 'Only the Pro pages A/B part 1 drawings are checked for copied guide lines.');
+    const facts = row.result.proPages;
+    if (row.status !== 'ok' || !facts) throw labError('NOT_DRAWN', 409, 'Only a drawn A/B result can be checked for copied guide lines.');
+    const pair = proPagesItem(row.itemId)?.pair;
+    const voted = pair ? (await store.votes()).some((v) => v.pairId === pair.id && (v.aRunId === row.id || v.bRunId === row.id)) : false;
+    if (!voted) throw labError('PAIR_NOT_READY', 409, 'Vote on this page first; the guide-lines box appears with the arms.');
+    const now = deps.now();
+    const updated = await store.updateResult(row.id, { ...row.result, proPages: { ...facts, guideLinesCopied: { value, at: new Date(now).toISOString(), by: adminId } } });
+    return runView(updated, now, updated.result.imagePath ? await signAll([updated.result.imagePath]) : {});
+  };
+
   const setWatermark = async (adminId: string, runId: string, body: unknown): Promise<LabRunView> => {
     const store = needStore();
     const b = isObject(body) ? body : {};
-    if (!(b.visible === true || b.visible === false || b.visible === null)) throw labError('BAD_REQUEST', 400, 'Say whether the watermark is visible (yes, no, or not checked).');
+    const triState = (v: unknown): v is boolean | null => v === true || v === false || v === null;
+    // The same route carries the A/B's guide-lines mark: { guideLines: true | false | null }.
+    const guideAsked = Object.prototype.hasOwnProperty.call(b, 'guideLines');
+    if (guideAsked ? !triState(b.guideLines) : !triState(b.visible)) {
+      throw labError('BAD_REQUEST', 400, guideAsked ? "Say whether the drawing copied the guide's lines (yes, no, or not checked)." : 'Say whether the watermark is visible (yes, no, or not checked).');
+    }
     const row = await store.byId(String(runId).slice(0, 64));
     if (!row) throw labError('NOT_FOUND', 404, 'That lab result is gone.');
-    // The A/B draws on the comic's own model and stays blind until its vote: no per-run edits there.
+    if (guideAsked) return setGuideLines(adminId, store, row, b.guideLines as boolean | null);
+    // The A/B draws on the comic's own model and stays blind until its vote: no watermark box there.
     if (LAB_AB_CHECKS.includes(row.checkId)) throw labError('BAD_REQUEST', 400, 'The Pro pages A/B drawings have no watermark check.');
     if (row.status !== 'ok') throw labError('NOT_DRAWN', 409, 'Only a drawn result can be checked for a watermark.');
     // A D4 result before its pair's vote stays blind: no per-run edits that would tie a run to a side.

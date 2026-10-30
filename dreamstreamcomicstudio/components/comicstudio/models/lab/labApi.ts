@@ -88,6 +88,8 @@ export interface LabFacts {
   recordedCall?: boolean;
   stoppedSecondCall?: boolean;
   watermark?: { visible: boolean | null; at: string; by: string | null } | null;
+  /** Pro pages A/B (P1), after the vote: the owner's mark of whether this drawing copied the layout guide's lines. */
+  guideLinesCopied?: { value: boolean | null; at: string; by: string | null } | null;
 }
 
 export type LabRunStatus = 'running' | 'ok' | 'failed' | 'interrupted';
@@ -228,6 +230,10 @@ export interface ProPagesTally {
   pairs: number;
   picks: { on: number; off: number; tie: number };
   beats: Record<ProPagesArm, { matched: number; planned: number }>;
+  /** Voted drawings marked as copying the guide's lines, per arm. */
+  guideLinesCopied: Record<ProPagesArm, number>;
+  /** Voted drawings marked either way (yes or no), per arm. */
+  guideLinesChecked: Record<ProPagesArm, number>;
 }
 
 export interface ProPagesOverview {
@@ -352,6 +358,10 @@ const asFacts = (v: unknown): LabFacts => {
   }
   if (isObject(f.watermark) && (f.watermark.visible === true || f.watermark.visible === false || f.watermark.visible === null)) {
     out.watermark = { visible: f.watermark.visible as boolean | null, at: text(f.watermark.at, 40) ?? '', by: text(f.watermark.by, 64) ?? null };
+  }
+  const guide = isObject(f.proPages) && isObject(f.proPages.guideLinesCopied) ? f.proPages.guideLinesCopied : undefined;
+  if (guide && (guide.value === true || guide.value === false || guide.value === null)) {
+    out.guideLinesCopied = { value: guide.value as boolean | null, at: text(guide.at, 40) ?? '', by: text(guide.by, 64) ?? null };
   }
   return out;
 };
@@ -542,6 +552,7 @@ export const asProPages = (v: unknown): ProPagesOverview | null => {
   const quote = isObject(v.quote) ? v.quote : {};
   const tally = isObject(v.tally) && isObject(v.tally.picks) && isObject(v.tally.beats) ? v.tally : undefined;
   const beatsOf = (b: unknown) => (isObject(b) ? { matched: num(b.matched) ?? 0, planned: num(b.planned) ?? 0 } : { matched: 0, planned: 0 });
+  const perArm = (v: unknown): Record<ProPagesArm, number> => (isObject(v) ? { on: num(v.on) ?? 0, off: num(v.off) ?? 0 } : { on: 0, off: 0 });
   const notice = text(v.notice, 600);
   const enabled = v.enabled === true;
   return {
@@ -582,7 +593,9 @@ export const asProPages = (v: unknown): ProPagesOverview | null => {
             voted: num(tally.voted) ?? 0,
             pairs: num(tally.pairs) ?? 0,
             picks: { on: num((tally.picks as Record<string, unknown>).on) ?? 0, off: num((tally.picks as Record<string, unknown>).off) ?? 0, tie: num((tally.picks as Record<string, unknown>).tie) ?? 0 },
-            beats: { on: beatsOf((tally.beats as Record<string, unknown>).on), off: beatsOf((tally.beats as Record<string, unknown>).off) }
+            beats: { on: beatsOf((tally.beats as Record<string, unknown>).on), off: beatsOf((tally.beats as Record<string, unknown>).off) },
+            guideLinesCopied: perArm(tally.guideLinesCopied),
+            guideLinesChecked: perArm(tally.guideLinesChecked)
           }
         }
       : {})
@@ -695,6 +708,20 @@ export async function runLabCheck(input: { itemId: string; idempotencyKey: strin
 export async function setLabWatermark(runId: string, visible: boolean | null): Promise<LabRun> {
   try {
     const run = asRun(await post<unknown, unknown>(`${MODEL_LAB_PATH}/runs/${encodeURIComponent(runId)}/watermark`, { visible }));
+    if (!run) throw new LabApiError("The answer couldn't be read. Refresh the lab.", 502);
+    return run;
+  } catch (err) {
+    throw toLabError(err);
+  }
+}
+
+/**
+ * Pro pages A/B (P1), after the pair's vote: did this drawing copy the layout guide's lines? null = not checked. The
+ * same route as the watermark box (the server refuses it before the vote and on anything but a voted P1 drawing).
+ */
+export async function setLabGuideLines(runId: string, copied: boolean | null): Promise<LabRun> {
+  try {
+    const run = asRun(await post<unknown, unknown>(`${MODEL_LAB_PATH}/runs/${encodeURIComponent(runId)}/watermark`, { guideLines: copied }));
     if (!run) throw new LabApiError("The answer couldn't be read. Refresh the lab.", 502);
     return run;
   } catch (err) {

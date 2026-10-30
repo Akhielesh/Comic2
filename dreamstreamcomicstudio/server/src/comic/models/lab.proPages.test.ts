@@ -16,6 +16,7 @@ import {
   LAB_AB_BUDGET_ENV,
   LAB_AB_HARD_CAP_USD,
   LAB_AB_NOT_ENABLED_COPY,
+  LAB_AB_REF_ALLOWANCE_USD,
   PRO_PAGES_GOLDEN,
   createMemoryLabStore,
   createModelLab,
@@ -423,6 +424,24 @@ describe('one click = one image call + its one page check', () => {
     expect(h3.store.runs[0].result.costReported).toBe(false);
   });
 
+  it('a drawing that could not be stored is never checked (it could never be compared): no check call, no check cost', async () => {
+    const h = harness();
+    h.deps.storage!.put = async () => {
+      throw new Error('bucket unavailable');
+    };
+    const run = (await runArm(h, P2_ON)).run as LabAbRunView;
+    expect(h.images()).toHaveLength(1);
+    expect(h.checks()).toHaveLength(0);
+    expect(run).toMatchObject({ status: 'ok', checked: false, costReported: true });
+    expect(run.costUsd).toBeCloseTo(0.0611, 6); // the image only: no check was paid for
+    const row = h.store.runs[0];
+    expect(row.result).toMatchObject({ stored: false });
+    expect(row.result.imagePath ?? null).toBeNull();
+    expect(row.result.proPages!.check).toMatchObject({ ok: false, callMade: false, message: "Not checked: the drawing couldn't be stored, so it can't be compared." });
+    // It never enters the pair (nothing to show), so the arm is still waiting to be drawn.
+    expect((await proOf(h)).pairs.find((p) => p.id === 'p1-b4b5774f-p2')).toMatchObject({ state: 'waiting', waitingFor: ['Guide off', 'Guide on'] });
+  });
+
   it('a section that cannot be prepared says so and never takes the rest of the lab down', async () => {
     const h = harness();
     h.source.docs.b4b5774f = { pages: null } as unknown as ComicDoc; // a broken stored doc
@@ -511,10 +530,35 @@ describe('blind until the vote', () => {
 
     // The tally: from voted pairs only.
     const after = await proOf(h);
-    expect(after.tally).toEqual({ voted: 1, pairs: 3, picks: { on: 1, off: 0, tie: 0 }, beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } } });
+    expect(after.tally).toEqual({
+      voted: 1,
+      pairs: 3,
+      picks: { on: 1, off: 0, tie: 0 },
+      beats: { on: { matched: 6, planned: 6 }, off: { matched: 4, planned: 6 } },
+      guideLinesCopied: { on: 0, off: 0 },
+      guideLinesChecked: { on: 0, off: 0 }
+    });
     expect(after.pairs.find((p) => p.id === 'p1-b4b5774f-p2')!.seen).toBeUndefined();
-    // After the vote the arms can be drawn again; the voted pair keeps the drawings the owner judged.
-    expect(armOf(after, P2_ON).canRun).toBe(true);
+    // After the vote the pair's two drawings are final: a new drawing would be paid for and shown nowhere (the voted pair
+    // keeps the drawings the owner judged), so neither arm offers one and a click is refused before anything is spent.
+    const voted = 'You voted on b4b5774f · page 2; its two drawings are final, so a new drawing here would never be shown.';
+    for (const id of [P2_OFF, P2_ON]) expect(armOf(after, id)).toMatchObject({ canRun: false, reason: voted });
+    const callsBefore = h.calls.length;
+    const rowsBefore = h.store.runs.length;
+    const abBefore = await h.store.spentOn(['P1', 'P2']);
+    let refused: unknown;
+    try {
+      await h.lab.run(ADMIN, { itemId: P2_ON, idempotencyKey: key(), ack: true, quotedUsd: armOf(after, P2_ON).quote!.usd });
+    } catch (err) {
+      refused = err;
+    }
+    expect(isLabError(refused) && refused.labCode).toBe('NOT_RUNNABLE');
+    expect((refused as Error).message).toBe(`${voted} Nothing was charged.`);
+    expect(h.calls).toHaveLength(callsBefore);
+    expect(h.store.runs).toHaveLength(rowsBefore);
+    expect(await h.store.spentOn(['P1', 'P2'])).toBe(abBefore);
+    // The other golden pages are untouched by this page's vote.
+    expect(armOf(after, 'p1-b4b5774f-p4-guide-on').canRun).toBe(true);
     // No watermark box on the A/B (wrong model check, and blind before the vote).
     expect(await labCodeOf(h.lab.setWatermark(ADMIN, h.store.runs[0].id, { visible: true }))).toBe('BAD_REQUEST');
   });
@@ -528,9 +572,40 @@ describe('the A/B cap: $1.20 over every day, shared with part 2', () => {
     const view = await proOf(h);
     expect(view.budget).toEqual({ capUsd: 1.2, limitUsd: 1.2, spentUsd: 1.16, remainingUsd: 0.04 });
     expect(armOf(view, P2_ON)).toMatchObject({ canRun: false });
-    expect(armOf(view, P2_ON).reason).toBe("The A/B budget can't cover this: $1.16 of $1.20 used (every day, parts 1 and 2 together), and this drawing is quoted at $0.0534. Nothing was charged.");
+    const held = Math.round(armOf(view, P2_ON).refs! * LAB_AB_REF_ALLOWANCE_USD * 10_000) / 10_000;
+    expect(armOf(view, P2_ON).reason).toBe(
+      `The A/B budget can't cover this: $1.16 of $1.20 used (every day, parts 1 and 2 together), and this drawing is quoted at $0.0534, with $${held} more held back for its attached images, whose price isn't published. Nothing was charged.`
+    );
     expect(await labCodeOf(h.lab.run(ADMIN, { itemId: P2_ON, idempotencyKey: key(), ack: true, quotedUsd: 0.0534 }))).toBe('AB_CAP_REACHED');
     expect(h.calls).toEqual([]);
+  });
+
+  it('each drawing holds $0.004 per attached image under the limit (unpriced reference input): a limit just above spent + quote is refused', async () => {
+    const quote = 0.0534;
+    const probe = harness();
+    const refs = armOf(await proOf(probe), P2_ON).refs!;
+    expect(refs).toBeGreaterThan(1); // the stored references plus the guide
+    const allowance = Math.round(refs * LAB_AB_REF_ALLOWANCE_USD * 1e6) / 1e6;
+
+    // Room for the quote, but not for the quote plus the allowance: refused before anything is read, reserved or sent.
+    const tight = harness({}, { enabled: true, limitUsd: quote + 0.001 });
+    const arm = armOf(await proOf(tight), P2_ON);
+    expect(arm.canRun).toBe(false);
+    expect(arm.reason).toMatch(/held back for its attached images, whose price isn't published/);
+    expect(await labCodeOf(tight.lab.run(ADMIN, { itemId: P2_ON, idempotencyKey: key(), ack: true, quotedUsd: quote }))).toBe('AB_CAP_REACHED');
+    expect(tight.calls).toEqual([]);
+    expect(tight.store.runs).toEqual([]);
+
+    // With room for both it runs, and the atomic reservation is made against the limit minus the allowance, so a reported
+    // cost above the quote (by up to the allowance) still lands under the limit.
+    const limit = Math.round((quote + allowance + 0.0005) * 1e6) / 1e6;
+    const roomy = harness({}, { enabled: true, limitUsd: limit });
+    const reserve = vi.spyOn(roomy.store, 'reserve');
+    expect(armOf(await proOf(roomy), P2_ON).canRun).toBe(true);
+    await runArm(roomy, P2_ON);
+    expect(reserve).toHaveBeenCalledTimes(1);
+    expect(reserve.mock.calls[0][0].ab!.capUsd).toBeCloseTo(limit - allowance, 6);
+    expect(roomy.images()).toHaveLength(1);
   });
 
   it('a switch set below the cap is the limit; earlier days count too; the store never lets a limit pass $1.20', async () => {
@@ -630,6 +705,80 @@ describe('the golden pages: the admin’s own comics, the studio’s reference g
     expect(await source.comic(ADMIN, "b4b5774f' or 1=1")).toMatchObject({ missing: expect.any(String) });
     expect(queries).toHaveLength(n); // a bad id is never sent to the database
     expect(createOwnerProPagesSource({ enabled: false, loadDataUrl: async () => '' })).toBeNull();
+  });
+});
+
+describe('the comic’s model lock', () => {
+  it('a comic locked to a model this server can’t draw is never drawn on another one: not runnable, no call', async () => {
+    const h = harness();
+    h.source.docs.b4b5774f.imageModel = { modelId: 'retired/old-model-9', lockedAt: T0, origin: 'first_render' };
+    const view = await proOf(h);
+    const copy = "Comic b4b5774f is locked to retired/old-model-9, which this server can't draw, so the lab won't draw it on another model.";
+    for (const id of [P2_OFF, P2_ON, 'p1-b4b5774f-p4-guide-off', 'p1-b4b5774f-p4-guide-on']) expect(armOf(view, id)).toMatchObject({ canRun: false, quote: null, reason: copy });
+    expect(armOf(view, 'p1-f8312c86-p1-guide-on').canRun).toBe(true); // another comic is unaffected
+    let refused: unknown;
+    try {
+      await h.lab.run(ADMIN, { itemId: P2_ON, idempotencyKey: key(), ack: true, quotedUsd: 0.0534 });
+    } catch (err) {
+      refused = err;
+    }
+    expect(isLabError(refused) && refused.labCode).toBe('NOT_RUNNABLE');
+    expect((refused as Error).message).toBe(`${copy} Nothing was charged.`);
+    expect(h.calls).toEqual([]);
+    expect(h.store.runs).toEqual([]);
+    expect(h.source.docs.b4b5774f.imageModel).toEqual({ modelId: 'retired/old-model-9', lockedAt: T0, origin: 'first_render' }); // the comic is never changed
+  });
+
+  it('a comic locked to the model its page compiles for draws as usual (a lock is checked, not guessed)', () => {
+    const doc = harness().source.docs.b4b5774f;
+    const planned = planProPagesArm(doc, PRO_PAGES_GOLDEN[0], 'on');
+    if (!('plan' in planned)) throw new Error(planned.reason);
+    const locked = { ...doc, imageModel: { modelId: planned.plan.compiled.spec.id, lockedAt: T0, origin: 'first_render' as const } };
+    expect('plan' in planProPagesArm(locked, PRO_PAGES_GOLDEN[0], 'on')).toBe(true);
+  });
+});
+
+describe('copied guide lines: the owner’s mark after the vote (plan §4.8)', () => {
+  it('only after the vote, only on the voted drawings; recorded per side, shown revealed, counted per arm in the tally', async () => {
+    const h = harness();
+    await runArm(h, P2_ON);
+    await runArm(h, P2_OFF);
+    const onRun = h.store.runs.find((r) => r.itemId === P2_ON)!;
+    const offRun = h.store.runs.find((r) => r.itemId === P2_OFF)!;
+    // Blind until the vote: no mark that could tie a run to a side.
+    expect(await labCodeOf(h.lab.setWatermark(ADMIN, onRun.id, { guideLines: true }))).toBe('PAIR_NOT_READY');
+    expect(onRun.result.proPages!.guideLinesCopied).toBeUndefined();
+
+    const pair = (await proOf(h)).pairs.find((p) => p.id === 'p1-b4b5774f-p2')!;
+    await h.lab.vote(ADMIN, 'p1-b4b5774f-p2', { pick: 'tie', seen: pair.seen });
+    expect(await labCodeOf(h.lab.setWatermark(ADMIN, onRun.id, { guideLines: 'yes' }))).toBe('BAD_REQUEST');
+    const marked = await h.lab.setWatermark(ADMIN, onRun.id, { guideLines: true });
+    expect(marked.facts.proPages!.guideLinesCopied).toMatchObject({ value: true, by: ADMIN });
+    await h.lab.setWatermark(ADMIN, offRun.id, { guideLines: false });
+    expect(h.store.runs.find((r) => r.id === offRun.id)!.result.proPages!.guideLinesCopied).toMatchObject({ value: false, by: ADMIN });
+    // The watermark box is still not an A/B thing, and a D check has no guide-lines mark.
+    expect(await labCodeOf(h.lab.setWatermark(ADMIN, onRun.id, { visible: true }))).toBe('BAD_REQUEST');
+
+    const view = await proOf(h);
+    const revealed = view.pairs.find((p) => p.id === 'p1-b4b5774f-p2')!;
+    const onSide = [revealed.a!, revealed.b!].find((s) => s.arm?.id === 'on')!;
+    expect(onSide.run!.facts.proPages!.guideLinesCopied).toMatchObject({ value: true });
+    expect(view.tally).toMatchObject({ guideLinesCopied: { on: 1, off: 0 }, guideLinesChecked: { on: 1, off: 1 } });
+
+    // "Not checked" clears the mark (and the count).
+    await h.lab.setWatermark(ADMIN, onRun.id, { guideLines: null });
+    expect((await proOf(h)).tally).toMatchObject({ guideLinesCopied: { on: 0, off: 0 }, guideLinesChecked: { on: 0, off: 1 } });
+    // Only voted drawings: a run the vote wasn't cast on (another page's) can't be marked.
+    await runArm(h, 'p1-b4b5774f-p4-guide-on');
+    const other = h.store.runs.find((r) => r.itemId === 'p1-b4b5774f-p4-guide-on')!;
+    expect(await labCodeOf(h.lab.setWatermark(ADMIN, other.id, { guideLines: false }))).toBe('PAIR_NOT_READY');
+  });
+
+  it('a D check refuses the guide-lines mark', async () => {
+    const h = harness();
+    const d = await h.store.reserve({ key: key(), adminId: ADMIN, checkId: 'D3', itemId: 'd3-seedream-pro', modelId: 'seedream-5-pro', providerModel: null, kind: 'page', res: '2K', aspect: '2:3', refs: 0, quotedUsd: 0.09, capUsd: 2 });
+    if (d.outcome !== 'reserved') throw new Error(d.outcome);
+    expect(await labCodeOf(h.lab.setWatermark(ADMIN, d.row.id, { guideLines: true }))).toBe('BAD_REQUEST');
   });
 });
 

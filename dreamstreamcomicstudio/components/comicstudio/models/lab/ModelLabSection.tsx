@@ -210,7 +210,7 @@ export const ModelLabSection: React.FC = () => {
             </section>
           ))}
 
-          {overview.proPages && <ProPagesSection view={overview.proPages} onRun={setConfirming} />}
+          {overview.proPages && <ProPagesSection view={overview.proPages} onRun={setConfirming} onVoted={load} />}
 
           <section aria-labelledby="model-lab-results" className={cx(LAB_PANEL, 'min-w-0 p-3')}>
             <h3 id="model-lab-results" className="text-[14.5px] font-semibold tracking-tight text-[var(--ds-ink)]">

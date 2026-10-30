@@ -1,14 +1,15 @@
 // One Pro pages A/B pair (P1): a golden page drawn with the layout guide off and on, shown side by side as A and B with
 // nothing else — no arm, cost, size or check — until the owner votes (the server does not even send them, and labApi
 // strips them if it did). The vote is final; then each side says which arm it was, what its page check found (beats
-// matched, panels drawn, art over a border) and what it cost.
+// matched, panels drawn, art over a border) and what it cost, and the owner marks whether it copied the guide's lines
+// (plan §4.8: the layout guide goes on only with better beats AND no copied guide lines).
 
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import { EyeOff } from 'lucide-react';
 import { TONE_TEXT } from '../../../chat/studioDesign';
 import { cx } from '../../conversation/ui';
 import { costLine } from './LabResultCard';
-import { voteBlindPair, type BlindPair, type BlindPick, type BlindSide, type LabPageCheck } from './labApi';
+import { setLabGuideLines, voteBlindPair, type BlindPair, type BlindPick, type BlindSide, type LabPageCheck, type LabRun } from './labApi';
 import { LAB_SECONDARY_BTN, LAB_WELL, WRAP } from './labStyles';
 
 const PICKS: { pick: BlindPick; label: string }[] = [
@@ -54,7 +55,52 @@ const SideImage: React.FC<{ side: BlindSide; pairLabel: string; revealed: boolea
   );
 };
 
-const RevealedSide: React.FC<{ side: BlindSide }> = ({ side }) => {
+const GUIDE_OPTIONS: { v: boolean | null; label: string }[] = [
+  { v: true, label: 'Yes, copied' },
+  { v: false, label: 'No' },
+  { v: null, label: 'Not checked' }
+];
+
+/** After the vote: did this drawing copy the layout guide's borders or lines into the art? (yes / no / not checked) */
+export const GuideLinesControl: React.FC<{ run: LabRun; label: string; onChange?: (run: LabRun) => void }> = ({ run, label, onChange }) => {
+  const name = useId();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const value = run.facts.guideLinesCopied?.value ?? null;
+  const pick = async (copied: boolean | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onChange?.(await setLabGuideLines(run.id, copied));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <fieldset className="mt-2 min-w-0" disabled={busy} data-ab-guide-lines={value === null ? 'unchecked' : value ? 'yes' : 'no'}>
+      <legend className={cx('text-[12.5px] font-semibold text-[var(--ds-ink)]', WRAP)}>Copied the guide’s lines into the art?</legend>
+      <div className="mt-1 flex min-w-0 flex-wrap gap-1.5">
+        {GUIDE_OPTIONS.map((o) => (
+          <label
+            key={String(o.v)}
+            className={cx(
+              'inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-[var(--ds-radius-control)] border border-[var(--ds-hairline)] px-3 text-[12.5px] text-[var(--ds-ink)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--ds-ring)]',
+              value === o.v ? 'bg-[var(--ds-accent-soft)]' : 'bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
+            )}
+          >
+            <input type="radio" name={name} aria-label={`${label}: ${o.label}`} className="h-4 w-4 accent-[var(--ds-accent)]" checked={value === o.v} onChange={() => void pick(o.v)} />
+            {o.label}
+          </label>
+        ))}
+      </div>
+      {error && <p className={cx('mt-1 text-[12px]', TONE_TEXT.warning, WRAP)}>{error}</p>}
+    </fieldset>
+  );
+};
+
+const RevealedSide: React.FC<{ side: BlindSide; onRunChange?: (run: LabRun) => void }> = ({ side, onRunChange }) => {
   const c = side.check;
   return (
     <article className={cx(LAB_WELL, 'min-w-0 p-3')} data-ab-revealed={side.arm?.id ?? ''}>
@@ -81,6 +127,7 @@ const RevealedSide: React.FC<{ side: BlindSide }> = ({ side }) => {
           ))}
         </ul>
       ) : null}
+      {side.run && side.run.status === 'ok' && <GuideLinesControl run={side.run} label={`${side.slot} · ${side.arm?.label ?? 'drawing'}`} onChange={onRunChange} />}
     </article>
   );
 };
@@ -103,6 +150,14 @@ export const ProPagesPairCard: React.FC<{ pair: BlindPair; onChange?: (pair: Bli
     } finally {
       setVoting(null);
     }
+  };
+
+  /** A side's run after the owner's guide-lines mark: kept here, and the section re-reads its tally. */
+  const replaceRun = (run: LabRun) => {
+    const swap = (s?: BlindSide) => (s?.run?.id === run.id ? { ...s, run } : s);
+    const next = { ...current, a: swap(current.a), b: swap(current.b) };
+    setCurrent(next);
+    onChange?.(next);
   };
 
   const revealed = current.state === 'voted';
@@ -151,7 +206,7 @@ export const ProPagesPairCard: React.FC<{ pair: BlindPair; onChange?: (pair: Bli
           </p>
           <div className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">
             {sides.map((s) => (
-              <RevealedSide key={s.slot} side={s} />
+              <RevealedSide key={s.slot} side={s} onRunChange={replaceRun} />
             ))}
           </div>
         </>
