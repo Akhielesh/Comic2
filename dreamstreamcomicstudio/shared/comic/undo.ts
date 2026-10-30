@@ -9,6 +9,8 @@
 //
 // Every inverse op is itself CLIENT-PATCHABLE (P2-AMEND), so an undo can always be sent as a `patch`.
 // Server-only ops (render, message, plan_input_hash, …) have no inverse: a batch holding one is not undoable.
+// Ship 2 (K2a): the panels/consistency ops (ops.ts PRO_PAGE_PATCH_OPS) are inverted too; their inverses are Ship 2 ops
+// and v5 patchable ops. While PRO_PAGE_OPS_PATCHABLE is off a client cannot send them, so isUndoable says false.
 
 import {
   bookOf,
@@ -22,7 +24,7 @@ import {
   type Line,
   type Page
 } from './doc.js';
-import { applyOp, CLIENT_PATCHABLE_OPS, type DocOp } from './ops.js';
+import { applyOp, CLIENT_PATCHABLE_OPS, INVERTIBLE_OPS, type DocOp, type PanelLineHome } from './ops.js';
 import { refsOf } from './refs.js';
 import { i18nOf } from './i18n.js';
 
@@ -55,9 +57,130 @@ const findLine = (page: Page | undefined, panelId: string, lineId: string): { li
 const pageCountFix = (before: ComicDoc, after: ComicDoc): DocOp[] =>
   before.format.pageCount !== after.format.pageCount ? [{ op: 'format', patch: { pageCount: before.format.pageCount } }] : [];
 
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+/** A patch of an entity without its id (the op names it). */
+const withoutId = (o: object): Rec => {
+  const { id: _id, ...rest } = o as Rec;
+  return rest;
+};
+
+/** Balloons, translations and edition overrides of `lineIds` as they were on `page` (the restore half of a deletion). */
+const lettersRestore = (doc: ComicDoc, page: Page, lineIds: string[]): DocOp[] => {
+  const ids = new Set(lineIds);
+  const out: DocOp[] = [];
+  if (page.balloons.some((b) => ids.has(b.lineId))) out.push({ op: 'balloons', pageId: page.id, balloons: page.balloons });
+  for (const [lang, e] of Object.entries(i18nOf(doc).editions)) {
+    for (const id of lineIds) {
+      if (e.lines[id]) out.push({ op: 'translation', lang, lineId: id, patch: e.lines[id] });
+      if (e.balloons[id]) out.push({ op: 'edition_balloon', lang, lineId: id, patch: e.balloons[id] });
+    }
+  }
+  return out;
+};
+
+/** Ship 2 (K2a): the exact inverse of a panels/consistency op (every op it returns is in INVERTIBLE_OPS). */
+const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null => {
+  switch (op.op) {
+    case 'page_frames': {
+      const page = findPage(doc, op.pageId);
+      const now = findPage(after, op.pageId);
+      if (!page || !now) return [];
+      const frames: DocOp = { op: 'page_frames', pageId: op.pageId, moveBalloons: false };
+      if (Object.prototype.hasOwnProperty.call(op, 'artMode')) frames.artMode = page.artMode ?? null;
+      if (Object.prototype.hasOwnProperty.call(op, 'frameStyle')) frames.frameStyle = page.frameStyle ?? null;
+      if (Array.isArray(op.frames)) {
+        const ids = [...new Set(op.frames.map((f) => f?.panelId))].filter((id): id is string => typeof id === 'string' && page.panels.some((p) => p.id === id));
+        frames.frames = ids.map((id) => ({ panelId: id, frame: page.panels.find((p) => p.id === id)!.frame ?? null }));
+      }
+      const restore: DocOp[] = [frames];
+      // What followed the frames comes back exactly (snapshots, not a reverse affine: no rounding drift).
+      if (!sameJson(page.balloons, now.balloons)) restore.push({ op: 'balloons', pageId: op.pageId, balloons: page.balloons });
+      for (const layer of page.layers || []) {
+        const moved = now.layers?.find((l) => l.id === layer.id);
+        if (moved && !sameJson(moved.box, layer.box)) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { box: layer.box } });
+      }
+      const editionsNow = i18nOf(after).editions;
+      for (const [lang, e] of Object.entries(i18nOf(doc).editions)) {
+        for (const [lineId, prev] of Object.entries(e.balloons)) {
+          const cur = editionsNow[lang]?.balloons[lineId];
+          if (cur && !sameJson(prev, cur)) restore.push({ op: 'edition_balloon', lang, lineId, patch: restoreFull(prev, cur) as never });
+        }
+      }
+      return restore;
+    }
+    case 'page_cuts': {
+      const page = findPage(doc, op.pageId);
+      return page ? [{ op: 'page_cuts', pageId: op.pageId, path: op.path, cuts: page.render.cuts ?? null, keepBy: true }] : [];
+    }
+    case 'panels_order': {
+      const page = findPage(doc, op.pageId);
+      return page ? [{ op: 'panels_order', pageId: op.pageId, order: page.panels.map((p) => p.id) }] : [];
+    }
+    case 'panel_add': {
+      const page = findPage(doc, op.pageId);
+      const added = findPage(after, op.pageId)?.panels.find((p) => p.id === op.panel.id);
+      if (!page || !added) return [];
+      // Lines it took from other panels go back where they were, in ascending position (exact order restored).
+      const homes: PanelLineHome[] = [];
+      for (const panel of page.panels)
+        panel.lines.forEach((l, index) => {
+          if (added.lines.some((x) => x.id === l.id)) homes.push({ lineId: l.id, panelId: panel.id, index });
+        });
+      return [{ op: 'panel_remove', pageId: op.pageId, id: added.id, ...(homes.length ? { lineHomes: homes } : {}) }];
+    }
+    case 'panel_remove': {
+      const page = findPage(doc, op.pageId);
+      const index = page ? page.panels.findIndex((p) => p.id === op.id) : -1;
+      if (!page || index < 0) return [];
+      const removed = page.panels[index];
+      const restore: DocOp[] = [{ op: 'panel_add', pageId: op.pageId, panel: removed, index }];
+      const moved = new Set([...(op.lineHomes || []).map((h) => h.lineId), ...(op.linesTo ? removed.lines.map((l) => l.id) : [])]);
+      const deleted = removed.lines.map((l) => l.id).filter((id) => !moved.has(id));
+      if (deleted.length) restore.push(...lettersRestore(doc, page, deleted));
+      for (const layer of page.layers || []) if (layer.clip === op.id) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { clip: op.id } });
+      return restore;
+    }
+    case 'layer': {
+      const page = findPage(doc, op.pageId);
+      if (!page) return [];
+      const layers = page.layers || [];
+      const index = layers.findIndex((l) => l.id === op.id);
+      if (index < 0) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: null }];
+      const prev = layers[index];
+      if (op.patch === null || op.patch === undefined) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: withoutId(prev), index }];
+      // The whole previous overlay (a kind change drops keys the normalizer no longer allows).
+      const now = findPage(after, op.pageId)?.layers?.find((l) => l.id === op.id);
+      return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: withoutId(restoreFull(prev, now)) }];
+    }
+    case 'continuity': {
+      const page = findPage(doc, op.pageId);
+      if (!page) return [];
+      const prev = page.continuity;
+      if (!prev) return [{ op: 'continuity', pageId: op.pageId, patch: null }];
+      return [{ op: 'continuity', pageId: op.pageId, patch: restoreFull(prev, findPage(after, op.pageId)?.continuity) }];
+    }
+    case 'scene': {
+      const scenes = doc.scenes || [];
+      const index = scenes.findIndex((s) => s.id === op.id);
+      if (index < 0) return [{ op: 'scene', id: op.id, patch: null }];
+      const prev = scenes[index];
+      if (op.patch === null || op.patch === undefined) return [{ op: 'scene', id: op.id, patch: withoutId(prev), index }];
+      return [{ op: 'scene', id: op.id, patch: withoutId(restoreFull(prev, after.scenes?.find((s) => s.id === op.id))) }];
+    }
+    case 'consistency':
+      return [{ op: 'consistency', patch: restoreFull(doc.consistency, after.consistency) }];
+    case 'finding': {
+      const prev = findPage(doc, op.pageId)?.render.qc?.findings?.find((f) => f.id === op.id);
+      return prev ? [{ op: 'finding', pageId: op.pageId, id: op.id, patch: { dismissed: prev.dismissed ?? null } }] : [];
+    }
+    default:
+      return null;
+  }
+};
+
 /** Inverse ops of ONE op, computed against the doc before it. null = no inverse (non-patchable / not undoable). */
 const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
-  if (!op || !CLIENT_PATCHABLE_OPS.has(op.op)) return null;
+  if (!op || !INVERTIBLE_OPS.has(op.op)) return null;
   const after = applyOp(doc, op);
   if (after === doc) return [];
   switch (op.op) {
@@ -285,6 +408,18 @@ const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
       const now = i18nOf(after).editions[op.lang]?.balloons[op.lineId];
       return [{ op: 'edition_balloon', lang: op.lang, lineId: op.lineId, patch: prev ? (restoreFull(prev, now) as never) : null }];
     }
+    // --- Ship 2 (K2a) ---
+    case 'page_frames':
+    case 'page_cuts':
+    case 'panels_order':
+    case 'panel_add':
+    case 'panel_remove':
+    case 'layer':
+    case 'continuity':
+    case 'scene':
+    case 'consistency':
+    case 'finding':
+      return invertShip2(doc, op, after);
     case 'glossary_term': {
       const prev = i18nOf(doc).glossary.find((t) => t.id === op.id);
       if (!prev) return [{ op: 'glossary_term', id: op.id, patch: null }];
@@ -366,12 +501,23 @@ const LABELS: Partial<Record<DocOp['op'], [string, string?]>> = {
   translation: ['edit a translation', 'edit {n} translations'],
   edition_text: ['edit a translated title'],
   edition_balloon: ['move a translated balloon', 'move {n} translated balloons'],
-  glossary_term: ['edit the glossary']
+  glossary_term: ['edit the glossary'],
+  // --- Ship 2 (K2a) ---
+  page_frames: ['rearrange the panels', 'rearrange the panels on {n} pages'],
+  page_cuts: ['adjust the panel cuts'],
+  panels_order: ['reorder panels'],
+  panel_add: ['add a panel', 'add {n} panels'],
+  panel_remove: ['delete a panel', 'delete {n} panels'],
+  layer: ['edit an overlay', 'edit {n} overlays'],
+  continuity: ['edit continuity', 'edit continuity on {n} pages'],
+  scene: ['edit a scene', 'edit {n} scenes'],
+  consistency: ['change consistency settings'],
+  finding: ['dismiss a check', 'dismiss {n} checks']
 };
 
 /** Human label for an undo entry ("restyle 3 balloons", "move page 4"). */
 export function describeOps(ops: DocOp[]): string {
-  const relevant = ops.filter((o) => o && CLIENT_PATCHABLE_OPS.has(o.op));
+  const relevant = ops.filter((o) => o && INVERTIBLE_OPS.has(o.op));
   if (!relevant.length) return 'change';
   const kinds = [...new Set(relevant.map((o) => o.op))];
   if (kinds.length === 1 && kinds[0] === 'line_style') {

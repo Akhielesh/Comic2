@@ -8,8 +8,243 @@
 import type { ComicDoc } from '../doc.js';
 import { HISTORY_LIMITS } from '../limits.js';
 import { languageSpec } from '../languages.js';
+import type { DocOp } from '../ops.js';
 import { SECTION_KEYS } from './sections.js';
 import type { BookDiff, ChangeItem, ChangeWhat, HistoryActor, HistoryKind } from './types.js';
+
+// ── Ship 2 (K2a; pro plan §5.6): panel moments ───────────────────────────────
+//
+// A diff can say "page 2's panels changed" but not that the editor made them editable or that the AI redrew one
+// panel. The recorder knows that from the ops or the action, so it adds PanelChangeItems (a ChangeItem refined by a
+// `moment`; every other reader sees an ordinary ChangeItem) and merges them over the diff's items (withPanelMoments).
+// describeChanges words them: "You rearranged the panels on page 2", "The editor made page 2's panels editable (no AI
+// cost)", "AI redrew panel 3 on page 2", "Matched page 1's script to its art (free)".
+
+/** What a panel-level change was. */
+export type PanelMoment =
+  | 'layout'
+  | 'editable'
+  | 'rebind'
+  | 'flatten'
+  | 'redraw_panel'
+  | 'draw_panel'
+  | 'enrich'
+  | 'cuts'
+  | 'overlays'
+  | 'continuity'
+  | 'scenes'
+  | 'finding';
+
+/** A ChangeItem refined by its panel moment (additive: `what` stays an ordinary ChangeWhat). */
+export interface PanelChangeItem extends ChangeItem {
+  moment: PanelMoment;
+  /** Panel numbers on the page (display only). */
+  panelNs?: number[];
+}
+
+const PANEL_MOMENTS: ReadonlySet<string> = new Set<PanelMoment>([
+  'layout', 'editable', 'rebind', 'flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'overlays', 'continuity', 'scenes', 'finding'
+]);
+export const isPanelChangeItem = (c: unknown): c is PanelChangeItem =>
+  !!c && typeof c === 'object' && typeof (c as PanelChangeItem).moment === 'string' && PANEL_MOMENTS.has((c as PanelChangeItem).moment);
+
+/** The ChangeWhat a moment reads as, for every reader that does not know moments. */
+const MOMENT_WHAT: Record<PanelMoment, ChangeWhat> = {
+  layout: 'panels',
+  editable: 'panels',
+  rebind: 'panels',
+  flatten: 'art',
+  redraw_panel: 'art',
+  draw_panel: 'art',
+  enrich: 'art',
+  cuts: 'art',
+  overlays: 'page_text',
+  continuity: 'page_text',
+  scenes: 'details',
+  finding: 'art'
+};
+const ART_MOMENTS: ReadonlySet<PanelMoment> = new Set<PanelMoment>(['flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'finding']);
+
+/** One moment item for a page (none for 'scenes', a book-wide moment). */
+export const panelMomentItem = (
+  moment: PanelMoment,
+  by: HistoryActor,
+  page?: { id: string; n?: number } | null,
+  panelNs?: readonly number[]
+): PanelChangeItem => {
+  const out: PanelChangeItem = { what: MOMENT_WHAT[moment], by, moment };
+  if (moment === 'scenes' || !page) out.key = SECTION_KEYS.meta;
+  else {
+    out.key = ART_MOMENTS.has(moment) ? SECTION_KEYS.art(page.id) : SECTION_KEYS.page(page.id);
+    out.pageIds = [page.id];
+    if (page.n) out.pageNs = [page.n];
+  }
+  const ns = [...new Set((panelNs || []).filter((n) => Number.isFinite(n) && n > 0))].sort((a, b) => a - b);
+  if (ns.length) out.panelNs = ns;
+  return out;
+};
+
+/** The action behind a batch, as far as the words need it (a Ship 2 StudioAction, or its type). */
+export interface PanelMomentAction {
+  type: string;
+  pageId?: string;
+  pageIds?: string[];
+  panelId?: string;
+  mode?: string;
+}
+
+const ACTION_MOMENT: Record<string, PanelMoment> = {
+  panelize_page: 'editable',
+  rebind_panels: 'rebind',
+  flatten_page: 'flatten',
+  apply_finding: 'finding',
+  enrich_pages: 'enrich'
+};
+
+/**
+ * The panel moments of one batch: from the action when it names one (panelize, rebind, flatten, apply a fix, enrich,
+ * fix a panel), else from the Ship 2 ops themselves. `doc` (the doc after the batch) supplies page and panel numbers.
+ * One item per (moment, page). Pure.
+ */
+export const panelMomentsOfOps = (
+  ops: readonly DocOp[],
+  by: HistoryActor,
+  doc?: Pick<ComicDoc, 'pages'>,
+  action?: PanelMomentAction | string
+): PanelChangeItem[] => {
+  const act = typeof action === 'string' ? { type: action } : action;
+  const pageOf = (id?: string) => (id ? doc?.pages.find((p) => p.id === id) : undefined);
+  const ref = (id?: string) => (id ? { id, n: pageOf(id)?.n } : null);
+  const items = new Map<string, PanelChangeItem>();
+  const add = (moment: PanelMoment, pageId?: string, panelNs: number[] = []) => {
+    const key = `${moment}|${moment === 'scenes' ? '' : pageId || ''}`;
+    const prev = items.get(key);
+    if (prev) {
+      if (panelNs.length) items.set(key, panelMomentItem(moment, by, ref(pageId), [...(prev.panelNs || []), ...panelNs]));
+      return;
+    }
+    items.set(key, panelMomentItem(moment, by, moment === 'scenes' ? null : ref(pageId), panelNs));
+  };
+  const opPageId = (op: DocOp): string | undefined => {
+    const o = op as { pageId?: unknown; id?: unknown; target?: { kind?: string; id?: unknown } };
+    if (typeof o.pageId === 'string') return o.pageId;
+    if ((op.op === 'page_panels' || op.op === 'page') && typeof o.id === 'string') return o.id;
+    if (op.op === 'render' && o.target?.kind === 'page' && typeof o.target.id === 'string') return o.target.id;
+    return undefined;
+  };
+  if (act?.type === 'fix_panel') {
+    const page = pageOf(act.pageId);
+    const n = page?.panels.find((p) => p.id === act.panelId)?.n;
+    add(act.mode === 'draw' ? 'draw_panel' : 'redraw_panel', act.pageId, n ? [n] : []);
+    return [...items.values()];
+  }
+  const fromAction = act ? ACTION_MOMENT[act.type] : undefined;
+  if (fromAction) {
+    const ids = new Set<string>([...(act?.pageId ? [act.pageId] : []), ...(act?.pageIds || [])]);
+    for (const op of ops) {
+      const id = op && typeof op === 'object' ? opPageId(op) : undefined;
+      if (id) ids.add(id);
+    }
+    for (const id of ids) add(fromAction, id);
+    return [...items.values()];
+  }
+  for (const op of ops) {
+    if (!op || typeof op !== 'object') continue;
+    switch (op.op) {
+      case 'page_frames':
+        add(op.artMode === 'panels' && by === 'editor' ? 'editable' : 'layout', op.pageId);
+        break;
+      case 'panels_order':
+      case 'panel_add':
+      case 'panel_remove':
+        add('layout', op.pageId);
+        break;
+      case 'page_cuts':
+        add('cuts', op.pageId);
+        break;
+      case 'layer':
+        add('overlays', op.pageId);
+        break;
+      case 'continuity':
+        add('continuity', op.pageId);
+        break;
+      case 'scene':
+      case 'consistency':
+        add('scenes');
+        break;
+      case 'finding':
+        add('finding', op.pageId);
+        break;
+      default:
+        break;
+    }
+  }
+  return [...items.values()];
+};
+
+/** Diff items a moment on the same page stands for (its own words replace them); dialogue edits are kept. */
+const REPLACED_BY_MOMENT: ReadonlySet<ChangeWhat> = new Set<ChangeWhat>(['panels', 'page_text', 'art', 'balloons']);
+
+/** The row's items: the moments first, then the diff's items they do not already stand for. Pure. */
+export const withPanelMoments = (items: readonly ChangeItem[], moments: readonly PanelChangeItem[]): ChangeItem[] => {
+  if (!moments.length) return [...items];
+  const pages = new Set(moments.flatMap((m) => m.pageIds || []));
+  const scenes = moments.some((m) => m.moment === 'scenes');
+  const rest = items.filter((i) => {
+    if (isPanelChangeItem(i)) return false;
+    if (scenes && i.what === 'details') return false;
+    return !(REPLACED_BY_MOMENT.has(i.what) && (i.pageIds || []).some((id) => pages.has(id)));
+  });
+  return [...moments, ...rest].slice(0, HISTORY_LIMITS.changesPerRow);
+};
+
+/** "panel 3" · "panels 2 and 3" · "panels 1–3". */
+const panelRangeText = (ns: readonly number[]): string => pageRangeText(ns).replace(/^pages?/, (m) => (m === 'page' ? 'panel' : 'panels'));
+
+/** The verb phrase of one moment group (most important words first). */
+const momentPhrase = (moment: PanelMoment, list: PanelChangeItem[], actor: HistoryActor): string => {
+  const pageNs = list.flatMap((c) => c.pageNs || []);
+  const pages = pageRangeText(pageNs);
+  const one = new Set(pageNs).size === 1;
+  const panelNs = list.flatMap((c) => c.panelNs || []);
+  switch (moment) {
+    case 'layout':
+      return `rearranged the panels on ${pages}`;
+    case 'editable':
+      return one ? `made ${pages}'s panels editable` : `made the panels on ${pages} editable`;
+    case 'rebind':
+      return one ? `matched ${pages}'s script to its art` : `matched the script of ${pages} to their art`;
+    case 'flatten':
+      return `flattened ${pages} into one picture`;
+    case 'redraw_panel':
+      return panelNs.length ? `redrew ${panelRangeText(panelNs)} on ${pages}` : `redrew a panel on ${pages}`;
+    case 'draw_panel':
+      return panelNs.length ? `drew ${panelRangeText(panelNs)} on ${pages}` : `drew a panel on ${pages}`;
+    case 'enrich':
+      return `added detail to ${pages}`;
+    case 'cuts':
+      return `adjusted the panel cuts on ${pages}`;
+    case 'overlays':
+      return `changed the overlays on ${pages}`;
+    case 'continuity':
+      return `updated the continuity on ${pages}`;
+    case 'scenes':
+      return 'updated the scenes';
+    case 'finding':
+      return actor === 'you' ? `dismissed a check on ${pages}` : `applied a fix on ${pages}`;
+    default:
+      return `changed ${pages}`;
+  }
+};
+
+const MOMENT_ORDER: readonly PanelMoment[] = [
+  'redraw_panel', 'draw_panel', 'enrich', 'flatten', 'editable', 'rebind', 'layout', 'cuts', 'overlays', 'finding', 'continuity', 'scenes'
+];
+const momentPhrases = (items: PanelChangeItem[], actor: HistoryActor): string[] =>
+  MOMENT_ORDER.flatMap((m) => {
+    const list = items.filter((c) => c.moment === m);
+    return list.length ? [momentPhrase(m, list, actor)] : [];
+  });
 
 export interface DescribeOptions {
   /** A name the user gave (named rows) or the line name (switch rows). */
@@ -64,9 +299,12 @@ const groupBy = (changes: ChangeItem[]): Map<ChangeWhat, ChangeItem[]> => {
  * The verb phrases of a set of changes, most important first ("revised pages 3–4", "drew page 5"). An image-model
  * switch leads, with its redraw right after it ("switched the image model", "redrew pages 1–6").
  */
-const phrases = (changes: ChangeItem[], opts: DescribeOptions, actor: HistoryActor): string[] => {
+const phrases = (all: ChangeItem[], opts: DescribeOptions, actor: HistoryActor): string[] => {
+  // Ship 2: panel moments are worded first; the remaining items as before.
+  const moments = all.filter(isPanelChangeItem);
+  const changes = moments.length ? all.filter((c) => !isPanelChangeItem(c)) : all;
   const g = groupBy(changes);
-  const out: string[] = [];
+  const out: string[] = momentPhrases(moments, actor);
   const model = !!g.get('model');
   const art = g.get('art');
   if (model) {
@@ -152,6 +390,12 @@ export const describeChanges = (changes: readonly ChangeItem[], kind: HistoryKin
       if (opts.final) return 'Where you left off';
       const editor = list.length > 0 && list.every((c) => c.by === 'editor');
       const p = phrases(list, opts, editor ? 'editor' : 'you');
+      // Ship 2: a free editor action named by its moments ("The editor made page 2's panels editable (no AI cost)";
+      // a rebind alone reads "Matched page 1's script to its art (free)").
+      if (editor && list.every(isPanelChangeItem)) {
+        if (list.every((c) => c.moment === 'rebind')) return clip(`${capitalize(join(p))} (free)`);
+        return clip(`The editor ${join(p)} (no AI cost)`);
+      }
       if (editor) return clip(`The editor ${p.length ? join(p) : 'tidied the pages'}, no AI cost`);
       return clip(p.length ? `You ${join(p)}` : 'Your edits');
     }

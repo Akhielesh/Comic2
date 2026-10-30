@@ -47,6 +47,16 @@ const editionLineKeys = (doc: ComicDoc | undefined, lang: string, lineIds: strin
   return [...out];
 };
 
+/** Ship 2: the per-language page keys of every edition holding a balloon override for a line of `pageId`. */
+const editionPageKeys = (doc: ComicDoc | undefined, pageId: string): string[] => {
+  const page = doc?.pages.find((p) => p.id === pageId);
+  if (!page) return [];
+  const ids = new Set(page.panels.flatMap((p) => p.lines.map((l) => l.id)));
+  return Object.entries(doc?.i18n?.editions || {})
+    .filter(([, e]) => Object.keys(e.balloons || {}).some((id) => ids.has(id)) || Object.keys(e.lines || {}).some((id) => ids.has(id)))
+    .map(([lang]) => K.editionPage(lang, pageId));
+};
+
 /** Keys of every archive block that may change when the archive grows (the newest block, and one more). */
 const archiveTail = (doc: ComicDoc | undefined): string[] => {
   const n = doc?.archive?.length ?? 0;
@@ -202,12 +212,39 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
         return [K.glossary];
       case 'history_restore':
         return restoreSetKeys(op.set, doc);
+      // --- Ship 2 (K2a; pro plan §5.6): frames, overlays and continuity are page-text fields (by exclusion); cuts and
+      //     findings live on the drawing (art); scenes and consistency are book (meta) keys. A frame move carries the
+      //     panel's balloons (art) and translated overrides (edp) along; a structural edit may re-stamp the drawing (art). ---
+      case 'page_frames':
+        return [K.page(op.pageId), K.art(op.pageId), ...editionPageKeys(doc, op.pageId)];
+      case 'panels_order':
+      case 'panel_add':
+        return [K.page(op.pageId), K.art(op.pageId)];
+      case 'panel_remove':
+        return [K.page(op.pageId), K.art(op.pageId), ...editionPageKeys(doc, op.pageId)];
+      case 'layer':
+      case 'continuity':
+        return [K.page(op.pageId)];
+      case 'page_cuts':
+      case 'finding':
+        return [K.art(op.pageId)];
+      case 'scene':
+      case 'consistency':
+        return [K.meta];
       default:
         return []; // forward-only records and ops this build does not know
     }
   })();
   return [...new Set(keys)].sort();
 };
+
+// --- Ship 2 (K2a; pro plan §5.6): who made a panels change ---
+/** Free software actions: their batches are the editor's ("no AI cost"). */
+export const EDITOR_ACTIONS: ReadonlySet<string> = new Set(['panelize_page', 'flatten_page', 'rebind_panels', 'apply_finding']);
+/** Paid actions: their batches are the AI's. */
+export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages']);
+/** Panel ops the server writes as free software when no action names the batch. */
+const EDITOR_JOB_OPS: ReadonlySet<string> = new Set(['page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'finding', 'continuity']);
 
 /** Render origins that are AI drawings (a `derived` image is the editor's free fit). */
 const AI_RENDER_ORIGINS = new Set(['render', 'edit', 'variation']);
@@ -218,13 +255,20 @@ const AI_JOB_OPS = new Set(['pages', 'page_panels', 'translations', 'style_optio
  * Who made this change (§4.2), or null when the op touches no section (forward-only records). user → you;
  * director content ops → ai; job renders that set an AI image, and job pages/panels/translations/style options/
  * model switches → ai; a derived image (fit_render) and balloon re-fits (relayout_balloons) → editor ("no AI cost").
+ * Ship 2: `action` (the StudioAction type that produced the batch, when the recorder knows it) puts panelize_page,
+ * flatten_page, rebind_panels and apply_finding batches on the editor and fix_panel / enrich_pages on the AI; server
+ * panel ops without one are the editor's.
  */
-export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc): HistoryActor | null => {
+export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc, action?: string): HistoryActor | null => {
   if (!op || typeof op !== 'object') return null;
   // A model switch is an AI change (a before_ai moment) although the lock itself is not a section (§4.2).
   if (op.op === 'image_model') return 'ai';
   if (CAPTURE_NEUTRAL_OPS.has(op.op)) return null;
   if (!touchedKeys(op, doc).length && op.op !== 'pages_reorder') return null;
+  // Ship 2: the action that produced the batch decides first (panelize/flatten/rebind/apply a fix → editor; a panel
+  // fix or "Add detail" → ai), whoever clicked it.
+  if (typeof action === 'string' && EDITOR_ACTIONS.has(action)) return 'editor';
+  if (typeof action === 'string' && AI_ACTIONS.has(action)) return 'ai';
   if (origin === 'user') return 'you';
   if (origin === 'director') return 'ai';
   if (op.op === 'render' || op.op === 'style_option' || op.op === 'character') {
@@ -236,6 +280,7 @@ export const opActor = (op: DocOp, origin: OpsOrigin | undefined, doc?: ComicDoc
   }
   if (AI_JOB_OPS.has(op.op)) return 'ai';
   if (op.op === 'balloons' || op.op === 'balloon') return 'editor';
+  if (origin === 'job' && EDITOR_JOB_OPS.has(op.op)) return 'editor';
   if (op.op === 'history_restore') return 'you';
   return origin === 'job' ? 'system' : 'you';
 };
