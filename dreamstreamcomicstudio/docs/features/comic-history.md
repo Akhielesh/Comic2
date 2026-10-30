@@ -359,7 +359,9 @@ Code: `server/src/comic/history/{recorder,policy}.ts` (the session's `HistoryHoo
 - The action decides who made the work, never what a job writes around it: a render's status, error or QC report
   stays `system` and the job's balloon placement after a page check stays the editor's, whatever the action. So a
   panel fix's run starts at its drawing (not at "queued"), and a check that lands after a change of yours never opens
-  a second AI run or a second "Before the AI…" row.
+  a second AI run or a second "Before the AI…" row. The action names a row's panel moment ("redrew panel 2") only from
+  its own work (`policy.ts momentsOf`: the AI's batches for `AI_ACTIONS`, the editor's for `EDITOR_ACTIONS`); `system`
+  batches name none.
 - A derived image (`render` with `origin: 'derived'`) is the editor's whoever asked.
 - Without an action: your clicks are yours, the director's changes are the AI's, job renders that set an AI image and
   the writer's pages, panels, translations, style options and model switches are the AI's, server panel ops and

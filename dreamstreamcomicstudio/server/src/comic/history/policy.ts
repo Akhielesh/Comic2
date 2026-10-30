@@ -26,7 +26,7 @@ import {
   type PanelMomentAction
 } from '../../../../shared/comic/history/describe.js';
 import { SECTION_KEYS, parseSectionKey } from '../../../../shared/comic/history/sections.js';
-import { CAPTURE_NEUTRAL_OPS, opActor, touchedKeys } from '../../../../shared/comic/history/touched.js';
+import { AI_ACTIONS, CAPTURE_NEUTRAL_OPS, EDITOR_ACTIONS, opActor, touchedKeys } from '../../../../shared/comic/history/touched.js';
 import type { ChangeItem, HistoryActor, HistoryKind, VersionSpend, VersionStats, VersionThumb } from '../../../../shared/comic/history/types.js';
 
 const MINUTE = 60_000;
@@ -267,11 +267,26 @@ export interface MomentBatch {
   action?: PanelMomentAction;
 }
 
-/** The panel moments of a stretch of batches, one per (moment, page), panel numbers merged. */
+/**
+ * The action names a batch's moment only when the batch is the action's own work: a panel fix's drawing is the AI's, a
+ * panelize the editor's. What a job writes around it (a render status or QC report, 'system'; the editor's balloon
+ * placement after a check) is worded by its own ops (§4.2), so a check landing after the run never reads "redrew panel 2".
+ */
+const momentAction = (b: MomentBatch): PanelMomentAction | undefined => {
+  const type = b.action?.type;
+  if (!type) return undefined;
+  if (AI_ACTIONS.has(type)) return b.by === 'ai' ? b.action : undefined;
+  if (EDITOR_ACTIONS.has(type)) return b.by === 'editor' ? b.action : undefined;
+  return b.action;
+};
+
+/** The panel moments of a stretch of batches, one per (moment, page), panel numbers merged. 'system' batches (QC
+ *  reports, render statuses) are no change and name none. */
 export const momentsOf = (batches: readonly MomentBatch[], doc: ComicDoc): PanelChangeItem[] => {
   const merged = new Map<string, PanelChangeItem>();
   for (const b of batches) {
-    for (const m of panelMomentsOfOps(b.ops, b.by, doc, b.action)) {
+    if (b.by === 'system') continue;
+    for (const m of panelMomentsOfOps(b.ops, b.by, doc, momentAction(b))) {
       const key = `${m.moment}|${(m.pageIds || []).join(',')}`;
       const prev = merged.get(key);
       if (!prev) merged.set(key, m);

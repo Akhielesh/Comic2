@@ -250,6 +250,8 @@ describe('with COMIC_HISTORY on, each action reaches the recorder with its commi
     expect(rows.map((r) => r.kind)).toEqual(['start', 'ai', 'edits']);
     expect(rows[1]).toMatchObject({ actor: 'ai', label: 'AI redrew panel 2 on page 1' });
     expect(rows.filter((r) => r.kind === 'before_ai')).toEqual([]);
+    // The last row holds your line; the check's statuses and placement never read as a second panel redraw.
+    expect(rows[2].changes).toEqual([expect.objectContaining({ what: 'dialogue', by: 'you', pageIds: ['pg_1'] })]);
   });
 
   it('an approved fix_panel gate: the run carries the gated action, not approve_gate', async () => {
