@@ -24,6 +24,8 @@ on:
       # Everything bundled into the backend image:
       - 'dreamstreamcomicstudio/server/**'
       - 'dreamstreamcomicstudio/shared/**'
+      # The shared platform contract (pure TypeScript), imported by the backend's platform tools.
+      - 'dreamstreamcomicstudio/packages/platform-core/**'
       - 'dreamstreamcomicstudio/apiTypes.ts'
       - 'dreamstreamcomicstudio/toolCatalog.ts'
       - 'dreamstreamcomicstudio/types.ts'
