@@ -23,7 +23,11 @@ const db = vi.hoisted(() => ({
   tables: {} as Record<string, Record<string, unknown>[]>,
   tokens: {} as Record<string, string>,
   signed: [] as string[],
-  signedWith: [] as { bucket: string; path: string; ttl: number }[]
+  signedWith: [] as { bucket: string; path: string; ttl: number }[],
+  /** Storage paths with no object: signing them fails the way Supabase does (a 400). */
+  missing: [] as string[],
+  /** When set, every projects query fails with this Postgres code. */
+  failProjects: null as string | null
 }));
 
 vi.mock('../services/supabase.js', () => {
@@ -43,6 +47,7 @@ vi.mock('../services/supabase.js', () => {
       return this;
     }
     then<T>(resolve: (v: { data: unknown; error: unknown }) => T) {
+      if (this.table === 'projects' && db.failProjects) return Promise.resolve(resolve({ data: null, error: { code: db.failProjects, message: 'down' } }));
       const rows = (db.tables[this.table] || []).filter((r) => this.filters.every((f) => f(r)));
       return Promise.resolve(resolve({ data: this.single ? rows[0] ?? null : rows, error: null }));
     }
@@ -52,6 +57,7 @@ vi.mock('../services/supabase.js', () => {
     storage: {
       from: (bucket: string) => ({
         createSignedUrl: async (path: string, ttl: number) => {
+          if (db.missing.includes(path)) return { data: null, error: { status: 400, statusCode: '404', message: 'Object not found' } };
           db.signed.push(path);
           db.signedWith.push({ bucket, path, ttl });
           return { data: { signedUrl: `https://signed.example/${path}` }, error: null };
@@ -73,7 +79,7 @@ vi.mock('../services/supabase.js', () => {
   };
 });
 
-const { systemRouter } = await import('./system.js');
+const { systemRouter, publicReaderPathCache } = await import('./system.js');
 
 const app = express();
 app.use('/api/system', systemRouter);
@@ -88,8 +94,11 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
+  publicReaderPathCache.clear();
   db.signed = [];
   db.signedWith = [];
+  db.missing = [];
+  db.failProjects = null;
   db.tokens = { 'owner-token': OWNER, 'stranger-token': STRANGER };
   const project = (id: string, extra: Row = {}): Row => ({
     id,
@@ -308,5 +317,124 @@ describe('image proxy: bucket routing (P1-STORAGE, contract §12.5)', () => {
       expect((await fetchImage(attack, 'stranger-token')).status).toBe(400);
     }
     expect(db.signed).toEqual([]);
+  });
+});
+
+describe('image proxy: legacy paths of a public classic comic (reading is free without an account)', () => {
+  const legacy = (file: string) => `${OWNER}/${file}`;
+  beforeEach(() => {
+    db.tables.projects[1].state = {
+      coverImageId: legacy('cover.png'),
+      coverTemplateImageId: legacy('template.jpg'),
+      panels: [{ imageId: legacy('p1.png'), imageIdHistory: [legacy('p1-old.png')] }, { imageId: legacy('p2') }],
+      characters: [{ imageId: legacy('hero.png'), referenceImageIds: [legacy('selfie.jpg')] }],
+      locations: [{ imageId: legacy('castle.png') }],
+      styleVariants: [{ imageId: legacy('style.png') }],
+      pageStudio: { pages: [{ imageId: legacy('page1.png'), baseImageId: legacy('page1-base.png'), edits: [] }] }
+    };
+    db.tables.projects[2].state = { coverImageId: legacy('private-cover.png') };
+    db.tables.projects[3].state = { coverImageId: legacy('moderated-cover.png') };
+  });
+
+  it.each(['cover.png', 'p1.png', 'p2.webp', 'style.png', 'page1.png'])('signs %s for a signed-out reader (what the comic shows)', async (file) => {
+    const res = await fetchImage(legacy(file));
+    expect(res.status).toBe(200);
+    expect(db.signed).toEqual([legacy(file)]);
+  });
+
+  it.each(['p1-old.png', 'selfie.jpg', 'template.jpg', 'hero.png', 'castle.png', 'page1-base.png', 'private-cover.png', 'moderated-cover.png', 'unknown.png', 'p1.png.png'])(
+    'refuses %s to a signed-out reader with 401',
+    async (file) => {
+      const res = await fetchImage(legacy(file));
+      expect(res.status).toBe(401);
+      expect(db.signed).toEqual([]);
+    }
+  );
+
+  it("signs a shown panel's tmp-lane twin when the legacy object is gone (the proxy's own fallback)", async () => {
+    db.missing = [legacy('p1.png')];
+    const res = await fetchImage(legacy('p1.png'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).path).toBe(`u/${OWNER}/tmp/p1.png`);
+    expect(db.signed).toEqual([`u/${OWNER}/tmp/p1.png`]);
+  });
+
+  it('refuses an upper-cased owner id (never a storage spelling) without signing', async () => {
+    const res = await fetchImage(`${OWNER.toUpperCase()}/p1.png`);
+    expect(res.status).toBe(401);
+    expect(db.signed).toEqual([]);
+  });
+
+  it('signs a signed-out reader a tmp-lane id the comic stores directly (as stored, or with the extension the client adds)', async () => {
+    db.tables.projects[1].state = { panels: [{ imageId: `u/${OWNER}/tmp/p3.webp` }, { imageId: `u/${OWNER}/tmp/p4` }] };
+    expect((await fetchImage(`u/${OWNER}/tmp/p3.webp`)).status).toBe(200);
+    expect((await fetchImage(`u/${OWNER}/tmp/p4.webp`)).status).toBe(200);
+    expect(db.signed).toEqual([`u/${OWNER}/tmp/p3.webp`, `u/${OWNER}/tmp/p4.webp`]);
+  });
+
+  it('a signed-in reader is never refused what a signed-out one is signed (extension forms, tmp twins)', async () => {
+    // The broad rule matches stored ids exactly; the shown set adds the client's extension and the tmp twin.
+    expect((await fetchImage(legacy('p2.webp'), 'stranger-token')).status).toBe(200);
+    expect((await fetchImage(`u/${OWNER}/tmp/p1.png`, 'stranger-token')).status).toBe(200);
+  });
+
+  it("a force-private comic's tmp-lane art is refused to everyone but the owner", async () => {
+    db.tables.projects[3].state = { coverImageId: `u/${OWNER}/tmp/mod.webp` };
+    expect((await fetchImage(`u/${OWNER}/tmp/mod.webp`, 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(`u/${OWNER}/tmp/mod.webp`)).status).toBe(401);
+    expect((await fetchImage(`u/${OWNER}/tmp/mod.webp`, 'owner-token')).status).toBe(200);
+  });
+
+  it('fails closed on the tmp lane too when the projects cannot be read', async () => {
+    db.tables.projects[1].state = { coverImageId: `u/${OWNER}/tmp/c.webp` };
+    db.failProjects = '57014';
+    const res = await fetchImage(`u/${OWNER}/tmp/c.webp`);
+    expect(res.status).toBe(401);
+    expect(db.signed).toEqual([]);
+    db.failProjects = null;
+    expect((await fetchImage(`u/${OWNER}/tmp/c.webp`)).status).toBe(200);
+  });
+
+  it('a takedown stops a signed-in reader at once, even with the signed-out cache warm', async () => {
+    expect((await fetchImage(legacy('p1.png'))).status).toBe(200); // warms the signed-out cache
+    expect((await fetchImage(legacy('p2.webp'), 'stranger-token')).status).toBe(200);
+    db.tables.projects[1].is_forced_private = true; // moderation takes the comic down
+    expect((await fetchImage(legacy('p1.png'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(legacy('p2.webp'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(`u/${OWNER}/tmp/p1.png`, 'stranger-token')).status).toBe(403);
+  });
+
+  it('fails closed when the projects cannot be read (401, nothing signed), and the failure is not cached', async () => {
+    db.failProjects = '57014';
+    const res = await fetchImage(legacy('p1.png'));
+    expect(res.status).toBe(401);
+    expect(db.signed).toEqual([]);
+    db.failProjects = null;
+    expect((await fetchImage(legacy('p1.png'))).status).toBe(200);
+  });
+
+  it('a public v4 listing state never authorizes a legacy path', async () => {
+    db.tables.projects[0].state = { studioVersion: 4, coverImageId: legacy('v4-cover.png') };
+    expect((await fetchImage(legacy('v4-cover.png'))).status).toBe(401);
+  });
+
+  it("signed-in readers keep the broad public rule (a public comic's references), never a force-private comic's", async () => {
+    expect((await fetchImage(legacy('selfie.jpg'), 'stranger-token')).status).toBe(200);
+    expect((await fetchImage(legacy('p1-old.png'), 'stranger-token')).status).toBe(200);
+    expect((await fetchImage(legacy('moderated-cover.png'), 'stranger-token')).status).toBe(403);
+    expect((await fetchImage(legacy('private-cover.png'), 'stranger-token')).status).toBe(403);
+  });
+
+  it('the owner always may', async () => {
+    expect((await fetchImage(legacy('private-cover.png'), 'owner-token')).status).toBe(200);
+  });
+
+  it("a signed-out reader gets a shown panel's tmp-lane twin, never a tmp path the reader does not show", async () => {
+    expect((await fetchImage(`u/${OWNER}/tmp/p1.png`)).status).toBe(200);
+    expect((await fetchImage(`u/${OWNER}/tmp/selfie.jpg`)).status).toBe(401);
+    db.tables.projects[1].state = { ...(db.tables.projects[1].state as Row), characters: [{ referenceImageIds: [`u/${OWNER}/tmp/ref.webp`] }] };
+    publicReaderPathCache.clear();
+    expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`))).toHaveProperty('status', 401);
+    expect((await fetchImage(`u/${OWNER}/tmp/ref.webp`, 'stranger-token')).status).toBe(200);
   });
 });
