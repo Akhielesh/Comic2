@@ -48,7 +48,7 @@ export const MomentRow: React.FC<MomentRowProps> = ({ row, selected, money, tz, 
       <span className="min-w-0 flex-1">
         <span className="line-clamp-2 text-[14px] font-medium leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{title}</span>
         <span className="mt-0.5 block text-[12px] leading-4 tabular-nums text-[var(--ds-muted)] [overflow-wrap:anywhere]">{meta}</span>
-        {(row.name || row.kind === 'publish' || row.publishedRev) && (
+        {(!!row.name || row.kind === 'publish' || row.publishedRev !== undefined) && (
           <span className="mt-1 flex min-w-0 flex-wrap gap-1">
             {row.name && <Mark icon={<Star className="h-3 w-3" aria-hidden />}>{row.name}</Mark>}
             {(row.kind === 'publish' || row.publishedRev !== undefined) && <Mark icon={<Globe className="h-3 w-3" aria-hidden />}>Published</Mark>}

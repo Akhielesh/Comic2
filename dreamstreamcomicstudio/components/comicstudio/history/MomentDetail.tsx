@@ -2,8 +2,9 @@
 //
 // "What changed", grouped ("Page 3 — Dialogue: 2 lines · Art: redrawn", "Telugu — 12 lines changed"), each group
 // with [Compare]; a sticky bar (safe-area padded) with [Read this version] [Compare with now] [Restore…]; and More:
-// Name this version (the newest moment), Undo this AI change (the latest AI moment). Reading, comparing and
-// restoring are free.
+// Name this version (the newest moment of the comic), Undo this AI change (the comic's latest AI run — the one
+// history_undo_ai reverts, never merely the first AI row a filtered list shows). Reading, comparing and restoring
+// are free.
 
 import React, { useEffect, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
@@ -11,14 +12,21 @@ import type { ChangeGroup, VersionRow } from '../../../shared/comic/history/type
 import { MENU, MENU_ITEM, FOCUS_ITEM } from '../../chat/studioDesign';
 import { historyErrorText, useHistoryApi } from './historyApi';
 import { ACTOR_INFO, changeGroupsOf, rowMetaText, type MoneyWords } from './historyModel';
-import type { HistoryStudio } from './useHistory';
+import { useLatestAiRow, type HistoryStudio } from './useHistory';
 import { ActorGlyph, cx, IconBtn, Note, Overline, PrimaryBtn, QuietBtn } from './ui';
 
 export interface MomentDetailProps {
   studio: HistoryStudio;
   versionId: string;
-  /** The list as loaded (newest first): the row itself when known, and whether it is the newest / the latest AI run. */
+  /** The list as loaded (newest first): the row itself when known. */
   rows: readonly VersionRow[];
+  /**
+   * The comic's newest moment (Name this version names the book as it is now). Default rows[0] — pass null when the
+   * list is filtered, so a filtered list's first row is never taken for the newest.
+   */
+  newestId?: string | null;
+  /** The comic's latest AI run (Undo this AI change). Omitted: read here, whatever the list shows. */
+  latestAiId?: string | null;
   money: MoneyWords;
   tz: string;
   onRead(versionId: string): void;
@@ -28,8 +36,9 @@ export interface MomentDetailProps {
   onName(): void;
 }
 
-export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, rows, money, tz, onRead, onCompare, onRestore, onUndoAi, onName }) => {
+export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, rows, newestId, latestAiId, money, tz, onRead, onCompare, onRestore, onUndoAi, onName }) => {
   const api = useHistoryApi();
+  const ownLatestAi = useLatestAiRow(studio, latestAiId === undefined);
   const projectId = studio.doc?.id;
   const known = rows.find((r) => r.id === versionId) ?? null;
   const [row, setRow] = useState<VersionRow | null>(known);
@@ -51,7 +60,7 @@ export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, r
         if (ctrl.signal.aborted) return;
         // The list row is enough to show what changed; say so only when there is nothing at all.
         if (known) setGroups(changeGroupsOf(known.changes));
-        else setError(historyErrorText(err, "This moment can't be opened. Nothing in your comic changed.") || null);
+        else setError(historyErrorText(err, "This moment can't be opened. Nothing in your comic changed.", 'moment') || null);
       });
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -60,8 +69,8 @@ export const MomentDetail: React.FC<MomentDetailProps> = ({ studio, versionId, r
   if (error) return <Note tone="attention">{error}</Note>;
   if (!row) return <Note>Opening this moment…</Note>;
   const actor = ACTOR_INFO[row.actor] ?? ACTOR_INFO.system;
-  const newest = rows[0]?.id === row.id;
-  const latestAi = rows.find((r) => r.kind === 'ai')?.id === row.id;
+  const newest = (newestId === undefined ? rows[0]?.id : newestId) === row.id;
+  const latestAi = row.kind === 'ai' && (latestAiId === undefined ? ownLatestAi.row?.id : latestAiId) === row.id;
   const more = [
     ...(newest ? [{ id: 'name', label: 'Name this version', run: onName }] : []),
     ...(latestAi ? [{ id: 'undo', label: 'Undo this AI change', run: onUndoAi }] : [])

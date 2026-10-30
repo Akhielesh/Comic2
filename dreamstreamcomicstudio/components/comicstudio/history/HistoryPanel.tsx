@@ -27,7 +27,7 @@ import { ClassicSnapshots } from './ClassicSnapshots';
 import { EarlierImages } from './EarlierImages';
 import { Filmstrip } from './Filmstrip';
 import { useHistoryApi, type HistoryFilter } from './historyApi';
-import { classicSourceOf, HISTORY_COPY, nextDraftName, pageById, restoredText, startRowOf, viewerTimeZone, type MoneyWords } from './historyModel';
+import { classicSourceOf, HISTORY_COPY, nextDraftName, pageById, pageScope, restoredText, startRowOf, viewerTimeZone, type MoneyWords, type RestoreFollowUp } from './historyModel';
 import { MomentDetail } from './MomentDetail';
 import { MomentList } from './MomentList';
 import type { OpenHistoryRequest } from './openHistory';
@@ -35,8 +35,9 @@ import { RestoreSheet } from './RestoreSheet';
 import { SaveVersionSheet } from './SaveVersionSheet';
 import { Scrubber } from './Scrubber';
 import { UndoAiSheet } from './UndoAiSheet';
-import { useHistory, type HistoryStudio } from './useHistory';
-import { HistorySheet, IconBtn, Note, QuietBtn, RestoredToast, useHistoryReducedMotion, useIsPhone } from './ui';
+import { useHistory, useLatestAiRow, type HistoryStudio } from './useHistory';
+import { HistorySheet, IconBtn, Note, QuietBtn, RestoredToast, useHistoryReducedMotion, useIsPhone, type ToastAction } from './ui';
+import { redrawPrice } from '../timeline/bookModel';
 import { VersionReader } from './VersionReader';
 
 /** A request to open History at a view (each request gets a fresh seq, so the same request twice still applies). */
@@ -50,6 +51,7 @@ interface Toast {
   message: string;
   tone?: 'healthy' | 'attention';
   undo?: () => void;
+  actions?: ToastAction[];
 }
 
 /** One view above the list: one entry on the back stack while it is shown. */
@@ -81,11 +83,18 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   const [sheet, setSheet] = useState<Sheet>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const list = useHistory(studio, { open, filter, pageId: pageFilterId });
+  // Bumped after every action that changed the comic or its History: the open compare and the latest-AI lookup read
+  // again (the list reloads too), so what came back stops showing as changed and a new moment shows at once.
+  const [refresh, setRefresh] = useState(0);
+  const liveRowId = studio.lastHistoryVersion?.id ?? '';
+  const latestAi = useLatestAiRow(studio, open, `${refresh}:${liveRowId}`);
   // The clock the day groups and "Tue 10:42" read: taken when the moments arrive (stable between renders, so the
   // restore preview is not recomputed on every keystroke).
   const now = useMemo(() => nowProp ?? Date.now(), [nowProp, open, list.rows]);
   const cost = useCostFormat(studio);
   const money: MoneyWords = useMemo(() => ({ governed: cost.governed, exact: cost.exact }), [cost]);
+  const costRef = useRef(cost);
+  costRef.current = cost;
   const studioRef = useRef(studio);
   studioRef.current = studio;
   const doc = studio.doc;
@@ -136,44 +145,95 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   const start = startRowOf(rows);
   const classic = classicSourceOf(rows);
   const onlyStart = rows.length <= 1 && rows.every((r) => r.kind === 'start');
+  // When History started: the start row once it is loaded; with every moment loaded and no start row, the oldest
+  // moment (History began no later). Unknown while older moments are still unloaded — "Earlier (images only)" waits
+  // rather than listing drawings made after History started.
+  const startedAt: number | null | undefined = start ? start.contentAt : list.hasMore ? undefined : rows[rows.length - 1]?.contentAt ?? null;
 
   // ── Actions (all free) ──────────────────────────────────────────────────────
 
+  const reloadList = list.reload;
+  /** Something changed: read the list, the open compare and the latest AI run again. */
+  const changed = useCallback(() => {
+    reloadList();
+    setRefresh((n) => n + 1);
+  }, [reloadList]);
+
   const undoRestore = useCallback(
-    async (scope: RestoreScope) => {
-      const res = await undoLastRestore(studioRef.current, api, scope);
+    async (scope: RestoreScope, beforeVersionId?: string) => {
+      const res = await undoLastRestore(studioRef.current, api, scope, beforeVersionId);
+      if (res.ok) changed();
       setToast(res.ok ? { message: 'Undone — your book is back as it was.' } : { message: res.error || 'Couldn’t undo that. Nothing in your comic changed.', tone: 'attention' });
     },
-    [api]
+    [api, changed]
   );
 
   const restore = useCallback(
-    async (versionId: string, scope: RestoreScope, at: string, baseRev?: number): Promise<ActResult> => {
+    async (versionId: string, scope: RestoreScope, at: string, baseRev?: number, followUp?: RestoreFollowUp): Promise<ActResult> => {
       const res = await runHistoryAction(studioRef.current, { type: 'history_restore', versionId, scope, ...(baseRev !== undefined ? { baseRev } : {}) });
       if (res.ok) {
-        setToast({ message: restoredText(scope, at, studioRef.current.doc), undo: () => void undoRestore(scope) });
+        changed();
+        const undo = () => void undoRestore(scope, res.beforeVersionId);
+        const message = restoredText(scope, at, studioRef.current.doc);
+        if (followUp?.kind === 'panel_drawing') {
+          // §6.3 Panel: the drawing still shows the newer panel — the earlier drawing (free) or a quoted redraw.
+          const doc = studioRef.current.doc;
+          const n = doc?.pages.find((p) => p.id === followUp.pageId)?.n ?? followUp.pageN;
+          // Own-key comics: the full controller carries byok (caps.byok otherwise).
+          const st = studioRef.current as HistoryStudio & { byok?: boolean };
+          const usd = doc ? redrawPrice(doc, 'page', !!(st.byok || st.caps?.byok)) : 0;
+          setToast({
+            message: `${message}. ${HISTORY_COPY.panelDrawing}`,
+            undo,
+            actions: [
+              { label: 'Use the earlier drawing too · Free', primary: true, onClick: () => void restore(versionId, pageScope(followUp.pageId, 'art', studioRef.current.doc), at) },
+              {
+                label: `Redraw ${n ? `page ${n}` : 'the page'} · ${costRef.current.approx(usd)}`,
+                onClick: () => {
+                  setToast(null);
+                  // The normal quoted redraw (the confirm policy applies as everywhere else); never automatic.
+                  void studioRef.current.act({ type: 'render_pages', pageIds: [followUp.pageId], force: true, quotedUsd: usd });
+                }
+              }
+            ]
+          });
+        } else {
+          setToast({ message, undo });
+        }
         if (scope.kind === 'book') setStack([]);
       } else if (scope.kind !== 'book') {
         setToast({ message: res.error || 'Couldn’t bring that back. Nothing in your comic changed.', tone: 'attention' });
       }
       return res;
     },
-    [undoRestore]
+    [undoRestore, changed]
   );
 
-  const useThen = useCallback((versionId: string, scope: RestoreScope, at: string) => void restore(versionId, scope, at), [restore]);
+  const useThen = useCallback((versionId: string, scope: RestoreScope, at: string, followUp?: RestoreFollowUp) => void restore(versionId, scope, at, undefined, followUp), [restore]);
 
-  const save = useCallback(async (name: string, note: string): Promise<ActResult> => {
-    const res = await runHistoryAction(studioRef.current, { type: 'history_save', name, ...(note ? { note } : {}) });
-    if (res.ok) setToast({ message: `Saved “${name}”. Named versions are kept forever.` });
-    return res;
-  }, []);
+  const save = useCallback(
+    async (name: string, note: string): Promise<ActResult> => {
+      const res = await runHistoryAction(studioRef.current, { type: 'history_save', name, ...(note ? { note } : {}) });
+      if (res.ok) {
+        changed();
+        setToast({ message: `Saved “${name}”. Named versions are kept forever.` });
+      }
+      return res;
+    },
+    [changed]
+  );
 
-  const undoAi = useCallback(async (decisions: Record<string, UndoAiDecision>): Promise<ActResult> => {
-    const res = await runHistoryAction(studioRef.current, { type: 'history_undo_ai', ...(Object.keys(decisions).length ? { decisions } : {}) });
-    if (res.ok) setToast({ message: 'Undid the last AI change. Its drawings stay in each page’s versions.' });
-    return res;
-  }, []);
+  const undoAi = useCallback(
+    async (decisions: Record<string, UndoAiDecision>): Promise<ActResult> => {
+      const res = await runHistoryAction(studioRef.current, { type: 'history_undo_ai', ...(Object.keys(decisions).length ? { decisions } : {}) });
+      if (res.ok) {
+        changed();
+        setToast({ message: 'Undid the last AI change. Its drawings stay in each page’s versions.' });
+      }
+      return res;
+    },
+    [changed]
+  );
 
   if (!doc) return null;
   const top = stack[stack.length - 1];
@@ -234,7 +294,7 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
           onLoadMore={list.loadMore}
         />
       )}
-      {filter === 'all' && list.loaded && !list.error && <EarlierImages studio={studio} startedAt={start?.contentAt ?? null} now={now} tz={tz} />}
+      {filter === 'all' && list.loaded && !list.error && startedAt !== undefined && <EarlierImages studio={studio} startedAt={startedAt} now={now} tz={tz} />}
       {classic && <ClassicSnapshots studio={studio} classicProjectId={classic} now={now} tz={tz} />}
       <p className="m-0 border-t border-[var(--ds-hairline)] px-4 py-3 text-[12px] leading-5 text-[var(--ds-muted)]" data-history-retention>
         {HISTORY_COPY.retention}
@@ -251,6 +311,8 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
             studio={studio}
             versionId={v.versionId}
             rows={rows}
+            newestId={filter === 'all' ? rows[0]?.id ?? null : null}
+            latestAiId={latestAi.row?.id ?? null}
             money={money}
             tz={tz}
             onRead={(id) => push({ kind: 'reader', versionId: id })}
@@ -266,7 +328,19 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
       return (
         <>
           {backBar(depth - 1, 'Compare')}
-          <BookCompare studio={studio} a={v.a} b={v.b} initialPageId={v.pageId} now={now} tz={tz} phone={phone} reducedMotion={reducedMotion} onUseThen={useThen} onRestoreBook={(id) => setSheet({ kind: 'restore', versionId: id })} />
+          <BookCompare
+            studio={studio}
+            a={v.a}
+            b={v.b}
+            initialPageId={v.pageId}
+            now={now}
+            tz={tz}
+            phone={phone}
+            reducedMotion={reducedMotion}
+            onUseThen={useThen}
+            onRestoreBook={(id) => setSheet({ kind: 'restore', versionId: id })}
+            refreshKey={refresh}
+          />
         </>
       );
     }
@@ -290,8 +364,8 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
       ))}
       <RestoreSheet studio={studio} versionId={sheet?.kind === 'restore' ? sheet.versionId : null} now={now} tz={tz} onClose={() => setSheet(null)} onRestore={restore} />
       <SaveVersionSheet open={sheet?.kind === 'save'} suggestedName={nextDraftName(rows)} onClose={() => setSheet(null)} onSave={save} />
-      <UndoAiSheet studio={studio} open={sheet?.kind === 'undo_ai'} rows={rows} loadingRows={list.loading} now={now} tz={tz} onClose={() => setSheet(null)} onUndo={undoAi} />
-      <RestoredToast message={toast?.message ?? null} tone={toast?.tone} onUndo={toast?.undo} onDismiss={() => setToast(null)} />
+      <UndoAiSheet studio={studio} open={sheet?.kind === 'undo_ai'} refresh={`${refresh}:${liveRowId}`} now={now} tz={tz} onClose={() => setSheet(null)} onUndo={undoAi} />
+      <RestoredToast message={toast?.message ?? null} tone={toast?.tone} onUndo={toast?.undo} actions={toast?.actions} onDismiss={() => setToast(null)} />
     </div>
   );
 };

@@ -6,41 +6,57 @@
 // re-check never reads as your edit): pieces you changed since are asked first ("You've changed page 3 since."
 // [Keep mine] [Take the earlier one]). The AI's newer drawings stay in each page's versions. Free — no AI. The server
 // re-plans when it runs (history_undo_ai {decisions}) and refuses nothing silently.
+//
+// The run it shows is read on its own (useLatestAiRow: the comic's latest `ai` row, whatever the panel's filter or
+// paging shows), because that is the run the server reverts — so the preview, the conflict choices and the decisions
+// it sends are always about that run.
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { UndoAiDecision, VersionRow } from '../../../shared/comic/history/types';
 import { SEGMENTED_ACTIVE, SEGMENTED_ITEM, SEGMENTED_TRACK, STATUS_INK } from '../../chat/studioDesign';
 import { HISTORY_COPY, undoAiPreview, whenText } from './historyModel';
-import { useVersionBook, type HistoryStudio } from './useHistory';
+import { useLatestAiRow, useVersionBook, type HistoryStudio } from './useHistory';
 import { cx, HistorySheet, PrimaryBtn, QuietBtn } from './ui';
 
 export interface UndoAiSheetProps {
   studio: HistoryStudio;
   open: boolean;
-  /** Newest first: the latest `ai` row is the change to undo. */
-  rows: readonly VersionRow[];
+  /**
+   * Not used to choose the run: the panel's list may be filtered or paged, and the server always reverts the comic's
+   * latest AI run — the sheet reads that one itself. Kept for callers of the earlier signature.
+   */
+  rows?: readonly VersionRow[];
   loadingRows?: boolean;
+  /** Re-read the latest AI run when this changes (a new moment arrived). */
+  refresh?: unknown;
   now: number;
   tz: string;
   onClose(): void;
   onUndo(decisions: Record<string, UndoAiDecision>): Promise<{ ok: boolean; error?: string }>;
 }
 
-export const UndoAiSheet: React.FC<UndoAiSheetProps> = ({ studio, open, rows, loadingRows, now, tz, onClose, onUndo }) => {
-  const R = open ? rows.find((r) => r.kind === 'ai') ?? null : null;
+export const UndoAiSheet: React.FC<UndoAiSheetProps> = ({ studio, open, refresh, now, tz, onClose, onUndo }) => {
+  const latest = useLatestAiRow(studio, open, refresh);
+  const R = open ? latest.row : null;
   const P = R?.parentId ?? null;
   const after = useVersionBook(studio, R?.id ?? null);
   const before = useVersionBook(studio, P);
   const [decisions, setDecisions] = useState<Record<string, UndoAiDecision>>({});
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Decisions belong to one run: a different latest run starts over.
+  const rid = R?.id ?? null;
   useEffect(() => {
     if (!open) return;
     setDecisions({});
     setError(null);
-  }, [open]);
+  }, [open, rid]);
   const live = studio.doc;
-  const preview = useMemo(() => (after.book && before.book && live ? undoAiPreview(before.book.doc, after.book.doc, live) : null), [after.book, before.book, live]);
+  // Only books of this run (a book still loading for an earlier run never previews this one).
+  const ofRun = (b: typeof after.book, id: string | null) => !!b && !!id && (!b.row || b.row.id === id);
+  const afterBook = ofRun(after.book, rid) ? after.book : null;
+  const beforeBook = ofRun(before.book, P) ? before.book : null;
+  const preview = useMemo(() => (afterBook && beforeBook && live ? undoAiPreview(beforeBook.doc, afterBook.doc, live) : null), [afterBook, beforeBook, live]);
   const decided = (keys: string[]) => keys.every((k) => decisions[k]);
   const allDecided = !preview || preview.conflicts.every((c) => decided(c.keys));
   const nothing = !!preview && !preview.plan.changed.length;
@@ -60,7 +76,11 @@ export const UndoAiSheet: React.FC<UndoAiSheetProps> = ({ studio, open, rows, lo
   return (
     <HistorySheet open={open} onClose={onClose} label="Undo the last AI change" detents={['content', 'full']}>
       <div className="min-w-0 space-y-3 px-4 pb-4 pt-1" data-undo-ai-sheet>
-        {!R && <p className="m-0 text-[13.5px] text-[var(--ds-muted)]">{loadingRows ? 'Looking for the last AI change…' : 'There’s no AI change to undo yet.'}</p>}
+        {!R && (
+          <p className={cx('m-0 text-[13.5px]', latest.error ? STATUS_INK.attention : 'text-[var(--ds-muted)]')} role={latest.error ? 'alert' : undefined}>
+            {!latest.loaded || latest.loading ? 'Looking for the last AI change…' : latest.error || 'There’s no AI change to undo yet.'}
+          </p>
+        )}
         {R && (
           <>
             <p className="m-0 text-[14px] leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]">
@@ -75,7 +95,7 @@ export const UndoAiSheet: React.FC<UndoAiSheetProps> = ({ studio, open, rows, lo
             {nothing && <p className="m-0 text-[13px] text-[var(--ds-muted)]">Nothing the AI changed is left to undo.</p>}
             {preview?.conflicts.map((c) => (
               <fieldset key={c.key} className="m-0 min-w-0 space-y-2 border-0 p-0" data-undo-conflict={c.pageId ?? c.key}>
-                <legend className="text-[13.5px] font-medium text-[var(--ds-ink)]">{c.title} Undo the AI’s change here too?</legend>
+                <legend className="text-[13.5px] font-medium text-[var(--ds-ink)]">{c.question}</legend>
                 <div role="radiogroup" aria-label={c.title} className={cx(SEGMENTED_TRACK, 'w-full')}>
                   {(
                     [

@@ -5,8 +5,10 @@
 //   list      the latest moments · [Open History]
 //   moment    one moment: what changed · [Open] (read, compare, restore from there)
 //   compare   "3 pages changed" · [See changes]
-//   confirm   "Restore page 3 from Tue 10:42?" — a piece: [Use then] at once (free, with Undo); the whole book:
-//             [Restore…] opens the restore sheet (a whole-book restore always needs that tap)
+//   confirm   "Restore page 3 from Tue 10:42?" — a piece: [Use then] (free, with Undo); a piece that would put pages
+//             "Out of date" (a look, a place, the style, the cover, the script) lists them first and waits for
+//             [Bring back]; the whole book: [Restore…] opens the restore sheet (a whole-book restore always needs
+//             that tap)
 //   undo_ai   "Undo the last AI change" · [Review and undo…]
 // With Comic History off (caps.history false) it renders nothing.
 
@@ -14,11 +16,12 @@ import React, { useEffect, useState } from 'react';
 import { History as HistoryIcon } from 'lucide-react';
 import { historyEnabled } from '../../../shared/comic/capabilities';
 import { changedPageCount, type HistoryCard as HistoryCardData, type RestoreScope, type VersionRow } from '../../../shared/comic/history/index';
+import type { ComicDoc } from '../../../shared/comic/doc';
 import type { CardProps } from '../extensions';
 import { CardShell } from '../conversation/ui';
 import { useCostFormat } from '../conversation/cost';
 import { historyErrorText, useHistoryApi } from './historyApi';
-import { changeGroupsOf, restorableId, restoredText, rowMetaText, viewerTimeZone, whenText } from './historyModel';
+import { changeGroupsOf, restorableId, restoredText, rowMetaText, scopeThing, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, viewerTimeZone, whenText } from './historyModel';
 import { runHistoryAction, undoLastRestore } from './historyActions';
 import { requestOpenHistory } from './openHistory';
 import type { HistoryStudio } from './useHistory';
@@ -58,6 +61,8 @@ interface Loaded {
   lines?: string[];
   changed?: number;
   compareFrom?: string | null;
+  /** confirm, a piece that may put pages out of date: the moment's book (null: it couldn't be read). */
+  thenDoc?: ComicDoc | null;
 }
 
 export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: number; tz?: string }> = ({ card, studio: base, now: nowProp, tz: tzProp }) => {
@@ -70,6 +75,8 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; tone?: 'healthy' | 'attention'; undo?: () => void } | null>(null);
   const [sending, setSending] = useState(false);
+  /** The "these pages will show Out of date" question, waiting for [Bring back]. */
+  const [ask, setAsk] = useState<string | null>(null);
   const now = nowProp ?? Date.now();
   const tz = tzProp ?? viewerTimeZone();
   const view = card?.view ?? 'list';
@@ -88,8 +95,16 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         return { changed: changedPageCount(res.diff), compareFrom: restorableId(res.a), ...(res.a.row ? { row: res.a.row } : {}) };
       }
       if ((view === 'moment' || view === 'confirm') && versionId) {
-        const d = await api.detail(projectId, versionId, { signal });
-        return { row: d.row, lines: (d.groups.length ? d.groups : changeGroupsOf(d.row.changes)).slice(0, 3).map((g) => `${g.title}${g.lines.length ? ` — ${g.lines.join(' · ')}` : ''}`) };
+        const staleCheck = view === 'confirm' && !!card?.scope && STALE_CHECK_SCOPES.has(card.scope.kind);
+        const [d, thenDoc] = await Promise.all([
+          api.detail(projectId, versionId, { signal }),
+          staleCheck ? api.book(projectId, versionId, { signal }).then((b) => b.doc, () => null) : Promise.resolve(undefined)
+        ]);
+        return {
+          row: d.row,
+          lines: (d.groups.length ? d.groups : changeGroupsOf(d.row.changes)).slice(0, 3).map((g) => `${g.title}${g.lines.length ? ` — ${g.lines.join(' · ')}` : ''}`),
+          ...(thenDoc !== undefined ? { thenDoc } : {})
+        };
       }
       if (view === 'undo_ai') {
         const res = await api.list(projectId, { filter: 'ai', limit: 1 }, { signal });
@@ -100,9 +115,11 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
     };
     load()
       .then((d) => !signal.aborted && setData(d))
-      .catch((err) => !signal.aborted && setError(historyErrorText(err) || null));
+      // A 404 on a moment or a compare is about that moment; only the list speaks for the whole History.
+      .catch((err) => !signal.aborted && setError(historyErrorText(err, undefined, view === 'list' || view === 'undo_ai' ? 'comic' : 'moment') || null));
     return () => ctrl.abort();
-  }, [api, enabled, projectId, view, versionId, a, b]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, enabled, projectId, view, versionId, a, b, card?.scope?.kind]);
 
   if (!enabled || !studio.doc || !card) return null;
   const money = { governed: cost.governed, exact: cost.exact };
@@ -110,8 +127,9 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
   const scope = card.scope;
   const partial = !!scope && scope.kind !== 'book';
 
-  const useNow = async () => {
+  const send = async () => {
     if (!versionId || !scope || sending) return;
+    setAsk(null);
     setSending(true);
     const res = await runHistoryAction(studio, { type: 'history_restore', versionId, scope });
     setSending(false);
@@ -122,10 +140,23 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
     setToast({
       message: restoredText(scope, at || 'then', studio.doc),
       undo: () =>
-        void undoLastRestore(studio, api, scope).then((u) =>
+        void undoLastRestore(studio, api, scope, res.beforeVersionId).then((u) =>
           setToast(u.ok ? { message: 'Undone — your book is back as it was.' } : { message: u.error || 'Couldn’t undo that. Nothing in your comic changed.', tone: 'attention' })
         )
     });
+  };
+  // A look, a place, the style, the cover or the script may put pages out of date: list them first (§6.3).
+  const useNow = () => {
+    if (!versionId || !scope || sending) return;
+    if (STALE_CHECK_SCOPES.has(scope.kind) && studio.doc) {
+      const thenDoc = data?.thenDoc ?? null;
+      const ns = thenDoc ? staleImpact(studio.doc, thenDoc, scope, versionId, now) : null;
+      if (ns === null || ns.length) {
+        setAsk(staleConfirmText(ns, scopeThing(scope, thenDoc, studio.doc)));
+        return;
+      }
+    }
+    void send();
   };
 
   const title =
@@ -168,10 +199,19 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         {view === 'undo_ai' && data?.row && <p className="m-0 text-[13px] text-[var(--ds-ink)] [overflow-wrap:anywhere]">{data.row.label}</p>}
         {data && (
           <div className="flex min-w-0 flex-wrap gap-2 pt-1">
-            {view === 'confirm' && partial && (
-              <PrimaryBtn onClick={() => void useNow()} disabled={sending || !versionId}>
+            {view === 'confirm' && partial && !ask && (
+              <PrimaryBtn onClick={useNow} disabled={sending || !versionId}>
                 {sending ? 'Bringing it back…' : 'Use then · Free'}
               </PrimaryBtn>
+            )}
+            {view === 'confirm' && partial && ask && (
+              <div role="group" aria-label="Before bringing it back" className="flex w-full min-w-0 flex-wrap items-center gap-2" data-stale-confirm="card">
+                <p className="m-0 w-full text-[13px] leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{ask}</p>
+                <PrimaryBtn onClick={() => void send()} disabled={sending}>
+                  {sending ? 'Bringing it back…' : 'Bring back · Free'}
+                </PrimaryBtn>
+                <QuietBtn onClick={() => setAsk(null)}>Cancel</QuietBtn>
+              </div>
             )}
             {view === 'confirm' && !partial && versionId && <PrimaryBtn onClick={() => requestOpenHistory({ view: 'confirm', versionId })}>Restore… · Free</PrimaryBtn>}
             {view === 'undo_ai' && data.row && <PrimaryBtn onClick={() => requestOpenHistory({ view: 'undo_ai' })}>Review and undo… · Free</PrimaryBtn>}

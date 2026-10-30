@@ -3,7 +3,7 @@
 // preview, and the "Earlier (images only)" items of an older comic.
 
 import { describe, expect, it } from 'vitest';
-import { collectAssetPaths } from '../../../shared/comic/doc';
+import { collectAssetPaths, normalizeDoc } from '../../../shared/comic/doc';
 import { historyFixture, HISTORY_NOW, HISTORY_TZ } from './__scenes__/historyFixtures';
 import {
   earlierImageGroups,
@@ -94,6 +94,36 @@ describe('the whole-book restore preview (the shared engine’s own restore)', (
   });
 });
 
+describe('the restore preview’s words (review round)', () => {
+  const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+  it('one page: "1 page changes" (the verb agrees)', () => {
+    const f = historyFixture('v5');
+    const now = clone(f.live);
+    now.pages.find((p) => p.id === 'pg_5')!.panels[0].lines[0].text = 'Changed since then.';
+    const p = restorePreview(normalizeDoc(now), f.live, 'ver_x', HISTORY_NOW);
+    expect(p.lines[0]).toBe('1 page changes');
+  });
+
+  it('a page coming back is said once ("comes back"), never also counted as a change', () => {
+    const f = historyFixture('v5');
+    const now = clone(f.live);
+    now.pages = now.pages.filter((p) => p.id !== 'pg_5');
+    const p = restorePreview(normalizeDoc(now), f.live, 'ver_x', HISTORY_NOW);
+    expect(p.lines).toContain('1 page comes back');
+    expect(p.lines.filter((l) => /^\d+ pages? changes?$/.test(l) || l === 'No page changes')).toEqual([]);
+  });
+
+  it('the same model under its provider id is not "another model"', () => {
+    const f = historyFixture('v5');
+    const before = clone(f.versions.find((v) => v.row.id === 'ver_before')!.doc);
+    for (const pg of before.pages) if (pg.render.asset) pg.render.asset.model = 'google/gemini-nano-banana-2.1';
+    if (before.cover.render.asset) before.cover.render.asset.model = 'google/gemini-nano-banana-2.1';
+    const p = restorePreview(f.live, before, 'ver_before', HISTORY_NOW);
+    expect(p.modelNotice).toBeUndefined();
+  });
+});
+
 describe('undo the last AI change (preview)', () => {
   it('reverts the AI’s untouched pieces and asks about a page you changed since', () => {
     const plain = historyFixture('v5');
@@ -105,6 +135,8 @@ describe('undo the last AI change (preview)', () => {
     const conflict = historyFixture('v5-conflict');
     const asked = undoAiPreview(P, R, conflict.live);
     expect(asked.conflicts.map((c) => [c.pageId, c.title])).toEqual([['pg_3', "You've changed page 3 since."]]);
+    // §6.4's question: only on the other pages (and the part of page 3 that goes back anyway), or on page 3 too?
+    expect(asked.conflicts[0].question).toBe("You've changed page 3 since. Undo the AI’s change only on pages 1, 4 and 6 (and page 3’s drawing), or on page 3’s words too?");
     expect(asked.plan.revert).not.toContain('page:pg_3');
     const decided = undoAiPreview(P, R, conflict.live, { 'page:pg_3': 'earlier' });
     expect(decided.conflicts).toEqual([]);

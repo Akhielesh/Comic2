@@ -7,10 +7,10 @@
 // "Use then" sends, the language status words, the undo-AI plan preview, the "Earlier (images only)" items of an
 // older comic, and the no-git-words guard. No React, no network.
 
-import type { ComicDoc, Line, Page } from '../../../shared/comic/doc';
+import { isPageStale, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
 import { editionProgress, i18nOf, translationStatus } from '../../../shared/comic/i18n';
 import { languageSpec } from '../../../shared/comic/languages';
-import { lockedModelId } from '../../../shared/comic/modelLock';
+import { lockedModelId, lockedSpecId } from '../../../shared/comic/modelLock';
 import { formatUsd } from '../../../shared/comic/models';
 import { applyOps } from '../../../shared/comic/ops';
 import { normalizeTimeZone } from '../../../shared/comic/events';
@@ -22,6 +22,7 @@ import {
   localParts,
   pageIdsOfKeys,
   pageRangeText,
+  parseSectionKey,
   planUndoLastAi,
   restoreEffects,
   restoreOps,
@@ -54,7 +55,9 @@ export const HISTORY_COPY = {
   saveFirst: 'Your book right now is saved first, so you can come back to it anytime.',
   namedForever: 'Named versions are kept forever.',
   readOnly: 'read-only',
-  useThenFree: 'Taking back a piece is free and instant — no AI.'
+  useThenFree: 'Taking back a piece is free and instant — no AI.',
+  /** After a panel's "Use then" when its action, shot or cast changed: the drawing is still the newer one. */
+  panelDrawing: 'The drawing still shows the newer panel.'
 } as const;
 
 /**
@@ -296,6 +299,19 @@ export const pageScope = (pageId: string, part: RestorePart, live?: Pick<ComicDo
 });
 export const languageScope = (lang: string): RestoreScope => ({ kind: 'language', lang });
 
+/**
+ * What the creator may want next after a piece came back (§6.3 Panel): the panel's action, shot or cast came back
+ * but the page's drawing is still the newer one — offer the earlier drawing (free) or a quoted redraw.
+ */
+export interface RestoreFollowUp {
+  kind: 'panel_drawing';
+  pageId: string;
+  pageN?: number;
+}
+
+/** Panel fields the drawing shows: when one of these comes back, the newer drawing no longer matches the panel. */
+export const DRAWN_PANEL_FIELDS: ReadonlySet<string> = new Set(['action', 'shot', 'castIds']);
+
 /** "Page 3 restored from Tue 10:42" — the toast after a partial "Use then". */
 export const restoredText = (scope: RestoreScope, at: string, doc?: Pick<ComicDoc, 'pages'> | null): string => {
   const n = (id: string) => doc?.pages.find((p) => p.id === id)?.n;
@@ -313,6 +329,58 @@ export const restoredText = (scope: RestoreScope, at: string, doc?: Pick<ComicDo
     default:
       return `Restored from ${at}`;
   }
+};
+
+// ── What a piece taken back would put "Out of date" (§6.3: listed first, then confirmed) ─────
+
+/** Scopes whose restore can change the spec of pages it does not name (a look, a place, the style…). */
+export const STALE_CHECK_SCOPES: ReadonlySet<RestoreScope['kind']> = new Set(['character', 'place', 'style', 'cover', 'script']);
+
+/**
+ * The page numbers a restore of `scope` from `version` would newly show "Out of date" (fresh now, stale after),
+ * computed with the shared engine — the same restoreOps + history_restore + applyOps the server commits. null when
+ * it can't be worked out (the caller then asks anyway). Pages already out of date are not listed again.
+ */
+export const staleImpact = (live: ComicDoc, version: ComicDoc, scope: RestoreScope, versionId: string, now = Date.now()): number[] | null => {
+  try {
+    const after = applyOps(live, [historyRestoreOp(restoreOps(live, version, scope), { versionId, at: now })], now);
+    const ns: number[] = [];
+    for (const p of live.pages) {
+      if (isPageStale(live, p)) continue;
+      const q = after.pages.find((x) => x.id === p.id);
+      if (q && isPageStale(after, q)) ns.push(q.n);
+    }
+    return ns.sort((a, b) => a - b);
+  } catch {
+    return null;
+  }
+};
+
+/** "Maya" · "the earlier style" — what a whole-piece "Use then" brings back, in words. */
+export const scopeThing = (scope: RestoreScope, ...docs: (Pick<ComicDoc, 'cast' | 'places'> | null | undefined)[]): string => {
+  switch (scope.kind) {
+    case 'character':
+      return docs.map((d) => d?.cast.find((c) => c.id === scope.id)?.name).find(Boolean) || 'this character';
+    case 'place':
+      return docs.map((d) => d?.places.find((p) => p.id === scope.id)?.name).find(Boolean) || 'this place';
+    case 'style':
+      return 'the earlier style';
+    case 'cover':
+      return 'the earlier cover';
+    case 'script':
+      return 'the earlier script';
+    default:
+      return 'it';
+  }
+};
+
+/**
+ * The confirm before a piece that would put pages out of date: "Pages 2 and 4 will show Out of date until redrawn.
+ * Bring Maya back anyway?" (ns null: "Some pages may show…").
+ */
+export const staleConfirmText = (ns: readonly number[] | null, thing: string): string => {
+  const pages = ns === null ? 'Some pages may show' : `${capitalize(pageRangeText(ns))} will show`;
+  return `${pages} Out of date until redrawn. Bring ${thing} back anyway?`;
 };
 
 // ── Compare sides ────────────────────────────────────────────────────────────
@@ -395,13 +463,15 @@ export const restorePreview = (live: ComicDoc, version: ComicDoc, versionId: str
   const diff = diffBooks(live, after);
   const effects = restoreEffects(live, version);
   const lines: string[] = [];
-  const changed = diff.pages.filter((p) => p.status !== 'moved' && !effects.pagesToDeleted.includes(p.pageId) && p.status !== 'removed').length;
+  // Pages that change in place: not the ones going to Deleted, not the ones coming back (each has its own line).
+  const changed = diff.pages.filter((p) => p.status === 'changed' && !effects.pagesToDeleted.includes(p.pageId)).length;
   const pagesChanged = changedPageCount(diff);
-  lines.push(changed ? `${pagesWord(changed)} change` : 'No page changes');
   const moved = diff.pages.filter((p) => p.status === 'moved').length;
+  const back = diff.pages.filter((p) => p.status === 'added').length;
+  if (changed) lines.push(`${pagesWord(changed)} ${changed === 1 ? 'changes' : 'change'}`);
+  else if (!moved && !back && !effects.pagesToDeleted.length) lines.push('No page changes');
   if (moved) lines.push(`${pagesWord(moved)} move back to ${moved === 1 ? 'its' : 'their'} earlier place`);
   if (effects.pagesToDeleted.length) lines.push(`${pagesWord(effects.pagesToDeleted.length)} added since ${effects.pagesToDeleted.length === 1 ? 'goes' : 'go'} to Deleted`);
-  const back = diff.pages.filter((p) => p.status === 'added').length;
   if (back) lines.push(`${pagesWord(back)} ${back === 1 ? 'comes' : 'come'} back`);
   lines.push(diff.cover.text || diff.cover.art ? 'Cover changes' : 'Cover stays');
   const liveEditions = Object.keys(i18nOf(live).editions).sort();
@@ -424,8 +494,10 @@ export const restorePreview = (live: ComicDoc, version: ComicDoc, versionId: str
   lines.push(lockName ? `Image model stays ${lockName}` : 'Image model stays as it is');
   const drawn = drawnModelOf(version);
   let modelNotice: string | undefined;
-  if (lock && drawn && drawn !== lock) {
-    const drawnPages = version.pages.filter((p) => (p.render.asset?.model || p.render.model) === drawn).map((p) => p.n);
+  // Compared as registry entries: older assets may name the same model by a provider route id.
+  if (lock && drawn && lockedSpecId(drawn) !== lockedSpecId(lock)) {
+    const drawnSpec = lockedSpecId(drawn);
+    const drawnPages = version.pages.filter((p) => p.render.asset && lockedSpecId(p.render.asset.model || p.render.model || '') === drawnSpec).map((p) => p.n);
     modelNotice = `${drawnPages.length ? `${capitalize(pageRangeText(drawnPages))} were` : 'Some pages were'} drawn with ${modelName(drawn) || drawn}; this comic now draws with ${lockName}. New drawings use ${lockName}.`;
   }
   return { lines, pagesChanged, pagesToDeleted: effects.pagesToDeleted.length, editionsKept, ...(modelNotice ? { modelNotice } : {}) };
@@ -444,11 +516,21 @@ export const semanticSignatures = (doc: ComicDoc): Record<string, string> => {
 
 export interface UndoAiPreview {
   plan: UndoAiPlan;
-  /** Conflicts grouped by page ("You've changed page 3 since"). */
-  conflicts: { key: string; keys: string[]; title: string; pageId?: string }[];
+  /**
+   * Conflicts grouped by page ("You've changed page 3 since."), each with its question (§6.4): "You've changed page 3
+   * since. Undo the AI's change only on pages 4–5, or on page 3 too?"
+   */
+  conflicts: { key: string; keys: string[]; title: string; question: string; pageId?: string; n?: number }[];
   /** "pages 4–5" the undo reverts without asking. */
   revertText: string;
 }
+
+const PART_WORDS: Readonly<Record<string, string>> = { page: 'words', art: 'drawing', edp: 'translation' };
+/** "words" / "drawing" / "translation" when every key is that part of a page, else undefined. */
+const partWord = (keys: readonly string[]): string | undefined => {
+  const words = new Set(keys.map((k) => PART_WORDS[parseSectionKey(k)?.kind ?? '']));
+  return words.size === 1 ? [...words][0] : undefined;
+};
 
 /** The three-way plan of P (before the AI), R (the AI's result) and live, with conflicts worded per page. */
 export const undoAiPreview = (P: ComicDoc, R: ComicDoc, live: ComicDoc, decisions: Readonly<Record<string, UndoAiDecision>> = {}): UndoAiPreview => {
@@ -461,11 +543,21 @@ export const undoAiPreview = (P: ComicDoc, R: ComicDoc, live: ComicDoc, decision
     g.keys.push(k);
     groups.set(pageId ?? k, g);
   }
+  const revertNs = pageIdsOfKeys(plan.revert).map(nOf).filter((n): n is number => !!n);
   const conflicts = [...groups.entries()].map(([key, g]) => {
     const n = g.pageId ? nOf(g.pageId) : undefined;
-    return { key, keys: g.keys, ...(g.pageId ? { pageId: g.pageId } : {}), title: g.pageId ? `You've changed page ${n ?? ''} since.`.replace('page  ', 'this page ') : 'You changed this since.' };
+    const title = g.pageId ? `You've changed page ${n ?? ''} since.`.replace('page  ', 'this page ') : 'You changed this since.';
+    // §6.4: "Undo the AI's change only on pages 4–5, or on page 3 too?" — the pages taken back without asking, other
+    // than this one; when part of this page goes back anyway (its drawing, say), that part is named too.
+    const others = revertNs.filter((x) => x !== n);
+    const ownReverted = g.pageId ? plan.revert.filter((k) => pageIdsOfKeys([k])[0] === g.pageId) : [];
+    const ownPart = ownReverted.length ? partWord(ownReverted) ?? 'other changes' : undefined;
+    const askedPart = ownPart ? partWord(g.keys) : undefined;
+    const lead = others.length ? `${pageRangeText(others)}${ownPart && n ? ` (and page ${n}’s ${ownPart})` : ''}` : ownPart && n ? `page ${n}’s ${ownPart}` : '';
+    const target = n ? (askedPart ? `on page ${n}’s ${askedPart}` : `on page ${n}`) : 'here';
+    const question = lead ? `${title} Undo the AI’s change only on ${lead}, or ${target} too?` : `${title} Undo the AI’s change ${target} too?`;
+    return { key, keys: g.keys, title, question, ...(g.pageId ? { pageId: g.pageId } : {}), ...(n ? { n } : {}) };
   });
-  const revertNs = pageIdsOfKeys(plan.revert).map(nOf).filter((n): n is number => !!n);
   return { plan, conflicts, revertText: revertNs.length ? pageRangeText(revertNs) : plan.revert.length ? 'the rest' : '' };
 };
 

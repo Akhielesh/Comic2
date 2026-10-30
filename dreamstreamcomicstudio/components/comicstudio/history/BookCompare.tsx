@@ -3,8 +3,11 @@
 // Free: the owner route diffs the two manifests and sends only the changed pieces; diffBooks (shared) is the one
 // meaning of "changed" on both ends. Shows: which pages changed, were added, removed or moved ("Moved from 5"),
 // the model line ("Drawn with X (then) · Y (now)"), the page compare with its language chips and word diff, and the
-// other pieces (characters, places, cover, script, style) — each with a free "Use then" when the earlier side is a
-// saved moment. Desktop: aligned then/now strips of the changed pages; phones: the Now strip with change marks.
+// other pieces (characters, places, cover, script, style, each language edition) — each with a free "Use then" when
+// the earlier side is a saved moment. A piece that would put pages "Out of date" (a look, a place, the style, the
+// cover, the script) lists those pages first and waits for [Bring back] (§6.3). The language chips show whenever the
+// books have editions — also when only translations differ ("the AI re-translation overwrote my edits").
+// Desktop: aligned then/now strips of the changed pages; phones: the Now strip with change marks.
 
 export { restorableId, sideLabel } from './historyModel';
 
@@ -15,11 +18,12 @@ import type { CompareRef, PageDiff, RestoreScope } from '../../../shared/comic/h
 import { FOCUS_RING, RADIUS_CONTROL } from '../../chat/studioDesign';
 import { useCostFormat } from '../conversation/cost';
 import { modelName } from '../timeline/bookModel';
-import { languageChips, languageScope, restorableId, sideLabel, whenText } from './historyModel';
+import { languageSpec } from '../../../shared/comic/languages';
+import { languageChips, languageScope, restorableId, scopeThing, sideLabel, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, whenText, type RestoreFollowUp } from './historyModel';
 import { LanguageChips } from './LanguageChips';
 import { PageCompare } from './PageCompare';
 import { useCompare, type HistoryStudio } from './useHistory';
-import { cx, Mark, Note, Overline, QuietBtn } from './ui';
+import { cx, Mark, Note, Overline, PrimaryBtn, QuietBtn } from './ui';
 
 export interface BookCompareProps {
   studio: HistoryStudio;
@@ -30,10 +34,19 @@ export interface BookCompareProps {
   tz: string;
   phone: boolean;
   reducedMotion: boolean;
-  /** Take a piece back from the earlier side (free). */
-  onUseThen(versionId: string, scope: RestoreScope, at: string): void;
+  /** Take a piece back from the earlier side (free); `followUp` asks what to do next (e.g. the panel's drawing). */
+  onUseThen(versionId: string, scope: RestoreScope, at: string, followUp?: RestoreFollowUp): void;
   /** Open the whole-book restore sheet for the earlier side. */
   onRestoreBook?(versionId: string): void;
+  /** A new value re-reads the compare (after a piece was taken back, so what came back stops showing as changed). */
+  refreshKey?: number;
+}
+
+/** "Pages 2 and 4 will show Out of date until redrawn. Bring Maya back anyway?" — waiting for [Bring back]. */
+interface StaleAsk {
+  key: string;
+  scope: RestoreScope;
+  text: string;
 }
 
 const PAGE_MARK: Record<PageDiff['status'], { words: string; icon: React.ReactNode }> = {
@@ -45,8 +58,9 @@ const PAGE_MARK: Record<PageDiff['status'], { words: string; icon: React.ReactNo
 
 const pageNo = (p: PageDiff) => p.toN ?? p.fromN ?? 0;
 
-export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', initialPageId, now, tz, phone, reducedMotion, onUseThen, onRestoreBook }) => {
-  const { result, loading, error, urlFor, reload } = useCompare(studio, a, b);
+export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', initialPageId, now, tz, phone, reducedMotion, onUseThen, onRestoreBook, refreshKey = 0 }) => {
+  const { result, loading, error, urlFor, reload } = useCompare(studio, a, b, refreshKey);
+  const [ask, setAsk] = useState<StaleAsk | null>(null);
   const cost = useCostFormat(studio);
   const pages = useMemo(() => (result ? [...result.diff.pages].sort((x, y) => pageNo(x) - pageNo(y)) : []), [result]);
   const [pageId, setPageId] = useState<string | null>(initialPageId ?? null);
@@ -69,7 +83,20 @@ export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', 
   const live = studio.doc;
   const canTake = !!versionId && result.b.kind === 'now';
   const turnBusy = studio.busy ? 'The director is working — take pieces back when it’s done.' : null;
-  const use = (scope: RestoreScope) => versionId && onUseThen(versionId, scope, atText);
+  const use = (scope: RestoreScope, followUp?: RestoreFollowUp) => versionId && onUseThen(versionId, scope, atText, followUp);
+  // A whole piece (a look, a place, the style, the cover, the script) may put pages out of date: list them first.
+  const useWhole = (key: string, scope: RestoreScope) => {
+    if (!versionId) return;
+    if (STALE_CHECK_SCOPES.has(scope.kind) && live) {
+      const ns = staleImpact(live, thenDoc, scope, versionId, now);
+      if (ns === null || ns.length) {
+        setAsk({ key, scope, text: staleConfirmText(ns, scopeThing(scope, thenDoc, live)) });
+        return;
+      }
+    }
+    setAsk(null);
+    use(scope);
+  };
   const diff = result.diff;
   const index = Math.max(0, pages.findIndex((p) => p.pageId === pageId));
   const current = pages[index];
@@ -117,6 +144,17 @@ export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', 
   if (diff.script) others.push({ key: 'script', title: 'Script', detail: 'Changed', scope: { kind: 'script' } });
   if (diff.style || diff.options.length) others.push({ key: 'style', title: 'Style', detail: 'Changed', scope: { kind: 'style' } });
   if (diff.meta.length) others.push({ key: 'meta', title: 'Story details', detail: 'Changed' });
+  // Each edition that differs (an edition new since then has nothing to bring back).
+  for (const e of diff.editions) {
+    if (e.status === 'added') continue;
+    const n = e.lineIds.length;
+    others.push({
+      key: `ed:${e.lang}`,
+      title: languageSpec(e.lang)?.english || e.lang,
+      detail: e.status === 'removed' ? 'Removed since then' : n ? `${n} translated ${n === 1 ? 'line differs' : 'lines differ'}` : 'Changed',
+      scope: languageScope(e.lang)
+    });
+  }
 
   const changedLines = diff.editions.reduce((n, e) => n + e.lineIds.length, 0);
   const summary = [
@@ -141,6 +179,8 @@ export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', 
         )}
       </div>
 
+      <LanguageChips chips={chips} selected={shownLang} onSelect={setLang} onUseThen={canTake && editionDiffers(shownLang) ? (l) => use(languageScope(l)) : undefined} useThenDisabled={!!turnBusy} />
+
       {pages.length > 0 && (
         <>
           {!phone && (
@@ -157,7 +197,6 @@ export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', 
             </Overline>
             {strip('now')}
           </div>
-          <LanguageChips chips={chips} selected={shownLang} onSelect={setLang} onUseThen={canTake && editionDiffers(shownLang) ? (l) => use(languageScope(l)) : undefined} useThenDisabled={!!turnBusy} />
           {current && (
             <PageCompare
               key={current.pageId}
@@ -189,14 +228,30 @@ export const BookCompare: React.FC<BookCompareProps> = ({ studio, a, b = 'now', 
           </Overline>
           <ul className="m-0 list-none space-y-1 p-0">
             {others.map((o) => (
-              <li key={o.key} className="flex min-w-0 flex-wrap items-center gap-2 py-1">
+              <li key={o.key} className="flex min-w-0 flex-wrap items-center gap-2 py-1" data-other-change={o.key}>
                 <p className="m-0 min-w-0 flex-1 text-[13px] text-[var(--ds-ink)] [overflow-wrap:anywhere]">
                   <span className="font-semibold">{o.title}</span> <span className="text-[var(--ds-muted)]">· {o.detail}</span>
                 </p>
                 {o.scope && canTake && (
-                  <QuietBtn onClick={() => use(o.scope!)} disabled={!!turnBusy} aria-label={`Use then: ${o.title} (free)`} data-use-then={o.scope.kind}>
+                  <QuietBtn onClick={() => useWhole(o.key, o.scope!)} disabled={!!turnBusy} aria-label={`Use then: ${o.title} (free)`} aria-expanded={STALE_CHECK_SCOPES.has(o.scope.kind) ? ask?.key === o.key : undefined} data-use-then={o.scope.kind}>
                     Use then
                   </QuietBtn>
+                )}
+                {ask?.key === o.key && (
+                  <div role="group" aria-label={`Before bringing back ${o.title}`} className="flex w-full min-w-0 flex-wrap items-center gap-2 pb-1" data-stale-confirm={o.key}>
+                    <p className="m-0 w-full text-[13px] leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{ask.text}</p>
+                    <PrimaryBtn
+                      onClick={() => {
+                        const scope = ask.scope;
+                        setAsk(null);
+                        use(scope);
+                      }}
+                      disabled={!!turnBusy}
+                    >
+                      Bring back · Free
+                    </PrimaryBtn>
+                    <QuietBtn onClick={() => setAsk(null)}>Cancel</QuietBtn>
+                  </div>
                 )}
               </li>
             ))}

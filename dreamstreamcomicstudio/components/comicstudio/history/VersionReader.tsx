@@ -3,6 +3,8 @@
 // The reassembled, normalized book of one moment in the real reader (ComicReaderView: page, spread, guided view on
 // phones, every language edition) — read-only: no editing, no downloads, no sharing, and the live book is never
 // touched. A banner says so: "Viewing Tue 10:42 — read-only", with [Compare with now] [Restore…] [Back to now].
+// The book's signed image URLs are short-lived while the book itself may come from the browser cache: when an image
+// fails to load, its URLs are signed again (uncached, once each).
 
 import React, { useMemo } from 'react';
 import { Eye } from 'lucide-react';
@@ -26,7 +28,7 @@ export interface VersionReaderProps {
 }
 
 export const VersionReader: React.FC<VersionReaderProps> = ({ studio, versionId, now, tz, onCompare, onRestore, onBack }) => {
-  const { book, loading, error, urlFor, reload } = useVersionBook(studio, versionId);
+  const { book, loading, error, urlFor, reload, reSign } = useVersionBook(studio, versionId);
   const [lang, setLang] = React.useState<string | null>(null);
   const editions = useMemo(() => (book ? Object.keys(i18nOf(book.doc).editions).sort() : []), [book]);
   if (loading && !book) return <Note>Opening this version…</Note>;
@@ -53,6 +55,7 @@ export const VersionReader: React.FC<VersionReaderProps> = ({ studio, versionId,
           autoFocus={false}
           syncUrl={false}
           allowDownload={false}
+          onImageError={reSign}
           zoomable
           {...(slot ? { language: slot } : {})}
         />

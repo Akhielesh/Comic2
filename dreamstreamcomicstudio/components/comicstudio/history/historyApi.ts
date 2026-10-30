@@ -265,10 +265,18 @@ export const HistoryApiProvider: React.FC<{ api: HistoryApi; children: React.Rea
 /** The HistoryApi in scope (the HTTP client unless a provider set the fake). */
 export const useHistoryApi = (): HistoryApi => useContext(HistoryApiContext);
 
-/** A calm sentence for a failed history request. */
-export const historyErrorText = (err: unknown, fallback = "Couldn't load History. Nothing in your comic changed."): string => {
+/** The list route answered 404: History as a whole can't be read for this comic. */
+export const HISTORY_UNAVAILABLE = "History isn't available for this comic yet.";
+/** A moment, its book or its compare answered 404 (thinned, or never there) — that moment only, never the comic. */
+export const HISTORY_MOMENT_GONE = "This moment isn't kept any more (older automatic saves are thinned). Nothing in your comic changed.";
+
+/**
+ * A calm sentence for a failed history request. A 404 means the whole History only for the list (`about` 'comic',
+ * the default); a moment, its book or a compare (`about` 'moment') says that moment is gone and nothing changed.
+ */
+export const historyErrorText = (err: unknown, fallback = "Couldn't load History. Nothing in your comic changed.", about: 'comic' | 'moment' = 'comic'): string => {
   const e = err as { kind?: string; message?: string } | null;
-  if (e?.kind === 'not_found') return "History isn't available for this comic yet.";
+  if (e?.kind === 'not_found') return about === 'moment' ? HISTORY_MOMENT_GONE : HISTORY_UNAVAILABLE;
   if (e?.kind === 'aborted') return '';
   return typeof e?.message === 'string' && e.message.trim() && e.kind ? e.message : fallback;
 };

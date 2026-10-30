@@ -7,7 +7,10 @@
 // outlined (QC panel boxes, else the changed lines' balloons) with the word "Changed". When the art differs, the
 // facts table is the timeline's compareRows (model, size, cost in the viewer's words, QC, made by, note).
 // Under the page: each changed panel with a word diff per line and a 44 px "Use then" for the line or the panel,
-// plus the page menu (whole page · text only · art only). Every "Use then" is free and sends one RestoreScope.
+// plus the page menu (whole page · text only · art only). Every "Use then" is free and sends one RestoreScope. A panel
+// whose action, shot or cast comes back while the page's drawing differs asks what next (§6.3 Panel): "The drawing
+// still shows the newer panel." [Use the earlier drawing too] (free) or [Redraw page 3 · quote] — never a redraw by
+// itself.
 
 import React, { useEffect, useId, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
@@ -18,7 +21,7 @@ import { FOCUS_RING, RADIUS_CONTROL, SEGMENTED_ACTIVE, SEGMENTED_ITEM, SEGMENTED
 import { ComicPageView } from '../board/ComicPageView';
 import { compareRows } from '../timeline/CompareView';
 import { versionList } from '../timeline/bookModel';
-import { lineLanguageStatus, lineScope, lineTextIn, pageScope, panelScope } from './historyModel';
+import { DRAWN_PANEL_FIELDS, lineLanguageStatus, lineScope, lineTextIn, pageScope, panelScope, type RestoreFollowUp } from './historyModel';
 import { WordDiff } from './WordDiff';
 import { cx, IconBtn, Mark, Overline, QuietBtn } from './ui';
 
@@ -43,7 +46,7 @@ export interface PageCompareProps {
   onPrev?(): void;
   onNext?(): void;
   /** null when this compare can't take pieces back (both sides are not a saved moment and now). */
-  onUseThen?: ((scope: RestoreScope) => void) | null;
+  onUseThen?: ((scope: RestoreScope, followUp?: RestoreFollowUp) => void) | null;
   /** Why "Use then" is unavailable right now ("Page 3 is still drawing…"). */
   blockedReason?: string | null;
   /** Viewer-terms money for the facts table. */
@@ -203,9 +206,12 @@ export const PageCompare: React.FC<PageCompareProps> = ({
   }, [diff.art, diff.pageId, thenDoc, nowDoc, thenPage, nowPage, money]);
 
   const can = !!onUseThen && !blockedReason;
-  const use = (scope: RestoreScope) => {
-    if (can) onUseThen!(scope);
+  const use = (scope: RestoreScope, followUp?: RestoreFollowUp) => {
+    if (can) onUseThen!(scope, followUp);
   };
+  // A panel whose drawn fields come back while the page's drawing differs: the drawing still shows the newer panel.
+  const panelFollowUp = (pd: PanelDiff): RestoreFollowUp | undefined =>
+    diff.art && thenPage?.render.asset && pd.fields.some((f) => DRAWN_PANEL_FIELDS.has(f)) ? { kind: 'panel_drawing', pageId: diff.pageId, ...(n ? { pageN: n } : {}) } : undefined;
   const usePage = (part: RestorePart) => use(pageScope(diff.pageId, part, live));
   const speakerName = (id?: string) => (id ? nowDoc.cast.find((c) => c.id === id)?.name ?? thenDoc.cast.find((c) => c.id === id)?.name ?? 'Someone' : undefined);
   const isSource = lang === nowDoc.format.language;
@@ -430,7 +436,7 @@ export const PageCompare: React.FC<PageCompareProps> = ({
                     </p>
                     {pd.status !== 'added' && <Mark>Changed</Mark>}
                     {thenPanel && onUseThen !== null && (
-                      <QuietBtn onClick={() => use(panelScope(diff.pageId, pd.panelId))} disabled={!can} aria-label={`Use then: panel ${panelN ?? ''} (free)`} data-use-then="panel">
+                      <QuietBtn onClick={() => use(panelScope(diff.pageId, pd.panelId), panelFollowUp(pd))} disabled={!can} aria-label={`Use then: panel ${panelN ?? ''} (free)`} data-use-then="panel">
                         Use then
                       </QuietBtn>
                     )}

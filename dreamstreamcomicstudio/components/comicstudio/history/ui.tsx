@@ -171,7 +171,19 @@ export interface RestoredToastProps {
   tone?: 'healthy' | 'attention';
   /** Undo the restore (sends the before-restore moment back with the same scope); absent = no Undo yet. */
   onUndo?: () => void;
+  /**
+   * What the creator may do next ("Use the earlier drawing too · Free", "Redraw page 3 · ≈ $0.07"). A toast with a
+   * choice waits for it: it does not time out (Dismiss closes it).
+   */
+  actions?: readonly ToastAction[];
   onDismiss(): void;
+}
+
+export interface ToastAction {
+  label: string;
+  onClick(): void;
+  /** The primary choice (the free one). */
+  primary?: boolean;
 }
 
 /**
@@ -179,22 +191,23 @@ export interface RestoredToastProps {
  * focused, sits above the safe area, no animation under reduced motion. Undo works after a reload too — it restores
  * the before-restore moment the server saved first.
  */
-export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'healthy', onUndo, onDismiss }) => {
+export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'healthy', onUndo, actions, onDismiss }) => {
   const reduce = useHistoryReducedMotion();
   const [paused, setPaused] = useState(false);
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
+  const choice = !!actions?.length;
   useEffect(() => {
-    if (!message || paused) return;
+    if (!message || paused || choice) return;
     const t = setTimeout(() => dismissRef.current(), UNDO_TOAST_MS);
     return () => clearTimeout(t);
-  }, [message, paused]);
+  }, [message, paused, choice]);
   const tree = (
     <div className="pointer-events-none fixed inset-x-0 z-[90] flex justify-center px-4" style={{ bottom: 'calc(var(--sa-bottom-eff, 0px) + 16px)' }} role="status" aria-live="polite">
       {message && (
         <div
           data-history-toast
-          className={cx(TOAST, 'w-full max-w-[420px] items-center', !reduce && 'ds-toast-enter')}
+          className={cx(TOAST, 'w-full max-w-[420px] items-center', choice && 'flex-wrap', !reduce && 'ds-toast-enter')}
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
           onFocus={() => setPaused(true)}
@@ -211,6 +224,21 @@ export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'h
           <IconBtn label="Dismiss" onClick={onDismiss}>
             <X className="h-3.5 w-3.5" aria-hidden />
           </IconBtn>
+          {choice && (
+            <div className="flex w-full min-w-0 basis-full flex-wrap gap-2" data-toast-actions>
+              {actions!.map((a) =>
+                a.primary ? (
+                  <PrimaryBtn key={a.label} onClick={a.onClick} className="min-w-0 flex-1 px-3">
+                    {a.label}
+                  </PrimaryBtn>
+                ) : (
+                  <QuietBtn key={a.label} onClick={a.onClick} className="min-w-0 flex-1 px-3">
+                    {a.label}
+                  </QuietBtn>
+                )
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

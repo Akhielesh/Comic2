@@ -148,6 +148,8 @@ describe('every target is at least 44 px', () => {
     const els = interactive(container);
     expect(els).toHaveLength(3);
     for (const el of els) expect(el.className).toMatch(TARGET_RE);
+    // On every pointer, not only on touch (no coarse:-only escape).
+    for (const el of els) expect(el.className).toMatch(/(^|\s)(min-)?h-11(\s|$)/);
     expect(screen.getByRole('button', { name: 'History' }).className).toMatch(/min-w-11/);
   });
 });
@@ -543,7 +545,9 @@ describe('the history card renders from ids', () => {
     const m = historySetup();
     mountWith(m, <HistoryCardView card={card({ view: 'moment', versionId: 'ver_missing' })} message={msg} studio={m.studio} now={NOW} tz={TZ} />);
     await settle();
-    expect(screen.getByText("History isn't available for this comic yet.")).toBeInTheDocument();
+    // That moment is gone (thinned or never there) — the whole History is not.
+    expect(screen.getByText("This moment isn't kept any more (older automatic saves are thinned). Nothing in your comic changed.")).toBeInTheDocument();
+    expect(screen.queryByText("History isn't available for this comic yet.")).toBeNull();
   });
 });
 
