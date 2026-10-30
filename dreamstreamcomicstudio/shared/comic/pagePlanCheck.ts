@@ -524,11 +524,28 @@ export function heldBackOf(check: PagePlanCheck): HeldBackPage {
 }
 
 /**
+ * A page "Render all" would draw: it has panels, is not queued or drawing, and is undrawn, failed or out of date
+ * (plan.ts pageTargets' rule without `force`).
+ */
+export const renderAllDraws = (doc: ComicDoc, page: Page): boolean =>
+  page.panels.length > 0 && page.render.status !== 'queued' && page.render.status !== 'rendering' && (page.render.status !== 'ready' || isPageStale(doc, page));
+
+/**
+ * The boxes a page's plan fit is judged on — ONE rule for every surface that says how full a panel is (summarizeBook's
+ * dots and the gate's hold-back, the board's page script, the director's line-edit budget): a page Render all would
+ * draw is judged on the layout it will be drawn on (undefined: checkPagePlan's planBoxes, effectiveLayout — the
+ * gate's boxes) even when an older take left measured boxes; a drawn, current (or busy) page on the panels it was
+ * drawn with (drawnPanelBoxes: measured, else the layout as drawn).
+ */
+export const fitBoxesFor = (doc: ComicDoc, page: Page): Box[] | undefined => (renderAllDraws(doc, page) ? undefined : drawnPanelBoxes(doc, page));
+
+/**
  * "That makes panel 6 about 34 words; it holds about 32." — the director's line-edit report (K1). Measured on the
- * boxes the words are lettered into: a drawn page's measured panels, else the layout as drawn.
+ * same boxes as the breakdown's dots and the page script (fitBoxesFor): the layout a page will be drawn on when
+ * Render all would draw it, else the panels it was drawn with.
  */
 export function panelBudgetSentence(doc: ComicDoc, page: Page, panelIndex: number): string | undefined {
-  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: drawnPanelBoxes(doc, page) });
+  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: fitBoxesFor(doc, page) });
   const p = check.panels[panelIndex];
   if (!p) return undefined;
   const base = `That makes panel ${p.n} about ${plural(p.words, nounOf(check.unit))}; it holds about ${p.budget}.`;

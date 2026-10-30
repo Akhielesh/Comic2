@@ -163,7 +163,8 @@ export interface QcReport {
   /** Where each speaking character's head/mouth is (tail aiming). */
   heads?: SpeakerMark[];
   // ── Ship 1 panel checks (plan §5.1; vision.ts). All optional and never hashed; a report without them is an
-  //    older check and means "not measured", never "fine". publicQc copies only panelBoxes (no leak). ──
+  //    older check and means "not measured", never "fine". publicQc copies only geometry: panelBoxes and the
+  //    keepOut/heads boxes the lettering places around (no issue text, score, model or time). ──
   /** Per DRAWN panel in reading order: the script panel number whose moment it shows (0 = none). Stored only
    *  when answered for every drawn panel. A permutation is reported, never applied. */
   beats?: number[];

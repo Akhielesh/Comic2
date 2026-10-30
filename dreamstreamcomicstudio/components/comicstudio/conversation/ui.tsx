@@ -13,6 +13,7 @@ import {
   RADIUS_PANEL,
   SEGMENTED_ACTIVE,
   SHADOW_SOFT,
+  TONE_CHIP,
   TRANSITION
 } from '../../chat/studioDesign';
 
@@ -108,6 +109,32 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
   >
     {children}
   </button>
+);
+
+/**
+ * A chip's badge: "Free", "Done", "Started" or what it costs ("≈$0.07", "≈1% of your usage", "adds ≈$0.07 on your
+ * key"). One rule for every card's chips (the notices, the breakdown's held-back fixes): a one-word badge never wraps
+ * and never shrinks (a 320 px chip broke "Free" into "Fr / ee" and "≈$0.90" into "≈$0. / 90", which reads as $0); a
+ * longer one wraps only between words, never inside a word or an amount.
+ */
+export const ChipBadge: React.FC<Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'> & { children: string; tone: 'paid' | 'free' }> = ({
+  children,
+  tone,
+  className,
+  ...rest
+}) => (
+  <span
+    {...rest}
+    data-chip-badge={/\s/.test(children.trim()) ? 'words' : 'word'}
+    className={cx(
+      'rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
+      /\s/.test(children.trim()) ? '[overflow-wrap:normal]' : 'shrink-0 whitespace-nowrap',
+      tone === 'paid' ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success,
+      className
+    )}
+  >
+    {children}
+  </span>
 );
 
 /** Segmented control (format kind, reading direction, panels per page). */

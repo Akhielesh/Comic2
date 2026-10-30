@@ -5,7 +5,10 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { drawnPanelBoxes } from '../../../shared/comic/pageGeometry';
-import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
+import { checkPagePlan, panelBudgetSentence } from '../../../shared/comic/pagePlanCheck';
+import { applyOps, layoutFixOps } from '../../../shared/comic/ops';
+import { summarizeBook } from '../../../shared/comic/plan';
+import type { ComicDoc } from '../../../shared/comic/doc';
 import { p2ShapedDoc } from '../../../shared/comic/lettering/__fixtures__/letterFit';
 import { PageScript, panelWordFits } from './PageScript';
 
@@ -36,5 +39,36 @@ describe('PageScript: words / fits about N per panel', () => {
     expect(one).toHaveAttribute('data-fit', fits[0]!.state);
     expect(one.className).not.toMatch(/danger/);
     expect(screen.queryAllByText(/fits about/)).toHaveLength(fits.filter(Boolean).length);
+  });
+
+  it('an out-of-date page is measured on the layout it will be drawn on: the same numbers as the breakdown and the gate', () => {
+    // An older take measured its panels; the page changed since (stale), so Render all would draw it again on the
+    // layout as drawn next time — the breakdown's dots and the gate's hold-back judge it there, and so must this.
+    const { doc, page } = p2ShapedDoc();
+    page.render.specHash = 'old';
+    const sameAsBreakdown = (d: ComicDoc) => {
+      const pg = d.pages[0];
+      const s = summarizeBook(d, { byok: false }).pages[0];
+      const fits = panelWordFits(d, pg);
+      s.panels.forEach((p, i) => {
+        if (!fits[i]) return;
+        expect(fits[i]!.state, `panel ${p.n}`).toBe(p.fitState);
+        expect(fits[i]!.text, `panel ${p.n}`).toMatch(new RegExp(`/ fits about ${p.budget}$`));
+      });
+      // the director's line-edit budget says the same
+      const six = s.panels[5];
+      expect(panelBudgetSentence(d, pg, 5)).toContain(`it holds about ${six.budget}`);
+      return { s, fits };
+    };
+    const before = sameAsBreakdown(doc);
+    expect(before.s.planFit?.heldBack).toBeTruthy();
+    expect(before.fits[5]!.state).toBe('overfull');
+    // The free "Use the layout that fits": the breakdown no longer holds the page back, and the script shows it.
+    const fixed = applyOps(doc, layoutFixOps(doc, doc.pages[0], before.s.planFit!.layoutFix!));
+    const after = sameAsBreakdown(fixed);
+    expect(after.s.planFit?.heldBack).toBeFalsy();
+    expect(after.fits[5]!.state).not.toBe('overfull');
+    render(<PageScript doc={fixed} page={fixed.pages[0]} />);
+    expect(screen.queryByText(/too full/)).toBeNull();
   });
 });

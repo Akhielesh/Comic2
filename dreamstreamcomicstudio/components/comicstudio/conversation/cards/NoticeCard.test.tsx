@@ -9,7 +9,9 @@ import { applyOps, type DocOp } from '../../../../shared/comic/ops';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities';
 import type { ComicStudioController } from '../../useStudio';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../testing/fixtures';
-import { NoticeCard, noticeChipState, noticeChips, noticePrice, type NoticeCardStudio } from './NoticeCard';
+import { NoticeCard, liveNoticeChip, noticeChipState, noticeChips, noticePrice, type NoticeCardStudio } from './NoticeCard';
+import { pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
+import { makeQaDoc } from '../../testing/qaFixtures';
 
 type Notice = Extract<Card, { type: 'notice' }>;
 
@@ -89,6 +91,10 @@ const withRender = (doc: ComicDoc, status: Page['render']['status']): ComicDoc =
   ...doc,
   pages: doc.pages.map((p) => (p.id === 'pg_2' ? { ...p, render: { ...p.render, status } } : p))
 });
+
+/** What a page-2 draw costs now on this doc (the chip shows and sends the live quote, not the posted one). */
+const page2Quote = (doc: ComicDoc, extra: { force?: boolean } = {}): number =>
+  Math.round(quoteRenderPages(doc, { pageIds: ['pg_2'], byok: false, tier: doc.settings.quality, ...extra }).usd * 10000) / 10000;
 
 beforeEach(showDollarPrices);
 afterEach(resetUsageStatus);
@@ -282,7 +288,7 @@ describe('NoticeCard fix chips', () => {
       fixes: [{ label: 'Draw page 2 anyway', free: false, action: { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.0845 } }]
     };
     const { rerender } = render(<NoticeCard card={notice} studio={fakeStudio({ doc: docWithPage2() })} />);
-    expect(screen.getByRole('button', { name: `Draw page 2 anyway, ≈${formatUsd(0.0845)}` })).toBeEnabled();
+    expect(screen.getByRole('button', { name: `Draw page 2 anyway, ≈${formatUsd(page2Quote(docWithPage2()))}` })).toBeEnabled();
     rerender(<NoticeCard card={notice} studio={fakeStudio({ doc: drawnPage2(docWithPage2()) })} />);
     expect(screen.queryByRole('button', { name: /Draw page 2 anyway/ })).toBeNull();
     // drawn but out of date again: offered again
@@ -290,6 +296,59 @@ describe('NoticeCard fix chips', () => {
     stale.pages = stale.pages.map((p) => (p.id === 'pg_2' ? { ...p, layout: 'Row 1: three equal panels. Row 2: three equal panels.' } : p));
     rerender(<NoticeCard card={notice} studio={fakeStudio({ doc: stale })} />);
     expect(screen.getByRole('button', { name: /^Draw page 2 anyway/ })).toBeEnabled();
+  });
+
+  it('a paid draw chip shows and sends what it would draw NOW: after the Render all ran, page 3 alone (no "with the rest")', async () => {
+    const doc = makeQaDoc('heist-12p');
+    const notice = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.id === 'n_held') as Notice;
+    const held = doc.pages[2];
+    const posted = (notice.fixes![1].action as { quotedUsd: number }).quotedUsd;
+    // The other pages the Render all draws are drawn and current now; page 3 is still held back.
+    const rest = pageTargets(doc).filter((p) => p.id !== held.id);
+    expect(rest.length).toBeGreaterThan(0);
+    const after: ComicDoc = {
+      ...doc,
+      pages: doc.pages.map((p) =>
+        rest.some((r) => r.id === p.id) ? { ...p, render: { status: 'ready', history: [], asset: { path: `u/x/${p.id}.webp`, source: 'generated', at: 1 }, specHash: pageSpecHash(doc, p) } } : p
+      )
+    };
+    const alone = quoteRenderPages(after, { byok: false, tier: after.settings.quality, holdBack: { drawOverfull: [held.id] } });
+    expect(alone.pageIds).toEqual([held.id]);
+    expect(alone.usd).toBeLessThan(posted / 2);
+    const studio = fakeStudio({ doc: after });
+    render(<NoticeCard card={notice} studio={studio} />);
+    const chip = screen.getByRole('button', { name: new RegExp(`^Draw page ${held.n} anyway`) });
+    expect(chip).toHaveAccessibleName(`Draw page ${held.n} anyway, ≈${formatUsd(alone.usd)}`);
+    expect(chip).toBeEnabled();
+    fireEvent.click(chip);
+    await flush();
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', drawOverfull: [held.id], quotedUsd: alone.usd });
+    // Before the run, the same chip is the whole Render all with page 3, "(with the rest)", at its live price.
+    const before = liveNoticeChip(doc, noticeChips(notice.fixes)[1]);
+    expect(before.fix.label).toBe(`Draw page ${held.n} anyway (with the rest)`);
+    expect(before.usd).toBeCloseTo(posted, 4);
+    // BYOK users are quoted on their key (the hard-coded false is gone).
+    const onKey = liveNoticeChip(after, noticeChips(notice.fixes)[1], true);
+    expect(onKey.usd).toBeCloseTo(quoteRenderPages(after, { byok: true, tier: after.settings.quality, holdBack: { drawOverfull: [held.id] } }).usd, 4);
+  });
+
+  it('an old page-check notice retires its paid chips once the page was checked again (a new take checked clean)', () => {
+    const POSTED = 1_000_000;
+    const checked = (at: number) => {
+      const doc = drawnPage2(docWithPage2());
+      doc.pages = doc.pages.map((p) => (p.id === 'pg_2' ? { ...p, render: { ...p.render, qc: { score: 0.95, issues: [], checkedAt: at } } } : p));
+      return doc;
+    };
+    // Checked again after the notice: its paid redraws are gone; the free caption fix stays.
+    const { rerender } = render(<NoticeCard card={qcNotice()} studio={fakeStudio({ doc: checked(POSTED + 60_000) })} postedAt={POSTED} />);
+    const group = () => screen.getByRole('group', { name: 'Fixes' });
+    expect(within(group()).getAllByRole('button').map((b) => b.getAttribute('data-fix'))).toEqual(['free']);
+    // The check the notice was written from (or an older one): the paid chips are still offered.
+    rerender(<NoticeCard card={qcNotice()} studio={fakeStudio({ doc: checked(POSTED - 1_000) })} postedAt={POSTED} />);
+    expect(within(group()).getAllByRole('button').map((b) => b.getAttribute('data-fix'))).toEqual(['free', 'paid', 'paid']);
+    expect(noticeChipState(checked(POSTED + 1), noticeChips(qcNotice().fixes)[2], false, POSTED)).toBe('hidden');
+    // No message time (an older host): nothing is retired.
+    expect(noticeChipState(checked(POSTED + 1), noticeChips(qcNotice().fixes)[2])).toBe('live');
   });
 
   it('a paid chip whose page is drawing reads "Started" and cannot be tapped again', () => {
@@ -324,7 +383,7 @@ describe('NoticeCard fix chips', () => {
     // the doc changed: re-checked against it (still something to draw here), priced again
     rerender(<NoticeCard card={qcNotice()} studio={{ ...studio, doc: { ...doc, rev: doc.rev + 1 } }} />);
     await waitFor(() => expect(chip()).toBeEnabled());
-    expect(chip()).toHaveAccessibleName(`Redraw page 2, ≈${formatUsd(0.0845)}`);
+    expect(chip()).toHaveAccessibleName(`Redraw page 2, ≈${formatUsd(page2Quote(doc, { force: true }))}`);
     unmount();
 
     for (const outcome of [{ ...ok, gated: true }, { ...ok, ok: false }]) {
@@ -353,7 +412,8 @@ describe('NoticeCard fix chips', () => {
     expect(within(group).getAllByRole('button').map((b) => b.getAttribute('data-fix'))).toEqual(['free', 'paid', 'paid']);
     fireEvent.click(within(group).getByRole('button', { name: /^Redraw page 2/ }));
     await flush();
-    expect(live.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_2'], force: true, quotedUsd: 0.0845 });
+    // sent with the live quote of what it draws now (the server re-checks it and gates a higher one)
+    expect(live.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_2'], force: true, quotedUsd: page2Quote(docWithPage2(), { force: true }) });
   });
 
   it('back-compat: a notice without fixes, or rendered without a controller, is the same calm line as before', () => {

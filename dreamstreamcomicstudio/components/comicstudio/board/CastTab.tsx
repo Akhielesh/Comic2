@@ -72,6 +72,22 @@ export const KIND_TEXT: Record<CastKind, string> = {
 
 const SHEET_ASPECT = '3 / 2';
 
+/**
+ * An extra's placeholder note. An extra is described in words until it has a sheet, and a ready sheet is attached on
+ * every page it appears on — except an Object's: the page prompt never spends a reference on an extra object
+ * (prompts.ts castReferences), so its card says so in the tab's own word, and how to get it onto pages (Support).
+ */
+const extraNote = (kind: CastKind): string =>
+  kind === 'object'
+    ? 'Objects are described in words on pages; a sheet isn’t attached to pages (set it to Support for that).'
+    : 'Extras are described in words until they have a sheet; a ready sheet is attached on every page they appear on.';
+
+/** The optional sheet button's title: what the sheet is for, honestly (an extra Object's is for reference only). */
+const extraSheetTitle = (kind: CastKind): string =>
+  kind === 'object'
+    ? 'Optional — for your reference: an extra object’s sheet isn’t attached to pages (set it to Support for that)'
+    : 'Optional — a ready sheet is attached on every page this extra appears on';
+
 const GRID = 'grid items-start gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))]';
 
 /** Largest group drawn as one identity (the server's cap; castNoun spells out two–twelve). */
@@ -249,7 +265,7 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
           <InitialsPlaceholder
             name={c.name}
             kind={kind}
-            note={c.tier === 'extra' ? 'Extras are described in words until they have a sheet; a ready sheet (not a prop’s) is attached on every page they appear on.' : 'The model sheet keeps them on-model on every page.'}
+            note={c.tier === 'extra' ? extraNote(kind) : 'The model sheet keeps them on-model on every page.'}
           />
         }
         overlay={
@@ -387,8 +403,8 @@ export const CharacterCard: React.FC<{ studio: StudioController; doc: ComicDoc; 
               <Sparkles className="h-3 w-3" aria-hidden /> Re-roll sheet
             </GhostButton>
           ) : c.tier === 'extra' ? (
-            <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} title="Optional — a ready sheet (not a prop’s) is attached on every page this extra appears on" aria-describedby={priceId}>
-              <Sparkles className="h-3 w-3" aria-hidden /> Draw a sheet anyway
+            <GhostButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} title={extraSheetTitle(kind)} aria-describedby={priceId}>
+              <Sparkles className="h-3 w-3" aria-hidden /> {kind === 'object' ? 'Draw a reference sheet' : 'Draw a sheet anyway'}
             </GhostButton>
           ) : (
             <PrimaryButton size="xs" busy={busyKey === 'sheet'} disabled={busy} onClick={renderSheet} aria-describedby={priceId}>

@@ -1,14 +1,20 @@
--- Comic Studio Model Lab (models.md §2.6 D1–D4; wm-plan M1-MODEL-LAB): the owner-approved paid checks, run one
--- provider call per explicit admin click from Admin → Model Lab (server/src/comic/models/lab.ts).
+-- Comic Studio Model Lab (models.md §2.6 D1–D4; wm-plan M1-MODEL-LAB; the Pro pages A/B P1/P2, plan §7): the
+-- owner-approved paid checks, run one provider call per explicit admin click from Admin → Model Lab
+-- (server/src/comic/models/lab.ts).
 --
--- Two tables and one function:
+-- check_id accepts D1–D4 (this file) and P1, P2 (the Pro pages A/B). The A/B checks need
+-- server/sql/comic_model_lab_pro_pages.sql applied AFTER this file: it adds comic_model_lab_reserve_ab, the only way
+-- an A/B (P1/P2) run row is created. Without it P1/P2 cannot run.
+--
+-- Two tables and one function here:
 --   * comic_model_lab_runs   one row per click: the idempotency key of that click, which check/model ran, the quote
 --                            shown in the confirm (reserved against the daily cap BEFORE the call), the provider-reported
 --                            cost, and a JSON row of facts (pixel size, file size, latency, provider-reported model
 --                            version, watermark yes/no, where the preview is stored). Never a prompt body, an image or
 --                            a key. The same call is also written to comic_image_calls (comic_image_calls.sql).
 --   * comic_model_lab_votes  the owner's blind-test (D4) votes: one per pair, with which run was shown as A and B.
---   * comic_model_lab_reserve(...)  the ONLY way a run row is created: under an advisory lock it returns the existing
+--   * comic_model_lab_reserve(...)  the ONLY way a D1–D4 run row is created (it refuses P1/P2, which go through
+--                            comic_model_lab_reserve_ab in comic_model_lab_pro_pages.sql): under an advisory lock it returns the existing
 --                            row for a repeated idempotency key (no second call), refuses when today's spend (UTC) plus
 --                            the quote would pass the cap, and otherwise inserts a 'running' row holding the quote.
 --                            The cap is min(the server's cap, $2.00): code can lower it, never raise it past $2 a day.

@@ -76,7 +76,8 @@ export const CardRenderer: React.FC<{ card: Card; studio: ComicStudioController;
       body = <RendersCard card={card} studio={studio} />;
       break;
     case 'notice':
-      body = <NoticeCard card={card} studio={studio} />;
+      // The message's time lets the card retire paid chips its page has been re-checked past.
+      body = <NoticeCard card={card} studio={studio} postedAt={(message || messageOf(studio.doc, card.id))?.at} />;
       break;
     case 'recap':
       body = <RecapCard card={card} studio={studio} />;

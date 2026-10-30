@@ -17,6 +17,7 @@
 import type { Balloon, Box, ComicDoc, Line, LineKind, Page } from '../doc.js';
 import { SCRIPTS, scriptOf, type ScriptId, type ScriptSpec } from '../languages.js';
 import { panelBoxesFor } from '../pageGeometry.js';
+import { PUBLIC_QC_CHECKED_AT } from '../publication.js';
 import { PANEL_LIMITS, panelWords, textBudget, textUnitFor } from '../panelRules.js';
 import { isKidsAudience } from '../safety.js';
 import { FIT_FONT_FLOOR, fitBalloonText, graphemes, normalizeLetteringText, wrapBalancedLines, wrapLines, wrapUnits, type FitResult, type WrapUnit } from '../textLayout.js';
@@ -155,6 +156,18 @@ export function coverCapFor(doc: Pick<ComicDoc, 'format' | 'brief'>): number {
     return PANEL_LIMITS.coverCap;
   }
 }
+
+/**
+ * The page is a public snapshot's published before its faces were: its page check is the snapshot's geometry-only one
+ * (`checkedAt` PUBLIC_QC_CHECKED_AT) with no face lists. Where the faces are is unknown there, and its stored balloons
+ * were placed around them by the page check, so the coverage cap never moves them blind: the reader draws them where
+ * they are stored (as it did before the cap) and the panel is only flagged dense. A live page (a real check time)
+ * and every snapshot published since (face lists always present) are capped exactly as the studio caps them.
+ */
+export const storedFrozen = (page: Pick<Page, 'render'>): boolean => {
+  const qc = page.render?.qc;
+  return !!qc && qc.checkedAt === PUBLIC_QC_CHECKED_AT && !Array.isArray(qc.keepOut) && !Array.isArray(qc.heads);
+};
 
 /** Elliptical outlines fill π/4 of their box; boxy ones all of it (density.ts needMeter uses outlineFill too). */
 const BOXY_SHAPES: ReadonlySet<BubbleShape> = new Set<BubbleShape>(['rect', 'rounded_rect', 'notched', 'scroll', 'ribbon', 'electronic', 'none']);
@@ -639,7 +652,7 @@ export function planLettering(doc: ComicDoc, page: Page, aspect: number, measure
     if (!sz) sizers.set(scale, (sz = letteringSizer(doc, page, asp, m, scale)));
     return sz;
   };
-  const cover = { cap: coverCapFor(doc), fillFor: (line: Line) => outlineFill(resolveLetterStyle(doc, line).shape) };
+  const cover = { cap: coverCapFor(doc), fillFor: (line: Line) => outlineFill(resolveLetterStyle(doc, line).shape), keepStored: storedFrozen(page) };
   const ctx: PlanCtx = { doc, page, items, lineIds, stored, boxes, rtl, safe, safeMargin, asp, H, m, shapes, sizerAt, cover };
   const tryScale = (scale: number): PageAttempt | undefined => {
     const attempt = (keep: 'all' | 'pinned', whole: readonly string[] = []): PageAttempt => {
@@ -696,7 +709,7 @@ function coverCapped(ctx: PlanCtx, win: PageAttempt): LetterPlan[] {
   const cover0 = coverOf(plans);
   const movable = (id: string) => {
     const b = stored.get(id);
-    return !b || (!b.pinned && !b.locked);
+    return !b || (!b.pinned && !b.locked && !ctx.cover.keepStored);
   };
   const over = new Set(page.panels.map((_p, i) => i).filter((i) => cover0[i] > cap + 1e-9 && items.some((it) => it.panelIndex === i && movable(it.line.id))));
   const noScales = new Map<number, number>();
@@ -843,8 +856,11 @@ interface PlanCtx {
   shapes: Map<string, BubbleGeometry>;
   /** The sizer of a size step (one per step: every packing of a step measures the same lines at the same widths). */
   sizerAt: (scale: number) => (line: Line, w: number) => SizedLine;
-  /** The doc's coverage cap and each line's outline fill (placement and the cap pass). */
-  cover: { cap: number; fillFor: (line: Line) => number };
+  /**
+   * The doc's coverage cap and each line's outline fill (placement and the cap pass); `keepStored`: the cap moves no
+   * stored balloon on this page (storedFrozen: a snapshot page whose faces are unknown).
+   */
+  cover: { cap: number; fillFor: (line: Line) => number; keepStored: boolean };
 }
 
 /** An overlap this thin (plan units: 0.1 % of the page width, under half a pixel on a phone) is not text under a balloon. */
@@ -892,7 +908,7 @@ function planAtDensity(
   const capLine = (id: string): boolean => {
     if (!capPass || !capPass.panels.has(panelOfLine.get(id) ?? -1)) return false;
     const b = stored.get(id);
-    return !b || (!b.pinned && !b.locked);
+    return !b || (!b.pinned && !b.locked && !ctx.cover.keepStored);
   };
   /** The size step a line is lettered at: the page's, or the cap's smaller one for its own panel. */
   const lineScale = (id: string): number => (capLine(id) ? Math.min(scale, capPass!.scales.get(panelOfLine.get(id) ?? -1) ?? scale) : scale);
@@ -1315,3 +1331,53 @@ export function planLetteringForPage(doc: ComicDoc, n: number, measure: Measure 
   const page = doc.pages.find((p) => p.n === n);
   return page ? planLettering(doc, page, letteringAspect(doc, page), measure) : undefined;
 }
+
+// ── Where a balloon is drawn ─────────────────────────────────────────────────
+
+/**
+ * The balloon behind a plan as DRAWN: the plan's x, y and width (the text box the fit settled on: a dense page
+ * letters it smaller, an rtl caption grows left) and its tail tip, page fractions. The render-time settle, a
+ * dense-page repack and the coverage cap may draw an unpinned balloon somewhere other than where it is stored.
+ */
+export function drawnBalloonOf(b: Balloon, plan: LetterPlan, H: number): Balloon {
+  const next: Balloon = { ...b, x: r4(plan.x / PLAN_W), y: r4(plan.y / H), w: r4(plan.w / PLAN_W) };
+  if (plan.tip && Number.isFinite(plan.tip.x) && Number.isFinite(plan.tip.y)) {
+    next.tailX = r4(clampV(plan.tip.x / PLAN_W, 0, 1));
+    next.tailY = r4(clampV(plan.tip.y / H, 0, 1));
+  }
+  return next;
+}
+
+/**
+ * The balloon behind every drawn plan, as the user SEES it: an unpinned balloon the plan draws somewhere it is not
+ * stored (crowded: the settle, a repack or the coverage cap moved it) or that software placed (`placed`, no stored
+ * balloon) takes its drawn spot; pinned and locked balloons are drawn where they are stored and stay as they are.
+ * Every edit that starts from a balloon (the editor's drag, nudge, Keep here and Lock; the director's
+ * arrange_balloons) starts from this map, so a balloon never jumps back to its stored spot. Mutates and returns
+ * `balloons`.
+ */
+export function withDrawnSpots(balloons: Map<string, Balloon>, plans: readonly LetterPlan[], H: number, placed: ReadonlySet<string>): Map<string, Balloon> {
+  if (!(H > 0)) return balloons;
+  for (const plan of plans) {
+    const b = balloons.get(plan.lineId);
+    if (!b || b.pinned || b.locked || !(plan.crowded || placed.has(plan.lineId))) continue;
+    balloons.set(plan.lineId, drawnBalloonOf(b, plan, H));
+  }
+  return balloons;
+}
+
+/**
+ * Keep a balloon where it is DRAWN: an unpinned stored balloon the engine drew elsewhere (the settle, a dense-page
+ * repack or the coverage cap) is pinned at its drawn spot, width and tail — never sent back to its stored spot.
+ * `drawn` is the balloon behind each line as drawn (withDrawnSpots). {} for anything else (a software-placed line's
+ * full balloon is sent whole by the caller; a pinned one is drawn as stored).
+ */
+export const drawnSpotPatch = (page: Pick<Page, 'balloons'>, lineId: string, drawn: ReadonlyMap<string, Balloon>): Partial<Balloon> => {
+  const stored = (page.balloons || []).find((b) => b.lineId === lineId);
+  const now = drawn.get(lineId);
+  if (!stored || !now || stored.pinned || stored.locked) return {};
+  const out: Partial<Balloon> = {};
+  if (now.x !== stored.x || now.y !== stored.y || now.w !== stored.w) Object.assign(out, { x: now.x, y: now.y, w: now.w });
+  if (typeof now.tailX === 'number' && typeof now.tailY === 'number' && (now.tailX !== stored.tailX || now.tailY !== stored.tailY)) Object.assign(out, { tailX: now.tailX, tailY: now.tailY });
+  return out;
+};

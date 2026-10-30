@@ -13,7 +13,7 @@
 import { resolveCharacter, type Balloon, type ComicDoc, type Line, type LineKind, type Page } from '../../../../shared/comic/doc.js';
 import type { DocOp } from '../../../../shared/comic/ops.js';
 import { FONT_REGISTRY, fontCoversLanguage } from '../../../../shared/comic/lettering/fonts.js';
-import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions } from '../../../../shared/comic/lettering/layout.js';
+import { drawnSpotPatch, estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions, planLettering, PLAN_W, withDrawnSpots } from '../../../../shared/comic/lettering/layout.js';
 import { fitBalloonOnPage, placeBalloonsWholeWords, safeAreaBox, stagedSpeakerX } from '../../../../shared/comic/lettering/place.js';
 import {
   BORDER_STYLES,
@@ -607,7 +607,11 @@ interface PageCtx {
   boxes: { x: number; y: number; w: number; h: number }[];
   safeMargin: number;
   sizer: (line: Line, w: number) => { h: number; bounds: { x: number; y: number; w: number; h: number } };
-  /** Every lettered line's current balloon (stored, or where the board draws it today). */
+  /**
+   * Every lettered line's balloon where the board draws it today: a pinned or locked balloon where it is stored; an
+   * unpinned one the settle, a repack or the coverage cap drew elsewhere, and a software-placed line, where it is
+   * drawn (layout.ts withDrawnSpots, the editor's rule). Every move, nudge, resize, tail aim and lock starts here.
+   */
   current: Map<string, Balloon>;
   stored: Set<string>;
 }
@@ -625,7 +629,10 @@ const pageCtx = (doc: ComicDoc, page: Page): PageCtx => {
     ...placementCoverOptions(doc)
   });
   const stored = new Set(page.balloons.map((b) => b.lineId));
-  return { doc, page, aspect, rtl, boxes, safeMargin, sizer, current: new Map(filled.balloons.map((b) => [b.lineId, b])), stored };
+  const current = new Map(filled.balloons.map((b) => [b.lineId, b]));
+  const placed = new Set([...current.keys()].filter((id) => !stored.has(id)));
+  withDrawnSpots(current, planLettering(doc, page, aspect, estimateMeasure), PLAN_W / aspect, placed);
+  return { doc, page, aspect, rtl, boxes, safeMargin, sizer, current, stored };
 };
 
 /** Where to put a balloon of `line` at `pos` inside its panel, keeping the outline inside the safe area. */
@@ -661,8 +668,11 @@ const positionIn = (
 
 const balloonOp = (pc: PageCtx, lineId: string, patch: Partial<Balloon>): DocOp => {
   const cur = pc.current.get(lineId);
-  // A line without a stored balloon gets a COMPLETE balloon (never the 0.1/0.1/0.28 default).
-  const full: Partial<Balloon> = pc.stored.has(lineId) || !cur ? patch : { ...cur, ...patch };
+  // A line without a stored balloon gets a COMPLETE balloon (never the 0.1/0.1/0.28 default). A stored balloon the
+  // engine draws somewhere else is pinned (or locked) at its DRAWN spot, width and tail, as the editor's Lock and
+  // drags do (drawnSpotPatch): it never jumps back to its stored spot. The patch's own fields win.
+  const pins = patch.pinned === true || patch.locked === true;
+  const full: Partial<Balloon> = !cur ? patch : pc.stored.has(lineId) ? (pins ? { ...drawnSpotPatch(pc.page, lineId, pc.current), ...patch } : patch) : { ...cur, ...patch };
   const clean: Partial<Balloon> = {};
   for (const [k, v] of Object.entries(full)) {
     if (k === 'lineId' || v === undefined) continue;

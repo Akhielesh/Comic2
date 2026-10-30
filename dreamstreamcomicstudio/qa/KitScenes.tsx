@@ -130,11 +130,14 @@ const BreakdownScene: React.FC<{ params: QaParams }> = ({ params }) => {
   const pro = useQaController({ doc: status, mode: 'pro', img: params.img });
   if (!planned || !status) return null;
   const pages = planned.pages.map((p) => p.id);
+  const gateAction = planned.gate?.action;
+  const gatePages = gateAction?.type === 'render_pages' && gateAction.pageIds?.length ? gateAction.pageIds : undefined;
   const cards: Array<{ title: string; testid: string; card: Card; studio: typeof easy; compact?: boolean }> = [
     { title: 'Easy — the plan (cover + every page)', testid: 'kit-breakdown-plan', card: { type: 'breakdown', id: 'kb_plan', cover: true, view: 'plan' }, studio: easy },
     { title: 'Pro — status (a busy page, a low-QC flag, a failed page, a stale cover)', testid: 'kit-breakdown-status', card: { type: 'breakdown', id: 'kb_status', cover: true, view: 'status' }, studio: pro },
     { title: 'Pro — cost', testid: 'kit-breakdown-cost', card: { type: 'breakdown', id: 'kb_cost', cover: true, view: 'cost' }, studio: pro },
-    { title: 'Compact — the gate subset', testid: 'kit-breakdown-gate', card: { type: 'breakdown', id: 'kb_gate', gateId: 'gate_qa', pageIds: pages.slice(1, 3) }, studio: easy, compact: true }
+    // Scoped like the card the server posts beside a gate (jobs.ts createGate: the pages the gate is bound to).
+    { title: 'Compact — the gate subset', testid: 'kit-breakdown-gate', card: { type: 'breakdown', id: 'kb_gate', gateId: 'gate_qa', pageIds: gatePages ?? pages.slice(1, 3) }, studio: easy, compact: true }
   ];
   return (
     <>

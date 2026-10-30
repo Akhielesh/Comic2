@@ -20,14 +20,18 @@ import {
   type I18nState,
   type Line,
   type Page,
+  type Box,
+  type KeepOut,
   type Panel,
   type QcReport,
+  type SpeakerMark,
   type TextTranslation
 } from '../../../../shared/comic/doc.js';
 import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
 import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
-import type { ShareCard } from '../../../../shared/comic/publication.js';
+import { PUBLIC_KIDS_AUDIENCE, PUBLIC_QC_CHECKED_AT, type ShareCard } from '../../../../shared/comic/publication.js';
+import { isKidsAudience } from '../../../../shared/comic/safety.js';
 import { isSafeStoragePath, variantPathFor } from '../assets.js';
 import { isLibraryPath, pubPath } from '../storagePaths.js';
 import type { SnapshotPlan } from './index.js';
@@ -180,13 +184,18 @@ const publicLine = (line: Line): Line => {
   return out;
 };
 
-const publicPanel = (panel: Panel): Panel => ({
+/**
+ * A panel: its number, size and lines, and who is in it (`castIds`, only ids of the published cast list — the
+ * lettering stages a speaker's balloon by them, so the reader letters the panel as the studio does). The shot and
+ * the action text stay private.
+ */
+const publicPanel = (panel: Panel, castIds: ReadonlySet<string>): Panel => ({
   id: String(panel.id),
   n: num(panel.n) ? panel.n : 1,
   size: panel.size,
   shot: 'medium',
   action: '',
-  castIds: [],
+  castIds: (Array.isArray(panel.castIds) ? panel.castIds : []).filter((id): id is string => typeof id === 'string' && castIds.has(id)),
   lines: (panel.lines || []).map(publicLine)
 });
 
@@ -197,21 +206,49 @@ const publicBalloon = (b: Balloon): Balloon => {
   return out as unknown as Balloon;
 };
 
-const publicQc = (qc: QcReport | undefined): QcReport | undefined =>
-  qc && Array.isArray(qc.panelBoxes) && qc.panelBoxes.length
-    ? { score: 0, issues: [], checkedAt: 0, panelBoxes: qc.panelBoxes.filter((b) => b && num(b.x) && num(b.y) && num(b.w) && num(b.h)).map((b) => ({ x: b.x, y: b.y, w: b.w, h: b.h })) }
-    : undefined;
+const validBox = (b: Box | undefined): b is Box => !!b && num(b.x) && num(b.y) && num(b.w) && num(b.h);
+const boxOf = (b: Box): Box => ({ x: b.x, y: b.y, w: b.w, h: b.h });
+const pointOf = (p: { x: number; y: number } | undefined): { x: number; y: number } | undefined => (p && num(p.x) && num(p.y) ? { x: p.x, y: p.y } : undefined);
+const KEEP_OUT_KINDS: ReadonlySet<KeepOut['kind']> = new Set<KeepOut['kind']>(['face', 'hands', 'action', 'text', 'other']);
 
-function publicPage(page: Page, n: number, plan: SnapshotPlan): Page | null {
+/**
+ * What the reader's lettering needs from the page check, as geometry only (no issue text, score, model or time):
+ * the panel boxes, and where the faces and heads are (`keepOut`, `heads`) so a balloon the coverage cap places
+ * again in the reader goes around the faces exactly as it does in the studio. Both face lists are always present
+ * (empty when the check stored none: the studio then letters the page as if no face is known, and so does the
+ * reader). `checkedAt` is PUBLIC_QC_CHECKED_AT: a snapshot written before the faces were published has no face
+ * lists, and the lettering never moves its stored balloons blind (layout.ts storedFrozen).
+ */
+const publicQc = (qc: QcReport | undefined, castIds: ReadonlySet<string>): QcReport | undefined => {
+  if (!qc) return undefined;
+  const panelBoxes = (Array.isArray(qc.panelBoxes) ? qc.panelBoxes : []).filter(validBox).map(boxOf);
+  const keepOut: KeepOut[] = (Array.isArray(qc.keepOut) ? qc.keepOut : [])
+    .filter((k) => !!k && num(k.panel) && validBox(k.box) && KEEP_OUT_KINDS.has(k.kind))
+    .map((k) => ({ panel: k.panel, box: boxOf(k.box), kind: k.kind }));
+  const heads: SpeakerMark[] = [];
+  for (const h of Array.isArray(qc.heads) ? qc.heads : []) {
+    const head = pointOf(h?.head);
+    if (!head || !num(h.panel)) continue;
+    const mark: SpeakerMark = { panel: h.panel, head };
+    if (typeof h.characterId === 'string' && castIds.has(h.characterId)) mark.characterId = h.characterId;
+    const mouth = pointOf(h.mouth);
+    if (mouth) mark.mouth = mouth;
+    heads.push(mark);
+  }
+  if (!panelBoxes.length && !keepOut.length && !heads.length) return undefined;
+  return { score: 0, issues: [], checkedAt: PUBLIC_QC_CHECKED_AT, ...(panelBoxes.length ? { panelBoxes } : {}), keepOut, heads };
+};
+
+function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: ReadonlySet<string>): Page | null {
   const asset = page.render.asset ? publicAsset(page.render.asset, plan) : null;
   if (!asset) return null;
-  const qc = publicQc(page.render.qc);
+  const qc = publicQc(page.render.qc, castIds);
   const out: Page = {
     id: String(page.id),
     n,
     summary: '',
     layout: typeof page.layout === 'string' ? page.layout : '',
-    panels: (page.panels || []).map(publicPanel),
+    panels: (page.panels || []).map((panel) => publicPanel(panel, castIds)),
     balloons: (page.balloons || []).map(publicBalloon),
     render: { status: 'ready', asset, history: [], ...(qc ? { qc } : {}) }
   };
@@ -238,16 +275,21 @@ function publicCover(cover: Cover | undefined, plan: SnapshotPlan): Cover {
 export function buildSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
   const at = num(plan.publishedAt) ? plan.publishedAt : 0;
   const wanted = new Set(plan.pageIds);
+  const castIds = new Set((doc.cast || []).map((c) => String(c.id)));
   const pages: Page[] = [];
   for (const page of doc.pages || []) {
     if (!wanted.has(page.id)) continue;
-    const pub = publicPage(page, pages.length + 1, plan);
+    const pub = publicPage(page, pages.length + 1, plan, castIds);
     if (pub) pages.push(pub);
   }
   const source = doc.format?.language || 'en';
   const editions = (plan.languages || []).filter((l) => !sameLanguage(l, source));
   const brief: ComicDoc['brief'] = { title: String(doc.brief?.title ?? ''), notes: [] };
   if (typeof doc.brief?.logline === 'string' && doc.brief.logline) brief.logline = doc.brief.logline;
+  // A children's book that is not a storybook (a kids' comic or manga) is lettered under the children's coverage
+  // cap (layout.ts coverCapFor reads the brief). The owner's audience, notes and premise stay private: the snapshot
+  // carries only the fixed category word, so the reader letters every page under the same cap as the studio.
+  if (doc.format?.kind !== 'storybook' && doc.brief && isKidsAudience(doc)) brief.audience = PUBLIC_KIDS_AUDIENCE;
   const style: ComicDoc['style'] = { status: 'locked', refs: [], options: [] };
   if (typeof doc.style?.name === 'string' && doc.style.name) style.name = doc.style.name;
 

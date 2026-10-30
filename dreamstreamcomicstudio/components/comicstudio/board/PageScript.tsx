@@ -5,8 +5,7 @@
 
 import React from 'react';
 import { castNoun, findCharacter, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
-import { drawnPanelBoxes } from '../../../shared/comic/pageGeometry';
-import { checkPagePlan, type FitState } from '../../../shared/comic/pagePlanCheck';
+import { checkPagePlan, fitBoxesFor, type FitState } from '../../../shared/comic/pagePlanCheck';
 import { textUnitFor, unitCount } from '../../../shared/comic/panelRules';
 import { LINE_KIND_LABEL, SHOT_LABEL, SIZE_LABEL, castName, placeName } from './boardModel';
 import { cx } from './ui';
@@ -31,13 +30,15 @@ export interface PanelWordFit {
 }
 
 /**
- * Each panel's lettered words against what it holds (A4 wave note 4, the rest of FX2), measured like the director's
- * line-edit budget (pagePlanCheck panelBudgetSentence) and the breakdown card's dots: a drawn page's measured panels,
- * else the layout as drawn. Silent panels (no balloons or captions) get none.
+ * Each panel's lettered words against what it holds (A4 wave note 4, the rest of FX2), on the same boxes as the
+ * breakdown card's dots, the Render-all gate and the director's line-edit budget (pagePlanCheck fitBoxesFor): a page
+ * Render all would draw (undrawn, failed or out of date) on the layout it will be drawn on — so the free "Use the
+ * layout that fits" shows here at once — and a drawn, current page on the panels it was drawn with. Silent panels
+ * (no balloons or captions) get none.
  */
 export const panelWordFits = (doc: ComicDoc, page: Page): (PanelWordFit | undefined)[] => {
   if (!page.panels.length) return [];
-  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: drawnPanelBoxes(doc, page) });
+  const check = checkPagePlan(doc, page, { fixLayout: false, boxes: fitBoxesFor(doc, page) });
   const unit = textUnitFor(doc.format?.language);
   return check.panels.map((p) => (p.words > 0 ? { text: `${unitCount(p.words, unit)} / fits about ${p.budget}`, state: p.state } : undefined));
 };

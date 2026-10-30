@@ -2,7 +2,7 @@
 // plan fit (the lettering chip, templates) reuse one implementation instead of copying it.
 import { describe, expect, it } from 'vitest';
 import * as barrel from './index';
-import { fitWords, gateRenderAll, layoutFitFix, paidAmount } from './BreakdownCard';
+import { fitWords, layoutFitFix, paidAmount } from './BreakdownCard';
 import { FIT_DOT_COLOR, fitDotOf } from './PageWireframe';
 
 describe('breakdown barrel', () => {
@@ -11,7 +11,8 @@ describe('breakdown barrel', () => {
     expect(barrel.FIT_DOT_COLOR).toBe(FIT_DOT_COLOR);
     expect(barrel.layoutFitFix).toBe(layoutFitFix);
     expect(barrel.paidAmount).toBe(paidAmount);
-    expect(barrel.gateRenderAll).toBe(gateRenderAll);
+    // The breakdown never extends a gate itself (the held-back notice beside the gate does): no gate helper.
+    expect('gateRenderAll' in barrel).toBe(false);
     expect(barrel.fitWords).toBe(fitWords);
     expect(barrel.fitDotOf('overfull')).toBe('overfull');
   });

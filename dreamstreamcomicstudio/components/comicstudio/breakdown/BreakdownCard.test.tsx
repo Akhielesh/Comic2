@@ -817,10 +817,21 @@ describe('plan fit: held-back pages (PD-1)', () => {
   });
 });
 
+describe('plan fit: the Draw anyway price at phone widths', () => {
+  it('the price badge is the shared chip badge: it never breaks inside the amount ("≈$0. / 90")', () => {
+    renderCard(bd(), makeFakeStudio({ doc: withPage2(p2Shaped()) }), true);
+    const chip = within(fixesOf()).getByRole('button', { name: /^Draw anyway/ });
+    const badge = chip.querySelector('[data-chip-badge]')!;
+    expect(badge.textContent).toMatch(/^adds ≈\$[\d.]+$/);
+    expect(badge.className).not.toMatch(/overflow-wrap:anywhere|\bmin-w-0\b/);
+    expect(badge).toHaveAttribute('data-chip-badge', 'words');
+  });
+});
+
 describe('plan fit: next to a gate', () => {
-  const renderAllGate = (over: Partial<Gate> = {}): Gate => ({
+  const gateOf = (action: Gate['action'], over: Partial<Gate> = {}): Gate => ({
     id: 'gate_1',
-    action: { type: 'render_pages', includeCover: true, quotedUsd: 0.2 },
+    action,
     title: 'Draw the pages?',
     summary: '1 page',
     estimateUsd: 0.2,
@@ -831,30 +842,50 @@ describe('plan fit: next to a gate', () => {
     reason: 'first_render',
     ...over
   });
+  /**
+   * A "Render all" gate exactly as the server stores it (jobs.ts createGate: withoutQuote(bindSpendAction(…))): bound
+   * to the pages it really draws — held-back pages left out — with no drawOverfull and no chip quote.
+   */
+  const storedRenderAll = (doc: ComicDoc): Gate['action'] => ({
+    type: 'render_pages',
+    includeCover: true,
+    pageIds: quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: {} }).pageIds
+  });
 
-  it('"Draw anyway" beside an open Render-all gate extends that run (drawOverfull), quoted as a whole', async () => {
-    const doc = withPage2(p2Shaped(), { gate: renderAllGate() });
+  it('the gate’s breakdown (scoped to its bound pages, as createGate posts it) leaves the held-back page out and never spends', () => {
+    const base = withPage2(p2Shaped());
+    const action = storedRenderAll(base) as Extract<Gate['action'], { type: 'render_pages' }>;
+    expect(action.pageIds!.length).toBeGreaterThan(0);
+    expect(action.pageIds).not.toContain('pg_2');
+    const doc = { ...base, gate: gateOf(action) };
     const studio = makeFakeStudio({ doc });
-    renderCard(bd({ gateId: 'gate_1', view: 'plan' }), studio, true);
-    // the gate owns approval: no Approve/Draw-this-page here, only the extension of its own run
+    renderCard(bd({ gateId: 'gate_1', pageIds: action.pageIds, view: 'plan' }), studio, true);
+    // the gate owns approval: no Approve, no Draw-this-page, no Draw anyway of any kind in its breakdown
     expect(screen.queryByRole('button', { name: /^Approve/ })).toBeNull();
-    const q = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, includeCover: true, holdBack: { drawOverfull: ['pg_2'] } });
-    const chip = within(fixesOf()).getByRole('button', { name: /^Draw page 2 anyway \(with the rest\)/ });
-    expect(chip).toHaveTextContent(`≈${formatUsd(q.usd)}`);
-    expect(screen.getByRole('group', { name: 'Page 2 is held back' })).toHaveTextContent('Fix it free, or draw it anyway.');
-    expect(within(fixesOf()).queryByRole('button', { name: /^Draw anyway/ })).toBeNull();
-    fireEvent.click(chip);
-    await flush();
-    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', drawOverfull: ['pg_2'], includeCover: true, quotedUsd: q.usd });
+    expect(screen.queryByRole('button', { name: /anyway/i })).toBeNull();
+    expect(within(screen.getByRole('list', { name: /Pages in this book/ })).queryByRole('button', { name: /^Page 2,/ })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Page 2 is held back' })).toBeNull();
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+
+  it('a held-back page shown beside an open gate (an unscoped card) offers its free fixes only: "Draw anyway" is the notice’s', () => {
+    const base = withPage2(p2Shaped());
+    const doc = { ...base, gate: gateOf(storedRenderAll(base)) };
+    renderCard(bd({ gateId: 'gate_1', view: 'plan' }), makeFakeStudio({ doc }), true);
+    const group = screen.getByRole('group', { name: 'Page 2 is held back' });
+    expect(group).toHaveTextContent('Page 2 isn’t drawn yet: panels 5 and 6 have more words than they can hold. Fix it free.');
+    expect(within(fixesOf()).queryByRole('button', { name: /anyway/i })).toBeNull();
+    expect(within(fixesOf()).getByRole('button', { name: /^Use the layout that fits/ })).toBeInTheDocument();
   });
 
   it('a gate that draws named pages draws them whatever their fit: nothing is held back there; a closed gate offers no spend', () => {
-    const explicit = withPage2(p2Shaped(), { gate: renderAllGate({ action: { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.07 } }) });
+    const explicit = withPage2(p2Shaped(), { gate: gateOf({ type: 'render_pages', pageIds: ['pg_2'] }) });
     const { unmount } = renderCard(bd({ gateId: 'gate_1', pageIds: ['pg_2'] }), makeFakeStudio({ doc: explicit }), true);
     expect(screen.queryByTestId('breakdown-held-back')).toBeNull();
     expect(screen.queryByRole('group', { name: 'Page 2 is held back' })).toBeNull();
     unmount();
-    const closed = withPage2(p2Shaped(), { gate: renderAllGate({ status: 'approved' }) });
+    const base = withPage2(p2Shaped());
+    const closed = { ...base, gate: gateOf(storedRenderAll(base), { status: 'approved' }) };
     renderCard(bd({ gateId: 'gate_1' }), makeFakeStudio({ doc: closed }), true);
     expect(within(fixesOf()).queryByRole('button', { name: /anyway/ })).toBeNull();
     // and the sentence offers only what is there: no "draw it anyway" without a Draw-anyway control
@@ -879,16 +910,9 @@ describe('plan fit: prices in the viewer’s terms', () => {
     unmount();
 
     resetUsageStatus();
-    const byokDoc = withPage2(p2Shaped(), {
-      gate: {
-        id: 'gate_1', action: { type: 'render_pages' }, title: 't', summary: 's', estimateUsd: 0.1, imageCount: 1, model: 'nano-banana-2.1', createdAt: 1, status: 'open', reason: 'policy'
-      }
-    });
-    const r = renderCard(bd(), makeFakeStudio({ doc: byokDoc, byok: true }));
+    const byokDoc = withPage2(p2Shaped(), { gate: null });
+    renderCard(bd(), makeFakeStudio({ doc: byokDoc, byok: true }));
     expect(within(fixesOf()).getByRole('button', { name: /^Draw anyway/ })).toHaveTextContent(/adds ≈\$[\d.]+ on your key$/);
-    r.unmount();
-    renderCard(bd({ gateId: 'gate_1' }), makeFakeStudio({ doc: byokDoc, byok: true }), true);
-    expect(within(fixesOf()).getByRole('button', { name: /^Draw page 2 anyway/ })).toHaveTextContent(/≈\$[\d.]+ on your key$/);
     // the helper: governed → usage share, BYOK → on your key, admin → plain dollars
     expect(paidAmount({ governed: false, badge: (u: number) => `≈${formatUsd(u)}` } as never, 0.07, true)).toBe(`≈${formatUsd(0.07)} on your key`);
     expect(paidAmount({ governed: true, badge: () => '≈1% of your usage' } as never, 0.07, true)).toBe('≈1% of your usage');

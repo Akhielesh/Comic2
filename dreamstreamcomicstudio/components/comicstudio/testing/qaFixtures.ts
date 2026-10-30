@@ -32,6 +32,7 @@ import {
   type Card,
   type Character,
   type ComicDoc,
+  type Gate,
   type ComicKind,
   type Line,
   type Msg,
@@ -39,8 +40,8 @@ import {
   type Panel,
   type RenderState
 } from '../../../shared/comic/doc';
-import { checkPagePlan, heldBackOf } from '../../../shared/comic/pagePlanCheck';
-import { quoteRenderPages } from '../../../shared/comic/plan';
+import { checkPagePlan, heldBackOf, splitHeldBack } from '../../../shared/comic/pagePlanCheck';
+import { pageTargets, quoteRenderPages, unitPrice } from '../../../shared/comic/plan';
 
 export const QA_NOW = 1_760_000_000_000;
 export const QA_PROJECT_ID = 'proj_qa';
@@ -306,9 +307,48 @@ const heldBackNotices = (doc: ComicDoc): Card[] => {
         { label: `Make panel 6's first line a caption`, free: true, action: { type: 'patch', ops: [{ op: 'line', pageId: page.id, panelId: page.panels[5].id, id: line.id, patch: { kind: 'caption' } }] } },
         { label: `Draw page ${page.n} anyway (with the rest)`, free: false, action: { ...anyway, quotedUsd: usd } }
       ]
+    },
+    ...chipStateNotice(doc)
+  ];
+};
+
+const KIND_WORD: Record<Line['kind'], string> = { speech: 'speech balloon', thought: 'thought balloon', whisper: 'whisper', shout: 'shout', caption: 'caption', sfx: 'sound effect' };
+
+/**
+ * An older page-check notice whose chips have moved on, so a QA run sees the other two chip states (A5 fix-round
+ * note 3): its free fix is already in the comic (the chip reads "Done") and its paid redraw targets a page that is
+ * queued or drawing (it reads "Started"). Nothing in the doc changes (the lettering goldens are recorded on it).
+ */
+const chipStateNotice = (doc: ComicDoc): Card[] => {
+  const drawn = doc.pages.find((p) => p.render.status === 'ready' && p.panels.some((pn) => pn.lines.length));
+  const busy = doc.pages.find((p) => p.render.status === 'queued' || p.render.status === 'rendering');
+  if (!drawn || !busy) return [];
+  const panel = drawn.panels.find((pn) => pn.lines.length)!;
+  const line = panel.lines[0];
+  const usd = unitPrice(doc, 'page', { byok: false }).usd;
+  return [
+    {
+      type: 'notice',
+      id: 'n_states',
+      tone: 'info',
+      text: `Page ${drawn.n}: panel ${panel.n}'s first line reads better as a ${KIND_WORD[line.kind]}, and page ${busy.n} needed a new take.`,
+      fixes: [
+        { label: `Make panel ${panel.n}'s first line a ${KIND_WORD[line.kind]}`, free: true, action: { type: 'patch', ops: [{ op: 'line', pageId: drawn.id, panelId: panel.id, id: line.id, patch: { kind: line.kind } }] } },
+        { label: `Redraw page ${busy.n}`, free: false, action: { type: 'render_pages', pageIds: [busy.id], force: true, quotedUsd: usd } }
+      ]
     }
   ];
 };
+
+/**
+ * The open gate exactly as the server stores it (jobs.ts createGate: withoutQuote(bindSpendAction(…))): a "Render
+ * all" is bound to the pages it really draws — held-back pages left out (the shared splitHeldBack decides, as the
+ * server's planCheckGate does) — with no drawOverfull and no chip quote; an explicit page draw keeps its pages.
+ */
+const storedGateAction = (doc: ComicDoc, mode: true | 'render_all'): Extract<Gate['action'], { type: 'render_pages' }> =>
+  mode === 'render_all'
+    ? { type: 'render_pages', pageIds: splitHeldBack(doc, pageTargets(doc).map((p) => p.id)).draw }
+    : { type: 'render_pages', pageIds: doc.pages.filter((p) => p.render.status !== 'ready').map((p) => p.id) };
 
 // ── Conversation ─────────────────────────────────────────────────────────────
 
@@ -412,7 +452,10 @@ interface DocOpts {
   balloons: 'edge' | 'tidy' | 'none';
   squareIndex?: number;
   conversation: boolean;
-  /** An open spend gate: explicit page ids, or 'render_all' (a Render all, which holds overfull pages back). */
+  /**
+   * An open spend gate, stored as the server stores it: explicit page ids, or 'render_all' (a Render all, bound to the
+   * pages it draws: overfull pages are held back and left out).
+   */
   gate: boolean | 'render_all';
   /** Page index re-planned as the held-back page (heldBackPanels); it must be one Render all would draw. */
   heldBackIndex?: number;
@@ -503,10 +546,7 @@ const buildDoc = (o: DocOpts): ComicDoc => {
   doc.gate = o.gate
     ? {
         id: 'gate_qa',
-        action:
-          o.gate === 'render_all'
-            ? { type: 'render_pages', quotedUsd: 1.31 }
-            : { type: 'render_pages', pageIds: doc.pages.filter((p) => p.render.status !== 'ready').map((p) => p.id), quotedUsd: 1.31 },
+        action: storedGateAction(doc, o.gate),
         title: stress ? 'Draw all twenty pages of the storybook in watercolor at Pro quality' : 'Draw the remaining pages',
         summary: stress ? 'This draws every page that is not drawn yet, plus re-draws the five pages that are out of date because you changed the cast.' : 'Draws the pages that are not drawn yet.',
         estimateUsd: 1.31,

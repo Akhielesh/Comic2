@@ -218,7 +218,9 @@ Reference budget per page job (from `refs` caps):
   card says "Described in text" / "Sheet ready · used on pages" ("Sheet ready" for a prop, whose sheet is never
   attached on a page; "Queued" / "Drawing sheet…" while a sheet the user asked for is being drawn), and the
   director's summary "text only" / "sheet ready". The Cast tab's extra note and its optional "Draw a sheet anyway"
-  button say "a ready sheet (not a prop's) is attached on every page they appear on".
+  button say "a ready sheet is attached on every page they appear on"; an extra the tab calls an Object (a prop)
+  says instead that it is described in words on pages and its sheet isn't attached to pages ("set it to Support for
+  that"), and its optional button is "Draw a reference sheet".
 - style: Pro → board + up to 2 user style refs as style refs; others → board as an object ref.
 - objects/places ≤ remaining `refs.objects`: place sheets used on the page, then the
   previous page (continuity) last.
@@ -469,25 +471,35 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   - "Draw page N anyway" after a run, or when nothing else is left to draw: that page alone (`pageIds: [id]`),
     quoted. Explicit page draws and forced new takes always pass through the gate unchanged.
   A spend retires an open `render_pages` gate only when it draws every page that gate would still draw (and its
-  cover), so a single-page draw never silently drops the other pages' approval. The breakdown card shows held-back
-  pages in red with the same free fixes and "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
+  cover), so a single-page draw never silently drops the other pages' approval. The gate itself is stored bound to the
+  pages it draws (`bindSpendAction`: held-back pages left out, no `drawOverfull`, no chip quote), and the breakdown
+  posted with it is scoped to those pages, so the user sees exactly what they approve; the held-back notice beside it
+  is where "Draw page N anyway (with the rest)" lives. The breakdown card shows held-back pages in red with the same
+  free fixes and, outside a gate, "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
 - **Plan fit in the UI** (Ship 1 A5). Every wireframe panel carries a fit dot: green fits, amber tight, red too
   full, in the readable status tones (`--ds-success-text`, `--ds-warning-text`, `--ds-danger-text`, `FIT_DOT_COLOR`)
   and in different shapes (a filled dot, a ring, a diamond), and the tile and its detail row say it in words
   ("Fits (12 of 18 words)", "Tight — …", "Too full — 34 words, fits about 32"). A held-back page is a red tile, left
   out of the quote and the run. Its free fixes come first: the layout that fits (`layoutFixOps`), the page editor,
   then "Split the page…" / "Shorten it…", which only prefill the composer for the director. "Draw anyway" outside a
-  gate is a toggle that adds the page to `drawOverfull` and re-quotes (`summarizeBook(…, { drawOverfull })`); next
-  to an open Render-all gate it sends `render_pages { drawOverfull, includeCover?, safe? }`, quoted as a whole.
+  gate is a toggle that adds the page to `drawOverfull` and re-quotes (`summarizeBook(…, { drawOverfull })`). Inside
+  a gate's breakdown nothing spends (the gate owns approval): a held-back page there offers its free fixes only, and
+  drawing it anyway is the held-back notice's chip, which extends the open Render all.
   The cost view never says "drawn and up to date" while pages are held back: "To draw now" reads "Nothing yet"
   with "N pages held back — too many words for a panel, not in this price. Fix free or draw anyway.", or adds
-  "· N pages held back (not in this price)" after the quote lines. The Format panel offers Auto ("3–4 big panels", the beats decide within the
-  kind's range) or a fixed 2–6, with the storybook note (`panelCountRule`).
+  "· N pages held back (not in this price)" after the quote lines. The Format panel offers Auto (what Auto plans for the kind, from `panelCountRule`
+  like the hint under it: "3–4 big panels" for a comic, "2–3 large panels" for a storybook, "3–5 panels" for a
+  webtoon; the beats decide within the kind's range) or a fixed 2–6, with the storybook note.
 - **Notice fix chips** (`NoticeCard`, rendered through `CardRenderer` with the studio controller): free chips come
   first; a paid chip shows its quote in the user's terms (a usage share for governed users, never dollars; "on
   your key" for BYOK) and needs a positive quote, else it isn't offered. Chips are re-checked against the live doc:
   a free fix already applied reads "Done", a paid one already drawing reads "Started", and a chip with nothing
-  left to do (or a free edit that would put a drawn page out of date) is hidden.
+  left to do (or a free edit that would put a drawn page out of date) is hidden. So is a paid chip whose page was
+  checked again after the notice was posted (`CardRenderer` passes the message time): the newer check, not the old
+  notice, says what the page needs, so a new take checked clean is never offered a paid fix for the old one. A paid "draw" chip
+  (`render_pages`) shows and sends the live quote of what it would draw now, not the price when the notice was
+  posted, and "(with the rest)" is dropped once nothing else is left to draw with it. Every chip badge (here and in
+  the breakdown) is `ui.tsx ChipBadge`: a one-word badge or amount never wraps, a longer one only between words.
 - **Planning quote.** "Plan the pages" is one writer pass per page; the plan check can send it back for one repair
   round, so the chip and the director's DOC SUMMARY (when `planStatus` is `none`) say the honest bound:
   "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.
@@ -505,12 +517,22 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   - At render time `planLettering` applies it to stored, unpinned balloons: a panel over the cap is lettered again,
     its movable balloons re-placed (partly across the panel's border when that helps). Pinned and locked balloons
     never move. Stored values never change; "Re-letter page" (free) saves the re-placement.
+  - The published comic is lettered exactly as the studio letters it: the public snapshot carries what the cap
+    reads, as geometry and categories only (`snapshot.ts`): the page check's face and head boxes (`keepOut`/`heads`,
+    always present, empty when the check stored none), each panel's cast ids, and `brief.audience: 'children'` for a
+    children's comic that is not a storybook (the owner's audience, notes and premise stay private), so the reader
+    and its downloads use the same cap and letter around the same faces. A snapshot published before the faces
+    were (a geometry-only check, `checkedAt` 0, no face lists: `storedFrozen`) never has its stored balloons moved
+    blind: the reader draws them where they are stored, as it did before the cap, and only flags the panel `dense`.
+    Republishing carries the faces and lets the cap re-place them around the faces.
   - The cap re-places only: it never shrinks text unless the owner flips `LETTER_FIT_POLICY.coverShrink` (off; a
     one-line edit), and even then never below 82% (`COVER_STEPS` 1, 0.9, 0.82), panel by panel.
   - A panel still over the cap is flagged `dense` (words, what it holds, coverage before and as drawn). Balloons
     the cap drew elsewhere are crowded with reason `'cover'`, so a first drag, nudge, "Keep here" or Lock starts
-    from where the balloon is drawn (`drawnSpotPatch`, in `styleOps.ts`; `lockOps` pins the drawn spot too) and
-    never jumps back to its stored spot.
+    from where the balloon is drawn (`withDrawnSpots` and `drawnSpotPatch`, in `layout.ts`; the editor's `lockOps`
+    pins the drawn spot too) and never jumps back to its stored spot. The director's `arrange_balloons` uses the
+    same rule: its move, nudge, resize, tail aim, fit and lock start from where the board draws the balloon (on the
+    estimate measure) and pin it there.
   - No balloon is left over another balloon's text while the page has a text-free spot for it; the settle
     fallback keeps a stored balloon within its own tier and panel, never carried panels away.
   - A pinned balloon stored narrower than its longest word is drawn as wide as that word within its panel (FX6).
@@ -524,8 +546,11 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
     offers the free placement around the art's busy areas first, then the paid face-aware re-check
     (`recheck_page`) quoted in the user's terms. A face-aware check stores its `keepOut`/`heads` even when it
     found no faces, so a page re-checked once is not offered the paid re-check again (`busyGrid.ts hasFaceData`).
-  - The board's page script shows each lettered panel's "N words / fits about M" (pagePlanCheck on the panels the
-    words are lettered into), with "too full" said in words on an overfull panel.
+  - The board's page script shows each lettered panel's "N words / fits about M", with "too full" said in words on
+    an overfull panel. It is measured on the same boxes as the breakdown's dots, the Render-all gate and the
+    director's line-edit budget (`pagePlanCheck fitBoxesFor`): a page Render all would draw (undrawn, failed or out
+    of date) on the layout it will be drawn on, a drawn, current page on the panels it was drawn with — so a free
+    "Use the layout that fits" shows in the script at once.
 - **Flags, both off.** `COMIC_LAYOUT_GUIDE` attaches a text-free layout-guide image (`panelize/wireframe.ts`) as
   Image 1 on page renders; it stays unset until the owner approves the paid Model Lab A/B (PD-8). With it off, page
   references and quotes are unchanged. `COMIC_IDENTITY_NOTICES` (identity findings in the chat notice) stays unset

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { CardShell, Segmented } from './ui';
+import { CardShell, ChipBadge, ChipButton, Segmented } from './ui';
 
 describe('CardShell', () => {
   it('a long title truncates but stays readable in its title attribute', () => {
@@ -9,6 +9,32 @@ describe('CardShell', () => {
     render(<CardShell title={long}>body</CardShell>);
     expect(screen.getByText(long)).toHaveAttribute('title', long);
     expect(screen.getByText(long)).toHaveClass('truncate');
+  });
+});
+
+describe('ChipBadge (every card’s chip badge: Free, Done, Started, a price)', () => {
+  it('a one-word badge, a dollar amount included, never wraps or shrinks: no "≈$0. / 90" at 320 px', () => {
+    render(
+      <ChipButton className="min-w-0">
+        <span className="min-w-0">Draw page 3 anyway (with the rest)</span>
+        <ChipBadge tone="paid">≈$0.90</ChipBadge>
+        <ChipBadge tone="free">Free</ChipBadge>
+      </ChipButton>
+    );
+    for (const text of ['≈$0.90', 'Free']) {
+      const badge = screen.getByText(text);
+      expect(badge).toHaveAttribute('data-chip-badge', 'word');
+      expect(badge).toHaveClass('shrink-0', 'whitespace-nowrap');
+      expect(badge.className).not.toMatch(/overflow-wrap:anywhere|\bmin-w-0\b/);
+    }
+  });
+
+  it('a several-word badge wraps only between words, never inside a word or an amount', () => {
+    render(<ChipBadge tone="paid">adds ≈$0.07 on your key</ChipBadge>);
+    const badge = screen.getByText('adds ≈$0.07 on your key');
+    expect(badge).toHaveAttribute('data-chip-badge', 'words');
+    expect(badge).toHaveClass('[overflow-wrap:normal]');
+    expect(badge.className).not.toMatch(/overflow-wrap:anywhere|\bmin-w-0\b|whitespace-nowrap/);
   });
 });
 

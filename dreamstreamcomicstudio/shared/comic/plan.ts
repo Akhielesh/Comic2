@@ -30,8 +30,7 @@ import { needMeter, type FitState, type NeedMeter } from './density.js';
 import { letteringAspect } from './lettering/layout.js';
 import { aspectMatches, estimateJobs, getImageModel, resolveImageJob, type ImageJobKind, type SpendEstimate } from './models.js';
 import { lockOf } from './modelLock.js';
-import { checkPagePlan, heldBackOf, splitHeldBack } from './pagePlanCheck.js';
-import { drawnPanelBoxes } from './pageGeometry.js';
+import { checkPagePlan, fitBoxesFor, heldBackOf, renderAllDraws, splitHeldBack } from './pagePlanCheck.js';
 import { PLAN_POLICY, RECURRING, textUnitFor } from './panelRules.js';
 import { safetyStatusOf, type ContentRating, type SafetyStatus } from './safety.js';
 
@@ -46,8 +45,7 @@ export function pageTargets(doc: ComicDoc, opts: { pageIds?: string[]; force?: b
   const ids = Array.isArray(opts.pageIds) && opts.pageIds.length ? new Set(opts.pageIds) : null;
   return doc.pages
     .filter((p) => (ids ? ids.has(p.id) : true))
-    .filter((p) => p.panels.length > 0 && !isBusy(p.render))
-    .filter((p) => opts.force || p.render.status !== 'ready' || isPageStale(doc, p))
+    .filter((p) => (opts.force ? p.panels.length > 0 && !isBusy(p.render) : renderAllDraws(doc, p)))
     .sort((a, b) => a.n - b.n);
 }
 
@@ -351,9 +349,8 @@ export function summarizeBook(
       // drawn, current (or busy) page on the panels it was drawn with (measured, else the layout as drawn), and is
       // never held back.
       const about = drawable.has(p.id);
-      const check = p.panels.length
-        ? checkPagePlan(doc, p, about ? { meter } : { meter, boxes: drawnPanelBoxes(doc, p), fixLayout: false })
-        : undefined;
+      const boxes = fitBoxesFor(doc, p);
+      const check = p.panels.length ? checkPagePlan(doc, p, boxes ? { meter, boxes, fixLayout: false } : { meter }) : undefined;
       const summary: PageSummary = {
         id: p.id,
         n: p.n,

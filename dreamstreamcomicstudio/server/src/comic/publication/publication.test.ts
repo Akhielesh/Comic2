@@ -201,7 +201,9 @@ describe('buildPublicSnapshot (allow-list, exact key sets)', () => {
     );
     expect(snapshot.id).toBe('pub-uuid');
     expect([snapshot.createdAt, snapshot.updatedAt, snapshot.rev]).toEqual([77, 77, 9]);
-    expect(keys(snapshot.brief)).toEqual(['logline', 'notes', 'title']);
+    // The brief's audience is a category word only ('kids 8+' → 'children': the kids' coverage cap reaches the reader).
+    expect(keys(snapshot.brief)).toEqual(['audience', 'logline', 'notes', 'title']);
+    expect(snapshot.brief.audience).toBe('children');
     expect(keys(snapshot.format)).toEqual(['colorMode', 'kind', 'language', 'lettering', 'pageAspect', 'pageCount', 'panelsPerPage', 'readingDirection']);
     expect(keys(snapshot.style)).toEqual(['name', 'options', 'refs', 'status']);
     expect(snapshot.style).toMatchObject({ status: 'locked', refs: [], options: [] });
@@ -220,12 +222,15 @@ describe('buildPublicSnapshot (allow-list, exact key sets)', () => {
       expect(p.summary).toBe('');
       expect(keys(p.render)).toEqual(['asset', 'history', 'qc', 'status']);
       expect(p.render.history).toEqual([]);
-      expect(keys(p.render.qc!)).toEqual(['checkedAt', 'issues', 'panelBoxes', 'score']);
+      expect(keys(p.render.qc!)).toEqual(['checkedAt', 'heads', 'issues', 'keepOut', 'panelBoxes', 'score']);
+      expect([p.render.qc!.score, p.render.qc!.issues, p.render.qc!.checkedAt, p.render.qc!.keepOut, p.render.qc!.heads]).toEqual([0, [], 0, [], []]);
       expect(keys(p.render.asset!)).toEqual(['at', 'h', 'path', 'source', 'variants', 'w']);
       for (const v of p.render.asset!.variants!) expect(keys(v)).toEqual(['h', 'path', 'w']);
       for (const pn of p.panels) {
         expect(keys(pn)).toEqual(['action', 'castIds', 'id', 'lines', 'n', 'shot', 'size']);
-        expect([pn.action, pn.shot, pn.castIds]).toEqual(['', 'medium', []]);
+        expect([pn.action, pn.shot]).toEqual(['', 'medium']);
+        // Who is in the panel (the lettering stages speakers by it): only ids of the published cast list.
+        expect(pn.castIds.every((id) => snapshot.cast.some((c) => c.id === id))).toBe(true);
         for (const l of pn.lines) expect(keys(l).every((k) => ['id', 'kind', 'speakerId', 'text', 'style', 'noTranslate'].includes(k))).toBe(true);
       }
       for (const b of p.balloons) expect(keys(b).every((k) => ['lineId', 'x', 'y', 'w', 'tailX', 'tailY', 'pinned', 'z', 'locked', 'linkTo'].includes(k))).toBe(true);

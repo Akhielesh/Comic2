@@ -30,10 +30,10 @@ import { CircleCheck, CircleX, Info, Loader2, TriangleAlert } from 'lucide-react
 import { isPageStale, type Card, type ComicDoc, type NoticeFix, type Page } from '../../../../shared/comic/doc';
 import { applyOps, isSpendAction, type DocOp, type StudioAction } from '../../../../shared/comic/ops';
 import { pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
-import { TONE_CHIP, TONE_SURFACE, TONE_TEXT } from '../../../chat/studioDesign';
+import { TONE_SURFACE, TONE_TEXT } from '../../../chat/studioDesign';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { useCostFormat, type CostFormat } from '../cost';
-import { ChipButton, cx } from '../ui';
+import { ChipBadge, ChipButton, cx } from '../ui';
 import { chipLabel } from './NextStepChips';
 import { stopsSequence, useAction } from './useAction';
 
@@ -156,8 +156,51 @@ const spendPages = (action: StudioAction): string[] => {
   return ids.filter((id): id is string => typeof id === 'string');
 };
 
-/** A chip's state against the live doc. Pure; no doc ⇒ 'live' (older hosts). */
-export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeChip): NoticeChipState => {
+type RenderPagesAction = Extract<StudioAction, { type: 'render_pages' }>;
+
+/**
+ * What a render_pages chip would draw NOW, quoted exactly as the server will (shared plan.ts, the comic's lock, this
+ * user's key): a "Render all" holds overfull pages back as the server's gate does, except its drawOverfull.
+ */
+const liveRenderQuote = (doc: ComicDoc, action: RenderPagesAction, byok: boolean) => {
+  const pageIds = Array.isArray(action.pageIds) && action.pageIds.length ? action.pageIds : undefined;
+  const renderAll = !pageIds && !action.force;
+  const anyway = Array.isArray(action.drawOverfull) ? action.drawOverfull.filter((id): id is string => typeof id === 'string') : [];
+  const quote = quoteRenderPages(doc, {
+    ...(pageIds ? { pageIds } : {}),
+    ...(action.force ? { force: true } : {}),
+    ...(action.includeCover ? { includeCover: true } : {}),
+    byok,
+    tier: doc.settings.quality,
+    modelOverride: doc.settings.imageModelOverride,
+    // "Render all" holds overfull pages back, as the server's gate does.
+    ...(renderAll ? { holdBack: { drawOverfull: anyway } } : {})
+  });
+  return { quote, renderAll, anyway };
+};
+
+/**
+ * A paid "draw" chip as it stands NOW: priced at what it would draw now, and sent with that quote — never the price
+ * from when the notice was posted (after the open Render all ran, "Draw page 3 anyway (with the rest)" draws page 3
+ * alone, at a fraction of the posted price). "(with the rest)" is dropped once nothing else is drawn with it. The
+ * server still re-checks: a higher fresh price is gated again. Other chips (and no doc, older hosts) are as posted.
+ */
+export const liveNoticeChip = (doc: ComicDoc | null | undefined, chip: NoticeChip, byok = false): NoticeChip => {
+  if (!doc || !chip.paid || chip.action.type !== 'render_pages') return chip;
+  const { quote, anyway } = liveRenderQuote(doc, chip.action, byok);
+  if (quote.nothing || !(quote.usd > 0)) return chip;
+  const usd = Math.round(quote.usd * 10000) / 10000;
+  const alone = anyway.length > 0 && !quote.cover && quote.pageIds.every((id) => anyway.includes(id));
+  const label = alone ? chip.fix.label.replace(/\s*\(with the rest\)\s*$/i, '') : chip.fix.label;
+  return { ...chip, usd, action: { ...chip.action, quotedUsd: usd }, fix: label === chip.fix.label ? chip.fix : { ...chip.fix, label } };
+};
+
+/**
+ * A chip's state against the live doc. Pure; no doc ⇒ 'live' (older hosts). `postedAt` (the notice's message time):
+ * a paid chip whose page was checked again after the notice was posted is hidden — that newer check, not this old
+ * notice, says what the page needs now (a redrawn page checked clean is never offered a paid fix for the old take).
+ */
+export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeChip, byok = false, postedAt?: number): NoticeChipState => {
   if (!doc) return 'live';
   const action = chip.action;
   if (!chip.paid) {
@@ -188,23 +231,12 @@ export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeCh
   if (typeof (action as { pageId?: unknown }).pageId === 'string' && !pages[0]) return 'hidden';
   const present = pages.filter((p): p is Page => !!p);
   if (present.some(isBusyPage)) return 'started';
+  if (typeof postedAt === 'number' && postedAt > 0 && present.some((p) => (p.render.qc?.checkedAt ?? 0) > postedAt)) return 'hidden';
   if (action.type === 'render_pages') {
-    const pageIds = Array.isArray(action.pageIds) && action.pageIds.length ? action.pageIds : undefined;
-    const renderAll = !pageIds && !action.force;
-    const anyway = Array.isArray(action.drawOverfull) ? action.drawOverfull.filter((id): id is string => typeof id === 'string') : [];
+    const { quote, renderAll, anyway } = liveRenderQuote(doc, action, byok);
     // "Draw page 2 anyway (with the rest)": once page 2 itself needs no drawing, the chip has nothing left to do.
     if (renderAll && anyway.length && !pageTargets(doc, { pageIds: anyway }).length) return 'hidden';
-    const q = quoteRenderPages(doc, {
-      ...(pageIds ? { pageIds } : {}),
-      ...(action.force ? { force: true } : {}),
-      ...(action.includeCover ? { includeCover: true } : {}),
-      byok: false,
-      tier: doc.settings.quality,
-      modelOverride: doc.settings.imageModelOverride,
-      // "Render all" holds overfull pages back, as the server's gate does.
-      ...(renderAll ? { holdBack: { drawOverfull: anyway } } : {})
-    });
-    if (q.nothing) return 'hidden';
+    if (quote.nothing) return 'hidden';
   }
   return 'live';
 };
@@ -214,7 +246,7 @@ const STATE_TITLE: Partial<Record<NoticeChipState, string>> = {
   started: 'Started — no need to tap again'
 };
 
-const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; cardId: string }> = ({ chips, studio, cardId }) => {
+const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; cardId: string; postedAt?: number }> = ({ chips, studio, cardId, postedAt }) => {
   const byok = !!(studio.byok || studio.caps?.byok);
   const cost = useCostFormat({ byok, caps: studio.caps ?? null });
   const doc = studio.doc;
@@ -248,8 +280,10 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
     }
     if (changed) setRan(next);
   }, [ran, doc]);
-  const states = React.useMemo(() => chips.map((c) => noticeChipState(doc, c)), [chips, doc]);
-  const shown = chips.map((c, i) => ({ c, i, state: states[i] })).filter((x) => x.state !== 'hidden');
+  const states = React.useMemo(() => chips.map((c) => noticeChipState(doc, c, byok, postedAt)), [chips, doc, byok, postedAt]);
+  // Paid draw chips show and send what they would draw now (liveNoticeChip), not the price when posted.
+  const live = React.useMemo(() => chips.map((c) => liveNoticeChip(doc, c, byok)), [chips, doc, byok]);
+  const shown = live.map((c, i) => ({ c, i, state: states[i] })).filter((x) => x.state !== 'hidden');
   if (!shown.length) return null;
   return (
     <div className="mt-2 flex min-w-0 flex-wrap gap-1.5 pl-[1.625rem]" role="group" aria-label="Fixes">
@@ -287,18 +321,11 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
             <span className="min-w-0 [overflow-wrap:anywhere]">{chipLabel(c.fix.label, price)}</span>
             {/* The name a screen reader hears is the visible text: "Use the layout that fits, Free". */}
             <span className="sr-only">,</span>{' '}
-            {/* The badge wraps only between words, never inside one (a 320 px chip broke "Free" into "Fr / ee"); a
-                one-word badge (Free, Done, Started) never wraps at all. */}
-            <span
-              data-fix-badge
-              className={cx(
-                'rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
-                badge.includes(' ') ? '[overflow-wrap:normal]' : 'shrink-0 whitespace-nowrap',
-                c.paid ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success
-              )}
-            >
+            {/* The badge wraps only between words, never inside one; a one-word badge (Free, Done, Started, a dollar
+                amount) never wraps at all (ui.tsx ChipBadge, shared with the breakdown's fixes). */}
+            <ChipBadge data-fix-badge tone={c.paid ? 'paid' : 'free'}>
               {badge}
-            </span>
+            </ChipBadge>
           </ChipButton>
         );
       })}
@@ -310,7 +337,7 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
  * `studio` is optional so the card still renders where no controller is passed (older hosts): the text shows, and
  * the fix chips — which need the controller to run — appear wherever the host passes it (CardRenderer).
  */
-export const NoticeCard: React.FC<{ card: NoticeCardData; studio?: NoticeCardStudio }> = ({ card, studio }) => {
+export const NoticeCard: React.FC<{ card: NoticeCardData; studio?: NoticeCardStudio; postedAt?: number }> = ({ card, studio, postedAt }) => {
   const tone = TONES[card.tone] || TONES.info;
   const hasStudio = !!studio;
   const chips = React.useMemo(() => (hasStudio ? noticeChips(card.fixes) : []), [hasStudio, card.fixes]);
@@ -321,7 +348,7 @@ export const NoticeCard: React.FC<{ card: NoticeCardData; studio?: NoticeCardStu
         <span className="mt-0.5 shrink-0">{tone.icon}</span>
         <span className="min-w-0 flex-1 whitespace-pre-wrap [overflow-wrap:anywhere]">{typeof card.text === 'string' ? card.text : ''}</span>
       </div>
-      {studio && chips.length > 0 && <NoticeFixChips chips={chips} studio={studio} cardId={card.id} />}
+      {studio && chips.length > 0 && <NoticeFixChips chips={chips} studio={studio} cardId={card.id} postedAt={postedAt} />}
     </div>
   );
 };

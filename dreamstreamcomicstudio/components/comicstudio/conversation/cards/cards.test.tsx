@@ -764,12 +764,16 @@ describe('NoticeCard and CardRenderer', () => {
       ]
     };
     const studio = renderCard(card);
+    // The chip is priced, and sent, at what it would draw now on the live doc (the server re-checks the quote).
+    const doc = studio.doc!;
+    const live = Math.round(quoteRenderPages(doc, { pageIds: ['pg_2'], byok: false, tier: doc.settings.quality }).usd * 10000) / 10000;
+    expect(live).toBeGreaterThan(0);
     const chips = within(screen.getByRole('group', { name: 'Fixes' })).getAllByRole('button');
     expect(chips.map((c) => c.getAttribute('data-fix'))).toEqual(['free', 'paid']);
     expect(chips[0]).toHaveAccessibleName('Make it a caption, Free');
-    expect(chips[1]).toHaveAccessibleName(`Draw page 2 anyway, ≈${formatUsd(0.0845)}`);
+    expect(chips[1]).toHaveAccessibleName(`Draw page 2 anyway, ≈${formatUsd(live)}`);
     fireEvent.click(chips[1]);
-    await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.0845 }));
+    await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', pageIds: ['pg_2'], quotedUsd: live }));
   });
 
   it('ignores unknown and malformed card types', () => {

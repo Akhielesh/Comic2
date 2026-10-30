@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { makeQaDoc } from '../testing/qaFixtures';
+import { p2ShapedDoc } from '../../../shared/comic/lettering/__fixtures__/letterFit';
 import { estimateMeasure, letteringAspect, planLettering } from '../../../shared/comic/lettering/layout';
 import { letteringKey, planLetteringCached, resolvePlacements, withDrawnGeometry } from './useLetterPlans';
 
@@ -89,5 +90,18 @@ describe('planLetteringCached (plans survive doc changes that leave a page’s l
     expect(letteringKey(hindi, page, aspect)).not.toBe(letteringKey(doc, page, aspect));
     const otherMeasure = (t: string, f: string) => estimateMeasure(t, f);
     expect(planLetteringCached(doc, page, aspect, otherMeasure)).not.toBe(first);
+  });
+
+  it('re-plans when the brief changes the coverage cap (an audience edit to a children’s book)', () => {
+    // A kids' comic (not a storybook): only the brief says so, and it lowers the cap from 0.30 to 0.25.
+    const { doc, page } = p2ShapedDoc({ panel6: 'one' });
+    const aspect = letteringAspect(doc, page);
+    const before = planLetteringCached(doc, page, aspect, estimateMeasure);
+    const kids = { ...doc, brief: { ...doc.brief, audience: 'kids 6-9' } };
+    const after = planLetteringCached(kids, page, aspect, estimateMeasure);
+    expect(after).not.toBe(before);
+    expect(after).toEqual(planLettering(kids, page, aspect, estimateMeasure));
+    const ln5 = (ps: readonly { lineId: string; x: number }[]) => ps.find((p) => p.lineId === 'ln_5')!.x;
+    expect(ln5(after)).not.toBeCloseTo(ln5(before), 0);
   });
 });

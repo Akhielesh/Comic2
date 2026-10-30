@@ -68,8 +68,17 @@ export const MIN_PAGES = 1;
 export const MAX_PAGES = 40;
 /** Auto, then the fixed counts Format offers (plan §5.1 PANEL_LIMITS.uiChoices: 2–6). */
 export const PANEL_OPTIONS: Format['panelsPerPage'][] = ['auto', ...PANEL_LIMITS.uiChoices];
-/** What Auto plans (plan §4.1): usually 3 big panels, sometimes 2 or 4. */
-export const AUTO_PANELS_LABEL = '3–4 big panels';
+/**
+ * The Auto tile's words for a kind: what Auto usually plans, from the same rule the writer, the plan check and the
+ * hint under the tiles use (panelRules.panelCountRule) — a comic "3–4 big panels", a storybook "2–3 large panels",
+ * a webtoon "3–5 panels" — so the tile never promises a count the writer never plans for that kind.
+ */
+export const autoPanelsLabel = (kind: ComicKind): string => {
+  const rule = panelCountRule({ kind, panelsPerPage: 'auto' });
+  const count = rule.typical >= rule.max ? `${rule.max}` : `${rule.typical}–${rule.max}`;
+  const size = kind === 'storybook' ? ' large' : kind === 'webtoon' || kind === 'strip' ? '' : ' big';
+  return `${count}${size} panels`;
+};
 
 /**
  * The words under the panel choice: what the current setting plans, from the same rule the writer and the plan
@@ -162,11 +171,12 @@ const PageCountInput: React.FC<{ id: string; value: number; onCommit: (n: number
 };
 
 /**
- * Panels per page: Auto ("3–4 big panels") and 2–6 as a radio group of tiles that WRAPS with its container
+ * Panels per page: Auto (what Auto plans for the kind: "3–4 big panels" for a comic) and 2–6 as a radio group of tiles that WRAPS with its container
  * (Auto spans two columns), arrow keys move and choose like a native radio group, 44 px targets on touch.
  * A stored count outside the offered ones (an old doc's 9, say) stays visible as its own "current" tile.
  */
-const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; onChange(v: Format['panelsPerPage']): void }> = ({ value, onChange }) => {
+const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; kind: ComicKind; onChange(v: Format['panelsPerPage']): void }> = ({ value, kind, onChange }) => {
+  const autoLabel = autoPanelsLabel(kind);
   const options: Format['panelsPerPage'][] = PANEL_OPTIONS.includes(value) ? PANEL_OPTIONS : [...PANEL_OPTIONS, value];
   const checked = options.findIndex((o) => o === value);
   const focusIndex = checked >= 0 ? checked : 0;
@@ -192,8 +202,8 @@ const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; onChange(v: F
             aria-checked={on}
             tabIndex={i === focusIndex ? 0 : -1}
             // The name starts with the visible words: "Auto · 3–4 big panels", "2 panels" (WCAG 2.5.3).
-            aria-label={auto ? `Auto · ${AUTO_PANELS_LABEL}` : `${v} panels${extra ? ' (current)' : ''}`}
-            title={auto ? `Auto · ${AUTO_PANELS_LABEL} — the story's beats decide` : `${v} panels on every page${extra ? ' (current setting)' : ''}`}
+            aria-label={auto ? `Auto · ${autoLabel}` : `${v} panels${extra ? ' (current)' : ''}`}
+            title={auto ? `Auto · ${autoLabel} — the story's beats decide` : `${v} panels on every page${extra ? ' (current setting)' : ''}`}
             onClick={() => onChange(v)}
             className={cx(
               `flex min-w-0 flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 text-center ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)] coarse:min-h-[44px]`,
@@ -206,7 +216,7 @@ const PanelCountChoice: React.FC<{ value: Format['panelsPerPage']; onChange(v: F
             {auto ? (
               <>
                 <span className="w-full truncate text-[12px] font-semibold">Auto</span>
-                <span className="w-full truncate text-[10px] leading-tight">{AUTO_PANELS_LABEL}</span>
+                <span className="w-full truncate text-[10px] leading-tight">{autoLabel}</span>
               </>
             ) : (
               <span className="text-[13px] font-semibold tabular-nums">{v}</span>
@@ -398,7 +408,7 @@ export const FormatPanel: React.FC<FormatPanelProps> = ({ doc, patch, byok = fal
 
       <div>
         <SectionLabel>Panels per page</SectionLabel>
-        <PanelCountChoice value={format.panelsPerPage} onChange={(panelsPerPage) => set({ panelsPerPage })} />
+        <PanelCountChoice value={format.panelsPerPage} kind={format.kind} onChange={(panelsPerPage) => set({ panelsPerPage })} />
         <p className="mt-2 text-[11px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{panelChoiceHint(format)}</p>
         {panelCountNote(format) && (
           <p

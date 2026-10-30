@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
-import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions } from '../../../../shared/comic/lettering/layout.js';
+import { estimateMeasure, letteringAspect, letteringSizer, placementCoverOptions, planLettering, PLAN_W } from '../../../../shared/comic/lettering/layout.js';
 import { p2ShapedDoc } from '../../../../shared/comic/lettering/__fixtures__/letterFit.js';
 import { panelBoxesFor } from '../../../../shared/comic/pageGeometry.js';
 import { PANEL_LIMITS } from '../../../../shared/comic/panelRules.js';
@@ -208,7 +208,50 @@ describe('arrange_balloons', () => {
     for (const b of kids.page.balloons.filter((x) => x.pinned)) expect(page.balloons.find((x) => x.lineId === b.lineId)).toEqual(b);
   });
 
-  it('a software-placed line is nudged from where the capped placement draws it (pageCtx, A4 wave note 3)', async () => {
+  describe('starts from where the board draws a balloon the coverage cap moved (never its stored spot)', () => {
+    /** p2ShapedDoc: panel 6's stored, unpinned ln_6a is drawn elsewhere by the cap (crowded, reason 'cover'). */
+    const capMoved = () => {
+      const p2 = p2ShapedDoc();
+      const { ctx, call } = setup((d) => Object.assign(d, p2.doc));
+      const doc = ctx.session.doc;
+      const aspect = letteringAspect(doc, doc.pages[0]);
+      const planOf = (d: ComicDoc) => planLettering(d, d.pages[0], aspect, estimateMeasure).find((p) => p.lineId === 'ln_6a')!;
+      const before = planOf(doc);
+      expect(before.crowdedReason).toBe('cover');
+      const stored = doc.pages[0].balloons.find((b) => b.lineId === 'ln_6a')!;
+      expect(Math.abs(before.y / (PLAN_W / aspect) - stored.y)).toBeGreaterThan(0.02);
+      return { ctx, call, before, planOf, H: PLAN_W / aspect };
+    };
+
+    it('lock pins it where it is drawn: its planned spot does not move', async () => {
+      const { ctx, call, before, planOf } = capMoved();
+      const res = await call('arrange_balloons', { page: 2, action: 'lock', target: { line_ids: ['ln_6a'] } });
+      expect(res).toMatch(/^Locked /);
+      expect(opsOf(ctx.events).at(-1)).toMatchObject({ op: 'balloon', lineId: 'ln_6a', patch: { locked: true, pinned: true } });
+      const after = planOf(ctx.session.doc);
+      expect(after.x).toBeCloseTo(before.x, 1);
+      expect(after.y).toBeCloseTo(before.y, 1);
+      noSpend(ctx);
+    });
+
+    it('nudge moves it by exactly dx/dy from where it is drawn', async () => {
+      const { ctx, call, before, planOf, H } = capMoved();
+      await call('arrange_balloons', { page: 2, action: 'nudge', target: { line_ids: ['ln_6a'] }, dx: -0.01, dy: 0.005 });
+      const after = planOf(ctx.session.doc);
+      expect(after.x).toBeCloseTo(before.x - 0.01 * PLAN_W, 0);
+      expect(after.y).toBeCloseTo(before.y + 0.005 * H, 0);
+    });
+
+    it('resize keeps it at its drawn spot (only the width changes, about its centre)', async () => {
+      const { ctx, call, before, planOf } = capMoved();
+      await call('arrange_balloons', { page: 2, action: 'resize', target: { line_ids: ['ln_6a'] }, width_scale: 1 });
+      const after = planOf(ctx.session.doc);
+      expect(after.x).toBeCloseTo(before.x, 0);
+      expect(after.y).toBeCloseTo(before.y, 0);
+    });
+  });
+
+  it('a software-placed line is nudged from where the board draws it (pageCtx, A4 wave note 3)', async () => {
     const kids = p2ShapedDoc({ kids: true, panel6: 'one' });
     kids.page.balloons = kids.page.balloons.filter((b) => b.lineId !== 'ln_5');
     const { ctx, call } = setup((d) => Object.assign(d, kids.doc));
@@ -219,15 +262,17 @@ describe('arrange_balloons', () => {
       page, boxes: panelBoxesFor(doc, page), aspect, rtl: false, plansFor: letteringSizer(doc, page, aspect, estimateMeasure),
       keepOut: page.render.qc?.keepOut, heads: page.render.qc?.heads, safeMargin: 0.03, existing: page.balloons, keep: 'all' as const, lang: doc.format.language
     };
-    const capped = placeBalloonsWholeWords({ ...args, ...placementCoverOptions(doc) }).balloons.find((b) => b.lineId === 'ln_5')!;
     const plain = placeBalloonsWholeWords(args).balloons.find((b) => b.lineId === 'ln_5')!;
-    expect([capped.x, capped.y]).not.toEqual([plain.x, plain.y]);
+    // The board letters the line under the kids' cap (the render-time cap re-places it): that is where it is drawn.
+    const H = PLAN_W / aspect;
+    const drawn = planLettering(doc, page, aspect, estimateMeasure).find((p) => p.lineId === 'ln_5')!;
+    expect([drawn.x / PLAN_W, drawn.y / H]).not.toEqual([plain.x, plain.y]);
     await call('arrange_balloons', { page: 2, action: 'nudge', target: { line_ids: ['ln_5'] }, dy: 0.01 });
     const op = opsOf(ctx.events).at(-1) as { op: string; lineId: string; patch: { x: number; y: number; w: number } };
     expect(op).toMatchObject({ op: 'balloon', lineId: 'ln_5' });
-    expect(op.patch.x).toBeCloseTo(capped.x, 4);
-    expect(op.patch.w).toBeCloseTo(capped.w, 4);
-    expect(op.patch.y).toBeCloseTo(capped.y + 0.01, 4);
+    expect(op.patch.x).toBeCloseTo(drawn.x / PLAN_W, 4);
+    expect(op.patch.w).toBeCloseTo(drawn.w / PLAN_W, 4);
+    expect(op.patch.y).toBeCloseTo(drawn.y / H + 0.01, 4);
   });
 
   it('move puts a COMPLETE, pinned balloon in the panel corner inside the safe area', async () => {

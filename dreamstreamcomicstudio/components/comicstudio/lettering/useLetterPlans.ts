@@ -11,7 +11,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Balloon, ComicDoc, Page } from '../../../shared/comic/doc';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { normalizeLetteringText } from '../../../shared/comic/textLayout';
-import { letteringAspect, letteringSizer, planLettering, type CrowdedReason, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
+import { coverCapFor, LETTER_FIT_POLICY, letteringAspect, letteringSizer, planLettering, withDrawnSpots, type CrowdedReason, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { placeBalloonsDetailed } from '../../../shared/comic/lettering/place';
 import { DEFAULT_LETTERING, DEFAULT_SAFE_MARGIN, type FontId } from '../../../shared/comic/lettering/style';
 import { ensureFonts, fontLoadGeneration, subscribeFontLoads } from './fontLoader';
@@ -73,8 +73,6 @@ export function resolvePlacements(doc: ComicDoc, page: Page, aspect: number, mea
   return { balloons, fallback, crowded, reasons };
 }
 
-const r4 = (n: number) => Math.round(n * 10000) / 10000;
-
 /**
  * The render-time settle and dense-page repack (planLettering) may draw a software-placed or an unpinned
  * stored balloon somewhere else than the placement put it, tail included. Those lines are `crowded` (the
@@ -88,17 +86,9 @@ export function withDrawnGeometry(p: Placements, plans: readonly LetterPlan[], H
       p.crowded.add(plan.lineId);
       if (plan.crowdedReason) (p.reasons ??= new Map()).set(plan.lineId, plan.crowdedReason);
     }
-    const b = p.balloons.get(plan.lineId);
-    if (!b || b.pinned || b.locked || !(plan.crowded || p.fallback.has(plan.lineId)) || !(H > 0)) continue;
-    // x, y AND w as drawn: the text box the fit settled on (a dense page letters it smaller, an rtl caption
-    // grows left), so pinning it by a drag keeps its left edge under the finger.
-    const next: Balloon = { ...b, x: r4(plan.x / 1000), y: r4(plan.y / H), w: r4(plan.w / 1000) };
-    if (plan.tip && Number.isFinite(plan.tip.x) && Number.isFinite(plan.tip.y)) {
-      next.tailX = r4(Math.min(1, Math.max(0, plan.tip.x / 1000)));
-      next.tailY = r4(Math.min(1, Math.max(0, plan.tip.y / H)));
-    }
-    p.balloons.set(plan.lineId, next);
   }
+  // x, y AND w as drawn (and the tail tip): one rule with the director's arrange_balloons (layout.ts withDrawnSpots).
+  withDrawnSpots(p.balloons, plans, H, p.fallback);
   return p;
 }
 
@@ -146,15 +136,17 @@ const PLAN_CACHE_SIZE = 240;
 
 /**
  * Everything planLettering reads from a doc and a page, as one string: equal keys plan identically. (The
- * lettering style and format of the doc; the page's layout, panel numbers / sizes / cast, every line's
+ * lettering style and format of the doc; the coverage cap the brief sets (a children's book letters under a lower
+ * one) and the owner's cover-shrink policy; the page's layout, panel numbers / sizes / cast, every line's
  * lettering fields, stored balloons and the vision qc that holds panel boxes, faces and heads.)
  */
-export function letteringKey(doc: Pick<ComicDoc, 'letterStyle' | 'format'>, page: Page, aspect: number): string {
+export function letteringKey(doc: Pick<ComicDoc, 'letterStyle' | 'format' | 'brief'>, page: Page, aspect: number): string {
   const f = doc.format;
   return JSON.stringify([
     Math.round(aspect * 1e6) / 1e6,
     doc.letterStyle ?? null,
     f ? [f.language, f.readingDirection, f.kind, f.pageAspect] : null,
+    [coverCapFor(doc), LETTER_FIT_POLICY.coverShrink],
     page.layout ?? '',
     (page.panels || []).map((p) => [p.n, p.size, p.castIds ?? [], (p.lines || []).map((l) => [l.id, l.kind, l.text, l.lang ?? '', l.speakerId ?? '', l.style ?? null])]),
     page.balloons ?? [],

@@ -13,6 +13,15 @@ export const SLUG_RE = /^[A-Za-z0-9]{17}$/;
 export const ASSET_KEY_RE = /^[A-Za-z0-9]{22}$/; // ≈ 131 bits, storage prefix pub/<key>/
 export const SHARE_PATH = (slug: string): string => `/c/${slug}`;
 export const OG_TEMPLATE_VERSION = 1;
+/**
+ * A public snapshot's page check is geometry only (server publication/snapshot.ts publicQc): no score, issues or
+ * time, so its `checkedAt` is this value (a live page check always stores the real time). A snapshot page with this
+ * marker and no face lists was published before the faces were (keepOut/heads); the lettering never moves its stored
+ * balloons there (lettering/layout.ts).
+ */
+export const PUBLIC_QC_CHECKED_AT = 0;
+/** The only audience a public snapshot carries: the category word, for a children's book that is not a storybook. */
+export const PUBLIC_KIDS_AUDIENCE = 'children';
 export type ShareChannel = 'copy' | 'native' | 'qr' | 'whatsapp' | 'x' | 'facebook' | 'telegram' | 'email' | 'embed' | 'direct';
 export const SHARE_CHANNELS: readonly ShareChannel[] = ['copy', 'native', 'qr', 'whatsapp', 'x', 'facebook', 'telegram', 'email', 'embed', 'direct'];
 export interface ShareLinkOptions { lang?: string; page?: number; via?: ShareChannel; guided?: boolean }

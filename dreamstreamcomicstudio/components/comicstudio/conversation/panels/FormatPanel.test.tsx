@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { PANEL_LIMITS, panelCountNote, panelCountRule } from '../../../../shared/comic/panelRules';
 import { makeSampleDoc, resetUsageStatus, showDollarPrices } from '../testing/fixtures';
-import { FormatPanel, PANEL_OPTIONS, panelChoiceHint } from './FormatPanel';
+import { FormatPanel, PANEL_OPTIONS, autoPanelsLabel, panelChoiceHint } from './FormatPanel';
 
 beforeEach(showDollarPrices);
 afterEach(resetUsageStatus);
@@ -23,6 +23,26 @@ describe('FormatPanel — panels per page', () => {
     expect(PANEL_OPTIONS).toEqual(['auto', ...PANEL_LIMITS.uiChoices]);
     // What Auto plans, in words, under the choice.
     expect(screen.getByText(/^Auto: usually 3 big panels a page \(2–4; 5 only for a fast, nearly silent moment\)/)).toBeInTheDocument();
+  });
+
+  it('the Auto tile says what Auto plans for THIS kind, from the same rule as the hint under it (one source)', () => {
+    const doc = makeSampleDoc();
+    const story = { ...doc, format: { ...doc.format, kind: 'storybook' as const, pageAspect: '4:3' as const, panelsPerPage: 'auto' as const } };
+    render(<FormatPanel doc={story} patch={vi.fn()} />);
+    const auto = within(group()).getAllByRole('radio')[0];
+    expect(auto).toHaveAccessibleName('Auto · 2–3 large panels');
+    expect(auto).toHaveAttribute('title', 'Auto · 2–3 large panels — the story’s beats decide'.replace('’', "'"));
+    expect(auto).toHaveTextContent('Auto2–3 large panels');
+    expect(screen.getByText(panelChoiceHint(story.format))).toHaveTextContent('Auto: usually 2 large panels a page (at most 3)');
+    // every kind's tile stays inside its own rule's range
+    for (const kind of ['comic', 'manga', 'webtoon', 'strip', 'storybook'] as const) {
+      const rule = panelCountRule({ kind, panelsPerPage: 'auto' });
+      const nums = autoPanelsLabel(kind).match(/\d+/g)!.map(Number);
+      expect(Math.min(...nums), kind).toBeGreaterThanOrEqual(rule.min);
+      expect(Math.max(...nums), kind).toBe(rule.max);
+    }
+    expect(autoPanelsLabel('comic')).toBe('3–4 big panels');
+    expect(autoPanelsLabel('webtoon')).toBe('3–5 panels');
   });
 
   it('choosing 2 is an instant, free format patch; arrow keys move and choose like a radio group', () => {

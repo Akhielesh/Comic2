@@ -9,7 +9,7 @@ import { newId, type Balloon, type Box, type ComicDoc, type Line, type LineKind,
 import type { DocOp } from '../../../shared/comic/ops';
 import { panelBoxesFor } from '../../../shared/comic/pageGeometry';
 import { estimateTextHeight, estimateWidthForText } from '../../../shared/comic/textLayout';
-import { letteringSizer, placementCoverOptions, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
+import { drawnSpotPatch, letteringSizer, placementCoverOptions, type LetterPlan, type Measure } from '../../../shared/comic/lettering/layout';
 import { placeBalloonsWholeWords, safeAreaBox } from '../../../shared/comic/lettering/place';
 import {
   DEFAULT_LETTERING,
@@ -282,20 +282,8 @@ export function zOrderOps(page: Page, lineIds: readonly string[], move: ZMove, p
     });
 }
 
-/**
- * Keep a balloon where it is DRAWN: an unpinned stored balloon the engine drew elsewhere (the settle, a dense-page
- * repack or the coverage cap) is pinned at its drawn spot, width and tail — never sent back to its stored spot. {}
- * for anything else (a software-placed line's full balloon comes from balloonOp; a pinned one is drawn as stored).
- */
-export const drawnSpotPatch = (page: Page, lineId: string, resolved: ReadonlyMap<string, Balloon>): Partial<Balloon> => {
-  const stored = page.balloons.find((b) => b.lineId === lineId);
-  const drawn = resolved.get(lineId);
-  if (!stored || !drawn || stored.pinned || stored.locked) return {};
-  const out: Partial<Balloon> = {};
-  if (drawn.x !== stored.x || drawn.y !== stored.y || drawn.w !== stored.w) Object.assign(out, { x: drawn.x, y: drawn.y, w: drawn.w });
-  if (typeof drawn.tailX === 'number' && typeof drawn.tailY === 'number' && (drawn.tailX !== stored.tailX || drawn.tailY !== stored.tailY)) Object.assign(out, { tailX: drawn.tailX, tailY: drawn.tailY });
-  return out;
-};
+// drawnSpotPatch lives in the shared engine (layout.ts) so the director's arrange_balloons pins the drawn spot too.
+export { drawnSpotPatch };
 
 /**
  * Lock / unlock (locked balloons are never moved by auto-layout or drags). Locking pins the balloon where it is

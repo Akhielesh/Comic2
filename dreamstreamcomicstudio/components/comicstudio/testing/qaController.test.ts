@@ -76,11 +76,13 @@ describe('fixtures', () => {
     const check = checkPagePlan(doc, page, { fixLayout: false });
     expect(check.state).toBe('overfull');
     expect(check.panels.filter((p) => p.state === 'overfull').map((p) => p.n)).toEqual([5, 6]);
-    // The gate is a Render all (no page ids), so the hold-back applies and Draw anyway extends it.
-    expect(doc.gate?.action).toEqual({ type: 'render_pages', quotedUsd: 1.31 });
+    // The gate is a Render all, stored as the server stores it (jobs.ts createGate: withoutQuote(bindSpendAction)):
+    // bound to the pages it draws, the held-back page left out, no drawOverfull and no chip quote. "Draw anyway" is
+    // the notice's chip, which extends that Render all.
     const quote = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: {} });
     expect(quote.heldBackIds).toEqual([page.id]);
     expect(quote.pageIds).not.toContain(page.id);
+    expect(doc.gate?.action).toEqual({ type: 'render_pages', pageIds: quote.pageIds });
     const notice = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.id === 'n_held') as Extract<Card, { type: 'notice' }>;
     expect(notice.text).toMatch(/^Page 3 is held back: panel \d has /);
     const chips = noticeChips(notice.fixes);
@@ -88,12 +90,17 @@ describe('fixtures', () => {
     expect(chips[1].usd).toBeGreaterThan(0);
     expect(chips[1].action).toMatchObject({ type: 'render_pages', drawOverfull: [page.id] });
     for (const c of chips) expect(noticeChipState(doc, c)).toBe('live');
+    // An older notice shows the other two chip states for the 320/360 px run: its free fix is already in the comic
+    // (Done) and its paid redraw targets a page that is queued or drawing (Started).
+    const states = doc.conversation.flatMap((m) => m.cards ?? []).find((c) => c.id === 'n_states') as Extract<Card, { type: 'notice' }>;
+    expect(noticeChips(states.fixes).map((c) => noticeChipState(doc, c))).toEqual(['done', 'started']);
     // heldBack: false is heist as it was before (the lettering goldens were recorded on it): page 3 as planned,
     // nothing held back, an explicit-pages gate and no held-back notice.
     const before = makeQaDoc('heist-12p', { heldBack: false });
     expect(before.pages[2].panels).toHaveLength(5);
     expect(quoteRenderPages(before, { byok: false, tier: before.settings.quality, holdBack: {} }).heldBackIds).toBeUndefined();
     expect((before.gate?.action as { pageIds?: string[] }).pageIds).toContain(before.pages[2].id);
+    expect(before.gate?.action).not.toHaveProperty('quotedUsd');
     expect(before.conversation.flatMap((m) => m.cards ?? []).some((c) => c.id === 'n_held')).toBe(false);
   });
 

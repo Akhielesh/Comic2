@@ -30,8 +30,10 @@
 // fixes first — "Use the layout that fits" (shared ops.layoutFixOps: the blueprint plus panel sizes that agree with
 // it, never a bare page.layout patch; offered only when it really fits once applied), the page editor, split or
 // shorten with the director — then "Draw anyway". Outside a gate, Draw anyway adds the page to this card's
-// `drawOverfull` and re-quotes; the primary action then sends `render_pages { drawOverfull }`. Inside an open
-// "Render all" gate it extends that run: `render_pages { drawOverfull: [...gate's, page] }`, quoted as a whole.
+// `drawOverfull` and re-quotes; the primary action then sends `render_pages { drawOverfull }`. A gate owns its own
+// approval: the server stores it bound to the pages it draws (jobs.ts bindSpendAction: held-back pages left out, no
+// drawOverfull, no quote) and posts its breakdown scoped to those pages, so a held-back page is never inside it. The
+// held-back notice posted beside the gate carries "Draw page N anyway (with the rest)", which extends that run.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
@@ -87,7 +89,7 @@ import {
   plural
 } from '../board/boardModel';
 import { composeInStudio } from '../conversation/composerBus';
-import { CardShell, ChipButton, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
+import { CardShell, ChipBadge, ChipButton, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
 import { noticePrice } from '../conversation/cards/NoticeCard';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
@@ -236,19 +238,10 @@ export const layoutFitFix = (doc: ComicDoc, page: Page, layout: string | undefin
   return checkPagePlan(fitted, after, { fixLayout: false }).state === 'overfull' ? null : ops;
 };
 
-type RenderPagesAction = Extract<StudioAction, { type: 'render_pages' }>;
-
-/** The open "Render all" (render_pages with no pageIds and no force) the card's gate is waiting on, else null. */
-export const gateRenderAll = (doc: ComicDoc, gateId: string | undefined): RenderPagesAction | null => {
-  const gate = gateId && doc.gate && doc.gate.id === gateId && doc.gate.status === 'open' ? doc.gate : null;
-  const action = gate?.action;
-  if (!action || action.type !== 'render_pages' || action.force) return null;
-  return Array.isArray(action.pageIds) && action.pageIds.length ? null : action;
-};
-
 /**
- * Pages a gate's run draws whatever their fit (the server's gate applies to "Render all" only): its drawOverfull,
- * or — for an explicit page draw or a forced redraw — every page it names.
+ * Pages a gate's run draws whatever their fit: every page it names (the server stores a gate bound to the pages it
+ * draws, held-back pages left out — jobs.ts bindSpendAction — and an explicit draw is never held back), every page
+ * for a forced redraw, or — a gate stored before gates were bound — its drawOverfull.
  */
 const gateDrawsAnyway = (doc: ComicDoc, gateId: string): string[] => {
   const action = doc.gate && doc.gate.id === gateId ? doc.gate.action : null;
@@ -279,8 +272,6 @@ interface PageFitActions {
   /** Outside a gate: what adding this page to the run adds to its quote. */
   anywayUsd?: number;
   onAnyway?(on: boolean): void;
-  /** Inside an open "Render all" gate: that run extended with this page, quoted as a whole. */
-  gateAnyway?: { usd: number; pending: boolean; run(): void };
 }
 
 /** The pure part of PageFitActions for one page (memoized by the card: plan checks and quotes, no handlers). */
@@ -290,7 +281,6 @@ interface PageFitCalc {
   anyway: boolean;
   layoutFix: DocOp[] | null;
   anywayUsd?: number;
-  gate?: { usd: number; action: StudioAction };
 }
 
 /**
@@ -574,25 +564,8 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
       const withIt = quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: [...drawAnyway, page.id], meter } });
       out.anywayUsd = Math.max(0, Math.round((withIt.usd - quote.usd) * 10000) / 10000);
     }
-    const gateRun = inGate ? gateRenderAll(doc, spec.gateId) : null;
-    if (heldBack && gateRun) {
-      // Next to an open "Render all" gate, Draw anyway EXTENDS that run (K1: the server's chip does the same) — a
-      // single-page draw would retire the gate and drop the other pages' approval. Quoted as a whole.
-      const next = [...new Set([...(gateRun.drawOverfull ?? []), page.id])].filter((id) => doc.pages.some((p) => p.id === id));
-      const usd = quoteRenderPages(doc, { byok, tier, modelOverride: override, includeCover: !!gateRun.includeCover, holdBack: { drawOverfull: next, meter } }).usd;
-      out.gate = {
-        usd,
-        action: {
-          type: 'render_pages',
-          drawOverfull: next,
-          ...(gateRun.includeCover ? { includeCover: true } : {}),
-          ...(gateRun.safe ? { safe: true } : {}),
-          quotedUsd: usd
-        }
-      };
-    }
     return out;
-  }, [doc, quote, selectedPageId, selectedSummary, inGate, chosenAnyway, drawAnyway, spec.gateId, scope.ids, byok, tier, override, meter]);
+  }, [doc, quote, selectedPageId, selectedSummary, inGate, chosenAnyway, drawAnyway, scope.ids, byok, tier, override, meter]);
   const [detailsOpen, setDetailsOpen] = useState<boolean>(pro && !compact);
   useEffect(() => {
     setDetailsOpen(pro && !compact);
@@ -835,8 +808,6 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         setAnyway(page.id, on);
       };
     }
-    const gate = f?.gate;
-    if (gate) out.gateAnyway = { usd: gate.usd, pending: isPending(`anyway:${page.id}`), run: () => void run(`anyway:${page.id}`, gate.action) };
     return out;
   };
 
@@ -1299,18 +1270,18 @@ const FreeBadge: React.FC = () => (
   </span>
 );
 
-/** A paid amount beside a choice that spends ("≈$0.07", "≈1% of your usage", "≈$0.07 on your key"). */
-const PriceBadge: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <span className="min-w-0 rounded-full bg-[var(--ds-well-strong)] px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-[var(--ds-muted)] [overflow-wrap:anywhere]">
-    {children}
-  </span>
-);
+/**
+ * A paid amount beside a choice that spends ("≈$0.07", "≈1% of your usage", "adds ≈$0.07 on your key"): the
+ * conversation's ChipBadge, so it never breaks inside an amount ("≈$0. / 90") at 320 px, exactly like the notices.
+ */
+const PriceBadge: React.FC<{ children: string }> = ({ children }) => <ChipBadge tone="paid">{children}</ChipBadge>;
 
 /**
  * A held-back page (PD-1): what is wrong in one sentence, the worst panel's fit in words, then the fixes — free
  * first (the layout that fits, the page editor; split or shorten with the director, which only prefills the
- * composer), then "Draw anyway" where this card can start it (outside a gate, or beside an open Render-all gate).
- * The sentence offers "draw it anyway" only when that control is there (a closed or explicit gate: "Fix it free.").
+ * composer), then "Draw anyway" where this card can start it (outside a gate: inside one, the gate owns approval and
+ * the held-back notice beside it offers "Draw page N anyway (with the rest)"). The sentence offers "draw it anyway"
+ * only when that control is there (inside a gate: "Fix it free.").
  * Never a refusal: every choice is the user's.
  */
 const HeldBackFixes: React.FC<{
@@ -1338,7 +1309,7 @@ const HeldBackFixes: React.FC<{
       <p className="flex min-w-0 items-start gap-2 text-[12.5px] leading-snug text-[var(--ds-ink)]">
         <TriangleAlert className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', TONE_TEXT.danger)} aria-hidden />
         <span className="min-w-0 [overflow-wrap:anywhere]">
-          {lead}: {subject}. {fit.onAnyway || fit.gateAnyway ? 'Fix it free, or draw it anyway.' : 'Fix it free.'}
+          {lead}: {subject}. {fit.onAnyway ? 'Fix it free, or draw it anyway.' : 'Fix it free.'}
         </span>
       </p>
       {worst && typeof budget === 'number' && (
@@ -1394,19 +1365,7 @@ const HeldBackFixes: React.FC<{
             onClick={() => fit.onAnyway!(true)}
           >
             <span className="min-w-0 [overflow-wrap:anywhere]">Draw anyway</span>
-            {typeof fit.anywayUsd === 'number' && fit.anywayUsd > 0 && <PriceBadge>adds {amountInSentence(paidAmount(cost, fit.anywayUsd, byok))}</PriceBadge>}
-          </ChipButton>
-        )}
-        {fit.gateAnyway && (
-          <ChipButton
-            className="min-w-0"
-            disabled={disabled || fit.gateAnyway.pending}
-            aria-busy={fit.gateAnyway.pending || undefined}
-            title="Approves the drawing waiting above with this page in it, priced as a whole. Tapping is your OK; the price is re-checked before anything is drawn."
-            onClick={fit.gateAnyway.run}
-          >
-            <span className="min-w-0 [overflow-wrap:anywhere]">Draw page {s.n} anyway (with the rest)</span>
-            <PriceBadge>{paidAmount(cost, fit.gateAnyway.usd, byok)}</PriceBadge>
+            {typeof fit.anywayUsd === 'number' && fit.anywayUsd > 0 && <PriceBadge>{`adds ${amountInSentence(paidAmount(cost, fit.anywayUsd, byok))}`}</PriceBadge>}
           </ChipButton>
         )}
       </div>
