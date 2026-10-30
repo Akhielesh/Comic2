@@ -557,6 +557,21 @@ describe('earlierMoments: a panel picture or overlay a restore archived is not "
     expect(byPath(moments, STICKER)).toMatchObject({ owner: { key: `page:${page.id}` }, label: `An overlay from page ${page.n}`, by: null, archived: true });
   });
 
+  it('every owner numbers its drawings v1..vN: a panel picture or overlay takes no number (no gap where it was)', () => {
+    const moments = earlierMoments(withSources());
+    const byOwner = new Map<string, number[]>();
+    for (const m of moments) if (m.kind === 'drawing' && m.versionN !== undefined) byOwner.set(m.owner.key, [...(byOwner.get(m.owner.key) || []), m.versionN]);
+    expect(byOwner.get('trash:pg_old')?.length).toBeGreaterThan(0); // the deleted page with an overlay has drawings
+    for (const [key, ns] of byOwner) {
+      const sorted = [...ns].sort((a, b) => a - b);
+      expect(sorted, key).toEqual(sorted.map((_, i) => i + 1));
+    }
+    // Still listed, under their pages, with no v-number: the live page's (the shared list leaves them out), the
+    // deleted page's and the purged page's.
+    for (const path of [OVERLAY, TAKE, TRASHED, PURGED]) expect(byPath(moments, path), path).not.toHaveProperty('versionN');
+    expect(earlierForPage(moments, 'pg_2').map((m) => m.path)).toEqual(expect.arrayContaining([OVERLAY, TAKE]));
+  });
+
   it('its facts say what was never recorded, and never "No AI cost"', () => {
     const moments = earlierMoments(withSources());
     expect(earlierFacts(byPath(moments, OVERLAY))).toEqual([`How it was made: ${NOT_RECORDED}`, `Image model: ${NOT_RECORDED}`, `Cost: ${NOT_RECORDED}`, 'Archived', `Date: ${NOT_RECORDED}`]);

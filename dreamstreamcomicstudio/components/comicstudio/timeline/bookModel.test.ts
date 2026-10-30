@@ -210,18 +210,30 @@ const withPanelSources = (doc: ComicDoc): ComicDoc => {
 };
 
 describe('a panel picture or overlay a restore archived is not a version of the page (note 4b)', () => {
-  it('versionList leaves it out and keeps the shared v-numbers (the director’s) for the drawings', () => {
+  it('versionList leaves it out before numbering: v1..vN count the drawings only, the same numbers as the director’s', () => {
     const doc = withPanelSources(richDoc());
     const page1 = { kind: 'page', id: 'pg_1' } as const;
-    const shared = new Map(sharedVersionList(doc, page1).map((v) => [v.path, v.n]));
-    expect(shared.has('u/x/p/ov-p1.webp')).toBe(true); // the shared list still counts it (book.ts wave note)
+    // The shared list (the director's list_versions / use_version, the board's version strip) leaves it out too.
+    expect(sharedVersionList(doc, page1).map((v) => v.path)).not.toContain('u/x/p/ov-p1.webp');
     const list = versionList(doc, page1);
-    expect(list.map((v) => v.path)).toEqual(['u/x/p/p1-v1.webp', 'u/x/p/p1-v2.webp', 'u/x/p/p1-v3.webp']);
-    for (const v of list) expect(v.n, v.path).toBe(shared.get(v.path));
+    expect(list.map((v) => [v.n, v.path, v.current])).toEqual([
+      [1, 'u/x/p/p1-v1.webp', false],
+      [2, 'u/x/p/p1-v2.webp', false],
+      [3, 'u/x/p/p1-v3.webp', true]
+    ]);
+    expect(list.map((v) => [v.n, v.path])).toEqual(sharedVersionList(doc, page1).map((v) => [v.n, v.path]));
     expect(versionCount(doc, page1)).toBe(3);
-    // Page 2: the panel picture is gone from its versions; the look-alike drawing stays.
-    expect(versionList(doc, { kind: 'page', id: 'pg_2' }).map((v) => v.path)).toEqual(['u/x/p/p2-old.webp']);
-    expect(bookClips(doc).find((c) => c.target?.kind === 'page' && c.target.id === 'pg_1')?.versions).toBe(3);
+    // Every target in the book: n === index + 1, so no view can read "v4 of 3".
+    for (const t of [{ kind: 'cover' } as const, ...doc.pages.map((p) => ({ kind: 'page', id: p.id }) as const)]) {
+      const vs = versionList(doc, t);
+      expect(vs.map((v) => v.n), JSON.stringify(t)).toEqual(vs.map((_, i) => i + 1));
+    }
+    // Page 2: the panel picture is gone from its versions; the look-alike drawing stays, as v1.
+    expect(versionList(doc, { kind: 'page', id: 'pg_2' }).map((v) => [v.n, v.path])).toEqual([[1, 'u/x/p/p2-old.webp']]);
+    // The timeline clip counts 3 and its current version is v3.
+    const clip = bookClips(doc).find((c) => c.target?.kind === 'page' && c.target.id === 'pg_1')!;
+    expect(clip.versions).toBe(3);
+    expect(list.find((v) => v.current)?.n).toBe(clip.versions);
   });
 
   it('the media index lists it under its page by its own label, never as a version of the drawing', () => {
@@ -235,9 +247,9 @@ describe('a panel picture or overlay a restore archived is not a version of the 
     expect(at('ov-t')).not.toHaveProperty('deletedPageId');
     // A purged page's: under that page's own name.
     expect(at('ov-gone')).toMatchObject({ role: 'deleted_page', owner: { key: 'archive:page:pg_gone', label: 'Page 7' }, versionLabel: 'Page 7 overlay · date not recorded', panelSource: 'overlay' });
-    // The drawings keep their shared numbers; the look-alike drawing is a version as before.
+    // The drawings are v1..v3 (no gap where the overlay was); the look-alike drawing is a version as before.
     const page1 = groupMedia(items, 'book').find((g) => g.label === 'Page 1')!;
-    expect(page1.items.map((i) => i.versionLabel)).toEqual(['v4 · current', 'v3', 'v2', 'Page 1 overlay · date not recorded']);
+    expect(page1.items.map((i) => i.versionLabel)).toEqual(['v3 · current', 'v2', 'v1', 'Page 1 overlay · date not recorded']);
     expect(at('p2-old')).toMatchObject({ role: 'page', versionLabel: 'v1', archived: true });
     expect(at('p2-old')).not.toHaveProperty('panelSource');
     // One item per path; nothing else in the bin changed.

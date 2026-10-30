@@ -363,17 +363,27 @@ const drawingMoment = (owner: EarlierOwner, held: Held): EarlierMoment | null =>
   return m;
 };
 
-/** Number a set of versions the way shared/comic/book.ts versionList does: v1 = oldest (at, then path); a path once. */
+/** An archived frame picture or overlay (apply.ts isPanelSourceArchive): listed under its page, never numbered. */
+const isPanelSourceHeld = (it: { version: Held['version']; archived: boolean }): boolean =>
+  it.archived && isPanelSourceArchive(it.version as ArchivedVersion);
+
+/**
+ * Number a set of versions the way shared/comic/book.ts versionList does: v1 = oldest (at, then path); a path once;
+ * a frame picture or overlay a restore archived is not a drawing, so it takes no number (n 0, no versionN) and is
+ * listed after the drawings.
+ */
 const numbered = (list: { version: Held['version']; current: boolean; archived: boolean }[]): Held[] => {
   const seen = new Set<string>();
-  const items = list.filter((it) => {
+  const once = (it: { version: Held['version'] }): boolean => {
     const path = it.version?.path;
     if (typeof path !== 'string' || !path || seen.has(path)) return false;
     seen.add(path);
     return true;
-  });
-  items.sort((a, b) => (a.version.at || 0) - (b.version.at || 0) || cmpStr(a.version.path, b.version.path));
-  return items.map((it, i) => ({ ...it, n: i + 1 }));
+  };
+  const drawings = list.filter((it) => !isPanelSourceHeld(it)).filter(once);
+  const panels = list.filter(isPanelSourceHeld).filter(once);
+  drawings.sort((a, b) => (a.version.at || 0) - (b.version.at || 0) || cmpStr(a.version.path, b.version.path));
+  return [...drawings.map((it, i) => ({ ...it, n: i + 1 })), ...panels.map((it) => ({ ...it, n: 0 }))];
 };
 
 const renderVersionsOf = (r: RenderState | undefined): { version: RenderVersion; current: boolean; archived: boolean }[] => {
@@ -396,8 +406,19 @@ export const earlierMoments = (doc: ComicDoc, opts: EarlierOptions = {}): Earlie
   const owned = new Set<string>(); // archive targetKeys an owner below already took
 
   const addTarget = (target: RenderTarget, owner: EarlierOwner) => {
+    const seen = new Set<string>();
     for (const e of versionList(doc, target)) {
+      seen.add(e.path);
       const m = drawingMoment(owner, { version: e.version, n: e.n, current: e.current, archived: e.archived });
+      if (m) out.push(m);
+    }
+    // A live page's frame pictures and overlays a restore archived under it: the shared list leaves them out (they are
+    // not drawings of the page), so they are listed here, under the page, with no v-number.
+    if (target.kind !== 'page') return;
+    for (const a of archive) {
+      if (a.targetKey !== owner.key || seen.has(a.path) || !isPanelSourceArchive(a)) continue;
+      seen.add(a.path);
+      const m = drawingMoment(owner, { version: a, n: 0, current: false, archived: true });
       if (m) out.push(m);
     }
   };

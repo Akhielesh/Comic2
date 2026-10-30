@@ -2,9 +2,11 @@
 // the public reader (contract §11.3, timeline.md §2.5).
 import { describe, expect, it } from 'vitest';
 import { makeSampleDoc } from '../../components/comicstudio/board/__fixtures__/sampleDoc';
-import { coverSpecHash, normalizeDoc, type ComicDoc } from './doc';
+import { archiveOf, coverSpecHash, normalizeDoc, type ArchivedVersion, type ComicDoc } from './doc';
 import { applyOps } from './ops';
-import { aspectMismatch, bookSequence, bookSpreads, clipStatus, continuityHint, coverStatus, reorderIds } from './book';
+import { aspectMismatch, bookSequence, bookSpreads, clipStatus, continuityHint, coverStatus, reorderIds, versionList } from './book';
+import { historyRestoreOp, isPanelSourceArchive, restoreOps } from './history/index';
+import { BOOK_NOW, historyV4Doc } from './history/__fixtures__/books';
 
 const sample = (): ComicDoc => normalizeDoc(makeSampleDoc());
 
@@ -98,5 +100,58 @@ describe('aspectMismatch / reorderIds / continuityHint', () => {
     expect(continuityHint(doc, doc.pages[1])).toBe(false);
     doc.pages[1].render = { ...doc.pages[1].render, continuityPath: 'u/proj/pages/p1-old.png' };
     expect(continuityHint(doc, doc.pages[1])).toBe(true);
+  });
+});
+
+// A page's frame picture or overlay that a restore displaced is archived under the page ('page:<id>', apply.ts
+// pathHomes, isPanelSourceArchive). It is not a drawing of the page: the ONE numbering (the director's list_versions /
+// use_version, the timeline, the board's version strip) leaves it out before numbering, so v-numbers count drawings.
+describe('versionList: a frame picture or overlay a restore archived is not a version of the page', () => {
+  const STICKER = 'u/user-a/p/proj-v4/refs/sticker.webp';
+  const FRAME = 'u/user-a/p/proj-v4/img/frame-take.webp';
+  /** The real I1 net: frame picture + image overlay on page 2, then a restore of that page to the base. */
+  const restored = (): { doc: ComicDoc; pageId: string } => {
+    const base = normalizeDoc(historyV4Doc());
+    const page = base.pages[1];
+    const at = BOOK_NOW - 60_000;
+    const framed = applyOps(base, [
+      { op: 'page_frames', pageId: page.id, artMode: 'panels', frames: page.panels.map((pn, i) => ({ panelId: pn.id, frame: { box: { x: 0.02, y: 0.02 + i * 0.3, w: 0.96, h: 0.28 }, ...(i === 0 ? { src: { path: FRAME } } : {}) } })), moveBalloons: false },
+      { op: 'layer', pageId: page.id, id: 'ly_sticker', patch: { kind: 'image', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, src: { path: STICKER }, print: false } }
+    ], at);
+    const doc = applyOps(framed, [historyRestoreOp(restoreOps(framed, base, { kind: 'page', pageId: page.id, mode: 'replace', part: 'all' }), { versionId: 'v', at })], at);
+    return { doc, pageId: page.id };
+  };
+
+  it('leaves them out before numbering: v1..vN are the drawings, n === index + 1', () => {
+    const { doc, pageId } = restored();
+    const held = archiveOf(doc).filter((a) => a.targetKey === `page:${pageId}` && isPanelSourceArchive(a)).map((a) => a.path).sort();
+    expect(held).toEqual([STICKER, FRAME].sort()); // the restore really archived both under the page
+    const list = versionList(doc, { kind: 'page', id: pageId });
+    expect(list.length).toBeGreaterThan(0);
+    expect(list.map((v) => v.path)).not.toContain(STICKER);
+    expect(list.map((v) => v.path)).not.toContain(FRAME);
+    expect(list.map((v) => v.n)).toEqual(list.map((_, i) => i + 1));
+    expect(list.filter((v) => v.current)).toHaveLength(1);
+    // Every page of the book: no number past the count.
+    for (const p of doc.pages) {
+      const vs = versionList(doc, { kind: 'page', id: p.id });
+      expect(vs.map((v) => v.n), p.id).toEqual(vs.map((_, i) => i + 1));
+    }
+  });
+
+  it('a look-alike archived as the page’s own art stays a version; a shared path keeps the drawing', () => {
+    const { doc, pageId } = restored();
+    const key = `page:${pageId}`;
+    const plain = (path: string, label: string): ArchivedVersion => ({ path, source: 'upload', at: 0, targetKey: key, label, archivedAt: BOOK_NOW });
+    const LOOKALIKE = 'u/user-a/p/proj-v4/img/p2-upload.webp';
+    const before = versionList(doc, { kind: 'page', id: pageId }).map((v) => v.path);
+    // The label is just the page's: a drawing (an undated upload), so it is v1 and the rest move up by one.
+    doc.archive = [plain(LOOKALIKE, 'Page 2'), plain(LOOKALIKE, 'Page 2 overlay'), ...archiveOf(doc)];
+    const list = versionList(doc, { kind: 'page', id: pageId });
+    expect(list.map((v) => v.path)).toEqual([LOOKALIKE, ...before]);
+    expect(list[0]).toMatchObject({ n: 1, archived: true, version: { label: 'Page 2' } });
+    // The overlay entry listed second never hides (or replaces) the drawing with the same path.
+    const overlayFirst = { ...doc, archive: [plain(LOOKALIKE, 'Page 2 overlay'), plain(LOOKALIKE, 'Page 2'), ...archiveOf(doc).slice(2)] };
+    expect(versionList(overlayFirst, { kind: 'page', id: pageId })[0]).toMatchObject({ n: 1, path: LOOKALIKE, version: { label: 'Page 2' } });
   });
 });

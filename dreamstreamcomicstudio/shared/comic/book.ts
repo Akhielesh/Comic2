@@ -22,6 +22,7 @@ import {
   type RenderVersion
 } from './doc.js';
 import { aspectFromSize, aspectMatches } from './models.js';
+import { isPanelSourceArchive } from './history/apply.js';
 
 export type BookSlotKind = 'cover' | 'title' | 'page' | 'end' | 'back_cover';
 export interface BookSlot {
@@ -148,7 +149,11 @@ export interface VersionEntry {
 }
 
 /** Every version of a target — current, history and its archived versions — numbered v1 = oldest.
- *  A path appears once (current wins over history, history over archive). Missing target → []. */
+ *  A path appears once (current wins over history, history over archive). Missing target → [].
+ *  A page's frame picture or overlay that a restore archived under the page (history/apply.ts isPanelSourceArchive)
+ *  is not a drawing of the page: it is left out before numbering, so the v-numbers count drawings only and nothing
+ *  that reads this list (the director's list_versions/use_version, the timeline, the board's version strip) offers
+ *  it as the page's art. The media bin and Earlier list it under its page by its own label. */
 export function versionList(doc: ComicDoc, target: RenderTarget): VersionEntry[] {
   const r = getRender(doc, target);
   if (!r) return [];
@@ -162,7 +167,7 @@ export function versionList(doc: ComicDoc, target: RenderTarget): VersionEntry[]
   };
   push(currentVersion(r), true, false);
   for (const v of r.history) push(v, false, false);
-  for (const a of archiveOf(doc)) if (a.targetKey === key) push(a, false, true);
+  for (const a of archiveOf(doc)) if (a.targetKey === key && !isPanelSourceArchive(a)) push(a, false, true);
   items.sort((a, b) => (a.version.at || 0) - (b.version.at || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return items.map((it, i) => ({ ...it, n: i + 1 }));
 }

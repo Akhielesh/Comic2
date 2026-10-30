@@ -97,16 +97,15 @@ type AnyVersion = RenderVersion | ArchivedVersion;
 /**
  * Every version of a target — current, history, its archived versions — numbered v1 = oldest. A page's frame picture
  * or overlay that a restore archived under the page (shared/comic/history isPanelSourceArchive) is not a version of
- * the page's drawing, so it is left out here; it keeps the shared number it has (the v-numbers stay the director's),
- * and the media bin lists it under its page by its own label (collectMedia).
+ * the page's drawing: the shared list already leaves it out before numbering, so v1..vN count drawings only, and the
+ * media bin lists it under its page by its own label (collectMedia).
  */
 export function versionList(doc: ComicDoc, target: RenderTarget): VersionItem[] {
   const want = specHashFor(doc, target);
   const shaped = target.kind === 'page' || target.kind === 'cover';
   // The ONE numbering (shared/comic/book versionList, P2-AMEND): the same v-numbers the director's
-  // list_versions / use_version use — this view only adds what the UI shows about each version.
-  const drawings = sharedVersionList(doc, target).filter(({ version, archived }) => !(archived && isPanelSourceArchive(version as ArchivedVersion)));
-  return drawings.map(({ n, version, current, archived }) => {
+  // list_versions / use_version use — this view only adds what the UI shows about each version. Never renumber here.
+  return sharedVersionList(doc, target).map(({ n, version, current, archived }) => {
     const v: AnyVersion = version;
     const rv = v as RenderVersion & Partial<ArchivedVersion>;
     const item: VersionItem = {
