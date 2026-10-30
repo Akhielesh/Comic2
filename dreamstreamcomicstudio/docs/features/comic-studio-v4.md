@@ -160,6 +160,24 @@ studio asset. The `projects` row stays the listing record: the server mirrors
 `name`, `updated_at`, and a minimal legacy-compatible `state` (`studioVersion: 4`,
 empty legacy arrays, `coverImageId` = cover or page-1 asset, `overview` = logline).
 
+**Canonical hashes (back-compat F1, v5).** Postgres `jsonb` reorders object keys on save (shorter keys first), so a
+hash of `JSON.stringify` in memory order changed after a reload and drawn pages read "Out of date" for nothing. Every
+hash that decides staleness or "changed since" now serialises with `stableStringify` (`shared/comic/hash.ts`: keys
+sorted at every depth, array order kept): `pageSpecHash`, `sheetSpecHash`, `placeSpecHash`, `coverSpecHash`,
+`planInputHashOf`, and the publication's `contentFingerprint` (`server/src/comic/publication/snapshot.ts`). The
+hashed tuples themselves are unchanged.
+- **Load-time legacy acceptance.** A doc stamped before F1 is repaired once per load: `session.ts recoveryOps` runs
+  `legacySpecHashOps`, which tries a bounded set of likely key-order variants of each non-canonical render (and the
+  plan input hash) with the pre-F1 serialisation. On a match it writes a server-only render patch with the
+  canonical hash, so nothing is redrawn, re-quoted or charged; no match stays stale, honestly.
+- **Publication.** `fingerprintMatches(doc, languages, stored)` accepts the canonical fingerprint or the pre-F1
+  `legacyContentFingerprint`, so a link published before F1 does not show "Update the published version" after a
+  reload. The next publish stores the canonical form. A legacy hash stamped in a session whose keys were later
+  reordered can still read "behind" once; republishing clears it ($0, cosmetic).
+- **Release order.** Ship the v5 server and client together (a cached old client computes the pre-F1 page hash
+  until it reloads), and cut over only when v5 replaces production: once v5 has re-stamped a doc, older v4 code
+  reading the same row would show those pages as out of date (cosmetic, $0).
+
 ### Keys, routing, billing
 - Keys from `req.apiKeys.providerKeys` (`openrouter`, `gemini`), already governed by
   `X-Allowed-Sources` + account BYOK. Prefer OpenRouter (platform key in prod), else
@@ -195,7 +213,10 @@ strip the `google/` prefix. **The client's `X-Text-Model` is ignored** for these
 
 Reference budget per page job (from `refs` caps):
 - characters ≤ `refs.characters` (NB 2.1: 4, Pro: 5) — the page's lead/support cast
-  ranked by panel appearances; extras are text-locked only.
+  ranked by panel appearances. Extras are described in words until they have a sheet; an on-page extra (not a
+  prop) with a ready sheet or photo is attached within the character slots on every page it appears on. The cast
+  card says "Described in text" / "Sheet ready · used on pages", and the director's summary "text only" /
+  "sheet ready".
 - style: Pro → board + up to 2 user style refs as style refs; others → board as an object ref.
 - objects/places ≤ remaining `refs.objects`: place sheets used on the page, then the
   previous page (continuity) last.
@@ -236,10 +257,18 @@ tier only picks the resolution on the locked model.
   PriceBook (`ctx.prices`, built on the first quote and memoised per request): the live OpenRouter price, or our
   observed median when it is higher, plus QC, × the platform markup unless the user's own key pays. Chips on free
   actions wait up to 800 ms for it, else quote the registry list. `model_options` builds the same live PriceBook for
-  its numbers. Chip quotes in director replies (`priceOf` in `tools.ts`, `estimateOf` in `replies.ts`,
-  `intents.ts`, the breakdown tool's `quote`) still use the registry estimate rather than the PriceBook, and most of
-  them ignore the lock, until the lock-aware-quote package lands. Gates re-quote before anything is reserved, so
-  money stays safe.
+  its numbers. Gates re-quote before anything is reserved, so money stays safe.
+- **Lock-aware quotes everywhere.** The shared quote helpers derive the lock from the doc themselves:
+  `shared/comic/plan.ts` `quoteRenderPages`, `unitPrice` and `estimateDocJobs` price on `quoteLockOf(doc)` (the
+  persisted `doc.imageModel`, else the legacy `deriveLock`), with the tier only picking the resolution, exactly as
+  `jobs.ts resolveJobFor` draws. So a comic locked to Nano Banana Pro quotes Pro in the breakdown card and tool, the
+  plan card, the Pages tab, the cast card, every next-step and "Try again" chip (`replies.ts estimateOf`), the $0
+  intents (`intents.ts`) and the director's DOC SUMMARY, with no call-site change. A caller can pass `lock: null` to
+  price a what-if on the unlocked tier model. `BookSummary.pricing.locked` is true when the comic is locked (or has
+  an explicit override). A few displays that still call `estimateJobs` directly (board sheet and redraw prices, the
+  style and format panels, the renders card's style and cover retries, the languages tab) price the tier model
+  until they switch to `estimateDocJobs`. Chip quotes outside a gate use the registry list; the gate's PriceBook
+  re-quote is still the price that is reserved.
 - **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
   `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
   version) and bumps `model_usage_monthly`. Recording never blocks or fails a job; until
@@ -283,7 +312,7 @@ ART STYLE — apply identically in every panel:
 CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people:
 - MAYA (Image 1): {look.summary}; {hair}; {outfit}; {marks}.
 - ARJUN (Image 2): …
-- VENDOR (no reference): {look.summary}   ← extras: text lock only
+- VENDOR (no reference): {look.summary}   ← extras: described in words until they have a ready sheet
 
 PAGE LAYOUT — {n} panels, read {left-to-right, top-to-bottom | right-to-left (manga)}:
 {page.layout}
@@ -387,6 +416,48 @@ Flash-class vision model, image + page spec → strict JSON:
 [{lineId, x, y, w, tailX, tailY}]}` — balloons placed inside their panel, near the
 speaker's head, never covering faces/hands/key action, top-to-bottom in reading order.
 Fallback (vision unavailable): even grid boxes from the layout + top-of-panel stacking.
+
+### 6.10 Plan fit, the layout as drawn and honest page checks (v5, Ship 1)
+"Better pages at the same price": one image call per page, fewer and larger panels, and words that fit them.
+- **Panel rules and budgets** (`shared/comic/panelRules.ts`, `density.ts`): auto plans use about 3 panels (2–4; 5
+  only for a fast, nearly silent sequence); storybooks set above 3 per page plan new pages with at most 3 and show
+  a note (PD-2, `PLAN_POLICY.clampStorybook`; existing pages untouched). Each panel's lettering need is measured
+  against its area: roomy ≤ 0.18, fits ≤ 0.22, tight ≤ 0.30, overfull above (kids: 0.25).
+- **The layout as drawn.** The page prompt draws `effectiveLayout(page, format)`: the page's blueprint when it agrees
+  with its panels (count, format, sizes), else the blueprint synthesized from the panel sizes. It lives in
+  `shared/comic/pageGeometry.ts` with `harmonizePanelSizes` and `layoutConflicts` (one implementation; `prompts.ts`
+  re-exports them under the same names, and `ops.ts layoutFixOps` uses them). The page-plan check
+  (`pagePlanCheck.ts planBoxes`), the Render-all hold-back and its quote, the breakdown card's fit dots
+  (`summarizeBook` planFit; `drawnPanelBoxes` for a drawn page without measured boxes) and the director's line-edit
+  budget all measure that layout. So a stored page whose layout text contradicts its panel sizes is held back exactly
+  when it would be drawn overfull, and never because of layout text the prompt does not draw.
+- **The Render-all hold-back** (PD-1, `PLAN_POLICY.holdBackOverfull`; `server/src/comic/planCheckGate.ts`): applies
+  only to "Render all" (`render_pages` with no explicit `pageIds` and no `force`). An overfull page that Render all
+  would draw is left out of the run AND its quote; it is never refused. The notice ("Page 2 is held back: panel 3 has
+  70 words in 22% of the page …") carries fix chips, free first:
+  - "Use the layout that fits" — a free patch from `layoutFixOps`: the blueprint plus panel sizes that agree with
+    it (a bare layout patch would be drawn as the old layout). Offered only when the page really fits once applied.
+  - "Draw page N anyway (with the rest)" next to an open Render-all gate: that same Render all with the page added
+    to `render_pages.drawOverfull`, quoted for the whole run, so it extends the open gate instead of replacing it.
+  - "Draw page N anyway" after a run, or when nothing else is left to draw: that page alone (`pageIds: [id]`),
+    quoted. Explicit page draws and forced new takes always pass through the gate unchanged.
+  A spend retires an open `render_pages` gate only when it draws every page that gate would still draw (and its
+  cover), so a single-page draw never silently drops the other pages' approval. The breakdown card shows held-back
+  pages in red with the same free fixes and "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
+- **Planning quote.** "Plan the pages" is one writer pass per page; the plan check can send it back for one repair
+  round, so the chip and the director's DOC SUMMARY (when `planStatus` is `none`) say the honest bound:
+  "≈ $0.10 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.
+- **The honest page-check notice** (`server/src/comic/qcNotice.ts qcNoticeFor`, called from `jobs.ts letterPage`):
+  after a page is checked, the chat speaks only for a major structured problem (the drawn panel count differs from
+  the plan, the planned moments look reordered or missing, a speaker who should be visible may not be drawn) or a
+  score below 0.75. The words hedge ("looks like", "may not be drawn") because beat accuracy is not yet measured;
+  off-panel voices are never blamed; a page the safety check withheld gets no notice (its safety card speaks).
+  Fix chips are free first; paid ones carry their quote and go through the spend gate. Badges and the page's
+  quality list always show everything.
+- **Flags, both off.** `COMIC_LAYOUT_GUIDE` attaches a text-free layout-guide image (`panelize/wireframe.ts`) as
+  Image 1 on page renders; it stays unset until the owner approves the paid Model Lab A/B (PD-8). With it off, page
+  references and quotes are unchanged. `COMIC_IDENTITY_NOTICES` (identity findings in the chat notice) stays unset
+  until Ship 2.
 
 ## 7. Client modules (`components/comicstudio/`)
 `ComicStudio.tsx` (shell), `useStudio.ts` (state + stream), `studioApi.ts`,
