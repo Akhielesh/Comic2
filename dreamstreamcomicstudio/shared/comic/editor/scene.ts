@@ -100,6 +100,9 @@ const SHAPE_WORD: Record<string, string> = { rect: 'Rectangle', ellipse: 'Ellips
 export const layerWord = (layer: PageLayer): string =>
   layer.name || (layer.kind === 'shape' ? SHAPE_WORD[layer.shape?.type ?? 'rect'] ?? 'Shape' : 'Image');
 
+/** Design §6.4: "May look soft: shown 1.8× larger than drawn", naming the panel. */
+export const softNote = (page: Pick<Page, 'panels'>, panelId: string, up: number): string => `${cap1(panelWord(page, panelId))} may look soft: shown ${up}× larger than drawn`;
+
 /** The page has no drawing yet (a plan only). */
 export const isUndrawn = (page: Pick<Page, 'render'>): boolean => !page.render?.asset?.path;
 
@@ -251,7 +254,16 @@ export interface PageScene {
   frames: FramesMode;
   /** Every object, bottom to top (draw order). */
   objects: SceneObject[];
+  /**
+   * The language edition the balloons are shown in (its own positions and text), or undefined for the original
+   * language. A balloon moved in an edition moves for that language only (edition_balloon), never the original.
+   */
+  lang?: string;
 }
+
+/** The edition a scene option names: a language other than the comic's own, else undefined. */
+export const editionLangOf = (doc: Pick<ComicDoc, 'format'>, lang: string | undefined): string | undefined =>
+  lang && lang !== doc.format?.language ? lang : undefined;
 
 export interface SceneOptions {
   /** A language edition: its balloon geometry overrides and translated text. */
@@ -386,7 +398,8 @@ export function buildScene(doc: ComicDoc, page: Page, opts: SceneOptions = {}): 
   }
   lettering.sort((a, b) => a.z - b.z || (a.order ?? 0) - (b.order ?? 0));
   objects.push(...lettering);
-  return { pageId: page.id, aspect, frames: shown.mode, objects };
+  const edition = editionLangOf(doc, opts.lang);
+  return { pageId: page.id, aspect, frames: shown.mode, objects, ...(edition ? { lang: edition } : {}) };
 }
 
 function overlayObject(layer: PageLayer, band: Band, clip?: Box): SceneObject {

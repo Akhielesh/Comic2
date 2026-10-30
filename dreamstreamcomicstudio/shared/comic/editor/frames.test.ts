@@ -52,7 +52,10 @@ describe('gutter drag', () => {
     const [b1, b2] = [page.panels[0].frame!.box, page.panels[1].frame!.box];
     const row = b1.w + (b2.x - (b1.x + b1.w)) + b2.w;
 
-    const wide = roundTrip(doc, gutterDragEdit(doc, page, g, 0.8));
+    const drag = gutterDragEdit(doc, page, g, 0.8);
+    // Design §6.4's words for a panel shown larger than drawn.
+    expect(okOf(drag).notes).toContainEqual(expect.stringMatching(/^Panel 1 may look soft: shown [\d.]+× larger than drawn$/));
+    const wide = roundTrip(doc, drag);
     const [w1, w2] = [pageOf(wide, 'pg_a').panels[0].frame!.box, pageOf(wide, 'pg_a').panels[1].frame!.box];
     expect(w2.w).toBeCloseTo(EDITOR_LIMITS.frameMin, 4);
     expect(w1.w + (w2.x - (w1.x + w1.w)) + w2.w).toBeCloseTo(row, 4);
@@ -378,5 +381,67 @@ describe('cuts matched by position (no cut names a panel)', () => {
   it('cuts that already name their panels are left alone', () => {
     const doc = withPages(baseDoc(), [drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1), panel('p2', 2), panel('p3', 3)])]);
     expect(okOf(deleteFrameEdit(doc, pageOf(doc, 'pg_a'), 'p2')).ops.map((o) => o.op)).toEqual(['page_frames', 'panel_remove']);
+  });
+});
+
+describe('nothing is lost or changed behind the user’s back', () => {
+  const shape = (id: string, box: { x: number; y: number; w: number; h: number }, clip: string, locked = true) => ({ id, kind: 'shape' as const, box, shape: { type: 'rect' as const }, clip, ...(locked ? { locked: true as const } : {}) });
+
+  it('joining panels not drawn yet merges the dropped panel’s plan into the kept one, and says so', () => {
+    const page = undrawnPage(
+      'pg_u',
+      1,
+      [
+        panel('u1', 1, [line('l1', 'Wait!')], { action: 'Maya runs to the gate', castIds: ['c_maya'], size: 'wide' }),
+        panel('u2', 2, [line('l2', 'Over here!')], { action: 'Ravi waves from the bench', castIds: ['c_ravi'], placeId: 'pl_park', size: 'wide', direction: { cast: { c_ravi: { pos: 'left' } }, by: 'writer' } })
+      ],
+      'Row 1: one wide panel across the full width (panel 1). Row 2: one wide panel across the full width (panel 2).'
+    );
+    const doc = withPages(baseDoc(), [page]);
+    const r = okOf(joinFramesEdit(doc, page, 'u1', 'u2'));
+    expect(r.notes).toEqual(["Panel 2's plan (what happens, who is in it) was merged into panel 1."]);
+    const after = roundTrip(doc, r);
+    const [joined] = pageOf(after, 'pg_u').panels;
+    expect(pageOf(after, 'pg_u').panels).toHaveLength(1);
+    expect(joined.castIds).toEqual(['c_maya', 'c_ravi']);
+    expect(joined.action).toBe('Maya runs to the gate. Ravi waves from the bench');
+    expect(joined.placeId).toBe('pl_park');
+    expect(joined.direction?.cast).toEqual({ c_ravi: { pos: 'left' } });
+    expect(joined.lines.map((l) => l.id)).toEqual(['l1', 'l2']);
+    // A blank planned panel brings nothing, and nothing is said.
+    const blank = undrawnPage('pg_u', 1, [panel('u1', 1, [], { size: 'wide' }), panel('u2', 2, [], { action: '', castIds: [], size: 'wide' })], page.layout);
+    const d2 = withPages(baseDoc(), [blank]);
+    expect(okOf(joinFramesEdit(d2, blank, 'u1', 'u2')).notes).toBeUndefined();
+  });
+
+  it('an inset is not drawn over a locked panel', () => {
+    const page = drawnPage('pg_a', 1, 'two-tiers', [panel('p1', 1), panel('p2', 2)]);
+    page.panels[0] = { ...page.panels[0], frame: { ...page.panels[0].frame!, locked: true } };
+    const doc = withPages(baseDoc(), [page]);
+    expect(addFrameEdit(doc, page, { x: 0.6, y: 0.3, w: 0.3, h: 0.15 })).toEqual({ ok: false, reason: 'Panel 1 is locked. Unlock it to change it.' });
+    // Free space below is fine.
+    expect(addFrameEdit(doc, page, { x: 0.6, y: 0.75, w: 0.3, h: 0.15 }).ok).toBe(true);
+  });
+
+  it('split, join and delete refuse to move or unclip a locked overlay kept in the panel', () => {
+    const base = drawnPage('pg_a', 1, 'four-grid', [panel('p1', 1), panel('p2', 2), panel('p3', 3), panel('p4', 4)]);
+    // p2 is an empty frame (no cut), with a locked sticker kept in it; p1 has one in its right half.
+    const page: Page = {
+      ...base,
+      render: { ...base.render, cuts: { ...base.render.cuts!, cuts: base.render.cuts!.cuts.filter((c) => c.panelId !== 'p2') } },
+      layers: [shape('ly_right', { x: 0.35, y: 0.1, w: 0.1, h: 0.1 }, 'p1'), shape('ly_p2', { x: 0.6, y: 0.1, w: 0.1, h: 0.1 }, 'p2')]
+    };
+    const doc = withPages(baseDoc(), [page]);
+    const locked = 'Rectangle is locked. Unlock it to change it.';
+    expect(splitFrameEdit(doc, page, 'p1', 'across')).toEqual({ ok: false, reason: locked });
+    expect(joinFramesEdit(doc, page, 'p1', 'p2')).toEqual({ ok: false, reason: locked });
+    expect(deleteFrameEdit(doc, page, 'p2')).toEqual({ ok: false, reason: locked });
+    // A locked overlay that stays in its half does not stop a split.
+    expect(splitFrameEdit(doc, page, 'p1', 'down', { at: 0.8 }).ok).toBe(true);
+    // Unlocked, the overlays follow their panel.
+    const free: Page = { ...page, layers: page.layers!.map((l) => ({ ...l, locked: undefined })) };
+    const fd = withPages(doc, [free]);
+    const split = roundTrip(fd, splitFrameEdit(fd, free, 'p1', 'across'));
+    expect(pageOf(split, 'pg_a').layers!.find((l) => l.id === 'ly_right')!.clip).toBe('pe1');
   });
 });

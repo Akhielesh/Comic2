@@ -1,6 +1,8 @@
 // Align and distribute (Ship 2, B9; design §4.8). Work across a mixed selection of balloons and overlays, relative to
 // the selection or to the panel the first object sits in. Frames tile the page, so they get "equalize row / column"
-// (frames.ts) instead. Locked objects stay where they are and still count as anchors. Pure.
+// (frames.ts) instead. Locked objects stay where they are: in an align they are the anchors the others line up with;
+// in a distribute they may only be the first or the last (which stay put anyway), else the gaps could not come out
+// even. In a language edition's scene, balloons move for that language only (transform.setBoxEdit). Pure.
 
 import type { Box, ComicDoc, Page } from '../doc.js';
 import type { DocOp } from '../ops.js';
@@ -103,11 +105,19 @@ export function alignEdit(doc: ComicDoc, page: Page, refs: readonly SceneRef[], 
   return boxesEdit(doc, page, scene, objs, alignBoxes(objs.map((o) => o.box), mode, to), ALIGN_WORD[mode]);
 }
 
-/** Distribute three or more balloons and overlays evenly (horizontally or vertically). */
+/** Said when a locked object sits between others in a distribute: they cannot all be spaced evenly around it. */
+export const DISTRIBUTE_LOCKED = "Something you picked is locked, so they can't be spaced evenly. Unlock it, or leave it out.";
+
+/** Distribute three or more balloons and overlays evenly (horizontally or vertically); the first and last stay put. */
 export function distributeEdit(doc: ComicDoc, page: Page, refs: readonly SceneRef[], axis: DistributeAxis, opts: { scene?: PageScene } = {}): EditResult {
   if (refs.some((r) => r.kind === 'frame')) return refuse('Panels tile the page. Use Equalize row or Equalize column instead.');
   const scene = opts.scene ?? buildScene(doc, page);
   const objs = refs.map((r) => sceneObject(scene, r)).filter(alignable);
   if (objs.length < 3) return refuse('Pick three or more things to space evenly.');
+  // The same order distributeBoxes spaces them in: a locked one in the middle would stay put while the even spacing
+  // assumed it moves.
+  const key = axis === 'h' ? 'x' : 'y';
+  const order = objs.map((o, i) => ({ o, i })).sort((a, b) => a.o.box[key] - b.o.box[key] || a.i - b.i);
+  if (order.slice(1, -1).some(({ o }) => o.locked)) return refuse(DISTRIBUTE_LOCKED);
   return boxesEdit(doc, page, scene, objs, distributeBoxes(objs.map((o) => o.box), axis), axis === 'h' ? 'Space evenly across' : 'Space evenly down');
 }

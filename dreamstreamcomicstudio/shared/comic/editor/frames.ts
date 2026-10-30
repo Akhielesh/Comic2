@@ -55,6 +55,7 @@ import {
   refuse,
   roundBox,
   sameBox,
+  softNote,
   takenIds,
   withNamedCuts,
   type EditResult,
@@ -160,9 +161,6 @@ const finish = (ctx: Ctx, ops: DocOp[], label: string, notes: string[] = []): Ed
   if (!all.length) return refuse(NOTHING_TO_CHANGE);
   return editOf(ctx.doc, [...all, ...planFollowups(ctx, all)], label, notes);
 };
-
-/** Design §6.4: "May look soft: shown 1.8× larger than drawn", naming the panel. */
-export const softNote = (page: Pick<Page, 'panels'>, panelId: string, up: number): string => `${cap1(panelWord(page, panelId))} may look soft: shown ${up}× larger than drawn`;
 
 /** The plain-words reason a locked overlay kept in one of these panels refuses an edit that would change it. */
 const lockedLayerIn = (page: Page, test: (layer: PageLayer) => boolean): string | undefined => {

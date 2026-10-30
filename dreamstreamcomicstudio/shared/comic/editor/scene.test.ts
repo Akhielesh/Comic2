@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Page, PageLayer } from '../doc.js';
 import { EDITOR_LIMITS } from '../limits.js';
 import { apply, baseDoc, drawnPage, line, pageOf, panel, withPages } from './__fixtures__/editorDoc.js';
-import { alignBoxes, alignEdit, distributeBoxes, distributeEdit } from './align.js';
+import { i18nOf } from '../i18n.js';
+import { alignBoxes, alignEdit, distributeBoxes, distributeEdit, DISTRIBUTE_LOCKED } from './align.js';
 import { readingOrderOf } from './readingOrder.js';
 import { BANDS, buildScene, objectAt, zOrderEdit, type EditOk } from './scene.js';
-import { clampRot, resizeBox, rotateEdit, rotationFromPointer, setBoxEdit } from './transform.js';
+import { clampRot, EDITION_HEIGHT_SHARED, resizeBox, rotateEdit, rotationFromPointer, setBoxEdit } from './transform.js';
 
 const shape = (id: string, box: PageLayer['box'], extra: Partial<PageLayer> = {}): PageLayer => ({ id, kind: 'shape', box, shape: { type: 'rect' }, ...extra });
 const strip = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_k, x) => (x === null ? undefined : x)));
@@ -130,5 +131,63 @@ describe('reading order', () => {
     expect(readingOrderOf([{ x: 0.02, y: 0.02, w: 0.47, h: 0.47 }, { x: 0.51, y: 0.02, w: 0.47, h: 0.47 }], true)).toEqual([1, 0]);
     // Staggered balloons read the higher one first.
     expect(readingOrderOf([{ x: 0.1, y: 0.15, w: 0.2, h: 0.08 }, { x: 0.5, y: 0.1, w: 0.2, h: 0.08 }])).toEqual([1, 0]);
+  });
+});
+
+describe('language editions', () => {
+  /** A Hindi edition whose balloon for l1 sits elsewhere than the original's. */
+  const editionDoc = () => {
+    const { doc, page } = fixture();
+    const d = apply(doc, [
+      { op: 'edition', lang: 'hi', patch: { register: 'everyday' } },
+      { op: 'edition_balloon', lang: 'hi', lineId: 'l1', patch: { x: 0.15, y: 0.12, w: 0.3 } }
+    ]);
+    return { doc: d, page: pageOf(d, page.id) };
+  };
+
+  it('a scene knows its edition (never the original language)', () => {
+    const { doc, page } = editionDoc();
+    expect(buildScene(doc, page, { lang: 'hi' }).lang).toBe('hi');
+    expect(buildScene(doc, page, { lang: doc.format.language }).lang).toBeUndefined();
+    expect(buildScene(doc, page).lang).toBeUndefined();
+  });
+
+  it('moving a balloon in an edition moves it for that language only; undo restores it', () => {
+    const { doc, page } = editionDoc();
+    const scene = buildScene(doc, page, { lang: 'hi' });
+    const b = scene.objects.find((o) => o.id === 'l1')!;
+    expect(b.text).toEqual({ x: 0.15, y: 0.12, w: 0.3 });
+    const r = setBoxEdit(doc, page, { kind: 'balloon', id: 'l1' }, { ...b.box, x: b.box.x + 0.1, w: b.box.w + 0.05 }, scene) as EditOk;
+    expect(r.ops).toEqual([{ op: 'edition_balloon', lang: 'hi', lineId: 'l1', patch: { x: 0.25, y: 0.12, pinned: true, w: 0.35 } }]);
+    const after = apply(doc, r.ops);
+    // The original language's balloon has not moved.
+    expect(pageOf(after, 'pg_a').balloons).toEqual(page.balloons);
+    expect(i18nOf(after).editions.hi.balloons.l1).toMatchObject({ x: 0.25, y: 0.12, w: 0.35 });
+    expect(strip(apply(after, r.undo))).toEqual(strip(doc));
+    // The height is one for every language.
+    expect(setBoxEdit(doc, page, { kind: 'balloon', id: 'l1' }, { ...b.box, h: b.box.h + 0.05 }, scene)).toEqual({ ok: false, reason: EDITION_HEIGHT_SHARED });
+    // Align in the edition writes the edition too.
+    const aligned = alignEdit(doc, page, [{ kind: 'balloon', id: 'l1' }, { kind: 'balloon', id: 'l2' }], 'left', { scene }) as EditOk;
+    expect(aligned.ops.every((o) => o.op === 'edition_balloon')).toBe(true);
+  });
+});
+
+describe('distribute with locked objects', () => {
+  const row = (lockedId?: string) => {
+    const { doc, page } = fixture();
+    const layers = [shape('ly_a', { x: 0.1, y: 0.4, w: 0.1, h: 0.05 }), shape('ly_b', { x: 0.25, y: 0.4, w: 0.1, h: 0.05 }), shape('ly_c', { x: 0.7, y: 0.4, w: 0.1, h: 0.05 })].map((l) =>
+      l.id === lockedId ? { ...l, locked: true as const } : l
+    );
+    const p: Page = { ...page, layers };
+    return { doc: withPages(doc, [p]), page: p };
+  };
+  const refs = [{ kind: 'overlay' as const, id: 'ly_a' }, { kind: 'overlay' as const, id: 'ly_b' }, { kind: 'overlay' as const, id: 'ly_c' }];
+
+  it('a locked one in the middle refuses (the gaps could not come out even); at an end it stays put and the rest space evenly', () => {
+    const mid = row('ly_b');
+    expect(distributeEdit(mid.doc, mid.page, refs, 'h')).toEqual({ ok: false, reason: DISTRIBUTE_LOCKED });
+    const end = row('ly_c');
+    const r = distributeEdit(end.doc, end.page, refs, 'h') as EditOk;
+    expect(r.ops).toEqual([{ op: 'layer', pageId: 'pg_a', id: 'ly_b', patch: { box: { x: 0.4, y: 0.4, w: 0.1, h: 0.05 } } }]);
   });
 });

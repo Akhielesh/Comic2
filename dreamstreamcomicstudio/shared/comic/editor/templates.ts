@@ -10,7 +10,7 @@ import { applyOp, type DocOp } from '../ops.js';
 import { PANEL_LIMITS } from '../panelRules.js';
 import { upscaleOf } from '../panelize/space.js';
 import { framesFromLayoutText, layoutTextOf } from './layoutText.js';
-import { cap1, editOf, isUndrawn, lockedReason, NOTHING_TO_CHANGE, panelWord, refuse, roundBox, sameBox, type EditResult } from './scene.js';
+import { editOf, isUndrawn, lockedReason, NOTHING_TO_CHANGE, refuse, roundBox, sameBox, softNote, type EditResult } from './scene.js';
 
 export type TemplateId =
   | 'splash'
@@ -160,8 +160,20 @@ export function templateLayout(t: PageTemplate, opts: { rtl?: boolean; margin?: 
   return { frames, sentence, z };
 }
 
-/** The templates offered for a book: the twelve, or the webtoon stacks for webtoon books. */
-export const templatesForKind = (kind: string | undefined): PageTemplate[] => PAGE_TEMPLATES.filter((t) => (kind === 'webtoon' ? !!t.webtoon : !t.webtoon));
+/**
+ * Templates with an inset ("Hero + inset") are offered only once the blueprint geometry (pageGeometry's parseLayout and
+ * estimatePanelBoxes) understands the inset clause. Until then a page planned with one would show the inset in the
+ * editor but its two panels side by side on the board, the wireframes and the lettering: two layout truths for one
+ * page. Turning them on is this one line.
+ */
+export const INSET_TEMPLATES_ON = false;
+const INSET_TEMPLATE_IDS: ReadonlySet<TemplateId> = new Set<TemplateId>(['hero-inset']);
+/** A template the picker, "Best fit" and the director may offer now. */
+export const templateOffered = (t: PageTemplate): boolean => INSET_TEMPLATES_ON || !INSET_TEMPLATE_IDS.has(t.id);
+
+/** The templates offered for a book: the twelve (less any not offered yet), or the webtoon stacks for webtoon books. */
+export const templatesForKind = (kind: string | undefined): PageTemplate[] =>
+  PAGE_TEMPLATES.filter((t) => (kind === 'webtoon' ? !!t.webtoon : !t.webtoon) && templateOffered(t));
 
 export interface PanelFitDot {
   area: number;
@@ -241,7 +253,7 @@ const applyAll = (doc: ComicDoc, ops: DocOp[]): ComicDoc => ops.reduce((d, op) =
  */
 export function applyTemplateEdit(doc: ComicDoc, page: Page, id: string): EditResult {
   const t = templateById(id);
-  if (!t) return refuse('That layout is not available.');
+  if (!t || !templateOffered(t)) return refuse('That layout is not available.');
   if (t.panels !== page.panels.length) return refuse(`This layout has ${t.panels} panel${t.panels === 1 ? '' : 's'}; page ${page.n} has ${page.panels.length}.`);
   for (const p of page.panels) {
     const locked = lockedReason(page, { kind: 'frame', id: p.id });
@@ -277,7 +289,7 @@ export function applyTemplateEdit(doc: ComicDoc, page: Page, id: string): EditRe
     const pa = after.pages.find((p) => p.id === page.id)!;
     for (const p of pa.panels) {
       const up = upscaleOf(after, pa, p.id);
-      if (up !== undefined && up > EDITOR_LIMITS.upscaleSoft) notes.push(`${cap1(panelWord(pa, p.id))} may look soft at this size (shown ${up}× larger than drawn).`);
+      if (up !== undefined && up > EDITOR_LIMITS.upscaleSoft) notes.push(softNote(pa, p.id, up));
     }
     notes.push('The drawing is kept: only where the panels sit changes.');
   }

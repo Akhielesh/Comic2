@@ -3,7 +3,8 @@
 // a resize pushes the neighbours that share its gutter). Rotation is in degrees, clockwise, 0 = upright.
 
 import { EDITOR_LIMITS, PRO_PAGE_LIMITS } from '../limits.js';
-import { layersOf, type Balloon, type Box, type ComicDoc, type Page } from '../doc.js';
+import { layersOf, type Balloon, type BalloonGeometryOverride, type Box, type ComicDoc, type Page } from '../doc.js';
+import { i18nOf } from '../i18n.js';
 import { buildScene, clamp, editOf, lockedReason, NOTHING_TO_CHANGE, r4, refuse, roundBox, sameBox, sceneObject, UNIT_BOX, type EditResult, type PageScene, type Point, type SceneRef } from './scene.js';
 
 export type Handle = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -160,6 +161,9 @@ const overlayOf = (page: Page, id: string) => layersOf(page).find((l) => l.id ==
  * page, smallest side PRO_PAGE_LIMITS.boxMin). A balloon's text box moves with its outline and its width changes by
  * the outline's; a height change sets its minimum height (the height handle, ≤ EDITOR_LIMITS.minHMax). Frames go
  * through frames.ts. Locked objects refuse.
+ *
+ * In a language edition's scene (scene.lang) a balloon moves for that language only: an edition_balloon op with its
+ * own x, y and width, never the original language's balloon. The height is shared by every language.
  */
 export function setBoxEdit(doc: ComicDoc, page: Page, ref: SceneRef, to: Box, scene: PageScene = buildScene(doc, page)): EditResult {
   const locked = lockedReason(page, ref);
@@ -182,6 +186,7 @@ export function setBoxEdit(doc: ComicDoc, page: Page, ref: SceneRef, to: Box, sc
     if (sameBox(box, layer.box, 1e-4)) return refuse(NOTHING_TO_CHANGE);
     return editOf(doc, [{ op: 'layer', pageId: page.id, id: layer.id, patch: { box } }], `${verb} ${me.label.toLowerCase()}`);
   }
+  if (scene.lang) return editionBoxEdit(doc, page, scene.lang, ref.id, me.box, me.text!, to, verb, me.label);
   // Balloon: move its text box by the outline's offset; width by the outline's; height → minH.
   const text = me.text!;
   const patch: Partial<Balloon> = {
@@ -196,6 +201,28 @@ export function setBoxEdit(doc: ComicDoc, page: Page, ref: SceneRef, to: Box, sc
   const b = page.balloons.find((x) => x.lineId === ref.id);
   if (!b && !('w' in patch)) patch.w = r4(text.w);
   return editOf(doc, [{ op: 'balloon', pageId: page.id, lineId: ref.id, patch }], `${verb} ${me.label.split(':')[0].toLowerCase()}`);
+}
+
+/** The height is one for every language (the balloon's minimum height); an edition moves and widens its own balloons. */
+export const EDITION_HEIGHT_SHARED = 'The height is the same in every language. Change it in the original language.';
+
+/** A balloon moved or widened in one language edition (edition_balloon), never the original language's balloon. */
+function editionBoxEdit(doc: ComicDoc, page: Page, lang: string, lineId: string, from: Box, text: { x: number; y: number; w: number }, to: Box, verb: string, label: string): EditResult {
+  const edition = i18nOf(doc).editions[lang];
+  if (!edition) return refuse('That language is not in this comic yet.');
+  // Only a balloon placed in the original language has a position to adjust for this one.
+  if (!page.balloons.some((b) => b.lineId === lineId)) return refuse('Place this balloon in the original language first, then adjust it for this language.');
+  const widthChanged = Math.abs(from.w - to.w) > 1e-4;
+  const heightChanged = Math.abs(from.h - to.h) > 1e-4;
+  // A top or bottom handle (the height alone, its edge moving with it) has nothing to change in one language.
+  if (heightChanged && !widthChanged) return refuse(EDITION_HEIGHT_SHARED);
+  const patch: BalloonGeometryOverride = {
+    x: r4(clamp(text.x + (to.x - from.x), 0, 1)),
+    y: r4(clamp(text.y + (to.y - from.y), 0, 1)),
+    pinned: true
+  };
+  if (widthChanged) patch.w = r4(clamp(text.w + (to.w - from.w), 0.04, 1));
+  return editOf(doc, [{ op: 'edition_balloon', lang, lineId, patch }], `${verb} ${label.split(':')[0].toLowerCase()}`, heightChanged ? [EDITION_HEIGHT_SHARED] : undefined);
 }
 
 /** Move an overlay or a balloon by (dx, dy) — a drag or a nudge. */

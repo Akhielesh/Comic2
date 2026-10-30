@@ -3,7 +3,7 @@ import { estimatePanelBoxes, layoutPanelCount, parseLayout } from '../pageGeomet
 import { apply, baseDoc, drawnPage, line, pageOf, panel, undrawnPage, withPages } from './__fixtures__/editorDoc.js';
 import { framesFromLayoutText, layoutTextFits, layoutTextOf } from './layoutText.js';
 import type { EditOk } from './scene.js';
-import { applyTemplateEdit, bestTemplate, DEFAULT_TEMPLATE_ID, PAGE_TEMPLATES, templateLayout, templatesFor, templatesForKind } from './templates.js';
+import { applyTemplateEdit, bestTemplate, DEFAULT_TEMPLATE_ID, INSET_TEMPLATES_ON, PAGE_TEMPLATES, templateLayout, templatesFor, templatesForKind } from './templates.js';
 
 /**
  * Panel areas of the $0 probe (pro/_design/areas.ts over the real estimatePanelBoxes; margin and gutter 0.02) and the
@@ -28,7 +28,10 @@ const INSET_CLAUSE = / with a small inset panel in its lower right corner \(pane
 
 describe('templates', () => {
   it('twelve curated templates (plus three webtoon stacks), the default first among the three-panel ones', () => {
-    expect(templatesForKind('comic').map((t) => t.id)).toEqual(Object.keys(PROBE));
+    expect(PAGE_TEMPLATES.filter((t) => !t.webtoon).map((t) => t.id)).toEqual(Object.keys(PROBE));
+    // Hero + inset waits for the blueprint geometry to learn the inset clause (one layout truth per page).
+    expect(INSET_TEMPLATES_ON).toBe(false);
+    expect(templatesForKind('comic').map((t) => t.id)).toEqual(Object.keys(PROBE).filter((id) => id !== 'hero-inset'));
     expect(templatesForKind('webtoon').map((t) => t.id)).toEqual(['stack-2', 'stack-3', 'stack-4']);
     expect(DEFAULT_TEMPLATE_ID).toBe('big-top-two');
   });
@@ -137,6 +140,9 @@ describe('applying a template', () => {
     const p = drawnPage('pg_a', 1, 'big-top-two', [panel('p1', 1), panel('p2', 2), panel('p3', 3)]);
     const doc = withPages(baseDoc(), [p]);
     expect(applyTemplateEdit(doc, p, 'four-grid')).toEqual({ ok: false, reason: 'This layout has 4 panels; page 1 has 3.' });
+    // Not offered yet (INSET_TEMPLATES_ON): the director cannot apply it by name either.
+    const two = undrawnPage('pg_u', 1, [panel('u1', 1), panel('u2', 2)]);
+    expect(applyTemplateEdit(withPages(doc, [two]), two, 'hero-inset')).toEqual({ ok: false, reason: 'That layout is not available.' });
     const locked = { ...p, panels: p.panels.map((x, i) => (i === 1 ? { ...x, frame: { ...x.frame!, locked: true as const } } : x)) };
     expect(applyTemplateEdit(withPages(doc, [locked]), locked, 'tall-left-two')).toEqual({ ok: false, reason: 'Panel 2 is locked. Unlock it to change it.' });
     const asDrawn = { ...p, artMode: undefined, render: { ...p.render, cuts: undefined } };
