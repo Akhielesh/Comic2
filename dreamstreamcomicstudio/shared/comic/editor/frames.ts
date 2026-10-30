@@ -475,14 +475,23 @@ function planSplit(ctx: Ctx, panelId: string, dir: SplitDir, at: number, newSide
     } else if (keepImg && page.render.asset?.path && page.render.cuts) {
       // Name every cut by its panel, then slice this panel's cut in two.
       const cuts: PanelCut[] = [];
+      const used = new Set<PanelCut>();
       page.panels.forEach((p) => {
         const c = cutFor(page, p);
         if (!c) return;
+        used.add(c);
         if (p.id === panelId) {
           cuts.push({ ...c, panelId: p.id, box: keepImg });
           if (freshImg && !newShows) cuts.push({ panelId: newId, drawn: c.drawn, box: freshImg, conf: c.conf, ...(c.shows !== undefined ? { shows: c.shows } : {}) });
         } else cuts.push({ ...c, panelId: p.id });
       });
+      // Drawn panels no script panel uses yet stay listed (without a panel), so nothing the detector found is lost.
+      for (const c of page.render.cuts.cuts) {
+        if (used.has(c)) continue;
+        const rest: PanelCut = { ...c };
+        delete rest.panelId;
+        cuts.push(rest);
+      }
       if (cuts.length > EDITOR_LIMITS.maxCuts) return `This drawing already has ${EDITOR_LIMITS.maxCuts} panel cuts.`;
       const value: PanelCuts = { ...page.render.cuts, cuts };
       cutsOp = { op: 'page_cuts', pageId: page.id, path: page.render.asset.path, cuts: value, moveBalloons: false };

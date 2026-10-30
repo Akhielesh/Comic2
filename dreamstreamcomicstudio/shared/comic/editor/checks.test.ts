@@ -3,7 +3,7 @@ import type { ComicDoc, Page } from '../doc.js';
 import type { LetterPlan } from '../lettering/layout.js';
 import { apply, baseDoc, drawnPage, line, pageOf, panel, T0, undrawnPage, withPages } from './__fixtures__/editorDoc.js';
 import { checkFixEdit, checksSummary, pageChecks, type PageCheck } from './checks.js';
-import type { EditOk } from './scene.js';
+import { buildScene, type EditOk } from './scene.js';
 
 const byId = (checks: PageCheck[], id: PageCheck['id']) => checks.find((c) => c.id === id)!;
 
@@ -54,10 +54,15 @@ describe('page checks on fixtures', () => {
   });
 
   it('a balloon over a face → look, with the free fix to move it clear', () => {
-    const page = drawnPage('pg_a', 1, 'two-tiers', [panel('p1', 1, [line('l1', 'Hi!', 'speech', 'c_maya')]), panel('p2', 2)], {
-      balloons: [{ lineId: 'l1', x: 0.1, y: 0.1, w: 0.25, pinned: true }],
-      qc: { keepOut: [{ panel: 1, kind: 'face', box: { x: 0.14, y: 0.1, w: 0.1, h: 0.06 } }], heads: [{ panel: 1, characterId: 'c_maya', head: { x: 0.19, y: 0.13 } }] }
+    const base = drawnPage('pg_a', 1, 'two-tiers', [panel('p1', 1, [line('l1', 'Hi!', 'speech', 'c_maya')]), panel('p2', 2)], {
+      balloons: [{ lineId: 'l1', x: 0.1, y: 0.1, w: 0.25, pinned: true }]
     });
+    // The face keep-out overlaps the balloon's outline; the head point itself sits just below the balloon, so only the
+    // keep-out can find the overlap.
+    const b = buildScene(withPages(baseDoc(), [base]), base).objects.find((o) => o.id === 'l1')!.box;
+    const face = { x: b.x + 0.04, y: b.y + 0.01, w: 0.1, h: b.h + 0.01 };
+    const head = { x: b.x + 0.09, y: b.y + b.h + 0.005 };
+    const page = { ...base, render: { ...base.render, qc: { ...base.render.qc!, keepOut: [{ panel: 1, kind: 'face' as const, box: face }], heads: [{ panel: 1, characterId: 'c_maya', head }] } } };
     const doc = withPages(baseDoc(), [page]);
     const faces = byId(pageChecks(doc, page), 'faces');
     expect(faces).toMatchObject({ state: 'look', detail: "A balloon covers Maya's face in panel 1", targets: [{ kind: 'balloon', id: 'l1' }] });
@@ -85,7 +90,8 @@ describe('page checks on fixtures', () => {
     const page = drawnPage('pg_a', 1, 'two-tiers', [panel('p1', 1, [line('l1', 'Stop!'), line('l2', 'Run!')]), panel('p2', 2)], {
       balloons: [
         { lineId: 'l1', x: 0.6, y: 0.1, w: 0.2, pinned: true },
-        { lineId: 'l2', x: 0.1, y: 0.1, w: 0.2, pinned: true }
+        // A touch lower but in the same row: it still reads first (left before right).
+        { lineId: 'l2', x: 0.1, y: 0.11, w: 0.2, pinned: true }
       ]
     });
     const doc = withPages(baseDoc(), [page]);

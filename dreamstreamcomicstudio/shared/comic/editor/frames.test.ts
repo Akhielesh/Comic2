@@ -136,6 +136,19 @@ describe('split', () => {
     expect(cutFor(pa, pa.panels[1])!.panelId).toBe('pe1');
   });
 
+  it('keeps a drawn panel no script panel uses yet in the cuts', () => {
+    const doc = splitDoc();
+    const page = pageOf(doc, 'pg_a');
+    const extra = { drawn: 3, box: { x: 0.5, y: 0.6, w: 0.3, h: 0.3 }, conf: 0.6 };
+    const p = { ...page, render: { ...page.render, cuts: { ...page.render.cuts!, status: 'mismatch' as const, cuts: [...page.render.cuts!.cuts, extra] } } };
+    const d = withPages(doc, [p]);
+    const after = roundTrip(d, splitFrameEdit(d, p, 'p1', 'down'));
+    const cuts = pageOf(after, 'pg_a').render.cuts!;
+    expect(cuts.cuts.map((c) => c.panelId ?? null)).toEqual(['p1', 'pe1', 'p2', null]);
+    expect(cuts.cuts[3]).toEqual(extra);
+    expect(cuts.by).toBe('user');
+  });
+
   it('on an undrawn page adds a planned panel and the layout sentence follows the frames', () => {
     const page = undrawnPage('pg_u', 1, [panel('u1', 1, [], { size: 'wide' }), panel('u2', 2, [], { size: 'wide' })], 'Row 1: one wide panel. Row 2: one wide panel.');
     const doc = withPages(baseDoc(), [page]);
