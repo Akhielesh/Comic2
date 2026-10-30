@@ -6,8 +6,9 @@
  * - `richdocFromMarkdown(md, opts)`: Markdown (CommonMark + GFM) → RichDoc v1, raw HTML and unsafe links dropped.
  *
  * None of them fetches a URL or reads a path: images are `data:` images, and a host asset id goes through the host's
- * own `resolveAsset`. In the browser, load this package only through `services/platformExport.ts` (a lazy `import()`),
- * so `docx`, PptxGenJS and remark never reach the entry chunk.
+ * own `resolveAsset`. In the browser, load this package only through `services/platformExport.ts`, which imports
+ * `./docx.js`, `./pptx.js` and `./markdown.js` lazily, one chunk each, so `docx`, PptxGenJS and remark never reach the
+ * entry chunk and an export loads only the renderer it uses.
  */
 export { renderDocx, DOCX_STYLE_IDS } from './docx.js';
 export type { DocxRenderOptions } from './docx.js';

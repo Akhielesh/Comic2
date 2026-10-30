@@ -50,10 +50,16 @@ platform-core's `DREAMSTREAM_BRAND` derives from the skin tokens.
 
 ## Using it in the app
 
-Never import this package statically from app code: `services/platformExport.ts` loads it with one `import()` the
-first time a file is made, so `docx`, PptxGenJS and remark stay out of the entry chunk, and it maps every failure to
-the app's `ExportError` with a message for the person exporting (`exportDocx`, `exportPptx`, `exportMarkdownDocx`,
-`downloadPlatformFile`).
+Never import this package statically from app code: `services/platformExport.ts` loads each renderer with its own
+`import()` (`./docx`, `./pptx`, `./markdown`) the first time it is needed, so `docx`, PptxGenJS and remark stay out of
+the entry chunk and an export downloads only its own renderer (a deck never pays for docx or remark; a chat
+document's Word file never pays for PptxGenJS). It maps every failure to the app's `ExportError` with a message for
+the person exporting (`exportDocx`, `exportPptx`, `exportMarkdownDocx`, `downloadPlatformFile`). esbuild estimate,
+minified (gzip): docx 463 KB (136 KB), pptx 376 KB (127 KB), markdown 116 KB (34 KB), plus a 17 KB shared chunk.
+
+Markers for an entry-chunk test (literals that survive minification and live only in one renderer chunk):
+`w:document` (docx), `addMedia() is disabled` (the vendored PptxGenJS's P2 guard). Comments (`[DreamStream P0]`) and
+package names (`remark-gfm`, which the chat already uses) are not markers.
 
 ## Dependencies
 

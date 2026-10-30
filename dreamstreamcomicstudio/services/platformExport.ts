@@ -1,8 +1,9 @@
 // Word and PowerPoint files in the browser (platform plan §12 W1.7): the one door to packages/platform-render.
 //
 // The renderers (docx, the vendored PptxGenJS, unified/remark) are big and used only when someone exports, so this
-// file never imports them statically: `loadPlatformRender()` pulls them in with one `import()` the first time a file
-// is made, Vite splits them into their own lazy chunk, and the entry chunk never contains them
+// file never imports them statically. Each has its own `import()` (`loadDocx`, `loadPptx`, `loadMarkdown`), so Vite
+// splits them into three lazy chunks and an export downloads only what it uses: a pitch deck never pays for docx or
+// remark, a chat document's Word file never pays for PptxGenJS. The entry chunk never contains any of them
 // (tests/config/platformChunks.test.ts, W1.8, checks the built entry). Callers (the comic pitch deck, the chat
 // document and deck cards) import only this module.
 //
@@ -17,13 +18,19 @@
 
 import type { DeckSpec } from '../packages/platform-core/src/contract/deck';
 import type { RichDoc } from '../packages/platform-core/src/contract/richdoc';
-import type * as PlatformRender from '../packages/platform-render/src/index';
+import type * as DocxRender from '../packages/platform-render/src/docx';
+import type * as MarkdownRender from '../packages/platform-render/src/markdown';
+import type * as PptxRender from '../packages/platform-render/src/pptx';
 import type { DocxRenderOptions, ImageTranscoder, MarkdownOptions, PptxRenderOptions, RenderErrorCode, SlideOverlap } from '../packages/platform-render/src/index';
 import { CANCELLED, ExportError } from '../components/comicstudio/export/errors';
 import { sanitizeFilename } from '../components/comicstudio/export/filenames';
 import { downloadBlob } from './download';
 
-export type PlatformRenderModule = typeof PlatformRender;
+export type DocxRenderModule = typeof DocxRender;
+export type PptxRenderModule = typeof PptxRender;
+export type MarkdownRenderModule = typeof MarkdownRender;
+/** The three renderers together (what `loadPlatformRender` answers, and what a test's `load` stands in for). */
+export type PlatformRenderModule = DocxRenderModule & PptxRenderModule & MarkdownRenderModule;
 
 export const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -45,21 +52,46 @@ export class PlatformExportError extends ExportError {
 
 // ── Loading ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-let loading: Promise<PlatformRenderModule> | null = null;
+export type PlatformRenderPart = 'docx' | 'pptx' | 'markdown';
 
-/** The renderers, loaded once on first use (a failed load is retried on the next call). */
-export const loadPlatformRender = (): Promise<PlatformRenderModule> => {
-  if (!loading) {
-    loading = import('../packages/platform-render/src/index').catch((err: unknown) => {
-      loading = null;
-      throw err;
-    });
-  }
-  return loading;
+/** One lazy chunk, loaded once on first use; a failed load is forgotten, so the next call tries again. */
+const lazyChunk = <T>(importer: () => Promise<T>): { load: () => Promise<T>; requested: () => boolean } => {
+  let loading: Promise<T> | null = null;
+  return {
+    load: () => {
+      if (!loading) {
+        loading = importer().catch((err: unknown) => {
+          loading = null;
+          throw err;
+        });
+      }
+      return loading;
+    },
+    requested: () => loading !== null,
+  };
 };
 
-/** True once the renderer chunk has been requested (tests and diagnostics). */
-export const platformRenderRequested = (): boolean => loading !== null;
+// One literal `import()` per renderer: Vite makes each its own chunk (shared helpers land in a common chunk).
+const CHUNKS: Record<PlatformRenderPart, { load: () => Promise<unknown>; requested: () => boolean }> = {
+  docx: lazyChunk(() => import('../packages/platform-render/src/docx')),
+  pptx: lazyChunk(() => import('../packages/platform-render/src/pptx')),
+  markdown: lazyChunk(() => import('../packages/platform-render/src/markdown')),
+};
+
+/** The Word renderer (`docx`), loaded once on first use. */
+export const loadDocx = (): Promise<DocxRenderModule> => CHUNKS.docx.load() as Promise<DocxRenderModule>;
+/** The PowerPoint renderer (the vendored PptxGenJS), loaded once on first use. */
+export const loadPptx = (): Promise<PptxRenderModule> => CHUNKS.pptx.load() as Promise<PptxRenderModule>;
+/** Markdown → RichDoc (unified/remark), loaded once on first use. */
+export const loadMarkdown = (): Promise<MarkdownRenderModule> => CHUNKS.markdown.load() as Promise<MarkdownRenderModule>;
+
+/** All three renderers (each from its own chunk). Exports load only the ones they need. */
+export const loadPlatformRender = (): Promise<PlatformRenderModule> =>
+  Promise.all([loadDocx(), loadPptx(), loadMarkdown()]).then(([docx, pptx, markdown]) => ({ ...docx, ...pptx, ...markdown }));
+
+/** True once a renderer chunk (`part`, or any) has been requested and not failed (tests and diagnostics). */
+export const platformRenderRequested = (part?: PlatformRenderPart): boolean =>
+  part ? CHUNKS[part].requested() : CHUNKS.docx.requested() || CHUNKS.pptx.requested() || CHUNKS.markdown.requested();
 
 // ── Errors ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -172,7 +204,7 @@ interface CommonExportOptions {
   /** Refuse a file bigger than this many bytes (`ExportError` with code `too_big`). */
   maxBytes?: number;
   signal?: AbortSignal;
-  /** The renderers (tests); default the lazy chunk. */
+  /** The renderers (tests); default the lazy chunks this export needs. */
   load?: () => Promise<PlatformRenderModule>;
 }
 
@@ -212,29 +244,31 @@ const run = async <T>(kind: PlatformFileKind, signal: AbortSignal | undefined, w
 /** A RichDoc as a Word file. Never fetches; throws `ExportError` (see `toExportError`). */
 export const exportDocx = (doc: RichDoc, opts: PlatformDocxExportOptions = {}): Promise<PlatformFile> =>
   run('docx', opts.signal, async () => {
-    const mod = await (opts.load || loadPlatformRender)();
+    const { renderDocx } = opts.load ? await opts.load() : await loadDocx();
     checkCancelled(opts.signal);
-    const bytes = await mod.renderDocx(doc, { transcode: browserTranscoder(), ...renderOpts(opts) });
+    const bytes = await renderDocx(doc, { transcode: browserTranscoder(), ...renderOpts(opts) });
     return fileOf(bytes, opts.fileName || doc.title, 'docx', opts.maxBytes);
   });
 
 /** A DeckSpec as a PowerPoint file; refused while content elements overlap. Throws `ExportError`. */
 export const exportPptx = (deck: DeckSpec, opts: PlatformPptxExportOptions = {}): Promise<PlatformFile> =>
   run('pptx', opts.signal, async () => {
-    const mod = await (opts.load || loadPlatformRender)();
+    const { renderPptx } = opts.load ? await opts.load() : await loadPptx();
     checkCancelled(opts.signal);
-    const bytes = await mod.renderPptx(deck, { transcode: browserTranscoder(), ...renderOpts(opts) });
+    const bytes = await renderPptx(deck, { transcode: browserTranscoder(), ...renderOpts(opts) });
     return fileOf(bytes, opts.fileName || deck.title, 'pptx', opts.maxBytes);
   });
 
 /** Markdown (a chat document) as a Word file: raw HTML and unsafe links dropped on the way. Throws `ExportError`. */
 export const exportMarkdownDocx = (markdown: string, opts: PlatformMarkdownDocxExportOptions = {}): Promise<PlatformFile> =>
   run('docx', opts.signal, async () => {
-    const mod = await (opts.load || loadPlatformRender)();
+    const { richdocFromMarkdown, renderDocx } = opts.load
+      ? await opts.load()
+      : await Promise.all([loadMarkdown(), loadDocx()]).then(([md, docx]) => ({ richdocFromMarkdown: md.richdocFromMarkdown, renderDocx: docx.renderDocx }));
     checkCancelled(opts.signal);
     const { markdown: mdOpts, ...rest } = opts;
-    const doc = mod.richdocFromMarkdown(markdown, { ...(opts.fileName ? { title: opts.fileName } : {}), ...mdOpts });
-    const bytes = await mod.renderDocx(doc, { transcode: browserTranscoder(), ...renderOpts(rest) });
+    const doc = richdocFromMarkdown(markdown, { ...(opts.fileName ? { title: opts.fileName } : {}), ...mdOpts });
+    const bytes = await renderDocx(doc, { transcode: browserTranscoder(), ...renderOpts(rest) });
     return fileOf(bytes, opts.fileName || doc.title, 'docx', opts.maxBytes);
   });
 

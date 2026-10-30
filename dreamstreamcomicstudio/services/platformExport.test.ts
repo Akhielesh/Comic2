@@ -17,7 +17,11 @@ const MINIMAL = fixture<RichDoc>('packages/platform-core/fixtures/contract/richd
 const FULL_DECK = fixture<DeckSpec>('packages/platform-core/fixtures/contract/deck/full.json');
 const IMAGES = fixture<{ png: string }>('packages/platform-render/fixtures/render/images.json');
 
-const RENDER_ENTRY = '../packages/platform-render/src/index';
+/** The three renderer chunks, as platformExport.ts names them in its `import()` calls. */
+const DOCX_ENTRY = '../packages/platform-render/src/docx';
+const PPTX_ENTRY = '../packages/platform-render/src/pptx';
+const MARKDOWN_ENTRY = '../packages/platform-render/src/markdown';
+const ENTRIES = [DOCX_ENTRY, PPTX_ENTRY, MARKDOWN_ENTRY];
 
 /** The module under test and the error class it throws, from the same module graph (tests reset modules). */
 const load = async () => ({ ...(await import('./platformExport')), ...(await import('../components/comicstudio/export/errors')) });
@@ -32,13 +36,13 @@ const blobBytes = (blob: Blob): Promise<ArrayBuffer> =>
   });
 
 afterEach(() => {
-  vi.doUnmock(RENDER_ENTRY);
+  for (const entry of ENTRIES) vi.doUnmock(entry);
   vi.resetModules();
   vi.restoreAllMocks();
 });
 
-describe('platformExport: the renderers load lazily', () => {
-  it('imports no renderer statically: only `import type` and one dynamic import() of platform-render', () => {
+describe('platformExport: the renderers load lazily, each in its own chunk', () => {
+  it('imports no renderer statically: only `import type` and one dynamic import() per renderer (docx, pptx, markdown)', () => {
     const file = resolve(ROOT, 'services/platformExport.ts');
     const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
     const staticRuntime: string[] = [];
@@ -48,41 +52,77 @@ describe('platformExport: the renderers load lazily', () => {
         const typeOnly = !!node.importClause && (node.importClause.isTypeOnly || (!node.importClause.name && !!node.importClause.namedBindings && ts.isNamedImports(node.importClause.namedBindings) && node.importClause.namedBindings.elements.every((e) => e.isTypeOnly)));
         if (!typeOnly) staticRuntime.push(node.moduleSpecifier.text);
       }
-      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteralLike(node.arguments[0])) dynamic.push(node.arguments[0].text);
+      if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) dynamic.push(ts.isStringLiteralLike(node.arguments[0]) ? node.arguments[0].text : '(not a literal)');
       ts.forEachChild(node, visit);
     };
     visit(sf);
     expect(staticRuntime.filter((s) => /platform-render|platform-core|^docx$|unified|remark|pptxgen|jszip/.test(s))).toEqual([]);
-    expect(dynamic).toEqual([RENDER_ENTRY]);
+    // Exactly three, each a literal Vite can split on; never the package index, which would bundle all three together.
+    expect(dynamic.slice().sort()).toEqual(ENTRIES.slice().sort());
   });
 
-  it('importing the module loads nothing; the first export loads the renderers once', async () => {
-    let loads = 0;
+  /** Mocks the three renderer chunks, counting how often each module is evaluated. */
+  const mockChunks = () => {
+    const loads = { docx: 0, pptx: 0, markdown: 0 };
     const renderDocx = vi.fn(async () => new Uint8Array([80, 75, 3, 4]));
-    vi.doMock(RENDER_ENTRY, () => {
-      loads++;
-      return { renderDocx, renderPptx: vi.fn(), richdocFromMarkdown: vi.fn() };
-    });
+    const renderPptx = vi.fn(async () => new Uint8Array([80, 75, 3, 4, 5]));
+    const richdocFromMarkdown = vi.fn(() => MINIMAL);
+    vi.doMock(DOCX_ENTRY, () => (loads.docx++, { renderDocx }));
+    vi.doMock(PPTX_ENTRY, () => (loads.pptx++, { renderPptx }));
+    vi.doMock(MARKDOWN_ENTRY, () => (loads.markdown++, { richdocFromMarkdown }));
+    return { loads, renderDocx, renderPptx, richdocFromMarkdown };
+  };
+
+  it('importing the module loads nothing; the first Word export loads the docx chunk once, and only that one', async () => {
+    const { loads, renderDocx } = mockChunks();
     const mod = await import('./platformExport');
-    expect(loads).toBe(0);
+    expect(loads).toEqual({ docx: 0, pptx: 0, markdown: 0 });
     expect(mod.platformRenderRequested()).toBe(false);
     const file = await mod.exportDocx(MINIMAL);
-    expect(loads).toBe(1);
+    expect(loads).toEqual({ docx: 1, pptx: 0, markdown: 0 });
     expect(mod.platformRenderRequested()).toBe(true);
+    expect(mod.platformRenderRequested('docx')).toBe(true);
+    expect(mod.platformRenderRequested('pptx')).toBe(false);
     await mod.exportDocx(MINIMAL, { fileName: 'Second / copy?' });
-    expect(loads).toBe(1);
+    expect(loads.docx).toBe(1);
     expect(renderDocx).toHaveBeenCalledTimes(2);
     expect(file).toMatchObject({ fileName: 'notes.docx', mime: mod.DOCX_MIME, size: 4 });
     expect(file.blob.type).toBe(mod.DOCX_MIME);
   });
 
+  it('a PowerPoint export loads only the pptx chunk; a Markdown Word file loads markdown and docx, never pptx', async () => {
+    const { loads, renderPptx, richdocFromMarkdown, renderDocx } = mockChunks();
+    const mod = await import('./platformExport');
+    await mod.exportPptx(FULL_DECK);
+    expect(loads).toEqual({ docx: 0, pptx: 1, markdown: 0 });
+    expect(renderPptx).toHaveBeenCalledTimes(1);
+    vi.resetModules();
+    const fresh = mockChunks();
+    const mod2 = await import('./platformExport');
+    const md = await mod2.exportMarkdownDocx('# Notes');
+    expect(fresh.loads).toEqual({ docx: 1, pptx: 0, markdown: 1 });
+    expect(fresh.richdocFromMarkdown).toHaveBeenCalledWith('# Notes', {});
+    expect(fresh.renderDocx).toHaveBeenCalledWith(MINIMAL, expect.any(Object));
+    expect(md.fileName).toBe('notes.docx');
+    expect(mod2.platformRenderRequested('pptx')).toBe(false);
+    expect(richdocFromMarkdown).not.toHaveBeenCalled();
+    expect(renderDocx).not.toHaveBeenCalled();
+    // loadPlatformRender still answers all three together.
+    const all = await mod2.loadPlatformRender();
+    expect(Object.keys(all).sort()).toEqual(['renderDocx', 'renderPptx', 'richdocFromMarkdown']);
+    expect(fresh.loads).toEqual({ docx: 1, pptx: 1, markdown: 1 });
+  });
+
   it('a chunk that fails to load is an ExportError, and the next export tries again', async () => {
-    vi.doMock(RENDER_ENTRY, () => {
+    vi.doMock(DOCX_ENTRY, () => {
       throw new Error('the chunk is gone');
     });
     const mod = await load();
-    await expect(mod.loadPlatformRender()).rejects.toBeInstanceOf(Error);
-    expect(mod.platformRenderRequested()).toBe(false); // the failed load is forgotten, so the next export retries
+    await expect(mod.loadDocx()).rejects.toBeInstanceOf(Error);
+    expect(mod.platformRenderRequested('docx')).toBe(false); // the failed load is forgotten, so the next export retries
+    const failed = (await mod.exportDocx(MINIMAL).catch((e: unknown) => e)) as Error;
+    expect(failed).toBeInstanceOf(mod.ExportError);
+    expect(mod.platformRenderRequested()).toBe(false);
     // How browsers report a dynamic import that could not be fetched (Chromium/Firefox, then Safari).
     for (const reason of ['Failed to fetch dynamically imported module: https://app.example/assets/render-abc.js', 'Importing a module script failed.']) {
       const err = (await mod.exportDocx(MINIMAL, { load: () => Promise.reject(new TypeError(reason)) }).catch((e: unknown) => e)) as Error;
