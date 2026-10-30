@@ -516,14 +516,37 @@ describe('edit_page → raster.pasteRegion; render_pages.followFrames → a guid
     expect(vi.mocked(pasteRegion)).not.toHaveBeenCalled();
   });
 
-  it('“Redraw with my layout” draws the layout guide from the page’s frames (flag off), and never without frames', async () => {
+  const framedDoc = (): ComicDoc => {
     const doc = drawnDoc();
     doc.settings = { ...doc.settings, confirm: 'never' };
     doc.pages[0] = { ...doc.pages[0], artMode: 'panels', panels: doc.pages[0].panels.map((pn, j) => ({ ...pn, frame: { box: CUTS.cuts[j].box } })) };
-    const session = newSession(doc);
+    return doc;
+  };
+  const GUIDE_ENV = process.env.COMIC_LAYOUT_GUIDE;
+  afterEach(() => {
+    if (GUIDE_ENV === undefined) delete process.env.COMIC_LAYOUT_GUIDE;
+    else process.env.COMIC_LAYOUT_GUIDE = GUIDE_ENV;
+  });
+
+  it('“Redraw with my layout” with COMIC_LAYOUT_GUIDE off draws no guide at all (PD-8): no guide image, no __layout__ reference', async () => {
+    delete process.env.COMIC_LAYOUT_GUIDE;
+    const session = newSession(framedDoc());
+    const ctx = testContext(session);
+    await (await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true, followFrames: true } as never, { confirmed: true })).done;
+    expect(ctx.imagesFake.calls).toHaveLength(1);
+    expect(vi.mocked(renderLayoutGuide)).not.toHaveBeenCalled();
+    expect(ctx.imagesFake.calls[0].references.map((r) => r.label)).not.toContain('PAGE LAYOUT GUIDE');
+    expect(ctx.imagesFake.calls[0].prompt).not.toContain('PAGE LAYOUT GUIDE');
+    expect(findPage(session.doc, 'pg_1')!.render.status).toBe('ready');
+  });
+
+  it('with COMIC_LAYOUT_GUIDE on, followFrames draws the guide from the page’s frames, and from the blueprint without frames', async () => {
+    process.env.COMIC_LAYOUT_GUIDE = '1';
+    const session = newSession(framedDoc());
     const ctx = testContext(session);
     await (await startAction(ctx, { type: 'render_pages', pageIds: ['pg_1'], force: true, followFrames: true } as never, { confirmed: true })).done;
     expect(vi.mocked(renderLayoutGuide)).toHaveBeenCalledWith(CUTS.cuts.map((c) => c.box), expect.any(String), expect.any(String));
+    expect(ctx.imagesFake.calls[0].references[0].label).toBe('PAGE LAYOUT GUIDE');
     vi.mocked(renderLayoutGuide).mockClear();
     await (await startAction(ctx, { type: 'render_pages', pageIds: ['pg_2'], force: true, followFrames: true } as never, { confirmed: true })).done;
     expect(vi.mocked(renderLayoutGuide)).not.toHaveBeenCalled();

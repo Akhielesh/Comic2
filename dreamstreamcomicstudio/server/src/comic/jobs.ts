@@ -3711,10 +3711,12 @@ class RenderRun {
     // Plan §4.2: the PAGE LAYOUT GUIDE (Image 1, one object slot inside the locked model's limits) while
     // COMIC_LAYOUT_GUIDE is on — OFF by default (PD-8). Rendered here, never stored; a guide that cannot be drawn
     // drops the guide (recompiled without it: its lines go and the images renumber), never the page job or its quote.
-    // Ship 2: "Redraw with my layout" (render_pages.followFrames) turns the guide on for a page whose every panel has a
-    // frame, and draws it from the frames.
-    const framed = job.followFrames && job.target.kind === 'page' ? framedBoxes(findPage(docAtCompile, job.target.id)) : null;
-    let guideOn = job.kind === 'page' && job.target.kind === 'page' && (layoutGuideEnabled() || !!framed);
+    // Ship 2: "Redraw with my layout" (render_pages.followFrames) only changes WHERE the guide comes from — the page's
+    // frames (every panel has one) instead of the blueprint — and only while COMIC_LAYOUT_GUIDE is on. It never turns the
+    // guide on by itself: the guide is what the unapproved A/B part 1 tests (PD-8), and it takes a reference slot.
+    const guideFlag = layoutGuideEnabled();
+    const framed = guideFlag && job.followFrames && job.target.kind === 'page' ? framedBoxes(findPage(docAtCompile, job.target.id)) : null;
+    let guideOn = job.kind === 'page' && job.target.kind === 'page' && guideFlag;
     let guide: LayoutGuideImage | null = null;
     // Ship 2: a `__board__` reference that could not be made is compiled out (never worth failing a paid job).
     let boardOff = false;
