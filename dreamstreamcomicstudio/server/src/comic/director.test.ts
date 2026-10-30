@@ -15,6 +15,8 @@ import { fakeBilling, fakeImages, newSession, plannedDoc, scriptedLlm, testConte
 import { StudioError } from './types.js';
 import { costFormatter, costViewFor } from './costText.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
+import { unitPrice } from '../../../shared/comic/plan.js';
+import { getImageModel, tierPagePrice } from '../../../shared/comic/models.js';
 
 beforeEach(() => {
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -326,6 +328,30 @@ describe('summaries', () => {
     expect(s).toContain('- ARJUN [c_arjun] support — Bearded spice vendor in a green kurta; sheet not drawn');
   });
 
+  it('an unlocked comic with a model override is quoted on that model: the Settings line prices what it names', () => {
+    // change_image_model on a comic with nothing drawn only sets the override (no lock yet): the line named the
+    // override's model but priced the tier preset (about 2.5x too little per page on Nano Banana Pro).
+    const doc = plannedDoc();
+    doc.settings = { ...doc.settings, imageModelOverride: 'nano-banana-pro' };
+    expect(doc.imageModel).toBeUndefined();
+    expect(getImageModel('nano-banana-pro')).toBeTruthy();
+    const c = costFormatter();
+    const page = unitPrice(doc, 'page', { byok: false });
+    const cover = unitPrice(doc, 'cover', { byok: false });
+    expect(page.model).toBe('Nano Banana Pro');
+    // The override really prices differently from the tier preset, so the assertion below can tell them apart.
+    expect(c.approx(page.usd)).not.toBe(c.approx(tierPagePrice(doc.settings.quality, false)));
+    const s = summarizeDocForDirector(doc);
+    const settings = s.split('\n').find((l) => l.startsWith('Settings:'))!;
+    expect(settings).toContain('Nano Banana Pro');
+    expect(settings).not.toContain('(locked)');
+    expect(settings).toContain(`${c.approx(page.usd)}/page`);
+    expect(settings).toContain(`cover ${c.approx(cover.usd)}`);
+    // BYOK: the provider price of the same model.
+    const byok = summarizeDocForDirector(doc, true).split('\n').find((l) => l.startsWith('Settings:'))!;
+    expect(byok).toContain(`${c.approx(unitPrice(doc, 'page', { byok: true }).usd)}/page`);
+  });
+
   it('before a plan exists, the summary quotes planning with its honest "up to" bound, in usage words for governed users', () => {
     const doc = plannedDoc();
     doc.pages = [];
@@ -334,6 +360,8 @@ describe('summaries', () => {
     const dollars = summarizeDocForDirector(doc);
     expect(dollars).toContain(`Planning the pages: ${planPagesQuoteText(doc, costFormatter(), false)}`);
     expect(dollars).toMatch(/Planning the pages: ≈ \$\d+\.\d\d for 6 pages \(up to ≈ \$\d+\.\d\d if the plan needs its one writer repair\)/);
+    // The exact figures the docs quote (comic-studio-v4.md §6.10): 0.012 × 6 × 1.3 = $0.0936, bound 2 × that.
+    expect(dollars).toContain('Planning the pages: ≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)');
     // The tail is never clipped: the line sits with the money lines, after the body.
     expect(dollars.indexOf('Planning the pages:')).toBeGreaterThan(dollars.indexOf('Settings:'));
     // BYOK quotes the provider price (no platform markup).

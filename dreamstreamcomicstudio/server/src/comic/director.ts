@@ -10,7 +10,8 @@
 
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
-import { aspectFromSize, aspectMatches, estimateJobs, resolveImageJob, tierPagePrice } from '../../../shared/comic/models.js';
+import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
+import { unitPrice } from '../../../shared/comic/plan.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
 import { costFormatter, costFormatterFor, governCard, governDollars, type CostFormatter } from './costText.js';
 import { effectiveRating, type ContentRating } from '../../../shared/comic/safety.js';
@@ -160,8 +161,10 @@ export function summarizeDocForDirector(
   // The comic's model (models.md §3.4 #1): with a lock every tier draws on it; the tier only picks the resolution.
   const lock = deriveLock(doc);
   const { spec, resolution } = resolveImageJob('page', set.quality, set.imageModelOverride, lock);
-  const coverUsd = estimateJobs([{ kind: 'cover', count: 1 }], set.quality, { override: set.imageModelOverride, byok, ...(lock ? { lock } : {}) }).usd;
-  const pageUsd = lock ? estimateJobs([{ kind: 'page', count: 1 }], set.quality, { override: set.imageModelOverride, byok, lock }).usd : tierPagePrice(set.quality, byok);
+  // The prices come from the same source as every other quote (unitPrice: the lock, else the model override, else
+  // the tier preset), so an unlocked comic with a model override is quoted on that model, as named above.
+  const pageUsd = unitPrice(doc, 'page', { byok }).usd;
+  const coverUsd = unitPrice(doc, 'cover', { byok }).usd;
   tail.push(
     `Settings: ${set.quality} quality (${spec.nickname}${lock ? ' (locked)' : ''} ${resolution}, ${c.approx(pageUsd)}/page, cover ${c.approx(coverUsd)}, text edits free); confirm ${set.confirm}${set.confirm === 'big' ? ` (above ${c(set.bigSpendUsd)})` : ''}; budget ${set.budgetUsd ? c(set.budgetUsd) : 'none'}`
   );
