@@ -77,3 +77,85 @@ export const HISTORY_LIMITS = {
   labelChars: 160
 } as const;
 export type HistoryLimitKey = keyof typeof HISTORY_LIMITS;
+
+// --- Ship 2 (K2a; pro plan §5.5): one constant each, so a change is a one-line edit ---
+
+/** The editor's caps (pro plan §5.5). Boxes are page fractions; rotations are degrees. */
+export const EDITOR_LIMITS = {
+  /** Overlays (image or shape layers) per page. */
+  layersPerPage: 24,
+  /** Extra image sources a page's frames may show besides its own drawing (another take, an uploaded image). */
+  sourcesPerPage: 2,
+  /** Shortest side of a panel frame. */
+  frameMin: 0.04,
+  /** Largest crop zoom inside a frame (fit.s is 1..fitZoomMax). */
+  fitZoomMax: 4,
+  /** Panel cuts kept per drawing. */
+  maxCuts: 12,
+  /** Balloon rotation, ± degrees. */
+  balloonRot: 45,
+  /** Overlay rotation, ± degrees. */
+  layerRot: 180,
+  /** Tallest a balloon's minimum height may be (page fraction). */
+  minHMax: 0.6,
+  /** Unsent edits kept on the device (C3). */
+  outboxOpsMax: 2000,
+  outboxDays: 7,
+  undoPersistMax: 100,
+  /** Detection confidence at or above which a cut is trusted. */
+  detectConfOk: 0.85,
+  /** A panel enlarged past this reads soft; past upscaleBad it reads blurry. */
+  upscaleSoft: 1.5,
+  upscaleBad: 2.0
+} as const;
+export type EditorLimitKey = keyof typeof EDITOR_LIMITS;
+
+/** Consistency caps (pro plan §5.5). */
+export const CONSISTENCY_LIMITS = {
+  scenes: 60,
+  /** Characters whose state a page's continuity changes. */
+  castChanges: 12,
+  propChanges: 8,
+  notes: 3,
+  directionBackground: 4,
+  findings: 16,
+  /** Keys a VersionParts record holds (panels + places + props). */
+  partsKeys: 80,
+  anchorKeys: 16,
+  maxRefsDefault: 9,
+  promptChars: 9000,
+  recurringPages: 2,
+  recurringPanels: 3
+} as const;
+export type ConsistencyLimitKey = keyof typeof CONSISTENCY_LIMITS;
+
+/** Ranges and text lengths of the Ship 2 fields (pro plan §5.2). The normalizers and the server sanitizers share them. */
+export const PRO_PAGE_LIMITS = {
+  frameGutterMax: 0.06,
+  frameMarginMax: 0.08,
+  frameBorderMax: 0.02,
+  frameRadiusMax: 0.04,
+  /** Smallest side of an overlay, a source crop or a cut box. */
+  boxMin: 0.01,
+  /** Stacking order range for frames and overlays. */
+  zMax: 100,
+  layerNameChars: 60,
+  layerStrokeMax: 0.05,
+  layerRadiusMax: 0.5,
+  cutNoteChars: 160,
+  sceneNameChars: 60,
+  sceneTextChars: 120,
+  continuityTextChars: 120,
+  continuityListItems: 6,
+  continuityNoteChars: 160,
+  directionTextChars: 160,
+  directionCastTextChars: 80,
+  directionListItems: 6,
+  findingNoteChars: 160,
+  fixInstructionChars: 400,
+  anchorKeyChars: 80,
+  /** consistency.skip entries (anchor keys the user unticked). */
+  skipItems: 60,
+  /** consistency.maxRefs ceiling (the largest reference count any registered model takes). */
+  maxRefsMax: 14
+} as const;

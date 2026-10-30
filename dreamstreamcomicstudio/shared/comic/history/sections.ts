@@ -89,7 +89,11 @@ export const TOP_LEVEL_SECTIONS: Readonly<Record<keyof ComicDoc, TopLevelSection
   refInbox: 'excluded',
   safety: 'excluded',
   publication: 'excluded',
-  imageModel: 'excluded'
+  imageModel: 'excluded',
+  // --- Ship 2 (K2a; pro plan §5.6): the book section. Extra meta keys (not TYPED_META_KEYS): captured, compared and
+  //     restored generically through RestoreSet.metaExtra. They hold no image paths. ---
+  scenes: 'meta',
+  consistency: 'meta'
 };
 
 /** Top-level keys a version never holds (and a restore never touches). */

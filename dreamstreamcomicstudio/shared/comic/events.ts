@@ -20,6 +20,12 @@ export interface StudioFocus {
   lineIds?: string[];
   panelN?: number;
   surface?: 'board' | 'page_editor' | 'reader' | 'timeline';
+  // --- Ship 2 (K2a; pro plan §4.5): what the editor has selected on `pageId`. Ids only; the server keeps the ones on
+  //     that page (≤ DOC_LIMITS.panelsPerPage panels, ≤ EDITOR_LIMITS.layersPerPage overlays). ---
+  /** Selected panels (frames). */
+  panelIds?: string[];
+  /** Selected overlays ('ly_…'). */
+  layerIds?: string[];
 }
 /** Optional quick-assign of one image attachment. */
 export type AttachmentTarget = RefOwner | { kind: 'new_character'; name: string; castKind?: CastKind } | null;
