@@ -27,7 +27,7 @@ describe('parseQaParams', () => {
 
   it('reads every documented parameter and rejects junk', () => {
     const p = parseQaParams('?surface=editor&fixture=deep-40p&tab=cast&page=7&lang=te&theme=dark&state=streaming&mode=pro&rtl=1&public=not-found&img=png&still=1');
-    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false });
+    expect(p).toEqual({ surface: 'editor', fixture: 'deep-40p', tab: 'cast', page: 7, lang: 'te', theme: 'dark', state: 'streaming', mode: 'pro', rtl: true, publicResult: 'not-found', img: 'png', still: true, kit: null, allowDownload: true, share: false, history: false });
     const bad = parseQaParams('?surface=admin&fixture=../../etc&tab=x&page=-3&lang=<script>&state=boom&kit=<img src=x>');
     expect(bad).toMatchObject({ surface: 'studio', fixture: 'heist-12p', tab: 'pages', page: null, lang: null, state: 'idle', kit: null });
     expect(parseQaParams('?surface=kit&kit=refs-drawer')).toMatchObject({ surface: 'kit', kit: 'refs-drawer' });
@@ -35,6 +35,27 @@ describe('parseQaParams', () => {
     expect(parseQaParams('?surface=reader&share=1').share).toBe(true);
     expect(parseQaParams('?surface=reader&share=yes').share).toBe(false);
     expect(parseQaParams('?p=4').page).toBe(4);
+  });
+});
+
+describe('history=1 (Comic History on in the QA harness)', () => {
+  it('only an exact `history=1` turns it on', () => {
+    expect(parseQaParams('?surface=studio&history=1').history).toBe(true);
+    for (const q of ['', '?surface=studio', '?history=0', '?history=yes', '?history=true', '?history=']) expect(parseQaParams(q).history, q).toBe(false);
+  });
+
+  it('the scene carries caps {history: true} only then; without it the scene names no caps (DEFAULT_CAPS, History off)', () => {
+    expect(qaSceneFromParams(parseQaParams('?surface=studio&history=1')).caps).toEqual({ history: true });
+    expect(qaSceneFromParams(parseQaParams('?surface=board&history=1&fixture=lake-1p')).caps).toEqual({ history: true });
+    expect(qaSceneFromParams(parseQaParams('?surface=studio'))).not.toHaveProperty('caps');
+  });
+
+  it('the controller then reports History on, every other capability unchanged', () => {
+    const on = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('?history=1')))).result.current.caps;
+    const off = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('')))).result.current.caps;
+    expect(on.history).toBe(true);
+    expect(off.history).toBeFalsy();
+    expect({ ...on, history: off.history }).toEqual(off);
   });
 });
 
