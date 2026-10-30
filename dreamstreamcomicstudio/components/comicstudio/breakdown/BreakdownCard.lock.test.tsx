@@ -15,6 +15,9 @@ const PRO: ImageModelLock = { modelId: 'nano-banana-pro', lockedAt: 1, origin: '
 const msg = { id: 'msg_1', role: 'assistant' as const, text: '', at: 1 };
 const bd = (extra: Partial<Extract<Card, { type: 'breakdown' }>> = {}): Extract<Card, { type: 'breakdown' }> => ({ type: 'breakdown', id: 'card_bd', ...extra });
 
+/** A button whose accessible name carries this price ("≈$0.21", "≈ $0.21"), wherever the label puts it. */
+const priced = (usd: number) => new RegExp(`≈ ?${formatUsd(usd).replace('$', '\\$').replace('.', '\\.')}(?!\\d)`);
+
 const proLocked = (): ComicDoc => {
   const doc = makeSampleDoc();
   doc.imageModel = { ...PRO };
@@ -41,8 +44,10 @@ describe('a Pro-locked comic is quoted on Pro in the chat cards', () => {
     const unlockedUsd = estimateJobs([{ kind: 'page', count: q.pageIds.length }, { kind: 'sheet', count: q.sheetIds.length }], doc.settings.quality, {}).usd;
     expect(proUsd).toBeGreaterThan(unlockedUsd);
     render(<BreakdownCard card={bd()} message={msg} studio={studio} />);
-    expect(screen.getByRole('button', { name: `Approve & render all · ≈${formatUsd(proUsd)}` })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: `Approve & render all · ≈${formatUsd(unlockedUsd)}` })).toBeNull();
+    // Matched by role and price, not by the full label: the card's owner may reword the button (held-back pages,
+    // "Draw anyway") without changing what this guards — the run is quoted on the locked model.
+    expect(screen.getAllByRole('button', { name: priced(proUsd) }).length).toBeGreaterThan(0);
+    expect(screen.queryAllByRole('button', { name: priced(unlockedUsd) })).toHaveLength(0);
   });
 
   it('cast card: "Draw 1 sheet" is quoted on Pro', () => {

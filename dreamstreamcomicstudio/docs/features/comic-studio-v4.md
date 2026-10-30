@@ -215,8 +215,9 @@ Reference budget per page job (from `refs` caps):
 - characters ≤ `refs.characters` (NB 2.1: 4, Pro: 5) — the page's lead/support cast
   ranked by panel appearances. Extras are described in words until they have a sheet; an on-page extra (not a
   prop) with a ready sheet or photo is attached within the character slots on every page it appears on. The cast
-  card says "Described in text" / "Sheet ready · used on pages", and the director's summary "text only" /
-  "sheet ready".
+  card says "Described in text" / "Sheet ready · used on pages" ("Sheet ready" for a prop, whose sheet is never
+  attached on a page; "Queued" / "Drawing sheet…" while a sheet the user asked for is being drawn), and the
+  director's summary "text only" / "sheet ready".
 - style: Pro → board + up to 2 user style refs as style refs; others → board as an object ref.
 - objects/places ≤ remaining `refs.objects`: place sheets used on the page, then the
   previous page (continuity) last.
@@ -266,8 +267,9 @@ tier only picks the resolution on the locked model.
   intents (`intents.ts`) and the director's DOC SUMMARY, with no call-site change. A caller can pass `lock: null` to
   price a what-if on the unlocked tier model. `BookSummary.pricing.locked` is true when the comic is locked (or has
   an explicit override). A few displays that still call `estimateJobs` directly (board sheet and redraw prices, the
-  style and format panels, the renders card's style and cover retries, the languages tab) price the tier model
-  until they switch to `estimateDocJobs`. Chip quotes outside a gate use the registry list; the gate's PriceBook
+  style and format panels, the renders card's style and cover retries, the languages tab, and the translated-edition
+  overlay and textless-cover quotes in the server's `i18n/index.ts`) price the tier model until they switch to
+  `estimateDocJobs`. Chip quotes outside a gate use the registry list; the gate's PriceBook
   re-quote is still the price that is reserved.
 - **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
   `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
@@ -446,7 +448,7 @@ Fallback (vision unavailable): even grid boxes from the layout + top-of-panel st
   pages in red with the same free fixes and "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
 - **Planning quote.** "Plan the pages" is one writer pass per page; the plan check can send it back for one repair
   round, so the chip and the director's DOC SUMMARY (when `planStatus` is `none`) say the honest bound:
-  "≈ $0.10 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.
+  "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.
 - **The honest page-check notice** (`server/src/comic/qcNotice.ts qcNoticeFor`, called from `jobs.ts letterPage`):
   after a page is checked, the chat speaks only for a major structured problem (the drawn panel count differs from
   the plan, the planned moments look reordered or missing, a speaker who should be visible may not be drawn) or a
