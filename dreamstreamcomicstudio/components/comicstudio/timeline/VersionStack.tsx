@@ -27,6 +27,7 @@ import { UndoToast, useTimelineEdit } from './UndoToast';
 import { Badge, BlockedTile, cx, FOCUS_RING, shortDate } from './ui';
 import { useCostFormat } from '../conversation/cost';
 import { amountInSentence } from '../../../services/costDisplay';
+import { PageHistoryLink } from '../history/EntryLinks';
 
 export interface VersionStackProps {
   studio: StudioController;
@@ -327,6 +328,7 @@ export const VersionStack: React.FC<VersionStackProps> = ({ studio, target, comp
         )}
       </dl>
       {thumbs}
+      <PageHistoryLink studio={studio} target={target} />
       {toast}
     </div>
   );

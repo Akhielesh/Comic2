@@ -40,6 +40,7 @@ import { AddClip, TimelineClip } from './TimelineClip';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { VersionStack } from './VersionStack';
 import { cx, FOCUS_RING, TimelineDialog, useReducedMotion, useStoredFlag } from './ui';
+import { TimelineHistoryLink } from '../history/EntryLinks';
 
 export interface BookTimelineProps {
   studio: StudioController;
@@ -637,6 +638,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           <p className="min-w-0 flex-1 truncate text-[11.5px] tabular-nums text-[var(--ds-muted)]" title={notice || summary} role={notice ? 'status' : undefined}>
             {notice || summary}
           </p>
+          <TimelineHistoryLink studio={studio} />
           {/* The Media tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
           {hasMedia(doc) && (
             <button

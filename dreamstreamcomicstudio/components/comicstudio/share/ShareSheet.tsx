@@ -25,6 +25,7 @@ import { QrCode } from './QrCode';
 import { ShareLinkCard } from './ShareLinkCard';
 import { ShareStats } from './ShareStats';
 import { comicTitle, INTENT_CHANNELS, CHANNEL_LABEL, intentUrl, pageIdsFor, shareLinkFor, statusLine } from './shareModel';
+import { ChangesSincePublishLink } from '../history/ChangesSincePublishLink';
 
 export interface ShareSheetProps {
   studio: StudioController;
@@ -361,6 +362,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           {live && view?.behind && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.08] px-3 py-2 text-[13px] text-[var(--ds-ink)]">
               <span className="min-w-0">You’ve made changes since publishing. Readers still see the published version.</span>
+              <ChangesSincePublishLink studio={studio} />
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 {newlyBlockedNs.length > 0 && (
                   <button
