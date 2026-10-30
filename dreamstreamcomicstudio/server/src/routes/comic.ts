@@ -69,8 +69,8 @@ import { createSupabaseDocStore, sanitizePublicDoc } from '../comic/store.js';
 import { ANALYZE_SOURCE_MIN_CHARS, buildTurnToolset, createDirectorTurn } from '../comic/tools.js';
 import { toolGroups } from '../comic/tools/index.js';
 import { StudioError, type AssetStore, type DocStore } from '../comic/types.js';
-// --- history (versions plan §3.3, §11; H0 seams). Through the owner history route modules, never comic/history
-//     directly: this file also holds the public reader router (§12). ---
+// --- history (versions plan §3.3, §11; H0 seams). Only through the owner history route modules, never the history
+//     engine modules directly: this file also holds the public reader router (§12). ---
 import { historyRoutesEnabled, rememberTurnTimeZone } from './comicHistory.js';
 import { legacyVersionImport, notifyImported, parseFromVersionId } from './comicLegacyHistory.js';
 
@@ -1229,7 +1229,7 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
           ...(access.ok === false ? { qualityDenied: access.message } : {}),
           ...(restricted ? { spendBlocked: RESTRICTED_SPEND_MESSAGE } : {})
         });
-        // History's director tools resolve "this morning" in the sender's zone (comic/history/hooks.ts turnTimeZone).
+        // History's director tools resolve "this morning" in the sender's zone (turnTimeZone of the history hooks).
         rememberTurnTimeZone(ctx, request.tz);
         // Attachments are validated (and legacy images stored) before the stream opens, so a
         // bad file or a stale inbox path is a plain 400 with nothing persisted.
