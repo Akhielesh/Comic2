@@ -6,7 +6,9 @@
 //
 // The corpus: the page templates (both reading directions), synthesizeLayout over every size sequence of 1–5 panels
 // (and a fixed stride of the 6-panel ones) for every kind and direction, layoutTextOf over the estimated boxes of each
-// synthesized page of up to 4 panels (the sentence B9 derives from frames), and every layout-like string literal in
+// synthesized page of up to 4 panels (the sentence B9 derives from frames), the plan check's candidate blueprints
+// (pagePlanCheck candidateLayouts: what chooseLayout and the writer's free fix apply, every kind and direction, 1–9
+// panels), and every layout-like string literal in
 // the app's source and JSON fixtures (the fixture docs, the golden scenarios, the tests). For each sentence the golden
 // pins a hash of what the layout readers make of it: parseLayout, layoutPanelCount, estimatePanelBoxes (three kinds ×
 // two directions, the inferred direction, and one panel too many), effectiveLayout, harmonizePanelSizes,
@@ -23,6 +25,7 @@ import { framesFromLayoutText, layoutTextFits, layoutTextOf } from '../../../sha
 import { PAGE_TEMPLATES, templateLayout } from '../../../shared/comic/editor/templates.js';
 import { hashString, stableStringify } from '../../../shared/comic/hash.js';
 import * as geo from '../../../shared/comic/pageGeometry.js';
+import { candidateLayouts } from '../../../shared/comic/pagePlanCheck.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(here, '..', '..', '..');
@@ -69,7 +72,11 @@ const literalSentences = (): string[] => {
   return [...out];
 };
 
-/** Every layout sentence the code produces (templates, synthesized, derived) and the fixtures' literal ones. */
+/** The plan check's candidate blueprints for a format and a panel count (chooseLayout, the writer's free fix). */
+const candidatesFor = (kind: ComicKind, readingDirection: (typeof DIRS)[number], n: number): string[] =>
+  candidateLayouts({ format: { kind, readingDirection } } as Parameters<typeof candidateLayouts>[0], n);
+
+/** Every layout sentence the code produces (templates, synthesized, derived, candidates) and the fixtures' literal ones. */
 const layoutCorpus = (): { generated: string[]; literals: string[] } => {
   const out = new Set<string>();
   for (const t of PAGE_TEMPLATES) {
@@ -97,6 +104,7 @@ const layoutCorpus = (): { generated: string[]; literals: string[] } => {
       out.add(layoutTextOf(boxes, { rtl: readingDirection === 'rtl', kind }));
     }
   }
+  for (const kind of KINDS) for (const readingDirection of DIRS) for (let n = 1; n <= 9; n++) for (const c of candidatesFor(kind, readingDirection, n)) out.add(c);
   out.delete('');
   const literals = literalSentences().filter((s) => s && !out.has(s));
   return { generated: [...out].sort(), literals: literals.sort() };
@@ -162,7 +170,16 @@ describe('golden: every layout sentence reads as before the inset clause', () =>
     expect(generated.length).toBeGreaterThan(4000);
     expect(plainLiterals.length).toBeGreaterThan(20);
     expect(generated).toEqual(expect.arrayContaining([PAGE_TEMPLATES[0].sentence, 'Row 1: two equal panels side by side (panels 1–2). Row 2: two equal panels side by side (panels 3–4).']));
-    expect(plainLiterals).toEqual(expect.arrayContaining(['Row 1: one wide panel. Row 2: two equal panels.']));
+    expect(plainLiterals).toEqual(expect.arrayContaining(['Row 1: a tall panel on the left beside two stacked panels. Row 2: one wide panel.']));
+    // A literal the code also generates (here a plan-check candidate) is checked once, with the generated ones.
+    expect(generated).toContain('Row 1: one wide panel. Row 2: two equal panels.');
+    expect(plainLiterals).not.toContain('Row 1: one wide panel. Row 2: two equal panels.');
+    // The plan check's candidates (rows in both directions, webtoon stacks), up to 9 panels.
+    for (const [kind, dir, n] of [['comic', 'ltr', 3], ['manga', 'rtl', 9], ['webtoon', 'ltr', 5]] as const) {
+      const c = candidatesFor(kind, dir, n);
+      expect(c.length, `${kind} ${dir} ${n}`).toBeGreaterThan(0);
+      expect(generated).toEqual(expect.arrayContaining(c));
+    }
     expect(insets.length).toBeGreaterThan(0);
   });
 
