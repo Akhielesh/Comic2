@@ -1888,7 +1888,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       costUsd: r.costUsd,
       callMade: r.result.callMade === true,
       costReported: r.result.costReported === true,
-      checked: r.result.proPages?.check.callMade === true,
+      checked: r.result.proPages?.check?.callMade === true,
       message: r.result.message ?? null
     };
   };
@@ -2001,7 +2001,13 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     // D1–D3 only: D4 and the A/B are judged blind in their pair views.
     const shown = runs.filter((r) => r.checkId === 'D1' || r.checkId === 'D2' || r.checkId === 'D3').slice(0, LAB_RESULTS_SHOWN);
     const urls = await signAll(shown.map((r) => r.result.imagePath).filter((p): p is string => !!p));
-    const proPages = deps.proPages ? await proPagesView(adminId, { runs, votes, spentUsd, prices, keys, now, healthByModel }) : undefined;
+    // The A/B section never takes the rest of the lab down: if it can't be prepared it says so, and nothing in it runs.
+    const proPages = deps.proPages
+      ? await proPagesView(adminId, { runs, votes, spentUsd, prices, keys, now, healthByModel }).catch((err) => {
+          logger.warn('comic_model_lab_pro_pages_view_failed', { message: String((err as Error)?.message || err).slice(0, 200) });
+          return proPagesUnavailable();
+        })
+      : undefined;
     return {
       capUsd,
       day,
@@ -2441,6 +2447,22 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     ].join(' · ');
   };
 
+  /** The section when it couldn't be prepared: honest, quote-less, nothing runnable. */
+  const proPagesUnavailable = (): ProPagesView => {
+    const budget = abBudget();
+    const reason = "The A/B section couldn't be prepared right now, so nothing here can run. Refresh to try again.";
+    return {
+      ...PRO_PAGES_CHECK,
+      switchName: LAB_AB_BUDGET_ENV,
+      enabled: budget.enabled,
+      ...(budget.enabled ? {} : { notice: budget.reason ?? LAB_AB_NOT_ENABLED_COPY }),
+      budget: { capUsd: LAB_AB_HARD_CAP_USD, limitUsd: budget.enabled ? budget.limitUsd : null, spentUsd: null, remainingUsd: null },
+      quote: { usd: null, arms: 0, pages: 0, checks: 0, basis: [], refsUnpriced: false },
+      pages: PRO_PAGES_GOLDEN.map((g) => ({ key: g.key, label: g.label, why: g.why, pairId: `p1-${g.key}`, available: false, reason, arms: [] })),
+      pairs: []
+    };
+  };
+
   const proPagesView = async (
     adminId: string,
     ctx: { runs: LabRunRow[]; votes: LabVoteRow[]; spentUsd: number; prices: ServerPriceBook | null; keys: StudioKeys | null; now: number; healthByModel: Map<string, LabHealthView | null> }
@@ -2654,13 +2676,14 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       const costUsd = drawn.costUsd === null ? null : round6(drawn.costUsd + checkUsd);
       const facts: LabResultFacts = {
         ...drawn.facts,
-        costReported: drawn.facts.costReported === true && (!check.callMade || check.costReported),
         quoteBasis: quote.basis,
         quoteSource: quote.source,
         proPages: { golden: item.golden.key, comic: item.golden.comic, pageN: item.golden.pageN, arm: item.arm, guide: plan.guide, withheld: plan.withheld, dropped: prepared.dropped, check }
       };
-      // comic_image_calls records the image call (its own cost); the page check lives in the lab row.
+      // comic_image_calls records the image call with the image's own reported cost; the page check lives in the lab row.
       await recordCall(store, adminId, spec, { kind: 'page', res, aspect, logId: item.id }, { status: drawn.status, costUsd: drawn.costUsd }, facts);
+      // The run's cost is reported only when both of its calls reported theirs (the cap otherwise keeps the quote's part).
+      facts.costReported = drawn.facts.costReported === true && (!check.callMade || check.costReported);
 
       const patch = { status: drawn.status, costUsd, providerModel: drawn.providerModel, result: facts, finishedAt: new Date(deps.now()).toISOString() };
       const finished = await finishRun(store, reserved.row.id, patch, { check: item.check, item: item.id, quotedUsd: quote.usd });

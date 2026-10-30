@@ -418,6 +418,19 @@ describe('one click = one image call + its one page check', () => {
     expect(run).toMatchObject({ status: 'ok', costReported: false, checked: true });
     expect(run.costUsd).toBeCloseTo(0.0611 + 0.003, 6);
     expect(h3.store.runs[0].result.proPages!.check).toMatchObject({ ok: false, callMade: true, costReported: false, httpStatus: 500 });
+    // comic_image_calls keeps the image's own reported cost; only the run's total is "not reported".
+    expect(h3.store.imageCalls).toEqual([expect.objectContaining({ outcome: 'ok', provider_cost_usd: 0.0611 })]);
+    expect(h3.store.runs[0].result.costReported).toBe(false);
+  });
+
+  it('a section that cannot be prepared says so and never takes the rest of the lab down', async () => {
+    const h = harness();
+    h.source.docs.b4b5774f = { pages: null } as unknown as ComicDoc; // a broken stored doc
+    const o = await h.lab.overview(ADMIN);
+    expect(o.checks.map((c) => c.id)).toEqual(['D1', 'D2', 'D3', 'D4']);
+    expect(o.proPages!.quote).toMatchObject({ usd: null, arms: 0 });
+    for (const p of o.proPages!.pages) expect(p).toMatchObject({ available: false, arms: [], reason: expect.stringMatching(/couldn't be prepared right now/) });
+    expect(h.calls).toEqual([]);
   });
 
   it('a repeated click returns the stored result and never calls again — also while the first is still running', async () => {
