@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { versionList } from '../book';
-import { collectAssetPaths, type ArchivedVersion, type ComicDoc, type RenderVersion } from '../doc';
+import { applyOps } from '../ops';
+import { historyRestoreOp, restoreOps } from './index';
+import { collectAssetPaths, normalizeDoc, type ArchivedVersion, type ComicDoc, type RenderVersion } from '../doc';
 import { BOOK_NOW, historyEmptyDoc, historyV4Doc, historyV5Doc } from './__fixtures__/books';
 import { randomBook } from './__fixtures__/random';
 import {
@@ -499,5 +501,93 @@ describe('earlier.ts is pure', () => {
       const words = [h.title, h.note, ...h.days.map((d) => d.label), ...h.owners.map((g) => g.label), ...h.moments.flatMap((m) => [m.label, ...earlierFacts(m)])];
       for (const w of words) expect(w).not.toMatch(GIT_WORDS);
     }
+  });
+});
+
+// ig2 FIX wave note 8: a page's frame picture or overlay that a restore displaced is archived under the page with
+// source 'upload' and at 0 (apply.ts pathHomes) — 'upload' there only records that nothing was known. Its moment is
+// worded from the entry, names no maker and is not an older drawing of the page.
+describe('earlierMoments: a panel picture or overlay a restore archived is not "You uploaded art"', () => {
+  const plain = (path: string, targetKey: string, label: string): ArchivedVersion => ({ path, source: 'upload', at: 0, targetKey, label, archivedAt: BOOK_NOW - 1_000_000 });
+  const OVERLAY = 'u/user-b/p/proj-v5/ref/sticker.webp';
+  const TAKE = `${V5}/frame-take.webp`;
+  const TRASHED = 'u/user-b/p/proj-v5/ref/old-guide.webp';
+  const PURGED = `${V5}/gone-take.webp`;
+  const UPLOAD = `${V5}/p2-upload.webp`;
+  const withSources = (): ComicDoc => {
+    const doc = historyV5Doc();
+    doc.archive = [
+      ...doc.archive!,
+      plain(OVERLAY, 'page:pg_2', 'Page 2 overlay'),
+      plain(TAKE, 'page:pg_2', 'Page 2 panel picture'),
+      plain(TRASHED, 'page:pg_old', 'Deleted page 7 overlay'),
+      plain(PURGED, 'page:pg_gone', 'Page 9 panel picture'),
+      // A look-alike: an undated upload archived as page 2's own art (its label is just the page's) IS a drawing.
+      plain(UPLOAD, 'page:pg_2', 'Page 2')
+    ];
+    return doc;
+  };
+
+  it('is labelled from its entry, with no maker ("not recorded") and no v-number', () => {
+    const moments = earlierMoments(withSources());
+    const overlay = byPath(moments, OVERLAY);
+    expect(overlay).toMatchObject({ owner: { key: 'page:pg_2', kind: 'page' }, label: 'An overlay from page 2', by: null, origin: null, source: null, at: null, archived: true, current: false });
+    expect(overlay.missing).toEqual(['date', 'by', 'origin', 'model', 'cost']);
+    expect(overlay).not.toHaveProperty('versionN');
+    expect(byPath(moments, TAKE)).toMatchObject({ label: 'A panel picture from page 2', by: null, source: null });
+    // A deleted page's and a purged page's: under that page, worded from their own labels.
+    expect(byPath(moments, TRASHED)).toMatchObject({ owner: { key: 'trash:pg_old', kind: 'deleted_page', label: 'Deleted page 7' }, label: 'An overlay from deleted page 7', by: null });
+    expect(byPath(moments, PURGED)).toMatchObject({ owner: { key: 'archive:page:pg_gone', kind: 'removed', label: 'Page 9 (removed)', pageId: 'pg_gone' }, label: 'A panel picture from page 9', by: null });
+    for (const m of moments.filter((x) => [OVERLAY, TAKE, TRASHED, PURGED].includes(x.path!))) expect(m.label, m.path).not.toMatch(/uploaded|You /);
+  });
+
+  it('end to end: pictures the real restore displaced (the I1 net) read "A panel picture / An overlay from page N"', () => {
+    const base = normalizeDoc(historyV4Doc());
+    const page = base.pages[1];
+    const STICKER = 'u/user-a/p/proj-v4/refs/sticker.webp';
+    const FRAME = `${V4}/frame-take.webp`;
+    const at = BOOK_NOW - 60_000;
+    const framed = applyOps(base, [
+      { op: 'page_frames', pageId: page.id, artMode: 'panels', frames: page.panels.map((pn, i) => ({ panelId: pn.id, frame: { box: { x: 0.02, y: 0.02 + i * 0.3, w: 0.96, h: 0.28 }, ...(i === 0 ? { src: { path: FRAME } } : {}) } })), moveBalloons: false },
+      { op: 'layer', pageId: page.id, id: 'ly_sticker', patch: { kind: 'image', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, src: { path: STICKER }, print: false } }
+    ], at);
+    const doc = applyOps(framed, [historyRestoreOp(restoreOps(framed, base, { kind: 'page', pageId: page.id, mode: 'replace', part: 'all' }), { versionId: 'v', at })], at);
+    const moments = earlierMoments(doc);
+    expect(byPath(moments, FRAME)).toMatchObject({ owner: { key: `page:${page.id}` }, label: `A panel picture from page ${page.n}`, by: null, archived: true });
+    expect(byPath(moments, STICKER)).toMatchObject({ owner: { key: `page:${page.id}` }, label: `An overlay from page ${page.n}`, by: null, archived: true });
+  });
+
+  it('every owner numbers its drawings v1..vN: a panel picture or overlay takes no number (no gap where it was)', () => {
+    const moments = earlierMoments(withSources());
+    const byOwner = new Map<string, number[]>();
+    for (const m of moments) if (m.kind === 'drawing' && m.versionN !== undefined) byOwner.set(m.owner.key, [...(byOwner.get(m.owner.key) || []), m.versionN]);
+    expect(byOwner.get('trash:pg_old')?.length).toBeGreaterThan(0); // the deleted page with an overlay has drawings
+    for (const [key, ns] of byOwner) {
+      const sorted = [...ns].sort((a, b) => a - b);
+      expect(sorted, key).toEqual(sorted.map((_, i) => i + 1));
+    }
+    // Still listed, under their pages, with no v-number: the live page's (the shared list leaves them out), the
+    // deleted page's and the purged page's.
+    for (const path of [OVERLAY, TAKE, TRASHED, PURGED]) expect(byPath(moments, path), path).not.toHaveProperty('versionN');
+    expect(earlierForPage(moments, 'pg_2').map((m) => m.path)).toEqual(expect.arrayContaining([OVERLAY, TAKE]));
+  });
+
+  it('its facts say what was never recorded, and never "No AI cost"', () => {
+    const moments = earlierMoments(withSources());
+    expect(earlierFacts(byPath(moments, OVERLAY))).toEqual([`How it was made: ${NOT_RECORDED}`, `Image model: ${NOT_RECORDED}`, `Cost: ${NOT_RECORDED}`, 'Archived', `Date: ${NOT_RECORDED}`]);
+  });
+
+  it('regression guard: page 2’s drawings are unchanged (the look-alike upload is still "You uploaded art", with its shared v-number)', () => {
+    const doc = withSources();
+    const moments = earlierMoments(doc);
+    const shared = new Map(versionList(doc, { kind: 'page', id: 'pg_2' }).map((e) => [e.path, e.n]));
+    const upload = byPath(moments, UPLOAD);
+    expect(upload).toMatchObject({ label: 'You uploaded art for page 2', by: 'you', source: 'upload', versionN: shared.get(UPLOAD) });
+    for (const m of earlierForPage(moments, 'pg_2').filter((x) => x.kind === 'drawing' && x.path !== OVERLAY && x.path !== TAKE)) expect(m.versionN, m.path).toBe(shared.get(m.path!));
+    // The same book without the displaced pictures words every other moment exactly as before.
+    const plainDoc = withSources();
+    plainDoc.archive = plainDoc.archive!.filter((a) => ![OVERLAY, TAKE, TRASHED, PURGED].includes(a.path));
+    const others = (ms: EarlierMoment[]) => ms.filter((m) => ![OVERLAY, TAKE, TRASHED, PURGED].includes(m.path!)).map((m) => [m.id, m.label, m.by]);
+    expect(others(moments)).toEqual(others(earlierMoments(plainDoc)));
   });
 });

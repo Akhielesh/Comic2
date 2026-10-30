@@ -513,12 +513,11 @@ export async function getStudioModels(): Promise<{ models: ImageModelSpec[]; tie
 const EVENT_NAMES = new Set<string>(STREAM_EVENT_NAMES);
 
 /**
- * The `done` event as this client reads it: the shared shape plus `beforeVersionId` — a `history_restore` stream names
- * the moment the server saved just before the restore (versions plan §6.1 step 8), so the restore toast's Undo needs no
- * lookup. Additive and optional: an older server simply never sends it. (Wave amendment: shared/comic/events.ts `done`
- * gains `beforeVersionId?: string`; this type then equals the shared one.)
+ * The `done` event as this client reads it: exactly the shared shape (shared/comic/events.ts), whose optional
+ * `beforeVersionId` names the moment a `history_restore` stream saved just before the restore (versions plan §6.1
+ * step 8), so the restore toast's Undo needs no lookup. An older server simply never sends it.
  */
-export type StudioDoneEvent = Extract<StudioEvent, { type: 'done' }> & { beforeVersionId?: string };
+export type StudioDoneEvent = Extract<StudioEvent, { type: 'done' }>;
 
 /**
  * Parse one SSE block into a StudioEvent. The data is the event JSON; its `type` wins,

@@ -43,7 +43,10 @@ export type StudioEvent =
   | { type: 'urls'; urls: Record<string, string> }
   /** `code` is one of STREAM_ERROR_CODES (additive strings; clients must tolerate unknown codes). */
   | { type: 'error'; message: string; code?: string }
-  | { type: 'done'; rev: number; spentUsd: number; savedUsd?: number }
+  /** `beforeVersionId` (Comic History): a `history_restore` stream names the moment saved just before the restore
+   *  (versions plan §6.1 step 8), or the reused latest moment when none was written, so the toast's Undo needs no
+   *  lookup. Optional and additive: every other stream, and an older server, simply omits it. */
+  | { type: 'done'; rev: number; spentUsd: number; savedUsd?: number; beforeVersionId?: string }
   // --- history: a moment was saved, so an open History panel updates live (the client also resyncs) ---
   | { type: 'history'; version: VersionRow };
 

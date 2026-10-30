@@ -37,6 +37,7 @@ import { spendByTarget, unitPrice } from '../../../shared/comic/plan';
 import { describeOps, inverseOps, isUndoable } from '../../../shared/comic/undo';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits';
+import { isPanelSourceArchive, PANEL_SOURCE_ARCHIVE_WORDS } from '../../../shared/comic/history/index';
 import { amountInSentence } from '../../../services/costDisplay';
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -93,12 +94,17 @@ export interface VersionItem {
 
 type AnyVersion = RenderVersion | ArchivedVersion;
 
-/** Every version of a target — current, history, its archived versions — numbered v1 = oldest. */
+/**
+ * Every version of a target — current, history, its archived versions — numbered v1 = oldest. A page's frame picture
+ * or overlay that a restore archived under the page (shared/comic/history isPanelSourceArchive) is not a version of
+ * the page's drawing: the shared list already leaves it out before numbering, so v1..vN count drawings only, and the
+ * media bin lists it under its page by its own label (collectMedia).
+ */
 export function versionList(doc: ComicDoc, target: RenderTarget): VersionItem[] {
   const want = specHashFor(doc, target);
   const shaped = target.kind === 'page' || target.kind === 'cover';
   // The ONE numbering (shared/comic/book versionList, P2-AMEND): the same v-numbers the director's
-  // list_versions / use_version use — this view only adds what the UI shows about each version.
+  // list_versions / use_version use — this view only adds what the UI shows about each version. Never renumber here.
   return sharedVersionList(doc, target).map(({ n, version, current, archived }) => {
     const v: AnyVersion = version;
     const rv = v as RenderVersion & Partial<ArchivedVersion>;
@@ -384,7 +390,27 @@ export interface MediaItem {
   /** Deleted pages: the trash entry's page id (Restore). */
   deletedPageId?: string;
   deletedFromN?: number;
+  /**
+   * A page's frame picture or overlay a restore archived under the page (isPanelSourceArchive): what it was. It is
+   * not a version of the page's drawing — never page or cover art; listed under its page by its own label.
+   */
+  panelSource?: PanelSourceWhat;
 }
+
+/** What a panel-source archive entry was ('panel picture' | 'overlay'). */
+export type PanelSourceWhat = (typeof PANEL_SOURCE_ARCHIVE_WORDS)[keyof typeof PANEL_SOURCE_ARCHIVE_WORDS];
+
+/** A panel picture or overlay archive entry records no time (at 0): its tile says so instead of a date. */
+export const DATE_NOT_RECORDED = 'date not recorded';
+
+/** "Page 3 overlay" → 'overlay' (null for anything that is not a panel-source archive entry). */
+export const panelSourceWhat = (a: ArchivedVersion): PanelSourceWhat | null => {
+  if (!isPanelSourceArchive(a)) return null;
+  return a.label.endsWith(PANEL_SOURCE_ARCHIVE_WORDS.frame) ? PANEL_SOURCE_ARCHIVE_WORDS.frame : PANEL_SOURCE_ARCHIVE_WORDS.layer;
+};
+
+/** The entry's own label with its (unrecorded) date: "Page 3 overlay · date not recorded". */
+export const panelSourceLabel = (a: Pick<ArchivedVersion, 'label'>): string => `${a.label} · ${DATE_NOT_RECORDED}`;
 
 export type MediaFilter = 'all' | 'pages' | 'cover' | 'characters' | 'places' | 'style' | 'uploads' | 'archived' | 'deleted';
 export const MEDIA_FILTERS: { id: MediaFilter; label: string }[] = [
@@ -454,6 +480,19 @@ export function collectMedia(doc: ComicDoc): MediaItem[] {
         v.current ? label : `${label} (earlier version)`
       );
     }
+    if (target.kind === 'page') addPanelSources(owner.key, owner, role);
+  };
+  // A page's frame picture or overlay a restore archived under it ('page:<id>', isPanelSourceArchive): listed under its
+  // page by its own label ("Page 3 overlay · date not recorded"), never as a version of the page's drawing.
+  const addPanelSources = (key: string, owner: MediaItem['owner'], role: MediaRole) => {
+    for (const a of archiveOf(doc)) {
+      const what = a.targetKey === key ? panelSourceWhat(a) : null;
+      if (!what) continue;
+      add(
+        { role, group: 'pages', owner, current: false, versionLabel: panelSourceLabel(a), panelSource: what, archived: true, starred: !!a.starred, canStar: true, stale: false, asset: a },
+        `${a.label} (archived)`
+      );
+    }
   };
   const addRefs = (refs: RefAsset[] | undefined, group: MediaGroup, label: string) => {
     if (!refs?.length) return;
@@ -494,10 +533,33 @@ export function collectMedia(doc: ComicDoc): MediaItem[] {
         label
       );
     }
+    addPanelSources(renderTargetKey({ kind: 'page', id: t.page.id }), owner, 'deleted_page');
   }
   // Archived versions whose owner no longer exists (purged pages, removed characters).
   for (const a of archiveOf(doc)) {
     if (byPath.has(a.path)) continue;
+    const what = panelSourceWhat(a);
+    if (what) {
+      // A purged page's frame picture or overlay: under that page's own group, by its label.
+      const pageLabel = a.label.slice(0, -(what.length + 1));
+      add(
+        {
+          role: 'deleted_page',
+          group: 'pages',
+          owner: { key: `archive:${a.targetKey}`, label: pageLabel, order: ownerOrder++ },
+          current: false,
+          versionLabel: panelSourceLabel(a),
+          panelSource: what,
+          archived: true,
+          starred: !!a.starred,
+          canStar: true,
+          stale: false,
+          asset: a
+        },
+        `${a.label} (archived)`
+      );
+      continue;
+    }
     const kind = a.targetKey.split(':')[0];
     const role: MediaRole = kind === 'cover' ? 'cover' : kind === 'sheet' ? 'sheet' : kind === 'place' ? 'place' : kind === 'style_option' ? 'style_option' : 'deleted_page';
     const group: MediaGroup = role === 'sheet' ? 'characters' : role === 'place' ? 'places' : role === 'style_option' ? 'style' : role === 'cover' ? 'cover' : 'pages';

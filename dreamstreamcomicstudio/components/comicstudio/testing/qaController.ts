@@ -49,12 +49,14 @@ export interface QaParams {
   allowDownload: boolean;
   /** `share=1`: the reader gets a share link (endCard.shareUrl), as on a published comic. */
   share: boolean;
+  /** `history=1`: Comic History on (caps.history), answered offline by the fake HistoryApi (qa/ComicQaApp.tsx). */
+  history: boolean;
 }
 
 const TABS: readonly StudioTab[] = ['story', 'cast', 'style', 'pages', 'media', 'languages', 'read'];
 const pick = <T extends string>(value: string | null, allowed: readonly T[], fallback: T): T => (value && (allowed as readonly string[]).includes(value) ? (value as T) : fallback);
 
-/** Parse `?surface=studio|board|editor|reader|public|kit&fixture=…&tab=pages&page=2&lang=en&kit=…` (mobile.md §10.2). */
+/** Parse `?surface=studio|board|editor|reader|public|kit&fixture=…&tab=pages&page=2&lang=en&kit=…&history=1` (mobile.md §10.2). */
 export const parseQaParams = (search: string, env: { webdriver?: boolean } = {}): QaParams => {
   const q = new URLSearchParams(search);
   const fixture = q.get('fixture');
@@ -76,7 +78,8 @@ export const parseQaParams = (search: string, env: { webdriver?: boolean } = {})
     still: q.get('still') === '1',
     kit: /^[a-z][a-z-]{0,31}$/.test(q.get('kit') || '') ? q.get('kit') : null,
     allowDownload: q.get('download') !== '0',
-    share: q.get('share') === '1'
+    share: q.get('share') === '1',
+    history: q.get('history') === '1'
   };
 };
 
@@ -242,7 +245,9 @@ export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
     focusedPageId: p.surface === 'editor' ? pageId ?? doc?.pages[0]?.id ?? null : null,
     state: p.state,
     mode: p.mode,
-    img: p.img
+    img: p.img,
+    // `history=1` turns Comic History on; absent, the caps stay DEFAULT_CAPS (History off, as before).
+    ...(p.history ? { caps: { history: true } } : {})
   };
 };
 

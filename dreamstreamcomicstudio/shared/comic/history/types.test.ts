@@ -2,6 +2,8 @@
 // rows a route returns and the UI can carry them as ordinary ChangeItems (no PanelChangeItem cast needed).
 // The fold is checked by the typecheck (npm run typecheck covers this file); the runtime checks prove a plain
 // ChangeItem that carries a moment is read and worded exactly as a PanelChangeItem is.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { describeChanges, isPanelChangeItem, panelMomentItem, type PanelChangeItem, type PanelMoment } from './describe';
 import type { ChangeItem, VersionRow } from './types';
@@ -24,5 +26,19 @@ describe('ChangeItem carries K2a panel moments officially', () => {
     expect(describeChanges(items, 'ai')).toMatch(/panel 3/);
     // A ChangeItem without a moment stays an ordinary change.
     expect(isPanelChangeItem({ what: 'art', by: 'ai' } satisfies ChangeItem)).toBe(false);
+  });
+});
+
+describe('PanelChangeItem is ChangeItem with the moment present (ig2 FIX wave note 5)', () => {
+  it('is exactly that type, declared once as an alias (no field of its own that could drift from ChangeItem)', () => {
+    // The type is the fold: every field is ChangeItem's, the moment is required.
+    expectTypeOf<PanelChangeItem>().toEqualTypeOf<ChangeItem & { moment: PanelMoment }>();
+    expectTypeOf<Exclude<keyof PanelChangeItem, keyof ChangeItem>>().toEqualTypeOf<never>();
+    expectTypeOf<PanelChangeItem['moment']>().toEqualTypeOf<PanelMoment>();
+    // Structurally the old interface was the same type, so its declaration is pinned too: an alias of ChangeItem,
+    // never again an interface that re-declares ChangeItem's fields.
+    const src = readFileSync(join(__dirname, 'describe.ts'), 'utf8');
+    expect(src).toMatch(/^export type PanelChangeItem = ChangeItem & \{ moment: PanelMoment \};$/m);
+    expect(src).not.toMatch(/interface PanelChangeItem\b/);
   });
 });

@@ -134,6 +134,33 @@ describe('VersionStack', () => {
   });
 });
 
+// A page's frame picture or overlay a restore archived under the page (shared/comic/history isPanelSourceArchive) is
+// not a drawing of the page: the shared versionList leaves it out before numbering, so the stack never reads "v4 of 3".
+describe('VersionStack: a panel picture or overlay a restore archived is not a version', () => {
+  const withOverlay = (): ComicDoc => {
+    const doc = richDoc();
+    doc.archive = [{ path: 'u/x/p/ov-p1.webp', source: 'upload', at: 0, targetKey: 'page:pg_1', label: 'Page 1 overlay', archivedAt: 26 }, ...(doc.archive || [])];
+    return doc;
+  };
+
+  it('numbers the drawings v1..v3 and never shows a number past the count', () => {
+    const { studio } = setup(withOverlay());
+    expect(screen.getByText('v3 of 3 · current')).toBeInTheDocument();
+    const radios = screen.getAllByRole('radio');
+    expect(radios.map((r) => r.getAttribute('aria-label'))).toEqual(['v1, archived', 'v2', 'v3, current']);
+    for (const r of radios) {
+      fireEvent.click(r);
+      const badge = screen.getByText(/^v\d+ of \d+/).textContent || '';
+      const [, n, of] = /^v(\d+) of (\d+)/.exec(badge)!;
+      expect(Number(n), badge).toBeLessThanOrEqual(Number(of));
+    }
+    // v1 is the oldest drawing, never the overlay: using it prints p1-v1.
+    fireEvent.click(radios[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Use v1 · Free' }));
+    expect(studio.patch.mock.calls[0][0]).toEqual([{ op: 'render_use', target: P1, path: 'u/x/p/p1-v1.webp', at: expect.any(Number) }]);
+  });
+});
+
 describe('VersionsCard (chat)', () => {
   it('renders a live compact stack and handles a deleted target honestly', () => {
     const studio = makeFakeStudio({ doc: richDoc() });

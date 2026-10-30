@@ -16,11 +16,12 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, within } from '@testing-library/react';
-import { normalizeDoc, type ComicDoc } from '../../../shared/comic/doc';
+import { normalizeDoc, type ArchivedVersion, type ComicDoc } from '../../../shared/comic/doc';
 import type { HistoryCard as HistoryCardData, VersionRow } from '../../../shared/comic/history/types';
 import { resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { resetBackStack } from '../mobile/backStack';
 import { ChangesSincePublishLink } from './ChangesSincePublishLink';
+import { EarlierImages } from './EarlierImages';
 import { TimelineHistoryLink } from './EntryLinks';
 import { HistoryButton, HISTORY_HEADER_ICON_MIN_WIDTH } from './HistoryButton';
 import { HistoryCardView } from './HistoryCard';
@@ -352,6 +353,28 @@ describe('"Earlier (images only)" waits until History’s start is known', () =>
     }
     expect(document.querySelector('[data-moment="ver_start"]')).toBeTruthy();
     expect(document.querySelector('[data-history-earlier]')).toBeTruthy();
+  });
+});
+
+// ── Minor: Earlier tiles of panel pictures and overlays have their own names ──
+
+describe('Earlier: a page’s panel pictures and overlays get distinct tile names', () => {
+  it('named from their own words (no v-number), "1 of 2" when two would read the same; every tile name is unique', async () => {
+    const live = clone(historyFixture('v4').live);
+    const page = live.pages.find((p) => p.n === 2)!;
+    const plain = (name: string, label: string): ArchivedVersion => ({ path: `u/user-a/p/proj-v4/refs/${name}.webp`, source: 'upload', at: 0, targetKey: `page:${page.id}`, label, archivedAt: NOW - 60_000 });
+    live.archive = [plain('ov-a', 'Page 2 overlay'), plain('ov-b', 'Page 2 overlay'), plain('pic', 'Page 2 panel picture'), ...(live.archive || [])];
+    const m = historySetup({ fixture: 'v4', studio: { doc: live } as never });
+    mountWith(m, <EarlierImages studio={m.studio} startedAt={null} now={NOW} tz={TZ} />);
+    await settle();
+    const names = Array.from(document.querySelectorAll<HTMLElement>('[data-earlier-moment]')).map((el) => el.getAttribute('aria-label') || '');
+    expect(names).toEqual(expect.arrayContaining(['An overlay from page 2 (1 of 2): open', 'An overlay from page 2 (2 of 2): open', 'A panel picture from page 2: open']));
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).not.toContain('Page 2: open');
+    // Opening one names the image by its own words too.
+    fireEvent.click(screen.getByRole('button', { name: 'A panel picture from page 2: open' }));
+    await settle();
+    expect(within(document.querySelector<HTMLElement>('[data-earlier-detail]')!).getByRole('img', { name: 'A panel picture from page 2' })).toBeInTheDocument();
   });
 });
 

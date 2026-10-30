@@ -10,6 +10,8 @@
 //                    &fixture=lake-1p|heist-12p|deep-40p|webtoon-20p|stress|empty
 //                    &tab=pages&page=2&lang=en&theme=light|dark&state=idle|loading|streaming|…
 //                    &mode=easy|pro&rtl=1&public=ok|not-found|error|slow&img=png|svg&still=1&download=0&share=1
+//                    &history=1    (Comic History on: caps.history, and the studio surface answers History offline
+//                                   from the fake HistoryApi over the synthetic 'v5' history fixture; absent: unchanged)
 //                    &skin=atlas   (the page-level Atlas skin, as on the comics host: html[data-ds-skin];
 //                                   the studio and reader roots carry the attribute regardless)
 //
@@ -31,6 +33,9 @@ import { ComicReaderView } from '../components/comicstudio/reader/ComicReaderVie
 import { PublicComicReader } from '../components/comicstudio/PublicComicReader';
 import { ImmersiveReader } from '../components/comicstudio/immersive/ImmersiveReader';
 import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudio/testing/qaFixtures';
+import { HistoryApiProvider } from '../components/comicstudio/history/historyApi';
+import { createFakeHistoryApi } from '../components/comicstudio/history/historyApi.fake';
+import { historyFixture } from '../components/comicstudio/history/__scenes__/historyFixtures';
 import { parseQaParams, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
 import { bootDsSkin } from '../services/dsSkin';
 import { COMICS_HOST } from '../services/productHost';
@@ -111,12 +116,28 @@ class CrashBoundary extends React.Component<{ children: React.ReactNode }, { err
   }
 }
 
+/**
+ * `&history=1`: the studio's History panel reads the in-memory fake HistoryApi over the synthetic 'v5' history fixture
+ * (a week of moments), so the layout harness can open and measure it with no backend. Only then: without the param
+ * the tree is exactly the old one (no provider, and qaSceneFromParams leaves caps.history off).
+ */
+const QaHistory: React.FC<{ on: boolean; children: React.ReactNode }> = ({ on, children }) => {
+  const api = React.useMemo(() => {
+    if (!on) return null;
+    const f = historyFixture('v5');
+    return createFakeHistoryApi({ live: () => f.live, versions: f.versions });
+  }, [on]);
+  return api ? <HistoryApiProvider api={api}>{children}</HistoryApiProvider> : <>{children}</>;
+};
+
 const Studio: React.FC<{ params: QaParams }> = ({ params }) => {
   const studio = useQaController(React.useMemo(() => qaSceneFromParams(params), [params]));
   return (
-    <div style={FULL}>
-      <ComicStudioShell studio={studio} onBack={() => recordQaOp('client', { type: 'back' })} />
-    </div>
+    <QaHistory on={params.history}>
+      <div style={FULL}>
+        <ComicStudioShell studio={studio} onBack={() => recordQaOp('client', { type: 'back' })} />
+      </div>
+    </QaHistory>
   );
 };
 

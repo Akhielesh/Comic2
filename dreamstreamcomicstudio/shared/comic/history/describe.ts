@@ -39,12 +39,12 @@ export type PanelMoment =
   /** "Show as drawn": the page left panels mode, nothing else changed. */
   | 'as_drawn';
 
-/** A ChangeItem refined by its panel moment (additive: `what` stays an ordinary ChangeWhat). */
-export interface PanelChangeItem extends ChangeItem {
-  moment: PanelMoment;
-  /** Panel numbers on the page (display only). */
-  panelNs?: number[];
-}
+/**
+ * A ChangeItem refined by its panel moment: types.ts ChangeItem with `moment` present (additive: `what` stays an
+ * ordinary ChangeWhat; the panel numbers, `panelNs`, are ChangeItem's own optional field). One definition, so the two
+ * can never drift apart.
+ */
+export type PanelChangeItem = ChangeItem & { moment: PanelMoment };
 
 const PANEL_MOMENTS: ReadonlySet<string> = new Set<PanelMoment>([
   'layout', 'editable', 'rebind', 'flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'overlays', 'continuity', 'scenes', 'finding',

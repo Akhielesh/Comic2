@@ -64,8 +64,7 @@ import {
   signStudioUrls,
   streamStudio,
   toStudioApiError,
-  uploadStudioRef,
-  type StudioDoneEvent
+  uploadStudioRef
 } from './studioApi';
 import {
   assetPath,
@@ -259,12 +258,12 @@ const opensGate = (event: StudioEvent): boolean =>
 
 /**
  * Comic History: the moment a `history_restore` stream's `done` event names as saved just before it (§6.1 step 8),
- * copied onto the act outcome so the restore toast's Undo needs no lookup. Read defensively here (not through a
- * studioApi helper) so tests that stub studioApi keep working.
+ * copied onto the act outcome so the restore toast's Undo needs no lookup. The shared done type carries it; the value is
+ * still checked here (not through a studioApi helper) so tests that stub studioApi and hand over raw events keep working.
  */
 const doneBeforeVersionId = (event: StudioEvent): string | undefined => {
   if (event.type !== 'done') return undefined;
-  const before = (event as StudioDoneEvent).beforeVersionId;
+  const before: unknown = event.beforeVersionId;
   return typeof before === 'string' && before ? before : undefined;
 };
 
