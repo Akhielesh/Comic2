@@ -205,6 +205,14 @@ export const BRAND_LIMITS = {
   footer: 500,
   radiusMax: 32,
   printProfile: 64,
+  /** `docStyles.sizes`: whole points. */
+  docSizeMin: 6,
+  docSizeMax: 96,
+  /** `docStyles.lineSpacing`: a multiple. */
+  lineSpacingMin: 1,
+  lineSpacingMax: 3,
+  /** At most this many unknown fields are reported per object. */
+  unknownReported: 10,
 } as const;
 
 // ── Built-in kits, derived from the skins ──────────────────────────────────────────────────────────────────────
@@ -285,7 +293,7 @@ export const brandKitById = (id: string | undefined): BrandKit => {
 
 // ── Validation ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type BrandIssueCode = 'id' | 'text' | 'color' | 'contrast' | 'font' | 'logo' | 'radius';
+export type BrandIssueCode = 'id' | 'text' | 'color' | 'contrast' | 'font' | 'logo' | 'radius' | 'size' | 'unknown';
 
 export interface BrandIssue {
   path: string;
@@ -302,6 +310,17 @@ const PROFILE = s.id({ max: BRAND_LIMITS.printProfile });
 
 const isObject = (v: unknown): v is { [k: string]: unknown } => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** The fields each object of a kit may have (`checkBrandKit` reports any other as `unknown`). */
+const KIT_FIELDS = ['id', 'name', 'skin', 'colors', 'fonts', 'wordmark', 'logo', 'emailTheme', 'docStyles', 'deckTheme', 'printProfile'];
+const COLOR_FIELDS: (keyof BrandColors)[] = ['canvas', 'surface', 'ink', 'muted', 'accent', 'accentText', 'onAccent', 'border'];
+const FONT_FIELDS = ['body', 'display'];
+const EMAIL_FIELDS = ['header', 'footer', 'radius', 'buttonRadius'];
+const DOC_FIELDS = ['headingFont', 'bodyFont', 'headingColor', 'bodyColor', 'mutedColor', 'linkColor', 'accentColor', 'sizes', 'lineSpacing'];
+const SIZE_FIELDS: (keyof BrandDocStyles['sizes'])[] = ['body', 'lead', 'caption', 'h1', 'h2', 'h3'];
+const DECK_FIELDS = ['theme', 'titleFont', 'bodyFont'];
+const DECK_THEME_FIELDS = ['preset', 'background', 'text', 'accent'];
+const DECK_PRESETS: readonly DeckTheme['preset'][] = ['light', 'dark', 'brand'];
+
 /** The text-on-background pairs every kit must clear (`TEXT_CONTRAST_MIN`). */
 const CONTRAST_PAIRS: readonly [keyof BrandColors, keyof BrandColors][] = [
   ['ink', 'surface'],
@@ -314,25 +333,36 @@ const CONTRAST_PAIRS: readonly [keyof BrandColors, keyof BrandColors][] = [
 
 /**
  * Everything wrong with a kit (empty when it is usable): malformed ids and text, colours that are not `#RRGGBB`,
- * text pairs under 4.5:1 (ink, muted and links on the surface; ink and muted (the footer) on the canvas; the button label on the accent;
- * the DOCX and deck text colours on their paper), font ids the registry does not know, a logo that is not a valid
- * `AssetRef`, radii out of range. Never throws, whatever it is given.
+ * text pairs under 4.5:1 (ink, muted and links on the surface; ink and muted (the footer) on the canvas; the button
+ * label on the accent; the DOCX and deck text colours on their paper), font ids the registry does not know, a logo
+ * that is not a valid `AssetRef`, radii out of range, DOCX sizes that are not whole points from
+ * `BRAND_LIMITS.docSizeMin` to `docSizeMax`, a line spacing outside `lineSpacingMin`–`lineSpacingMax`, a deck preset
+ * that is not light, dark or brand, and any field a kit does not have (`unknown`). Never throws, whatever it is given.
  */
 export const checkBrandKit = (kit: unknown): BrandIssue[] => {
   const out: BrandIssue[] = [];
   const add = (path: string, code: BrandIssueCode, message: string): void => {
     out.push({ path, code, message });
   };
+  const unknownFields = (o: { [key: string]: unknown }, allowed: readonly string[], path: string): void => {
+    let reported = 0;
+    for (const key of Object.keys(o)) {
+      if (allowed.indexOf(key) !== -1) continue;
+      if (reported++ >= BRAND_LIMITS.unknownReported) break;
+      add(`${path ? `${path}.` : ''}${key.slice(0, 64)}`, 'unknown', 'is not a BrandKit field');
+    }
+  };
   if (!isObject(kit)) return [{ path: '', code: 'text', message: 'a BrandKit must be an object' }];
   const k = kit as Partial<BrandKit>;
+  unknownFields(kit, KIT_FIELDS, '');
   if (typeof k.id !== 'string' || !ID.test(k.id)) add('id', 'id', 'must be an id (letters, digits, _ . : -; at most 64)');
   if (!check(NAME, k.name).ok) add('name', 'text', `must be one line of 1–${BRAND_LIMITS.name} characters`);
   if (!check(WORDMARK, k.wordmark).ok) add('wordmark', 'text', `must be one line of 1–${BRAND_LIMITS.wordmark} characters`);
   if (k.skin !== 'dreamstream' && k.skin !== 'atlas') add('skin', 'id', 'must be "dreamstream" or "atlas"');
 
   const colors = isObject(k.colors) ? (k.colors as { [key: string]: unknown }) : {};
-  const keys: (keyof BrandColors)[] = ['canvas', 'surface', 'ink', 'muted', 'accent', 'accentText', 'onAccent', 'border'];
-  for (const key of keys) {
+  unknownFields(colors, COLOR_FIELDS, 'colors');
+  for (const key of COLOR_FIELDS) {
     const v = colors[key];
     if (typeof v !== 'string' || !HEX.test(v)) add(`colors.${key}`, 'color', 'must be #RRGGBB');
   }
@@ -345,8 +375,10 @@ export const checkBrandKit = (kit: unknown): BrandIssue[] => {
   }
 
   const fontIds: [string, unknown][] = [];
-  if (isObject(k.fonts)) fontIds.push(['fonts.body', k.fonts.body], ['fonts.display', k.fonts.display]);
-  else add('fonts', 'font', 'must name a body and a display font');
+  if (isObject(k.fonts)) {
+    fontIds.push(['fonts.body', k.fonts.body], ['fonts.display', k.fonts.display]);
+    unknownFields(k.fonts as { [key: string]: unknown }, FONT_FIELDS, 'fonts');
+  } else add('fonts', 'font', 'must name a body and a display font');
   if (isObject(k.docStyles)) fontIds.push(['docStyles.headingFont', k.docStyles.headingFont], ['docStyles.bodyFont', k.docStyles.bodyFont]);
   if (isObject(k.deckTheme)) fontIds.push(['deckTheme.titleFont', k.deckTheme.titleFont], ['deckTheme.bodyFont', k.deckTheme.bodyFont]);
   for (const [path, id] of fontIds) if (typeof id !== 'string' || !platformFont(id)) add(path, 'font', 'must be a font registry id (brand/fonts.ts)');
@@ -356,6 +388,7 @@ export const checkBrandKit = (kit: unknown): BrandIssue[] => {
   const email = isObject(k.emailTheme) ? (k.emailTheme as Partial<BrandEmailTheme>) : undefined;
   if (!email) add('emailTheme', 'text', 'is required');
   else {
+    unknownFields(email as { [key: string]: unknown }, EMAIL_FIELDS, 'emailTheme');
     if (email.header !== 'none' && email.header !== 'logo' && email.header !== 'wordmark') add('emailTheme.header', 'text', 'must be "none", "logo" or "wordmark"');
     if (email.header === 'logo' && k.logo === undefined) add('emailTheme.header', 'logo', 'a logo header needs a logo');
     if (email.footer !== undefined && !check(FOOTER, email.footer).ok) add('emailTheme.footer', 'text', `must be one line of at most ${BRAND_LIMITS.footer} characters`);
@@ -367,15 +400,35 @@ export const checkBrandKit = (kit: unknown): BrandIssue[] => {
 
   if (isObject(k.docStyles)) {
     const d = k.docStyles as Partial<BrandDocStyles>;
+    unknownFields(k.docStyles as { [key: string]: unknown }, DOC_FIELDS, 'docStyles');
     for (const c of ['headingColor', 'bodyColor', 'mutedColor', 'linkColor'] as const) {
       const v = d[c];
       if (typeof v !== 'string' || !HEX.test(v)) add(`docStyles.${c}`, 'color', 'must be #RRGGBB');
       else if (!(contrastRatio(v, '#ffffff') >= TEXT_CONTRAST_MIN)) add(`docStyles.${c}`, 'contrast', `is under ${TEXT_CONTRAST_MIN}:1 on white paper`);
     }
+    // The accent is a fill (rules, shading), never text, so it has no contrast gate.
+    if (typeof d.accentColor !== 'string' || !HEX.test(d.accentColor)) add('docStyles.accentColor', 'color', 'must be #RRGGBB');
+    if (isObject(d.sizes)) {
+      const sizes = d.sizes as { [key: string]: unknown };
+      unknownFields(sizes, SIZE_FIELDS, 'docStyles.sizes');
+      for (const key of SIZE_FIELDS) {
+        const v = sizes[key];
+        if (typeof v !== 'number' || Math.round(v) !== v || !(v >= BRAND_LIMITS.docSizeMin && v <= BRAND_LIMITS.docSizeMax)) {
+          add(`docStyles.sizes.${key}`, 'size', `must be a whole number of points from ${BRAND_LIMITS.docSizeMin} to ${BRAND_LIMITS.docSizeMax}`);
+        }
+      }
+    } else add('docStyles.sizes', 'size', 'must give body, lead, caption, h1, h2 and h3 sizes in points');
+    const ls = d.lineSpacing;
+    if (typeof ls !== 'number' || !(ls >= BRAND_LIMITS.lineSpacingMin && ls <= BRAND_LIMITS.lineSpacingMax)) {
+      add('docStyles.lineSpacing', 'size', `must be a number from ${BRAND_LIMITS.lineSpacingMin} to ${BRAND_LIMITS.lineSpacingMax}`);
+    }
   } else add('docStyles', 'text', 'is required');
 
   if (isObject(k.deckTheme) && isObject(k.deckTheme.theme)) {
     const t = k.deckTheme.theme as Partial<DeckTheme>;
+    unknownFields(k.deckTheme as { [key: string]: unknown }, DECK_FIELDS, 'deckTheme');
+    unknownFields(t as { [key: string]: unknown }, DECK_THEME_FIELDS, 'deckTheme.theme');
+    if (DECK_PRESETS.indexOf(t.preset as DeckTheme['preset']) === -1) add('deckTheme.theme.preset', 'text', 'must be "light", "dark" or "brand"');
     for (const c of ['background', 'text', 'accent'] as const) {
       const v = t[c];
       if (v !== undefined && (typeof v !== 'string' || !HEX.test(v))) add(`deckTheme.theme.${c}`, 'color', 'must be #RRGGBB');

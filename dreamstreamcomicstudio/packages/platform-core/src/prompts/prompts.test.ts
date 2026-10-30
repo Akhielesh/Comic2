@@ -6,9 +6,12 @@
 // a deck outline becomes a DeckSpec whose content elements never overlap.
 import { describe, expect, it } from 'vitest';
 import type { DeckSpec } from '../contract/deck.js';
+import { check } from '../schema/check.js';
 import { toJsonSchema } from '../schema/jsonSchema.js';
 import { EMAIL_TEMPLATES } from '../email/templates.js';
+import { DECK_OUTLINE_CHARS_PER_TOKEN } from './deckOutline.v1.js';
 import {
+  DECK_OUTLINE_LIMITS,
   DECK_OUTLINE_V1,
   DeckOutlineSchema,
   EMAIL_DRAFT_LIMITS,
@@ -211,8 +214,40 @@ describe('deckOutline.v1', () => {
     }
   });
 
+  it('maxTokens holds the largest outline the schema accepts (compact JSON at 3 characters per token, so 4 too)', () => {
+    const D = DECK_OUTLINE_LIMITS;
+    const x = (n: number): string => 'x'.repeat(n);
+    const column = Array.from({ length: D.bullets }, () => x(D.bullet));
+    const slide = { layout: 'two-col', title: x(D.title), bullets: column, right: column, notes: x(D.notes) };
+    const largest = { title: x(D.title), subtitle: x(D.subtitle), slides: Array.from({ length: D.slidesMax }, () => slide), closing: x(D.closing) };
+    expect(check(DeckOutlineSchema, largest).ok).toBe(true);
+    // It IS the largest: one more slide, bullet or character anywhere is refused.
+    expect(check(DeckOutlineSchema, { ...largest, slides: [...largest.slides, slide] }).ok).toBe(false);
+    expect(check(DeckOutlineSchema, { ...largest, slides: [{ ...slide, right: [...column, 'x'] }] }).ok).toBe(false);
+    expect(check(DeckOutlineSchema, { ...largest, slides: [{ ...slide, notes: x(D.notes + 1) }] }).ok).toBe(false);
+    expect(check(DeckOutlineSchema, { ...largest, slides: [{ ...slide, bullets: [x(D.bullet + 1)] }] }).ok).toBe(false);
+    const chars = JSON.stringify(largest).length;
+    expect(chars).toBe(23542); // the arithmetic in deckOutline.v1.ts's module comment
+    expect(chars).toBeLessThanOrEqual(DECK_OUTLINE_V1.maxTokens * DECK_OUTLINE_CHARS_PER_TOKEN);
+    expect(chars).toBeLessThanOrEqual(DECK_OUTLINE_V1.maxTokens * 4);
+    const r = buildPrompt(DECK_OUTLINE_V1, { instruction: 'Pitch deck', slideCount: D.slidesMax });
+    expect(r.prompt?.maxTokens).toBe(DECK_OUTLINE_V1.maxTokens);
+    expect(buildPrompt(DECK_OUTLINE_V1, { instruction: 'Pitch deck', slideCount: D.slidesMax + 1 }).ok).toBe(false);
+  });
+
+  it('the system prompt states the caps the schema enforces', () => {
+    const D = DECK_OUTLINE_LIMITS;
+    const sys = DECK_OUTLINE_V1.system;
+    expect(sys).toContain(`"title" (at most ${D.title} characters) and the optional "subtitle" (at most ${D.subtitle})`);
+    expect(sys).toContain(`up to ${D.bullets} bullets`);
+    expect(sys).toContain(`at most ${D.bullet} characters; at most ${D.slidesMax} slides`);
+    expect(sys).toContain(`at most ${D.notes} characters`);
+    expect(sys).toContain(`at most ${D.closing} characters`);
+    expect(sys).toContain('compact JSON object (no indentation)');
+  });
+
   it('refuses an outline that breaks its caps, and never throws', () => {
-    const tooMany = { ...outline, slides: Array.from({ length: 31 }, () => ({ layout: 'content', title: 'x' })) };
+    const tooMany = { ...outline, slides: Array.from({ length: DECK_OUTLINE_LIMITS.slidesMax + 1 }, () => ({ layout: 'content', title: 'x' })) };
     expect(outlineToDeck(tooMany)).toMatchObject({ ok: false, errors: [{ path: 'slides', code: 'too-many' }] });
     expect(outlineToDeck({ ...outline, slides: [{ layout: 'image-full', title: 'x' }] })).toMatchObject({ ok: false, errors: [{ path: 'slides[0].layout', code: 'enum' }] });
     expect(outlineToDeck({ ...outline, slides: [{ layout: 'content', title: 'x', bullets: ['a\nb'] }] })).toMatchObject({ ok: false, errors: [{ path: 'slides[0].bullets[0]', code: 'single-line' }] });

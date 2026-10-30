@@ -1,8 +1,19 @@
 /**
  * `deckOutline.v1`: one model call that turns an instruction (and optional source text) into a slide OUTLINE, which
  * software then lays out as a DeckSpec (`outlineToDeck`). The model writes words only; it never places rectangles,
- * picks images or writes URLs, so the deck costs a few hundred output tokens and can never overlap or fetch anything
- * ("the AI and software go hand in hand").
+ * picks images or writes URLs, so the deck can never overlap or fetch anything ("the AI and software go hand in
+ * hand").
+ *
+ * Output budget (`maxTokens`): the LARGEST outline the schema accepts must fit, or the JSON is cut off, parses as
+ * `bad-json`, and the one repair turn cannot fix a truncation. The caps below are sized for that:
+ * - one `two-col` slide at its caps is a 120-character title, 2 × 6 bullets of 100 characters and 500 characters of
+ *   notes: 1,920 characters of compact JSON with its keys and quotes;
+ * - 12 such slides plus a 120-character title, a 200-character subtitle and a 120-character closing line is
+ *   23,542 characters;
+ * - English prose runs about 4 characters per token and JSON punctuation tokenises denser, so the budget assumes 3:
+ *   23,542 / 3 ≈ 7,850 tokens, under `maxTokens: 8000` (and under 6,000 at 4 characters per token).
+ * The count is for plain characters (an escaped quote or backslash takes two). A test serialises that largest outline
+ * and checks it against `maxTokens × 3` characters; raise `maxTokens` with any cap.
  */
 import type { DeckElement, DeckSize, DeckSpec, DeckTheme, Slide } from '../contract/deck.js';
 import type { CheckError, Infer } from '../contract/schema.js';
@@ -15,14 +26,19 @@ export const DECK_OUTLINE_LIMITS = {
   sourceText: 12000,
   audience: 200,
   slidesMin: 1,
-  slidesMax: 30,
+  /** Content slides (the title and closing slides are extra). */
+  slidesMax: 12,
   title: 120,
   subtitle: 200,
+  /** Per column. */
   bullets: 6,
-  bullet: 200,
-  notes: 2000,
+  bullet: 100,
+  notes: 500,
   closing: 120,
 } as const;
+
+/** Characters per output token the budget assumes (see the module comment). */
+export const DECK_OUTLINE_CHARS_PER_TOKEN = 3;
 
 const D = DECK_OUTLINE_LIMITS;
 
@@ -62,13 +78,13 @@ export type DeckOutline = Infer<typeof DeckOutlineSchema>;
 
 const SYSTEM = `You outline slide decks. Software lays the slides out, so you write words only: no positions, sizes, colours, images, URLs or HTML.
 
-Answer with exactly one JSON object and nothing else: no prose and no code fence.
+Answer with exactly one compact JSON object (no indentation) and nothing else: no prose and no code fence.
 {"title":"…","subtitle":"…","slides":[{"layout":"content","title":"…","bullets":["…"],"notes":"…"}],"closing":"…"}
-- "title" (at most 120 characters) and the optional "subtitle" (at most 200) make the title slide.
-- Each slide has a "layout": "section" (a divider with only a title), "content" (a title and up to 6 bullets) or "two-col" (a title, up to 6 "bullets" on the left and up to 6 in "right").
-- Bullets are short single lines of at most 200 characters; at most 30 slides.
-- "notes" are optional speaker notes in full sentences.
-- "closing" is an optional last-slide line, such as a thank-you or a call to action.
+- "title" (at most ${D.title} characters) and the optional "subtitle" (at most ${D.subtitle}) make the title slide.
+- Each slide has a "layout": "section" (a divider with only a title), "content" (a title and up to ${D.bullets} bullets) or "two-col" (a title, up to ${D.bullets} "bullets" on the left and up to ${D.bullets} in "right"). Slide titles are at most ${D.title} characters.
+- Bullets are short single lines of at most ${D.bullet} characters; at most ${D.slidesMax} slides.
+- "notes" are optional speaker notes in full sentences, at most ${D.notes} characters.
+- "closing" is an optional last-slide line of at most ${D.closing} characters, such as a thank-you or a call to action.
 
 Rules:
 - Aim for the number of slides in <task> (not counting the title and closing slides).
@@ -92,7 +108,7 @@ export const DECK_OUTLINE_V1: PromptPack<DeckOutlineInput> = {
   description: 'Outline a slide deck (titles, bullets, notes) for software to lay out as a DeckSpec.',
   input: DeckOutlineInputSchema,
   system: SYSTEM,
-  maxTokens: 2000,
+  maxTokens: 8000,
   user,
 };
 

@@ -4,8 +4,8 @@
  * checks the output with `check(EmailDoc)`, repairs once with `repairMessage`, then renders and reviews it with
  * `renderEmail` / `reviewEmail` (which flag any address the model invented, whatever this prompt says).
  *
- * Input caps follow the Atlas compose route (instruction ≤ 2,000 characters; at most 6 thread messages and 12,000
- * characters of thread text, signatures and quoted text stripped by the host).
+ * Input caps: instruction ≤ 2,000 characters; at most 6 thread messages and 12,000 characters of thread text
+ * (signatures and quoted text stripped by the host).
  */
 import type { CheckError, Infer } from '../contract/schema.js';
 import { EMAIL_LIMITS } from '../contract/email.js';

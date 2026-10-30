@@ -230,8 +230,66 @@ describe('checkBrandKit refuses an unusable kit', () => {
     expect(codes(kit((k) => (k.deckTheme.theme = { preset: 'brand', background: '#ffffff', text: '#aaaaaa' })))).toEqual(['deckTheme.theme.text:contrast']);
   });
 
+  it('DOCX sizes are whole points from 6 to 96 (W1.7 builds DOCX from them)', () => {
+    for (const bad of [1e9, NaN, Infinity, 10.5, 5, 97, -11, '11']) {
+      expect(codes(kit((k) => (k.docStyles.sizes.h1 = bad as number)))).toEqual(['docStyles.sizes.h1:size']);
+    }
+    expect(codes(kit((k) => (k.docStyles.sizes.caption = 6)))).toEqual([]);
+    expect(codes(kit((k) => (k.docStyles.sizes.h1 = 96)))).toEqual([]);
+    expect(codes(kit((k) => delete (k.docStyles as Partial<BrandKit['docStyles']>).sizes))).toEqual(['docStyles.sizes:size']);
+    expect(codes(kit((k) => delete (k.docStyles.sizes as Partial<BrandKit['docStyles']['sizes']>).body))).toEqual(['docStyles.sizes.body:size']);
+  });
+
+  it('the DOCX line spacing is a number from 1 to 3', () => {
+    for (const bad of [0.5, 3.01, NaN, Infinity, '1.15', undefined]) {
+      expect(codes(kit((k) => (k.docStyles.lineSpacing = bad as number)))).toEqual(['docStyles.lineSpacing:size']);
+    }
+    expect(codes(kit((k) => (k.docStyles.lineSpacing = 1)))).toEqual([]);
+    expect(codes(kit((k) => (k.docStyles.lineSpacing = 3)))).toEqual([]);
+  });
+
+  it('the DOCX accent colour is #RRGGBB (a fill, so no contrast gate)', () => {
+    expect(codes(kit((k) => (k.docStyles.accentColor = 'red;x:url(y)')))).toEqual(['docStyles.accentColor:color']);
+    expect(codes(kit((k) => delete (k.docStyles as Partial<BrandKit['docStyles']>).accentColor))).toEqual(['docStyles.accentColor:color']);
+    expect(codes(kit((k) => (k.docStyles.accentColor = '#d97757')))).toEqual([]);
+  });
+
+  it('the deck preset is light, dark or brand', () => {
+    expect(codes(kit((k) => (k.deckTheme.theme.preset = 'x' as 'brand')))).toEqual(['deckTheme.theme.preset:text']);
+    expect(codes(kit((k) => delete (k.deckTheme.theme as Partial<BrandKit['deckTheme']['theme']>).preset))).toEqual(['deckTheme.theme.preset:text']);
+    for (const preset of ['light', 'dark', 'brand'] as const) expect(codes(kit((k) => (k.deckTheme.theme.preset = preset)))).toEqual([]);
+  });
+
+  it('a field a kit does not have is reported, at any depth (at most 10 per object)', () => {
+    const odd = kit((k) => {
+      const any = k as unknown as { [key: string]: { [key: string]: unknown } };
+      any.script = { x: 1 };
+      any.colors.highlight = '#ffff00';
+      any.fonts.mono = 'inter';
+      any.emailTheme.css = 'x';
+      any.docStyles.headingCase = 'upper';
+      (any.docStyles.sizes as { [key: string]: unknown }).h4 = 12;
+      any.deckTheme.master = 'x';
+      (any.deckTheme.theme as { [key: string]: unknown }).font = 'x';
+    });
+    expect(codes(odd)).toEqual([
+      'script:unknown',
+      'colors.highlight:unknown',
+      'fonts.mono:unknown',
+      'emailTheme.css:unknown',
+      'docStyles.headingCase:unknown',
+      'docStyles.sizes.h4:unknown',
+      'deckTheme.master:unknown',
+      'deckTheme.theme.font:unknown',
+    ]);
+    const many = kit((k) => {
+      for (let i = 0; i < 50; i++) (k as unknown as { [key: string]: unknown })[`x${i}`] = i;
+    });
+    expect(codes(many)).toHaveLength(10);
+  });
+
   it('never throws, whatever it is given', () => {
-    for (const v of [null, undefined, 3, 'kit', [], {}, { colors: 7, fonts: [], emailTheme: 'x', docStyles: null, deckTheme: { theme: 1 } }]) {
+    for (const v of [null, undefined, 3, 'kit', [], {}, { colors: 7, fonts: [], emailTheme: 'x', docStyles: null, deckTheme: { theme: 1 } }, { docStyles: { sizes: 'x', lineSpacing: {} } }]) {
       expect(() => checkBrandKit(v)).not.toThrow();
       expect(checkBrandKit(v).length).toBeGreaterThan(0);
     }
