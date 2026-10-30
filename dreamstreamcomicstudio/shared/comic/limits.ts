@@ -42,3 +42,38 @@ export const DOC_LIMITS = {
   docBytesMax: 6_000_000 // session refuses commits that would exceed this (409 LIMIT)
 } as const;
 export type DocLimitKey = keyof typeof DOC_LIMITS;
+
+// --- history (versions plan §3.3; decisions V-1): one constant each, so a change is a one-line edit ---
+
+/** "Try another version": lines per comic including "Original" (V-1: inside one comic, at most 5). */
+export const MAX_ALTERNATIVES = 5;
+
+/** Comic History caps (retention §4.4, moments §4.3, abuse §12). */
+export const HISTORY_LIMITS = {
+  /** Automatic (unpinned) rows kept per comic; thinning beyond it posts a notice. */
+  unpinnedRows: 300,
+  /** Named versions per comic (kept forever). */
+  namedRows: 100,
+  alternatives: MAX_ALTERNATIVES,
+  /** Per-comic budget of kept `bytes_new`; above it the oldest unpinned rows are thinned, with a notice. */
+  bytesPerComic: 25_000_000,
+  changesPerRow: 60,
+  thumbsPerRow: 8,
+  /** Quiet editing: a user-only `edits` row after this many minutes, commits or pages touched. */
+  quietEditMinutes: 10,
+  quietEditCommits: 25,
+  quietEditPages: 3,
+  /** The first commit after this long a gap captures the state before it. */
+  gapMinutes: 30,
+  /** Consecutive AI commits at most this far apart (no user commit between) are one run. */
+  aiRunGapMinutes: 10,
+  /** A before-restore row is kept at least this long. */
+  beforeRestoreDays: 30,
+  /** Saves (named + automatic writes) per hour per comic. */
+  savesPerHour: 30,
+  /** Name / note / label lengths (comic_versions checks). */
+  nameChars: 80,
+  noteChars: 280,
+  labelChars: 160
+} as const;
+export type HistoryLimitKey = keyof typeof HISTORY_LIMITS;

@@ -1074,7 +1074,7 @@ describe('v5 §16.4 op invariants', () => {
 
 describe('v5 §16.5 sets', () => {
   it('server-only ops are never client-patchable', () => {
-    for (const op of ['pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash'] as const) {
+    for (const op of ['pages', 'page_panels', 'style_option', 'style_options_clear', 'render', 'asset_meta', 'translations', 'message', 'message_patch', 'spend', 'gate', 'memory', 'safety', 'publication', 'plan_input_hash', 'history_restore'] as const) {
       expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
       expect(SERVER_ONLY_OPS).toContain(op);
     }
@@ -1089,7 +1089,9 @@ describe('v5 §16.5 sets', () => {
       relayout_balloons: true, cancel: true, fit_render: true, show_breakdown: true, use_preset: true, ref_crop: true, publish: true,
       update_publication: true, unpublish: true, regenerate_link: true, decline_publish: true, safety_recheck: true,
       swap_source_language: true, accept_translation_issue: true, library_save: true, library_use: true, import_classic_cast: true,
-      change_image_model: true // W-M M0-CONTRACT (models.md §3.3)
+      change_image_model: true, // W-M M0-CONTRACT (models.md §3.3)
+      // Comic History H0 (versions plan §3.3): every history path is free
+      history_save: true, history_restore: true, history_undo_ai: true, history_forget_photo: true, history_alternative: true
     };
     for (const t of Object.keys(all)) expect(Number(SPEND_ACTION_TYPES.has(t)) + Number(NON_SPEND_ACTION_TYPES.has(t)), t).toBe(1);
     expect(SPEND_ACTION_TYPES.size + NON_SPEND_ACTION_TYPES.size).toBe(Object.keys(all).length);
@@ -1393,5 +1395,74 @@ describe('P2-AMEND events, models, caps, safety text, versions, public payload',
   it('translate lineIds have a shared cap', () => {
     expect(DOC_LIMITS.translateLineIds).toBe(200);
     expect(isSpendAction({ type: 'translate', languages: ['te'], lineIds: ['pg_1_l1'] })).toBe(true);
+  });
+});
+
+// ── Comic History H0 (versions plan §3.3) ────────────────────────────────────
+import { HISTORY_ACTION_TYPES, type HistoryCard } from './history/types';
+import { HISTORY_LIMITS, MAX_ALTERNATIVES } from './limits';
+import { KNOWN_DOC_OPS, isKnownDocOp } from './ops';
+import { STREAM_EVENT_NAMES, normalizeTimeZone } from './events';
+import { HISTORY_ENV, historyEnabled, historyFlagOn, maxAlternativesOf, resolveStudioCaps, withHistoryCaps } from './capabilities';
+
+describe('Comic History contract (H0)', () => {
+  it('history_restore is server-only: never client-patchable, never undoable, but known to every client', () => {
+    expect(SERVER_ONLY_OPS).toContain('history_restore');
+    expect(CLIENT_PATCHABLE_OPS.has('history_restore' as DocOp['op'])).toBe(false);
+    for (const op of SERVER_ONLY_OPS) expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
+    expect(isKnownDocOp({ op: 'history_restore' })).toBe(true);
+    expect(isKnownDocOp({ op: 'panel_frames_from_the_future' })).toBe(false);
+    expect(KNOWN_DOC_OPS.size).toBe(CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length);
+    const doc = richDoc();
+    const restore: DocOp = { op: 'history_restore', set: { brief: { ...doc.brief, title: 'Then' } }, mode: 'merge', versionId: 'v1', at: 5 };
+    expect(isUndoable(doc, [restore])).toBe(false);
+    expect(inverseOps(doc, [restore])).toEqual([]);
+  });
+
+  it('every history action is NON_SPEND (free), never a spend action', () => {
+    expect([...HISTORY_ACTION_TYPES].sort()).toEqual(['history_alternative', 'history_forget_photo', 'history_restore', 'history_save', 'history_undo_ai']);
+    for (const t of HISTORY_ACTION_TYPES) {
+      expect(NON_SPEND_ACTION_TYPES.has(t), t).toBe(true);
+      expect(SPEND_ACTION_TYPES.has(t), t).toBe(false);
+    }
+    expect(isSpendAction({ type: 'history_restore', versionId: 'v', scope: { kind: 'book' } })).toBe(false);
+    expect(isSpendAction({ type: 'history_undo_ai' })).toBe(false);
+  });
+
+  it('the history card holds ids only and survives normalizeDoc', () => {
+    const card: HistoryCard = { type: 'history', id: 'card_h', view: 'compare', a: 'v1', b: 'now', pageId: 'pg_1', scope: { kind: 'page', pageId: 'pg_1', mode: 'replace', part: 'text' } };
+    const doc = normalizeDoc({ ...createEmptyDoc('h'), conversation: [{ id: 'm', role: 'assistant', text: 'Here', at: 1, cards: [card] }] });
+    expect(doc.conversation[0].cards).toEqual([card]);
+  });
+
+  it('limits: one constant each (V-1: at most 5 versions inside one comic)', () => {
+    expect(MAX_ALTERNATIVES).toBe(5);
+    expect(HISTORY_LIMITS).toMatchObject({
+      unpinnedRows: 300, namedRows: 100, alternatives: 5, bytesPerComic: 25_000_000, changesPerRow: 60, thumbsPerRow: 8,
+      quietEditMinutes: 10, quietEditCommits: 25, quietEditPages: 3, gapMinutes: 30, aiRunGapMinutes: 10, beforeRestoreDays: 30, savesPerHour: 30
+    });
+  });
+
+  it('caps: history is off unless COMIC_HISTORY is on, and off adds nothing to the caps on the wire', () => {
+    expect(HISTORY_ENV).toBe('COMIC_HISTORY');
+    expect('history' in DEFAULT_CAPS).toBe(false);
+    expect('maxAlternatives' in DEFAULT_CAPS).toBe(false);
+    const caps = resolveStudioCaps({ byok: false, isAdmin: false });
+    expect(historyEnabled(caps)).toBe(false);
+    expect(withHistoryCaps(caps, historyFlagOn(undefined))).toBe(caps);
+    expect(withHistoryCaps(caps, historyFlagOn(''))).toBe(caps);
+    expect(withHistoryCaps(caps, historyFlagOn('0'))).toBe(caps);
+    const on = withHistoryCaps(caps, historyFlagOn('1'));
+    expect(on).toEqual({ ...caps, history: true, maxAlternatives: 5 });
+    expect(historyEnabled(on)).toBe(true);
+    expect(maxAlternativesOf({ maxAlternatives: 3 })).toBe(3);
+    expect(maxAlternativesOf({ maxAlternatives: 0 })).toBe(5);
+  });
+
+  it('events: the history event name and the request time zone (validated with Intl)', () => {
+    expect(STREAM_EVENT_NAMES).toContain('history');
+    expect(normalizeTimeZone('America/Los_Angeles')).toBe('America/Los_Angeles');
+    expect(normalizeTimeZone('Asia/Kolkata')).toMatch(/^Asia\/(Kolkata|Calcutta)$/);
+    for (const bad of ['', 'Mars/Olympus', 'UTC; drop table', 42, null, 'a'.repeat(80)]) expect(normalizeTimeZone(bad), String(bad)).toBeUndefined();
   });
 });

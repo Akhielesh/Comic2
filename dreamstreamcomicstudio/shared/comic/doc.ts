@@ -26,6 +26,8 @@ import { isPublicationMirror } from './publication.js';
 import { hashString, stableStringify } from './hash.js';
 import { DOC_LIMITS } from './limits.js';
 import { normalizeOutageOption, type OutageOption } from './modelHealth.js';
+// --- history (versions plan §3.3; H0): type-only, so doc.ts stays the dependency root ---
+import type { HistoryCard } from './history/types.js';
 export { hashString, stableStringify } from './hash.js';
 export { MAX_RENDER_HISTORY, MAX_SPEND_ENTRIES, MAX_CONVERSATION, MAX_ARCHIVE, MAX_TRASH } from './limits.js';
 
@@ -778,7 +780,9 @@ export type Card =
       /** Mid-run: what the failed part cost (finite, ≥ 0). The card says "you weren't charged" only when it is 0
        *  (or for a preflight card); a card without an origin makes no money claim. */
       chargedUsd?: number;
-    };
+    }
+  // --- history (versions plan §3.3): ids only; renders by fetching from the owner API ---
+  | HistoryCard;
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -792,7 +796,9 @@ export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   'publish', 'update_publication', 'unpublish', 'regenerate_link', 'decline_publish',
   'safety_recheck', 'swap_source_language', 'accept_translation_issue',
   'library_save', 'library_use', 'import_classic_cast',
-  'change_image_model'
+  'change_image_model',
+  // --- history (versions plan §3.3): every history path is free ---
+  'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative'
 ]);
 
 export type RenderTarget =
