@@ -38,7 +38,7 @@ import {
   type RefOwner,
   type RenderTarget
 } from '../../shared/comic/doc';
-import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
+import { DEFAULT_CAPS, historyEnabled, type StudioCaps } from '../../shared/comic/capabilities';
 import { getImageModel } from '../../shared/comic/models';
 import type { PublicationOwnerView } from '../../shared/comic/publication';
 import type {
@@ -86,6 +86,9 @@ import { useStudioMode } from './useStudioMode';
 import { requestOpenSettings, settingsSectionOf } from './openSettings';
 import { API_KEYS_HREF } from '../usage/links';
 import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from './useUndo';
+// --- history (versions plan §8, §6.1; H0 seams — the intents are stubs until H5) ---
+import { handleHistoryIntent, historyUndoFallback, matchHistoryIntent, type HistoryIntentHost } from './history/intents';
+import { requestOpenHistory } from './history/index';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -249,6 +252,23 @@ const RETRYABLE_CODES = new Set(['CONFLICT', 'RATE_LIMIT', 'COOLDOWN', 'TIMEOUT'
 
 let noticeSeq = 0;
 
+/** The browser's IANA time zone (history's "this morning"), or undefined when the runtime can't tell. */
+export const browserTimeZone = (): string | undefined => {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return typeof tz === 'string' && tz ? tz : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** A stream request carrying the sender's time zone (only while Comic History is on; otherwise unchanged). */
+export const withTimeZone = (request: StreamRequest, caps: StudioCaps): StreamRequest => {
+  if (!historyEnabled(caps)) return request;
+  const tz = browserTimeZone();
+  return tz ? { ...request, tz } : request;
+};
+
 
 export function useStudio(projectId: string): ComicStudioController {
   const [state, dispatch] = useReducer(studioReducer, undefined, initialStudioState);
@@ -276,6 +296,8 @@ export function useStudio(projectId: string): ComicStudioController {
   const [tab, setTabState] = useState<BoardTab>('story');
   const [focusedPageId, setFocusedPageId] = useState<string | null>(null);
   const [caps, setCaps] = useState<StudioCaps>(DEFAULT_CAPS);
+  const capsRef = useRef(caps);
+  capsRef.current = caps;
   /** The server sent caps at least once (else byok falls back to the doc heuristic). */
   const [capsFromServer, setCapsFromServer] = useState(false);
   const { mode, setMode } = useStudioMode(caps);
@@ -424,7 +446,7 @@ export function useStudio(projectId: string): ComicStudioController {
       try {
         await streamStudio(
           projectRef.current,
-          request,
+          withTimeZone(request, capsRef.current),
           (raw) => {
             let event = raw;
             // The server can refuse inside the stream (an `error` event, then close). Its text is
@@ -587,7 +609,7 @@ export function useStudio(projectId: string): ComicStudioController {
    * could work, else drops it. `announce` (typed "undo", chat chips) leaves a calm notice either way.
    */
   const historyStep = useCallback(
-    (dir: 'undo' | 'redo', announce: boolean): boolean => {
+    (dir: 'undo' | 'redo', announce: boolean, opts?: { onNothing?: () => boolean }): boolean => {
       const doc = viewRef.current;
       if (!doc || !stateRef.current.base) return false;
       const api = undoRef.current;
@@ -606,6 +628,8 @@ export function useStudio(projectId: string): ComicStudioController {
       const usable = (e: UndoEntry) => !isNoopOn(doc, opsOf(e));
       const entry = dir === 'undo' ? api.takeUndo(usable) : api.takeRedo(usable);
       if (!entry) {
+        // Comic History: nothing to undo locally, but an earlier saved moment may bring it back (free).
+        if (opts?.onNothing?.()) return false;
         if (announce) say({ kind: 'info', text: dir === 'undo' ? 'Nothing to undo yet — free edits from this session can be undone here.' : 'Nothing to redo.' });
         return false;
       }
@@ -636,6 +660,43 @@ export function useStudio(projectId: string): ComicStudioController {
 
   const undo = useCallback(() => void historyStep('undo', false), [historyStep]);
   const redo = useCallback(() => void historyStep('redo', false), [historyStep]);
+
+  // ── Comic History seams (versions plan §8, §6.4) ───────────────────────────
+  // Only while caps.history is on (COMIC_HISTORY): typed intents are handled locally (free, never sent to the
+  // director), and a typed "undo" whose newest change the local stack can't invert offers history_undo_ai.
+
+  /** act(), reachable from send() (defined below). */
+  const actRef = useRef<((action: StudioAction) => Promise<unknown>) | null>(null);
+  const historyHost = useCallback(
+    (): HistoryIntentHost => ({
+      caps: capsRef.current,
+      doc: viewRef.current,
+      act: (action) => (actRef.current ? actRef.current(action) : Promise.resolve(undefined)),
+      openHistory: (request) => requestOpenHistory(request),
+      say: (text) => void say({ kind: 'info', text })
+    }),
+    [say]
+  );
+
+  /** A typed / chip "undo". With history on: when the newest change is an AI change the stack can't invert, or there is
+   *  nothing to undo, the history fallback may offer "Restore what you had just before it (free)". */
+  const typedUndo = useCallback((): void => {
+    if (!historyEnabled(capsRef.current)) {
+      historyStep('undo', true);
+      return;
+    }
+    const top = undoRef.current.stacks().undo.at(-1);
+    const aiAt = stateRef.current.aiChangeAt;
+    if (aiAt !== undefined && (!top || top.at < aiAt) && historyUndoFallback(historyHost())) return;
+    historyStep('undo', true, { onNothing: () => historyUndoFallback(historyHost()) });
+  }, [historyStep, historyHost]);
+
+  // An incoming `history_restore` replaced content under the undo stack: its inverses were computed against the old
+  // doc and would misapply, so the stack starts over (the restore's own Undo is the before-restore moment).
+  const historyRestoreRev = state.historyRestoreRev;
+  useEffect(() => {
+    if (historyRestoreRev !== undefined) undoRef.current.clear();
+  }, [historyRestoreRev]);
 
   // Director edits (ops.origin === 'director') become undo entries, inverse computed against the
   // exact base each batch applied to; the batches of one reply merge, so "undo" undoes the reply.
@@ -671,8 +732,13 @@ export function useStudio(projectId: string): ComicStudioController {
       if (!clean && !files.length && !inbox.length) return;
       // A typed "undo" is the editor's job: instant, free, never sent to the director (contract §13.1).
       if (!files.length && !inbox.length && TYPED_UNDO_RE.test(clean)) {
-        historyStep('undo', true);
+        typedUndo();
         return;
+      }
+      // Comic History typed intents ("show history", "undo the last AI change"): handled locally, free.
+      if (!files.length && !inbox.length && historyEnabled(capsRef.current)) {
+        const intent = matchHistoryIntent(clean);
+        if (intent && handleHistoryIntent(intent, historyHost())) return;
       }
       if (messageInFlightRef.current || !stateRef.current.base) return;
       const streamId = localId('stream');
@@ -713,7 +779,7 @@ export function useStudio(projectId: string): ComicStudioController {
         if (generation === generationRef.current && messageInFlightRef.current === streamId) messageInFlightRef.current = null;
       }
     },
-    [runStream, historyStep]
+    [runStream, typedUndo, historyHost]
   );
 
   const retryPendingMessage = useCallback(() => {
@@ -799,6 +865,7 @@ export function useStudio(projectId: string): ComicStudioController {
     },
     [cancel, patch, runStream]
   );
+  actRef.current = act;
 
   // ── Resync ─────────────────────────────────────────────────────────────────
 
@@ -1059,7 +1126,7 @@ export function useStudio(projectId: string): ComicStudioController {
           return;
         }
         case 'undo':
-          historyStep('undo', true);
+          typedUndo();
           return;
         case 'set_mode':
           setMode(action.mode);
@@ -1068,7 +1135,7 @@ export function useStudio(projectId: string): ComicStudioController {
           return;
       }
     },
-    [setTab, openPage, historyStep, setMode, say]
+    [setTab, openPage, typedUndo, setMode, say]
   );
 
   const runNextStep = useCallback(

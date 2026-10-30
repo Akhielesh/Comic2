@@ -19,7 +19,10 @@
 // so useStudio can push its inverse (computed BEFORE apply) onto the undo stack. Ops committed
 // outside a stream (an upload answer) apply through `server_ops` with the same revision guard.
 
-import { applyOps, type DocOp } from '../../shared/comic/ops';
+import { applyOps, CLIENT_PATCHABLE_OPS, isKnownDocOp, type DocOp } from '../../shared/comic/ops';
+// --- history (versions plan §11; H0) ---
+import { opActor } from '../../shared/comic/history/touched';
+import type { VersionRow } from '../../shared/comic/history/types';
 import type { AttachmentTarget, OpsOrigin, StudioEvent, StudioFocus } from '../../shared/comic/events';
 import { getRender, renderTargetKey, type AssetRef, type ComicDoc, type Msg, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import type { ActivityItem, BoardTab, PendingAttachment } from './types';
@@ -181,6 +184,15 @@ export interface StudioState {
   lastOps: { rev: number; ops: DocOp[]; echo: boolean; origin?: OpsOrigin; label?: string } | null;
   /** Director batches not yet pushed onto the undo stack (oldest first). */
   undoInbox: DirectorBatch[];
+  // --- history (versions plan §6.1, §11; optional so an older state shape stays valid) ---
+  /** Revision of the latest `history_restore` batch: the hook clears its undo stack (inverses computed against the
+   *  old doc would misapply). */
+  historyRestoreRev?: number;
+  /** When (client clock) the latest AI change the local undo stack cannot invert landed (a re-plan, a translation or
+   *  render run): a typed "undo" offers "Restore what you had just before it" instead (history_undo_ai). */
+  aiChangeAt?: number;
+  /** The latest moment the server saved (the `history` event): an open History panel updates live. */
+  lastHistoryVersion?: VersionRow;
 }
 
 export const initialStudioState = (): StudioState => ({
@@ -459,6 +471,12 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
 
   const knownIds = new Set(base.conversation.map((m) => m.id));
   const nextBase: ComicDoc = { ...applyOps(base, event.ops, now), rev: event.rev };
+  // --- history: an op this build does not know left the mirror unchanged where the server's doc changed — refetch
+  //     now (old tabs, newer server; versions plan §11). A restore resets the local undo stack. ---
+  const unknownOp = event.ops.some((op) => !isKnownDocOp(op));
+  const restored = event.ops.some((op) => op?.op === 'history_restore');
+  const aiChange =
+    !!event.origin && event.origin !== 'user' && event.ops.some((op) => !!op && !CLIENT_PATCHABLE_OPS.has(op.op) && opActor(op, event.origin, base) === 'ai');
 
   let drafts = state.drafts;
   let pendingMessage = state.pendingMessage;
@@ -491,8 +509,9 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
   const origin = event.origin;
   const label = typeof event.label === 'string' && event.label.trim() ? event.label.trim() : undefined;
   // A director edit is undoable: queue it with the exact base it applied to (inverse before apply).
-  const undoInbox =
-    origin === 'director' && event.ops.length
+  const undoInbox = restored
+    ? []
+    : origin === 'director' && event.ops.length
       ? [...state.undoInbox, { rev: event.rev, before: base, ops: event.ops, ...(label ? { label } : {}), at: now, ...(streamId ? { streamId } : {}) }].slice(-MAX_UNDO_INBOX)
       : state.undoInbox;
 
@@ -504,6 +523,9 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
     pendingMessage,
     behindRev: Math.max(state.behindRev, event.rev),
     syncDue: state.syncDue || mayHaveDroppedClears(event.ops),
+    ...(unknownOp ? { hardRefresh: true } : {}),
+    ...(restored ? { historyRestoreRev: event.rev } : {}),
+    ...(aiChange ? { aiChangeAt: now } : {}),
     lastOps: {
       rev: event.rev,
       ops: event.ops,
@@ -544,6 +566,14 @@ const handleEvent = (state: StudioState, streamId: string, event: StudioEvent, n
         errorCode: code,
         streams: stream ? { ...state.streams, [streamId]: { ...stream, errored: message, ...(code ? { erroredCode: code } : {}) } } : state.streams
       };
+    }
+    // --- history: a moment was saved; an open History panel reads it. A restore or a switch rewrote the book, so the
+    //     doc also resyncs once idle (other moments change nothing in the doc: no GET per request). ---
+    case 'history': {
+      const version = event.version;
+      if (!version || typeof version !== 'object') return state;
+      const rewrote = version.kind === 'restore' || version.kind === 'switch';
+      return { ...state, lastHistoryVersion: version, syncDue: state.syncDue || rewrote };
     }
     case 'done':
       return {
