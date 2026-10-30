@@ -175,3 +175,20 @@ describe('the typed-undo fallback (history_undo_ai)', () => {
     expect(result.current.notice?.text).toBe('Nothing to undo yet — free edits from this session can be undone here.');
   });
 });
+
+describe('the history event reaches an open History panel', () => {
+  it('the controller exposes the latest saved moment (absent until one arrives)', async () => {
+    const { result } = await setup(ON);
+    expect('lastHistoryVersion' in result.current).toBe(false);
+    const version = { id: 'ver_9', kind: 'edits', actor: 'you', label: 'You edited page 2', pinned: false, rev: 3, contentAt: T, createdAt: T, codec: 'v5', changes: [], thumbs: [], stats: { pages: 6, drawn: 1, lines: 9, langs: [], models: [] } };
+    api.streamStudio.mockImplementationOnce(async (_id: string, req: StreamRequest, onEvent: (e: StudioEvent) => void) => {
+      requests.push(req);
+      onEvent({ type: 'history', version } as StudioEvent);
+      onEvent({ type: 'done', rev: server.rev, spentUsd: 0 });
+    });
+    await act(async () => {
+      await result.current.send('hello');
+    });
+    expect(result.current.lastHistoryVersion).toEqual(version);
+  });
+});

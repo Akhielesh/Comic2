@@ -89,6 +89,7 @@ import { isNoopOn, makeUndoEntry, useUndo, waitsOnDrawing, type UndoEntry } from
 // --- history (versions plan §8, §6.1; H0 seams — the intents are stubs until H5) ---
 import { handleHistoryIntent, historyUndoFallback, matchHistoryIntent, type HistoryIntentHost } from './history/intents';
 import { requestOpenHistory } from './history/index';
+import type { VersionRow } from '../../shared/comic/history/types';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -129,6 +130,8 @@ export interface ComicStudioController extends StudioController {
   byok: boolean;
   /** Pages + sheets + options + cover currently queued or drawing. */
   renderingTotal: number;
+  /** Comic History: the latest moment the server saved (the `history` event) — an open History panel updates live. */
+  lastHistoryVersion?: VersionRow;
 }
 
 /** Don't auto-switch the board tab within this long of the user picking one. */
@@ -1303,7 +1306,8 @@ export function useStudio(projectId: string): ComicStudioController {
       publication,
       publicationLoading,
       refreshPublication,
-      readerRequest
+      readerRequest,
+      ...(state.lastHistoryVersion ? { lastHistoryVersion: state.lastHistoryVersion } : {})
     }),
     [
       doc,
@@ -1355,7 +1359,8 @@ export function useStudio(projectId: string): ComicStudioController {
       publication,
       publicationLoading,
       refreshPublication,
-      readerRequest
+      readerRequest,
+      state.lastHistoryVersion
     ]
   );
 }
