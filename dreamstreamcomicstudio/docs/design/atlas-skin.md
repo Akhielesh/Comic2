@@ -347,11 +347,12 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`98240e5b`** (2026-10-30; Atlas wave 8 —
-  `cddff16a` "Type scale, shared overline labels and readable status ink", merged in `5f4df1be`, and `98240e5b`
-  "Dialog titles default to 20px under the standard type scale"; see the wave 8 changelog below; previous syncs
-  `496f265c`, `acd9fdfc`, `07935fcf`). Re-sync:
-  `git -C /home/user/atlasd diff 98240e5b origin/claude/quirky-darwin-fpx23q -- app/globals.css
+- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`acbdaff7`** (2026-10-30; the design
+  files are byte-identical to `98240e5b`, Atlas wave 8 — `cddff16a` "Type scale, shared overline labels and readable
+  status ink", merged in `5f4df1be`, and `98240e5b` "Dialog titles default to 20px under the standard type scale"; the
+  commits since are email and sign-in setup work, no design change; see the wave 8 changelog below; previous syncs
+  `98240e5b`, `496f265c`, `acd9fdfc`, `07935fcf`). Re-sync:
+  `git -C /home/user/atlasd diff acbdaff7 origin/claude/quirky-darwin-fpx23q -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Files that define the language, and what each token group was derived from:
   - `app/globals.css` — `:root` / `.dark` colours (wave 5: overlays `#1a1a1a`, `--control-border`,
