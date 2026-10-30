@@ -3,19 +3,27 @@
 // room), and a bottom sheet on narrow screens. Easy and Pro are VIEWS of the same capability: Pro is gated
 // only by `caps.proEditor` (true for everyone now); Easy can do everything too, and everything is also
 // reachable by talking to the director. Honest warnings with one-click free fixes: outside the safe
-// area, text that doesn't fit, a crowded panel.
+// area, text that doesn't fit, a crowded panel, too much text for a panel (letter fit, FX2).
+//
+// Also the page editor's two letter-fit chips (plan §10 A4): "Too much text" (selects the panel; the inspector
+// says how much it holds and offers free fixes) and "Fix balloon placement" (free: around the art's busy areas;
+// paid, quoted in the user's terms: the existing gated page re-check, recheck_page).
 
 import React, { useLayoutEffect, useRef, useState } from 'react';
-import { TriangleAlert, X } from 'lucide-react';
+import { ScanFace, TriangleAlert, X } from 'lucide-react';
 import type { StudioMode } from '../../../shared/comic/capabilities';
+import type { DocOp } from '../../../shared/comic/ops';
+import type { Balloon, Page } from '../../../shared/comic/doc';
+import { PLATFORM_MARKUP, RELAYOUT_VISION_USD } from '../../../shared/comic/models';
 import { EasyLetteringPanel } from './EasyLetteringPanel';
 import { ProLetteringPanel } from './ProLetteringPanel';
 import { balloonOp, fixSafeAreaOps, linesOf, moveLineToPanelOps, findLineRef, pinKeepingSizeOps, widenOps } from './styleOps';
 import type { LetteringPanelProps } from './panelTypes';
-import type { CrowdedReason } from '../../../shared/comic/lettering/layout';
-import { RADIUS_CONTROL, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
+import { panelCoverage, type CrowdedReason, type LetterDensity, type LetterPlan } from '../../../shared/comic/lettering/layout';
+import { RADIUS_CONTROL, RADIUS_PILL, TONE_CHIP, TONE_SURFACE, TONE_TEXT } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 import { LINE_KIND_LABEL, castName } from '../board/boardModel';
+import { ContextMenuSheet, type ContextMenuItem } from '../mobile/touch/ContextMenuSheet';
 
 export interface Rect {
   left: number;
@@ -87,12 +95,163 @@ export const CROWDED_COPY: Record<CrowdedReason, string> = {
   overlap: 'Crowded panel — this balloon overlaps another.',
   order: 'This panel has more words than room, so this balloon is read out of order. Shorten the text, or give the panel more room.',
   outside: 'No room in its panel — the editor moved it beside the panel so nothing overlaps.',
-  moved: 'No room where it was — the editor moved it so nothing overlaps.'
+  moved: 'No room where it was — the editor moved it so nothing overlaps.',
+  cover: 'Its panel has more words than picture — the editor moved this balloon so more of the art shows. Keep here keeps it where it is drawn.'
 };
 
 /** The visible explanation of a dense page's smaller lettering (the chip on the page says the same). */
 export const densityNote = (scale: number): string =>
   `Dense page — lettered at ${Math.round(scale * 100)}% of its size so every line fits without overlapping. Shorten the text to letter it bigger; Keep here keeps this size.`;
+
+// ── Letter fit: too much text for a panel (FX2) ─────────────────────────────
+
+/** One entry per panel whose lettering is too much for its picture (the plans' `dense`), by panel number. */
+export const densePanels = (plans: readonly LetterPlan[]): LetterDensity[] => {
+  const by = new Map<number, LetterDensity>();
+  for (const p of plans) if (p.dense && !by.has(p.dense.panelN)) by.set(p.dense.panelN, p.dense);
+  return [...by.values()].sort((a, b) => a.panelN - b.panelN);
+};
+
+const unitWord = (d: Pick<LetterDensity, 'unit'>, n: number) => (d.unit === 'chars' ? (n === 1 ? 'character' : 'characters') : n === 1 ? 'word' : 'words');
+
+/**
+ * What the inspector says about a panel with too much text: how much it carries, about how much it holds, and what the
+ * editor already did (honest: never "fixed" — the free fixes are the user's).
+ */
+export const tooMuchTextCopy = (d: LetterDensity): string => {
+  const pct = Math.round(d.drawn * 100);
+  const head = `Too much text for panel ${d.panelN}: ${d.words} ${unitWord(d, d.words)} cover about ${pct}% of the picture — it holds about ${d.fits}.`;
+  if (d.scale !== undefined && d.scale < 1) return `${head} Lettered at ${Math.round(d.scale * 100)}% of its size so more of the art shows.`;
+  if (d.drawn < d.cover - 0.005) return `${head} The editor moved its balloons (partly over the panel's border) so more of the art shows.`;
+  return head;
+};
+
+/** The chip's short label (plan: "Too much text for this panel"): "Too much text for panel 6" / "Too much text in 2 panels". */
+export const tooMuchTextLabel = (list: readonly LetterDensity[]): string =>
+  list.length === 1 ? `Too much text for panel ${list[0].panelN}` : `Too much text in ${list.length} panels`;
+
+/**
+ * Keep a balloon where it is DRAWN: an unpinned stored balloon the engine drew elsewhere (the settle, a dense-page
+ * repack or the coverage cap) is pinned at its drawn spot, width and tail — never sent back to its stored spot. {}
+ * for anything else (a software-placed line's full balloon comes from balloonOp; a pinned one is drawn as stored).
+ */
+export const drawnSpotPatch = (page: Page, lineId: string, resolved: ReadonlyMap<string, Balloon>): Partial<Balloon> => {
+  const stored = page.balloons.find((b) => b.lineId === lineId);
+  const drawn = resolved.get(lineId);
+  if (!stored || !drawn || stored.pinned || stored.locked) return {};
+  const out: Partial<Balloon> = {};
+  if (drawn.x !== stored.x || drawn.y !== stored.y || drawn.w !== stored.w) Object.assign(out, { x: drawn.x, y: drawn.y, w: drawn.w });
+  if (typeof drawn.tailX === 'number' && typeof drawn.tailY === 'number' && (drawn.tailX !== stored.tailX || drawn.tailY !== stored.tailY)) Object.assign(out, { tailX: drawn.tailX, tailY: drawn.tailY });
+  return out;
+};
+
+/** "Make it a caption" (free): a spoken line becomes a caption in the same panel (its speaker stays on the line). */
+export const captionOps = (page: Page, lineId: string): DocOp[] => {
+  const ref = findLineRef(page, lineId);
+  if (!ref || ref.line.kind === 'caption' || ref.line.kind === 'sfx') return [];
+  const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: ref.panel.id, id: lineId, patch: { kind: 'caption' } }];
+  // A caption is placed afresh (its own corner), unless the owner pinned the balloon.
+  const stored = page.balloons.find((b) => b.lineId === lineId);
+  if (stored && !stored.pinned && !stored.locked) ops.push({ op: 'balloons', pageId: page.id, balloons: page.balloons.filter((b) => b.lineId !== lineId) });
+  return ops;
+};
+
+/**
+ * The panel with the most room for a moved line: the least covered other panel (a silent one first), nearest in
+ * reading order on a tie. Undefined when the page has one panel.
+ */
+export const roomiestPanel = (props: Pick<LetteringPanelProps, 'doc' | 'page' | 'plans' | 'H'>, fromPanelN: number): Page['panels'][number] | undefined => {
+  const { doc, page, plans, H } = props;
+  const cover = panelCoverage(doc, page, plans, H > 0 ? 1000 / H : undefined);
+  const from = page.panels.findIndex((p) => p.n === fromPanelN);
+  const candidates = page.panels
+    .map((panel, i) => ({ panel, i, cover: cover[i] ?? 0, silent: !panel.lines.some((l) => l.text.trim()) }))
+    .filter((c) => c.panel.n !== fromPanelN)
+    .sort((a, b) => Number(b.silent) - Number(a.silent) || a.cover - b.cover || Math.abs(a.i - from) - Math.abs(b.i - from));
+  return candidates[0]?.panel;
+};
+
+/** The paid page re-check's quote (models.ts RELAYOUT_VISION_USD × markup; on the user's own key, the provider price). */
+export const recheckQuoteUsd = (byok: boolean): number => Math.round(RELAYOUT_VISION_USD * (byok ? 1 : PLATFORM_MARKUP) * 10000) / 10000;
+
+const CHIP_WARN = `tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border ${TONE_CHIP.warning} px-2 py-0.5 text-[11.5px] font-medium hover:bg-[var(--ds-hover)]`;
+const CHIP_PLAIN = `tap-target inline-flex min-w-0 items-center gap-1 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`;
+
+/** The page editor's "Too much text" chip: selects the first such panel's balloons (the inspector explains and fixes). */
+export const TooMuchTextChip: React.FC<{ plans: readonly LetterPlan[]; onSelect(lineIds: string[]): void }> = ({ plans, onSelect }) => {
+  const list = densePanels(plans);
+  if (!list.length) return null;
+  const first = list[0];
+  return (
+    <button
+      type="button"
+      data-testid="too-much-text-chip"
+      onClick={() => onSelect(plans.filter((p) => p.dense?.panelN === first.panelN).map((p) => p.lineId))}
+      className={CHIP_WARN}
+      title={`${tooMuchTextCopy(first)} Free fixes in the lettering panel: shorten, make it a caption, or move a line to a panel with room.`}
+    >
+      <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">{tooMuchTextLabel(list)}</span>
+    </button>
+  );
+};
+
+/**
+ * The page editor's "Fix balloon placement" chip (FX3), for drawn pages whose check has no face data: a menu with the
+ * free placement around the art's busy areas first, then the paid re-check that reads faces, quoted in the user's terms
+ * (usage for governed users, never dollars; the price on their own key). Both leave pinned balloons where they are.
+ */
+export const PlacementFixChip: React.FC<{
+  /** The re-check's quote as the user reads it (useEditorCost). */
+  price: string;
+  onFree(): void;
+  onPaid(): void;
+  /** Why the free one is unavailable (e.g. a translated edition), shown instead of "Free". */
+  freeDisabled?: string;
+  busy?: boolean;
+}> = ({ price, onFree, onPaid, freeDisabled, busy }) => {
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const items: ContextMenuItem[] = [
+    {
+      id: 'free',
+      label: 'Place around the art',
+      // Hints sit beside the label on one line (never truncated): kept short so a 320 px sheet still shows both.
+      hint: freeDisabled ?? 'Free · no AI cost',
+      disabled: !!freeDisabled,
+      onSelect: () => {
+        setAt(null);
+        onFree();
+      }
+    },
+    {
+      id: 'paid',
+      // The quote is on the label itself (plan: "Fix balloon placement (≈$0.004)"), in the user's terms.
+      label: `Fix balloon placement · ${price}`,
+      onSelect: () => {
+        setAt(null);
+        onPaid();
+      }
+    }
+  ];
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="placement-fix-chip"
+        aria-haspopup="menu"
+        disabled={busy}
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setAt({ x: r.left, y: r.bottom });
+        }}
+        className={CHIP_PLAIN}
+        title={`Balloons over faces? Place them around the art (free), or fix balloon placement by reading the page again (${price}). Balloons you moved stay put.`}
+      >
+        <ScanFace className="h-3 w-3 shrink-0" aria-hidden /> <span className="truncate">Fix balloon placement</span>
+      </button>
+      {at && <ContextMenuSheet open onClose={() => setAt(null)} label="Fix balloon placement" items={items} at={at} />}
+    </>
+  );
+};
 
 export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => {
   const { doc, page, lineIds, plans, placements, H, apply, onEditText, mode, onModeChange, canPro, anchor, compact, maxHeight, bounds, onClose } = props;
@@ -147,6 +306,11 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
   })();
   const dense = selPlans.find((p) => typeof p.densityScale === 'number' && p.densityScale < 1);
   const one = lines.length === 1 ? lines[0] : undefined;
+  // Too much text for the selection's panel (letter fit): the panel's own numbers and free fixes.
+  const tooMuch = selPlans.find((p) => p.dense)?.dense;
+  const roomy = tooMuch && one && !props.editionLang ? roomiestPanel(props, tooMuch.panelN) : undefined;
+  const caption = tooMuch && one && !props.editionLang ? captionOps(page, one.id) : [];
+  const showCrowded = crowded.length > 0 && !!one;
   const title = one ? `${LINE_KIND_LABEL[one.kind]}${one.speakerId ? ` · ${castName(doc, one.speakerId)}` : ''}` : `${lines.length} balloons`;
   const nextPanelFor = (id: string) => {
     const ref2 = findLineRef(page, id);
@@ -181,7 +345,7 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
         </button>
       </header>
       <div className={cx('min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 py-3', !compact && 'max-h-[min(70vh,560px)]')}>
-        {(outside.length > 0 || overflow.length > 0 || crowded.length > 0) && (
+        {(outside.length > 0 || overflow.length > 0 || showCrowded || !!tooMuch) && (
           <ul className="space-y-1.5" aria-label="Lettering warnings">
             {outside.length > 0 && (
               <li className={WARN_ROW}>
@@ -209,7 +373,50 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                 </button>
               </li>
             )}
-            {crowded.length > 0 && one && (
+            {tooMuch && (
+              <li className={`${WARN_ROW} flex-wrap`} data-testid="too-much-text">
+                <TriangleAlert className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.warning}`} aria-hidden />
+                <span className="min-w-0 flex-1" data-testid="too-much-text-copy">
+                  {tooMuchTextCopy(tooMuch)}
+                </span>
+                {/* The crowded row (when shown) already offers Shorten and the next panel: no button twice. */}
+                {one && !showCrowded && (
+                  <button type="button" className={WARN_BTN} onClick={() => onEditText(one.id)}>
+                    Shorten
+                  </button>
+                )}
+                {one && caption.length > 0 && (
+                  <button type="button" className={WARN_BTN} title="A caption sits in the panel's corner, with no tail (free)" onClick={() => apply(caption, { label: 'Make it a caption' })}>
+                    Make it a caption
+                  </button>
+                )}
+                {one && roomy && !(showCrowded && nextPanelFor(one.id)?.id === roomy.id) && (
+                  <button
+                    type="button"
+                    className={WARN_BTN}
+                    title={`Panel ${roomy.n} has room for it (free)`}
+                    onClick={() => apply(moveLineToPanelOps(page, one.id, roomy.id), { label: 'Move line to another panel' })}
+                  >
+                    Move to panel {roomy.n}
+                  </button>
+                )}
+                {props.onAskAI && (
+                  <button
+                    type="button"
+                    className={WARN_BTN}
+                    title="The director suggests shorter lines (a chat message)"
+                    onClick={() =>
+                      props.onAskAI!(
+                        `Panel ${tooMuch.panelN} on page ${page.n} has too much text for its picture (${tooMuch.words} ${unitWord(tooMuch, tooMuch.words)}; it holds about ${tooMuch.fits}). Shorten its lines to fit, keeping what they say.`
+                      )
+                    }
+                  >
+                    Ask to trim
+                  </button>
+                )}
+              </li>
+            )}
+            {showCrowded && one && (
               <li className={`${WARN_ROW} flex-wrap`}>
                 <TriangleAlert className={`h-3.5 w-3.5 shrink-0 ${TONE_TEXT.warning}`} aria-hidden />
                 <span className="min-w-0 flex-1" data-testid="crowded-reason" data-reason={crowdedWhy}>
@@ -222,7 +429,11 @@ export const LetteringInspector: React.FC<LetteringInspectorProps> = (props) => 
                   type="button"
                   title={crowdedWhy === 'overlap' ? 'Keep this balloon where it is (it may overlap); the editor stops moving it' : 'Keep this balloon where it is drawn, at this size; the editor stops moving it'}
                   className={WARN_BTN}
-                  onClick={() => apply(pinKeepingSizeOps([balloonOp(page, one.id, { pinned: true }, placements.balloons)], page, plans, [one.id], props.editionLang), { label: 'Keep balloon here' })}
+                  onClick={() =>
+                    apply(pinKeepingSizeOps([balloonOp(page, one.id, { ...drawnSpotPatch(page, one.id, placements.balloons), pinned: true }, placements.balloons)], page, plans, [one.id], props.editionLang), {
+                      label: 'Keep balloon here'
+                    })
+                  }
                 >
                   Keep here
                 </button>

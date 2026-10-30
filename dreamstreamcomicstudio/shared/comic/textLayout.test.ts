@@ -10,6 +10,7 @@ import {
   wrapUnits,
   type FitInput
 } from './textLayout';
+import { LETTER_METRICS } from './lettering/style';
 
 const realSegmenter = (Intl as unknown as { Segmenter?: unknown }).Segmenter;
 const withoutSegmenter = <T>(fn: () => T): T => {
@@ -331,5 +332,23 @@ describe('fitBalloonText', () => {
   });
   it('scripts apply their font scale (Urdu 0.95)', () => {
     expect(fitBalloonText({ ...base, lang: 'ur', text: 'سلام' }).fontPx).toBeCloseTo(12 * 0.95, 2);
+  });
+  it('(FX6) a pinned balloon asked for minWordFit is drawn as wide as its longest word, within its room', () => {
+    // 'Calibrating' at 12 px = 11 × 7.2 = 79.2 px, plus the default padding on both sides.
+    const pad = LETTER_METRICS.padX * 700;
+    const narrow = { ...base, text: 'Calibrating now', balloon: { x: 0.1, y: 0.1, w: 0.04, pinned: true } };
+    const before = fitBalloonText(narrow);
+    expect(before.w).toBe(0.04);
+    expect(before.lines.length).toBeGreaterThan(2); // broken mid-word
+    const fit = fitBalloonText({ ...narrow, minWordFit: { maxW: 0.5 } });
+    expect(fit.w).toBeGreaterThanOrEqual((measure('Calibrating', 12) + 2 * pad) / 700 - 1e-9);
+    expect(fit.w).toBeLessThan((measure('Calibrating', 12) + 2 * pad) / 700 + 0.001);
+    // Wide enough for the whole word (the planner letters the plain wrap when balancing would split it).
+    expect(wrapLines('Calibrating now', 'en', fit.w * 700 - 2 * pad, (t) => measure(t, 12))).toEqual(['Calibrating', 'now']);
+    expect(fit.grew).toBe(true);
+    // No room for the whole word: drawn as stored (the break is reported by the planner, never half-widened).
+    expect(fitBalloonText({ ...narrow, minWordFit: { maxW: 0.1 } }).w).toBe(0.04);
+    // A pinned balloon wide enough already is untouched.
+    expect(fitBalloonText({ ...base, balloon: { ...base.balloon, pinned: true }, minWordFit: { maxW: 0.5 } })).toEqual(fitBalloonText({ ...base, balloon: { ...base.balloon, pinned: true } }));
   });
 });
