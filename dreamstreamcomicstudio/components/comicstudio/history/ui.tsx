@@ -16,6 +16,8 @@ import {
   PRIMARY_BTN,
   RADIUS_CONTROL,
   RADIUS_PILL,
+  SEGMENTED_ACTIVE,
+  SEGMENTED_ITEM,
   STATUS_DOT,
   STATUS_INK,
   TOAST,
@@ -27,7 +29,7 @@ import { BottomSheet } from '../mobile/sheets/BottomSheet';
 import { SideSheet } from '../mobile/sheets/SideSheet';
 import type { SheetDetent } from '../mobile/sheets/snap';
 import { useFormFactor } from '../mobile/useFormFactor';
-import { UNDO_TOAST_MS } from '../timeline/UndoToast';
+import { claimUndoToast, UNDO_TOAST_MS } from '../timeline/UndoToast';
 import type { ActorIcon as ActorIconName } from './historyModel';
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
@@ -87,6 +89,19 @@ export const ChipBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & {
     {children}
   </button>
 );
+
+/**
+ * A segmented item's shape — SEGMENTED_ITEM without its inks — so each state CHOOSES its one ink, the house pattern
+ * (share/ShareSheet.tsx, lettering/ProLetteringPanel.tsx): selected → SEGMENTED_ACTIVE, otherwise muted with an ink
+ * hover. Stacking SEGMENTED_ITEM's muted base under SEGMENTED_ACTIVE's ink would leave the applied colour to
+ * stylesheet order (tests/config/statusInkGuard.test.ts).
+ */
+const SEGMENT_SHAPE = SEGMENTED_ITEM.split(/\s+/)
+  .filter((c) => !/^(?:[\w-]+:)*text-\[var\(--ds-(?:muted|ink)\)\]$/.test(c))
+  .join(' ');
+
+/** A 44 px segmented item (role radio + aria-checked at the call site) with one ink per state. */
+export const segmentClass = (on: boolean): string => cx(SEGMENT_SHAPE, 'min-h-11', on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]');
 
 /** A small mark with a word (never colour alone): "Changed", "New", "Draft 2", "Published". */
 export const Mark: React.FC<{ icon?: React.ReactNode; children: React.ReactNode; tone?: 'neutral' | 'active' | 'attention'; className?: string }> = ({ icon, children, tone = 'neutral', className }) => (
@@ -190,6 +205,8 @@ export interface ToastAction {
  * The restore toast (Atlas TOAST recipe; same timing as the timeline's UndoToast): polite, pauses while hovered or
  * focused, sits above the safe area, no animation under reduced motion. Undo works after a reload too — it restores
  * the before-restore moment the server saved first.
+ * It lives in the studio's ONE toast slot (timeline/UndoToast claimUndoToast): showing it makes a timeline Undo toast
+ * step aside, and a newer toast (a timeline edit's, or another restore's) replaces it — the two never stack.
  */
 export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'healthy', onUndo, actions, onDismiss }) => {
   const reduce = useHistoryReducedMotion();
@@ -202,6 +219,17 @@ export const RestoredToast: React.FC<RestoredToastProps> = ({ message, tone = 'h
     const t = setTimeout(() => dismissRef.current(), UNDO_TOAST_MS);
     return () => clearTimeout(t);
   }, [message, paused, choice]);
+  // Each toast claims the shared slot as it appears; when a newer toast takes the slot, this one is dismissed.
+  useEffect(() => {
+    if (!message) return;
+    let mounted = true;
+    claimUndoToast(() => {
+      if (mounted) dismissRef.current();
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [message]);
   const tree = (
     <div className="pointer-events-none fixed inset-x-0 z-[90] flex justify-center px-4" style={{ bottom: 'calc(var(--sa-bottom-eff, 0px) + 16px)' }} role="status" aria-live="polite">
       {message && (

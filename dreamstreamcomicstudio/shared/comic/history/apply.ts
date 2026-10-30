@@ -6,7 +6,8 @@
 // MERGE mode (every restore and "Use then"), invariants property-tested in apply.test.ts:
 //   I1 no lost image — a displaced current asset goes to its target's render.history (the render_use swap rule)
 //      with overflow to the archive; a removed page goes to the trash; any other path that would be left
-//      unreferenced is archived. (Archive cap eviction stays the existing, never-silent §5.3.1 rule.)
+//      unreferenced is archived where it lived — a frame source or an image overlay under its page ('page:<id>').
+//      (Archive cap eviction stays the existing, never-silent §5.3.1 rule.)
 //   I2 no lost translation — editions merge by line id: the version wins for its own lines, other lines are kept;
 //      editions and glossary terms are a union. Stale/current/missing re-derive from sourceHash for free.
 //   I3 forward-only state untouched — spend, conversation, memory, settings, safety, publication, imageModel and
@@ -57,6 +58,29 @@ import { i18nOf, normalizeBalloonOverride, normalizeGlossaryTerm, normalizeTextT
 import { languageSpec, sameLanguage } from '../languages.js';
 import { extraMetaKeys, isExtraMetaKey, stableRender } from './sections.js';
 import type { EditionMerge, HistoryRestoreOp, RestorePart, RestoreSet } from './types.js';
+
+/**
+ * What the archive calls a page's frame picture (frame.src) or image overlay (layer.src) when a restore displaces it
+ * (K2a, I1): "Page 3 panel picture", "Deleted page 2 overlay". Such a picture is not a drawing of the page.
+ */
+export const PANEL_SOURCE_ARCHIVE_WORDS = { frame: 'panel picture', layer: 'overlay' } as const;
+
+const PANEL_SOURCE_LABEL_RE = /^(?:Page|Deleted page)(?: \d+)? (?:panel picture|overlay)$/;
+
+/**
+ * An archive entry the I1 net made for a displaced frame picture or overlay: under a page ('page:<id>'), with no
+ * maker or time recorded (no origin, at 0) and a label that says which. It is not an older drawing of the page, so
+ * nothing should offer it as one ("Use for this page" / "Use this version" would print an overlay — even a guide-only
+ * one — as the whole page's art).
+ */
+export const isPanelSourceArchive = (v: Pick<ArchivedVersion, 'targetKey' | 'label'> & { origin?: unknown; at?: unknown }): boolean =>
+  !!v &&
+  typeof v.targetKey === 'string' &&
+  v.targetKey.startsWith('page:') &&
+  v.origin === undefined &&
+  !(typeof v.at === 'number' && v.at > 0) &&
+  typeof v.label === 'string' &&
+  PANEL_SOURCE_LABEL_RE.test(v.label);
 
 /** The ops.ts archive primitives (passed in, so this module never imports ops.ts at runtime). */
 export interface RestoreKernel {
@@ -695,6 +719,21 @@ const pathHomes = (doc: ComicDoc): Map<string, { asset: AssetRef; key: string; l
     add(t.page.render.asset, key, `Deleted page ${t.fromN}`);
     t.page.render.history.forEach((v) => add(v, key, `Deleted page ${t.fromN}`));
   });
+  // Ship 2 (K2a): a frame's own picture (frame.src) and an image overlay (layer.src) live on their page ('page:<id>'),
+  // so I1 archives one a restore displaces. Listed last: a path a render also holds keeps that richer home. Plain
+  // paths carry no maker or time (at 0 = date not recorded), and the label says what the picture was — "Page 3 panel
+  // picture", "Page 3 overlay" — never just "Page 3", so it is not taken for a drawing of the page
+  // (isPanelSourceArchive). A path a frame and an overlay share keeps the frame's (first) home.
+  const sources = (page: Page, label: string) => {
+    const key = renderTargetKey({ kind: 'page', id: page.id });
+    const plain = (path: unknown, what: string) => {
+      if (typeof path === 'string' && path) add({ path, source: 'upload', at: 0 }, key, `${label} ${what}`);
+    };
+    for (const panel of page?.panels || []) plain(panel?.frame?.src?.path, PANEL_SOURCE_ARCHIVE_WORDS.frame);
+    for (const layer of page?.layers || []) plain(layer?.src?.path, PANEL_SOURCE_ARCHIVE_WORDS.layer);
+  };
+  doc.pages.forEach((p) => sources(p, targetLabel(doc, { kind: 'page', id: p.id })));
+  trashOf(doc).forEach((t) => sources(t.page, `Deleted page ${t.fromN}`));
   return out;
 };
 

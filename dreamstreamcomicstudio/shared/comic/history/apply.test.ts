@@ -5,6 +5,7 @@ import {
   collectAssetPaths,
   normalizeDoc,
   pageSpecHash,
+  trashOf,
   type ComicDoc,
   type Page
 } from '../doc';
@@ -15,6 +16,7 @@ import { MAX_ARCHIVE, MAX_RENDER_HISTORY, MAX_TRASH } from '../limits';
 import { historyEmptyDoc, historyV4Doc, historyV5Doc, BOOK_NOW } from './__fixtures__/books';
 import { evolveBook, randomBook, randomScope } from './__fixtures__/random';
 import { diffBooks } from './diff';
+import { isPanelSourceArchive } from './apply';
 import { exactRestoreSet, historyRestoreOp, isEmptyRestoreSet, restoreEffects, restoreOps } from './restore';
 import { excludedOf, joinSections, splitSections } from './sections';
 import type { RestoreScope } from './types';
@@ -178,6 +180,130 @@ describe('merge-mode invariants I1–I6 (property tests over random books and sc
   function int(seed: number, lo: number, hi: number): number {
     return lo + ((seed * 2654435761) >>> 0) % (hi - lo + 1);
   }
+});
+
+describe('I1 on panelized pages: frame sources and image overlays (K2a)', () => {
+  const v5 = () => normalizeDoc(historyV5Doc());
+  const TAKE = 'u/user-b/p/proj-v5/img/p2-frame-take.webp';
+  const STICKER = 'u/user-b/p/proj-v5/refs/sticker.webp';
+  const GUIDE = 'u/user-b/p/proj-v5/refs/guide.webp';
+  const bx = (x: number, y: number, w: number, h: number) => ({ x, y, w, h });
+  const int = (seed: number, lo: number, hi: number): number => lo + (((seed * 2654435761) >>> 0) % (hi - lo + 1));
+
+  /** The page shown in frames: its first frame shows another picture, plus a sticker and a guide-only overlay. */
+  const panelize = (doc: ComicDoc, pageId: string, paths = { take: TAKE, sticker: STICKER, guide: GUIDE }): ComicDoc => {
+    const page = doc.pages.find((p) => p.id === pageId)!;
+    const n = page.panels.length;
+    const h = 0.96 / n;
+    return applyOps(doc, [
+      {
+        op: 'page_frames',
+        pageId,
+        artMode: 'panels',
+        frames: page.panels.map((pn, i) => ({ panelId: pn.id, frame: { box: bx(0.02, 0.02 + i * h, 0.96, h - 0.02), ...(i === 0 ? { src: { path: paths.take } } : {}) } })),
+        moveBalloons: false
+      },
+      { op: 'layer', pageId, id: 'ly_sticker', patch: { kind: 'image', box: bx(0.1, 0.1, 0.2, 0.2), src: { path: paths.sticker } } },
+      { op: 'layer', pageId, id: 'ly_guide', patch: { kind: 'image', box: bx(0.5, 0.1, 0.2, 0.2), src: { path: paths.guide }, print: false } }
+    ], AT - 5);
+  };
+
+  it('a restore that displaces a frame source or an overlay archives it under its page (page, page-text and book scopes)', () => {
+    const version = asVersion(v5()); // before the page was put in frames: no frame source, no overlay
+    const current = panelize(v5(), 'pg_2');
+    const page = current.pages.find((p) => p.id === 'pg_2')!;
+    expect(page.panels[0].frame?.src?.path).toBe(TAKE);
+    expect(page.layers!.map((l) => l.src?.path)).toEqual([STICKER, GUIDE]);
+    for (const p of [TAKE, STICKER, GUIDE]) expect(collectAssetPaths(current), p).toContain(p);
+
+    for (const scope of [
+      { kind: 'page', pageId: 'pg_2', mode: 'replace', part: 'all' },
+      { kind: 'page', pageId: 'pg_2', mode: 'replace', part: 'text' },
+      { kind: 'book' }
+    ] as RestoreScope[]) {
+      const after = restore(current, version, scope);
+      const ctx = JSON.stringify(scope);
+      const back = after.pages.find((p) => p.id === 'pg_2')!;
+      expect(back.layers, ctx).toBeUndefined(); // the version's page had none
+      expect(back.panels[0].frame?.src, ctx).toBeUndefined();
+      // I1: nothing the book held is lost — the displaced pictures went to the archive, once each, under their page.
+      const kept = new Set(collectAssetPaths(after));
+      expect(collectAssetPaths(current).filter((p) => !kept.has(p)), ctx).toEqual([]);
+      // The label says what the picture was (never just "Page 2": it is not a drawing of the page).
+      for (const [path, label] of [[TAKE, 'Page 2 panel picture'], [STICKER, 'Page 2 overlay'], [GUIDE, 'Page 2 overlay']]) {
+        const entries = after.archive!.filter((a) => a.path === path);
+        expect(entries, `${ctx} ${path}`).toEqual([expect.objectContaining({ path, targetKey: 'page:pg_2', label, archivedAt: AT, source: 'upload', at: 0 })]);
+        expect(entries[0].origin, `${ctx} ${path}`).toBeUndefined();
+        expect(isPanelSourceArchive(entries[0]), `${ctx} ${path}`).toBe(true);
+      }
+      expect(duplicatePaths(after.archive), ctx).toEqual([]);
+      expect(normalizeDoc(after), ctx).toEqual(after);
+    }
+  });
+
+  it('a picture a render also holds keeps that richer home; a trashed page\'s sources archive as its Deleted page', () => {
+    // The frame shows an older drawing of the page itself: when it is displaced it stays in that page's versions.
+    const older = v5().pages.find((p) => p.id === 'pg_2')!.render.history[0];
+    expect(older?.path).toBeTruthy();
+    const version = asVersion(v5());
+    const current = panelize(v5(), 'pg_2', { take: older.path, sticker: STICKER, guide: GUIDE });
+    const after = restore(current, version, { kind: 'page', pageId: 'pg_2', mode: 'replace', part: 'all' });
+    expect(collectAssetPaths(after)).toContain(older.path);
+    expect(after.archive!.filter((a) => a.path === older.path)).toEqual([]); // still in the page's own versions
+    expect(after.archive!.filter((a) => a.path === STICKER)).toHaveLength(1);
+
+    // Deleted since, with its overlays; the whole book comes back from before: the page returns without them.
+    const deleted = applyOps(panelize(v5(), 'pg_2'), [{ op: 'page_delete', id: 'pg_2', deletedAt: AT - 2 }], AT - 2);
+    const fromN = trashOf(deleted).find((t) => t.page.id === 'pg_2')!.fromN;
+    const reinserted = restore(deleted, version, { kind: 'book' });
+    expect(reinserted.pages.map((p) => p.id)).toContain('pg_2');
+    const kept = new Set(collectAssetPaths(reinserted));
+    expect(collectAssetPaths(deleted).filter((p) => !kept.has(p))).toEqual([]);
+    for (const [path, what] of [[TAKE, 'panel picture'], [STICKER, 'overlay'], [GUIDE, 'overlay']]) {
+      const entries = reinserted.archive!.filter((a) => a.path === path);
+      expect(entries, path).toEqual([expect.objectContaining({ targetKey: 'page:pg_2', label: `Deleted page ${fromN} ${what}` })]);
+      expect(isPanelSourceArchive(entries[0]), path).toBe(true);
+    }
+  });
+
+  it('isPanelSourceArchive: only an undated, maker-less page entry labelled as a panel picture or overlay', () => {
+    const entry = { path: 'x/a.webp', w: 1, h: 1, source: 'upload' as const, at: 0, targetKey: 'page:pg_2', label: 'Page 2 overlay', archivedAt: AT };
+    expect(isPanelSourceArchive(entry)).toBe(true);
+    expect(isPanelSourceArchive({ ...entry, label: 'Page 2 panel picture' })).toBe(true);
+    expect(isPanelSourceArchive({ ...entry, label: 'Deleted page 4 overlay' })).toBe(true);
+    // A real older drawing of the page (its own label, a maker or a date) is never one.
+    expect(isPanelSourceArchive({ ...entry, label: 'Page 2' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, origin: 'render' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, at: AT })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, targetKey: 'cover', label: 'Cover overlay' })).toBe(false);
+    expect(isPanelSourceArchive({ ...entry, targetKey: 'style_option:so_1', label: 'Style option “Neon overlay”' })).toBe(false);
+    // Every archive entry of the v5 fixture (real drawings) reads as a drawing.
+    for (const a of v5().archive || []) expect(isPanelSourceArchive(a), a.path).toBe(false);
+  });
+
+  it('holds on random books whose pages carry frame sources and overlays (property)', () => {
+    let displaced = 0;
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const base = randomBook(seed);
+      const version = asVersion(evolveBook(base, seed * 101, int(seed, 4, 20)));
+      let current = evolveBook(base, seed * 7, int(seed, 6, 30));
+      // Put one to three live pages in frames, each with its own pictures (fresh paths only this doc holds).
+      const pages = current.pages.filter((p) => p.panels.length > 0);
+      for (let i = 0; i < Math.min(pages.length, 1 + (seed % 3)); i += 1) {
+        const id = pages[(seed + i * 2) % pages.length].id;
+        if (current.pages.find((p) => p.id === id)!.layers?.length) continue;
+        current = panelize(current, id, { take: `x/${seed}/${id}/take.webp`, sticker: `x/${seed}/${id}/sticker.webp`, guide: `x/${seed}/${id}/guide.webp` });
+      }
+      const scope = randomScope(version, current, seed * 13);
+      const after = applyOps(current, [historyRestoreOp(restoreOps(current, version, scope), { versionId: 'v', at: AT })], AT);
+      const ctx = `seed ${seed} scope ${JSON.stringify(scope)}`;
+      const kept = new Set(collectAssetPaths(after));
+      expect(collectAssetPaths(current).filter((p) => !kept.has(p)), ctx).toEqual([]);
+      if (uniquePaths(current.archive)) expect(duplicatePaths(after.archive), ctx).toEqual([]);
+      displaced += (after.archive || []).filter((a) => a.path.startsWith(`x/${seed}/`)).length;
+    }
+    expect(displaced).toBeGreaterThan(0); // the property really exercised the new homes
+  });
 });
 
 describe('exact mode (alternative switch)', () => {

@@ -2,18 +2,21 @@
 //
 // A row ≥ 64 px, fully tappable: who made it (Sparkles = AI, User = you, Wand2 = the editor, no AI cost), a two-line
 // label, a meta line ("10:42 · pages 3–4 · uses a little of your usage" / "Free" / "$0.07 · on your key" — governed
-// viewers never read dollars), a 40×60 thumbnail, and chips for a name (Star) and Published (Globe).
+// viewers never read dollars), a 40×60 thumbnail, and chips for a name (Star), Published (Globe) and — in Original's
+// list — "From a version you removed" (Layers; a removed line's rows keep their line, H1).
 
 import React from 'react';
-import { Globe, Star } from 'lucide-react';
+import { Globe, Layers, Star } from 'lucide-react';
 import type { VersionRow } from '../../../shared/comic/history/types';
 import { FOCUS_RING, HOVER_ROW, RADIUS_CONTROL } from '../../chat/studioDesign';
-import { ACTOR_INFO, rowMetaText, type MoneyWords } from './historyModel';
+import { ACTOR_INFO, HISTORY_COPY, rowMetaText, type MoneyWords } from './historyModel';
 import { ActorGlyph, cx, Mark } from './ui';
 
 export interface MomentRowProps {
   row: VersionRow;
   selected?: boolean;
+  /** A row of a version the creator removed (Original's list carries them): said in plain words. */
+  removed?: boolean;
   money: MoneyWords;
   tz: string;
   urlFor(path: string): string | undefined;
@@ -21,7 +24,7 @@ export interface MomentRowProps {
   onFocusRow?(row: VersionRow): void;
 }
 
-export const MomentRow: React.FC<MomentRowProps> = ({ row, selected, money, tz, urlFor, onOpen, onFocusRow }) => {
+export const MomentRow: React.FC<MomentRowProps> = ({ row, selected, removed, money, tz, urlFor, onOpen, onFocusRow }) => {
   const actor = ACTOR_INFO[row.actor] ?? ACTOR_INFO.system;
   const thumb = row.thumbs.find((t) => t.key !== 'cover') ?? row.thumbs[0];
   const url = thumb ? urlFor(thumb.path) : undefined;
@@ -32,7 +35,8 @@ export const MomentRow: React.FC<MomentRowProps> = ({ row, selected, money, tz, 
       type="button"
       data-moment={row.id}
       aria-current={selected ? 'true' : undefined}
-      aria-label={`${title}. ${actor.words}. ${meta}`}
+      aria-label={`${title}. ${actor.words}. ${meta}${removed ? `. ${HISTORY_COPY.removedLine}` : ''}`}
+      data-moment-removed={removed ? '' : undefined}
       onClick={() => onOpen(row)}
       onFocus={() => onFocusRow?.(row)}
       className={cx(
@@ -48,8 +52,9 @@ export const MomentRow: React.FC<MomentRowProps> = ({ row, selected, money, tz, 
       <span className="min-w-0 flex-1">
         <span className="line-clamp-2 text-[14px] font-medium leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{title}</span>
         <span className="mt-0.5 block text-[12px] leading-4 tabular-nums text-[var(--ds-muted)] [overflow-wrap:anywhere]">{meta}</span>
-        {(!!row.name || row.kind === 'publish' || row.publishedRev !== undefined) && (
+        {(!!row.name || row.kind === 'publish' || row.publishedRev !== undefined || removed) && (
           <span className="mt-1 flex min-w-0 flex-wrap gap-1">
+            {removed && <Mark icon={<Layers className="h-3 w-3" aria-hidden />}>{HISTORY_COPY.removedLine}</Mark>}
             {row.name && <Mark icon={<Star className="h-3 w-3" aria-hidden />}>{row.name}</Mark>}
             {(row.kind === 'publish' || row.publishedRev !== undefined) && <Mark icon={<Globe className="h-3 w-3" aria-hidden />}>Published</Mark>}
           </span>

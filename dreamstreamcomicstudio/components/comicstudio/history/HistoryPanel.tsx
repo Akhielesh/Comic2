@@ -27,7 +27,7 @@ import { ClassicSnapshots } from './ClassicSnapshots';
 import { EarlierImages } from './EarlierImages';
 import { Filmstrip } from './Filmstrip';
 import { useHistoryApi, type HistoryFilter } from './historyApi';
-import { classicSourceOf, HISTORY_COPY, nextDraftName, pageById, pageScope, restoredText, startRowOf, viewerTimeZone, type MoneyWords, type RestoreFollowUp } from './historyModel';
+import { classicSourceOf, hereRowId, HISTORY_COPY, isRemovedLineRow, nextDraftName, pageById, pageScope, restoredText, startRowOf, viewerTimeZone, type MoneyWords, type RestoreFollowUp } from './historyModel';
 import { MomentDetail } from './MomentDetail';
 import { MomentList } from './MomentList';
 import type { OpenHistoryRequest } from './openHistory';
@@ -138,17 +138,20 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   const push = useCallback((v: View) => setStack((s) => [...s, v]), []);
   const popTo = useCallback((depth: number) => setStack((s) => s.slice(0, depth)), []);
   const rows = list.rows;
-  const selected = rows.find((r) => r.id === selectedId) ?? rows[0] ?? null;
+  // "You're here" comes from the line's head (store.head), never from rows[0]: in Original's list a removed version's
+  // row can be the newest. It is the default selection and the only moment "Name this version" names.
+  const hereId = hereRowId(rows, list.head, list.line, filter !== 'all');
+  const selected = rows.find((r) => r.id === selectedId) ?? rows.find((r) => r.id === hereId) ?? rows.find((r) => !isRemovedLineRow(r, list.line)) ?? rows[0] ?? null;
   const focusedPageId = request?.pageId ?? studio.focusedPageId ?? null;
   const focusedPage = pageById(doc, pageFilterId ?? focusedPageId);
   const pageLabel = focusedPage ? `Page ${focusedPage.n}` : null;
   const start = startRowOf(rows);
   const classic = classicSourceOf(rows);
   const onlyStart = rows.length <= 1 && rows.every((r) => r.kind === 'start');
-  // When History started: the start row once it is loaded; with every moment loaded and no start row, the oldest
-  // moment (History began no later). Unknown while older moments are still unloaded — "Earlier (images only)" waits
-  // rather than listing drawings made after History started.
-  const startedAt: number | null | undefined = start ? start.contentAt : list.hasMore ? undefined : rows[rows.length - 1]?.contentAt ?? null;
+  // When History started (the shared Earlier derivation's `before`): the start row's createdAt once it is loaded; with
+  // every moment loaded and no start row, the oldest moment's (History began no later). Unknown while older moments
+  // are still unloaded — "Earlier (images only)" waits rather than listing drawings made after History started.
+  const startedAt: number | null | undefined = start ? start.createdAt : list.hasMore ? undefined : rows[rows.length - 1]?.createdAt ?? null;
 
   // ── Actions (all free) ──────────────────────────────────────────────────────
 
@@ -277,7 +280,7 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
       {selected && rows.length > 0 && (
         <div className="min-w-0">
           <Filmstrip row={selected} live={doc} urlFor={(p) => list.urlFor(p, { width: 160 })} reducedMotion={reducedMotion} onOpenPage={(pageId) => push({ kind: 'compare', a: selected.id, b: 'now', pageId })} />
-          <Scrubber rows={rows} selectedId={selected.id} onSelect={setSelectedId} now={now} tz={tz} reducedMotion={reducedMotion} />
+          <Scrubber rows={rows} selectedId={selected.id} onSelect={setSelectedId} line={list.line} now={now} tz={tz} reducedMotion={reducedMotion} />
         </div>
       )}
       {(rows.length > 0 || filter !== 'all') && (
@@ -302,6 +305,7 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
           hasMore={list.hasMore}
           loadingMore={list.loadingMore}
           onLoadMore={list.loadMore}
+          line={list.line}
         />
       )}
       {filter === 'all' && list.loaded && !list.error && startedAt !== undefined && <EarlierImages studio={studio} startedAt={startedAt} now={now} tz={tz} />}
@@ -321,7 +325,8 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
             studio={studio}
             versionId={v.versionId}
             rows={rows}
-            newestId={filter === 'all' ? rows[0]?.id ?? null : null}
+            newestId={hereId}
+            line={list.line}
             latestAiId={latestAi.row?.id ?? null}
             money={money}
             tz={tz}

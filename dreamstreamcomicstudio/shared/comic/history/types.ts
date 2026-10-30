@@ -31,6 +31,8 @@ import type {
   TrashedPage
 } from '../doc.js';
 import type { LetteringStyle } from '../lettering/style.js';
+// Type-only (erased): describe.ts owns the moment vocabulary and imports this module's types back.
+import type { PanelMoment } from './describe.js';
 
 // ── Versions (rows) ──────────────────────────────────────────────────────────
 
@@ -98,6 +100,12 @@ export interface ChangeItem {
   lang?: string;
   /** How many (lines, pages…) when the words need a number. */
   count?: number;
+  /** Ship 2 (K2a): the panel-level moment that refines `what` (set by the recorder from the ops or the action;
+   *  describe.ts words it, every other reader sees an ordinary ChangeItem). describe.ts's PanelChangeItem is this
+   *  item with `moment` present. */
+  moment?: PanelMoment;
+  /** Panel numbers on the page, when a moment names them (display only). */
+  panelNs?: number[];
 }
 
 /** Spend made by an AI run (summed from the run's new spend entries). BYOK never counts toward usage. */

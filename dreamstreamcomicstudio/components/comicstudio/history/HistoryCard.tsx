@@ -2,18 +2,18 @@
 //
 // The card holds ids only ({view, versionId?, a?, b?, pageId?, scope?}) and renders by fetching from the owner API,
 // so an old card in the conversation always shows the moment as it is stored — and never carries content of its own.
-//   list      the latest moments · [Open History]
+//   list      the latest moments · [Open History] (a row of a version you removed says so, as in the panel)
 //   moment    one moment: what changed · [Open] (read, compare, restore from there)
 //   compare   "3 pages changed" · [See changes]
 //   confirm   "Restore page 3 from Tue 10:42?" — a piece: [Use then] (free, with Undo); a piece that would put pages
 //             "Out of date" (a look, a place, the style, the cover, the script) lists them first and waits for
 //             [Bring back]; the whole book: [Restore…] opens the restore sheet (a whole-book restore always needs
 //             that tap)
-//   undo_ai   "Undo the last AI change" · [Review and undo…]
+//   undo_ai   "Undo the last AI change" · [Review and undo…] (the book you're on: findLatestAiRow)
 // With Comic History off (caps.history false) it renders nothing.
 
 import React, { useEffect, useState } from 'react';
-import { History as HistoryIcon } from 'lucide-react';
+import { History as HistoryIcon, Layers } from 'lucide-react';
 import { historyEnabled } from '../../../shared/comic/capabilities';
 import { changedPageCount, type HistoryCard as HistoryCardData, type RestoreScope, type VersionRow } from '../../../shared/comic/history/index';
 import type { ComicDoc } from '../../../shared/comic/doc';
@@ -21,11 +21,11 @@ import type { CardProps } from '../extensions';
 import { CardShell } from '../conversation/ui';
 import { useCostFormat } from '../conversation/cost';
 import { historyErrorText, useHistoryApi } from './historyApi';
-import { changeGroupsOf, restorableId, restoredText, rowMetaText, scopeThing, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, viewerTimeZone, whenText } from './historyModel';
+import { changeGroupsOf, HISTORY_COPY, isRemovedLineRow, restorableId, restoredText, rowMetaText, scopeThing, STALE_CHECK_SCOPES, staleConfirmText, staleImpact, viewerTimeZone, whenText } from './historyModel';
 import { runHistoryAction, undoLastRestore } from './historyActions';
 import { requestOpenHistory } from './openHistory';
-import type { HistoryStudio } from './useHistory';
-import { Note, PrimaryBtn, QuietBtn, RestoredToast } from './ui';
+import { findLatestAiRow, type HistoryStudio } from './useHistory';
+import { Mark, Note, PrimaryBtn, QuietBtn, RestoredToast } from './ui';
 
 const scopeWords = (scope: RestoreScope | undefined, doc: HistoryStudio['doc']): string => {
   const n = (id: string) => doc?.pages.find((p) => p.id === id)?.n;
@@ -58,6 +58,8 @@ const scopeWords = (scope: RestoreScope | undefined, doc: HistoryStudio['doc']):
 interface Loaded {
   row?: VersionRow;
   rows?: VersionRow[];
+  /** list: the line listed (null = "Original"): a row of another line came from a version the creator removed. */
+  line?: string | null;
   lines?: string[];
   changed?: number;
   compareFrom?: string | null;
@@ -107,11 +109,13 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         };
       }
       if (view === 'undo_ai') {
-        const res = await api.list(projectId, { filter: 'ai', limit: 1 }, { signal });
-        return { ...(res.rows[0] ? { row: res.rows[0] } : {}) };
+        // The latest AI run of the book you're on — never a removed version's, even when its runs fill the newest
+        // window (the same lookup as the panel's: findOwnRow reads older pages).
+        const row = await findLatestAiRow(api, projectId, { signal });
+        return { ...(row ? { row } : {}) };
       }
       const res = await api.list(projectId, { limit: 3 }, { signal });
-      return { rows: res.rows };
+      return { rows: res.rows, line: res.line ?? null };
     };
     load()
       .then((d) => !signal.aborted && setData(d))
@@ -176,6 +180,12 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         {error && <Note tone="attention">{error}</Note>}
         {!data && !error && <p className="m-0 text-[13px] text-[var(--ds-muted)]">Loading…</p>}
         {data?.row && view !== 'compare' && <p className="m-0 text-[12.5px] tabular-nums text-[var(--ds-muted)] [overflow-wrap:anywhere]">{rowMetaText(data.row, money, tz)}</p>}
+        {/* A moment's detail names no line: read as Original's (before H7 the creator is always on it). */}
+        {data?.row && view === 'moment' && isRemovedLineRow(data.row, null) && (
+          <p className="m-0" data-moment-removed>
+            <Mark icon={<Layers className="h-3 w-3" aria-hidden />}>{HISTORY_COPY.removedLine}</Mark>
+          </p>
+        )}
         {data?.lines && data.lines.length > 0 && (
           <ul className="m-0 list-disc space-y-0.5 pl-5 text-[13px] text-[var(--ds-ink)]">
             {data.lines.map((l) => (
@@ -188,8 +198,14 @@ export const HistoryCardView: React.FC<CardProps<HistoryCardData> & { now?: numb
         {data?.rows && (
           <ul className="m-0 list-none space-y-1 p-0">
             {data.rows.map((r) => (
-              <li key={r.id} className="text-[13px] text-[var(--ds-ink)] [overflow-wrap:anywhere]">
+              <li key={r.id} className="text-[13px] text-[var(--ds-ink)] [overflow-wrap:anywhere]" data-moment-removed={isRemovedLineRow(r, data.line ?? null) ? '' : undefined}>
                 <span className="font-medium">{r.name || r.label}</span> <span className="text-[var(--ds-muted)]">· {rowMetaText(r, money, tz)}</span>
+                {isRemovedLineRow(r, data.line ?? null) && (
+                  <>
+                    {' '}
+                    <Mark icon={<Layers className="h-3 w-3" aria-hidden />}>{HISTORY_COPY.removedLine}</Mark>
+                  </>
+                )}
               </li>
             ))}
           </ul>

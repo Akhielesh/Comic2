@@ -10,6 +10,7 @@ vi.mock('../../../services/apiClient', () => ({ get: getMock, post: postMock, de
 
 import { historyFixture } from './__scenes__/historyFixtures';
 import { asListResponse, asVersionRow, HISTORY_ROUTES, HISTORY_URL_BATCH, httpHistoryApi } from './historyApi';
+import { createFakeHistoryApi } from './historyApi.fake';
 
 beforeEach(() => {
   getMock.mockReset();
@@ -81,5 +82,52 @@ describe('parsing', () => {
     expect(r.thumbs).toHaveLength(1);
     expect(r.createdAt).toBe(5);
     expect(asListResponse(null)).toEqual({ rows: [], next: null, urls: {} });
+  });
+});
+
+describe('lines: the list says which line it is and where you are (H1 store.list / store.head)', () => {
+  it('reads line and head when the server sends them — a string, or null — and never invents them', () => {
+    const row = fx().versions[0].row;
+    expect(asListResponse({ rows: [row], next: null, urls: {}, line: null, head: 'ver_edit' })).toMatchObject({ line: null, head: 'ver_edit' });
+    expect(asListResponse({ rows: [], line: 'alt_1', head: null })).toMatchObject({ line: 'alt_1', head: null });
+    const bare = asListResponse({ rows: [] });
+    expect('line' in bare).toBe(false);
+    expect('head' in bare).toBe(false);
+    const junk = asListResponse({ rows: [], line: 42, head: { id: 'x' } });
+    expect('line' in junk).toBe(false);
+    expect('head' in junk).toBe(false);
+    // A row keeps its alternativeId through parsing (the removed-version label reads it).
+    expect(asVersionRow({ ...row, alternativeId: 'alt_gone' })!.alternativeId).toBe('alt_gone');
+  });
+
+  const lineFixture = (activeLine: string | null = null) => {
+    const f = fx();
+    const own = f.versions;
+    const at = (min: number) => own[0].row.createdAt + min * 60_000;
+    const extra = (id: string, alternativeId: string, min: number) => ({ row: { ...own[0].row, id, alternativeId, contentAt: at(min), createdAt: at(min) }, doc: own[0].doc });
+    return createFakeHistoryApi({
+      live: () => f.live,
+      versions: [extra('ver_live_2', 'alt_live', 3), extra('ver_gone', 'alt_gone', 2), extra('ver_live_1', 'alt_live', 1), ...own],
+      lines: [{ id: 'alt_gone', removed: true }, { id: 'alt_live' }],
+      activeLine
+    });
+  };
+
+  it('the fake models them as the store does: Original carries removed lines\' rows (not a live line\'s); its head is its own newest row', async () => {
+    const res = await lineFixture().list('p1');
+    const ids = res.rows.map((r) => r.id);
+    expect(ids[0]).toBe('ver_gone'); // newer than Original's own newest row
+    expect(ids).not.toContain('ver_live_1');
+    expect(ids).not.toContain('ver_live_2');
+    expect(res.line).toBeNull();
+    expect(res.head).toBe(fx().versions[0].row.id);
+    // On a live line: its rows only; its head is its own newest row (store.head), as the server sends it.
+    const onLine = await lineFixture('alt_live').list('p1');
+    expect(onLine.rows.map((r) => r.id)).toEqual(['ver_live_2', 'ver_live_1']);
+    expect(onLine).toMatchObject({ line: 'alt_live', head: 'ver_live_2' });
+    // A removed line is not found: nothing listed, no head.
+    const gone = await lineFixture('alt_gone').list('p1');
+    expect(gone.rows).toEqual([]);
+    expect(gone.head).toBeNull();
   });
 });

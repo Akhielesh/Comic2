@@ -70,6 +70,17 @@ export interface HistoryListResponse {
   next: string | null;
   /** Signed thumbnail URLs by storage path. */
   urls: Record<string, string>;
+  /**
+   * The line this list is (H1 store.list): null = "Original". Absent = not said, read as Original (before H7 the
+   * creator is always on Original). Original's list also carries the rows of lines the creator removed — each keeps
+   * its own non-null alternativeId (historyModel isRemovedLineRow).
+   */
+  line?: string | null;
+  /**
+   * "You're here": the listed line's head (H1 store.head(line)?.id) — Original's own newest row, never a removed
+   * line's row and never simply rows[0]. null = the line has no row yet; absent = not said (historyModel hereRowId).
+   */
+  head?: string | null;
 }
 
 export interface VersionBookResponse {
@@ -159,12 +170,23 @@ export const asVersionRow = (v: unknown): VersionRow | null => {
   };
 };
 
+/** An optional id field: a string, null when the wire says null, absent otherwise (never a made-up value). */
+const optId = (o: Record<string, unknown>, key: string): { [k: string]: string | null } => {
+  if (!(key in o)) return {};
+  const v = o[key];
+  if (v === null) return { [key]: null };
+  const s = str(v);
+  return s ? { [key]: s } : {};
+};
+
 export const asListResponse = (v: unknown): HistoryListResponse => {
   const o = isObj(v) ? v : {};
   return {
     rows: (Array.isArray(o.rows) ? o.rows : []).map(asVersionRow).filter((r): r is VersionRow => !!r),
     next: str(o.next) ?? null,
-    urls: asUrlMap(o.urls)
+    urls: asUrlMap(o.urls),
+    ...optId(o, 'line'),
+    ...optId(o, 'head')
   };
 };
 

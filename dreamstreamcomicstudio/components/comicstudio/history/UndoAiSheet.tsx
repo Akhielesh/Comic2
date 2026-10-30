@@ -13,10 +13,10 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import type { UndoAiDecision, VersionRow } from '../../../shared/comic/history/types';
-import { SEGMENTED_ACTIVE, SEGMENTED_ITEM, SEGMENTED_TRACK, STATUS_INK } from '../../chat/studioDesign';
+import { SEGMENTED_TRACK, STATUS_INK } from '../../chat/studioDesign';
 import { HISTORY_COPY, undoAiPreview, whenText } from './historyModel';
 import { useLatestAiRow, useVersionBook, type HistoryStudio } from './useHistory';
-import { cx, HistorySheet, PrimaryBtn, QuietBtn } from './ui';
+import { cx, HistorySheet, PrimaryBtn, QuietBtn, segmentClass } from './ui';
 
 export interface UndoAiSheetProps {
   studio: HistoryStudio;
@@ -105,7 +105,7 @@ export const UndoAiSheet: React.FC<UndoAiSheetProps> = ({ studio, open, refresh,
                   ).map(([d, label]) => {
                     const on = c.keys.every((k) => decisions[k] === d);
                     return (
-                      <button key={d} type="button" role="radio" aria-checked={on} onClick={() => setGroup(c.keys, d)} className={cx(SEGMENTED_ITEM, 'min-h-11', on && SEGMENTED_ACTIVE)}>
+                      <button key={d} type="button" role="radio" aria-checked={on} onClick={() => setGroup(c.keys, d)} className={segmentClass(on)}>
                         {label}
                       </button>
                     );

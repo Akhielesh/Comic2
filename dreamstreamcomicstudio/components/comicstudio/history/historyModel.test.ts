@@ -1,13 +1,19 @@
 // The History view model (package H5): time words in the viewer's zone, money words, filters, the scrubber's spoken
 // value, the scopes "Use then" sends, the whole-book restore preview (computed with the shared engine), the undo-AI
-// preview, and the "Earlier (images only)" items of an older comic.
+// preview, and what "Use this version" opens from an "Earlier (images only)" moment.
 
 import { describe, expect, it } from 'vitest';
 import { collectAssetPaths, normalizeDoc } from '../../../shared/comic/doc';
 import { historyFixture, HISTORY_NOW, HISTORY_TZ } from './__scenes__/historyFixtures';
+import { earlierHistory, earlierMoments, historyRestoreOp, restoreOps, type EarlierMoment } from '../../../shared/comic/history/index';
+import { applyOps } from '../../../shared/comic/ops';
+import { collectMedia } from '../timeline/bookModel';
 import {
-  earlierImageGroups,
+  earlierUseOf,
   filterRows,
+  hereRowId,
+  HISTORY_COPY,
+  isRemovedLineRow,
   languageScope,
   lineScope,
   mergeLiveRow,
@@ -144,19 +150,117 @@ describe('undo the last AI change (preview)', () => {
   });
 });
 
-describe('"Earlier (images only)"', () => {
-  it('a v4 comic’s older drawings, newest first by day, only paths the comic holds, none of the current images', () => {
-    const f = historyFixture('v4');
-    const start = f.versions[0].row.contentAt;
-    const groups = earlierImageGroups(f.live, start, HISTORY_NOW, HISTORY_TZ);
-    const items = groups.flatMap((g) => g.items);
-    expect(items).toHaveLength(5);
-    const held = new Set(collectAssetPaths(f.live));
-    for (const it of items) {
-      expect(held.has(it.path)).toBe(true);
-      expect(it.current).toBe(false);
+describe('"Earlier (images only)": what "Use this version" opens (H6a FIX note 1)', () => {
+  const v4 = () => historyFixture('v4').live;
+  const before = () => historyFixture('v4').versions[0].row.createdAt;
+  const momentsOf = (doc = v4()) => earlierHistory(doc, { now: HISTORY_NOW, tz: HISTORY_TZ, before: before() }).moments;
+  const find = (ms: EarlierMoment[], pred: (m: EarlierMoment) => boolean) => {
+    const m = ms.find(pred);
+    expect(m, 'the fixture has such a moment').toBeTruthy();
+    return m!;
+  };
+
+  it('an older drawing of a live page opens that page’s own MediaPreview item (matched on path and owner)', () => {
+    const doc = v4();
+    const older = find(momentsOf(doc), (m) => m.kind === 'drawing' && !m.current && m.owner.key === 'page:pg_3');
+    const use = earlierUseOf(doc, older)!;
+    expect(use.items).toEqual(collectMedia(doc));
+    expect(use.items[use.index].path).toBe(older.path);
+    expect(use.items[use.index].owner.key).toBe('page:pg_3');
+    // Every path offered is one the comic holds (the item list is the timeline's own).
+    const held = new Set(collectAssetPaths(doc));
+    for (const it of use.items) expect(held.has(it.path)).toBe(true);
+  });
+
+  it('is not offered for a drawing already in the book, one held back, one with no live target, or a non-drawing', () => {
+    const doc = v4();
+    const ms = momentsOf(doc);
+    expect(earlierUseOf(doc, find(ms, (m) => m.current && m.owner.key === 'page:pg_1'))).toBeNull();
+    expect(earlierUseOf(doc, find(ms, (m) => m.owner.kind === 'style_board'))).toBeNull(); // no target
+    const older = find(ms, (m) => !m.current && m.owner.key === 'page:pg_2');
+    expect(earlierUseOf(doc, { ...older, blocked: true })).toBeNull();
+    expect(earlierUseOf(doc, { ...older, kind: 'deleted' })).toBeNull();
+    expect(earlierUseOf(doc, { ...older, owner: { ...older.owner, target: undefined } })).toBeNull();
+    // Exactly the five older page drawings of the v4 fixture can be used.
+    expect(ms.filter((m) => earlierUseOf(doc, m)).map((m) => m.owner.key).sort()).toEqual(['page:pg_1', 'page:pg_2', 'page:pg_3', 'page:pg_4', 'page:pg_5']);
+  });
+
+  it('a frame picture or overlay a restore displaced (archived under its page) is never offered as the page’s drawing', () => {
+    const base = v4();
+    const page = base.pages[1];
+    const STICKER = 'u/user-a/p/proj-v4/refs/sticker.webp';
+    const TAKE = 'u/user-a/p/proj-v4/img/frame-take.webp';
+    const at = before() - 60_000;
+    const bx = { x: 0.1, y: 0.1, w: 0.2, h: 0.2 };
+    const framed = applyOps(base, [
+      { op: 'page_frames', pageId: page.id, artMode: 'panels', frames: page.panels.map((pn, i) => ({ panelId: pn.id, frame: { box: { x: 0.02, y: 0.02 + i * 0.3, w: 0.96, h: 0.28 }, ...(i === 0 ? { src: { path: TAKE } } : {}) } })), moveBalloons: false },
+      { op: 'layer', pageId: page.id, id: 'ly_sticker', patch: { kind: 'image', box: bx, src: { path: STICKER }, print: false } }
+    ], at);
+    // The page comes back from before it was put in frames: the I1 net archives both pictures under the page.
+    const doc = applyOps(framed, [historyRestoreOp(restoreOps(framed, base, { kind: 'page', pageId: page.id, mode: 'replace', part: 'all' }), { versionId: 'v', at })], at);
+    expect((doc.archive || []).filter((a) => a.path === STICKER || a.path === TAKE).map((a) => [a.path, a.targetKey, a.label])).toEqual(
+      expect.arrayContaining([[TAKE, `page:${page.id}`, `Page ${page.n} panel picture`], [STICKER, `page:${page.id}`, `Page ${page.n} overlay`]])
+    );
+    const ms = earlierHistory(doc, { now: HISTORY_NOW, tz: HISTORY_TZ, before: before() }).moments;
+    for (const path of [STICKER, TAKE]) {
+      const m = find(ms, (x) => x.path === path && x.owner.key === `page:${page.id}`);
+      expect(m.archived, path).toBe(true);
+      expect(earlierUseOf(doc, m), path).toBeNull();
     }
-    for (let i = 1; i < items.length; i += 1) expect(items[i - 1].at).toBeGreaterThanOrEqual(items[i].at);
-    expect(earlierImageGroups(historyFixture('empty').live, null, HISTORY_NOW, HISTORY_TZ)).toEqual([]);
+    // The page's real older drawings are still offered.
+    expect(ms.filter((m) => m.owner.key === `page:${page.id}` && earlierUseOf(doc, m)).length).toBeGreaterThan(0);
+  });
+
+  it('a path page 5 shares with page 4 opens a one-item list in page 5’s context, never page 4’s item', () => {
+    const live = v4();
+    const p4Older = live.pages[3].render.history[0];
+    // Page 5 reuses page 4's older drawing in its own versions (collectMedia keeps the first owner: page 4).
+    const doc = normalizeDoc({ ...live, pages: live.pages.map((p) => (p.id === 'pg_5' ? { ...p, render: { ...p.render, history: [p4Older, ...p.render.history] } } : p)) });
+    const shared = earlierMoments(doc, { before: before() }).filter((m) => m.path === p4Older.path);
+    expect(shared.map((m) => m.owner.key).sort()).toEqual(['page:pg_4', 'page:pg_5']);
+    expect(collectMedia(doc).filter((i) => i.path === p4Older.path).map((i) => i.owner.key)).toEqual(['page:pg_4']);
+
+    const forPage4 = earlierUseOf(doc, shared.find((m) => m.owner.key === 'page:pg_4')!)!;
+    expect(forPage4.items[forPage4.index].owner.key).toBe('page:pg_4');
+
+    const m5 = shared.find((m) => m.owner.key === 'page:pg_5')!;
+    const forPage5 = earlierUseOf(doc, m5)!;
+    expect(forPage5.index).toBe(0);
+    expect(forPage5.items).toHaveLength(1);
+    expect(forPage5.items[0]).toMatchObject({
+      path: p4Older.path,
+      owner: { key: 'page:pg_5', label: 'Page 5', order: m5.owner.order, target: { kind: 'page', id: 'pg_5' } },
+      current: false,
+      versionN: m5.versionN,
+      versionLabel: `v${m5.versionN}`
+    });
+  });
+});
+
+describe('rows of a version you removed (H1 FIX note 4): never "you\'re here", never the top of Original', () => {
+  const rows = () => {
+    const f = historyFixture('v5');
+    const own = f.versions.map((v) => v.row);
+    const gone = { ...own[0], id: 'ver_gone', alternativeId: 'alt_gone', contentAt: HISTORY_NOW - 60_000, createdAt: HISTORY_NOW - 60_000 };
+    return [gone, ...own];
+  };
+
+  it('in Original\'s list a row with a non-null alternativeId came from a removed version; in a line\'s own list it did not', () => {
+    expect(isRemovedLineRow({ alternativeId: 'alt_gone' })).toBe(true);
+    expect(isRemovedLineRow({ alternativeId: 'alt_gone' }, null)).toBe(true);
+    expect(isRemovedLineRow({ alternativeId: null })).toBe(false);
+    expect(isRemovedLineRow({})).toBe(false);
+    expect(isRemovedLineRow({ alternativeId: 'alt_live' }, 'alt_live')).toBe(false);
+    expect(HISTORY_COPY.removedLine).toBe('From a version you removed');
+  });
+
+  it('"you\'re here" is the head the server read; without it, the line\'s newest own row — never rows[0] when that was removed', () => {
+    const list = rows();
+    expect(list[0].id).toBe('ver_gone');
+    expect(hereRowId(list, 'ver_draw')).toBe('ver_draw'); // head() wins, whatever the list order
+    expect(hereRowId(list, null)).toBeNull();
+    expect(hereRowId(list, undefined)).toBe(list[1].id); // Original's own newest row
+    expect(hereRowId(list, undefined, null, true)).toBeNull(); // a filtered list alone can't tell
+    expect(hereRowId(list.map((r) => ({ ...r, alternativeId: 'alt_live' })), undefined, 'alt_live')).toBe('ver_gone');
   });
 });

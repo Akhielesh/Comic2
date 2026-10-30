@@ -35,6 +35,27 @@ const subscribeToasts = (f: () => void) => {
 };
 const latestToastId = () => latestToast;
 
+/**
+ * Claims the one toast slot for a toast that is not a timeline edit's (History's restore toast, history/ui.tsx
+ * RestoredToast): every timeline toast on screen steps aside, exactly as for a newer edit. A newer claim — a timeline
+ * edit's toast or another claim — takes the slot back; `onLost`, when given, is told once when that happens. Returns
+ * the claim's id. Timeline toasts behave as before: the newest one owns the slot.
+ */
+export const claimUndoToast = (onLost?: () => void): number => {
+  toastSeq += 1;
+  const id = toastSeq;
+  publishToast(id);
+  if (onLost) {
+    const watch = () => {
+      if (latestToast === id) return;
+      toastSubs.delete(watch);
+      onLost();
+    };
+    toastSubs.add(watch);
+  }
+  return id;
+};
+
 export interface UndoEntry {
   id: number;
   /** "Page 3 deleted". */

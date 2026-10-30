@@ -11,6 +11,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities';
+import { earlierHistory } from '../../../shared/comic/history/index';
 import type { HistoryCard as HistoryCardData } from '../../../shared/comic/history/types';
 import { resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { openLayers, resetBackStack } from '../mobile/backStack';
@@ -28,6 +29,7 @@ import { WordDiff } from './WordDiff';
 import { HISTORY_KIT_SCENES, HistoryKitScene } from './__scenes__/HistoryScenes';
 import { parseQaParams } from '../testing/qaController';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
+import { textColours } from '../../../tests/config/textColours';
 import { fakeAct, historySetup, HISTORY_NOW, HISTORY_TZ, interactive, mountWith, overflowProblems, settle, TARGET_RE, type Mounted } from './history.testkit';
 
 const NOW = HISTORY_NOW;
@@ -103,6 +105,11 @@ const tour = async (width: number): Promise<{ name: string; root: HTMLElement }[
     const rf = panel(mf, req());
     await settle(6);
     out.push({ name: `${fixture} list`, root: document.querySelector<HTMLElement>('[data-history-sheet="History"]')! });
+    if (fixture === 'v4') {
+      fireEvent.click(screen.getByRole('button', { name: 'Page 3, v1: open' }));
+      await settle();
+      out.push({ name: 'earlier drawing sheet', root: document.querySelector<HTMLElement>('[data-history-sheet="Earlier drawing"]')! });
+    }
     rf.unmount();
     resetBackStack();
   }
@@ -113,7 +120,7 @@ describe('no horizontal overflow at 320 and 360 px in every sheet', () => {
   for (const width of [320, 360]) {
     it(`${width} px: nothing in the panel, its views or its sheets is wider than the phone`, async () => {
       const surfaces = await tour(width);
-      expect(surfaces.map((s) => s.name)).toEqual(['panel (list)', 'moment', 'compare', 'compare (blink)', 'reader', 'restore sheet', 'undo-AI sheet', 'save sheet', 'v4 list', 'classic list']);
+      expect(surfaces.map((s) => s.name)).toEqual(['panel (list)', 'moment', 'compare', 'compare (blink)', 'reader', 'restore sheet', 'undo-AI sheet', 'save sheet', 'v4 list', 'earlier drawing sheet', 'classic list']);
       for (const s of surfaces) {
         expect(s.root, s.name).toBeTruthy();
         expect(overflowProblems(s.root, width), s.name).toEqual([]);
@@ -158,6 +165,39 @@ describe('every target is at least 44 px', () => {
     expect(timeline.className).toMatch(/(^|\s)h-7(\s|$)/);
     expect(timeline.className).toMatch(/(^|\s)coarse:h-11(\s|$)/);
     expect(timeline.className).toMatch(/(^|\s)coarse:min-w-11(\s|$)/);
+  });
+});
+
+describe('segmented controls choose one ink per state (Atlas: never two text colours in one class list)', () => {
+  const check = (radios: HTMLElement[], name: string) => {
+    expect(radios.length, name).toBeGreaterThan(1);
+    expect(radios.filter((r) => r.getAttribute('aria-checked') === 'true'), name).toHaveLength(1);
+    for (const r of radios) {
+      const on = r.getAttribute('aria-checked') === 'true';
+      expect(r.getAttribute('role'), name).toBe('radio');
+      expect(r.className, name).toMatch(TARGET_RE);
+      expect(textColours(r.className), `${name}: ${r.textContent}`).toEqual([on ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]']);
+    }
+  };
+
+  it('the compare view\'s Then | Now | Swipe | Blink and the undo-AI sheet\'s Keep mine | Take the earlier one', async () => {
+    const m = historySetup();
+    const r = panel(m, req({ view: 'compare', versionId: 'ver_ai' }));
+    await settle(6);
+    const compare = view('compare');
+    check(within(compare).getAllByRole('radio'), 'compare');
+    fireEvent.click(within(compare).getByRole('radio', { name: 'Blink' }));
+    check(within(view('compare')).getAllByRole('radio'), 'compare after Blink');
+    r.unmount();
+    resetBackStack();
+
+    const u = historySetup({ fixture: 'v5-conflict' });
+    panel(u, req({ view: 'undo_ai' }));
+    await settle(10);
+    const sheet = document.querySelector<HTMLElement>('[data-undo-ai-sheet]')!;
+    const group = within(sheet).getAllByRole('radiogroup')[0];
+    fireEvent.click(within(group).getByRole('radio', { name: 'Keep mine' }));
+    check(within(group).getAllByRole('radio'), 'undo-AI choice');
   });
 });
 
@@ -503,8 +543,13 @@ describe('the empty, v4 "Earlier" and "Classic snapshots" states render', () => 
     const earlier = document.querySelector<HTMLElement>('[data-history-earlier]')!;
     expect(within(earlier).getByRole('heading', { name: 'Earlier (images only)' })).toBeInTheDocument();
     expect(earlier.textContent).toMatch(/Only drawings were recorded before \d+ [A-Z][a-z]{2}\./);
-    // The v4 fixture's five pages each hold one older drawing.
-    expect(within(earlier).getAllByRole('button', { name: /: open$/ })).toHaveLength(5);
+    // Rendered from the shared derivation (earlier.ts), before the start row's createdAt: every drawing the comic
+    // holds from before History — each page's drawing and its older one, the cover, the four sheets, the style board.
+    const shared = earlierHistory(m.fixture.live, { now: NOW, tz: TZ, before: m.fixture.versions[0].row.createdAt });
+    expect(shared.drawings).toBe(16);
+    expect(within(earlier).getAllByRole('button', { name: /: open$/ })).toHaveLength(shared.moments.filter((x) => x.path).length);
+    expect(Array.from(earlier.querySelectorAll('[data-earlier-day]')).map((d) => d.getAttribute('data-earlier-day'))).toEqual(shared.days.map((d) => d.key));
+    expect(earlier.textContent).toContain(shared.note);
     expect(document.querySelector('[data-moment="ver_start"]')).toHaveTextContent('History starts here');
   });
 
@@ -520,6 +565,75 @@ describe('the empty, v4 "Earlier" and "Classic snapshots" states render', () => 
 });
 
 // ── Card ─────────────────────────────────────────────────────────────────────
+
+describe('"Earlier (images only)" renders the shared derivation (H6a): facts, money words, "Use this version"', () => {
+  const NO_DOLLARS = /\$\s?\d|<\$/;
+  const open = async (m: Mounted, name: string): Promise<HTMLElement> => {
+    fireEvent.click(screen.getByRole('button', { name }));
+    await settle();
+    return document.querySelector<HTMLElement>('[data-earlier-detail]')!;
+  };
+
+  it('a moment lists its facts; a governed user reads usage, never dollars; a dollar viewer reads the cost', async () => {
+    showUsagePrices(1);
+    const g = historySetup({ fixture: 'v4' });
+    const r = panel(g, req());
+    await settle(6);
+    const detail = await open(g, 'Page 3, v1: open');
+    expect(detail.textContent).toContain('AI drew page 3');
+    expect(detail.querySelector('[data-earlier-facts]')!.textContent).toMatch(/Drawn by AI/);
+    expect(detail.textContent).toContain('Drawn with Nano Banana 2.1');
+    expect(detail.textContent).toMatch(/of your usage/);
+    expect(detail.textContent).not.toMatch(NO_DOLLARS);
+    expect(document.querySelector('[data-history-earlier]')!.textContent).not.toMatch(NO_DOLLARS);
+    r.unmount();
+    resetBackStack();
+
+    showDollarPrices();
+    const d = historySetup({ fixture: 'v4' });
+    panel(d, req());
+    await settle(6);
+    expect((await open(d, 'Page 3, v1: open')).textContent).toContain('$0.04');
+  });
+
+  it('"Use this version" only for an older drawing of a live target; it opens that page’s MediaPreview', async () => {
+    const m = historySetup({ fixture: 'v4' });
+    panel(m, req());
+    await settle(6);
+    // In the book now: no "Use this version".
+    const current = await open(m, 'Page 3, v2: open');
+    expect(current.textContent).toContain('In the book now');
+    expect(within(current).queryByRole('button', { name: 'Use this version' })).toBeNull();
+    // The style board has no render target: no "Use this version" either.
+    const board = await open(m, 'Style board, v1: open');
+    expect(board.textContent).toContain('AI drew the style board');
+    expect(within(board).queryByRole('button', { name: 'Use this version' })).toBeNull();
+    // An older drawing of page 3: offered, and it opens the timeline's preview on that very image.
+    const older = await open(m, 'Page 3, v1: open');
+    fireEvent.click(within(older).getByRole('button', { name: 'Use this version' }));
+    await settle();
+    const sheet = document.querySelector<HTMLElement>('[data-history-sheet="Earlier drawing"]')!;
+    expect(sheet.querySelector('[data-earlier-detail]')).toBeNull();
+    expect(within(sheet).getByRole('img', { name: /Page 3, v1/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Use for this page' })).toBeInTheDocument();
+    // Nothing was sent by opening it.
+    expect(m.studio.patch).not.toHaveBeenCalled();
+  });
+
+  it('the day labels follow the local day of now (memoised on the day, not the minute)', async () => {
+    const m = historySetup({ fixture: 'v4' });
+    const r = mountWith(m, <HistoryBrowser studio={m.studio} open request={req()} now={NOW} tz={TZ} />);
+    await settle(6);
+    const label = () => document.querySelector('[data-earlier-day] p')!.textContent;
+    expect(label()).toBe('Today');
+    r.rerender(m.wrap(<HistoryBrowser studio={m.studio} open request={null} now={NOW + 60_000} tz={TZ} />));
+    await settle();
+    expect(label()).toBe('Today');
+    r.rerender(m.wrap(<HistoryBrowser studio={m.studio} open request={null} now={NOW + 86_400_000} tz={TZ} />));
+    await settle();
+    expect(label()).toBe('Yesterday');
+  });
+});
 
 describe('the history card renders from ids', () => {
   const msg = { id: 'm', role: 'assistant' as const, text: '', at: NOW };
