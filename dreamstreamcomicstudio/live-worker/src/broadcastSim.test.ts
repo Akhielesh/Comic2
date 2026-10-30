@@ -304,6 +304,11 @@ afterEach(() => {
   clearMemberCache();
 });
 
+// Each case simulates a whole stream-hour (thousands of segment requests and chat/emoji events) in memory: CPU-bound
+// work that takes about a second alone but several on a busy machine (a full suite beside other runs), so the cases
+// get their own budget instead of vitest's 5 s default.
+const STREAM_HOUR_TIMEOUT_MS = 30_000;
+
 describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
   it('100 viewers: DO requests and rows per stream-hour, before vs after, and nothing people rely on broke', async () => {
     const sc = { viewers: 100, chatPerViewerHour: 6, emojiPerViewerHour: 12 };
@@ -320,7 +325,7 @@ describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
     const rail = r.sim.doRequests() - audience;
     expect(rail).toBeLessThanOrEqual(800);
     expect(r.sim.doRequests()).toBeLessThan(BEFORE.v100.doRequests * 0.6);
-  });
+  }, STREAM_HOUR_TIMEOUT_MS);
 
   it('20 viewers (the doc’s baseline, ≈ 1,371 requests): ≤ 800 DO requests and ≤ 1,000 rows per stream-hour', async () => {
     const sc = { viewers: 20, chatPerViewerHour: 6, emojiPerViewerHour: 12 };
@@ -329,7 +334,7 @@ describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
     await expectNothingBroke(r, sc);
     expect(r.sim.doRequests()).toBeLessThanOrEqual(800);
     expect(r.sim.rows()).toBeLessThanOrEqual(1000);
-  });
+  }, STREAM_HOUR_TIMEOUT_MS);
 
   it('an ended event costs nothing to keep by day 9 (no R2, no alarm, a few KB of rows) and stays usable; its usage was written first', async () => {
     const r = await runStream({ viewers: 20, chatPerViewerHour: 6, emojiPerViewerHour: 12 });
@@ -365,5 +370,5 @@ describe('broadcast rail — a 1-hour stream, counted (C10)', () => {
     expect(((await invite.json()) as { status: string }).status).toBe('ended');
     const studio = await r.sim.open(r.id, `k=${encodeURIComponent(r.hostKey)}&name=Host`);
     expect(studio.msgs('hello')[0].you).toMatchObject({ role: 'host' });
-  });
+  }, STREAM_HOUR_TIMEOUT_MS);
 });

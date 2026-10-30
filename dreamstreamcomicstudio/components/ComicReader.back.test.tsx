@@ -129,9 +129,24 @@ const landed = async () => {
     await new Promise((r) => setTimeout(r, 30));
   });
 };
+/**
+ * Press Back and wait for the traversal itself (its popstate), not a fixed time: under a loaded machine jsdom's history
+ * task can land later than any fixed sleep. Then let the handlers' follow-up work (a deferred back(), state updates)
+ * settle for a beat.
+ */
 const back = async () => {
   await act(async () => {
+    const popped = new Promise<void>((resolve) => {
+      const done = () => {
+        window.removeEventListener('popstate', done);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, 2000);
+      window.addEventListener('popstate', done);
+    });
     window.history.back();
+    await popped;
     await new Promise((r) => setTimeout(r, 30));
   });
 };
