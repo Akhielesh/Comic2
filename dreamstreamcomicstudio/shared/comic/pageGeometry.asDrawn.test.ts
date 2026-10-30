@@ -1,7 +1,7 @@
 // The layout as drawn, shared (moved from server prompts.ts): effectiveLayout is the page's blueprint when it agrees
 // with its panels, else the blueprint synthesized from the sizes; drawnLayoutBoxes / drawnPanelBoxes measure it.
 import { describe, expect, it } from 'vitest';
-import type { Box, Page, PanelSize } from './doc';
+import { createEmptyDoc, type Box, type ComicDoc, type Page, type PanelSize } from './doc';
 import { drawnLayoutBoxes, drawnPanelBoxes, effectiveLayout, estimatePanelBoxes, harmonizePanelSizes, layoutConflicts, panelBoxesFor, parseLayout, synthesizeLayout } from './pageGeometry';
 
 const page = (layout: string, sizes: PanelSize[], qcBoxes?: Box[]): Page => ({
@@ -13,7 +13,7 @@ const page = (layout: string, sizes: PanelSize[], qcBoxes?: Box[]): Page => ({
   render: qcBoxes ? { status: 'ready', history: [], qc: { score: 1, issues: [], checkedAt: 1, panelBoxes: qcBoxes } } : { status: 'none', history: [] },
   balloons: []
 });
-const comic = { format: { kind: 'comic' as const, readingDirection: 'ltr' as const } };
+const comic: Pick<ComicDoc, 'format'> = { format: { ...createEmptyDoc('geo').format, kind: 'comic', readingDirection: 'ltr' } };
 
 describe('effectiveLayout (shared)', () => {
   it('keeps a blueprint that agrees with its panels; replaces one whose sizes contradict it', () => {
