@@ -145,10 +145,10 @@ export const HistoryBrowser: React.FC<HistoryBrowserProps> = ({ studio, open, re
   const start = startRowOf(rows);
   const classic = classicSourceOf(rows);
   const onlyStart = rows.length <= 1 && rows.every((r) => r.kind === 'start');
-  // When History started: the start row once it is loaded; with every moment loaded and no start row, the oldest
-  // moment (History began no later). Unknown while older moments are still unloaded — "Earlier (images only)" waits
-  // rather than listing drawings made after History started.
-  const startedAt: number | null | undefined = start ? start.contentAt : list.hasMore ? undefined : rows[rows.length - 1]?.contentAt ?? null;
+  // When History started (the shared Earlier derivation's `before`): the start row's createdAt once it is loaded; with
+  // every moment loaded and no start row, the oldest moment's (History began no later). Unknown while older moments
+  // are still unloaded — "Earlier (images only)" waits rather than listing drawings made after History started.
+  const startedAt: number | null | undefined = start ? start.createdAt : list.hasMore ? undefined : rows[rows.length - 1]?.createdAt ?? null;
 
   // ── Actions (all free) ──────────────────────────────────────────────────────
 

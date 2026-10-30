@@ -9,6 +9,7 @@
 //   describe  plain-word labels (§4.3)
 //   when      "this morning" / "yesterday" in the user's time zone (§9)
 //   lastAi    "Undo the last AI change" three-way plan (§6.4)
+//   earlier   "Earlier (images only)" for comics older than History: dated drawings per owner and per local day
 //
 // Import it from 'shared/comic/history/index.js' (shared/comic/index.ts does not re-export it). Nothing under
 // server/src/comic/publication/**, comics-edge/** or the public reader router imports history (§12).
@@ -22,3 +23,4 @@ export * from './touched.js';
 export * from './describe.js';
 export * from './when.js';
 export * from './lastAi.js';
+export * from './earlier.js';

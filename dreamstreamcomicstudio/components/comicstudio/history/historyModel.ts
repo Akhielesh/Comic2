@@ -4,8 +4,9 @@
 // icons, the money words of a row (governed users read usage, never dollars; own-key rows say "on your key"), the
 // day groups, the filter chips, the scrubber's spoken value, what a whole-book restore would do (computed with the
 // shared engine — restoreOps → history_restore → applyOps — never re-implemented here), the RestoreScope each
-// "Use then" sends, the language status words, the undo-AI plan preview, the "Earlier (images only)" items of an
-// older comic, and the no-git-words guard. No React, no network.
+// "Use then" sends, the language status words, the undo-AI plan preview, what "Use this version" opens from an
+// "Earlier (images only)" moment (the moments themselves come from shared/comic/history/earlier.ts), and the
+// no-git-words guard. No React, no network.
 
 import { isPageStale, type ComicDoc, type Line, type Page } from '../../../shared/comic/doc';
 import { editionProgress, i18nOf, translationStatus } from '../../../shared/comic/i18n';
@@ -33,6 +34,7 @@ import {
   type ChangeGroup,
   type ChangeItem,
   type CompareSide,
+  type EarlierMoment,
   type HistoryActor,
   type RestorePart,
   type RestoreScope,
@@ -561,38 +563,36 @@ export const undoAiPreview = (P: ComicDoc, R: ComicDoc, live: ComicDoc, decision
   return { plan, conflicts, revertText: revertNs.length ? pageRangeText(revertNs) : plan.revert.length ? 'the rest' : '' };
 };
 
-// ── "Earlier (images only)" for comics older than History (§8, §11) ──────────
-
-export interface EarlierGroup {
-  label: string;
-  items: MediaItem[];
-}
-
-const EARLIER_ROLES: ReadonlySet<MediaItem['role']> = new Set(['page', 'cover', 'sheet', 'place', 'style_option', 'deleted_page']);
+// ── "Earlier (images only)": "Use this version" (§8, §11; the moments come from shared earlier.ts) ─────────
 
 /**
- * The drawings an older comic already holds (every version and archived image, from AssetRef.at), older than the
- * moment History started — newest first, by day. A missing date reads "Date not recorded". (Shared derivation:
- * shared/comic/history/earlier.ts, H6a, replaces this adapter when it lands — see the wave notes.)
+ * What "Use this version" opens for an Earlier moment (H6a): MediaPreview's items and index, or null when it is not
+ * offered — only a drawing that is not held back, not already in the book, and whose owner is a live render target
+ * (a Deleted page goes through MediaPreview's own Restore; style-board and removed owners have no target).
+ * collectMedia keeps one item per path (the first owner wins) while Earlier lists a path once per owner (page 5
+ * reusing page 4's drawing): the item is matched on path AND owner. When another owner holds the path, page 4's item
+ * is never opened — a one-item list where the path's item takes this moment's owner, so MediaPreview's versionList,
+ * refusal and render_use rules apply in the right page's context.
  */
-export const earlierImageGroups = (doc: ComicDoc, startedAt: number | null, now: number, tz: string): EarlierGroup[] => {
-  const items = collectMedia(doc).filter((m) => EARLIER_ROLES.has(m.role) && !m.current && !m.blocked && (startedAt === null || !(m.at > 0) || m.at < startedAt));
-  items.sort((a, b) => (b.at || 0) - (a.at || 0) || a.owner.order - b.owner.order);
-  const out: EarlierGroup[] = [];
-  for (const item of items) {
-    const label = item.at > 0 ? dayGroupLabel(item.at, now, tz) : 'Date not recorded';
-    const last = out[out.length - 1];
-    if (last && last.label === label) last.items.push(item);
-    else out.push({ label, items: [item] });
-  }
-  return out;
-};
-
-/** "Only drawings were recorded before 29 Oct." */
-export const earlierNote = (startedAt: number | null, tz: string): string => {
-  if (!startedAt) return 'Only drawings were recorded before History started.';
-  const p = localParts(startedAt, tz);
-  return `Only drawings were recorded before ${p.d} ${MONTHS[p.m - 1]}.`;
+export const earlierUseOf = (doc: ComicDoc, m: EarlierMoment): { items: MediaItem[]; index: number } | null => {
+  if (m.kind !== 'drawing' || m.blocked || m.current || !m.owner.target || !m.path) return null;
+  const items = collectMedia(doc);
+  const index = items.findIndex((i) => i.path === m.path && i.owner.key === m.owner.key);
+  if (index >= 0) return { items, index };
+  const held = items.find((i) => i.path === m.path);
+  if (!held) return null;
+  return {
+    items: [
+      {
+        ...held,
+        owner: { key: m.owner.key, label: m.owner.label, order: m.owner.order, target: m.owner.target },
+        current: m.current,
+        versionN: m.versionN,
+        versionLabel: `v${m.versionN}`
+      }
+    ],
+    index: 0
+  };
 };
 
 // ── Small helpers ────────────────────────────────────────────────────────────
