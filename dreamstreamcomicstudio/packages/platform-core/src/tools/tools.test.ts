@@ -6,13 +6,15 @@
 // - model-facing email ops are AgentEmailOp, never EmailOp: no set_recipients, no `actor` in the schema; a model's
 //   `actor` is deleted and the host stamps 'agent';
 // - toChatSpec matches the chat registry's toToolSpec shape; toDirectorSpec carries the director's cost prefix;
-// - every tool's capability exists; MCP never sees an external write; bindTools checks, gates, meters and audits.
+// - a model never places an image (no asset id, no data: URI) in any document, email, deck or attachment it writes;
+// - every tool's capability exists; MCP never sees an external write; bindTools checks, gates, meters and audits, and
+//   refuses to bind a metered tool without a meter; a ledger that cannot settle is reported, never hidden.
 import { readFileSync } from 'node:fs';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { Infer, JsonSchema } from '../contract/schema.js';
-import type { AgentEmailOp, EmailDoc } from '../contract/email.js';
+import type { AgentEmailOp, EmailBlock, EmailColumnBlock, EmailDoc } from '../contract/email.js';
 import type { DeckOp, DeckSpec } from '../contract/deck.js';
-import type { DocOp, RichDoc } from '../contract/richdoc.js';
+import type { DocBlock, DocOp, RichDoc } from '../contract/richdoc.js';
 import { s, toJsonSchema } from '../schema/index.js';
 import { SchemaDefinitionError } from '../errors.js';
 import { CAPABILITIES, getCapability } from '../capabilities.js';
@@ -20,6 +22,7 @@ import { CHAT_PRODUCT, COMIC_PRODUCT, defineProduct } from '../products.js';
 import { createFakeAudit, createFakeLedger, createIdSequence } from '../testing/fakePorts.js';
 import {
   AgentDeckOpSchema,
+  AgentDocOpSchema,
   AgentEmailOpInputSchema,
   DATA_NOT_INSTRUCTIONS,
   DIRECTOR_COST_PREFIX,
@@ -28,6 +31,7 @@ import {
   EmailDraftInputSchema,
   PLATFORM_TOOLS,
   PLATFORM_TOOL_NAMES,
+  RichDocBodySchema,
   RichDocSchema,
   bindTools,
   checkToolInput,
@@ -36,6 +40,7 @@ import {
   emailReviseTool,
   getPlatformTool,
   mcpToolsFor,
+  needsMeter,
   toChatSpec,
   toDirectorSpec,
   toMcpTool,
@@ -57,6 +62,20 @@ const KNOWN_TOOL_NAMES = chatRegistry.KNOWN_TOOL_NAMES;
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../../fixtures/contract/${name}`, import.meta.url), 'utf8'));
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** A copy of `value` with every image block or element removed, at any depth. */
+const withoutImages = <T>(value: T): T => {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.filter((x) => !(x && typeof x === 'object' && ((x as { type?: unknown }).type === 'image' || (x as { kind?: unknown }).kind === 'image'))).map(walk);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v)) out[k] = walk((v as Record<string, unknown>)[k]);
+      return out;
+    }
+    return v;
+  };
+  return walk(value) as T;
+};
 
 describe('every tool schema projects to the llm target (W1.1 waveNote 3)', () => {
   it('projects every input and output with llm, mcp and strict, and every llm property has a JSON type', () => {
@@ -107,12 +126,22 @@ describe('every tool schema projects to the llm target (W1.1 waveNote 3)', () =>
 });
 
 describe('the tool schemas are pinned to the frozen contract', () => {
-  it('Infer<schema> equals the contract types', () => {
+  it('Infer<schema> equals the contract types; the model-facing ones are the contract minus images', () => {
     expectTypeOf<Infer<typeof RichDocSchema>>().toEqualTypeOf<RichDoc>();
     expectTypeOf<Infer<typeof DeckSpecSchema>>().toEqualTypeOf<DeckSpec>();
     expectTypeOf<Infer<typeof DocOpSchema>>().toEqualTypeOf<DocOp>();
-    expectTypeOf<Infer<typeof EmailDraftInputSchema>>().toEqualTypeOf<Omit<EmailDoc, 'v' | 'rev' | 'attachments'>>();
-    expectTypeOf<Infer<typeof AgentEmailOpInputSchema>>().toEqualTypeOf<DistributiveOmit<AgentEmailOp, 'actor'>>();
+    // What a model writes is always a valid contract value (the host stamps v/rev/actor)…
+    expectTypeOf<Infer<typeof EmailDraftInputSchema>>().toExtend<Omit<EmailDoc, 'v' | 'rev' | 'attachments'>>();
+    expectTypeOf<Infer<typeof AgentEmailOpInputSchema>>().toExtend<DistributiveOmit<AgentEmailOp, 'actor'>>();
+    expectTypeOf<Infer<typeof AgentEmailOpInputSchema>['op']>().toEqualTypeOf<AgentEmailOp['op']>();
+    expectTypeOf<Infer<typeof AgentDocOpSchema>>().toExtend<DocOp>();
+    expectTypeOf<Infer<typeof AgentDocOpSchema>['op']>().toEqualTypeOf<DocOp['op']>();
+    expectTypeOf<Infer<typeof RichDocBodySchema>>().toExtend<Omit<RichDoc, 'v' | 'rev'>>();
+    // …with every block of the contract except images, nested ones included.
+    type DraftBlock = Infer<typeof EmailDraftInputSchema>['blocks'][number];
+    expectTypeOf<DraftBlock['type']>().toEqualTypeOf<Exclude<EmailBlock['type'], 'image'>>();
+    expectTypeOf<Extract<DraftBlock, { type: 'columns' }>['columns'][number]['blocks'][number]['type']>().toEqualTypeOf<Exclude<EmailColumnBlock['type'], 'image'>>();
+    expectTypeOf<Infer<typeof RichDocBodySchema>['sections'][number]['blocks'][number]['type']>().toEqualTypeOf<Exclude<DocBlock['type'], 'image'>>();
     // Agent decks hold every element but images; their ops are the contract's deck ops over those slides.
     expectTypeOf<Infer<typeof AgentDeckOpSchema>['op']>().toEqualTypeOf<DeckOp['op']>();
     expectTypeOf<Extract<Infer<typeof AgentDeckOpSchema>, { op: 'add_slide' }>['slide']['elements'][number]['kind']>().toEqualTypeOf<'text' | 'shape' | 'table' | 'chart'>();
@@ -124,10 +153,15 @@ describe('the tool schemas are pinned to the frozen contract', () => {
       for (const k of keys) delete out[k];
       return out;
     };
-    for (const name of ['richdoc/minimal.json', 'richdoc/full.json']) expect(checkToolInput(getPlatformTool('doc_create')!, strip(fixture(name) as Record<string, unknown>, 'v', 'rev')).errors).toBeUndefined();
-    for (const name of ['email/minimal.json', 'email/full.json', 'email/reply.json']) {
-      expect(checkToolInput(emailDraftTool, strip(fixture(name) as Record<string, unknown>, 'v', 'rev', 'attachments')).errors, name).toBeUndefined();
+    for (const name of ['richdoc/minimal.json', 'richdoc/full.json']) {
+      expect(checkToolInput(getPlatformTool('doc_create')!, withoutImages(strip(fixture(name) as Record<string, unknown>, 'v', 'rev'))).errors, name).toBeUndefined();
     }
+    for (const name of ['email/minimal.json', 'email/full.json', 'email/reply.json']) {
+      expect(checkToolInput(emailDraftTool, withoutImages(strip(fixture(name) as Record<string, unknown>, 'v', 'rev', 'attachments'))).errors, name).toBeUndefined();
+    }
+    // With their images, the full fixtures are refused: a model never places one.
+    expect(checkToolInput(getPlatformTool('doc_create')!, strip(fixture('richdoc/full.json') as Record<string, unknown>, 'v', 'rev')).ok).toBe(false);
+    expect(checkToolInput(emailDraftTool, strip(fixture('email/full.json') as Record<string, unknown>, 'v', 'rev', 'attachments')).ok).toBe(false);
     for (const op of fixture('richdoc/ops.json') as unknown[]) expect(checkToolInput(getPlatformTool('doc_revise')!, { draftId: 'd1', ops: [op] }).errors).toBeUndefined();
     for (const op of fixture('email/ops.json') as { op: string }[]) {
       expect(checkToolInput(emailReviseTool, { draftId: 'd1', ops: [op] }).ok, op.op).toBe(op.op !== 'set_recipients');
@@ -137,6 +171,33 @@ describe('the tool schemas are pinned to the frozen contract', () => {
     expect(checkToolInput(getPlatformTool('deck_create')!, noImages).errors).toBeUndefined();
     const withImage = checkToolInput(getPlatformTool('deck_create')!, strip(deck as unknown as Record<string, unknown>, 'v', 'rev'));
     expect(withImage.ok).toBe(false); // a model never places images: the host adds the ones it built
+  });
+
+  it('a model never places an image: no asset id (another user’s, say) and no data: URI, anywhere it writes', () => {
+    const someoneElses = { kind: 'asset', id: 'someone-elses-asset' };
+    const dataUri = { kind: 'data', dataUri: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==' };
+    const draft = { mode: 'compose', subject: 'Hi', to: [], blocks: [{ type: 'paragraph', id: 'p1', runs: [{ text: 'Hello' }] }] };
+    expect(checkToolInput(emailDraftTool, draft).ok).toBe(true);
+    for (const ref of [someoneElses, dataUri]) {
+      const image = { type: 'image', id: 'i1', ref, alt: 'x' };
+      expect(checkToolInput(emailDraftTool, { ...draft, blocks: [image] })).toMatchObject({ ok: false, errors: [{ path: 'blocks[0].type', code: 'tag' }] });
+      expect(checkToolInput(emailDraftTool, { ...draft, blocks: [{ type: 'columns', id: 'c1', columns: [{ blocks: [image] }] }] }).ok).toBe(false);
+      const revise = (op: unknown) => checkToolInput(emailReviseTool, { draftId: 'd1', ops: [op] });
+      expect(revise({ op: 'insert_block', id: 'o1', baseRev: 0, block: image }).ok).toBe(false);
+      expect(revise({ op: 'update_block', id: 'o1', baseRev: 0, blockId: 'p1', block: image }).ok).toBe(false);
+      const docAttachment = { id: 'a1', name: 'Notes', kind: 'pdf', spec: { type: 'doc', doc: { v: 1, title: 'Notes', sections: [{ id: 's1', pageBreakBefore: false, blocks: [image] }] } } };
+      const deckImage = { kind: 'image', id: 'e1', rect: [0, 0, 0.5, 0.5], layer: 'content', ref, alt: 'x' };
+      const deckAttachment = { id: 'a2', name: 'Deck', kind: 'pptx', spec: { type: 'deck', deck: { v: 1, title: 'Deck', size: '16:9', theme: { preset: 'light' }, slides: [{ id: 'sl1', layout: 'content', elements: [deckImage] }] } } };
+      expect(revise({ op: 'attach', id: 'o2', baseRev: 0, attachment: docAttachment }).ok).toBe(false);
+      expect(revise({ op: 'attach', id: 'o3', baseRev: 0, attachment: deckAttachment }).ok).toBe(false);
+      expect(checkToolInput(getPlatformTool('doc_create')!, { title: 'T', sections: [{ id: 's1', pageBreakBefore: false, blocks: [image] }] }).ok).toBe(false);
+      expect(checkToolInput(getPlatformTool('doc_revise')!, { draftId: 'd1', ops: [{ op: 'insert_block', id: 'o4', baseRev: 0, sectionId: 's1', block: image }] }).ok).toBe(false);
+      expect(checkToolInput(getPlatformTool('doc_propose_changes')!, { documentId: 'doc1', ops: [{ op: 'update_block', id: 'o5', baseRev: 0, blockId: 'b1', block: image }] }).ok).toBe(false);
+    }
+    // The same attachments without images pass.
+    expect(checkToolInput(emailReviseTool, { draftId: 'd1', ops: [{ op: 'attach', id: 'o6', baseRev: 0, attachment: { id: 'a1', name: 'Notes', kind: 'pdf', spec: { type: 'doc', doc: { v: 1, title: 'Notes', sections: [] } } } }] }).ok).toBe(true);
+    // No model-facing schema mentions an asset reference or a data URI at all.
+    for (const tool of PLATFORM_TOOLS) expect(JSON.stringify(toChatSpec(tool).parameters), tool.name).not.toMatch(/dataUri|"image"/);
   });
 
   it('caps the whole email body at 10,000 characters', () => {
@@ -276,6 +337,56 @@ describe('bindTools', () => {
     ledger.setDown(true);
     expect(await inspect.run({ fileRef: 'f-2' })).toMatchObject({ status: 'refused', code: 'disabled', reason: 'ledger-down' });
     expect(ledger.reservations).toHaveLength(1);
+  });
+
+  it('refuses to bind a metered tool without a meter, so no engine or paid call runs unmetered', () => {
+    let ran = 0;
+    const inspect = async () => (ran++, { pageCount: 1, formFields: 0, hasText: true, encrypted: false });
+    expect(() => bindTools(CHAT_PRODUCT, { handlers: { pdf_inspect: inspect }, now: () => 0, newId: createIdSequence('e') }, { wave: 2 })).toThrow(/ports\.meter/);
+    expect(ran).toBe(0);
+    // Not yet shipped (wave 1): nothing is bound, so nothing needs a meter.
+    expect(bindTools(CHAT_PRODUCT, { handlers: { pdf_inspect: inspect }, now: () => 0, newId: createIdSequence('e') })).toEqual([]);
+    // Text tools ride on the metered chat turn.
+    expect(bindTools(CHAT_PRODUCT, { handlers: { email_draft: async () => ({}) }, now: () => 0, newId: createIdSequence('e') })).toHaveLength(1);
+  });
+
+  it('meters engine jobs, quoted paid calls and every quota or spend gate', () => {
+    for (const tool of PLATFORM_TOOLS) expect(needsMeter(tool), tool.name).toBe(tool.cost === 'job' || tool.cost === 'job-heavy' || tool.gate === 'quota');
+    expect(needsMeter({ cost: 'paid', gate: 'none' })).toBe(true);
+    expect(needsMeter({ cost: 'text', gate: 'spend' })).toBe(true);
+    expect(needsMeter({ cost: 'text', gate: 'none' })).toBe(false);
+    expect(needsMeter({ cost: 'free', gate: 'external-write' })).toBe(false);
+  });
+
+  it('settles at the whole hold when the handler reports no cost', async () => {
+    const ledger = createFakeLedger({ governed: true });
+    const [inspect] = bindTools(CHAT_PRODUCT, { handlers: { pdf_inspect: async () => ({ pageCount: 1, formFields: 0, hasText: true, encrypted: false }) }, policy: { app: 'dreamstream', confirm: 'never' }, meter: ledger, now: () => 0, newId: createIdSequence('e') }, { wave: 2 });
+    expect(await inspect.run({ fileRef: 'f-1' })).toMatchObject({ status: 'ok' });
+    expect(await inspect.run({ fileRef: 'f-2' }, { estimateUsd: 0.01 })).toMatchObject({ status: 'ok' });
+    expect(ledger.reservations.map((r) => [r.estimateUsd, r.status, r.actualUsd])).toEqual([
+      [0.002, 'settled', 0.002],
+      [0.01, 'settled', 0.01],
+    ]);
+  });
+
+  it('a ledger that cannot settle or release is flagged on the outcome and audited, never hidden', async () => {
+    const ledger = createFakeLedger({ governed: true });
+    const audit = createFakeAudit();
+    const settleDown = Object.assign(Object.create(ledger), { settle: async () => ({ ok: false as const, code: 'unavailable' as const, message: 'down' }) });
+    const bind = (meter: typeof ledger, handler: ToolHandler) =>
+      bindTools(CHAT_PRODUCT, { handlers: { pdf_inspect: handler }, policy: { app: 'dreamstream', confirm: 'never' }, meter, audit, now: () => 0, newId: createIdSequence('e') }, { wave: 2 })[0];
+    const ok = await bind(settleDown, async (_i, ctx) => (ctx.reportCostUsd(0.0011), { pageCount: 2, formFields: 0, hasText: true, encrypted: false })).run({ fileRef: 'f-1' }, { userId: 'user-1' });
+    expect(ok).toMatchObject({ status: 'ok', settleFailed: true });
+    expect(audit.events).toContainEqual(expect.objectContaining({ tool: 'pdf_inspect', outcome: 'failed', errorCode: 'settle-failed', costMicros: 1100 }));
+    expect(ledger.reservations[0].status).toBe('reserved'); // stranded, for reconciliation
+    const releaseThrows = Object.assign(Object.create(ledger), { release: async () => Promise.reject(new Error('socket hang up')) });
+    const failed = await bind(releaseThrows, async () => Promise.reject(new Error('engine down'))).run({ fileRef: 'f-2' });
+    expect(failed).toMatchObject({ status: 'failed', code: 'engine-failed', settleFailed: true });
+    expect(audit.events.map((e) => e.errorCode)).toContain('release-failed');
+    // A healthy ledger leaves no flag.
+    const fine = await bind(ledger, async () => ({ pageCount: 1, formFields: 0, hasText: true, encrypted: false })).run({ fileRef: 'f-3' });
+    expect(fine).toMatchObject({ status: 'ok' });
+    expect((fine as { settleFailed?: true }).settleFailed).toBeUndefined();
   });
 
   it('an external write only PREPARES its draft action, under every policy', async () => {

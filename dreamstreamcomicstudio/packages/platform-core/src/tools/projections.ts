@@ -17,7 +17,7 @@ import type { ProductManifest } from '../products.js';
 import { decideGate, mayRunNow } from '../gates/gates.js';
 import type { GateDecision, HostPolicy } from '../gates/gates.js';
 import { JOB_FLOOR_HEAVY_USD, JOB_FLOOR_USD } from '../gates/ports.js';
-import type { MeterPort, MeterReserveResult } from '../gates/ports.js';
+import type { MeterPort, MeterReserveResult, MeterSettleResult } from '../gates/ports.js';
 import { auditEvent } from '../audit/event.js';
 import type { AuditDecision, AuditOutcome, AuditPort } from '../audit/event.js';
 import { inputHash } from '../audit/inputHash.js';
@@ -197,7 +197,11 @@ export interface BindToolsPorts {
   handlers: { [name: string]: ToolHandler | undefined };
   /** The user's policy (default: the manifest's). */
   policy?: HostPolicy;
-  /** Reserves the engine-job floor for `quota` tools (fails closed for a governed user). */
+  /**
+   * The user's ledger. REQUIRED when any bound tool reserves (`needsMeter`: gate `quota` or `spend`, cost `job`,
+   * `job-heavy` or `paid`): `bindTools` throws without it, so such a tool can never run unmetered. Fails closed for a
+   * governed user.
+   */
   meter?: MeterPort;
   audit?: AuditPort;
   /** Unix ms. */
@@ -222,13 +226,17 @@ export interface ToolCallContext {
   signal?: { readonly aborted: boolean };
 }
 
+/**
+ * `settleFailed`: the ledger could not settle or release this call's reservation (it threw or answered `{ok:false}`),
+ * so the hold is stranded until the host's reconciliation closes it; audited as `settle-failed` / `release-failed`.
+ */
 export type ToolCallOutcome =
-  | { status: 'ok'; output: unknown; decision: GateDecision; inputHash: string }
+  | { status: 'ok'; output: unknown; decision: GateDecision; inputHash: string; settleFailed?: true }
   | { status: 'invalid'; errors: CheckError[] }
   /** Nothing ran (or, for an external write, only the draft action was prepared): ask the person. */
   | { status: 'needs-approval'; decision: 'spend-confirm' | 'propose' | 'confirm'; inputHash: string; input: unknown; output?: unknown }
   | { status: 'refused'; code: 'forbidden' | 'quota' | 'disabled'; reason: string; message: string }
-  | { status: 'failed'; code: 'engine-failed' | 'invalid'; message: string };
+  | { status: 'failed'; code: 'engine-failed' | 'invalid'; message: string; settleFailed?: true };
 
 export interface BoundTool {
   name: PlatformToolName;
@@ -247,10 +255,19 @@ const opIdsOf = (value: unknown): string[] => {
 const floorFor = (cost: ToolCost): number => (cost === 'job-heavy' ? JOB_FLOOR_HEAVY_USD : JOB_FLOOR_USD);
 
 /**
+ * Does a call of `tool` reserve on the user's ledger before it runs? Engine jobs (`job`, `job-heavy`), quoted paid
+ * calls (`paid`) and every `quota` or `spend` gate: their spend must reach the ledger, and with it down a governed user
+ * fails closed (plan §5.6). Text and free tools ride on the already metered model turn.
+ */
+export const needsMeter = (tool: { cost: string; gate: string }): boolean =>
+  tool.gate === 'quota' || tool.gate === 'spend' || tool.cost === 'job' || tool.cost === 'job-heavy' || tool.cost === 'paid';
+
+/**
  * The host's executable tools for `manifest`: every tool the product lists, shipped by `options.wave`, that has a
- * handler. A handler for a tool the product does not list is a configuration error (throws). Each call:
- * parse → strip agent `actor`s → `check()` + refine → stamp ops → `maxPerTurn` → `decideGate` → (quota: reserve the
- * job floor) → handler → `check()` the output → settle/release → one content-free audit event.
+ * handler. A handler for a tool the product does not list, or a metered tool (`needsMeter`) bound without
+ * `ports.meter`, is a configuration error (throws). Each call: parse → strip agent `actor`s → `check()` + refine →
+ * stamp ops → `maxPerTurn` → `decideGate` → (metered: reserve the floor or the estimate) → handler → `check()` the
+ * output → settle/release (a failure is flagged and audited) → one content-free audit event.
  */
 export const bindTools = (manifest: ProductManifest, ports: BindToolsPorts, options: { wave?: PlatformWave } = {}): BoundTool[] => {
   for (const name of Object.keys(ports.handlers)) {
@@ -260,6 +277,11 @@ export const bindTools = (manifest: ProductManifest, ports: BindToolsPorts, opti
   }
   const policy = ports.policy || manifest.policy;
   const tools = toolsForProduct(manifest, options.wave === undefined ? CURRENT_WAVE : options.wave);
+  for (const tool of tools) {
+    if (ports.handlers[tool.name] && needsMeter(tool) && !ports.meter) {
+      throw new ToolProjectionError(`${tool.name} reserves on the user's ledger (gate ${tool.gate}, cost ${tool.cost}); bind it with ports.meter`);
+    }
+  }
   const bound: BoundTool[] = [];
   for (const tool of tools) {
     const handler = ports.handlers[tool.name];
@@ -345,13 +367,31 @@ export const bindTools = (manifest: ProductManifest, ports: BindToolsPorts, opti
       }
 
       let reservationId: string | undefined;
-      const metered = !!ports.meter && (tool.gate === 'quota' || tool.cost === 'job' || tool.cost === 'job-heavy');
+      const metered = needsMeter(tool);
+      const heldUsd = Math.max(floorFor(tool.cost), typeof ctx.estimateUsd === 'number' && isFinite(ctx.estimateUsd) && ctx.estimateUsd > 0 ? ctx.estimateUsd : 0);
+      const decidedBy: AuditDecision = approved ? 'confirmed' : 'auto';
+      /** Settle (or release) the hold; false when the ledger threw or answered {ok:false}: audited, never hidden. */
+      const closeHold = async (id: string, settleUsd: number | undefined): Promise<boolean> => {
+        const meter = ports.meter as MeterPort;
+        let closed: MeterSettleResult | undefined;
+        try {
+          closed =
+            settleUsd !== undefined
+              ? await meter.settle(id, { actualUsd: settleUsd, metadata: { platform: { app: manifest.app, product: manifest.id, tool: tool.name, capability: tool.capability, inputHash: hash } } })
+              : await meter.release(id, { reason: 'tool-failed' });
+        } catch {
+          closed = undefined;
+        }
+        if (closed && closed.ok !== false) return true;
+        audit(ctx, hash, value, decidedBy, 'failed', settleUsd !== undefined ? 'settle-failed' : 'release-failed', settleUsd);
+        return false;
+      };
       if (metered && ports.meter) {
         let r: MeterReserveResult;
         try {
           r = await ports.meter.reserve({
             operation: `platform_${tool.name}`,
-            estimateFloorUsd: Math.max(floorFor(tool.cost), ctx.estimateUsd || 0),
+            estimateFloorUsd: heldUsd,
             metadata: { platform: { app: manifest.app, product: manifest.id, tool: tool.name, capability: tool.capability, inputHash: hash } },
           });
         } catch {
@@ -372,23 +412,26 @@ export const bindTools = (manifest: ProductManifest, ports: BindToolsPorts, opti
       try {
         output = await handler(value, h.c);
       } catch (error) {
-        if (reservationId && ports.meter) await ports.meter.release(reservationId, { reason: 'tool-failed' }).catch(() => undefined);
-        audit(ctx, hash, value, approved ? 'confirmed' : 'auto', 'failed', 'engine-failed');
-        return { status: 'failed', code: 'engine-failed', message: error instanceof Error && error.message ? error.message.slice(0, 200) : 'The tool failed.' };
+        const released = reservationId ? await closeHold(reservationId, undefined) : true;
+        audit(ctx, hash, value, decidedBy, 'failed', 'engine-failed');
+        const failed: ToolCallOutcome = { status: 'failed', code: 'engine-failed', message: error instanceof Error && error.message ? error.message.slice(0, 200) : 'The tool failed.' };
+        if (!released) failed.settleFailed = true;
+        return failed;
       }
       const out = check(tool.output, output);
-      const spent = h.cost() !== undefined ? (h.cost() as number) : reservationId ? floorFor(tool.cost) : undefined;
-      if (reservationId && ports.meter) {
-        await ports.meter
-          .settle(reservationId, { actualUsd: spent || 0, metadata: { platform: { app: manifest.app, product: manifest.id, tool: tool.name, capability: tool.capability, inputHash: hash } } })
-          .catch(() => undefined);
-      }
+      // What the call cost: what the handler reported, else the whole hold (the quote it ran under).
+      const spent = h.cost() !== undefined ? (h.cost() as number) : reservationId ? heldUsd : undefined;
+      const settled = reservationId ? await closeHold(reservationId, spent || 0) : true;
       if (out.ok === false) {
-        audit(ctx, hash, value, approved ? 'confirmed' : 'auto', 'failed', 'invalid-output', spent);
-        return { status: 'failed', code: 'invalid', message: `${tool.name} returned an output that does not match its schema.` };
+        audit(ctx, hash, value, decidedBy, 'failed', 'invalid-output', spent);
+        const failed: ToolCallOutcome = { status: 'failed', code: 'invalid', message: `${tool.name} returned an output that does not match its schema.` };
+        if (!settled) failed.settleFailed = true;
+        return failed;
       }
-      audit(ctx, hash, value, approved ? 'confirmed' : 'auto', 'ok', undefined, spent);
-      return { status: 'ok', output: out.value, decision, inputHash: hash };
+      audit(ctx, hash, value, decidedBy, 'ok', undefined, spent);
+      const ok: ToolCallOutcome = { status: 'ok', output: out.value, decision, inputHash: hash };
+      if (!settled) ok.settleFailed = true;
+      return ok;
     };
 
     bound.push({ name: tool.name, tool, spec: toChatSpec(tool), run });

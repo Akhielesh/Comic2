@@ -17,10 +17,10 @@ import { DATA_NOT_INSTRUCTIONS, FORBIDDEN_NAME, PLATFORM_TOOL_NAMES, TOOL_COSTS,
 import {
   AgentDeckBodySchema,
   AgentDeckOpSchema,
+  AgentDocOpSchema,
   AgentEmailOpInputSchema,
   DeckDraftOutputSchema,
   DocDraftOutputSchema,
-  DocOpSchema,
   DocReadOutputSchema,
   DraftActionOutputSchema,
   EmailDraftInputSchema,
@@ -85,7 +85,7 @@ export const emailDraftTool = defineTool({
   name: 'email_draft',
   title: 'Draft an email',
   description:
-    'Draft an email for the person to review: a subject, recipients and blocks (headings, paragraphs, lists, buttons, quotes, dividers, two columns). Nothing is sent: the person reads it and opens it in their own mail app. Use only addresses the person typed or that are already in the thread; any other address shows as a suggestion and is never filled in. Links are https: or mailto: only, and every link is shown to the person with its full address.',
+    'Draft an email for the person to review: a subject, recipients and blocks (headings, paragraphs, lists, buttons, quotes, dividers, two columns). Nothing is sent: the person reads it and opens it in their own mail app. You never add images: the app adds pictures it already holds. Use only addresses the person typed or that are already in the thread; any other address shows as a suggestion and is never filled in. Links are https: or mailto: only, and every link is shown to the person with its full address.',
   input: EmailDraftInputSchema,
   output: EmailDraftOutputSchema,
   capability: 'email.render',
@@ -93,7 +93,7 @@ export const emailDraftTool = defineTool({
   cost: 'text',
   gate: 'none',
   target: 'own-draft',
-  maxPerTurn: 3,
+  maxPerTurn: 3, // PROVISIONAL, not a plan number (owner W1.9; ADR 0008 to confirm)
   wave: 1,
   refine: refineEmailBody,
 });
@@ -110,7 +110,7 @@ export const deckCreateTool = defineTool({
   cost: 'text',
   gate: 'none',
   target: 'own-draft',
-  maxPerTurn: 2,
+  maxPerTurn: 2, // PROVISIONAL, not a plan number (owner W1.9; ADR 0008 to confirm)
   wave: 1,
 });
 
@@ -251,7 +251,7 @@ export const docReviseTool = defineTool({
   name: 'doc_revise',
   title: 'Revise your document draft',
   description: 'Change a document draft you created, with ops against its current revision (baseRev).',
-  input: revision(DocOpSchema),
+  input: revision(AgentDocOpSchema),
   output: RevisionOutputSchema,
   mode: 'revise',
   cost: 'text',
@@ -293,7 +293,7 @@ export const docProposeChangesTool = defineTool({
   name: 'doc_propose_changes',
   title: 'Suggest changes to a document',
   description: "Suggest changes to the person's own document. They land as suggestions the person accepts or rejects one by one; nothing changes on its own.",
-  input: s.object({ documentId: s.id(), ops: s.array(DocOpSchema, { max: 100 }) }),
+  input: s.object({ documentId: s.id(), ops: s.array(AgentDocOpSchema, { max: 100 }) }),
   output: ProposalOutputSchema,
   capability: 'richdoc.render',
   mode: 'propose',
