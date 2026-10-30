@@ -5,11 +5,14 @@
 --     RPCs but never writes the tables directly; RLS is on with no policies;
 --   * a wrong-hash chunk is rejected; chunk content never changes; `paths` may shrink but never grow;
 --     a saved moment is immutable except its label/name/note/pin columns;
---   * a put with a missing chunk rolls back fully (its chunks too); an equal root dedupes (and pins/names/marks);
+--   * a put with a missing chunk rolls back fully (its chunks too); an equal root dedupes (and pins/names/marks),
+--     but a second named save never renames a moment already saved under a name; a classic snapshot keeps its time;
+--   * a chunk hash computed by the server (Node) is accepted by Postgres for multi-byte, escaped and astral text;
 --   * thinning keeps pinned rows, line heads, the newest row and keep_until, thins by hour / day / week, caps the
 --     unpinned rows and reports the budget; a thinned parent leaves a null parent_id;
 --   * GC never deletes a referenced chunk or one younger than 10 minutes;
---   * label / delete / forget_path / set_head / alternatives behave and refuse what they must;
+--   * label / delete / forget_path / set_head / alternatives behave and refuse what they must; a removed line is
+--     marked, never deleted: Original's newest row stays Original's own, and set_head(null) pins nothing;
 --   * collect_active_image_paths() returns a path present only in a chunk; the guard fails without that branch and
 --     on a narrower copy;
 --   * the public RPCs (comic_public_payload, comic_share_card) and every client-executable function never
@@ -59,7 +62,10 @@ insert into public.projects (id, user_id, name, state) values
   ('10000000-0000-4000-8000-000000000004', '00000000-0000-4000-8000-0000000000a1', 'P4 cap', '{}'),
   ('10000000-0000-4000-8000-000000000005', '00000000-0000-4000-8000-0000000000a1', 'P5 budget', '{}'),
   ('10000000-0000-4000-8000-000000000006', '00000000-0000-4000-8000-0000000000a1', 'P6 gc', '{}'),
-  ('10000000-0000-4000-8000-000000000007', '00000000-0000-4000-8000-0000000000a1', 'P7 lines', '{}');
+  ('10000000-0000-4000-8000-000000000007', '00000000-0000-4000-8000-0000000000a1', 'P7 lines', '{}'),
+  ('10000000-0000-4000-8000-000000000008', '00000000-0000-4000-8000-0000000000a1', 'P8 remove a line while on another', '{}'),
+  ('10000000-0000-4000-8000-000000000009', '00000000-0000-4000-8000-0000000000a1', 'P9 remove a line from Original', '{}'),
+  ('10000000-0000-4000-8000-000000000010', '00000000-0000-4000-8000-0000000000a1', 'P10 removing versions', '{}');
 
 create function pg_temp.h(p_content text) returns text language sql immutable as $$
   select left(encode(extensions.digest(p_content, 'sha256'), 'hex'), 32)
@@ -227,6 +233,15 @@ begin
   assert rejected, 'paths grew';
   update public.comic_version_chunks set paths = '{}' where project_id = p and hash = c.hash;
   assert (select paths from public.comic_version_chunks where project_id = p and hash = c.hash) = '{}', 'paths may shrink';
+
+  -- Parity with the server: this literal is historyHash(sectionContent({t: 'నమస్తే — “q” \u0000 🎨', s: '\uD800'}))
+  -- computed by Node (hash.test.ts asserts the same literal). Multi-byte, an escaped NUL, an escaped lone surrogate and
+  -- an astral emoji: Postgres digest(text) must accept exactly that hash.
+  insert into public.comic_version_chunks (project_id, hash, user_id, codec, kind, content, bytes)
+  values (p, 'c7e29801600af2d024412cfcdba68ea3', u, 'v5', 'page', '{"s":"\ud800","t":"నమస్తే — “q” \u0000 🎨"}', 0);
+  assert pg_temp.h('{"s":"\ud800","t":"నమస్తే — “q” \u0000 🎨"}') = 'c7e29801600af2d024412cfcdba68ea3', 'digest parity with Node';
+  assert (select bytes from public.comic_version_chunks where project_id = p and hash = 'c7e29801600af2d024412cfcdba68ea3') = 63,
+    'the UTF-8 size matches Node''s Buffer.byteLength';
 end $$;
 
 -- ── 3. Put: ownership, missing chunk rollback, presence, dedupe ─────────────────────────────────────────────────
@@ -292,6 +307,7 @@ begin
   assert not (select pinned from public.comic_versions where id = (res ->> 'id')::uuid), 'an edits row is not pinned';
   res2 := public.comic_history_put(p, u, pg_temp.ver('named', md5('r2'), a, '{"name":"  Draft 1  ","note":"before the chase"}'), '[]'::jsonb);
   assert res2 ->> 'id' = res ->> 'id' and (res2 ->> 'deduped')::boolean, 'a named save of an unchanged state names the head';
+  assert not (res2 ? 'alreadyNamed'), 'naming an unnamed moment is not "already named"';
   select * into v from public.comic_versions where id = (res ->> 'id')::uuid;
   assert v.pinned and v.name = 'Draft 1' and v.note = 'before the chase' and v.kind = 'edits', 'the head is pinned and named';
   -- A publish of an unchanged state marks the head; a before-restore extends its keep.
@@ -316,6 +332,28 @@ begin
   res := public.comic_history_put(p, u, pg_temp.ver('legacy', md5('L1'), a, '{"codec":"legacy","legacyRef":{"snapshotId":"s1"}}'), '[]'::jsonb);
   res2 := public.comic_history_put(p, u, pg_temp.ver('legacy', md5('L1b'), a, '{"codec":"legacy","legacyRef":{"snapshotId":"s1"}}'), '[]'::jsonb);
   assert res2 ->> 'id' = res ->> 'id' and (res2 ->> 'deduped')::boolean, 'a classic snapshot imports once';
+
+  -- A classic snapshot keeps its own time as created_at (2026-01-02T03:04:05Z), so the classic line keeps its order…
+  res := public.comic_history_put(p, u, pg_temp.ver('legacy', md5('L2'), a, '{"codec":"legacy","legacyRef":{"snapshotId":"s2"},"createdAt":1767323045000}'), '[]'::jsonb);
+  assert (select created_at from public.comic_versions where id = (res ->> 'id')::uuid) = '2026-01-02T03:04:05Z'::timestamptz,
+    'a classic snapshot keeps its time';
+  -- …never later than now, and a number that is no time at all falls back to now (it never fails the import).
+  res := public.comic_history_put(p, u, pg_temp.ver('legacy', md5('L3'), a, '{"codec":"legacy","legacyRef":{"snapshotId":"s3"},"createdAt":4102444800000}'), '[]'::jsonb);
+  assert (select created_at from public.comic_versions where id = (res ->> 'id')::uuid) between now() and clock_timestamp(), 'a future time is clamped to now';
+  res := public.comic_history_put(p, u, pg_temp.ver('legacy', md5('L4'), a, '{"codec":"legacy","legacyRef":{"snapshotId":"s4"},"createdAt":1e300,"contentAt":-5}'), '[]'::jsonb);
+  select * into v from public.comic_versions where id = (res ->> 'id')::uuid;
+  assert v.created_at between now() and clock_timestamp() and v.content_at = now(), 'an impossible time falls back to now';
+  -- Every other row is stamped by the server, whatever the caller says.
+  res := public.comic_history_put(p, u, pg_temp.ver('edits', md5('r10'), a, '{"createdAt":1767323045000}'), '[]'::jsonb);
+  assert (select created_at from public.comic_versions where id = (res ->> 'id')::uuid) between now() and clock_timestamp(), 'a v5 row ignores createdAt';
+
+  -- A named save of an unchanged moment that already has a name keeps that name: never a silent rename.
+  res := public.comic_history_put(p, u, pg_temp.ver('named', md5('r11'), a, '{"name":"Draft 3","note":"first"}'), '[]'::jsonb);
+  res2 := public.comic_history_put(p, u, pg_temp.ver('named', md5('r11'), a, '{"name":"Draft 4","note":"second"}'), '[]'::jsonb);
+  assert res2 ->> 'id' = res ->> 'id' and (res2 ->> 'deduped')::boolean, 'the unchanged moment is not saved twice';
+  assert (res2 ->> 'alreadyNamed')::boolean and res2 ->> 'name' = 'Draft 3', 'the caller learns it is already saved as Draft 3: ' || res2::text;
+  select * into v from public.comic_versions where id = (res ->> 'id')::uuid;
+  assert v.name = 'Draft 3' and v.note = 'first' and v.pinned, 'Draft 3 was renamed: ' || coalesce(v.name, '') || ' / ' || coalesce(v.note, '');
 end $$;
 
 -- ── 4. A saved moment is immutable except its label columns ─────────────────────────────────────────────────────
@@ -550,7 +588,8 @@ begin
   assert (select head_version_id from public.comic_alternatives where id = line) = v1, 'the head moved';
   assert (select pinned from public.comic_versions where id = v1) and not (select pinned from public.comic_versions where id = v2), 'new head pinned, old one released';
   assert not public.comic_history_set_head(p, u, gen_random_uuid(), v1), 'an unknown line is false';
-  assert public.comic_history_set_head(p, u, null, v3), 'the Original line''s head is pinned';
+  assert public.comic_history_set_head(p, u, null, v3), 'Original''s head is acknowledged (it is its newest row)';
+  assert not public.comic_history_set_head(p, u, null, gen_random_uuid()), 'a version not in this comic is false';
   failed := false;
   begin
     perform public.comic_history_delete(p, u, v1);
@@ -565,15 +604,186 @@ begin
   end;
   assert failed and msg = 'COMIC_HISTORY_REFUSED:active', 'the active line was removed';
   assert public.comic_history_alternative_remove(p, u, line), 'a line is removed';
-  assert (select alternative_id from public.comic_versions where id = v1) is null and not (select pinned from public.comic_versions where id = v1),
-    'its rows unpin and join Original';
+  -- Soft removal: the line row stays (marked), its rows keep their line, unpinned, and age out (newest row included).
+  assert (select removed_at is not null and not is_active and head_version_id is null from public.comic_alternatives where id = line),
+    'the line is marked removed and lets go of its head';
+  assert (select alternative_id from public.comic_versions where id = v1) = line and not (select pinned from public.comic_versions where id = v1),
+    'its rows unpin and keep their line (they never join Original)';
+  assert exists (select 1 from public.comic_history_deletable(p, now()) where id = v1), 'a removed line''s newest row ages out';
   assert not public.comic_history_alternative_remove(p, u, line), 'removing twice is false';
+  -- A removed line is not found anywhere.
+  failed := false;
+  begin
+    perform public.comic_history_put(p, u, pg_temp.ver('edits', md5('l5'), h2, jsonb_build_object('alternativeId', line)), '[]'::jsonb);
+  exception when no_data_found then failed := true;
+  end;
+  assert failed, 'a put on a removed line was accepted';
+  assert not public.comic_history_set_head(p, u, line, v3), 'set_head on a removed line is false';
+  assert public.comic_history_alternative_update(p, u, line, 'Back again', true) is null, 'a removed line cannot be renamed or switched to';
+  assert (select name from public.comic_alternatives where id = line) = 'New ending' and not (select is_active from public.comic_alternatives where id = line),
+    'the removed line is untouched';
+  -- It no longer counts toward the limit: a new line fits where it was (Original + 4).
+  perform public.comic_history_alternative_create(p, u, 'Fresh try', null, v3, 5);
+  failed := false;
+  begin
+    perform public.comic_history_alternative_create(p, u, 'One too many', null, v3, 5);
+  exception when program_limit_exceeded then failed := true;
+  end;
+  assert failed, 'a 6th live line was created';
 
   -- Forget a reference photo: every chunk of this comic drops it; nothing else changes.
   assert public.comic_history_forget_path(p, u, ' ' || photo || ' ') = 2, 'both chunks forget the photo';
   assert not exists (select 1 from public.comic_version_chunks where project_id = p and photo = any (paths)), 'the photo is gone from history';
   assert exists (select 1 from public.comic_version_chunks where project_id = p and 'u/a/p/7/img/p1.webp' = any (paths)), 'other paths stay';
   assert public.comic_history_forget_path(p, u, photo) = 0, 'forgetting twice changes nothing';
+end $$;
+
+-- ── 7b. Removing a line never touches "Original" ───────────────────────────────────────────────────────────────
+-- "Original"'s head is its newest `alternative_id is null` row (head(null), the put's dedupe, the delete and thinning
+-- protections all read it that way). A removed line's rows must never become that row.
+create function pg_temp.original_head(p_project uuid) returns uuid language sql stable as $$
+  select v.id from public.comic_versions v
+   where v.project_id = p_project and v.user_id = '00000000-0000-4000-8000-0000000000a1' and v.alternative_id is null
+   order by v.created_at desc, v.id desc limit 1
+$$;
+create function pg_temp.put_on(p_project uuid, p_kind text, p_content text, p_alt uuid default null) returns uuid language sql as $$
+  select (public.comic_history_put(p_project, '00000000-0000-4000-8000-0000000000a1',
+            pg_temp.ver(p_kind, md5(p_content), pg_temp.h(p_content),
+                        case when p_alt is null then '{}'::jsonb else jsonb_build_object('alternativeId', p_alt) end),
+            jsonb_build_array(pg_temp.chunk(p_content))) ->> 'id')::uuid
+$$;
+
+-- While on another line (C): remove B.
+do $$
+declare
+  p uuid := '10000000-0000-4000-8000-000000000008';
+  u uuid := '00000000-0000-4000-8000-0000000000a1';
+  o uuid;
+  b1 uuid;
+  c1 uuid;
+  lb uuid;
+  lc uuid;
+  res jsonb;
+begin
+  -- On Original: O. Leaving it saves O as Original's head (H7): acknowledged, nothing pinned.
+  o := pg_temp.put_on(p, 'edits', 'ORIGINAL');
+  assert public.comic_history_set_head(p, u, null, o), 'set_head(null) is acknowledged';
+  assert not (select pinned from public.comic_versions where id = o), 'set_head(null) pins nothing';
+  -- B from O, an edit on B, B's head saved; C from B; switch to C and edit.
+  lb := (public.comic_history_alternative_create(p, u, 'B', o, o, 5) ->> 'id')::uuid;
+  perform public.comic_history_alternative_update(p, u, lb, null, true);
+  b1 := pg_temp.put_on(p, 'edits', 'B-CONTENT', lb);
+  assert public.comic_history_set_head(p, u, lb, b1);
+  lc := (public.comic_history_alternative_create(p, u, 'C', b1, b1, 5) ->> 'id')::uuid;
+  perform public.comic_history_alternative_update(p, u, lc, null, true);
+  c1 := pg_temp.put_on(p, 'edits', 'C-CONTENT', lc);
+  assert public.comic_history_set_head(p, u, lc, c1);
+
+  assert public.comic_history_alternative_remove(p, u, lb), 'B is removed';
+  assert pg_temp.original_head(p) = o, 'Original''s head is still O after removing B';
+  -- Switching back to Original exact-restores O: the switch row dedupes against O, the same root.
+  res := public.comic_history_put(p, u, pg_temp.ver('switch', md5('ORIGINAL'), pg_temp.h('ORIGINAL')), '[]'::jsonb);
+  assert (res ->> 'deduped')::boolean and (res ->> 'id')::uuid = o, 'the switch back compares against O: ' || res::text;
+  -- B's rows keep their line, are unpinned and thin like any automatic moment; O stays protected as Original's newest.
+  assert (select alternative_id from public.comic_versions where id = b1) = lb, 'B''s rows keep their line';
+  assert not (select pinned from public.comic_versions where id = b1), 'B''s head is unpinned';
+  assert exists (select 1 from public.comic_history_deletable(p, now()) where id = b1), 'B''s rows age out';
+  assert not exists (select 1 from public.comic_history_deletable(p, now()) where id = o), 'O is protected as Original''s newest row';
+  assert not exists (select 1 from public.comic_history_deletable(p, now()) where id = c1), 'C''s head stays';
+end $$;
+
+-- Back on Original (it moved on), then remove B; two set_head(null) calls leave no pin behind.
+do $$
+declare
+  p uuid := '10000000-0000-4000-8000-000000000009';
+  u uuid := '00000000-0000-4000-8000-0000000000a1';
+  o uuid;
+  o2 uuid;
+  b1 uuid;
+  lb uuid;
+  res jsonb;
+begin
+  o := pg_temp.put_on(p, 'edits', 'O9');
+  assert public.comic_history_set_head(p, u, null, o);
+  lb := (public.comic_history_alternative_create(p, u, 'B', o, o, 5) ->> 'id')::uuid;
+  perform public.comic_history_alternative_update(p, u, lb, null, true);
+  b1 := pg_temp.put_on(p, 'edits', 'B9', lb);
+  assert public.comic_history_set_head(p, u, lb, b1);
+  -- Back to Original: B's head is kept, O is restored, the switch row dedupes against O.
+  perform public.comic_history_alternative_update(p, u, lb, null, false);
+  res := public.comic_history_put(p, u, pg_temp.ver('switch', md5('O9'), pg_temp.h('O9')), '[]'::jsonb);
+  assert (res ->> 'id')::uuid = o and (res ->> 'deduped')::boolean, 'back on Original at O';
+  o2 := pg_temp.put_on(p, 'edits', 'O9 later');
+  assert public.comic_history_set_head(p, u, null, o2);
+
+  assert public.comic_history_alternative_remove(p, u, lb), 'B is removed from Original';
+  assert pg_temp.original_head(p) = o2, 'Original''s head is still its own newest row';
+  assert (select alternative_id from public.comic_versions where id = b1) = lb and not (select pinned from public.comic_versions where id = b1),
+    'B''s rows keep their line, unpinned';
+  assert exists (select 1 from public.comic_history_deletable(p, now()) where id = b1), 'B''s rows age out';
+  assert (select count(*) from public.comic_versions where project_id = p and alternative_id is null and pinned) = 0,
+    'two set_head(null) calls left a pin behind';
+  assert exists (select 1 from public.comic_history_deletable(p, now()) where id = o), 'the earlier Original head thins normally';
+  assert not exists (select 1 from public.comic_history_deletable(p, now()) where id = o2), 'the newest Original row is kept';
+end $$;
+
+-- Removing versions: anything the user saved (a named save, or a moment they named), never a classic snapshot.
+do $$
+declare
+  p uuid := '10000000-0000-4000-8000-000000000010';
+  u uuid := '00000000-0000-4000-8000-0000000000a1';
+  a1 uuid;
+  a2 uuid;
+  a3 uuid;
+  cl uuid;
+  side uuid;
+  sn uuid;
+  failed boolean;
+  msg text;
+begin
+  a1 := pg_temp.put_on(p, 'edits', 'D1');
+  a2 := pg_temp.put_on(p, 'edits', 'D2');
+  a3 := pg_temp.put_on(p, 'edits', 'D3');
+  -- A moment the user named is a version they saved: it can be removed.
+  perform public.comic_history_label(p, u, a1, 'Before the twist', null, null);
+  assert public.comic_history_delete(p, u, a1), 'a moment the user named can be removed';
+  -- An unnamed automatic moment cannot (thinning tidies it); nor the newest moment, even named.
+  failed := false;
+  begin
+    perform public.comic_history_delete(p, u, a2);
+  exception when object_not_in_prerequisite_state then failed := true; msg := sqlerrm;
+  end;
+  assert failed and msg = 'COMIC_HISTORY_REFUSED:not_named', 'an automatic moment was removed';
+  perform public.comic_history_label(p, u, a3, 'Latest', null, null);
+  failed := false;
+  begin
+    perform public.comic_history_delete(p, u, a3);
+  exception when object_not_in_prerequisite_state then failed := true; msg := sqlerrm;
+  end;
+  assert failed and msg = 'COMIC_HISTORY_REFUSED:newest', 'the newest moment was removed';
+  -- A classic-editor snapshot (imported with its older time: Original's head stays a3) is never removed, named or not.
+  cl := (public.comic_history_put(p, u, pg_temp.ver('legacy', md5('D-classic'), pg_temp.h('D1'),
+                                    '{"codec":"legacy","legacyRef":{"snapshotId":"d-classic"},"createdAt":1767323045000}'), '[]'::jsonb) ->> 'id')::uuid;
+  assert pg_temp.original_head(p) = a3, 'an older classic snapshot does not become the newest moment';
+  perform public.comic_history_label(p, u, cl, 'Old snapshot', null, null);
+  failed := false;
+  begin
+    perform public.comic_history_delete(p, u, cl);
+  exception when object_not_in_prerequisite_state then failed := true; msg := sqlerrm;
+  end;
+  assert failed and msg = 'COMIC_HISTORY_REFUSED:classic', 'a classic snapshot was removed: ' || coalesce(msg, '');
+  -- The newest saved version of a line being tried is kept; once the line is removed it may go.
+  side := (public.comic_history_alternative_create(p, u, 'Side', null, a3, 5) ->> 'id')::uuid;
+  sn := (public.comic_history_put(p, u, pg_temp.ver('named', md5('D5'), pg_temp.h('D2'), jsonb_build_object('name', 'Side save', 'alternativeId', side)), '[]'::jsonb) ->> 'id')::uuid;
+  failed := false;
+  begin
+    perform public.comic_history_delete(p, u, sn);
+  exception when object_not_in_prerequisite_state then failed := true; msg := sqlerrm;
+  end;
+  assert failed and msg = 'COMIC_HISTORY_REFUSED:newest', 'the newest moment of a line being tried was removed';
+  assert public.comic_history_alternative_remove(p, u, side);
+  assert (select pinned and alternative_id = side from public.comic_versions where id = sn), 'a named save of a removed line stays pinned';
+  assert public.comic_history_delete(p, u, sn), 'a removed line''s saved version can be removed';
 end $$;
 
 -- ── 8. GC roots ─────────────────────────────────────────────────────────────────────────────────────────────────

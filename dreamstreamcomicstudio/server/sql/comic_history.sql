@@ -16,7 +16,9 @@
 --
 -- What it creates:
 --   comic_alternatives    "Versions you're trying" (H7). Empty until used: a comic with no rows has one line,
---                         "Original" (alternative_id null on its versions). No backfill.
+--                         "Original" (alternative_id null on its versions). No backfill. A removed line is never
+--                         deleted: removed_at marks it, its rows keep their alternative_id (so they never become
+--                         "Original"'s newest row) and age out through thinning; every RPC treats it as not found.
 --   comic_versions        one row per saved moment: a manifest of chunk hashes, never a whole doc.
 --   comic_version_chunks  content-addressed sections of a book, keyed by (project_id, hash): no cross-comic
 --                         addressing, so nobody can probe whether some content exists in another comic.
@@ -36,8 +38,12 @@
 --   COMIC_HISTORY_MISSING_CHUNKS (23503)  a version references a chunk that is not stored: the whole call rolls back.
 --   COMIC_HISTORY_LIMIT:<what> (54000)  named versions, saves per hour, versions you're trying.
 --   COMIC_HISTORY_REFUSED:<why> (55000)  not removable (the newest moment, a line's head, not a saved version,
---                                         the line you're on).
+--                                         a classic-editor snapshot, the line you're on).
 --   COMIC_HISTORY_INVALID:<what> (22023) a malformed request.
+--
+-- Limits (comic_history_put): saves per hour counts NAMED saves that write a new row (automatic captures are never
+-- throttled, and naming or pinning an unchanged moment writes nothing, so it is not counted); at most `namedRows`
+-- named versions per comic.
 
 -- ── 0. pgcrypto (digest) lives in `extensions` on Supabase ─────────────────────────────────────────────────────────
 
@@ -63,6 +69,8 @@ create table if not exists public.comic_alternatives (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+-- Soft removal (V-3: nothing is destroyed): a removed line keeps its row and its versions keep pointing at it.
+alter table public.comic_alternatives add column if not exists removed_at timestamptz;
 create unique index if not exists comic_alternatives_one_active on public.comic_alternatives (project_id) where is_active;
 create index if not exists comic_alternatives_project_idx on public.comic_alternatives (project_id, created_at);
 
@@ -279,8 +287,9 @@ as $$
   select to_jsonb(p_row) - 'manifest' - 'chunks' - 'project_id' - 'user_id';
 $$;
 
--- Rows thinning may remove: unpinned, unnamed (named versions are kept forever), past keep_until, not the newest row
--- of their line, not a line's head.
+-- Rows thinning may remove: unpinned, unnamed (named versions are kept forever), past keep_until, not a line's head,
+-- and not the newest row of "Original" or of a line still being tried (a removed line has no current state: all of
+-- its unpinned rows age out).
 create or replace function public.comic_history_deletable(p_project uuid, p_now timestamptz)
 returns setof public.comic_versions
 language sql
@@ -298,6 +307,9 @@ as $$
        select distinct on (coalesce(n.alternative_id::text, '')) n.id
          from public.comic_versions n
         where n.project_id = p_project
+          and (n.alternative_id is null
+               or exists (select 1 from public.comic_alternatives a
+                           where a.id = n.alternative_id and a.project_id = p_project and a.removed_at is null))
         order by coalesce(n.alternative_id::text, ''), n.created_at desc, n.id desc);
 $$;
 
@@ -444,8 +456,12 @@ $$;
 -- ── 5. RPCs (SECURITY DEFINER, service_role only) ───────────────────────────────────────────────────────────────────
 
 -- One transaction: lock, ownership, chunks (verified by the trigger), presence check (a missing chunk rolls the whole
--- call back), dedupe, insert, thin, GC. Returns {id, deduped, thinned, budgetThinned, gcChunks, bytesNew}.
+-- call back), dedupe, insert, thin, GC. Returns {id, deduped, thinned, budgetThinned, gcChunks, bytesNew}, plus
+-- {alreadyNamed: true, name} when a named save finds the unchanged moment already saved under a name (it is kept as
+-- it is: a second save never renames the first).
 -- p_version uses the server's VersionInput names (camelCase; times in epoch ms). p_chunks: [{hash, kind, content, paths}].
+-- A classic-editor snapshot (codec 'legacy') may carry `createdAt`: the snapshot's own time becomes created_at
+-- (never later than now), so the classic line keeps its order. Every other row is stamped clock_timestamp().
 -- p_policy: {unpinnedRows, bytesPerComic, namedRows, savesPerHour, beforeRestoreDays} (HISTORY_LIMITS by default).
 create or replace function public.comic_history_put(
   p_project uuid,
@@ -479,6 +495,8 @@ declare
   v_bytes_new integer := 0;
   v_head public.comic_versions%rowtype;
   v_keep timestamptz;
+  v_created timestamptz;
+  v_content_at timestamptz;
   v_id uuid;
   v_thin jsonb;
   v_gc integer;
@@ -500,7 +518,8 @@ begin
 
   v_alt := nullif(p_version ->> 'alternativeId', '')::uuid;
   if v_alt is not null and not exists (
-    select 1 from public.comic_alternatives a where a.id = v_alt and a.project_id = p_project and a.user_id = p_user
+    select 1 from public.comic_alternatives a
+     where a.id = v_alt and a.project_id = p_project and a.user_id = p_user and a.removed_at is null
   ) then
     raise exception 'COMIC_HISTORY_NOT_FOUND: line' using errcode = 'P0002';
   end if;
@@ -551,6 +570,17 @@ begin
     when jsonb_typeof(p_version -> 'keepUntil') = 'number' then to_timestamp((p_version ->> 'keepUntil')::double precision / 1000.0)
     when v_kind = 'before_restore' then now() + make_interval(days => v_restore_days)
   end;
+  -- Times are epoch ms; anything outside 1970..2286 (a classic snapshot can carry any number) falls back to now.
+  v_content_at := case
+    when jsonb_typeof(p_version -> 'contentAt') = 'number' and (p_version ->> 'contentAt')::numeric between 0 and 1e13
+      then to_timestamp((p_version ->> 'contentAt')::double precision / 1000.0)
+    else now()
+  end;
+  v_created := clock_timestamp();
+  if v_codec = 'legacy' and jsonb_typeof(p_version -> 'createdAt') = 'number'
+     and (p_version ->> 'createdAt')::numeric between 0 and 1e13 then
+    v_created := least(to_timestamp((p_version ->> 'createdAt')::double precision / 1000.0), v_created);
+  end if;
 
   -- 5. Dedupe. A classic snapshot is imported once (by its id).
   if v_kind = 'legacy' and v_snapshot is not null then
@@ -588,17 +618,21 @@ begin
         raise exception 'COMIC_HISTORY_LIMIT:named' using errcode = '54000';
       end if;
       if v_kind in ('start', 'named', 'publish', 'import', 'before_restore') then
+        -- A named save names the moment only when it has no name yet: one already saved as 'Draft 1' stays 'Draft 1'
+        -- (the caller says so), never silently renamed.
         update public.comic_versions v
            set pinned = v.pinned or v_kind in ('start', 'named', 'publish', 'import'),
-               name = case when v_kind = 'named' and v_name is not null then v_name else v.name end,
-               note = case when v_kind = 'named' and v_note is not null then v_note else v.note end,
+               name = case when v_kind = 'named' and v.name is null and v_name is not null then v_name else v.name end,
+               note = case when v_kind = 'named' and v.name is null and v_note is not null then v_note else v.note end,
                published_rev = case when v_kind = 'publish' and jsonb_typeof(p_version -> 'publishedRev') = 'number'
                                     then round((p_version ->> 'publishedRev')::numeric)::integer else v.published_rev end,
                keep_until = case when v_kind = 'before_restore' then greatest(v.keep_until, v_keep) else v.keep_until end
          where v.id = v_head.id;
       end if;
       return jsonb_build_object('id', v_head.id, 'deduped', true, 'thinned', 0, 'budgetThinned', 0, 'gcChunks', 0,
-                                'bytesNew', v_bytes_new);
+                                'bytesNew', v_bytes_new)
+             || case when v_kind = 'named' and v_head.name is not null
+                     then jsonb_build_object('alreadyNamed', true, 'name', v_head.name) else '{}'::jsonb end;
     end if;
   end if;
 
@@ -626,8 +660,7 @@ begin
       or v_kind in ('start', 'named', 'publish', 'import', 'legacy') or v_name is not null,
     v_keep,
     coalesce(round((p_version ->> 'rev')::numeric)::integer, 0),
-    case when jsonb_typeof(p_version -> 'contentAt') = 'number'
-         then to_timestamp((p_version ->> 'contentAt')::double precision / 1000.0) else now() end,
+    v_content_at,
     v_manifest, v_root, v_chunks,
     case when jsonb_typeof(p_version -> 'changes') = 'array' then p_version -> 'changes' else '[]'::jsonb end,
     case when jsonb_typeof(p_version -> 'thumbs') = 'array' then p_version -> 'thumbs' else '[]'::jsonb end,
@@ -636,7 +669,7 @@ begin
     case when jsonb_typeof(p_version -> 'publishedRev') = 'number' then round((p_version ->> 'publishedRev')::numeric)::integer end,
     case when jsonb_typeof(p_version -> 'legacyRef') = 'object' then p_version -> 'legacyRef' end,
     v_bytes_new,
-    clock_timestamp()
+    v_created
   )
   returning id into v_id;
 
@@ -707,8 +740,9 @@ begin
 end;
 $$;
 
--- Remove a saved (named) version. Never the newest row of its line or a line's head. Then the same chunk GC.
--- Returns false when the version is not in this comic.
+-- Remove a version the user saved: a `named` row, or any moment the user gave a name (label). Never the newest row of
+-- "Original" or of a line still being tried, never a line's head, never a classic-editor snapshot (its server copy
+-- is the safe one, V-3). Then the same chunk GC. Returns false when the version is not in this comic.
 create or replace function public.comic_history_delete(p_project uuid, p_user uuid, p_version uuid)
 returns boolean
 language plpgsql
@@ -728,16 +762,22 @@ begin
   if not found then
     return false;
   end if;
-  if v.kind <> 'named' then
+  if v.kind = 'legacy' then
+    raise exception 'COMIC_HISTORY_REFUSED:classic' using errcode = '55000';
+  end if;
+  if v.kind <> 'named' and v.name is null then
     raise exception 'COMIC_HISTORY_REFUSED:not_named' using errcode = '55000';
   end if;
-  if v.id = (
-    select n.id from public.comic_versions n
-     where n.project_id = p_project
-       and (case when v.alternative_id is null then n.alternative_id is null else n.alternative_id = v.alternative_id end)
-     order by n.created_at desc, n.id desc
-     limit 1
-  ) then
+  if (v.alternative_id is null
+      or exists (select 1 from public.comic_alternatives a
+                  where a.id = v.alternative_id and a.project_id = p_project and a.removed_at is null))
+     and v.id = (
+       select n.id from public.comic_versions n
+        where n.project_id = p_project
+          and (case when v.alternative_id is null then n.alternative_id is null else n.alternative_id = v.alternative_id end)
+        order by n.created_at desc, n.id desc
+        limit 1
+     ) then
     raise exception 'COMIC_HISTORY_REFUSED:newest' using errcode = '55000';
   end if;
   if exists (select 1 from public.comic_alternatives a where a.project_id = p_project and a.head_version_id = v.id) then
@@ -773,9 +813,10 @@ begin
 end;
 $$;
 
--- Mark a version as the head of a line (p_alternative null = "Original") and pin it. An alternative's previous head
--- goes back to normal thinning unless it is pinned for its own sake. Returns false when the line or the version is
--- not in this comic.
+-- Mark a version as the head of a line and pin it; the line's previous head goes back to normal thinning unless it is
+-- pinned for its own sake. "Original" (p_alternative null) has no stored head: its head is always its newest row,
+-- which thinning never removes, so nothing is pinned (every switch away from Original would otherwise leave a pin
+-- behind forever). Returns false when the line (a removed one included) or the version is not in this comic.
 create or replace function public.comic_history_set_head(p_project uuid, p_user uuid, p_alternative uuid, p_version uuid)
 returns boolean
 language plpgsql
@@ -791,30 +832,31 @@ begin
   ) then
     return false;
   end if;
-  if p_alternative is not null then
-    select a.head_version_id into v_old
-      from public.comic_alternatives a
-     where a.id = p_alternative and a.project_id = p_project and a.user_id = p_user
-     for update;
-    if not found then
-      return false;
-    end if;
-    update public.comic_alternatives a set head_version_id = p_version, updated_at = now() where a.id = p_alternative;
-    if v_old is not null and v_old <> p_version
-       and not exists (select 1 from public.comic_alternatives a where a.project_id = p_project and a.head_version_id = v_old) then
-      update public.comic_versions v
-         set pinned = false
-       where v.id = v_old and v.project_id = p_project
-         and v.kind not in ('start', 'named', 'publish', 'import', 'legacy') and v.name is null;
-    end if;
+  if p_alternative is null then
+    return true;
+  end if;
+  select a.head_version_id into v_old
+    from public.comic_alternatives a
+   where a.id = p_alternative and a.project_id = p_project and a.user_id = p_user and a.removed_at is null
+   for update;
+  if not found then
+    return false;
+  end if;
+  update public.comic_alternatives a set head_version_id = p_version, updated_at = now() where a.id = p_alternative;
+  if v_old is not null and v_old <> p_version
+     and not exists (select 1 from public.comic_alternatives a where a.project_id = p_project and a.head_version_id = v_old) then
+    update public.comic_versions v
+       set pinned = false
+     where v.id = v_old and v.project_id = p_project
+       and v.kind not in ('start', 'named', 'publish', 'import', 'legacy') and v.name is null;
   end if;
   update public.comic_versions v set pinned = true where v.id = p_version and not v.pinned;
   return true;
 end;
 $$;
 
--- "Versions you're trying" (H7). The comic's lines are "Original" (no row) plus these rows: at most p_max lines in
--- all. The head version (required) is pinned. Returns the new row.
+-- "Versions you're trying" (H7). The comic's lines are "Original" (no row) plus the rows not removed: at most p_max
+-- lines in all. The head version (required) is pinned. Returns the new row.
 create or replace function public.comic_history_alternative_create(
   p_project uuid,
   p_user uuid,
@@ -836,7 +878,8 @@ begin
   if v_name = '' then
     raise exception 'COMIC_HISTORY_INVALID: name' using errcode = '22023';
   end if;
-  if (select count(*) from public.comic_alternatives a where a.project_id = p_project) + 1 >= greatest(coalesce(p_max, 5), 1) then
+  if (select count(*) from public.comic_alternatives a where a.project_id = p_project and a.removed_at is null) + 1
+     >= greatest(coalesce(p_max, 5), 1) then
     raise exception 'COMIC_HISTORY_LIMIT:alternatives' using errcode = '54000';
   end if;
   if p_head is null or not exists (
@@ -856,7 +899,8 @@ begin
 end;
 $$;
 
--- Rename a line and/or make it the one you're on (p_active true; false = back to "Original"). Null when not found.
+-- Rename a line and/or make it the one you're on (p_active true; false = back to "Original"). Null when not found
+-- (a removed line included).
 create or replace function public.comic_history_alternative_update(
   p_project uuid,
   p_user uuid,
@@ -875,7 +919,7 @@ declare
 begin
   perform public.comic_history_lock(p_project, p_user);
   select * into v from public.comic_alternatives a
-   where a.id = p_id and a.project_id = p_project and a.user_id = p_user
+   where a.id = p_id and a.project_id = p_project and a.user_id = p_user and a.removed_at is null
    for update;
   if not found then
     return null;
@@ -900,8 +944,11 @@ begin
 end;
 $$;
 
--- Remove a line (never the one you're on). Its rows are unpinned (named and other pinned kinds stay pinned) and join
--- "Original" (alternative_id → null); thinning then ages them out. Nothing is deleted here. False when not found.
+-- Remove a line (never the one you're on). Nothing is deleted: the line is marked removed (from then on every RPC
+-- treats it as not found and it no longer counts toward the limit), its head pointer is released, and its rows are
+-- unpinned (named and other pinned kinds stay pinned). The rows KEEP their alternative_id: they never join "Original"
+-- (whose head is its own newest row), and thinning ages them out, newest row included. False when not found or
+-- already removed.
 create or replace function public.comic_history_alternative_remove(p_project uuid, p_user uuid, p_id uuid)
 returns boolean
 language plpgsql
@@ -913,7 +960,7 @@ declare
 begin
   perform public.comic_history_lock(p_project, p_user);
   select * into v from public.comic_alternatives a
-   where a.id = p_id and a.project_id = p_project and a.user_id = p_user
+   where a.id = p_id and a.project_id = p_project and a.user_id = p_user and a.removed_at is null
    for update;
   if not found then
     return false;
@@ -930,7 +977,9 @@ begin
                                where a.project_id = p_project and a.head_version_id = x.id and a.id <> p_id)))
      and x.pinned
      and x.kind not in ('start', 'named', 'publish', 'import', 'legacy') and x.name is null;
-  delete from public.comic_alternatives a where a.id = p_id;
+  update public.comic_alternatives a
+     set removed_at = now(), is_active = false, head_version_id = null, updated_at = now()
+   where a.id = p_id;
   return true;
 end;
 $$;
