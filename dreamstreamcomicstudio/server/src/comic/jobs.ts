@@ -70,6 +70,7 @@ import {
   type RenderErrorDetail,
   type RenderState,
   type RenderTarget,
+  type Resolution,
   type Settings,
   type ShotType,
   type SpendKind,
@@ -942,17 +943,27 @@ const repriceAnchorLines = (doc: ComicDoc, lines: AnchorQuoteLine[], byok: boole
   return lines.map((l) => {
     if (l.kind === 'sheet') return priceImageJobs(doc, [{ kind: 'sheet', count: l.count, label: l.label }], byok, prices, pin).lines[0] ?? { label: l.label, count: l.count, usd: 0 };
     if (l.kind === 'refs') return { label: l.label, count: l.count, usd: l.usd };
-    const { spec } = resolveJobFor(pin, 'place');
-    const res = nearestResolution(spec, ANCHOR_SHEET_RES);
-    let unit: number | null = null;
-    try {
-      unit = prices.unit(spec.id, res, 'place').usd;
-    } catch {
-      unit = null;
-    }
-    const each = typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, res);
-    return { label: l.label, count: l.count, usd: round4(each * l.count * markup) };
+    return { label: l.label, count: l.count, usd: round4(anchorSheetUnitUsd(pin, prices) * l.count * markup) };
   });
+};
+
+/**
+ * The model, resolution and list price of one place/prop anchor sheet (B4): a 'place' job at ANCHOR_SHEET_RES (nearest the
+ * model supports). The quote prices place and prop lines with it, and RenderRun.anchorJobs draws them exactly so.
+ */
+export const anchorSheetJobFor = (pin: RunPin) => {
+  const { spec } = resolveJobFor(pin, 'place');
+  return { kind: 'place' as const, spec, resolution: nearestResolution(spec, ANCHOR_SHEET_RES) };
+};
+const anchorSheetUnitUsd = (pin: RunPin, prices?: PriceBook): number => {
+  const { spec, resolution } = anchorSheetJobFor(pin);
+  let unit: number | null = null;
+  try {
+    unit = prices ? prices.unit(spec.id, resolution, 'place').usd : null;
+  } catch {
+    unit = null;
+  }
+  return typeof unit === 'number' && Number.isFinite(unit) && unit >= 0 ? unit : imagePriceUsd(spec, resolution);
 };
 
 /**
@@ -2144,6 +2155,9 @@ interface ImageJob {
   followFrames?: boolean;
   /** Called once the image is stored (a scheduled run's `after` dependency with settle 'stored'). */
   onStored?: () => void;
+  /** Draw at this resolution (nearest the job's model supports) instead of the kind's: place/prop anchor sheets at
+   *  ANCHOR_SHEET_RES, exactly what the render_pages quote priced (anchorSheetJobFor). */
+  resolution?: Resolution;
 }
 
 interface JobResult {
@@ -2321,9 +2335,11 @@ class RenderRun {
   }
 
   /** What one image of this job would cost at the pinned quality (savedUsd, reservation shares, chip quotes). */
-  private priceOf(kind: ImageJobKind): number {
+  private priceOf(job: Pick<ImageJob, 'kind' | 'resolution'>): number {
+    // An anchor sheet at its own resolution is priced as its quote line was (anchorSheetJobFor).
+    if (job.resolution) return round4(anchorSheetUnitUsd(this.pinned, this.prices) * (this.byok ? 1 : PLATFORM_MARKUP));
     // The basis the run was reserved at (its PriceBook), so shares and chip quotes agree with the reservation.
-    return priceImageJobs(this.session.doc, [{ kind, count: 1 }], this.byok, this.prices, this.pinned).usd;
+    return priceImageJobs(this.session.doc, [{ kind: job.kind, count: 1 }], this.byok, this.prices, this.pinned).usd;
   }
 
   private commit(ops: DocOp[], label?: string) {
@@ -2386,19 +2402,25 @@ class RenderRun {
     );
   }
 
-  /** Sheet jobs for the anchor keys a render_pages quote lists ('char:', 'prop:', 'place:'), skipping sheets already queued. */
+  /**
+   * Sheet jobs for the anchor keys a render_pages quote lists ('char:', 'prop:', 'place:'), skipping sheets already
+   * queued — each drawn exactly as its quote line priced it: a recurring character as a character sheet job; a place or
+   * a prop as a 'place' job at ANCHOR_SHEET_RES (anchorSheetJobFor; the reservation's operation and resolution follow).
+   */
   private anchorJobs(doc: ComicDoc, action: Extract<SpendAction, { type: 'render_pages' }>, queued: ReadonlySet<string>): ImageJob[] {
     if (!anchorRunFor(action)) return [];
     const keys = renderPagesQuote(doc, action, this.byok, this.pinned).anchors?.keys ?? [];
+    const { kind: anchorKind } = anchorSheetJobFor(this.pinned);
     const out: ImageJob[] = [];
     for (const key of keys) {
       const [kind, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
       if ((kind === 'char' || kind === 'prop') && !queued.has(id)) {
         const c = findCharacter(doc, id);
-        if (c && !isBusy(c.sheet)) out.push(this.sheetJob(c, false));
+        if (!c || isBusy(c.sheet)) continue;
+        out.push(kind === 'prop' ? { ...this.sheetJob(c, false), kind: anchorKind, resolution: ANCHOR_SHEET_RES } : this.sheetJob(c, false));
       } else if (kind === 'place') {
         const p = findPlace(doc, id);
-        if (p && !isBusy(p.sheet)) out.push(this.placeJob(p, false));
+        if (p && !isBusy(p.sheet)) out.push({ ...this.placeJob(p, false), kind: anchorKind, resolution: ANCHOR_SHEET_RES });
       }
     }
     return out;
@@ -3092,7 +3114,7 @@ class RenderRun {
     // A locked comic is drawn on its model only: a version from another model is never put back silently (§3.1).
     const lock = lockOf(doc);
     if (lock && match.version.model && lockedSpecId(match.version.model) !== lockedSpecId(lock.modelId)) return false;
-    const saved = this.priceOf(job.kind);
+    const saved = this.priceOf(job);
     const balloonsBefore = job.target.kind === 'page' ? findPage(doc, job.target.id)?.balloons : undefined;
     // Un-busy first (render_use is a no-op on a busy target), then swap in the version.
     this.commit(
@@ -3231,7 +3253,7 @@ class RenderRun {
     model: string | undefined,
     rule: 'R3' | 'R7'
   ): Promise<void> {
-    const saved = this.priceOf(job.kind);
+    const saved = this.priceOf(job);
     // A copied picture in the wrong frame gets the same honest notice and free Fit chip as a fresh one.
     const aspect = this.checkAspect(job, prepared.compiled, asset);
     this.commit(
@@ -3594,7 +3616,7 @@ class RenderRun {
     this.notices.push(noticeCard('warn', `${capitalize(what)} came back ${got} instead of ${want}. Fit it to ${want} for free, keep it, or redraw it.`));
     const redraw: SpendAction =
       job.target.kind === 'cover' ? { type: 'render_cover' } : { type: 'render_pages', pageIds: [job.target.id], force: true };
-    const usd = this.priceOf(job.target.kind === 'cover' ? 'cover' : 'page');
+    const usd = this.priceOf({ kind: job.target.kind === 'cover' ? 'cover' : 'page' });
     this.extraSteps.push(
       { label: `Fit to ${want} (Free)`, action: { type: 'fit_render', target: job.target, mode: 'auto' }, usd: 0 },
       { label: got === '1:1' ? 'Keep square' : `Keep ${got}`, say: `Keep ${what} as it is (${got}).` },
@@ -3661,9 +3683,11 @@ class RenderRun {
    */
   private onLockedModel(job: ImageJob, compiled: CompiledImageJob): CompiledImageJob {
     const want = resolveJobFor(this.pinned, job.kind);
-    if (compiled.spec.id === want.spec.id && compiled.resolution === want.resolution) return compiled;
-    if (!this.pinned.lock) return compiled; // unlocked: the compilers' choice IS the tier/override resolution
-    return { ...compiled, spec: want.spec, resolution: want.resolution, aspect: nearestAspect(want.spec, compiled.aspect) };
+    // An anchor sheet draws at the resolution its quote line priced (ImageJob.resolution), locked or not.
+    const resolution = job.resolution ? nearestResolution(want.spec, job.resolution) : want.resolution;
+    if (compiled.spec.id === want.spec.id && compiled.resolution === resolution) return compiled;
+    if (!this.pinned.lock && !job.resolution) return compiled; // unlocked: the compilers' choice IS the tier/override resolution
+    return { ...compiled, spec: want.spec, resolution, aspect: nearestAspect(want.spec, compiled.aspect) };
   }
 
   /**

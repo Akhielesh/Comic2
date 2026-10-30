@@ -23,6 +23,7 @@ import { runDrawsAnchors, scheduleRun } from './consistency/schedule.js';
 import {
   JOB_TIMINGS,
   PAGE_REFERENCE_PATH,
+  anchorSheetJobFor,
   PANEL_REFERENCE_PATH,
   estimateSpendAction,
   priceImageJobs,
@@ -595,6 +596,58 @@ describe('render_pages anchors: quoted only once the run draws them, re-priced b
       else expect(got).toEqual({ label: line.label, count: line.count, usd: Math.round(placeUnit * line.count * PLATFORM_MARKUP * 10000) / 10000 });
     }
     expect(priced.usd).toBe(Math.round(priced.lines.reduce((s, l) => s + l.usd, 0) * 10000) / 10000);
+  });
+
+  it('the run draws each anchor exactly as its quote line priced it (operation, model, resolution) and spends no more than the quote', async () => {
+    vi.mocked(runDrawsAnchors).mockReturnValue(true);
+    process.env.COMIC_CONSISTENCY_ANCHORS = 'places,props';
+    const doc = harbourComic();
+    const pin = runPinOf(doc);
+    const q = quoteRenderPages(doc, {
+      byok: false,
+      tier: doc.settings.quality,
+      modelOverride: doc.settings.imageModelOverride,
+      holdBack: {},
+      anchors: { mode: 'auto', kinds: { places: true, props: true, styleKey: false, sheetV2: false }, layoutGuide: false }
+    });
+    const lines = q.anchors!.lines;
+    const count = (kinds: string[]) => lines.filter((l) => kinds.includes(l.kind)).reduce((n, l) => n + l.count, 0);
+    // The fixture really exercises every kind: places, a prop and a recurring extra.
+    expect(count(['place'])).toBeGreaterThan(0);
+    expect(count(['prop'])).toBeGreaterThan(0);
+    expect(count(['sheet'])).toBeGreaterThan(0);
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    // The provider bills the list price of what was asked (model × resolution), so a resolution the quote didn't price shows.
+    ctx.imagesFake.behave = (req) => ({ costUsd: imagePriceUsd(req.spec, req.resolution) });
+    const reserves: { operation: string; resolution?: string; model: string }[] = [];
+    const reserve = ctx.billing.reserve.bind(ctx.billing);
+    ctx.billing.reserve = async (args) => {
+      reserves.push({ operation: args.operation, resolution: args.resolution, model: args.model });
+      return reserve(args);
+    };
+    const est = estimateSpendAction(doc, { type: 'render_pages' }, false, await ctx.prices());
+    await (await startAction(ctx, { type: 'render_pages', quotedUsd: est.usd }, { confirmed: true })).done;
+
+    const anchor = anchorSheetJobFor(pin);
+    expect(anchor).toMatchObject({ kind: 'place', resolution: nearestResolution(resolveJobFor(pin, 'place').spec, ANCHOR_SHEET_RES) });
+    const sheet = resolveJobFor(pin, 'sheet');
+    expect(anchor.resolution).not.toBe(sheet.resolution); // the gap this pins: sheets draw at the preset's sheet size
+    // Every sheet reservation is a sheet operation (a 'place' job bills as one); place and prop anchors at
+    // ANCHOR_SHEET_RES, one each; character sheets (missing ones and recurring-character anchors) at the sheet size.
+    const sheetReserves = reserves.filter((r) => r.operation === 'comic.image.sheet');
+    expect(sheetReserves).toHaveLength(q.sheetIds.length + count(['sheet', 'place', 'prop']));
+    expect(sheetReserves.filter((r) => r.resolution === anchor.resolution)).toHaveLength(count(['place', 'prop']));
+    expect(sheetReserves.filter((r) => r.resolution === sheet.resolution)).toHaveLength(q.sheetIds.length + count(['sheet']));
+    expect(reserves.every((r) => r.model === sheetReserves[0].model)).toBe(true);
+    expect(ctx.imagesFake.calls.filter((c) => c.resolution === anchor.resolution)).toHaveLength(count(['place', 'prop']));
+    // What the anchors cost is what their lines quoted, and the run as a whole stays within its quote.
+    const anchorNames = [...doc.places.map((p) => `Location: ${p.name}`), 'Sheet: Brass Lantern'];
+    const anchorSpend = session.doc.spend.entries.filter((e) => anchorNames.includes(e.label)).reduce((s, e) => s + e.usd, 0);
+    const anchorQuoted = est.lines.filter((l) => l.label === 'place sheets' || l.label === 'prop sheets').reduce((s, l) => s + l.usd, 0);
+    expect(anchorSpend).toBeCloseTo(anchorQuoted, 3); // within per-entry rounding (0.0001 each)
+    const spent = spendEntries(session.doc).reduce((s, e) => s + e.usd, 0);
+    expect(spent).toBeLessThanOrEqual(est.usd + 1e-9);
   });
 });
 
