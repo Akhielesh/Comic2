@@ -4,8 +4,10 @@
 //            dist/THIRD-PARTY-NOTICES.txt from the npm packages that are REALLY in the browser bundle,
 //            plus the browser-scope fonts, vendored code and CDN scripts recorded in licence-policy.json.
 //   engines: node scripts/notices.mjs --engines --out <file>
-//            writes the notices for platform-engine/engines.lock.json and the engine-scope data assets
-//            (the image copies it to /licenses; the gateway serves it at GET /v1/notices).
+//            writes the notices for platform-engine/engines.lock.json, the image's own npm runtime
+//            (the non-dev packages of platform-engine/package-lock.json, texts read from
+//            platform-engine/node_modules, so run it after that folder's `npm ci`) and the engine-scope
+//            data assets (the image copies it to /licenses; the gateway serves it at GET /v1/notices).
 //   web, standalone: node scripts/notices.mjs --browser-modules <report.json> --out <file>
 //
 // Deterministic (sorted, no timestamps). Licence texts are read from each package's own
@@ -13,7 +15,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { APP_ROOT, effectiveLicence, loadPolicy } from './licence-check.mjs';
+import { APP_ROOT, WEB_NOTICES_TITLE, effectiveLicence, lockfilePackages, loadPolicy } from './licence-check.mjs';
 
 const MAX_TEXT = 64 * 1024;
 const LICENCE_FILE = /^(licen[cs]e|copying|notice)([.-].*)?$/i;
@@ -76,7 +78,8 @@ function assetEntries(policy, scopes, root) {
       /** @type {{file:string, text:string}[]} */
       let texts = [];
       try { texts = [{ file: r.licenceFile, text: readFileSync(path.join(root, r.licenceFile), 'utf8').trim() }]; } catch { /* the gate reports it */ }
-      return { title: r.name, version: r.version, licence: r.licence, note: `Terms: ${r.terms}`, source: r.source, texts };
+      const copyright = Array.isArray(r.copyright) && r.copyright.length ? `\n    ${r.copyright.join('\n    ')}` : '';
+      return { title: r.name, version: r.version, licence: r.licence, note: `Terms: ${r.terms}${copyright}`, source: r.source, texts };
     });
 }
 
@@ -97,7 +100,7 @@ export function webNotices(report, opts = {}) {
     .map((/** @type {any} */ r) => ({ title: r.name, version: r.version, licence: r.licence, source: r.source, texts: readLicenceTexts(path.join(root, r.path)) }));
   const cdn = (policy.externalScripts ?? []).map((/** @type {any} */ s) => ({ title: s.name, version: s.version, licence: s.licence, source: s.src, texts: [] }));
   return renderNotices({
-    heading: 'DreamStream — third-party notices (web app)',
+    heading: `DreamStream — ${WEB_NOTICES_TITLE}`,
     intro: [
       'This web app includes the open-source software below. Each item is listed with its licence and',
       'followed by the licence text it ships with. Generated at build time from the modules actually in',
@@ -106,19 +109,35 @@ export function webNotices(report, opts = {}) {
     sections: [
       { title: 'npm packages in the browser bundle', entries: packages },
       { title: 'Vendored code', entries: vendored },
-      { title: 'Fonts and other data assets', entries: assetEntries(policy, ['browser'], root) },
+      { title: 'Fonts, models and other data assets', entries: assetEntries(policy, ['browser'], root) },
       { title: 'Scripts loaded from a CDN (not bundled)', entries: cdn },
     ],
   });
 }
 
 /**
- * The engine image's /licenses text from engines.lock.json (+ engine-scope data assets).
- * @param {any} lock parsed engines.lock.json, or null @param {{ root?: string, policy?: any }} [opts]
+ * The engine image's /licenses text from engines.lock.json, the image's npm runtime and the
+ * engine-scope data assets.
+ * @param {any} lock parsed engines.lock.json, or null
+ * @param {{ root?: string, policy?: any, packageLock?: any, packageDir?: string }} [opts]
+ *   packageLock: the parsed platform-engine/package-lock.json (its non-dev packages are listed);
+ *   packageDir: the folder whose node_modules holds them (default <root>/<dirname of engines.npmLockfile>).
  */
 export function engineNotices(lock, opts = {}) {
   const root = opts.root ?? APP_ROOT;
   const policy = opts.policy ?? loadPolicy(path.join(root, 'scripts/licence-policy.json'));
+  const packageDir = opts.packageDir ?? path.join(root, path.dirname(policy.engines.npmLockfile ?? 'platform-engine/package-lock.json'));
+  // Every package that is not dev-only ships in the image (sharp with @img/sharp-libvips, whose LGPL
+  // notice is required, mammoth, unpdf, pdfkit, ...). Platform-specific optional builds that npm skips
+  // on the image's platform are listed too: over-listing a notice is harmless, missing one is not.
+  const npm = opts.packageLock
+    ? lockfilePackages(opts.packageLock, { lockfile: 'platform-engine/package-lock.json', root: packageDir })
+      .filter((p) => !p.dev)
+      .map((p) => {
+        const eff = effectiveLicence(p, policy);
+        return { title: p.name, version: p.version, licence: eff.licence ?? 'UNKNOWN', note: eff.note, texts: readLicenceTexts(path.join(packageDir, p.key)) };
+      })
+    : [];
   const engines = (Array.isArray(lock?.engines) ? lock.engines : []).map((/** @type {any} */ e) => {
     /** @type {{file:string, text:string}[]} */
     let texts = [];
@@ -130,9 +149,23 @@ export function engineNotices(lock, opts = {}) {
     intro: ['The engine image runs the software below, pinned by sha256 in engines.lock.json (policy: scripts/licence-policy.json).'],
     sections: [
       { title: 'Engines', entries: engines },
+      { title: 'npm packages in the engine image', entries: npm },
       { title: 'Fonts, ICC profiles and other data assets', entries: assetEntries(policy, ['engine'], root) },
     ],
   });
+}
+
+/**
+ * What `notices.mjs --engines` writes: reads engines.lock.json and the image's package-lock.json
+ * (both named in the policy) under root, either of which may be absent.
+ * @param {{ root?: string, policy?: any }} [opts]
+ */
+export function engineNoticesFromDisk(opts = {}) {
+  const root = opts.root ?? APP_ROOT;
+  const policy = opts.policy ?? loadPolicy(path.join(root, 'scripts/licence-policy.json'));
+  const read = (/** @type {string|undefined} */ rel) => (rel && existsSync(path.join(root, rel)) ? JSON.parse(readFileSync(path.join(root, rel), 'utf8')) : null);
+  const engineLock = policy.engines.lockfiles.map((/** @type {string} */ f) => read(f)).find((/** @type {any} */ l) => l !== null) ?? null;
+  return engineNotices(engineLock, { root, policy, packageLock: read(policy.engines.npmLockfile) });
 }
 
 /** @param {string[]} argv */
@@ -141,9 +174,7 @@ function main(argv) {
   const out = arg('--out');
   let text;
   if (argv.includes('--engines')) {
-    const policy = loadPolicy();
-    const file = policy.engines.lockfiles.map((/** @type {string} */ f) => path.join(APP_ROOT, f)).find((/** @type {string} */ f) => existsSync(f));
-    text = engineNotices(file ? JSON.parse(readFileSync(file, 'utf8')) : null, { policy });
+    text = engineNoticesFromDisk();
   } else {
     const modules = arg('--browser-modules');
     if (!modules || !existsSync(modules)) { console.error('notices: pass --browser-modules <report.json> (LICENCE_MODULES_OUT of a build) or --engines'); return 2; }

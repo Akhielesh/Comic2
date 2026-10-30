@@ -8,7 +8,8 @@
  *   - blocked everywhere: AGPL, SSPL, BUSL, PolyForm, CC-NC, source-available, no licence;
  *   - a named denylist; jszip under its MIT option; Liberation fonts 2.x (OFL) only;
  *   - known violations are owner decisions (KNOWN), never silent and never a dependency change.
- * Fixtures are synthetic lockfiles / engine locks / asset records judged by the REAL policy.
+ * Fixtures are synthetic lockfiles / engine locks / asset records judged by the REAL policy rules
+ * (FIXTURE_POLICY leaves out only the repository's own data-asset records).
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
@@ -17,13 +18,20 @@ import { fileURLToPath } from 'node:url';
 import { build, type Plugin, type Rollup } from 'vite';
 import { afterAll, describe, expect, it } from 'vitest';
 import * as gate from '../../scripts/licence-check.mjs';
-import { engineNotices, webNotices } from '../../scripts/notices.mjs';
+import { engineNotices, engineNoticesFromDisk, webNotices } from '../../scripts/notices.mjs';
 import viteConfig, { licenceModules } from '../../vite.config';
 
 const APP = fileURLToPath(new URL('../..', import.meta.url));
 const REPO = path.resolve(APP, '..');
 const POLICY = gate.loadPolicy(path.join(APP, 'scripts/licence-policy.json'));
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+/** The real rules without the repository's own data-asset records (some of which are KNOWN owner
+ *  decisions); 'the real repository' and the notices tests judge those records. */
+const FIXTURE_POLICY = (() => {
+  const p = clone(POLICY);
+  p.dataAssets.records = [];
+  return p;
+})();
 
 type Pkg = { version?: string; license?: string; dev?: boolean; name?: string };
 const lockfile = (pkgs: Record<string, Pkg>) => ({
@@ -45,7 +53,7 @@ type GateOpts = Parameters<typeof gate.runGate>[0];
 const fixtureGate = (opts: GateOpts = {}) =>
   gate.runGate({
     root: '/nonexistent/licence-fixture',
-    policy: POLICY,
+    policy: FIXTURE_POLICY,
     lockfiles: {},
     engines: {},
     dataAssetFiles: [],
@@ -110,6 +118,15 @@ describe('npm lockfiles', () => {
     expect(kinds(g, 'gpl-with-exception')).toEqual(['copyleft-not-allowlisted']);
   });
 
+  it('an npm alias cannot borrow a name on the GPL/LGPL server allowlist (aliases count for the denylist only)', () => {
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': lockfile({
+      '@img/sharp-libvips-linux-x64': { license: 'GPL-3.0-only', name: 'some-gpl-lib' },
+      '@img/sharp-libvips-linux-arm64': { license: 'LGPL-3.0-or-later' },
+    }) } });
+    expect(kinds(g, 'some-gpl-lib')).toEqual(['copyleft-not-allowlisted']);
+    expect(failuresOf(g, '@img/sharp-libvips-linux-arm64')).toEqual([]);
+  });
+
   it('compares SPDX ids case-insensitively', () => {
     const g = fixtureGate({ lockfiles: { 'package-lock.json': lockfile({ lower: { license: 'mit' }, agpl: { license: 'agpl-3.0-only' } }) } });
     expect(failuresOf(g, 'lower')).toEqual([]);
@@ -126,7 +143,7 @@ describe('npm lockfiles', () => {
       // Synthetic test fixtures are never shipped and are not read.
       writeFileSync(path.join(root, 'tests/fixtures/package-lock.json'), JSON.stringify(lockfile({ fixture: { license: 'AGPL-3.0-only' } })));
       expect(gate.scanLockfiles(root, POLICY)).toEqual(['new-worker/package-lock.json', 'package-lock.json']);
-      const policy = clone(POLICY);
+      const policy = clone(FIXTURE_POLICY);
       policy.dataAssets.records = [];
       policy.vendored.records = [];
       const g = gate.runGate({ root, policy, engines: {}, htmlPages: [] });
@@ -142,6 +159,44 @@ describe('npm lockfiles', () => {
     expect(failuresOf(g, 'evil')[0].source).toMatch(/^api-proxy\/package-lock\.json: /);
     for (const f of POLICY.lockfiles as string[]) expect(f).toMatch(/package-lock\.json$/);
     expect(POLICY.lockfiles).toEqual(expect.arrayContaining(['package-lock.json', 'api-proxy/package-lock.json', 'comics-edge/package-lock.json', 'live-worker/package-lock.json', 'email-worker/package-lock.json']));
+  });
+});
+
+describe('SPDX WITH exceptions are judged, never assumed to add rights', () => {
+  const COMMONS = ['Apache-2.0 WITH Commons-Clause', 'MIT WITH Commons-Clause', '(Apache-2.0 WITH Commons-Clause)', 'apache-2.0 with commons-clause'];
+  /** One package `p` under `licence`, judged in one scope: browser (in the bundle report), server or dev. */
+  const inScope = (scope: 'browser' | 'server' | 'dev', licence: string) => {
+    const g = fixtureGate({
+      lockfiles: { 'package-lock.json': lockfile({ p: { license: licence, dev: scope === 'dev' } }) },
+      browserModules: scope === 'browser' ? bundle({ name: 'p', licence }) : null,
+    });
+    const r = g.results.find((x) => x.name === 'p');
+    expect(r?.scope).toBe(scope);
+    return g;
+  };
+
+  it.each(['browser', 'server', 'dev'] as const)('Commons Clause written as WITH fails as blocked in %s scope', (scope) => {
+    for (const licence of COMMONS) {
+      const g = inScope(scope, licence);
+      expect(kinds(g, 'p')).toEqual(['blocked']);
+      expect(g.ok).toBe(false);
+    }
+  });
+
+  it.each(['browser', 'server', 'dev'] as const)('Apache-2.0 WITH LLVM-exception still passes in %s scope', (scope) => {
+    const g = inScope(scope, 'Apache-2.0 WITH LLVM-exception');
+    expect(g.failures).toEqual([]);
+    expect(g.results.find((r) => r.name === 'p')?.effective).toBe('Apache-2.0 WITH LLVM-exception');
+  });
+
+  it('an exception the policy does not list fails, and an OR alternative without one still rescues the package', () => {
+    expect(kinds(inScope('server', 'MIT WITH Some-Restriction-1.0'), 'p')).toEqual(['exception-not-allowed']);
+    const either = inScope('browser', '(Apache-2.0 WITH Commons-Clause OR MIT)');
+    expect(either.failures).toEqual([]);
+    expect(either.results.find((r) => r.name === 'p')?.effective).toBe('MIT');
+    // An exception is judged on top of its base licence, never instead of it.
+    expect(kinds(inScope('server', 'AGPL-3.0-only WITH LLVM-exception'), 'p')).toEqual(['blocked']);
+    for (const id of POLICY.withExceptions.allow as string[]) expect(gate.parseSpdx(`Apache-2.0 WITH ${id}`)).not.toBeNull();
   });
 });
 
@@ -186,9 +241,35 @@ describe('browser bundle (the licenceModules() report)', () => {
     expect(fixtureGate({ requireBrowserModules: true }).failures.map((r) => r.problems[0].kind)).toEqual(['no-browser-report']);
     const lock = lockfile({ a: { license: 'MIT' }, b: { license: 'ISC' } });
     const report = bundle({ name: 'a', licence: 'MIT' }, { name: 'b', licence: 'ISC' });
-    expect(fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: report, noticesText: 'a@1.0.0 — MIT\nb@1.0.0 — ISC' }).ok).toBe(true);
-    const g = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: report, noticesText: 'a@1.0.0 — MIT' });
+    const heading = `DreamStream — ${gate.WEB_NOTICES_TITLE}\n`;
+    expect(fixtureGate({ requireBrowserModules: true, lockfiles: { 'package-lock.json': lock }, browserModules: report, noticesText: `${heading}a@1.0.0 — MIT\nb@1.0.0 — ISC` }).ok).toBe(true);
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: report, noticesText: `${heading}a@1.0.0 — MIT` });
     expect(g.failures.flatMap((r) => r.problems.map((p) => p.message))).toEqual(['b@1.0.0 is bundled but not in the notices']);
+  });
+
+  it('CI mode fails on an empty or malformed bundle report and on notices that are not the web app\'s', () => {
+    const lock = lockfile({ a: { license: 'MIT' } });
+    const good = bundle({ name: 'a', licence: 'MIT' });
+    const notices = `DreamStream — ${gate.WEB_NOTICES_TITLE}\na@1.0.0 — MIT`;
+    const ci = (browserModules: unknown, noticesText = notices) =>
+      fixtureGate({ requireBrowserModules: true, lockfiles: { 'package-lock.json': lock }, browserModules, noticesText });
+    expect(ci(good).ok).toBe(true);
+    // What a Vite/Rollup upgrade that broke the hooks would produce, with an empty notices file.
+    const empty = ci({ version: 1, packages: [], vendored: [], firstPartyModules: 0 }, '');
+    expect(empty.ok).toBe(false);
+    expect(empty.failures.flatMap((r) => r.problems.map((p) => p.kind)).sort()).toEqual(['no-browser-report', 'notices-not-web']);
+    for (const broken of [
+      { ...good, packages: [] },
+      { ...good, firstPartyModules: 0 },
+      { ...good, version: 2 },
+      { ...good, packages: 'node_modules/a' },
+    ]) expect(ci(broken).failures.flatMap((r) => r.problems.map((p) => p.kind))).toEqual(['no-browser-report']);
+    // A report with packages but notices from somewhere else (or none at all) fails too.
+    expect(ci(good, 'a@1.0.0 — MIT').failures.flatMap((r) => r.problems.map((p) => p.kind))).toEqual(['notices-not-web']);
+    // Outside CI an unusable report is a warning, not a failure.
+    const local = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: { version: 1, packages: [], vendored: [], firstPartyModules: 0 } });
+    expect(local.ok).toBe(true);
+    expect(local.warnings.join('\n')).toMatch(/browser bundle report is not usable/);
   });
 
   it('maps module ids to packages (nested, scoped, queries, assets) and finds vendored first-party code', () => {
@@ -223,7 +304,7 @@ describe('the named denylist', () => {
     '@docx-editor.dev/docx-to-pdf', '@docx-editor.dev/telemetry', 'superdoc', 'pdf-lib', 'presenton',
   ];
   it.each(DENIED)('%s fails whatever its licence and scope, and no exception rescues it', (name) => {
-    const policy = clone(POLICY);
+    const policy = clone(FIXTURE_POLICY);
     policy.exceptions.push({ package: name, licence: 'MIT', decision: 'owner', reason: 'fixture' });
     for (const dev of [false, true]) {
       const g = fixtureGate({ policy, lockfiles: { 'package-lock.json': lockfile({ [name]: { license: 'MIT', dev } }) } });
@@ -283,7 +364,7 @@ describe('platform-engine/engines.lock.json', () => {
   });
 
   it('the sha256 and https-source rules hold even if the policy schema is loosened', () => {
-    const policy = clone(POLICY);
+    const policy = clone(FIXTURE_POLICY);
     const props = policy.engines.schema.properties.engines.items.properties;
     props.sha256 = { type: 'string' };
     props.source = { type: 'string' };
@@ -291,6 +372,23 @@ describe('platform-engine/engines.lock.json', () => {
     expect(loose({}).failures).toEqual([]);
     expect(loose({ sha256: 'deadbeef' }).failures.flatMap((r) => r.problems.map((p) => p.message))).toEqual(['sha256 must be 64 lowercase hex characters']);
     expect(loose({ source: 'http://mirror.example/x' }).failures.flatMap((r) => r.problems.map((p) => p.message))).toEqual(['source must be an https:// URL']);
+  });
+
+  it('the named denylist covers engines: an engine presenton fails as denied, and no exception rescues it', () => {
+    const policy = clone(FIXTURE_POLICY);
+    policy.exceptions.push({ package: 'engine:presenton', licence: 'Apache-2.0', decision: 'owner', reason: 'fixture' });
+    const g = fixtureGate({ policy, engines: { 'platform-engine/engines.lock.json': { version: 1, engines: [engine({ id: 'presenton', licence: 'Apache-2.0' })] } } });
+    expect(kinds(g, 'engine:presenton')).toEqual(['denied']);
+    expect(g.known).toEqual([]);
+    // The bare id never reaches the copyleft allowlist: only engine:<id> may name it.
+    expect(kinds(engineGate([engine({ id: 'superdoc', licence: 'MIT' })]), 'engine:superdoc')).toEqual(['denied']);
+  });
+
+  it('the Liberation 2.x pin holds for engines too (Debian fonts-liberation is the 1.x GPL build)', () => {
+    expect(kinds(engineGate([engine({ id: 'liberation-fonts', version: '1.07.4', licence: 'OFL-1.1' })]), 'engine:liberation-fonts')).toEqual(['asset-version']);
+    expect(kinds(engineGate([engine({ id: 'fonts-liberation', version: '1.07.4-11', licence: 'GPL-2.0-only WITH Font-exception-2.0' })]), 'engine:fonts-liberation').sort())
+      .toEqual(['asset-version', 'copyleft-not-allowlisted']);
+    expect(engineGate([engine({ id: 'fonts-liberation2', version: '2.1.5', licence: 'OFL-1.1' })]).failures).toEqual([]);
   });
 
   it('a duplicate id or a wrong lock version fails', () => {
@@ -304,11 +402,37 @@ describe('platform-engine/engines.lock.json', () => {
     expect(text).toContain('qpdf@12.4.2 — Apache-2.0 — https://github.com/qpdf/qpdf/releases/tag/v12.4.2');
     expect(text).toContain(`sha256 ${sha('a')}; upstream build`);
   });
+
+  it('notices.mjs --engines also lists the image\'s npm runtime (platform-engine/package-lock.json) with each package\'s own licence text', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'licence-engine-notices-'));
+    try {
+      const put = (rel: string, text: string) => { mkdirSync(path.dirname(path.join(root, rel)), { recursive: true }); writeFileSync(path.join(root, rel), text); };
+      put('platform-engine/engines.lock.json', JSON.stringify({ version: 1, engines: [engine()] }));
+      put('platform-engine/package-lock.json', JSON.stringify(lockfile({
+        sharp: { version: '0.34.4', license: 'Apache-2.0' },
+        '@img/sharp-libvips-linux-x64': { version: '1.2.3', license: 'LGPL-3.0-or-later' },
+        jszip: { version: '3.10.1', license: '(MIT OR GPL-3.0-or-later)' },
+        vitest: { version: '3.2.4', license: 'MIT', dev: true },
+      })));
+      put('platform-engine/node_modules/sharp/LICENSE', 'Apache License fixture text for sharp');
+      put('platform-engine/node_modules/@img/sharp-libvips-linux-x64/LICENSE', 'GNU LESSER GENERAL PUBLIC LICENSE fixture text for libvips');
+      const text = engineNoticesFromDisk({ root, policy: POLICY });
+      expect(text).toContain('qpdf@12.4.2 — Apache-2.0');
+      expect(text).toMatch(/^npm packages in the engine image \(3\)$/m);
+      expect(text).toContain('sharp@0.34.4 — Apache-2.0');
+      expect(text).toContain('@img/sharp-libvips-linux-x64@1.2.3 — LGPL-3.0-or-later');
+      expect(text).toMatch(/==== @img\/sharp-libvips-linux-x64@1\.2\.3 ====\n\nGNU LESSER GENERAL PUBLIC LICENSE fixture text for libvips/);
+      expect(text).toContain('jszip@3.10.1 — MIT');
+      expect(text).not.toContain('vitest');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('data assets (fonts, ICC profiles)', () => {
   const withRecords = (records: unknown[], extra: Record<string, unknown> = {}) => {
-    const policy = clone(POLICY);
+    const policy = clone(FIXTURE_POLICY);
     policy.dataAssets.records = records;
     Object.assign(policy.dataAssets, extra);
     return policy;
@@ -348,6 +472,20 @@ describe('data assets (fonts, ICC profiles)', () => {
     expect(v2.failures).toEqual([]);
     const unversioned = fixtureGate({ policy: withRecords([font({ name: 'Liberation Serif', files: ['assets/fonts/LiberationSans-*.ttf'] })]), dataAssetFiles: files });
     expect(kinds(unversioned, 'asset:Liberation Serif')).toEqual(['asset-version']);
+  });
+
+  it('model files are data assets too: ONNX, TFLite, MediaPipe .task and RTen files need a record', () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'licence-models-'));
+    try {
+      const files = ['public/models/a/m.onnx', 'public/models/b/m.tflite', 'public/models/c/m.task', 'platform-engine/models/ocr.rten', 'node_modules/x/m.onnx'];
+      for (const f of files) { mkdirSync(path.dirname(path.join(root, f)), { recursive: true }); writeFileSync(path.join(root, f), 'x'); }
+      const found = gate.scanDataAssets(root, POLICY);
+      expect(found).toEqual(['platform-engine/models/ocr.rten', 'public/models/a/m.onnx', 'public/models/b/m.tflite', 'public/models/c/m.task']);
+      const g = fixtureGate({ policy: withRecords([]), dataAssetFiles: found });
+      for (const f of found) expect(kinds(g, f)).toEqual(['asset-unrecorded']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('a browser-served font follows the browser rules', () => {
@@ -400,7 +538,7 @@ describe('vendored code and CDN scripts', () => {
 
 describe('owner decisions and elections', () => {
   it('a recorded owner decision turns a violation into KNOWN with its reason; a changed licence or version fails again', () => {
-    const policy = clone(POLICY);
+    const policy = clone(FIXTURE_POLICY);
     policy.exceptions = [{ package: 'odd', version: '1.0.0', licence: 'Elastic-2.0', decision: 'owner', status: 'pending', reason: 'dormant tool, owner deciding' }];
     const known = fixtureGate({ policy, lockfiles: { 'package-lock.json': lockfile({ odd: { license: 'Elastic-2.0' } }) } });
     expect(known.ok).toBe(true);
@@ -414,7 +552,7 @@ describe('owner decisions and elections', () => {
     expect(POLICY.exceptions.length).toBeGreaterThan(0);
     for (const e of POLICY.exceptions) {
       expect(e.package).toBeTruthy();
-      expect(e.version).toMatch(/^\d+\.\d+\.\d+/);
+      expect(e.version).toMatch(/^\d+(\.\d+)*$/);
       expect(e.licence).toBeTruthy();
       expect(e.decision).toBe('owner');
       expect(e.reason).toMatch(/components\/|chunk|used|Pulled in/);
@@ -429,7 +567,7 @@ describe('owner decisions and elections', () => {
     const g = fixtureGate({ lockfiles: { 'package-lock.json': lockfile({ jszip: { license: '(MIT OR GPL-3.0-or-later)' } }) }, browserModules: bundle({ name: 'jszip', licence: '(MIT OR GPL-3.0-or-later)' }) });
     expect(g.failures).toEqual([]);
     expect(g.results.find((r) => r.name === 'jszip')?.effective).toBe('MIT');
-    const policy = clone(POLICY);
+    const policy = clone(FIXTURE_POLICY);
     policy.elections.jszip.licence = 'Apache-2.0';
     const bad = fixtureGate({ policy, lockfiles: { 'package-lock.json': lockfile({ jszip: { license: '(MIT OR GPL-3.0-or-later)' } }) } });
     expect(kinds(bad, 'jszip')).toEqual(['election-mismatch']);
@@ -456,9 +594,33 @@ describe('notices', () => {
     // Browser fonts and CDN scripts are named too.
     expect(text).toContain('IBM Plex Sans — OFL-1.1');
     expect(text).toContain('jspdf@2.5.1 — MIT — https://cdnjs.cloudflare.com/');
+    // The browser-shipped models, with their label attribution.
+    expect(text).toContain('YAMNet sound model@1 — Apache-2.0 AND CC-BY-4.0 — https://huggingface.co/audiomagic/yamnet-onnx');
+    expect(text).toContain('AudioSet ontology by Google, licensed under CC BY 4.0');
+    expect(text).toContain('MediaPipe object detector (EfficientDet-Lite0 int8)@1 — Apache-2.0 AND CC-BY-4.0');
+    expect(text).toContain('COCO dataset labels by the COCO Consortium, licensed under CC BY 4.0');
+    expect(text).toContain('MediaPipe pose landmarker (lite)@1 — Apache-2.0');
+    expect(text.startsWith(`DreamStream — ${gate.WEB_NOTICES_TITLE}\n`)).toBe(true);
     // Deterministic.
     expect(webNotices({ packages: [{ key: 'node_modules/clsx', name: 'clsx', version: '2.1.1', licence: 'MIT' }] }, { root: APP, policy: POLICY }))
       .toBe(webNotices({ packages: [{ key: 'node_modules/clsx', name: 'clsx', version: '2.1.1', licence: 'MIT' }] }, { root: APP, policy: POLICY }));
+  });
+});
+
+describe('data-asset copyright lines', () => {
+  it('a record\'s own copyright lines are printed with it, and the QA fonts name their own authors, not Noto\'s', () => {
+    const policy = clone(FIXTURE_POLICY);
+    policy.dataAssets.records = [{ name: 'Fixture Display', files: ['x.woff2'], licence: 'OFL-1.1', scope: 'browser', terms: 'OFL-1.1, bundled',
+      copyright: ['Copyright 2001 The Fixture Display Authors'], licenceFile: 'public/fonts/LICENSE-OFL.md' }];
+    const text = webNotices({ packages: [] }, { root: APP, policy });
+    expect(text).toMatch(/^Fixture Display — OFL-1\.1\n {4}Terms: OFL-1\.1, bundled\n {4}Copyright 2001 The Fixture Display Authors$/m);
+    const qa = POLICY.dataAssets.records.find((r: { scope: string }) => r.scope === 'qa');
+    expect(qa.copyright).toEqual([
+      expect.stringMatching(/^Copyright 2010 The Bangers Project Authors/),
+      expect.stringMatching(/^Copyright 2014 The Comic Neue Project Authors/),
+      expect.stringMatching(/^Copyright 2016 The Inter Project Authors/),
+    ]);
+    if (!existsSync(path.join(APP, 'qa/fonts/OFL.txt'))) expect(qa.terms).toMatch(/OFL-1\.1 text only/);
   });
 });
 
@@ -521,6 +683,10 @@ describe('the real repository', () => {
     expect(g.ok).toBe(true);
     // Known violations are visible, never silent.
     expect(g.known.map((r) => r.name)).toContain('@codesandbox/nodebox');
+    // The browser-shipped models are recorded data assets: the two with CC BY 4.0 labels are owner decisions.
+    expect(g.known.filter((r) => r.name.startsWith('asset:')).map((r) => r.name).sort()).toEqual(['asset:MediaPipe object detector (EfficientDet-Lite0 int8)', 'asset:YAMNet sound model']);
+    expect(g.results.find((r) => r.name === 'asset:MediaPipe pose landmarker (lite)')?.status).toBe('ok');
+    expect(gate.scanDataAssets(APP, POLICY)).toEqual(expect.arrayContaining(['public/models/yamnet/yamnet-v1.onnx', 'public/models/mediapipe/efficientdet_lite0-int8-v1.tflite', 'public/models/mediapipe/pose_landmarker_lite-v1.task']));
     for (const r of g.known) expect(r.decision).toMatch(/^owner decision/);
     // Every font in the repo is covered by a record.
     expect(gate.scanDataAssets(APP, POLICY).length).toBeGreaterThan(0);

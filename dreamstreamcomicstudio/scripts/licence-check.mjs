@@ -5,8 +5,10 @@
 //   3. platform-engine/engines.lock.json (engine binaries: sha256, licence, source URL),
 //   4. the data assets (fonts, ICC profiles), vendored code and CDN scripts in index.html / live.html.
 //
-// Rules: browser = MIT/Apache/BSD/ISC/MPL/OFL only; GPL/LGPL server-only and only from the allowlist;
-// AGPL/SSPL/BUSL/PolyForm/CC-NC/source-available/no licence blocked everywhere; a named denylist.
+// Rules: browser = MIT/Apache/BSD/ISC/MPL/OFL only; GPL/LGPL server-only and only from the allowlist
+// (matched on a package's own name, never an npm alias); AGPL/SSPL/BUSL/PolyForm/CC-NC/source-available/
+// no licence blocked everywhere, `X WITH <exception>` included (only listed exceptions pass); a named
+// denylist (npm packages and engines alike).
 // A known violation is never fixed here by changing a dependency: the policy records it as an owner
 // decision (`exceptions`), which this gate reports as KNOWN on every run instead of failing.
 //
@@ -23,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 
 export const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const POLICY_FILE = path.join(APP_ROOT, 'scripts/licence-policy.json');
+/** The web app's notices heading ends with this (scripts/notices.mjs); the gate checks the built file has it. */
+export const WEB_NOTICES_TITLE = 'third-party notices (web app)';
 
 /** @typedef {'browser'|'server'|'dev'|'engine'|'qa'} Scope */
 /** @typedef {{ kind: string, licence?: string, message: string }} Problem */
@@ -142,8 +146,10 @@ export function compareVersions(a, b) {
 export const rulesFor = (scope) => (scope === 'browser' || scope === 'qa' ? 'browser' : 'server');
 
 /**
- * One licence id in one scope. `names` are the subject's names (npm name, alias, `engine:<id>`,
- * `asset:<name>`) that the copyleft allowlist may name.
+ * One licence id in one scope. `names[0]` is the subject's own name (npm package name, `engine:<id>`,
+ * `asset:<name>`) and the only one the copyleft allowlist may name. Any further names (an npm alias,
+ * that is the lockfile key an installer chose; an engine's bare id) count for the denylist only, so a
+ * GPL package installed under an allowlisted key such as `@img/sharp-libvips-*` gains nothing.
  * @param {string} id @param {Scope} scope @param {string[]} names @param {any} policy
  * @returns {Problem|null}
  */
@@ -154,7 +160,7 @@ export function classifyLicence(id, scope, names, policy) {
   }
   if (new RegExp(policy.copyleft.pattern, 'i').test(id)) {
     if (rulesFor(scope) === 'browser') return { kind: 'copyleft-in-browser', licence: id, message: `${id} is GPL/LGPL: never allowed in the browser bundle` };
-    const allowed = policy.copyleft.serverAllowlist.some((/** @type {any} */ e) => names.some((n) => globMatch(e.match, n)));
+    const allowed = policy.copyleft.serverAllowlist.some((/** @type {any} */ e) => globMatch(e.match, names[0]));
     return allowed ? null : { kind: 'copyleft-not-allowlisted', licence: id, message: `${id} is GPL/LGPL and ${names[0]} is not on the server copyleft allowlist` };
   }
   const allow = policy.scopes[rulesFor(scope)].allow;
@@ -163,15 +169,38 @@ export function classifyLicence(id, scope, names, policy) {
 }
 
 /**
+ * The `exception` of `id WITH exception`, judged on its own. An exception is never assumed to add
+ * rights: Commons Clause is declared exactly as `Apache-2.0 WITH Commons-Clause` and takes them away.
+ * It fails when it matches a blocked pattern, and otherwise unless policy.withExceptions.allow lists it.
+ * @param {string} exception @param {string} id @param {any} policy
+ * @returns {Problem|null}
+ */
+export function classifyException(exception, id, policy) {
+  const licence = `${id} WITH ${exception}`;
+  for (const b of policy.blocked) {
+    if (new RegExp(b.pattern, 'i').test(exception)) return { kind: 'blocked', licence, message: `${licence}: ${exception} is blocked everywhere (${b.reason})` };
+  }
+  const allow = policy.withExceptions?.allow ?? [];
+  if (allow.some((/** @type {string} */ a) => a.toLowerCase() === exception.toLowerCase())) return null;
+  return { kind: 'exception-not-allowed', licence, message: `${licence}: the exception ${exception} is not on withExceptions.allow (read it first: an exception can take rights away)` };
+}
+
+/**
  * Evaluates a parsed expression. OR passes when one alternative passes (the first that does is the
- * one we use); AND needs every part; `X WITH exception` is judged as X (an exception only adds rights).
+ * one we use); AND needs every part; `X WITH exception` needs X to pass AND the exception to pass
+ * classifyException (an exception can restrict, so it is never ignored).
  * @param {any} ast @param {Scope} scope @param {string[]} names @param {any} policy
  * @returns {{ ok: boolean, used: string, problems: Problem[] }}
  */
 export function evaluateExpression(ast, scope, names, policy) {
   if (ast.t === 'id') {
+    /** @type {Problem[]} */
+    const problems = [];
+    const w = ast.with ? classifyException(ast.with, ast.id, policy) : null;
+    if (w) problems.push(w);
     const p = classifyLicence(ast.id, scope, names, policy);
-    return { ok: !p, used: spdxToString(ast), problems: p ? [p] : [] };
+    if (p) problems.push(p);
+    return { ok: problems.length === 0, used: spdxToString(ast), problems };
   }
   const parts = ast.items.map((/** @type {any} */ a) => evaluateExpression(a, scope, names, policy));
   if (ast.t === 'or') {
@@ -418,7 +447,14 @@ export function checkEngines(lock, policy, file = 'platform-engine/engines.lock.
     seen.add(e.id);
     if (!/^[0-9a-f]{64}$/.test(String(e.sha256 ?? ''))) extra.push({ kind: 'schema', message: 'sha256 must be 64 lowercase hex characters' });
     if (!/^https:\/\//.test(String(e.source ?? ''))) extra.push({ kind: 'schema', message: 'source must be an https:// URL' });
-    out.push(evaluateItem({ name: `engine:${e.id}`, version: e.version, licence: e.licence, scope: 'engine', source: file, noDeny: true, extraProblems: extra }, policy));
+    // Version pins (Liberation 2.x) hold for engines too: Debian's fonts-liberation is the 1.x GPL build.
+    for (const pin of policy.dataAssets.minVersions ?? []) {
+      if (!new RegExp(pin.name, 'i').test(String(e.id ?? ''))) continue;
+      if (compareVersions(String(e.version ?? ''), pin.min) < 0) extra.push({ kind: 'asset-version', message: `engine ${e.id} ${e.version ?? '(no version)'} is below ${pin.min} (${pin.reason})` });
+    }
+    // The denylist sees both `engine:<id>` and the bare id (presenton is a server app, so this file is
+    // where it would come in); the copyleft allowlist sees only `engine:<id>` (classifyLicence).
+    out.push(evaluateItem({ name: `engine:${e.id}`, aliases: [String(e.id)], version: e.version, licence: e.licence, scope: 'engine', source: file, extraProblems: extra }, policy));
   }
   return out;
 }
@@ -476,7 +512,7 @@ export function checkDataAssets(files, policy, opts = {}) {
     if (typeof r.licenceFile !== 'string' || !r.licenceFile) extra.push({ kind: 'asset-no-licence-file', message: `${r.name}: no licenceFile recorded` });
     else if (!exists(r.licenceFile)) extra.push({ kind: 'asset-no-licence-file', message: `${r.name}: licence file ${r.licenceFile} is missing` });
     for (const pin of policy.dataAssets.minVersions ?? []) {
-      if (!new RegExp(pin.name).test(r.name ?? '')) continue;
+      if (!new RegExp(pin.name, 'i').test(r.name ?? '')) continue;
       if (!r.version) extra.push({ kind: 'asset-version', message: `${r.name}: a version is required (${pin.reason})` });
       else if (compareVersions(r.version, pin.min) < 0) extra.push({ kind: 'asset-version', message: `${r.name} ${r.version} is below ${pin.min} (${pin.reason})` });
     }
@@ -597,6 +633,22 @@ export function checkExternalScripts(pages, policy) {
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * Why a licenceModules() report cannot stand for the browser bundle, or null when it can. An empty or
+ * malformed report would judge every bundled package by the server rules and leave the notices check
+ * nothing to compare, so CI treats it like a missing one: a Vite or Rollup upgrade that changed
+ * chunk.modules, originalFileNames or the worker hook shows up here instead of switching the
+ * browser rules off.
+ * @param {any} report @returns {string|null}
+ */
+export function browserReportProblem(report) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return 'no browser-modules report: build with LICENCE_MODULES_OUT set and pass --browser-modules';
+  if (report.version !== 1) return `the browser-modules report has version ${JSON.stringify(report.version)}, not 1`;
+  if (!Array.isArray(report.packages) || report.packages.length === 0) return 'the browser-modules report lists no npm packages: licenceModules() saw no bundled modules (did a Vite/Rollup upgrade change the bundle hooks?)';
+  if (!(typeof report.firstPartyModules === 'number' && report.firstPartyModules > 0)) return 'the browser-modules report counts no first-party modules: licenceModules() did not see the app itself';
+  return null;
+}
+
+/**
  * @param {{
  *   root?: string, policy?: any,
  *   lockfiles?: Record<string, any>,              // name → parsed lockfile (default: policy.lockfiles read from root)
@@ -627,13 +679,16 @@ export function runGate(opts = {}) {
     for (const f of files) lockfiles[f] = JSON.parse(readFileSync(path.join(root, f), 'utf8'));
   }
   const browser = opts.browserModules ?? null;
-  if (!browser) {
+  const reportProblem = browserReportProblem(browser);
+  if (reportProblem) {
     if (opts.requireBrowserModules) {
       results.push({ subject: 'browser bundle', name: 'browser bundle', scope: 'browser', source: 'licenceModules()', licence: '', status: 'fail',
-        problems: [{ kind: 'no-browser-report', message: 'no browser-modules report: build with LICENCE_MODULES_OUT set and pass --browser-modules' }] });
-    } else warnings.push('browser bundle not checked: build with LICENCE_MODULES_OUT=<file> and pass --browser-modules <file> (CI does)');
+        problems: [{ kind: 'no-browser-report', message: reportProblem }] });
+    } else if (!browser) warnings.push('browser bundle not checked: build with LICENCE_MODULES_OUT=<file> and pass --browser-modules <file> (CI does)');
+    else warnings.push(`browser bundle report is not usable: ${reportProblem}`);
   }
-  const browserKeys = new Map((browser?.packages ?? []).map((/** @type {any} */ p) => [p.key, p]));
+  const browserPackages = Array.isArray(browser?.packages) ? browser.packages : [];
+  const browserKeys = new Map(browserPackages.map((/** @type {any} */ p) => [p.key, p]));
   const seenBrowser = new Set();
   for (const [file, lock] of Object.entries(lockfiles)) {
     const pkgs = lockfilePackages(lock, { lockfile: file, root: file === 'package-lock.json' ? root : undefined });
@@ -646,11 +701,11 @@ export function runGate(opts = {}) {
     }
   }
   // Bundled packages the main lockfile does not list (e.g. a stale node_modules): judged from the report.
-  for (const p of browser?.packages ?? []) {
+  for (const p of browserPackages) {
     if (seenBrowser.has(p.key)) continue;
     results.push(evaluateItem({ name: p.name, version: p.version, licence: p.licence, scope: 'browser', source: `bundle ${p.key} (not in package-lock.json)` }, policy));
   }
-  if (browser) info.push(`browser bundle: ${(browser.packages ?? []).length} npm packages, ${browser.firstPartyModules ?? 0} first-party modules`);
+  if (browser) info.push(`browser bundle: ${browserPackages.length} npm packages, ${browser.firstPartyModules ?? 0} first-party modules`);
 
   // 2. Engines.
   /** @type {Record<string, any>} */
@@ -673,19 +728,24 @@ export function runGate(opts = {}) {
   warnings.push(...assets.warnings);
 
   // 4. Vendored code (on disk and in the bundle) and CDN scripts.
-  const vendoredDirs = [...new Set([...(opts.vendoredDirs ?? scanVendored(root, policy)), ...(browser?.vendored ?? [])])];
+  const vendoredDirs = [...new Set([...(opts.vendoredDirs ?? scanVendored(root, policy)), ...(Array.isArray(browser?.vendored) ? browser.vendored : [])])];
   const vend = checkVendored(vendoredDirs, policy, { root, exists });
   results.push(...vend.results);
   warnings.push(...vend.warnings);
   const pages = opts.htmlPages ?? policy.htmlEntries.filter((/** @type {string} */ f) => exists(f)).map((/** @type {string} */ f) => ({ file: f, html: readFileSync(path.join(root, f), 'utf8') }));
   results.push(...checkExternalScripts(pages, policy));
 
-  // 5. The built notices name every bundled package.
-  if (opts.noticesText != null && browser) {
-    const missing = (browser.packages ?? []).filter((/** @type {any} */ p) => !opts.noticesText?.includes(`${p.name}@${p.version}`));
-    if (missing.length) {
-      results.push({ subject: 'THIRD-PARTY-NOTICES.txt', name: 'THIRD-PARTY-NOTICES.txt', scope: 'browser', source: 'notices', licence: '', status: 'fail',
-        problems: missing.map((/** @type {any} */ p) => ({ kind: 'notice-missing', message: `${p.name}@${p.version} is bundled but not in the notices` })) });
+  // 5. The built notices are the web app's and name every bundled package.
+  if (opts.noticesText != null) {
+    const text = opts.noticesText;
+    /** @type {Problem[]} */
+    const problems = [];
+    if (!text.includes(WEB_NOTICES_TITLE)) problems.push({ kind: 'notices-not-web', message: `the notices file has no '${WEB_NOTICES_TITLE}' heading: it is empty or not the web app's (scripts/notices.mjs webNotices())` });
+    for (const p of browserPackages) {
+      if (!text.includes(`${p.name}@${p.version}`)) problems.push({ kind: 'notice-missing', message: `${p.name}@${p.version} is bundled but not in the notices` });
+    }
+    if (problems.length) {
+      results.push({ subject: 'THIRD-PARTY-NOTICES.txt', name: 'THIRD-PARTY-NOTICES.txt', scope: 'browser', source: 'notices', licence: '', status: 'fail', problems });
     }
   }
 

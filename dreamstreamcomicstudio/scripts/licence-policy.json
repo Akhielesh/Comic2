@@ -4,7 +4,8 @@
     "platform-engine/engines.lock.json and the data assets (fonts, ICC profiles). Enforced by scripts/licence-check.mjs",
     "(CI step 'Licence gate' in .github/workflows/ci.yml); notices by scripts/notices.mjs. Licences are SPDX ids.",
     "Browser bundle: MIT, Apache, BSD, ISC, MPL and OFL only. GPL/LGPL: server-only and only from serverCopyleft.",
-    "Blocked everywhere: AGPL, SSPL, BUSL, PolyForm, CC-NC, source-available and no-licence code.",
+    "Blocked everywhere: AGPL, SSPL, BUSL, PolyForm, CC-NC, source-available and no-licence code, also when written as",
+    "'X WITH <exception>' (Apache-2.0 WITH Commons-Clause): an exception passes only if 'withExceptions' lists it.",
     "A violation found in today's dependencies is never fixed here by changing a dependency: it goes under",
     "'exceptions' as an owner decision with a reason, so CI stays green and the decision stays visible on every run."
   ],
@@ -38,9 +39,14 @@
     { "pattern": "^NONE$", "reason": "no licence" }
   ],
 
+  "withExceptions": {
+    "$comment": "The SPDX exceptions allowed after WITH. Each one here was read and only ADDS rights (linking, runtime, font-embedding or generated-output permissions). Any other WITH fails ('exception-not-allowed'), and one that matches 'blocked' fails as blocked: Commons Clause is declared as 'Apache-2.0 WITH Commons-Clause' and takes rights away. The base licence is still judged by its own rules (GPL-2.0-only WITH Classpath-exception-2.0 stays server-only and allowlist-only).",
+    "allow": ["LLVM-exception", "Classpath-exception-2.0", "Font-exception-2.0", "GCC-exception-3.1", "Autoconf-exception-3.0", "Bison-exception-2.2"]
+  },
+
   "copyleft": {
     "pattern": "^L?GPL-",
-    "$comment": "GPL and LGPL (any version, with or without exceptions such as the font exception). Never in the browser; on the server only for the names below. Names are npm package names, 'engine:<id>' for engines.lock.json entries and 'asset:<name>' for data assets.",
+    "$comment": "GPL and LGPL (any version, with or without exceptions such as the font exception). Never in the browser; on the server only for the names below. Names are a package's OWN npm name (never the alias key it is installed under), 'engine:<id>' for engines.lock.json entries and 'asset:<name>' for data assets.",
     "serverAllowlist": [
       { "match": "@img/sharp-libvips-*", "reason": "libvips (LGPL-3.0-or-later) through sharp: prebuilt shared library, server-only, unmodified" },
       { "match": "@img/sharp-win32-*", "reason": "sharp's Windows build bundles libvips (LGPL-3.0-or-later); dev machines only" },
@@ -51,6 +57,7 @@
     ]
   },
 
+  "$denyPackages": "Matched against an npm package's own name AND any alias it is installed under, and against an engines.lock.json entry as both 'engine:<id>' and the bare '<id>'. An exception never rescues a denied package.",
   "denyPackages": [
     { "match": "@tiptap-pro/*", "reason": "Tiptap Pro: paid, not open source" },
     { "match": "@univerjs-pro/*", "reason": "Univer Pro: paid" },
@@ -94,6 +101,26 @@
       "status": "pending",
       "recorded": "2026-10-30",
       "reason": "W3C polyfill pulled in by @react-hook/intersection-observer <- @codesandbox/sandpack-react (chat code playground, lazy vendor-sandpack chunk). The W3C Software and Document License is permissive (notice only) but not on the browser list (MIT/Apache/BSD/ISC/MPL/OFL). Owner options: add W3C-20150513 to the browser list, or drop it together with the playground."
+    },
+    {
+      "package": "asset:YAMNet sound model",
+      "version": "1",
+      "licence": "Apache-2.0 AND CC-BY-4.0",
+      "scopes": ["browser"],
+      "decision": "owner",
+      "status": "pending",
+      "recorded": "2026-10-30",
+      "reason": "Data asset served to every browser: public/models/yamnet/yamnet-v1.onnx, used by the baby monitor's camera device (live/monitor/yamnet.worker.ts, live/monitor/soundClasses.ts). The weights are Apache-2.0, but per public/models/yamnet/README.md the AudioSet labels it classifies into are CC BY 4.0, which is attribution-only yet not on the browser list (MIT/Apache/BSD/ISC/MPL/OFL). The attribution is printed in THIRD-PARTY-NOTICES.txt. Owner options: allow CC-BY-4.0 for browser data assets (attribution kept in the notices), or remove the model and the monitor's sound detection."
+    },
+    {
+      "package": "asset:MediaPipe object detector (EfficientDet-Lite0 int8)",
+      "version": "1",
+      "licence": "Apache-2.0 AND CC-BY-4.0",
+      "scopes": ["browser"],
+      "decision": "owner",
+      "status": "pending",
+      "recorded": "2026-10-30",
+      "reason": "Data asset served to every browser: public/models/mediapipe/efficientdet_lite0-int8-v1.tflite, used by the baby monitor's smart vision (live/monitor/sceneAi.ts). The model is Apache-2.0, but per public/models/mediapipe/README.md its COCO labels are CC BY 4.0, which is attribution-only yet not on the browser list (MIT/Apache/BSD/ISC/MPL/OFL). The attribution is printed in THIRD-PARTY-NOTICES.txt. Owner options: allow CC-BY-4.0 for browser data assets (attribution kept in the notices), or remove the object detector (smart vision keeps the pose model)."
     }
   ],
 
@@ -104,7 +131,8 @@
     "comics-edge/package-lock.json",
     "live-worker/package-lock.json",
     "email-worker/package-lock.json",
-    "data-egress/package-lock.json"
+    "data-egress/package-lock.json",
+    "platform-engine/package-lock.json"
   ],
 
   "htmlEntries": ["index.html", "live.html"],
@@ -121,9 +149,11 @@
   },
 
   "engines": {
-    "$lockfiles": "The lockfiles below are always read; every other package-lock.json under the app (outside node_modules, build output and test fixtures) is found and read too, with the server rules unless its packages are in the browser bundle.",
-  "lockfiles": ["platform-engine/engines.lock.json"],
-    "$comment": "Every engine binary that enters the platform-engine image: pinned by sha256, with its licence and source URL. Evaluated with the server rules under the name 'engine:<id>'. The schema is a JSON Schema subset (type, const, enum, required, properties, additionalProperties, items, pattern, minLength, maxLength, maxItems).",
+    "$lockfiles": "Only the files listed here are read; each engine is judged by the server rules under the name engine:<id>.",
+    "lockfiles": ["platform-engine/engines.lock.json"],
+    "$npmLockfile": "The engine image's own npm runtime (sharp with libvips, the document libraries). The gate judges it like every other package-lock.json (it is in 'lockfiles' above); `node scripts/notices.mjs --engines` lists its non-dev packages in the image's /licenses, with the texts read from platform-engine/node_modules.",
+    "npmLockfile": "platform-engine/package-lock.json",
+    "$comment": "Every engine binary that enters the platform-engine image: pinned by sha256, with its licence and source URL. Evaluated with the server rules under the name 'engine:<id>'; the denylist also sees the bare id, and dataAssets.minVersions applies to the id (case-insensitive). The schema is a JSON Schema subset (type, const, enum, required, properties, additionalProperties, items, pattern, minLength, maxLength, maxItems).",
     "schema": {
       "type": "object",
       "required": ["version", "engines"],
@@ -159,14 +189,15 @@
   },
 
   "dataAssets": {
-    "$comment": "Every font and ICC profile file in the repo (outside node_modules and build output) must match exactly one record with its licence, its terms (what we may do with it) and the licence text file. Scope browser = served to browsers; server = backend image; engine = platform-engine image; qa = the QA harness build (dist-qa), checked with the browser rules.",
-    "extensions": [".ttf", ".otf", ".woff", ".woff2", ".ttc", ".icc", ".icm"],
+    "$comment": "Every font, ICC profile and model file (ONNX, TFLite, MediaPipe .task, RTen) in the repo (outside node_modules and build output) must match exactly one record with its licence, its terms (what we may do with it) and the licence text file. Scope browser = served to browsers (listed in THIRD-PARTY-NOTICES.txt); server = backend image; engine = platform-engine image (listed in its /licenses); qa = the QA harness build (dist-qa), checked with the browser rules. No OCR model (*.rten, *.onnx) may enter the engine image (plan section 11): never add an engine-scope record for one.",
+    "extensions": [".ttf", ".otf", ".woff", ".woff2", ".ttc", ".icc", ".icm", ".onnx", ".tflite", ".task", ".rten"],
     "ignoreDirs": ["node_modules", "dist", "dist-qa", "dist-ssr", "server/dist", ".git", ".wrangler", "test-results", "playwright-report", "coverage", "fixtures"],
     "customLicences": {
       "$comment": "LicenseRef-* terms a data asset may carry (an ICC profile's licence, say), keyed by id: { terms, licenceText, scopes, verified }. 'verified' becomes true only after a human read the licence text; until then any record using it fails."
     },
+    "$minVersions": "Version pins, matched case-insensitively against data-asset record names AND engines.lock.json ids (an engine 'fonts-liberation' or 'liberation-fonts' 1.07.4 fails). A matching record or engine below 'min', or without a version, fails as 'asset-version'.",
     "minVersions": [
-      { "name": "^Liberation\\b", "min": "2.0.0", "reason": "Liberation fonts 1.x are GPL-2.0 with a font exception; 2.x is OFL-1.1" }
+      { "name": "(^|[^A-Za-z])Liberation", "min": "2.0.0", "reason": "Liberation fonts 1.x are GPL-2.0 with a font exception; 2.x is OFL-1.1" }
     ],
     "records": [
       {
@@ -210,9 +241,44 @@
         "files": ["qa/fonts/bangers-latin.woff2", "qa/fonts/comic-neue-*-latin.woff2", "qa/fonts/inter-latin.woff2"],
         "licence": "OFL-1.1",
         "scope": "qa",
-        "terms": "SIL Open Font License 1.1: used only by the QA harness build (dist-qa), which is never deployed; not sold on their own.",
+        "terms": "SIL Open Font License 1.1: used only by the QA harness build (dist-qa), which is never deployed; not sold on their own. The copyright holders are the lines under 'copyright' (read from each font's name table, ID 0). The licenceFile is used for the OFL-1.1 text only: its first line names the Noto authors, not these families, until qa/fonts/OFL.txt with these three lines lands (wave note) and this record points at it.",
+        "copyright": [
+          "Copyright 2010 The Bangers Project Authors (https://github.com/googlefonts/bangers)",
+          "Copyright 2014 The Comic Neue Project Authors (https://github.com/crozynski/comicneue)",
+          "Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)"
+        ],
         "licenceFile": "server/assets/fonts/OFL.txt",
         "source": "https://fonts.google.com/ (Bangers, Comic Neue, Inter: OFL-1.1 families)"
+      },
+      {
+        "name": "YAMNet sound model",
+        "version": "1",
+        "files": ["public/models/yamnet/yamnet-v1.onnx"],
+        "licence": "Apache-2.0 AND CC-BY-4.0",
+        "scope": "browser",
+        "terms": "Weights: Apache License 2.0, Copyright 2022 Google LLC (google/yamnet v1 as the ONNX export published at huggingface.co/audiomagic/yamnet-onnx, weights unchanged). Served unmodified to the baby monitor's camera device and run in the browser; live/monitor/yamnet.worker.ts checks its SHA-256 before it runs. Its 521 output classes are the AudioSet ontology, whose labels are CC BY 4.0 (public/models/yamnet/README.md): attribution 'AudioSet ontology by Google, licensed under CC BY 4.0, https://creativecommons.org/licenses/by/4.0/'.",
+        "licenceFile": "public/models/yamnet/LICENSE",
+        "source": "https://huggingface.co/audiomagic/yamnet-onnx"
+      },
+      {
+        "name": "MediaPipe object detector (EfficientDet-Lite0 int8)",
+        "version": "1",
+        "files": ["public/models/mediapipe/efficientdet_lite0-int8-v1.tflite"],
+        "licence": "Apache-2.0 AND CC-BY-4.0",
+        "scope": "browser",
+        "terms": "Google MediaPipe Tasks model, Apache License 2.0, Google LLC. Served unmodified to the baby monitor's camera device and run in the browser by live/monitor/sceneAi.ts, which checks its SHA-256. Its 80 class labels are the COCO labels, CC BY 4.0 (public/models/mediapipe/README.md): attribution 'COCO dataset labels by the COCO Consortium, licensed under CC BY 4.0, https://creativecommons.org/licenses/by/4.0/'.",
+        "licenceFile": "public/models/mediapipe/LICENSE",
+        "source": "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/"
+      },
+      {
+        "name": "MediaPipe pose landmarker (lite)",
+        "version": "1",
+        "files": ["public/models/mediapipe/pose_landmarker_lite-v1.task"],
+        "licence": "Apache-2.0",
+        "scope": "browser",
+        "terms": "Google MediaPipe Tasks model (BlazePose lite, 33 landmarks, float16), Apache License 2.0, Google LLC. Served unmodified to the baby monitor's camera device and run in the browser by live/monitor/sceneAi.ts, which checks its SHA-256.",
+        "licenceFile": "public/models/mediapipe/LICENSE",
+        "source": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/"
       }
     ]
   }
