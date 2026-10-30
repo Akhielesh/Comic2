@@ -149,7 +149,7 @@ import { actionHandlerFor } from './actions/index.js';
 import { castOpsForUncast, findUncastBeings } from './castScan.js';
 import type { OrchestratorContext } from './context.js';
 import { costFormatterFor, governCard, governDollars, costViewFor, type CostFormatter } from './costText.js';
-import type { ActionHandler, SanitizeCtx } from './extensions.js';
+import { notAvailableAction, type ActionHandler, type SanitizeCtx } from './extensions.js';
 import { imageFailureDetail, imageFailureInfo, modelUnavailableReason, pickImageRoute } from './imageClient.js';
 import { createPriceBook, registryPriceBook, type ServerPriceBook } from './models/index.js';
 import { isKeyScopedFailure, isOwnSideFailure, isRoutePausedError, narrowBlockedAction, preflightImageRun, UPSTREAM_FAILURE_CODES } from './models/health.js';
@@ -1250,10 +1250,35 @@ async function startActionScoped(ctx: StudioContext, action: StudioAction, opts:
 }
 
 /**
+ * A registered handler that can say, before any quote, that it can't run (pro plan §5.3 HARD rule: a Ship 2 stub refuses
+ * with NOT_AVAILABLE before any quote, gate or spend). Optional; read by runFeatureAction and approveGate before they
+ * estimate. extensions.ts ActionHandler is where it belongs (wave note); until it is declared there it is read here, and
+ * a stub opts in by returning its refusal words (B7: enrich_pages → CONSISTENCY_NOT_AVAILABLE).
+ */
+export interface PreQuoteCheck {
+  unavailable?(ctx: StudioContext, action: StudioAction): string | null | undefined;
+}
+
+/** The refusal a handler gives before any quote, or null when it can run. */
+const unavailableMessage = (handler: ActionHandler, ctx: StudioContext, action: StudioAction): string | null => {
+  const check = (handler as ActionHandler & PreQuoteCheck).unavailable;
+  if (typeof check !== 'function') return null;
+  const message = check.call(handler, ctx, action);
+  return typeof message === 'string' && message.trim() ? message : null;
+};
+
+/** The same calm notice an inert stub gives (a card for the director, a message for a UI tap); `blocked`, NOT_AVAILABLE. */
+const refuseUnavailable = (ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions, message: string): Promise<StartedAction> =>
+  notAvailableAction(action.type, handler.spend, message).run(ctx, action, opts);
+
+/**
  * Run a registered feature action. Spend handlers with an estimate (translate) go through
  * estimate → gateDecision → run exactly like the core spends (a stale chip quote re-gates).
+ * A handler that says it can't run (PreQuoteCheck) is refused first: no quote, no gate card, no spend.
  */
 export async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
+  const refusal = unavailableMessage(handler, ctx, action);
+  if (refusal) return refuseUnavailable(ctx, handler, action, opts, refusal);
   // Ship 2's enrich_pages is a spend like translate (quoted, gated, re-gated on a stale quote).
   if (!handler.spend || !handler.estimate || !isGatedSpend(action)) return handler.run(ctx, action, opts);
   const estimate = await handler.estimate(ctx, action as SpendAction);
@@ -1293,6 +1318,10 @@ async function approveGate(ctx: StudioContext, gateId: string, opts: RunActionOp
   if (!isGatedSpend(gated)) throw badRequest('That approval has nothing to run.');
   const doc = ctx.session.doc;
   const handler = actionHandlerFor(gated.type);
+  // An action that can't run is refused before it is re-quoted; its card is left as it was (never flipped to
+  // 'approved' and back), and nothing is spent.
+  const refusal = handler ? unavailableMessage(handler, ctx, gate.action) : null;
+  if (handler && refusal) return refuseUnavailable(ctx, handler, gate.action, opts, refusal);
   const estimate = handler?.estimate ? await handler.estimate(ctx, gated as SpendAction) : estimateSpendAction(doc, gated, spendActionIsByok(doc, gated, ctx.keys), gated.type === 'recheck_page' ? undefined : prices);
   const nickname = handler ? gate.model : gateModelName(doc, gated, estimate);
   const origin = originOf(opts);

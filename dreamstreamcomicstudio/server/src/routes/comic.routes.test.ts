@@ -28,7 +28,9 @@ import {
   type FakeImages,
   type ScriptedLlm
 } from '../comic/orchestrator.fakes.js';
-import { JOB_TIMINGS, noticeCard } from '../comic/jobs.js';
+import { JOB_TIMINGS, noticeCard, type PreQuoteCheck } from '../comic/jobs.js';
+import { actionHandlerFor } from '../comic/actions/index.js';
+import type { ActionHandler } from '../comic/extensions.js';
 import { CONSISTENCY_NOT_AVAILABLE } from '../comic/actions/consistency.js';
 import { FLATTEN_NOT_AVAILABLE } from '../comic/actions/editor.js';
 import { FIX_PANEL_NOT_AVAILABLE } from '../comic/actions/panelFix.js';
@@ -1485,6 +1487,45 @@ describe('Ship 2 actions through the route parser and the stream (stubs refuse; 
       expect(saved.conversation.map((m) => m.text), String(action.type)).toContain(says);
       for (const m of saved.conversation) expect(m.text).not.toContain('$');
       __resetSessionsForTests();
+    }
+  });
+
+  it('a handler that says it can’t run is refused before any quote: no budget card on a click, no re-quote on an approval', async () => {
+    usage = { governed: true, pctLeft: 64, exhausted: false, pctPerStandardPage: 1.5 };
+    // What B7's enrich_pages stub declares (wave note): its refusal, before any quote. Restored after the test.
+    const handler = actionHandlerFor('enrich_pages') as ActionHandler & PreQuoteCheck;
+    expect(handler?.spend).toBe(true);
+    handler.unavailable = () => CONSISTENCY_NOT_AVAILABLE;
+    try {
+      // A budget with less than one page of room left: the quote alone would stop at a 'budget' card.
+      const doc = ship2Doc();
+      doc.settings = { ...doc.settings, budgetUsd: 0.001 };
+      const { events } = await stream('proj-1', { kind: 'action', action: { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] } });
+      expect(events.some((e) => e.type === 'error')).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+      let saved = store.docs.get('proj-1')!.doc;
+      expect(saved.gate ?? null).toBeNull();
+      expect(saved.conversation.at(-1)).toMatchObject({ role: 'assistant', text: CONSISTENCY_NOT_AVAILABLE, cards: [expect.objectContaining({ type: 'notice', text: CONSISTENCY_NOT_AVAILABLE })] });
+      expect(saved.spend.entries).toEqual([]);
+      expect(llm.calls).toHaveLength(0);
+      for (const m of saved.conversation) expect(m.text).not.toContain('$');
+      expect(JSON.stringify(events.filter((e) => e.type !== 'done'))).not.toContain('$');
+      __resetSessionsForTests();
+
+      // A card an earlier director turn left: approving it is refused before the re-quote, and the card is not flipped.
+      const gated = ship2Doc();
+      gated.gate = { id: 'gate_1', action: { type: 'enrich_pages', pageIds: ['pg_1'] } as never, estimateUsd: 1, imageCount: 0, model: 'Writer', title: 'Add detail', summary: 'Add detail', reason: 'policy', status: 'open', createdAt: Date.now() };
+      const approval = await stream('proj-1', { kind: 'action', action: { type: 'approve_gate', gateId: 'gate_1' } });
+      expect(approval.events.some((e) => e.type === 'error')).toBe(false);
+      expect(approval.events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+      saved = store.docs.get('proj-1')!.doc;
+      expect(saved.gate).toMatchObject({ id: 'gate_1', status: 'open' });
+      expect(JSON.stringify(approval.events)).not.toContain('"approved"');
+      expect(saved.conversation.at(-1)).toMatchObject({ role: 'assistant', text: CONSISTENCY_NOT_AVAILABLE });
+      expect(saved.spend.entries).toEqual([]);
+      expect(llm.calls).toHaveLength(0);
+    } finally {
+      delete handler.unavailable;
     }
   });
 });

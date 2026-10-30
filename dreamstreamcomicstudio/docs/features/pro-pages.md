@@ -263,8 +263,14 @@ their handlers):
 | Action | Kind | Where it runs | Today (stub) |
 |---|---|---|---|
 | `fix_panel {pageId, panelId, mode, instruction?, region?}` | spend (image) | core: `jobs.ts startSpend` (quote, gate, budget, lock, preflight, reservation, `RenderRun.panelFix`) | `fixPanelProblem` refuses before any quote: "Fixing a single panel isn't available yet. Nothing was drawn or charged." |
-| `enrich_pages {pageIds}` | spend (text, `ENRICH_USD_PER_PAGE` = $0.006 a page before the markup) | `actions/consistency.ts`, through the gate like `translate` | a UI click is refused (`NOT_AVAILABLE`, nothing charged); a director start stops at its gate first, and approving it is refused the same way |
+| `enrich_pages {pageIds}` | spend (text, `ENRICH_USD_PER_PAGE` = $0.006 a page before the markup) | `actions/consistency.ts`, through the gate like `translate` | a UI click is refused (`NOT_AVAILABLE`, nothing charged). Until the stub declares `unavailable` (below), a director start, or a click on a budget with less than the quote left, still shows its gate card first; approving it is refused the same way |
 | `panelize_page`, `rebind_panels`, `apply_finding`, `flatten_page` | free | `actions/{panels,consistency,editor}.ts` | refused with `NOT_AVAILABLE`, nothing changed |
+
+**Refused before any quote.** A registered handler may answer `unavailable(ctx, action)` with its refusal words
+(`jobs.ts PreQuoteCheck`). `runFeatureAction` asks it before the estimate and the gate, and `approveGate` before it
+re-quotes: the same calm notice an inert stub gives, no card, no quote, no spend, and an open card is left as it was.
+Open: `extensions.ts ActionHandler` declares the hook (then `PreQuoteCheck` folds into it), and B7's `enrich_pages` stub
+returns `CONSISTENCY_NOT_AVAILABLE` from it; until then that stub can still show a gate card before it refuses.
 
 `render_pages` carries `followFrames` ("Redraw with my layout") and `anchors` ('auto' | 'none'); `edit_page` carries
 `pasteBack` ('region', the default whenever a region is marked, or 'page'). The stream parser keeps them on the action.
