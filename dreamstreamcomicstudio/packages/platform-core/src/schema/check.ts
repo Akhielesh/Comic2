@@ -148,8 +148,9 @@ const walkText = (node: TextSchema, v: unknown, path: Path, ctx: Ctx): unknown =
 
 /**
  * One plain address in a conservative ASCII subset: a dot-atom local part of letters, digits, `_`, `+` and `-`, and a
- * domain of LDH labels ending in a letter-led TLD. No display names, quotes, comments, IP literals, `%`, `?` or
- * whitespace, so an address can never smuggle a header line or a second recipient into a draft or a `mailto:` link.
+ * domain of LDH labels ending in a letter-led TLD. No display names, quotes, comments, IP literals, `%`, `?`, `,` or
+ * whitespace, so an address can never smuggle a header line or a second recipient into a draft. (A `mailto:` link's
+ * own query is checked separately by `isSafeHref`: only `subject` and `body` may follow the `?`.)
  */
 const LOCAL = '[A-Za-z0-9_+-]+(?:\\.[A-Za-z0-9_+-]+)*';
 const LABEL = '[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?';
@@ -168,10 +169,26 @@ const HTTPS = new RegExp(`^https://(${LABEL}(?:\\.${LABEL})*)(?::([0-9]{1,5}))?(
 const MAILTO = new RegExp(`^mailto:([^?]*)(?:\\?(${URL_REST}))?$`);
 const BAD_PERCENT = /%(?![0-9A-Fa-f]{2})/;
 const MAILTO_MAX_ADDRESSES = 20;
+/** The only `mailto:` header fields a link may set. `to`, `cc` and `bcc` would add recipients; no other header belongs in a link. */
+const MAILTO_FIELDS = ['subject', 'body'];
+/** A percent-encoded CR or LF: a line break in a mailto `subject` could start a new header in a careless client. */
+const ENCODED_LINE_BREAK = /%0[ad]/i;
+
+/** `subject=…&body=…`: every hfield is `name=value` with a name from `MAILTO_FIELDS`, and the subject is one line. */
+const isSafeMailtoQuery = (query: string): boolean =>
+  query.split('&').every((field) => {
+    const eq = field.indexOf('=');
+    if (eq <= 0) return false;
+    const name = field.slice(0, eq).toLowerCase();
+    if (MAILTO_FIELDS.indexOf(name) === -1) return false;
+    return name !== 'subject' || !ENCODED_LINE_BREAK.test(field.slice(eq + 1));
+  });
 
 /**
  * `https://host[:port][/path][?query][#fragment]` (no userinfo, so `https://bank.example@evil.example` is refused) or
- * `mailto:addr[,addr…][?query]`. Lower-case schemes only; every `%` must start a valid escape.
+ * `mailto:addr[,addr…][?subject=…&body=…]`: the recipients are exactly the addresses before the `?`, because a query
+ * may set only `subject` and `body` (never `to`, `cc`, `bcc` or another header; a percent-encoded field name is refused
+ * too). Lower-case schemes only; every `%` must start a valid escape.
  */
 export const isSafeHref = (v: string, max: number = SCHEMA_LIMITS.linkMax): boolean => {
   if (v.length > max || BAD_PERCENT.test(v)) return false;
@@ -183,7 +200,8 @@ export const isSafeHref = (v: string, max: number = SCHEMA_LIMITS.linkMax): bool
     const m = MAILTO.exec(v);
     if (!m) return false;
     const addresses = m[1].split(',');
-    return addresses.length <= MAILTO_MAX_ADDRESSES && addresses.every(isEmail);
+    if (addresses.length > MAILTO_MAX_ADDRESSES || !addresses.every(isEmail)) return false;
+    return m[2] === undefined || isSafeMailtoQuery(m[2]);
   }
   return false;
 };

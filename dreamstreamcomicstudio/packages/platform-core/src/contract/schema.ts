@@ -264,7 +264,7 @@ export type HexColor = string;
 
 export type AssetMime = 'image/png' | 'image/jpeg' | 'image/webp';
 
-/** An image as bytes we already hold: `data:image/(png|jpeg|webp);base64,…`, at most 5 MB decoded. */
+/** An image as bytes we already hold: `data:image/(png|jpeg|webp);base64,…`, at most 5 MB (5,000,000 bytes) decoded. */
 export interface DataAssetRef {
   kind: 'data';
   dataUri: string;
@@ -291,6 +291,15 @@ export type OpActor = 'user' | 'agent';
  * Every op is `{op, id, baseRev, …}`. `baseRev` is the document `rev` the op was made against: an `apply*Ops` call
  * applies an op only while `op.baseRev === (doc.rev ?? 0)` at the start of the call, and bumps `rev` by 1 when it
  * applies at least one op, so a replayed batch is refused as `stale`.
+ *
+ * Accepting a suggestion (`DocSuggestion`): the host re-stamps the suggestion's op `baseRev` to the current
+ * `doc.rev` after checking that its target ids (`sectionId` / `blockId`, when the op names one) still exist, and only
+ * then applies it, so accepting one suggestion never makes the others stale. A suggestion whose target is gone is
+ * refused as `not-found`, never re-stamped.
+ *
+ * Every op has an exact inverse in the same op union (undo): `insert_*` / `add_slide` ↔ `remove_*`, `attach` ↔
+ * `detach` (the inverse `attach` carries the old `index`), and `update_*` / `set_*` / `move_slide` ↔ themselves
+ * carrying the previous value or position.
  */
 export interface OpBase {
   id: OpId;
@@ -328,8 +337,8 @@ export const SCHEMA_LIMITS = {
   emailLocalMax: 64,
   linkMax: 2048,
   assetIdMax: 200,
-  /** Decoded bytes of a `data:` image: 5 MB (5 × 1024 × 1024). */
-  assetDataMaxBytes: 5242880,
+  /** Decoded bytes of a `data:` image: 5 MB (10^6 bytes per MB, as plan §5.2 counts). */
+  assetDataMaxBytes: 5000000,
   /** Object field names. */
   fieldNameMax: 64,
   fieldsMax: 256,

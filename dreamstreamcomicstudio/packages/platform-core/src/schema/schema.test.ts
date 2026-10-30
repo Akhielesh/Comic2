@@ -19,18 +19,24 @@ import {
   check,
   s,
   toJsonSchema,
+  type AgentEmailOp,
   type AssetRef,
   type CheckResult,
   type DeckOp,
   type DeckSpec,
   type DocOp,
+  type DocOpName,
+  type DocSection,
   type DocSuggestion,
+  type EmailAttachOp,
   type EmailDoc,
   type EmailOp,
+  type EmailOpName,
   type Infer,
   type JsonSchema,
   type RichDoc,
   type Schema,
+  type Section,
 } from '../index.js';
 
 const fixture = (name: string): unknown => JSON.parse(readFileSync(new URL(`../../fixtures/${name}`, import.meta.url), 'utf8'));
@@ -206,17 +212,24 @@ describe('check(): behaviour', () => {
     expect(r).toMatchObject({ ok: false, errors: [{ path: 'tags', code: 'too-many' }] });
   });
 
-  it('caps data: images at 5 MB decoded by default, and sniffs their bytes', () => {
+  it('caps data: images at 5 MB (5,000,000 bytes) decoded by default, and sniffs their bytes', () => {
     const Img = s.assetRef();
     const png = 'iVBORw0KGgo'; // PNG magic
-    const at = (bytes: number) => `data:image/png;base64,${png}${'A'.repeat(Math.ceil((bytes - 8) / 3) * 4 - (png.length - 8))}`;
-    const atCap = 'data:image/png;base64,' + png + 'A'.repeat(Math.floor(SCHEMA_LIMITS.assetDataMaxBytes / 3) * 4 - png.length);
-    expect(check(Img, { kind: 'data', dataUri: atCap }).ok).toBe(true);
-    expect(check(Img, { kind: 'data', dataUri: at(SCHEMA_LIMITS.assetDataMaxBytes + 3) })).toMatchObject({
-      ok: false,
-      errors: [{ path: 'dataUri', code: 'asset-too-large' }],
-    });
-    expect(SCHEMA_LIMITS.assetDataMaxBytes).toBe(5 * 1024 * 1024);
+    /** A PNG data URI that decodes to exactly `bytes` bytes (base64 padded as needed). */
+    const exactly = (bytes: number) => {
+      const length = Math.ceil(bytes / 3) * 4;
+      const pad = (length / 4) * 3 - bytes;
+      return `data:image/png;base64,${png}${'A'.repeat(length - png.length - pad)}${'='.repeat(pad)}`;
+    };
+    expect(check(Img, { kind: 'data', dataUri: exactly(5_000_000) }).ok).toBe(true);
+    expect(check(Img, { kind: 'data', dataUri: exactly(4_999_999) }).ok).toBe(true);
+    for (const bytes of [5_000_001, 5_000_002, 5 * 1024 * 1024]) {
+      expect(check(Img, { kind: 'data', dataUri: exactly(bytes) }), String(bytes)).toMatchObject({
+        ok: false,
+        errors: [{ path: 'dataUri', code: 'asset-too-large' }],
+      });
+    }
+    expect(SCHEMA_LIMITS.assetDataMaxBytes).toBe(5_000_000);
   });
 
   it('formats keys that are not identifiers with brackets', () => {
@@ -265,6 +278,25 @@ describe('a schema without caps (or otherwise malformed) throws', () => {
     ['toJsonSchema() with a hand-written uncapped schema', () => toJsonSchema({ kind: 'text' } as Schema<string>, { target: 'llm' })],
     ['toJsonSchema() with an unknown target', () => toJsonSchema(s.bool(), { target: 'openapi' as never })],
     ['toJsonSchema() for mcp with a non-object root', () => toJsonSchema(s.bool(), { target: 'mcp' })],
+    [
+      'toJsonSchema() llm with a union field that is text in one variant and a number in another',
+      () =>
+        toJsonSchema(
+          s.union('t', [s.object({ t: s.literal('a'), x: s.text({ max: 3 }) }), s.object({ t: s.literal('b'), x: s.int() })]),
+          { target: 'llm' },
+        ),
+    ],
+    [
+      'toJsonSchema() llm with a nested union field of two JSON types',
+      () =>
+        toJsonSchema(
+          s.object({
+            v: s.union('t', [s.object({ t: s.literal('a'), x: s.object({ y: s.bool() }) }), s.object({ t: s.literal('b'), x: s.object({ y: s.text({ max: 2 }) }) })]),
+          }),
+          { target: 'llm' },
+        ),
+    ],
+    ['toJsonSchema() llm with tuple items of two JSON types', () => toJsonSchema(s.tuple([s.text({ max: 3 }), s.int()]), { target: 'llm' })],
   ];
   for (const [name, make] of bad) {
     it(name, () => {
@@ -366,6 +398,18 @@ describe('toJsonSchema()', () => {
   it('is deterministic', () => {
     expect(JSON.stringify(toJsonSchema(Kitchen, { target: 'llm' }))).toBe(JSON.stringify(toJsonSchema(Kitchen, { target: 'llm' })));
   });
+
+  it('llm merges a field two variants declare as integer and number, and only llm refuses two JSON types', () => {
+    const numeric = s.union('t', [s.object({ t: s.literal('a'), x: s.int({ min: 0, max: 3 }) }), s.object({ t: s.literal('b'), x: s.number({ min: -1, max: 1 }) })]);
+    expect(toJsonSchema(numeric, { target: 'llm' })).toEqual({
+      type: 'object',
+      properties: { t: { type: 'string', enum: ['a', 'b'] }, x: { type: 'number', minimum: -1, maximum: 3 } },
+      required: ['t', 'x'],
+    });
+    const mixed = s.union('t', [s.object({ t: s.literal('a'), x: s.text({ max: 3 }) }), s.object({ t: s.literal('b'), x: s.int() })]);
+    expect(() => toJsonSchema(mixed, { target: 'llm' })).toThrow(/different JSON types/);
+    expect(toJsonSchema(mixed, { target: 'strict' })).toMatchObject({ oneOf: [{ properties: { x: { type: 'string' } } }, { properties: { x: { type: 'integer' } } }] });
+  });
 });
 
 describe('Infer', () => {
@@ -446,6 +490,7 @@ const DocOpS = s.union('op', [
   s.object({ op: s.literal('update_block'), ...opBase, blockId: id, block: DocBlockS }),
   s.object({ op: s.literal('remove_block'), ...opBase, blockId: id }),
   s.object({ op: s.literal('insert_section'), ...opBase, index, section: SectionS }),
+  s.object({ op: s.literal('remove_section'), ...opBase, sectionId: id }),
   s.object({ op: s.literal('set_title'), ...opBase, title: s.text({ max: R.title }) }),
 ]);
 const SuggestionS = s.object({ id, op: DocOpS, author: s.literal('agent'), at: s.int({ min: 0 }) });
@@ -541,15 +586,19 @@ const EmailDocS = s.object({
   brand: s.optional(id),
 });
 const actor = s.optional(s.enum(['user', 'agent']));
-const EmailOpS = s.union('op', [
+const agentEmailOps = [
   s.object({ op: s.literal('set_subject'), ...opBase, actor, subject: s.text({ max: E.subject, singleLine: true }) }),
   s.object({ op: s.literal('insert_block'), ...opBase, actor, index, block: EmailBlockS }),
   s.object({ op: s.literal('update_block'), ...opBase, actor, blockId: id, block: EmailBlockS }),
   s.object({ op: s.literal('remove_block'), ...opBase, actor, blockId: id }),
-  s.object({ op: s.literal('attach'), ...opBase, actor, attachment: AttachmentS }),
+  s.object({ op: s.literal('attach'), ...opBase, actor, index, attachment: AttachmentS }),
   s.object({ op: s.literal('detach'), ...opBase, actor, attachmentId: id }),
+] as const;
+const EmailOpS = s.union('op', [
+  ...agentEmailOps,
   s.object({ op: s.literal('set_recipients'), ...opBase, actor: s.literal('user'), to: recipients, cc: s.optional(recipients), bcc: s.optional(recipients) }),
 ]);
+const AgentEmailOpS = s.union('op', agentEmailOps);
 
 describe('the frozen contract (src/contract/**) is exactly expressible in the DSL', () => {
   it('Infer<schema> is the contract type', () => {
@@ -560,6 +609,9 @@ describe('the frozen contract (src/contract/**) is exactly expressible in the DS
     expectTypeOf<Infer<typeof DeckOpS>>().toEqualTypeOf<DeckOp>();
     expectTypeOf<Infer<typeof EmailDocS>>().toEqualTypeOf<EmailDoc>();
     expectTypeOf<Infer<typeof EmailOpS>>().toEqualTypeOf<EmailOp>();
+    expectTypeOf<Infer<typeof AgentEmailOpS>>().toEqualTypeOf<AgentEmailOp>();
+    expectTypeOf<Infer<typeof SectionS>>().toEqualTypeOf<Section>();
+    expectTypeOf<Section>().toEqualTypeOf<DocSection>();
   });
 
   const pass = (schema: Schema<unknown>, name: string) => {
@@ -596,7 +648,7 @@ describe('the frozen contract (src/contract/**) is exactly expressible in the DS
     for (const c of ['bar', 'line', 'pie']) expect(text('deck/full.json')).toContain(`"chart": "${c}"`);
     for (const t of ['heading', 'paragraph', 'list', 'button', 'quote', 'divider', 'image', 'columns']) expect(text('email/full.json')).toContain(`"type": "${t}"`);
     const ops = (name: string) => (fixture(`contract/${name}`) as { op: string }[]).map((o) => o.op);
-    expect(new Set(ops('richdoc/ops.json'))).toEqual(new Set(['insert_block', 'update_block', 'remove_block', 'insert_section', 'set_title']));
+    expect(new Set(ops('richdoc/ops.json'))).toEqual(new Set(['insert_block', 'update_block', 'remove_block', 'insert_section', 'remove_section', 'set_title']));
     expect(new Set(ops('deck/ops.json'))).toEqual(new Set(['add_slide', 'update_slide', 'remove_slide', 'move_slide', 'set_theme']));
     expect(new Set(ops('email/ops.json'))).toEqual(
       new Set(['set_subject', 'insert_block', 'update_block', 'remove_block', 'attach', 'detach', 'set_recipients']),
@@ -605,7 +657,7 @@ describe('the frozen contract (src/contract/**) is exactly expressible in the DS
 
   it('holds the caps the plan names (§5.2)', () => {
     expect(MODEL_LIMITS.runText).toBe(4000);
-    expect(SCHEMA_LIMITS.assetDataMaxBytes).toBe(5 * 1024 * 1024);
+    expect(SCHEMA_LIMITS.assetDataMaxBytes).toBe(5_000_000);
     expect([R.sections, R.blocksPerSection, R.tableRows, R.tableCols]).toEqual([200, 2000, 50, 12]);
     expect([D.slides, D.elementsPerSlide]).toEqual([60, 40]);
     expect([E.subject, E.preheader, E.recipients, E.blocks, E.field, E.attachments, E.columns]).toEqual([250, 150, 100, 80, 10000, 5, 2]);
@@ -614,6 +666,68 @@ describe('the frozen contract (src/contract/**) is exactly expressible in the DS
   it('an agent set_recipients does not fit the contract (only a user changes recipients)', () => {
     const op = { op: 'set_recipients', id: 'op-x', baseRev: 0, actor: 'agent', to: [{ address: 'evil@example.com' }] };
     expect(check(EmailOpS, op)).toMatchObject({ ok: false, errors: [{ path: 'actor', code: 'literal' }] });
+  });
+
+  it('AgentEmailOp (what model-facing tools take) cannot express set_recipients, even one claiming actor "user"', () => {
+    expectTypeOf<Extract<AgentEmailOp, { op: 'set_recipients' }>>().toBeNever();
+    expectTypeOf<Exclude<EmailOpName, AgentEmailOp['op']>>().toEqualTypeOf<'set_recipients'>();
+    const claimed = { op: 'set_recipients', id: 'op-x', baseRev: 0, actor: 'user', to: [{ address: 'evil@example.com' }] };
+    expect(check(EmailOpS, claimed).ok).toBe(true); // the full union admits it: hosts stamp `actor`, models never do
+    expect(check(AgentEmailOpS, claimed)).toMatchObject({ ok: false, errors: [{ path: 'op', code: 'tag' }] });
+    for (const op of fixture('contract/email/ops.json') as { op: string }[]) expect(check(AgentEmailOpS, op).ok, op.op).toBe(op.op !== 'set_recipients');
+    expect(JSON.stringify(toJsonSchema(AgentEmailOpS, { target: 'llm' }))).not.toContain('set_recipients');
+  });
+
+  it('every op has its inverse in its own union (undo), so W1.2 can compute exact inverses', () => {
+    const DOC_INVERSE: { [K in DocOpName]: DocOpName } = {
+      insert_block: 'remove_block',
+      remove_block: 'insert_block',
+      update_block: 'update_block',
+      insert_section: 'remove_section',
+      remove_section: 'insert_section',
+      set_title: 'set_title',
+    };
+    const EMAIL_INVERSE: { [K in EmailOpName]: EmailOpName } = {
+      set_subject: 'set_subject',
+      insert_block: 'remove_block',
+      remove_block: 'insert_block',
+      update_block: 'update_block',
+      attach: 'detach',
+      detach: 'attach',
+      set_recipients: 'set_recipients',
+    };
+    expect(Object.keys(DOC_INVERSE).sort()).toEqual((fixture('contract/richdoc/ops.json') as { op: string }[]).map((o) => o.op).filter((o, i, a) => a.indexOf(o) === i).sort());
+    expect(Object.keys(EMAIL_INVERSE).sort()).toEqual((fixture('contract/email/ops.json') as { op: string }[]).map((o) => o.op).filter((o, i, a) => a.indexOf(o) === i).sort());
+    // insert_section s2 → remove_section s2; detach of the FIRST of [a1, a2] → attach a1 back at index 0.
+    const undoInsertSection = { op: 'remove_section', id: 'op-undo-1', baseRev: 1, sectionId: 's2' };
+    expect(check(DocOpS, undoInsertSection)).toEqual({ ok: true, value: undoInsertSection });
+    const a1 = (fixture('contract/email/ops.json') as { op: string; attachment?: unknown }[]).find((o) => o.op === 'attach')!.attachment;
+    const undoDetach = { op: 'attach', id: 'op-undo-2', baseRev: 1, index: 0, attachment: a1 };
+    expect(check(EmailOpS, undoDetach)).toEqual({ ok: true, value: undoDetach });
+    expectTypeOf<EmailAttachOp['index']>().toEqualTypeOf<number | undefined>();
+  });
+
+  it('every contract schema projects to an llm schema in which every property has a JSON type', () => {
+    const untyped: string[] = [];
+    const visit = (node: JsonSchema, path: string): void => {
+      if (typeof node.type !== 'string') untyped.push(path || '(root)');
+      if (node.properties && typeof node.properties === 'object') {
+        for (const [k, v] of Object.entries(node.properties as Record<string, JsonSchema>)) visit(v, `${path}.${k}`);
+      }
+      if (node.items && typeof node.items === 'object') visit(node.items as JsonSchema, `${path}[]`);
+    };
+    const schemas: [string, Schema<unknown>][] = [
+      ['RichDoc', RichDocS],
+      ['DocOp', DocOpS],
+      ['DocSuggestion', SuggestionS],
+      ['DeckSpec', DeckS],
+      ['DeckOp', DeckOpS],
+      ['EmailDoc', EmailDocS],
+      ['EmailOp', EmailOpS],
+      ['AgentEmailOp', AgentEmailOpS],
+    ];
+    for (const [name, schema] of schemas) visit(toJsonSchema(schema, { target: 'llm' }), name);
+    expect(untyped).toEqual([]);
   });
 
   it('the email contract has no way to send', () => {

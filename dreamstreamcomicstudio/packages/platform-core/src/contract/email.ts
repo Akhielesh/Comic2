@@ -146,36 +146,49 @@ export interface EmailSetSubjectOp extends EmailOpBase {
   subject: string;
 }
 
-/** Insert `block` at `index` (absent appends). */
+// The block ops (`insert_block`, `update_block`, `remove_block`) address TOP-LEVEL blocks only: `index` is a position
+// in `EmailDoc.blocks` and `blockId` names a block there. A block inside a `columns` block changes through an
+// `update_block` of that `columns` block (which carries its whole new content), so every block op has an exact inverse.
+
+/** Insert `block` at `index` in the top-level `blocks` (absent appends). */
 export interface EmailInsertBlockOp extends EmailOpBase {
   op: 'insert_block';
   index?: number;
   block: EmailBlock;
 }
 
-/** Replace block `blockId` with `block` (same id). */
+/** Replace top-level block `blockId` with `block` (same id). */
 export interface EmailUpdateBlockOp extends EmailOpBase {
   op: 'update_block';
   blockId: string;
   block: EmailBlock;
 }
 
+/** Remove top-level block `blockId`. */
 export interface EmailRemoveBlockOp extends EmailOpBase {
   op: 'remove_block';
   blockId: string;
 }
 
+/** Add `attachment` (its `id` must be new). */
 export interface EmailAttachOp extends EmailOpBase {
   op: 'attach';
+  /** Insert position in `attachments`; absent appends. */
+  index?: number;
   attachment: AttachmentSpec;
 }
 
+/** Remove attachment `attachmentId`; its inverse is an `attach` with the old `index`. */
 export interface EmailDetachOp extends EmailOpBase {
   op: 'detach';
   attachmentId: string;
 }
 
-/** Only a person changes recipients: an op without `actor: 'user'` is refused. */
+/**
+ * Only a person changes recipients: an op without `actor: 'user'` is refused. It replaces all three fields: the
+ * document's `to`, `cc` and `bcc` become exactly the op's, so an absent `cc` / `bcc` CLEARS that field (the document
+ * then has none) and the inverse is the same op carrying the previous three fields.
+ */
 export interface EmailSetRecipientsOp extends OpBase {
   op: 'set_recipients';
   actor: 'user';
@@ -194,6 +207,12 @@ export type EmailOp =
   | EmailSetRecipientsOp;
 
 export type EmailOpName = EmailOp['op'];
+
+/**
+ * The ops a model may propose: every `EmailOp` except `set_recipients`. Model-facing tool inputs use `AgentEmailOp`,
+ * never `EmailOp`; a host deletes `actor` from model output and stamps it itself.
+ */
+export type AgentEmailOp = Exclude<EmailOp, EmailSetRecipientsOp>;
 
 /** `applyEmailOps(doc, ops)`. */
 export type EmailOpResult = OpResult<EmailDoc, EmailOp>;

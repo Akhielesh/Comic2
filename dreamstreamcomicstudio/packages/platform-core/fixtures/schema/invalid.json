@@ -351,6 +351,51 @@
       "code": "link"
     },
     {
+      "name": "a mailto link that adds a bcc",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?bcc=x@evil.example",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a mailto link that adds a cc after its subject (any case)",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?subject=Hi&CC=x@evil.example",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a mailto link that adds a to",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?to=x@evil.example",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a mailto link with a percent-encoded field name",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?%62cc=x@evil.example",
+      "path": "link",
+      "code": "link"
+    },
+    {
+      "name": "a mailto subject with an encoded line break",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?subject=Hi%0D%0ABcc:%20x@evil.example",
+      "path": "link",
+      "code": "link"
+    },
+    {
       "name": "a link over its cap",
       "at": [
         "link"

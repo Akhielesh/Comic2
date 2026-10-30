@@ -112,6 +112,13 @@
       "value": "mailto:sam@example.com,lee@example.org?subject=Hi%20there"
     },
     {
+      "name": "a mailto: link with a subject and a multi-line body",
+      "at": [
+        "link"
+      ],
+      "value": "mailto:sam@example.com?Subject=Hi&body=Line%201%0D%0ALine%202"
+    },
+    {
       "name": "an https: link with a port, parentheses and escapes",
       "at": [
         "link"

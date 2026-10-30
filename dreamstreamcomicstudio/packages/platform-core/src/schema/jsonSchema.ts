@@ -154,44 +154,47 @@ const maxOf = (a: unknown, b: unknown): number | undefined => (typeof a === 'num
 const minOf = (a: unknown, b: unknown): number | undefined => (typeof a === 'number' && typeof b === 'number' ? Math.min(a, b) : undefined);
 
 /**
- * One schema that admits what either admits (as loosely as needed): used when two union variants declare the same
- * field differently. Exactness is not the goal here; `check()` is.
+ * One schema that admits what either admits (as loosely as needed): used when two union variants (or two tuple items)
+ * declare the same field differently. Exactness is not the goal here; `check()` is. Both must share one JSON type
+ * (`integer` and `number` merge to `number`): a field that is text in one variant and a number in another has no
+ * typed flat form, and several function-calling dialects refuse a property without a `type`, so that throws.
  */
 const mergeLlm = (a: JsonSchema, b: JsonSchema): JsonSchema => {
   if (deepEqual(a, b)) return a;
   const ta = a.type;
   const tb = b.type;
   const numeric = (t: unknown): boolean => t === 'integer' || t === 'number';
+  if (typeof ta !== 'string' || typeof tb !== 'string' || (ta !== tb && !(numeric(ta) && numeric(tb)))) {
+    throw new SchemaDefinitionError('union variants (or tuple items) declare one field with different JSON types; the llm target cannot flatten it');
+  }
   const out: JsonSchema = {};
-  if (ta === tb || (numeric(ta) && numeric(tb))) {
-    out.type = ta === tb ? ta : 'number';
-    if (Array.isArray(a.enum) && Array.isArray(b.enum)) {
-      const values = a.enum.slice();
-      for (const v of b.enum) if (values.indexOf(v) === -1) values.push(v);
-      out.enum = values;
-    }
-    const set = (key: string, v: number | undefined): void => {
-      if (v !== undefined) out[key] = v;
-    };
-    set('maxLength', maxOf(a.maxLength, b.maxLength));
-    set('minLength', minOf(a.minLength, b.minLength));
-    set('maxItems', maxOf(a.maxItems, b.maxItems));
-    set('minItems', minOf(a.minItems, b.minItems));
-    set('maximum', maxOf(a.maximum, b.maximum));
-    set('minimum', minOf(a.minimum, b.minimum));
-    if (isJsonObject(a.items) && isJsonObject(b.items)) out.items = mergeLlm(a.items, b.items);
-    if (isJsonObject(a.properties) && isJsonObject(b.properties)) {
-      const props: JsonSchema = {};
-      const pa = a.properties;
-      const pb = b.properties;
-      for (const k of Object.keys(pa)) props[k] = isJsonObject(pb[k]) ? mergeLlm(pa[k] as JsonSchema, pb[k] as JsonSchema) : pa[k];
-      for (const k of Object.keys(pb)) if (!(k in props)) props[k] = pb[k];
-      out.properties = props;
-      const ra = Array.isArray(a.required) ? (a.required as string[]) : [];
-      const rb = Array.isArray(b.required) ? (b.required as string[]) : [];
-      const required = ra.filter((k) => rb.indexOf(k) !== -1);
-      if (required.length) out.required = required;
-    }
+  out.type = ta === tb ? ta : 'number';
+  if (Array.isArray(a.enum) && Array.isArray(b.enum)) {
+    const values = a.enum.slice();
+    for (const v of b.enum) if (values.indexOf(v) === -1) values.push(v);
+    out.enum = values;
+  }
+  const set = (key: string, v: number | undefined): void => {
+    if (v !== undefined) out[key] = v;
+  };
+  set('maxLength', maxOf(a.maxLength, b.maxLength));
+  set('minLength', minOf(a.minLength, b.minLength));
+  set('maxItems', maxOf(a.maxItems, b.maxItems));
+  set('minItems', minOf(a.minItems, b.minItems));
+  set('maximum', maxOf(a.maximum, b.maximum));
+  set('minimum', minOf(a.minimum, b.minimum));
+  if (isJsonObject(a.items) && isJsonObject(b.items)) out.items = mergeLlm(a.items, b.items);
+  if (isJsonObject(a.properties) && isJsonObject(b.properties)) {
+    const props: JsonSchema = {};
+    const pa = a.properties;
+    const pb = b.properties;
+    for (const k of Object.keys(pa)) props[k] = isJsonObject(pb[k]) ? mergeLlm(pa[k] as JsonSchema, pb[k] as JsonSchema) : pa[k];
+    for (const k of Object.keys(pb)) if (!(k in props)) props[k] = pb[k];
+    out.properties = props;
+    const ra = Array.isArray(a.required) ? (a.required as string[]) : [];
+    const rb = Array.isArray(b.required) ? (b.required as string[]) : [];
+    const required = ra.filter((k) => rb.indexOf(k) !== -1);
+    if (required.length) out.required = required;
   }
   if (typeof a.description === 'string' && a.description === b.description) out.description = a.description;
   return out;

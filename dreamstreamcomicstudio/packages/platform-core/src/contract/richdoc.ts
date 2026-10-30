@@ -33,6 +33,9 @@ export interface DocSection {
   blocks: DocBlock[];
 }
 
+/** Plan §5.2 calls a RichDoc section `Section`; the same type as `DocSection`. */
+export type Section = DocSection;
+
 export type DocBlock = DocHeading | DocParagraph | DocList | DocTable | DocImage | DocDivider | DocScript;
 
 export type DocBlockType = DocBlock['type'];
@@ -126,12 +129,27 @@ export interface DocInsertSectionOp extends OpBase {
   section: DocSection;
 }
 
+/**
+ * Remove section `sectionId` and its blocks. It is the inverse of `insert_section`; its own inverse is an
+ * `insert_section` carrying the removed section at its old index.
+ */
+export interface DocRemoveSectionOp extends OpBase {
+  op: 'remove_section';
+  sectionId: string;
+}
+
 export interface DocSetTitleOp extends OpBase {
   op: 'set_title';
   title: string;
 }
 
-export type DocOp = DocInsertBlockOp | DocUpdateBlockOp | DocRemoveBlockOp | DocInsertSectionOp | DocSetTitleOp;
+export type DocOp =
+  | DocInsertBlockOp
+  | DocUpdateBlockOp
+  | DocRemoveBlockOp
+  | DocInsertSectionOp
+  | DocRemoveSectionOp
+  | DocSetTitleOp;
 
 export type DocOpName = DocOp['op'];
 

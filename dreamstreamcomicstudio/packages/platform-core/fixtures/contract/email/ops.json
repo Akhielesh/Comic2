@@ -5,5 +5,6 @@
   { "op": "remove_block", "id": "op-4", "baseRev": 0, "blockId": "p1" },
   { "op": "attach", "id": "op-5", "baseRev": 0, "attachment": { "id": "a1", "name": "Notes", "kind": "pdf", "spec": { "type": "doc", "doc": { "v": 1, "title": "Notes", "sections": [] } } } },
   { "op": "detach", "id": "op-6", "baseRev": 0, "attachmentId": "a1" },
-  { "op": "set_recipients", "id": "op-7", "baseRev": 0, "actor": "user", "to": [{ "address": "editor@example.com", "name": "Sam Editor" }], "cc": [] }
+  { "op": "set_recipients", "id": "op-7", "baseRev": 0, "actor": "user", "to": [{ "address": "editor@example.com", "name": "Sam Editor" }], "cc": [] },
+  { "op": "attach", "id": "op-8", "baseRev": 0, "index": 0, "attachment": { "id": "a2", "name": "Deck", "kind": "pptx", "spec": { "type": "deck", "deck": { "v": 1, "title": "Deck", "size": "16:9", "theme": { "preset": "light" }, "slides": [] } } } }
 ]
