@@ -108,7 +108,7 @@ describe('lines: the list says which line it is and where you are (H1 store.list
     return createFakeHistoryApi({
       live: () => f.live,
       versions: [extra('ver_live_2', 'alt_live', 3), extra('ver_gone', 'alt_gone', 2), extra('ver_live_1', 'alt_live', 1), ...own],
-      lines: [{ id: 'alt_gone', removed: true }, { id: 'alt_live', headVersionId: 'ver_live_1' }],
+      lines: [{ id: 'alt_gone', removed: true }, { id: 'alt_live' }],
       activeLine
     });
   };
@@ -121,10 +121,10 @@ describe('lines: the list says which line it is and where you are (H1 store.list
     expect(ids).not.toContain('ver_live_2');
     expect(res.line).toBeNull();
     expect(res.head).toBe(fx().versions[0].row.id);
-    // On a live line: its rows only, its pinned head.
+    // On a live line: its rows only; its head is its own newest row (store.head), as the server sends it.
     const onLine = await lineFixture('alt_live').list('p1');
     expect(onLine.rows.map((r) => r.id)).toEqual(['ver_live_2', 'ver_live_1']);
-    expect(onLine).toMatchObject({ line: 'alt_live', head: 'ver_live_1' });
+    expect(onLine).toMatchObject({ line: 'alt_live', head: 'ver_live_2' });
     // A removed line is not found: nothing listed, no head.
     const gone = await lineFixture('alt_gone').list('p1');
     expect(gone.rows).toEqual([]);
