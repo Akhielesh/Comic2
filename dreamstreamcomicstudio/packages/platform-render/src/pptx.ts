@@ -151,6 +151,9 @@ const ROLE_SIZE = { title: 36, subtitle: 22, body: 18, caption: 12, quote: 24 } 
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 
+/** A shape name for PowerPoint's selection pane: the element's kind and id, cleaned. */
+const nameOf = (kind: string, id: unknown): string => `${kind} ${cleanText(String(id)).replace(/[^A-Za-z0-9 _.:-]/g, '')}`.slice(0, 80);
+
 /** A rect in inches, clamped inside the slide. */
 const box = (rect: DeckRect, W: number, H: number): { x: number; y: number; w: number; h: number } => {
   const x = clamp01(rect[0]);
@@ -213,7 +216,7 @@ const addText = (slide: PptSlide, el: DeckText, theme: Theme, W: number, H: numb
     ...(role === 'quote' ? { italic: true } : {}),
     margin: [4, 4, 2, 2],
     fit: 'shrink',
-    objectName: `text ${el.id}`.slice(0, 80),
+    objectName: nameOf('text', el.id),
   });
 };
 
@@ -221,7 +224,7 @@ const addImage = (slide: PptSlide, el: DeckImage, img: PreparedImage, W: number,
   const b = box(el.rect, W, H);
   if (b.w <= 0 || b.h <= 0) return;
   const alt = cleanText(el.alt).slice(0, MODEL_LIMITS.alt);
-  const name = `image ${el.id}`.slice(0, 80);
+  const name = nameOf('image', el.id);
   if (!img.width || !img.height) {
     slide.addImage({ data: img.dataUri, ...b, altText: alt, objectName: name });
     return;
@@ -264,7 +267,7 @@ const addElement = async (slide: PptSlide, el: DeckElement, theme: Theme, W: num
       return;
     case 'shape': {
       const b = box(el.rect, W, H);
-      const name = `shape ${el.id}`.slice(0, 80);
+      const name = nameOf('shape', el.id);
       if (el.shape === 'line' || isLine(el.rect)) {
         slide.addShape('line', { ...b, line: { color: hexOf(el.stroke, hexOf(el.fill, theme.accent)), width: 1.5 }, objectName: name });
         return;
@@ -296,7 +299,7 @@ const addElement = async (slide: PptSlide, el: DeckElement, theme: Theme, W: num
         border: { type: 'solid', pt: 1, color: theme.muted },
         autoPage: false,
         valign: 'middle',
-        objectName: `table ${el.id}`.slice(0, 80),
+        objectName: nameOf('table', el.id),
       });
       return;
     }
@@ -326,7 +329,7 @@ const addElement = async (slide: PptSlide, el: DeckElement, theme: Theme, W: num
         valAxisLabelColor: theme.text,
         catAxisLabelFontFace: theme.bodyFont,
         valAxisLabelFontFace: theme.bodyFont,
-        objectName: `chart ${el.id}`.slice(0, 80),
+        objectName: nameOf('chart', el.id),
       });
       return;
     }

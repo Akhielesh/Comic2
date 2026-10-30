@@ -157,6 +157,43 @@ describe('platformExport: real files', () => {
     expect(saved).toEqual(['plan.docx']);
   }, 30_000);
 
+  it('the browser transcoder re-encodes WebP as PNG on a canvas, and as JPEG on white paper when the PNG is too big', async () => {
+    const calls: string[] = [];
+    let pngSize = 1000;
+    class FakeCanvas {
+      constructor(public width: number, public height: number) {}
+      getContext() {
+        return {
+          drawImage: () => calls.push('draw'),
+          fillRect: (_x: number, _y: number, w: number, h: number) => calls.push(`fill ${w}x${h}`),
+          set globalCompositeOperation(v: string) { calls.push(`op ${v}`); },
+          set fillStyle(v: string) { calls.push(`style ${v}`); },
+        };
+      }
+      async convertToBlob(o: { type: string; quality?: number }) {
+        calls.push(`encode ${o.type}${o.quality ? ` ${o.quality}` : ''}`);
+        const bytes = o.type === 'image/png' ? new Uint8Array(pngSize) : new Uint8Array([0xff, 0xd8, 0xff]);
+        return { size: bytes.length, arrayBuffer: async () => bytes.buffer };
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', FakeCanvas);
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 40, height: 30, close: () => calls.push('close') }));
+    try {
+      const { browserTranscoder, TRANSCODE_PNG_MAX_BYTES } = await load();
+      const t = browserTranscoder()!;
+      const small = await t({ bytes: new Uint8Array([1]), mime: 'image/webp' });
+      expect(small.mime).toBe('image/png');
+      expect(calls).toEqual(['draw', 'encode image/png', 'close']);
+      calls.length = 0;
+      pngSize = TRANSCODE_PNG_MAX_BYTES + 1;
+      const big = await t({ bytes: new Uint8Array([1]), mime: 'image/webp' });
+      expect(big).toEqual({ bytes: new Uint8Array([0xff, 0xd8, 0xff]), mime: 'image/jpeg' });
+      expect(calls).toEqual(['draw', 'encode image/png', 'op destination-over', 'style #ffffff', 'fill 40x30', 'encode image/jpeg 0.92', 'close']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('a WebP image without a canvas transcoder (jsdom has no createImageBitmap) is a clear refusal', async () => {
     const { exportDocx, browserTranscoder, ExportError } = await load();
     expect(browserTranscoder()).toBeUndefined();

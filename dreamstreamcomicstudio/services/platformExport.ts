@@ -108,33 +108,47 @@ export const toExportError = (err: unknown, kind: PlatformFileKind): ExportError
 
 // ── Images ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/** Above this a re-encoded PNG is redone as JPEG (a photo-like page as PNG can be several times its WebP size). */
+export const TRANSCODE_PNG_MAX_BYTES = 5000000;
+
 /**
- * WebP → PNG on a canvas, in the browser. Undefined where the browser has no `createImageBitmap` (the renderers then
- * refuse WebP images with a clear message instead of writing a file some readers cannot open).
+ * WebP → PNG on a canvas, in the browser (JPEG at quality 0.92 when the PNG would pass `TRANSCODE_PNG_MAX_BYTES`).
+ * Undefined where the browser has no `createImageBitmap` (the renderers then refuse WebP images with a clear message
+ * instead of writing a file some readers cannot open).
  */
 export const browserTranscoder = (): ImageTranscoder | undefined => {
   if (typeof createImageBitmap !== 'function' || typeof Blob === 'undefined') return undefined;
   return async ({ bytes, mime }) => {
     const bitmap = await createImageBitmap(new Blob([bytes as BlobPart], { type: mime }));
     try {
-      let blob: Blob | null;
+      const { width, height } = bitmap;
+      let ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
+      let encode: (type: 'image/png' | 'image/jpeg') => Promise<Blob | null>;
       if (typeof OffscreenCanvas !== 'undefined') {
-        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('no 2d canvas');
-        ctx.drawImage(bitmap, 0, 0);
-        blob = await canvas.convertToBlob({ type: 'image/png' });
+        const canvas = new OffscreenCanvas(width, height);
+        ctx = canvas.getContext('2d');
+        encode = (type) => canvas.convertToBlob(type === 'image/jpeg' ? { type, quality: 0.92 } : { type });
       } else {
         const canvas = document.createElement('canvas');
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('no 2d canvas');
-        ctx.drawImage(bitmap, 0, 0);
-        blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+        canvas.width = width;
+        canvas.height = height;
+        ctx = canvas.getContext('2d');
+        encode = (type) => new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, type === 'image/jpeg' ? 0.92 : undefined));
+      }
+      if (!ctx) throw new Error('no 2d canvas');
+      ctx.drawImage(bitmap, 0, 0);
+      let mime: 'image/png' | 'image/jpeg' = 'image/png';
+      let blob = await encode(mime);
+      if (blob && blob.size > TRANSCODE_PNG_MAX_BYTES) {
+        // JPEG has no transparency: put white paper under the picture first.
+        ctx.globalCompositeOperation = 'destination-over';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        mime = 'image/jpeg';
+        blob = await encode(mime);
       }
       if (!blob) throw new Error('the image could not be re-encoded');
-      return { bytes: new Uint8Array(await blob.arrayBuffer()), mime: 'image/png' as const };
+      return { bytes: new Uint8Array(await blob.arrayBuffer()), mime };
     } finally {
       bitmap.close();
     }

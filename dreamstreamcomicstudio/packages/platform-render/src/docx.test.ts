@@ -8,6 +8,7 @@ import type { DocBlock, RichDoc } from '../../platform-core/src/contract/richdoc
 import { RICHDOC_LIMITS } from '../../platform-core/src/contract/richdoc.js';
 import { renderDocx } from './docx.js';
 import { RenderError } from './errors.js';
+import { TRANSCODED_MAX_BYTES } from './images.js';
 import { BRAND, FAMILIES, IMAGES, contractFixture, fakeTranscode, parseXml, renderFixture, text, zipParts } from './render.testkit.js';
 
 const docOf = (blocks: DocBlock[], extra: Partial<RichDoc> = {}): RichDoc => ({ v: 1, title: 'Test', sections: [{ id: 's1', pageBreakBefore: false, blocks }], ...extra });
@@ -200,6 +201,9 @@ describe('renderDocx: images are data: images we hold, never a path or a URL', (
     expect(Object.keys(parts).some((n) => /^word\/media\/.+\.png$/.test(n))).toBe(true);
     const liar = async () => ({ bytes: new Uint8Array([1, 2, 3]), mime: 'image/png' as const });
     expect((await refusal(renderDocx(doc, { transcode: liar }))).code).toBe('unsupported');
+    const huge = new Uint8Array(TRANSCODED_MAX_BYTES + 1);
+    huge.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    expect((await refusal(renderDocx(doc, { transcode: async () => ({ bytes: huge, mime: 'image/png' as const }) }))).code).toBe('too-large');
   });
 
   it('a data: image over 5 MB is too-large', async () => {

@@ -266,6 +266,21 @@ describe('renderPptx: theme, text and structure', () => {
     expect(text(parts, 'ppt/notesSlides/notesSlide1.xml')).toContain('Say &lt;hello&gt;');
   });
 
+  it('chart and table text that looks like markup is escaped, and ids cannot break out of a shape name', async () => {
+    const deck = deckOf([
+      { kind: 'chart', id: 'c"><x', rect: [0, 0, 0.5, 0.5], layer: 'content', chart: 'bar', title: 'A <b>&"title"', categories: ['<i>', `x${String.fromCharCode(2)}y`], series: [{ name: 'S&P <1>', values: [1, NaN] }] },
+      { kind: 'table', id: 't', rect: [0.5, 0, 0.5, 0.5], layer: 'content', header: true, rows: [{ cells: [{ runs: [{ text: '<td>&' }] }] }] },
+    ]);
+    const parts = await zipParts(await renderPptx(deck));
+    for (const name of Object.keys(parts).filter((n) => /\.(xml|rels)$/.test(n))) parseXml(text(parts, name), name);
+    const chart = text(parts, Object.keys(parts).filter((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n))[0]);
+    expect(chart).toContain('A &lt;b&gt;&amp;&quot;title&quot;');
+    expect(chart).toContain('&lt;i&gt;');
+    expect(chart).toContain('<c:v>xy</c:v>');
+    expect(text(parts, 'ppt/slides/slide1.xml')).toContain('name="chart cx"');
+    expect(text(parts, 'ppt/slides/slide1.xml')).toContain('&lt;td&gt;&amp;');
+  });
+
   it('metadata names the deck and the kit, never the library', async () => {
     const core = text(await zipParts(await renderPptx(deckOf([]), { brand: BRAND })), 'docProps/core.xml');
     expect(core).toContain('<dc:title>Test deck</dc:title>');

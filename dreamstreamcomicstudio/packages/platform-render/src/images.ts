@@ -156,6 +156,12 @@ export const imageSize = (b: Uint8Array, mime: ImageMime): { width: number; heig
   return w > 0 && h > 0 && w <= 100000 && h <= 100000 ? { width: w, height: h } : null;
 };
 
+/**
+ * A re-encoded image may be bigger than the WebP it came from (PNG is lossless): up to 4 × the 5 MB input cap, so a
+ * transcoder cannot balloon a file without bound.
+ */
+export const TRANSCODED_MAX_BYTES = 4 * SCHEMA_LIMITS.assetDataMaxBytes;
+
 // ── Preparing one image ─────────────────────────────────────────────────────────────────────────────────────────
 
 const DATA_REF = s.assetRef();
@@ -201,7 +207,7 @@ export const imagePreparer = (opts: ImageOptions): ((ref: AssetRef, where: strin
       const out = await opts.transcode({ bytes, mime });
       const real = out && out.bytes instanceof Uint8Array ? sniffImage(out.bytes) : null;
       if (!real || real === 'image/webp' || real !== out.mime) throw new RenderError('unsupported', `${where}: the WebP image could not be converted`);
-      if (out.bytes.length > SCHEMA_LIMITS.assetDataMaxBytes) throw new RenderError('too-large', `${where}: the converted image is over ${SCHEMA_LIMITS.assetDataMaxBytes / 1000000} MB`);
+      if (out.bytes.length > TRANSCODED_MAX_BYTES) throw new RenderError('too-large', `${where}: the converted image is over ${TRANSCODED_MAX_BYTES / 1000000} MB`);
       mime = real;
       bytes = out.bytes;
     }
