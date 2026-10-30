@@ -9,13 +9,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cutFor, emptyRender, findPage, type AssetRef, type ComicDoc, type PanelCuts } from '../../../shared/comic/doc.js';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
-import { getImageModel, imagePriceUsd, nearestResolution, PLAN_USD_PER_PAGE, PLATFORM_MARKUP, QC_USD_PER_PAGE } from '../../../shared/comic/models.js';
+import { getImageModel, imagePriceUsd, nearestResolution, PLATFORM_MARKUP, QC_USD_PER_PAGE } from '../../../shared/comic/models.js';
 import { ANCHOR_SHEET_RES } from '../../../shared/comic/anchors.js';
 import { partsOf } from '../../../shared/comic/parts.js';
 import { quoteRenderPages } from '../../../shared/comic/plan.js';
 import type { PriceBook } from '../../../shared/comic/modelLock.js';
 import { harbourComic } from '../../../shared/comic/__fixtures__/consistencyBooks.js';
 import { ACTION_HANDLERS, CORE_ACTION_TYPES } from './actions/index.js';
+import { ENRICH_USD_PER_PAGE } from './actions/consistency.js';
 import { FIX_PANEL_NOT_AVAILABLE, compileFixPanel, finishFixPanel, fixPanelMeta, fixPanelProblem } from './actions/panelFix.js';
 import { boardForCheck } from './consistency/contactSheet.js';
 import { withFindings } from './consistency/findings.js';
@@ -193,6 +194,7 @@ describe('runAfter: the per-page `after` dependency (promises only)', () => {
 
   it('a failed predecessor never blocks its chain; unknown, self and cyclic dependencies start at once', async () => {
     const started: string[] = [];
+    const failed: string[] = [];
     await runAfter(
       [
         { id: 'a', after: null },
@@ -204,10 +206,72 @@ describe('runAfter: the per-page `after` dependency (promises only)', () => {
       ],
       async (item) => {
         started.push(item.id);
-        if (item.id === 'a') throw new Error('provider down');
+        // runJob records a failed drawing (provider down, blocked…) and returns: that is a failure, not a throw.
+        if (item.id === 'a') failed.push(item.id);
       }
-    ).catch(() => undefined);
+    );
+    expect(failed).toEqual(['a']);
     expect(started.sort()).toEqual(['a', 'b', 'p', 'q', 's', 'x']);
+  });
+
+  it('a predecessor that throws stops its chain, and the run settles only after everything already started has finished', async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    const gate = deferred();
+    let settled = false;
+    const done = runAfter(
+      [
+        { id: 'a', after: null },
+        { id: 'b', after: 'a' },
+        { id: 'x', after: null }
+      ],
+      async (item) => {
+        started.push(item.id);
+        if (item.id === 'a') throw new Error('restore failed');
+        await gate.promise;
+        finished.push(item.id);
+      }
+    ).then(
+      () => ((settled = true), null),
+      (err: Error) => ((settled = true), err)
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(started).toEqual(['a', 'x']); // b never starts: a threw (today's rule: a throw from page 1 stops the rest)
+    expect(settled).toBe(false); // x is still drawing: the run is not over
+    gate.resolve();
+    expect(((await done) as Error).message).toBe('restore failed');
+    expect(finished).toEqual(['x']);
+  });
+
+  it("settle 'stored': a dependent already drawing when its predecessor throws is waited for before the run fails", async () => {
+    const finished: string[] = [];
+    const gate = deferred();
+    let settled = false;
+    const done = runAfter(
+      [
+        { id: 'a', after: null },
+        { id: 'b', after: 'a' }
+      ],
+      async (item, landed) => {
+        if (item.id === 'a') {
+          landed(); // image stored, then its follow-up throws
+          await new Promise((r) => setImmediate(r));
+          throw new Error('letter failed');
+        }
+        await gate.promise;
+        finished.push(item.id);
+      },
+      'stored'
+    ).then(
+      () => ((settled = true), null),
+      (err: Error) => ((settled = true), err)
+    );
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(settled).toBe(false);
+    gate.resolve();
+    expect(((await done) as Error).message).toBe('letter failed');
+    expect(finished).toEqual(['b']);
   });
 
   it('creates no timer: no setTimeout, no setInterval (the backend stays sleepable)', async () => {
@@ -306,6 +370,38 @@ describe('the new spend actions go through the existing gate (zero paid calls)',
     expect(ctx.imagesFake.calls).toHaveLength(0);
   });
 
+  it("fix_panel started unconfirmed (the director) always stops at a 'redraw' gate under the 'big' policy, however small", async () => {
+    vi.mocked(fixPanelProblem).mockReturnValue(null);
+    const doc = drawnDoc();
+    doc.settings = { ...doc.settings, confirm: 'big' };
+    const est = estimateSpendAction(doc, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix' }, false);
+    expect(est.usd).toBeLessThan(0.5); // under the big-spend line: only the redraw rule stops it
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    const started = await startAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix', instruction: 'Red scarf' } as never, { confirmed: false });
+    expect(started.outcome.status).toBe('gated');
+    expect(session.doc.gate!.reason).toBe('redraw');
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+  });
+
+  it('fix_panel gate titles follow the mode (plan §4.4): Fix, Redraw, Draw, and Redraw … to its new shape', async () => {
+    vi.mocked(fixPanelProblem).mockReturnValue(null);
+    const titles: Record<string, string> = {};
+    for (const mode of ['fix', 'redraw', 'draw', 'extend'] as const) {
+      const session = newSession(drawnDoc());
+      const ctx = testContext(session);
+      await startAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_3', mode } as never, { confirmed: false });
+      titles[mode] = session.doc.gate!.title;
+    }
+    expect(titles).toEqual({
+      fix: 'Fix panel 3 on page 1?',
+      redraw: 'Redraw panel 3 on page 1?',
+      draw: 'Draw panel 3 on page 1?',
+      extend: 'Redraw panel 3 on page 1 to its new shape?'
+    });
+  });
+
   it('fix_panel: a confirmed tap whose quote went stale is gated again instead of spending', async () => {
     vi.mocked(fixPanelProblem).mockReturnValue(null);
     const doc = drawnDoc();
@@ -321,7 +417,10 @@ describe('the new spend actions go through the existing gate (zero paid calls)',
   it('enrich_pages: quoted at the writer price and gated; confirmed, the stub runs nothing and charges nothing', async () => {
     const doc = drawnDoc();
     const est = estimateSpendAction(doc, { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] }, false);
-    expect(est).toEqual({ usd: Math.round(PLAN_USD_PER_PAGE * 2 * PLATFORM_MARKUP * 10000) / 10000, imageCount: 0, model: 'Writer', lines: [{ label: 'page details', count: 2, usd: est.usd }] });
+    // Plan §7: "Add detail to an old page (enrich_pages) | about $0.008" — per page, after the markup.
+    expect(ENRICH_USD_PER_PAGE * PLATFORM_MARKUP).toBeCloseTo(0.008, 3);
+    expect(est).toEqual({ usd: Math.round(ENRICH_USD_PER_PAGE * 2 * PLATFORM_MARKUP * 10000) / 10000, imageCount: 0, model: 'Writer', lines: [{ label: 'page details', count: 2, usd: est.usd }] });
+    expect(est.usd).toBe(0.0156);
     const session = newSession(doc);
     const ctx = testContext(session, { caps: { ...DEFAULT_CAPS } });
     const gated = await startAction(ctx, { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] } as never, { confirmed: false });
@@ -412,6 +511,28 @@ describe('fix_panel through the run engine (B8 hooks mocked): generated referenc
     expect(page.render.history.map((v) => v.path)).toContain(own('p1'));
     const entry = session.doc.spend.entries.find((e) => e.label.startsWith('Panel 2 on page 1'))!;
     expect(entry).toMatchObject({ refs: 2, outcome: 'ok' });
+  });
+
+  it('a reference that keeps failing never sends a panel fix with no images: it stops before any reservation', async () => {
+    vi.mocked(fixPanelProblem).mockReturnValue(null);
+    // A compiler that keeps naming a sheet that can't be loaded (four passes, then prepare() gives up on references).
+    vi.mocked(compileFixPanel).mockImplementation((doc) => {
+      const c = compiled(doc);
+      return { ...c, references: [...c.references, { label: 'Image 3: MAYA', path: own('sheet-gone') }] } as never;
+    });
+    vi.mocked(cropForPanel).mockResolvedValue('data:image/png;base64,CROP');
+    const doc = drawnDoc();
+    doc.settings = { ...doc.settings, confirm: 'never' };
+    const session = newSession(doc);
+    const ctx = testContext(session);
+    ctx.assetsFake.missing.add(own('sheet-gone'));
+    const started = await startAction(ctx, { type: 'fix_panel', pageId: 'pg_1', panelId: 'pn_1_2', mode: 'fix', instruction: 'Red scarf' } as never, { confirmed: true });
+    await started.done;
+    expect(vi.mocked(compileFixPanel).mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(ctx.imagesFake.calls).toHaveLength(0);
+    expect(ctx.billingFake.reserves).toHaveLength(0);
+    expect(spendEntries(session.doc)).toEqual([]);
+    expect(findPage(session.doc, 'pg_1')!.render).toMatchObject({ status: 'ready', asset: { path: own('p1') } });
   });
 
   it('a paste-back that cannot be made is billed honestly and changes nothing on the page', async () => {

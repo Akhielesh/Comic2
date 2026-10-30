@@ -1380,7 +1380,10 @@ const describeSpend = (doc: ComicDoc, action: GatedSpend): SpendPlan => {
       const where = `panel ${n} on page ${page?.n ?? '?'}`;
       const what =
         action.mode === 'redraw' ? `a new drawing of ${where}` : action.mode === 'draw' ? `a drawing for the empty ${where}` : action.mode === 'extend' ? `${where} redrawn to its new shape` : `a fix of ${where}`;
-      return { what, title: `${action.mode === 'fix' ? 'Fix' : 'Redraw'} ${where}?`, kind: 'panel' };
+      // Plan §4.4 copy, by mode: "Fix …", "Redraw …", "Draw that panel", "… to its new shape".
+      const title =
+        action.mode === 'draw' ? `Draw ${where}?` : action.mode === 'extend' ? `Redraw ${where} to its new shape?` : action.mode === 'redraw' ? `Redraw ${where}?` : `Fix ${where}?`;
+      return { what, title, kind: 'panel' };
     }
     case 'enrich_pages': {
       const ids = new Set(action.pageIds || []);
@@ -1631,6 +1634,10 @@ const replacesCurrentArt = (doc: ComicDoc, action: GatedSpend): boolean => {
       return !!action.force && sheetTargets(doc, action).characters.some((c) => c.sheet.status === 'ready' && !isTargetStale(doc, { kind: 'sheet', id: c.id }));
     case 'render_cover':
       return doc.cover.render.status === 'ready' && !!doc.cover.render.asset && !coverNeedsDraw(doc);
+    // A panel fix always makes a new version of a drawn page (plan §4.4 "approval only"; §9 the director only proposes):
+    // never started unconfirmed under the 'big' policy, however small its price.
+    case 'fix_panel':
+      return true;
     default:
       return false;
   }
@@ -2074,8 +2081,11 @@ export interface AfterItem {
 /**
  * Run items with a per-item `after` dependency (pro plan §4.2: "inside a chain page k starts when page k−1's image is
  * stored"). `settle: 'done'` lands an item when its run settles; `'stored'` as soon as it calls `landed()` (its image is
- * stored) or its run settles, whichever is first — a failed predecessor never blocks its chain. Promises only: no timer,
- * no polling. Unknown or self dependencies, and cycles, start at once.
+ * stored) or its run settles, whichever is first — a failed predecessor (its run recorded the failure and returned)
+ * never blocks its chain. A predecessor whose run THREW stops its chain (its dependents never start), as a throw from
+ * page 1 always stopped the pages after it; everything already started is waited for before the throw is passed on, so
+ * the run never reports done while a page is still drawing. Promises only: no timer, no polling. Unknown or self
+ * dependencies, and cycles, start at once.
  */
 export async function runAfter<T extends AfterItem>(items: readonly T[], run: (item: T, landed: () => void) => Promise<void>, settle: 'stored' | 'done' = 'done'): Promise<void> {
   const ids = new Set(items.map((i) => i.id));
@@ -2097,18 +2107,31 @@ export async function runAfter<T extends AfterItem>(items: readonly T[], run: (i
     const promise = new Promise<void>((r) => (resolve = r));
     landed.set(i.id, { promise, resolve });
   }
-  await Promise.all(
+  const threw = new Set<string>();
+  const settled = await Promise.allSettled(
     items.map(async (item) => {
       const before = dep.get(item.id);
-      if (before) await landed.get(before)!.promise;
       const mine = landed.get(item.id)!;
+      if (before) {
+        await landed.get(before)!.promise;
+        if (threw.has(before)) {
+          threw.add(item.id);
+          mine.resolve();
+          return;
+        }
+      }
       try {
         await run(item, settle === 'stored' ? mine.resolve : () => undefined);
+      } catch (err) {
+        threw.add(item.id);
+        throw err;
       } finally {
         mine.resolve();
       }
     })
   );
+  const bad = settled.find((s): s is PromiseRejectedResult => s.status === 'rejected');
+  if (bad) throw bad.reason;
 }
 
 interface ImageJob {
@@ -3828,8 +3851,13 @@ class RenderRun {
       }
       if (!dropped) result = { compiled, references, attached };
     }
-    // Still missing after recompiles: give up on references rather than mislabel them (the guide too).
+    // Still missing after recompiles: give up on references rather than mislabel them (the guide too) — except for a
+    // job whose Image 1 IS the thing to change (a panel fix's crop, an edit's page): sent with no images it would pay
+    // for a drawing of nothing. It stops here, before any reservation.
     if (!result) {
+      if (job.kind === 'panel' || job.kind === 'edit') {
+        throw new StudioError('NOT_FOUND', `Couldn't prepare ${job.label.toLowerCase()} to draw — nothing was charged. Try again in a moment.`, { status: 404 });
+      }
       guideOn = false;
       result = { compiled: compileWith(withoutAssets(docAtCompile, new Set(collectAssetPaths(docAtCompile)))), references: [], attached: [] };
     }

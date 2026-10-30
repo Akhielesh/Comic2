@@ -11,7 +11,7 @@
 // says the action isn't available yet and charges nothing.
 
 import type { ComicDoc } from '../../../../shared/comic/doc.js';
-import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP, type SpendEstimate } from '../../../../shared/comic/models.js';
+import { PLATFORM_MARKUP, type SpendEstimate } from '../../../../shared/comic/models.js';
 import type { ActionHandler } from '../extensions.js';
 import { notAvailableAction } from '../extensions.js';
 import { spendIsByok, type EnrichPagesAction } from '../jobs.js';
@@ -22,6 +22,13 @@ export const ENRICH_MODEL_LABEL = 'Writer';
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
+/**
+ * Provider cost of one page's detail pass (directions, continuity and scenes; never story text): pro plan §7 "Add detail
+ * to an old page (enrich_pages) | about $0.008" — the "+$0.008 for directions and continuity" a planned page adds — is
+ * the price after the platform markup (0.006 × PLATFORM_MARKUP ≈ $0.008). B6/B7 refine it with the real call's size.
+ */
+export const ENRICH_USD_PER_PAGE = 0.006;
+
 /** The pages an enrich_pages action names that are in the comic (unknown ids dropped; none = every page). */
 export const enrichTargets = (doc: ComicDoc, action: Pick<EnrichPagesAction, 'pageIds'>): string[] => {
   const ids = Array.isArray(action.pageIds) ? new Set(action.pageIds.filter((id) => typeof id === 'string')) : null;
@@ -29,12 +36,12 @@ export const enrichTargets = (doc: ComicDoc, action: Pick<EnrichPagesAction, 'pa
 };
 
 /**
- * What adding detail to these pages costs: one writer pass per page at the plan's per-page price (PLAN_USD_PER_PAGE),
- * × the platform markup unless BYOK. A TEXT spend: no image. B6/B7 refine it with the real call's size.
+ * What adding detail to these pages costs: one detail pass per page at ENRICH_USD_PER_PAGE (pro plan §7), × the platform
+ * markup unless BYOK. A TEXT spend: no image.
  */
 export const enrichPagesQuote = (doc: ComicDoc, action: Pick<EnrichPagesAction, 'pageIds'>, byok: boolean): SpendEstimate => {
   const count = enrichTargets(doc, action).length;
-  const usd = round4(PLAN_USD_PER_PAGE * count * (byok ? 1 : PLATFORM_MARKUP));
+  const usd = round4(ENRICH_USD_PER_PAGE * count * (byok ? 1 : PLATFORM_MARKUP));
   return { usd, imageCount: 0, model: ENRICH_MODEL_LABEL, lines: count ? [{ label: 'page details', count, usd }] : [] };
 };
 
