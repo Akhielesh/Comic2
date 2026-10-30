@@ -2,11 +2,15 @@
 //
 // Fingerprints and audit events (plan §5.10; W1.4): the pure SHA-256 / HMAC / base64url agree with node:crypto on
 // random and golden inputs; canonical JSON makes a hash independent of key order; an audit event keeps ids, the
-// decision and a hash — never content — and DreamStream files security decisions in audit_log only.
+// decision and a hash — never content — and DreamStream files security decisions in audit_log only (routine budget
+// refusals and stranded holds go to the log line).
 import { createHash, createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   AuditEventError,
+  LEDGER_PROBLEM_CODES,
+  ROUTINE_GUARD_CODES,
+  SECURITY_GUARD_CODES,
   auditEvent,
   base64urlDecode,
   base64urlEncode,
@@ -121,8 +125,27 @@ describe('audit events are content-free', () => {
     expect(() => auditEvent({ ...base, id: 'has spaces' })).toThrow(AuditEventError);
   });
 
-  it('files DreamStream events: security decisions to audit_log, paid calls to cost metadata, the rest to a log line', () => {
+  it('files only security guards in audit_log; routine budget refusals and stranded holds go to the log line', () => {
+    const blocked = (errorCode: string, costMicros?: number) => dreamstreamAuditSink(auditEvent({ ...base, decision: 'blocked', outcome: 'refused', errorCode, costMicros }));
+    for (const code of SECURITY_GUARD_CODES) expect(blocked(code), code).toEqual({ sink: 'audit_log', action: 'platform.guard.blocked' });
+    for (const code of ROUTINE_GUARD_CODES) expect(blocked(code, 2000), code).toEqual({ sink: 'log' });
+    expect(SECURITY_GUARD_CODES.filter((c) => (ROUTINE_GUARD_CODES as readonly string[]).includes(c))).toEqual([]);
+    // Every code core blocks with is classified (plan-<reason> for each PlanTokenRefusal).
+    const emitted = [
+      ...['malformed', 'signature', 'expired', 'not-yet-valid', 'lifetime', 'subject', 'plan'].map((r) => `plan-${r}`),
+      ...['gate-deny', 'quota', 'ledger-down', 'max-per-turn', 'reservation-used', 'reservation-unknown', 'plan-stale', 'plan-params', 'estimate-changed', 'external-write'],
+    ];
+    const known = [...SECURITY_GUARD_CODES, ...ROUTINE_GUARD_CODES] as readonly string[];
+    expect(emitted.filter((c) => !known.includes(c))).toEqual([]);
+    // An unknown guard is treated as security-relevant, never dropped into the log.
+    expect(blocked('new-guard')).toEqual({ sink: 'audit_log', action: 'platform.guard.blocked' });
     expect(dreamstreamAuditSink(auditEvent({ ...base, decision: 'blocked', outcome: 'refused' }))).toEqual({ sink: 'audit_log', action: 'platform.guard.blocked' });
+    // A hold the ledger could not close is logged as stranded, even with its cost (no cost row settled to carry it).
+    for (const code of LEDGER_PROBLEM_CODES) expect(dreamstreamAuditSink(auditEvent({ ...base, outcome: 'failed', errorCode: code, costMicros: 2000 })), code).toEqual({ sink: 'log', stranded: true });
+  });
+
+  it('files DreamStream events: security decisions to audit_log, paid calls to cost metadata, the rest to a log line', () => {
+    expect(dreamstreamAuditSink(auditEvent({ ...base, decision: 'blocked', outcome: 'refused', errorCode: 'gate-deny' }))).toEqual({ sink: 'audit_log', action: 'platform.guard.blocked' });
     expect(dreamstreamAuditSink(auditEvent({ ...base, kind: 'consent', decision: 'confirmed' }))).toEqual({ sink: 'audit_log', action: 'platform.consent.recorded' });
     expect(dreamstreamAuditSink(auditEvent({ ...base, kind: 'toggle', actor: { kind: 'user' } }))).toEqual({ sink: 'audit_log', action: 'platform.capability.toggled' });
     expect(dreamstreamAuditSink(auditEvent({ ...base, costMicros: 2000 }))).toEqual({ sink: 'cost_metadata' });

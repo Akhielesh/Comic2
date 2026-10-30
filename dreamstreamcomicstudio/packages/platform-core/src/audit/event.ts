@@ -5,7 +5,8 @@
  * so an extra field a caller passes (a subject line, a body) is dropped, not stored.
  *
  * Where a host files it is its own business; `dreamstreamAuditSink` names DreamStream's routing: security-relevant
- * decisions to `audit_log`, paid calls to the cost row's `metadata.platform`, everything else to a log line.
+ * decisions to `audit_log` (routine budget refusals never), paid calls to the cost row's `metadata.platform`,
+ * stranded holds and everything else to a log line.
  */
 import { ID_PATTERN } from '../contract/schema.js';
 import { isInputHash } from './inputHash.js';
@@ -142,20 +143,59 @@ export const auditEvent = (input: AuditEventInput): PlatformAuditEvent => {
 export const DREAMSTREAM_AUDIT_ACTIONS = ['platform.guard.blocked', 'platform.consent.recorded', 'platform.capability.toggled'] as const;
 export type DreamStreamAuditAction = (typeof DREAMSTREAM_AUDIT_ACTIONS)[number];
 
+/**
+ * `blocked` codes that are SECURITY decisions (plan §5.10: `audit_log` holds these only): a policy deny, a forged,
+ * foreign, edited or replayed approval, an external write that could not be prepared, and every consent refusal
+ * (`executeExternalWrite`).
+ */
+export const SECURITY_GUARD_CODES = [
+  'gate-deny',
+  'plan-malformed',
+  'plan-signature',
+  'plan-lifetime',
+  'plan-not-yet-valid',
+  'plan-subject',
+  'plan-plan',
+  'plan-params',
+  'reservation-unknown',
+  'external-write',
+  'no-consent',
+  'wrong-action',
+  'wrong-user',
+  'payload-changed',
+  'consent-expired',
+] as const;
+
+/**
+ * `blocked` codes that are ROUTINE budget and lifecycle refusals: a structured log line, never `audit_log` (they would
+ * flood it). Any other `blocked` code is treated as a security decision.
+ */
+export const ROUTINE_GUARD_CODES = ['quota', 'ledger-down', 'max-per-turn', 'reservation-used', 'estimate-changed', 'plan-expired', 'plan-stale'] as const;
+
+/** A hold the ledger could not close: logged with `stranded: true` so reconciliation finds it. */
+export const LEDGER_PROBLEM_CODES = ['settle-failed', 'release-failed'] as const;
+
 export type DreamStreamAuditSink =
   | { sink: 'audit_log'; action: DreamStreamAuditAction }
   | { sink: 'cost_metadata' }
-  | { sink: 'log' };
+  | { sink: 'log'; stranded?: true };
 
 /**
- * Where DreamStream files an event: a blocked guard, a recorded consent or a capability toggle → `audit_log`; a call
- * that cost something → the cost row's `metadata.platform` (through reserve/settle); anything else → one structured
- * log line. A flow run is counted from its cost rows, so a paid flow run goes to `cost_metadata` too.
+ * Where DreamStream files an event:
+ * - a recorded consent or a capability toggle → `audit_log`;
+ * - a stranded hold (`settle-failed` / `release-failed`) → a log line with `stranded: true` (its cost row never
+ *   settled, so it cannot carry it);
+ * - a `blocked` security guard (`SECURITY_GUARD_CODES`, or any code not known to be routine) → `audit_log` as
+ *   `platform.guard.blocked`; a routine refusal (`ROUTINE_GUARD_CODES`: quota, ledger down, per-turn cap, a used
+ *   reservation, a changed estimate, an expired or stale plan) → a log line;
+ * - a call that cost something → the cost row's `metadata.platform` (through reserve/settle; a paid flow run too);
+ * - anything else → one structured log line.
  */
 export const dreamstreamAuditSink = (event: PlatformAuditEvent): DreamStreamAuditSink => {
   if (event.kind === 'consent') return { sink: 'audit_log', action: 'platform.consent.recorded' };
   if (event.kind === 'toggle') return { sink: 'audit_log', action: 'platform.capability.toggled' };
-  if (event.decision === 'blocked') return { sink: 'audit_log', action: 'platform.guard.blocked' };
+  if (has(LEDGER_PROBLEM_CODES, event.errorCode)) return { sink: 'log', stranded: true };
+  if (event.decision === 'blocked') return has(ROUTINE_GUARD_CODES, event.errorCode) ? { sink: 'log' } : { sink: 'audit_log', action: 'platform.guard.blocked' };
   if (typeof event.costMicros === 'number' && event.costMicros > 0) return { sink: 'cost_metadata' };
   return { sink: 'log' };
 };
