@@ -1,16 +1,29 @@
-import type { ChatTool } from './types.js';
+import type { ChatTool, ToolExecResult } from './types.js';
 import sharp from 'sharp';
 import { assertSafePublicUrl } from './mcpClient.js';
+import { allowedImageWords, checkImageBytes } from '../../services/sharpGuard.js';
 
 // `convert_image` — deterministic, NON-AI image conversion/resizing via sharp (libvips).
 // No AI touches the pixels: the model only picks the operation; sharp does the work.
-// Accepts an https image URL (SSRF-guarded) or a data:image/... URI, converts between
-// JPEG/PNG/WebP/AVIF and optionally resizes, and returns the result as a data URI.
+// Accepts an https image URL (SSRF-guarded) or a data:image/... URI, converts to
+// PNG/JPEG/WebP/AVIF and optionally resizes, and returns the result as a data URI.
+//
+// Input is admitted by its BYTES, never by the data-URI subtype or the URL's Content-Type
+// (services/sharpGuard.ts): JPEG, PNG, WebP and GIF only. SVG, HTML, HEIC, AVIF, TIFF, PDF and
+// anything unknown are refused before sharp sees them, and sharp must then decode the bytes as the
+// same format they were sniffed as. The process-wide sharp.block (installed at boot) is the second
+// layer behind this one.
 
 const MAX_BYTES = 12 * 1024 * 1024;
 const MAX_DIM = 4096;
+const MAX_INPUT_PIXELS = 50_000_000;
 const FORMATS = ['png', 'jpeg', 'webp', 'avif'] as const;
 type Fmt = (typeof FORMATS)[number];
+
+const refused = (reason: string): ToolExecResult => ({
+  content: `Couldn't convert the image: ${reason}.`,
+  notice: { level: 'error', message: 'Image type not allowed', fix: `Use ${allowedImageWords()}.` }
+});
 
 async function loadImage(input: string, signal?: AbortSignal): Promise<Buffer> {
   const s = input.trim();
@@ -40,11 +53,11 @@ const clampDim = (v: unknown): number | undefined => {
 export const convertImageTool: ChatTool = {
   name: 'convert_image',
   description:
-    'Convert or resize an image deterministically (no AI) — change format between PNG/JPEG/WebP/AVIF and optionally resize. Provide the image as an https URL or a data:image/... URI. Use for "convert this jpg to png", "make a webp", "resize to 512px", "shrink this image". The converted image is returned and shown to the user.',
+    'Convert or resize an image deterministically (no AI) — takes a JPG, PNG, WebP or GIF image and returns PNG/JPEG/WebP/AVIF, optionally resized. Provide the image as an https URL or a data:image/... URI. Use for "convert this jpg to png", "make a webp", "resize to 512px", "shrink this image". SVG, HEIC, TIFF and PDF inputs are refused. The converted image is returned and shown to the user.',
   parameters: {
     type: 'object',
     properties: {
-      image: { type: 'string', description: 'The source image: an https URL or a data:image/...;base64 URI.' },
+      image: { type: 'string', description: 'The source image (JPG, PNG, WebP or GIF): an https URL or a data:image/...;base64 URI.' },
       to: { type: 'string', enum: ['png', 'jpeg', 'webp', 'avif'], description: 'Target format (default png).' },
       width: { type: 'number', description: 'Optional target width in px (aspect kept, never upscaled).' },
       height: { type: 'number', description: 'Optional target height in px (aspect kept, never upscaled).' },
@@ -68,8 +81,18 @@ export const convertImageTool: ChatTool = {
       return { content: `Couldn't load the image: ${(err as Error).message}.`, notice: { level: 'warn', message: 'Image not loaded', fix: 'Pass an https image URL or a data:image/... URI.' } };
     }
 
+    // Layer 1: the bytes decide the type (the data-URI subtype / Content-Type is ignored).
+    const check = checkImageBytes(input);
+    if (check.ok === false) return refused(check.reason);
+
     try {
-      let pipe = sharp(input, { failOn: 'none', limitInputPixels: 50_000_000 });
+      const opts = { failOn: 'none' as const, limitInputPixels: MAX_INPUT_PIXELS };
+      // sharp must read the bytes as the format they were sniffed as (no loader confusion).
+      const decoded = (await sharp(input, opts).metadata()).format;
+      if (decoded !== check.type) {
+        return refused(`its contents start like ${check.type.toUpperCase()} but don't decode as one. Use ${allowedImageWords()}`);
+      }
+      let pipe = sharp(input, opts);
       if (width || height) pipe = pipe.resize({ width, height, fit: 'inside', withoutEnlargement: true });
       const out = await pipe.toFormat(to, quality !== undefined ? { quality } : undefined).toBuffer();
       const meta = await sharp(out).metadata();
