@@ -185,8 +185,14 @@ export const FOCUS_RING =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--ds-focus)] contrast-more:focus-visible:outline-[3px]';
 /** The same, flush with the element (tab and segment triggers inside a track). */
 export const FOCUS_RING_FLUSH = FOCUS_RING.replace('outline-offset-2', 'outline-offset-0');
-/** Rows inside a menu, list or listbox: an inset ring in the ring colour (Atlas menu items). */
-export const FOCUS_ITEM = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)]';
+/**
+ * Rows inside a menu, list or listbox (Atlas dropdown / select / menu items): the row highlights in
+ * the overlay-row colour (--ds-overlay-hover: the hover tint by default; white 8 % in the dark skin,
+ * where the #1f1f1f hover was a hair above the #1a1a1a overlay) and carries an inset ring in the ring
+ * colour.
+ */
+export const FOCUS_ITEM =
+  'focus-visible:outline-none focus-visible:bg-[var(--ds-overlay-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--ds-ring)]';
 
 /**
  * A text field or select trigger (Atlas Input / Textarea / SelectTrigger): an edge that clears 3:1
@@ -201,8 +207,15 @@ export const FIELD = `${RADIUS_CONTROL} border border-[var(--ds-control-border)]
  * inside a wrapper that shows focus itself.
  */
 export const FIELD_EMBEDDED = 'min-w-0 flex-1 border-0 bg-transparent focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0';
-/** The pill around an embedded field (a search box with an icon): the field edge, and focus shown by the group. */
-export const FIELD_GROUP = `flex items-center gap-2 ${RADIUS_CONTROL} border border-[var(--ds-control-border)] bg-[var(--ds-canvas)] hover:border-[var(--ds-control-border-hover)] focus-within:border-[color:color-mix(in_srgb,var(--ds-ink)_70%,transparent)] focus-within:ring-[3px] focus-within:ring-[color:color-mix(in_srgb,var(--ds-ring)_20%,transparent)] transition-[border-color,box-shadow] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]`;
+/**
+ * The pill around an embedded field (a search box with an icon; Atlas's document / PDF / sheet search
+ * pills): it rests on the hairline as Atlas's do — the icon and the placeholder name it, and a field
+ * that stands alone takes FIELD's 3:1 edge — darkens on hover, and shows focus exactly as a field
+ * does: the edge in the focus colour plus a 2 px focus ring set 2 px off. (Atlas draws the group's
+ * focus as ink at 70 % and a 20 % ring; on a 3:1 resting edge, and under "increase contrast", that
+ * was no visible change, tokenContrast.test.ts.)
+ */
+export const FIELD_GROUP = `flex items-center gap-2 ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-canvas)] hover:border-[color:color-mix(in_srgb,var(--ds-ink)_25%,transparent)] focus-within:border-[var(--ds-focus)] focus-within:ring-2 focus-within:ring-[var(--ds-focus)] focus-within:ring-offset-2 focus-within:ring-offset-[color:var(--ds-canvas)] transition-[border-color,box-shadow] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]`;
 
 /**
  * Menus, popovers, dialogs and sheets (Atlas overlays): a step above the cards they cover (#1a1a1a
@@ -248,7 +261,8 @@ export const STATUS_SURFACE: Record<StatusState, string> = {
   active: 'border-[color:color-mix(in_srgb,var(--ds-ink)_15%,transparent)] bg-[var(--ds-well)]',
   waiting: 'border-[var(--ds-hairline)] bg-[var(--ds-canvas)]',
   attention: 'border-[color:color-mix(in_srgb,var(--ds-warning)_40%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-warning)_8%,transparent)]',
-  error: 'border-[color:color-mix(in_srgb,var(--ds-danger-mark)_35%,transparent)] bg-[color:color-mix(in_srgb,var(--ds-danger-mark)_6%,transparent)]'
+  /** Atlas: destructive at 35 % / 6 % in light, the brighter mark at 40 % / 8 % in dark (the tokens carry both). */
+  error: 'border-[var(--ds-status-error-edge)] bg-[var(--ds-status-error-tint)]'
 };
 /** The solid dot of a status (always beside its words), a toast's edge and time-left bar. */
 export const STATUS_DOT: Record<StatusState, string> = {
@@ -269,12 +283,17 @@ export const STATUS_CHIP_TONE: Record<StatusState, string> = {
 };
 
 /**
- * Segmented tabs (Atlas PanelTabs): a soft track; the selected segment is a raised pill. Either paint
- * SEGMENTED_ACTIVE on the selected item, or place one SEGMENTED_PILL under the items and move it with
- * an inline translateX / width measured from the selected item — it glides on the panel time and the
- * spring, and jumps under reduced motion. Items take the flush focus outline.
+ * Segmented tabs (Atlas PanelTabs): a soft track (the muted well at 60 %, 50 % in dark, with a 70 %
+ * hairline); the selected segment is a raised pill — paper ringed in a 6 % hairline in light, the
+ * accent step ringed in white 8 % in dark, so it stands off the track in every context
+ * (tokenContrast.test.ts). Either paint SEGMENTED_ACTIVE on the selected item (every live segmented
+ * control in Comic Studio does, on a `bg-[var(--ds-segment-track)]` well), or place one
+ * SEGMENTED_PILL under the items and move it with an inline translateX / width measured from the
+ * selected item — it glides on the panel time and the spring, and jumps under reduced motion. Items
+ * take the flush focus outline. Outside the skin the pill and the track are the board Segmented's
+ * (raised on the well, a 1 px 8 % drop shadow).
  */
-export const SEGMENTED_TRACK = `relative inline-flex min-w-0 max-w-full gap-0.5 ${RADIUS_CONTROL} border border-[var(--ds-hairline-soft)] bg-[var(--ds-well-strong)] p-0.5`;
+export const SEGMENTED_TRACK = `relative inline-flex min-w-0 max-w-full gap-0.5 ${RADIUS_CONTROL} border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5`;
 export const SEGMENTED_ITEM = `relative inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--ds-radius-control)-2px)] px-3 text-[13px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-checked:text-[var(--ds-ink)] aria-selected:text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] ${FOCUS_RING_FLUSH}`;
 export const SEGMENTED_ACTIVE = 'bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]';
 export const SEGMENTED_PILL = 'pointer-events-none absolute inset-y-0.5 left-0 rounded-[calc(var(--ds-radius-control)-2px)] bg-[var(--ds-segment-pill)] shadow-[shadow:var(--ds-shadow-segment)] transition-[transform,width] duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] motion-reduce:transition-none';
@@ -295,26 +314,33 @@ export const SECTION_BODY = 'px-5 py-5 sm:px-6';
  * Toasts (Atlas GlobalNotificationBar): a monochrome card — the status hue appears only on the 4 px
  * edge (TOAST_EDGE + STATUS_DOT[state]), the time-left bar (TOAST_COUNTDOWN + STATUS_DOT[state], with
  * `--ds-toast-duration` set inline and `data-paused` on the toast while its dismiss clock is held) and
- * the icon (STATUS_INK[state]), next to a title that already says what happened. TOAST_ENTER /
- * TOAST_EXIT arrive on the enter curve and leave quicker; give the exit a removal timer (no
- * animationend fires under reduced motion). Each toast sits in a TOAST_SLOT that closes
+ * the icon (STATUS_INK[state]), next to a title that already says what happened (two lines at most,
+ * the message three). The card is Atlas's: paper with a 70 % hairline in light, the raised step with a
+ * white 12 % edge in dark, 16 px corners. TOAST_ENTER / TOAST_EXIT arrive on the enter curve in 300 ms
+ * and leave in 200 ms; remove the toast after TOAST_EXIT_FALLBACK_MS even without an animationend
+ * (none fires under reduced motion). Each toast sits in a TOAST_SLOT that closes
  * (TOAST_SLOT_CLOSED) as it leaves, so the stack glides up instead of jumping.
  */
-export const TOAST = `ds-toast pointer-events-auto relative flex items-start gap-3 overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-overlay-edge)] bg-[var(--ds-raised)] py-3 pl-4 pr-3 text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-panel)]`;
+export const TOAST = `ds-toast pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-2xl border border-[var(--ds-toast-edge)] bg-[var(--ds-raised)] py-3 pl-4 pr-3 text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-panel)]`;
 export const TOAST_EDGE = 'pointer-events-none absolute inset-y-0 left-0 w-1';
 export const TOAST_COUNTDOWN = 'ds-toast-countdown pointer-events-none absolute bottom-0 left-0 h-0.5 w-full';
 export const TOAST_ENTER = 'ds-toast-enter';
 export const TOAST_EXIT = 'ds-toast-exit';
-export const TOAST_TITLE = 'text-[length:var(--ds-text-base)] font-medium leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]';
-export const TOAST_MESSAGE = 'mt-0.5 text-[13px] leading-5 text-[var(--ds-muted)] [overflow-wrap:anywhere]';
+/** How long TOAST_EXIT runs (index.css; Atlas's duration-200). */
+export const TOAST_EXIT_MS = 200;
+/** Remove a leaving toast after this long even when no animationend fires (reduced motion): the exit plus a frame of slack, as Atlas. */
+export const TOAST_EXIT_FALLBACK_MS = 240;
+export const TOAST_TITLE = 'line-clamp-2 text-[length:var(--ds-text-base)] font-medium leading-5 text-[var(--ds-ink)] [overflow-wrap:anywhere]';
+export const TOAST_MESSAGE = 'mt-0.5 line-clamp-3 text-[13px] leading-5 text-[var(--ds-muted)] [overflow-wrap:anywhere]';
 export const TOAST_SLOT = 'grid transition-[grid-template-rows] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none';
 export const TOAST_SLOT_OPEN = 'grid-rows-[1fr]';
 export const TOAST_SLOT_CLOSED = 'grid-rows-[0fr]';
 
 /**
  * The inverted ink panel (a black call-to-action or brand panel on white). Under the skin in dark it
- * stays a raised dark panel with a light rim instead of a white slab (index.css swaps the ink tokens
- * back inside it), and focus inside it draws in the page colour.
+ * stays a raised dark panel with a light rim instead of a white slab (index.css swaps the ink and page
+ * tokens back inside it, as Atlas does — never the accent, so PRIMARY_BTN inside keeps its label on
+ * its fill), and focus inside it draws in the page colour.
  */
 export const INVERSE_SURFACE = 'ds-inverse-surface bg-[var(--ds-ink)] text-[var(--ds-canvas)]';
 
@@ -343,8 +369,11 @@ export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-in
 /** Floating dropdown/context menu. */
 export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-surface-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
 
-/** Row inside a floating menu (icon + label, quiet hover). */
-export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+/**
+ * Row inside a floating menu (icon + label, quiet hover). The hover reads --ds-overlay-hover: the
+ * hover tint by default (unchanged), Atlas's menu highlight under the skin (white 8 % in dark).
+ */
+export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-[var(--ds-overlay-hover)] ${TRANSITION}`;
 
 // ---------------------------------------------------------------------------
 // Sidebar rail (Claude-style compact navigation)

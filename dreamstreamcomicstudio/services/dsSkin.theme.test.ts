@@ -138,6 +138,53 @@ describe('switchDsTheme — under the skin', () => {
     expect(root.classList.contains(DS_NO_TRANSITIONS_CLASS)).toBe(false);
   });
 
+  it('overlapping cross-fades: only the latest one clears ds-theme-transition (an earlier one finishing mid-fade leaves it on)', async () => {
+    root.setAttribute(DS_SKIN_ATTR, 'atlas');
+    // A startViewTransition stand-in that keeps a handle per transition, so two can be in flight.
+    const handles: Array<{ finish: () => void; done: () => void }> = [];
+    const start = vi.fn((update: () => void): ViewTransitionLike => {
+      let finish!: () => void;
+      let done!: () => void;
+      const finished = new Promise<void>((r) => {
+        finish = r;
+      });
+      const updateCallbackDone = new Promise<void>((r) => {
+        done = r;
+      });
+      update();
+      handles.push({ finish, done });
+      return { ready: Promise.resolve(), updateCallbackDone, finished };
+    });
+    const { raf } = fakeRaf();
+    // The person flips to dark, then straight back to light before the first fade ends (the browser
+    // skips the first transition, which settles its `finished` while the second still runs).
+    expect(switchDsTheme(root, true, { animate: true, env: env({ startViewTransition: start, raf }) })).toBe('cross-fade');
+    expect(switchDsTheme(root, false, { animate: true, env: env({ startViewTransition: start, raf }) })).toBe('cross-fade');
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(root.classList.contains('dark')).toBe(false);
+    handles[0].finish();
+    await flush();
+    expect(root.classList.contains(DS_THEME_TRANSITION_CLASS), 'the second fade is still running').toBe(true);
+    handles[1].finish();
+    await flush();
+    expect(root.classList.contains(DS_THEME_TRANSITION_CLASS)).toBe(false);
+
+    // And in the other order: the latest finishing first clears it; the stale one finishing later
+    // does not put it back or touch a third fade's class.
+    expect(switchDsTheme(root, true, { animate: true, env: env({ startViewTransition: start, raf }) })).toBe('cross-fade');
+    expect(switchDsTheme(root, false, { animate: true, env: env({ startViewTransition: start, raf }) })).toBe('cross-fade');
+    handles[3].finish();
+    await flush();
+    expect(root.classList.contains(DS_THEME_TRANSITION_CLASS)).toBe(false);
+    expect(switchDsTheme(root, true, { animate: true, env: env({ startViewTransition: start, raf }) })).toBe('cross-fade');
+    handles[2].finish();
+    await flush();
+    expect(root.classList.contains(DS_THEME_TRANSITION_CLASS), 'a stale fade never ends the running one').toBe(true);
+    handles[4].finish();
+    await flush();
+    expect(root.classList.contains(DS_THEME_TRANSITION_CLASS)).toBe(false);
+  });
+
   it('without the View Transitions API, or when it throws, the theme still lands at once', () => {
     root.setAttribute(DS_SKIN_ATTR, 'atlas');
     const { raf } = fakeRaf();

@@ -182,6 +182,12 @@ export function resolveColor(value: string, lookup?: (name: string) => string, s
   }
   const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(v);
   if (rgb) return { r: +rgb[1], g: +rgb[2], b: +rgb[3], a: rgb[4] === undefined ? 1 : +rgb[4] };
+  // The space-separated form the shadows use: rgb(0 0 0 / 0.06).
+  const rgbSpace = /^rgba?\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:\/\s*([\d.]+)(%?)\s*)?\)$/.exec(v);
+  if (rgbSpace) {
+    const a = rgbSpace[4] === undefined ? 1 : +rgbSpace[4] / (rgbSpace[5] ? 100 : 1);
+    return { r: +rgbSpace[1], g: +rgbSpace[2], b: +rgbSpace[3], a };
+  }
   const ok = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\)$/.exec(v);
   if (ok) return oklchToRgb(+ok[1], +ok[2], +ok[3]);
   const mix = /^color-mix\(\s*in srgb\s*,([\s\S]+)\)$/.exec(v);
@@ -200,6 +206,21 @@ export function resolveColor(value: string, lookup?: (name: string) => string, s
     return { r: ch('r'), g: ch('g'), b: ch('b'), a };
   }
   throw new Error(`cssTokens: cannot parse the colour "${v}"${seen.length ? ` (${seen.join(' → ')})` : ''}`);
+}
+
+/** A resolved colour written back as a literal (for a custom property that inherits as a computed value). */
+export const rgbaString = ({ r, g, b, a }: Rgba) => `rgba(${r}, ${g}, ${b}, ${a})`;
+
+/**
+ * The colour of a box-shadow's 1 px spread ring (`0 0 0 1px <colour>`, not inset), or null when the
+ * shadow has none.
+ */
+export function spreadRingColor(shadow: string): string | null {
+  for (const part of topLevelSplit(shadow)) {
+    const m = /^0 0 0 1px (.+)$/.exec(part.trim());
+    if (m) return m[1];
+  }
+  return null;
 }
 
 /** Paint `top` over an opaque `under`. */

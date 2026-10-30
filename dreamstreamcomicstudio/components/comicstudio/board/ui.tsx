@@ -5,7 +5,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RotateCcw } from 'lucide-react';
 import type { RenderState } from '../../../shared/comic/doc';
-import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, RADIUS_PANEL, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
+import { ACCENT_BG, ACCENT_BG_HOVER, HAIRLINE, RADIUS_PANEL, SEGMENTED_ACTIVE, SHADOW_SOFT, TRANSITION } from '../../chat/studioDesign';
 import { failureCaption, failureFacts, formatFailedAt } from '../conversation/cards/failure';
 import { formatElapsed, type VisualStatus } from './boardModel';
 
@@ -178,7 +178,7 @@ export function Segmented<T extends string>({
   const checkedIndex = options.findIndex((o) => o.value === value && !o.disabled);
   const tabStop = checkedIndex >= 0 ? checkedIndex : options.findIndex((o) => !o.disabled);
   return (
-    <div role="radiogroup" aria-label={label} className={cx('inline-flex min-w-0 max-w-full rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
+    <div role="radiogroup" aria-label={label} className={cx('inline-flex min-w-0 max-w-full rounded-xl bg-[var(--ds-segment-track)] p-0.5', className)}>
       {options.map((o, i) => {
         const on = o.value === value;
         return (
@@ -200,8 +200,10 @@ export function Segmented<T extends string>({
               // Touch: every segment is a full 44×44 target, icon-only ones too (the header pane switcher).
               size === 'xs' ? 'px-2 py-1 text-[11px] coarse:min-h-[44px] coarse:min-w-[44px]' : 'px-2.5 py-1.5 text-[12px] coarse:min-h-[44px] coarse:min-w-[44px]',
               // Unselected segments read in ink at 80 %: muted on the well measured 4.39:1 (axe, under
-              // AA 4.5:1); ink at 80 % over the well is ≥ 8:1 in both themes.
-              on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-ink)] opacity-80 hover:opacity-100'
+              // AA 4.5:1); ink at 80 % over the well is ≥ 8:1 in both themes. The selected segment is the
+              // segmented pill (studioDesign SEGMENTED_ACTIVE): the raised pill by default, ringed off the
+              // track under the skin (the dark skin's raised step is the track's own colour).
+              on ? SEGMENTED_ACTIVE : 'text-[var(--ds-ink)] opacity-80 hover:opacity-100'
             )}
           >
             {/* Text labels truncate inside their segment instead of overlapping a neighbour in a narrow row. */}

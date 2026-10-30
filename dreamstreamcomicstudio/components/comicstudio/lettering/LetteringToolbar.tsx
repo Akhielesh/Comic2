@@ -7,6 +7,7 @@ import React from 'react';
 import { Cloud, MessageCircle, Redo2, Sparkles, Square, Undo2, Wand2, Zap } from 'lucide-react';
 import type { LineKind } from '../../../shared/comic/doc';
 import type { StudioMode } from '../../../shared/comic/capabilities';
+import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 
 export interface LetteringToolbarProps {
@@ -57,7 +58,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
   disabled
 }) => (
   <div role="toolbar" aria-label="Lettering tools" className="flex min-w-0 flex-wrap items-center gap-1" data-testid="lettering-toolbar">
-    <div className="flex flex-wrap items-center gap-0.5 rounded-xl bg-[var(--ds-well-strong)] p-0.5" role="group" aria-label="Add a balloon">
+    <div className="flex flex-wrap items-center gap-0.5 rounded-xl bg-[var(--ds-segment-track)] p-0.5" role="group" aria-label="Add a balloon">
       {ADD.map((a) => (
         <button
           key={a.kind}
@@ -68,7 +69,7 @@ export const LetteringToolbar: React.FC<LetteringToolbarProps> = ({
           // The name contains the visible words ("+ Sound effect" → "Add a sound effect"; WCAG 2.5.3).
           aria-label={a.kind === 'sfx' ? 'Add a sound effect' : `Add ${a.label.toLowerCase()} balloon`}
           onClick={() => onAddKind(addKind === a.kind ? null : a.kind)}
-          className={cx(BTN, addKind === a.kind && 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]')}
+          className={cx(BTN, addKind === a.kind && SEGMENTED_ACTIVE)}
         >
           {a.icon}
           <span aria-hidden className="hidden sm:inline">

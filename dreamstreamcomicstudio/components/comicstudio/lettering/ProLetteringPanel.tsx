@@ -39,6 +39,7 @@ import {
 import { measureForGeneration } from './measure';
 import { fontLoadGeneration } from './fontLoader';
 import { BORDER_SWATCHES, FILL_SWATCHES, TEXT_SWATCHES, paletteOf, type LetteringPanelProps } from './panelTypes';
+import { SEGMENTED_ACTIVE } from '../../chat/studioDesign';
 import { Segmented, cx } from '../board/ui';
 import { LINE_KIND_LABEL, castName } from '../board/boardModel';
 
@@ -166,7 +167,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
 
   return (
     <div className="space-y-3" data-testid="pro-lettering">
-      <div role="tablist" aria-label="Lettering controls" className="flex gap-0.5 overflow-x-auto rounded-xl bg-[var(--ds-well-strong)] p-0.5 [scrollbar-width:none]">
+      <div role="tablist" aria-label="Lettering controls" className="flex gap-0.5 overflow-x-auto rounded-xl bg-[var(--ds-segment-track)] p-0.5 [scrollbar-width:none]">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -178,7 +179,7 @@ export const ProLetteringPanel: React.FC<LetteringPanelProps & ProLetteringEditi
             onClick={() => setTab(t.id)}
             className={cx(
               'min-w-0 flex-1 whitespace-nowrap rounded-[10px] px-2 py-1 text-[11.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]',
-              tab === t.id ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+              tab === t.id ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
             {t.label}
