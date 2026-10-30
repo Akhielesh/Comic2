@@ -135,7 +135,7 @@ describe('every target is at least 44 px', () => {
     }
   });
 
-  it('the header button and the entry links are 44 px too', () => {
+  it('the header button and the entry links are 44 px too (the timeline link on coarse pointers, like its siblings)', () => {
     // A phone header wide enough for the icon (narrower ones carry History in the ⋯ menu instead).
     const m = historySetup({ width: 480, height: 900 });
     const { container } = mountWith(
@@ -149,9 +149,15 @@ describe('every target is at least 44 px', () => {
     const els = interactive(container);
     expect(els).toHaveLength(3);
     for (const el of els) expect(el.className).toMatch(TARGET_RE);
-    // On every pointer, not only on touch (no coarse:-only escape).
-    for (const el of els) expect(el.className).toMatch(/(^|\s)(min-)?h-11(\s|$)/);
+    const [header, page, timeline] = els;
+    // The header button and the page link: on every pointer, not only on touch (no coarse:-only escape).
+    for (const el of [header, page]) expect(el.className).toMatch(/(^|\s)(min-)?h-11(\s|$)/);
     expect(screen.getByRole('button', { name: 'History' }).className).toMatch(/min-w-11/);
+    // The timeline link follows the dock's summary row (its Media sibling): 28 px on fine pointers, 44 px on coarse.
+    expect(timeline).toHaveAttribute('data-history-entry', 'timeline');
+    expect(timeline.className).toMatch(/(^|\s)h-7(\s|$)/);
+    expect(timeline.className).toMatch(/(^|\s)coarse:h-11(\s|$)/);
+    expect(timeline.className).toMatch(/(^|\s)coarse:min-w-11(\s|$)/);
   });
 });
 

@@ -8,7 +8,7 @@
 // remembered per device; hidden in the Read tab. `compact` is the 64 px strip for the page editor.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { ChevronUp, History as HistoryIcon, Images } from 'lucide-react';
+import { ChevronUp, Images } from 'lucide-react';
 import { newId, renderTargetKey, type RenderTarget } from '../../../shared/comic/doc';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { useCostFormat } from '../conversation/cost';
@@ -40,12 +40,12 @@ import { AddClip, TimelineClip } from './TimelineClip';
 import { UndoToast, useTimelineEdit } from './UndoToast';
 import { VersionStack } from './VersionStack';
 import { cx, FOCUS_RING, TimelineDialog, useReducedMotion, useStoredFlag } from './ui';
-import { historyEnabled } from '../../../shared/comic/capabilities';
-import { requestOpenHistory } from '../history/openHistory';
+import { TimelineHistoryLink } from '../history/EntryLinks';
 
 /**
- * The summary row's small actions (Media, History): 28 px on fine pointers, so nothing is clipped by the 36 px row,
- * and a 44 px target on coarse pointers, where the row itself grows to 44 px (coarse:h-11).
+ * The summary row's small actions: 28 px on fine pointers, so nothing is clipped by the 36 px row, and a 44 px
+ * target on coarse pointers, where the row itself grows to 44 px (coarse:h-11). History's TimelineHistoryLink
+ * (history/EntryLinks.tsx) draws the same class; BookTimeline.test.tsx pins the two equal.
  */
 const SUMMARY_ACTION = cx(
   'inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] coarse:h-11 coarse:min-w-11 coarse:justify-center coarse:px-3',
@@ -649,18 +649,7 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
             {notice || summary}
           </p>
           {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off. */}
-          {historyEnabled(studio.caps) && (
-            <button
-              type="button"
-              onClick={() => void requestOpenHistory({ view: 'list' })}
-              className={SUMMARY_ACTION}
-              aria-label="Open History: every saved moment of this comic"
-              data-history-entry="timeline"
-            >
-              <HistoryIcon className="h-3.5 w-3.5" aria-hidden />
-              <span className="hidden sm:inline">History</span>
-            </button>
-          )}
+          <TimelineHistoryLink studio={studio} />
           {/* The Media tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
           {hasMedia(doc) && (
             <button
