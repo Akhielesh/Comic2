@@ -2172,7 +2172,7 @@ interface ImageJob {
   finishRequired?: boolean;
   /** Extra VersionMeta for the new version (fix_panel: the copied cuts, parts, parentPath). */
   extraMeta?: (doc: ComicDoc) => Partial<VersionMeta>;
-  /** Page jobs: "Redraw with my layout" — the page's frames become the layout guide (render_pages.followFrames). */
+  /** Page jobs: "Redraw with my layout" — with COMIC_LAYOUT_GUIDE on, the guide is drawn from the page's frames (render_pages.followFrames). */
   followFrames?: boolean;
   /** Called once the image is stored (a scheduled run's `after` dependency with settle 'stored'). */
   onStored?: () => void;
