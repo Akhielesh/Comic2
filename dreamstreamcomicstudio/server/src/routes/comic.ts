@@ -71,7 +71,7 @@ import { toolGroups } from '../comic/tools/index.js';
 import { StudioError, type AssetStore, type DocStore } from '../comic/types.js';
 // --- history (versions plan §3.3, §11; H0 seams). Only through the owner history route modules, never the history
 //     engine modules directly: this file also holds the public reader router (§12). ---
-import { historyRoutesEnabled, rememberTurnTimeZone } from './comicHistory.js';
+import { historyActionOff, historyRoutesEnabled, rememberTurnTimeZone } from './comicHistory.js';
 import { legacyVersionImport, notifyImported, parseFromVersionId } from './comicLegacyHistory.js';
 
 // ── Limits ───────────────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ const bodyShape = (body: unknown): Pick<RefusalLog, 'kind' | 'action'> => {
   if (body.kind === 'message') return { kind: 'message' };
   if (body.kind === 'action') {
     const type = isObject(body.action) ? body.action.type : undefined;
-    return { kind: 'action', ...(typeof type === 'string' && STREAM_ACTION_TYPES.has(type) ? { action: type } : {}) };
+    return { kind: 'action', ...(typeof type === 'string' && STREAM_ACTION_TYPES.has(type) && !historyActionOff(type) ? { action: type } : {}) };
   }
   return {};
 };
@@ -515,7 +515,8 @@ export function parseStreamRequest(body: unknown): StreamRequest {
   if (body.kind === 'action') {
     const action = body.action;
     if (!isObject(action) || typeof action.type !== 'string') throw bad('Unknown action.');
-    if (!STREAM_ACTION_TYPES.has(action.type)) throw bad(`Unknown action "${action.type.slice(0, 40)}".`);
+    // History actions exist only while Comic History is on; off, they are as unknown as before it shipped.
+    if (!STREAM_ACTION_TYPES.has(action.type) || historyActionOff(action.type)) throw bad(`Unknown action "${action.type.slice(0, 40)}".`);
     const tz = normalizeTimeZone(body.tz);
     return { kind: 'action', action: action as unknown as StudioAction, ...(tz ? { tz } : {}) };
   }
@@ -1063,6 +1064,11 @@ export function createComicRouter(deps: ComicRouterDeps = {}): Router {
       const fromVersionId = importFrom && historyRoutesEnabled() ? parseFromVersionId(body.fromVersionId) : undefined;
       if (importFrom) {
         if (!PROJECT_ID.test(importFrom)) throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
+        // A snapshot id that is present but malformed never falls back to the live classic state: the creator asked
+        // for snapshot X, so anything else is the same 404 as a missing snapshot (null/absent = the live state).
+        if (historyRoutesEnabled() && body.fromVersionId !== undefined && body.fromVersionId !== null && !fromVersionId) {
+          throw new StudioError('NOT_FOUND', "That project doesn't exist or you don't have access to it.", { status: 404 });
+        }
         // One classic import per user at a time: each can re-encode up to ~105 photos through the
         // process-wide image slots, so parallel imports must never multiply that work (the UI already
         // sends one at a time; this holds for forged or multi-tab requests too).

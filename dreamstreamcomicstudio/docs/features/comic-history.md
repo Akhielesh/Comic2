@@ -64,24 +64,34 @@ creator confidence — no lost work, easy undo and versions.
   `ed:<lang>`, `edp:<lang>:<pageId>`, `glossary`, `archive:<n>` blocks of 32 from the oldest end, `trash:<pageId>`).
   **Future-proof by exclusion**: new page/panel fields land in `page:` automatically; `meta` takes every unlisted
   top-level key; `TOP_LEVEL_SECTIONS` is typed `Record<keyof ComicDoc, …>` so a new doc key fails the typecheck until it
-  is assigned (K2a: `scenes`, `consistency` → meta). Volatile render fields (busy/failed status, attempts, error,
+  is assigned (K2a: `scenes`, `consistency` → meta). Every meta key beyond the typed seven (`TYPED_META_KEYS`) is an
+  "extra" meta key (`isExtraMetaKey`): captured, compared by `diffBooks` and restored through `RestoreSet.metaExtra`
+  (null removes a key), so a K2a key needs nothing beyond its `TOP_LEVEL_SECTIONS` entry. Volatile render fields (busy/failed status, attempts, error,
   errorDetail, updatedAt) never enter a section. `joinSections` reassembles through `normalizeDoc`; split → join is the
   identity (volatile fields aside) on v4, v5, empty and random books; `pageSpecHash` never changes.
 - **apply.ts** — merge mode keeps **I1** no lost image (displaced art → that target's history → archive; removed pages
-  → Deleted; anything else unreferenced → archived), **I2** no lost translation (union by line id, version wins for its
+  → Deleted; anything else unreferenced → archived; an overflowed version is archived only when nothing references
+  its path any more, each path once, so restore → Undo cycles never pile up duplicates), **I2** no lost translation (union by line id, version wins for its
   lines), **I3** forward-only state untouched (spend, conversation, memory, settings, safety, publication, the model
   lock, the inbox; `gate` → null; restored images keep the newest verdict and variants), **I4** busy targets untouched,
   **I5** normalized, **I6** later characters/places/options kept, later pages to Deleted. The source language is never
-  changed by a merge restore. Exact mode (alternative switch only) replaces as stored; the trash belongs to the comic.
+  changed by a merge restore. Exact mode (alternative switch only) replaces as stored; the trash belongs to the comic:
+  it stays, the target line's Deleted pages join it (by page id, newest first, capped at 20 with the overflow
+  archived) and a page live in the target is not also deleted, so a switch there and back gives every page back.
 - **restore.ts** — `restoreOps(current, versionDoc, scope)` per scope; `restoreEffects` (what goes to Deleted / is
   kept); `exactRestoreSet`; `historyRestoreOp`.
 - **diff.ts** — `diffManifests` (no body loads), `diffBooks` with the semantic filter (QC, variants and safety never
   count as a change), `diffWords` (word LCS), `diffLines`, `drawnModelOf`.
 - **touched.ts** — `touchedKeys(op, doc?)`, `opActor(op, origin)` (you / ai / editor, §4.2), `CAPTURE_NEUTRAL_OPS`.
-- **describe.ts** — `describeChanges(changes, kind)`, `changeItemsFromDiff`, `pageRangeText` (no git words, ever).
+- **describe.ts** — `describeChanges(changes, kind)`, `changeItemsFromDiff`, `pageRangeText` (no git words, ever). A
+  model switch leads ("Switched the image model and redrew pages 1–6"); up to three phrases are named before "and
+  more".
 - **when.ts** — `resolveWhen({day, part?, at?}, now, tz)`: "yesterday" ends at local midnight, "this morning" at 12:00
   local; DST days are 23/25 hours; no valid zone → UTC, and it says so.
-- **lastAi.ts** — `planUndoLastAi(P, R, live, decisions?)`: untouched AI keys revert, changed-since keys are conflicts.
+- **lastAi.ts** — `planUndoLastAi(P, R, live, decisions?, sameContent?)`: untouched AI keys revert, changed-since keys
+  are conflicts. Raw chunk hashes include QC, variants and safety verdicts, which the studio commits on its own
+  (variant backfill on load, async verdicts), so H3 passes `sameContent(key)` comparing the live and R bodies with
+  `semanticSectionContent` (diff.ts): such a key counts as untouched, never as "You've changed page 3 since".
 
 ## 5. The seams (H0 stubs; later packages replace them in place, same names)
 
@@ -96,8 +106,10 @@ creator confidence — no lost work, easy undo and versions.
   legacy first; off → the paths fall through untouched; on → the same bare 404 as a missing comic, `private, no-store`,
   text-limited on their exact paths).
 - **routes/comic.ts**: the stream request's `tz` rides on the turn context (`turnTimeZone(ctx)` for H4); `POST
-  /projects {importFromProjectId, fromVersionId}` (read only while history is on) → the classic snapshot loader; one
-  `onImported` call after a classic import; caps from `COMIC_HISTORY`.
+  /projects {importFromProjectId, fromVersionId}` (read only while history is on) → the classic snapshot loader (a
+  present but malformed id answers the same 404, never the live classic state); one `onImported` call after a
+  classic import; caps from `COMIC_HISTORY`. While history is off, `parseStreamRequest` answers a `history_*` action
+  with the same 400 "Unknown action" as before H0 (`historyActionOff` in `routes/comicHistory.ts`).
 - **Client**: `components/comicstudio/history/{index,intents}.ts` (registered in `features.ts`, listed once they
   register something); `studioReducer` refetches on an unknown op, records a `history_restore` (and drops queued
   director batches), marks AI changes the undo stack cannot invert, and feeds the `history` event to an open panel;
@@ -111,7 +123,7 @@ creator confidence — no lost work, easy undo and versions.
 - Old client tabs refetch on any op they do not know. Release order: client first, then H1's SQL, then the server with
   `COMIC_HISTORY=1`.
 - With `COMIC_HISTORY` unset nothing observable changes: no caps keys, no tz on requests, no director group, history
-  paths fall through, the action stubs are unreachable from the UI.
+  paths fall through, a `history_*` stream action is an unknown action (400) as before.
 
 ## 7. Security boundary (§12, holds from H0)
 

@@ -19,6 +19,7 @@
 // that also holds the public reader router never imports comic/history directly.
 
 import { Router, type RequestHandler } from 'express';
+import { HISTORY_ACTION_TYPES } from '../../../shared/comic/history/types.js';
 import { isHistoryEnabled, rememberTurnTimeZone } from '../comic/history/hooks.js';
 
 /** Every path this router owns (exact; anything else falls through). */
@@ -35,6 +36,14 @@ export const historyRouteGate =
   (mw: RequestHandler): RequestHandler =>
   (req, res, next) =>
     isHistoryEnabled() ? mw(req, res, next) : next();
+
+const HISTORY_ACTIONS: ReadonlySet<string> = new Set(HISTORY_ACTION_TYPES);
+
+/**
+ * A history_* stream action while Comic History is off (COMIC_HISTORY unset): routes/comic.ts parseStreamRequest
+ * answers it exactly like any unknown action (400 'Unknown action "…"'), as before H0 — nothing observable changes.
+ */
+export const historyActionOff = (type: string): boolean => HISTORY_ACTIONS.has(type) && !isHistoryEnabled();
 
 /** Remember the stream request's time zone on its turn context (comic/history/hooks.ts). */
 export { rememberTurnTimeZone };

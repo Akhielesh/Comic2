@@ -1401,7 +1401,6 @@ describe('P2-AMEND events, models, caps, safety text, versions, public payload',
 // ── Comic History H0 (versions plan §3.3) ────────────────────────────────────
 import { expectTypeOf } from 'vitest';
 import { HISTORY_ACTION_TYPES, type HistoryCard } from './history/types';
-import type { Card } from './doc';
 import { HISTORY_LIMITS, MAX_ALTERNATIVES } from './limits';
 import { KNOWN_DOC_OPS, isKnownDocOp } from './ops';
 import { STREAM_EVENT_NAMES, normalizeTimeZone } from './events';

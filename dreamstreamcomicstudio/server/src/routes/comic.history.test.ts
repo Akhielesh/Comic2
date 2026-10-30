@@ -100,6 +100,24 @@ describe('parseStreamRequest tz', () => {
   });
 });
 
+describe('history actions on the stream follow COMIC_HISTORY', () => {
+  it('off: a history action is an unknown action (400), exactly as before H0; on: it reaches its (stub) handler', async () => {
+    for (const type of ['history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative']) {
+      expect(() => parseStreamRequest({ kind: 'action', action: { type } }), type).toThrow(`Unknown action "${type}".`);
+    }
+    const doc = plannedDoc();
+    store.docs.set(doc.id, { userId: 'user-1', doc });
+    const off = await api(`/api/comic/projects/${doc.id}/stream`, { user: 'user-1', body: { kind: 'action', action: { type: 'history_restore', versionId: 'v', scope: { kind: 'book' } } } });
+    expect(off.status).toBe(400);
+    expect((await off.json()).error).toMatchObject({ code: 'BAD_REQUEST', message: 'Unknown action "history_restore".' });
+    vi.stubEnv('COMIC_HISTORY', '1');
+    expect(parseStreamRequest({ kind: 'action', action: { type: 'history_restore' } })).toEqual({ kind: 'action', action: { type: 'history_restore' } });
+    const on = await api(`/api/comic/projects/${doc.id}/stream`, { user: 'user-1', body: { kind: 'action', action: { type: 'history_restore', versionId: 'v', scope: { kind: 'book' } } } });
+    expect(on.status).toBe(200);
+    expect(await on.text()).toContain('NOT_AVAILABLE');
+  });
+});
+
 describe('the turn context carries the request time zone', () => {
   it('a message stream remembers tz on its StudioContext (what the history tools read)', async () => {
     const doc = plannedDoc();
@@ -151,6 +169,26 @@ describe('POST /projects from a classic snapshot', () => {
     expect(imported.calls).toEqual([]);
     // Without a snapshot id the live state still imports.
     expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-9' } })).status).toBe(201);
+  });
+
+  it('while on, a malformed snapshot id answers that same 404 instead of importing the live classic state', async () => {
+    classic();
+    vi.stubEnv('COMIC_HISTORY', '1');
+    const before = store.docs.size;
+    for (const fromVersionId of ['bad id!', '', 42, { id: 'snap_2' }, 'x'.repeat(200)]) {
+      const res = await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-9', fromVersionId } });
+      expect(res.status, JSON.stringify(fromVersionId)).toBe(404);
+      expect((await res.json()).error.code).toBe('NOT_FOUND');
+    }
+    expect(store.docs.size).toBe(before);
+    expect(imported.calls).toEqual([]);
+    // null means "no snapshot": the live state imports, as without the field.
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-9', fromVersionId: null } })).status).toBe(201);
+  });
+
+  it('while off, a malformed snapshot id is ignored as before (the live classic state imports)', async () => {
+    classic();
+    expect((await api('/api/comic/projects', { user: 'user-1', body: { importFromProjectId: 'old-9', fromVersionId: 'bad id!' } })).status).toBe(201);
   });
 
   it('a plain new comic never calls onImported', async () => {
