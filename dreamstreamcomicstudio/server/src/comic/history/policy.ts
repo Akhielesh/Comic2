@@ -2,8 +2,9 @@
 // in), no store, no I/O, no timers. recorder.ts holds the state and does the writes; this file decides.
 //
 //   classifyBatch   who made a commit (§4.2) and what it touched: touchedKeys/opActor from shared/comic/history/
-//                   touched.ts (K2a's ops included, never re-classified), plus the §4.2 rule that a fitted (derived)
-//                   image and a balloon re-fit are the editor's free work whoever asked.
+//                   touched.ts (K2a's ops included, never re-classified), plus the §4.2 rules that a paid AI action
+//                   ("Plan the pages") is the AI's whoever clicked it, and a fitted (derived) image and a balloon
+//                   re-fit are the editor's free work whoever asked.
 //   the clocks      gap (30 min), AI-run coalescing (10 min), quiet editing (10 min / 25 commits / 3 pages).
 //   the row         changes (≤ 60, semantic: diffBooks hides QC, variants and safety), panel moments, thumbs (≤ 8),
 //                   stats with the run's spend (BYOK flagged), and the plain-words label (describeChanges).
@@ -60,6 +61,25 @@ export const HISTORY_MOMENT_BATCHES_MAX = 200;
  */
 export const EDITOR_SOFTWARE_ACTIONS: ReadonlySet<string> = new Set(['fit_render', 'relayout_balloons']);
 
+/**
+ * Paid AI actions whose batches are the AI's whoever clicked them (§4.2, §4.3 #1). "Plan the pages" from the UI runs
+ * the writer and commits its pages with origin 'user'; it is still the AI's rewrite (a `before_ai` + `ai` pair, with
+ * the writer's spend). touched.ts AI_ACTIONS (fix_panel, enrich_pages) reach opActor as its 4th argument already.
+ */
+export const AI_PAID_ACTIONS: ReadonlySet<string> = new Set(['plan_pages']);
+
+/**
+ * Until jobs.ts passes the action to History (withHistoryAction; REQUIRED before COMIC_HISTORY=1), the commit labels
+ * planPages gives the writer's ops name the batch instead: one of these labels with a `pages` or `character` op is the
+ * AI's. The labels are set by the server only (a client 'patch' commits without a label).
+ */
+export const AI_WRITER_LABELS: ReadonlySet<string> = new Set(['Plan pages', 'Revise pages', 'Add cast']);
+const AI_WRITER_OPS: ReadonlySet<string> = new Set(['pages', 'character']);
+
+/** The writer's batch, named by its commit label (the fallback while the action is unknown). */
+export const isAiWriterBatch = (ops: readonly DocOp[], label: string | undefined): boolean =>
+  typeof label === 'string' && AI_WRITER_LABELS.has(label) && ops.some((op) => !!op && AI_WRITER_OPS.has(op.op));
+
 /** How much an actor says about a change: a key touched by the AI and re-fitted by the editor reads as the AI's. */
 const ACTOR_RANK: Record<HistoryActor, number> = { ai: 4, you: 3, editor: 2, system: 1 };
 export const strongerActor = (a: HistoryActor | null | undefined, b: HistoryActor | null | undefined): HistoryActor | null => {
@@ -108,25 +128,42 @@ export const pageIdOfKey = (key: string): string | undefined => {
   return undefined;
 };
 
-/** One op's actor (§4.2): opActor, with the editor rule for fitted images and balloon re-fits. */
-export const actorOf = (op: DocOp, origin: OpsOrigin | undefined, doc: ComicDoc | undefined, action?: string, fittedBatch = false): HistoryActor | null => {
+/**
+ * One op's actor (§4.2): opActor, then a paid AI action (or the writer's labelled batch) is the AI's, then the editor
+ * rule for fitted images and balloon re-fits.
+ */
+export const actorOf = (
+  op: DocOp,
+  origin: OpsOrigin | undefined,
+  doc: ComicDoc | undefined,
+  action?: string,
+  fittedBatch = false,
+  aiBatch = false
+): HistoryActor | null => {
   const base = opActor(op, origin, doc, action);
   if (base === null) return null;
+  if (aiBatch || (typeof action === 'string' && AI_PAID_ACTIONS.has(action))) return 'ai';
   if (fittedBatch || isDerivedRender(op) || (typeof action === 'string' && EDITOR_SOFTWARE_ACTIONS.has(action))) return 'editor';
   return base;
 };
 
-/** Classify one commit (pure; `before` and `next` resolve keys that depend on where things live). */
+/**
+ * Classify one commit (pure; `before` and `next` resolve keys that depend on where things live). `label` is the
+ * commit's undo label (the writer's batch is named by it while the action is unknown).
+ */
 export const classifyBatch = (
   ops: readonly DocOp[],
   origin: OpsOrigin | undefined,
   before: ComicDoc,
   next: ComicDoc,
-  action?: string
+  action?: string,
+  label?: string
 ): BatchClass => {
   const out: BatchClass = { actor: null, ai: false, you: false, edit: false, keys: new Map(), pageIds: [], spend: [], restore: false, model: false };
   // fit_render commits its derived image with the remapped balloons: the whole batch is the editor's.
   const fitted = ops.some(isDerivedRender);
+  // planPages commits the writer's pages (and the cast it adds) with the click's origin: the whole batch is the AI's.
+  const writer = isAiWriterBatch(ops, label);
   const pages = new Set<string>();
   for (const op of ops) {
     if (!op || typeof op !== 'object') continue;
@@ -135,7 +172,7 @@ export const classifyBatch = (
     if (op.op === 'history_restore') out.restore = true;
     if (op.op === 'image_model' && hasModelSwitch([op])) out.model = true;
     if (CAPTURE_NEUTRAL_OPS.has(op.op)) continue;
-    const actor = actorOf(op, origin, next, action, fitted);
+    const actor = actorOf(op, origin, next, action, fitted, writer);
     if (!actor) continue;
     out.actor = strongerActor(out.actor, actor);
     if (actor === 'ai') out.ai = true;
@@ -357,7 +394,7 @@ export const rowLabel = (kind: HistoryKind, changes: readonly ChangeItem[], opts
 
 /** The info notice when the put thinned rows to stay within the comic's byte budget (never silent; §4.4). */
 export const budgetThinnedNotice = (count: number): string =>
-  `History made room for new moments: it let ${count} older automatic ${count === 1 ? 'moment' : 'moments'} go to stay within this comic's space. Versions you named and pinned moments are always kept.`;
+  `History made room for new moments: it let ${count} older automatic ${count === 1 ? 'moment' : 'moments'} go to stay within this comic's space. Named versions are kept forever.`;
 
 /** comic_versions.changes byte cap (the column's check). */
 export const HISTORY_CHANGES_MAX_BYTES = 16_384;

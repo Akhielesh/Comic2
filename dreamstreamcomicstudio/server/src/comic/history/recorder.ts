@@ -5,10 +5,12 @@
 //   onCommit   SYNCHRONOUS bookkeeping (policy.ts classifyBatch: touchedKeys + opActor + §4.2), AI-run coalescing,
 //              and the moments that capture the state BEFORE a commit: `before_ai` at a run's first AI commit (its
 //              write starts right away and is never awaited: a paid run never waits for History), the `ai` row of a
-//              run a change of yours closed, and the gap rule's `edits` row (content_at = before.updatedAt).
+//              run a change of yours closed, and the gap rule's `edits` row (content_at = when the book last
+//              changed: before.updatedAt unless a chat message, spend, gate or QC commit moved it since).
 //   onFlush    the `ai` row of a finished run (stats.spend from the run's new spend entries, BYOK flagged), quiet
 //              edits, and "Where you left off" on the final flush; awaited by flush(), so it waits only for its own
-//              store calls (the same requests that already wait for the doc save) and never for a timer.
+//              captures (never for an older write another request started, never for a timer); the final flush
+//              waits for everything still queued.
 //   onLoad     "History starts here" (a pinned `start` row) for a comic with no rows; otherwise it reads the head.
 //   onImported a pinned `import` row for a comic brought in from the classic editor (no session needed).
 //
@@ -21,7 +23,10 @@
 // — never on a timer: the recorder creates no setTimeout/setInterval, so the backend stays sleepable.
 //
 // The `history` SSE event (a VersionRow, alternativeId null for "Original") goes through the sink to the comic's own
-// open session; a budget-thinned put posts an info notice the same way (never silent).
+// open session; a budget-thinned put posts an info notice the same way (never silent; once per open comic).
+//
+// A history restore (H3) or line switch (H7) drops what is still queued (H3's awaited before_restore row holds that
+// book), except the write in flight and pinned moments, which are written but never taken as the line's head.
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { newId, type ComicDoc, type SpendEntry } from '../../../../shared/comic/doc.js';
@@ -158,6 +163,8 @@ interface Capture {
   publishedRev?: number;
   legacyRef?: VersionInput['legacyRef'];
   attempts: number;
+  /** Queued before a restore (pinned, or in flight): still written, never taken as the line's head. */
+  superseded?: boolean;
 }
 
 interface Head {
@@ -177,9 +184,12 @@ const PINNED = new Set<HistoryKind>(PINNED_HISTORY_KINDS);
 const SPEND_KEPT_MAX = 500;
 
 const isConflict = (err: unknown): boolean => err instanceof StudioError && err.code === 'CONFLICT' && err.retryable === true;
-/** A refusal that will never succeed for this capture (it is dropped, not retried). */
-const isPermanent = (err: unknown): boolean =>
-  err instanceof StudioError && !err.retryable && (err.code === 'BAD_REQUEST' || err.code === 'LIMIT' || err.code === 'NOT_FOUND' || err.code === 'FORBIDDEN');
+/**
+ * A refusal that will never succeed for this capture (it is dropped, not retried): any StudioError the store marks
+ * not retryable (a bad request, a limit, a missing line, a hash refusal, a REFUSED:* conflict). NOT_AVAILABLE stops
+ * recording instead. Anything else (a network error, a retryable StudioError) is retried at the next commit or flush.
+ */
+const isPermanent = (err: unknown): boolean => err instanceof StudioError && !err.retryable && err.code !== 'NOT_AVAILABLE';
 const toChunk = ({ hash, kind, content, paths }: ChunkInput): ChunkInput => ({ hash, kind, content, paths });
 
 class Recorder implements HistoryRecorder {
@@ -193,11 +203,19 @@ class Recorder implements HistoryRecorder {
   private headStale = false;
   /** A doc that may equal the head (the loaded doc; the doc a restore produced). */
   private candidate?: ComicDoc;
+  /** The book a restore produced, until this recorder writes its own row: the head's book whatever the store's newest
+   *  row is (H3's restore row may not have landed yet, or a superseded capture landed after it). */
+  private restoredDoc?: ComicDoc;
   private recordingNow = false;
   /** The tables are not applied (NOT_AVAILABLE): this session records nothing more. */
   private off = false;
+  /** The budget notice was posted (once per open comic: past its budget every write thins a row). */
+  private budgetNoticed = false;
 
   private queue: Capture[] = [];
+  /** Captures queued so far, and that count at the last flush (a flush waits only for what is new since). */
+  private enqueued = 0;
+  private flushMark = 0;
   private draining: Promise<void> | null = null;
 
   private accrued = newAccrued();
@@ -233,15 +251,18 @@ class Recorder implements HistoryRecorder {
 
   // ── Hooks ──────────────────────────────────────────────────────────────────
 
-  onCommit(before: ComicDoc, next: ComicDoc, ops: DocOp[], origin: OpsOrigin | undefined, _label: string | undefined): void {
+  onCommit(before: ComicDoc, next: ComicDoc, ops: DocOp[], origin: OpsOrigin | undefined, label: string | undefined): void {
     if (this.off) return;
+    let restore = false;
     try {
       const at = Number.isFinite(next?.updatedAt) ? next.updatedAt : this.now();
       const action = currentHistoryAction();
-      const b = classifyBatch(ops, origin, before, next, action?.type);
+      const b = classifyBatch(ops, origin, before, next, action?.type, label);
       if (b.spend.length) this.addSpend(b.spend);
-      if (b.restore) this.restored(before, next, at);
-      else {
+      if (b.restore) {
+        restore = true;
+        this.restored(before, next, at);
+      } else {
         if (b.actor) this.content(before, next, ops, b, action, at);
         const rev = b.publication?.publishedRev;
         if (b.publication && typeof rev === 'number' && rev !== before.publication?.publishedRev) {
@@ -251,14 +272,15 @@ class Recorder implements HistoryRecorder {
     } catch (err) {
       this.log('onCommit', err);
     }
-    // A capture that failed earlier is retried now (never on a timer).
-    if (this.queue.length) void this.kick();
+    // A capture that failed earlier is retried now (never on a timer). Not at a restore's own commit: H3 flushes and
+    // then writes its `restore` row, so a pinned moment still waiting goes out at that flush, before the restore row.
+    if (this.queue.length && !restore) void this.kick();
   }
 
   async onFlush(doc: ComicDoc, opts: { final: boolean }): Promise<void> {
     if (this.off) return;
+    const final = opts?.final === true;
     try {
-      const final = opts?.final === true;
       const contentAt = this.lastContentAt ?? doc.updatedAt;
       if (this.run) {
         // The stream waits for its renders before it flushes; a render still drawing keeps the run open.
@@ -275,7 +297,15 @@ class Recorder implements HistoryRecorder {
     } catch (err) {
       this.log('onFlush', err);
     }
-    await this.kick();
+    const olderWrite = this.draining !== null;
+    const fresh = this.enqueued !== this.flushMark; // queued since the last flush (this one's own included)
+    this.flushMark = this.enqueued;
+    const drain = this.kick();
+    // A flush waits for what was queued since the last flush (its request's moments: H3's flush before a restore
+    // relies on it) and for a retry it starts itself, but never for an older write an earlier flush already waits
+    // for: a slow store holds that one request, not every later 'done'. The final flush (eviction, shutdown) waits for
+    // everything still queued. The store's own request timeout bounds each write (no timer here).
+    if (final || fresh || !olderWrite) await drain;
   }
 
   async onLoad(doc: ComicDoc): Promise<void> {
@@ -289,6 +319,7 @@ class Recorder implements HistoryRecorder {
     this.lastContentAt = doc.updatedAt;
     this.head = undefined;
     this.candidate = doc;
+    this.restoredDoc = undefined;
     this.capture('start', doc, { contentAt: doc.updatedAt });
     await this.kick();
   }
@@ -316,22 +347,32 @@ class Recorder implements HistoryRecorder {
     if (into.length > SPEND_KEPT_MAX) into.splice(0, into.length - SPEND_KEPT_MAX);
   }
 
+  /**
+   * When the book `before` last changed. A chat message, a spend, a gate, memory, QC or a render's status also move
+   * updatedAt, so the content's own time is kept (it equals before.updatedAt when nothing like that came between).
+   */
+  private contentAtOf(before: ComicDoc): number {
+    return this.lastContentAt ?? before.updatedAt;
+  }
+
   /** A content commit: the captures of `before` it calls for, then its own bookkeeping. */
   private content(before: ComicDoc, next: ComicDoc, ops: DocOp[], b: BatchClass, action: PanelMomentAction | undefined, at: number): void {
+    // QC reports and render statuses ('system') change nothing you made (§4.2): no capture, no clock, not "changed".
+    const system = b.actor === 'system';
     const gap = isGap(this.lastChangeAt, at);
     if (b.ai) {
       if (this.run && continuesRun(this.run.lastAiAt, at)) this.run.lastAiAt = at;
       else {
         // A run that went quiet ends where it stood; the new one starts from there (its before_ai dedupes onto it).
-        if (this.run) this.closeRun(before, before.updatedAt);
+        if (this.run) this.closeRun(before, this.contentAtOf(before));
         this.startRun(before, next, ops, action, at);
       }
     } else if (b.you && this.run) {
       // A change of yours closes the AI run: its result is the book just before your change.
-      this.closeRun(before, before.updatedAt);
-    } else if (gap && !this.run) {
+      this.closeRun(before, this.contentAtOf(before));
+    } else if (gap && !this.run && !system) {
       // Back after a gap: keep the book as it was, at the time it was last changed.
-      this.capture('edits', before, { contentAt: before.updatedAt });
+      this.capture('edits', before, { contentAt: this.contentAtOf(before) });
     }
     // This commit's own changes (after the captures of `before` took the earlier ones).
     const acc = this.accrued;
@@ -344,6 +385,7 @@ class Recorder implements HistoryRecorder {
       for (const id of b.pageIds) acc.pages.add(id);
     }
     if (b.you && !this.run) this.spendSince = [];
+    if (system) return;
     this.dirty = true;
     this.lastChangeAt = at;
     this.lastContentAt = at;
@@ -354,7 +396,7 @@ class Recorder implements HistoryRecorder {
     this.spendSince = [];
     this.run = run;
     // Written right away and never awaited: a crash mid-run still leaves it, and the paid run never waits for it.
-    this.capture('before_ai', before, { contentAt: before.updatedAt, run, labelItems: beforeAiItems(before, next, ops, action) });
+    this.capture('before_ai', before, { contentAt: this.contentAtOf(before), run, labelItems: beforeAiItems(before, next, ops, action) });
   }
 
   private closeRun(doc: ComicDoc, contentAt: number): void {
@@ -364,14 +406,35 @@ class Recorder implements HistoryRecorder {
     this.capture('ai', doc, { contentAt, run, base: run.beforeDoc, spend: spendOf(run.spend) });
   }
 
-  /** A history restore or line switch (H3/H7 write their own rows): start over from the restored book. */
+  /**
+   * A history restore or line switch (H3/H7 write their own rows): start over from the restored book.
+   *
+   * Every capture still queued led to the book H3's awaited `before_restore` row already holds (H3 flushes before it,
+   * so they land first while the store is healthy). Written after the restore, one would become the line's newest
+   * row holding the book as it was before: the list would show it as the latest moment, tapping it would undo the
+   * restore, and every later row would be worded against it. So they are dropped — except the write in flight (it
+   * can't be called back) and pinned moments (never dropped). Those two are `superseded`: written, but never taken as
+   * the head; until this recorder writes its own row the head's book is the restored one (`restoredDoc`).
+   */
   private restored(before: ComicDoc, next: ComicDoc, at: number): void {
-    if (this.run) this.closeRun(before, before.updatedAt);
+    if (this.run) this.closeRun(before, this.contentAtOf(before)); // its result is the before_restore row's book
+    const inFlight = this.draining !== null ? this.queue[0] : undefined;
+    const kept: Capture[] = [];
+    for (const c of this.queue) {
+      if (c === inFlight || c.pinned) {
+        c.superseded = true;
+        kept.push(c);
+      } else {
+        logger.warn('comic_history_capture_dropped', { projectId: this.scope.projectId, kind: c.kind, reason: 'restore', attempts: c.attempts });
+      }
+    }
+    this.queue = kept;
     this.accrued = newAccrued();
     this.dirty = false;
     this.spendSince = [];
     this.headStale = true;
     this.candidate = next;
+    this.restoredDoc = next;
     this.lastChangeAt = at;
     this.lastContentAt = at;
   }
@@ -386,6 +449,7 @@ class Recorder implements HistoryRecorder {
   }
 
   private enqueue(c: Capture): void {
+    this.enqueued += 1;
     this.queue.push(c);
     while (this.queue.length > HISTORY_PENDING_MAX) {
       const from = this.draining ? 1 : 0; // the capture being written stays
@@ -450,8 +514,15 @@ class Recorder implements HistoryRecorder {
     }
     this.recordingNow = true;
     const root = typeof row.rootHash === 'string' ? row.rootHash : '';
+    const line = row.alternativeId ?? null;
+    const restored = this.restoredDoc;
+    if (restored) {
+      // Right after a restore the line's book IS the restored one, whichever row the store lists newest just now.
+      this.head = { id: row.id, root: chunkBook(restored).rootHash, line, doc: restored };
+      return this.head;
+    }
     const candidate = this.candidate;
-    this.head = { id: row.id, root, line: row.alternativeId ?? null, doc: candidate && root && chunkBook(candidate).rootHash === root ? candidate : undefined };
+    this.head = { id: row.id, root, line, doc: candidate && root && chunkBook(candidate).rootHash === root ? candidate : undefined };
     return this.head;
   }
 
@@ -490,7 +561,7 @@ class Recorder implements HistoryRecorder {
     const book = chunkBook(c.doc);
     if (c.kind === 'start' && head) {
       // History already started: the loaded book differs from its head when it changed while nothing recorded.
-      if (head.root !== book.rootHash) this.dirty = true;
+      if (head.root !== book.rootHash && !c.superseded) this.dirty = true;
       return;
     }
     // Same book as the head: nothing new (a publish or import still goes to the store, which pins the head).
@@ -501,7 +572,8 @@ class Recorder implements HistoryRecorder {
     }
     const by = c.kind === 'ai' ? 'ai' : 'you';
     const firstRow = c.kind === 'start' || c.kind === 'import';
-    const base = firstRow ? null : (c.base ?? (head ? await this.headDoc(c.doc) : null));
+    // A superseded capture is worded by its own run or its ops only: the head is the restored book, not its base.
+    const base = firstRow ? null : (c.base ?? (head && !c.superseded ? await this.headDoc(c.doc) : null));
     const changes = firstRow ? [] : trimChanges(rowChanges(base, c.doc, by, c.accrued.keys, c.accrued.batches));
     // Nothing the creator made changed (a QC report, size variants, a safety verdict, a render's status): no moment.
     if (!firstRow && c.kind !== 'publish' && base && !changes.length) {
@@ -531,7 +603,10 @@ class Recorder implements HistoryRecorder {
       ...(c.legacyRef ? { legacyRef: c.legacyRef } : {})
     };
     const res = await this.put(book, input);
-    this.head = { id: res.id, root: book.rootHash, line, doc: c.doc };
+    if (!c.superseded) {
+      this.head = { id: res.id, root: book.rootHash, line, doc: c.doc };
+      this.restoredDoc = undefined; // this recorder's own row is the head from now on
+    }
     this.recordingNow = true;
     if (c.run && c.kind === 'before_ai') c.run.parent.id = res.id;
     if (!res.deduped) await this.announce(this.rowOf(res.id, input));
@@ -543,7 +618,11 @@ class Recorder implements HistoryRecorder {
         await this.announce(row);
       }
     }
-    if (res.budgetThinned > 0) await this.notify(budgetThinnedNotice(res.budgetThinned));
+    if (res.budgetThinned > 0 && !this.budgetNoticed) {
+      // Never silent, and said once: past its budget every new row thins an older one.
+      this.budgetNoticed = true;
+      await this.notify(budgetThinnedNotice(res.budgetThinned));
+    }
   }
 
   /** The wire row of a write (what GET …/history lists; alternativeId null for "Original"). */
