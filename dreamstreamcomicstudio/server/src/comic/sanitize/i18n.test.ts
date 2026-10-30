@@ -29,6 +29,25 @@ const expectCode = (fn: () => unknown, status: number) => {
 };
 
 describe('i18n sanitizers (contract §5.4)', () => {
+  it('the Undo of removing a language is accepted while a translated page sits in Deleted (its lines come back too)', () => {
+    const live = withTe();
+    // Give the deleted page an edition balloon too, then delete the page that holds the translated line.
+    const pageId = live.pages[0].id;
+    const withBalloon = applyOps(live, sanitizePatchOps(live, [{ op: 'edition_balloon', lang: 'te', lineId: 'l1', patch: { x: 0.2, y: 0.3, pinned: true } } as DocOp], CTX));
+    const before = applyOps(withBalloon, [{ op: 'page_delete', id: pageId, deletedAt: 7 } as DocOp]);
+    expect(before.pages.some((p) => p.id === pageId)).toBe(false);
+    expect(i18nOf(before).editions.te.lines.l1?.text).toBe('పాతది');
+    const remove: DocOp = { op: 'edition', lang: 'te', patch: null };
+    const after = applyOps(before, sanitizePatchOps(before, [remove], CTX));
+    expect(i18nOf(after).editions.te).toBeUndefined();
+    const undo = sanitizePatchOps(after, inverseOps(before, [remove]), CTX);
+    const undone = applyOps(after, undo);
+    expect(i18nOf(undone).editions.te.lines.l1?.text).toBe('పాతది');
+    expect(i18nOf(undone).editions.te.balloons?.l1).toEqual(i18nOf(before).editions.te.balloons?.l1);
+    // A line on no page, live or deleted, is still refused.
+    expectCode(() => sanitizeTranslation.sanitize(undone, { op: 'translation', lang: 'te', lineId: 'ghost', patch: { text: 'x' } } as never, CTX), 400);
+  });
+
   it('are all registered (none is the wave-0 NOT_AVAILABLE stub)', () => {
     for (const op of ['edition', 'translation', 'edition_text', 'edition_balloon', 'glossary_term']) expect(opSanitizerFor(op)).toBe(I18N_SANITIZERS.find((s) => s.op === op));
   });

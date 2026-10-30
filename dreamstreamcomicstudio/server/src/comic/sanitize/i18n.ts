@@ -17,6 +17,7 @@
 //                    source), values ≤ 80 (null deletes); note ≤ 140; ≤ 200 terms (409)
 
 import type { ComicDoc, EditionTextField, GlossaryTerm, Line, TextTranslation, TranslationRegister } from '../../../../shared/comic/doc.js';
+import { trashOf } from '../../../../shared/comic/doc.js';
 import { i18nOf, lineSourceHash, normalizeSource, textSourceHash } from '../../../../shared/comic/i18n.js';
 import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
 import { DOC_LIMITS } from '../../../../shared/comic/limits.js';
@@ -57,8 +58,12 @@ const existingEdition = (doc: ComicDoc, raw: unknown): string => {
   return lang;
 };
 
+/** A line of a live page or of a page in Deleted: the Undo of removing a language puts a deleted page's translations
+ *  and balloons back too (ops.ts lineIdsOf with trash), so the sanitizer accepts those lines. */
 const findLine = (doc: ComicDoc, id: unknown): Line => {
-  if (typeof id === 'string') for (const p of doc.pages) for (const panel of p.panels) for (const l of panel.lines) if (l.id === id) return l;
+  if (typeof id === 'string') {
+    for (const p of [...doc.pages, ...trashOf(doc).map((t) => t.page)]) for (const panel of p.panels) for (const l of panel.lines) if (l.id === id) return l;
+  }
   throw bad('That line no longer exists.');
 };
 

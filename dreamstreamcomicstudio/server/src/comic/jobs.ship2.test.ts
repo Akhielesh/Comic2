@@ -415,7 +415,7 @@ describe('the new spend actions go through the existing gate (zero paid calls)',
     expect(ctx.imagesFake.calls).toHaveLength(0);
   });
 
-  it('enrich_pages: quoted at the writer price and gated; confirmed, the stub runs nothing and charges nothing', async () => {
+  it('enrich_pages: priced at the writer price; while its stub is inert it is refused before any quote or gate card', async () => {
     const doc = drawnDoc();
     const est = estimateSpendAction(doc, { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] }, false);
     // Plan §7: "Add detail to an old page (enrich_pages) | about $0.008" — per page, after the markup.
@@ -424,10 +424,11 @@ describe('the new spend actions go through the existing gate (zero paid calls)',
     expect(est.usd).toBe(0.0156);
     const session = newSession(doc);
     const ctx = testContext(session, { caps: { ...DEFAULT_CAPS } });
-    const gated = await startAction(ctx, { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] } as never, { confirmed: false });
-    expect(gated.outcome.status).toBe('gated');
-    expect(session.doc.gate!.title).toBe('Add detail to pages 1–2?');
-    expect(session.doc.gate!.summary).not.toContain('$');
+    // The inert stub declares its refusal (ActionHandler.unavailable): no quote, no gate card, nothing charged.
+    const unconfirmed = await startAction(ctx, { type: 'enrich_pages', pageIds: ['pg_1', 'pg_2'] } as never, { confirmed: false });
+    expect(unconfirmed.outcome).toMatchObject({ status: 'blocked', code: 'NOT_AVAILABLE' });
+    expect(session.doc.gate ?? null).toBeNull();
+    for (const m of session.doc.conversation) expect(m.text).not.toContain('$');
     const run = await startAction(ctx, { type: 'enrich_pages', pageIds: ['pg_1'], quotedUsd: est.usd } as never, { confirmed: true });
     expect(run.outcome).toMatchObject({ status: 'blocked', code: 'NOT_AVAILABLE' });
     expect(ctx.llmFake.calls).toHaveLength(0);

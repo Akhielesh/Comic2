@@ -1249,21 +1249,12 @@ async function startActionScoped(ctx: StudioContext, action: StudioAction, opts:
   }
 }
 
-/**
- * A registered handler that can say, before any quote, that it can't run (pro plan §5.3 HARD rule: a Ship 2 stub refuses
- * with NOT_AVAILABLE before any quote, gate or spend). Optional; read by runFeatureAction and approveGate before they
- * estimate. extensions.ts ActionHandler is where it belongs (wave note); until it is declared there it is read here, and
- * a stub opts in by returning its refusal words (B7: enrich_pages → CONSISTENCY_NOT_AVAILABLE).
- */
-export interface PreQuoteCheck {
-  unavailable?(ctx: StudioContext, action: StudioAction): string | null | undefined;
-}
+/** The optional pre-quote refusal of a handler (extensions.ts ActionHandler.unavailable); kept as a name for importers. */
+export type PreQuoteCheck = Pick<ActionHandler, 'unavailable'>;
 
 /** The refusal a handler gives before any quote, or null when it can run. */
 const unavailableMessage = (handler: ActionHandler, ctx: StudioContext, action: StudioAction): string | null => {
-  const check = (handler as ActionHandler & PreQuoteCheck).unavailable;
-  if (typeof check !== 'function') return null;
-  const message = check.call(handler, ctx, action);
+  const message = handler.unavailable?.(ctx, action);
   return typeof message === 'string' && message.trim() ? message : null;
 };
 
@@ -1274,7 +1265,7 @@ const refuseUnavailable = (ctx: StudioContext, handler: ActionHandler, action: S
 /**
  * Run a registered feature action. Spend handlers with an estimate (translate) go through
  * estimate → gateDecision → run exactly like the core spends (a stale chip quote re-gates).
- * A handler that says it can't run (PreQuoteCheck) is refused first: no quote, no gate card, no spend.
+ * A handler that says it can't run (ActionHandler.unavailable) is refused first: no quote, no gate card, no spend.
  */
 export async function runFeatureAction(ctx: StudioContext, handler: ActionHandler, action: StudioAction, opts: RunActionOptions): Promise<StartedAction> {
   const refusal = unavailableMessage(handler, ctx, action);
