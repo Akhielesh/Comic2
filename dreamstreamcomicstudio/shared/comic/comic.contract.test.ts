@@ -2340,7 +2340,7 @@ describe('Ship 2 contract (K2a)', () => {
     });
     expect(CONSISTENCY_LIMITS).toEqual({
       scenes: 60, castChanges: 12, propChanges: 8, notes: 3, directionBackground: 4, findings: 16, partsKeys: 80, anchorKeys: 16,
-      maxRefsDefault: 9, promptChars: 9000, recurringPages: 2, recurringPanels: 3
+      placeAnchors: 2, propAnchors: 2, maxRefsDefault: 9, promptChars: 9000, recurringPages: 2, recurringPanels: 3
     });
   });
 });
