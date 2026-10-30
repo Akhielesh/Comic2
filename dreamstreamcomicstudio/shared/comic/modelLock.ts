@@ -3,7 +3,7 @@
 
 import type { AssetRef, ComicDoc, ImageModelLock, RedrawScope, RenderState, Resolution } from './doc.js';
 import type { StudioCaps } from './capabilities.js';
-import { PLATFORM_MARKUP, getImageModel, resolveImageJob, type ImageJobKind, type ImageModelSpec } from './models.js';
+import { PLATFORM_MARKUP, getImageModel, resolveImageJob, type AnyImageJobKind, type ImageJobKind, type ImageModelSpec } from './models.js';
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
 
@@ -95,9 +95,13 @@ export const drawnModels = (doc: ComicDoc): { modelId: string; images: number }[
  * Prices for a quote (models.md §2.3): the server builds one from the live catalog and observed costs; tests
  * inject hand values. `unit` already includes reference cost on the list basis — redrawQuote never adds it
  * again. usd null = no basis at all ("can't price yet").
+ *
+ * `kind` takes any image job kind, Ship 2's 'panel' included, so a panel quote reads the observed median of panel
+ * calls (matched by kind) instead of being asked as a page. `unit` has exactly one signature: a book written as an
+ * object literal then gets typed parameters from it (with two signatures they would be implicit `any`).
  */
 export interface PriceBook {
-  unit(modelId: string, res: Resolution, kind: ImageJobKind, refs?: number): { usd: number | null; basis: string };
+  unit(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): { usd: number | null; basis: string };
   /** QC per page (observed median when n ≥ 5, else QC_USD_PER_PAGE). */
   qcUsd: number;
 }

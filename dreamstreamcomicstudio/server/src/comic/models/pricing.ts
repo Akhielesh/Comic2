@@ -16,7 +16,7 @@
 
 import type { Resolution } from '../../../../shared/comic/doc.js';
 import type { PriceBook } from '../../../../shared/comic/modelLock.js';
-import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type ImageJobKind, type ImageModelSpec } from '../../../../shared/comic/models.js';
+import { PLATFORM_MARKUP, QC_USD_PER_PAGE, getImageModel, type AnyImageJobKind, type ImageModelSpec } from '../../../../shared/comic/models.js';
 import type { CatalogPrice, OrImageEndpoint, OrPricingLine, PriceBasis } from './catalog.js';
 
 const round4 = (n: number) => Math.round(n * 10000) / 10000;
@@ -344,13 +344,13 @@ export interface PriceQuote {
   refsUnpriced: boolean;
 }
 
-/** models.md §2.3 in full for one job: (unit + QC for page/edit jobs) × PLATFORM_MARKUP unless BYOK. */
+/** models.md §2.3 in full for one job: (unit + QC for page, edit and panel jobs) × PLATFORM_MARKUP unless BYOK. */
 export interface JobQuote {
   /** What the user is charged (null = no basis: the UI shows no number). */
   usd: number | null;
   /** The provider price of the image (unit), before QC and markup. */
   providerUsd: number | null;
-  /** QC added (page and edit jobs only). */
+  /** QC added (page, edit and panel jobs only: one QC run each, as estimateJobs counts them). */
   qcUsd: number;
   markup: number;
   /** Dollar views only (see QuoteBasis). */
@@ -359,8 +359,9 @@ export interface JobQuote {
 }
 
 export interface ServerPriceBook extends PriceBook {
-  quote(modelId: string, res: Resolution, kind: ImageJobKind, refs?: number): PriceQuote;
-  jobQuote(modelId: string, res: Resolution, kind: ImageJobKind, opts?: { refs?: number; byok?: boolean }): JobQuote;
+  /** Any image job kind, Ship 2's 'panel' included: observed medians are matched by the exact kind. */
+  quote(modelId: string, res: Resolution, kind: AnyImageJobKind, refs?: number): PriceQuote;
+  jobQuote(modelId: string, res: Resolution, kind: AnyImageJobKind, opts?: { refs?: number; byok?: boolean }): JobQuote;
   /** Observed QC detail when it was used. */
   qcObserved: { medianUsd: number; n: number } | null;
 }
@@ -388,7 +389,7 @@ export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => 
   const observed = src.observed ?? [];
   const qc = src.qc && src.qc.n >= QC_OBSERVED_MIN_N && isFiniteNumber(src.qc.medianUsd) ? { medianUsd: round4(src.qc.medianUsd), n: src.qc.n } : null;
 
-  const quote = (modelId: string, res: Resolution, kind: ImageJobKind, refs = 0): PriceQuote => {
+  const quote = (modelId: string, res: Resolution, kind: AnyImageJobKind, refs = 0): PriceQuote => {
     const spec = getImageModel(modelId);
     const row = rows.get(spec?.id ?? modelId) ?? rows.get(modelId);
     const sent = Number.isFinite(refs) && refs > 0 ? Math.floor(refs) : 0;
@@ -443,7 +444,7 @@ export const priceBookFromSources = (src: PriceBookSources): ServerPriceBook => 
   const jobQuote: ServerPriceBook['jobQuote'] = (modelId, res, kind, opts = {}) => {
     const q = quote(modelId, res, kind, opts.refs ?? 0);
     const markup = opts.byok ? 1 : PLATFORM_MARKUP;
-    const qcAdd = kind === 'page' || kind === 'edit' ? qcUsd : 0;
+    const qcAdd = kind === 'page' || kind === 'edit' || kind === 'panel' ? qcUsd : 0;
     const qcBasis = qcAdd ? (qc ? ` + QC ${money(qcAdd)} (your last ${qc.n} checks)` : ` + QC ${money(qcAdd)}`) : '';
     return {
       usd: q.usd === null ? null : round4((q.usd + qcAdd) * markup),

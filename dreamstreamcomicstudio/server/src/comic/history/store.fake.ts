@@ -25,8 +25,6 @@ import {
   preparePut,
   versionHashes,
   type HeadVersionRow,
-  type HistoryPutResult,
-  type HistoryVersionInput,
   type StoredVersionRow,
   type StoredVersionWithPaths
 } from './store.js';
@@ -393,7 +391,7 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
     async put(scope: HistoryScope, input: VersionInput, chunks: ChunkInput[], policy?: Partial<HistoryPolicy>): Promise<PutResult> {
       enter('put', scope);
       lock(scope);
-      const { version, chunks: incoming } = preparePut(input as HistoryVersionInput, chunks);
+      const { version, chunks: incoming } = preparePut(input, chunks);
       const at = now();
       const unpinned = Math.min(Math.max(Math.trunc(policy?.unpinnedRows ?? 300), 1), 100_000);
       const budget = Math.max(policy?.bytesPerComic ?? 25_000_000, 0);
@@ -455,8 +453,11 @@ export function createFakeHistoryStore(opts: FakeHistoryStoreOptions = {}): Fake
           if (version.kind === 'publish' && typeof version.publishedRev === 'number') head.publishedRev = version.publishedRev;
           if (version.kind === 'before_restore' && keepUntil !== undefined) head.keepUntil = Math.max(head.keepUntil ?? 0, keepUntil);
           commitChunks();
-          const out: HistoryPutResult = deduped(head.id);
-          if (alreadyNamed) Object.assign(out, { alreadyNamed: true, name: alreadyNamed });
+          const out: PutResult = deduped(head.id);
+          if (alreadyNamed) {
+            out.alreadyNamed = true;
+            out.name = alreadyNamed;
+          }
           return out;
         }
       }

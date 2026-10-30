@@ -44,6 +44,8 @@ export interface VersionInput {
   publishedRev?: number;
   codec?: HistoryCodec;
   legacyRef?: { snapshotId?: string; snapshotHash?: string; reason?: string; projectId?: string };
+  /** Epoch ms; codec 'legacy' only (a classic snapshot's own time). */
+  createdAt?: number;
 }
 
 /** Thinning and budget policy passed to the put RPC (HISTORY_LIMITS by default). */
@@ -62,6 +64,10 @@ export interface PutResult {
   budgetThinned: number;
   gcChunks: number;
   bytesNew: number;
+  /** A named save of an unchanged moment that already has a name: nothing was renamed; `name` is that name (the
+   *  caller says "This moment is already saved as '<name>'." instead of a success). */
+  alreadyNamed?: true;
+  name?: string;
 }
 
 export interface HistoryListFilter {
@@ -72,7 +78,7 @@ export interface HistoryListFilter {
   actor?: HistoryActor;
   /** Only rows whose changes touch this page. */
   pageId?: string;
-  /** The line to list (absent = the active one). */
+  /** The line to list: absent = the active one; null = "Original" (see HistoryStore.list). */
   alternativeId?: string | null;
 }
 
@@ -87,6 +93,9 @@ export interface StoredVersion {
   manifest: Manifest;
   /** hash → parsed body. */
   bodies: Map<string, unknown>;
+  /** hash → that chunk's GC roots (its `paths`). A path the bodies mention but no chunk lists was forgotten (V-4: a
+   *  removed reference photo): restores and URL signing skip it. Both stores fill it. */
+  paths?: Map<string, string[]>;
 }
 
 /**
@@ -99,15 +108,28 @@ export interface HistoryStore {
   missing(scope: HistoryScope, hashes: string[]): Promise<string[]>;
   /** One transaction: lock, ownership, chunks, presence check, dedupe, insert, thin, GC (§3.2 comic_history_put). */
   put(scope: HistoryScope, version: VersionInput, chunks: ChunkInput[], policy?: Partial<HistoryPolicy>): Promise<PutResult>;
-  /** The newest row of a line (null: no history yet). */
-  head(scope: HistoryScope, alternativeId?: string | null): Promise<VersionRow | null>;
+  /**
+   * The newest row of a line, with its root hash and manifest (null: no history yet). `alternativeId` undefined = the
+   * line you're on; null = "Original": its own newest row (rows of a removed line keep their line and never count).
+   * A removed or unknown line returns null.
+   */
+  head(scope: HistoryScope, alternativeId?: string | null): Promise<(VersionRow & { rootHash?: string; manifest?: Manifest }) | null>;
+  /**
+   * A page of a line's rows, newest first. `filter.alternativeId` null ("Original") also returns the rows of removed
+   * lines, marked by their non-null alternativeId (their named saves are kept, so they stay reachable). A removed or
+   * unknown line returns no rows.
+   */
   list(scope: HistoryScope, filter?: HistoryListFilter): Promise<HistoryListPage>;
   /** A version with every chunk loaded and re-verified (null when missing, foreign or corrupt). */
   get(scope: HistoryScope, versionId: string): Promise<StoredVersion | null>;
   /** Verified bodies of these chunks (compare loads only the changed ones). */
   chunks(scope: HistoryScope, hashes: string[]): Promise<Map<string, unknown>>;
   label(scope: HistoryScope, versionId: string, patch: { name?: string | null; note?: string | null; pinned?: boolean }): Promise<VersionRow | null>;
-  /** Named rows only; never the newest row or an alternative's head. */
+  /**
+   * Removes a row the user saved or named (kind 'named', or any row with a name); never a classic snapshot (kind
+   * 'legacy': REFUSED:classic), never a line's head, never the newest row of "Original" or of a live line.
+   * false when missing or foreign.
+   */
   delete(scope: HistoryScope, versionId: string): Promise<boolean>;
   /** Remove a storage path from every chunk's `paths` of this comic (a forgotten reference photo; V-4). */
   forgetPath(scope: HistoryScope, path: string): Promise<number>;

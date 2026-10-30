@@ -69,7 +69,7 @@ export const HISTORY_LIMITS = {
   aiRunGapMinutes: 10,
   /** A before-restore row is kept at least this long. */
   beforeRestoreDays: 30,
-  /** Saves (named + automatic writes) per hour per comic. */
+  /** Named saves that write a new row, per hour per comic (automatic captures are never throttled). */
   savesPerHour: 30,
   /** Name / note / label lengths (comic_versions checks). */
   nameChars: 80,

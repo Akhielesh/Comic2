@@ -42,33 +42,31 @@ import type {
   VersionInput
 } from './storeTypes.js';
 
-// ── Wire shapes beyond storeTypes (extra fields; structurally still the declared types) ──────────────────────────
+// ── What both stores return: the declared storeTypes shapes with their optional fields always filled ─────────────
 
 /** A row as the store reads it: VersionRow plus its root hash (the recorder compares roots without loading chunks). */
 export interface StoredVersionRow extends VersionRow {
   rootHash: string;
 }
 
-/** head(): the line's newest row with its manifest (diffManifests without any chunk load). */
+/** head(): the line's newest row with its manifest (diffManifests without any chunk load); the declared head() row
+ *  (storeTypes.ts) with rootHash and manifest always present. */
 export interface HeadVersionRow extends StoredVersionRow {
   manifest: Manifest;
 }
 
-/** put() input: VersionInput plus, for a classic-editor snapshot (codec 'legacy') only, the snapshot's own time. */
-export interface HistoryVersionInput extends VersionInput {
-  /** Epoch ms. Kept as created_at (never later than now) for codec 'legacy'; ignored for every other row. */
-  createdAt?: number;
-}
+/** put() input. Kept for existing imports: VersionInput itself now declares `createdAt` (codec 'legacy' only; kept as
+ *  created_at, never later than now; ignored for every other row). */
+export type HistoryVersionInput = VersionInput;
 
-/** put() answer: PutResult plus, when a named save found the unchanged moment already saved under a name, that name
- *  (it is never renamed: the caller says "This moment is already saved as 'Draft 1'"). */
-export interface HistoryPutResult extends PutResult {
-  alreadyNamed?: true;
-  name?: string;
-}
+/** put() answer. Kept for existing imports: PutResult itself now declares `alreadyNamed` and `name` (a named save of
+ *  an unchanged moment already saved under a name is never renamed: the caller says "This moment is already saved as
+ *  'Draft 1'"). */
+export type HistoryPutResult = PutResult;
 
-/** get(): a verified version plus each chunk's GC roots. A path the version's bodies mention but no chunk's `paths`
- *  lists was forgotten (V-4: a removed reference photo): restores and signing must skip it. */
+/** get(): a verified version with each chunk's GC roots always filled (StoredVersion.paths). A path the version's
+ *  bodies mention but no chunk's `paths` lists was forgotten (V-4: a removed reference photo): restores and signing
+ *  must skip it. */
 export interface StoredVersionWithPaths extends StoredVersion {
   row: StoredVersionRow;
   /** hash → that chunk's `paths`. */
@@ -94,7 +92,7 @@ export const versionHashes = (codec: HistoryCodec, manifest: Manifest, chunks: u
 
 /** Every GC root of a verified version (the union of its chunks' `paths`). */
 export const versionPaths = (version: StoredVersion): Set<string> => {
-  const paths = (version as Partial<StoredVersionWithPaths>).paths;
+  const paths = version.paths;
   return new Set(paths ? [...paths.values()].flat() : []);
 };
 
@@ -313,7 +311,7 @@ export const isEpochMs = (v: unknown): v is number => typeof v === 'number' && N
  * Validate and normalize a put (both stores): hashes, kinds, sizes and caps. Throws INVALID / TOO_LARGE; never
  * modifies the caller's objects. The chunk list is deduped by hash. `createdAt` survives only on a classic snapshot.
  */
-export const preparePut = (version: HistoryVersionInput, chunks: ChunkInput[]): { version: HistoryVersionInput; chunks: ChunkInput[] } => {
+export const preparePut = (version: VersionInput, chunks: ChunkInput[]): { version: VersionInput; chunks: ChunkInput[] } => {
   if (!isRecord(version) || !KINDS.has(version.kind) || !ACTORS.includes(version.actor) || !isHistoryHash(version.rootHash) || !isRecord(version.manifest)) {
     throw historyStoreError('INVALID');
   }
@@ -338,7 +336,7 @@ export const preparePut = (version: HistoryVersionInput, chunks: ChunkInput[]): 
   }
   const name = typeof version.name === 'string' ? version.name.trim().slice(0, HISTORY_LIMITS.nameChars) : '';
   const note = typeof version.note === 'string' ? version.note.trim().slice(0, HISTORY_LIMITS.noteChars) : '';
-  const out: HistoryVersionInput = {
+  const out: VersionInput = {
     ...version,
     codec,
     label: String(version.label ?? '').slice(0, LABEL_CHARS),
@@ -527,7 +525,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
 
     async put(scope, version, chunks, policy) {
       if (!scoped(scope)) throw historyStoreError('NOT_FOUND');
-      const prepared = preparePut(version as HistoryVersionInput, chunks);
+      const prepared = preparePut(version, chunks);
       const v = prepared.version;
       const pVersion = jsonbSafe({
         kind: v.kind,
@@ -560,7 +558,7 @@ export function createSupabaseHistoryStore(opts: SupabaseHistoryStoreOptions = {
         'save a moment'
       );
       if (!isRecord(data) || typeof data.id !== 'string') throw mapHistoryDbError({ code: 'XX000', message: 'comic_history_put returned nothing' }, 'save a moment');
-      const result: HistoryPutResult = {
+      const result: PutResult = {
         id: data.id,
         deduped: data.deduped === true,
         thinned: int(data.thinned) ?? 0,
