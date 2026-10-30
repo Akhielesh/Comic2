@@ -11,7 +11,7 @@ import {
 import { applyOp, applyOps, type DocOp } from '../ops';
 import { encodeStudioEvent } from '../events';
 import { editionProgress, i18nOf } from '../i18n';
-import { MAX_ARCHIVE, MAX_RENDER_HISTORY } from '../limits';
+import { MAX_ARCHIVE, MAX_RENDER_HISTORY, MAX_TRASH } from '../limits';
 import { historyEmptyDoc, historyV4Doc, historyV5Doc, BOOK_NOW } from './__fixtures__/books';
 import { evolveBook, randomBook, randomScope } from './__fixtures__/random';
 import { diffBooks } from './diff';
@@ -30,6 +30,15 @@ const restore = (current: ComicDoc, version: ComicDoc, scope: RestoreScope, mode
 /** The wire: what the client receives (encodeStudioEvent turns undefined into null) and the doc it mirrors. */
 const overTheWire = <T>(value: T): T => JSON.parse(encodeStudioEvent({ type: 'ops', rev: 1, ops: [value as unknown as DocOp] })).ops[0] as T;
 const wireDoc = (doc: ComicDoc): ComicDoc => JSON.parse(JSON.stringify(doc)) as ComicDoc;
+
+/** Paths the archive lists more than once. */
+const duplicatePaths = (archive: ComicDoc['archive']): string[] => {
+  const seen = new Set<string>();
+  const dup = new Set<string>();
+  for (const a of archive || []) (seen.has(a.path) ? dup : seen).add(a.path);
+  return [...dup];
+};
+const uniquePaths = (archive: ComicDoc['archive']): boolean => duplicatePaths(archive).length === 0;
 
 const FORWARD_ONLY = ['spend', 'conversation', 'memory', 'settings', 'safety', 'publication', 'imageModel', 'refInbox'] as const;
 
@@ -111,6 +120,8 @@ describe('merge-mode invariants I1–I6 (property tests over random books and sc
       expect(current.archive!.length + 120, ctx).toBeLessThan(MAX_ARCHIVE);
       const kept = new Set(collectAssetPaths(after));
       expect(collectAssetPaths(current).filter((p) => !kept.has(p)), ctx).toEqual([]);
+      // …and never by archiving a path twice: an archive of unique paths stays unique.
+      if (uniquePaths(current.archive)) expect(duplicatePaths(after.archive), ctx).toEqual([]);
 
       // I2: no translation removed; editions and glossary terms are a union; statuses still derive.
       const ea = i18nOf(after).editions;
@@ -182,8 +193,12 @@ describe('exact mode (alternative switch)', () => {
       expect(diffBooks(other, after).same, ctx).toBe(true);
       // No history push: each page keeps exactly the version's older versions.
       for (const p of after.pages) expect(p.render.history.map((h) => h.path), `${ctx} ${p.id}`).toEqual(other.pages.find((x) => x.id === p.id)!.render.history.map((h) => h.path));
-      // The trash belongs to the comic, not the line (minus pages live in this line); forward-only records are untouched.
-      expect(after.trash, ctx).toEqual((current.trash || []).filter((t) => !after.pages.some((p) => p.id === t.page.id)));
+      // The trash belongs to the comic, not the line: the comic's Deleted pages plus the line's, minus pages live in
+      // this line; forward-only records are untouched.
+      const live = new Set(after.pages.map((p) => p.id));
+      const expected = [...new Set([...(current.trash || []), ...(other.trash || [])].map((t) => t.page.id))].filter((id) => !live.has(id));
+      expect((after.trash || []).map((t) => t.page.id).sort(), ctx).toEqual(expected.sort());
+      for (const t of current.trash || []) if (!live.has(t.page.id)) expect(after.trash, ctx).toContainEqual(t);
       const ids = [...after.pages.map((p) => p.id), ...(after.trash || []).map((t) => t.page.id)];
       expect(new Set(ids).size, `${ctx} duplicate page ids`).toBe(ids.length);
       for (const k of FORWARD_ONLY) expect(after[k], `${ctx} ${k}`).toEqual(current[k]);
@@ -199,6 +214,56 @@ describe('exact mode (alternative switch)', () => {
     const b = asVersion(evolveBook(a, 99, 30));
     const headA = asVersion(a);
     const back = restore(restore(a, b, { kind: 'book' }, 'exact'), headA, { kind: 'book' }, 'exact');
+    expect(diffBooks(headA, back).same).toBe(true);
+    expect((back.trash || []).map((t) => t.page.id)).toEqual((headA.trash || []).map((t) => t.page.id));
+    const paths = new Set(collectAssetPaths(back));
+    expect(collectAssetPaths(headA).filter((p) => !paths.has(p))).toEqual([]);
+  });
+
+  it('the line\'s Deleted pages join the comic\'s, newest first, capped at MAX_TRASH with the overflow archived', () => {
+    const base = normalizeDoc(historyV5Doc());
+    const template = base.trash![0];
+    const trashed = (id: string, deletedAt: number) => ({
+      ...template,
+      page: { ...template.page, id, render: { ...template.page.render, asset: { ...template.page.render.asset!, path: `x/${id}.webp` }, history: [] } },
+      deletedAt
+    });
+    const current = { ...base, trash: Array.from({ length: MAX_TRASH }, (_, i) => trashed(`pg_t${i}`, AT - 1000 - i)) };
+    const other = asVersion({ ...base, trash: [trashed('pg_b1', AT - 10), trashed('pg_b2', AT - 20)] });
+    const after = restore(current, other, { kind: 'book' }, 'exact');
+    expect(after.trash).toHaveLength(MAX_TRASH);
+    expect(after.trash!.slice(0, 2).map((t) => t.page.id)).toEqual(['pg_b1', 'pg_b2']);
+    // The two oldest of the comic's Deleted pages no longer fit: their drawings go to the archive, each once.
+    for (const id of [`pg_t${MAX_TRASH - 2}`, `pg_t${MAX_TRASH - 1}`]) {
+      expect(after.trash!.some((t) => t.page.id === id)).toBe(false);
+      expect(after.archive!.filter((a) => a.path === `x/${id}.webp`)).toHaveLength(1);
+    }
+    expect(duplicatePaths(after.archive)).toEqual([]);
+    expect(normalizeDoc(after)).toEqual(after);
+  });
+
+  it('a switch there and back keeps a page this line redrew and deleted while the other line still has it live', () => {
+    // Line A: page 3 redrawn, then deleted. Line B (made before that): page 3 is live there.
+    const b = asVersion(normalizeDoc(historyV5Doc()));
+    const a = applyOps(
+      normalizeDoc(historyV5Doc()),
+      [
+        { op: 'render', target: { kind: 'page', id: 'pg_3' }, patch: { status: 'ready', asset: { path: 'x/p3-A.webp', source: 'generated', at: AT - 50 } } },
+        { op: 'page_delete', id: 'pg_3', deletedAt: AT - 20 }
+      ],
+      AT - 20
+    );
+    const headA = asVersion(a);
+    expect((headA.trash || []).map((t) => t.page.id)).toEqual(['pg_3', 'pg_old']);
+    const onB = restore(a, b, { kind: 'book' }, 'exact');
+    expect(onB.pages.some((p) => p.id === 'pg_3')).toBe(true);
+    expect((onB.trash || []).map((t) => t.page.id)).toEqual(['pg_old']); // live in B, so not also "deleted"
+    const back = restore(onB, headA, { kind: 'book' }, 'exact');
+    expect((back.trash || []).map((t) => t.page.id)).toEqual(['pg_3', 'pg_old']);
+    expect(back.trash![0]).toEqual(headA.trash![0]);
+    expect(collectAssetPaths(back)).toContain('x/p3-A.webp');
+    const paths = new Set(collectAssetPaths(back));
+    expect(collectAssetPaths(headA).filter((p) => !paths.has(p))).toEqual([]);
     expect(diffBooks(headA, back).same).toBe(true);
   });
 });
@@ -218,10 +283,57 @@ describe('per-scope restores on the fixtures', () => {
     expect(r.asset!.path).toBe(version.pages[0].render.asset!.path); // the version's drawing is current again
     expect(r.history[0].path).toBe(NEW); // the newer drawing stays in that page's versions
     expect(r.history).toHaveLength(MAX_RENDER_HISTORY);
-    // Overflow went to the archive, labelled for its page.
-    expect(after.archive!.length).toBeGreaterThan(archived);
-    expect(after.archive!.some((a) => a.targetKey === 'page:pg_1' && a.archivedAt === AT)).toBe(true);
+    // The overflowed oldest version (p1-v1) is already in the archive since the redraw: it is not archived again.
+    expect(after.archive!.filter((a) => a.path.endsWith('/p1-v1.webp'))).toHaveLength(1);
+    expect(after.archive!.length).toBe(archived);
     for (const p of collectAssetPaths(current)) expect(collectAssetPaths(after)).toContain(p);
+
+    // Nine redraws since: the page's versions are all later drawings. Restoring the version's art overflows the
+    // oldest later drawing, which nothing else references: it goes to the archive once, labelled for its page.
+    let busy = v5();
+    for (let n = 1; n <= 9; n += 1) {
+      busy = applyOps(busy, [{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: `x/p1-r${n}.webp`, source: 'generated', at: AT - 100 + n }, origin: 'render' } }], AT - 100 + n);
+    }
+    expect(busy.pages[0].render.history.map((h) => h.path)).toContain('x/p1-r1.webp');
+    const again = restore(busy, version, { kind: 'page', pageId: 'pg_1', mode: 'replace', part: 'art' });
+    expect(again.pages[0].render.asset!.path).toBe(version.pages[0].render.asset!.path);
+    expect(again.pages[0].render.history[0].path).toBe('x/p1-r9.webp');
+    expect(again.archive!.length).toBe(busy.archive!.length + 1);
+    expect(again.archive!.filter((a) => a.path === 'x/p1-r1.webp')).toEqual([expect.objectContaining({ targetKey: 'page:pg_1', label: 'Page 1', archivedAt: AT })]);
+    expect(duplicatePaths(again.archive)).toEqual([]);
+    for (const p of collectAssetPaths(busy)) expect(collectAssetPaths(again)).toContain(p);
+  });
+
+  it('restore → Undo → restore never archives a path twice (the archive stays put after the first cycle)', () => {
+    const redraw = (doc: ComicDoc, n: number) =>
+      applyOps(doc, [{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: `x/p1-later${n}.webp`, source: 'generated', at: AT - 100 + n }, origin: 'render' } }], AT - 100 + n);
+    const version = asVersion(v5());
+    const current = redraw(redraw(v5(), 1), 2); // two redraws since: the version's older drawings went to the archive
+    expect(duplicatePaths(current.archive)).toEqual([]);
+    for (const scope of [{ kind: 'page', pageId: 'pg_1', mode: 'replace', part: 'art' }, { kind: 'book' }] as RestoreScope[]) {
+      let doc = current;
+      const lengths: number[] = [];
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        const beforeRow = asVersion(doc); // the awaited before_restore row
+        doc = restore(doc, version, scope);
+        expect(duplicatePaths(doc.archive), `${scope.kind} restore ${cycle}`).toEqual([]);
+        doc = restore(doc, beforeRow, scope); // Undo: the before row, same scope
+        expect(duplicatePaths(doc.archive), `${scope.kind} undo ${cycle}`).toEqual([]);
+        for (const p of collectAssetPaths(current)) expect(collectAssetPaths(doc), `${scope.kind} ${cycle} ${p}`).toContain(p);
+        lengths.push(doc.archive!.length);
+      }
+      expect(lengths[1], scope.kind).toBe(lengths[0]);
+      expect(lengths[2], scope.kind).toBe(lengths[0]);
+    }
+  });
+
+  it('a whole-book restore adds each archived path once, even when the version listed it twice', () => {
+    const extra = { path: 'x/old-board.webp', source: 'generated' as const, at: 1, targetKey: 'page:pg_1', label: 'Page 1', archivedAt: BOOK_NOW - 1 };
+    const stored = v5();
+    const version = asVersion({ ...stored, archive: [extra, { ...extra, targetKey: 'cover', label: 'Cover' }, ...(stored.archive || [])] });
+    const after = restore(v5(), version, { kind: 'book' });
+    expect(after.archive!.filter((a) => a.path === extra.path)).toHaveLength(1);
+    expect(duplicatePaths(after.archive)).toEqual([]);
   });
 
   it('a page deleted since is re-inserted at its old index, with its later drawings kept', () => {

@@ -304,7 +304,10 @@ export const historyRestoreOp = (set: RestoreSet, opts: { versionId: string; at:
   at: opts.at
 });
 
-/** The exact-mode set of a whole book (alternative switch): every section as stored, no unions. */
+/**
+ * The exact-mode set of a whole book (alternative switch): every section as stored, no unions — except the trash,
+ * which belongs to the comic: the line's Deleted pages join the comic's (so a switch there and back loses none).
+ */
 export const exactRestoreSet = (version: ComicDoc): RestoreSet => ({
   ...metaFields(version),
   source: version.source,
@@ -316,7 +319,8 @@ export const exactRestoreSet = (version: ComicDoc): RestoreSet => ({
   places: version.places,
   editions: allEditions(version),
   glossary: i18nOf(version).glossary,
-  archive: version.archive || []
+  archive: version.archive || [],
+  trashAdd: version.trash || []
 });
 
 export interface RestoreEffects {

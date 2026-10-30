@@ -19,7 +19,8 @@
 //   The source language (format.language) is never changed by a merge restore.
 //
 // EXACT mode (alternative switch only, after the old line's head row is written and pinned): the present sections
-// are replaced as stored — no history push, no union. The trash belongs to the comic, not the line, and stays.
+// are replaced as stored — no history push, no union. The trash belongs to the comic, not the line: it stays, and
+// the target line's Deleted pages join it (a page live in the target is not also "deleted").
 
 import {
   archiveOf,
@@ -511,7 +512,11 @@ const applyMerge = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
   // Archive and trash are unions (never shrink).
   if (Array.isArray(set.archiveAdd) && set.archiveAdd.length) {
     const have = new Set(collectAssetPaths(doc));
-    const add = set.archiveAdd.filter((a) => isObj(a) && typeof a.path === 'string' && typeof a.targetKey === 'string' && !have.has(a.path));
+    const add = set.archiveAdd.filter((a) => {
+      if (!isObj(a) || typeof a.path !== 'string' || !a.path || typeof a.targetKey !== 'string' || have.has(a.path)) return false;
+      have.add(a.path); // each path once
+      return true;
+    });
     if (add.length) {
       const archive = [...archiveOf(doc), ...add].sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
       doc = ctx.k.evictArchive({ ...doc, archive });
@@ -539,7 +544,7 @@ const applyMerge = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
 
 // ── Exact ────────────────────────────────────────────────────────────────────
 
-const applyExact = (before: ComicDoc, set: RestoreSet): ComicDoc => {
+const applyExact = (before: ComicDoc, set: RestoreSet, ctx: Ctx): ComicDoc => {
   let doc: ComicDoc = { ...before };
   if (isObj(set.brief)) doc.brief = { ...(set.brief as ComicDoc['brief']), notes: asArr<string>(set.brief.notes) };
   if (isObj(set.format)) doc.format = { ...(set.format as ComicDoc['format']) };
@@ -580,9 +585,21 @@ const applyExact = (before: ComicDoc, set: RestoreSet): ComicDoc => {
     doc.i18n = { ...i18n, editions, glossary };
   }
   if (Array.isArray(set.archive)) doc.archive = set.archive.filter((a) => isObj(a) && typeof a.path === 'string' && typeof a.targetKey === 'string');
-  // The trash belongs to the comic, not the line — but a page that is live in this line is not also "deleted".
+  // The trash belongs to the comic, not the line: the target line's Deleted pages join the comic's (by page id; the
+  // comic's own entry wins), so a switch there and back gives every deleted page back. A page that is live in this
+  // line is not also "deleted". Newest first, capped at MAX_TRASH (overflow archived — I1).
   const live = new Set(doc.pages.map((p) => p.id));
-  if (trashOf(doc).some((t) => live.has(t.page.id))) doc.trash = trashOf(doc).filter((t) => !live.has(t.page.id));
+  const inTrash = new Set(trashOf(doc).map((t) => t.page.id));
+  const adds = asArr<TrashedPage>(set.trashAdd).filter((t) => {
+    if (!isObj(t) || !isPage(t.page) || inTrash.has(t.page.id)) return false;
+    inTrash.add(t.page.id);
+    return true;
+  });
+  if (adds.length) {
+    const all = [...trashOf(doc), ...adds].filter((t) => !live.has(t.page.id)).sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0));
+    if (all.length) doc = trashPages({ ...doc, trash: [] }, all, ctx);
+    else if (doc.trash) doc.trash = [];
+  } else if (trashOf(doc).some((t) => live.has(t.page.id))) doc.trash = trashOf(doc).filter((t) => !live.has(t.page.id));
   return doc;
 };
 
@@ -660,10 +677,29 @@ const pathHomes = (doc: ComicDoc): Map<string, { asset: AssetRef; key: string; l
   return out;
 };
 
+/**
+ * The archive entries for overflowed versions (render history past MAX_RENDER_HISTORY, trash past MAX_TRASH): only
+ * paths the merged doc no longer references anywhere (a version's history often still lists paths the live doc has
+ * already archived — archiving them again would pile up duplicates on every restore/undo and, at MAX_ARCHIVE,
+ * evict real, unique old versions), each path once.
+ */
+const overflowEntries = (merged: ComicDoc, ctx: Ctx): ArchivedVersion[] => {
+  if (!ctx.overflow.length) return [];
+  const have = new Set(collectAssetPaths(merged));
+  const out: ArchivedVersion[] = [];
+  for (const o of ctx.overflow) {
+    for (const v of o.versions) {
+      if (!v?.path || have.has(v.path)) continue;
+      have.add(v.path);
+      out.push(ctx.k.toArchived(v, o.targetKey, o.label, ctx.at));
+    }
+  }
+  return out;
+};
+
 const finishMerge = (before: ComicDoc, merged: ComicDoc, ctx: Ctx): ComicDoc => {
   let next = merged;
-  const archived: ArchivedVersion[] = [];
-  for (const o of ctx.overflow) for (const v of o.versions) archived.push(ctx.k.toArchived(v, o.targetKey, o.label, ctx.at));
+  const archived = overflowEntries(merged, ctx);
   if (archived.length) next = ctx.k.pushArchive(next, archived);
   next = freshenAssetMeta(before, next);
   // Anything still unreferenced is archived where it lived (never a render target it did not belong to).
@@ -688,11 +724,13 @@ export const applyHistoryRestore = (doc: ComicDoc, op: HistoryRestoreOp, k: Rest
   if (!isObj(op) || !isObj(op.set) || (op.mode !== 'merge' && op.mode !== 'exact')) return doc;
   if (!Object.keys(op.set).length) return doc;
   const at = typeof op.at === 'number' && Number.isFinite(op.at) ? op.at : 0;
+  const ctx: Ctx = { at, k, overflow: [] };
   if (op.mode === 'exact') {
-    const next = applyExact(doc, op.set);
+    let next = applyExact(doc, op.set, ctx);
+    const archived = overflowEntries(next, ctx);
+    if (archived.length) next = k.pushArchive(next, archived);
     return { ...freshenAssetMeta(doc, next), gate: null };
   }
-  const ctx: Ctx = { at, k, overflow: [] };
   const merged = applyMerge(doc, op.set, ctx);
   return { ...finishMerge(doc, merged, ctx), gate: null };
 };
