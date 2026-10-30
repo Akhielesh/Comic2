@@ -104,12 +104,15 @@ export const lineOrderOps = (page: Page, panelId: string, want: readonly string[
 };
 
 /**
- * Per panel, balloons placed so they read in another order than the script's lines (only lines with a balloon on the
- * page count; software-placed ones follow the script by construction). One issue per panel, naming the first pair.
+ * Per panel, balloons placed so they read in another order than the script's lines. Only lines whose balloon is stored
+ * on the page count (placed by the user, or pinned where they are): a line the software places (a lettering plan in
+ * the scene, no stored balloon) follows the script by construction, and its fix would rewrite the script to match a
+ * placement nobody made. One issue per panel, naming the first pair.
  */
 export function lineOrderIssues(doc: ComicDoc, page: Page, scene: PageScene = buildScene(doc, page)): LineOrderIssue[] {
   const rtl = doc.format?.readingDirection === 'rtl';
-  const byLine = new Map(scene.objects.filter((o) => o.kind === 'balloon').map((o) => [o.id, o]));
+  const stored = new Set(page.balloons.map((b) => b.lineId));
+  const byLine = new Map(scene.objects.filter((o) => o.kind === 'balloon' && stored.has(o.id)).map((o) => [o.id, o]));
   const out: LineOrderIssue[] = [];
   for (const panel of page.panels) {
     const placed = panel.lines.filter((l) => byLine.has(l.id));

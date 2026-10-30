@@ -4,12 +4,13 @@
 // cheap to make here, else as a named fix the editor resolves (checkFixEdit). Runs on every edit: no image reads, no
 // network, no clock; well under 2 ms on a 9-panel page.
 
-import { isPageStale, type Box, type ComicDoc, type Page, type Panel, type PanelParts } from '../doc.js';
+import { isPageStale, type Box, type ComicDoc, type Line, type LineKind, type Page, type Panel, type PanelDirection, type PanelParts } from '../doc.js';
 import { fitState, hardFitLimit, needMeter, panelFit, type NeedMeter } from '../density.js';
 import { coverCapFor, outlineFill, type LetterPlan } from '../lettering/layout.js';
 import { resolveLetterStyle, type LetterStylePatch } from '../lettering/style.js';
 import { EDITOR_LIMITS } from '../limits.js';
 import type { DocOp } from '../ops.js';
+import { OFF_PANEL_SHOTS } from '../panelRules.js';
 import { frameAffine, pageSpaceQc, upscaleOf } from '../panelize/space.js';
 import { partsOf } from '../parts.js';
 import { closeGapEdit, deleteFrameEdit, makeBiggestEdit } from './frames.js';
@@ -30,9 +31,11 @@ export type FixKey =
   | 'swap_lines'
   | 'looks_fine'
   | 'off_panel'
+  | 'caption'
   | 'delete_panel'
   | 'close_gap'
   // free, done by the editor or the server (no ops here)
+  | 'check_edges'
   | 'move_clear'
   | 'widen'
   | 'drop_image'
@@ -242,12 +245,37 @@ function charactersCheck(doc: ComicDoc, page: Page): PageCheck {
   return check('characters', 'look', `${f.panel ? `Panel ${f.panel}: ` : ''}${f.note}`, panel ? [frameRef(panel.id)] : [], fixes);
 }
 
+const VOICE_KINDS: ReadonlySet<LineKind> = new Set<LineKind>(['speech', 'thought', 'whisper', 'shout']);
+/** A speaker's spoken lines in a panel (captions and sound effects have no speaker to draw). */
+const voiceLines = (panel: Panel, castId: string): Line[] => panel.lines.filter((l) => l.speakerId === castId && VOICE_KINDS.has(l.kind) && !!l.text?.trim());
+
+/**
+ * A speaker the page check found missing still needs drawing (after the server's QC rule, vision.qcOffPanelSpeakerIds):
+ * they still speak there, the shot draws its speakers (not a POV, insert or establishing shot), and the panel's plan
+ * has them in it (castIds). A voice from off the panel is out of the cast; a plan that lists them AND marks them
+ * off-panel is contradictory, and the cast wins (as the consistency rules normalize it: offPanel ∉ castIds), so it
+ * still counts as missing — never a false ok.
+ */
+const stillMissing = (panel: Panel, castId: string): boolean => voiceLines(panel, castId).length > 0 && !OFF_PANEL_SHOTS.has(panel.shot) && panel.castIds.includes(castId);
+
+/** The panel's direction without one cast member's staging (they are heard, not drawn). */
+const directionWithout = (direction: PanelDirection | undefined, castId: string): PanelDirection => {
+  const out: PanelDirection = { ...(direction ?? {}) };
+  if (out.cast && castId in out.cast) {
+    const cast = { ...out.cast };
+    delete cast[castId];
+    if (Object.keys(cast).length) out.cast = cast;
+    else delete out.cast;
+  }
+  return out;
+};
+
 function speakersCheck(doc: ComicDoc, page: Page): PageCheck {
   const qc = page.render.qc;
   if (!qc) return check('speakers', 'unknown', 'Not checked yet.', [], [RECHECK]);
   const missing = (qc.missingSpeakers || []).filter((m) => {
     const p = page.panels.find((x) => x.n === m.panel);
-    return p && !(p.direction?.offPanel || []).includes(m.castId);
+    return !!p && stillMissing(p, m.castId);
   });
   if (!missing.length) {
     if (!Array.isArray(qc.missingSpeakers) && !qc.boxesFrom) return check('speakers', 'unknown', 'Not checked: this page was drawn before speaker checks.', [], [RECHECK]);
@@ -256,12 +284,41 @@ function speakersCheck(doc: ComicDoc, page: Page): PageCheck {
   const m = missing[0];
   const panel = page.panels.find((p) => p.n === m.panel)!;
   const who = nameOf(doc, m.castId);
-  const offPanel = [...(panel.direction?.offPanel || []), m.castId];
-  return check('speakers', 'look', `${who} speaks in panel ${m.panel} but isn't drawn`, [frameRef(panel.id)], [
-    { key: 'off_panel', label: `Make ${who} a voice from off the panel`, free: true, panelId: panel.id, ops: [{ op: 'panel', pageId: page.id, id: panel.id, patch: { direction: { ...(panel.direction || {}), offPanel } } }] },
-    { key: 'redraw_panel', label: `Redraw panel ${panel.n} with ${who}`, free: false, panelId: panel.id }
-  ]);
+  // Off the panel: heard, not drawn — out of the panel's cast and its staging, and marked off-panel by the user
+  // (the consistency rule: offPanel ∉ castIds).
+  const offPanel = [...new Set([...(panel.direction?.offPanel || []), m.castId])];
+  const fixes: CheckFix[] = [
+    {
+      key: 'off_panel',
+      label: `Make ${who} a voice from off the panel`,
+      free: true,
+      panelId: panel.id,
+      ops: [{ op: 'panel', pageId: page.id, id: panel.id, patch: { castIds: panel.castIds.filter((id) => id !== m.castId), direction: { ...directionWithout(panel.direction, m.castId), offPanel, by: 'user' } } }]
+    }
+  ];
+  // A caption needs no speaker drawn (overlay lettering only: lines drawn into the art are part of the picture).
+  const lines = voiceLines(panel, m.castId);
+  if (doc.format?.lettering !== 'in_art' && lines.length) {
+    fixes.push({
+      key: 'caption',
+      label: `Make ${who}'s ${lines.length === 1 ? 'line' : 'lines'} in panel ${panel.n} a caption`,
+      free: true,
+      panelId: panel.id,
+      lineIds: lines.map((l) => l.id),
+      ops: lines.map((l) => ({ op: 'line', pageId: page.id, panelId: panel.id, id: l.id, patch: { kind: 'caption' } }))
+    });
+  }
+  fixes.push({ key: 'redraw_panel', label: `Redraw panel ${panel.n} with ${who}`, free: false, panelId: panel.id });
+  return check('speakers', 'look', `${who} speaks in panel ${m.panel} but isn't drawn`, [frameRef(panel.id)], fixes);
 }
+
+/** The drawn-panel order the page check read, when it is a reordering of the plan's panels (not the plan's own order). */
+const beatPermutation = (beats: unknown, n: number): number[] | undefined => {
+  if (!Array.isArray(beats) || beats.length !== n || n < 2) return undefined;
+  const sorted = [...beats].sort((a, b) => a - b);
+  if (!sorted.every((b, k) => b === k + 1)) return undefined;
+  return beats.some((b, k) => b !== k + 1) ? [...beats] : undefined;
+};
 
 function planCheck(page: Page): PageCheck {
   const qc = page.render.qc;
@@ -271,7 +328,12 @@ function planCheck(page: Page): PageCheck {
     if (cuts.status === 'ok') return check('plan', 'ok', 'Every drawn panel is where the plan has it.');
     const found = cuts.cuts.length;
     const detail = found !== n ? `We found ${found} drawn panel${found === 1 ? '' : 's'}; the plan has ${n}` : cuts.note || 'We are not sure where every drawn panel is';
-    return check('plan', 'look', detail, [], [{ key: 'redraw_page', label: 'Redraw the page', free: false }]);
+    // Free first: fix the edges by hand (the editor opens "Check the edges"), or match the script to the drawing.
+    const fixes: CheckFix[] = [{ key: 'check_edges', label: 'Check the edges', free: true }];
+    const order = beatPermutation(qc?.beats, n);
+    if (order) fixes.push({ key: 'rebind', label: 'Match the script to the drawing', free: true, order });
+    fixes.push({ key: 'redraw_page', label: 'Redraw the page', free: false });
+    return check('plan', 'look', detail, [], fixes);
   }
   if (!qc) return check('plan', 'unknown', 'Not checked yet.', [], [RECHECK]);
   if (Array.isArray(qc.beats) && qc.beats.length) {
