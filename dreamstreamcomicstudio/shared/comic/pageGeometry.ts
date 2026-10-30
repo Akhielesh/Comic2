@@ -354,14 +354,18 @@ export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'p
 };
 
 /**
- * Like panelBoxesFor, but the fallback is the layout as drawn (drawnLayoutBoxes): the vision pass's measured boxes
- * when they match the panel count, else the boxes of effectiveLayout. Used where a fit is judged (the breakdown
- * card's dots on a drawn page, the director's line-edit budget), so a page whose layout text contradicts its panel
- * sizes is measured on the panels the prompt drew.
+ * Like panelBoxesFor, but the fallback is the layout as drawn (drawnLayoutBoxes): the vision pass's boxes when it
+ * really measured them (not `boxesFrom: 'estimate'`) and they match the panel count, else the boxes of
+ * effectiveLayout. Used where a fit is judged (the breakdown card's dots on a drawn page, the director's line-edit
+ * budget), so a page whose layout text contradicts its panel sizes is measured on the panels the prompt drew. A
+ * check that fell back (no usable reading, or another panel count) stored an ESTIMATE as panelBoxes — one made on
+ * the stored layout text — so those boxes are not a measurement and never stand in for the layout as drawn. QC
+ * written before boxesFrom existed has no marker and is read as measured, as before.
  */
 export const drawnPanelBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout' | 'render'>): Box[] => {
-  const measured = page.render?.qc?.panelBoxes;
-  if (Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
+  const qc = page.render?.qc;
+  const measured = qc?.panelBoxes;
+  if (qc?.boxesFrom !== 'estimate' && Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
   return drawnLayoutBoxes(doc, page);
 };
 

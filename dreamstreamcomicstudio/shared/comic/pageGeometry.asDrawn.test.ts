@@ -56,4 +56,23 @@ describe('drawnLayoutBoxes / drawnPanelBoxes', () => {
     // A count mismatch falls back to the layout as drawn.
     expect(drawnPanelBoxes(comic, page(p.layout!, ['wide', 'medium', 'medium'], measured.slice(0, 2)))).toEqual(drawnLayoutBoxes(comic, p));
   });
+
+  it("a check that fell back stored an estimate on the stored text: it is not a measurement, so the layout as drawn wins", () => {
+    // vision.ts stores `panelBoxes: estimated` with `boxesFrom: 'estimate'` when the check returns nothing or finds
+    // another panel count; that estimate was made on the stored layout text, which the prompt did not draw.
+    const conflicting = page('Row 1: two equal panels. Row 2: one large panel.', ['wide', 'medium', 'medium']);
+    const storedTextEstimate = estimatePanelBoxes(conflicting, { kind: 'comic', readingDirection: 'ltr' });
+    const fellBack: Page = {
+      ...conflicting,
+      render: { status: 'ready', history: [], qc: { score: 0.5, issues: [], checkedAt: 1, panelBoxes: storedTextEstimate, boxesFrom: 'estimate' } }
+    };
+    expect(storedTextEstimate).not.toEqual(drawnLayoutBoxes(comic, conflicting));
+    expect(drawnPanelBoxes(comic, fellBack)).toEqual(drawnLayoutBoxes(comic, conflicting));
+    expect(drawnPanelBoxes(comic, fellBack)[0].w).toBeGreaterThan(0.9);
+    // Boxes the check really measured are used, whether marked 'vision' or written before the marker existed.
+    const measured: Box[] = [{ x: 0.02, y: 0.02, w: 0.96, h: 0.3 }, { x: 0.02, y: 0.34, w: 0.47, h: 0.64 }, { x: 0.51, y: 0.34, w: 0.47, h: 0.64 }];
+    const vision: Page = { ...conflicting, render: { status: 'ready', history: [], qc: { score: 1, issues: [], checkedAt: 1, panelBoxes: measured, boxesFrom: 'vision' } } };
+    expect(drawnPanelBoxes(comic, vision)).toEqual(measured);
+    expect(drawnPanelBoxes(comic, page(conflicting.layout!, ['wide', 'medium', 'medium'], measured))).toEqual(measured);
+  });
 });
