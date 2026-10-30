@@ -1,4 +1,5 @@
 import 'dotenv/config'; // Load env vars before anything else
+import './services/sharpGuard.js'; // process-wide sharp.block on risky libvips loaders, before any module can decode
 import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
