@@ -1,18 +1,28 @@
 // @vitest-environment node
 //
-// What a signed-out reader of a public classic comic may sign: what the comic shows to anyone (the reader's cover and
-// panels, a card's style preview), never a character's reference photos, the cover template or a panel's older
-// renders; force-private and v4 rows authorize nothing.
+// What the image proxy signs a signed-out reader of a public classic comic: what the comic shows to anyone (the
+// reader's cover, panels and Page Studio pages, a card's style preview), never a character's reference photos, the
+// cover template, item or location art or a panel's older renders; force-private and v4 rows authorize nothing.
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, readerPathsOfState } from './publicReaderPaths.js';
+import {
+  MAX_PATHS_PER_OWNER,
+  MAX_PATH_LENGTH,
+  createPublicReaderPathCache,
+  loadPublicProjectStates,
+  loadPublicReaderPaths,
+  readerPathsOfState
+} from './publicReaderPaths.js';
 
 const OWNER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const O3 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 
 /** A service-role client whose projects table answers select().eq().eq(), optionally without the moderation column. */
-const fakeAdmin = (rows: Record<string, unknown>[], opts: { noModerationColumn?: boolean; fail?: boolean } = {}) => {
+const fakeAdmin = (
+  rows: Record<string, unknown>[],
+  opts: { noModerationColumn?: boolean; fail?: boolean; failFirst?: string; failFallback?: boolean } = {}
+) => {
   const calls: string[] = [];
   const admin = {
     from: () => {
@@ -30,6 +40,8 @@ const fakeAdmin = (rows: Record<string, unknown>[], opts: { noModerationColumn?:
         },
         then: (resolve: (r: { data: unknown; error: unknown }) => unknown) => {
           if (opts.fail) return Promise.resolve(resolve({ data: null, error: { code: 'XX000', message: 'down' } }));
+          if (opts.failFirst && cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: opts.failFirst } }));
+          if (opts.failFallback && !cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: 'XX001' } }));
           if (opts.noModerationColumn && cols.includes('is_forced_private')) return Promise.resolve(resolve({ data: null, error: { code: '42703' } }));
           const out = rows
             .filter((r) => filters.every(([c, v]) => r[c] === v))
@@ -54,13 +66,15 @@ const classicState = {
   ],
   characters: [{ imageId: `${OWNER}/hero.png`, referenceImageIds: [`${OWNER}/selfie.jpg`] }],
   items: [{ imageId: `${OWNER}/sword.png` }],
+  locations: [{ imageId: `${OWNER}/castle.png`, referenceImageIds: [`${OWNER}/place.jpg`] }],
   styleVariants: [{ imageId: `${OWNER}/style.png` }],
+  pageStudio: { pages: [{ imageId: `${OWNER}/page1.png`, baseImageId: `${OWNER}/page1-base.png`, edits: [] }, { edits: [] }] },
   imageTags: { [`${OWNER}/tagged.png`]: ['x'] }
 };
 
 describe('readerPathsOfState', () => {
-  it('is the cover, each panel image and the style previews: never history, references, the cover template, items or tags', () => {
-    expect(readerPathsOfState(classicState)).toEqual([`${OWNER}/cover.png`, `${OWNER}/p1.png`, `${OWNER}/p2`, `${OWNER}/style.png`]);
+  it('is the cover, panels, Page Studio pages and style previews: never history, base pages, references, the cover template, items, locations or tags', () => {
+    expect(readerPathsOfState(classicState)).toEqual([`${OWNER}/cover.png`, `${OWNER}/p1.png`, `${OWNER}/p2`, `${OWNER}/page1.png`, `${OWNER}/style.png`]);
   });
 
   it('a v4 listing state and malformed states authorize nothing', () => {
@@ -97,9 +111,31 @@ describe('loadPublicReaderPaths', () => {
     expect(calls).toEqual(['state, is_forced_private', 'state']);
   });
 
-  it('throws on any other error (the route answers 500, never "allowed")', async () => {
-    const { admin } = fakeAdmin(rows, { fail: true });
-    await expect(loadPublicReaderPaths(admin, OWNER)).rejects.toMatchObject({ code: 'XX000' });
+  it('rethrows any other error on the first query: never falls back to the query that cannot see moderation', async () => {
+    const { admin, calls } = fakeAdmin(rows, { failFirst: '57014' });
+    await expect(loadPublicProjectStates(admin, OWNER)).rejects.toMatchObject({ code: '57014' });
+    expect(calls).toEqual(['state, is_forced_private']);
+  });
+
+  it('rethrows when the fallback query fails too', async () => {
+    const { admin } = fakeAdmin(rows, { failFirst: '42703', failFallback: true });
+    await expect(loadPublicReaderPaths(admin, OWNER)).rejects.toMatchObject({ code: 'XX001' });
+  });
+
+  it("keeps only ids in the owner's own namespaces, of bounded length and number", async () => {
+    const long = `${OWNER}/${'x'.repeat(MAX_PATH_LENGTH)}.png`;
+    const many = Array.from({ length: MAX_PATHS_PER_OWNER + 50 }, (_, i) => ({ imageId: `${OWNER}/m${i}.png` }));
+    const { admin } = fakeAdmin([
+      { user_id: OWNER, is_public: true, is_forced_private: false, state: { coverImageId: `${OTHER}/foreign.png`, panels: [{ imageId: long }, { imageId: `u/${OWNER}/tmp/t.webp` }, { imageId: `u/${OWNER}/p/${O3}/img/a.webp` }, { imageId: 'library/shared.webp' }] } },
+      { user_id: OWNER, is_public: true, is_forced_private: false, state: { panels: many } }
+    ]);
+    const paths = await loadPublicReaderPaths(admin, OWNER);
+    expect(paths.has(`${OTHER}/foreign.png`)).toBe(false);
+    expect(paths.has(long)).toBe(false);
+    expect(paths.has('library/shared.webp')).toBe(false);
+    expect(paths.has(`u/${OWNER}/tmp/t.webp`)).toBe(true);
+    expect(paths.has(`u/${OWNER}/p/${O3}/img/a.webp`)).toBe(true);
+    expect(paths.size).toBe(MAX_PATHS_PER_OWNER);
   });
 });
 
@@ -113,8 +149,12 @@ describe('createPublicReaderPathCache', () => {
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/p1.png`)).toBe(true);
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/p2.png`)).toBe(true);
     expect(await cache.shows(OWNER, `${OWNER}/p1-old.png`)).toBe(false);
-    // Another owner's tmp lane is never this owner's twin, nor a nested tmp path.
+    // Another owner's tmp lane is never this owner's twin.
     expect(await cache.shows(OWNER, `u/${OTHER}/tmp/p1.png`)).toBe(false);
+  });
+
+  it('a nested tmp path is never a legacy twin, even when that nested legacy-looking id is shown', async () => {
+    const cache = createPublicReaderPathCache(async () => set(`${OWNER}/nested/p1.png`));
     expect(await cache.shows(OWNER, `u/${OWNER}/tmp/nested/p1.png`)).toBe(false);
   });
 
@@ -148,6 +188,26 @@ describe('createPublicReaderPathCache', () => {
     await cache.shows(OWNER, `${OWNER}/a.png`);
     expect(load).toHaveBeenCalledTimes(2);
     await cache.shows(OTHER, `${OTHER}/a.png`);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it('a miss on an answer older than refreshAfterMs reloads once, so a comic published a moment ago is shown', async () => {
+    let t = 0;
+    let published = false;
+    const load = vi.fn(async () => (published ? set(`${OWNER}/new.png`) : set(`${OWNER}/old.png`)));
+    const cache = createPublicReaderPathCache(load, { ttlMs: 60_000, refreshAfterMs: 5_000, now: () => t });
+    expect(await cache.shows(OWNER, `${OWNER}/old.png`)).toBe(true);
+    published = true;
+    t = 4_999; // too fresh to reload: a miss is final
+    expect(await cache.shows(OWNER, `${OWNER}/new.png`)).toBe(false);
+    expect(load).toHaveBeenCalledTimes(1);
+    t = 5_000;
+    expect(await cache.shows(OWNER, `${OWNER}/new.png`)).toBe(true);
+    expect(load).toHaveBeenCalledTimes(2);
+    // Concurrent misses share one reload; a miss on the fresh answer is final.
+    t = 11_000;
+    const misses = await Promise.all([1, 2, 3].map(() => cache.shows(OWNER, `${OWNER}/never.png`)));
+    expect(misses).toEqual([false, false, false]);
     expect(load).toHaveBeenCalledTimes(3);
   });
 
