@@ -343,9 +343,12 @@ describe('acceptDocSuggestion', () => {
     const r = acceptDocSuggestion(removed, suggestion());
     expect(r.doc).toBe(removed);
     expect(r.applied).toEqual([]);
-    expect(r.rejected).toEqual([{ index: 0, opId: 'op-sg-1', code: 'not-found', message: expect.stringContaining('block p1') }]);
+    expect(r.rejected).toEqual([{ index: 0, opId: 'op-sg-1', code: 'not-found', message: "the suggestion's block p1 is gone" }]);
     const gone: DocSuggestion = { id: 'sg-3', author: 'agent', at: 1, op: { op: 'insert_block', id: 'op-sg-3', baseRev: 0, sectionId: 's9', block: para('q', 'x') } };
-    expect(acceptDocSuggestion(minimal(), gone).rejected).toMatchObject([{ code: 'not-found', message: expect.stringContaining('section s9') }]);
+    expect(acceptDocSuggestion(minimal(), gone).rejected).toMatchObject([{ code: 'not-found', message: "the suggestion's section s9 is gone" }]);
+    // The target is checked before anything else: a suggestion whose block is gone is not-found even when its op id is
+    // also in the host's log (applying it would have said duplicate).
+    expect(acceptDocSuggestion(removed, suggestion(), { seenOpIds: ['op-sg-1'] }).rejected).toMatchObject([{ code: 'not-found' }]);
   });
 
   it('refuses a malformed suggestion, and applies a suggestion at most once with the host op log', () => {
