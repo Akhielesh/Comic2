@@ -71,6 +71,8 @@ import {
 } from '../../../shared/comic/plan';
 import { applyOps, layoutFixOps, type DocOp, type StudioAction } from '../../../shared/comic/ops';
 import { checkPagePlan } from '../../../shared/comic/pagePlanCheck';
+import { needMeter } from '../../../shared/comic/density';
+import { letteringAspect } from '../../../shared/comic/lettering/layout';
 import { panelWords, textUnitFor, unitCount, type TextUnit } from '../../../shared/comic/panelRules';
 import { aspectMismatch, continuityHint } from '../../../shared/comic/book';
 import { effectiveRating, safetyStatusOf, type ContentRating, type SafetyVerdict } from '../../../shared/comic/safety';
@@ -87,6 +89,7 @@ import {
 import { composeInStudio } from '../conversation/composerBus';
 import { CardShell, ChipButton, GhostButton, PrimaryButton, Segmented, cx } from '../conversation/ui';
 import { useAction } from '../conversation/cards/useAction';
+import { noticePrice } from '../conversation/cards/NoticeCard';
 import { useCostFormat, type CostFormat } from '../conversation/cost';
 import { amountInSentence, compactUsageShare } from '../../../services/costDisplay';
 import type { CardProps } from '../extensions';
@@ -204,10 +207,10 @@ const RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring
 
 /**
  * A paid amount in THIS user's terms: a share of the usage for governed users (never dollars), dollars "on your
- * key" for comics drawn on the user's own key, plain dollars for admins.
+ * key" for comics drawn on the user's own key, plain dollars for admins. One implementation, shared with the
+ * notice fix chips (NoticeCard.noticePrice).
  */
-export const paidAmount = (cost: CostFormat, usd: number, byok: boolean): string =>
-  !cost.governed && byok ? `${cost.badge(usd)} on your key` : cost.badge(usd);
+export const paidAmount: (cost: CostFormat, usd: number, byok: boolean) => string = noticePrice;
 
 /** "Fits (18 of 32 words)" · "Tight — 30 of 32 words" · "Too full — 29 words, fits about 11" (plan §6 exact copy). */
 export const fitWords = (dot: FitDot, words: number, budget: number, unit: Pick<TextUnit, 'noun'>): string => {
@@ -260,6 +263,8 @@ const listNumbers = (ns: number[]): string => (ns.length <= 1 ? ns.join('') : `$
 
 /** Panels (1-based) of a summary that are too full for their words. */
 const overfullPanels = (s: Pick<PageSummary, 'panels'>): number[] => s.panels.filter((p) => p.fitState === 'overfull').map((p) => p.n);
+/** Panels (1-based) of a summary whose words are tight (allowed, amber). */
+const tightPanels = (s: Pick<PageSummary, 'panels'>): number[] => s.panels.filter((p) => p.fitState === 'tight').map((p) => p.n);
 
 /** What the selected page's detail row can do about its plan fit (computed by the card, which owns the run). */
 interface PageFitActions {
@@ -276,6 +281,16 @@ interface PageFitActions {
   onAnyway?(on: boolean): void;
   /** Inside an open "Render all" gate: that run extended with this page, quoted as a whole. */
   gateAnyway?: { usd: number; pending: boolean; run(): void };
+}
+
+/** The pure part of PageFitActions for one page (memoized by the card: plan checks and quotes, no handlers). */
+interface PageFitCalc {
+  pageId: string;
+  heldBack: boolean;
+  anyway: boolean;
+  layoutFix: DocOp[] | null;
+  anywayUsd?: number;
+  gate?: { usd: number; action: StudioAction };
 }
 
 /**
@@ -463,11 +478,14 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   );
   const tier = doc?.settings.quality ?? 'standard';
   const override = doc?.settings.imageModelOverride;
+  // One need meter per doc for every hold-back quote below (built exactly as plan.ts builds its own), so a line is
+  // measured once per doc, not once per quote.
+  const meter = useMemo(() => (doc ? needMeter(doc, { aspect: letteringAspect(doc, null) }) : undefined), [doc]);
   // The quote leaves held-back pages out, exactly like the server's "Render all" gate (and, for a subset, the
   // explicit page list the primary action sends is this quote's pageIds — held-back pages are not in it).
   const quote = useMemo(
-    () => (doc ? quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: drawAnyway } }) : null),
-    [doc, scope.ids, byok, tier, override, drawAnyway]
+    () => (doc ? quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: drawAnyway, meter } }) : null),
+    [doc, scope.ids, byok, tier, override, drawAnyway, meter]
   );
 
   const anyDrawn = !!doc?.pages.some((p) => p.render.status === 'ready' && !!p.render.asset);
@@ -509,7 +527,14 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
       if (typeof s.qcScore === 'number' && s.qcScore < LOW_QC_SCORE) flags.push('Quality check flagged it');
       const held = s.safety === 'blocked' ? 'held for review' : s.safety === 'over_rating' ? 'above rating' : '';
       const over = overfullPanels(s);
-      const fit = over.length ? `${heldBack ? 'held back: ' : ''}${over.length === 1 ? 'panel' : 'panels'} ${listNumbers(over)} too full` : '';
+      const tight = tightPanels(s);
+      // The fit in words for screen readers (the dots' hue and shape are not enough): "panel 6 too full, panel 3 tight".
+      const fit = [
+        over.length ? `${heldBack ? 'held back: ' : ''}${over.length === 1 ? 'panel' : 'panels'} ${listNumbers(over)} too full` : '',
+        tight.length ? `${tight.length === 1 ? 'panel' : 'panels'} ${listNumbers(tight)} tight` : ''
+      ]
+        .filter(Boolean)
+        .join(', ');
       out.push({
         key: s.id,
         kind: 'page',
@@ -530,6 +555,44 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
   const firstPageKey = tiles.find((t) => t.heldBack)?.key ?? tiles.find((t) => t.kind === 'page')?.key ?? tiles[0]?.key ?? '';
   const [selectedKey, setSelectedKey] = useState<string>('');
   const selected = tiles.find((t) => t.key === selectedKey) ?? tiles.find((t) => t.key === firstPageKey);
+
+  // ── Plan fit of the selected page (plan §4.1, §4.4, PD-1): the free layout fix and the "Draw anyway" quotes ──
+  // Pure plan checks over the book (applyOps + checkPagePlan for the layout fix, one or two hold-back quotes), so
+  // computed once per doc / selection / choice — not on every render (a pending spinner, a usage update, a hover).
+  const selectedPageId = selected?.kind === 'page' ? selected.page?.id : undefined;
+  const selectedSummary = selected?.kind === 'page' ? selected.summary : undefined;
+  const fitCalc = useMemo((): PageFitCalc | null => {
+    if (!doc || !quote || !selectedPageId || !selectedSummary) return null;
+    const page = doc.pages.find((p) => p.id === selectedPageId);
+    if (!page) return null;
+    const s = selectedSummary;
+    const heldBack = !!s.planFit?.heldBack;
+    const anyway = !inGate && chosenAnyway.includes(page.id) && overfullPanels(s).length > 0 && quote.pageIds.includes(page.id);
+    const out: PageFitCalc = { pageId: page.id, heldBack, anyway, layoutFix: heldBack ? layoutFitFix(doc, page, s.planFit?.layoutFix) : null };
+    if (!inGate && heldBack) {
+      // What the run costs more with this page in it (the same hold-back quote the primary action uses).
+      const withIt = quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: [...drawAnyway, page.id], meter } });
+      out.anywayUsd = Math.max(0, Math.round((withIt.usd - quote.usd) * 10000) / 10000);
+    }
+    const gateRun = inGate ? gateRenderAll(doc, spec.gateId) : null;
+    if (heldBack && gateRun) {
+      // Next to an open "Render all" gate, Draw anyway EXTENDS that run (K1: the server's chip does the same) — a
+      // single-page draw would retire the gate and drop the other pages' approval. Quoted as a whole.
+      const next = [...new Set([...(gateRun.drawOverfull ?? []), page.id])].filter((id) => doc.pages.some((p) => p.id === id));
+      const usd = quoteRenderPages(doc, { byok, tier, modelOverride: override, includeCover: !!gateRun.includeCover, holdBack: { drawOverfull: next, meter } }).usd;
+      out.gate = {
+        usd,
+        action: {
+          type: 'render_pages',
+          drawOverfull: next,
+          ...(gateRun.includeCover ? { includeCover: true } : {}),
+          ...(gateRun.safe ? { safe: true } : {}),
+          quotedUsd: usd
+        }
+      };
+    }
+    return out;
+  }, [doc, quote, selectedPageId, selectedSummary, inGate, chosenAnyway, drawAnyway, spec.gateId, scope.ids, byok, tier, override, meter]);
   const [detailsOpen, setDetailsOpen] = useState<boolean>(pro && !compact);
   useEffect(() => {
     setDetailsOpen(pro && !compact);
@@ -606,7 +669,6 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     return !s || overfullPanels(s).length > 0;
   });
   const renderAllAction = (): StudioAction => ({ type: 'render_pages', ...(anywayInRun.length ? { drawOverfull: anywayInRun } : {}), quotedUsd: quote.usd });
-  const gateRun = inGate ? gateRenderAll(doc, spec.gateId) : null;
 
   // ── Header meta (wraps; never widens the chat) ──
   const metaQuote = quote.nothing ? (
@@ -751,45 +813,30 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
     </div>
   );
 
-  // ── Plan fit of one page: the free fixes and "Draw anyway" (plan §4.1, §4.4, PD-1) ──
-  const planFitFor = (page: Page, s: PageSummary): PageFitActions => {
-    const heldBack = !!s.planFit?.heldBack;
-    const anyway = !inGate && chosenAnyway.includes(page.id) && overfullPanels(s).length > 0 && quote.pageIds.includes(page.id);
-    const layoutFix = heldBack ? layoutFitFix(doc, page, s.planFit?.layoutFix) : null;
+  // ── Plan fit of one page: the free fixes and "Draw anyway" (the memoized fitCalc plus this render's handlers) ──
+  const planFitFor = (page: Page): PageFitActions => {
+    const f = fitCalc && fitCalc.pageId === page.id ? fitCalc : null;
+    const heldBack = !!f?.heldBack;
+    const anyway = !!f?.anyway;
     // Keep this page selected while it stops being held back (else the detail would jump to another page).
     const keep = () => setSelectedKey(page.id);
-    const out: PageFitActions = { heldBack, anyway, layoutFix, fixPending: isPending(`fit:${page.id}`) };
-    if (layoutFix) {
+    const out: PageFitActions = { heldBack, anyway, layoutFix: f?.layoutFix ?? null, fixPending: isPending(`fit:${page.id}`) };
+    const ops = f?.layoutFix;
+    if (ops) {
       out.onLayoutFix = () => {
         keep();
-        void run(`fit:${page.id}`, { type: 'patch', ops: layoutFix });
+        void run(`fit:${page.id}`, { type: 'patch', ops });
       };
     }
     if (!inGate && (heldBack || anyway)) {
-      if (heldBack) {
-        // What the run costs more with this page in it (the same holdBack quote the primary action uses).
-        const withIt = quoteRenderPages(doc, { pageIds: scope.ids, byok, tier, modelOverride: override, holdBack: { drawOverfull: [...drawAnyway, page.id] } });
-        out.anywayUsd = Math.max(0, Math.round((withIt.usd - quote.usd) * 10000) / 10000);
-      }
+      if (heldBack && f?.anywayUsd !== undefined) out.anywayUsd = f.anywayUsd;
       out.onAnyway = (on) => {
         keep();
         setAnyway(page.id, on);
       };
     }
-    if (heldBack && gateRun) {
-      // Next to an open "Render all" gate, Draw anyway EXTENDS that run (K1: the server's chip does the same) — a
-      // single-page draw would retire the gate and drop the other pages' approval. Quoted as a whole.
-      const next = [...new Set([...(gateRun.drawOverfull ?? []), page.id])].filter((id) => doc.pages.some((p) => p.id === id));
-      const usd = quoteRenderPages(doc, { byok, tier, modelOverride: override, includeCover: !!gateRun.includeCover, holdBack: { drawOverfull: next } }).usd;
-      const action: StudioAction = {
-        type: 'render_pages',
-        drawOverfull: next,
-        ...(gateRun.includeCover ? { includeCover: true } : {}),
-        ...(gateRun.safe ? { safe: true } : {}),
-        quotedUsd: usd
-      };
-      out.gateAnyway = { usd, pending: isPending(`anyway:${page.id}`), run: () => void run(`anyway:${page.id}`, action) };
-    }
+    const gate = f?.gate;
+    if (gate) out.gateAnyway = { usd: gate.usd, pending: isPending(`anyway:${page.id}`), run: () => void run(`anyway:${page.id}`, gate.action) };
     return out;
   };
 
@@ -823,7 +870,7 @@ export const BreakdownCard: React.FC<BreakdownCardProps> = ({ card, studio, comp
         urlFor={studio.urlFor}
         cost={cost}
         unit={textUnitFor(doc.format.language)}
-        fit={planFitFor(selected.page, selected.summary)}
+        fit={planFitFor(selected.page)}
         onToggle={() => setDetailsOpen((v) => !v)}
         pending={isPending(`page:${selected.page.id}`)}
         disabled={anyPending}
@@ -1262,7 +1309,9 @@ const PriceBadge: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 /**
  * A held-back page (PD-1): what is wrong in one sentence, the worst panel's fit in words, then the fixes — free
  * first (the layout that fits, the page editor; split or shorten with the director, which only prefills the
- * composer), then "Draw anyway". Never a refusal: every choice is the user's.
+ * composer), then "Draw anyway" where this card can start it (outside a gate, or beside an open Render-all gate).
+ * The sentence offers "draw it anyway" only when that control is there (a closed or explicit gate: "Fix it free.").
+ * Never a refusal: every choice is the user's.
  */
 const HeldBackFixes: React.FC<{
   doc: ComicDoc;
@@ -1289,7 +1338,7 @@ const HeldBackFixes: React.FC<{
       <p className="flex min-w-0 items-start gap-2 text-[12.5px] leading-snug text-[var(--ds-ink)]">
         <TriangleAlert className={cx('mt-0.5 h-3.5 w-3.5 shrink-0', TONE_TEXT.danger)} aria-hidden />
         <span className="min-w-0 [overflow-wrap:anywhere]">
-          {lead}: {subject}. Fix it free, or draw it anyway.
+          {lead}: {subject}. {fit.onAnyway || fit.gateAnyway ? 'Fix it free, or draw it anyway.' : 'Fix it free.'}
         </span>
       </p>
       {worst && typeof budget === 'number' && (

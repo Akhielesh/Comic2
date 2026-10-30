@@ -7,8 +7,11 @@
 //
 // Fit dots (plan §4.1, §6): every panel that carries a fit state shows one dot in its top-right corner — green when
 // its words fit (roomy or fits), amber when tight, red when overfull. Hue never stands alone: the three states also
-// differ in SHAPE (a filled dot, a ring, a diamond), the tile and the detail row say it in words, and an overfull
-// panel gets a red outline. Same numbers as the render gate (PanelSummary.fitState is the page check's verdict).
+// differ in SHAPE (a filled dot, a ring, a diamond), the tile's spoken name and the detail row say it in words
+// ("panel 3 tight", "panel 6 too full"), and an overfull panel gets a red outline. The marks use the readable
+// status tones (--ds-*-text): the bare amber of Atlas light (#f59e0b) is under 2:1 on its #f4f4f4 panels, the
+// text tones are over 3:1 on every skin (WCAG 1.4.11). Same numbers as the render gate (PanelSummary.fitState is
+// the page check's verdict).
 //
 // The SVG uses a page-shaped viewBox (`0 0 1 1/ratio`), so the boxes keep the page's real shape at any tile size.
 // Colours are theme tokens applied through `style` (var() is not reliable in SVG presentation attributes).
@@ -44,11 +47,14 @@ export type FitDot = 'fits' | 'tight' | 'overfull';
 export const fitDotOf = (state: FitState | undefined): FitDot | undefined =>
   state === 'overfull' ? 'overfull' : state === 'tight' ? 'tight' : state === 'roomy' || state === 'fits' ? 'fits' : undefined;
 
-/** Theme token per dot state (Atlas status tones; --ds-success / --ds-warning / --ds-danger). */
+/**
+ * Theme token per dot state: the readable status tones (--ds-success-text / --ds-warning-text / --ds-danger-text),
+ * at least 3:1 against the panel and tile surfaces in every skin and theme — a 6 px ring in bare amber is not.
+ */
 export const FIT_DOT_COLOR: Record<FitDot, string> = {
-  fits: 'var(--ds-success)',
-  tight: 'var(--ds-warning)',
-  overfull: 'var(--ds-danger)'
+  fits: 'var(--ds-success-text)',
+  tight: 'var(--ds-warning-text)',
+  overfull: 'var(--ds-danger-text)'
 };
 
 export interface PageWireframeProps {
