@@ -2,14 +2,16 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { pageSpecHash, type Card, type ComicDoc } from '../../../shared/comic/doc';
+import { emptyRender, pageSpecHash, type Card, type ComicDoc, type Gate, type Line, type Page, type Panel } from '../../../shared/comic/doc';
 import { formatUsd } from '../../../shared/comic/models';
-import { quoteRenderPages, unitPrice } from '../../../shared/comic/plan';
+import { layoutFixOps } from '../../../shared/comic/ops';
+import { quoteRenderPages, summarizeBook, unitPrice } from '../../../shared/comic/plan';
 import { CardRenderer } from '../conversation/cards/CardRenderer';
 import { COMPOSE_EVENT } from '../conversation/composerBus';
 import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices, showUsagePrices } from '../conversation/testing/fixtures';
 import { registeredCard } from '../features';
-import { BREAKDOWN_VIEW_KEY, BreakdownCard, type BreakdownCardProps } from './BreakdownCard';
+import { BREAKDOWN_VIEW_KEY, BreakdownCard, fitWords, layoutFitFix, paidAmount, type BreakdownCardProps } from './BreakdownCard';
+import { PageWireframe } from './PageWireframe';
 import { feature } from './index';
 
 type Studio = ReturnType<typeof makeFakeStudio>;
@@ -463,5 +465,361 @@ describe('governed users never see dollars (P1-LIMITS rule)', () => {
     unmount();
     renderCard(bd(), makeFakeStudio({ byok: true }));
     expect(screen.getByRole('button', { name: /^Approve & render all · ≈\$\d/ })).toBeInTheDocument();
+  });
+});
+
+// ── Plan fit (A5: plan §4.1, §6; decision PD-1) ──────────────────────────────
+// Synthetic pages shaped like the owner's b4b5774f p2 — no production text.
+
+const WORDS = 'listen the carrier behind those flower stalls has no plates and nobody has unloaded anything since morning which means someone wants us watching it closely tonight'.split(' ');
+const say = (n: number, seed = 0) => Array.from({ length: n }, (_, i) => WORDS[(seed + i) % WORDS.length]).join(' ');
+const sp = (id: string, n: number, seed = 0): Line => ({ id, kind: 'speech', speakerId: 'c_maya', text: say(n, seed) });
+const pn = (pageId: string, n: number, over: Partial<Panel>): Panel => ({ id: `${pageId}_p${n}`, n, size: 'medium', shot: 'medium', action: `Beat ${n}.`, castIds: ['c_maya'], lines: [], ...over });
+
+/** b4b5774f-p2-shaped: two equal / one wide / three small; panels 5 and 6 are too full for their small cells and
+ *  a same-order blueprint fits them for free. */
+const p2Shaped = (): Page => ({
+  id: 'pg_2',
+  n: 2,
+  summary: 'Maya spots the carrier.',
+  layout: 'Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.',
+  panels: [
+    pn('pg_2', 1, { shot: 'wide', lines: [sp('l1', 10)] }),
+    pn('pg_2', 2, { lines: [{ id: 'l2', kind: 'sfx', text: 'BZZT' }] }),
+    pn('pg_2', 3, { size: 'wide', shot: 'wide' }),
+    pn('pg_2', 4, { size: 'small', shot: 'insert', castIds: [], lines: [{ id: 'l4', kind: 'sfx', text: 'CLICK' }] }),
+    pn('pg_2', 5, { size: 'small', shot: 'close_up', lines: [sp('l5', 17, 3)] }),
+    pn('pg_2', 6, { size: 'small', lines: [sp('l6a', 15, 5), sp('l6b', 14, 9)] })
+  ],
+  render: emptyRender(),
+  balloons: []
+});
+
+/** One wide panel over two: 5 words (fits), 36 (tight) and 60 (too full) on the blueprint. */
+const threeStates = (): Page => ({
+  id: 'pg_2',
+  n: 2,
+  summary: 'Maya argues with the courier.',
+  layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+  panels: [pn('pg_2', 1, { size: 'wide', lines: [sp('a', 5)] }), pn('pg_2', 2, { lines: [sp('b', 36, 2)] }), pn('pg_2', 3, { lines: [sp('c', 60, 4)] })],
+  render: emptyRender(),
+  balloons: []
+});
+
+/** Three panels of 75 words each: no blueprint fits, so there is no free layout fix. */
+const noFit = (): Page => ({
+  ...threeStates(),
+  panels: [1, 2, 3].map((n) => pn('pg_2', n, { lines: [sp(`a${n}`, 25), sp(`b${n}`, 25, 4), sp(`c${n}`, 25, 8)] }))
+});
+
+const withPage2 = (page: Page, over: Partial<ComicDoc> = {}): ComicDoc => {
+  const doc = makeSampleDoc(over);
+  doc.pages = doc.pages.map((p) => (p.id === 'pg_2' ? page : p));
+  return doc;
+};
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+const tileOf = (name: RegExp) => within(screen.getByRole('list', { name: /Pages in this book/ })).getByRole('button', { name });
+const fixesOf = () => within(screen.getByRole('group', { name: /^Page 2 is held back$/ })).getByRole('group', { name: 'Fixes' });
+
+describe('plan fit: dots on the wireframes', () => {
+  it('every wireframe panel carries a fit dot in three states — green fits, amber tight, red too full — with different shapes', () => {
+    const doc = withPage2(threeStates());
+    renderCard(bd({ view: 'plan' }), makeFakeStudio({ doc }));
+    const dots = [...tileOf(/^Page 2,/).querySelectorAll('[data-fit-dot]')];
+    expect(dots.map((d) => d.getAttribute('data-fit-dot'))).toEqual(['fits', 'tight', 'overfull']);
+    expect(dots.map((d) => d.firstElementChild!.tagName.toLowerCase())).toEqual(['circle', 'circle', 'rect']);
+    // the overfull panel is outlined in the danger tone too (hue never alone: shape + words)
+    const outline = (dot: Element) => (dot.parentElement!.querySelector(':scope > rect') as SVGElement).style.stroke;
+    expect(dots.map(outline)).toEqual(['var(--ds-hairline)', 'var(--ds-hairline)', 'var(--ds-danger)']);
+    // every wireframe panel of every page tile has its dot (pages 1 and 3 have 2 panels each)
+    expect(tileOf(/^Page 1,/).querySelectorAll('[data-fit-dot]')).toHaveLength(2);
+    expect(tileOf(/^Page 3,/).querySelectorAll('[data-fit-dot]')).toHaveLength(2);
+  });
+
+  it('the wireframe maps roomy/fits → green, tight → amber, overfull → red through the Atlas tone tokens', () => {
+    const box = { x: 0, y: 0, w: 0.5, h: 0.5 };
+    const panel = (n: number, fitState?: 'roomy' | 'fits' | 'tight' | 'overfull') => ({ n, box: { ...box, x: (n - 1) * 0.25 }, shot: 'medium' as const, speech: 1, captions: 0, sfx: 0, ...(fitState ? { fitState } : {}) });
+    const { container } = render(<PageWireframe panels={[panel(1, 'roomy'), panel(2, 'fits'), panel(3, 'tight'), panel(4, 'overfull'), panel(5)]} aspect="2:3" />);
+    const marks = [...container.querySelectorAll('[data-fit-dot]')];
+    expect(marks.map((m) => [m.getAttribute('data-panel'), m.getAttribute('data-fit-dot')])).toEqual([
+      ['1', 'fits'],
+      ['2', 'fits'],
+      ['3', 'tight'],
+      ['4', 'overfull']
+    ]);
+    const paint = (m: Element) => (m.firstElementChild as SVGElement).style;
+    expect(paint(marks[0]).fill).toBe('var(--ds-success)');
+    expect(paint(marks[2]).stroke).toBe('var(--ds-warning)');
+    expect(paint(marks[3]).fill).toBe('var(--ds-danger)');
+    // fit={false} turns them off (e.g. a future editor overlay); a panel without a fit state never gets one
+    const off = render(<PageWireframe panels={[panel(1, 'overfull')]} aspect="2:3" fit={false} />);
+    expect(off.container.querySelector('[data-fit-dot]')).toBeNull();
+  });
+
+  it('each panel row says its fit in words beside the dot (plan §6 copy)', () => {
+    const doc = withPage2(threeStates());
+    renderCard(bd({ view: 'plan' }), makeFakeStudio({ doc }));
+    fireEvent.click(tileOf(/^Page 2,/));
+    fireEvent.click(screen.getByRole('button', { name: 'Panels & actions' }));
+    const rows = within(screen.getByRole('list', { name: 'Panels on page 2' })).getAllByRole('listitem');
+    expect(rows.map((r) => r.getAttribute('data-fit'))).toEqual(['fits', 'tight', 'overfull']);
+    const s = summarizeBook(doc, { byok: false }).pages.find((p) => p.id === 'pg_2')!;
+    expect(rows[0]).toHaveTextContent(`Fits (5 of ${s.panels[0].budget} words)`);
+    expect(rows[1]).toHaveTextContent(`Tight — 36 of ${s.panels[1].budget} words`);
+    expect(rows[2]).toHaveTextContent(`Too full — 60 words, fits about ${s.panels[2].budget}`);
+    expect(fitWords('fits', 18, 32, { noun: 'word' })).toBe('Fits (18 of 32 words)');
+    expect(fitWords('tight', 30, 32, { noun: 'word' })).toBe('Tight — 30 of 32 words');
+    expect(fitWords('overfull', 29, 11, { noun: 'word' })).toBe('Too full — 29 words, fits about 11');
+  });
+});
+
+describe('plan fit: held-back pages (PD-1)', () => {
+  it('an overfull page is red, held back from the quote, opened first, with the free fixes before "Draw anyway"', async () => {
+    const doc = withPage2(p2Shaped());
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    // red tile, "Held back" in words, no "to draw" price on it
+    const tile = tileOf(/^Page 2,/);
+    expect(tile).toHaveAccessibleName('Page 2, not drawn, 6 panels, held back: panels 5 and 6 too full');
+    expect(tile.querySelector('[data-held-back="true"]')).not.toBeNull();
+    expect(tile).toHaveTextContent('Held back');
+    expect(screen.getByTestId('breakdown-held-back')).toHaveTextContent('1 page held back');
+    // the quote leaves it out — the same rule as the server's Render-all gate
+    const held = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: {} });
+    const all = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality });
+    expect(held.heldBackIds).toEqual(['pg_2']);
+    expect(held.usd).toBeLessThan(all.usd);
+    const approve = screen.getByRole('button', { name: `Approve & render all · ≈${formatUsd(held.usd)}` });
+    expect(screen.getByText(/Page 2 is held back — a panel has more words than it can hold, so it isn’t in this price\./)).toBeInTheDocument();
+    // the held-back page is the one shown, with the plan §6 sentence and the worst panel in words
+    const group = screen.getByRole('group', { name: 'Page 2 is held back' });
+    expect(group).toHaveTextContent('Page 2 isn’t drawn yet: panels 5 and 6 have more words than they can hold. Fix it free, or draw it anyway.');
+    expect(group).toHaveTextContent('Panel 6: Too full — 29 words, fits about 9');
+    // free fixes first, then Draw anyway
+    const names = within(fixesOf()).getAllByRole('button').map((b) => b.textContent);
+    expect(names).toEqual(['Use the layout that fitsFree', 'Move or cut a lineFree', 'Split the page…', 'Shorten it…', expect.stringMatching(/^Draw anywayadds ≈\$/)]);
+    // no single-page "Draw this page" for a held-back page: the fixes come first
+    fireEvent.click(screen.getByRole('button', { name: 'Panels & actions' }));
+    expect(screen.queryByRole('button', { name: /Draw this page|New take/ })).toBeNull();
+    // Render all without drawOverfull: the server holds page 2 back the same way
+    fireEvent.click(approve);
+    await flush();
+    expect(studio.act).toHaveBeenNthCalledWith(2, { type: 'render_pages', quotedUsd: held.usd });
+  });
+
+  it('"Draw anyway" adds the page to drawOverfull: re-quoted, sent with the run, and undoable before approving', async () => {
+    const doc = withPage2(p2Shaped());
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    const before = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: {} });
+    const after = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: { drawOverfull: ['pg_2'] } });
+    const anyway = within(fixesOf()).getByRole('button', { name: /^Draw anyway/ });
+    expect(anyway).toHaveAttribute('aria-pressed', 'false');
+    expect(anyway).toHaveTextContent(`adds ≈${formatUsd(Math.round((after.usd - before.usd) * 10000) / 10000)}`);
+    fireEvent.click(anyway);
+    // no longer held back; the quote now includes it; the detail says it will be drawn as is
+    expect(screen.queryByTestId('breakdown-held-back')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Page 2 is held back' })).toBeNull();
+    expect(screen.getByRole('group', { name: 'Page 2 is drawn as is' })).toHaveTextContent('Page 2 will be drawn as is, although panels 5 and 6 are too full.');
+    expect(tileOf(/^Page 2,/)).toHaveAccessibleName(`Page 2, about ${formatUsd(unitPrice(doc, 'page', { byok: false }).usd)} to draw, not drawn, 6 panels, panels 5 and 6 too full`);
+    fireEvent.click(screen.getByRole('button', { name: `Approve & render all · ≈${formatUsd(after.usd)}` }));
+    await flush();
+    expect(studio.act).toHaveBeenNthCalledWith(1, { type: 'approve_plan' });
+    expect(studio.act).toHaveBeenNthCalledWith(2, { type: 'render_pages', drawOverfull: ['pg_2'], quotedUsd: after.usd });
+    // "Hold it back" puts it back out of the run
+    fireEvent.click(screen.getByRole('button', { name: 'Hold it back' }));
+    expect(screen.getByTestId('breakdown-held-back')).toHaveTextContent('1 page held back');
+    expect(screen.getByRole('button', { name: `Approve & render all · ≈${formatUsd(before.usd)}` })).toBeInTheDocument();
+  });
+
+  it('approved plans and subsets carry it too: Render all with drawOverfull, a subset with the page in its explicit list', async () => {
+    const doc = withPage2(p2Shaped(), { planStatus: 'approved' });
+    const studio = makeFakeStudio({ doc });
+    const { unmount } = renderCard(bd(), studio);
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: /^Draw anyway/ }));
+    const all = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, holdBack: { drawOverfull: ['pg_2'] } });
+    fireEvent.click(screen.getByRole('button', { name: `Draw 2 pages · ≈${formatUsd(all.usd)}` }));
+    await flush();
+    expect(studio.act).toHaveBeenLastCalledWith({ type: 'render_pages', drawOverfull: ['pg_2'], quotedUsd: all.usd });
+    unmount();
+    // a subset holds the page back too (an explicit list is never gated on the server, so it must not carry it)
+    const s2 = makeFakeStudio({ doc });
+    renderCard(bd({ pageIds: ['pg_2', 'pg_3'] }), s2);
+    const one = quoteRenderPages(doc, { pageIds: ['pg_2', 'pg_3'], byok: false, tier: doc.settings.quality, holdBack: {} });
+    expect(one.pageIds).toEqual(['pg_3']);
+    fireEvent.click(screen.getByRole('button', { name: `Draw 1 page · ≈${formatUsd(one.usd)}` }));
+    await flush();
+    expect(s2.act).toHaveBeenLastCalledWith({ type: 'render_pages', pageIds: ['pg_3'], quotedUsd: one.usd });
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: /^Draw anyway/ }));
+    const both = quoteRenderPages(doc, { pageIds: ['pg_2', 'pg_3'], byok: false, tier: doc.settings.quality, holdBack: { drawOverfull: ['pg_2'] } });
+    fireEvent.click(screen.getByRole('button', { name: `Draw 2 pages · ≈${formatUsd(both.usd)}` }));
+    await flush();
+    expect(s2.act).toHaveBeenLastCalledWith({ type: 'render_pages', pageIds: ['pg_2', 'pg_3'], quotedUsd: both.usd });
+  });
+
+  it('"Use the layout that fits" dispatches layoutFixOps (the blueprint AND the panel sizes, never a bare layout patch)', async () => {
+    const doc = withPage2(p2Shaped());
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    const layout = summarizeBook(doc, { byok: false }).pages.find((p) => p.id === 'pg_2')!.planFit!.layoutFix!;
+    const ops = layoutFixOps(doc, doc.pages[1], layout);
+    expect(ops.length).toBeGreaterThan(1);
+    expect(ops.some((o) => o.op === 'panel')).toBe(true);
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: /^Use the layout that fits/ }));
+    await flush();
+    expect(studio.act).toHaveBeenCalledWith({ type: 'patch', ops });
+    expect(layoutFitFix(doc, doc.pages[1], layout)).toEqual(ops);
+  });
+
+  it('the layout chip hides when the ops are [] or the page is still too full on that layout', () => {
+    const page = noFit();
+    const doc = withPage2(page);
+    expect(summarizeBook(doc, { byok: false }).pages.find((p) => p.id === 'pg_2')!.planFit).toMatchObject({ heldBack: true });
+    renderCard(bd(), makeFakeStudio({ doc }));
+    expect(within(fixesOf()).queryByRole('button', { name: /Use the layout that fits/ })).toBeNull();
+    expect(within(fixesOf()).getByRole('button', { name: /^Move or cut a line/ })).toBeInTheDocument();
+    // [] → null: a sentence that is not a blueprint, or one with another panel count
+    expect(layoutFitFix(doc, page, 'make it nice')).toBeNull();
+    expect(layoutFitFix(doc, page, 'Row 1: two equal panels.')).toBeNull();
+    expect(layoutFitFix(doc, page, undefined)).toBeNull();
+    // a valid 3-panel blueprint that is still overfull → null
+    expect(layoutFixOps(doc, page, 'Row 1: one wide panel. Row 2: one wide panel. Row 3: one large panel.').length).toBeGreaterThan(0);
+    expect(layoutFitFix(doc, page, 'Row 1: one wide panel. Row 2: one wide panel. Row 3: one large panel.')).toBeNull();
+  });
+
+  it('the other free fixes: the page editor, and split or shorten prefilled for the director (nothing sent)', () => {
+    const doc = withPage2(p2Shaped());
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd(), studio);
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: /^Move or cut a line/ }));
+    expect(studio.openPage).toHaveBeenCalledWith('pg_2');
+    const composed: unknown[] = [];
+    const onCompose = (e: Event) => composed.push((e as CustomEvent).detail);
+    window.addEventListener(COMPOSE_EVENT, onCompose);
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: 'Split the page…' }));
+    fireEvent.click(within(fixesOf()).getByRole('button', { name: 'Shorten it…' }));
+    window.removeEventListener(COMPOSE_EVENT, onCompose);
+    expect(composed).toEqual([
+      { text: 'Split page 2 into two pages so panel 6 has room for its words.', focus: true },
+      { text: 'Shorten the words in panel 6 on page 2 to about 9 words.', focus: true }
+    ]);
+    expect(studio.act).not.toHaveBeenCalled();
+    expect(studio.send).not.toHaveBeenCalled();
+  });
+});
+
+describe('plan fit: next to a gate', () => {
+  const renderAllGate = (over: Partial<Gate> = {}): Gate => ({
+    id: 'gate_1',
+    action: { type: 'render_pages', includeCover: true, quotedUsd: 0.2 },
+    title: 'Draw the pages?',
+    summary: '1 page',
+    estimateUsd: 0.2,
+    imageCount: 2,
+    model: 'nano-banana-2.1',
+    createdAt: 1,
+    status: 'open',
+    reason: 'first_render',
+    ...over
+  });
+
+  it('"Draw anyway" beside an open Render-all gate extends that run (drawOverfull), quoted as a whole', async () => {
+    const doc = withPage2(p2Shaped(), { gate: renderAllGate() });
+    const studio = makeFakeStudio({ doc });
+    renderCard(bd({ gateId: 'gate_1', view: 'plan' }), studio, true);
+    // the gate owns approval: no Approve/Draw-this-page here, only the extension of its own run
+    expect(screen.queryByRole('button', { name: /^Approve/ })).toBeNull();
+    const q = quoteRenderPages(doc, { byok: false, tier: doc.settings.quality, includeCover: true, holdBack: { drawOverfull: ['pg_2'] } });
+    const chip = within(fixesOf()).getByRole('button', { name: /^Draw page 2 anyway \(with the rest\)/ });
+    expect(chip).toHaveTextContent(`≈${formatUsd(q.usd)}`);
+    expect(within(fixesOf()).queryByRole('button', { name: /^Draw anyway/ })).toBeNull();
+    fireEvent.click(chip);
+    await flush();
+    expect(studio.act).toHaveBeenCalledWith({ type: 'render_pages', drawOverfull: ['pg_2'], includeCover: true, quotedUsd: q.usd });
+  });
+
+  it('a gate that draws named pages draws them whatever their fit: nothing is held back there; a closed gate offers no spend', () => {
+    const explicit = withPage2(p2Shaped(), { gate: renderAllGate({ action: { type: 'render_pages', pageIds: ['pg_2'], quotedUsd: 0.07 } }) });
+    const { unmount } = renderCard(bd({ gateId: 'gate_1', pageIds: ['pg_2'] }), makeFakeStudio({ doc: explicit }), true);
+    expect(screen.queryByTestId('breakdown-held-back')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Page 2 is held back' })).toBeNull();
+    unmount();
+    const closed = withPage2(p2Shaped(), { gate: renderAllGate({ status: 'approved' }) });
+    renderCard(bd({ gateId: 'gate_1' }), makeFakeStudio({ doc: closed }), true);
+    expect(within(fixesOf()).queryByRole('button', { name: /anyway/ })).toBeNull();
+    // free fixes stay
+    expect(within(fixesOf()).getByRole('button', { name: /^Use the layout that fits/ })).toBeInTheDocument();
+  });
+});
+
+describe('plan fit: prices in the viewer’s terms', () => {
+  const NO_DOLLARS = /\$\s?\d|\$0\b|<\$/;
+
+  it('governed users see usage words, never dollars; BYOK users see "on your key"', () => {
+    showUsagePrices(1);
+    const doc = withPage2(p2Shaped(), { gate: undefined });
+    const { container, unmount } = renderCard(bd(), makeFakeStudio({ doc }));
+    expect(container.textContent).not.toMatch(NO_DOLLARS);
+    expect(within(fixesOf()).getByRole('button', { name: /^Draw anyway/ })).toHaveTextContent(/adds (≈[\d.]+%|<0\.1%) of your usage$/);
+    expect(screen.getByTestId('breakdown-moments')).toHaveTextContent(/of your usage to draw it$/);
+    unmount();
+
+    resetUsageStatus();
+    const byokDoc = withPage2(p2Shaped(), {
+      gate: {
+        id: 'gate_1', action: { type: 'render_pages' }, title: 't', summary: 's', estimateUsd: 0.1, imageCount: 1, model: 'nano-banana-2.1', createdAt: 1, status: 'open', reason: 'policy'
+      }
+    });
+    const r = renderCard(bd(), makeFakeStudio({ doc: byokDoc, byok: true }));
+    expect(within(fixesOf()).getByRole('button', { name: /^Draw anyway/ })).toHaveTextContent(/adds ≈\$[\d.]+ on your key$/);
+    r.unmount();
+    renderCard(bd({ gateId: 'gate_1' }), makeFakeStudio({ doc: byokDoc, byok: true }), true);
+    expect(within(fixesOf()).getByRole('button', { name: /^Draw page 2 anyway/ })).toHaveTextContent(/≈\$[\d.]+ on your key$/);
+    // the helper: governed → usage share, BYOK → on your key, admin → plain dollars
+    expect(paidAmount({ governed: false, badge: (u: number) => `≈${formatUsd(u)}` } as never, 0.07, true)).toBe(`≈${formatUsd(0.07)} on your key`);
+    expect(paidAmount({ governed: true, badge: () => '≈1% of your usage' } as never, 0.07, true)).toBe('≈1% of your usage');
+  });
+
+  it('the moments line: "Want more moments? Add a page" with one page’s price; the button only prefills the composer', () => {
+    const studio = makeFakeStudio();
+    renderCard(bd(), studio);
+    const line = screen.getByTestId('breakdown-moments');
+    expect(line).toHaveTextContent(`Want more moments? Add a page · ≈${formatUsd(unitPrice(studio.doc!, 'page', { byok: false }).usd)} to draw it`);
+    let composed: unknown = null;
+    const onCompose = (e: Event) => (composed = (e as CustomEvent).detail);
+    window.addEventListener(COMPOSE_EVENT, onCompose);
+    fireEvent.click(within(line).getByRole('button', { name: 'Add a page' }));
+    window.removeEventListener(COMPOSE_EVENT, onCompose);
+    expect(composed).toEqual({ text: 'Add a page after page 3: ', focus: true });
+    expect(studio.act).not.toHaveBeenCalled();
+  });
+});
+
+describe('plan fit: phone layout (320/360 px)', () => {
+  it('the held-back panel and its fixes wrap inside the card: no fixed widths, long words wrap, 44 px targets', () => {
+    const doc = withPage2(p2Shaped());
+    const { container } = renderCard(bd(), makeFakeStudio({ doc }), true);
+    const group = screen.getByRole('group', { name: 'Page 2 is held back' });
+    expect(group.className).toMatch(/\bmin-w-0\b/);
+    const fixes = fixesOf();
+    expect(fixes.className).toMatch(/\bflex-wrap\b/);
+    expect(fixes.className).toMatch(/\bmin-w-0\b/);
+    for (const chip of within(fixes).getAllByRole('button')) {
+      expect(chip.className).toMatch(/coarse:min-h-\[44px\]/);
+      expect(chip.className).toMatch(/\bmax-w-full\b/);
+      expect(chip.className).toMatch(/\bmin-w-0\b/);
+      expect(chip.querySelector('span')!.className).toMatch(/overflow-wrap:anywhere/);
+    }
+    for (const p of group.querySelectorAll('p > span:last-child')) expect(p.className).toMatch(/overflow-wrap:anywhere/);
+    // nothing in the new UI sets a fixed width that could widen a 320 px chat
+    for (const el of group.querySelectorAll('*')) expect(el.getAttribute('class') ?? '').not.toMatch(/(?:^|\s)(?:w|min-w)-\[\d/);
+    // the "Add a page" link and the moments line are touch-sized and wrap
+    const moments = screen.getByTestId('breakdown-moments');
+    expect(moments.className).toMatch(/\bflex-wrap\b/);
+    expect(within(moments).getByRole('button', { name: 'Add a page' }).className).toMatch(/coarse:min-h-11/);
+    // the strip still never widens the chat
+    expect(screen.getByRole('list', { name: /Pages in this book/ }).className).toMatch(/\boverflow-x-auto\b/);
+    expect(container.querySelector('[data-held-back="true"]')).not.toBeNull();
   });
 });
