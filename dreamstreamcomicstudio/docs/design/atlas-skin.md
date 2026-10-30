@@ -306,9 +306,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`acd9fdfc`** (2026-10-29,
-  "Merge wave 5: system-foundations refinements"; previous sync `07935fcf`). Re-sync:
-  `git -C /home/user/atlasd diff acd9fdfc origin/claude/quirky-darwin-fpx23q -- app/globals.css
+- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`496f265c`** (2026-10-30; Atlas waves 6-7 —
+  diagnostics, a public /features page, docs — left every design file byte-identical to `acd9fdfc`, "Merge wave 5:
+  system-foundations refinements", the last port; previous syncs `acd9fdfc`, `07935fcf`). Re-sync:
+  `git -C /home/user/atlasd diff 496f265c origin/claude/quirky-darwin-fpx23q -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md`.
 - Files that define the language, and what each token group was derived from:
   - `app/globals.css` — `:root` / `.dark` colours (wave 5: overlays `#1a1a1a`, `--control-border`,
