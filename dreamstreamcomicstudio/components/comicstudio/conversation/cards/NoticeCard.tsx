@@ -11,19 +11,31 @@
 //     formatCostForUser: a share of the usage for governed users, never dollars; "on your key" for comics drawn on
 //     the user's own key) and goes through the existing spend gate: the action is sent with its `quotedUsd`, the
 //     tap is the confirmation, and the server re-gates it (an approval card) if the fresh price is higher.
-// A chip is free only when its action spends nothing: a "free" flag on a spend action is treated as paid, and a
-// paid action without a quote is sent with quotedUsd 0, so it always comes back as a priced approval.
+// A chip is free only when its action spends nothing: a "free" flag on a spend action is treated as paid. A paid
+// chip is offered only with a positive quote — the servers quote every real one, and a quote of 0 means nothing is
+// left to draw — so a spend never reads "Free" and never runs unpriced.
 // Extra flags on an action (`safe: true` for a safer take) pass through untouched.
+//
+// Chips are re-checked against the LIVE doc (studio.doc), so an old notice never offers a stale fix:
+//   - a patch that is already in the doc reads "Done" (derived, so it survives a reload and clears again if the
+//     server rejects the edit); one that would put a drawn, current page out of date (a layout fix after the page
+//     was drawn anyway) or that targets something no longer there is hidden;
+//   - a paid chip whose page is drawing reads "Started"; a render_pages chip with nothing left to draw
+//     (quoteRenderPages `nothing`, or a "Draw page N anyway" whose page N was drawn meanwhile) is hidden; a paid
+//     chip that ran reads "Started" until the doc changes. (A message's `at` is not the notice's time — a run's
+//     outcome keeps its progress message's — so "drawn again since the notice" is not inferred from it.)
 
 import React from 'react';
 import { CircleCheck, CircleX, Info, Loader2, TriangleAlert } from 'lucide-react';
-import type { Card, NoticeFix } from '../../../../shared/comic/doc';
-import { isSpendAction, type StudioAction } from '../../../../shared/comic/ops';
+import { isPageStale, type Card, type ComicDoc, type NoticeFix, type Page } from '../../../../shared/comic/doc';
+import { applyOps, isSpendAction, type DocOp, type StudioAction } from '../../../../shared/comic/ops';
+import { pageTargets, quoteRenderPages } from '../../../../shared/comic/plan';
 import { TONE_CHIP, TONE_SURFACE, TONE_TEXT } from '../../../chat/studioDesign';
 import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { useCostFormat, type CostFormat } from '../cost';
 import { ChipButton, cx } from '../ui';
-import { useAction } from './useAction';
+import { chipLabel } from './NextStepChips';
+import { stopsSequence, useAction } from './useAction';
 
 type NoticeCardData = Extract<Card, { type: 'notice' }>;
 
@@ -56,92 +68,233 @@ export interface NoticeCardStudio {
   /** The comic draws on the user's own key: prices read "on your key". */
   byok?: boolean;
   caps?: Pick<StudioCaps, 'byok' | 'admin' | 'usage'> | null;
+  /** The live doc: each chip is re-checked against it (already done, nothing left to do, already started). */
+  doc?: ComicDoc | null;
 }
 
-const priceOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+/** A positive, finite quote (a paid chip's price), else undefined. */
+const positiveUsd = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined);
 
 /** A chip as rendered: paid when its action spends (whatever its `free` flag says), with the quote it carries. */
 export interface NoticeChip {
   fix: NoticeFix;
   paid: boolean;
-  /** Paid chips: the action's quotedUsd, when it has one. */
+  /** Paid chips: the action's quotedUsd (always > 0 — a paid fix without a positive quote is not offered). */
   usd?: number;
-  /** The action as it is sent (a paid one always carries a quotedUsd). */
+  /** The action as it is sent (a paid one carries its quotedUsd). */
   action: StudioAction;
 }
 
-/** The card's fixes as chips, free first (stable within each group). */
+/**
+ * The card's fixes as chips, free first (stable within each group). A paid fix is offered only with a positive
+ * quote: the servers quote every real one (qcNotice's offerPaid drops what it cannot price; jobs.ts quotes "Draw
+ * anyway"), and a quote of 0 means nothing is left to draw — so a spend is never badged "Free" or sent unpriced.
+ */
 export const noticeChips = (fixes: NoticeFix[] | undefined): NoticeChip[] => {
   if (!Array.isArray(fixes)) return [];
-  const chips = fixes
-    .filter((f): f is NoticeFix => !!f && typeof f.label === 'string' && !!f.label.trim() && !!f.action && typeof f.action.type === 'string')
-    .map((fix): NoticeChip => {
-      const paid = isSpendAction(fix.action) || fix.free !== true;
-      const usd = paid ? priceOf((fix.action as { quotedUsd?: unknown }).quotedUsd) : undefined;
-      // A spend without a quote is sent quoted at 0, so the server answers with a priced approval, never a bill.
-      const action = paid && isSpendAction(fix.action) && usd === undefined ? ({ ...fix.action, quotedUsd: 0 } as StudioAction) : fix.action;
-      return { fix, paid, ...(usd !== undefined ? { usd } : {}), action };
-    });
+  const chips: NoticeChip[] = [];
+  for (const fix of fixes) {
+    if (!fix || typeof fix.label !== 'string' || !fix.label.trim() || !fix.action || typeof fix.action.type !== 'string') continue;
+    const paid = isSpendAction(fix.action) || fix.free !== true;
+    if (!paid) {
+      chips.push({ fix, paid, action: fix.action });
+      continue;
+    }
+    const usd = positiveUsd((fix.action as { quotedUsd?: unknown }).quotedUsd);
+    if (usd !== undefined) chips.push({ fix, paid, usd, action: fix.action });
+  }
   return [...chips.filter((c) => !c.paid), ...chips.filter((c) => c.paid)];
 };
 
-/** A paid chip's price for this user: "≈1% of your usage" (governed) · "≈$0.05 on your key" (BYOK) · "≈$0.05". */
+/**
+ * A paid amount in THIS user's terms — "≈1% of your usage" (governed: never dollars) · "≈$0.05 on your key" (BYOK)
+ * · "≈$0.05" (admins). The one implementation: the breakdown card's `paidAmount` is this function.
+ */
 export const noticePrice = (cost: CostFormat, usd: number, byok: boolean): string => (!cost.governed && byok ? `${cost.badge(usd)} on your key` : cost.badge(usd));
 
-/** A price as servers write it at the end of a label ("· ≈$0.05", "(Free)"), dropped so the badge says it once. */
-const PRICE_SUFFIX = /(?:\s*\((?:free|[≈<]\s*\$[\d.,]+)\)|\s+[·•–—-]\s*(?:free|[≈<]\s*\$[\d.,]+|[≈<]\s*[\d.,]+%\s*of\s+your\s+usage))\s*$/i;
-const chipText = (label: string): string => label.replace(PRICE_SUFFIX, '').trim() || label;
+// ── Chips against the live doc ────────────────────────────────────────────────
+
+/** How a chip shows right now: offered, already applied (free), already running (paid), or not offered. */
+export type NoticeChipState = 'live' | 'done' | 'started' | 'hidden';
+
+const same = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+/** Every field a patch sets already has that value. */
+const patchIsIn = (target: object, patch: object): boolean =>
+  Object.entries(patch).every(([k, v]) => same((target as Record<string, unknown>)[k], v));
+const isBusyPage = (p: Page) => p.render.status === 'queued' || p.render.status === 'rendering';
+
+/** The page an op edits and whether it is already applied (null: its target is gone; undefined: can't tell). */
+const opCheck = (doc: ComicDoc, op: DocOp): { pageId?: string; noop?: boolean } | null => {
+  switch (op.op) {
+    case 'page': {
+      const page = doc.pages.find((p) => p.id === op.id);
+      return page ? { pageId: page.id, noop: !!op.patch && patchIsIn(page, op.patch) } : null;
+    }
+    case 'panel': {
+      const page = doc.pages.find((p) => p.id === op.pageId);
+      const panel = page?.panels.find((x) => x.id === op.id);
+      return page && panel ? { pageId: page.id, noop: !!op.patch && patchIsIn(panel, op.patch) } : null;
+    }
+    case 'line': {
+      const page = doc.pages.find((p) => p.id === op.pageId);
+      const line = page?.panels.find((x) => x.id === op.panelId)?.lines.find((l) => l.id === op.id);
+      if (!page) return null;
+      if (op.patch === null) return { pageId: page.id, noop: !line };
+      return line ? { pageId: page.id, noop: patchIsIn(line, op.patch) } : null;
+    }
+    default:
+      return { noop: false };
+  }
+};
+
+/** Pages a paid action draws or checks (for "Started"). */
+const spendPages = (action: StudioAction): string[] => {
+  const a = action as { type: string; pageId?: unknown; pageIds?: unknown; drawOverfull?: unknown };
+  if (typeof a.pageId === 'string') return [a.pageId];
+  if (a.type !== 'render_pages') return [];
+  const ids = Array.isArray(a.pageIds) && a.pageIds.length ? a.pageIds : Array.isArray(a.drawOverfull) ? a.drawOverfull : [];
+  return ids.filter((id): id is string => typeof id === 'string');
+};
+
+/** A chip's state against the live doc. Pure; no doc ⇒ 'live' (older hosts). */
+export const noticeChipState = (doc: ComicDoc | null | undefined, chip: NoticeChip): NoticeChipState => {
+  if (!doc) return 'live';
+  const action = chip.action;
+  if (!chip.paid) {
+    if (action.type !== 'patch') return 'live';
+    const ops = Array.isArray(action.ops) ? action.ops : [];
+    const checks = ops.map((op) => (op && typeof op === 'object' ? opCheck(doc, op) : null));
+    if (checks.some((c) => c === null)) return 'hidden';
+    if (checks.every((c) => c!.noop)) return 'done';
+    // Free must stay free: an edit that would put a drawn, current page out of date (only a paid redraw brings it
+    // back in line — e.g. the layout fix after the page was drawn anyway) is not offered.
+    const touched = new Set(checks.map((c) => c!.pageId).filter((id): id is string => !!id));
+    const current = doc.pages.filter((p) => touched.has(p.id) && p.render.status === 'ready' && !isPageStale(doc, p));
+    if (!current.length) return 'live';
+    try {
+      const after = applyOps(doc, ops);
+      return current.some((p) => {
+        const next = after.pages.find((x) => x.id === p.id);
+        return !!next && isPageStale(after, next);
+      })
+        ? 'hidden'
+        : 'live';
+    } catch {
+      return 'live';
+    }
+  }
+  const ids = spendPages(action);
+  const pages = ids.map((id) => doc.pages.find((p) => p.id === id));
+  if (typeof (action as { pageId?: unknown }).pageId === 'string' && !pages[0]) return 'hidden';
+  const present = pages.filter((p): p is Page => !!p);
+  if (present.some(isBusyPage)) return 'started';
+  if (action.type === 'render_pages') {
+    const pageIds = Array.isArray(action.pageIds) && action.pageIds.length ? action.pageIds : undefined;
+    const renderAll = !pageIds && !action.force;
+    const anyway = Array.isArray(action.drawOverfull) ? action.drawOverfull.filter((id): id is string => typeof id === 'string') : [];
+    // "Draw page 2 anyway (with the rest)": once page 2 itself needs no drawing, the chip has nothing left to do.
+    if (renderAll && anyway.length && !pageTargets(doc, { pageIds: anyway }).length) return 'hidden';
+    const q = quoteRenderPages(doc, {
+      ...(pageIds ? { pageIds } : {}),
+      ...(action.force ? { force: true } : {}),
+      ...(action.includeCover ? { includeCover: true } : {}),
+      byok: false,
+      tier: doc.settings.quality,
+      modelOverride: doc.settings.imageModelOverride,
+      // "Render all" holds overfull pages back, as the server's gate does.
+      ...(renderAll ? { holdBack: { drawOverfull: anyway } } : {})
+    });
+    if (q.nothing) return 'hidden';
+  }
+  return 'live';
+};
+
+const STATE_TITLE: Partial<Record<NoticeChipState, string>> = {
+  done: 'Done — already in your comic',
+  started: 'Started — no need to tap again'
+};
 
 const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; cardId: string }> = ({ chips, studio, cardId }) => {
   const byok = !!(studio.byok || studio.caps?.byok);
   const cost = useCostFormat({ byok, caps: studio.caps ?? null });
-  const { run, isPending } = useAction(studio.act);
-  const [done, setDone] = React.useState<ReadonlySet<string>>(() => new Set());
+  const doc = studio.doc;
+  // What each run resolved to (by action object), so a paid chip reads "Started" only when it really went through
+  // (not refused, cancelled or turned into an approval card).
+  const results = React.useRef(new Map<StudioAction, unknown>());
+  const studioAct = studio.act;
+  const act = React.useCallback(
+    async (action: StudioAction) => {
+      const result = await studioAct(action);
+      results.current.set(action, result);
+      return result;
+    },
+    [studioAct]
+  );
+  const { run, isPending } = useAction(act);
+  // Paid chips that ran: "Started" until the doc changes (stamped with the doc first seen after the run).
+  const [ran, setRan] = React.useState<ReadonlyMap<string, { doc?: ComicDoc | null }>>(() => new Map());
+  React.useEffect(() => {
+    if (!ran.size) return;
+    let changed = false;
+    const next = new Map(ran);
+    for (const [k, v] of ran) {
+      if (!('doc' in v)) {
+        next.set(k, { doc });
+        changed = true;
+      } else if (v.doc !== doc) {
+        next.delete(k);
+        changed = true;
+      }
+    }
+    if (changed) setRan(next);
+  }, [ran, doc]);
+  const states = React.useMemo(() => chips.map((c) => noticeChipState(doc, c)), [chips, doc]);
+  const shown = chips.map((c, i) => ({ c, i, state: states[i] })).filter((x) => x.state !== 'hidden');
+  if (!shown.length) return null;
   return (
     <div className="mt-2 flex min-w-0 flex-wrap gap-1.5 pl-[1.625rem]" role="group" aria-label="Fixes">
-      {chips.map((c, i) => {
+      {shown.map(({ c, i, state: derived }) => {
         const key = `${cardId}:${i}`;
         const busy = isPending(key);
-        const finished = !c.paid && done.has(key);
-        const price = c.paid ? (c.usd !== undefined ? noticePrice(cost, c.usd, byok) : undefined) : 'Free';
+        const state: NoticeChipState = derived === 'live' && c.paid && ran.has(key) ? 'started' : derived;
+        const price = c.paid ? noticePrice(cost, c.usd ?? 0, byok) : 'Free';
+        const badge = state === 'done' ? 'Done' : state === 'started' ? 'Started' : price;
         return (
           <ChipButton
             key={key}
             className="min-w-0 !text-[12.5px] coarse:!text-[13px]"
-            disabled={busy || finished}
+            disabled={busy || state !== 'live'}
             aria-busy={busy || undefined}
             data-fix={c.paid ? 'paid' : 'free'}
+            data-state={state}
             title={
-              c.paid
-                ? c.usd !== undefined
-                  ? 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
-                  : 'I’ll confirm the price with you before anything is drawn'
+              STATE_TITLE[state] ??
+              (c.paid
+                ? 'Estimate — tapping is your OK, and the price is re-checked before anything is drawn'
                 : c.action.type === 'patch'
                   ? 'Free — done by the editor, no AI cost'
-                  : 'Free — no charge to you'
+                  : 'Free — no charge to you')
             }
             onClick={() => {
               void run(key, c.action).then((ok) => {
-                if (ok && !c.paid) setDone((prev) => new Set(prev).add(key));
+                if (ok && c.paid && !stopsSequence(results.current.get(c.action))) setRan((prev) => new Map(prev).set(key, {}));
+                results.current.delete(c.action);
               });
             }}
           >
             {busy && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden />}
-            {finished && <CircleCheck className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />}
-            <span className="min-w-0 [overflow-wrap:anywhere]">{chipText(c.fix.label)}</span>
+            {state === 'done' && <CircleCheck className={cx('h-3.5 w-3.5 shrink-0', TONE_TEXT.success)} aria-hidden />}
+            <span className="min-w-0 [overflow-wrap:anywhere]">{chipLabel(c.fix.label, price)}</span>
             {/* The name a screen reader hears is the visible text: "Use the layout that fits, Free". */}
-            {price && <span className="sr-only">,</span>}
-            {price && ' '}
-            {price && (
-              <span
-                className={cx(
-                  'min-w-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums [overflow-wrap:anywhere]',
-                  c.paid ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success
-                )}
-              >
-                {finished ? 'Done' : price}
-              </span>
-            )}
+            <span className="sr-only">,</span>{' '}
+            <span
+              className={cx(
+                'min-w-0 rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums [overflow-wrap:anywhere]',
+                c.paid ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success
+              )}
+            >
+              {badge}
+            </span>
           </ChipButton>
         );
       })}
@@ -155,7 +308,8 @@ const NoticeFixChips: React.FC<{ chips: NoticeChip[]; studio: NoticeCardStudio; 
  */
 export const NoticeCard: React.FC<{ card: NoticeCardData; studio?: NoticeCardStudio }> = ({ card, studio }) => {
   const tone = TONES[card.tone] || TONES.info;
-  const chips = studio ? noticeChips(card.fixes) : [];
+  const hasStudio = !!studio;
+  const chips = React.useMemo(() => (hasStudio ? noticeChips(card.fixes) : []), [hasStudio, card.fixes]);
   // The live region holds the words only: the chips sit beside it, so a chip turning "Done" is not re-announced.
   return (
     <div className={cx('min-w-0 rounded-xl border px-3.5 py-2.5 text-[13px] leading-snug', tone.cls)}>
