@@ -137,6 +137,18 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     }
   });
 
+  it('covers Atlas Studio, which connects through the same Google apps, and links its policy', () => {
+    const section = googleSection();
+    const text = textOf(section);
+    expect(text).toMatch(/Atlas Studio \(atlas\.dreamstreamstudio\.ai\)/);
+    expect(text).toMatch(/read-only access to Google Drive and Gmail/);
+    expect(text).toMatch(/does not send Google user data to AI models/);
+    expect(within(section).getByRole('link', { name: 'Atlas Studio Privacy Policy' })).toHaveAttribute(
+      'href',
+      'https://atlas.dreamstreamstudio.ai/privacy#google-user-data'
+    );
+  });
+
   it('shows the updated date and an email contact instead of only the in-app flow', () => {
     render(<PrivacyPolicy onBack={vi.fn()} />);
     expect(screen.getByText('November 4, 2026')).toHaveAttribute('dateTime', '2026-11-04');

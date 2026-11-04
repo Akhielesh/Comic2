@@ -3,6 +3,9 @@ import React, { useEffect } from 'react';
 const PRIVACY_EMAIL = 'privacy@dreamstreamstudio.ai';
 const GOOGLE_USER_DATA_POLICY_URL = 'https://developers.google.com/terms/api-services-user-data-policy';
 const GOOGLE_CONNECTIONS_URL = 'https://myaccount.google.com/connections';
+// Atlas Studio connects through the same Google apps (one consent screen for every studio), so this
+// policy, which that consent screen links to, points at Atlas's own Google user data section.
+const ATLAS_GOOGLE_USER_DATA_URL = 'https://atlas.dreamstreamstudio.ai/privacy#google-user-data';
 const GOOGLE_PRIVACY_POLICY_URL = 'https://policies.google.com/privacy';
 
 // Theme tokens only (--ds-*, see index.css) so the page reads in light and dark.
@@ -135,6 +138,8 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
                     <Section id="google-user-data" title="4. Google User Data (Connected Google Accounts)">
                         <p>In Chat Studio and Stream Studio you can connect your own Google account. You pick which Google services to connect, and Google asks for your permission before DreamStream can access anything. This section covers the information DreamStream receives from Google APIs ("Google user data") and applies in addition to the rest of this policy.</p>
+                        <p><strong>Atlas Studio</strong> (atlas.dreamstreamstudio.ai), DreamStream's search workspace, connects to Google through the same DreamStream Studio Google apps. In its public beta it uses Sign in with Google (your name, email address and profile picture) and read-only access to Google Drive and Gmail (files, messages, attachments and labels) to index, search and preview them for you. Atlas Studio does not send Google user data to AI models, cannot change, send, draft or delete anything in your Google account, and follows the same Limited Use commitment below. Its full handling is described in the{' '}
+                            <ExternalLink href={ATLAS_GOOGLE_USER_DATA_URL}>Atlas Studio Privacy Policy</ExternalLink>.</p>
 
                         <SubHeading>What we access, for each service</SubHeading>
                         <ul className="space-y-3">
