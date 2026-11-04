@@ -48,6 +48,19 @@ const WAVE5_TOKENS = [
   '--ds-overlay-hover', '--ds-status-error-edge', '--ds-status-error-tint', '--ds-toast-edge',
   '--ds-ease-enter', '--ds-motion-enter', '--ds-motion-exit'
 ];
+/**
+ * The tokens DS-1a added (docs/design/design-system.md, master plan §1.1 "New tokens"): the stacking
+ * ladder, the control densities, the heading steps, Atlas's slow entrance, stagger and the 280 ms
+ * entrance under its Atlas name, and the label on a solid danger fill.
+ */
+const DS1A_Z = ['stage', 'chrome', 'header', 'editor', 'reader', 'scrim', 'sheet', 'popover', 'toast', 'tooltip'] as const;
+const DS1A_TOKENS = [
+  ...DS1A_Z.map((l) => `--ds-z-${l}`),
+  '--ds-density-compact', '--ds-density-comfortable', '--ds-density-touch',
+  '--ds-text-xl', '--ds-text-2xl', '--ds-text-3xl',
+  '--ds-motion-enter-quick', '--ds-motion-enter-slow', '--ds-motion-stagger',
+  '--ds-on-danger'
+];
 /** A token's colour in Atlas light / Atlas dark, var() followed through that block's cascade. */
 const atlasColor = (name: string, theme: 'light' | 'dark') => {
   const blocks = theme === 'light' ? [ATLAS_LIGHT, ROOT_TOKENS] : [ATLAS_DARK, ATLAS_LIGHT, DARK_TOKENS, ROOT_TOKENS];
@@ -202,7 +215,7 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     for (const k of DARK_TOKENS.keys()) expect(ROOT_TOKENS.get(k), `${k} exists in :root`).toBeDefined();
     // (--ds-accent is pre-existing and theme-invariant by design; the new tokens must not add noise.)
     for (const [k, v] of DARK_TOKENS) {
-      if (!NEW_TOKENS.includes(k) && !WAVE5_TOKENS.includes(k)) continue;
+      if (!NEW_TOKENS.includes(k) && !WAVE5_TOKENS.includes(k) && !DS1A_TOKENS.includes(k)) continue;
       expect(v, `${k} differs in .dark`).not.toBe(ROOT_TOKENS.get(k));
     }
   });
@@ -373,6 +386,80 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
     });
     // Only under the skin: no :root or .dark block in the media query.
     expect(rules.some((r) => r.parents.includes('@media (prefers-contrast: more)') && /^(:root|\.dark)$/.test(r.selector))).toBe(false);
+  });
+});
+
+describe('Atlas skin — DS-1a tokens (z ladder, densities, heading steps, motion, the danger label)', () => {
+  it('defines every DS-1a token in :root and gives each a skin value (no token without one)', () => {
+    expect(DS1A_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
+    expect(DS1A_TOKENS.filter((k) => !ATLAS_LIGHT.has(k))).toEqual([]);
+    // Only the danger label is a colour that changes with the theme; the rest are numbers and lengths.
+    expect(DS1A_TOKENS.filter((k) => DARK_TOKENS.has(k))).toEqual(['--ds-on-danger']);
+    expect(DS1A_TOKENS.filter((k) => ATLAS_DARK.has(k))).toEqual(['--ds-on-danger']);
+  });
+
+  it('the stacking ladder: stage 0, chrome and header 40, editor 70, reader 80, scrim 85, sheet 86, popover 90, toast 95, tooltip 100', () => {
+    const ladder = (block: Map<string, string>) => DS1A_Z.map((l) => Number(block.get(`--ds-z-${l}`)));
+    expect(ladder(ROOT_TOKENS)).toEqual([0, 40, 40, 70, 80, 85, 86, 90, 95, 100]);
+    // Atlas has no z tokens: the skin restates the same ladder (never a different stacking under the skin).
+    expect(ladder(ATLAS_LIGHT)).toEqual(ladder(ROOT_TOKENS));
+    // Non-decreasing, and every overlay layer clears the page editor and the reader it may open over.
+    const values = ladder(ROOT_TOKENS);
+    expect([...values].sort((a, b) => a - b)).toEqual(values);
+    for (const l of ['scrim', 'sheet', 'popover', 'toast', 'tooltip']) expect(Number(ROOT_TOKENS.get(`--ds-z-${l}`))).toBeGreaterThan(80);
+    // The ladder the mobile sheets already document (BottomSheet / SideSheet) is the same one.
+    const sheet = readFileSync(path.join(ROOT, 'components/comicstudio/mobile/sheets/BottomSheet.tsx'), 'utf8');
+    expect(sheet).toMatch(/z 85 \(scrim\) \/ 86 \(sheet\)/);
+    expect(sheet).toMatch(/page[\s/]+editor \(70\) and the full-screen reader \(80\)/);
+  });
+
+  it('densities 28 / 36 / 44 px (touch = the coarse-pointer minimum --tap-min); heading steps are Atlas’s 20 / 24 / 30 px in rem', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
+      expect(block.get('--ds-density-compact')).toBe('28px');
+      expect(block.get('--ds-density-comfortable')).toBe('36px');
+      expect(block.get('--ds-density-touch')).toBe('44px');
+      expect(block.get('--ds-text-xl')).toBe('1.25rem');
+      expect(block.get('--ds-text-2xl')).toBe('1.5rem');
+      expect(block.get('--ds-text-3xl')).toBe('1.875rem');
+    }
+    const tapMin = rules.find((r) => r.selector === ':root' && /--tap-min\s*:/.test(r.body))?.body.match(/--tap-min\s*:\s*([^;]+);/)?.[1];
+    expect(tapMin).toBe(ROOT_TOKENS.get('--ds-density-touch'));
+  });
+
+  it('motion: -enter-quick is an alias of the 280 ms entrance (the existing token keeps its name and value), -enter-slow 420 ms and -stagger 40 ms (Atlas)', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
+      expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
+      expect(block.get('--ds-motion-enter')).toBe('280ms');
+      expect(block.get('--ds-motion-enter-slow')).toBe('420ms');
+      expect(block.get('--ds-motion-stagger')).toBe('40ms');
+    }
+  });
+
+  it('the danger label: white on the red, ink on the default dark theme’s light red (tokenContrast.test.ts measures both)', () => {
+    expect(ROOT_TOKENS.get('--ds-on-danger')).toBe('#ffffff');
+    expect(DARK_TOKENS.get('--ds-on-danger')).toBe('#1a1915');
+    expect(ATLAS_LIGHT.get('--ds-on-danger')).toBe('#ffffff');
+    expect(ATLAS_DARK.get('--ds-on-danger')).toBe('#ffffff');
+    expect(contrastRatio(ATLAS_LIGHT.get('--ds-on-danger')!, ATLAS_LIGHT.get('--ds-danger')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('studioDesign reads them: one Z class per layer, DENSITY and the TEXT_* steps', () => {
+    expect(Object.keys(design.Z)).toEqual([...DS1A_Z]);
+    for (const l of DS1A_Z) expect(design.Z[l]).toBe(`z-[var(--ds-z-${l})]`);
+    expect(design.DENSITY).toMatchObject({
+      compact: 'min-h-[var(--ds-density-compact)]',
+      comfortable: 'min-h-[var(--ds-density-comfortable)]',
+      touch: 'min-h-[var(--ds-density-touch)]',
+      coarse: 'coarse:min-h-[var(--ds-density-touch)]'
+    });
+    expect(design.DENSITY.coarseSquare.split(' ')).toEqual(['coarse:min-h-[var(--ds-density-touch)]', 'coarse:min-w-[var(--ds-density-touch)]']);
+    expect(design.TEXT_XL).toBe('text-[length:var(--ds-text-xl)] leading-7');
+    expect(design.TEXT_2XL).toBe('text-[length:var(--ds-text-2xl)] leading-8');
+    expect(design.TEXT_3XL).toBe('text-[length:var(--ds-text-3xl)] leading-9');
+    // Every z token has its recipe, and no recipe spells a raw number.
+    const zTokens = [...ROOT_TOKENS.keys()].filter((k) => k.startsWith('--ds-z-')).map((k) => k.slice('--ds-z-'.length));
+    expect(zTokens.sort()).toEqual([...DS1A_Z].sort());
+    for (const v of Object.values(design.Z)) expect(v).not.toMatch(/z-\d|z-\[\d/);
   });
 });
 

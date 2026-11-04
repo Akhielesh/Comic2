@@ -388,6 +388,66 @@ export const TOAST_SLOT_CLOSED = 'grid-rows-[0fr]';
 export const INVERSE_SURFACE = 'ds-inverse-surface bg-[var(--ds-ink)] text-[var(--ds-canvas)]';
 
 // ---------------------------------------------------------------------------
+// DS-1a recipes (docs/design/design-system.md): the stacking ladder, control densities and the
+// heading steps. Token-driven like the rest; the primitives in components/ds read them through
+// components/ds/recipes.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * The stacking ladder (index.css `--ds-z-*`). A screen takes a LAYER, never a number: stage 0 (the
+ * canvas / page content; its own layers stack 1–30 inside it), chrome and the sticky header 40, the
+ * full-screen page editor 70 and reader 80, a sheet's scrim 85 and the sheet 86 (the ladder
+ * mobile/sheets documents), popovers and menus 90, toasts 95, tooltips 100. This is the one place a
+ * z-index class is spelled; anywhere else a raw z class is off the ladder (DS-0's z-ladder guard).
+ */
+export const Z = {
+  stage: 'z-[var(--ds-z-stage)]',
+  chrome: 'z-[var(--ds-z-chrome)]',
+  header: 'z-[var(--ds-z-header)]',
+  editor: 'z-[var(--ds-z-editor)]',
+  reader: 'z-[var(--ds-z-reader)]',
+  scrim: 'z-[var(--ds-z-scrim)]',
+  sheet: 'z-[var(--ds-z-sheet)]',
+  popover: 'z-[var(--ds-z-popover)]',
+  toast: 'z-[var(--ds-z-toast)]',
+  tooltip: 'z-[var(--ds-z-tooltip)]'
+} as const;
+export type ZLayer = keyof typeof Z;
+
+/**
+ * Control row heights (index.css `--ds-density-*`): compact 28 px (dense tables, toolbars on a fine
+ * pointer), comfortable 36 px (Atlas's default control) and touch 44 px. `coarse` is the floor every
+ * interactive control carries under a coarse pointer (a 44 px tall target; `coarseSquare` also 44 px
+ * wide, for icon-only controls), so no screen spells the touch size itself.
+ */
+export const DENSITY = {
+  compact: 'min-h-[var(--ds-density-compact)]',
+  comfortable: 'min-h-[var(--ds-density-comfortable)]',
+  touch: 'min-h-[var(--ds-density-touch)]',
+  coarse: 'coarse:min-h-[var(--ds-density-touch)]',
+  coarseSquare: 'coarse:min-h-[var(--ds-density-touch)] coarse:min-w-[var(--ds-density-touch)]'
+} as const;
+export type Density = 'compact' | 'comfortable' | 'touch';
+
+/**
+ * The heading steps above the chrome scale (`--ds-text-xs…lg`): Atlas's text-xl / 2xl / 3xl (20 / 24 /
+ * 30 px, rem so they follow the reader's text size) with Tailwind's line heights. Size and leading only:
+ * pair with a weight and, for a heading, the display face.
+ */
+export const TEXT_XL = 'text-[length:var(--ds-text-xl)] leading-7';
+export const TEXT_2XL = 'text-[length:var(--ds-text-2xl)] leading-8';
+export const TEXT_3XL = 'text-[length:var(--ds-text-3xl)] leading-9';
+
+/**
+ * A solid danger fill that carries a label (Atlas's destructive button and badge, `bg-destructive
+ * text-white`): the danger hue under `--ds-on-danger` — white on the red, and the light ink on the
+ * default dark theme's light red, where white measured 2.8:1. The hover mixes 12 % of the ink in (darker
+ * in light, lighter in dark), so the label only gains contrast. tokenContrast.test.ts measures both.
+ */
+export const DANGER_FILL = 'bg-[var(--ds-danger)] text-[var(--ds-on-danger)]';
+export const DANGER_FILL_HOVER = 'hover:bg-[color:color-mix(in_srgb,var(--ds-danger)_88%,var(--ds-ink))]';
+
+// ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)
 // ---------------------------------------------------------------------------
 
