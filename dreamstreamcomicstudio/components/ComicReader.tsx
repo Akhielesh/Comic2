@@ -1291,7 +1291,7 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
               <button type="button" onClick={leaveTo(onOpenPrivacy)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
               <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
               <button type="button" onClick={leaveTo(onOpenFaq)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
-              <a href="mailto:contact@dreamstream.com" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
+              <a href="mailto:contact@dreamstreamstudio.ai" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
             </div>
           </div>
         </PhoneSheet>

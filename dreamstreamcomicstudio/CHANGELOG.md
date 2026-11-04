@@ -105,10 +105,10 @@ All notable user-facing changes. Format loosely follows
   includes Google's Limited Use statements, the YouTube API Services notice with a link to the
   Google Privacy Policy, a privacy contact (privacy@dreamstreamstudio.ai), and a November 4,
   2026 date. The page follows the light/dark theme and jumps straight to a section from a `#`
-  link. Two links that pointed at contact@dreamstream.com, a domain we don't own, now go to
-  contact@dreamstreamstudio.ai: the Contact link in the Privacy · Terms · FAQs footer and
-  Stream Studio's Support link. The old address still appears in Account Settings, the comic
-  reader's own footer and the Stream Studio guide; those are being fixed separately.
+  link. Every contact address that pointed at dreamstream.com, a domain we don't own, is now on
+  dreamstreamstudio.ai: the Contact link in the Privacy · Terms · FAQs footer, Stream Studio's
+  Support link and guide, the comic reader's footer (contact@dreamstreamstudio.ai), and the
+  support address in Account Settings (support@dreamstreamstudio.ai).
 - **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
   shows one screen — sign in or create your DreamStream account, the same one as Comic Studio
   and Chat Studio — instead of the whole studio. Nothing sits behind it: no dashboard, events,
