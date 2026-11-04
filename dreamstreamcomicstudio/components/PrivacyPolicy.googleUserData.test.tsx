@@ -1,0 +1,108 @@
+import React from 'react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { PrivacyPolicy } from './PrivacyPolicy';
+
+const USER_DATA_POLICY = 'https://developers.google.com/terms/api-services-user-data-policy';
+
+const googleSection = (): HTMLElement => {
+  const { container } = render(<PrivacyPolicy onBack={vi.fn()} />);
+  const section = container.querySelector<HTMLElement>('#google-user-data');
+  if (!section) throw new Error('missing #google-user-data section');
+  return section;
+};
+
+const textOf = (el: Element): string => (el.textContent || '').replace(/\s+/g, ' ').trim();
+
+describe('privacy policy: Google user data (OAuth verification)', () => {
+  afterEach(() => {
+    window.location.hash = '';
+    vi.restoreAllMocks();
+  });
+
+  it('has a stable #google-user-data anchor with a labelled heading', () => {
+    const section = googleSection();
+    expect(section.tagName).toBe('SECTION');
+    expect(within(section).getByRole('heading', { level: 2, name: /Google User Data/i })).toBeInTheDocument();
+    expect(section).toHaveAttribute('aria-labelledby', 'google-user-data-title');
+  });
+
+  it('carries both Limited Use statements verbatim, linked to the User Data Policy', () => {
+    const section = googleSection();
+    const text = textOf(section);
+    expect(text).toContain(
+      "DreamStream Studio's use and transfer of information received from Google APIs to any other app will adhere to the Google API Services User Data Policy, including the Limited Use requirements."
+    );
+    expect(text).toContain(
+      'The use of information received from Google Workspace APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.'
+    );
+    const policyLinks = within(section).getAllByRole('link', { name: 'Google API Services User Data Policy' });
+    expect(policyLinks).toHaveLength(2);
+    for (const a of policyLinks) expect(a).toHaveAttribute('href', USER_DATA_POLICY);
+  });
+
+  it('lists every OAuth scope the connectors request (server/src/connectors/connectors/*.ts)', () => {
+    const text = textOf(googleSection());
+    for (const scope of [
+      'userinfo.email',
+      'userinfo.profile',
+      'gmail.readonly',
+      'drive.readonly',
+      'drive.file',
+      'calendar.events',
+      'spreadsheets.readonly',
+      'youtube.readonly'
+    ]) {
+      expect(text).toContain(scope);
+    }
+  });
+
+  it('names who receives the data and rules out sale and advertising', () => {
+    const text = textOf(googleSection());
+    expect(text).toMatch(/We do not sell Google user data/);
+    expect(text).toMatch(/advertising platforms, data brokers or information resellers/);
+    for (const provider of ['Cloudflare', 'Supabase', 'OpenRouter', 'Anthropic', 'OpenAI', 'Google (Gemini)']) {
+      expect(text).toContain(provider);
+    }
+    expect(text).toMatch(/only to generate the response you asked for/);
+    expect(text).toMatch(/explicit prior consent/);
+  });
+
+  it('explains revocation, in-app disconnect and the privacy contact', () => {
+    const section = googleSection();
+    expect(within(section).getByRole('link', { name: /myaccount\.google\.com\/connections/ })).toHaveAttribute(
+      'href',
+      'https://myaccount.google.com/connections'
+    );
+    expect(textOf(section)).toMatch(/Settings → Connectors and choose Disconnect/);
+    for (const a of within(section).getAllByRole('link', { name: 'privacy@dreamstreamstudio.ai' })) {
+      expect(a).toHaveAttribute('href', 'mailto:privacy@dreamstreamstudio.ai');
+    }
+  });
+
+  it('shows the updated date and an email contact instead of only the in-app flow', () => {
+    render(<PrivacyPolicy onBack={vi.fn()} />);
+    expect(screen.getByText('November 4, 2026')).toHaveAttribute('dateTime', '2026-11-04');
+    const contact = screen.getByRole('heading', { name: /12\. Contact/ }).closest('section') as HTMLElement;
+    expect(within(contact).getByRole('link', { name: 'privacy@dreamstreamstudio.ai' })).toBeInTheDocument();
+  });
+
+  it('scrolls to the #google-user-data fragment once the lazily-loaded view mounts', () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    window.location.hash = '#google-user-data';
+    render(<PrivacyPolicy onBack={vi.fn()} />);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toHaveProperty('id', 'google-user-data');
+  });
+
+  it('uses theme tokens only, so it reads in light and dark', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'PrivacyPolicy.tsx'), 'utf8');
+    expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(src).not.toMatch(/\b(?:bg|text|border)-(?:white|black|slate-\d+|gray-\d+)\b/);
+  });
+});
