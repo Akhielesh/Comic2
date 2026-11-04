@@ -15,6 +15,7 @@
 
 import {
   CAST_KINDS,
+  POS9,
   castNoun,
   findPage,
   isPageStale,
@@ -1623,8 +1624,26 @@ const LINE_REF_SCHEMA = {
     kind: S('Line kind.', { enum: [...LINE_KINDS] }),
     text_contains: S('Words from the line.'),
     line_ids: A({ type: 'string' }, 'Exact line ids from read_pages.'),
-    nth: I('Her 2nd line = 2; -1 = the last.')
+    nth: I('Her 2nd line = 2; -1 = the last.'),
+    which: S('Which of several: the top / bottom / left / right one, or the biggest.', { enum: ['top', 'bottom', 'left', 'right', 'biggest'] })
   }
+};
+
+/** Placement (plan §3 B1) in tool-JSON form: where a balloon goes. */
+const PLACEMENT_SCHEMA = {
+  type: 'object',
+  description: 'Where: a cell of the panel or page, a full-width bar at its top or bottom edge, next to a character, or a nudge.',
+  properties: {
+    frame: S('Inside the line\'s panel, or anywhere on the page ("of the page").', { enum: ['panel', 'page'] }),
+    cell: S('One of nine cells of the frame.', { enum: [...POS9] }),
+    edge: S('A full-width caption bar at this edge of the frame.', { enum: ['top', 'bottom'] }),
+    near: S('A character: a cast name or kind word ("Mira", "the robot").'),
+    relation: S('Where relative to `near`.', { enum: ['above', 'below', 'left', 'right', 'near', 'between'] }),
+    and: S('The second character of "between them".'),
+    nudge: S('Move a little from where it is.', { enum: ['up', 'down', 'left', 'right'] }),
+    amount: S('How far to nudge.', { enum: ['bit', 'lot'] })
+  },
+  required: ['frame']
 };
 
 /**
@@ -1647,10 +1666,11 @@ export function dialogueEditTool(ctx: StudioContext, turn: DirectorTurn): Direct
         kind: S('New line kind.', { enum: [...LINE_KINDS] }),
         text: S('New words.'),
         speaker: S('Speaker name, or "off_panel".'),
-        place: { type: 'object', description: 'Where: frame panel|page, cell, edge, near, relation, nudge, amount.' },
+        place: PLACEMENT_SCHEMA,
         tail_to: S('Who or what the tail points at ("mouth" = the speaker\'s mouth).'),
         to_panel: I('Panel number to move the line to.'),
         index: I('0-based position in the panel.'),
+        style: LETTERING_STYLE_ARGS_SCHEMA,
         scope: S('Restyle scope.', { enum: ['line', 'kind', 'speaker', 'comic'] })
       },
       ['action']

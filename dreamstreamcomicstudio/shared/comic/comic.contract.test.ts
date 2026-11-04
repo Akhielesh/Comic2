@@ -2494,7 +2494,7 @@ describe('Live agent, dialogue and Pro editor v2 contract (K3)', () => {
     expect(doc.conversation[0].cards).toEqual([card]);
   });
 
-  it('doc: Line.styleId and LetteringStyle.named are optional and never hashed; Msg.steered survives; old docs are untouched', () => {
+  it('doc: Line.styleId and LetteringStyle.named are optional and never in a spec hash; Msg.steered survives; old docs are untouched', () => {
     const plain = inArtSample();
     const styled = inArtSample();
     for (const page of styled.pages) for (const panel of page.panels) panel.lines = panel.lines.map((l): Line => ({ ...l, styleId: 'st_villain' }));

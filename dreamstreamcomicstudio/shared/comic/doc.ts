@@ -412,7 +412,9 @@ export interface Line {
   /** Never translate this line (spell, made-up word, song). Never hashed. */
   noTranslate?: boolean;
   /** A named lettering style this line uses (agent-editor plan §3 C7; LINKED: editing the style restyles every line
-   *  using it): a key of `letterStyle.named`. Optional and never hashed. */
+   *  using it): a key of `letterStyle.named`. Optional; never part of a spec hash (pageSpecHash, planInputHash: a style
+   *  reference changes no drawn art). The publication fingerprint does count it once set (a restyle is a change since
+   *  publishing), appended only when present so old comics keep their fingerprint. */
   styleId?: string;
 }
 

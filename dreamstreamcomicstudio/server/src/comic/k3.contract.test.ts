@@ -5,7 +5,8 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import { createEmptyDoc, type ConflictCard } from '../../../shared/comic/doc.js';
+import { POS9, createEmptyDoc, type ConflictCard } from '../../../shared/comic/doc.js';
+import { DIALOGUE_ACTS } from '../../../shared/comic/dialogue/types.js';
 import { NON_SPEND_ACTION_TYPES } from '../../../shared/comic/ops.js';
 import { __resetAccessCacheForTests, studioCapsFor } from './access.js';
 import { ACTION_HANDLERS, CORE_ACTION_TYPES, actionHandlerFor } from './actions/index.js';
@@ -13,6 +14,8 @@ import { CONFLICT_NOT_AVAILABLE } from './actions/conflict.js';
 import * as guard from './conflictGuard.js';
 import { runDirectorTurn, steerNoteText } from './director.js';
 import { startAction } from './jobs.js';
+import { contentFingerprint } from './publication/snapshot.js';
+import { LETTERING_STYLE_ARGS_SCHEMA } from './tools/lettering.js';
 import { newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { RECENT_COMMITS_MAX, recentCommitsOf, takeSteerOf, type SteerNote } from './session.js';
 import { StudioError } from './types.js';
@@ -83,6 +86,17 @@ describe('access.ts: the agent-editor flags become caps (D9)', () => {
   });
 });
 
+describe('named styles: never in a spec hash, but a change since publishing', () => {
+  it('letterStyle.named moves the publication fingerprint (a style edit is something readers would see)', () => {
+    const plain = plannedDoc();
+    const styled = plannedDoc();
+    styled.letterStyle = { ...(styled.letterStyle ?? { presetId: 'classic' }), named: { st_villain: { name: 'Villain', patch: { italic: true } } } };
+    expect(contentFingerprint(styled, [])).not.toBe(contentFingerprint(plain, []));
+    // An old comic (no named styles, no styleId) keeps the fingerprint it was published with.
+    expect(contentFingerprint(plannedDoc(), [])).toBe(contentFingerprint(plain, []));
+  });
+});
+
 describe('session.ts stubs (A2 TURN fills them)', () => {
   it('takeSteer drains nothing, recentCommits is empty, reserveTurn refuses only while a turn runs', async () => {
     const session = newSession(plannedDoc());
@@ -129,6 +143,35 @@ describe('tools.ts: the reserved dialogue tool and offer_next (B-TOOL fills them
     expect(offer.spec.function.name).toBe('offer_next');
     expect(await offer.execute({ chips: [{ label: 'A bit higher', say: 'move it up a bit' }] })).toBe(`Error: ${OFFER_NEXT_NOT_AVAILABLE}`);
     expect(turn.nextSteps).toEqual([]);
+  });
+
+  it('dialogue_edit already has its final B3 signature: every argument, the B1 LineRef and Placement, the style schema', () => {
+    const ctx = testContext(newSession(plannedDoc()));
+    const params = dialogueEditTool(ctx, createDirectorTurn({ userText: 'x' })).spec.function.parameters as {
+      properties: Record<string, { enum?: string[]; properties?: Record<string, { enum?: string[] }>; required?: string[] }>;
+      required: string[];
+    };
+    expect(Object.keys(params.properties).sort()).toEqual(
+      ['action', 'target', 'second', 'kind', 'text', 'speaker', 'place', 'tail_to', 'to_panel', 'index', 'style', 'scope'].sort()
+    );
+    expect(params.required).toEqual(['action']);
+    expect(params.properties.action.enum).toEqual([...DIALOGUE_ACTS]);
+    // LineRef (B1): every narrowing field, `which` among them.
+    const ref = params.properties.target.properties!;
+    expect(Object.keys(ref).sort()).toEqual(['kind', 'line_ids', 'nth', 'page', 'panel', 'selected', 'speaker', 'text_contains', 'which'].sort());
+    expect(ref.which.enum).toEqual(['top', 'bottom', 'left', 'right', 'biggest']);
+    expect(params.properties.second).toEqual(params.properties.target);
+    // Placement (B1): typed, not a free-form object.
+    const place = params.properties.place.properties!;
+    expect(Object.keys(place).sort()).toEqual(['amount', 'and', 'cell', 'edge', 'frame', 'near', 'nudge', 'relation'].sort());
+    expect(place.frame.enum).toEqual(['panel', 'page']);
+    expect(place.cell.enum).toEqual([...POS9]);
+    expect(place.edge.enum).toEqual(['top', 'bottom']);
+    expect(place.relation.enum).toEqual(['above', 'below', 'left', 'right', 'near', 'between']);
+    expect(place.nudge.enum).toEqual(['up', 'down', 'left', 'right']);
+    expect(place.amount.enum).toEqual(['bit', 'lot']);
+    // style reuses the lettering tools' schema, so a restyle reads the same everywhere.
+    expect(params.properties.style).toBe(LETTERING_STYLE_ARGS_SCHEMA);
   });
 });
 

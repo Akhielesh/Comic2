@@ -91,7 +91,8 @@ export interface LetteringStyle {
   /** Auto-placement safe margin (fraction of page width). Default 0.03. Manual drags only keep the OUTLINE ≥ 0.008 inside. */
   safeMargin?: number;
   /** Saved, named looks ("Villain", "Radio"), keyed by style id; lines use one through `Line.styleId` (agent-editor plan
-   *  §3 C7, owner decision D6: LINKED — editing a style restyles every line using it). Optional; never part of a spec hash.
+   *  §3 C7, owner decision D6: LINKED — editing a style restyles every line using it). Optional; never part of a spec hash,
+   *  but part of the publication fingerprint (through doc.letterStyle), so a style edit shows as a change since publishing.
    *  The cascade and the sanitizer learn it in wave 2 (C-STYLES); until then sanitizeLetteringStyle drops it. */
   named?: Record<string, NamedLetterStyle>;
 }
