@@ -8,6 +8,7 @@
  * Results never throw. With `strict` off (the backend), narrow with `r.ok === false` (`if (!r.ok)` does not narrow
  * there).
  */
+import type { CapabilityId } from '../capabilities.js';
 import type { PlatformFailure } from '../errors.js';
 
 // ── Injected capabilities ───────────────────────────────────────────────────────────────────────────────────────
@@ -153,10 +154,10 @@ export const PREVIEW_CAPABILITIES = ['doc.convert', 'doc.extract', 'doc.thumbnai
 export type PreviewCapability = (typeof PREVIEW_CAPABILITIES)[number];
 
 /**
- * A capability id inside a claim. The wire does not know the capability registry (src/capabilities.ts); it checks
- * the shape (`CAPABILITY_ID_PATTERN`) and the gateway checks the id against the endpoint.
+ * A capability id inside a claim: typed as the registry's `CapabilityId` (src/capabilities.ts). At run time the wire
+ * checks only the shape (`CAPABILITY_ID_PATTERN`); the gateway checks the id against the endpoint.
  */
-export type ClaimCapability = string;
+export type ClaimCapability = CapabilityId;
 
 /** A user claim: minted only after the host's own auth. `sub` is pseudonymous (`pseudonymousSub`). */
 export interface UserClaim {

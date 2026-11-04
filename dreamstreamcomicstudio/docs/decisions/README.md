@@ -29,3 +29,4 @@ Rules:
 | 0005 | Retire Code Studio (and the Ventures build stage with it) | Accepted |
 | 0006 | [Native apps, watch companions, local-first, and security](0006-native-apps-watch-local-first-security.md) — Phase 0 in progress; operations in [`live-security-runbook.md`](../infrastructure/live-security-runbook.md), owner steps in [`phase0-owner-checklist.md`](../infrastructure/phase0-owner-checklist.md) | Proposed |
 | 0007 | [Stream Studio cost transparency and frugality](0007-stream-studio-cost-transparency-and-frugality.md) | Proposed |
+| 0008 | [One shared, owned docs, design and agent platform](0008-shared-platform.md) — contract-first `platform-core`; hosts own auth, models, money and consent; no send. Overview in [`docs/platform/`](../platform/README.md) | Proposed |

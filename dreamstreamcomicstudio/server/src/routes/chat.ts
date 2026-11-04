@@ -47,7 +47,8 @@ import {
 import { recordModelUsage } from '../services/modelStats.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
-import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
+import { selectRelevantTools, ROUTABLE_TOOL_NAMES, PLATFORM_ROLLOUT_TOOL_NAMES } from '../../../toolCatalog.js';
+import { addressesPastedIn, addressesTypedIn, bindPlatformScope, platformDocsFor, platformToolContext } from '../ai/tools/platformDocs.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
 import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled } from '../ai/studio/designSystem.js';
@@ -502,6 +503,18 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       };
     }
   }
+  // Shared-platform drafts (email_draft, deck_create; plan §5.5): the server-only answer for THIS request (the
+  // PLATFORM_DOCS kill switch, the rollout stage, the person's role). It is bound to this request's clientContext
+  // object, which every agent path below receives as is (recipes, the swarm, the run_recipe / swarm tools), so they
+  // build the tools with the same user. A client-supplied clientContext.platformDocs is dropped by
+  // sanitizeClientContext and would not count anyway (only an answer platformDocsFor issued does). Off: no change.
+  // Only the addresses the person TYPED are trusted; those inside a pasted-text block folded into the message (a
+  // pasted email thread, say) are passed as `pasted` and stay flagged (plan §7, §9).
+  const platformDocs = await platformDocsFor(req);
+  if (platformDocs.enabled) {
+    clientContext = clientContext || {};
+    bindPlatformScope(clientContext, platformDocs, addressesTypedIn(lastUserText), addressesPastedIn(lastUserText));
+  }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
   // Files attached to the CURRENT user turn (images, CSV/JSON/text) for tools like
@@ -533,7 +546,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
           location: clientContext?.location,
           ...(attachments.length ? { attachments } : {}),
           // Scopes connector tools (gmail_search, drive_search, …) to THIS user.
-          ...(req.user?.id ? { userId: req.user.id } : {})
+          ...(req.user?.id ? { userId: req.user.id } : {}),
+          // Platform drafts: user id, the issued answer, governed status, the typed and pasted addresses ({} when off).
+          ...platformToolContext(clientContext)
         }
       : undefined;
 
@@ -549,7 +564,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // relevant handful for this message rather than handing over the whole suite.
   const toolsEnabledForProvider = resolved.provider === 'openrouter' || JSON_TOOL_PROTOCOL_ENABLED;
   let routedToolNames = toolsEnabledForProvider
-    ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
+    ? selectRelevantTools(lastUserText, platformDocs.enabled ? [...ROUTABLE_TOOL_NAMES, ...PLATFORM_ROLLOUT_TOOL_NAMES] : ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
     : [];
   // On study/exam intent, guarantee the core learning tools are on the table so the
   // EXAM/STUDY guidance can actually deliver practice (quiz/flashcards/guide) even when
@@ -1888,6 +1903,7 @@ chatPublicRouter.post('/tool-refresh', async (req, res) => {
       };
     }
   }
+  // Never a platform tool: this public refresh route carries no platformDocs answer (and REFRESHABLE excludes them).
   const impl = resolveTools([tool], {
     timezone: clientContext?.timezone,
     locale: clientContext?.locale,

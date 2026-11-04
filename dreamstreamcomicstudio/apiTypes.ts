@@ -16,6 +16,8 @@ import type {
   ReservationState,
   TokenEstimateResponse
 } from './shared/types/billing.js';
+import type { EmailDoc, EmailReview } from './packages/platform-core/src/contract/email.js';
+import type { DeckSpec, OverlapPair } from './packages/platform-core/src/contract/deck.js';
 
 export type ApiBillingInfo = {
   reservationId?: string;
@@ -1719,6 +1721,86 @@ export interface EmailComposeArtifact {
   mailto: string;
   density?: 'compact' | 'detailed';
 }
+
+// --- Shared-platform drafts (email_draft, deck_create; plan §5.5, §7) ----------
+// Agents draft; people send. Neither card can send anything: an email draft opens in the person's OWN mail client
+// (Gmail web compose or their mail app) only when they tap, and the compose links carry only the recipients the
+// review allowed (the thread's participants, addresses the person typed, or ones the person tapped to add). A
+// model-only address is a suggestion until the person taps it. A deck downloads as a .pptx built in the browser.
+
+/** An email the chat model drafted with `email_draft` (server: ai/tools/platformTools.ts). */
+export interface EmailDraftArtifact {
+  /** Host-issued id of this draft. */
+  draftId: string;
+  /** The checked EmailDoc v1 (the model's arguments plus `v: 1`). */
+  doc: EmailDoc;
+  /** `renderEmail(doc)`: shown only inside a `sandbox=""` srcdoc iframe under a CSP (EmailDraftCard). */
+  html: string;
+  /** `emailToPlainText(doc)`: what Copy and the compose links carry. */
+  text: string;
+  /** `reviewEmail(doc, …)`: `prefill` may be filled in; `flagged` never is until the person taps it; every link. */
+  review: EmailReview;
+  /** Gmail web compose, built from `review.prefill` ONLY (`emailComposeLinks`). */
+  gmailUrl: string;
+  /** mailto: for the person's own mail app, built from `review.prefill` ONLY. */
+  mailto: string;
+  /** The person's usage is governed: the card shows usage words, never '$'. */
+  governed: boolean;
+  density?: 'compact' | 'detailed';
+}
+
+/** A slide deck the chat model drafted with `deck_create`. */
+export interface DeckDraftArtifact {
+  draftId: string;
+  /** The checked DeckSpec v1 (text, shapes, tables and charts; never images from a model). */
+  deck: DeckSpec;
+  /** Overlapping content elements per slide; the .pptx export is refused until there are none. */
+  overlaps: { slideId: string; pairs: OverlapPair[] }[];
+  governed: boolean;
+  density?: 'compact' | 'detailed';
+}
+
+/**
+ * Longest Gmail compose URL we hand out with the body inside; past it the body is left out and copied instead.
+ * PROVISIONAL, not a plan number (owner W1.9); real Gmail/mailto URL limits are UNVERIFIED; ADR 0008 to confirm.
+ */
+export const EMAIL_GMAIL_URL_MAX = 8000;
+/**
+ * Longest mailto: we hand out with the body inside; past it the body is left out and copied instead.
+ * PROVISIONAL, not a plan number (owner W1.9); real Gmail/mailto URL limits are UNVERIFIED; ADR 0008 to confirm.
+ */
+export const EMAIL_MAILTO_URL_MAX = 2000;
+
+export interface EmailComposeLinks {
+  gmailUrl: string;
+  mailto: string;
+  /** Whether each link carries the body (false: too long for that link; the person pastes the copied text). */
+  bodyInGmail: boolean;
+  bodyInMailto: boolean;
+}
+
+/**
+ * Compose links for a draft, from exactly the recipients given (the caller passes the review's prefill plus what
+ * the person tapped to add, never the draft's own to/cc/bcc). Pure; shared by the server tool and the card.
+ */
+export const emailComposeLinks = (input: { to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string }): EmailComposeLinks => {
+  const enc = (s: string): string => encodeURIComponent(s || '');
+  const list = (xs: readonly string[] | undefined): string[] => (xs || []).filter((a) => typeof a === 'string' && a.length > 0);
+  const to = list(input.to);
+  const cc = list(input.cc);
+  const bcc = list(input.bcc);
+  const gmailHead = ['view=cm', 'fs=1', `to=${enc(to.join(','))}`, cc.length ? `cc=${enc(cc.join(','))}` : '', bcc.length ? `bcc=${enc(bcc.join(','))}` : '', `su=${enc(input.subject)}`]
+    .filter(Boolean)
+    .join('&');
+  const gmailBase = `https://mail.google.com/mail/?${gmailHead}`;
+  const gmailFull = `${gmailBase}&body=${enc(input.body)}`;
+  const bodyInGmail = gmailFull.length <= EMAIL_GMAIL_URL_MAX;
+  const mailHead = [cc.length ? `cc=${cc.map(enc).join(',')}` : '', bcc.length ? `bcc=${bcc.map(enc).join(',')}` : '', `subject=${enc(input.subject)}`].filter(Boolean).join('&');
+  const mailBase = `mailto:${to.map(enc).join(',')}?${mailHead}`;
+  const mailFull = `${mailBase}&body=${enc(input.body)}`;
+  const bodyInMailto = mailFull.length <= EMAIL_MAILTO_URL_MAX;
+  return { gmailUrl: bodyInGmail ? gmailFull : gmailBase, mailto: bodyInMailto ? mailFull : mailBase, bodyInGmail, bodyInMailto };
+};
 
 // --- Calendar (your connected Google Calendar) -------------------------------
 // READ surfaces an interactive agenda widget (agenda/week/month views, click an

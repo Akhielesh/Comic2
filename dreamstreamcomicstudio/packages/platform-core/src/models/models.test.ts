@@ -395,7 +395,7 @@ describe('each mark at most once, in documents and in what ops carry', () => {
       expect(r.rejected).toEqual([{ index: 0, opId: expect.any(String), code: 'invalid', message: expect.stringContaining(path) }]);
     }
     const sg = { id: 'sg', author: 'agent', at: 1, op: { op: 'update_block', id: 'm6', baseRev: 0, blockId: 'p1', block: para('p1') } };
-    expect(checkDocSuggestion(sg)).toMatchObject({ ok: false, errors: [{ path: 'op.block.runs[0].marks', code: 'too-many' }] });
+    expect(checkDocSuggestion(sg)).toMatchObject({ ok: false, errors: [{ path: 'op.block.runs[0].marks', code: 'duplicate-id' }] });
     // Distinct marks are fine.
     const fine = (applyDocOps as unknown as AnyApplyFn)(doc, [{ op: 'insert_block', id: 'm7', baseRev: 0, sectionId: 's1', block: { type: 'paragraph', id: 'pm', runs: [{ text: 'x', marks: ['b', 'i', 'u', 'code'] }] } }]);
     expect(fine.rejected).toEqual([]);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { KNOWN_TOOL_NAMES, resolveTools, toToolSpec } from './registry.js';
+import { KNOWN_TOOL_NAMES, PLATFORM_CHAT_TOOL_NAMES, resolveTools, toToolSpec } from './registry.js';
 import { TOOL_CATALOG } from '../../../../toolCatalog.js';
 
 // The catalogue (client/dashboard/routing) and the server registry (execution) must
@@ -21,8 +21,10 @@ describe('registry ↔ catalogue consistency', () => {
   });
 
   it('resolves every static/contextual tool to a callable spec', () => {
-    // Exclude meta-tools built in the routes with provider creds / user keys.
-    const META = new Set(['run_agent_swarm', 'generate_image']);
+    // Exclude meta-tools built in the routes with provider creds / user keys, and the shared-platform drafts, which
+    // resolve only with a request's enabled platformDocs answer (platformTools.test.ts covers them).
+    const META = new Set<string>(['run_agent_swarm', 'generate_image', ...PLATFORM_CHAT_TOOL_NAMES]);
+    expect(resolveTools([...PLATFORM_CHAT_TOOL_NAMES])).toEqual([]);
     const resolvable = KNOWN_TOOL_NAMES.filter((n) => !META.has(n));
     const tools = resolveTools(resolvable);
     expect(tools.length).toBe(resolvable.length);

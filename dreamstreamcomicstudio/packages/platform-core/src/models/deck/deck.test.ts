@@ -157,10 +157,10 @@ describe('overlapCheck', () => {
   it('slide ids are unique in a deck and element ids within a slide (the same element id on two slides is fine)', () => {
     const deck = full();
     const twoSlides: DeckSpec = { ...deck, slides: [deck.slides[0], { ...deck.slides[1], id: deck.slides[0].id }] };
-    expect(checkDeckSpec(twoSlides)).toMatchObject({ ok: false, errors: [{ path: 'slides[1].id', code: 'too-many' }] });
+    expect(checkDeckSpec(twoSlides)).toMatchObject({ ok: false, errors: [{ path: 'slides[1].id', code: 'duplicate-id' }] });
     const sameOnTwo: DeckSpec = { ...minimal(), slides: [slideOf([box('e', [0, 0, 0.1, 0.1])]), { ...slideOf([box('e', [0, 0, 0.1, 0.1])]), id: 'sl2' }] };
     expect(checkDeckSpec(sameOnTwo).ok).toBe(true);
-    expect(checkSlide(slideOf([box('e', [0, 0, 0.1, 0.1]), box('e', [0.5, 0.5, 0.1, 0.1])]))).toMatchObject({ ok: false, errors: [{ path: 'elements[1].id', code: 'too-many' }] });
+    expect(checkSlide(slideOf([box('e', [0, 0, 0.1, 0.1]), box('e', [0.5, 0.5, 0.1, 0.1])]))).toMatchObject({ ok: false, errors: [{ path: 'elements[1].id', code: 'duplicate-id' }] });
   });
 
   it('background elements never count, and it never throws on anything', () => {

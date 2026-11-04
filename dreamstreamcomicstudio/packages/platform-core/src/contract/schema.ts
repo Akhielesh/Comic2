@@ -179,6 +179,7 @@ export const CHECK_ERROR_CODES = [
   'asset', // a malformed asset reference (MIME, base64, magic bytes, id)
   'asset-too-large', // a data: image over its byte cap
   'too-many-nodes', // the value is bigger than the check budget allows
+  'duplicate-id', // an id (or a run's mark) given twice where each must be unique; raised by the models' checks, never by check() alone (added in 1.0.0 before the tag, amendment A1)
 ] as const;
 
 export type CheckErrorCode = (typeof CHECK_ERROR_CODES)[number];

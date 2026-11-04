@@ -10,6 +10,7 @@
 import { runChat } from '../chat.js';
 import type { ChatMessage, AIProviderId } from '../providers/types.js';
 import { resolveTools, type ToolContext } from '../tools/registry.js';
+import { platformToolContext } from '../tools/platformDocs.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
@@ -165,9 +166,12 @@ const pushSpent = (parts: ApiUsage[], err: unknown) => {
 const hasUsage = (u: MeteredUsage): boolean =>
   (u.providerCostUsd ?? 0) > 0 || (u.partialProviderCostUsd ?? 0) > 0 || (u.totalTokens ?? 0) > 0 || (u.estimatedTokens ?? 0) > 0;
 
+// Plus the request's platform scope, bound to its clientContext object by prepareChat (ai/tools/platformDocs.ts):
+// an agent whose toolNames list email_draft / deck_create gets them only for a request the rollout admits, built for
+// the signed-in user. Nothing is read from the object's own properties; off: no change.
 const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
   ctx
-    ? { timezone: ctx.timezone, locale: ctx.locale, units: ctx.units, location: ctx.location }
+    ? { timezone: ctx.timezone, locale: ctx.locale, units: ctx.units, location: ctx.location, ...platformToolContext(ctx) }
     : undefined;
 
 // Resilience (Phase 9): a single agent hiccup (a transient provider/network blip)

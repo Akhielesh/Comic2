@@ -3,7 +3,7 @@
     "W1.6 licence policy: ONE policy over the npm lockfiles, the browser bundle (licenceModules() in vite.config.ts),",
     "platform-engine/engines.lock.json and the data assets (fonts, ICC profiles). Enforced by scripts/licence-check.mjs",
     "(CI step 'Licence gate' in .github/workflows/ci.yml); notices by scripts/notices.mjs. Licences are SPDX ids.",
-    "Browser bundle: MIT, Apache, BSD, ISC, MPL and OFL only. GPL/LGPL: server-only and only from serverCopyleft.",
+    "Browser bundle: MIT, Apache, BSD, ISC, MPL, OFL and the notice-only BlueOak-1.0.0 and Zlib. GPL/LGPL: server-only and only from serverCopyleft.",
     "Blocked everywhere: AGPL, SSPL, BUSL, PolyForm, CC-NC, source-available and no-licence code, also when written as",
     "'X WITH <exception>' (Apache-2.0 WITH Commons-Clause): an exception passes only if 'withExceptions' lists it.",
     "A violation found in today's dependencies is never fixed here by changing a dependency: it goes under",
@@ -13,8 +13,8 @@
 
   "scopes": {
     "browser": {
-      "$comment": "Families: MIT (MIT, MIT-0), Apache (Apache-2.0), BSD (BSD-2-Clause, BSD-3-Clause, 0BSD), ISC, MPL (MPL-2.0), OFL (OFL-1.1).",
-      "allow": ["MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "ISC", "MPL-2.0", "OFL-1.1"]
+      "$comment": "Families: MIT (MIT, MIT-0), Apache (Apache-2.0), BSD (BSD-2-Clause, BSD-3-Clause, 0BSD), ISC, MPL (MPL-2.0), OFL (OFL-1.1). Also BlueOak-1.0.0 and Zlib: both are permissive, notice-only licences (OSI-approved). docx bundles sax (BlueOak-1.0.0), and jszip (ours and the copy docx bundles) carries pako's zlib port (MIT AND Zlib); scripts/notices.mjs prints their texts under docx and jszip.",
+      "allow": ["MIT", "MIT-0", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "ISC", "MPL-2.0", "OFL-1.1", "BlueOak-1.0.0", "Zlib"]
     },
     "server": {
       "$comment": "Backend image, Workers, the engine image and dev tooling (dev tools use the server rules). The browser list plus other permissive licences with notice-only duties.",

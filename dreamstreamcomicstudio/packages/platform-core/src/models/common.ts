@@ -124,11 +124,8 @@ export type RefinePath = (string | number)[];
 
 export const refineError = (path: RefinePath, code: CheckError['code'], message: string): CheckError => ({ path: formatPath(path), code, message });
 
-/**
- * The code a repeated id is refused with. Interim: CHECK_ERROR_CODES has no `duplicate-id` yet (amendment A1, open
- * with the lead); when it lands this one line and the repeated-id cases of fixtures/models/invalid.json change to it.
- */
-const REPEATED_ID: CheckError['code'] = 'too-many';
+/** The code a repeated id or mark is refused with (CHECK_ERROR_CODES `duplicate-id`, amendment A1). */
+const REPEATED_ID: CheckError['code'] = 'duplicate-id';
 
 /** One id namespace of a document (its sections, its blocks, a slide's elements…): each id at most once. */
 export interface IdScope {
@@ -152,8 +149,8 @@ export const idScope = (what: string): IdScope => {
 };
 
 /**
- * Every run's `marks` inside `value` (a checked copy, found at `path`) that names a mark twice, refused as `too-many`
- * at that `marks`: each mark at most once (MODEL_LIMITS.marks). `Run` is the only shape with a `marks` field.
+ * Every run's `marks` inside `value` (a checked copy, found at `path`) that names a mark twice, refused as
+ * `duplicate-id` at that `marks`: each mark at most once (MODEL_LIMITS.marks). `Run` is the only shape with a `marks` field.
  */
 export const repeatedMarks = (value: unknown, path: RefinePath): CheckError[] => {
   const errors: CheckError[] = [];
@@ -173,7 +170,7 @@ export const repeatedMarks = (value: unknown, path: RefinePath): CheckError[] =>
       const child = v[key];
       if (key === 'marks' && Array.isArray(child)) {
         const repeat = firstRepeat(child as string[]);
-        if (repeat !== null) errors.push(refineError(at, 'too-many', `names the mark ${JSON.stringify(repeat)} more than once (each mark at most once)`));
+        if (repeat !== null) errors.push(refineError(at, REPEATED_ID, `names the mark ${JSON.stringify(repeat)} more than once (each mark at most once)`));
       } else walk(child);
       at.pop();
     }

@@ -60,7 +60,7 @@ jobs:
           LICENCE_MODULES_OUT: ${{ runner.temp }}/licence/browser-modules.json
       # One licence policy (scripts/licence-policy.json) over every lockfile, the browser bundle above,
       # platform-engine/engines.lock.json and the data assets (fonts, ICC). Browser: MIT/Apache/BSD/ISC/
-      # MPL/OFL only; GPL/LGPL server-only from an allowlist; AGPL/SSPL/BUSL/PolyForm/CC-NC/source-available/
+      # MPL/OFL plus the notice-only BlueOak-1.0.0 and Zlib; GPL/LGPL server-only from an allowlist; AGPL/SSPL/BUSL/PolyForm/CC-NC/source-available/
       # no licence blocked everywhere. Owner decisions on known violations print as KNOWN and do not fail.
       # It also checks that dist/THIRD-PARTY-NOTICES.txt names every bundled package.
       - name: Licence gate

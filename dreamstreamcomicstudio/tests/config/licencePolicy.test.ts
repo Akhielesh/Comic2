@@ -3,10 +3,12 @@
  * W1.6 licence gate (scripts/licence-check.mjs + scripts/licence-policy.json + licenceModules() in
  * vite.config.ts + scripts/notices.mjs). One policy over the npm lockfiles, the browser bundle,
  * platform-engine/engines.lock.json and the data assets:
- *   - browser: MIT / Apache / BSD / ISC / MPL / OFL only;
+ *   - browser: MIT / Apache / BSD / ISC / MPL / OFL, plus the notice-only BlueOak-1.0.0 and Zlib (lead decision L1);
  *   - GPL and LGPL: server-only, and only from the allowlist (libvips through sharp, poppler, ffmpeg);
  *   - blocked everywhere: AGPL, SSPL, BUSL, PolyForm, CC-NC, source-available, no licence;
  *   - a named denylist; jszip under its MIT option; Liberation fonts 2.x (OFL) only;
+ *   - the libraries a bundled package's own dist file carries (BUNDLED_LIBRARIES: docx's 45, jszip's 4) are recorded,
+ *     judged under the browser rules, and held to the installed files (an unrecorded one fails);
  *   - known violations are owner decisions (KNOWN), never silent and never a dependency change.
  * Fixtures are synthetic lockfiles / engine locks / asset records judged by the REAL policy rules
  * (FIXTURE_POLICY leaves out only the repository's own data-asset records).
@@ -18,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { build, type Plugin, type Rollup } from 'vite';
 import { afterAll, describe, expect, it } from 'vitest';
 import * as gate from '../../scripts/licence-check.mjs';
-import { engineNotices, engineNoticesFromDisk, webNotices } from '../../scripts/notices.mjs';
+import { BUNDLED_NOTICES, bundledNotices, engineNotices, engineNoticesFromDisk, webNotices } from '../../scripts/notices.mjs';
 import viteConfig, { licenceModules } from '../../vite.config';
 
 const APP = fileURLToPath(new URL('../..', import.meta.url));
@@ -217,11 +219,33 @@ describe('browser bundle (the licenceModules() report)', () => {
     expect(kinds(g, '@img/sharp-libvips-linux-x64')).toEqual(['copyleft-in-browser']);
   });
 
-  it('server-only permissive licences (BlueOak, CC0, Zlib) pass on the server and fail in the browser', () => {
-    const lock = lockfile({ blue: { license: 'BlueOak-1.0.0' }, cc0: { license: 'CC0-1.0' }, zlib: { license: '(MIT AND Zlib)' } });
+  it('BlueOak-1.0.0 and Zlib are notice-only licences allowed in the browser (sax in docx, pako in jszip)', () => {
+    const lock = lockfile({ sax: { license: 'BlueOak-1.0.0' }, pako: { license: '(MIT AND Zlib)' }, zlibonly: { license: 'Zlib' } });
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: bundle({ name: 'sax', licence: 'BlueOak-1.0.0' }, { name: 'pako', licence: '(MIT AND Zlib)' }, { name: 'zlibonly', licence: 'Zlib' }) });
+    expect(g.failures).toEqual([]);
+    expect(g.results.filter((r) => r.scope === 'browser').map((r) => [r.name, r.status])).toEqual([['sax', 'ok'], ['pako', 'ok'], ['zlibonly', 'ok']]);
+    expect(FIXTURE_POLICY.scopes.browser.$comment).toMatch(/BlueOak-1\.0\.0 and Zlib: both are permissive, notice-only licences \(OSI-approved\)/);
+  });
+
+  it('the other server-only permissive licences (CC0, Unlicense, W3C) pass on the server and still fail in the browser', () => {
+    const lock = lockfile({ cc0: { license: 'CC0-1.0' }, unl: { license: 'Unlicense' }, w3c: { license: 'W3C-20150513' } });
     expect(fixtureGate({ lockfiles: { 'package-lock.json': lock } }).ok).toBe(true);
-    const g = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: bundle({ name: 'blue', licence: 'BlueOak-1.0.0' }, { name: 'cc0', licence: 'CC0-1.0' }, { name: 'zlib', licence: '(MIT AND Zlib)' }) });
-    for (const n of ['blue', 'cc0', 'zlib']) expect(kinds(g, n)).toEqual(['not-allowed']);
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: bundle({ name: 'cc0', licence: 'CC0-1.0' }, { name: 'unl', licence: 'Unlicense' }, { name: 'w3c', licence: 'W3C-20150513' }) });
+    for (const n of ['cc0', 'unl', 'w3c']) expect(kinds(g, n)).toEqual(['not-allowed']);
+  });
+
+  it('an unknown licence still fails, in the browser and on the server, and so does a near-miss of an allowed id', () => {
+    const lock = lockfile({ odd: { license: 'LicenseRef-Mystery-1.0' }, blue2: { license: 'BlueOak-2.0.0' }, zlibish: { license: 'Zlib-acknowledgement' } });
+    const server = fixtureGate({ lockfiles: { 'package-lock.json': lock } });
+    for (const n of ['odd', 'blue2', 'zlibish']) expect(kinds(server, n)).toEqual(['not-allowed']);
+    const browser = fixtureGate({ lockfiles: { 'package-lock.json': lock }, browserModules: bundle({ name: 'odd', licence: 'LicenseRef-Mystery-1.0' }, { name: 'blue2', licence: 'BlueOak-2.0.0' }, { name: 'zlibish', licence: 'Zlib-acknowledgement' }) });
+    for (const n of ['odd', 'blue2', 'zlibish']) {
+      expect(kinds(browser, n)).toEqual(['not-allowed']);
+      expect(failuresOf(browser, n)[0].scope).toBe('browser');
+    }
+    // A Zlib part does not rescue an unknown one: AND needs every part.
+    const both = fixtureGate({ lockfiles: { 'package-lock.json': lockfile({ mix: { license: '(Zlib AND LicenseRef-Mystery-1.0)' } }) }, browserModules: bundle({ name: 'mix', licence: '(Zlib AND LicenseRef-Mystery-1.0)' }) });
+    expect(kinds(both, 'mix')).toEqual(['not-allowed']);
   });
 
   it('the browser families pass: MIT, Apache, BSD, ISC, MPL, OFL', () => {
@@ -607,6 +631,252 @@ describe('notices', () => {
   });
 });
 
+/** The licence-text blocks of a notices file: who each one is printed for, and its text. */
+const noticeBlocks = (text: string) => {
+  const body = text.slice(text.indexOf('\nLicence texts\n'));
+  const parts = body.split(/^==== (.+) ====$/m);
+  const blocks: { who: string[]; text: string }[] = [];
+  for (let i = 1; i < parts.length; i += 2) blocks.push({ who: parts[i].split(', '), text: parts[i + 1].trim() });
+  return blocks;
+};
+const blockWith = (text: string, needle: string) => noticeBlocks(text).filter((b) => b.text.includes(needle));
+const installed = (rel: string) => existsSync(path.join(APP, rel));
+
+describe('notices for code bundled inside a package (docx carries sax and pako, jszip carries pako)', () => {
+  const docxAndJszip = { packages: [
+    { key: 'node_modules/docx', name: 'docx', version: '9.11.0', licence: 'MIT' },
+    { key: 'node_modules/jszip', name: 'jszip', version: '3.10.1', licence: '(MIT OR GPL-3.0-or-later)' },
+  ], vendored: [] };
+
+  it('the docx entry prints sax\'s BlueOak-1.0.0 notice with sax\'s copyright line, pako\'s MIT text and the zlib licence', () => {
+    const text = webNotices(docxAndJszip, { root: APP, policy: POLICY });
+    expect(text).toMatch(/^docx@9\.11\.0 — MIT\n {4}Bundles sax \(BlueOak-1\.0\.0\) and pako \(MIT AND Zlib\); their notices are printed with this package's\.$/m);
+    expect(text).toMatch(/^jszip@3\.10\.1 — MIT\n {4}elected MIT from .*; Bundles pako \(MIT AND Zlib\)/m);
+
+    const sax = blockWith(text, 'sax — BlueOak-1.0.0');
+    expect(sax).toHaveLength(1);
+    expect(sax[0].who).toEqual(['docx@9.11.0']);
+    expect(sax[0].text).toMatch(/^sax — BlueOak-1\.0\.0\nCopyright \(c\) Isaac Z\. Schlueter and Contributors\n\n# Blue Oak Model License\n\nVersion 1\.0\.0\n/);
+    expect(sax[0].text).toContain('also gets the text of this license or a link to\n<https://blueoakcouncil.org/license/1.0.0>.');
+
+    const mit = blockWith(text, 'pako — MIT');
+    expect(mit).toHaveLength(1);
+    expect(mit[0].who).toEqual(['docx@9.11.0', 'jszip@3.10.1']);
+    expect(mit[0].text).toContain('Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn');
+    expect(mit[0].text).toContain('Permission is hereby granted, free of charge');
+
+    const zlib = blockWith(text, "pako's zlib port — Zlib");
+    expect(zlib).toHaveLength(1);
+    expect(zlib[0].who).toEqual(['docx@9.11.0', 'jszip@3.10.1']);
+    expect(zlib[0].text).toContain('(C) 1995-2013 Jean-loup Gailly and Mark Adler');
+    expect(zlib[0].text).toContain("This software is provided 'as-is', without any express or implied");
+    expect(zlib[0].text).toMatch(/3\. This notice may not be removed or altered from any source distribution\.$/);
+    // A package that bundles nothing gets no extra note or text.
+    expect(webNotices({ packages: [{ key: 'node_modules/clsx', name: 'clsx', version: '2.1.1', licence: 'MIT' }] }, { root: APP, policy: POLICY })).not.toMatch(/Bundles |sax — |pako/);
+  });
+
+  it('without the installed libraries the pinned texts are printed, and they equal what the installed sax and pako ship', () => {
+    const empty = mkdtempSync(path.join(os.tmpdir(), 'notices-pinned-'));
+    try {
+      const pinned = webNotices(docxAndJszip, { root: empty, policy: POLICY });
+      for (const needle of ['sax — BlueOak-1.0.0\nCopyright (c) Isaac Z. Schlueter and Contributors\n\n# Blue Oak Model License', 'Andrei Tuputcyn', 'Jean-loup Gailly and Mark Adler']) {
+        expect(blockWith(pinned, needle).map((b) => b.who[0])).toEqual(['docx@9.11.0']);
+      }
+      const fromPins = bundledNotices('docx', 'node_modules/docx', empty);
+      expect(fromPins?.texts.map((t) => t.file)).toEqual(['sax/LICENSE.md', 'pako/LICENSE', 'pako/lib/zlib/deflate.js']);
+      // Where the libraries are installed (nested under docx, or hoisted), the texts come from them and match the pins.
+      const saxHere = installed('node_modules/docx/node_modules/sax/LICENSE.md') || installed('node_modules/sax/LICENSE.md');
+      const pakoHere = installed('node_modules/docx/node_modules/pako/LICENSE') || installed('node_modules/pako/LICENSE');
+      if (saxHere && pakoHere) expect(bundledNotices('docx', 'node_modules/docx', APP)).toEqual(fromPins);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+    expect(bundledNotices('clsx', 'node_modules/clsx', APP)).toBeNull();
+    expect(bundledNotices('constructor', 'node_modules/constructor', APP)).toBeNull();
+  });
+
+  it('each printed notice\'s evidence marker is still in the installed dist file (a bump that drops sax or pako is noticed)', () => {
+    const facts: Record<string, { file: string; marker: string }[]> = {};
+    for (const [outer, parts] of Object.entries(BUNDLED_NOTICES)) facts[outer] = parts.map((p) => p.evidence);
+    expect(Object.keys(facts).sort()).toEqual(['docx', 'jszip']);
+    for (const [outer, evidence] of Object.entries(facts)) {
+      for (const e of evidence) {
+        const file = path.join(APP, 'node_modules', outer, e.file);
+        if (!existsSync(file)) continue; // not installed in this checkout: CI's npm ci installs it
+        expect(readFileSync(file, 'utf8'), `${outer}/${e.file} carries ${e.marker}`).toContain(e.marker);
+      }
+    }
+    // jszip's browser build (what Vite resolves through its "browser" field) carries pako's zlib port too.
+    const jszipDist = path.join(APP, 'node_modules/jszip/dist/jszip.min.js');
+    if (existsSync(jszipDist)) {
+      const js = readFileSync(jszipDist, 'utf8');
+      expect(JSON.parse(readFileSync(path.join(APP, 'node_modules/jszip/package.json'), 'utf8')).browser['./lib/index']).toBe('./dist/jszip.min.js');
+      for (const m of ['JSZip uses the library pako', 'invalid distance too far back', 'incorrect header check']) expect(js).toContain(m);
+    }
+  });
+
+  it('every library whose notice is printed is a recorded bundled library of that package, under the same licence', () => {
+    const spdx = (s: string) => gate.spdxToString(gate.parseSpdx(s));
+    /** The libraries `outer` carries, through nested records (docx carries jszip's dist file, so pako too). */
+    const carried = (outer: string, seen = new Set<string>()): Record<string, string> => {
+      const rec = gate.BUNDLED_LIBRARIES[outer];
+      if (!rec || seen.has(outer)) return {};
+      seen.add(outer);
+      let out: Record<string, string> = { ...rec.libraries };
+      for (const lib of Object.keys(rec.libraries)) out = { ...carried(lib, seen), ...out };
+      return out;
+    };
+    for (const [outer, parts] of Object.entries(BUNDLED_NOTICES)) {
+      const libs = carried(outer);
+      for (const p of parts) expect(libs[p.name] && spdx(libs[p.name]), `${outer} → ${p.name}`).toBe(spdx(p.licence));
+    }
+    expect(Object.keys(carried('docx'))).toHaveLength(49);
+  });
+});
+
+describe('libraries bundled inside a package\'s own dist file (BUNDLED_LIBRARIES)', () => {
+  /** Where the installed copy of a bundled library is: nested under the outer package first, then hoisted. */
+  const installedPackageJson = (outer: string, lib: string): string | null => {
+    for (const dir of [`node_modules/${outer}/node_modules/${lib}`, `node_modules/${lib}`]) if (installed(`${dir}/package.json`)) return path.join(APP, dir, 'package.json');
+    return null;
+  };
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'licence-bundled-'));
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+  const writePackage = (root: string, name: string, files: Record<string, string>) => {
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(path.dirname(path.join(root, 'node_modules', name, rel)), { recursive: true });
+      writeFileSync(path.join(root, 'node_modules', name, rel), text);
+    }
+  };
+
+  it('the installed docx and jszip dist files carry exactly the recorded libraries: one added or dropped by a bump fails', () => {
+    expect(Object.keys(gate.BUNDLED_LIBRARIES).sort()).toEqual(['docx', 'jszip']);
+    let checked = 0;
+    // docx's own nested jszip is held to jszip's record too: its dist file is the one docx's region carries.
+    const copies: [string, string][] = [['docx', 'node_modules/docx'], ['jszip', 'node_modules/jszip'], ['jszip', 'node_modules/docx/node_modules/jszip']];
+    for (const [name, key] of copies) {
+      const rec = gate.BUNDLED_LIBRARIES[name];
+      const onDisk = gate.bundledLibrariesOnDisk(rec, APP, key);
+      if (onDisk === null) continue; // not installed in this checkout: CI's npm ci installs it
+      checked++;
+      const recorded = Object.keys(rec.libraries).sort();
+      expect({ key, unrecorded: onDisk.filter((n) => !recorded.includes(n)), gone: recorded.filter((n) => !onDisk.includes(n)) }).toEqual({ key, unrecorded: [], gone: [] });
+    }
+    if (installed('node_modules/docx/dist/index.mjs')) {
+      const regions = gate.regionLibraries(readFileSync(path.join(APP, 'node_modules/docx/dist/index.mjs'), 'utf8'));
+      expect(regions).toHaveLength(45);
+      // The libraries the L1 decision is about, and the nested ones (readable-stream lives under stream-browserify).
+      expect(regions).toEqual(expect.arrayContaining(['sax', 'jszip', 'hash.js', 'xml-js', 'nanoid', 'buffer', 'readable-stream', 'stream-browserify']));
+      expect(regions.some((n) => /rolldown|oxc/.test(n))).toBe(false);
+      expect(checked).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('every recorded licence is the one the installed copy declares, and passes the browser rules', () => {
+    let compared = 0;
+    for (const [outer, rec] of Object.entries(gate.BUNDLED_LIBRARIES)) {
+      for (const [lib, licence] of Object.entries(rec.libraries)) {
+        const pj = installedPackageJson(outer, lib);
+        if (pj) {
+          compared++;
+          expect(gate.licenceOfPackageJson(JSON.parse(readFileSync(pj, 'utf8'))), `${outer} → ${lib} (${pj})`).toBe(licence);
+        }
+        const r = gate.evaluateItem({ name: lib, licence, scope: 'browser', source: `${outer} → ${lib}` }, POLICY);
+        expect([lib, r.status, r.problems]).toEqual([lib, 'ok', []]);
+      }
+    }
+    if (installed('node_modules/docx/node_modules/sax/package.json')) expect(compared).toBeGreaterThanOrEqual(30);
+    // The L1 allowlist entries are exercised by real records, not only by fixtures.
+    const used = new Set(Object.values(gate.BUNDLED_LIBRARIES).flatMap((rec) => Object.values(rec.libraries)).flatMap((l) => l.match(/[A-Za-z0-9.-]+/g) ?? []));
+    for (const id of ['BlueOak-1.0.0', 'Zlib', 'MIT', 'ISC', 'BSD-3-Clause']) expect(used.has(id), id).toBe(true);
+  });
+
+  it('the gate judges every library a bundled package carries under the browser rules (nested records included)', () => {
+    const report = bundle({ name: 'docx', version: '9.11.0', licence: 'MIT' }, { name: 'jszip', version: '3.10.1', licence: '(MIT OR GPL-3.0-or-later)' });
+    const g = fixtureGate({ browserModules: report });
+    expect(g.failures).toEqual([]);
+    const bundled = g.results.filter((r) => / \(bundled in /.test(r.subject));
+    expect(bundled.filter((r) => r.subject.endsWith('(bundled in docx@9.11.0)'))).toHaveLength(49);
+    expect(bundled.filter((r) => r.subject.endsWith('(bundled in jszip@3.10.1)')).map((r) => r.name).sort()).toEqual(['immediate', 'lie', 'pako', 'setimmediate']);
+    expect(bundled.every((r) => r.scope === 'browser' && r.status === 'ok')).toBe(true);
+    expect(bundled.find((r) => r.subject === 'sax (bundled in docx@9.11.0)')).toMatchObject({ effective: 'BlueOak-1.0.0', source: 'node_modules/docx/dist/index.mjs: sax' });
+    expect(bundled.find((r) => r.subject === 'pako (bundled in docx@9.11.0)')?.source).toBe('node_modules/docx/dist/index.mjs → jszip/dist/jszip.min.js: pako');
+    // The fixture root has no node_modules: the gate says it judged from the records alone.
+    expect(g.warnings.filter((w) => /could not be read/.test(w))).toHaveLength(2);
+    expect(g.info).toContain('browser bundle: 53 checks of the libraries carried inside bundled packages\' own dist files');
+
+    // The L1 entries are what lets sax and pako through: without them the bundled copies fail like any other module.
+    const strict = clone(FIXTURE_POLICY);
+    strict.scopes.browser.allow = strict.scopes.browser.allow.filter((id: string) => id !== 'BlueOak-1.0.0' && id !== 'Zlib');
+    const s = gate.runGate({ root: '/nonexistent/licence-fixture', policy: strict, lockfiles: {}, engines: {}, dataAssetFiles: [], vendoredDirs: [], htmlPages: [], exists: () => true, browserModules: report });
+    expect(s.failures.map((r) => r.subject).sort()).toEqual(['pako (bundled in docx@9.11.0)', 'pako (bundled in jszip@3.10.1)', 'sax (bundled in docx@9.11.0)']);
+
+    // A copyleft or unknown library inside a bundled package fails the gate, and a package with no record adds nothing.
+    const records = { widget: { file: 'dist/index.mjs', format: 'regions' as const, libraries: { gplish: 'GPL-3.0-only', odd: 'LicenseRef-Mystery-1.0', fine: 'MIT' } } };
+    const w = fixtureGate({ browserModules: bundle({ name: 'widget', licence: 'MIT' }, { name: 'docx', version: '9.11.0', licence: 'MIT' }), bundledLibraries: records });
+    expect(kinds(w, 'gplish')).toEqual(['copyleft-in-browser']);
+    expect(kinds(w, 'odd')).toEqual(['not-allowed']);
+    expect(w.results.filter((r) => / \(bundled in docx/.test(r.subject))).toEqual([]);
+  });
+
+  it('a library the installed dist file carries but the records do not name fails; one the file no longer carries warns', () => {
+    const root = path.join(tmp, 'regions');
+    writePackage(root, 'widget', {
+      'package.json': JSON.stringify({ name: 'widget', version: '1.0.0', license: 'MIT' }),
+      'dist/index.mjs': [
+        '//#region \\0rolldown/runtime.js', 'var a = 1;', '//#endregion',
+        '//#region \\0@oxc-project+runtime@0.152.0/helpers/esm/typeof.js', '//#endregion',
+        '//#region src/index.ts', '//#endregion',
+        '//#region node_modules/sax/lib/sax.js', '//#endregion',
+        '//#region node_modules/@scope/pkg/dist/x.js', '//#endregion',
+        '//#region node_modules/outer/node_modules/inner/lib/y.js', '//#endregion',
+        '//#region node_modules/stranger/index.js', '//#endregion',
+        "const s = '//#region node_modules/notaregion/x.js';",
+      ].join('\n'),
+    });
+    expect(gate.regionLibraries(readFileSync(path.join(root, 'node_modules/widget/dist/index.mjs'), 'utf8'))).toEqual(['@scope/pkg', 'inner', 'sax', 'stranger']);
+    const records = { widget: { file: 'dist/index.mjs', format: 'regions' as const, libraries: { sax: 'BlueOak-1.0.0', '@scope/pkg': 'MIT', inner: 'ISC', gone: 'MIT' } } };
+    const report = bundle({ name: 'widget', licence: 'MIT' });
+    const g = gate.runGate({ root, policy: FIXTURE_POLICY, lockfiles: {}, engines: {}, dataAssetFiles: [], vendoredDirs: [], htmlPages: [], exists: () => true, browserModules: report, bundledLibraries: records });
+    expect(g.failures.map((r) => [r.subject, r.problems.map((p) => p.kind)])).toEqual([['widget@1.0.0 bundled code', ['bundled-unrecorded']]]);
+    expect(g.failures[0].problems[0].message).toBe('node_modules/widget/dist/index.mjs carries stranger, which BUNDLED_LIBRARIES (scripts/licence-check.mjs) does not record: add it with its licence');
+    expect(g.warnings).toContain('node_modules/widget/dist/index.mjs no longer carries gone: remove it from BUNDLED_LIBRARIES (and BUNDLED_NOTICES)');
+    // Recorded, it passes.
+    const ok = gate.runGate({ root, policy: FIXTURE_POLICY, lockfiles: {}, engines: {}, dataAssetFiles: [], vendoredDirs: [], htmlPages: [], exists: () => true, browserModules: report,
+      bundledLibraries: { widget: { ...records.widget, libraries: { sax: 'BlueOak-1.0.0', '@scope/pkg': 'MIT', inner: 'ISC', stranger: 'MIT' } } } });
+    expect(ok.failures).toEqual([]);
+    expect(ok.warnings.filter((w) => /widget/.test(w))).toEqual([]);
+  });
+
+  it('a browserify bundle names its libraries in its module maps (void 0 and the package\'s own browser shims are not libraries)', () => {
+    const js = '!function(e){}({1:[function(t,e,r){e.exports=[t("lie"),t("./x")];var a=[{},{fake:1}]},{lie:2,"./x":3,stream:void 0,"readable-stream":4,"@s/p":5}],'
+      + '2:[function(t,e,r){},{}],3:[function(t,e,r){},{immediate:6}],4:[function(t,e,r){},{}],5:[function(t,e,r){},{}],6:[function(t,e,r){},{}]},{},[1])(1)';
+    expect(gate.browserifyLibraries(js)).toEqual(['@s/p', 'immediate', 'lie', 'readable-stream']);
+    expect(gate.browserifyLibraries(js, ['readable-stream'])).toEqual(['@s/p', 'immediate', 'lie']);
+    const root = path.join(tmp, 'browserify');
+    writePackage(root, 'zippy', {
+      'package.json': JSON.stringify({ name: 'zippy', version: '1.0.0', license: 'MIT', browser: { './lib/index': './dist/z.js', 'readable-stream': './lib/rs.js', fs: false } }),
+      'dist/z.js': js,
+    });
+    expect(gate.bundledLibrariesOnDisk({ file: 'dist/z.js', format: 'browserify', libraries: {} }, root, 'node_modules/zippy')).toEqual(['@s/p', 'immediate', 'lie']);
+    if (installed('node_modules/jszip/dist/jszip.min.js')) {
+      expect(gate.bundledLibrariesOnDisk(gate.BUNDLED_LIBRARIES.jszip, APP, 'node_modules/jszip')).toEqual(['immediate', 'lie', 'pako', 'setimmediate']);
+    }
+  });
+
+  it('the gate on the installed docx and jszip (as CI judges them once docx is in the bundle) passes with nothing unread', () => {
+    const version = (name: string): string | null => (installed(`node_modules/${name}/package.json`) ? JSON.parse(readFileSync(path.join(APP, 'node_modules', name, 'package.json'), 'utf8')).version : null);
+    const docxVersion = version('docx');
+    const jszipVersion = version('jszip');
+    if (!docxVersion || !jszipVersion) return; // not installed in this checkout: CI's npm ci installs them
+    const report = bundle({ name: 'docx', version: docxVersion, licence: 'MIT' }, { name: 'jszip', version: jszipVersion, licence: '(MIT OR GPL-3.0-or-later)' });
+    const g = gate.runGate({ root: APP, policy: POLICY, lockfiles: {}, engines: {}, dataAssetFiles: [], vendoredDirs: [], htmlPages: [], exists: () => true, browserModules: report });
+    expect(g.failures.map((r) => `${r.subject}: ${r.problems.map((p) => p.message).join('; ')}`)).toEqual([]);
+    expect(g.warnings.filter((w) => /BUNDLED_LIBRARIES|could not be read/.test(w))).toEqual([]);
+    expect(g.results.find((r) => r.subject === `sax (bundled in docx@${docxVersion})`)).toMatchObject({ status: 'ok', effective: 'BlueOak-1.0.0' });
+  });
+});
+
 describe('data-asset copyright lines', () => {
   it('a record\'s own copyright lines are printed with it, and the QA fonts name their own authors, not Noto\'s', () => {
     const policy = clone(FIXTURE_POLICY);
@@ -653,6 +923,33 @@ describe('licenceModules() (vite.config.ts)', () => {
     const g = fixtureGate({ lockfiles: { 'package-lock.json': JSON.parse(readFileSync(path.join(APP, 'package-lock.json'), 'utf8')) }, browserModules: report });
     expect(g.results.find((r) => r.name === 'clsx')?.scope).toBe('browser');
   }, 60_000);
+
+  it.skipIf(!existsSync(path.join(APP, 'node_modules/docx/dist/index.mjs')))('a real build of docx and jszip reports only those two (sax and pako are inside their dist files), and its notices carry sax\'s and pako\'s texts', async () => {
+    const reportFile = path.join(tmp, 'report-docx.json');
+    const entry: Plugin = {
+      name: 'fixture-entry',
+      resolveId: (id) => (id === 'virtual:licence-docx' ? '\0virtual:licence-docx' : null),
+      load: (id) => (id === '\0virtual:licence-docx' ? "import { Document } from 'docx';\nimport JSZip from 'jszip';\nexport const both = [Document, JSZip];\n" : null),
+    };
+    const out = (await build({
+      configFile: false,
+      root: APP,
+      logLevel: 'silent',
+      publicDir: false,
+      plugins: [entry, licenceModules({ root: APP, reportFile })],
+      build: { write: false, minify: false, rollupOptions: { input: 'virtual:licence-docx' } },
+    })) as Rollup.RollupOutput;
+    const report = JSON.parse(readFileSync(reportFile, 'utf8'));
+    expect(report.packages.map((p: { name: string }) => p.name).sort()).toEqual(['docx', 'jszip']);
+    const notices = String((out.output.find((o) => o.fileName === 'THIRD-PARTY-NOTICES.txt') as Rollup.OutputAsset).source);
+    expect(blockWith(notices, 'sax — BlueOak-1.0.0').map((b) => b.who.map((w) => w.split('@')[0]))).toEqual([['docx']]);
+    expect(blockWith(notices, 'pako — MIT').map((b) => b.who.map((w) => w.split('@')[0]))).toEqual([['docx', 'jszip']]);
+    expect(blockWith(notices, 'Jean-loup Gailly and Mark Adler').map((b) => b.who.map((w) => w.split('@')[0]))).toEqual([['docx', 'jszip']]);
+    // The gate judges both as browser code and the built notices name both.
+    const g = fixtureGate({ lockfiles: { 'package-lock.json': JSON.parse(readFileSync(path.join(APP, 'package-lock.json'), 'utf8')) }, browserModules: report, noticesText: notices });
+    expect(['docx', 'jszip'].map((n) => g.results.find((r) => r.name === n && r.scope === 'browser')?.status)).toEqual(['ok', 'ok']);
+    expect(g.failures.filter((r) => r.scope === 'browser')).toEqual([]);
+  }, 120_000);
 
   it('worker bundles count as browser code', () => {
     const plugin = licenceModules({ root: APP });

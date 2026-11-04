@@ -49,7 +49,7 @@ import {
   verifySignature,
   wireCryptoFromSubtle,
 } from './index.js';
-import type { ClaimPurpose, PollTokenInput, PreflightOptions, SubtleCryptoLike, UserClaimInput, WireCrypto } from './index.js';
+import type { ClaimCapability, ClaimPurpose, PollTokenInput, PreflightOptions, SubtleCryptoLike, UserClaimInput, WireCrypto } from './index.js';
 
 // ── Fixtures and adapters ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ const userInput = (over: Partial<UserClaimInput> = {}): UserClaimInput => ({
   ...over,
 });
 const keys = (secret = SECRET, now = at(NOW_S)) => ({ secret, crypto: nodeCrypto, now });
-const verifyOpts = (over: Partial<{ purposes: ClaimPurpose[]; capability: string; products: string[]; now: () => number; secret: Uint8Array; app: string }> = {}) => ({
+const verifyOpts = (over: Partial<{ purposes: ClaimPurpose[]; capability: ClaimCapability; products: string[]; now: () => number; secret: Uint8Array; app: string }> = {}) => ({
   ...keys(over.secret, over.now),
   app: over.app ?? 'dreamstream',
   purposes: over.purposes ?? (['extract', 'preview'] as ClaimPurpose[]),

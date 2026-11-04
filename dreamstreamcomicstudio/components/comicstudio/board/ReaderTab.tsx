@@ -5,6 +5,10 @@
 //   • PDF      — a print-ready PDF downloaded directly, no dialog (@cantoo/pdf-lib)
 //   • PNG      — a ZIP of lettered PNG pages
 //   • Motion   — an animated "motion comic" video (9:16 / 1:1 / 16:9) for social/sharing
+//   • Pitch deck (.pptx) — a slide per page with the script as speaker notes (export/pitchDeck.ts). Shown only
+//     while the shared platform is on for this viewer: VITE_PLATFORM_DOCS 'on' and the stage admits them
+//     (platformDocsVisible(useIsAdmin()); admins only in wave 1). Its code loads on first use, so nobody else
+//     downloads it.
 // Exports use the language picked in the switch (i18n.md §10.2), so "Download the Telugu PDF"
 // is one tap: the SOURCE doc goes to the exporter with `{ lang }`, so files are named "…-te.pdf" and
 // the script's lettering faces load for that language. "All languages (ZIP)" puts every published
@@ -20,12 +24,16 @@
 // (`h-full min-h-0`, no 520 px floor), so a landscape phone never scrolls the reader inside the board.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpen, Clapperboard, Copy, Expand, Eye, FileArchive, FileDown, Languages, Presentation, Printer, Share2, SlidersHorizontal, X } from 'lucide-react';
 import { readerOf, type ComicDoc, type PageTurnStyle, type ReaderSettings } from '../../../shared/comic/doc';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import { SHARE_PATH } from '../../../shared/comic/publication';
 import { languageSpec, sameLanguage } from '../../../shared/comic/languages';
 import type { ReaderRequest, StudioController } from '../types';
+import { useIsAdmin } from '../../../hooks/useIsAdmin';
+import { platformDocsVisible } from '../../../services/platformFlags';
+import { ExportError, friendlyExportError } from '../export/errors';
+import type { PitchDeckResult } from '../export/pitchDeck';
 import { openPrintView } from '../export/printView';
 import { exportLanguagesZip, exportPngZip } from '../export/zipExport';
 import { collectExportSlots, exportLanguages } from '../export/sequence';
@@ -74,6 +82,12 @@ const languageList = (codes: readonly string[]): string => {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 };
 
+/** The pitch deck maker (export/pitchDeck.ts and, through it, the PowerPoint renderer), loaded on first use. */
+const loadPitchDeck = () =>
+  import('../export/pitchDeck').catch(() => {
+    throw new ExportError('Couldn’t load the pitch deck maker. Check your connection and try again.');
+  });
+
 /** Reader requests already answered (a request object opens the reader once, even across remounts). */
 const answeredRequests = new WeakSet<ReaderRequest>();
 
@@ -102,6 +116,22 @@ const SheetRow: React.FC<{ icon: React.ReactNode; label: React.ReactNode; hint?:
     </span>
   </button>
 );
+
+/**
+ * "Pitch deck (.pptx)": a shared-platform surface, so it needs BOTH the build's kill switch and the stage
+ * (shared/platform/flags.ts): platformDocsVisible(useIsAdmin()). Mounted only when the switch could admit anyone
+ * (`platformDocsVisible(true)`), so with VITE_PLATFORM_DOCS unset nothing changes, not even an admin probe.
+ */
+const PitchDeckRow: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) =>
+  platformDocsVisible(useIsAdmin()) ? (
+    <SheetRow
+      icon={<Presentation className="h-4 w-4" />}
+      label="Pitch deck (.pptx)"
+      hint="A slide per page, your script as speaker notes — for PowerPoint, Keynote or Google Slides"
+      onClick={onClick}
+      disabled={disabled}
+    />
+  ) : null;
 
 /** The creator's reader defaults (doc.reader): viewers can still override them locally. Free. */
 export const ReaderLookPanel: React.FC<{ studio: StudioController; doc: ComicDoc }> = ({ studio, doc }) => {
@@ -304,6 +334,21 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
       'PDF export failed.'
     );
 
+  const pitchDeck = () =>
+    run(
+      `Preparing the pitch deck${exportLabel}…`,
+      (signal, onProgress) =>
+        loadPitchDeck()
+          .then((m) => m.exportComicPitchDeck(doc, studio.urlFor, { lang: exportLang, signal, onProgress }))
+          .catch((err: unknown) => {
+            // Every failure reads as the export's own sentence (a cap, a cancel, a chunk that wouldn't load).
+            throw new ExportError(friendlyExportError(err));
+          }),
+      (r: PitchDeckResult) =>
+        exportDoneState(`Downloaded ${r.fileName} (${r.slides} slides).`, [...r.failed.map((f) => `${f.label}: ${f.message}`), ...r.skipped], r.notice, draftNote),
+      'Pitch deck export failed.'
+    );
+
   const motion = (aspect: MotionAspect) => {
     const { width, height } = MOTION_SIZES[aspect];
     run(
@@ -495,6 +540,7 @@ export const ReaderTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = 
               disabled={working || (!!allZipPlan && !allZipPlan.fits)}
             />
           )}
+          {platformDocsVisible(true) && <PitchDeckRow onClick={pitchDeck} disabled={working} />}
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 px-2.5 py-2">
             <span className="flex min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--ds-ink)]">
               <Clapperboard className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" aria-hidden /> Motion comic

@@ -21,6 +21,7 @@
     "./tools": "./src/tools/index.ts",
     "./gates": "./src/gates/index.ts",
     "./cost": "./src/cost/index.ts",
+    "./audit": "./src/audit/index.ts",
     "./flows": "./src/flows/index.ts",
     "./wire": "./src/wire/index.ts",
     "./client": "./src/client/index.ts",

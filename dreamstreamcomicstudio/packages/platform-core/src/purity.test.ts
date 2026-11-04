@@ -20,6 +20,11 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import ts from 'typescript';
 import { afterAll, describe, expect, it } from 'vitest';
+import * as auditBarrel from './audit/index.js';
+import * as rootBarrel from './index.js';
+import * as deckBarrel from './models/deck/index.js';
+import * as emailBarrel from './models/email/index.js';
+import * as richdocBarrel from './models/richdoc/index.js';
 
 const PKG = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
 const RENDER = resolve(PKG, '../platform-render');
@@ -186,6 +191,33 @@ const packageCopy = (): string => {
   }
   return dir;
 };
+
+describe('package.json exports and the root barrel', () => {
+  const pkg = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')) as { exports: Record<string, string> };
+
+  it('every exports entry points at a file (or a folder for a pattern) that exists, ./audit included', () => {
+    expect(pkg.exports['./audit']).toBe('./src/audit/index.ts');
+    for (const [key, target] of Object.entries(pkg.exports)) {
+      const fixed = target.split('*')[0];
+      expect(existsSync(join(PKG, fixed)), `${key} → ${target}`).toBe(true);
+    }
+    for (const model of ['richdoc', 'deck', 'email']) expect(existsSync(join(PKG, pkg.exports['./models/*'].replace('*', model))), model).toBe(true);
+  });
+
+  it('the root barrel carries every runtime export of the three model barrels, the same values (no name is ambiguous)', () => {
+    const root = rootBarrel as unknown as Record<string, unknown>;
+    const barrels = { richdoc: richdocBarrel, deck: deckBarrel, email: emailBarrel } as unknown as Record<string, Record<string, unknown>>;
+    for (const model of ['richdoc', 'deck', 'email']) {
+      const barrel = barrels[model];
+      const names = Object.keys(barrel);
+      expect(names.length, model).toBeGreaterThan(5);
+      for (const name of names) expect(root[name], `${model}: ${name}`).toBe(barrel[name]);
+    }
+    for (const name of ['checkRichDoc', 'checkDeckSpec', 'checkEmailDoc', 'overlapCheck', 'deckOverlaps', 'applyDocOps', 'applyDeckOps', 'applyEmailOps', 'check']) expect(typeof root[name], name).toBe('function');
+    expect(typeof root.s).toBe('object');
+    expect(Object.keys(auditBarrel).length).toBeGreaterThan(0);
+  });
+});
 
 describe('check-consumers', () => {
   const TARGETS = ['pure', 'comic2-web', 'atlas', 'atlas-bundler-flavour', 'dreamstream-server', 'dreamstream-server-strict'];

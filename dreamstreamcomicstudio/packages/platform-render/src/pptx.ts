@@ -1,9 +1,11 @@
 /**
  * DeckSpec v1 → PPTX (plan §5.2, W1.7) with the vendored, patched PptxGenJS 4.0.1 (src/vendor/pptxgenjs, PATCHES.md).
  *
+ * - **The deck is checked first** with platform-core's `checkDeckSpec` (models/deck), and only that checked copy is
+ *   read from then on.
  * - **Export is refused while content elements overlap.** No engine moves things apart, so a deck whose `content`
  *   elements collide throws `RenderError('overlap')` listing every pair, before anything is drawn. The rule is
- *   platform-core's `overlapCheck` (models/deck); a host can pass that function itself as `overlapCheck`.
+ *   platform-core's `overlapCheck` (re-exported as `contentOverlaps`); a host may pass its own as `overlapCheck`.
  * - **Every element is placed by its own rectangle** (slide fractions), `background` elements under `content` ones.
  * - **The theme comes from the deck and the BrandKit:** `preset: 'brand'` takes the kit's deck theme, `light` and
  *   `dark` are fixed, and the deck's own `background` / `text` / `accent` win over both. Titles use the kit's title
@@ -14,8 +16,9 @@
  */
 import type { DeckElement, DeckImage, DeckParagraph, DeckRect, DeckSpec, DeckText, OverlapPair, Slide } from '../../platform-core/src/contract/deck.js';
 import { DECK_LIMITS } from '../../platform-core/src/contract/deck.js';
-import type { TableRow } from '../../platform-core/src/contract/schema.js';
+import type { CheckError, TableRow } from '../../platform-core/src/contract/schema.js';
 import { MODEL_LIMITS } from '../../platform-core/src/contract/schema.js';
+import { DECK_OVERLAP_EPSILON, checkDeckSpec, overlapCheck } from '../../platform-core/src/models/deck/index.js';
 import { isSafeHref } from '../../platform-core/src/schema/index.js';
 import type { SlideOverlap } from './errors.js';
 import { RenderError } from './errors.js';
@@ -31,92 +34,29 @@ export interface PptxRenderOptions extends ImageOptions {
   brand?: RenderBrand;
   /** Font-registry id → family name; see `fontFamilyOf`. */
   fontFamily?: FontFamilyResolver;
-  /** The overlap rule; default `contentOverlaps` (the same rule as platform-core's `overlapCheck`). */
+  /** The overlap rule; default platform-core's `overlapCheck` (also exported here as `contentOverlaps`). */
   overlapCheck?: (slide: Slide) => OverlapPair[];
 }
 
-// ── Overlaps (the rule of platform-core models/deck `overlapCheck`) ─────────────────────────────────────────────
-// A copy until W1.2 merges (then `contentOverlaps` becomes a re-export of `overlapCheck`): same epsilon, same
-// line and squashed-box rules, same order of pairs.
+// ── Overlaps and validation: platform-core models/deck ──────────────────────────────────────────────────────────
+// The overlap rule is platform-core's `overlapCheck` itself (same epsilon, line and squashed-box rules, same order of
+// pairs); `contentOverlaps` stays exported under its old name. Decks are checked with `checkDeckSpec` first, so the
+// rule and the drawing only ever see a checked plain copy (no getters, no Proxies, no flat non-line elements).
 
-const E = 1e-6;
+export { overlapCheck as contentOverlaps } from '../../platform-core/src/models/deck/index.js';
 
-const isRecord = (v: unknown): v is { [k: string]: unknown } => !!v && typeof v === 'object' && !Array.isArray(v);
+/** A rect with no width or no height (after `checkDeckSpec`, only a `line` shape can be one). */
+const isFlat = (r: DeckRect): boolean => r[2] <= DECK_OVERLAP_EPSILON || r[3] <= DECK_OVERLAP_EPSILON;
 
-const rectOf = (el: unknown): DeckRect | null => {
-  const r = isRecord(el) ? el.rect : undefined;
-  if (!Array.isArray(r) || r.length !== 4) return null;
-  for (const n of r) if (typeof n !== 'number' || !isFinite(n)) return null;
-  return r as DeckRect;
-};
-
-/** A rect with no width or no height. */
-const isFlat = (r: DeckRect): boolean => r[2] <= E || r[3] <= E;
-
-/** A `line` shape: the only element that may have no width or no height. */
-const isLineShape = (el: { [k: string]: unknown }): boolean => el.kind === 'shape' && el.shape === 'line';
-
-/** A content element as the overlap rule sees it. */
-interface Box {
-  id: string;
-  rect: DeckRect;
-  /** A `line` shape with no width or no height: it collides only with a box it runs through. */
-  line: boolean;
-  /** Any other element with no width or no height: it collides with whatever it touches. */
-  squashed: boolean;
-}
-
-/** How much `[lo1, lo1 + len1]` and `[lo2, lo2 + len2]` share (negative for a gap). */
-const shared = (lo1: number, len1: number, lo2: number, len2: number): number => Math.min(lo1 + len1, lo2 + len2) - Math.max(lo1, lo2);
-
-/** A line crosses a box when it runs through the box's inside (lying along its edge does not count). */
-const crosses = (line: DeckRect, box: DeckRect): boolean => {
-  const [lx, ly, lw, lh] = line;
-  const [bx, by, bw, bh] = box;
-  if (lw <= E && lh <= E) return false; // a point
-  if (lh <= E) return ly > by + E && ly < by + bh - E && shared(lx, lw, bx, bw) > E;
-  return lx > bx + E && lx < bx + bw - E && shared(ly, lh, by, bh) > E;
-};
-
-/** Two rects meet, edges and corners included. */
-const touches = (a: DeckRect, b: DeckRect): boolean => shared(a[0], a[2], b[0], b[2]) >= -E && shared(a[1], a[3], b[1], b[3]) >= -E;
-
-const overlapOf = (a: Box, b: Box): number | null => {
-  // A flat text box or table is still drawn down from its top edge, so it collides with anything it touches.
-  if (a.squashed || b.squashed) return touches(a.rect, b.rect) ? 0 : null;
-  if (a.line && b.line) return null; // two rules crossing is a drawing, not a collision
-  if (a.line) return crosses(a.rect, b.rect) ? 0 : null;
-  if (b.line) return crosses(b.rect, a.rect) ? 0 : null;
-  const w = shared(a.rect[0], a.rect[2], b.rect[0], b.rect[2]);
-  const h = shared(a.rect[1], a.rect[3], b.rect[1], b.rect[3]);
-  return w > E && h > E ? w * h : null;
-};
-
-/**
- * Every pair of `content` elements on `slide` whose rects overlap (element order, `a` before `b`), with the overlap's
- * area as a fraction of the slide. `background` elements never count; edges that only touch do not overlap. A `line`
- * shape with no width or no height overlaps a box it runs through, with area 0, and never another line. Any other
- * element with no width or no height (which the contract's check refuses) is "squashed": it overlaps whatever it
- * touches, with area 0, because its text or table is still drawn down from its top edge. Never throws.
- */
-export const contentOverlaps = (slide: Slide): OverlapPair[] => {
-  const out: OverlapPair[] = [];
-  if (!isRecord(slide) || !Array.isArray(slide.elements)) return out;
-  const boxes: Box[] = [];
-  for (const el of slide.elements as unknown[]) {
-    const rect = rectOf(el);
-    if (!rect || !isRecord(el) || el.layer !== 'content' || typeof el.id !== 'string') continue;
-    const flat = isFlat(rect);
-    const line = flat && isLineShape(el);
-    boxes.push({ id: el.id, rect, line, squashed: flat && !line });
-  }
-  for (let i = 0; i < boxes.length; i++) {
-    for (let j = i + 1; j < boxes.length; j++) {
-      const area = overlapOf(boxes[i], boxes[j]);
-      if (area !== null) out.push({ a: boxes[i].id, b: boxes[j].id, area });
-    }
-  }
-  return out;
+/** `checkDeckSpec`'s first refusal as a RenderError: a non-`data:` image is `blocked`, anything over a cap `too-large`. */
+const refusalOf = (errors: readonly CheckError[]): RenderError => {
+  const at = (e: CheckError): string => (e.path ? `${e.path}: ` : '');
+  const blocked = errors.filter((e) => e.code === 'asset' || e.code === 'link')[0];
+  if (blocked) return new RenderError('blocked', `This deck has an image or link it cannot carry (${at(blocked)}${blocked.message}). Images must be data: images (PNG, JPEG or WebP); links must be https: or mailto:.`);
+  const big = errors.filter((e) => e.code === 'asset-too-large' || e.code === 'too-many' || e.code === 'too-long' || e.code === 'too-many-nodes')[0];
+  if (big) return new RenderError('too-large', `This deck is over a limit (${at(big)}${big.message}).`);
+  const first = errors[0];
+  return new RenderError('invalid', `This is not a valid DeckSpec v1 deck (${first ? `${at(first)}${first.message}` : 'unreadable'}).`);
 };
 
 // ── Theme ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -285,7 +225,7 @@ const tableCells = (rows: TableRow[], header: boolean, theme: Theme): PptCell[][
 };
 
 const addElement = async (slide: PptSlide, el: DeckElement, theme: Theme, W: number, H: number, prepare: (el: DeckImage, where: string) => Promise<PreparedImage>, where: string): Promise<void> => {
-  if (!el || typeof el !== 'object' || !rectOf(el)) return;
+  if (!el || typeof el !== 'object') return;
   switch (el.kind) {
     case 'text':
       addText(slide, el, theme, W, H);
@@ -376,19 +316,27 @@ const asRenderError = (err: unknown): unknown => {
 };
 
 /**
- * DeckSpec v1 → the bytes of a `.pptx` file. Throws `RenderError`: `overlap` (content elements collide; `overlaps`
- * lists every pair), `invalid` (not a DeckSpec v1), `too-large` (over the slide or element caps, an image over
- * 5 MB), `blocked` (an image that is not a `data:` image, or anything the vendored library refuses),
+ * DeckSpec v1 → the bytes of a `.pptx` file. The deck is checked with platform-core's `checkDeckSpec` first, then
+ * refused while content elements overlap (`overlapCheck`), and only the checked copy is drawn. Throws `RenderError`:
+ * `overlap` (content elements collide; `overlaps` lists every pair), `invalid` (not a valid DeckSpec v1: a repeated
+ * id, a flat element that is not a line shape…), `too-large` (over the slide, element or text caps, an image over
+ * 5 MB), `blocked` (an image that is not a `data:` image, an unsafe link, or anything the vendored library refuses),
  * `asset-missing` and `unsupported` (as `renderDocx`).
  */
-export const renderPptx = async (deck: DeckSpec, opts: PptxRenderOptions = {}): Promise<Uint8Array> => {
-  if (!deck || typeof deck !== 'object' || deck.v !== 1 || !Array.isArray(deck.slides)) throw new RenderError('invalid', 'This is not a DeckSpec v1 deck.');
-  if (deck.slides.length > DECK_LIMITS.slides) throw new RenderError('too-large', `A deck has at most ${DECK_LIMITS.slides} slides.`);
-  const check = opts.overlapCheck || contentOverlaps;
-  const overlaps: SlideOverlap[] = [];
-  deck.slides.forEach((slide, i) => {
+export const renderPptx = async (input: DeckSpec, opts: PptxRenderOptions = {}): Promise<Uint8Array> => {
+  if (!input || typeof input !== 'object' || input.v !== 1 || !Array.isArray(input.slides)) throw new RenderError('invalid', 'This is not a DeckSpec v1 deck.');
+  if (input.slides.length > DECK_LIMITS.slides) throw new RenderError('too-large', `A deck has at most ${DECK_LIMITS.slides} slides.`);
+  input.slides.forEach((slide, i) => {
     if (!slide || !Array.isArray(slide.elements)) throw new RenderError('invalid', `Slide ${i + 1} has no elements list.`);
     if (slide.elements.length > DECK_LIMITS.elementsPerSlide) throw new RenderError('too-large', `A slide has at most ${DECK_LIMITS.elementsPerSlide} elements.`);
+  });
+  // checkDeckSpec before the overlap rule: from here on only the checked plain copy is read.
+  const checked = checkDeckSpec(input);
+  if (checked.ok === false) throw refusalOf(checked.errors);
+  const deck: DeckSpec = checked.value;
+  const check = opts.overlapCheck || overlapCheck;
+  const overlaps: SlideOverlap[] = [];
+  deck.slides.forEach((slide, i) => {
     for (const p of check(slide)) overlaps.push({ slideId: slide.id, slideNumber: i + 1, a: p.a, b: p.b, area: p.area });
   });
   if (overlaps.length) {

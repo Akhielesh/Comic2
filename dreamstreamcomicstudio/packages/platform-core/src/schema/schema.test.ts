@@ -106,6 +106,15 @@ const mutate = (base: Record<string, unknown>, c: Case): unknown => {
   return value;
 };
 
+describe('CHECK_ERROR_CODES is additive only (contract v1)', () => {
+  it('keeps the frozen codes in their order and appends every later one (duplicate-id, amendment A1)', () => {
+    const FROZEN = ['type', 'required', 'unknown-key', 'too-long', 'too-short', 'too-many', 'too-few', 'pattern', 'bad-char', 'single-line', 'enum', 'literal', 'tag', 'int', 'not-finite', 'below-min', 'above-max', 'email', 'link', 'asset', 'asset-too-large', 'too-many-nodes'];
+    expect(CHECK_ERROR_CODES.slice(0, FROZEN.length)).toEqual(FROZEN);
+    expect(CHECK_ERROR_CODES.slice(FROZEN.length)).toEqual(['duplicate-id']);
+    expect(new Set(CHECK_ERROR_CODES).size).toBe(CHECK_ERROR_CODES.length);
+  });
+});
+
 describe('check(): invalid fixtures', () => {
   const file = fixture('schema/invalid.json') as CaseFile;
 
@@ -113,8 +122,9 @@ describe('check(): invalid fixtures', () => {
     expect(file.cases.length).toBeGreaterThanOrEqual(40);
     const codes = new Set(file.cases.map((c) => c.code));
     for (const c of file.cases) expect(CHECK_ERROR_CODES as readonly string[]).toContain(c.code);
-    // not-finite (NaN / Infinity) and too-many-nodes cannot be written as one JSON change; tested below.
-    for (const code of CHECK_ERROR_CODES) if (code !== 'not-finite' && code !== 'too-many-nodes') expect(codes, code).toContain(code);
+    // not-finite (NaN / Infinity) and too-many-nodes cannot be written as one JSON change; tested below. duplicate-id
+    // is raised only by the models' checks (fixtures/models/invalid.json), never by check() alone.
+    for (const code of CHECK_ERROR_CODES) if (code !== 'not-finite' && code !== 'too-many-nodes' && code !== 'duplicate-id') expect(codes, code).toContain(code);
   });
 
   it('the base value itself passes', () => {

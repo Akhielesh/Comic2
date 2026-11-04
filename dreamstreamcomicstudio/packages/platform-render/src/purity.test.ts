@@ -2,7 +2,7 @@
 //
 // platform-render stays a renderer and nothing more (plan §5.1, §9, W1.7):
 // - every relative import names its `.js` file (the backend's Node16 rule; platform-core's purity test checks it too);
-// - the shipped sources import only their own files, the platform-core contract and kernel, `docx`, `unified`,
+// - the shipped sources import only their own files, the platform-core contract, kernel and deck model, `docx`, `unified`,
 //   `remark-parse`, `remark-gfm` and the vendored PptxGenJS;
 // - they touch no network, file, DOM or process global (`fetch`, `XMLHttpRequest`, `window`, `document`, `process`,
 //   `Buffer`, `require`, `globalThis`, `eval`, `Function`, timers) and make no dynamic `import()`;
@@ -30,7 +30,7 @@ const shippedFiles = (dir: string, out: string[] = []): string[] => {
 };
 
 const ALLOWED_BARE = ['docx', 'unified', 'remark-parse', 'remark-gfm'];
-const ALLOWED_RELATIVE = [/^\.\/[a-z][A-Za-z]*\.js$/, /^\.\/vendor\/pptxgenjs\/pptxgen\.es\.js$/, /^\.\.\/\.\.\/platform-core\/src\/(contract|schema)\/[a-z][A-Za-z]*\.js$/, /^\.\.\/\.\.\/platform-core\/src\/schema\/index\.js$/];
+const ALLOWED_RELATIVE = [/^\.\/[a-z][A-Za-z]*\.js$/, /^\.\/vendor\/pptxgenjs\/pptxgen\.es\.js$/, /^\.\.\/\.\.\/platform-core\/src\/(contract|schema)\/[a-z][A-Za-z]*\.js$/, /^\.\.\/\.\.\/platform-core\/src\/schema\/index\.js$/, /^\.\.\/\.\.\/platform-core\/src\/models\/deck\/index\.js$/];
 const BANNED = ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'window', 'document', 'navigator', 'process', 'Buffer', 'require', 'globalThis', 'self', 'eval', 'Function', 'setTimeout', 'setInterval', 'importScripts', 'localStorage', 'indexedDB'];
 
 interface Finding {

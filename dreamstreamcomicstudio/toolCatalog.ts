@@ -79,6 +79,12 @@ export interface ToolMeta {
   license?: ToolLicense;
   /** One-line licensing/fallback note shown in the dashboard. */
   licenseNote?: string;
+  /**
+   * Behind a rollout: 'platform-docs' tools (the shared platform's drafts) exist only for a person the PLATFORM_DOCS
+   * kill switch and the rollout stage admit (server: platformDocsFor(req); client: platformDocsVisible). The server
+   * never routes or builds them for anyone else; a UI listing tools should hide them the same way.
+   */
+  rollout?: 'platform-docs';
 }
 
 export interface CategoryMeta {
@@ -720,10 +726,10 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   {
     name: 'convert_image', label: 'Convert image', category: 'media', kind: 'builtin', provider: 'DreamStream (sharp, non-AI)',
-    description: 'Deterministically convert or resize an image (PNG/JPEG/WebP/AVIF) with sharp — no AI touches the pixels. Takes an https URL or a data:image URI. For "convert this jpg to png", "make a webp", "resize to 512px".',
+    description: 'Deterministically convert or resize a JPG, PNG, WebP or GIF image to PNG/JPEG/WebP/AVIF with sharp — no AI touches the pixels. Takes an https URL or a data:image URI; SVG, HEIC, TIFF and PDF inputs are refused. For "convert this jpg to png", "make a webp", "resize to 512px".',
     auth: 'none', rateLimit: 'Unlimited (local libvips, no API)',
     dataShape: 'The converted image, shown inline.', docsUrl: 'https://dreamstream.app',
-    keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
+    keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
   },
   {
     name: 'create_dashboard', label: 'Glass dashboard', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
@@ -907,6 +913,22 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['write an email', 'draft an email', 'compose an email', 'compose a message', 'draft a reply', 'write a message', 'send an email', 'email to']
   },
   {
+    name: 'email_draft', label: 'Email draft (review card)', category: 'productivity', kind: 'builtin', provider: 'DreamStream platform (in-app, no account needed)',
+    description: 'Draft a well-formatted email (headings, paragraphs, lists, buttons, quotes, two columns) as a card the person reviews: a safe preview, every link with its full address, and Copy / Open in Gmail / Open in mail app. Nothing is sent. Only addresses the person typed are filled in; any other address is a suggestion they tap to add.',
+    auth: 'none', rateLimit: 'Up to 3 drafts per chat turn (rendered by DreamStream, no API, no extra model call)',
+    dataShape: 'Email draft card: subject, recipients (filled in vs suggested), sandboxed preview, link list, compose links.', docsUrl: 'https://dreamstream.app',
+    keywords: ['draft an email', 'write an email', 'compose an email', 'email draft', 'draft email', 'newsletter', 'announcement email', 'follow-up email', 'follow up email', 'thank you email', 'intro email', 'email to', 'html email'],
+    rollout: 'platform-docs'
+  },
+  {
+    name: 'deck_create', label: 'Slide deck (.pptx)', category: 'productivity', kind: 'builtin', provider: 'DreamStream platform (in-app, no account needed)',
+    description: 'Create a slide deck (title, 16:9 or 4:3, light/dark/brand theme, up to 60 slides of text, shapes, tables and bar/line/pie charts) as a card the person previews and downloads as a PowerPoint file. Elements are placed by exact rectangles; overlapping content is flagged and blocks the download until fixed.',
+    auth: 'none', rateLimit: 'Up to 2 decks per chat turn (built in the browser, no API, no extra model call)',
+    dataShape: 'Deck card: slide previews, overlap warnings, Download .pptx.', docsUrl: 'https://dreamstream.app',
+    keywords: ['slide deck', 'slides', 'presentation', 'pitch deck', 'powerpoint', 'pptx', 'deck', 'make slides', 'keynote', 'slideshow'],
+    rollout: 'platform-docs'
+  },
+  {
     name: 'drive_search', label: 'Drive (your files)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
     description: "Search the signed-in user's own Google Drive files by name and return matches (name, type, link, modified date).",
     auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Drive API quota',
@@ -1086,8 +1108,14 @@ export const ALL_TOOL_NAMES: string[] = TOOL_CATALOG.map((t) => t.name);
 // static tool registry, so routing them would just waste a smart-routing slot — exclude them.
 const META_TOOL_NAMES = new Set(['run_agent_swarm', 'generate_image']);
 
-/** Tool names that are safe to auto-enable / route to (everything except route-built meta tools). */
-export const ROUTABLE_TOOL_NAMES: string[] = TOOL_CATALOG.filter((t) => !META_TOOL_NAMES.has(t.name)).map((t) => t.name);
+/** Tools behind the shared-platform rollout (`rollout: 'platform-docs'`): routed only for an admitted person. */
+export const PLATFORM_ROLLOUT_TOOL_NAMES: string[] = TOOL_CATALOG.filter((t) => t.rollout === 'platform-docs').map((t) => t.name);
+
+/**
+ * Tool names that are safe to auto-enable / route to for anyone: everything except route-built meta tools and tools
+ * behind a rollout (the chat route adds PLATFORM_ROLLOUT_TOOL_NAMES only for a request the rollout admits).
+ */
+export const ROUTABLE_TOOL_NAMES: string[] = TOOL_CATALOG.filter((t) => !META_TOOL_NAMES.has(t.name) && !t.rollout).map((t) => t.name);
 
 const tokenize = (text: string): string[] => {
   const matches = text.toLowerCase().match(/[a-z0-9&]+/g);

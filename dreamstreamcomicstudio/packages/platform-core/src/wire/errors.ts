@@ -99,9 +99,10 @@ export const parseErrorBody = (body: Uint8Array | string | null | undefined): Pl
 };
 
 /**
- * A non-2xx answer as a failure. A well-formed platform error body names the code; otherwise the status does (413 →
- * `too-large`, 415 → `unsupported`, 504 → `timeout`, other 4xx → `invalid`, other 5xx and 3xx → `engine-failed`), so
- * an edge proxy's own 413 or 504 page maps the same way. `retryable` always follows the code's rule.
+ * A non-2xx answer as a failure. A well-formed platform error body names the code; otherwise the status does (every
+ * status in PLATFORM_ERRORS maps to its own code, e.g. 429 → `quota`, 503 → `disabled`; other 4xx → `invalid`, other
+ * 5xx and 3xx → `engine-failed`), so an edge proxy's own 413, 429 or 504 page maps the same way. `retryable` always
+ * follows the code's rule.
  */
 export const failureFromResponse = (status: number, body: Uint8Array | null, requestIdHeader?: string | null): WireFailure => {
   const parsed = parseErrorBody(body);

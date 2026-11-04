@@ -1,24 +1,33 @@
 /**
- * `createFakePlatform()` (plan §5.8): an in-memory `/v1` gateway for every host's tests. It answers the wire's
- * endpoints with the platform's error body and headers, enforces the request rules a host can get wrong, and keeps
- * everything in memory: no network, no timers, no engine.
+ * `createFakePlatform()` (plan §5.8): an in-memory `/v1` gateway for every host's tests, built on the wire's own
+ * verifier (src/wire), so a host's tests run the gateway's real request checks. No network, no timers, no engine.
  *
- * Checked on every request: the app allowlist, `X-Platform-Contract: 1`, an `Idempotency-Key` on every POST, a claim
- * on every POST with a body (decoded, app- and capability-bound, unexpired; service claims only for previews), the
- * body cap, capability kill switches, and a per-caller daily quota. Idempotency is scoped per (app, sub or 'svc',
- * key): the same body replays the same answer, a different body gets 409.
+ * Every request but `GET /v1/health` and a poll-token read goes through `verifyRequest` with the fake's key ring:
+ * the signing headers, the app allowlist and key id, `X-Platform-Contract: 1`, the timestamp skew, an
+ * `Idempotency-Key` and a `Content-Length` on every POST, the body cap, a claim on every POST with a body (MAC, app,
+ * time window, purpose, capability, product; service claims only for previews) and the request signature over the
+ * body. The fake then acts only on the verified request's fields (app, owner, claim, Idempotency-Key). Refusals
+ * answer with the wire's `errorResponse`.
  *
- * The HMAC request signature is the wire's (W1.5) business: pass `verify` to check it here as well. Without `verify`
- * the fake trusts the signature headers, never the claim's contents.
+ * Idempotency is scoped per caller: the job or result record id is `idempotencyScope({app, sub or null, key})`; the
+ * same body replays the same answer, a different body gets 409. A `202` carries a poll token (`mintPollToken`, bound
+ * to the job record's app and sub), and `GET /v1/jobs/:id?t=` is checked with `verifyPollToken` against that record's
+ * owner. Capability kill switches answer 503 and an optional per-caller daily quota 429.
+ *
+ * Hosts sign with the fake's key ring: `fakeClientConfig(platform)` is a `createPlatformClient` config for it, and
+ * `createFakeIdentity()` mints claims under the same default secret.
  */
 import type { CapabilityId } from '../capabilities.js';
 import { getCapability } from '../capabilities.js';
-import { platformErrorBody, PLATFORM_ERRORS } from '../errors.js';
-import type { PlatformErrorCode } from '../errors.js';
-import { base64urlDecode, sha256Hex, utf8Bytes, utf8Decode } from '../audit/inputHash.js';
+import { platformFailure } from '../errors.js';
+import type { PlatformErrorCode, PlatformFailure } from '../errors.js';
+import { sha256Hex, utf8Bytes, utf8Decode } from '../audit/inputHash.js';
 import { productsForApp } from '../products.js';
 import type { PlatformApp } from '../products.js';
-import { SERVICE_PREVIEW_CAPS } from '../gates/ports.js';
+import type { PlatformClientConfig } from '../client/index.js';
+import { USER_CLAIM_PURPOSES, errorResponse, idempotencyScope, mintPollToken, verifyPollToken, verifyRequest } from '../wire/index.js';
+import type { ClaimPurpose, ClaimRequirement, PreflightOptions, UserClaimPurpose, WireCrypto } from '../wire/index.js';
+import { FAKE_APP_SECRET, FAKE_KEY_ID, FAKE_WIRE_CRYPTO } from './fakePorts.js';
 
 export interface FakeRequest {
   method: string;
@@ -36,7 +45,7 @@ export interface FakeResponse {
   json(): unknown;
 }
 
-/** The subset of a fetch `Response` hosts read. */
+/** The subset of a fetch `Response` hosts read (and the platform client's `FetchResponseLike`). */
 export interface FakeFetchResponse {
   status: number;
   ok: boolean;
@@ -66,30 +75,26 @@ export interface FakePlatformOptions {
   dailyQuota?: number;
   /** Largest body in bytes (default 50 MB). */
   maxBodyBytes?: number;
-  /** Extra request verification (the wire's HMAC signature): false or a code refuses the request. */
+  /**
+   * The key ring: the secret for (app, key id), or nothing. Default: every allowed app signs with `FAKE_KEY_ID` and
+   * `FAKE_APP_SECRET`. Only apps in `apps` are ever asked for.
+   */
+  keys?: (app: string, kid: string) => Uint8Array | null | undefined;
+  /** The wire's crypto (default `FAKE_WIRE_CRYPTO`, pure and synchronous). */
+  crypto?: WireCrypto;
+  /** An extra host check after the wire's: false or a code refuses the request. */
   verify?: (request: FakeRequest) => boolean | PlatformErrorCode;
 }
 
 export interface FakePlatform {
   handle(request: FakeRequest): Promise<FakeResponse>;
-  /** A fetch-compatible function for clients that take an injected `fetch`. */
-  fetch(url: string, init?: { method?: string; headers?: { [name: string]: string }; body?: string | Uint8Array }): Promise<FakeFetchResponse>;
+  /** A fetch-compatible function: pass it as the platform client's `fetch` (see `fakeClientConfig`). */
+  fetch(url: string, init?: { method?: string; headers?: { [name: string]: string }; body?: string | Uint8Array | ArrayBuffer }): Promise<FakeFetchResponse>;
   disable(capability: CapabilityId): void;
   enable(capability: CapabilityId): void;
   readonly requests: FakeRequestLogEntry[];
   /** Files stored so far (sha256 → bytes is never exposed; only counts). */
   fileCount(): number;
-}
-
-interface Claim {
-  v: 1;
-  kind: 'user' | 'service';
-  app: string;
-  product?: string;
-  sub?: string;
-  purpose: string;
-  caps: string[];
-  exp: number;
 }
 
 interface StoredFile {
@@ -99,10 +104,20 @@ interface StoredFile {
   bytes: Uint8Array;
   sniffed: string;
   name: string;
+  /** The job that produced it, for `GET /v1/files/:ref?t=` (uploads have none). */
+  jobId?: string;
+}
+
+interface JobRecord {
+  id: string;
+  app: string;
+  /** The user claim's sub: the owner a poll token is checked against. */
+  sub: string;
+  op: string;
 }
 
 const MB = 1000000;
-const KEY = /^[A-Za-z0-9._:-]{1,128}$/;
+const REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const SERVED: { [sniffed: string]: string } = {
   pdf: 'application/pdf',
   png: 'image/png',
@@ -110,6 +125,11 @@ const SERVED: { [sniffed: string]: string } = {
   webp: 'image/webp',
   zip: 'application/octet-stream',
 };
+
+/** Every purpose a claim can name (reads accept any; the owner check is what matters). */
+const ALL_PURPOSES: readonly ClaimPurpose[] = [...USER_CLAIM_PURPOSES, 'preview'];
+const USER_PURPOSES: readonly UserClaimPurpose[] = USER_CLAIM_PURPOSES;
+const PDF_OPS = /^(inspect|fill|redact|organize)$/;
 
 const sniff = (b: Uint8Array): string => {
   const at = (i: number, ...v: number[]) => v.every((x, k) => b[i + k] === x);
@@ -127,43 +147,85 @@ const lower = (headers: { [name: string]: string } | undefined): { [name: string
   return out;
 };
 
-const decodeClaim = (claim: string): Claim | null => {
-  const dot = claim.indexOf('.');
-  if (dot < 1 || claim.length > 4096) return null;
-  const raw = base64urlDecode(claim.slice(0, dot));
-  const text = raw ? utf8Decode(raw) : null;
-  if (!text) return null;
+/** The `op` a `/v1/pdf` body names: it only picks which capability the claim must carry (checked by the wire). */
+const pdfOpOf = (bytes: Uint8Array): string | null => {
   try {
-    const c = JSON.parse(text) as Claim;
-    if (!c || c.v !== 1 || (c.kind !== 'user' && c.kind !== 'service') || typeof c.app !== 'string' || !Array.isArray(c.caps) || typeof c.exp !== 'number') return null;
-    if (c.kind === 'user' && typeof c.sub !== 'string') return null;
-    return c;
+    const body = JSON.parse(utf8Decode(bytes) || 'null') as { job?: { op?: unknown } } | null;
+    const op = body && typeof body === 'object' && body.job && typeof body.job === 'object' ? body.job.op : undefined;
+    return typeof op === 'string' && PDF_OPS.test(op) ? op : null;
   } catch {
     return null;
   }
 };
 
-/** The capability a POST endpoint needs. */
-const capabilityFor = (route: string, body: unknown): string | null => {
-  if (route === '/v1/convert') return 'doc.convert';
-  if (route === '/v1/extract') return 'doc.extract';
-  if (route === '/v1/pdf') {
-    const op = body && typeof body === 'object' && (body as { job?: { op?: unknown } }).job ? (body as { job: { op?: unknown } }).job.op : undefined;
-    return typeof op === 'string' && /^(inspect|fill|redact|organize)$/.test(op) ? `pdf.${op}` : null;
+/** What an endpoint accepts: the claim requirement for `verifyRequest`, and the capability its kill switch guards. */
+interface Route {
+  claim: ClaimRequirement;
+  claimRequired?: boolean;
+  capability?: CapabilityId;
+}
+
+const routeFor = (method: string, route: string, bytes: Uint8Array): Route | null => {
+  if (method === 'GET') {
+    if (route === '/v1/capabilities' || route === '/v1/notices') return { claim: { purposes: ALL_PURPOSES } };
+    if (route.indexOf('/v1/jobs/') === 0 || route.indexOf('/v1/files/') === 0) return { claim: { purposes: ALL_PURPOSES }, claimRequired: true };
+    return null;
   }
-  if (route === '/v1/render') return 'richdoc.render';
-  return null;
+  if (method !== 'POST') return null;
+  switch (route) {
+    case '/v1/convert':
+      return { claim: { purposes: ['extract', 'export', 'preview'], capability: 'doc.convert' }, capability: 'doc.convert' };
+    case '/v1/extract':
+      return { claim: { purposes: ['extract', 'preview'], capability: 'doc.extract' }, capability: 'doc.extract' };
+    case '/v1/files':
+      return { claim: { purposes: USER_PURPOSES } };
+    case '/v1/pdf': {
+      const op = pdfOpOf(bytes);
+      const capability = op ? (`pdf.${op}` as CapabilityId) : undefined;
+      return capability ? { claim: { purposes: ['pdf'], capability }, capability } : { claim: { purposes: ['pdf'] } };
+    }
+    case '/v1/render':
+      return { claim: { purposes: ['render', 'export'], capability: 'richdoc.render' }, capability: 'richdoc.render' };
+    case '/v1/jobs':
+      return { claim: { purposes: USER_PURPOSES } };
+    default:
+      return null;
+  }
 };
+
+/** A key ring for `apps`: each signs with `FAKE_KEY_ID` and `secret` (default `FAKE_APP_SECRET`). Tests only. */
+export const fakeKeyRing = (apps: readonly string[] = ['dreamstream', 'atlas'], secret: string = FAKE_APP_SECRET): ((app: string, kid: string) => Uint8Array | null) => {
+  const bytes = utf8Bytes(secret);
+  return (app, kid) => (apps.indexOf(app) !== -1 && kid === FAKE_KEY_ID ? bytes : null);
+};
+
+/**
+ * A `createPlatformClient` config that talks to `platform` with the fake key ring's default key: the host's real
+ * client, signing and all, against the fake gateway. Override `now` with the fake's clock when it is not real time.
+ */
+export const fakeClientConfig = (platform: FakePlatform, over: Partial<PlatformClientConfig> = {}): PlatformClientConfig => ({
+  baseUrl: 'https://platform.test',
+  app: 'dreamstream',
+  keyId: FAKE_KEY_ID,
+  secret: utf8Bytes(FAKE_APP_SECRET),
+  crypto: FAKE_WIRE_CRYPTO,
+  fetch: platform.fetch,
+  now: () => Date.now(),
+  ...over,
+});
 
 export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatform => {
   const apps: readonly string[] = options.apps || ['dreamstream', 'atlas'];
   const clock = options.clock || (() => Date.now());
+  const crypto = options.crypto || FAKE_WIRE_CRYPTO;
+  const ring = options.keys || fakeKeyRing(apps);
+  const keys = (app: string, kid: string): Uint8Array | null | undefined => (apps.indexOf(app) !== -1 ? ring(app, kid) : null);
   const maxBody = options.maxBodyBytes === undefined ? 50 * MB : options.maxBodyBytes;
   const disabled: string[] = (options.disabled || []).slice();
   const requests: FakeRequestLogEntry[] = [];
-  const idempotency: { [key: string]: { bodyHash: string; response: FakeResponse } } = {};
+  const idempotency: { [scope: string]: { bodyHash: string; response: FakeResponse } } = {};
   const files: { [ref: string]: StoredFile } = {};
-  const jobs: { [id: string]: { app: string; owner: string; op: string; pollToken: string } } = {};
+  const jobs: { [id: string]: JobRecord } = {};
   const quota: { [key: string]: number } = {};
   let seq = 0;
 
@@ -179,24 +241,29 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
   };
   const json = (status: number, value: unknown, requestId: string, headers: { [k: string]: string } = {}) =>
     respond(status, JSON.stringify(value), { 'content-type': 'application/json', ...headers }, requestId);
-  const error = (code: PlatformErrorCode, message: string, requestId: string) => json(PLATFORM_ERRORS[code].status, platformErrorBody(code, message, requestId), requestId);
+  /** A refusal as the gateway answers it: the wire's `errorResponse`. */
+  const refusal = (failure: PlatformFailure, requestId: string): FakeResponse => {
+    const r = errorResponse(failure, requestId);
+    return respond(r.status, r.body, { 'content-type': 'application/json' }, requestId);
+  };
+  const error = (code: PlatformErrorCode, message: string, requestId: string) => refusal(platformFailure(code, message), requestId);
 
   const handle = async (request: FakeRequest): Promise<FakeResponse> => {
     const h = lower(request.headers);
-    const requestId = h['x-request-id'] && KEY.test(h['x-request-id']) ? h['x-request-id'] : `req-${++seq}`;
+    const requestId = h['x-request-id'] && REQUEST_ID.test(h['x-request-id']) ? h['x-request-id'] : `req-${++seq}`;
     const method = String(request.method || 'GET').toUpperCase();
-    const full = String(request.path || '').replace(/^https?:\/\/[^/]+/, '');
-    const q = full.indexOf('?');
-    const route = q === -1 ? full : full.slice(0, q);
+    const target = String(request.path || '').replace(/^https?:\/\/[^/]+/, '');
+    const q = target.indexOf('?');
+    const route = q === -1 ? target : target.slice(0, q);
     const query: { [k: string]: string } = {};
     if (q !== -1) {
-      for (const part of full.slice(q + 1).split('&')) {
+      for (const part of target.slice(q + 1).split('&')) {
         if (!part) continue;
         const eq = part.indexOf('=');
         try {
-          query[decodeURIComponent(eq === -1 ? part : part.slice(0, eq))] = decodeURIComponent(eq === -1 ? '' : part.slice(eq + 1));
+          query[decodeURIComponent((eq === -1 ? part : part.slice(0, eq)).replace(/\+/g, ' '))] = decodeURIComponent((eq === -1 ? '' : part.slice(eq + 1)).replace(/\+/g, ' '));
         } catch {
-          // a malformed escape is just an absent parameter
+          // a malformed escape is just an absent parameter (a signed request with one is refused by the wire)
         }
       }
     }
@@ -208,107 +275,89 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
       return r;
     };
     const fail = (code: PlatformErrorCode, message: string) => done(error(code, message, requestId), code);
+    const refuse = (failure: PlatformFailure) => done(refusal(failure, requestId), failure.code);
 
-    // Open endpoints.
+    // Open endpoint.
     if (method === 'GET' && route === '/v1/health') return done(json(200, { ok: true, contract: 1 }, requestId));
 
-    // Every other request names its app and speaks contract 1.
-    const app = h['x-platform-app'];
-    if (!app || apps.indexOf(app) === -1) return fail('unauthorized', 'Unknown app.');
-    log.app = app;
-    if (h['x-platform-contract'] !== '1') return fail('invalid', 'X-Platform-Contract must be 1.');
-    if (options.verify) {
-      const v = options.verify(request);
-      if (v !== true) return fail(typeof v === 'string' ? v : 'unauthorized', 'The request signature did not verify.');
+    // A browser's poll: GET with a poll token and nothing else, checked against the job record's own owner.
+    if (method === 'GET' && query.t !== undefined && (route.indexOf('/v1/jobs/') === 0 || route.indexOf('/v1/files/') === 0)) {
+      const isJob = route.indexOf('/v1/jobs/') === 0;
+      const file = isJob ? undefined : files[route.slice('/v1/files/'.length)];
+      const job = isJob ? jobs[route.slice('/v1/jobs/'.length)] : file && file.jobId ? jobs[file.jobId] : undefined;
+      if (!job) return fail('not-found', isJob ? 'No such job.' : 'No such file.');
+      const v = await verifyPollToken(query.t, { keys, crypto, now: clock, jobId: job.id, owner: { app: job.app, sub: job.sub }, method });
+      if (v.ok === false) return refuse(v);
+      log.app = job.app;
+      log.sub = job.sub;
+      return isJob ? done(json(200, { state: 'succeeded', progress: 1, result: { op: job.op } }, requestId)) : serveFile(file as StoredFile);
     }
 
-    if (method === 'GET' && route === '/v1/capabilities') {
-      const ids: string[] = [];
-      for (const p of productsForApp(app as PlatformApp)) for (const c of p.capabilities) if (ids.indexOf(c) === -1) ids.push(c);
-      return done(
-        json(
-          200,
-          {
-            app,
-            capabilities: ids.map((id) => {
-              const c = getCapability(id);
-              return { id, kind: c ? c.kind : 'render', wave: c ? c.wave : 1, maturity: c ? c.maturity : 'adopt', disabled: disabled.indexOf(id) !== -1 };
-            }),
-          },
-          requestId,
-        ),
-      );
-    }
-    if (method === 'GET' && route === '/v1/notices') return done(respond(200, 'Third-party notices (fake platform).', { 'content-type': 'text/plain; charset=utf-8' }, requestId));
-
-    // Reads need the same app and caller: a job's poll token, or a claim with the same subject.
-    const reader = (): string | null => {
-      const c = h['x-platform-claim'] ? decodeClaim(h['x-platform-claim']) : null;
-      if (!c || c.app !== app || c.exp <= Math.floor(clock() / 1000)) return null;
-      return c.kind === 'user' ? (c.sub as string) : 'svc';
-    };
-    if (method === 'GET' && route.indexOf('/v1/jobs/') === 0) {
-      const job = jobs[route.slice('/v1/jobs/'.length)];
-      const allowed = !!job && job.app === app && (query.t !== undefined ? query.t === job.pollToken : reader() === job.owner);
-      if (!job || !allowed) return fail('not-found', 'No such job.');
-      return done(json(200, { state: 'succeeded', progress: 1, result: { op: job.op } }, requestId));
-    }
-    if (method === 'GET' && route.indexOf('/v1/files/') === 0) {
-      const file = files[route.slice('/v1/files/'.length)];
-      if (!file || file.app !== app || reader() !== file.owner) return fail('not-found', 'No such file.');
-      const type = SERVED[file.sniffed];
-      if (!type || file.sniffed === 'zip') return fail('unsupported', 'That file type is never served.');
-      return done(
-        respond(200, file.bytes, {
-          'content-type': type,
-          'content-disposition': `attachment; filename="${file.name.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
-          'x-content-type-options': 'nosniff',
-          'content-security-policy': "sandbox; default-src 'none'",
-          'cache-control': 'private, no-store',
-        }, requestId),
-      );
-    }
-
-    if (method !== 'POST') return fail('not-found', 'No such endpoint.');
-    const known = ['/v1/convert', '/v1/extract', '/v1/files', '/v1/pdf', '/v1/render', '/v1/jobs'];
-    if (known.indexOf(route) === -1) return fail('not-found', 'No such endpoint.');
-
-    // POST rules: an idempotency key always; a claim whenever there is a body; the body cap before reading it.
-    const key = h['idempotency-key'];
-    if (!key || !KEY.test(key)) return fail('invalid', 'Every POST needs an Idempotency-Key of at most 128 characters of [A-Za-z0-9._:-].');
+    // Everything else is a signed request: the wire's two phases, with the body already in memory.
     const bytes = request.body === undefined ? new Uint8Array(0) : typeof request.body === 'string' ? utf8Bytes(request.body) : request.body;
-    const declared = h['content-length'] !== undefined ? Number(h['content-length']) : bytes.length;
-    if (!(declared <= maxBody) || bytes.length > maxBody) return fail('too-large', 'The body is over the cap.');
-    const claimText = h['x-platform-claim'];
-    if (bytes.length > 0 && !claimText) return fail('unauthorized', 'A POST with a body needs a claim.');
-    const claim = claimText ? decodeClaim(claimText) : null;
-    if (claimText && !claim) return fail('unauthorized', 'The claim is malformed.');
-    if (claim) {
-      if (claim.app !== app) return fail('forbidden', 'The claim is for another app.');
-      if (claim.exp <= Math.floor(clock() / 1000)) return fail('unauthorized', 'The claim has expired.');
-    }
-    const owner = claim && claim.kind === 'user' ? (claim.sub as string) : 'svc';
+    const headers: { [name: string]: string } = { ...h };
+    // Content-Length comes from the transport when the caller (fetch) did not set it.
+    if (method === 'POST' && headers['content-length'] === undefined) headers['content-length'] = String(bytes.length);
+    const spec = routeFor(method, route, bytes);
+    // A claim's product must be one the signing app serves (the wire also checks that the claim names that app).
+    const signingApp = headers['x-platform-app'];
+    const products = signingApp && apps.indexOf(signingApp) !== -1 ? productsForApp(signingApp as PlatformApp).map((p) => p.id as string) : [];
+    const opts: PreflightOptions = {
+      crypto,
+      now: clock,
+      keys,
+      claim: { ...(spec ? spec.claim : { purposes: ALL_PURPOSES }), products },
+      claimRequired: spec ? spec.claimRequired === true : false,
+      maxBodyBytes: maxBody,
+    };
+    const v = await verifyRequest({ method, target, headers }, bytes, opts);
+    if (v.ok === false) return refuse(v);
+    const app = v.app;
+    const owner = v.owner;
+    const claim = v.claim;
+    log.app = app;
     log.sub = owner;
-
-    const isJson = (h['content-type'] || '').indexOf('application/json') === 0;
-    let parsed: unknown;
-    if (isJson) {
-      try {
-        parsed = JSON.parse(utf8Decode(bytes) || 'null');
-      } catch {
-        return fail('invalid', 'The body is not valid JSON.');
-      }
+    if (options.verify) {
+      const extra = options.verify(request);
+      if (extra !== true) return fail(typeof extra === 'string' ? extra : 'unauthorized', 'The host check refused the request.');
     }
-    const cap = capabilityFor(route, parsed);
-    if (cap) {
-      if (!claim || claim.caps.indexOf(cap) === -1) return fail('forbidden', `The claim does not allow ${cap}.`);
-      if (claim.kind === 'service' && (claim.purpose !== 'preview' || (SERVICE_PREVIEW_CAPS as readonly string[]).indexOf(cap) === -1)) {
-        return fail('forbidden', 'A service claim may only preview.');
-      }
-      if (disabled.indexOf(cap) !== -1) return fail('disabled', `${cap} is switched off right now.`);
-    } else if (claim && claim.kind === 'service') return fail('forbidden', 'A service claim may only preview.');
+    if (!spec) return fail('not-found', 'No such endpoint.');
 
-    const scope = `${app}|${owner}|${key}`;
+    if (method === 'GET') {
+      if (route === '/v1/capabilities') {
+        const ids: string[] = [];
+        for (const p of productsForApp(app as PlatformApp)) for (const c of p.capabilities) if (ids.indexOf(c) === -1) ids.push(c);
+        return done(
+          json(
+            200,
+            {
+              app,
+              capabilities: ids.map((id) => {
+                const c = getCapability(id);
+                return { id, kind: c ? c.kind : 'render', wave: c ? c.wave : 1, maturity: c ? c.maturity : 'adopt', disabled: disabled.indexOf(id) !== -1 };
+              }),
+            },
+            requestId,
+          ),
+        );
+      }
+      if (route === '/v1/notices') return done(respond(200, 'Third-party notices (fake platform).', { 'content-type': 'text/plain; charset=utf-8' }, requestId));
+      if (route.indexOf('/v1/jobs/') === 0) {
+        const job = jobs[route.slice('/v1/jobs/'.length)];
+        if (!job || job.app !== app || job.sub !== owner) return fail('not-found', 'No such job.');
+        return done(json(200, { state: 'succeeded', progress: 1, result: { op: job.op } }, requestId));
+      }
+      const file = files[route.slice('/v1/files/'.length)];
+      if (!file || file.app !== app || file.owner !== owner) return fail('not-found', 'No such file.');
+      return serveFile(file);
+    }
+
+    // A POST: the wire has checked the Idempotency-Key, the body cap, the claim (purpose, capability, product) and
+    // the signature over these bytes. What is left is the platform's own business.
+    if (spec.capability && disabled.indexOf(spec.capability) !== -1) return fail('disabled', `${spec.capability} is switched off right now.`);
+    if (route === '/v1/pdf' && !spec.capability) return fail('invalid', 'The PDF job names no known operation.');
+    const scope = await idempotencyScope(crypto, { app, sub: claim && claim.kind === 'user' ? claim.sub : null, key: v.idempotencyKey || '' });
+    if (scope === null) return fail('invalid', 'The request has no idempotency scope.');
     const bodyHash = sha256Hex(bytes);
     const seen = idempotency[scope];
     if (seen) return done(seen.bodyHash === bodyHash ? seen.response : error('conflict', 'This Idempotency-Key was used with a different body.', requestId), seen.bodyHash === bodyHash ? undefined : 'conflict');
@@ -324,7 +373,15 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
       return done(response, code);
     };
     const engine = { 'x-platform-engine': 'fake@1' };
-    const type = (h['content-type'] || '').split(';')[0].trim();
+    const type = (headers['content-type'] || '').split(';')[0].trim();
+    let parsed: unknown;
+    if (type === 'application/json') {
+      try {
+        parsed = JSON.parse(utf8Decode(bytes) || 'null');
+      } catch {
+        return store(error('invalid', 'The body is not valid JSON.', requestId), 'invalid');
+      }
+    }
 
     switch (route) {
       case '/v1/convert': {
@@ -342,7 +399,7 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
       case '/v1/files': {
         const ref = `f-${sha256Hex(`${app}|${owner}|${bodyHash}`).slice(0, 24)}`;
         const sniffed = sniff(bytes);
-        files[ref] = { ref, app, owner, bytes, sniffed, name: h['x-platform-file-name'] || 'file' };
+        files[ref] = { ref, app, owner, bytes, sniffed, name: headers['x-platform-file-name'] || 'file' };
         return store(json(200, { fileRef: ref, sha256: bodyHash, bytes: bytes.length, sniffed }, requestId));
       }
       case '/v1/pdf': {
@@ -359,11 +416,32 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
       default: {
         const op = parsed && typeof parsed === 'object' ? (parsed as { op?: unknown }).op : undefined;
         if (typeof op !== 'string' || !/^[a-z][a-z0-9._-]{0,63}$/.test(op)) return store(error('invalid', 'A job needs an op.', requestId), 'invalid');
-        const id = `job-${++seq}`;
-        const pollToken = `pt-${sha256Hex(`${id}|${bodyHash}`).slice(0, 32)}`;
-        jobs[id] = { app, owner, op, pollToken };
-        return store(json(202, { jobId: id, pollToken }, requestId));
+        if (!claim || claim.kind !== 'user') return store(error('forbidden', 'A job belongs to a user.', requestId), 'forbidden');
+        // The job record id is the caller's idempotency scope; its poll token is bound to the record's app and sub.
+        const minted = await mintPollToken({ secret: v.secret, crypto, now: clock }, { app, kid: v.kid, sub: claim.sub, jobId: scope });
+        if (minted.ok === false) return store(refusal(minted, requestId), minted.code);
+        jobs[scope] = { id: scope, app, sub: claim.sub, op };
+        return store(json(202, { jobId: scope, pollToken: minted.token, state: 'queued' }, requestId));
       }
+    }
+
+    function serveFile(file: StoredFile): FakeResponse {
+      const type = SERVED[file.sniffed];
+      if (!type || file.sniffed === 'zip') return fail('unsupported', 'That file type is never served.');
+      return done(
+        respond(
+          200,
+          file.bytes,
+          {
+            'content-type': type,
+            'content-disposition': `attachment; filename="${file.name.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+            'x-content-type-options': 'nosniff',
+            'content-security-policy': "sandbox; default-src 'none'",
+            'cache-control': 'private, no-store',
+          },
+          requestId,
+        ),
+      );
     }
   };
 
@@ -378,7 +456,10 @@ export const createFakePlatform = (options: FakePlatformOptions = {}): FakePlatf
 
   return {
     handle,
-    fetch: async (url, init = {}) => toFetch(await handle({ method: init.method || 'GET', path: url, headers: init.headers, body: init.body })),
+    fetch: async (url, init = {}) => {
+      const body = init.body instanceof ArrayBuffer ? new Uint8Array(init.body) : init.body;
+      return toFetch(await handle({ method: init.method || 'GET', path: url, headers: init.headers, body }));
+    },
     disable: (capability) => {
       if (disabled.indexOf(capability) === -1) disabled.push(capability);
     },

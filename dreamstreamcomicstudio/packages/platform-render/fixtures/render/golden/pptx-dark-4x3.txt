@@ -185,7 +185,6 @@ ppt/viewProps.xml
 <a:rPr lang="en-US" dirty="0"/>
 <a:t>Thirty seconds, then the cover.</a:t>
 </a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
 </a:p>
 </p:txBody>
 </p:sp>
@@ -268,14 +267,7 @@ ppt/viewProps.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -357,14 +349,7 @@ ppt/viewProps.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>

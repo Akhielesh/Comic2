@@ -13,6 +13,7 @@ import { runChat } from '../chat.js';
 import { runSwarm } from '../agents/orchestrator.js';
 import { runDeepResearch, type ResearchDepth } from '../research/deepResearch.js';
 import { resolveTools, type ToolContext } from '../tools/registry.js';
+import { platformToolContext } from '../tools/platformDocs.js';
 import { TEXT_FALLBACK } from '../autoRouter.js';
 import { spentUsageOf } from '../usage.js';
 import { safeClientMessage } from '../providers/errors.js';
@@ -91,8 +92,12 @@ export interface RunRecipeResult {
   activities: string[];
 }
 
+// The request's clientContext object also carries, out of band, its platform scope (ai/tools/platformDocs.ts): for a
+// request the shared-platform rollout admits, the recipe's tools get the signed-in user's id, the issued platform
+// answer and governed status, so a recipe that lists email_draft / deck_create builds them for THAT user (and its
+// connector tools stop losing the user). Nothing is read from the object's own properties; off: no change.
 const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
-  ctx ? { timezone: ctx.timezone, locale: ctx.locale, units: ctx.units, location: ctx.location } : undefined;
+  ctx ? { timezone: ctx.timezone, locale: ctx.locale, units: ctx.units, location: ctx.location, ...platformToolContext(ctx) } : undefined;
 
 const jsonDirective = (schema: Record<string, unknown>): string =>
   `\n\nIMPORTANT — return your final answer as a single JSON object that conforms to this JSON Schema, with no prose or code fences around it:\n${JSON.stringify(schema)}`;

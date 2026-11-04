@@ -11,7 +11,9 @@
 //   web, standalone: node scripts/notices.mjs --browser-modules <report.json> --out <file>
 //
 // Deterministic (sorted, no timestamps). Licence texts are read from each package's own
-// LICENSE/LICENCE/COPYING/NOTICE files; identical texts are printed once.
+// LICENSE/LICENCE/COPYING/NOTICE files; identical texts are printed once. Code that a package's dist
+// file bundles (BUNDLED_NOTICES: sax and pako inside docx, pako inside jszip) is printed with it; every library such
+// a file carries is recorded and judged in licence-check.mjs (BUNDLED_LIBRARIES).
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +72,185 @@ export function renderNotices(doc) {
   return `${out.join('\n').trimEnd()}\n`;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Code that a package's own dist file bundles. licenceModules() sees only the outer package (docx's
+// dist/index.mjs is one module), so the outer package's licence alone would drop these notices.
+// Each text is read from the installed package when it is there, else the pinned copy below is used
+// (pinned from sax 1.6.1 and pako 1.0.11; tests/config/licencePolicy.test.ts checks that they match).
+// ---------------------------------------------------------------------------------------------
+
+/** The Blue Oak Model License 1.0.0, as sax 1.6.1 ships it in LICENSE.md. */
+const BLUEOAK_1_0_0_TEXT = `# Blue Oak Model License
+
+Version 1.0.0
+
+## Purpose
+
+This license gives everyone as much permission to work with
+this software as possible, while protecting contributors
+from liability.
+
+## Acceptance
+
+In order to receive this license, you must agree to its
+rules.  The rules of this license are both obligations
+under that agreement and conditions to your license.
+You must not do anything with this software that triggers
+a rule that you cannot or will not follow.
+
+## Copyright
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe that contributor's
+copyright in it.
+
+## Notices
+
+You must ensure that everyone who gets a copy of
+any part of this software from you, with or without
+changes, also gets the text of this license or a link to
+<https://blueoakcouncil.org/license/1.0.0>.
+
+## Excuse
+
+If anyone notifies you in writing that you have not
+complied with [Notices](#notices), you can keep your
+license by taking all practical steps to comply within 30
+days after the notice.  If you do not do so, your license
+ends immediately.
+
+## Patent
+
+Each contributor licenses you to do everything with this
+software that would otherwise infringe any patent claims
+they can license or become able to license.
+
+## Reliability
+
+No contributor can revoke this license.
+
+## No Liability
+
+***As far as the law allows, this software comes as is,
+without any warranty or condition, and no contributor
+will be liable to anyone for any damages related to this
+software or this license, under any kind of legal claim.***`;
+
+/** pako's LICENSE (MIT), as pako 1.0.11 ships it. */
+const PAKO_MIT_TEXT = `(The MIT License)
+
+Copyright (C) 2014-2017 by Vitaly Puzrin and Andrei Tuputcyn
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.`;
+
+/** The zlib licence of pako's zlib port (the header of pako 1.0.11's lib/zlib/*.js files). */
+const PAKO_ZLIB_TEXT = `(C) 1995-2013 Jean-loup Gailly and Mark Adler
+(C) 2014-2017 Vitaly Puzrin and Andrey Tupitsin
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+  claim that you wrote the original software. If you use this software
+  in a product, an acknowledgment in the product documentation would be
+  appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+  misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.`;
+
+/**
+ * sax 1.6.1's LICENSE.md is the bare Blue Oak text with no copyright line; the line comes from its
+ * package.json author (Isaac Z. Schlueter) and the "and Contributors" form of sax's earlier licence file.
+ */
+const SAX_COPYRIGHT = 'Copyright (c) Isaac Z. Schlueter and Contributors';
+
+/** The leading `//` comment of a source file, without the slashes. @param {string} source */
+const leadingComment = (source) => {
+  /** @type {string[]} */
+  const lines = [];
+  for (const line of source.replace(/\r\n/g, '\n').split('\n')) {
+    if (!lines.length && (line.trim() === '' || /^['"]use strict['"];?$/.test(line.trim()))) continue;
+    if (!line.startsWith('//')) break;
+    lines.push(line.replace(/^\/\/ ?/, ''));
+  }
+  return lines.join('\n').trim();
+};
+
+/**
+ * @typedef {{ name: string, licence: string, heading: string, file: string, pinned: string, mustContain: string,
+ *             extract?: (text: string) => string, copyright?: string }} BundledText
+ * @typedef {{ name: string, licence: string, evidence: { file: string, marker: string }, texts: BundledText[] }} BundledPart
+ */
+
+/** @type {BundledText} */
+const SAX_TEXT = { name: 'sax', licence: 'BlueOak-1.0.0', heading: 'sax — BlueOak-1.0.0', file: 'LICENSE.md', pinned: BLUEOAK_1_0_0_TEXT, mustContain: 'Blue Oak Model License', copyright: SAX_COPYRIGHT };
+/** @type {BundledText[]} */
+const PAKO_TEXTS = [
+  { name: 'pako', licence: 'MIT', heading: 'pako — MIT', file: 'LICENSE', pinned: PAKO_MIT_TEXT, mustContain: 'Vitaly Puzrin' },
+  { name: 'pako', licence: 'Zlib', heading: "pako's zlib port — Zlib", file: 'lib/zlib/deflate.js', pinned: PAKO_ZLIB_TEXT, mustContain: 'Jean-loup Gailly and Mark Adler', extract: leadingComment },
+];
+
+/**
+ * Outer package → the bundled code whose licence texts are printed with it (lead decision L1: sax and pako), with
+ * the marker that proves it is still there (checked against the installed package by the tests, so a bump that drops
+ * one is noticed). The full list of what each dist file carries, with licences, is BUNDLED_LIBRARIES in
+ * scripts/licence-check.mjs: the gate judges every one of those and fails on a library it does not record.
+ * @type {Record<string, BundledPart[]>}
+ */
+export const BUNDLED_NOTICES = {
+  docx: [
+    { name: 'sax', licence: 'BlueOak-1.0.0', evidence: { file: 'dist/index.mjs', marker: '//#region node_modules/sax/lib/sax.js' }, texts: [SAX_TEXT] },
+    { name: 'pako', licence: 'MIT AND Zlib', evidence: { file: 'dist/index.mjs', marker: '//#region node_modules/jszip/dist/jszip.min.js' }, texts: PAKO_TEXTS },
+  ],
+  jszip: [
+    { name: 'pako', licence: 'MIT AND Zlib', evidence: { file: 'dist/jszip.min.js', marker: 'incorrect header check' }, texts: PAKO_TEXTS },
+  ],
+};
+
+/**
+ * The licence texts of the code bundled inside `name` (installed at `<root>/<key>`), each read from the
+ * installed library (nested under the outer package first, then hoisted), else from the pinned copy.
+ * @param {string} name @param {string} key @param {string} root
+ * @returns {{ note: string, texts: {file:string, text:string}[] }|null}
+ */
+export function bundledNotices(name, key, root) {
+  const parts = Object.prototype.hasOwnProperty.call(BUNDLED_NOTICES, name) ? BUNDLED_NOTICES[name] : null;
+  if (!parts) return null;
+  const texts = parts.flatMap((part) => part.texts.map((t) => {
+    let body = t.pinned;
+    for (const dir of [path.join(root, key, 'node_modules', t.name), path.join(root, 'node_modules', t.name)]) {
+      try {
+        const raw = readFileSync(path.join(dir, t.file), 'utf8').replace(/\r\n/g, '\n');
+        const text = (t.extract ? t.extract(raw) : raw).trim();
+        if (text.includes(t.mustContain)) { body = text; break; }
+      } catch { /* not installed here */ }
+    }
+    return { file: `${t.name}/${t.file}`, text: [t.heading, ...(t.copyright ? [t.copyright] : []), '', body].join('\n') };
+  }));
+  return { note: `Bundles ${parts.map((p) => `${p.name} (${p.licence})`).join(' and ')}; their notices are printed with this package's.`, texts };
+}
+
 /** Records of one scope set, as notice entries. @param {any} policy @param {string[]} scopes @param {string} root */
 function assetEntries(policy, scopes, root) {
   return (policy.dataAssets.records ?? [])
@@ -93,7 +274,9 @@ export function webNotices(report, opts = {}) {
   const policy = opts.policy ?? loadPolicy(path.join(root, 'scripts/licence-policy.json'));
   const packages = report.packages.map((p) => {
     const eff = effectiveLicence(p, policy);
-    return { title: p.name, version: p.version, licence: eff.licence ?? 'UNKNOWN', note: eff.note, texts: readLicenceTexts(path.join(root, p.key)) };
+    const bundled = bundledNotices(p.name, p.key, root);
+    const note = [eff.note, bundled?.note].filter(Boolean).join('; ') || undefined;
+    return { title: p.name, version: p.version, licence: eff.licence ?? 'UNKNOWN', note, texts: [...readLicenceTexts(path.join(root, p.key)), ...(bundled?.texts ?? [])] };
   });
   const vendored = (policy.vendored?.records ?? [])
     .filter((/** @type {any} */ r) => (report.vendored ?? []).includes(r.path))

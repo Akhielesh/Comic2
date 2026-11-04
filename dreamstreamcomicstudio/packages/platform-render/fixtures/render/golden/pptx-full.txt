@@ -1379,7 +1379,6 @@ xl/worksheets/sheet1.xml
 <a:rPr lang="en-US" dirty="0"/>
 <a:t>Open with the storm.</a:t>
 </a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
 </a:p>
 </p:txBody>
 </p:sp>
@@ -1462,14 +1461,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -1551,14 +1543,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -1640,14 +1625,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -1729,14 +1707,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -1818,14 +1789,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>
@@ -1907,14 +1871,7 @@ xl/worksheets/sheet1.xml
 <p:txBody>
 <a:bodyPr/>
 <a:lstStyle/>
-<a:p>
-<a:r>
-<a:rPr lang="en-US" dirty="0"/>
-<a:t>
-</a:t>
-</a:r>
-<a:endParaRPr lang="en-US" dirty="0"/>
-</a:p>
+<a:p/>
 </p:txBody>
 </p:sp>
 <p:sp>

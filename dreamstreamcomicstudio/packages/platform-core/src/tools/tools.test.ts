@@ -251,9 +251,9 @@ describe('projections', () => {
       expect(cap, tool.name).toBeDefined();
       expect(cap!.wave, tool.name).toBeLessThanOrEqual(tool.wave);
     }
-    // KNOWN_TOOL_NAMES gains email_draft and deck_create in W1.9; until then the gap is reported, not hidden.
+    // W1.9 has landed: KNOWN_TOOL_NAMES holds email_draft and deck_create, so every wave-1 tool is known.
     const missing = PLATFORM_TOOLS.filter((t) => t.wave === 1 && !KNOWN_TOOL_NAMES.includes(t.name)).map((t) => t.name);
-    expect(missing.every((n) => n === 'email_draft' || n === 'deck_create')).toBe(true);
+    expect(missing).toEqual([]);
   });
 });
 

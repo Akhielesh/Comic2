@@ -5,6 +5,10 @@
 // toggle chips) automatically. Enabling a category turns on all its tools; the
 // server then smart-routes to the few most relevant per message, so users can keep
 // several categories on without flooding the model.
+//
+// Tools behind a rollout (`rollout: 'platform-docs'`: email_draft, deck_create) are left out: the server adds them
+// per request only for a person the rollout admits, so they never belong to a chip and no chip's tool list or
+// "+N more" count changes for anyone.
 
 import { CATEGORY_META, toolsByCategory, type ToolCategory } from '../toolCatalog';
 
@@ -20,7 +24,7 @@ export interface ChatConnector {
 }
 
 export const CHAT_CONNECTORS: ChatConnector[] = CATEGORY_META.map((cat) => {
-  const tools = toolsByCategory(cat.id);
+  const tools = toolsByCategory(cat.id).filter((t) => !t.rollout);
   const names = tools.map((t) => t.name);
   const sample = tools.slice(0, 4).map((t) => t.label).join(', ');
   return {

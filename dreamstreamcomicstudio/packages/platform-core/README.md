@@ -27,10 +27,20 @@ keep their own auth, models, money and consent; nothing here calls an LLM, holds
 | `src/contract/{schema,richdoc,deck,email}.ts` | **The frozen public types and caps** (contract v1): the DSL's node types and `Infer`; the shared model primitives (`Run`, `SafeLink`, `AssetRef`, `ListItem`, `TableRow`) and op envelope (`OpBase`, `OpRejection`, `OpResult`); RichDoc, DeckSpec and EmailDoc v1 with their ops; the email render/review result types |
 | `src/schema/` | `s` (the DSL), `check()` (the validator), `toJsonSchema()` (`strict`, `mcp`, `llm`), `assertSchema()` |
 | `src/errors.ts` | The platform error codes with their HTTP status and retry rule, the error body, `PlatformFailure`, `SchemaDefinitionError` |
-| `src/index.ts` | The kernel barrel: contract, schema, errors |
-| `src/models/*`, `src/email`, `src/brand`, `src/prompts`, `src/tools`, `src/gates`, `src/cost`, `src/flows`, `src/wire`, `src/client`, `src/testing` | Built on the contract by the following wave-1 packages; each has its own entry point in `package.json` `exports` |
+| `src/index.ts` | The root barrel: contract, schema, errors and the three model barrels |
+| `src/models/{common,richdoc,deck,email}` | Schemas (`Infer` = contract), `check*` / `migrate*` (schema plus refinements), `apply*Ops` with exact inverses, `overlapCheck` / `deckOverlaps`, `stampAgentEmailOp` |
+| `src/email` | `renderEmail`, `emailToPlainText`, `reviewEmail` (recipients and links), the 9 templates |
+| `src/brand` (+ `skins/`) | BrandKit (`DREAMSTREAM_BRAND`, `ATLAS_BRAND`, `checkBrandKit`), the two skins, the font registry |
+| `src/prompts` | Versioned prompt packs (`emailDraft.v1`, `deckOutline.v1`), `buildPrompt`, `parseModelJson`, `repairMessage` |
+| `src/capabilities.ts`, `src/products.ts`, `src/tools`, `src/gates`, `src/cost`, `src/audit`, `src/flows` | Governance: the capability registry, product manifests, agent tools and their projections, gates and consent, host ports, usage wording, content-free audit events, flows and plan tokens |
+| `src/wire` | Canonical request signing, claims, poll tokens, headers and errors; crypto, fetch and the clock are injected |
+| `src/client` | The never-throwing gateway client; server-side only, because it holds the app secret |
+| `src/testing`, `conformance/` | Fake host ports, the fake `/v1` platform (on the wire's verifier), the conformance kit and its tests |
 | `fixtures/contract/` | Valid documents and ops for every block, element, layout and op: **the contract by example** |
 | `fixtures/schema/` | The DSL's 55 invalid and 20 valid cases (path and code), and the `toJsonSchema` snapshots |
+| `fixtures/models/` | Hostile documents (`invalid.json`, path and code each), the page-break and SmartArt-over-chart fixtures, golden apply/undo cases |
+| `fixtures/email/` | Hostile and brand fixtures and the golden renders (HTML and text SHA-256); regenerate with `UPDATE_EMAIL_GOLDEN=1 npx vitest run packages/platform-core/src/email/render.test.ts` |
+| `fixtures/wire/` | Golden vectors for request signatures, claims and poll tokens |
 | `scripts/check-consumers.mjs` | Compiles the sources the way each consumer does |
 | `scripts/export.mjs` | Writes the two release tarballs, `MANIFEST.json` and `SHA256SUMS` |
 
@@ -70,8 +80,11 @@ either way.
 
 ## Consumers
 
+- **The wire contract** is [docs/platform/contract.md](../../docs/platform/contract.md): what a host and the platform
+  send each other, as the code defines it.
+- **Keep `./client` in server-only code.** It holds the app secret, so it never belongs in a browser bundle.
 - **Inside this repo**, import by relative path, always with `.js`: from `server/src/ai/tools/` that is
-  `'../../../../packages/platform-core/src/index.js'`. Nothing in the apps imports it yet.
+  `'../../../../packages/platform-core/src/index.js'` (or a subpath such as `src/email/index.js`).
 - **Outside this repo**, vendor a release: `node packages/platform-core/scripts/export.mjs --out dist` writes
   `platform-core-<ver>.tgz` (sources as they are), `platform-core-bundler-<ver>.tgz` (the same with the `.js`
   suffixes stripped, for a bundler that does not map `.js` to `.ts`), `MANIFEST.json` (version, git SHA, the sha256 of
@@ -104,10 +117,36 @@ either way.
   `index`); `update_*`, `set_*` and `move_slide` invert to themselves.
 - Email block ops address top-level blocks only (a block inside `columns` changes through an `update_block` of its
   `columns` block); `set_recipients` replaces `to`, `cc` and `bcc` together, and an absent `cc` / `bcc` clears it.
+- `apply*Ops(doc, ops, {seenOpIds})` takes the host's op log: an op id in it is refused as `duplicate`, so a retried
+  or re-stamped op still applies at most once. `acceptDocSuggestion` requires that log.
+- `apply*Ops` is pure and never throws: unreadable input is refused, and a call that applies nothing returns the same
+  document reference. `invert*Ops` returns checked ops or `null`.
+- Ids are unique where they name something (sections, blocks, slides, a slide's elements, attachments) and a run
+  names each mark once: the `check*` functions refuse a repeat as `duplicate-id`.
+
+## Wire
+
+- **Signed requests.** `X-Platform-Signature` is `base64url(HMAC-SHA256(secret, canonical))`, where canonical is
+  `"v1\n" + METHOD + "\n" + PATH + "?" + CANONICAL_QUERY + "\n" + TS + "\n" + hex(sha256(body)) + "\n" +
+  (claim ? hex(sha256(claim)) : "-") + "\n" + IDEMPOTENCY_KEY`, the query sorted by key and RFC 3986-encoded.
+- **Derived keys.** The claim key is `HMAC(appSecret, "platform-claim-v1")`, the poll-token key
+  `HMAC(appSecret, "platform-poll-v1")`. A claim's `sub` is `hex(HMAC(HMAC(subSecret, "platform-sub-v1"), userId))`
+  cut to 32 characters, where `subSecret` is the host's own, never rotates and differs from every signing secret.
+- **Two-phase verify.** `preflightRequest` checks everything but the body before anything is stored;
+  `verifyRequestSignature` checks the signature over the received bytes; `verifyRequest` runs both for a body in memory.
+- `fixtures/wire/` are the golden vectors: a change there is a contract change.
+- `maxResponseBytes`: refused before reading when Content-Length says so; while reading when the response exposes a
+  body stream (fetch's Response does); otherwise only after reading the whole body. A host whose fetch returns no
+  stream should wrap it with a size-limiting reader.
+- With `strict` off, narrow every result with `r.ok === false`.
 
 ## Tests
 
 `npx vitest run packages/platform-core` (from the app root): every invalid fixture rejected at its exact path and code,
 schemas without caps throwing, unknown keys rejected at every depth, the `toJsonSchema` snapshots, `Infer` equal to the
 frozen contract types, every contract fixture valid, the purity rules (AST-based), `check-consumers` for every target
-plus planted ES2018+ APIs and an extensionless import failing, and two exports byte-identical.
+plus planted ES2018+ APIs and an extensionless import failing, and two exports byte-identical. Then the layers on
+top: the model tests (hostile documents, purity under frozen inputs, apply and undo goldens, overlaps); the email
+goldens and the property that `emailToPlainText(d)` never exceeds `emailBodyTextLength(d)`; governance and the
+conformance kit; the wire's golden vectors under node:crypto and WebCrypto adapters, and the client end to end
+through the wire's verifier and the fake platform.

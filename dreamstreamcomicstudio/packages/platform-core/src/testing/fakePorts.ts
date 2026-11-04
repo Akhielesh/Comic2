@@ -6,11 +6,12 @@
  */
 import type { CapabilityId } from '../capabilities.js';
 import type { AuditPort, PlatformAuditEvent } from '../audit/event.js';
-import { base64urlEncode, canonicalJson, hmacSha256, toHex } from '../audit/inputHash.js';
+import { hmacSha256, sha256, toHex, utf8Bytes } from '../audit/inputHash.js';
 import type { DraftAction } from '../gates/consent.js';
 import type { ApproverPort, ClaimPurpose, IdentityPort, MeterClaimResult, MeterPort, MeterReserveResult, MeterSettleResult, PlatformCostMetadata, ServicePreviewCap } from '../gates/ports.js';
-import { SERVICE_PREVIEW_CAPS } from '../gates/ports.js';
 import type { FlowModelReply, FlowModelRequest } from '../flows/types.js';
+import { WIRE_KEY_LABELS, mintServiceClaim, mintUserClaim, pseudonymousSub } from '../wire/index.js';
+import type { ClaimTier, WireCrypto } from '../wire/index.js';
 
 // ── Clock and ids ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,29 @@ export const createFakeLedger = (options: FakeLedgerOptions = {}): FakeLedger =>
   return ledger;
 };
 
+// ── The wire's crypto and keys, for tests ───────────────────────────────────────────────────────────────────────
+
+/** The wire's `WireCrypto` over this package's own pure SHA-256 / HMAC (no WebCrypto, no node:crypto; synchronous). */
+export const FAKE_WIRE_CRYPTO: WireCrypto = {
+  sha256: (data) => sha256(data),
+  hmacSha256: (key, data) => hmacSha256(key, data),
+};
+
+/** The app secret every fake signs with by default (tests only; at least 32 bytes). */
+export const FAKE_APP_SECRET = 'fake-app-secret-for-tests-only-0123456789';
+/** The key id the fake platform's default key ring and `fakeClientConfig` use. */
+export const FAKE_KEY_ID = 'fake-1';
+/** The host's sub secret in the fakes: distinct from every signing secret, as the wire requires (tests only). */
+export const FAKE_SUB_SECRET = 'fake-sub-secret-for-tests-only-0123456789abcdef';
+
+/**
+ * The pseudonymous subject the fake identity puts in a user claim, computed synchronously: the wire's
+ * `pseudonymousSub` derivation (`hex(HMAC(HMAC(subSecret, "platform-sub-v1"), userId))[0..32]`) over the same pure
+ * HMAC. `conformance/kit.test.ts` pins it to `pseudonymousSub` itself.
+ */
+export const fakeSub = (userId: string, subSecret: string = FAKE_SUB_SECRET): string =>
+  toHex(hmacSha256(hmacSha256(utf8Bytes(subSecret), WIRE_KEY_LABELS.sub), userId)).slice(0, 32);
+
 // ── Identity ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface FakeIdentityOptions {
@@ -148,45 +172,44 @@ export interface FakeIdentityOptions {
   session: { userId: string } | null;
   app?: string;
   product?: string;
-  /** The app secret the claims are signed with (tests only). */
+  /** The app secret the claims are signed with (tests only; default `FAKE_APP_SECRET`). */
   appSecret?: string;
-  tier?: 'free' | 'creator' | 'studio' | 'admin' | 'atlas-beta';
+  /** The host's sub secret (tests only; default `FAKE_SUB_SECRET`). */
+  subSecret?: string;
+  tier?: ClaimTier;
   clock?: () => number;
   ids?: () => string;
 }
 
-const CLAIM_TTL_S = 300;
-
-/** A claim in the wire's shape: `base64url(json) "." base64url(HMAC(claimKey, base64url(json)))`. */
-const signClaim = (payload: object, appSecret: string): string => {
-  const body = base64urlEncode(canonicalJson(payload));
-  const claimKey = hmacSha256(appSecret, 'platform-claim-v1');
-  return `${body}.${base64urlEncode(hmacSha256(claimKey, body))}`;
-};
-
 /**
- * An identity port bound to one fake request. `mintUserClaim` rejects without a session; `mintServiceClaim` rejects
- * any capability outside `SERVICE_PREVIEW_CAPS` and any purpose but `preview`. The subject is pseudonymous:
- * `hex(HMAC(appSecret, userId))[0..32]`.
+ * An identity port bound to one fake request, minting with the wire's own `mintUserClaim` / `mintServiceClaim`
+ * (src/wire), so its claims are exactly what a gateway verifies: `base64url(json) "." base64url(HMAC(claimKey,
+ * base64url(json)))`, the wire's default lifetime (120 s), a pseudonymous `sub` from `pseudonymousSub`.
+ * `mintUserClaim` rejects without a session; `mintServiceClaim` rejects any purpose but `preview` and any capability
+ * outside the preview capabilities (the wire refuses them).
  */
 export const createFakeIdentity = (options: FakeIdentityOptions): IdentityPort => {
   const app = options.app || 'dreamstream';
   const product = options.product || 'chat';
-  const secret = options.appSecret || 'fake-app-secret-for-tests-only-0123456789';
+  const secret = utf8Bytes(options.appSecret || FAKE_APP_SECRET);
+  const subSecret = utf8Bytes(options.subSecret || FAKE_SUB_SECRET);
   const clock = options.clock || (() => Date.now());
   const ids = options.ids || createIdSequence('jti');
+  const keys = { secret, crypto: FAKE_WIRE_CRYPTO, now: clock };
   return {
     async mintUserClaim(purpose: ClaimPurpose, caps: readonly CapabilityId[]): Promise<string> {
       if (!options.session || !options.session.userId) throw new Error('No authenticated session: a user claim needs the host to have signed the user in.');
-      const now = Math.floor(clock() / 1000);
-      const sub = toHex(hmacSha256(secret, options.session.userId)).slice(0, 32);
-      return signClaim({ v: 1, kind: 'user', app, product, sub, tier: options.tier || 'free', purpose, caps: caps.slice(), exp: now + CLAIM_TTL_S, jti: ids() }, secret);
+      const sub = await pseudonymousSub(FAKE_WIRE_CRYPTO, subSecret, options.session.userId);
+      if (sub === null) throw new Error('No pseudonymous subject for that user.');
+      const r = await mintUserClaim(keys, { app, product, sub, tier: options.tier || 'free', purpose, caps, jti: ids() });
+      if (r.ok === false) throw new Error(r.message);
+      return r.token;
     },
     async mintServiceClaim(purpose: 'preview', caps: readonly ServicePreviewCap[]): Promise<string> {
       if (purpose !== 'preview') throw new Error('A service claim is for previews only.');
-      for (const c of caps) if ((SERVICE_PREVIEW_CAPS as readonly string[]).indexOf(c) === -1) throw new Error(`A service claim cannot carry ${String(c)}.`);
-      const now = Math.floor(clock() / 1000);
-      return signClaim({ v: 1, kind: 'service', app, product, purpose, caps: caps.slice(), exp: now + CLAIM_TTL_S, jti: ids() }, secret);
+      const r = await mintServiceClaim(keys, { app, product, purpose, caps, jti: ids() });
+      if (r.ok === false) throw new Error(r.message);
+      return r.token;
     },
   };
 };
@@ -267,6 +290,6 @@ export const createFakePorts = (options: { governed?: boolean; budgetUsd?: numbe
     approver: createFakeApprover(),
     identity: createFakeIdentity({ session, clock }),
     planKey: FAKE_PLAN_KEY,
-    sub: session ? toHex(hmacSha256('fake-app-secret-for-tests-only-0123456789', session.userId)).slice(0, 32) : 'anonymous',
+    sub: session ? fakeSub(session.userId) : 'anonymous',
   };
 };

@@ -6,16 +6,20 @@
 import type { CapabilityId } from '../capabilities.js';
 import type { Schema } from '../contract/schema.js';
 import type { DraftAction } from './consent.js';
+import type { PreviewCapability, UserClaimPurpose } from '../wire/types.js';
 
 // AuditPort and PlatformAuditEvent live in src/audit/event.ts (re-exported by ./gates).
 
-/** What a user claim lets the gateway do (wire claims, plan §5.8). */
-export const CLAIM_PURPOSES = ['compose', 'render', 'extract', 'pdf', 'export', 'job-read'] as const;
-export type ClaimPurpose = (typeof CLAIM_PURPOSES)[number];
+/**
+ * What a user claim lets the gateway do (wire claims, plan §5.8): the wire's `USER_CLAIM_PURPOSES`, one list for
+ * both (src/wire/types.ts). The wire's own `ClaimPurpose` also admits the service-only `preview`.
+ */
+export { USER_CLAIM_PURPOSES as CLAIM_PURPOSES } from '../wire/types.js';
+export type ClaimPurpose = UserClaimPurpose;
 
-/** The only capabilities a service claim (no user: background previews) may ever carry. */
-export const SERVICE_PREVIEW_CAPS = ['doc.convert', 'doc.extract', 'doc.thumbnail'] as const;
-export type ServicePreviewCap = (typeof SERVICE_PREVIEW_CAPS)[number];
+/** The only capabilities a service claim (no user: background previews) may ever carry: the wire's `PREVIEW_CAPABILITIES`. */
+export { PREVIEW_CAPABILITIES as SERVICE_PREVIEW_CAPS } from '../wire/types.js';
+export type ServicePreviewCap = PreviewCapability;
 
 /**
  * Mints the short-lived signed claims the gateway accepts. Bound to ONE incoming request by the host.

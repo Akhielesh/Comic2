@@ -1,7 +1,8 @@
 // W1.6 licence gate: ONE policy (scripts/licence-policy.json) over
 //   1. every npm lockfile the repo ships from (the app, each Worker),
 //   2. the packages that are really in the browser bundle (licenceModules() in vite.config.ts writes them
-//      to $LICENCE_MODULES_OUT during `npm run build`),
+//      to $LICENCE_MODULES_OUT during `npm run build`), and the libraries their own dist files carry
+//      (BUNDLED_LIBRARIES: docx's polyfills, sax and jszip; jszip's pako, lie and immediate),
 //   3. platform-engine/engines.lock.json (engine binaries: sha256, licence, source URL),
 //   4. the data assets (fonts, ICC profiles), vendored code and CDN scripts in index.html / live.html.
 //
@@ -388,6 +389,147 @@ export function browserModulesReport(ids, opts) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Libraries bundled inside a package's own dist file
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * @typedef {{ file: string, format: 'regions'|'browserify', libraries: Record<string, string> }} BundledRecord
+ */
+
+/**
+ * Third-party libraries that a package's own dist file carries inside it. Its bundler inlined them, so they reach
+ * our browser bundle under the OUTER package's name and licenceModules() never sees them. Keyed by the outer package:
+ * the dist file Vite resolves for it, how that file names what it carries, and every library in it with the SPDX
+ * licence of its package.json.
+ * - `regions`: a Rolldown/Rollup build; each `//#region node_modules/…/<name>/<file>` comment names one library (the
+ *   innermost `node_modules/<name>`).
+ * - `browserify`: a browserify bundle; each bare name in its module maps (`{lie:37,"./utils":32}`) is one library,
+ *   except a name mapped to `void 0` (left out) or one the package's own `browser` field maps to a local file.
+ * A library that has its own record here (docx carries jszip's dist file) carries that record's libraries too.
+ * The bundler's injected helpers (`\0rolldown/runtime.js`, `\0@oxc-project+runtime@…/helpers`) are not listed, just as
+ * Vite's own helpers in our bundle are not.
+ * runGate() judges every recorded library under the browser rules whenever its outer package is in the bundle, and
+ * fails on a library the installed dist file carries that is not recorded here. tests/config/licencePolicy.test.ts
+ * holds this list to the installed files and the installed copies' licences. The licence texts scripts/notices.mjs
+ * prints for them are BUNDLED_NOTICES (sax and pako).
+ * @type {Record<string, BundledRecord>}
+ */
+export const BUNDLED_LIBRARIES = {
+  docx: {
+    file: 'dist/index.mjs',
+    format: 'regions',
+    libraries: {
+      'available-typed-arrays': 'MIT', 'base64-js': 'MIT', buffer: 'MIT', 'call-bind': 'MIT', 'call-bind-apply-helpers': 'MIT',
+      'call-bound': 'MIT', 'define-data-property': 'MIT', 'dunder-proto': 'MIT', 'es-define-property': 'MIT', 'es-errors': 'MIT',
+      'es-object-atoms': 'MIT', events: 'MIT', 'for-each': 'MIT', 'function-bind': 'MIT', 'get-intrinsic': 'MIT', 'get-proto': 'MIT',
+      gopd: 'MIT', 'has-property-descriptors': 'MIT', 'has-symbols': 'MIT', 'has-tostringtag': 'MIT', 'hash.js': 'MIT', hasown: 'MIT',
+      ieee754: 'BSD-3-Clause', inherits: 'ISC', 'is-arguments': 'MIT', 'is-callable': 'MIT', 'is-generator-function': 'MIT',
+      'is-typed-array': 'MIT', jszip: '(MIT OR GPL-3.0-or-later)', 'math-intrinsics': 'MIT', 'minimalistic-assert': 'ISC', nanoid: 'MIT',
+      'possible-typed-array-names': 'MIT', 'readable-stream': 'MIT', 'safe-buffer': 'MIT', sax: 'BlueOak-1.0.0', 'set-function-length': 'MIT',
+      'stream-browserify': 'MIT', string_decoder: 'MIT', util: 'MIT', 'util-deprecate': 'MIT', 'vite-plugin-node-polyfills': 'MIT',
+      'which-typed-array': 'MIT', xml: 'MIT', 'xml-js': 'MIT',
+    },
+  },
+  jszip: {
+    file: 'dist/jszip.min.js',
+    format: 'browserify',
+    libraries: { immediate: 'MIT', lie: 'MIT', pako: '(MIT AND Zlib)', setimmediate: 'MIT' },
+  },
+};
+
+/**
+ * The libraries a `regions` dist file carries: the innermost `node_modules/<name>` of each `//#region` comment, sorted.
+ * @param {string} source @returns {string[]}
+ */
+export function regionLibraries(source) {
+  const names = new Set();
+  for (const m of source.matchAll(/^\/\/#region (.*)$/gm)) {
+    const all = [...m[1].matchAll(/node_modules\/((?:@[^/\s]+\/)?[^/\s]+)/g)];
+    if (all.length) names.add(all[all.length - 1][1]);
+  }
+  return [...names].sort();
+}
+
+/**
+ * The libraries a `browserify` bundle carries: the bare names in its module maps (`},{map}]` right before the next
+ * module or the entry list), except names mapped to `void 0` and the ones in `local` (the package's `browser` field
+ * maps them to its own file). Sorted.
+ * @param {string} source @param {string[]} [local] @returns {string[]}
+ */
+export function browserifyLibraries(source, local = []) {
+  const names = new Set();
+  for (const m of source.matchAll(/,\{([^{}]*)\}\](?=,\d+:\[function|\},\{\},\[)/g)) {
+    for (const entry of m[1].split(',')) {
+      const i = entry.lastIndexOf(':');
+      if (i < 0) continue;
+      const name = entry.slice(0, i).trim().replace(/^"|"$/g, '');
+      const target = entry.slice(i + 1).trim();
+      if (name && !name.startsWith('.') && !name.startsWith('/') && /^\d+$/.test(target) && !local.includes(name)) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/**
+ * What the installed `<root>/<key>/<record.file>` carries, or null when it cannot be read.
+ * @param {BundledRecord} record @param {string} root @param {string} key @returns {string[]|null}
+ */
+export function bundledLibrariesOnDisk(record, root, key) {
+  let source;
+  try { source = readFileSync(path.join(root, key, record.file), 'utf8'); } catch { return null; }
+  if (record.format === 'regions') return regionLibraries(source);
+  /** @type {string[]} */
+  let local = [];
+  try {
+    const browser = JSON.parse(readFileSync(path.join(root, key, 'package.json'), 'utf8')).browser;
+    if (browser && typeof browser === 'object') local = Object.keys(browser).filter((k) => typeof browser[k] === 'string' && browser[k].startsWith('.') && !k.startsWith('.'));
+  } catch { /* no package.json: nothing is local */ }
+  return browserifyLibraries(source, local);
+}
+
+/**
+ * The bundled libraries of one browser package, judged under the browser rules, plus a failure for each library its
+ * installed dist file carries that `records` does not list (a warning when the file cannot be read).
+ * @param {{ key: string, name: string, version: string }} pkg @param {any} policy
+ * @param {{ root: string, records?: Record<string, BundledRecord> }} opts
+ * @returns {{ results: Result[], warnings: string[] }}
+ */
+export function checkBundledLibraries(pkg, policy, opts) {
+  const records = opts.records ?? BUNDLED_LIBRARIES;
+  /** @type {Result[]} */
+  const results = [];
+  /** @type {string[]} */
+  const warnings = [];
+  const own = Object.prototype.hasOwnProperty.call(records, pkg.name) ? records[pkg.name] : null;
+  if (!own) return { results, warnings };
+  const source = `${pkg.key}/${own.file}`;
+  const onDisk = bundledLibrariesOnDisk(own, opts.root, pkg.key);
+  if (onDisk === null) warnings.push(`${source} could not be read: the libraries ${pkg.name} bundles were judged from BUNDLED_LIBRARIES only`);
+  else {
+    const unrecorded = onDisk.filter((n) => !Object.prototype.hasOwnProperty.call(own.libraries, n));
+    if (unrecorded.length) {
+      results.push({ subject: `${pkg.name}@${pkg.version} bundled code`, name: pkg.name, version: pkg.version, scope: 'browser', source, licence: '', status: 'fail',
+        problems: unrecorded.map((n) => ({ kind: 'bundled-unrecorded', message: `${source} carries ${n}, which BUNDLED_LIBRARIES (scripts/licence-check.mjs) does not record: add it with its licence` })) });
+    }
+    const gone = Object.keys(own.libraries).filter((n) => !onDisk.includes(n));
+    if (gone.length) warnings.push(`${source} no longer carries ${gone.join(', ')}: remove ${gone.length > 1 ? 'them' : 'it'} from BUNDLED_LIBRARIES (and BUNDLED_NOTICES)`);
+  }
+  // Depth-first through nested records (docx → jszip → pako), each library judged once per outer package.
+  const seen = new Set([pkg.name]);
+  /** @param {BundledRecord} rec @param {string} via */
+  const judge = (rec, via) => {
+    for (const [name, licence] of Object.entries(rec.libraries)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      results.push(evaluateItem({ subject: `${name} (bundled in ${pkg.name}@${pkg.version})`, name, licence, scope: 'browser', source: `${via}: ${name}` }, policy));
+      if (Object.prototype.hasOwnProperty.call(records, name)) judge(records[name], `${via} → ${name}/${records[name].file}`);
+    }
+  };
+  judge(own, source);
+  return { results, warnings };
+}
+
+// ---------------------------------------------------------------------------------------------
 // engines.lock.json (JSON Schema subset)
 // ---------------------------------------------------------------------------------------------
 
@@ -658,6 +800,7 @@ export function browserReportProblem(report) {
  *   dataAssetFiles?: string[], vendoredDirs?: string[], htmlPages?: {file:string, html:string}[],
  *   exists?: (rel: string) => boolean,
  *   noticesText?: string|null,
+ *   bundledLibraries?: Record<string, BundledRecord>, // default BUNDLED_LIBRARIES
  * }} [opts]
  */
 export function runGate(opts = {}) {
@@ -706,6 +849,15 @@ export function runGate(opts = {}) {
     results.push(evaluateItem({ name: p.name, version: p.version, licence: p.licence, scope: 'browser', source: `bundle ${p.key} (not in package-lock.json)` }, policy));
   }
   if (browser) info.push(`browser bundle: ${browserPackages.length} npm packages, ${browser.firstPartyModules ?? 0} first-party modules`);
+  // Libraries a bundled package's own dist file carries (BUNDLED_LIBRARIES): judged under the browser rules too.
+  let bundledCount = 0;
+  for (const p of browserPackages) {
+    const b = checkBundledLibraries(p, policy, { root, records: opts.bundledLibraries });
+    bundledCount += b.results.length;
+    results.push(...b.results);
+    warnings.push(...b.warnings);
+  }
+  if (bundledCount) info.push(`browser bundle: ${bundledCount} checks of the libraries carried inside bundled packages' own dist files`);
 
   // 2. Engines.
   /** @type {Record<string, any>} */

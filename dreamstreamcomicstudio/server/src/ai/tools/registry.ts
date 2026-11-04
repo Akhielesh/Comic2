@@ -47,6 +47,7 @@ import { analyzeDataTool } from './analyzeData.js';
 import { transformDataTool } from './transformData.js';
 import { convertImageTool } from './convertImage.js';
 import { makeRunPythonTool, runPythonTool } from './runPython.js';
+import { PLATFORM_CHAT_TOOL_NAMES, buildPlatformChatTool, isPlatformChatToolName } from './platformTools.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -1228,6 +1229,11 @@ const CONTEXTUAL_TOOL_NAMES = ['get_news', 'find_places'] as const;
 // of the client allowlist. `run_agent_swarm` and `generate_image` are wired in by the routes.
 const META_TOOL_NAMES = ['run_agent_swarm', 'generate_image'] as const;
 
+// Shared-platform tools (email_draft, deck_create) are built per request like get_news, but only for a request whose
+// server-only `platformDocsFor(req)` answer is enabled (ctx.platformDocs; PLATFORM_DOCS kill switch + rollout stage
+// + role). Without it they are left out: a recipe or agent listing them simply does not get them.
+export { PLATFORM_CHAT_TOOL_NAMES } from './platformTools.js';
+
 /** The set of tool names a client is allowed to enable (allowlist). */
 export const KNOWN_TOOL_NAMES = [
   ...Object.keys(STATIC_TOOLS),
@@ -1235,7 +1241,9 @@ export const KNOWN_TOOL_NAMES = [
   // Per-user connector tools (Gmail/Drive/Calendar/Sheets/Maps + unified search),
   // built per-request with the signed-in user's context.
   ...CONNECTOR_TOOL_NAMES,
-  ...META_TOOL_NAMES
+  ...META_TOOL_NAMES,
+  // Platform drafts: allowlisted names; resolveTools builds them only for an enabled request (see above).
+  ...PLATFORM_CHAT_TOOL_NAMES
 ];
 
 /** Resolve an allowlisted set of tool names to their implementations. */
@@ -1257,6 +1265,12 @@ export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): Ch
     if (name === 'run_python') {
       // Built per-request so the current turn's attachments (on ctx) reach the sandbox.
       tools.push(makeRunPythonTool(ctx));
+      continue;
+    }
+    if (isPlatformChatToolName(name)) {
+      // Built per-request from the server-only platform answer on ctx; absent when the request is not enabled.
+      const platformTool = buildPlatformChatTool(name, ctx);
+      if (platformTool) tools.push(platformTool);
       continue;
     }
     // Per-user connector tools (built with ctx.userId so they only ever touch the
