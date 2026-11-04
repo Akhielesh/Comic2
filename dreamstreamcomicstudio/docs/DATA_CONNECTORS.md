@@ -176,6 +176,22 @@ bodies of a plain paid and a plain free-only turn against the previous code).
 | Gemini (direct key) | **owner to confirm** the platform key is on a paid (billing-enabled) project: unpaid Gemini API use may be used to improve Google products and read by human reviewers |
 | NVIDIA, DeepSeek, Z.ai, MiniMax, Tencent, xAI | **not verified**: owner to confirm before connector content is used with them |
 
+**Decisions (lead, accepted 2026-11-04):**
+- *Server provenance store, fail-open.* Replies connected content entered are recognised by the server's own store
+  (`replyProvenance.ts`) as well as by the client's echo; a store or database failure falls back to the in-process cache
+  and is logged, and never blocks a chat (the cost: replies from before a restart can be missed while the store is down).
+- *Catalog lookup registration.* "Free" includes a model the live catalog prices at $0; `routes/chat.ts` registers that
+  lookup with the provider instead of a dynamic import. A process that never loads the chat routes uses the `:free`
+  rule alone.
+- *Egress probe.* A reply is marked only when connector content actually entered it (the provider reports what a
+  denied body carried), while deny is still decided up front.
+- *Memory marking rule.* Memory distilled from a conversation that carries, or may carry, connected content is marked
+  for any provider (a connected user's memory included), and a connected user's free turn retrieves memory without the
+  marked rows.
+- *Free only with a pinned paid model is a flagged paid turn:* connector tools stay, data collection is denied, no paid
+  retry. Its swarm, delegation and deep-research workers run on that pinned model, and `/api/recipes/distill` runs it
+  rather than refusing.
+
 **Known gaps** (also in `docs/infrastructure/SECURITY_FINDINGS.md`, C1):
 - *History provenance (C1a, partly fixed).* Replies are recognised by the server's provenance store
   from the day it is deployed. Not covered: replies from conversations before the deploy, a reply
