@@ -1612,12 +1612,32 @@ export interface TurnToolset {
 }
 
 /**
+ * Lettering words: balloons, their looks, and dialogue itself (agent-editor plan §3 B3, 0a). "move Mira's line to the
+ * top left" and "swap the order of these two lines" lost the whole lettering group before `line`, `dialogue`, `said`
+ * and the position words were here (spot-check 5).
+ */
+const LETTERING_WORDS = String.raw`fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|italics?|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?|lines?|dialogues?|said|says|speech|speaks?|narrat\w*`;
+/** "move page 3 to the top": a page move, where top / bottom / corner are about the book, not a balloon. */
+const PAGE_MOVE = String.raw`\b(?:move|swap|switch|put|drag)\s+(?:the\s+|this\s+|that\s+)?pages?\b`;
+/** Breakdown words that always count; a bare `left` ("top left") is not one of them. */
+const BREAKDOWN_WORDS = String.raw`breakdown|plan|cost|price|quote|how much|status|what['’]?s left|pages? left|left to`;
+/**
+ * A page action ("delete page 4", "restore the previous version of page 2"): the timeline's job. There `page` alone does
+ * not make breakdown hot, or its 2 tools sort ahead of the timeline and the cap trims delete_page / move_page on a
+ * drawn book (core + breakdown + timeline is the whole budget once a core seat is reserved).
+ */
+const PAGE_ACTION = String.raw`\b(?:move|swap|switch|put|drag|delete|remove|insert|add|duplicate|copy|restore|reorder)\b[^.!?\n]{0,40}\bpages?\b`;
+
+/**
  * Words that make a feature group relevant to THIS turn. When the per-turn cap must trim,
  * relevant groups are kept first (then by priority), so "make the shouts red" never loses the
- * lettering tools to an unrelated group. Tuned on the golden set (golden/scenarios/*.json).
+ * lettering tools to an unrelated group. Tuned on the golden set (golden/scenarios/*.json) and the dialogue phrases of
+ * the agent-editor plan (tools.hints.test.ts). Both hot, lettering (priority 20) is kept before the timeline (30), so
+ * the timeline's move / swap never starves a dialogue move; position words (top, bottom, corner) wake lettering only
+ * when the sentence is not a page move, so "move page 3 to the top" keeps move_page.
  */
 export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
-  lettering: /\b(fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?)\b/i,
+  lettering: new RegExp(String.raw`\b(?:${LETTERING_WORDS})\b|^(?![\s\S]*${PAGE_MOVE})[\s\S]*\b(?:top|bottom|corners?)\b`, 'i'),
   timeline: /\b(move|swap|switch|insert|add (?:a|one|another) page|delete|remove (?:page|it)|duplicate|copy|versions?|undo|restore|earlier|previous|original|fit|square|book|back cover|title page)\b/i,
   publish: /\b(publish|share|link|unpublish|public|unlisted|readers?|post it|send (?:it|the link)|whats ?app|instagram)\b/i,
   i18n: /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|portuguese|edition)\b|[\u0900-\u0DFF]/i,
@@ -1625,7 +1645,8 @@ export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
   safety: /\b(rating|pg-?13|pg\b|safe|safety|gore|violent|violence|scary|horror|blood)\b/i,
   library: /\b(presets?|styles?|looks?|library)\b/i,
   reader: /\b(reader|page turn|chapters?|dedication|credits|guided)\b/i,
-  breakdown: /\b(pages?|panels?|breakdown|plan|cost|price|quote|how much|status|left)\b/i,
+  // `left` only as "what's left / pages left / left to draw": a bare `left` ("top left") made breakdown hot on balloon moves.
+  breakdown: new RegExp(String.raw`\b(?:${BREAKDOWN_WORDS})\b|^(?![\s\S]*${PAGE_ACTION})[\s\S]*\b(?:pages?|panels?)\b`, 'i'),
   // models.md §3.8: a model ask ("just switch it to GPT") also wakes the timeline ("switch"); the models group must stay
   // in the budget so model_options is offered. Only an explicit model ask (MODEL_ASK_RE): the wider MODEL_HINT_RE
   // ("too expensive", "consistent", "sharper") put models ahead of the timeline on page actions and the cap trimmed
@@ -1639,8 +1660,17 @@ export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
 const groupRelevant = (g: ToolGroup, turn: DirectorTurn): boolean => {
   const hint = GROUP_HINTS[g.id];
   if (g.id === 'refs' && (turn.attachments.length || turn.images.length)) return true;
+  // Selected balloons: "swap these two", "move it up a bit" are about them even with no lettering word.
+  if (g.id === 'lettering' && turn.focus?.lineIds?.length) return true;
   return !!hint && hint.test(turn.userText || '');
 };
+
+/**
+ * Core tools that always have a seat in a director turn, so dialogue never depends on GROUP_HINTS (agent-editor plan
+ * §3 B3). While one is not in the core list yet (dialogue_edit ships in wave 2 B-TOOL), buildTurnToolset keeps its
+ * slot free under MAX_TOOLS_PER_TURN; adding it to buildDirectorTools later trims no feature group.
+ */
+export const RESERVED_CORE_TOOLS: readonly string[] = ['dialogue_edit'];
 
 const groupFailed = (ctx: StudioContext, id: string, stage: string, err: unknown) =>
   logger.warn('comic_tool_group_failed', { projectId: ctx.projectId, group: id, stage, message: (err as Error)?.message });
@@ -1651,7 +1681,8 @@ const groupFailed = (ctx: StudioContext, id: string, stage: string, err: unknown
  * feature is never half-offered; one that would push the turn past MAX_TOOLS_PER_TURN
  * is skipped (a smaller, lower-priority group may still fit). Tool names are unique:
  * a feature tool can never shadow a core tool or an earlier group's. A group that throws
- * is skipped and logged — a broken feature never breaks the director turn.
+ * is skipped and logged — a broken feature never breaks the director turn. Each RESERVED_CORE_TOOLS name the core
+ * list does not carry yet keeps one seat free; an explicit `opts.maxTools` is the whole budget (no reservation).
  */
 export function buildTurnToolset(
   ctx: StudioContext,
@@ -1660,9 +1691,9 @@ export function buildTurnToolset(
   opts: { core?: DirectorTool[]; maxTools?: number } = {}
 ): TurnToolset {
   const core = opts.core ?? buildDirectorTools(ctx, turn);
-  const max = opts.maxTools ?? MAX_TOOLS_PER_TURN;
   const tools = [...core];
   const names = new Set(tools.map((t) => t.spec.function.name));
+  const max = opts.maxTools ?? MAX_TOOLS_PER_TURN - RESERVED_CORE_TOOLS.filter((name) => !names.has(name)).length;
   const out: TurnToolset = { tools, groups: [], promptRules: [], summaryLines: [], activity: {} };
   const doc = ctx.session.doc;
   const ordered = groups
