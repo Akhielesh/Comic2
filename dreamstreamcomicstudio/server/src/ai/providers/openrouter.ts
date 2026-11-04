@@ -22,12 +22,17 @@ import { modelTimeoutError, makeProviderError } from './errors.js';
 import { markSharedKeyCapped } from '../providerCircuit.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
-import { connectorPrivacyActive } from '../privacy/scope.js';
+import { connectorPrivacyActive, noteConnectorEgress } from '../privacy/scope.js';
+import { isFreeModelId, messagesCarryConnectorData } from '../privacy/connectorData.js';
 import {
+  connectedDataCapacityError,
   dataPolicyUnavailableError,
+  isCapacityFailure,
   isDataPolicyUnavailable,
   routeForConnectorData,
-  withDataCollectionDenied
+  withDataCollectionDenied,
+  zeroPricedModelLookup,
+  type FreeModelPredicate
 } from '../privacy/openrouterPolicy.js';
 import { logger } from '../../lib/logger.js';
 import type {
@@ -292,10 +297,38 @@ export type ConnectorPrivacyTextRequest = GenerateTextRequest & { dataCollection
 const deniesDataCollection = (req: GenerateTextRequest): boolean =>
   (req as ConnectorPrivacyTextRequest).dataCollection === 'deny' || connectorPrivacyActive();
 
+/** A catalog lookup never holds a connector request longer than this; the `:free` rule still applies. */
+const CATALOG_FREE_LOOKUP_TIMEOUT_MS = 1_500;
+
+/**
+ * "Free" for a request that carries connector content: a `:free` id, or a model the live catalog
+ * prices at $0 (`costClass: 'free_verified'`, the pickers' own rule, ai/autoRouter.ts) through the
+ * lookup the chat routes register (privacy/openrouterPolicy.ts registerZeroPricedModelLookup). Read
+ * only for such requests: plain requests never touch the catalog. When the catalog cannot be read in
+ * time, the `:free` rule alone applies and the request still denies data collection.
+ */
+const freeModelPredicate = async (req: GenerateTextRequest): Promise<FreeModelPredicate> => {
+  const lookup = zeroPricedModelLookup();
+  if (!lookup) return isFreeModelId;
+  const ids = [req.model, req.fallbackModel, ...(req.models || [])].filter((m): m is string => typeof m === 'string' && !!m.trim());
+  try {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const zeroPriced = await Promise.race([
+      lookup(ids),
+      new Promise<ReadonlySet<string>>((resolve) => {
+        timer = setTimeout(() => resolve(new Set()), CATALOG_FREE_LOOKUP_TIMEOUT_MS);
+      })
+    ]).finally(() => clearTimeout(timer));
+    return (model) => isFreeModelId(model) || zeroPriced.has(String(model || '').trim().toLowerCase());
+  } catch {
+    return isFreeModelId;
+  }
+};
+
 /** Connector content: drop free models (or refuse a free-only request) before anything is sent. */
-const routeForPrivacy = (req: GenerateTextRequest): GenerateTextRequest => {
+const routeForPrivacy = async (req: GenerateTextRequest): Promise<GenerateTextRequest> => {
   if (!deniesDataCollection(req)) return req;
-  const route = routeForConnectorData(req);
+  const route = routeForConnectorData(req, await freeModelPredicate(req));
   if ('error' in route) throw route.error;
   if (route.swappedFrom) {
     logger.info('connector_privacy_free_model_skipped', { from: route.swappedFrom, to: route.req.model });
@@ -303,9 +336,17 @@ const routeForPrivacy = (req: GenerateTextRequest): GenerateTextRequest => {
   return route.req;
 };
 
-/** A connector request no private endpoint could serve fails with honest copy (never a free retry). */
-const privacyFailure = (req: GenerateTextRequest, err: unknown): unknown =>
-  deniesDataCollection(req) && isDataPolicyUnavailable(err) ? dataPolicyUnavailableError(err) : err;
+/**
+ * A connector request that failed is reported honestly: no private endpoint could serve it, or the
+ * shared service is at capacity (without the generic "switch to a free model" advice, which this
+ * conversation cannot follow). Never a free retry.
+ */
+const privacyFailure = (req: GenerateTextRequest, err: unknown): unknown => {
+  if (!deniesDataCollection(req)) return err;
+  if (isDataPolicyUnavailable(err)) return dataPolicyUnavailableError(err);
+  if (isCapacityFailure(err)) return connectedDataCapacityError(err);
+  return err;
+};
 
 const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
   const baseBody: Record<string, unknown> = {
@@ -355,7 +396,11 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
   // Connected-account content (Google Limited Use): only providers that do not collect user data.
   // Every call of such a turn builds its body here — the first call, tool rounds, retries, the
   // fallback model, the JSON repair round and streaming. Other turns are byte-identical.
-  return deniesDataCollection(req) ? withDataCollectionDenied(baseBody) : baseBody;
+  if (!deniesDataCollection(req)) return baseBody;
+  // Tell the turn's egress probe when this body really carries connector content (the connector
+  // context block, a connector tool's call or output): the route marks the reply only then.
+  if (messagesCarryConnectorData(req.messages)) noteConnectorEgress();
+  return withDataCollectionDenied(baseBody);
 };
 
 const generateTextOnce = async (
@@ -415,7 +460,7 @@ const generateText = async (
   original: GenerateTextRequest,
   ctx: ProviderContext
 ): Promise<GenerateTextResult> => {
-  const req = routeForPrivacy(original);
+  const req = await routeForPrivacy(original);
   try {
     return await generateTextOnce(req, ctx);
   } catch (err) {
@@ -589,7 +634,7 @@ const generateTextStream = async (
   ctx: ProviderContext,
   onDelta: (delta: { content?: string; reasoning?: string }) => void
 ): Promise<GenerateTextResult> => {
-  const req = routeForPrivacy(original);
+  const req = await routeForPrivacy(original);
   try {
     return await streamOnce(req, ctx, onDelta);
   } catch (err) {

@@ -13,20 +13,47 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-type PrivacyStore = { readonly connectorData: true };
+/**
+ * What actually left for a model during a scoped run. The deny decision is made up front (a turn
+ * that MAY carry connector content); whether connector content was really SENT is only known at
+ * the egress point, ai/providers/openrouter.ts, which reports it here (`noteConnectorEgress`) when
+ * a request body carries connector content (the connector context block, a connector tool's call
+ * or output: ./connectorData.ts messagesCarryConnectorData). routes/chat.ts marks a reply as
+ * connected content (`connectorData: true`, the provenance store) only when its probe saw that.
+ */
+export type ConnectorEgressProbe = { sent: boolean };
+
+/** A fresh probe for one run. */
+export const connectorEgressProbe = (): ConnectorEgressProbe => ({ sent: false });
+
+type PrivacyStore = { readonly connectorData: true; readonly probes: readonly ConnectorEgressProbe[] };
 
 const store = new AsyncLocalStorage<PrivacyStore>();
-const ACTIVE: PrivacyStore = Object.freeze({ connectorData: true as const });
+const ACTIVE: PrivacyStore = Object.freeze({ connectorData: true as const, probes: Object.freeze([]) as readonly ConnectorEgressProbe[] });
 
 /** True while running inside a turn that carries connected-account content. */
 export const connectorPrivacyActive = (): boolean => store.getStore()?.connectorData === true;
 
 /**
  * Run `fn` with connected-account privacy on when `connectorData` is true; otherwise run it as is
- * (an enclosing scope, if any, stays in force).
+ * (an enclosing scope, if any, stays in force). `probe` (optional) learns whether any model call
+ * inside the scope actually sent connector content; a nested scope reports to every enclosing
+ * probe as well.
  */
-export const runWithConnectorPrivacy = <T>(connectorData: boolean, fn: () => T): T =>
-  connectorData && !connectorPrivacyActive() ? store.run(ACTIVE, fn) : fn();
+export const runWithConnectorPrivacy = <T>(connectorData: boolean, fn: () => T, probe?: ConnectorEgressProbe): T => {
+  const current = store.getStore();
+  if (current) {
+    // Sticky: already in force. A new probe joins the enclosing ones for this nested run.
+    return probe ? store.run({ connectorData: true, probes: [...current.probes, probe] }, fn) : fn();
+  }
+  if (!connectorData) return fn();
+  return store.run(probe ? { connectorData: true, probes: [probe] } : ACTIVE, fn);
+};
+
+/** Called by the provider when a scoped request body carries connector content. */
+export const noteConnectorEgress = (): void => {
+  for (const probe of store.getStore()?.probes || []) probe.sent = true;
+};
 
 // ── The request-level decision, for agent paths that start after prepareChat returned ─────────
 // routes/chat.ts prepareChat decides once per request; /api/recipes then calls runRecipe outside
@@ -34,13 +61,30 @@ export const runWithConnectorPrivacy = <T>(connectorData: boolean, fn: () => T):
 // to every agent path untouched (the same out-of-band pattern as ai/tools/platformDocs.ts), so
 // runRecipe and the swarm read it with `connectorPrivacyBound(clientContext)`. Nothing is read from
 // the object's own properties: a client cannot set it.
-const BOUND = new WeakMap<object, true>();
+//
+// The whole decision is bound, not just the flag: `freeTurn` (the turn runs on a free model, so
+// connector tools were withheld) lets runRecipe use prepareChat's own answer — which also knows a
+// pinned model the catalog prices at $0 without a `:free` suffix — instead of re-deriving it.
+
+/** prepareChat's privacy decision for one request. */
+export type ConnectorTurnDecision = { connectorData: boolean; freeTurn: boolean };
+
+const BOUND = new WeakMap<object, ConnectorTurnDecision>();
 
 /** Mark the request (by its clientContext object) as carrying connected-account content. */
 export const bindConnectorPrivacy = (clientContext: object | undefined, connectorData: boolean): void => {
-  if (clientContext && connectorData) BOUND.set(clientContext, true);
+  if (clientContext && connectorData) BOUND.set(clientContext, { freeTurn: BOUND.get(clientContext)?.freeTurn ?? false, connectorData: true });
 };
 
 /** True when prepareChat decided this request carries connected-account content. */
 export const connectorPrivacyBound = (clientContext: object | undefined): boolean =>
-  Boolean(clientContext && BOUND.get(clientContext));
+  Boolean(clientContext && BOUND.get(clientContext)?.connectorData);
+
+/** Bind prepareChat's whole decision (flag and free turn) to the request. */
+export const bindConnectorTurnDecision = (clientContext: object | undefined, decision: ConnectorTurnDecision): void => {
+  if (clientContext) BOUND.set(clientContext, { connectorData: decision.connectorData, freeTurn: decision.freeTurn });
+};
+
+/** prepareChat's decision for this request, when one was bound. */
+export const connectorTurnDecision = (clientContext: object | undefined): ConnectorTurnDecision | undefined =>
+  clientContext ? BOUND.get(clientContext) : undefined;

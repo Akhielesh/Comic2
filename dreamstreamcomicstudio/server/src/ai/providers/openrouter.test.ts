@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { openRouterProvider } from './openrouter.js';
+import { registerZeroPricedModelLookup } from '../privacy/openrouterPolicy.js';
+
+// The provider asks the catalog lookup the chat routes register (only for requests that carry
+// connected-account content) which models are priced at $0. A fake one here.
+const catalog = { models: [] as { id: string; costClass: string }[], fail: false, reads: 0 };
+const fakeLookup = async (ids: readonly string[]) => {
+  catalog.reads += 1;
+  if (catalog.fail) throw new Error('catalog down');
+  const zero = new Set(catalog.models.filter((m) => m.costClass === 'free_verified').map((m) => m.id.toLowerCase()));
+  return new Set(ids.map((id) => id.toLowerCase()).filter((id) => zero.has(id)));
+};
 import type { GenerateTextRequest, ProviderContext } from './types.js';
 
 // Build a fake streaming Response whose body is a ReadableStream of the given SSE text,
@@ -25,6 +36,10 @@ const ctx: ProviderContext = { apiKey: 'k', byok: false };
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  catalog.models = [];
+  catalog.fail = false;
+  catalog.reads = 0;
+  registerZeroPricedModelLookup(undefined);
 });
 
 describe('openrouter generateTextStream mid-stream error handling', () => {
@@ -238,5 +253,122 @@ describe('openrouter connected-account privacy', () => {
     const [inScope, outside] = sentBodies(fetchMock);
     expect(inScope.provider).toEqual({ data_collection: 'deny' });
     expect(outside.provider).toBeUndefined();
+  });
+});
+
+// ── Review fixes: catalog-free models, capacity copy, refusal copy, egress probe ───────────────
+import { connectorEgressProbe } from '../privacy/scope.js';
+import { __resetSharedKeyCircuit } from '../providerCircuit.js';
+
+describe('openrouter connected-account privacy: review fixes', () => {
+  it('a model the catalog prices at $0 without the `:free` suffix is a free model for connector content', async () => {
+    registerZeroPricedModelLookup(fakeLookup);
+    catalog.models = [
+      { id: 'vendor/zero', costClass: 'free_verified' },
+      { id: 'paid/net', costClass: 'paid' }
+    ];
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    await runWithConnectorPrivacy(true, () =>
+      openRouterProvider.generateText(baseReq({ model: 'vendor/zero', models: ['vendor/zero', 'paid/b'], fallbackModel: 'paid/net' }), ctx)
+    );
+    const [body] = sentBodies(fetchMock);
+    expect(body.model).toBe('paid/net');
+    expect(JSON.stringify(body)).not.toContain('vendor/zero');
+
+    // Free only: refused (never moved to a paid model), with the Free only advice.
+    fetchMock.mockClear();
+    await expect(
+      runWithConnectorPrivacy(true, () => openRouterProvider.generateText(baseReq({ model: 'vendor/zero', freeOnly: true }), ctx))
+    ).rejects.toMatchObject({ status: 409, publicMessage: expect.stringContaining('turn off Free only') });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the same $0 model outside the scope is untouched, and a plain request never reads the catalog', async () => {
+    registerZeroPricedModelLookup(fakeLookup);
+    catalog.models = [{ id: 'vendor/zero', costClass: 'free_verified' }];
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    await openRouterProvider.generateText(baseReq({ model: 'vendor/zero' }), ctx);
+    expect(sentBodies(fetchMock)[0].model).toBe('vendor/zero');
+    expect(catalog.reads).toBe(0);
+  });
+
+  it('when the catalog cannot be read, the `:free` rule still applies and the request still denies data collection', async () => {
+    registerZeroPricedModelLookup(fakeLookup);
+    catalog.fail = true;
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    await runWithConnectorPrivacy(true, () =>
+      openRouterProvider.generateText(baseReq({ model: 'vendor/w:free', fallbackModel: 'paid/net' }), ctx)
+    );
+    const [body] = sentBodies(fetchMock);
+    expect(body.model).toBe('paid/net');
+    expect(body.provider).toEqual({ data_collection: 'deny' });
+  });
+
+  it('a refusal that is not Free only advises picking a standard model, never "turn off Free only"', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => answer()));
+    const err = await runWithConnectorPrivacy(true, () =>
+      openRouterProvider.generateText(baseReq({ model: 'vendor/w:free' }), ctx)
+    ).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, publicCode: 'CONNECTED_DATA_NEEDS_STANDARD_MODEL' });
+    expect(err.publicMessage).toContain('Pick a standard model instead of the free one');
+    expect(err.publicMessage).not.toContain('Free only');
+  });
+
+  it('a capacity failure on connector content never advises switching to a free model; elsewhere the copy is unchanged', async () => {
+    const capped = () => jsonResponse({ error: { message: 'Key limit exceeded (total limit)' } }, 403);
+    vi.stubGlobal('fetch', vi.fn(async () => capped()));
+    try {
+      const err = await runWithConnectorPrivacy(true, () => openRouterProvider.generateText(baseReq({ retries: 1 }), ctx)).catch((e) => e);
+      expect(err).toMatchObject({ status: 503, publicCode: 'PROVIDER_CAPACITY' });
+      expect(err.publicMessage).not.toMatch(/switch to a free model/i);
+      expect(err.publicMessage).toContain('never sent to free models');
+      expect(err.publicMessage).toContain('add your own API key');
+      expect(String(err.message)).toContain('403'); // the log message (and retriable checks) keep the provider text
+
+      const plain = await openRouterProvider.generateText(baseReq({ retries: 1 }), ctx).catch((e) => e);
+      expect(plain.publicMessage).toContain('switch to a free model');
+    } finally {
+      __resetSharedKeyCircuit();
+    }
+  });
+
+  it('the egress probe learns when a scoped body really carries connector content, and only then', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => answer()));
+    const withRag = connectorEgressProbe();
+    await runWithConnectorPrivacy(
+      true,
+      () =>
+        openRouterProvider.generateText(
+          baseReq({ messages: [{ role: 'system', content: 'Base.\n\n## Connected account data (the user\'s authorized sources)\n- [Gmail] Lunch' }, { role: 'user', content: 'hi' }] }),
+          ctx
+        ),
+      withRag
+    );
+    expect(withRag.sent).toBe(true);
+
+    const toolOutput = connectorEgressProbe();
+    await runWithConnectorPrivacy(
+      true,
+      () =>
+        openRouterProvider.generateText(
+          baseReq({
+            messages: [
+              { role: 'user', content: 'mail?' },
+              { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'gmail_search', arguments: '{}' } }] },
+              { role: 'tool', tool_call_id: 'c1', content: 'r' }
+            ]
+          }),
+          ctx
+        ),
+      toolOutput
+    );
+    expect(toolOutput.sent).toBe(true);
+
+    const nothing = connectorEgressProbe();
+    await runWithConnectorPrivacy(true, () => openRouterProvider.generateText(baseReq(), ctx), nothing);
+    expect(nothing.sent).toBe(false);
   });
 });
