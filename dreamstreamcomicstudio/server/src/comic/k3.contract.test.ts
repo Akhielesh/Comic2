@@ -15,6 +15,7 @@ import { runDirectorTurn, steerNoteText } from './director.js';
 import { startAction } from './jobs.js';
 import { newSession, plannedDoc, scriptedLlm, testContext } from './orchestrator.fakes.js';
 import { RECENT_COMMITS_MAX, recentCommitsOf, takeSteerOf, type SteerNote } from './session.js';
+import { StudioError } from './types.js';
 import {
   DIALOGUE_EDIT_NOT_AVAILABLE,
   OFFER_NEXT_NOT_AVAILABLE,
@@ -42,7 +43,8 @@ const capsDeps = (admin: boolean, env: Record<string, string | undefined> = {}) 
 
 beforeEach(() => {
   __resetAccessCacheForTests();
-  vi.mocked(guard.conflictCardFor).mockClear();
+  // mockReset (not mockClear): an unconsumed mockImplementationOnce never leaks into the next test.
+  vi.mocked(guard.conflictCardFor).mockReset();
 });
 
 describe('access.ts: the agent-editor flags become caps (D9)', () => {
@@ -226,6 +228,28 @@ describe('director.ts call sites', () => {
     const reply = session.doc.conversation.at(-1)!;
     expect(reply.role).toBe('assistant');
     expect(reply.cards).toEqual(expect.arrayContaining([card]));
+  });
+
+  it('a Stopped turn still carries the conflict card: held-back edits never vanish without a word', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const controller = new AbortController();
+    const card: ConflictCard = { type: 'conflict', id: 'card_cf', items: [{ id: 'cf_1', where: { label: 'page 1' }, mine: 'a', theirs: 'b', proposed: [] }] };
+    vi.mocked(guard.conflictCardFor).mockImplementationOnce(() => card);
+    // One tool round (where the guard could hold an edit back), then Stop before the model answers.
+    const llm = scriptedLlm({
+      director: [
+        { text: '', toolCalls: [{ id: 'c1', name: 'update_brief', arguments: JSON.stringify({ title: 'Spice Run' }) }] },
+        () => {
+          controller.abort();
+          return new StudioError('CANCELLED', 'Cancelled.');
+        }
+      ]
+    });
+    await runDirectorTurn(testContext(session, { llm, signal: controller.signal }), { text: 'Call it Spice Run', attachments: [] });
+    expect(guard.conflictCardFor).toHaveBeenCalledTimes(1);
+    const reply = session.doc.conversation.at(-1)!;
+    expect(reply).toMatchObject({ role: 'assistant', text: 'Stopped.' });
+    expect(reply.cards).toEqual([card]);
   });
 
   it('without held-back edits the reply carries no conflict card (today: always)', async () => {

@@ -795,7 +795,8 @@ async function directorTurnBody(
 
   // Conflicts (agent-editor plan §3 A3): what the creator changed mid-turn was kept; one card asks about the rest.
   // conflictCardFor is null until the guard (wave 1 A3 CONFLICT) holds anything back.
-  const conflictCard = cancelled ? null : conflictCardFor(turn);
+  // Asked on a Stopped turn too: the edits it held back are never dropped without a word (never silent).
+  const conflictCard = conflictCardFor(turn);
   if (conflictCard) turn.cards.push(conflictCard);
 
   const after = session.doc;

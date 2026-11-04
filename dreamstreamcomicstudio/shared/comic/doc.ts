@@ -992,7 +992,11 @@ export interface NoticeFix {
 
 // --- live agent (agent-editor plan §3 A3; K3): the creator's edit and the director's collided ---
 
-/** Bounds of a conflict card (A3: at most 50 stored ops, size-capped). */
+/**
+ * Bounds of a stored conflict card (A3: at most 50 stored ops, size-capped). The per-item, item, text and label caps are
+ * K3 choices for the lead to confirm. An op list is never cut: an item whose ops do not fit is kept with `proposed: []`
+ * and `tooBig`, and collisions past `items` are counted in `more`, so nothing the director held back vanishes unseen.
+ */
 export const CONFLICT_LIMITS = { items: 10, opsPerItem: 20, ops: 50, textChars: 300, labelChars: 120 } as const;
 /** Where two edits collided: ids for "Show me" (opens the page with that balloon selected) and the card's words. */
 export interface ConflictWhere {
@@ -1013,6 +1017,12 @@ export interface ConflictItem {
   mine: string;
   theirs: string;
   proposed: import('./ops.js').DocOp[];
+  /**
+   * The held-back edit could not be stored whole (over CONFLICT_LIMITS, or unreadable): `proposed` is [] and "Use the
+   * director's" refuses it in plain words ("That change is too big to apply from here; Show me opens it"), never a
+   * partial edit.
+   */
+  tooBig?: true;
   /** Set once the creator answered (the card then shows the outcome, its buttons gone). */
   resolved?: 'mine' | 'theirs';
 }
@@ -1021,6 +1031,8 @@ export interface ConflictCard {
   type: 'conflict';
   id: string;
   items: ConflictItem[];
+  /** Collisions past CONFLICT_LIMITS.items, not on the card: the card says how many more it left alone ("…and 3 more"). */
+  more?: number;
 }
 
 /** Interactive cards that live inside the conversation. Every card renders LIVE doc state. */
@@ -1934,16 +1946,17 @@ export const normalizeNoticeCard = (card: Extract<Card, { type: 'notice' }>): Ex
   return out;
 };
 
-/** Cards of a message: `model_outage` cards are validated (dropped when malformed) and notice fix chips are
- *  validated; every other card is kept exactly as stored (their renderers read live doc state). Returns the SAME
- *  array when nothing changed. */
 const clipStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
 const optId = (v: unknown): string | undefined => (typeof v === 'string' && v && v.length <= 80 ? v : undefined);
+const isOpLike = (op: unknown): op is import('./ops.js').DocOp => isObject(op) && typeof op.op === 'string';
 
 /**
  * A stored conflict card, well-formed (agent-editor plan §3 A3): items with an id, a where-label and both versions; at most
  * CONFLICT_LIMITS ops (each an object naming its op — the server re-sanitizes them against the live doc on resolve).
- * Undefined when nothing usable is left; the SAME object when already clean (old docs stay identical).
+ * An item's op list is kept WHOLE or not at all: one that is over the per-item cap or the card's remaining budget, or
+ * holds anything that is not an op, becomes `proposed: []` + `tooBig`, so "Use the director's" can never apply half an
+ * edit. Items past CONFLICT_LIMITS.items add to `more`. Undefined when nothing usable is left; the SAME object when
+ * already clean (old docs stay identical).
  */
 export const normalizeConflictCard = (value: unknown): ConflictCard | undefined => {
   if (!isObject(value) || value.type !== 'conflict' || typeof value.id !== 'string' || !value.id) return undefined;
@@ -1957,19 +1970,31 @@ export const normalizeConflictCard = (value: unknown): ConflictCard | undefined 
       const id = optId(raw.where[key]);
       if (id) where[key] = id;
     }
-    const ops = (Array.isArray(raw.proposed) ? raw.proposed : [])
-      .filter((op): op is import('./ops.js').DocOp => isObject(op) && typeof op.op === 'string')
-      .slice(0, Math.min(CONFLICT_LIMITS.opsPerItem, budget));
-    budget -= ops.length;
-    const item: ConflictItem = { id: raw.id, where, mine: clipStr(raw.mine, CONFLICT_LIMITS.textChars), theirs: clipStr(raw.theirs, CONFLICT_LIMITS.textChars), proposed: ops };
+    const list: unknown[] = Array.isArray(raw.proposed) ? raw.proposed : [];
+    const whole = raw.tooBig !== true && list.length <= Math.min(CONFLICT_LIMITS.opsPerItem, budget) && list.every(isOpLike);
+    const item: ConflictItem = {
+      id: raw.id,
+      where,
+      mine: clipStr(raw.mine, CONFLICT_LIMITS.textChars),
+      theirs: clipStr(raw.theirs, CONFLICT_LIMITS.textChars),
+      proposed: whole ? (list as import('./ops.js').DocOp[]) : []
+    };
+    if (whole) budget -= list.length;
+    else item.tooBig = true;
     if (raw.resolved === 'mine' || raw.resolved === 'theirs') item.resolved = raw.resolved;
     items.push(item);
   }
   if (!items.length) return undefined;
+  const stored = typeof value.more === 'number' && Number.isInteger(value.more) && value.more > 0 ? value.more : 0;
+  const more = stored + Math.max(0, value.items.length - CONFLICT_LIMITS.items);
   const next: ConflictCard = { type: 'conflict', id: value.id, items };
+  if (more) next.more = more;
   return stableStringify(next) === stableStringify(value) ? (value as unknown as ConflictCard) : next;
 };
 
+/** Cards of a message: `model_outage` cards are validated (dropped when malformed), notice fix chips are validated and
+ *  conflict cards are validated (normalizeConflictCard; dropped when nothing usable is left); every other card is kept
+ *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
 const normalizeCards = (cards: unknown): Card[] | undefined => {
   if (!Array.isArray(cards)) return undefined;
   let changed = false;

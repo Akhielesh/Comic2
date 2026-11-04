@@ -2436,17 +2436,47 @@ describe('Live agent, dialogue and Pro editor v2 contract (K3)', () => {
     // Answered items keep their outcome.
     const answered = { ...card, items: [{ ...card.items[0], resolved: 'mine' as const }] };
     expect(normalizeConflictCard(answered)).toEqual(answered);
-    // Junk: no id, no items, items without a where-label, non-op proposals, over-long text and too many ops.
+    // Junk: no id, no items, items without a where-label, over-long text and a bad resolved value.
     expect(normalizeConflictCard({ type: 'conflict', items: card.items })).toBeUndefined();
     expect(normalizeConflictCard({ ...card, items: [{ id: 'x', mine: 'a', theirs: 'b', proposed: [] }] })).toBeUndefined();
     const messy = normalizeConflictCard({
       ...card,
-      items: [{ ...card.items[0], mine: 'm'.repeat(999), resolved: 'maybe', where: { label: 'p1', pageId: 42 }, proposed: [1, 'x', null, ...Array.from({ length: 30 }, () => card.items[0].proposed[0])] }]
+      items: [{ ...card.items[0], mine: 'm'.repeat(999), resolved: 'maybe', where: { label: 'p1', pageId: 42 } }]
     })!;
     expect(messy.items[0].mine).toHaveLength(CONFLICT_LIMITS.textChars);
     expect(messy.items[0].where).toEqual({ label: 'p1' });
     expect(messy.items[0].resolved).toBeUndefined();
-    expect(messy.items[0].proposed).toHaveLength(CONFLICT_LIMITS.opsPerItem);
+    expect(messy.items[0].proposed).toEqual(card.items[0].proposed);
+    expect(messy.items[0].tooBig).toBeUndefined();
+  });
+
+  it('doc: a conflict card never stores half an edit; collisions past the item cap are counted, never dropped unseen', () => {
+    const op = conflictCard().items[0].proposed[0];
+    const ops = (n: number) => Array.from({ length: n }, () => op);
+    const item = (id: string, proposed: unknown[]) => ({ ...conflictCard().items[0], id, proposed });
+    // Over the per-item cap, or holding anything that is not an op: kept, its op list emptied and flagged — not cut.
+    const big = normalizeConflictCard({ type: 'conflict', id: 'c', items: [item('a', ops(CONFLICT_LIMITS.opsPerItem + 5)), item('b', [1, 'x', null, op])] })!;
+    for (const it of big.items) expect([it.proposed, it.tooBig], it.id).toEqual([[], true]);
+    // The card's op budget: items that fit keep every op; the one that no longer fits keeps none (never part of it).
+    const perItem = CONFLICT_LIMITS.opsPerItem;
+    expect(2 * perItem).toBeLessThanOrEqual(CONFLICT_LIMITS.ops);
+    expect(3 * perItem).toBeGreaterThan(CONFLICT_LIMITS.ops);
+    const budget = normalizeConflictCard({ type: 'conflict', id: 'c', items: [item('a', ops(perItem)), item('b', ops(perItem)), item('c', ops(perItem)), item('d', ops(0))] })!;
+    expect(budget.items.map((it) => [it.proposed.length, it.tooBig ?? false])).toEqual([
+      [perItem, false],
+      [perItem, false],
+      [0, true],
+      [0, false]
+    ]);
+    // Past the item cap: the first CONFLICT_LIMITS.items stay, the rest are counted in `more` for the card's copy.
+    const many = normalizeConflictCard({ type: 'conflict', id: 'c', items: Array.from({ length: CONFLICT_LIMITS.items + 3 }, (_, i) => item(`i${i}`, [op])) })!;
+    expect(many.items).toHaveLength(CONFLICT_LIMITS.items);
+    expect(many.more).toBe(3);
+    // Normalizing again changes nothing (same object): `tooBig` and `more` are stable, so a reload keeps the card intact.
+    for (const clean of [big, budget, many]) expect(normalizeConflictCard(clean)).toBe(clean);
+    const { more: _more, ...fewer } = many;
+    void _more;
+    expect(normalizeConflictCard({ ...fewer, more: -2 })).toEqual(fewer);
     const dropped = normalizeDoc({ ...createEmptyDoc('k3'), conversation: [{ id: 'm', role: 'assistant', text: 'x', at: 1, cards: [{ type: 'conflict', id: 'c', items: [] } as unknown as Card] }] });
     expect(dropped.conversation[0].cards).toEqual([]);
   });
