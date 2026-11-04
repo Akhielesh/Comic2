@@ -773,12 +773,13 @@ async function directorTurnBody(
         messages.push({ role: 'tool', tool_call_id: call.id, content: output.slice(0, 16_000) });
       }
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
-      // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call.
-      // session.takeSteer() is a stub returning [] until wave 1 A2 TURN, so nothing changes yet.
-      const steered = takeSteerOf(session);
-      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered) });
       // ask_user ends the turn: the question and its chips are the reply.
       if (turn.askedUser) break;
+      // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call
+      // (drained only when that call follows, so a note is never taken into a turn that is ending). session.takeSteer()
+      // is a stub returning [] until wave 1 A2 TURN, so nothing changes yet.
+      const steered = takeSteerOf(session);
+      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered) });
     }
   } catch (err) {
     const error = err instanceof StudioError ? err : new StudioError('INTERNAL', 'The studio assistant hit a snag. Please try again.', { cause: err });

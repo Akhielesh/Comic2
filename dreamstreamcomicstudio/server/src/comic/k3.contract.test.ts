@@ -194,6 +194,16 @@ describe('director.ts call sites', () => {
     expect(session.doc.brief.title).toBe('Spice Run');
   });
 
+  it('never drains a note into a turn that is ending (ask_user ended it): the note stays for whoever reads the inbox next', async () => {
+    const session = newSession(createEmptyDoc('proj-1'));
+    const ask = { question: 'Which look?', options: ['Bright', 'Moody'] };
+    const llm = scriptedLlm({ director: [{ text: '', toolCalls: [{ id: 'c1', name: 'ask_user', arguments: JSON.stringify(ask) }] }, { text: 'Pick one.' }] });
+    const take = vi.spyOn(session, 'takeSteer');
+    await runDirectorTurn(testContext(session, { llm }), { text: 'Make a comic', attachments: [] });
+    expect(llm.calls).toHaveLength(1);
+    expect(take).not.toHaveBeenCalled();
+  });
+
   it('steerNoteText: one note inline, several numbered in order', () => {
     expect(steerNoteText([{ msgId: 'a', text: '  red  ', at: 1 }])).toBe('(The user added while you were working:) red');
     expect(steerNoteText([{ msgId: 'a', text: 'red', at: 1 }, { msgId: 'b', text: 'bigger', at: 2 }])).toBe('(The user added while you were working:)\n1. red\n2. bigger');
