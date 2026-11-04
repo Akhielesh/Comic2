@@ -7,6 +7,7 @@
 // (toolGroups()) on two golden fixtures, exactly as director.ts builds a turn.
 
 import { describe, expect, it } from 'vitest';
+import { LAKE_MODEL, makeLakeComic } from '../../../shared/comic/__fixtures__/lakeComic.js';
 import type { ComicDoc } from '../../../shared/comic/doc.js';
 import type { StudioFocus } from '../../../shared/comic/events.js';
 import { MAX_TOOLS_PER_TURN } from './extensions.js';
@@ -27,6 +28,14 @@ const PHRASES = [
 ];
 
 const FIXTURES: Record<string, () => ComicDoc> = { plannedDoc: () => plannedDoc(), lakeDrawnDoc };
+
+/**
+ * A drawn, model-locked five-page book whose pages have versions: its timeline group is 7 tools (move/insert/duplicate/
+ * delete_page, list_versions, use_version, set_book), so core + timeline fills the budget and any other hot group with a
+ * lower priority number (lettering 20, breakdown 10) trims the WHOLE timeline. The page-action guards must hold here.
+ */
+const lockedLakeDoc = () => makeLakeComic((d) => (d.imageModel = { modelId: LAKE_MODEL, lockedAt: 1, origin: 'first_render' }));
+const TIMELINE_PAGE_TOOLS = ['move_page', 'insert_page', 'duplicate_page', 'delete_page', 'use_version'];
 
 const offered = (doc: ComicDoc, userText: string, focus?: StudioFocus) => {
   const ctx = testContext(newSession(doc));
@@ -70,13 +79,26 @@ describe('GROUP_HINTS (0a)', () => {
     }
   });
 
-  it('position words do not wake lettering on a page move', () => {
+  it('position words do not wake lettering when a page is the object of the sentence', () => {
     const lettering = GROUP_HINTS.lettering!;
-    for (const say of ['move page 3 to the top', 'put page 2 at the bottom', 'swap pages 2 and 3 and put them on top']) {
+    for (const say of [
+      'move page 3 to the top',
+      'put page 2 at the bottom',
+      'swap pages 2 and 3 and put them on top',
+      'move the second page to the top',
+      'move the last page to the top',
+      'can you move my third page to the top of the book?',
+      'duplicate the top page',
+      'delete the page at the bottom',
+      'restore the previous version of the top page',
+      'remove page 4 from the bottom of the book'
+    ]) {
       expect(lettering.test(say), say).toBe(false);
     }
-    // ...but a balloon placed "of the page" is still lettering.
-    expect(lettering.test('put it at the top left of the page')).toBe(true);
+    // ...but a page named as the frame ("of / on / in / at the page") is still a balloon placement.
+    for (const say of ['put it at the top left of the page', 'put the caption at the bottom of page 3', 'move it to the top of page 2', 'put it in the corner on this page']) {
+      expect(lettering.test(say), say).toBe(true);
+    }
   });
 
   it('page actions keep the timeline tools on a drawn multi-page book (breakdown and lettering yield)', () => {
@@ -86,7 +108,7 @@ describe('GROUP_HINTS (0a)', () => {
       ['insert a page after page 3', 'insert_page'],
       ['duplicate page 2', 'duplicate_page']
     ];
-    for (const [fixture, make] of Object.entries({ plannedDoc: () => plannedDoc(), sixPageDrawnDoc })) {
+    for (const [fixture, make] of Object.entries({ plannedDoc: () => plannedDoc(), sixPageDrawnDoc, lockedLakeDoc })) {
       for (const [say, tool] of cases) {
         const { set, names } = offered(make(), say);
         expect(set.groups, `${fixture}: ${say}`).toContain('timeline');
@@ -126,6 +148,55 @@ describe('GROUP_HINTS (0a)', () => {
         const { names } = offered(make(), say, { pageId: page.id, lineIds });
         expect(names, `${fixture}: ${say}`).toContain('arrange_balloons');
       }
+    }
+  });
+});
+
+describe('page actions on a drawn book with a 7-tool timeline (lettering yields)', () => {
+  it('the fixture really carries the 7-tool timeline that fills the budget', () => {
+    const ctx = testContext(newSession(lockedLakeDoc()));
+    const turn = createDirectorTurn({ userText: 'x' });
+    const timeline = toolGroups().find((g) => g.id === 'timeline')!;
+    expect(timeline.when?.(ctx, turn) ?? true).toBe(true);
+    expect(timeline.tools(ctx, turn)).toHaveLength(7);
+  });
+
+  // "top / bottom" here are about the book: before the PAGE_OBJECT guard these woke lettering (priority 20, ahead of the
+  // timeline's 30), and core 21 + lettering 3 + timeline 7 = 31 is over the budget, so every page tool was trimmed.
+  for (const say of [
+    'move the second page to the top',
+    'move the last page to the top',
+    'duplicate the top page',
+    'delete the page at the bottom',
+    'restore the previous version of the top page',
+    'remove page 4 from the bottom of the book'
+  ]) {
+    it(`"${say}" offers move_page / delete_page / duplicate_page / use_version`, () => {
+      const { set, names } = offered(lockedLakeDoc(), say);
+      expect(set.groups, say).toContain('timeline');
+      expect(names, say).toEqual(expect.arrayContaining(TIMELINE_PAGE_TOOLS));
+    });
+  }
+
+  it('a selected balloon does not turn a page action into a lettering turn', () => {
+    const doc = lockedLakeDoc();
+    const page = doc.pages.find((p) => p.panels.some((pn) => pn.lines.length))!;
+    const focus: StudioFocus = { pageId: page.id, lineIds: [page.panels.flatMap((pn) => pn.lines)[0].id] };
+    for (const [say, tool] of [
+      ['delete page 4', 'delete_page'],
+      ['move page 3 to the end', 'move_page'],
+      ['duplicate page 2', 'duplicate_page'],
+      ['insert a page after page 3', 'insert_page']
+    ] as const) {
+      const { set, names } = offered(lockedLakeDoc(), say, focus);
+      expect(set.groups, say).toContain('timeline');
+      expect(names, say).toContain(tool);
+    }
+    // ...while a sentence about the selection itself still offers the balloon tools.
+    for (const say of ['swap these two', 'move it up a bit', 'move it to the top of page 2']) {
+      const { set, names } = offered(lockedLakeDoc(), say, focus);
+      expect(set.groups, say).toContain('lettering');
+      expect(names, say).toContain('arrange_balloons');
     }
   });
 });

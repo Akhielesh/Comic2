@@ -1700,8 +1700,14 @@ export interface TurnToolset {
  * and the position words were here (spot-check 5).
  */
 const LETTERING_WORDS = String.raw`fonts?|lettering|letters|balloons?|bubbles?|captions?|text|bigger|smaller|bold|italics?|colou?rs?|shouts?|whispers?|thoughts?|sfx|overlap\w*|cover(?:s|ing)? (?:her|his|their|the) faces?|re-?letter\w*|re-?check\w*|tails?|lines?|dialogues?|said|says|speech|speaks?|narrat\w*`;
-/** "move page 3 to the top": a page move, where top / bottom / corner are about the book, not a balloon. */
-const PAGE_MOVE = String.raw`\b(?:move|swap|switch|put|drag)\s+(?:the\s+|this\s+|that\s+)?pages?\b`;
+/**
+ * A page is the OBJECT of the sentence ("move the second page to the top", "duplicate the top page", "delete the page at
+ * the bottom"): a page action, where top / bottom / corner are about the book, not a balloon. A page named as a frame
+ * ("of / on / in / at the page": "put it at the top left of the page", "the caption at the bottom of page 3") is not the
+ * object, so those stay lettering. Bounded: one verb, at most 40 characters to `page`, one short lookbehind.
+ */
+const PAGE_OBJECT = String.raw`\b(?:move|swap|switch|put|drag|delete|remove|insert|add|duplicate|copy|restore|reorder)\b[^.!?\n]{0,40}(?<!\b(?:of|on|in|at)\s(?:the\s|this\s|that\s)?)\bpages?\b`;
+const PAGE_OBJECT_RE = new RegExp(PAGE_OBJECT, 'i');
 /** Breakdown words that always count; a bare `left` ("top left") is not one of them. */
 const BREAKDOWN_WORDS = String.raw`breakdown|plan|cost|price|quote|how much|status|what['’]?s left|pages? left|left to`;
 /**
@@ -1717,10 +1723,11 @@ const PAGE_ACTION = String.raw`\b(?:move|swap|switch|put|drag|delete|remove|inse
  * lettering tools to an unrelated group. Tuned on the golden set (golden/scenarios/*.json) and the dialogue phrases of
  * the agent-editor plan (tools.hints.test.ts). Both hot, lettering (priority 20) is kept before the timeline (30), so
  * the timeline's move / swap never starves a dialogue move; position words (top, bottom, corner) wake lettering only
- * when the sentence is not a page move, so "move page 3 to the top" keeps move_page.
+ * when no page is the object of the sentence (PAGE_OBJECT), so "move the second page to the top" keeps move_page on a
+ * drawn book whose timeline group fills the rest of the budget.
  */
 export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
-  lettering: new RegExp(String.raw`\b(?:${LETTERING_WORDS})\b|^(?![\s\S]*${PAGE_MOVE})[\s\S]*\b(?:top|bottom|corners?)\b`, 'i'),
+  lettering: new RegExp(String.raw`\b(?:${LETTERING_WORDS})\b|^(?![\s\S]*${PAGE_OBJECT})[\s\S]*\b(?:top|bottom|corners?)\b`, 'i'),
   timeline: /\b(move|swap|switch|insert|add (?:a|one|another) page|delete|remove (?:page|it)|duplicate|copy|versions?|undo|restore|earlier|previous|original|fit|square|book|back cover|title page)\b/i,
   publish: /\b(publish|share|link|unpublish|public|unlisted|readers?|post it|send (?:it|the link)|whats ?app|instagram)\b/i,
   i18n: /\b(translat\w*|languages?|telugu|hindi|tamil|kannada|malayalam|bengali|marathi|gujarati|punjabi|urdu|arabic|spanish|french|german|japanese|korean|chinese|portuguese|edition)\b|[\u0900-\u0DFF]/i,
@@ -1743,8 +1750,9 @@ export const GROUP_HINTS: Partial<Record<ToolGroup['id'], RegExp>> = {
 const groupRelevant = (g: ToolGroup, turn: DirectorTurn): boolean => {
   const hint = GROUP_HINTS[g.id];
   if (g.id === 'refs' && (turn.attachments.length || turn.images.length)) return true;
-  // Selected balloons: "swap these two", "move it up a bit" are about them even with no lettering word.
-  if (g.id === 'lettering' && turn.focus?.lineIds?.length) return true;
+  // Selected balloons: "swap these two", "move it up a bit" are about them even with no lettering word, but not when a
+  // page is the object ("delete page 4" with a balloon still selected is a timeline ask; lettering would trim it).
+  if (g.id === 'lettering' && turn.focus?.lineIds?.length && !PAGE_OBJECT_RE.test(turn.userText || '')) return true;
   return !!hint && hint.test(turn.userText || '');
 };
 
