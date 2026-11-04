@@ -68,18 +68,21 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
 ## Connected-account privacy and model routing (Google Limited Use)
 
 Applies to the **account connectors** (Gmail, Drive, Calendar, Sheets, Maps, the unified
-`connected_data_search`, and `nango_call_api`, which proxies any API the user connected through
-Nango). Content from those accounts must never reach a model endpoint that may log or train on it.
-Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy, provider table).
+`connected_data_search`, `nango_call_api`, which proxies any API the user connected through
+Nango, and the operator's self-hosted Nango MCP, whose tools arrive as `mcp_nango_*` when
+`STUDIO_NANGO_MCP_URL` is set). Content from those accounts must never reach a model endpoint that
+may log or train on it. Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy,
+provider table, reply provenance).
 
 **How connector content can enter a model call** (`turnUsesConnectorData`, `connectorData.ts`):
 
 | Source | Where | Detected by |
 |---|---|---|
-| `tools` | a connector tool is offered (chat force-includes the primary tool of each linked account; recipes and swarm agents list their own) | tool name (exact list + `gmail_` / `drive_` / `calendar_` / `sheets_` / `connected_data_` prefixes) |
+| `tools` | a connector tool is offered (chat force-includes the primary tool of each linked account; recipes and swarm agents list their own; the operator's Nango MCP adds `mcp_nango_*`) | tool name (exact list + `gmail_` / `drive_` / `calendar_` / `sheets_` / `connected_data_` / `mcp_nango_` prefixes) |
 | `context` | the connector RAG block (`connectors/retrieval.ts`, injected by `ai/chat.ts` when `connectorContext` is on) | a signed-in user with any connection (or a failed lookup) |
-| `history` | earlier messages already carry connector output | connector tool calls/results in the messages, the RAG block heading, or a provenance marker (`connectorData: true`, or `toolEvents` naming a connector tool) |
+| `history` | earlier messages already carry connector output | connector tool calls/results in the messages, the RAG block heading, a provenance marker (`connectorData: true`, or `toolEvents` naming a connector tool), or **the server's own provenance store** (`replyProvenance.ts`): a reply it recorded as connected content, recognised when the client sends it back as plain text |
 | `inherited` | an enclosing turn already decided | the privacy scope (`scope.ts`) or the decision `prepareChat` binds to the request's `clientContext` |
+| memory | long-term memory distilled from a connected conversation, injected on a later turn | not a turn source: memory is marked when written and kept off free turns (below) |
 
 **What a connector turn does** (paid OpenRouter turn where any source applies):
 - Every OpenRouter call of the turn sends `provider: { data_collection: 'deny' }` (OpenRouter:
@@ -88,15 +91,28 @@ Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy, provider ta
   model, the JSON repair round, streaming, the auto-memory summary, the swarm's planner, agents
   and synthesis, deep research and delegation, and recipes. It travels as an AsyncLocalStorage
   scope (`runWithConnectorPrivacy`), so engine code needs no new parameter.
-- No `:free` model takes it: free members leave the chain; a nested engine that picked a free
+- No free model takes it: free members leave the chain; a nested engine that picked a free
   worker is moved to the paid net its caller already reserved for (logged as
   `connector_privacy_free_model_skipped`). A free-only request is refused instead, never moved to
-  a paid model.
-- The reply carries `connectorData: true` so the client can mark that assistant turn (see the
-  provenance gap below).
+  a paid model. "Free" is a `:free` id **or** a model the live catalog prices at $0
+  (`costClass: 'free_verified'`, the pickers' own rule); the chat routes register that catalog
+  lookup with the provider. If the catalog cannot be read within 1.5 s, the `:free` rule alone
+  applies and the request still denies data collection (a $0 model without the suffix is then
+  covered only by `deny`).
+- Swarm: the planner and agents use the paid net instead of a free worker. With Free only on and
+  a **paid model pinned**, the turn is a flagged paid turn, so the planner and agents run on that
+  same pinned model (never refused, never moved to another paid model). The `/swarm` hold adds the
+  planner plus up to four agents at the worker model's catalog price (`connectorSwarmHoldUsd`).
+- The reply carries `connectorData: true`, and is recorded in the provenance store, **only when
+  connected content actually entered it**: a model call of the turn really sent the connector
+  context block or a connector tool's call or output (the provider reports it to the turn's egress
+  probe), a connector tool ran, or the history already carried connector content. Deny is still
+  decided up front for every turn that may carry it.
 - Title, memory and follow-up helpers send the flag for a user with any connection.
 - If no endpoint that meets the policy can serve the model, the user is told so plainly
-  (`CONNECTED_DATA_NO_PRIVATE_ENDPOINT`), never retried on a free model.
+  (`CONNECTED_DATA_NO_PRIVATE_ENDPOINT`), never retried on a free model. A capacity failure of the
+  shared key (spend cap, out of credits) says so without the generic "switch to a free model"
+  advice, which such a conversation cannot follow.
 
 **Free models never receive connector content:**
 - A free turn (Free only, a pinned free model, or the free chain used while the shared key is
@@ -106,12 +122,32 @@ Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy, provider ta
 - A free turn whose history already carries connector content is **refused** with HTTP 409
   `CONNECTED_DATA_NEEDS_STANDARD_MODEL` before anything is reserved or sent: what happened, why,
   and the two ways forward (switch to a standard model, or start a new chat without connected
-  content). It is never silently moved to a paid model.
+  content). "Turn off Free only" is said only to someone in Free only; a pinned free model gets
+  "pick a standard model instead of the free one". It is never silently moved to a paid model.
+  Today's client sends history as plain text, so the provenance store is what recognises such a
+  history (see "Reply provenance" below).
+- **Memory:** facts distilled from a conversation that carries, or may carry, connected content
+  (any provider; a user with any connection) are stored with `product = 'chat_studio_connected'`
+  (`CONNECTED_MEMORY_PRODUCT`), and `POST /api/chat/memory` answers `connectorData: true` for
+  them. A free turn of a user with connections gets **no long-term memory**: the server memory
+  block is off (`runChatParams`), and the memory the client composes into `systemPrompt` (the
+  "Background facts about the user" block, parity-tested against the client) is stripped; the
+  persona stays. Wave notes make this precise later (retrieval skips only the marked rows; the
+  client stops composing marked memory into Free only turns).
 - The free-model fallbacks never take a conversation that carries, or may carry, connector
   content (marked history, or a user with connections and an earlier assistant reply): the capped
   shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan
   is refused with an added sentence saying why. The first message of a new chat can still fall
   back to a free model, with connector tools and context withheld.
+
+**Reply provenance** (`replyProvenance.ts`, table `chat_connector_replies`,
+`server/sql/chat_connector_replies.sql`): for every marked reply the backend stores a SHA-256 of
+its normalised text per user (never the text), keeps the newest 2,000 per user for up to a year,
+and service role only. A later OpenRouter turn of a signed-in user with earlier replies looks
+their hashes up once (time-boxed to 1.5 s, run alongside model resolution); a match makes the
+history `history`. A failed write or lookup falls back to an in-process cache and is logged as
+`connector_reply_marks_unavailable` (at most once a minute); it never blocks a chat. Until the SQL
+is applied the cache only covers the awake container, so apply it before deploying.
 
 **Turns without connector content are unchanged** (users with no connections, no marked
 history): the OpenRouter body is byte-identical to before (verified by hashing the request
@@ -127,14 +163,22 @@ bodies of a plain paid and a plain free-only turn against the previous code).
 | NVIDIA, DeepSeek, Z.ai, MiniMax, Tencent, xAI | **not verified**: owner to confirm before connector content is used with them |
 
 **Known gaps** (also in `docs/infrastructure/SECURITY_FINDINGS.md`, C1):
-- *History provenance.* The chat client sends history as plain text, so a conversation that read
-  Gmail on a standard model and then switches to Free only is not recognised until the client
-  echoes `connectorData: true` on those assistant turns (wave note). Degraded fallbacks are
-  conservative meanwhile (see above); a user-chosen Free only turn relies on the marker.
+- *History provenance (C1a, partly fixed).* Replies are recognised by the server's provenance store
+  from the day it is deployed. Not covered: replies from conversations before the deploy, a reply
+  the client changed before sending it back, and the window when the store is unavailable (the
+  in-process cache then covers only the awake container). The client echoing `connectorData: true`
+  on those assistant turns (wave note) closes the rest without a lookup. Degraded free fallbacks
+  stay conservative (a user with connections and an earlier assistant reply never gets one).
+- *Memory (C1d, partly fixed).* Server memory written before this change is unmarked, and a user
+  who removed every connection is no longer treated as connected, so their free turns get memory
+  again. Until the wave notes land (retrieval skips marked rows; the client keeps marked memory out
+  of Free only turns), connected users simply get no memory on free turns.
 - User-configured MCP servers are the user's own services, not connectors this app holds OAuth
-  grants for; their tools are not treated as connector content.
+  grants for; their tools are not treated as connector content. The operator's Nango MCP is.
 - `OPENROUTER_FREE_TEXT_MODEL` (config, a `:free` endpoint by default) is not read by any server
   path today.
+- The public privacy policy's Limited Use statement ("never to free models") must ship **after**
+  the provenance SQL is applied and the client wave notes land (C1a, C1d).
 
 ## Rendering coverage (honest status)
 
@@ -179,3 +223,5 @@ Nango and MCP results.
    Nango-style proxy): add its name to `CONNECTOR_DATA_TOOL_NAMES` in
    `server/src/ai/privacy/connectorData.ts` (the parity test there fails otherwise for account
    connector tools), so connector turns deny data collection and free models never receive it.
+   An operator MCP that proxies users' connections goes in `CONNECTOR_MCP_TOOL_PREFIXES`
+   (`mcp_<serverId>_`).
