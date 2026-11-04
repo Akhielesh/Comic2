@@ -143,10 +143,14 @@ function Fields() {
   );
 }
 
+type View = 'scroll' | 'page' | 'spread';
+type Mode = 'easy' | 'pro';
+type TextStyle = 'bold' | 'italic' | 'underline';
+
 function Choices() {
-  const [view, setView] = useState<'scroll' | 'page' | 'spread'>('page');
-  const [mode, setMode] = useState<'easy' | 'pro'>('easy');
-  const [align, setAlign] = useState<'bold' | 'italic' | 'underline'>('bold');
+  const [view, setView] = useState<View>('page');
+  const [mode, setMode] = useState<Mode>('easy');
+  const [align, setAlign] = useState<TextStyle>('bold');
   const [autosave, setAutosave] = useState(true);
   const [all, setAll] = useState<CheckedState>('indeterminate');
   const [gutter, setGutter] = useState(12);
@@ -154,7 +158,7 @@ function Choices() {
     <SectionCard title="Choices" description="Segmented, tabs, switches, checkboxes, sliders and progress." icon={<Palette />}>
       <div className={STACK}>
         <div className={ROW}>
-          <Segmented
+          <Segmented<View>
             label="Reading view"
             value={view}
             onChange={setView}
@@ -164,7 +168,7 @@ function Choices() {
               { value: 'spread', label: 'Spread' }
             ]}
           />
-          <Segmented
+          <Segmented<Mode>
             label="Editor mode"
             size="sm"
             value={mode}
@@ -174,7 +178,7 @@ function Choices() {
               { value: 'pro', label: 'Pro' }
             ]}
           />
-          <Segmented
+          <Segmented<TextStyle>
             label="Text style"
             value={align}
             onChange={setAlign}
@@ -186,7 +190,7 @@ function Choices() {
           />
           <Segmented label="Disabled choice" disabled value="a" onChange={() => undefined} options={[{ value: 'a', label: 'On' }, { value: 'b', label: 'Off' }]} />
         </div>
-        <Segmented
+        <Segmented<View>
           label="Panel layout"
           fullWidth
           value={view}
