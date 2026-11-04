@@ -9,15 +9,16 @@
 // The engines are spies that record, for each model call, its model, tools and whether the privacy
 // scope was active at that moment.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { connectorPrivacyActive, bindConnectorPrivacy, runWithConnectorPrivacy } from './scope.js';
-import { CONNECTED_DATA_FREE_MODEL_MESSAGE } from './connectorData.js';
+import { connectorPrivacyActive, bindConnectorPrivacy, bindConnectorTurnDecision, runWithConnectorPrivacy } from './scope.js';
+import { connectedDataFreeModelMessage } from './connectorData.js';
+import { routeForConnectorData } from './openrouterPolicy.js';
 
-type Call = { model: string; tools: string[]; scoped: boolean; system: string };
+type Call = { model: string; tools: string[]; scoped: boolean; system: string; noPaidRetry: boolean };
 const calls = vi.hoisted(() => ({ list: [] as Call[], plan: '[]' }));
 vi.mock('../chat.js', () => ({
-  runChat: async (p: { model: string; tools?: { name: string }[]; systemOverride?: string; systemPrompt?: string }) => {
+  runChat: async (p: { model: string; tools?: { name: string }[]; systemOverride?: string; systemPrompt?: string; noPaidRetry?: boolean }) => {
     const system = String(p.systemOverride || p.systemPrompt || '');
-    calls.list.push({ model: p.model, tools: (p.tools || []).map((t) => t.name), scoped: connectorPrivacyActive(), system });
+    calls.list.push({ model: p.model, tools: (p.tools || []).map((t) => t.name), scoped: connectorPrivacyActive(), system, noPaidRetry: p.noPaidRetry === true });
     return { text: system.includes('planner for a swarm') ? calls.plan : 'done', model: p.model, usage: {} };
   }
 }));
@@ -27,7 +28,7 @@ vi.mock('../autoRouter.js', async (importOriginal) => ({
 }));
 vi.mock('../research/deepResearch.js', () => ({
   runDeepResearch: vi.fn(async (p: { model: string }) => {
-    calls.list.push({ model: p.model, tools: [], scoped: connectorPrivacyActive(), system: 'research' });
+    calls.list.push({ model: p.model, tools: [], scoped: connectorPrivacyActive(), system: 'research', noPaidRetry: false });
     return { text: 'r', model: p.model, usage: {}, report: {}, trace: {}, citations: [] };
   })
 }));
@@ -141,7 +142,49 @@ describe('recipes (runRecipe) carry the flag', () => {
 
     calls.list = [];
     const r = await runRecipe({ ...base, model: 'vendor/chat:free', recipe: recipe(['web_search']), priorMessages: MARKED.slice(0, 2) });
-    expect(r.text).toBe(CONNECTED_DATA_FREE_MODEL_MESSAGE);
+    // A free model the user picked (not Free only): the copy says to pick a standard model.
+    expect(r.text).toBe(connectedDataFreeModelMessage(false));
     expect(calls.list).toHaveLength(0);
+
+    const freeOnly = await runRecipe({ ...base, recipe: recipe(['web_search']), priorMessages: MARKED.slice(0, 2), noPaidRetry: true });
+    expect(freeOnly.text).toBe(connectedDataFreeModelMessage(true));
+    expect(calls.list).toHaveLength(0);
+  });
+
+  it("uses prepareChat's own free-turn decision: a $0 pinned model without the `:free` suffix gets no connector tool", async () => {
+    const clientContext = {};
+    bindConnectorTurnDecision(clientContext, { connectorData: false, freeTurn: true });
+    await runRecipe({ ...base, model: 'vendor/zero-priced', recipe: recipe(['gmail_search', 'web_search']), clientContext });
+    expect(calls.list[0].tools).toEqual(['web_search']);
+    expect(calls.list[0].scoped).toBe(false);
+
+    // …and Free only with a pinned paid model is a paid turn there too: tools kept, scoped.
+    calls.list = [];
+    const paidCtx = {};
+    bindConnectorTurnDecision(paidCtx, { connectorData: true, freeTurn: false });
+    await runRecipe({ ...base, model: 'vendor/smart', recipe: recipe(['gmail_search']), clientContext: paidCtx, noPaidRetry: true });
+    expect(calls.list[0].tools).toContain('gmail_search');
+    expect(calls.list[0].scoped).toBe(true);
+  });
+});
+
+describe('Free only with a pinned paid model on a connector turn (the swarm)', () => {
+  it('planner and agents run on the pinned model: no call is refused and none is on a free model', async () => {
+    calls.plan = planOf('scheduling', 'weather');
+    const clientContext = {};
+    bindConnectorPrivacy(clientContext, true);
+    await runWithConnectorPrivacy(true, () =>
+      runSwarm({ ...base, model: 'vendor/smart', messages: ask('Am I free on Friday, and the weather?'), clientContext, noPaidRetry: true })
+    );
+    expect(calls.list.length).toBe(4); // planner, 2 agents, synthesis
+    for (const c of calls.list) {
+      expect(c.model).toBe('vendor/smart');
+      expect(c.scoped).toBe(true);
+      expect(c.noPaidRetry).toBe(true);
+      // What the provider would do with it: never a refusal (a free model under Free only would be).
+      expect(routeForConnectorData({ model: c.model, freeOnly: true }).ok).toBe(true);
+    }
+    // The flagged paid turn keeps its connector tools (the chat turn does too).
+    expect(calls.list.some((c) => c.tools.includes('calendar_agenda'))).toBe(true);
   });
 });

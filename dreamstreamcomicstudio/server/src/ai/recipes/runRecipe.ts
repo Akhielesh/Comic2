@@ -31,13 +31,13 @@ import type {
 } from '../../../../apiTypes.js';
 import { resolveRecipe } from './validate.js';
 import {
-  CONNECTED_DATA_FREE_MODEL_MESSAGE,
+  connectedDataFreeModelMessage,
   isFreeModelId,
   messagesCarryConnectorData,
   turnUsesConnectorData,
   withoutConnectorTools
 } from '../privacy/connectorData.js';
-import { connectorPrivacyActive, connectorPrivacyBound, runWithConnectorPrivacy } from '../privacy/scope.js';
+import { connectorPrivacyActive, connectorPrivacyBound, connectorTurnDecision, runWithConnectorPrivacy } from '../privacy/scope.js';
 import type { Recipe } from './schema.js';
 
 export interface RunRecipeParams {
@@ -140,14 +140,18 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
   // tool and never takes a conversation that already carries connector content. A paid run whose
   // recipe tools, conversation or caller (scope / the request decision) carry connector content runs
   // every engine call with data collection denied and no free model.
-  const freeRun = freeOnly || isFreeModelId(model);
+  // "Free run" is prepareChat's own decision when the request went through it (bound to the
+  // request's clientContext): that one also knows a pinned model the catalog prices at $0 without a
+  // `:free` suffix, and that Free only with a pinned paid model is a paid turn. Otherwise derived here.
+  const decision = connectorTurnDecision(params.clientContext);
+  const freeRun = decision ? decision.freeTurn || isFreeModelId(model) : freeOnly || isFreeModelId(model);
   const recipeTools = freeRun ? withoutConnectorTools(recipe.tools || []) : recipe.tools;
   if (freeRun && messagesCarryConnectorData(params.priorMessages)) {
     return {
       recipeId: recipe.id,
       title: recipe.title,
       missing: [],
-      text: CONNECTED_DATA_FREE_MODEL_MESSAGE,
+      text: connectedDataFreeModelMessage(freeOnly),
       model,
       artifacts: [],
       usage: {},

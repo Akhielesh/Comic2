@@ -53,7 +53,8 @@ const SYNTH_SYSTEM = composePersona(
   `You are the lead agent of a swarm. Specialized sub-agents have completed focused subtasks and their findings are provided to you. Synthesize them into ONE clear, accurate, well-structured answer that fully addresses the user's goal. Integrate and reconcile the findings, cite sources where given, prefer the most reliable information, flag anything the agents could not verify, and do not describe the orchestration process unless asked.`
 );
 
-const MAX_AGENTS = 4;
+/** Agents a swarm run launches at most (routes/chat.ts SWARM_HOLD_MAX_AGENTS sizes a connector run's hold from it). */
+export const MAX_AGENTS = 4;
 
 export interface RunSwarmParams {
   provider: AIProviderId;
@@ -224,16 +225,22 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   // caller's turn does (its privacy scope, or the decision prepareChat bound to the request) or the
   // conversation does. A free model never takes such a run: the planner and agents use the paid net
   // the caller priced instead of a free pick, and every call denies data collection. A free-only run
-  // is never moved to a paid model: its agents get no connector tools instead (below).
+  // is never moved to a paid model: its agents get no connector tools instead (below) — except when
+  // the user pinned a paid model with Free only on and the turn carries connector content: that turn
+  // is a flagged paid turn (routes/chat.ts), so its planner and agents run on that same pinned,
+  // already priced model (not an upgrade) instead of a free pick the provider would refuse.
   const paidWorker = baseReq.fallbackModel && !isFreeModelId(baseReq.fallbackModel) ? baseReq.fallbackModel : TEXT_FALLBACK;
   const inheritedConnectorData =
     connectorPrivacyActive() || connectorPrivacyBound(params.clientContext) || messagesCarryConnectorData(params.messages);
+  const pinnedPaidConnectorRun = freeOnly && inheritedConnectorData && !isFreeModelId(params.model);
 
   // Planner + agents run on a free model by default (the swarm is meant to run on
   // open/free models); synthesis uses the user's chosen model. Free-only never falls back to a
   // paid pick: a verified-free model, else the caller's own (already priced) model.
   const workerModel = freeOnly
-    ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
+    ? pinnedPaidConnectorRun
+      ? params.model
+      : await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
     : inheritedConnectorData
       ? paidWorker
       : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
@@ -261,10 +268,11 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   // An agent offered a connector tool (the calendar agent, a custom agent listing gmail_search…)
   // makes the rest of the run a connector run: those agents and the synthesis follow the policy
   // above. On a free-only run the agents get no connector tools at all.
-  const toolsFor = (def: AgentDefinition): string[] => (freeOnly ? withoutConnectorTools(def.toolNames) : def.toolNames);
+  const freeAgents = freeOnly && !pinnedPaidConnectorRun;
+  const toolsFor = (def: AgentDefinition): string[] => (freeAgents ? withoutConnectorTools(def.toolNames) : def.toolNames);
   const connectorRun =
-    !freeOnly && (inheritedConnectorData || plan.some((p) => (pool[p.agent]?.toolNames || []).some(isConnectorToolName)));
-  const agentModel = connectorRun ? paidWorker : workerModel;
+    !freeAgents && (inheritedConnectorData || plan.some((p) => (pool[p.agent]?.toolNames || []).some(isConnectorToolName)));
+  const agentModel = connectorRun ? (pinnedPaidConnectorRun ? params.model : paidWorker) : workerModel;
 
   const agents: SwarmAgentRun[] = plan.map((p) => {
     const def = pool[p.agent];

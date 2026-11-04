@@ -25,9 +25,21 @@ vi.mock('../services/supabase.js', async (importOriginal) => ({
 }));
 vi.mock('../ai/clientGeo.js', () => ({ resolveClientGeo: async () => null, clientIpFromReq: () => undefined }));
 vi.mock('../services/mcpRegistry.js', () => ({ enabledMcpConfigs: async () => [] }));
+// MCP tools: none, unless a test turns on the operator's Nango MCP (`mcp_nango_*`).
+const mcp = vi.hoisted(() => ({ nango: false }));
 vi.mock('../ai/tools/mcpClient.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../ai/tools/mcpClient.js')>()),
-  buildMcpTools: async () => []
+  buildMcpTools: async () =>
+    mcp.nango
+      ? [
+          {
+            name: 'mcp_nango_list_records',
+            description: 'List records from a connected integration (operator Nango MCP).',
+            parameters: { type: 'object', properties: {} },
+            execute: async () => ({ content: 'none' })
+          }
+        ]
+      : []
 }));
 vi.mock('../services/customAgents.js', () => ({ loadCustomAgentDefinitions: async () => [] }));
 vi.mock('../services/modelStats.js', () => ({ recordModelUsage: () => undefined }));
@@ -35,10 +47,19 @@ vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/modelAccessPolicy.js')>()),
   assertModelAllowedForUser: async () => ({})
 }));
+// Long-term memory: the server block a turn would get, and every write (with its `product`).
+const mem = vi.hoisted(() => ({
+  block: null as string | null,
+  writes: [] as { userId: string; product: string; items: { content: string }[] }[]
+}));
 vi.mock('../services/userMemory.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/userMemory.js')>()),
-  buildUserMemoryBlock: async () => null,
-  rememberUserMemories: async () => undefined
+  isMemoryEnabled: async () => true,
+  buildUserMemoryBlock: async () => mem.block,
+  rememberUserMemories: async (userId: string, product: string, _session: string | null, items: { content: string }[]) => {
+    mem.writes.push({ userId, product, items });
+    return items.length;
+  }
 }));
 
 // The connector lookups: who has which connection, and the connector context block (RAG).
@@ -121,17 +142,25 @@ vi.mock('../services/costEstimator.js', () => {
 vi.mock('../middleware/accountKeys.js', () => ({ hasAccountKeyFor: vi.fn(async () => false) }));
 vi.mock('../services/rbac.js', () => ({ isBootstrapAdminEmail: () => false, getUserRoles: vi.fn(async () => []) }));
 
+const reservedEstimates = vi.hoisted(() => [] as { userId: string; estimateUsd: number }[]);
 const allowance = await import('../services/platformAllowance.js');
 const { chatRouter } = await import('./chat.js');
 const { errorHandler } = await import('../middleware/errors.js');
 const { markSharedKeyCapped, __resetSharedKeyCircuit } = await import('../ai/providerCircuit.js');
-const { CONNECTED_ACCOUNTS_WITHHELD_NOTE, CONNECTED_ACCOUNTS_WITHHELD_NOTICE, CONNECTED_DATA_BUDGET_SENTENCE, CONNECTED_DATA_FREE_MODEL_CODE } =
-  await import('../ai/privacy/connectorData.js');
+const {
+  CONNECTED_ACCOUNTS_WITHHELD_NOTE,
+  CONNECTED_ACCOUNTS_WITHHELD_NOTICE,
+  CONNECTED_DATA_BUDGET_SENTENCE,
+  CONNECTED_DATA_FREE_MODEL_CODE,
+  CONNECTED_MEMORY_PRODUCT,
+  connectedDataFreeModelMessage
+} = await import('../ai/privacy/connectorData.js');
 
 const used = (userId: string) =>
   db.events.filter((e) => e.userId === userId && (e.status === 'SETTLED' || e.status === 'RESERVED')).reduce((s, e) => s + e.costUsd, 0);
 allowance.setUsageBudgetRpc({
   tryReserve: async ({ userId, reservationId, estimateUsd, event }) => {
+    reservedEstimates.push({ userId, estimateUsd });
     const budget = db.budgets.get(userId) ?? Number(event.default_budget_usd);
     const u = used(userId);
     const pct = (v: number) => Math.min(100, Math.round((v / budget) * 1000) / 10);
@@ -157,7 +186,7 @@ type Body = {
   stream?: boolean;
 };
 type Step = { toolCalls?: { id: string; name: string; arguments: string }[]; text?: string };
-const or = vi.hoisted(() => ({ bodies: [] as Body[], script: [] as Step[] }));
+const or = vi.hoisted(() => ({ bodies: [] as Body[], script: [] as Step[], fail: null as null | { status: number; body: unknown } }));
 const realFetch = globalThis.fetch;
 const reply = (body: Body) => {
   const step = or.script.shift();
@@ -171,6 +200,7 @@ const fakeFetch = async (input: unknown, init?: { body?: string }) => {
   if (!url.startsWith('https://openrouter.ai/')) return realFetch(input as string, init as RequestInit);
   const body = JSON.parse(String(init?.body || '{}')) as Body;
   or.bodies.push(body);
+  if (or.fail) return new Response(JSON.stringify(or.fail.body), { status: or.fail.status, headers: { 'content-type': 'application/json' } });
   const data = reply(body);
   if (body.stream) {
     const msg = data.choices[0].message as { content?: string; tool_calls?: unknown[] };
@@ -210,6 +240,11 @@ afterAll(async () => {
 beforeEach(() => {
   or.bodies = [];
   or.script = [];
+  or.fail = null;
+  mcp.nango = false;
+  mem.block = null;
+  mem.writes = [];
+  reservedEstimates.length = 0;
   db.events = [];
   conn.ragBlock.mockReset().mockImplementation(async () => null);
   __resetSharedKeyCircuit();
@@ -298,13 +333,21 @@ describe('a plain turn is unchanged', () => {
 });
 
 describe('a connector turn: every OpenRouter call denies data collection, no free model', () => {
-  it("'tools': a connected user's turn offers gmail_search and carries the flag; the reply is marked", async () => {
+  it("'tools': a connected user's turn offers gmail_search and carries the flag; a reply nothing connected entered is not marked", async () => {
     const r = await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('connected') });
     expect(r.status).toBe(200);
     const [body] = turnBodies();
     expect(toolNames(body)).toContain('gmail_search');
     expect(body.provider).toEqual(DENY);
     expect(anyFree(body)).toBe(false);
+    // Deny is decided up front; the provenance mark only when connected content actually entered.
+    expect(r.json && 'connectorData' in r.json).toBe(false);
+  });
+
+  it('a reply a connector tool answered is marked connected content', async () => {
+    or.script = [{ toolCalls: [{ id: 'c1', name: 'gmail_search', arguments: '{"query":"launch"}' }] }, { text: 'Dana wrote about Friday.' }];
+    const r = await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('connected') });
+    expect(r.status).toBe(200);
     expect(r.json?.connectorData).toBe(true);
   });
 
@@ -322,6 +365,7 @@ describe('a connector turn: every OpenRouter call denies data collection, no fre
   });
 
   it('over /stream as well', async () => {
+    or.script = [{ toolCalls: [{ id: 'c1', name: 'gmail_search', arguments: '{"query":"launch"}' }] }, { text: 'Dana wrote about Friday.' }];
     const res = await realFetch(`${base}/api/chat/stream`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-test-user': user('connected') },
@@ -343,6 +387,8 @@ describe('a connector turn: every OpenRouter call denies data collection, no fre
     expect(toolNames(body).some((n) => n.startsWith('gmail_'))).toBe(false);
     expect(systemText(body)).toContain('## Connected account data');
     expect(body.provider).toEqual(DENY);
+    // The connector context block really reached the model: the reply is marked.
+    expect(r.json?.connectorData).toBe(true);
   });
 
   it("'history': a prior assistant turn marked as connected content flags a user without connections", async () => {
@@ -472,5 +518,197 @@ describe('summaries and titles generated from a connected conversation', () => {
     await post('/api/chat/title', exchange, { 'x-test-user': user('plain') });
     expect(or.bodies).toHaveLength(1);
     expect('provider' in or.bodies[0]).toBe(false);
+  });
+});
+
+// ── Review fixes ─────────────────────────────────────────────────────────────────────────────
+const streamFinal = (text: string): Record<string, any> | null => {
+  const m = /event: final\ndata: (.*)\n/.exec(text);
+  return m ? JSON.parse(m[1]) : null;
+};
+const postStream = async (path: string, body: unknown, headers: Record<string, string>) => {
+  const res = await realFetch(`${base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  return { status: res.status, text: await res.text() };
+};
+
+describe('C1a: the history of plain text today’s client sends is recognised by the server', () => {
+  it('a reply a connector tool answered, sent back as plain text on a Free only turn, is refused: nothing sent, nothing reserved', async () => {
+    const id = user('connected');
+    or.script = [{ toolCalls: [{ id: 'c1', name: 'gmail_search', arguments: '{"query":"launch"}' }] }, { text: 'Dana asked to move the launch to Friday.' }];
+    const first = await post('/api/chat', ASK_EMAIL, { 'x-test-user': id });
+    expect(first.json?.connectorData).toBe(true);
+    await vi.waitFor(() => expect(or.bodies.some(isHelper)).toBe(true)); // let the auto-memory call go out first
+
+    // The client echoes no marker: {role, content} only — the reply text as it was shown.
+    or.bodies = [];
+    db.events = [];
+    const history = [...ASK_EMAIL.messages, { role: 'assistant', content: 'Dana asked to move the launch to Friday.' }, { role: 'user', content: 'Tell me a joke' }];
+    for (const path of ['/api/chat', '/api/chat/stream', '/api/chat/swarm']) {
+      const r = await post(path, { messages: history }, { 'x-test-user': id, 'X-Free-Only': 'true' });
+      expect(r.status).toBe(409);
+      expect(r.json?.error?.code).toBe(CONNECTED_DATA_FREE_MODEL_CODE);
+    }
+    expect(or.bodies).toHaveLength(0);
+    expect(db.events.filter((e) => e.userId === id)).toHaveLength(0);
+  });
+
+  it('a reply nothing connected entered stays usable on Free only (no over-broad refusal)', async () => {
+    const id = user('connected');
+    or.script = [{ text: 'Tides come from the moon.' }];
+    const first = await post('/api/chat', ASK_PLAIN, { 'x-test-user': id });
+    expect(first.json && 'connectorData' in first.json).toBe(false);
+    or.bodies = [];
+    const history = [...ASK_PLAIN.messages, { role: 'assistant', content: 'Tides come from the moon.' }, { role: 'user', content: 'And waves?' }];
+    const r = await post('/api/chat', { messages: history }, { 'x-test-user': id, 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    expect(/:free$/.test(turnBodies()[0].model)).toBe(true);
+  });
+
+  it('the swarm reply is marked only when an agent really read connected content', async () => {
+    const id = user('connected');
+    const ask = { messages: [{ role: 'user', content: 'Am I free on Friday afternoon?' }] };
+    or.script = [{ text: '[{"agent":"scheduling","task":"check Friday"}]' }, { text: 'Nothing found.' }, { text: 'You look free.' }];
+    const plain = streamFinal((await postStream('/api/chat/swarm', ask, { 'x-test-user': id })).text);
+    expect(plain && 'connectorData' in plain).toBe(false);
+
+    or.script = [
+      { text: '[{"agent":"scheduling","task":"check Friday"}]' },
+      { toolCalls: [{ id: 'k1', name: 'calendar_agenda', arguments: '{}' }] },
+      { text: 'Friday is open after 2pm.' },
+      { text: 'You are free after 2pm.' }
+    ];
+    const read = streamFinal((await postStream('/api/chat/swarm', ask, { 'x-test-user': user('connected') })).text);
+    expect(read?.connectorData).toBe(true);
+  });
+});
+
+describe('memory distilled from connected content never reaches a free model', () => {
+  const MEMORY_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Planning the launch with Dana on Friday';
+  const CLIENT_MEMORY =
+    'Answer like a pirate.\n\nBackground facts about the user (from earlier conversations) — use ONLY when they are clearly relevant to the current question:\n- Dana launch Friday\n\n' +
+    'Relevance rules: treat these as optional background, never a frame. If stored facts seem to contradict the current message, trust the current message.';
+
+  it('a connector turn writes its memory marked as connected content; a plain user’s stays unmarked', async () => {
+    const id = user('connected');
+    or.script = [{ toolCalls: [{ id: 'c1', name: 'gmail_search', arguments: '{"query":"launch"}' }] }, { text: 'Dana wrote about Friday.' }, { text: '- Planning the launch with Dana on Friday' }];
+    await post('/api/chat', ASK_EMAIL, { 'x-test-user': id });
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === id)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === id)?.product).toBe(CONNECTED_MEMORY_PRODUCT);
+
+    const plainId = user('plain');
+    or.script = [{ text: 'Tides come from the moon.' }, { text: '- Likes oceanography' }];
+    await post('/api/chat', ASK_PLAIN, { 'x-test-user': plainId });
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === plainId)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === plainId)?.product).toBe('chat_studio');
+  });
+
+  it('the next free turn of a connected user gets no memory block and no client-composed memory; the persona stays', async () => {
+    mem.block = MEMORY_BLOCK;
+    const r = await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('connected'), 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    const sys = systemText(turnBodies()[0]);
+    expect(sys).not.toContain('Planning the launch with Dana');
+    expect(sys).not.toContain('Dana launch Friday');
+    expect(sys).not.toContain('Background facts about the user');
+    expect(sys).toContain('Answer like a pirate.');
+  });
+
+  it('a plain user’s free turn keeps both memories (unchanged)', async () => {
+    mem.block = MEMORY_BLOCK;
+    await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
+    const sys = systemText(turnBodies()[0]);
+    expect(sys).toContain('Planning the launch with Dana');
+    expect(sys).toContain('Dana launch Friday');
+  });
+
+  it('a connected user’s paid turn keeps its memory (it runs with data collection denied)', async () => {
+    mem.block = MEMORY_BLOCK;
+    await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('connected') });
+    const [body] = turnBodies();
+    expect(systemText(body)).toContain('Planning the launch with Dana');
+    expect(body.provider).toEqual(DENY);
+  });
+
+  it('POST /memory of a connected user says connectorData and writes marked rows; a plain user’s does neither', async () => {
+    const exchange = { messages: [{ role: 'user', content: 'Summarise my unread email' }, { role: 'assistant', content: 'Dana asked to move the launch.' }] };
+    or.script = [{ text: '- Launch moved to Friday' }];
+    const id = user('connected');
+    const r = await post('/api/chat/memory', exchange, { 'x-test-user': id });
+    expect(r.json?.connectorData).toBe(true);
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === id)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === id)?.product).toBe(CONNECTED_MEMORY_PRODUCT);
+
+    or.script = [{ text: '- Likes tides' }];
+    const plainId = user('plain');
+    const p2 = await post('/api/chat/memory', exchange, { 'x-test-user': plainId });
+    expect(p2.json && 'connectorData' in p2.json).toBe(false);
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === plainId)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === plainId)?.product).toBe('chat_studio');
+  });
+});
+
+describe('honest copy', () => {
+  it('the refusal on a pinned free model (not Free only) says to pick a standard model, never "turn off Free only"', async () => {
+    const r = await post('/api/chat', { messages: MARKED_HISTORY, model: FREE_B }, { 'x-test-user': user('plain') });
+    expect(r.status).toBe(409);
+    expect(r.json?.error?.message).toBe(connectedDataFreeModelMessage(false));
+    expect(r.json?.error?.message).not.toContain('Free only');
+    expect(r.json?.error?.message).toContain('pick a standard model instead of the free one');
+  });
+
+  it('a capped shared key on a connector conversation reports capacity without "switch to a free model"', async () => {
+    markSharedKeyCapped();
+    or.fail = { status: 403, body: { error: { message: 'Key limit exceeded (total limit)' } } };
+    const history = [
+      { role: 'user', content: 'What is on my calendar tomorrow?' },
+      { role: 'assistant', content: 'You have a dentist appointment at 9.' },
+      { role: 'user', content: 'Explain how ocean tides work in detail' }
+    ];
+    const r = await post('/api/chat', { messages: history }, { 'x-test-user': user('connected') });
+    expect(r.status).toBe(503);
+    const text = JSON.stringify(r.json);
+    expect(text).not.toMatch(/switch to a free model/i);
+    expect(text).toContain('never sent to free models');
+    expect(or.bodies.every((b) => !anyFree(b))).toBe(true);
+  });
+});
+
+describe('the operator’s Nango MCP (mcp_nango_*) is a connector', () => {
+  it('a free turn never offers it; a paid turn that offers it denies data collection (even for a user with no connections here)', async () => {
+    mcp.nango = true;
+    await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
+    expect(toolNames(turnBodies()[0])).not.toContain('mcp_nango_list_records');
+
+    or.bodies = [];
+    await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('plain') });
+    const [paid] = turnBodies();
+    expect(toolNames(paid)).toContain('mcp_nango_list_records');
+    expect(paid.provider).toEqual(DENY);
+  });
+});
+
+describe('a connector swarm run holds for its paid planner and agents', () => {
+  const ASK = { messages: [{ role: 'user', content: 'What is the weather in Lisbon on Friday?' }] };
+  const holdOf = async (path: string, id: string) => {
+    reservedEstimates.length = 0;
+    if (path.endsWith('/swarm')) await postStream(path, ASK, { 'x-test-user': id });
+    else await post(path, ASK, { 'x-test-user': id });
+    return reservedEstimates.find((e) => e.userId === id)?.estimateUsd ?? NaN;
+  };
+
+  it('holds for exactly as many agents as the orchestrator can launch', async () => {
+    const { MAX_AGENTS } = await import('../ai/agents/orchestrator.js');
+    const { SWARM_HOLD_MAX_AGENTS } = await import('./chat.js');
+    expect(SWARM_HOLD_MAX_AGENTS).toBe(MAX_AGENTS);
+  });
+
+  it('connected: the /swarm hold exceeds the single-turn hold by the planner + agents allowance; plain: unchanged', async () => {
+    const id = user('connected');
+    const turn = await holdOf('/api/chat', id);
+    const swarm = await holdOf('/api/chat/swarm', id);
+    expect(swarm).toBeGreaterThan(turn + 0.001);
+
+    const plainId = user('plain');
+    expect(await holdOf('/api/chat/swarm', plainId)).toBeCloseTo(await holdOf('/api/chat', plainId), 9);
   });
 });
