@@ -22,6 +22,8 @@ import {
   type AgentDefinition
 } from './registry.js';
 import { composePersona, withAgentPersona } from '../persona.js';
+import { isConnectorToolName, isFreeModelId, messagesCarryConnectorData, withoutConnectorTools } from '../privacy/connectorData.js';
+import { connectorPrivacyActive, connectorPrivacyBound, runWithConnectorPrivacy } from '../privacy/scope.js';
 import { verifyFindings, verificationBlock, type AgentFinding } from './verify.js';
 import type {
   ChatArtifact,
@@ -218,24 +220,35 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   const pool: Record<string, AgentDefinition> = { ...AGENTS };
   for (const a of params.extraAgents || []) pool[a.id] = a;
 
+  // Connected-account privacy (ai/privacy): the run already carries connector content when the
+  // caller's turn does (its privacy scope, or the decision prepareChat bound to the request) or the
+  // conversation does. A free model never takes such a run: the planner and agents use the paid net
+  // the caller priced instead of a free pick, and every call denies data collection. A free-only run
+  // is never moved to a paid model: its agents get no connector tools instead (below).
+  const paidWorker = baseReq.fallbackModel && !isFreeModelId(baseReq.fallbackModel) ? baseReq.fallbackModel : TEXT_FALLBACK;
+  const inheritedConnectorData =
+    connectorPrivacyActive() || connectorPrivacyBound(params.clientContext) || messagesCarryConnectorData(params.messages);
+
   // Planner + agents run on a free model by default (the swarm is meant to run on
   // open/free models); synthesis uses the user's chosen model. Free-only never falls back to a
   // paid pick: a verified-free model, else the caller's own (already priced) model.
   const workerModel = freeOnly
     ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
-    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+    : inheritedConnectorData
+      ? paidWorker
+      : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
 
   // 1) PLAN
   let plan: { agent: string; task: string }[] = [];
   try {
-    const planRes = await runChat({
+    const planRes = await runWithConnectorPrivacy(inheritedConnectorData, () => runChat({
       ...baseReq,
       model: workerModel,
       messages: [...priorMessages, { role: 'user', content: `Goal: ${goal}` }],
       systemOverride: PLANNER_PROMPT.replace('{catalog}', agentCatalogForPlanner(pool)),
       temperature: 0.2,
       maxTokens: 500
-    });
+    }));
     usageParts.push(planRes.usage);
     plan = sanitizePlan(coerceJsonOrNull(planRes.text), goal, pool);
   } catch (err) {
@@ -244,6 +257,14 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   }
   if (!plan.length) plan = selectAgentsHeuristic(goal);
   plan = plan.slice(0, MAX_AGENTS);
+
+  // An agent offered a connector tool (the calendar agent, a custom agent listing gmail_search…)
+  // makes the rest of the run a connector run: those agents and the synthesis follow the policy
+  // above. On a free-only run the agents get no connector tools at all.
+  const toolsFor = (def: AgentDefinition): string[] => (freeOnly ? withoutConnectorTools(def.toolNames) : def.toolNames);
+  const connectorRun =
+    !freeOnly && (inheritedConnectorData || plan.some((p) => (pool[p.agent]?.toolNames || []).some(isConnectorToolName)));
+  const agentModel = connectorRun ? paidWorker : workerModel;
 
   const agents: SwarmAgentRun[] = plan.map((p) => {
     const def = pool[p.agent];
@@ -272,16 +293,16 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
         const agentPrompt = withAgentPersona(def.systemPrompt);
         const r = await runWithRetry(
           () =>
-            runChat({
+            runWithConnectorPrivacy(connectorRun, () => runChat({
               ...baseReq,
-              model: workerModel,
+              model: agentModel,
               messages: [...priorMessages, { role: 'user', content: p.task }],
               systemOverride: userMemory ? `${agentPrompt}\n\nUser context / preferences:\n${userMemory}` : agentPrompt,
               clientContext: params.clientContext,
-              tools: resolveTools(def.toolNames, toolCtx),
+              tools: resolveTools(toolsFor(def), toolCtx),
               temperature: 0.4,
               maxTokens: 1400
-            }),
+            })),
           params.signal,
           // The first attempt's spend bills even when the retry succeeds.
           (err) => pushSpent(usageParts, err)
@@ -357,7 +378,7 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   ];
   const synthSystem = [SYNTH_SYSTEM, params.systemPrompt?.trim()].filter(Boolean).join('\n\n');
 
-  const synthRes = await runChat({
+  const synthRes = await runWithConnectorPrivacy(connectorRun, () => runChat({
     ...baseReq,
     model: params.model,
     ...(freeOnly && params.fallbackModels?.length ? { fallbackModels: params.fallbackModels } : {}),
@@ -367,7 +388,7 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
     temperature: 0.5,
     maxTokens: 3072,
     onDelta: params.onDelta
-  });
+  }));
   usageParts.push(synthRes.usage);
   if (synthRes.citations) citations.push(...synthRes.citations);
   if (synthRes.notices) notices.push(...synthRes.notices);

@@ -30,6 +30,14 @@ import type {
   ApiUsage
 } from '../../../../apiTypes.js';
 import { resolveRecipe } from './validate.js';
+import {
+  CONNECTED_DATA_FREE_MODEL_MESSAGE,
+  isFreeModelId,
+  messagesCarryConnectorData,
+  turnUsesConnectorData,
+  withoutConnectorTools
+} from '../privacy/connectorData.js';
+import { connectorPrivacyActive, connectorPrivacyBound, runWithConnectorPrivacy } from '../privacy/scope.js';
 import type { Recipe } from './schema.js';
 
 export interface RunRecipeParams {
@@ -128,6 +136,32 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
   const fallbackModel = freeOnly ? undefined : params.fallbackModel || TEXT_FALLBACK;
   const retry = { fallbackModel, ...(freeOnly ? { noPaidRetry: true } : {}) };
 
+  // Connected-account privacy (ai/privacy). A free run (free-only, or a free model) gets no connector
+  // tool and never takes a conversation that already carries connector content. A paid run whose
+  // recipe tools, conversation or caller (scope / the request decision) carry connector content runs
+  // every engine call with data collection denied and no free model.
+  const freeRun = freeOnly || isFreeModelId(model);
+  const recipeTools = freeRun ? withoutConnectorTools(recipe.tools || []) : recipe.tools;
+  if (freeRun && messagesCarryConnectorData(params.priorMessages)) {
+    return {
+      recipeId: recipe.id,
+      title: recipe.title,
+      missing: [],
+      text: CONNECTED_DATA_FREE_MODEL_MESSAGE,
+      model,
+      artifacts: [],
+      usage: {},
+      activities: r.activities
+    };
+  }
+  const connectorRun =
+    !freeRun &&
+    turnUsesConnectorData({
+      toolNames: recipe.tools,
+      messages: params.priorMessages,
+      inherited: connectorPrivacyActive() || connectorPrivacyBound(params.clientContext)
+    });
+
   // Effective kickoff message: the templated prompt, or — if the recipe is
   // instructions-only — a minimal nudge so the agent acts on the instructions.
   const kickoff = r.prompt || 'Carry out the task exactly as instructed above.';
@@ -158,7 +192,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
     if (recipe.id === 'deep-research-brief') {
       const depthRaw = String(r.values.depth ?? 'standard');
       const depth: ResearchDepth = depthRaw === 'quick' || depthRaw === 'exhaustive' ? depthRaw : 'standard';
-      const res = await runDeepResearch({
+      const res = await runWithConnectorPrivacy(connectorRun, () => runDeepResearch({
         topic: String(r.values.topic ?? '').trim(),
         audience: r.values.audience ? String(r.values.audience) : undefined,
         depth,
@@ -172,7 +206,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         signal: params.signal,
         onDelta: params.onDelta,
         onProgress: params.onProgress ? (t) => params.onProgress?.(t) : undefined
-      });
+      }));
       return {
         recipeId: recipe.id,
         title: recipe.title,
@@ -197,7 +231,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
       // Instructions steer every agent + synthesis; merge with durable user memory.
       const swarmSystem = [r.instructions, userMemory].filter(Boolean).join('\n\n');
       const messages: ChatMessage[] = [...(params.priorMessages || []), { role: 'user', content: kickoff }];
-      const res = await runSwarm({
+      const res = await runWithConnectorPrivacy(connectorRun, () => runSwarm({
         provider: params.provider,
         apiKey: params.apiKey,
         model,
@@ -209,7 +243,7 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         signal: params.signal,
         onDelta: params.onDelta,
         onProgress: params.onProgress ? (t) => params.onProgress?.(t) : undefined
-      });
+      }));
       const structured = wantsJson ? coerceJsonOrNull(res.text) ?? undefined : undefined;
       return {
         recipeId: recipe.id,
@@ -238,21 +272,21 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
       (userMemory ? `\n\nUser context / preferences:\n${userMemory}` : '');
 
     const messages: ChatMessage[] = [...(params.priorMessages || []), { role: 'user', content: kickoff }];
-    const res = await runChat({
+    const res = await runWithConnectorPrivacy(connectorRun, () => runChat({
       provider: params.provider,
       apiKey: params.apiKey,
       model,
       messages,
       systemOverride,
       clientContext: params.clientContext,
-      tools: resolveTools(recipe.tools, toolCtxFrom(params.clientContext)),
+      tools: resolveTools(recipeTools, toolCtxFrom(params.clientContext)),
       temperature,
       maxTokens: 3072,
       ...retry,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
       onDelta: params.onDelta
-    });
+    }));
     const structured = wantsJson ? coerceJsonOrNull(res.text) ?? undefined : undefined;
     return {
       recipeId: recipe.id,
