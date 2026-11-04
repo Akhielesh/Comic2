@@ -14,6 +14,8 @@ vi.mock('../../connectors/store.js', async (importOriginal) => ({
 import {
   CONNECTED_ACCOUNTS_WITHHELD_NOTICE,
   CONNECTED_DATA_BUDGET_SENTENCE,
+  connectedAccountsWithheldNote,
+  connectedAccountsWithheldNotice,
   CONNECTED_DATA_FREE_MODEL_MESSAGE,
   CONNECTOR_CONTEXT_HEADING,
   CONNECTOR_DATA_TOOL_NAMES,
@@ -204,10 +206,17 @@ describe('copy and the provider table', () => {
     }
     // services/chatErrors.ts rewrites messages containing these phrases; ours must reach the user verbatim.
     const rewritten = /aborted|timed out|timeout|failed to fetch|network error|not found|no endpoints found|limit exceeded|payment required|credits|quota|429|rate limit|too many requests|uuid/i;
-    for (const copy of [CONNECTED_DATA_FREE_MODEL_MESSAGE, CONNECTED_DATA_BUDGET_SENTENCE, CONNECTED_ACCOUNTS_WITHHELD_NOTICE]) {
+    for (const copy of [CONNECTED_DATA_FREE_MODEL_MESSAGE, CONNECTED_DATA_BUDGET_SENTENCE, CONNECTED_ACCOUNTS_WITHHELD_NOTICE, connectedAccountsWithheldNotice(false)]) {
       expect(copy).not.toMatch(rewritten);
       expect(copy).not.toMatch(/\$/);
     }
+  });
+
+  it('the withheld copy only advises turning Free only off when the user chose it', () => {
+    expect(connectedAccountsWithheldNote(true)).toContain('turn off Free only');
+    expect(connectedAccountsWithheldNotice(true)).toContain('turn off Free only');
+    expect(connectedAccountsWithheldNote(false)).not.toContain('Free only');
+    expect(connectedAccountsWithheldNotice(false)).not.toContain('Free only');
   });
 
   it('documents every text provider; only OpenRouter is controlled per request, Gemini needs the owner', () => {

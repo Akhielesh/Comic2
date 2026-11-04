@@ -75,8 +75,8 @@ import { hasFreeSuffix } from '../../../shared/pricing.js';
 import type { LimitExceededDetails } from '../../../shared/types/billing.js';
 import { logger } from '../lib/logger.js';
 import {
-  CONNECTED_ACCOUNTS_WITHHELD_NOTE,
-  CONNECTED_ACCOUNTS_WITHHELD_NOTICE,
+  connectedAccountsWithheldNote,
+  connectedAccountsWithheldNotice,
   CONNECTED_DATA_BUDGET_SENTENCE,
   CONNECTED_DATA_FREE_MODEL_CODE,
   CONNECTED_DATA_FREE_MODEL_MESSAGE,
@@ -259,6 +259,8 @@ type ConnectorTurnPrivacy = {
   hasConnections: boolean | null;
   /** The message asked for connected data (the keyword router picked a connector tool) and the user has connections. */
   connectorIntent: boolean;
+  /** The user chose free models (X-Free-Only), as opposed to a free fallback: decides the advice in the copy. */
+  freeOnly: boolean;
 };
 
 /** The turn carries connected-account content (run its model calls in the privacy scope). */
@@ -268,8 +270,8 @@ const connectorTurn = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean 
  * A free-model turn of a user with connected accounts: connector tools out, the connector context
  * block off, and (connections confirmed) a note so the model explains instead of guessing.
  */
-const withheldSystemPrompt = (systemPrompt: string | undefined, hasConnections: boolean | null): string | undefined =>
-  hasConnections === true ? [systemPrompt, CONNECTED_ACCOUNTS_WITHHELD_NOTE].filter(Boolean).join('\n\n') : systemPrompt;
+const withheldSystemPrompt = (systemPrompt: string | undefined, hasConnections: boolean | null, freeOnly: boolean): string | undefined =>
+  hasConnections === true ? [systemPrompt, connectedAccountsWithheldNote(freeOnly)].filter(Boolean).join('\n\n') : systemPrompt;
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
 
@@ -690,7 +692,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     }
     if (freeTurn && hasConnections !== false) {
       routedToolNames = withoutConnectorTools(routedToolNames);
-      systemPrompt = withheldSystemPrompt(systemPrompt, hasConnections);
+      systemPrompt = withheldSystemPrompt(systemPrompt, hasConnections, freeOnly);
     }
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
@@ -869,7 +871,8 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       freeTurn,
       blocksFreeFallback: historyConnectorData || (priorAssistantTurn && hasConnections === true),
       hasConnections,
-      connectorIntent: keywordConnectorIntent && hasConnections === true
+      connectorIntent: keywordConnectorIntent && hasConnections === true,
+      freeOnly
     };
     if (connectorPrivacy.connectorData) {
       // No free model in this turn's chain (the provider enforces it again per request).
@@ -958,7 +961,7 @@ const markConnectorData = <T extends object>(p: PreparedChat, payload: T): T =>
 /** A free turn that asked for connected data says honestly why the accounts weren't used. */
 const withWithheldNotice = (p: PreparedChat, notices: CapabilityNotice[] | undefined): CapabilityNotice[] | undefined =>
   p.connectorPrivacy?.freeTurn && p.connectorPrivacy.connectorIntent
-    ? [...(notices || []), { tool: 'connectors', level: 'info', message: CONNECTED_ACCOUNTS_WITHHELD_NOTICE }]
+    ? [...(notices || []), { tool: 'connectors', level: 'info', message: connectedAccountsWithheldNotice(p.connectorPrivacy.freeOnly) }]
     : notices;
 
 /**
@@ -1278,7 +1281,7 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
     freeModelsOnly: true,
     ...(privacy
       ? {
-          systemPrompt: withhold ? withheldSystemPrompt(p.systemPrompt, privacy.hasConnections) : p.systemPrompt,
+          systemPrompt: withhold ? withheldSystemPrompt(p.systemPrompt, privacy.hasConnections, privacy.freeOnly) : p.systemPrompt,
           connectorPrivacy: {
             ...privacy,
             connectorData: false,

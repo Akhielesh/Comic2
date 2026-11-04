@@ -445,6 +445,10 @@ describe('the free-model fallbacks never take a connector conversation', () => {
     expect(toolNames(body)).not.toContain('gmail_search');
     expect(conn.ragBlock).not.toHaveBeenCalled();
     expect('provider' in body).toBe(false);
+    // The user did not choose Free only here, so the copy never tells them to turn it off.
+    expect(systemText(body)).toContain('CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY');
+    expect(systemText(body)).not.toContain('turn off Free only');
+    expect(JSON.stringify(r.json?.notices || [])).not.toContain('turn off Free only');
   });
 });
 

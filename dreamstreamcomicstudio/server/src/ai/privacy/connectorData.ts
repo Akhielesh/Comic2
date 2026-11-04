@@ -173,11 +173,22 @@ export const CONNECTED_DATA_BUDGET_SENTENCE =
   "This chat includes content from your connected accounts, which is never sent to free models, so it can't continue on one. " +
   'Start a new chat without connected content to keep chatting on free models, or add your own API key in Settings → API keys.';
 
-/** Told to the model on a free-model turn for a user with connected accounts (they were withheld). */
-export const CONNECTED_ACCOUNTS_WITHHELD_NOTE =
+/**
+ * Told to the model on a free-model turn for a user with connected accounts (they were withheld).
+ * `freeOnly`: the user chose free models (the way forward is turning Free only off); otherwise the
+ * free model came from a fallback (used-up usage, a busy shared service) and that advice would be wrong.
+ */
+export const connectedAccountsWithheldNote = (freeOnly: boolean): string =>
   "CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY. It runs on a free model, and the user's connected accounts (Gmail, Drive, Calendar and other connectors) are never sent to free models, because free model endpoints may keep or learn from what they receive. " +
-  'If the user asks about their email, files, calendar or other connected data, say so plainly in one sentence and give the two ways forward: switch to a standard model (turn off Free only), or ask without their connected content. Never guess or invent their data.';
+  `If the user asks about their email, files, calendar or other connected data, say so plainly in one sentence and give the two ways forward: ${
+    freeOnly ? 'switch to a standard model (turn off Free only)' : 'try again on a standard model later'
+  }, or ask without their connected content. Never guess or invent their data.`;
 
 /** Shown to the user when a free-model turn asked about connected data and the tools were withheld. */
-export const CONNECTED_ACCOUNTS_WITHHELD_NOTICE =
-  "Your connected accounts weren't used for this reply: it ran on a free model, and connected content is only sent to standard models. Switch to a standard model (turn off Free only) to use them.";
+export const connectedAccountsWithheldNotice = (freeOnly: boolean): string =>
+  "Your connected accounts weren't used for this reply: it ran on a free model, and connected content is only sent to standard models. " +
+  (freeOnly ? 'Switch to a standard model (turn off Free only) to use them.' : 'They work again once replies come from a standard model.');
+
+/** The free-only variants (the common case). */
+export const CONNECTED_ACCOUNTS_WITHHELD_NOTE = connectedAccountsWithheldNote(true);
+export const CONNECTED_ACCOUNTS_WITHHELD_NOTICE = connectedAccountsWithheldNotice(true);
