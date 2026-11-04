@@ -22,6 +22,14 @@ import { modelTimeoutError, makeProviderError } from './errors.js';
 import { markSharedKeyCapped } from '../providerCircuit.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
+import { connectorPrivacyActive } from '../privacy/scope.js';
+import {
+  dataPolicyUnavailableError,
+  isDataPolicyUnavailable,
+  routeForConnectorData,
+  withDataCollectionDenied
+} from '../privacy/openrouterPolicy.js';
+import { logger } from '../../lib/logger.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -273,6 +281,32 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   };
 };
 
+/**
+ * A text request may say explicitly that it carries connected-account content; otherwise the
+ * connected-account privacy scope of the turn decides (ai/privacy/scope.ts). Either way the body
+ * gets `provider.data_collection: 'deny'` and no free model takes it (ai/privacy/openrouterPolicy.ts,
+ * which quotes OpenRouter's documented semantics).
+ */
+export type ConnectorPrivacyTextRequest = GenerateTextRequest & { dataCollection?: 'deny' };
+
+const deniesDataCollection = (req: GenerateTextRequest): boolean =>
+  (req as ConnectorPrivacyTextRequest).dataCollection === 'deny' || connectorPrivacyActive();
+
+/** Connector content: drop free models (or refuse a free-only request) before anything is sent. */
+const routeForPrivacy = (req: GenerateTextRequest): GenerateTextRequest => {
+  if (!deniesDataCollection(req)) return req;
+  const route = routeForConnectorData(req);
+  if ('error' in route) throw route.error;
+  if (route.swappedFrom) {
+    logger.info('connector_privacy_free_model_skipped', { from: route.swappedFrom, to: route.req.model });
+  }
+  return route.req;
+};
+
+/** A connector request no private endpoint could serve fails with honest copy (never a free retry). */
+const privacyFailure = (req: GenerateTextRequest, err: unknown): unknown =>
+  deniesDataCollection(req) && isDataPolicyUnavailable(err) ? dataPolicyUnavailableError(err) : err;
+
 const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
   const baseBody: Record<string, unknown> = {
     model: req.model,
@@ -318,7 +352,10 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
     baseBody.tool_choice = 'auto';
   }
 
-  return baseBody;
+  // Connected-account content (Google Limited Use): only providers that do not collect user data.
+  // Every call of such a turn builds its body here — the first call, tool rounds, retries, the
+  // fallback model, the JSON repair round and streaming. Other turns are byte-identical.
+  return deniesDataCollection(req) ? withDataCollectionDenied(baseBody) : baseBody;
 };
 
 const generateTextOnce = async (
@@ -375,9 +412,10 @@ const generateTextOnce = async (
  * unavailable (404 "No endpoints") or rate-limited (429) — common for free models.
  */
 const generateText = async (
-  req: GenerateTextRequest,
+  original: GenerateTextRequest,
   ctx: ProviderContext
 ): Promise<GenerateTextResult> => {
+  const req = routeForPrivacy(original);
   try {
     return await generateTextOnce(req, ctx);
   } catch (err) {
@@ -387,9 +425,13 @@ const generateText = async (
     // that would defeat the whole point. Surface the error so the route can return
     // a Block + explain response instead of charging the caller's key.
     if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable) {
-      return await generateTextOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx);
+      try {
+        return await generateTextOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx);
+      } catch (fallbackErr) {
+        throw privacyFailure(req, fallbackErr);
+      }
     }
-    throw err;
+    throw privacyFailure(req, err);
   }
 };
 
@@ -543,10 +585,11 @@ const streamOnce = async (
 };
 
 const generateTextStream = async (
-  req: GenerateTextRequest,
+  original: GenerateTextRequest,
   ctx: ProviderContext,
   onDelta: (delta: { content?: string; reasoning?: string }) => void
 ): Promise<GenerateTextResult> => {
+  const req = routeForPrivacy(original);
   try {
     return await streamOnce(req, ctx, onDelta);
   } catch (err) {
@@ -556,9 +599,13 @@ const generateTextStream = async (
     // mid-stream failure (err.streamed) would replay the whole answer and duplicate output.
     const streamed = Boolean((err as { streamed?: boolean })?.streamed);
     if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable && !streamed) {
-      return await streamOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx, onDelta);
+      try {
+        return await streamOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx, onDelta);
+      } catch (fallbackErr) {
+        throw privacyFailure(req, fallbackErr);
+      }
     }
-    throw err;
+    throw privacyFailure(req, err);
   }
 };
 
@@ -574,12 +621,15 @@ const generateImage = async (
     if (url) content.push({ type: 'image_url', image_url: { url } });
   }
 
-  const body = {
+  const imageBody: Record<string, unknown> = {
     model: req.model,
     messages: [{ role: 'user', content }],
     modalities: ['image', 'text'],
     usage: { include: true }
   };
+  // An image made inside a connected-account turn (its prompt may quote that content) follows the
+  // same data policy as the turn's text calls.
+  const body = connectorPrivacyActive() ? withDataCollectionDenied(imageBody) : imageBody;
 
   const data = await withRetry(
     () =>
