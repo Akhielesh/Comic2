@@ -28,7 +28,7 @@ import { pickTextModel, pickTextModelChain, pickSmartChatModel, markModelDown, T
 import { isSharedKeyCapped } from '../ai/providerCircuit.js';
 import { defaultModelForProvider } from '../ai/gateway.js';
 import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, OPENROUTER_SMART_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
-import { listConnections } from '../connectors/store.js';
+import { listConnections, type ConnectionRow } from '../connectors/store.js';
 import { primaryConnectorToolNames } from '../ai/tools/connectors.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { safeClientMessage } from '../ai/providers/errors.js';
@@ -74,6 +74,31 @@ import {
 import { hasFreeSuffix } from '../../../shared/pricing.js';
 import type { LimitExceededDetails } from '../../../shared/types/billing.js';
 import { logger } from '../lib/logger.js';
+import {
+  connectedAccountsWithheldNote,
+  connectedAccountsWithheldNotice,
+  connectedDataFreeModelMessage,
+  CONNECTED_DATA_BUDGET_SENTENCE,
+  CONNECTED_DATA_FREE_MODEL_CODE,
+  CONNECTED_MEMORY_PRODUCT,
+  connectorDataSources,
+  isConnectorMcpToolName,
+  isConnectorToolName,
+  isFreeModelId,
+  messagesCarryConnectorData,
+  withoutClientMemoryBlock,
+  withoutConnectorTools,
+  type ConnectorDataSource
+} from '../ai/privacy/connectorData.js';
+import {
+  bindConnectorPrivacy,
+  bindConnectorTurnDecision,
+  connectorEgressProbe,
+  runWithConnectorPrivacy,
+  type ConnectorEgressProbe
+} from '../ai/privacy/scope.js';
+import { historyHasConnectorReply, recordConnectorReply } from '../ai/privacy/replyProvenance.js';
+import { registerZeroPricedModelLookup } from '../ai/privacy/openrouterPolicy.js';
 
 export const chatRouter = Router();
 
@@ -224,7 +249,48 @@ type PreparedChat = {
    * stays separate because it also strips the paid web plugin and the paid agent meta-tools.
    */
   noPaidRetry?: boolean;
+  /**
+   * Connected-account privacy (Google Limited Use, ai/privacy): set on OpenRouter turns of a
+   * signed-in user or with marked history. Absent on every other turn (unchanged).
+   */
+  connectorPrivacy?: ConnectorTurnPrivacy;
 };
+
+/** What prepareChat decided about connected-account content for one turn (see ai/privacy/connectorData.ts). */
+type ConnectorTurnPrivacy = {
+  /** The turn carries connector content: every OpenRouter call denies data collection and no free model takes it. */
+  connectorData: boolean;
+  /** How connector content enters the turn (empty when it does not). */
+  sources: ConnectorDataSource[];
+  /** The turn runs on a free model, so connector tools and the connector context block were withheld. */
+  freeTurn: boolean;
+  /** No free-model fallback (usage re-plan) may take this conversation: its history carries, or may carry, connector content. */
+  blocksFreeFallback: boolean;
+  /** The user has connected accounts (null: the lookup failed). */
+  hasConnections: boolean | null;
+  /** The message asked for connected data (the keyword router picked a connector tool) and the user has connections. */
+  connectorIntent: boolean;
+  /** The user chose free models (X-Free-Only), as opposed to a free fallback: decides the advice in the copy. */
+  freeOnly: boolean;
+};
+
+/** The turn carries connected-account content (run its model calls in the privacy scope). */
+const connectorTurn = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean => Boolean(p.connectorPrivacy?.connectorData);
+
+/**
+ * A free-model turn of a user who has (or may have) connected accounts: nothing derived from
+ * connected content reaches it — connector tools, the connector context block, and long-term memory
+ * (server-side and client-composed), which may have been distilled from connected content.
+ */
+const withholdsConnectedContent = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean =>
+  Boolean(p.connectorPrivacy?.freeTurn && p.connectorPrivacy.hasConnections !== false);
+
+/**
+ * A free-model turn of a user with connected accounts: connector tools out, the connector context
+ * block off, and (connections confirmed) a note so the model explains instead of guessing.
+ */
+const withheldSystemPrompt = (systemPrompt: string | undefined, hasConnections: boolean | null, freeOnly: boolean): string | undefined =>
+  hasConnections === true ? [systemPrompt, connectedAccountsWithheldNote(freeOnly)].filter(Boolean).join('\n\n') : systemPrompt;
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
 
@@ -282,6 +348,24 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')) ||
     (Array.isArray(body.attachments) && body.attachments.length > 0);
 
+  // Connected-account privacy: does the history already carry connector content (provenance markers,
+  // connector tool calls/results, the connector context block, or — for the plain text today's client
+  // sends — an earlier reply the server's provenance store recorded as connected content)? And the
+  // user's connections, looked up once (the same lookup the connector tool routing below always made;
+  // null = lookup failed). The store lookup starts now and runs alongside the model resolution below.
+  const markedHistory = messagesCarryConnectorData(incoming);
+  const priorAssistantTurn = messages.some((m) => m.role === 'assistant');
+  const knownHistoryLookup: Promise<boolean> =
+    !markedHistory && priorAssistantTurn && resolved.provider === 'openrouter' && req.user?.id
+      ? historyHasConnectorReply(req.user.id, incoming)
+      : Promise.resolve(false);
+  let connectionsMemo: Promise<ConnectionRow[] | null> | undefined;
+  const connectorRows = (): Promise<ConnectionRow[] | null> =>
+    (connectionsMemo ??= req.user?.id ? listConnections(req.user.id).catch(() => null) : Promise.resolve([]));
+  /** A free-model fallback must not take this conversation (history carries, or may carry, connector content). */
+  const freeFallbackBlocked = async (): Promise<boolean> =>
+    markedHistory || (await knownHistoryLookup) || (priorAssistantTurn && ((await connectorRows())?.length ?? 0) > 0);
+
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
   // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
   // but free). When OFF (the default) the chat leads with a FAST, capable, cheap model rather
@@ -314,12 +398,15 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // engine, request router, media model) can never hold a conversation, and a model
   // without image input can't see attached images. Fail fast with an actionable
   // message instead of streaming provider errors or moderation labels back as "chat".
+  // A pinned model the catalog prices at $0 is a free model even without the `:free` suffix.
+  let pinnedFree = false;
   if (requestedModel && resolved.provider === 'openrouter') {
     try {
       const { models: catalogModels } = await getCatalog();
       // A variant (`:nitro`, `:online`, …) is checked as its base model (see catalogEntryFor).
       const entry = catalogEntryFor(catalogModels, requestedModel);
       if (entry) {
+        pinnedFree = entry.costClass === 'free_verified';
         const fit = productFitForModel(entry, 'chat_studio');
         if (!fit.allowed) {
           return {
@@ -408,6 +495,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     isFastLaneChat(lastUserText);
 
   let fallbackModels: string[] | undefined;
+  let cappedFree = false;
   if (resolved.provider === 'openrouter') {
     if (requestedModel) {
       // Pinned model: keep it primary; add the cheap paid net (unless free-only).
@@ -423,10 +511,13 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       }).catch(() => [model]);
       fallbackModels = chain.length ? chain : [model];
       model = fallbackModels[0] || model;
-    } else if (sharedKeyCapped) {
+    } else if (sharedKeyCapped && !(await freeFallbackBlocked())) {
       // Platform key is in a spend-cap cooldown: the paid default chains would all 403/402.
       // Route to a cooldown-aware FREE chain (free models cost $0 and keep working) so chat
       // degrades gracefully instead of a hard outage. Self-heals when the breaker closes.
+      // Never for a conversation that carries (or may carry) connected-account content: that
+      // turn keeps its paid chain and a capacity failure is reported honestly.
+      cappedFree = true;
       const chain = await pickTextModelChain({
         preferFree: true,
         prefer: (m) => (m.supportedParameters || []).includes('tools'),
@@ -455,6 +546,24 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     }
   }
 
+  // Connected-account privacy: a FREE turn (free-only Auto, a pinned free model, the capped-key free
+  // chain) never receives connector content. If the conversation already carries some, the turn is
+  // refused before anything is sent or reserved — never moved to a paid model. (Free only with an
+  // explicitly pinned paid model runs on that paid model: a paid turn, flagged like any other.) The
+  // copy only says "turn off Free only" to someone who has it on.
+  const historyKnown = await knownHistoryLookup;
+  const historyConnectorData = markedHistory || historyKnown;
+  const freeTurn =
+    resolved.provider === 'openrouter' && ((freeOnly && !requestedModel) || pinnedFree || cappedFree || isFreeModelId(model));
+  if (freeTurn && historyConnectorData) {
+    return {
+      error: {
+        status: 409,
+        body: { error: { message: connectedDataFreeModelMessage(freeOnly), code: CONNECTED_DATA_FREE_MODEL_CODE } }
+      }
+    };
+  }
+
   const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
   // Internet access is a backend default, not a user toggle: OpenRouter chats get live web
   // grounding. BUT skip the always-on web plugin on trivial/conversational turns (greetings,
@@ -473,7 +582,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // default that added hallucination noise to tool selection and synthesis. Trivial/small-talk
   // turns keep the model's own default (undefined) so casual replies stay natural.
   const chatTemperature = groundedTurn ? 0.3 : undefined;
-  const systemPrompt =
+  let systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
   let dreamstreamContextJson: string | undefined;
@@ -595,16 +704,30 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // the inbox and the model answered generically (or pretended it looked). Force-include the
   // primary tool for each linked connector; an honest "reconnect" prompt still beats a silent
   // drop. Best-effort: a connector lookup must never block or fail a chat.
+  // A FREE turn gets no connector tool at all when the user has (or may have) connected accounts:
+  // free models never receive connected-account content (ai/privacy). The model is told why, so it
+  // explains instead of guessing; a message that asked for connected data also gets a notice.
+  const keywordConnectorIntent = routedToolNames.some(isConnectorToolName);
+  let hasConnections: boolean | null = false;
   if (toolsEnabledForProvider && req.user?.id) {
     try {
-      const connections = await listConnections(req.user.id);
+      const connections = await connectorRows();
+      if (!connections) throw new Error('connection lookup failed');
+      hasConnections = connections.length > 0;
       const linkedIds = connections.filter((c) => c.status !== 'disconnected').map((c) => c.connector_id);
-      const connectorTools = primaryConnectorToolNames(linkedIds);
+      const connectorTools = freeTurn ? [] : primaryConnectorToolNames(linkedIds);
       if (connectorTools.length) {
         routedToolNames = Array.from(new Set([...connectorTools, ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
       }
     } catch {
       /* connector lookup is best-effort — never block a chat on it */
+      hasConnections = null;
+    }
+    if (freeTurn && hasConnections !== false) {
+      routedToolNames = withoutConnectorTools(routedToolNames);
+      // The long-term memory the client composes into the system prompt is distilled from earlier
+      // chats, which may have read connected accounts: it stays off free models too.
+      systemPrompt = withheldSystemPrompt(withoutClientMemoryBlock(systemPrompt), hasConnections, freeOnly);
     }
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
@@ -760,6 +883,48 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     if (servers.length) mcpTools = await buildMcpTools(servers);
   }
 
+  // The operator's Nango MCP (`mcp_nango_*`) can proxy the user's own connections whether or not they
+  // linked anything here: a free turn never offers it.
+  const tools = [...builtinTools, ...metaTools, ...(freeTurn ? mcpTools.filter((t) => !isConnectorMcpToolName(t.name)) : mcpTools)];
+
+  // Connected-account privacy for this turn (Google Limited Use). A paid OpenRouter turn whose tools,
+  // connector context block or history can carry connector content runs every model call with
+  // `provider.data_collection: 'deny'` and keeps free models out of its chain; a free turn already
+  // had all of it withheld above. Turns of users with no connections (and no marked history) are
+  // left exactly as before.
+  let connectorPrivacy: ConnectorTurnPrivacy | undefined;
+  if (resolved.provider === 'openrouter' && (req.user?.id || historyConnectorData)) {
+    const sources = freeTurn
+      ? []
+      : connectorDataSources({
+          toolNames: tools.map((t) => t.name),
+          // The connector context block (ai/chat.ts) can only add items for a user with connections.
+          connectorContext: Boolean(req.user?.id) && hasConnections !== false,
+          messages: incoming,
+          historyKnown
+        });
+    connectorPrivacy = {
+      connectorData: sources.length > 0,
+      sources,
+      freeTurn,
+      blocksFreeFallback: historyConnectorData || (priorAssistantTurn && hasConnections === true),
+      hasConnections,
+      connectorIntent: keywordConnectorIntent && hasConnections === true,
+      freeOnly
+    };
+    if (connectorPrivacy.connectorData) {
+      // No free model in this turn's chain (the provider enforces it again per request).
+      const paidChain = (fallbackModels || []).filter((m) => !isFreeModelId(m));
+      fallbackModels = fallbackModels ? (paidChain.length ? paidChain : [model]) : fallbackModels;
+      // The agent paths that start from this request (recipes, the swarm) read the decision too.
+      bindConnectorPrivacy(clientContext, true);
+    }
+  }
+  // The whole decision (free turn included) for runRecipe, which then needs no re-derivation.
+  if (resolved.provider === 'openrouter') {
+    bindConnectorTurnDecision(clientContext, { connectorData: Boolean(connectorPrivacy?.connectorData), freeTurn });
+  }
+
   return {
     prepared: {
       resolved,
@@ -772,14 +937,15 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       systemPrompt,
       fallbackModels,
       dreamstreamContextJson,
-      tools: [...builtinTools, ...metaTools, ...mcpTools],
+      tools,
       clientContext,
       customAgents,
       attachments,
       userId: req.user?.id,
       // Free-only must mean no paid retry (services/freeOnlyMode.ts: "the server blocks rather than
       // silently charging a paid fallback"). Only OpenRouter turns ever carry one.
-      ...(freeOnly && resolved.provider === 'openrouter' ? { noPaidRetry: true } : {})
+      ...(freeOnly && resolved.provider === 'openrouter' ? { noPaidRetry: true } : {}),
+      ...(connectorPrivacy ? { connectorPrivacy } : {})
     }
   };
 };
@@ -809,21 +975,61 @@ const withAllowanceNotices = (req: any, payload: ChatResponse): ChatResponse => 
   return extra.length ? { ...payload, notices: [...(payload.notices || []), ...extra] } : payload;
 };
 
-const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>): ChatResponse => ({
-  text: result.text,
-  model: result.model,
-  source: p.resolved.provider,
-  requestedModel: p.requestedModel || result.model,
-  reasoningLevel: p.reasoningLevel,
-  webSearch: p.webSearch,
-  reasoning: result.reasoning,
-  citations: result.citations,
-  toolEvents: result.toolEvents,
-  images: result.images,
-  artifacts: result.artifacts,
-  notices: withGuardrailNotices(result),
-  usage: result.usage
-});
+const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>, probe?: ConnectorEgressProbe): ChatResponse =>
+  markConnectorData(p, connectorContentEntered(p, result, probe), {
+    text: result.text,
+    model: result.model,
+    source: p.resolved.provider,
+    requestedModel: p.requestedModel || result.model,
+    reasoningLevel: p.reasoningLevel,
+    webSearch: p.webSearch,
+    reasoning: result.reasoning,
+    citations: result.citations,
+    toolEvents: result.toolEvents,
+    images: result.images,
+    artifacts: result.artifacts,
+    notices: withWithheldNotice(p, withGuardrailNotices(result)),
+    usage: result.usage
+  });
+
+/**
+ * Did connected-account content actually enter this reply? The deny decision is made up front for a
+ * turn that MAY carry it (a connected user's every paid turn); the provenance mark is narrower:
+ *   - a model call of the turn really sent connector content (the egress probe: the connector
+ *     context block, a connector tool's call or output — ai/privacy/scope.ts);
+ *   - a connector tool ran (its tool events name one);
+ *   - the history already carried connector content (markers, or the provenance store).
+ * Wave note: ai/chat.ts may also report `connectorContextUsed` on its result; it is honoured here.
+ */
+const connectorContentEntered = (
+  p: PreparedChat,
+  result: { toolEvents?: { tool?: unknown }[]; connectorContextUsed?: unknown },
+  probe?: ConnectorEgressProbe
+): boolean =>
+  connectorTurn(p) &&
+  (Boolean(probe?.sent) ||
+    result.connectorContextUsed === true ||
+    (result.toolEvents || []).some((e) => isConnectorToolName(e?.tool)) ||
+    (p.connectorPrivacy?.sources || []).includes('history'));
+
+/**
+ * A reply that connected-account content entered says so (`connectorData: true`) and is recorded in
+ * the server's provenance store (ai/privacy/replyProvenance.ts), so a later free turn whose history
+ * carries it is refused even though today's client sends history as plain text. The client echoing
+ * the flag on that assistant turn (wave note) makes it exact without a lookup. Other replies are
+ * unchanged.
+ */
+const markConnectorData = <T extends { text?: string }>(p: PreparedChat, entered: boolean, payload: T): T => {
+  if (!entered) return payload;
+  void recordConnectorReply(p.userId, payload.text);
+  return { ...payload, connectorData: true };
+};
+
+/** A free turn that asked for connected data says honestly why the accounts weren't used. */
+const withWithheldNotice = (p: PreparedChat, notices: CapabilityNotice[] | undefined): CapabilityNotice[] | undefined =>
+  p.connectorPrivacy?.freeTurn && p.connectorPrivacy.connectorIntent
+    ? [...(notices || []), { tool: 'connectors', level: 'info', message: connectedAccountsWithheldNotice(p.connectorPrivacy.freeOnly) }]
+    : notices;
 
 /**
  * Every model a chat call may end up billed for (usage budget, P1-LIMITS): the OpenRouter
@@ -865,12 +1071,16 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   temperature: p.temperature,
   dreamstreamContextJson: p.dreamstreamContextJson,
   userId: p.userId,
-  userMemory: Boolean(p.userId),
+  // Server-side long-term memory can hold facts distilled from connected content (marked
+  // CONNECTED_MEMORY_PRODUCT since this change, unmarked before): a free-model turn of a user with
+  // connected accounts gets none of it. Wave note: services/userMemory.ts buildUserMemoryBlock(…,
+  // { excludeConnected }) then lets such a turn keep the unmarked rows.
+  userMemory: Boolean(p.userId) && !withholdsConnectedContent(p),
   // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
   // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
   // it's safe to enable for any signed-in user. (Was declared but never set → connector
   // context never reached the model.)
-  connectorContext: Boolean(p.userId),
+  connectorContext: Boolean(p.userId) && !p.connectorPrivacy?.freeTurn,
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
@@ -983,6 +1193,19 @@ export const catalogEntryFor = <T extends { id: string }>(models: T[], rawId: st
   const base = lower.slice(0, colon);
   return models.find((m) => m.id.toLowerCase() === base);
 };
+
+// Connected-account privacy: the OpenRouter provider treats a model the live catalog prices at $0
+// (`costClass: 'free_verified'`, also without a `:free` suffix) as a free model for requests that
+// carry connector content. It cannot import the catalog itself (an import cycle through the
+// gateway), so the chat routes — every path that runs such requests — register the lookup here.
+registerZeroPricedModelLookup(async (ids) => {
+  const { models } = await getCatalog();
+  const zero = new Set<string>();
+  for (const id of ids) {
+    if (catalogEntryFor(models, id)?.costClass === 'free_verified') zero.add(id.trim().toLowerCase());
+  }
+  return zero;
+});
 
 /**
  * The provider cost of one call at the live catalog price of the most expensive of `models`
@@ -1126,6 +1349,11 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
   }
   chain = chain.slice(0, MAX_FREE_CHAIN);
   if (!chain.length) return null;
+  // Connected-account privacy: the free re-plan never takes connector content. Its connector tools
+  // and the connector context block are withheld (the model is told why); a conversation whose
+  // history carries connector content never gets here (reserveChat refuses it).
+  const privacy = p.connectorPrivacy;
+  const withhold = Boolean(privacy && privacy.hasConnections !== false);
   return {
     ...p,
     model: chain[0],
@@ -1133,8 +1361,25 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
     // OpenRouter's web plugin is billed per request even on free models; the web_search TOOL
     // (keyless) stays available.
     webSearch: false,
-    tools: p.tools.filter((t) => !PAID_META_TOOLS.has(t.name)),
-    freeModelsOnly: true
+    tools: p.tools.filter(
+      (t) => !PAID_META_TOOLS.has(t.name) && !isConnectorMcpToolName(t.name) && !(withhold && isConnectorToolName(t.name))
+    ),
+    freeModelsOnly: true,
+    ...(privacy
+      ? {
+          // Memory the client composed into the prompt goes too (see prepareChat); server memory is
+          // off through runChatParams (freeTurn below).
+          systemPrompt: withhold
+            ? withheldSystemPrompt(withoutClientMemoryBlock(p.systemPrompt), privacy.hasConnections, privacy.freeOnly)
+            : p.systemPrompt,
+          connectorPrivacy: {
+            ...privacy,
+            connectorData: false,
+            sources: [],
+            freeTurn: true
+          }
+        }
+      : {})
   };
 };
 
@@ -1159,14 +1404,50 @@ const copyHoldBack = (req: any, view: any) => {
   }
 };
 
+/** Output tokens one swarm planner or agent call is held for (an agent answers in up to 1,400). */
+export const SWARM_HOLD_WORKER_OUTPUT_TOKENS = 1_400;
+/** Agents a swarm run launches at most: ai/agents/orchestrator.ts MAX_AGENTS (parity-tested). */
+export const SWARM_HOLD_MAX_AGENTS = 4;
+
+/**
+ * The model a connector swarm run's planner and agents are billed on, when they leave the free
+ * worker (ai/agents/orchestrator.ts): the caller's paid net (TEXT_FALLBACK) on a flagged run, the
+ * user's own pinned model on a Free only run with a pinned paid model, and the paid net for a
+ * connected user's unflagged paid-mode run (a pinned free model), which moves to it as soon as it
+ * plans an agent with a connector tool. Null when the workers stay free (plain users, Free only).
+ */
+const connectorSwarmWorkerModel = (p: PreparedChat): string | null => {
+  if (p.resolved.provider !== 'openrouter' || p.freeModelsOnly || !p.connectorPrivacy) return null;
+  if (connectorTurn(p)) return p.noPaidRetry ? p.model : TEXT_FALLBACK;
+  if (!p.noPaidRetry && p.connectorPrivacy.hasConnections !== false) return TEXT_FALLBACK;
+  return null;
+};
+
+/**
+ * The extra hold a connector swarm run needs: the planner plus up to SWARM_HOLD_MAX_AGENTS agents, each
+ * sending the prepared context and answering in up to SWARM_HOLD_WORKER_OUTPUT_TOKENS, at the live
+ * catalog price of the worker model. The route holds once per run, so without this a governed
+ * user's connector swarm could settle well above its hold. Undefined when no allowance applies (or
+ * the model is unpriced).
+ */
+export const connectorSwarmHoldUsd = async (p: PreparedChat, inputTokens: number): Promise<number | undefined> => {
+  const worker = connectorSwarmWorkerModel(p);
+  if (!worker) return undefined;
+  const calls = 1 + SWARM_HOLD_MAX_AGENTS;
+  return catalogHoldFloorUsd([worker], inputTokens * calls, SWARM_HOLD_WORKER_OUTPUT_TOKENS * calls);
+};
+
 const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<string, unknown>) => {
   const view = p.freeModelsOnly ? pricedAs(req, p.model) : req;
   const priced = chatPricedModels(p);
   // Sized from the prepared context (not the first 8,000 body characters) plus the bounded
   // tool-round allowance, and floored at the live catalog price of every model the call may be
-  // billed for.
-  const hold = chatHoldTokens(p, preparedInputTokens(p));
-  const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], hold.inputTokens, hold.outputTokens);
+  // billed for. A connector swarm run adds its paid planner and agents (connectorSwarmHoldUsd).
+  const inputTokens = preparedInputTokens(p);
+  const hold = chatHoldTokens(p, inputTokens);
+  const baseFloorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], hold.inputTokens, hold.outputTokens);
+  const swarmUsd = metadata.swarm ? await connectorSwarmHoldUsd(p, inputTokens) : undefined;
+  const floorUsd = swarmUsd ? Number(((baseFloorUsd || 0) + swarmUsd).toFixed(6)) : baseFloorUsd;
   const reserve = await reserveForOperation({
     req: view,
     operation: 'chat.completion',
@@ -1179,11 +1460,22 @@ const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<strin
     ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
     provider: p.resolved.provider,
     stage: 'chat',
-    metadata: { ...metadata, model: p.model, ...(p.freeModelsOnly ? { freeModelsOnly: true } : {}) }
+    metadata: {
+      ...metadata,
+      model: p.model,
+      ...(p.freeModelsOnly ? { freeModelsOnly: true } : {}),
+      ...(swarmUsd ? { connectorSwarmHoldUsd: swarmUsd } : {})
+    }
   });
   copyHoldBack(req, view);
   return reserve;
 };
+
+/** The budget refused the paid plan and the conversation carries connected-account content: no free re-plan. */
+export const connectedDataDetails = (details: LimitExceededDetails): LimitExceededDetails => ({
+  ...details,
+  message: `${details.message || allowanceExhaustedMessage(null)} ${CONNECTED_DATA_BUDGET_SENTENCE}`
+});
 
 /** The budget refused the paid plan and no free model is available: say so calmly (percent-only). */
 export const noFreeModelDetails = (details: LimitExceededDetails): LimitExceededDetails => ({
@@ -1201,6 +1493,9 @@ export const reserveChat = async (req: any, p: PreparedChat, metadata: Record<st
   const first = await reserveChatPlan(req, p, metadata);
   if (!('details' in first)) return { ok: true, p, reserve: first };
   if (first.details.reason !== 'usage_budget_exhausted' || p.freeModelsOnly) return { ok: false, details: first.details };
+  // Connected-account content never goes to a free model: a conversation that carries (or may carry)
+  // it gets no free re-plan — the refusal says why and what to do, nothing is spent.
+  if (p.connectorPrivacy?.blocksFreeFallback) return { ok: false, details: connectedDataDetails(first.details) };
   const free = await freeModelsOnlyPlan(p);
   // Only OpenRouter has free models: elsewhere the honest refusal stands as it is (not "busy").
   if (!free) return { ok: false, details: p.resolved.provider === 'openrouter' ? noFreeModelDetails(first.details) : first.details };
@@ -1338,6 +1633,33 @@ export const runHeldHelper = async (
   }
   return result;
 };
+
+/**
+ * A helper that reads a conversation (title, memory, follow-ups) follows the data policy of a
+ * connected-account conversation. The history is plain text, so a signed-in user with any
+ * connection counts (a failed lookup too: the flag only narrows routing); marked history always
+ * does. Users without connections are unchanged.
+ */
+const helperCarriesConnectorData = async (req: any, provider: AIProviderId, incoming: unknown[]): Promise<boolean> =>
+  provider === 'openrouter' && conversationMayCarryConnectorData(req.user?.id, incoming);
+
+/**
+ * The conversation carries, or may carry, connected-account content, whatever the provider (a
+ * connector tool reads the account on any provider): marked history, a user with any connection on
+ * record (a failed lookup counts), or a reply the provenance store recorded for this user.
+ */
+const conversationMayCarryConnectorData = async (userId: string | undefined, incoming: unknown[]): Promise<boolean> => {
+  if (messagesCarryConnectorData(incoming)) return true;
+  if (!userId) return false;
+  const connected = await listConnections(userId).then(
+    (rows) => rows.length > 0,
+    () => true
+  );
+  return connected || historyHasConnectorReply(userId, incoming);
+};
+
+/** The memory `product` of facts distilled from a conversation (see CONNECTED_MEMORY_PRODUCT). */
+const memoryProductFor = (connected: boolean): string => (connected ? CONNECTED_MEMORY_PRODUCT : 'chat_studio');
 
 /** OpenRouter helpers call the fast default with the paid net — both may be billed. */
 const helperModels = (provider: AIProviderId, model: string): string[] | undefined =>
@@ -1489,19 +1811,22 @@ chatRouter.post('/title', async (req, res, next) => {
       return res.json({ title: firstUser ? localChatTitle(textOf(firstUser)) : '', skipped: 'usage' });
     }
 
+    const connectorData = await helperCarriesConnectorData(req, resolved.provider, incoming);
     const result = await runHeldHelper(hold, meter, () =>
-      runChat({
-        provider: resolved.provider,
-        apiKey: resolved.apiKey,
-        model,
-        messages: [{ role: 'user', content }],
-        systemOverride: TITLE_SYSTEM_PROMPT,
-        temperature: 0.3,
-        maxTokens: 24,
-        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-      })
+      runWithConnectorPrivacy(connectorData, () =>
+        runChat({
+          provider: resolved.provider,
+          apiKey: resolved.apiKey,
+          model,
+          messages: [{ role: 'user', content }],
+          systemOverride: TITLE_SYSTEM_PROMPT,
+          temperature: 0.3,
+          maxTokens: 24,
+          fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+          fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+          timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        })
+      )
     );
     const title = sanitizeTitle(result.text || '');
     res.json({ title: /^new chat$/i.test(title) ? '' : title, model: result.model });
@@ -1559,19 +1884,26 @@ chatRouter.post('/memory', async (req, res, next) => {
     // Usage used up (or not checkable): memory stays as it is — $0, no error.
     if (!hold.run) return res.json({ memory: existing, skipped: 'usage' });
 
+    // Connected content: the summary call denies data collection (OpenRouter), and the result is
+    // marked as distilled from connected content — the server rows (CONNECTED_MEMORY_PRODUCT) and the
+    // response (`connectorData: true`, so the client never composes it into a free-model turn).
+    const connected = await conversationMayCarryConnectorData(req.user?.id, incoming);
+    const connectorData = resolved.provider === 'openrouter' && connected;
     const result = await runHeldHelper(hold, meter, () =>
-      runChat({
-        provider: resolved.provider,
-        apiKey: resolved.apiKey,
-        model,
-        messages: [{ role: 'user', content }],
-        systemOverride: MEMORY_SYSTEM_PROMPT,
-        temperature: 0.2,
-        maxTokens: 500,
-        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-      })
+      runWithConnectorPrivacy(connectorData, () =>
+        runChat({
+          provider: resolved.provider,
+          apiKey: resolved.apiKey,
+          model,
+          messages: [{ role: 'user', content }],
+          systemOverride: MEMORY_SYSTEM_PROMPT,
+          temperature: 0.2,
+          maxTokens: 500,
+          fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+          fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+          timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        })
+      )
     );
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
     // Canonical store: distilled bullets also land in the server-side cross-product
@@ -1579,9 +1911,9 @@ chatRouter.post('/memory', async (req, res, next) => {
     // the localStorage copy returned below remains a fast-paint cache.
     if (req.user?.id && updated) {
       const bullets = updated.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
-      void rememberUserMemories(req.user.id, 'chat_studio', null, bullets.map((content) => ({ content })));
+      void rememberUserMemories(req.user.id, memoryProductFor(connected), null, bullets.map((content) => ({ content })));
     }
-    res.json({ memory: updated || existing });
+    res.json({ memory: updated || existing, ...(connected ? { connectorData: true } : {}) });
   } catch (err) {
     next(err);
   }
@@ -1667,22 +1999,27 @@ const maybeAutoRemember = (req: any, p: PreparedChat, answerText: string): void 
         maxTokens: 400
       });
       if (!hold.run) return;
+      // A summary of a connected-account turn follows the turn's data policy, and what it distils is
+      // marked as connected content (never offered to a later free-model turn).
+      const connected = connectorTurn(p) || (await conversationMayCarryConnectorData(userId, p.messages));
       const result = await runHeldHelper(hold, meter, () =>
-        runChat({
-          provider: p.resolved.provider,
-          apiKey: p.resolved.apiKey,
-          model,
-          messages: [{ role: 'user', content }],
-          systemOverride: MEMORY_SYSTEM_PROMPT,
-          temperature: 0.2,
-          maxTokens: 400,
-          fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-          timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-        })
+        runWithConnectorPrivacy(connectorTurn(p), () =>
+          runChat({
+            provider: p.resolved.provider,
+            apiKey: p.resolved.apiKey,
+            model,
+            messages: [{ role: 'user', content }],
+            systemOverride: MEMORY_SYSTEM_PROMPT,
+            temperature: 0.2,
+            maxTokens: 400,
+            fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+            timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+          })
+        )
       );
       const bullets = (result.text || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
       if (bullets.length) {
-        await rememberUserMemories(userId, 'chat_studio', null, bullets.map((content) => ({ content })));
+        await rememberUserMemories(userId, memoryProductFor(connected), null, bullets.map((content) => ({ content })));
       }
     } catch {
       /* memory write-back must never disturb the chat path */
@@ -1849,19 +2186,22 @@ chatRouter.post('/followups', async (req, res, next) => {
     // Usage used up (or not checkable): no suggestions this time — $0, no error.
     if (!hold.run) return res.json({ suggestions: [], skipped: 'usage' });
 
+    const connectorData = await helperCarriesConnectorData(req, resolved.provider, incoming);
     const result = await runHeldHelper(hold, meter, () =>
-      runChat({
-        provider: resolved.provider,
-        apiKey: resolved.apiKey,
-        model,
-        messages: [{ role: 'user', content }],
-        systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
-        temperature: 0.5,
-        maxTokens: 200,
-        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-        fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-      })
+      runWithConnectorPrivacy(connectorData, () =>
+        runChat({
+          provider: resolved.provider,
+          apiKey: resolved.apiKey,
+          model,
+          messages: [{ role: 'user', content }],
+          systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
+          temperature: 0.5,
+          maxTokens: 200,
+          fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+          fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+          timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+        })
+      )
     );
     res.json({ suggestions: parseFollowUps(result.text || ''), model: result.model });
   } catch (err) {
@@ -1968,7 +2308,10 @@ chatRouter.post('/', async (req, res, next) => {
     // real turn's spend. A failed settle leaves the hold counting for its window (and is logged).
     let settleStarted = false;
     try {
-      const result = await runChat(runChatParams(p, reserve));
+      // Connected-account turns run every model call in the privacy scope (ai/privacy/scope.ts); the
+      // probe learns whether connector content was actually sent (it decides the reply's mark).
+      const probe = connectorEgressProbe();
+      const result = await runWithConnectorPrivacy(connectorTurn(p), () => runChat(runChatParams(p, reserve)), probe);
       if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
         markModelDown(p.model);
       }
@@ -1985,7 +2328,7 @@ chatRouter.post('/', async (req, res, next) => {
           })
         : null;
 
-      const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result), gate, result.model));
+      const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result, probe), gate, result.model));
       maybeAutoRemember(req, p, result.text || '');
       recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
       res.json(reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
@@ -2060,8 +2403,9 @@ const streamChatTurn = async (
 
   // Once the settle has started, never release (see POST /).
   let settleStarted = false;
+  const probe = connectorEgressProbe();
   try {
-    const result = await runChat({
+    const result = await runWithConnectorPrivacy(connectorTurn(p), () => runChat({
       ...runChatParams(p, reserve),
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
@@ -2074,7 +2418,7 @@ const streamChatTurn = async (
       // watches the agent work (search → read → fetch → synthesize) during the long
       // pre-answer window instead of staring at a bare spinner.
       onToolEvent: (e) => send('agent_step', e)
-    });
+    }), probe);
 
     // Adaptive speed: if the served model differs from the (free) primary we led the chain
     // with, that primary is currently unavailable/rate-limited — cool it down so the next
@@ -2096,7 +2440,7 @@ const streamChatTurn = async (
         })
       : null;
 
-    const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result), gate, result.model, opts));
+    const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result, probe), gate, result.model, opts));
     maybeAutoRemember(req, p, result.text || '');
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
@@ -2158,7 +2502,8 @@ chatRouter.post('/swarm', async (req, res, next) => {
     }
 
     // Planner + agents run on a free pick with the paid TEXT_FALLBACK retry (none when free-only);
-    // synthesis on p.model — the hold is priced at the whole chain.
+    // synthesis on p.model — the hold is priced at the whole chain. A connector run puts the planner
+    // and agents on a paid model instead, and its hold adds them (connectorSwarmHoldUsd).
     const reserved = await reserveChat(req, prep.prepared, { route: req.path, historyLength: prep.prepared.messages.length, swarm: true });
     if ('details' in reserved) return res.status(402).json({ error: formatLimitErrorResponse(reserved.details) });
     gate = reserved;
@@ -2182,7 +2527,9 @@ chatRouter.post('/swarm', async (req, res, next) => {
   // Once the settle has started, never release (see POST /).
   let settleStarted = false;
   try {
-    const result = await runSwarm({
+    // The swarm entry: a connected-account turn runs planner, agents and synthesis in the privacy scope.
+    const probe = connectorEgressProbe();
+    const result = await runWithConnectorPrivacy(connectorTurn(p), () => runSwarm({
       provider: p.resolved.provider,
       apiKey: p.resolved.apiKey,
       model: p.model,
@@ -2200,7 +2547,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
         else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
       },
       onProgress: (trace) => send('trace', trace)
-    });
+    }), probe);
 
     settleStarted = true;
     const settled = reserve
@@ -2215,7 +2562,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
         })
       : null;
 
-    const payload: ChatResponse = withAllowanceNotices(req, {
+    const payload: ChatResponse = withAllowanceNotices(req, markConnectorData(p, connectorContentEntered(p, result, probe), {
       text: result.text,
       model: result.model,
       source: p.resolved.provider,
@@ -2229,7 +2576,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
       artifacts: result.artifacts,
       notices: withGuardrailNotices(result),
       usage: result.usage
-    });
+    }));
     maybeAutoRemember(req, p, result.text || '');
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
