@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi, afterEach } from 'vitest';
 import { openRouterProvider } from './openrouter.js';
 import { registerZeroPricedModelLookup } from '../privacy/openrouterPolicy.js';
 
@@ -172,7 +172,11 @@ describe('openrouter connected-account privacy', () => {
   it('an explicit per-request dataCollection: deny works without a scope', async () => {
     const fetchMock = vi.fn(async () => answer());
     vi.stubGlobal('fetch', fetchMock);
-    await openRouterProvider.generateText({ ...baseReq(), dataCollection: 'deny' } as GenerateTextRequest, ctx);
+    // A plain GenerateTextRequest field (no cast): `npm run build:server` typechecks this file, so
+    // the field leaving the type fails the build (privacy wave note 8).
+    const req = baseReq({ dataCollection: 'deny' });
+    expectTypeOf<GenerateTextRequest['dataCollection']>().toEqualTypeOf<'deny' | undefined>();
+    await openRouterProvider.generateText(req, ctx);
     expect(sentBodies(fetchMock)[0].provider).toEqual({ data_collection: 'deny' });
   });
 

@@ -287,15 +287,15 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
 };
 
 /**
- * A text request may say explicitly that it carries connected-account content; otherwise the
- * connected-account privacy scope of the turn decides (ai/privacy/scope.ts). Either way the body
- * gets `provider.data_collection: 'deny'` and no free model takes it (ai/privacy/openrouterPolicy.ts,
- * which quotes OpenRouter's documented semantics).
+ * A text request may say explicitly that it carries connected-account content
+ * (`GenerateTextRequest.dataCollection`); otherwise the connected-account privacy scope of the turn
+ * decides (ai/privacy/scope.ts). Either way the body gets `provider.data_collection: 'deny'` and no
+ * free model takes it (ai/privacy/openrouterPolicy.ts, which quotes OpenRouter's documented semantics).
+ * The alias is kept for callers that imported it; the field now lives on GenerateTextRequest.
  */
-export type ConnectorPrivacyTextRequest = GenerateTextRequest & { dataCollection?: 'deny' };
+export type ConnectorPrivacyTextRequest = GenerateTextRequest;
 
-const deniesDataCollection = (req: GenerateTextRequest): boolean =>
-  (req as ConnectorPrivacyTextRequest).dataCollection === 'deny' || connectorPrivacyActive();
+const deniesDataCollection = (req: GenerateTextRequest): boolean => req.dataCollection === 'deny' || connectorPrivacyActive();
 
 /** A catalog lookup never holds a connector request longer than this; the `:free` rule still applies. */
 const CATALOG_FREE_LOOKUP_TIMEOUT_MS = 1_500;

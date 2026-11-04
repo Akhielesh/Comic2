@@ -78,6 +78,13 @@ export type GenerateTextRequest = {
   webSearch?: boolean;
   /** Function tools the model may call (agentic loop). Provider returns `toolCalls` when used. */
   tools?: ToolSpec[];
+  /**
+   * The request carries connected-account content (Gmail, Drive, Calendar…): OpenRouter sends
+   * `provider.data_collection: 'deny'` and no free model takes it (ai/privacy/openrouterPolicy.ts).
+   * Usually set for the whole turn by the privacy scope (ai/privacy/scope.ts); this is the explicit
+   * per-request form. Other providers ignore it.
+   */
+  dataCollection?: 'deny';
 };
 
 export type ProviderUsage = {
