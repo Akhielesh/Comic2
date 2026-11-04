@@ -239,9 +239,8 @@ export const CONNECTED_ACCOUNTS_WITHHELD_NOTICE = connectedAccountsWithheldNotic
 /**
  * The `user_memories.product` of memory distilled from a chat that carries, or may carry,
  * connected-account content (services/userMemory.ts rememberUserMemories). The column is free
- * text, so no schema change. Retrieval for a free-model turn skips these rows (wave note for
- * services/userMemory.ts); until then the chat routes turn server memory off on free turns of a
- * user with connections.
+ * text, so no schema change. A free-model turn of a user with connections retrieves memory
+ * without these rows (services/userMemory.ts `excludeConnected`, set by routes/chat.ts).
  */
 export const CONNECTED_MEMORY_PRODUCT = 'chat_studio_connected';
 

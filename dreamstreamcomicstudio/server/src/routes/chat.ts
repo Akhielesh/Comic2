@@ -280,7 +280,8 @@ const connectorTurn = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean 
 /**
  * A free-model turn of a user who has (or may have) connected accounts: nothing derived from
  * connected content reaches it — connector tools, the connector context block, and long-term memory
- * (server-side and client-composed), which may have been distilled from connected content.
+ * that may have been distilled from connected content (the marked server rows, and the memory the
+ * client composed into the prompt).
  */
 const withholdsConnectedContent = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean =>
   Boolean(p.connectorPrivacy?.freeTurn && p.connectorPrivacy.hasConnections !== false);
@@ -1072,10 +1073,10 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   dreamstreamContextJson: p.dreamstreamContextJson,
   userId: p.userId,
   // Server-side long-term memory can hold facts distilled from connected content (marked
-  // CONNECTED_MEMORY_PRODUCT since this change, unmarked before): a free-model turn of a user with
-  // connected accounts gets none of it. Wave note: services/userMemory.ts buildUserMemoryBlock(…,
-  // { excludeConnected }) then lets such a turn keep the unmarked rows.
-  userMemory: Boolean(p.userId) && !withholdsConnectedContent(p),
+  // CONNECTED_MEMORY_PRODUCT): a free-model turn of a user with connected accounts gets the rest of
+  // their memory, never those rows (services/userMemory.ts excludeConnected).
+  userMemory: Boolean(p.userId),
+  userMemoryExcludeConnected: withholdsConnectedContent(p),
   // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
   // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
   // it's safe to enable for any signed-in user. (Was declared but never set → connector
@@ -1367,8 +1368,8 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
     freeModelsOnly: true,
     ...(privacy
       ? {
-          // Memory the client composed into the prompt goes too (see prepareChat); server memory is
-          // off through runChatParams (freeTurn below).
+          // Memory the client composed into the prompt goes too (see prepareChat); server memory
+          // skips the marked rows through runChatParams (freeTurn below).
           systemPrompt: withhold
             ? withheldSystemPrompt(withoutClientMemoryBlock(p.systemPrompt), privacy.hasConnections, privacy.freeOnly)
             : p.systemPrompt,

@@ -129,11 +129,13 @@ provider table, reply provenance).
 - **Memory:** facts distilled from a conversation that carries, or may carry, connected content
   (any provider; a user with any connection) are stored with `product = 'chat_studio_connected'`
   (`CONNECTED_MEMORY_PRODUCT`), and `POST /api/chat/memory` answers `connectorData: true` for
-  them. A free turn of a user with connections gets **no long-term memory**: the server memory
-  block is off (`runChatParams`), and the memory the client composes into `systemPrompt` (the
-  "Background facts about the user" block, parity-tested against the client) is stripped; the
-  persona stays. Wave notes make this precise later (retrieval skips only the marked rows; the
-  client stops composing marked memory into Free only turns).
+  them. A free turn of a user with connections gets **no memory distilled from connected
+  content**: the server memory lookup skips the marked rows (`buildUserMemoryBlock(…,
+  { excludeConnected })`: full-text and recency queries filter `product`; the vector search asks
+  for twice the rows and drops the marked ones), so the rest of their memory still personalises
+  the turn. The memory the client composes into `systemPrompt` (the "Background facts about the
+  user" block, parity-tested against the client) is stripped; the persona stays. A client wave
+  note makes that side precise (the client stops composing marked memory into Free only turns).
 - The free-model fallbacks never take a conversation that carries, or may carry, connector
   content (marked history, or a user with connections and an earlier assistant reply): the capped
   shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan
@@ -169,10 +171,11 @@ bodies of a plain paid and a plain free-only turn against the previous code).
   in-process cache then covers only the awake container). The client echoing `connectorData: true`
   on those assistant turns (wave note) closes the rest without a lookup. Degraded free fallbacks
   stay conservative (a user with connections and an earlier assistant reply never gets one).
-- *Memory (C1d, partly fixed).* Server memory written before this change is unmarked, and a user
-  who removed every connection is no longer treated as connected, so their free turns get memory
-  again. Until the wave notes land (retrieval skips marked rows; the client keeps marked memory out
-  of Free only turns), connected users simply get no memory on free turns.
+- *Memory (C1d, partly fixed).* Server memory written before this change is unmarked, so a free
+  turn retrieves it like any other unmarked row: a connected user's free turns get it (retrieval
+  skips only the marked rows), and so do the free turns of a user who removed every connection.
+  Until the client wave note lands (the client keeps marked memory out of Free only turns), the
+  client-composed memory block is stripped from connected users' free turns instead.
 - User-configured MCP servers are the user's own services, not connectors this app holds OAuth
   grants for; their tools are not treated as connector content. The operator's Nango MCP is.
 - `OPENROUTER_FREE_TEXT_MODEL` (config, a `:free` endpoint by default) is not read by any server

@@ -47,15 +47,18 @@ vi.mock('../services/modelAccessPolicy.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/modelAccessPolicy.js')>()),
   assertModelAllowedForUser: async () => ({})
 }));
-// Long-term memory: the server block a turn would get, and every write (with its `product`).
+// Long-term memory: the server block a turn would get (all rows, or without the rows marked as
+// distilled from connected content when the turn asks for that), and every write (with its `product`).
 const mem = vi.hoisted(() => ({
   block: null as string | null,
+  unmarkedBlock: null as string | null,
   writes: [] as { userId: string; product: string; items: { content: string }[] }[]
 }));
 vi.mock('../services/userMemory.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/userMemory.js')>()),
   isMemoryEnabled: async () => true,
-  buildUserMemoryBlock: async () => mem.block,
+  buildUserMemoryBlock: async (_userId: string, _query: string, opts?: { excludeConnected?: boolean }) =>
+    opts?.excludeConnected ? mem.unmarkedBlock : mem.block,
   rememberUserMemories: async (userId: string, product: string, _session: string | null, items: { content: string }[]) => {
     mem.writes.push({ userId, product, items });
     return items.length;
@@ -243,6 +246,7 @@ beforeEach(() => {
   or.fail = null;
   mcp.nango = false;
   mem.block = null;
+  mem.unmarkedBlock = null;
   mem.writes = [];
   reservedEstimates.length = 0;
   db.events = [];
@@ -583,7 +587,9 @@ describe('C1a: the history of plain text today’s client sends is recognised by
 });
 
 describe('memory distilled from connected content never reaches a free model', () => {
-  const MEMORY_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Planning the launch with Dana on Friday';
+  const MEMORY_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Planning the launch with Dana on Friday\n- Likes oceanography';
+  // The same memory without the rows marked as distilled from connected content.
+  const UNMARKED_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Likes oceanography';
   const CLIENT_MEMORY =
     'Answer like a pirate.\n\nBackground facts about the user (from earlier conversations) — use ONLY when they are clearly relevant to the current question:\n- Dana launch Friday\n\n' +
     'Relevance rules: treat these as optional background, never a frame. If stored facts seem to contradict the current message, trust the current message.';
@@ -602,11 +608,14 @@ describe('memory distilled from connected content never reaches a free model', (
     expect(mem.writes.find((w) => w.userId === plainId)?.product).toBe('chat_studio');
   });
 
-  it('the next free turn of a connected user gets no memory block and no client-composed memory; the persona stays', async () => {
+  it('the next free turn of a connected user gets only the unmarked server memory and no client-composed memory; the persona stays', async () => {
     mem.block = MEMORY_BLOCK;
+    mem.unmarkedBlock = UNMARKED_BLOCK;
     const r = await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('connected'), 'X-Free-Only': 'true' });
     expect(r.status).toBe(200);
     const sys = systemText(turnBodies()[0]);
+    // Retrieval skips the marked rows (services/userMemory.ts excludeConnected); the rest stays.
+    expect(sys).toContain('Likes oceanography');
     expect(sys).not.toContain('Planning the launch with Dana');
     expect(sys).not.toContain('Dana launch Friday');
     expect(sys).not.toContain('Background facts about the user');

@@ -187,6 +187,12 @@ export interface RunChatParams {
   userId?: string;
   userMemory?: boolean;
   /**
+   * With userMemory: leave out memory distilled from connected-account content
+   * (services/userMemory.ts excludeConnected). Set for a free-model turn of a user with connected
+   * accounts, which keeps the rest of their memory.
+   */
+  userMemoryExcludeConnected?: boolean;
+  /**
    * Explicit opt-in to inject RAG context from the user's connected ACCOUNT
    * connectors (Gmail/Drive/Calendar/…). When set with userId, the top matching
    * normalized items are retrieved (scoped to the user) and injected as a system
@@ -642,7 +648,7 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
           ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
           : '';
     const memoryBlock = await Promise.race([
-      buildUserMemoryBlock(params.userId, memoryQuery).catch(() => null),
+      buildUserMemoryBlock(params.userId, memoryQuery, { excludeConnected: params.userMemoryExcludeConnected === true }).catch(() => null),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500))
     ]);
     if (memoryBlock) systemContent += memoryBlock;
