@@ -65,6 +65,77 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
   `requestLogger` as JSON lines.
 - Caching: search 5 min, weather 10 min, quotes 60 s (`lib/cache.ts` TtlCache).
 
+## Connected-account privacy and model routing (Google Limited Use)
+
+Applies to the **account connectors** (Gmail, Drive, Calendar, Sheets, Maps, the unified
+`connected_data_search`, and `nango_call_api`, which proxies any API the user connected through
+Nango). Content from those accounts must never reach a model endpoint that may log or train on it.
+Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy, provider table).
+
+**How connector content can enter a model call** (`turnUsesConnectorData`, `connectorData.ts`):
+
+| Source | Where | Detected by |
+|---|---|---|
+| `tools` | a connector tool is offered (chat force-includes the primary tool of each linked account; recipes and swarm agents list their own) | tool name (exact list + `gmail_` / `drive_` / `calendar_` / `sheets_` / `connected_data_` prefixes) |
+| `context` | the connector RAG block (`connectors/retrieval.ts`, injected by `ai/chat.ts` when `connectorContext` is on) | a signed-in user with any connection (or a failed lookup) |
+| `history` | earlier messages already carry connector output | connector tool calls/results in the messages, the RAG block heading, or a provenance marker (`connectorData: true`, or `toolEvents` naming a connector tool) |
+| `inherited` | an enclosing turn already decided | the privacy scope (`scope.ts`) or the decision `prepareChat` binds to the request's `clientContext` |
+
+**What a connector turn does** (paid OpenRouter turn where any source applies):
+- Every OpenRouter call of the turn sends `provider: { data_collection: 'deny' }` (OpenRouter:
+  "use only providers which do not collect user data"; merged into any existing `provider`
+  fields). This covers the first call, every tool-loop round, the provider retry and fallback
+  model, the JSON repair round, streaming, the auto-memory summary, the swarm's planner, agents
+  and synthesis, deep research and delegation, and recipes. It travels as an AsyncLocalStorage
+  scope (`runWithConnectorPrivacy`), so engine code needs no new parameter.
+- No `:free` model takes it: free members leave the chain; a nested engine that picked a free
+  worker is moved to the paid net its caller already reserved for (logged as
+  `connector_privacy_free_model_skipped`). A free-only request is refused instead, never moved to
+  a paid model.
+- The reply carries `connectorData: true` so the client can mark that assistant turn (see the
+  provenance gap below).
+- Title, memory and follow-up helpers send the flag for a user with any connection.
+- If no endpoint that meets the policy can serve the model, the user is told so plainly
+  (`CONNECTED_DATA_NO_PRIVATE_ENDPOINT`), never retried on a free model.
+
+**Free models never receive connector content:**
+- A free turn (Free only, a pinned free model, or the free chain used while the shared key is
+  capped) gets **no connector tool** and **no connector context block**. When the user has
+  connections, the model is told why (so it explains instead of guessing), and a message that
+  asked for connected data gets a notice.
+- A free turn whose history already carries connector content is **refused** with HTTP 409
+  `CONNECTED_DATA_NEEDS_STANDARD_MODEL` before anything is reserved or sent: what happened, why,
+  and the two ways forward (switch to a standard model, or start a new chat without connected
+  content). It is never silently moved to a paid model.
+- The free-model fallbacks never take a conversation that carries, or may carry, connector
+  content (marked history, or a user with connections and an earlier assistant reply): the capped
+  shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan
+  is refused with an added sentence saying why. The first message of a new chat can still fall
+  back to a free model, with connector tools and context withheld.
+
+**Turns without connector content are unchanged** (users with no connections, no marked
+history): the OpenRouter body is byte-identical to before (verified by hashing the request
+bodies of a plain paid and a plain free-only turn against the previous code).
+
+**Other providers** (`providerPolicies.ts`; this table changes no routing):
+
+| Provider | Coverage |
+|---|---|
+| OpenRouter | per-request `data_collection: 'deny'` + no free models (above) |
+| OpenAI, Anthropic | their published API terms: API data is not used for training by default |
+| Gemini (direct key) | **owner to confirm** the platform key is on a paid (billing-enabled) project: unpaid Gemini API use may be used to improve Google products and read by human reviewers |
+| NVIDIA, DeepSeek, Z.ai, MiniMax, Tencent, xAI | **not verified**: owner to confirm before connector content is used with them |
+
+**Known gaps** (also in `docs/infrastructure/SECURITY_FINDINGS.md`, C1):
+- *History provenance.* The chat client sends history as plain text, so a conversation that read
+  Gmail on a standard model and then switches to Free only is not recognised until the client
+  echoes `connectorData: true` on those assistant turns (wave note). Degraded fallbacks are
+  conservative meanwhile (see above); a user-chosen Free only turn relies on the marker.
+- User-configured MCP servers are the user's own services, not connectors this app holds OAuth
+  grants for; their tools are not treated as connector content.
+- `OPENROUTER_FREE_TEXT_MODEL` (config, a `:free` endpoint by default) is not read by any server
+  path today.
+
 ## Rendering coverage (honest status)
 
 Rich artifact cards exist for: weather, markets, crypto, news, places, finance
@@ -104,3 +175,7 @@ Nango and MCP results.
    keyed, to `CONNECTOR_KEYS`.
 4. Prefer a rich artifact (see `CLAUDE.md` pipeline + gallery rule) over text.
 5. Update the topic table above. Tests: budget mapping + any pure parsers.
+6. **A tool that returns a user's connected-account content** (a new account connector, a new
+   Nango-style proxy): add its name to `CONNECTOR_DATA_TOOL_NAMES` in
+   `server/src/ai/privacy/connectorData.ts` (the parity test there fails otherwise for account
+   connector tools), so connector turns deny data collection and free models never receive it.

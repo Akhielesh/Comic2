@@ -133,6 +133,17 @@ Watch them: Admin → Costs → **Security** (counts only). When something looks
 
 ---
 
+## Chat — connected-account content and model routing (Google Limited Use)
+
+| # | Sev | Finding | Status (2026-11-04) |
+|---|---|---|---|
+| C1 | High (compliance) | Content from users' connected accounts (Gmail, Drive, Calendar, Sheets, Maps, unified connected-data search, the Nango proxy) could reach model endpoints that may log or train on it. OpenRouter request bodies never set `provider.data_collection`; Free only mode (the client default), a pinned free model, the capped-shared-key free chain and the usage-budget free re-plan all ran on `:free` endpoints while connector tools and the connector context block were offered; the swarm's planner and agents (the calendar agent has connector tools) default to a free worker; title / memory / follow-up summaries of such conversations carried no flag. | **Fixed in code** on branch `privacy/connector-routing` (not yet deployed): `server/src/ai/privacy/` decides per turn whether connector content can enter it; such a turn sends `provider: { data_collection: 'deny' }` on every OpenRouter call (tool rounds, retries, fallback, streaming, auto-memory, swarm, recipes, helpers) and never uses a free model; free turns get no connector tool and no connector context; a free turn whose history carries connector content is refused (409, calm copy, nothing sent or spent); the free fallbacks never take such a conversation. Turns without connector content are byte-identical. Details: `docs/DATA_CONNECTORS.md` → "Connected-account privacy". |
+| C1a | Med | History provenance: the chat client sends history as plain text, so a conversation that read connected data on a standard model and then switches to Free only is only recognised once the client echoes the reply's `connectorData: true` mark. | **Open until** the client change (wave note: store the mark on the assistant turn and send it back in `ChatRequestMessage`). Degraded free fallbacks are conservative meanwhile. |
+| C1b | Med (owner) | Direct providers are covered only by the terms of the key's account. Gemini's unpaid API tier may use content to improve products and allows human review. | **Owner action:** confirm the platform Gemini key is on a paid (billing-enabled) project; NVIDIA, DeepSeek, Z.ai, MiniMax, Tencent and xAI terms are unverified (`server/src/ai/privacy/providerPolicies.ts`). Optional: the OpenRouter account's own training opt-out (paid and free). |
+| C1c | Low (unverified) | OpenRouter does not document how `data_collection` combines with the `models` fallback array, nor whether providers that keep prompts only for abuse monitoring are excluded under `deny`. | Verify with a real key after deploy: a connector turn on the default chain must answer; a refusal shows "no endpoint for this model promises not to keep or learn from it". |
+
+---
+
 ## Change log
 
 | Date | Change |
@@ -140,3 +151,4 @@ Watch them: Admin → Costs → **Security** (counts only). When something looks
 | 2026-06-16 | Initial snapshot: 216 Supabase advisories triaged; worker CORS + HMAC notes. |
 | 2026-10-02 | AI-agent gate at the edge: AI crawlers/agents get a 50-question check-in + synthetic canary record instead of pages; known AI agents get 403 on `/api/*` before the request reaches Railway (`api-proxy/src/agent-gate.ts`, `functions/_middleware.ts`). Plain HTTP clients, webhooks and search engines are unaffected. |
 | 2026-10-29 | Stream Studio / baby monitor findings F1–F18 (ADR 0006) with their Phase 0 status; leaked-password note updated (backend Pwned Passwords check); `SECURITY_HOOK_SECRET` added to the HMAC secrets. Runbook: `live-security-runbook.md`. |
+| 2026-11-04 | Chat connected-account privacy C1–C1c (Google Limited Use): connector turns deny OpenRouter data collection and never use free models; free turns get no connector content. |
