@@ -382,6 +382,15 @@ describe('free models never receive connector content', () => {
     expect('provider' in body).toBe(false);
   });
 
+  it('Free only with an explicitly pinned paid model runs on that model: a flagged paid turn, tools kept', async () => {
+    const r = await post('/api/chat', { ...ASK_EMAIL, model: 'vendor/smart' }, { 'x-test-user': user('connected'), 'X-Free-Only': 'true' });
+    expect(r.status).toBe(200);
+    const [body] = turnBodies();
+    expect(body.model).toBe('vendor/smart');
+    expect(toolNames(body)).toContain('gmail_search');
+    expect(body.provider).toEqual(DENY);
+  });
+
   it('a pinned free model (paid mode) is a free turn too', async () => {
     const r = await post('/api/chat', { ...ASK_EMAIL, model: FREE_B }, { 'x-test-user': user('connected') });
     expect(r.status).toBe(200);

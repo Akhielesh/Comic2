@@ -521,10 +521,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     }
   }
 
-  // Connected-account privacy: a FREE turn (free-only, a pinned free model, the capped-key free
+  // Connected-account privacy: a FREE turn (free-only Auto, a pinned free model, the capped-key free
   // chain) never receives connector content. If the conversation already carries some, the turn is
-  // refused before anything is sent or reserved — never moved to a paid model.
-  const freeTurn = resolved.provider === 'openrouter' && (freeOnly || pinnedFree || cappedFree || isFreeModelId(model));
+  // refused before anything is sent or reserved — never moved to a paid model. (Free only with an
+  // explicitly pinned paid model runs on that paid model: a paid turn, flagged like any other.)
+  const freeTurn =
+    resolved.provider === 'openrouter' && ((freeOnly && !requestedModel) || pinnedFree || cappedFree || isFreeModelId(model));
   if (freeTurn && historyConnectorData) {
     return {
       error: { status: 409, body: { error: { message: CONNECTED_DATA_FREE_MODEL_MESSAGE, code: CONNECTED_DATA_FREE_MODEL_CODE } } }
