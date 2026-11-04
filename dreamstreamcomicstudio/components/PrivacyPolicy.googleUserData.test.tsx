@@ -68,8 +68,40 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     for (const provider of ['Cloudflare', 'Supabase', 'OpenRouter', 'Anthropic', 'OpenAI', 'Google (Gemini)']) {
       expect(text).toContain(provider);
     }
-    expect(text).toMatch(/only to generate the response you asked for/);
+    expect(text).toMatch(/to generate the response you asked for/);
     expect(text).toMatch(/explicit prior consent/);
+  });
+
+  it('names the services the model\'s tools contact, since tool requests can carry connected-account details', () => {
+    const section = googleSection();
+    const text = textOf(section);
+    // web_search/read_url are always offered (toolCatalog.ts CORE_ALWAYS_TOOLS), Context7/DeepWiki
+    // and user MCP servers join when tools are in use (server/src/routes/chat.ts).
+    for (const recipient of ['Tavily', 'Brave Search', 'SearXNG', 'Bing', 'Wikipedia', 'Context7', 'DeepWiki', 'MCP servers you add']) {
+      expect(text).toContain(recipient);
+    }
+    const shareList = within(section).getByText(/to the services the AI model uses while answering you/);
+    expect(shareList.tagName).toBe('LI');
+  });
+
+  it('describes memory as it works: automatic, saved to the account, Gemini-indexed, deleted by email', () => {
+    const text = textOf(googleSection());
+    expect(text).toMatch(/keeps memory notes automatically/);
+    expect(text).toMatch(/sent to Google's Gemini API to make it searchable/);
+    expect(text).toMatch(/memory cannot yet be turned off in the app/);
+    expect(text).toMatch(/does not delete the copy saved to your account/);
+    // Settings → Memory only edits the synced list (services/chatStorage.ts), not user_memories.
+    expect(text).not.toMatch(/turn off memory in Chat Studio/i);
+    expect(text).not.toMatch(/memory notes under Settings → Memory\./);
+  });
+
+  it('carries the YouTube API Services notice and links the Google Privacy Policy', () => {
+    const section = googleSection();
+    expect(textOf(section)).toContain('DreamStream uses YouTube API Services.');
+    expect(within(section).getByRole('link', { name: 'Google Privacy Policy' })).toHaveAttribute(
+      'href',
+      'https://policies.google.com/privacy'
+    );
   });
 
   it('explains revocation, in-app disconnect and the privacy contact', () => {
@@ -89,6 +121,8 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     expect(screen.getByText('November 4, 2026')).toHaveAttribute('dateTime', '2026-11-04');
     const contact = screen.getByRole('heading', { name: /12\. Contact/ }).closest('section') as HTMLElement;
     expect(within(contact).getByRole('link', { name: 'privacy@dreamstreamstudio.ai' })).toBeInTheDocument();
+    // Account Settings still shows an address on a domain we don't own; don't send requesters there.
+    expect(textOf(contact)).not.toMatch(/Account Settings/);
   });
 
   it('scrolls to the #google-user-data fragment once the lazily-loaded view mounts', () => {
@@ -98,6 +132,15 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     render(<PrivacyPolicy onBack={vi.fn()} />);
     expect(scroll).toHaveBeenCalledTimes(1);
     expect(scroll.mock.contexts[0]).toHaveProperty('id', 'google-user-data');
+  });
+
+  it('survives a malformed #fragment instead of throwing into the error boundary', () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    window.location.hash = '#%E0%A4';
+    expect(() => render(<PrivacyPolicy onBack={vi.fn()} />)).not.toThrow();
+    expect(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument();
+    expect(scroll).not.toHaveBeenCalled();
   });
 
   it('uses theme tokens only, so it reads in light and dark', () => {

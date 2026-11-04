@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 const PRIVACY_EMAIL = 'privacy@dreamstreamstudio.ai';
 const GOOGLE_USER_DATA_POLICY_URL = 'https://developers.google.com/terms/api-services-user-data-policy';
 const GOOGLE_CONNECTIONS_URL = 'https://myaccount.google.com/connections';
+const GOOGLE_PRIVACY_POLICY_URL = 'https://policies.google.com/privacy';
 
 // Theme tokens only (--ds-*, see index.css) so the page reads in light and dark.
 const LINK = 'font-medium text-[var(--ds-ink)] underline decoration-[var(--ds-accent)] underline-offset-2 hover:decoration-2';
@@ -55,8 +56,15 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     // The view mounts after the SPA boots, so the browser's own jump to a #fragment
     // (e.g. ?view=privacy#google-user-data) has already been missed. Do it here.
     useEffect(() => {
-        const id = decodeURIComponent(window.location.hash.slice(1));
-        if (!id) return;
+        const raw = window.location.hash.slice(1);
+        if (!raw) return;
+        // A mangled shared link (e.g. #%) must not take the whole page down.
+        let id = raw;
+        try {
+            id = decodeURIComponent(raw);
+        } catch {
+            /* keep the raw fragment */
+        }
         document.getElementById(id)?.scrollIntoView?.();
     }, []);
 
@@ -118,6 +126,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                             <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
                             <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
                             <li><strong>OpenRouter and other AI model providers:</strong> Chat Studio responses. OpenRouter is our AI gateway: it passes each request to the company that runs the model you pick, or that Auto picks for you. Requests can also go directly to a provider you choose in Chat Studio. Section 4 explains how this applies to connected Google data.</li>
+                            <li><strong>Search, lookup and reference services:</strong> While answering in Chat Studio, the AI model can use tools that contact other services, writing each request from your conversation: web search (such as Tavily, Brave Search, Serper, Google Programmable Search, SearXNG, DuckDuckGo, Bing and Wikipedia), the websites whose pages it reads, maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and MCP servers you add.</li>
                             <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
                             <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
                         </ul>
@@ -151,22 +160,26 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                             </Service>
                             <Service name="YouTube (read-only)" scopes={['youtube.readonly']}>
                                 <p>We keep an index of your own channel's uploaded videos (title, description, publish date and thumbnail).</p>
+                                <p>DreamStream uses YouTube API Services. Google's handling of your data is described in the{' '}
+                                    <ExternalLink href={GOOGLE_PRIVACY_POLICY_URL}>Google Privacy Policy</ExternalLink>.</p>
                             </Service>
                         </ul>
                         <p className="text-sm text-[var(--ds-muted)]">Google Maps lookups use an API key (DreamStream's, or one you add), not your Google account; the place or address you search for is sent to Google Maps.</p>
 
                         <SubHeading>How we use it</SubHeading>
-                        <p>We use Google user data only to provide the features you use and can see in DreamStream: showing your email, files, agenda, spreadsheets and videos; answering your questions about them in chat; preparing calendar changes for you to confirm; and saving your recordings to Drive. We do not sell Google user data, and we do not use it for advertising, including personalized, retargeted or interest-based ads, or to determine creditworthiness or for lending.</p>
+                        <p>We use Google user data only to provide the features you use and can see in DreamStream: showing your email, files, agenda, spreadsheets and videos; answering your questions about them in chat; keeping the memory notes that personalize your later chats (described under AI processing); preparing calendar changes for you to confirm; and saving your recordings to Drive. We do not sell Google user data, and we do not use it for advertising, including personalized, retargeted or interest-based ads, or to determine creditworthiness or for lending.</p>
 
                         <SubHeading>AI processing</SubHeading>
-                        <p>When you ask Chat Studio something that involves a connected account, the relevant items are included in the request to the AI model that writes the answer: for example the sender, subject, date and preview of matching emails, the events in your agenda, file names, or the spreadsheet rows you asked about. Chat can also include a few matching items from your connected accounts as background for a message you send. This information is sent only to generate the response you asked for.</p>
+                        <p>When you ask Chat Studio something that involves a connected account, the relevant items are included in the request to the AI model that writes the answer: for example the sender, subject, date and preview of matching emails, the events in your agenda, file names, or the spreadsheet rows you asked about. Chat can also include a few matching items from your connected accounts as background for a message you send. This information is sent to generate the response you asked for.</p>
                         <p>On Auto, DreamStream picks the model and sends the request through OpenRouter, our AI gateway, which passes it to the company that runs that model (for example Anthropic, Google or OpenAI). You can choose a specific model or provider in Chat Studio instead. Depending on your choice, the request goes through OpenRouter to that model's provider, or directly to OpenAI, Anthropic, Google (Gemini), xAI, DeepSeek, Z.AI, MiniMax, Tencent (Hunyuan) or NVIDIA. If you add your own API key for a provider, requests that use it run under your own account with that provider.</p>
-                        <p>If chat memory is on, the model may save short notes from a conversation to your memory, and these can include details from a connected account. The text of saved notes may be sent to Google's Gemini API to make them searchable. You can review, delete or turn off memory in Chat Studio under Settings → Memory.</p>
+                        <p>While writing an answer, the model can also use tools that contact other services. It writes those requests itself, so a request can include details from a connected account: asked what the company in your latest email does, for example, it may search the web for that company's name. These services are web search (such as Tavily, Brave Search, Serper, Google Programmable Search, SearXNG, DuckDuckGo, Bing and Wikipedia), the websites whose pages it reads, maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and any MCP servers you add in Chat Studio. The model makes these requests only to answer the message you sent.</p>
+                        <p>When you're signed in, Chat Studio also keeps memory notes automatically: short facts about you, written from your conversations so later chats can be personalized. The notes can include details from a connected account. To write them, the latest messages of a conversation, including the answer, are sent to an AI model through the provider your chat uses. The notes are saved to your DreamStream account, the text of each note is sent to Google's Gemini API to make it searchable, and notes that match a later message are included in that chat's request to the AI model. Settings → Memory in Chat Studio shows a list of notes you can edit or remove, but removing a note there does not delete the copy saved to your account, and memory cannot yet be turned off in the app. To see, delete or turn off the memory saved to your account, email <PrivacyEmail />.</p>
 
                         <SubHeading>Who we share it with</SubHeading>
                         <p>We do not transfer Google user data to advertising platforms, data brokers or information resellers. We transfer it only:</p>
                         <ul className={LIST}>
-                            <li>to the service providers that run DreamStream: Cloudflare, which hosts our website and the servers that handle your connected accounts; Supabase, our database, which stores your connections, encrypted tokens and the indexes described above; and the AI providers described under AI processing, which receive it only to generate the response you asked for;</li>
+                            <li>to the service providers that run DreamStream: Cloudflare, which hosts our website and the servers that handle your connected accounts; Supabase, our database, which stores your connections, encrypted tokens and the indexes described above, plus your memory notes and any chats saved to your account; and the AI providers described under AI processing, which receive it to generate the response you asked for and to write and index your memory notes;</li>
+                            <li>to the services the AI model uses while answering you, described under AI processing: web search and the websites it reads, maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and MCP servers you add. They receive only the requests the model writes to answer your message;</li>
                             <li>when necessary for security purposes, such as investigating abuse;</li>
                             <li>to comply with applicable laws; or</li>
                             <li>as part of a merger, acquisition or sale of assets, only after obtaining your explicit prior consent.</li>
@@ -190,8 +203,8 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                             <li>To disconnect, open Chat Studio, go to Settings → Connectors and choose Disconnect. This deletes the connection, its encrypted tokens and every item indexed from it.</li>
                             <li>You can remove DreamStream's access from your Google Account at any time at{' '}
                                 <ExternalLink href={GOOGLE_CONNECTIONS_URL}>myaccount.google.com/connections</ExternalLink>. After that DreamStream can no longer reach your Google data, and any connection still listed in DreamStream asks you to reconnect. Disconnect it in DreamStream as well to delete what we stored.</li>
-                            <li>Disconnecting does not delete your chats or memory. Chat answers and saved memory notes can include details from a connected account. Chats are kept in your browser and can also be synced to your DreamStream account; deleting a chat removes both copies. Delete chats from the chat list, and memory notes under Settings → Memory.</li>
-                            <li>To delete your DreamStream account, including every connection, token and index, email <PrivacyEmail />.</li>
+                            <li>Disconnecting does not delete your chats or memory notes, which can include details from a connected account. Chats are kept in your browser and can also be synced to your DreamStream account; deleting a chat from the chat list removes both copies. Memory notes saved to your account stay until you ask us to delete them: email <PrivacyEmail /> (removing a note under Settings → Memory does not delete the saved copy).</li>
+                            <li>To delete your DreamStream account, including every connection, token, index and memory note, email <PrivacyEmail />.</li>
                         </ul>
 
                         <SubHeading>Limited Use</SubHeading>
@@ -230,7 +243,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     </Section>
 
                     <Section title="9. Children">
-                        <p>The service is not intended for children under applicable legal age requirements. If you believe a child submitted personal data, contact support for review/removal.</p>
+                        <p>The service is not intended for children under applicable legal age requirements. If you believe a child submitted personal data, email <PrivacyEmail /> for review/removal.</p>
                     </Section>
 
                     <Section title="10. International Processing">
@@ -242,7 +255,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     </Section>
 
                     <Section title="12. Contact">
-                        <p>For privacy questions or deletion requests, email <PrivacyEmail />. You can also use the in-app contact/support flow in Account Settings.</p>
+                        <p>For privacy questions or deletion requests, email <PrivacyEmail />.</p>
                     </Section>
 
                     <Section title="Privacy FAQs">
@@ -255,7 +268,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                             <li><strong>What billing data is stored?</strong> If paid billing is enabled for your account, DreamStream may store wallet balances, token usage events, subscription lifecycle state, and Stripe payment-method references required for billing operations.</li>
                             <li><strong>Can other users see my drafts?</strong> No, unless you intentionally make a project public.</li>
                             <li><strong>What data stays on my device?</strong> Local caches including key settings, guest projects, test runs/images, and reader/learning state can be stored in localStorage/IndexedDB.</li>
-                            <li><strong>How do I delete my data?</strong> Delete content in-app where available, disconnect connected accounts in Chat Studio under Settings → Connectors, and email <PrivacyEmail /> for account-level or privacy deletion requests.</li>
+                            <li><strong>How do I delete my data?</strong> Delete content in-app where available, disconnect connected accounts in Chat Studio under Settings → Connectors, and email <PrivacyEmail /> to delete the memory saved to your account or for account-level or privacy deletion requests.</li>
                             <li><strong>Do you send marketing emails automatically?</strong> Marketing communication is optional and based on your signup consent choices.</li>
                         </ul>
                     </Section>
