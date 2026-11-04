@@ -391,7 +391,22 @@ export type StudioAction =
   | ApplyFindingAction
   | FlattenPageAction
   // --- history (versions plan §3.3): free, non-spend ---
-  | HistoryStudioAction;
+  | HistoryStudioAction
+  // --- live agent (agent-editor plan §3 A3; K3): free, non-spend ---
+  | ResolveConflictAction;
+
+/**
+ * Answer a conflict card (agent-editor plan §3 A3; owner decision D3: the creator's edit always wins until they say
+ * otherwise). 'mine' keeps what the creator wrote and closes the items; 'theirs' re-sanitizes the director's held-back
+ * ops against the CURRENT doc and commits them with origin 'director' (undoable). Free; never a spend.
+ */
+export interface ResolveConflictAction {
+  type: 'resolve_conflict';
+  cardId: string;
+  /** Items of that card this answer covers (the card's [Keep mine] / [Use the director's] answer all of them). */
+  itemIds: string[];
+  choice: 'mine' | 'theirs';
+}
 
 /** The type names live in doc.ts (single source for client + server; doc.ts validates a stored card's
  *  `blockedAction` against them and cannot import this module). Re-exported here, where StudioAction is

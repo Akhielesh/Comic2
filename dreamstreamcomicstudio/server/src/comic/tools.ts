@@ -28,6 +28,7 @@ import {
   type Character,
   type CharacterLook,
   type ComicDoc,
+  type ConflictItem,
   type Gate,
   type Line,
   type LineKind,
@@ -94,10 +95,12 @@ import {
   MAX_TOOLS_PER_TURN,
   ToolArgError,
   defineTool,
+  notAvailableError,
   type DirectorTool,
   type ToolCost,
   type ToolGroup
 } from './extensions.js';
+import { DIALOGUE_ACTS } from '../../../shared/comic/dialogue/types.js';
 import { addRefs } from './refs/index.js';
 import { LETTERING_STYLE_ARGS_SCHEMA, balloonAtPosition, styleArgsToPatch } from './tools/lettering.js';
 import { MODEL_ASK_RE } from './tools/models.js';
@@ -165,6 +168,11 @@ export interface DirectorTurn {
   outcome?: ActionOutcome['status'];
   /** Trademarked names this turn steers to an original homage (said once). */
   ipNames?: string[];
+  // ── live agent (agent-editor plan §3 A2/A3; K3). Optional: absent = the turn predates them ──
+  /** doc.rev when the turn started (runDirectorTurn sets it): the creator's commits after it win (conflictGuard.ts). */
+  startRev?: number;
+  /** Director edits held back because the creator changed the same entity mid-turn; one conflict card after the loop. */
+  conflicts?: ConflictItem[];
 }
 
 /** Source material shorter than this is stored without a (paid) writer analysis. */
@@ -1595,6 +1603,81 @@ export function buildDirectorTools(ctx: StudioContext, turn?: DirectorTurn): Dir
 
 /** Exposed for tests and the director: the tool names in the order offered. */
 export const directorToolNames = (tools: DirectorTool[]) => tools.map((t) => t.spec.function.name);
+
+// ── Live agent and dialogue tools (agent-editor plan §3 A4 and B3; K3 stubs, wave 2 B-TOOL fills them) ───────────────
+
+/** What the dialogue_edit stub tells the model (honest, with the tools that work today). */
+export const DIALOGUE_EDIT_NOT_AVAILABLE =
+  "dialogue_edit isn't available yet. Use set_line or edit_panel_text for words, kind and speaker, and arrange_balloons to move a balloon.";
+/** What the offer_next stub tells the model. */
+export const OFFER_NEXT_NOT_AVAILABLE = "offer_next isn't available yet. Suggest next steps in your reply instead.";
+
+const LINE_REF_SCHEMA = {
+  type: 'object',
+  description: 'Which line: the selection, or page / panel / speaker / kind / quoted text / ordinal.',
+  properties: {
+    selected: B('this / that / these / it: the selected balloons.'),
+    page: I('Page number.'),
+    panel: I('Panel number on that page.'),
+    speaker: S('Who says it ("Mira", "the robot").'),
+    kind: S('Line kind.', { enum: [...LINE_KINDS] }),
+    text_contains: S('Words from the line.'),
+    line_ids: A({ type: 'string' }, 'Exact line ids from read_pages.'),
+    nth: I('Her 2nd line = 2; -1 = the last.')
+  }
+};
+
+/**
+ * dialogue_edit (plan §3 B3): one free tool for every dialogue edit — resolve the line (asking "Which line?" when several
+ * match), compile the intent to ops, guardUserEdits, commit with origin 'director'. A RESERVED core tool (RESERVED_CORE_TOOLS):
+ * its seat is kept free in every turn. STUB: refuses NOT_AVAILABLE and is not offered yet (B-TOOL adds it to the core list).
+ */
+export function dialogueEditTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
+  void ctx;
+  void turn;
+  return define(
+    'dialogue_edit',
+    'free',
+    'Change dialogue: a line\'s kind, words or speaker; add, delete, move, reorder or swap lines; aim or restyle a tail; restyle a balloon.',
+    schema(
+      {
+        action: S('What to do.', { enum: [...DIALOGUE_ACTS] }),
+        target: LINE_REF_SCHEMA,
+        second: LINE_REF_SCHEMA,
+        kind: S('New line kind.', { enum: [...LINE_KINDS] }),
+        text: S('New words.'),
+        speaker: S('Speaker name, or "off_panel".'),
+        place: { type: 'object', description: 'Where: frame panel|page, cell, edge, near, relation, nudge, amount.' },
+        tail_to: S('Who or what the tail points at ("mouth" = the speaker\'s mouth).'),
+        to_panel: I('Panel number to move the line to.'),
+        index: I('0-based position in the panel.'),
+        scope: S('Restyle scope.', { enum: ['line', 'kind', 'speaker', 'comic'] })
+      },
+      ['action']
+    ),
+    () => {
+      throw notAvailableError(DIALOGUE_EDIT_NOT_AVAILABLE);
+    }
+  );
+}
+
+/**
+ * offer_next (plan §3 A4): up to 2 free `say` chips that follow what was just asked; never a spend action, never ends the
+ * turn. STUB: refuses NOT_AVAILABLE and is not offered yet.
+ */
+export function offerNextTool(ctx: StudioContext, turn: DirectorTurn): DirectorTool {
+  void ctx;
+  void turn;
+  return define(
+    'offer_next',
+    'free',
+    'Offer up to 2 short next-step chips the user can tap (each sends its text). Does not end your turn.',
+    schema({ chips: A({ type: 'object', properties: { label: S('Chip text (≤ 40 chars).'), say: S('Message sent when tapped.') } }, '1–2 chips.') }, ['chips']),
+    () => {
+      throw notAvailableError(OFFER_NEXT_NOT_AVAILABLE);
+    }
+  );
+}
 
 // ── Core + feature groups (contract §12.1) ───────────────────────────────────
 

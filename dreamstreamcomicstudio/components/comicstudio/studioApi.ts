@@ -346,6 +346,13 @@ export const asCaps = (v: unknown): StudioCaps | undefined => {
     const k = v.anchorKinds;
     caps.anchorKinds = anchorKindsOf({ places: k.places === true, props: k.props === true, styleKey: k.styleKey === true, sheetV2: k.sheetV2 === true });
   }
+  // Live agent, dialogue fast path, Pro editor v2 (agent-editor plan §5; K3): only a literal `true` turns a part on.
+  if (isObject(v.liveAgent)) {
+    const l = v.liveAgent;
+    caps.liveAgent = { queue: l.queue === true, steer: l.steer === true, conflicts: l.conflicts === true };
+  }
+  if (typeof v.dialogueFast === 'boolean') caps.dialogueFast = v.dialogueFast;
+  if (typeof v.proEditorV2 === 'boolean') caps.proEditorV2 = v.proEditorV2;
   return caps;
 };
 

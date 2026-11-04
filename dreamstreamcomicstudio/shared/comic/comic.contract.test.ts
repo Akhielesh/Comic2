@@ -1093,7 +1093,9 @@ describe('v5 §16.5 sets', () => {
       // Ship 2 (pro plan §5.3; K2b): a one-panel fix and a detail pass spend; the editor actions are free
       fix_panel: true, enrich_pages: true, panelize_page: true, rebind_panels: true, apply_finding: true, flatten_page: true,
       // Comic History H0 (versions plan §3.3): every history path is free
-      history_save: true, history_restore: true, history_undo_ai: true, history_forget_photo: true, history_alternative: true
+      history_save: true, history_restore: true, history_undo_ai: true, history_forget_photo: true, history_alternative: true,
+      // Live agent K3 (agent-editor plan §3 A3): answering a conflict card is free
+      resolve_conflict: true
     };
     for (const t of Object.keys(all)) expect(Number(SPEND_ACTION_TYPES.has(t)) + Number(NON_SPEND_ACTION_TYPES.has(t)), t).toBe(1);
     expect(SPEND_ACTION_TYPES.size + NON_SPEND_ACTION_TYPES.size).toBe(Object.keys(all).length);
@@ -2355,4 +2357,275 @@ describe('Ship 2 contract (K2a)', () => {
       placeAnchors: 2, propAnchors: 2, maxRefsDefault: 9, promptChars: 9000, recurringPages: 2, recurringPanels: 3
     });
   });
+});
+
+// ── Live agent, dialogue and Pro editor v2 contract (K3; agent-editor plan §3, §4 0b, §5) ─────────────────────────
+import { CONFLICT_LIMITS, POS9, normalizeConflictCard, type ConflictCard, type OptionVisual, type Pos9 } from './doc';
+import type { ResolveConflictAction } from './ops';
+import { STEER_LIMITS, type ActivityWhere, type SteerRequest, type StudioEvent as K3StudioEvent } from './events';
+import {
+  LIVE_FLAG_DEFAULTS,
+  LIVE_FLAG_ENV,
+  conflictGuardOn,
+  dialogueFastOn,
+  liveCapsFromEnv,
+  liveQueueOn,
+  parseFlagStage,
+  proEditorV2On,
+  stageAllows,
+  steerOn,
+  type StudioCaps
+} from './capabilities';
+import { collidingKeys, entityKeys } from './conflicts';
+import {
+  DIALOGUE_ACTS,
+  DIALOGUE_NOT_READY,
+  cellBox,
+  compileIntent,
+  matchSpeaker,
+  parseDialogue,
+  placementFor,
+  resolveLineRef,
+  type DialogueAct,
+  type DialogueIntent,
+  type Pos9 as DialoguePos9
+} from './dialogue/index';
+import { asCaps } from '../../components/comicstudio/studioApi';
+import type { NamedLetterStyle } from './lettering/style';
+
+/** A server module by path, without pulling server code into the client typecheck (insightsModel.test.ts precedent). */
+const k3Server = async <T,>(path: string): Promise<T> => (await import(/* @vite-ignore */ path)) as T;
+
+describe('Live agent, dialogue and Pro editor v2 contract (K3)', () => {
+  const conflictCard = (): ConflictCard => ({
+    type: 'conflict',
+    id: 'card_cf',
+    items: [
+      {
+        id: 'cf_1',
+        where: { pageId: 'pg_1', panelId: 'pg_1_p1', lineId: 'pg_1_l1', label: 'page 1 · panel 1 · line 1' },
+        mine: 'We have to go',
+        theirs: 'We must leave now',
+        proposed: [{ op: 'line', pageId: 'pg_1', panelId: 'pg_1_p1', id: 'pg_1_l1', patch: { text: 'We must leave now' } }]
+      }
+    ]
+  });
+
+  it('events: NOT_RUNNING is a stream error code; activity.where and the steer request are additive', () => {
+    expect(isStreamErrorCode('NOT_RUNNING')).toBe(true);
+    expect(STREAM_ERROR_CODES).toContain('NOT_RUNNING');
+    expect(new Set(STREAM_ERROR_CODES).size).toBe(STREAM_ERROR_CODES.length);
+    const where: ActivityWhere = { pageId: 'pg_1', lineIds: ['pg_1_l1'] };
+    const event: K3StudioEvent = { type: 'activity', id: 'act_1', label: 'Moving a balloon', phase: 'start', cost: 'free', where };
+    expect(JSON.parse(encodeStudioEvent(event))).toEqual(event);
+    // An activity without `where` is exactly the old event on the wire.
+    expect(encodeStudioEvent({ type: 'activity', id: 'a', label: 'x', phase: 'end' })).toBe('{"type":"activity","id":"a","label":"x","phase":"end"}');
+    expectTypeOf<SteerRequest>().toEqualTypeOf<{ text: string; focus?: StudioFocus }>();
+    expect(STEER_LIMITS).toEqual({ inbox: 3, extraRounds: 2, whereLines: 20 });
+  });
+
+  it('doc: the conflict card is a Card, round-trips normalizeDoc and the wire unchanged, and malformed parts are dropped', () => {
+    expectTypeOf<Extract<Card, { type: 'conflict' }>>().toEqualTypeOf<ConflictCard>();
+    const card = conflictCard();
+    const doc = normalizeDoc({ ...createEmptyDoc('k3'), conversation: [{ id: 'm', role: 'assistant', text: 'We both changed page 1.', at: 1, cards: [card] }] });
+    expect(doc.conversation[0].cards).toEqual([card]);
+    expect(normalizeConflictCard(card)).toBe(card); // already clean: the same object
+    expect(normalizeDoc(doc)).toEqual(doc);
+    const wired = JSON.parse(encodeStudioEvent({ type: 'ops', rev: 2, ops: [{ op: 'message', msg: doc.conversation[0] }] })) as { ops: DocOp[] };
+    expect(applyOps(createEmptyDoc('k3'), wired.ops).conversation[0].cards).toEqual([card]);
+    // Answered items keep their outcome.
+    const answered = { ...card, items: [{ ...card.items[0], resolved: 'mine' as const }] };
+    expect(normalizeConflictCard(answered)).toEqual(answered);
+    // Junk: no id, no items, items without a where-label, non-op proposals, over-long text and too many ops.
+    expect(normalizeConflictCard({ type: 'conflict', items: card.items })).toBeUndefined();
+    expect(normalizeConflictCard({ ...card, items: [{ id: 'x', mine: 'a', theirs: 'b', proposed: [] }] })).toBeUndefined();
+    const messy = normalizeConflictCard({
+      ...card,
+      items: [{ ...card.items[0], mine: 'm'.repeat(999), resolved: 'maybe', where: { label: 'p1', pageId: 42 }, proposed: [1, 'x', null, ...Array.from({ length: 30 }, () => card.items[0].proposed[0])] }]
+    })!;
+    expect(messy.items[0].mine).toHaveLength(CONFLICT_LIMITS.textChars);
+    expect(messy.items[0].where).toEqual({ label: 'p1' });
+    expect(messy.items[0].resolved).toBeUndefined();
+    expect(messy.items[0].proposed).toHaveLength(CONFLICT_LIMITS.opsPerItem);
+    const dropped = normalizeDoc({ ...createEmptyDoc('k3'), conversation: [{ id: 'm', role: 'assistant', text: 'x', at: 1, cards: [{ type: 'conflict', id: 'c', items: [] } as unknown as Card] }] });
+    expect(dropped.conversation[0].cards).toEqual([]);
+  });
+
+  it('doc: balloon and spot option visuals survive normalizeDoc; Pos9 is the nine cells', () => {
+    expect(POS9).toEqual(['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right']);
+    expectTypeOf<DialoguePos9>().toEqualTypeOf<Pos9>();
+    const visuals: OptionVisual[] = [
+      { kind: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l1' },
+      { kind: 'spot', pageId: 'pg_1', panelN: 2, cell: 'top-left', frame: 'panel' },
+      { kind: 'spot', pageId: 'pg_1', cell: 'bottom', frame: 'page' }
+    ];
+    const card: Card = { type: 'options', id: 'card_w', question: 'Which line?', choices: visuals.map((visual, i) => ({ id: `opt_${i}`, label: `Choice ${i}`, visual })), allowCustom: true };
+    const doc = normalizeDoc({ ...createEmptyDoc('k3'), conversation: [{ id: 'm', role: 'assistant', text: 'Which line?', at: 1, cards: [card] }] });
+    expect(doc.conversation[0].cards).toEqual([card]);
+  });
+
+  it('doc: Line.styleId and LetteringStyle.named are optional and never hashed; Msg.steered survives; old docs are untouched', () => {
+    const plain = inArtSample();
+    const styled = inArtSample();
+    for (const page of styled.pages) for (const panel of page.panels) panel.lines = panel.lines.map((l): Line => ({ ...l, styleId: 'st_villain' }));
+    const named: NamedLetterStyle = { name: 'Villain', patch: { textColor: '#aa0000', italic: true } };
+    styled.letterStyle = { ...(styled.letterStyle ?? { presetId: 'classic' }), named: { st_villain: named } };
+    // In-art lettering hashes its lines: a style reference changes no drawn art.
+    expect(styled.pages.map((p) => pageSpecHash(styled, p))).toEqual(plain.pages.map((p) => pageSpecHash(plain, p)));
+    expect(planInputHashOf(styled)).toBe(planInputHashOf(plain));
+    // normalizeDoc keeps a well-formed styleId and drops junk; a line without one keeps its object identity.
+    const norm = normalizeDoc(JSON.parse(JSON.stringify(styled)));
+    expect(norm.pages[0].panels.flatMap((p) => p.lines).every((l) => l.styleId === 'st_villain')).toBe(true);
+    const junk = makeSampleDoc((d) => { (d.pages[0].panels[0].lines[0] as unknown as { styleId: unknown }).styleId = 42; });
+    expect('styleId' in normalizeDoc(junk).pages[0].panels[0].lines[0]).toBe(false);
+    // Msg.steered rides along on a user message.
+    const steered = normalizeDoc({ ...createEmptyDoc('k3'), conversation: [{ id: 'u', role: 'user', text: 'Make it red', at: 1, steered: true }] });
+    expect(steered.conversation[0].steered).toBe(true);
+    // Old comics are byte-identical: no new key appears anywhere after normalizeDoc.
+    for (const old of [makeSampleDoc(), inArtSample(), ownerLiveDoc()]) {
+      const json = JSON.stringify(normalizeDoc(JSON.parse(JSON.stringify(old))));
+      for (const key of ['"styleId"', '"named"', '"steered"', '"conflict"', '"where"']) expect(json.includes(key), key).toBe(false);
+    }
+  });
+
+  it('ops: resolve_conflict is a free StudioAction that round-trips the wire', () => {
+    const action: ResolveConflictAction = { type: 'resolve_conflict', cardId: 'card_cf', itemIds: ['cf_1'], choice: 'theirs' };
+    const asAction: StudioAction = action;
+    expect(NON_SPEND_ACTION_TYPES.has('resolve_conflict')).toBe(true);
+    expect(SPEND_ACTION_TYPES.has('resolve_conflict')).toBe(false);
+    expect(isSpendAction(asAction)).toBe(false);
+    expect(JSON.parse(JSON.stringify({ kind: 'action', action }))).toEqual({ kind: 'action', action });
+    expectTypeOf<ResolveConflictAction['choice']>().toEqualTypeOf<'mine' | 'theirs'>();
+  });
+
+  it('caps: flag stages parse safely and the defaults are D9 (queue, conflicts, Pro editor v2 for admins; steer and fast path off)', () => {
+    expect(LIVE_FLAG_ENV).toEqual({ queue: 'COMIC_LIVE_QUEUE', steer: 'COMIC_STEER', conflicts: 'COMIC_CONFLICT_GUARD', dialogueFast: 'COMIC_DIALOGUE_FAST', proEditorV2: 'COMIC_PRO_EDITOR_V2' });
+    expect(LIVE_FLAG_DEFAULTS).toEqual({ queue: 'admins', steer: 'off', conflicts: 'admins', dialogueFast: 'off', proEditorV2: 'admins' });
+    const cases: [unknown, string][] = [
+      ['off', 'off'], [' OFF ', 'off'], ['0', 'off'], ['false', 'off'], ['admins', 'admins'], ['Admin', 'admins'], ['on', 'admins'], ['1', 'admins'],
+      ['true', 'admins'], ['all', 'all'], ['everyone', 'all'], [undefined, 'admins'], ['', 'admins'], ['bogus', 'admins'], [42, 'admins']
+    ];
+    for (const [value, stage] of cases) expect(parseFlagStage(value, 'admins'), String(value)).toBe(stage);
+    expect(stageAllows('off', true)).toBe(false);
+    expect(stageAllows('admins', true)).toBe(true);
+    expect(stageAllows('admins', false)).toBe(false);
+    expect(stageAllows('all', false)).toBe(true);
+    // Unset env: D9 defaults.
+    expect(liveCapsFromEnv({}, false)).toEqual({ liveAgent: { queue: false, steer: false, conflicts: false }, dialogueFast: false, proEditorV2: false });
+    expect(liveCapsFromEnv({}, true)).toEqual({ liveAgent: { queue: true, steer: false, conflicts: true }, dialogueFast: false, proEditorV2: true });
+    // Env wins: a switch "on" is admins only; everyone needs 'all'; 'off' turns an admins default off.
+    const env = { COMIC_STEER: 'all', COMIC_DIALOGUE_FAST: 'on', COMIC_LIVE_QUEUE: 'off', COMIC_PRO_EDITOR_V2: 'all' };
+    expect(liveCapsFromEnv(env, false)).toEqual({ liveAgent: { queue: false, steer: true, conflicts: false }, dialogueFast: false, proEditorV2: true });
+    expect(liveCapsFromEnv(env, true)).toEqual({ liveAgent: { queue: false, steer: true, conflicts: true }, dialogueFast: true, proEditorV2: true });
+    // Absent caps (DEFAULT_CAPS, an older server) = every new behaviour off; resolveStudioCaps adds nothing on its own.
+    for (const caps of [DEFAULT_CAPS, resolveStudioCaps({ byok: false, isAdmin: true }), null, undefined]) {
+      expect([liveQueueOn(caps), steerOn(caps), conflictGuardOn(caps), dialogueFastOn(caps), proEditorV2On(caps)]).toEqual([false, false, false, false, false]);
+    }
+    for (const key of ['liveAgent', 'dialogueFast', 'proEditorV2']) expect(key in DEFAULT_CAPS, key).toBe(false);
+  });
+
+  it('caps on the client: asCaps keeps well-formed live caps, only a literal true turns a part on, and absent stays absent', () => {
+    const on = asCaps({ ...DEFAULT_CAPS, liveAgent: { queue: true, steer: 'yes', conflicts: true }, dialogueFast: true, proEditorV2: false }) as StudioCaps;
+    expect(on.liveAgent).toEqual({ queue: true, steer: false, conflicts: true });
+    expect(on.dialogueFast).toBe(true);
+    expect(on.proEditorV2).toBe(false);
+    const old = asCaps({ plan: 'free' }) as StudioCaps;
+    for (const key of ['liveAgent', 'dialogueFast', 'proEditorV2']) expect(key in old, key).toBe(false);
+    expect(asCaps({ liveAgent: 'on', dialogueFast: 1 })).toEqual(DEFAULT_CAPS);
+  });
+
+  it('stubs carry their final names: conflicts and dialogue answer "nothing / not understood" until wave 1 fills them', () => {
+    const doc = makeSampleDoc();
+    const op: DocOp = { op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l1', patch: { x: 0.1 } };
+    expect(entityKeys(op)).toEqual([]);
+    expect(collidingKeys([op], [op])).toEqual([]);
+    expect(parseDialogue('make it a whisper', { selected: true })).toEqual({ intents: [], confident: false });
+    expect(resolveLineRef(doc, { speaker: 'Mira' })).toEqual({ status: 'none', note: DIALOGUE_NOT_READY });
+    expect(matchSpeaker(doc, 'Mira')).toEqual({ status: 'none' });
+    expect(placementFor(doc, 'pg_1', 'pg_1_l1', { frame: 'page', cell: 'top-left' })).toBeNull();
+    expect(cellBox({ x: 0, y: 0, w: 1, h: 1 }, 'center')).toBeNull();
+    const intent: DialogueIntent = { act: 'set_kind', target: { selected: true }, kind: 'whisper' };
+    expect(compileIntent(doc, intent, [])).toEqual({ ops: [], label: '', followUps: [], note: DIALOGUE_NOT_READY });
+    // DIALOGUE_ACTS lists exactly the acts of the DialogueIntent union (plan §3 B1).
+    expectTypeOf<DialogueIntent['act']>().toEqualTypeOf<DialogueAct>();
+    expect(new Set(DIALOGUE_ACTS).size).toBe(DIALOGUE_ACTS.length);
+    expect(DIALOGUE_ACTS).toHaveLength(18);
+  });
+
+  it('resolve_conflict through the route: accepted by the parser, refused NOT_AVAILABLE by its stub — nothing changes, $0, no provider call', async () => {
+    const root = '../../server/src';
+    type Json = Record<string, unknown>;
+    const { default: express } = await k3Server<{ default: (() => { use: (...a: unknown[]) => void; listen: (p: number) => import('node:http').Server }) & { json: (o: Json) => unknown } }>('express');
+    const route = await k3Server<{ createComicRouter: (deps: Json) => (...a: unknown[]) => void; parseStreamRequest: (b: unknown) => unknown }>(`${root}/routes/comic.ts`);
+    const fakes = await k3Server<Record<string, (...a: unknown[]) => unknown> & { KEYS: unknown }>(`${root}/comic/orchestrator.fakes.ts`);
+    const { __resetSessionsForTests } = await k3Server<{ __resetSessionsForTests: () => void }>(`${root}/comic/session.ts`);
+    const { CONFLICT_NOT_AVAILABLE } = await k3Server<{ CONFLICT_NOT_AVAILABLE: string }>(`${root}/comic/actions/conflict.ts`);
+    const { registryPriceBook } = await k3Server<{ registryPriceBook: () => unknown }>(`${root}/comic/models/index.ts`);
+
+    const action = { type: 'resolve_conflict', cardId: 'card_cf', itemIds: ['cf_1'], choice: 'theirs' };
+    expect(route.parseStreamRequest({ kind: 'action', action })).toEqual({ kind: 'action', action });
+
+    const store = fakes.fakeDocStore() as { docs: Map<string, { userId: string; doc: ComicDoc }> };
+    const llm = fakes.scriptedLlm() as { calls: unknown[] };
+    const images = fakes.fakeImages() as { calls: unknown[]; generate: unknown };
+    const doc = fakes.plannedDoc() as ComicDoc;
+    const line = doc.pages[0].panels.flatMap((p) => p.lines)[0];
+    const panelId = doc.pages[0].panels.find((p) => p.lines.includes(line))!.id;
+    const card: ConflictCard = { ...conflictCard(), items: [{ ...conflictCard().items[0], where: { pageId: doc.pages[0].id, panelId, lineId: line.id, label: 'page 1' }, mine: line.text, proposed: [{ op: 'line', pageId: doc.pages[0].id, panelId, id: line.id, patch: { text: 'Director text' } }] }] };
+    doc.conversation = [...doc.conversation, { id: 'm_cf', role: 'assistant', text: 'We both changed page 1.', at: 1, cards: [card] }];
+    store.docs.set(doc.id, { userId: 'user-1', doc });
+    const pagesBefore = structuredClone(doc.pages);
+
+    const app = express();
+    app.use(express.json({ limit: '1mb' }));
+    app.use((req: { header: (h: string) => string | undefined; user?: { id: string } }, _res: unknown, next: () => void) => {
+      const user = req.header('x-test-user');
+      if (user) req.user = { id: user };
+      next();
+    });
+    app.use(
+      '/api/comic',
+      route.createComicRouter({
+        store,
+        assets: fakes.fakeAssetStore(),
+        contextDeps: () => ({ keys: fakes.KEYS, llm, images: images.generate, billing: fakes.fakeBilling(), prices: async () => registryPriceBook() }),
+        qualityAccess: async () => ({ ok: true }),
+        capsDeps: { billingEnabled: true, planFor: async () => 'free', isAdminFor: async () => false, accountCeilingFor: async () => 'PG-13' },
+        requireActive: (_req: unknown, _res: unknown, next: () => void) => next(),
+        safety: { cooldownFor: async () => null },
+        usageFor: async () => undefined,
+        fastIntents: false,
+        backfillVariants: false,
+        heartbeatMs: 20
+      })
+    );
+    const server = app.listen(0);
+    try {
+      await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+      const port = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${port}/api/comic/projects/${doc.id}/stream`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-test-user': 'user-1' },
+        body: JSON.stringify({ kind: 'action', action })
+      });
+      expect(res.status).toBe(200);
+      const events = (await res.text())
+        .split('\n\n')
+        .filter((b) => b.trim() && !b.startsWith(':'))
+        .map((b) => JSON.parse(b.split('\n')[1].slice(6)) as K3StudioEvent);
+      expect(events.some((e) => e.type === 'error')).toBe(false);
+      expect(events.at(-1)).toMatchObject({ type: 'done', spentUsd: 0 });
+      const saved = store.docs.get(doc.id)!.doc;
+      const last = saved.conversation.at(-1)!;
+      expect(last).toMatchObject({ role: 'assistant', text: CONFLICT_NOT_AVAILABLE });
+      expect(last.cards?.[0]).toMatchObject({ type: 'notice', text: CONFLICT_NOT_AVAILABLE });
+      expect(saved.pages).toEqual(pagesBefore); // the director's text was NOT applied
+      expect(saved.spend.totalUsd).toBe(0);
+      expect(llm.calls).toHaveLength(0);
+      expect(images.calls).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      __resetSessionsForTests();
+    }
+  }, 30_000);
 });
