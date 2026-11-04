@@ -10,7 +10,7 @@ import { Checkbox, CHECKBOX_BOX, CHECKBOX_INPUT } from './Checkbox';
 import { Progress, PROGRESS_BAR, PROGRESS_TRACK } from './Progress';
 import { FOCUS_RING, FOCUS_RING_FLUSH, SEGMENTED_ITEM, SEGMENTED_TRACK, STATUS_DOT } from './recipes';
 import { nextRovingIndex } from './roving';
-import { expectClasses } from './testUtils';
+import { expectClasses } from './ds.testkit';
 
 const VIEWS = [
   { value: 'scroll', label: 'Scroll' },

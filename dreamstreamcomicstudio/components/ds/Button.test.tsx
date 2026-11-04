@@ -6,7 +6,7 @@ import { cn } from '../../lib/utils';
 import { Button, BUTTON_BASE, BUTTON_SIZE, BUTTON_SIZES, BUTTON_VARIANT, BUTTON_VARIANTS, buttonClasses } from './Button';
 import { IconButton, ICON_BUTTON_SIZE } from './IconButton';
 import { ACCENT_FILL, ACCENT_FILL_HOVER, ACCENT_TEXT, DANGER_FILL, DANGER_FILL_HOVER, DENSITY, FOCUS_RING, ON_ACCENT_TEXT } from './recipes';
-import { expectClasses } from './testUtils';
+import { expectClasses } from './ds.testkit';
 
 describe('Button — Atlas variant × size matrix on the tokens', () => {
   it.each(BUTTON_VARIANTS.flatMap((v) => BUTTON_SIZES.map((s) => [v, s] as const)))('%s × %s renders the base, variant, size and focus classes', (variant, size) => {

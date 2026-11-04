@@ -8,7 +8,7 @@ import { Select, SELECT_CLASSES, SELECT_SIZE } from './Select';
 import { Checkbox } from './Checkbox';
 import { Switch } from './Switch';
 import { FIELD, TONE_TEXT } from './recipes';
-import { expectClasses } from './testUtils';
+import { expectClasses } from './ds.testkit';
 
 describe('Field — label, description and error wired to the control', () => {
   it('names the control, describes it (error first, then help) and marks it invalid while there is an error', () => {

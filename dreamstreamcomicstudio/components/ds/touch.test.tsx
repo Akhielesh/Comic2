@@ -17,7 +17,7 @@ import { Switch } from './Switch';
 import { Slider } from './Slider';
 import { Checkbox } from './Checkbox';
 import { DENSITY } from './recipes';
-import { expectClasses } from './testUtils';
+import { expectClasses } from './ds.testkit';
 
 const TOUCH = 'coarse:min-h-[var(--ds-density-touch)]';
 const TOUCH_SQUARE = 'coarse:min-h-[var(--ds-density-touch)] coarse:min-w-[var(--ds-density-touch)]';
@@ -60,11 +60,16 @@ describe('coarse pointer: 44 px on every interactive primitive', () => {
         <Select aria-label="s" options={[{ value: 'a', label: 'A' }]} />
       </>
     );
-    for (const name of ['i', 't', 's']) {
+    for (const name of ['i', 's']) {
       const el = screen.getByLabelText(name);
       expectClasses(el, TOUCH);
       expect(hasEdge(el), name).toBe(true);
     }
+    // The textarea is at least 64 px everywhere; a coarse min-height of 44 px would LOWER its floor there.
+    const ta = screen.getByLabelText('t');
+    expectClasses(ta, 'min-h-16');
+    expect(ta.className).not.toContain('coarse:min-h-');
+    expect(hasEdge(ta)).toBe(true);
   });
 
   it('Segmented items and tab triggers', () => {

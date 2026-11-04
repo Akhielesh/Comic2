@@ -80,7 +80,8 @@ in `atlas-skin.md`, "The shared constants"):
 - **Choose a colour, never stack two.** One unvariant text colour per class list
   (`danger ? TONE_TEXT.danger : 'text-[var(--ds-ink)]'`); the status-ink guard fails on a stacked pair.
 - **44 px under a coarse pointer** on every interactive control (`DENSITY.coarse` / `coarseSquare`); a
-  control that is small by design (Switch, Checkbox) gets an invisible 44 × 44 hit area instead of growing.
+  control that is small by design (Switch, Checkbox) gets an invisible 44 × 44 hit area instead of growing,
+  and one that is always taller (Textarea's 64 px floor) skips the rule, which would lower its minimum.
 - **Forced colours:** every interactive primitive keeps a 1 px edge (transparent when Atlas draws none),
   which forced-colours mode paints; selected states and progress use `Highlight` there.
 - **Reduced motion:** transitions read the motion tokens; spinners, pills and thumbs hold still or jump.

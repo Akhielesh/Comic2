@@ -32,7 +32,7 @@ import {
   TEXT_3XL,
   TONE_CHIP
 } from './recipes';
-import { expectClasses } from './testUtils';
+import { expectClasses } from './ds.testkit';
 
 describe('Chip, Badge, StatusChip', () => {
   it('Chip: the CHIP shape with each variant, a decorative icon, the label truncating', () => {
