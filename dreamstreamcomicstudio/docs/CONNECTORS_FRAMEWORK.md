@@ -11,6 +11,9 @@ public data (API key) — so connected data feeds three consumers: **chat contex
 > connections** with OAuth/API-key credentials stored (encrypted) per user. The two
 > systems share no tables and no code.
 
+> **Privacy:** content from these accounts never reaches a model endpoint that may log or train on
+> it, and never a free model. See [`DATA_CONNECTORS.md`, "Connected-account privacy and model routing"](./DATA_CONNECTORS.md#connected-account-privacy-and-model-routing-google-limited-use).
+
 Adding a new connector = **implement one interface + register it**. No changes to core
 routing, the DB schema, the sync runner, or the UI shell.
 
