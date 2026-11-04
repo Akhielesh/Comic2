@@ -72,6 +72,15 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     expect(text).toMatch(/explicit prior consent/);
   });
 
+  it('names follow-up suggestions as a purpose, since FollowUpChips sends the last turns after every answer', () => {
+    const section = googleSection();
+    // components/chat/FollowUpChips.tsx posts the last 6 turns (answers included) to /chat/followups,
+    // which runs them through the chat's provider (server/src/routes/chat.ts).
+    expect(textOf(section)).toMatch(/to suggest follow-up questions \(shown under the answer as "You might ask"\)/);
+    const providers = within(section).getByText(/and the AI providers described under AI processing/);
+    expect(textOf(providers)).toMatch(/generate the response you asked for, suggest follow-up questions, and write and index your memory notes/);
+  });
+
   it('names the services the model\'s tools contact, since tool requests can carry connected-account details', () => {
     const section = googleSection();
     const text = textOf(section);
@@ -82,6 +91,9 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     }
     const shareList = within(section).getByText(/to the services the AI model uses while answering you/);
     expect(shareList.tagName).toBe('LI');
+    // read_url falls back to the Jina Reader proxy (server/src/ai/tools/readArticle.ts readViaJina).
+    expect(text).toContain('through the Jina Reader service');
+    expect(textOf(shareList)).toContain('the page-reading service it uses');
   });
 
   it('describes memory as it works: automatic, saved to the account, Gemini-indexed, deleted by email', () => {
@@ -93,6 +105,15 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     // Settings → Memory only edits the synced list (services/chatStorage.ts), not user_memories.
     expect(text).not.toMatch(/turn off memory in Chat Studio/i);
     expect(text).not.toMatch(/memory notes under Settings → Memory\./);
+  });
+
+  it('says memory goes with every later chat, not only matching ones', () => {
+    const text = textOf(googleSection());
+    // The whole Settings → Memory list rides on every request (AIChatPlatform composeSystemPrompt), and
+    // buildUserMemoryBlock adds the nearest or most recent saved notes with no relevance cutoff.
+    expect(text).toMatch(/included in every request Chat Studio sends to the AI model in your later chats, not only the ones they relate to/);
+    expect(text).toMatch(/the full list shown in Settings → Memory in Chat Studio, plus up to eight of the notes saved to your account/);
+    expect(text).not.toMatch(/notes that match a later message/);
   });
 
   it('carries the YouTube API Services notice and links the Google Privacy Policy', () => {

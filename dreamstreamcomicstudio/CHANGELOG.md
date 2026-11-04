@@ -95,10 +95,13 @@ All notable user-facing changes. Format loosely follows
 - **The privacy policy now covers connected Google accounts (2026-11-04):** a new section,
   **Google User Data** (`/?view=privacy#google-user-data`), says what DreamStream reads from
   Gmail, Drive, Calendar, Sheets and YouTube and why, what is sent to the AI model that answers
-  you and which providers that can be, which search, lookup and reference services the model's
-  tools can contact, how chat memory notes are kept (and that deleting the saved copy currently
-  takes an email), who else receives it, how tokens are protected, how long it is kept, and how
-  to disconnect in DreamStream or remove access at myaccount.google.com/connections. It
+  you and which providers that can be (including for the "You might ask" follow-up
+  suggestions), which search, lookup and reference services the model's tools can contact
+  (including the Jina Reader service used when a page can't be read directly), how chat memory
+  notes are kept and that they go with every later chat (and that deleting the saved copy
+  currently takes an email), who else receives it, how tokens are protected, how long it is
+  kept, and how to disconnect in DreamStream or remove access at
+  myaccount.google.com/connections. It
   includes Google's Limited Use statements, the YouTube API Services notice with a link to the
   Google Privacy Policy, a privacy contact (privacy@dreamstreamstudio.ai), and a November 4,
   2026 date. The page follows the light/dark theme and jumps straight to a section from a `#`
