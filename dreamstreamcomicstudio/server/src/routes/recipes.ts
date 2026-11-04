@@ -6,7 +6,15 @@
 // the chat route, so a recipe run is metered and gated exactly like a normal chat.
 
 import { Router } from 'express';
-import { catalogHoldFloorUsd, chatPricedModels, preparedInputTokens, prepareChat, settleSpentOrRelease } from './chat.js';
+import {
+  catalogHoldFloorUsd,
+  chatPricedModels,
+  connectorContentEntered,
+  connectorSwarmHoldUsd,
+  preparedInputTokens,
+  prepareChat,
+  settleSpentOrRelease
+} from './chat.js';
 import { safeClientMessage } from '../ai/providers/errors.js';
 import { logger } from '../lib/logger.js';
 import { TEXT_FALLBACK } from '../ai/autoRouter.js';
@@ -16,6 +24,14 @@ import { sanitizeRecipe, resolveRecipe } from '../ai/recipes/validate.js';
 import { runRecipe } from '../ai/recipes/runRecipe.js';
 import { distillRecipe } from '../ai/recipes/learning.js';
 import { listRecipes, getRecipe, saveRecipe, deleteRecipe } from '../services/recipes.js';
+import {
+  CONNECTED_DATA_FREE_MODEL_CODE,
+  connectedDataFreeModelMessage,
+  isFreeModelId,
+  messagesCarryConnectorData
+} from '../ai/privacy/connectorData.js';
+import { connectorEgressProbe, runWithConnectorPrivacy } from '../ai/privacy/scope.js';
+import { recordConnectorReply } from '../ai/privacy/replyProvenance.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -155,7 +171,11 @@ recipesRouter.post('/run', async (req, res, next) => {
     const recipeChars = (recipe.instructions?.length || 0) + (recipe.prompt?.length || 0) + JSON.stringify(values).length;
     const inputTokens = preparedInputTokens({ ...p, tools: [] }, recipeChars);
     const priced = chatPricedModels(p);
-    const floorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, RECIPE_HOLD_OUTPUT_TOKENS);
+    const baseFloorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], inputTokens, RECIPE_HOLD_OUTPUT_TOKENS);
+    // A swarm recipe of a connector run puts its planner and agents on a paid model (the swarm's
+    // privacy rule, ai/agents/orchestrator.ts), so its hold adds them, as /api/chat/swarm does.
+    const swarmUsd = recipe.swarm ? await connectorSwarmHoldUsd(p, inputTokens) : undefined;
+    const floorUsd = swarmUsd ? Number(((baseFloorUsd || 0) + swarmUsd).toFixed(6)) : baseFloorUsd;
     reserve = req.user?.id
       ? await reserveForOperation({
           req,
@@ -169,7 +189,7 @@ recipesRouter.post('/run', async (req, res, next) => {
           ...(floorUsd ? { estimateFloorUsd: floorUsd } : {}),
           provider: p.resolved.provider,
           stage: 'chat',
-          metadata: { route: req.path, model: p.model, recipe: recipe.id }
+          metadata: { route: req.path, model: p.model, recipe: recipe.id, ...(swarmUsd ? { connectorSwarmHoldUsd: swarmUsd } : {}) }
         })
       : null;
     if (reserve && 'details' in reserve) {
@@ -193,7 +213,12 @@ recipesRouter.post('/run', async (req, res, next) => {
   // would erase the run's real spend — see routes/chat.ts POST /).
   let settleStarted = false;
   try {
-    const result = await runRecipe({
+    // Connected-account privacy (ai/privacy): prepareChat's decision covers the whole run (every
+    // model call denies data collection; no free model takes it), even when the request carried no
+    // clientContext for runRecipe to read it from. The probe learns whether connector content was
+    // actually sent, which decides the provenance mark below.
+    const egress = connectorEgressProbe();
+    const result = await runWithConnectorPrivacy(Boolean(p.connectorPrivacy?.connectorData), () => runRecipe({
       recipe,
       values,
       provider: p.resolved.provider,
@@ -212,7 +237,7 @@ recipesRouter.post('/run', async (req, res, next) => {
         else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
       },
       onProgress: (trace) => send('trace', trace)
-    });
+    }), egress);
 
     settleStarted = true;
     const settled =
@@ -242,6 +267,13 @@ recipesRouter.post('/run', async (req, res, next) => {
       activities: result.activities,
       usage: result.usage
     };
+    // The chat route's rule (connectorContentEntered): a reply connected content actually entered
+    // (sent to a model, a connector tool ran, or the history carried it) says so, and is recorded
+    // in the provenance store so a later free turn whose history carries it is refused.
+    if (connectorContentEntered(p, result, egress)) {
+      payload.connectorData = true;
+      void recordConnectorReply(p.userId, result.text);
+    }
     const finalPayload =
       reserve && reserve.allowed ? attachBillingToPayload(payload, reserve.reservation, settled) : payload;
     send('final', finalPayload);
@@ -272,6 +304,7 @@ recipesRouter.post('/distill', async (req, res, next) => {
   let p: Extract<Awaited<ReturnType<typeof prepareChat>>, { prepared: unknown }>['prepared'];
   let goal: string;
   let transcript: string;
+  let transcriptConnectorData = false;
   let reserve: Awaited<ReturnType<typeof reserveForOperation>> | null;
   try {
     const prep = await prepareChat(req);
@@ -286,6 +319,17 @@ recipesRouter.post('/distill', async (req, res, next) => {
     transcript = typeof body.transcript === 'string' ? body.transcript : '';
     if (!goal || !transcript) {
       return res.status(400).json({ error: { message: 'distill needs a goal and a transcript.', code: 'DISTILL_INVALID' } });
+    }
+
+    // Connected-account privacy: the transcript is sent to the model, so connected content in it
+    // (a connector tool's output, the connector context block) makes the reflection a connector
+    // call. A free reflection never receives it: refused before anything is reserved or sent.
+    // "Free" is prepareChat's own decision (Free only with a pinned paid model is a paid turn).
+    transcriptConnectorData = messagesCarryConnectorData([{ role: 'user', content: transcript }]);
+    const freeDistill = p.connectorPrivacy ? p.connectorPrivacy.freeTurn : Boolean(p.noPaidRetry) || isFreeModelId(p.model);
+    if (transcriptConnectorData && freeDistill) {
+      const freeOnly = p.connectorPrivacy ? p.connectorPrivacy.freeOnly : p.noPaidRetry === true;
+      return res.status(409).json({ error: { message: connectedDataFreeModelMessage(freeOnly), code: CONNECTED_DATA_FREE_MODEL_CODE } });
     }
 
     // Sized from what the reflection sends (the goal + the transcript, which distillRecipe caps
@@ -316,17 +360,21 @@ recipesRouter.post('/distill', async (req, res, next) => {
 
   let settleStarted = false;
   try {
-    const result = await distillRecipe({
-      goal,
-      transcript,
-      provider: p.resolved.provider,
-      apiKey: p.resolved.apiKey,
-      model: p.model,
-      clientContext: p.clientContext,
-      fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
-      ...(p.noPaidRetry ? { noPaidRetry: true } : {}),
-      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-    });
+    // Every model call of the reflection denies data collection (no free model) when the request or
+    // the transcript carries connected content.
+    const result = await runWithConnectorPrivacy(Boolean(p.connectorPrivacy?.connectorData) || transcriptConnectorData, () =>
+      distillRecipe({
+        goal,
+        transcript,
+        provider: p.resolved.provider,
+        apiKey: p.resolved.apiKey,
+        model: p.model,
+        clientContext: p.clientContext,
+        fallbackModel: p.noPaidRetry ? undefined : TEXT_FALLBACK,
+        ...(p.noPaidRetry ? { noPaidRetry: true } : {}),
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
 
     if (reserve && reserve.allowed) {
       settleStarted = true;

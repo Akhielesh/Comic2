@@ -113,6 +113,14 @@ provider table, reply provenance).
   the `runChat` result), a connector tool ran, or the history already carried connector content. Deny is still
   decided up front for every turn that may carry it.
 - Title, memory and follow-up helpers send the flag for a user with any connection.
+- Recipes (`routes/recipes.ts`): `/run` runs the whole recipe inside `prepareChat`'s decision
+  (also when the request carries no `clientContext` for `runRecipe` to read it from) and marks its
+  reply by the chat route's rule (`connectorContentEntered`: `connectorData: true` in the `final`
+  event, plus the provenance store). A swarm recipe's hold adds its paid planner and agents
+  (`connectorSwarmHoldUsd`). `/distill` sends the transcript to the model, so a transcript that
+  carries connector output (a connector tool's output, the RAG block heading) makes the reflection a
+  connector call; a free reflection of one (`prepareChat`'s free-turn decision: Free only without a
+  pinned paid model, a pinned free model) is refused with the same 409 before anything is reserved.
 - If no endpoint that meets the policy can serve the model, the user is told so plainly
   (`CONNECTED_DATA_NO_PRIVATE_ENDPOINT`), never retried on a free model. A capacity failure of the
   shared key (spend cap, out of credits) says so without the generic "switch to a free model"

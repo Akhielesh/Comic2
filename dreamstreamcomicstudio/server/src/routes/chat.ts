@@ -1003,7 +1003,7 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
  *   - a connector tool ran (its tool events name one);
  *   - the history already carried connector content (markers, or the provenance store).
  */
-const connectorContentEntered = (
+export const connectorContentEntered = (
   p: PreparedChat,
   result: { toolEvents?: { tool?: unknown }[]; connectorContextUsed?: unknown },
   probe?: ConnectorEgressProbe
