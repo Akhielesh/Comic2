@@ -2,7 +2,9 @@
 // The chat engine's part in connected-account privacy (ai/privacy):
 //   - long-term memory: `userMemoryExcludeConnected` reaches the memory lookup as
 //     `excludeConnected`, so a free-model turn of a connected user gets only the memory that was
-//     not distilled from connected content (services/userMemory.ts).
+//     not distilled from connected content (services/userMemory.ts);
+//   - the connector RAG block: the result says `connectorContextUsed: true` exactly when the block
+//     was added to the prompt, which routes/chat.ts reads to mark the reply as connected content.
 // No network: the provider is a fake behind the gateway; memory and the connector RAG block are spies.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GenerateTextRequest, GenerateTextResult } from './providers/types.js';
@@ -29,6 +31,13 @@ const memory = vi.hoisted(() => ({
   )
 }));
 vi.mock('../services/userMemory.js', () => ({ buildUserMemoryBlock: memory.build }));
+const rag = vi.hoisted(() => ({ block: null as string | null, calls: 0 }));
+vi.mock('../connectors/retrieval.js', () => ({
+  buildConnectorContextBlock: async () => {
+    rag.calls += 1;
+    return rag.block;
+  }
+}));
 
 const { runChat } = await import('./chat.js');
 
@@ -45,6 +54,8 @@ const systemOf = (req: GenerateTextRequest) => String(req.messages[0]?.role === 
 beforeEach(() => {
   fake.requests = [];
   memory.build.mockClear();
+  rag.block = null;
+  rag.calls = 0;
 });
 
 describe('runChat: memory without the rows distilled from connected content', () => {
@@ -66,5 +77,39 @@ describe('runChat: memory without the rows distilled from connected content', ()
   it('no memory at all when userMemory is off', async () => {
     await runChat({ ...base, userMemory: false, userMemoryExcludeConnected: true });
     expect(memory.build).not.toHaveBeenCalled();
+  });
+});
+
+describe('runChat: connectorContextUsed', () => {
+  const RAG = '\n\n## Connected account data\n- Gmail: Dana asked to move the launch to Friday';
+
+  it('is true when the connector context block was added to the prompt', async () => {
+    rag.block = RAG;
+    const r = await runChat({ ...base, userMemory: false, connectorContext: true });
+    expect(systemOf(fake.requests[0])).toContain('## Connected account data');
+    expect(r.connectorContextUsed).toBe(true);
+  });
+
+  it('is absent when the lookup found nothing, or connector context was off', async () => {
+    const empty = await runChat({ ...base, userMemory: false, connectorContext: true });
+    expect(rag.calls).toBe(1);
+    expect(empty).not.toHaveProperty('connectorContextUsed');
+
+    rag.block = RAG;
+    const off = await runChat({ ...base, userMemory: false });
+    expect(rag.calls).toBe(1);
+    expect(off).not.toHaveProperty('connectorContextUsed');
+  });
+
+  it('is reported on the JSON tool-protocol path too (non-OpenRouter providers)', async () => {
+    rag.block = RAG;
+    const r = await runChat({
+      ...base,
+      provider: 'nvidia',
+      userMemory: false,
+      connectorContext: true,
+      tools: [{ name: 'web_search', description: 'search', parameters: { type: 'object', properties: {} }, execute: async () => ({ content: 'x' }) }]
+    });
+    expect(r.connectorContextUsed).toBe(true);
   });
 });

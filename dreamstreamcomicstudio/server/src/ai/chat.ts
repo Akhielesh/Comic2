@@ -599,6 +599,11 @@ type RunChatResult = {
   images?: ChatToolImage[];
   artifacts?: ChatArtifact[];
   notices?: CapabilityNotice[];
+  /**
+   * The connector RAG block (the user's connected-account content) was added to the system prompt
+   * of this turn. routes/chat.ts reads it to mark the reply as connected content (ai/privacy).
+   */
+  connectorContextUsed?: true;
 };
 
 /** The latest user message flattened to text (the usage record's prompt seed). */
@@ -655,6 +660,7 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
   }
   // RAG over the user's connected ACCOUNT connectors (Gmail/Drive/…). Same fail-open,
   // time-boxed contract as memory: a slow or failing lookup just means "no connector context".
+  let connectorContextUsed = false;
   if (params.userId && params.connectorContext) {
     const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
     const connectorQuery =
@@ -667,7 +673,10 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
       buildConnectorContextBlock(params.userId, connectorQuery).catch(() => null),
       new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 2_500))
     ]);
-    if (connectorBlock) systemContent += connectorBlock;
+    if (connectorBlock) {
+      systemContent += connectorBlock;
+      connectorContextUsed = true;
+    }
   }
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
@@ -957,7 +966,8 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
       toolEvents: toolEvents.length ? toolEvents : undefined,
       images: images.length ? images : undefined,
       artifacts: artifacts.length ? artifacts : undefined,
-      notices: notices.length ? notices : undefined
+      notices: notices.length ? notices : undefined,
+      ...(connectorContextUsed ? { connectorContextUsed: true as const } : {})
     };
   }
 
@@ -1126,7 +1136,8 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
     toolEvents: toolEvents.length ? toolEvents : undefined,
     images: images.length ? images : undefined,
     artifacts: artifacts.length ? artifacts : undefined,
-    notices: notices.length ? notices : undefined
+    notices: notices.length ? notices : undefined,
+    ...(connectorContextUsed ? { connectorContextUsed: true as const } : {})
   };
 };
 

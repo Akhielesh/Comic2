@@ -106,7 +106,8 @@ provider table, reply provenance).
 - The reply carries `connectorData: true`, and is recorded in the provenance store, **only when
   connected content actually entered it**: a model call of the turn really sent the connector
   context block or a connector tool's call or output (the provider reports it to the turn's egress
-  probe), a connector tool ran, or the history already carried connector content. Deny is still
+  probe), the engine added the connector context block to the prompt (`connectorContextUsed` on
+  the `runChat` result), a connector tool ran, or the history already carried connector content. Deny is still
   decided up front for every turn that may carry it.
 - Title, memory and follow-up helpers send the flag for a user with any connection.
 - If no endpoint that meets the policy can serve the model, the user is told so plainly

@@ -998,9 +998,10 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
  * turn that MAY carry it (a connected user's every paid turn); the provenance mark is narrower:
  *   - a model call of the turn really sent connector content (the egress probe: the connector
  *     context block, a connector tool's call or output — ai/privacy/scope.ts);
+ *   - the engine added the connector context block to the prompt (`connectorContextUsed`, ai/chat.ts:
+ *     known where it happens, without relying on the provider's egress report);
  *   - a connector tool ran (its tool events name one);
  *   - the history already carried connector content (markers, or the provenance store).
- * Wave note: ai/chat.ts may also report `connectorContextUsed` on its result; it is honoured here.
  */
 const connectorContentEntered = (
   p: PreparedChat,
