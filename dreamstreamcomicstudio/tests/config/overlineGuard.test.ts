@@ -15,15 +15,38 @@
  * spans and wherever it lives (an attribute, a constant): the files are read with TypeScript's parser
  * (tests/config/classLists.ts), so comments, JSX text and code are never mistaken for class names.
  * It also fails when a studio file imports the pre-Atlas `LABEL` (10 px, 0.05em) instead of OVERLINE.
+ *
+ * The rest of the app (DS-0, master plan §1.4): both checks run over every other scanned file —
+ * components/** outside Comic Studio, App.tsx and qa/** (tests, specs and live/** excluded;
+ * tests/config/classLists.ts SCANNED_ROOTS) — as a RATCHET against tests/config/baselines/overline.json,
+ * per file and per token (`hand-rolled-eyebrow`, `LABEL-import`): a file or token not listed must count
+ * 0, above its entry fails, below fails until the entry is lowered
+ * (`UPDATE_BASELINES=1 npx vitest run tests/config/overlineGuard.test.ts`). The one allowlist below
+ * serves both parts.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { findHandRolledOverlines, matchPinned } from './classLists';
+import {
+  type Allowlist,
+  type Counts,
+  type TokenHit,
+  compareToBaseline,
+  countTokens,
+  findHandRolledOverlines,
+  listScannedFiles,
+  matchPinned,
+  PINNED_DIR,
+  ratchet,
+  readBaseline,
+  scanTree
+} from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCANNED_DIR = 'components/comicstudio';
+const GUARD = 'overline';
+const TEST_FILE = 'tests/config/overlineGuard.test.ts';
 const SOURCE_FILE = /\.(tsx?|jsx?|mjs)$/;
 
 /**
@@ -60,11 +83,17 @@ const ALLOWLIST: Record<string, { lines: string[]; reason: string }> = {
     // The shot type ("CLOSE-UP") written inside a wireframe panel, scaled with the page thumbnail
     // (em-sized): content of the drawn wireframe, like the panel number beside it.
     reason: 'wireframe shot labels drawn inside the page thumbnail at its scale'
+  },
+  'components/chat/studioDesign.ts': {
+    lines: ["export const OVERLINE = 'text-[11px] font-semibold leading-4 tracking-[0.12em] uppercase text-[var(--ds-muted)]';"],
+    // The recipe itself: the one place the eyebrow's classes are written down (the pre-Atlas LABEL
+    // beside it is not pinned; it stays in the ratchet until DS-10 retires it).
+    reason: 'the OVERLINE recipe definition, the sanctioned home of the eyebrow classes'
   }
 };
 
-/** A studio file importing the pre-Atlas LABEL recipe from studioDesign. */
-const IMPORTS_LEGACY_LABEL = /import\s*\{[^}]*\bLABEL\b[^}]*\}\s*from\s*['"][^'"]*chat\/studioDesign['"]/;
+/** A file importing the pre-Atlas LABEL recipe from studioDesign (`../../chat/studioDesign`, or `./studioDesign` inside components/chat). */
+const IMPORTS_LEGACY_LABEL = /import\s*\{[^}]*\bLABEL\b[^}]*\}\s*from\s*['"][^'"]*\bstudioDesign(?:\.js|\.ts)?['"]/;
 const stripComments = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[\s;{}(),])\/\/.*$/gm, '$1');
 
 function listSourceFiles(dir: string): string[] {
@@ -144,6 +173,10 @@ describe('overline guard (components/comicstudio/**)', () => {
     expect(IMPORTS_LEGACY_LABEL.test("import { HEADING, OVERLINE } from '../../chat/studioDesign';")).toBe(false);
     // A file's own local LABEL constant is not the studioDesign one.
     expect(IMPORTS_LEGACY_LABEL.test("const LABEL = 'text-[11.5px]';\nimport { cx } from './ui';")).toBe(false);
+    // Inside components/chat the recipe module is a sibling.
+    expect(IMPORTS_LEGACY_LABEL.test("import { PILL, LABEL, HOVER_LIFT } from './studioDesign';")).toBe(true);
+    expect(IMPORTS_LEGACY_LABEL.test("import {\n  HAIRLINE,\n  LABEL\n} from '../studioDesign';")).toBe(true);
+    expect(IMPORTS_LEGACY_LABEL.test("import { LABEL } from './labels';")).toBe(false);
   });
 
   it('an allowlist entry permits its pinned lines only: a new eyebrow cannot take an allowed one\'s place', () => {
@@ -175,7 +208,9 @@ describe('overline guard (components/comicstudio/**)', () => {
       expect(result.stale, `${rel}: allowlisted lines no longer hand-rolled (${ALLOWLIST[rel]?.reason})`).toEqual([]);
     }
     expect(offenders, 'An eyebrow label is OVERLINE (components/chat/studioDesign.ts), keeping the element, its margins and its copy.').toEqual([]);
-    for (const file of Object.keys(ALLOWLIST)) expect(seen.has(file), `${file} is allowlisted but no longer exists`).toBe(true);
+    for (const file of Object.keys(ALLOWLIST).filter((f) => f.startsWith(`${SCANNED_DIR}/`))) {
+      expect(seen.has(file), `${file} is allowlisted but no longer exists`).toBe(true);
+    }
   });
 
   it('no studio file imports the pre-Atlas LABEL recipe (10 px, 0.05em); eyebrows read OVERLINE', () => {
@@ -183,5 +218,65 @@ describe('overline guard (components/comicstudio/**)', () => {
       .filter((f) => IMPORTS_LEGACY_LABEL.test(stripComments(readFileSync(f, 'utf8'))))
       .map(relative);
     expect(legacy).toEqual([]);
+  });
+});
+
+/** The allowlist as ratchet pins: each pinned line is a `hand-rolled-eyebrow` use. */
+const RATCHET_ALLOWLIST: Allowlist = Object.fromEntries(
+  Object.entries(ALLOWLIST).map(([rel, { lines, reason }]) => [rel, { uses: lines.map((line) => ({ token: 'hand-rolled-eyebrow', line })), reason }])
+);
+
+/**
+ * Every overline use in one source as ratchet hits: each hand-rolled eyebrow (`hand-rolled-eyebrow`,
+ * keyed by its snippet as the pins read it) and an import of the pre-Atlas LABEL (`LABEL-import`).
+ */
+export function overlineHits(source: string): TokenHit[] {
+  const hits: TokenHit[] = findHandRolledOverlines(source).map((h) => ({ line: h.line, token: 'hand-rolled-eyebrow', match: 'uppercase', text: h.snippet }));
+  if (IMPORTS_LEGACY_LABEL.test(stripComments(source))) {
+    const at = IMPORTS_LEGACY_LABEL.exec(source);
+    const line = at ? source.slice(0, at.index).split('\n').length : 1;
+    hits.push({ line, token: 'LABEL-import', match: 'LABEL', text: (source.split('\n')[line - 1] ?? '').trim() });
+  }
+  return hits;
+}
+
+describe('overline guard — the rest of the app (ratchet)', () => {
+  const { baseline } = readBaseline(GUARD);
+  const PLANTED = 'components/__planted__/Fixture.tsx';
+
+  it('a hand-rolled eyebrow or a LABEL import planted in any scanned file fails, naming the file and the token', () => {
+    const planted: Array<[string, string]> = [
+      ['export const Fixture = () => <p className="text-[11px] font-semibold uppercase tracking-wider">Recent</p>;\n', 'hand-rolled-eyebrow'],
+      ["import { LABEL } from './chat/studioDesign';\nexport const Fixture = () => <p className={LABEL}>Recent</p>;\n", 'LABEL-import']
+    ];
+    for (const [src, token] of planted) {
+      const actual: Counts = { ...baseline, [PLANTED]: countTokens(overlineHits(src)) };
+      expect(compareToBaseline(actual, baseline, TEST_FILE), src).toEqual({
+        over: [`${PLANTED}  ${token}: 1, baseline 0 — a file or token the baseline does not list must count 0`],
+        under: []
+      });
+    }
+  });
+
+  it('above a file’s baseline fails; below it fails until the baseline is lowered', () => {
+    const [rel, tokens] = Object.entries(baseline)[0];
+    const [token, n] = Object.entries(tokens)[0];
+    expect(compareToBaseline({ ...baseline, [rel]: { ...tokens, [token]: n + 1 } }, baseline, TEST_FILE).over).toEqual([
+      `${rel}  ${token}: ${n + 1}, baseline ${n} — 1 new use`
+    ]);
+    expect(compareToBaseline({ ...baseline, [rel]: { ...tokens, [token]: n - 1 } }, baseline, TEST_FILE).under).toEqual([
+      `${rel}  ${token}: ${n - 1}, baseline ${n} — the count fell: lower the baseline to ${n - 1} (UPDATE_BASELINES=1 npx vitest run ${TEST_FILE}) so the gain is kept`
+    ]);
+  });
+
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/overline.json exactly', () => {
+    const files = listScannedFiles({ exclude: [PINNED_DIR] });
+    expect(files.length).toBeGreaterThan(200);
+    const { counts, stale } = scanTree(files, (_rel, source) => overlineHits(source), RATCHET_ALLOWLIST);
+    expect(stale.filter((s) => !s.startsWith(`${SCANNED_DIR}/`))).toEqual([]);
+    const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
+    expect(problems).toEqual([]);
+    expect(over, 'A new hand-rolled eyebrow (or LABEL import): an eyebrow label is OVERLINE (components/chat/studioDesign.ts).').toEqual([]);
+    expect(under, 'Hand-rolled eyebrows were removed: lower the baseline so they cannot come back.').toEqual([]);
   });
 });

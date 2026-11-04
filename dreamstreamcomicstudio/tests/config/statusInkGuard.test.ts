@@ -29,16 +29,40 @@
  * Content colours — lettering, balloon and caption swatches, user-chosen colours, comic art, colour
  * pickers, brand illustration — are inline styles or hex values, never Tailwind hue classes, so they
  * need no entry; one that ever becomes a hue class is allowlisted here with its reason.
+ *
+ * The rest of the app (DS-0, master plan §1.4): the same three checks run over every other scanned file
+ * — components/** outside Comic Studio, App.tsx and qa/** (tests, specs and live/** excluded;
+ * tests/config/classLists.ts SCANNED_ROOTS) — as a RATCHET against tests/config/baselines/statusInk.json,
+ * per file and per token (each raw hue class as written, `stacked-inks`, `white-on-light-fill`): a file
+ * or token not listed must count 0, above its entry fails, below fails until the entry is lowered
+ * (`UPDATE_BASELINES=1 npx vitest run tests/config/statusInkGuard.test.ts`). The one allowlist below
+ * serves both: Comic Studio's pins, and any data-viz or content exemption elsewhere.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
-import { classListsOf, findCompetingInks, matchPinned, textColours } from './classLists';
+import {
+  type Counts,
+  type TokenHit,
+  classListsOf,
+  compareToBaseline,
+  countTokens,
+  findCompetingInks,
+  listScannedFiles,
+  matchPinned,
+  PINNED_DIR,
+  ratchet,
+  readBaseline,
+  scanTree,
+  textColours
+} from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCANNED_DIR = 'components/comicstudio';
+const GUARD = 'statusInk';
+const TEST_FILE = 'tests/config/statusInkGuard.test.ts';
 const SOURCE_FILE = /\.(tsx?|jsx?|mjs)$/;
 
 /**
@@ -67,10 +91,18 @@ const useKey = (u: { token: string; line: string }) => `${u.token}  @  ${u.line}
 
 /** A light warm fill (amber / yellow / lime 50–500, any opacity) that white text and icons fail on. */
 const LIGHT_WARM_FILL = /^bg-(?:amber|yellow|lime)-(?:50|[1-5]00)(?:\/[\d.[\]]+)?$/;
+/** A class list that puts white text or an icon on a light warm fill. */
+const whiteOnLightFill = (classes: string) => {
+  const tokens = classes.split(/[\s'"`]+/);
+  return tokens.includes('text-white') && tokens.some((t) => LIGHT_WARM_FILL.test(t));
+};
 
 const HUES = 'red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose';
-/** A raw hue text colour: any variant prefix (`dark:`, `hover:`, `group-hover:`, `[&_svg]:`), any step, any opacity. */
-const RAW_STATUS_INK = new RegExp(String.raw`(?<![\w-])(?:[\w\-[\]&:()>.*]+:)?text-(?:${HUES})-\d{2,3}(?:\/\d+|\/\[[^\]]+\])?(?![\w-])`, 'g');
+/**
+ * A raw hue text colour: any variant prefix (`dark:`, `hover:`, `group-hover:`, `group-hover/btn:`,
+ * `[&_svg]:`), any step, any opacity.
+ */
+const RAW_STATUS_INK = new RegExp(String.raw`(?<![\w-])(?:[\w\-[\]&:()>.*/@]+:)?text-(?:${HUES})-\d{2,3}(?:\/\d+|\/\[[^\]]+\])?(?![\w-])`, 'g');
 
 /** Comments blanked out (line numbers kept), exactly as Atlas's guard strips them. */
 function stripComments(source: string): string {
@@ -123,6 +155,7 @@ describe('status ink guard (components/comicstudio/**)', () => {
       'text-sky-700/80',
       'text-rose-500/[0.9]',
       '[&_svg]:text-orange-500',
+      'group-hover/btn:text-red-500',
       'text-emerald-800'
     ];
     for (const token of flagged) {
@@ -186,7 +219,9 @@ describe('status ink guard (components/comicstudio/**)', () => {
       offenders,
       'Status text and icons read TONE_TEXT / STATUS_INK (components/chat/studioDesign.ts) and their tint TONE_CHIP / STATUS_SURFACE; a raw hue ignores the skin and is unreadable in at least one theme.'
     ).toEqual([]);
-    for (const file of Object.keys(ALLOWLIST)) expect(seen.has(file), `${file} is allowlisted but no longer exists`).toBe(true);
+    for (const file of Object.keys(ALLOWLIST).filter((f) => f.startsWith(`${SCANNED_DIR}/`))) {
+      expect(seen.has(file), `${file} is allowlisted but no longer exists`).toBe(true);
+    }
   });
 
   it('recognises a tone or an emphasis stacked on another text colour, and passes one chosen against it', () => {
@@ -236,8 +271,7 @@ describe('status ink guard (components/comicstudio/**)', () => {
     for (const file of listSourceFiles(path.join(ROOT, SCANNED_DIR))) {
       const rel = path.relative(ROOT, file).split(path.sep).join('/');
       for (const list of classListsOf(readFileSync(file, 'utf8'))) {
-        const tokens = list.classes.split(/[\s'"`]+/);
-        if (tokens.includes('text-white') && tokens.some((t) => LIGHT_WARM_FILL.test(t))) offenders.push(`${rel}:${list.line}`);
+        if (whiteOnLightFill(list.classes)) offenders.push(`${rel}:${list.line}`);
       }
     }
     expect(offenders).toEqual([]);
@@ -253,5 +287,85 @@ describe('status ink guard (components/comicstudio/**)', () => {
       offenders,
       'cx() joins, it does not merge: take the ink out of the shared constant and CHOOSE it (danger ? TONE_TEXT.danger : \'text-[var(--ds-ink)]\'), as GhostButton does.'
     ).toEqual([]);
+  });
+});
+
+/**
+ * Every status-ink use in one source as ratchet hits: each raw hue class as written (variant and
+ * opacity kept, as the pins read it), each class list that stacks two text colours (`stacked-inks`) and
+ * each that puts white on a light warm fill (`white-on-light-fill`).
+ */
+export function statusInkHits(source: string): TokenHit[] {
+  const lines = source.split('\n');
+  const at = (line: number) => (lines[line - 1] ?? '').trim();
+  return [
+    ...findRawStatusInk(source).map((h) => ({ line: h.line, token: h.token, match: h.token, text: h.text })),
+    ...findCompetingInks(source, design).map((c) => ({ line: c.line, token: 'stacked-inks', match: c.colours.join(' vs '), text: at(c.line) })),
+    ...classListsOf(source)
+      .filter((l) => whiteOnLightFill(l.classes))
+      .map((l) => ({ line: l.line, token: 'white-on-light-fill', match: 'text-white', text: at(l.line) }))
+  ];
+}
+
+describe('status ink guard — the rest of the app (ratchet)', () => {
+  const { baseline } = readBaseline(GUARD);
+  const PLANTED = 'components/__planted__/Fixture.tsx';
+
+  it('names each kind of use with its own token', () => {
+    const src =
+      `import { TONE_TEXT } from './chat/studioDesign';\n` +
+      `const BTN = 'px-2 text-[var(--ds-ink)]';\n` +
+      `export const A = () => <><p className="text-sm dark:text-amber-300 text-red-600/80">x</p>\n` +
+      `<b className={cx(BTN, TONE_TEXT.danger)}>y</b>\n` +
+      `<i className="bg-amber-400 text-white">z</i></>;\n`;
+    expect(statusInkHits(src).map((h) => [h.line, h.token])).toEqual([
+      [3, 'dark:text-amber-300'],
+      [3, 'text-red-600/80'],
+      [4, 'stacked-inks'],
+      [5, 'white-on-light-fill']
+    ]);
+  });
+
+  it('a raw hue, a stacked ink or white on amber planted in any scanned file fails, naming the file and the token', () => {
+    const planted: Array<[string, string]> = [
+      ['<p className="text-emerald-600">Saved</p>', 'text-emerald-600'],
+      ["<p className={cx('text-[var(--ds-muted)]', on && 'text-[var(--ds-ink)]')}>x</p>", 'stacked-inks'],
+      ['<span className="bg-yellow-300 text-white">New</span>', 'white-on-light-fill']
+    ];
+    for (const [jsx, token] of planted) {
+      const src = `export const Fixture = () => ${jsx};\n`;
+      const actual: Counts = { ...baseline, [PLANTED]: countTokens(statusInkHits(src)) };
+      expect(compareToBaseline(actual, baseline, TEST_FILE), jsx).toEqual({
+        over: [`${PLANTED}  ${token}: 1, baseline 0 — a file or token the baseline does not list must count 0`],
+        under: []
+      });
+    }
+  });
+
+  it('above a file’s baseline fails; below it fails until the baseline is lowered', () => {
+    const [rel, tokens] = Object.entries(baseline)[0];
+    const [token, n] = Object.entries(tokens)[0];
+    expect(compareToBaseline({ ...baseline, [rel]: { ...tokens, [token]: n + 1 } }, baseline, TEST_FILE).over).toEqual([
+      `${rel}  ${token}: ${n + 1}, baseline ${n} — 1 new use`
+    ]);
+    expect(compareToBaseline({ ...baseline, [rel]: { ...tokens, [token]: n - 1 } }, baseline, TEST_FILE).under).toEqual([
+      `${rel}  ${token}: ${n - 1}, baseline ${n} — the count fell: lower the baseline to ${n - 1} (UPDATE_BASELINES=1 npx vitest run ${TEST_FILE}) so the gain is kept`
+    ]);
+  });
+
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/statusInk.json exactly', () => {
+    const files = listScannedFiles({ exclude: [PINNED_DIR] });
+    expect(files.length).toBeGreaterThan(200);
+    expect(files.some((f) => f.startsWith(`${SCANNED_DIR}/`))).toBe(false);
+    const { counts, stale } = scanTree(files, (_rel, source) => statusInkHits(source), ALLOWLIST);
+    // Comic Studio's pins are checked by the exact-line tests above; only the rest is stale here.
+    expect(stale.filter((s) => !s.startsWith(`${SCANNED_DIR}/`))).toEqual([]);
+    const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
+    expect(problems).toEqual([]);
+    expect(
+      over,
+      'New status ink: read TONE_TEXT / STATUS_INK and their tint TONE_CHIP / STATUS_SURFACE (components/chat/studioDesign.ts); CHOOSE a tone against the neutral ink, never stack it; never white on a light amber.'
+    ).toEqual([]);
+    expect(under, 'Raw status ink was removed: lower the baseline so it cannot come back.').toEqual([]);
   });
 });

@@ -20,8 +20,14 @@
  * (`tone === 'warn' && TONE_CHIP.warning, tone === 'danger' && TONE_CHIP.danger`) and a colour chosen
  * in one ternary pass. Variant colours (`hover:`, `dark:`, `group-hover:`) are states, not stacking.
  * A `className` prop forwarded into a component's own list is not followed (it is not a constant).
+ *
+ * It also holds the app-wide scan and the ratchet every design-system guard shares (DS-0, see the
+ * section "App-wide scanning and the ratchet" below and tests/config/baselines/README.md).
  * Not a test file (no `.test.` in the name), so vitest does not collect it; the typecheck covers it.
  */
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { TONE_INK, textColours } from './textColours';
 
@@ -303,4 +309,371 @@ export function matchPinned(hits: string[], pinned: readonly string[] = []): { e
     else extra.push(key);
   }
   return { extra, missing: left };
+}
+
+// ── App-wide scanning and the ratchet (DS-0) ─────────────────────────────────────────────────────
+//
+// The design-system guards (tests/config/{legacyKit,terracotta,localCx,zLadder}Guard.test.ts and the
+// widened statusInkGuard / overlineGuard / dialogTitle) scan the whole app, not only Comic Studio. The
+// app still carries about 1,750 legacy uses that predate them, so outside the exact-line pins they
+// RATCHET: tests/config/baselines/<guard>.json records, per file and per token, how many uses each file
+// had when the guard landed. A file or token the baseline does not list must count 0; a count above its
+// entry fails (a new use); a count BELOW its entry fails too, until the entry is lowered, so a
+// migration's gain is locked in and the numbers only ever fall. Entries are generated, never typed:
+// `UPDATE_BASELINES=1 npx vitest run tests/config/<guard test>` lowers every entry to today's count and
+// drops the zeros (it never raises one); `UPDATE_BASELINES=reset` rewrites the file from the tree (the
+// first generation, or a reviewed exception: the JSON diff shows the rise). See baselines/README.md.
+
+/** The app directory (`dreamstreamcomicstudio/`). Every path the scan reports is relative to it, with `/`. */
+export const APP_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/** What every app-wide guard scans: the components, the root App and the QA harness. */
+export const SCANNED_ROOTS: readonly string[] = ['components', 'App.tsx', 'qa'];
+
+/**
+ * Never scanned by an app-wide guard: tests and specs, the folders only tests read, and Stream Studio
+ * (`live/**`: its own brand and tokens until DS-11; outside the roots today, excluded in case one grows).
+ */
+export const EXCLUDED: readonly string[] = ['**/*.test.*', '**/*.spec.*', '**/__tests__/**', '**/__mocks__/**', '**/__fixtures__/**', 'live/**'];
+
+/** The recipe files, where z-indexes and tokens are spelled on purpose (skipped by the z-ladder guard). */
+export const RECIPE_FILES: readonly string[] = ['components/ds/**', 'components/chat/studioDesign.ts'];
+
+/** Comic Studio: the three wave 8 guards keep their exact-line pins here; their ratchet covers the rest. */
+export const PINNED_DIR = 'components/comicstudio/**';
+
+const SOURCE_FILE = /\.(?:tsx?|jsx?|mjs)$/;
+
+/** A path glob (`*` within a segment, `**` across segments, `?` one character) as an anchored RegExp. */
+export function globToRegExp(glob: string): RegExp {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*' && glob[i + 1] === '*') {
+      // `**/` is zero or more whole directories; any other `**` is the rest of the path.
+      if (glob[i + 2] === '/') {
+        re += '(?:.*/)?';
+        i += 2;
+      } else {
+        re += '.*';
+        i += 1;
+      }
+    } else if (c === '*') re += '[^/]*';
+    else if (c === '?') re += '[^/]';
+    else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`);
+}
+
+/** Whether an app-relative path matches any of the globs. */
+export const matchesGlob = (rel: string, globs: readonly string[]): boolean => globs.some((g) => globToRegExp(g).test(rel));
+
+/**
+ * The app-relative source files (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`) under the roots, sorted, minus
+ * EXCLUDED and any extra globs. A root may be a directory or a single file; one that does not exist
+ * is skipped (the guards assert the count, so a broken scan cannot pass empty).
+ */
+export function listScannedFiles(options: { roots?: readonly string[]; exclude?: readonly string[]; root?: string } = {}): string[] {
+  const root = options.root ?? APP_ROOT;
+  const exclude = [...EXCLUDED, ...(options.exclude ?? [])];
+  const out: string[] = [];
+  const walk = (rel: string) => {
+    const full = path.join(root, rel);
+    if (!existsSync(full)) return;
+    if (statSync(full).isDirectory()) {
+      for (const entry of readdirSync(full)) {
+        if (entry === 'node_modules' || entry.startsWith('.')) continue;
+        walk(`${rel}/${entry}`);
+      }
+    } else if (SOURCE_FILE.test(rel) && !matchesGlob(rel, exclude)) out.push(rel);
+  };
+  for (const r of options.roots ?? SCANNED_ROOTS) walk(r.replace(/\/+$/, ''));
+  return [...new Set(out)].sort();
+}
+
+/**
+ * A Tailwind variant chain before a utility (`dark:`, `hover:`, `md:`, `group-hover/place:`,
+ * `[&_svg]:`, `@lg:`) and the `!` important modifier, as the wave 8 guards read it. Put it right after a
+ * `(?<![\w-])` boundary.
+ */
+export const VARIANT = String.raw`(?:[\w\-[\]&:()>.*/@]+:)?!?`;
+
+/** A matched class without its variant chain or `!` (`dark:hover:!z-50` → `z-50`). */
+export const withoutVariant = (cls: string): string => cls.replace(/^.*:/, '').replace(/^!/, '');
+
+/** A Tailwind opacity suffix (`/80`, `/[0.35]`) removed: the ratchet counts the colour, not its strength. */
+export const withoutOpacity = (cls: string): string => cls.replace(/\/(?:\d+|\[[^\]]*\])$/, '');
+
+const isModuleSpecifier = (node: ts.Node): boolean => {
+  const p = node.parent;
+  if (!p) return false;
+  if ((ts.isImportDeclaration(p) || ts.isExportDeclaration(p)) && p.moduleSpecifier === node) return true;
+  if (ts.isExternalModuleReference(p)) return true;
+  // import('…') and require('…')
+  return ts.isCallExpression(p) && (p.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(p.expression) && p.expression.text === 'require'));
+};
+
+/**
+ * Every string and template literal in a source with the line it starts on, as written (quotes and
+ * `${` / `}` included, so a token at an edge keeps its boundary). Comments, JSX text, identifiers,
+ * regular expressions and module specifiers are not literals here, so a comment that explains a rule
+ * ("never `shadow-comic`") or a visible sentence never counts.
+ */
+export function literalsOf(source: string): Array<{ line: number; text: string }> {
+  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out: Array<{ line: number; text: string }> = [];
+  const visit = (node: ts.Node) => {
+    if (isLiteral(node) && !isModuleSpecifier(node)) {
+      out.push({ line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, text: node.getText(sf) });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** One use a guard counts: where it is, its ratchet token, the text it matched and its trimmed source line. */
+export interface TokenHit {
+  line: number;
+  token: string;
+  match: string;
+  text: string;
+}
+
+/**
+ * Every match of a global pattern inside the literals of a source (see literalsOf), each named by
+ * `token(match)` (the per-token key of the ratchet).
+ */
+export function findInLiterals(source: string, pattern: RegExp, token: (match: string) => string): TokenHit[] {
+  if (!pattern.global) throw new Error(`findInLiterals needs a global pattern: ${pattern}`);
+  const lines = source.split('\n');
+  const hits: TokenHit[] = [];
+  for (const lit of literalsOf(source)) {
+    for (const m of lit.text.matchAll(pattern)) {
+      const line = lit.line + (lit.text.slice(0, m.index).match(/\n/g)?.length ?? 0);
+      hits.push({ line, token: token(m[0]), match: m[0], text: (lines[line - 1] ?? '').trim() });
+    }
+  }
+  return hits;
+}
+
+/** Per-token counts for one file, and for the tree (app-relative file → token → count). */
+export type FileCounts = Record<string, number>;
+export type Counts = Record<string, FileCounts>;
+
+export const countTokens = (hits: ReadonlyArray<{ token: string }>): FileCounts => {
+  const counts: FileCounts = {};
+  for (const h of hits) counts[h.token] = (counts[h.token] ?? 0) + 1;
+  return counts;
+};
+
+/**
+ * A guard's content exemptions, keyed by app-relative path: each pins the exact uses it permits (the
+ * token and its trimmed source line), never a count, with a one-line reason. A pinned use is content
+ * (reader content tokens, lettering, a third-party mark, a data-viz palette), not legacy chrome, so it is
+ * not counted at all; a different use in the same file still is.
+ */
+export type Allowlist = Record<string, { uses: Array<{ token: string; line: string }>; reason: string }>;
+
+const useKeyOf = (u: { token: string; line: string }) => `${u.token}  @  ${u.line}`;
+
+/** One file's hits minus its allowlisted uses, and the pinned uses no hit matched (stale). */
+export function applyAllowlist(rel: string, hits: readonly TokenHit[], allowlist: Allowlist = {}): { counted: TokenHit[]; stale: string[] } {
+  const entry = allowlist[rel];
+  if (!entry) return { counted: [...hits], stale: [] };
+  const { extra, missing } = matchPinned(
+    hits.map((h) => useKeyOf({ token: h.token, line: h.text })),
+    entry.uses.map(useKeyOf)
+  );
+  const left = [...extra];
+  const counted = hits.filter((h) => {
+    const i = left.indexOf(useKeyOf({ token: h.token, line: h.text }));
+    if (i < 0) return false;
+    left.splice(i, 1);
+    return true;
+  });
+  return { counted, stale: missing };
+}
+
+/**
+ * Scans files (app-relative) with a guard's detector and returns the per-file per-token counts (files
+ * with none are left out), the stale allowlist pins and the allowlisted files that were not scanned.
+ */
+export function scanTree(
+  files: readonly string[],
+  hitsOf: (rel: string, source: string) => TokenHit[],
+  allowlist: Allowlist = {},
+  root = APP_ROOT
+): { counts: Counts; stale: string[]; hits: Record<string, TokenHit[]> } {
+  const counts: Counts = {};
+  const hits: Record<string, TokenHit[]> = {};
+  const stale: string[] = [];
+  const seen = new Set<string>();
+  for (const rel of files) {
+    seen.add(rel);
+    const { counted, stale: s } = applyAllowlist(rel, hitsOf(rel, readFileSync(path.join(root, rel), 'utf8')), allowlist);
+    for (const key of s) stale.push(`${rel}: allowlisted use no longer present: ${key} (${allowlist[rel].reason})`);
+    if (counted.length) {
+      counts[rel] = countTokens(counted);
+      hits[rel] = counted;
+    }
+  }
+  for (const rel of Object.keys(allowlist)) if (!seen.has(rel)) stale.push(`${rel}: allowlisted but not scanned (moved or deleted?)`);
+  return { counts, stale, hits };
+}
+
+// ── The baselines ────────────────────────────────────────────────────────────────────────────────
+
+export const BASELINE_DIR = path.join(APP_ROOT, 'tests', 'config', 'baselines');
+
+/** `tests/config/baselines/<guard>.json`. `totals` is derived (the sum per token) and checked. */
+export interface BaselineFile {
+  guard: string;
+  test: string;
+  note: string;
+  totals: FileCounts;
+  files: Counts;
+}
+
+/** `UPDATE_BASELINES`: unset / `0` / `false` checks; `reset` rewrites from the tree; anything else (`1`) only lowers. */
+export type RatchetMode = 'check' | 'shrink' | 'reset';
+export function ratchetMode(value: string | undefined = process.env.UPDATE_BASELINES): RatchetMode {
+  const v = (value ?? '').trim().toLowerCase();
+  if (!v || v === '0' || v === 'false' || v === 'no') return 'check';
+  return v === 'reset' ? 'reset' : 'shrink';
+}
+
+/** The sum per token over every file. */
+export function totalsOf(counts: Counts): FileCounts {
+  const totals: FileCounts = {};
+  for (const tokens of Object.values(counts)) for (const [t, n] of Object.entries(tokens)) totals[t] = (totals[t] ?? 0) + n;
+  return sortKeys(totals);
+}
+
+function sortKeys<T>(record: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+/** The command that lowers a guard's baseline. */
+export const shrinkCommand = (testFile: string) => `UPDATE_BASELINES=1 npx vitest run ${testFile}`;
+
+/**
+ * The ratchet itself. `over`: a file or token above its baseline entry (absent = 0) — a new use.
+ * `under`: below its entry (a file that no longer exists counts 0) — the entry must be lowered so the
+ * gain cannot be spent again. Each line names the file, the token, the count, the baseline and the fix.
+ */
+export function compareToBaseline(actual: Counts, baseline: Counts, testFile: string): { over: string[]; under: string[] } {
+  const over: string[] = [];
+  const under: string[] = [];
+  const files = [...new Set([...Object.keys(actual), ...Object.keys(baseline)])].sort();
+  for (const rel of files) {
+    const a = actual[rel] ?? {};
+    const b = baseline[rel] ?? {};
+    for (const token of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+      const n = a[token] ?? 0;
+      const base = b[token] ?? 0;
+      if (n > base) {
+        over.push(
+          base === 0
+            ? `${rel}  ${token}: ${n}, baseline 0 — a file or token the baseline does not list must count 0`
+            : `${rel}  ${token}: ${n}, baseline ${base} — ${n - base} new use${n - base === 1 ? '' : 's'}`
+        );
+      } else if (n < base) {
+        under.push(
+          `${rel}  ${token}: ${n}, baseline ${base} — the count fell: lower the baseline to ${n} (${shrinkCommand(testFile)}) so the gain is kept`
+        );
+      }
+    }
+  }
+  return { over, under };
+}
+
+/** The baseline lowered to the tree where the tree is lower, zeros dropped; never raised, never extended. */
+export function shrinkBaseline(actual: Counts, baseline: Counts): Counts {
+  const out: Counts = {};
+  for (const [rel, tokens] of Object.entries(baseline)) {
+    const kept: FileCounts = {};
+    for (const [token, base] of Object.entries(tokens)) {
+      const n = Math.min(base, actual[rel]?.[token] ?? 0);
+      if (n > 0) kept[token] = n;
+    }
+    if (Object.keys(kept).length) out[rel] = kept;
+  }
+  return out;
+}
+
+/** A baseline as checked-in JSON: one line per file, keys sorted, so a shrink is a one-line diff. */
+export function serialiseBaseline(guard: string, testFile: string, counts: Counts): string {
+  const files = sortKeys(Object.fromEntries(Object.entries(counts).filter(([, t]) => Object.values(t).some((n) => n > 0)).map(([f, t]) => [f, sortKeys(Object.fromEntries(Object.entries(t).filter(([, n]) => n > 0)))])));
+  const note =
+    'Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; ' +
+    'a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: ' +
+    `${shrinkCommand(testFile)} lowers it (see README.md).`;
+  const line = (record: FileCounts) => {
+    const parts = Object.entries(record).map(([k, n]) => `${JSON.stringify(k)}: ${n}`);
+    return parts.length ? `{ ${parts.join(', ')} }` : '{}';
+  };
+  const body = Object.entries(files).map(([f, t]) => `    ${JSON.stringify(f)}: ${line(t)}`);
+  return [
+    '{',
+    `  "guard": ${JSON.stringify(guard)},`,
+    `  "test": ${JSON.stringify(testFile)},`,
+    `  "note": ${JSON.stringify(note)},`,
+    `  "totals": ${line(totalsOf(files))},`,
+    body.length ? `  "files": {\n${body.join(',\n')}\n  }` : '  "files": {}',
+    '}',
+    ''
+  ].join('\n');
+}
+
+/** Reads and validates a baseline file; `problems` explains anything that is not a clean, consistent file. */
+export function readBaseline(guard: string, dir = BASELINE_DIR): { baseline: Counts; problems: string[]; exists: boolean } {
+  const file = path.join(dir, `${guard}.json`);
+  if (!existsSync(file)) return { baseline: {}, problems: [], exists: false };
+  const problems: string[] = [];
+  let parsed: Partial<BaselineFile>;
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<BaselineFile>;
+  } catch (e) {
+    return { baseline: {}, problems: [`${guard}.json is not valid JSON (${(e as Error).message})`], exists: true };
+  }
+  if (parsed.guard !== guard) problems.push(`${guard}.json names guard ${JSON.stringify(parsed.guard)}`);
+  const baseline: Counts = {};
+  for (const [rel, tokens] of Object.entries(parsed.files ?? {})) {
+    baseline[rel] = {};
+    for (const [token, n] of Object.entries(tokens ?? {})) {
+      if (!Number.isInteger(n) || n <= 0) problems.push(`${guard}.json: ${rel} ${token} is ${JSON.stringify(n)} (entries are positive integers; drop a zero)`);
+      else baseline[rel][token] = n;
+    }
+  }
+  if (JSON.stringify(sortKeys(parsed.totals ?? {})) !== JSON.stringify(totalsOf(baseline))) {
+    problems.push(`${guard}.json: "totals" does not match "files" (regenerate it: ${shrinkCommand(parsed.test ?? `tests/config/<${guard} guard>.test.ts`)})`);
+  }
+  return { baseline, problems, exists: true };
+}
+
+/**
+ * Compares a guard's counts with its baseline, first applying `UPDATE_BASELINES` (see ratchetMode):
+ * `shrink` lowers the file and drops the zeros (what is over stays over and still fails), `reset`
+ * rewrites it from the counts. Returns the over / under lines and any problem with the file itself.
+ */
+export function ratchet(
+  guard: string,
+  testFile: string,
+  actual: Counts,
+  options: { mode?: RatchetMode; dir?: string } = {}
+): { over: string[]; under: string[]; problems: string[]; written: boolean } {
+  const dir = options.dir ?? BASELINE_DIR;
+  const mode = options.mode ?? ratchetMode();
+  let { baseline, problems, exists } = readBaseline(guard, dir);
+  let written = false;
+  if (mode === 'reset' || (mode === 'shrink' && exists && problems.length === 0)) {
+    const next = mode === 'reset' ? actual : shrinkBaseline(actual, baseline);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${guard}.json`), serialiseBaseline(guard, testFile, next));
+    written = true;
+    ({ baseline, problems, exists } = readBaseline(guard, dir));
+  }
+  if (!exists) problems.push(`no baseline tests/config/baselines/${guard}.json: generate it from the tree with UPDATE_BASELINES=reset npx vitest run ${testFile}`);
+  return { ...compareToBaseline(actual, baseline, testFile), problems, written };
 }

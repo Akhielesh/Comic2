@@ -1,0 +1,33 @@
+{
+  "guard": "localCx",
+  "test": "tests/config/localCxGuard.test.ts",
+  "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/localCxGuard.test.ts lowers it (see README.md).",
+  "totals": { "cx": 25 },
+  "files": {
+    "components/comicstudio/board/ui.tsx": { "cx": 1 },
+    "components/comicstudio/conversation/ui.tsx": { "cx": 1 },
+    "components/comicstudio/history/ChangesSincePublishLink.tsx": { "cx": 1 },
+    "components/comicstudio/history/EntryLinks.tsx": { "cx": 1 },
+    "components/comicstudio/history/ui.tsx": { "cx": 1 },
+    "components/comicstudio/i18n/LanguageSwitch.tsx": { "cx": 1 },
+    "components/comicstudio/i18n/ReaderLanguagePicker.tsx": { "cx": 1 },
+    "components/comicstudio/library/LibraryImage.tsx": { "cx": 1 },
+    "components/comicstudio/library/StylePresetsCard.tsx": { "cx": 1 },
+    "components/comicstudio/library/admin/LibraryConsole.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/SavingsChip.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/editor/EditorToolbar.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/editor/EditorToolsSheet.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/sheets/BottomSheet.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/sheets/SideSheet.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/shell/CompactHeaderMenu.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/shell/DualScreen.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/shell/MobileTabBar.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/shell/StudioLayout.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/touch/ContextMenuSheet.tsx": { "cx": 1 },
+    "components/comicstudio/mobile/touch/TouchCanvas.tsx": { "cx": 1 },
+    "components/comicstudio/models/ui.tsx": { "cx": 1 },
+    "components/comicstudio/timeline/ui.tsx": { "cx": 1 },
+    "components/usage/UsageBudgetsPanel.tsx": { "cx": 1 },
+    "components/usage/UsageMeter.tsx": { "cx": 1 }
+  }
+}
