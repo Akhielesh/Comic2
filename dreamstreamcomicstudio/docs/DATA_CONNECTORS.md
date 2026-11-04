@@ -103,6 +103,9 @@ provider table, reply provenance).
   a **paid model pinned**, the turn is a flagged paid turn, so the planner and agents run on that
   same pinned model (never refused, never moved to another paid model). The `/swarm` hold adds the
   planner plus up to four agents at the worker model's catalog price (`connectorSwarmHoldUsd`).
+  Delegation helpers (`delegate.ts`) and the deep-research planner (`deepResearch.ts`) follow the
+  same rule inside a connector turn: the caller's non-free paid net (else `TEXT_FALLBACK`), or the
+  pinned paid model under Free only; outside one they keep their free worker.
 - The reply carries `connectorData: true`, and is recorded in the provenance store, **only when
   connected content actually entered it**: a model call of the turn really sent the connector
   context block or a connector tool's call or output (the provider reports it to the turn's egress

@@ -14,6 +14,8 @@ import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { buildUsage, spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
 import { composePersona, withAgentPersona } from '../persona.js';
 import { verifyFindings, verificationBlock, type AgentFinding } from './verify.js';
+import { isFreeModelId } from '../privacy/connectorData.js';
+import { connectorPrivacyActive } from '../privacy/scope.js';
 import type {
   ChatArtifact,
   ChatClientContext,
@@ -154,9 +156,19 @@ const runDelegationWith = async (params: RunDelegationParams, usageParts: ApiUsa
   // Helper agents run on a free model and are web-grounded (OpenRouter native search);
   // the user's chosen model is reserved for the aggregation so the final voice/quality holds.
   // Free-only never falls back to a paid pick: a verified-free model, else the caller's own model.
+  // Inside a connector turn (ai/privacy/scope.ts) no free model may take a helper's call, so the
+  // choice is explicit (the same rule as the swarm, orchestrator.ts): the paid net the caller priced,
+  // or — Free only with a pinned paid model, a flagged paid turn — that same pinned model.
+  const connectorRun = connectorPrivacyActive();
   const workerModel = freeOnly
-    ? await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
-    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+    ? connectorRun && !isFreeModelId(params.model)
+      ? params.model
+      : await pickTextModel({ costPref: 'free-only' }).catch(() => params.model)
+    : connectorRun
+      ? params.fallbackModel && !isFreeModelId(params.fallbackModel)
+        ? params.fallbackModel
+        : TEXT_FALLBACK
+      : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const webGrounded = params.provider === 'openrouter';
 
   const citations: ChatCitation[] = [];
