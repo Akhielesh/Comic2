@@ -112,4 +112,28 @@ describe('ChatSidebar keyboard access', () => {
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('false');
   });
+
+  it('renaming: Enter while an IME is composing picks a candidate and never commits the title', () => {
+    const onRename = vi.fn();
+    const project = createChatProject('Work', 'folder', 'blue');
+    const a = chat('Trip plan');
+    const noop = () => {};
+    render(
+      <ChatSidebar
+        sessions={[a]} projects={[project]} activeId={a.id} hasMemory={false}
+        onSelect={noop} onNew={noop} onDelete={noop} onRename={onRename} onMoveToProject={noop}
+        onNewProject={noop} onEditProject={noop} onDeleteProject={noop} onEditMemory={noop} onBack={noop}
+        onOpenSearch={noop} onOpenLibrary={noop} onOpenDashboards={noop} onOpenGallery={noop} onOpenTools={noop}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Options for Trip plan' }));
+    fireEvent.click(screen.getByRole('button', { name: /rename/i }));
+    const input = screen.getByDisplayValue('Trip plan');
+    fireEvent.change(input, { target: { value: '旅行' } });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 }); // Safari: isComposing false, keyCode 229
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(onRename).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+    expect(onRename).toHaveBeenCalledWith(a.id, '旅行');
+  });
 });

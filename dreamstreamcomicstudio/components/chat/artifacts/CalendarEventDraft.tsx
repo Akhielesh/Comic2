@@ -76,7 +76,7 @@ export const SettledArtifactLine: React.FC<{
         href={link.href}
         target="_blank"
         rel="noopener noreferrer"
-        className={`ml-auto inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-[var(--ds-muted)] underline-offset-2 hover:text-[var(--ds-ink)] hover:underline ${FOCUS_RING}`}
+        className={`ml-auto inline-flex shrink-0 items-center gap-1 coarse:min-h-11 coarse:px-2 text-[12px] font-medium text-[var(--ds-muted)] underline-offset-2 hover:text-[var(--ds-ink)] hover:underline ${FOCUS_RING}`}
       >
         <ExternalLink aria-hidden className="h-3.5 w-3.5" /> {link.label}
       </a>

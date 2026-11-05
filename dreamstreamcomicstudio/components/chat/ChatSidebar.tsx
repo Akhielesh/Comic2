@@ -112,7 +112,13 @@ const SessionRow: React.FC<{
           autoFocus
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditing(false); }}
+          onKeyDown={(e) => {
+            // Enter while an IME is composing (Japanese, Chinese, Korean…) picks a candidate: never commit then
+            // (keys P3-K0; Safari reports keyCode 229 with isComposing false).
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter') commitRename();
+            if (e.key === 'Escape') setEditing(false);
+          }}
           className={`flex-1 min-w-0 text-base sm:text-[13px] outline-none bg-transparent font-medium ${INK}`}
         />
         <button onClick={commitRename} className="tap-target p-1 text-green-600 hover:scale-110"><Check className="w-3.5 h-3.5" /></button>
