@@ -32,17 +32,17 @@ describe('AuthPage — password sign-in', () => {
     markSignInStarted('recovery'); // "Forgot password" → email sent; then the password came back to mind
     const onLoginSuccess = vi.fn();
     render(<AuthPage onLoginSuccess={onLoginSuccess} onOpenPrivacy={() => undefined} onOpenTerms={() => undefined} />);
-    fireEvent.change(screen.getByPlaceholderText('user@example.com or username'), { target: { value: 'ada@example.com' } });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'wrong' } });
+    fireEvent.change(screen.getByLabelText(/Email or username/), { target: { value: 'ada@example.com' } });
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: 'wrong' } });
 
     auth.signInWithPassword.mockResolvedValueOnce({ data: {}, error: { message: 'Invalid login credentials' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Enter Studio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await settle();
     expect(onLoginSuccess).not.toHaveBeenCalled();
     expect(hasFreshSignInIntent()).toBe(true); // still waiting for the reset link
 
     auth.signInWithPassword.mockResolvedValueOnce({ data: { user: { id: 'u', email_confirmed_at: '2026-01-01' } }, error: null });
-    fireEvent.click(screen.getByRole('button', { name: 'Enter Studio' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await settle();
     expect(onLoginSuccess).toHaveBeenCalledOnce();
     expect(auth.signInWithPassword).toHaveBeenLastCalledWith(expect.objectContaining({ email: 'ada@example.com' }));

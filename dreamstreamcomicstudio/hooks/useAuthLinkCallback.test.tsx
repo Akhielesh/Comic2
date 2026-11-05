@@ -329,7 +329,7 @@ describe('AuthCallbackPage — the confirm step', () => {
     rerender(<AuthCallbackPage status="verifying" onContinue={vi.fn()} />);
     expect(document.querySelector('[aria-live="polite"]')).toBe(live); // the same node: its new text is announced
     expect(live).toHaveTextContent('Please wait while we verify your secure sign-in link.');
-    expect(screen.getByRole('heading', { name: 'Verifying Link' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Verifying your link' })).toHaveFocus();
     rerender(<AuthCallbackPage status="error" message="This link has expired or was already used." onContinue={vi.fn()} />);
     expect(document.querySelector('[aria-live="polite"]')).toBe(live);
     expect(live).toHaveTextContent('This link has expired or was already used.');
