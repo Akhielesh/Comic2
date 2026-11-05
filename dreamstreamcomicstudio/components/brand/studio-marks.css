@@ -1,0 +1,234 @@
+/*
+ * DreamStream studio marks and lockups (components/brand: StudioMark, StudioLogo).
+ *
+ * Framework-free on purpose: Stream Studio's bundle has no Tailwind and no index.css, so this file is
+ * plain classes and reads every token with a fallback (the Atlas value). The marks look and move the
+ * same in both bundles, and follow the skin wherever the --ds-* tokens exist.
+ *
+ * Motion mirrors the Atlas logo (.atlas-logo-* in Atlas's globals.css): hover tilts the tile on the
+ * spring, a press squeezes it, and each studio has one moment that happens inside the mask, so the
+ * tile never changes colour and the cut stays a cut:
+ *   DreamStream, Atlas  the point drops in like a pin
+ *   Comic               the eye blinks
+ *   Stream              the arcs broadcast once (looped: the point pulses with them)
+ * `loading` loops the moment. Loops pause under [data-inview="false"] (useInViewPause / InViewPause);
+ * reduced motion stops everything.
+ */
+
+/* ── The mark ─────────────────────────────────────────────────────────────────────────────── */
+
+/* Zero specificity: any class (or the `size` prop's inline style) sizes a standalone mark. */
+:where(.ds-logo-mark) {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+.ds-logo-cut,
+.ds-logo-point {
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+/* The pin lands on its base, like Atlas's "you are here". */
+.ds-logo-mark--dreamstream .ds-logo-point,
+.ds-logo-mark--atlas .ds-logo-point {
+  transform-origin: 50% 100%;
+}
+
+/* ── The lockup ───────────────────────────────────────────────────────────────────────────── */
+
+.ds-logo {
+  --ds-logo-mark-size: 32px;
+  --ds-logo-text-size: 20px;
+  --ds-logo-gap: 10px;
+  --ds-logo-overline-size: 11px;
+  --ds-logo-stack-gap: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-logo-gap);
+  min-width: 0;
+  vertical-align: middle;
+}
+
+.ds-logo--display {
+  --ds-logo-mark-size: 56px;
+  --ds-logo-text-size: 34px;
+  --ds-logo-gap: 18px;
+}
+
+.ds-logo--compact {
+  --ds-logo-mark-size: 28px;
+  --ds-logo-text-size: 17px;
+  --ds-logo-gap: 9px;
+}
+
+/* Endorsed: the mark grows to the two lines (overline plus wordmark). */
+.ds-logo--endorsed.ds-logo--header {
+  --ds-logo-mark-size: 40px;
+  --ds-logo-text-size: 22px;
+  --ds-logo-gap: 12px;
+}
+
+.ds-logo--endorsed.ds-logo--display {
+  --ds-logo-mark-size: 68px;
+  --ds-logo-text-size: 34px;
+  --ds-logo-gap: 20px;
+  --ds-logo-overline-size: 13px;
+  --ds-logo-stack-gap: 6px;
+}
+
+.ds-logo--endorsed.ds-logo--compact {
+  --ds-logo-mark-size: 34px;
+  --ds-logo-text-size: 17px;
+  --ds-logo-gap: 10px;
+  --ds-logo-overline-size: 10px;
+  --ds-logo-stack-gap: 3px;
+}
+
+.ds-logo > .ds-logo-mark {
+  width: var(--ds-logo-mark-size);
+  height: var(--ds-logo-mark-size);
+}
+
+.ds-logo-word {
+  font-family: var(--ds-font-display, "Space Grotesk", system-ui, sans-serif);
+  font-size: var(--ds-logo-text-size);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ds-logo-word-muted {
+  font-weight: 500;
+  opacity: 0.55;
+}
+
+.ds-logo-stack {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--ds-logo-stack-gap);
+  min-width: 0;
+}
+
+/* The overline recipe (11 px, semibold, 0.12em, uppercase) at the lockup's scale. */
+.ds-logo-overline {
+  font-family: var(--ds-font-sans, "IBM Plex Sans", system-ui, sans-serif);
+  font-size: var(--ds-logo-overline-size);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.55;
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: no-preference) {
+  .ds-logo-mark {
+    transition: transform var(--ds-motion-panel, 220ms) var(--ds-ease-spring, cubic-bezier(0.34, 1.36, 0.64, 1));
+  }
+
+  /* Press: the tile squeezes quickly, then springs back over the panel duration. */
+  :is(.ds-logo:active, :is(a, button):active > .ds-logo, :is(a, button):active) > .ds-logo-mark {
+    transform: rotate(-6deg) scale(0.94);
+    transition-duration: var(--ds-motion-fast, 100ms);
+  }
+
+  /* Loading: the studio's moment, looped (splash and route-loading screens). */
+  .ds-logo-mark--loading:is(.ds-logo-mark--dreamstream, .ds-logo-mark--atlas) .ds-logo-point {
+    animation: ds-logo-pin 1100ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) infinite;
+  }
+
+  .ds-logo-mark--loading.ds-logo-mark--comic .ds-logo-point {
+    animation: ds-logo-blink-loop 2400ms ease-in-out infinite;
+  }
+
+  .ds-logo-mark--loading.ds-logo-mark--stream .ds-logo-cut {
+    animation: ds-logo-onair 1400ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) infinite;
+  }
+
+  .ds-logo-mark--loading.ds-logo-mark--stream .ds-logo-point {
+    animation: ds-logo-live 1400ms ease-in-out infinite;
+  }
+
+  /* Off screen or in a hidden tab, a loop holds its frame. */
+  [data-inview="false"] .ds-logo-mark--loading :is(.ds-logo-cut, .ds-logo-point),
+  .ds-logo-mark--loading[data-inview="false"] :is(.ds-logo-cut, .ds-logo-point) {
+    animation-play-state: paused;
+  }
+}
+
+/* Hover only where a pointer can hover, so a tap never leaves a phone's logo tilted. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  :is(.ds-logo:hover, :is(a, button):hover > .ds-logo, :is(a, button):hover) > .ds-logo-mark {
+    transform: rotate(-6deg) scale(1.05);
+  }
+
+  :is(.ds-logo:active, :is(a, button):active > .ds-logo, :is(a, button):active) > .ds-logo-mark {
+    transform: rotate(-6deg) scale(0.94);
+  }
+
+  /* One moment per studio; a looping (loading) mark keeps its loop. */
+  :is(.ds-logo:hover, :is(a, button):hover > .ds-logo, :is(a, button):hover)
+    > :is(.ds-logo-mark--dreamstream, .ds-logo-mark--atlas):not(.ds-logo-mark--loading)
+    .ds-logo-point {
+    animation: ds-logo-pin 640ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) 40ms;
+  }
+
+  :is(.ds-logo:hover, :is(a, button):hover > .ds-logo, :is(a, button):hover)
+    > .ds-logo-mark--comic:not(.ds-logo-mark--loading)
+    .ds-logo-point {
+    animation: ds-logo-blink 420ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) 60ms;
+  }
+
+  :is(.ds-logo:hover, :is(a, button):hover > .ds-logo, :is(a, button):hover)
+    > .ds-logo-mark--stream:not(.ds-logo-mark--loading)
+    .ds-logo-cut {
+    animation: ds-logo-onair 900ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) 40ms;
+  }
+}
+
+/* Belt and braces: nothing on a mark moves under reduced motion, whatever else targets it. */
+@media (prefers-reduced-motion: reduce) {
+  .ds-logo-mark,
+  .ds-logo-cut,
+  .ds-logo-point {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Entrances and loops end on transform: none, so a mark at rest carries no transform. */
+@keyframes ds-logo-pin {
+  0% { transform: none; }
+  30% { transform: translateY(-6px); }
+  56% { transform: translateY(0) scale(1.18, 0.82); }
+  76% { transform: translateY(-1.5px); }
+  100% { transform: none; }
+}
+
+@keyframes ds-logo-blink {
+  0%, 100% { transform: none; }
+  45% { transform: scaleY(0.12); }
+}
+
+@keyframes ds-logo-blink-loop {
+  0%, 76%, 92%, 100% { transform: none; }
+  84% { transform: scaleY(0.12); }
+}
+
+/* The arcs travel outward and fade into the tile, then come back from inside: a broadcast. */
+@keyframes ds-logo-onair {
+  0% { transform: none; opacity: 1; }
+  55% { transform: scale(1.14); opacity: 0; }
+  56% { transform: scale(0.86); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+
+@keyframes ds-logo-live {
+  0%, 100% { transform: none; }
+  50% { transform: scale(1.3); }
+}

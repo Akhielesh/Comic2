@@ -1,30 +1,44 @@
 #!/usr/bin/env node
 /**
- * Generates the Comic Studio (comics.dreamstreamstudio.ai) app icons and link-preview image from
- * its brand mark, public/icons/comics-mark.svg (the DreamStream tile with a comic page and a speech
- * balloon). Run from dreamstreamcomicstudio/:
+ * Generates the Comic Studio (comics.dreamstreamstudio.ai) link-preview card, public/icons/comics-og.png
+ * (1200×630 Open Graph / Twitter card). Run from dreamstreamcomicstudio/:
  *
  *   node comics-edge/scripts/gen-comics-icons.mjs
  *
- * Writes into public/icons/ (already excluded from Pages Functions by public/_routes.json):
- *   comics-192.png, comics-512.png   purpose "any"      — the mark as drawn
- *   comics-maskable-512.png          purpose "maskable" — full-bleed tile colour, mark in the 80% safe zone
- *   comics-apple-touch-180.png       iOS home screen    — full bleed (iOS rounds the corners itself)
- *   comics-og.png                    1200×630 Open Graph / Twitter card for the comics host
+ * The Comic Studio APP ICONS (comics-192/512/maskable-512/apple-touch-180, comics-icon.svg and the
+ * favicons) are generated with every other studio's by scripts/gen-icons.mjs (npm run gen:icons)
+ * from the "Grin" mark, public/icons/comics-mark.svg. This card still carries the pre-Atlas art (the
+ * terracotta comic page and speech balloon, embedded below as LEGACY_OG_MARK so re-running reproduces
+ * the committed card): it is redrawn with the Atlas palette when the apex skin lands, together with
+ * BRAND.ogImageAlt in comics-edge/src/brand.ts.
  *
- * Same approach as scripts/gen-icons.mjs (sharp, Apache-2.0, already a dependency). The OG card's
- * text uses the Inter font when installed (falls back to the system sans-serif).
+ * Uses sharp (Apache-2.0, already a dependency). The card's text uses the Inter font when installed
+ * (falls back to the system sans-serif).
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
 const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT_DIR = path.join(APP_ROOT, 'public', 'icons');
-const SRC = path.join(OUT_DIR, 'comics-mark.svg');
 
-const TILE = '#c2603f';
+/** The card's mark: the pre-Atlas Comic Studio tile, kept only until the card is redrawn. */
+const LEGACY_OG_MARK = `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <rect x="2" y="2" width="44" height="44" rx="12" fill="#c2603f"/>
+  <g fill="none" stroke="#fdfbf7" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" opacity=".6">
+    <rect x="9.5" y="12" width="20" height="25" rx="2.5"/>
+    <path d="M9.5 23h20M18.5 23v14"/>
+  </g>
+  <path d="M26.5 13h8.5a5 5 0 0 1 5 5v4.5a5 5 0 0 1-5 5h-3.4l-4.6 4.2v-4.2h-.5a5 5 0 0 1-5-5V18a5 5 0 0 1 5-5z" fill="#fdfbf7" stroke="#c2603f" stroke-width="2.2" stroke-linejoin="round"/>
+  <g fill="#c2603f">
+    <circle cx="26.6" cy="20.3" r="1.5"/>
+    <circle cx="30.8" cy="20.3" r="1.5"/>
+    <circle cx="35" cy="20.3" r="1.5"/>
+  </g>
+</svg>
+`;
+
 const PAPER = '#FAF9F5';
 const INK = '#1a1915';
 const MUTED = '#6e6a60';
@@ -37,19 +51,6 @@ async function renderMark(svg, px) {
   return sharp(svg, { density })
     .resize(px, px, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png()
-    .toBuffer();
-}
-
-const anyIcon = async (svg, size) => sharp(await renderMark(svg, size)).png({ compressionLevel: 9 }).toBuffer();
-
-async function fullBleedIcon(svg, size, scale) {
-  const inner = Math.round(size * scale);
-  const mark = await renderMark(svg, inner);
-  const offset = Math.round((size - inner) / 2);
-  return sharp({ create: { width: size, height: size, channels: 4, background: TILE } })
-    .composite([{ input: mark, left: offset, top: offset }])
-    .flatten({ background: TILE })
-    .png({ compressionLevel: 9 })
     .toBuffer();
 }
 
@@ -90,15 +91,9 @@ async function ogImage(svg) {
 }
 
 async function main() {
-  const svg = await readFile(SRC);
+  const svg = Buffer.from(LEGACY_OG_MARK);
   await mkdir(OUT_DIR, { recursive: true });
-  const jobs = [
-    ['comics-192.png', () => anyIcon(svg, 192)],
-    ['comics-512.png', () => anyIcon(svg, 512)],
-    ['comics-maskable-512.png', () => fullBleedIcon(svg, 512, 0.8)],
-    ['comics-apple-touch-180.png', () => fullBleedIcon(svg, 180, 1)],
-    ['comics-og.png', () => ogImage(svg)]
-  ];
+  const jobs = [['comics-og.png', () => ogImage(svg)]];
   for (const [name, make] of jobs) {
     const buf = await make();
     await writeFile(path.join(OUT_DIR, name), buf);
