@@ -1,0 +1,451 @@
+/* ============================================================================
+   atlas-skin.css — Stream Studio in the Atlas language (step 2a).
+
+   Imported LAST by live/main.tsx. Everything here hangs off `data-ds-skin="atlas"` on <html>
+   (static in live.html; the build's kill switch strips it), so without the attribute Stream
+   Studio is exactly the cream-and-clay studio of tokens.css.
+
+   How: Stream Studio's own token names (--bg, --panel, --text, --accent, …) are re-pointed to
+   the Atlas values (docs: the Atlas → DreamStream bridge §3.4) — the 2,990 lines of the other
+   files read them and follow. Below the tokens, only what tokens can't reach: hard-coded fonts,
+   the always-dark stage ("room"), red LIVE/REC fills, eyebrow labels, overlays, the phone tab
+   bar and motion.
+
+   Parity: the colours mirror the dev Atlas skin block in ../../index.css
+   (`[data-ds-skin="atlas"]` --ds-* tokens). live/styles/atlasSkinParity.unit.test.ts fails if
+   the two drift; live/styles/atlasSkinContrast.unit.test.ts measures every text-on-surface pair
+   in both themes (WCAG AA).
+
+   Specificity (P8): `html[data-ds-skin="atlas"]` (0,1,1) beats tokens.css `:root,
+   [data-theme='light']` (0,1,0); the dark block (0,2,1) beats `[data-theme='dark']` (0,1,0).
+   Tokens built with var() are restated in BOTH blocks, so nothing inherits a stale value.
+   theme.ts writes no inline --accent* under the skin (an inline style would beat all of this).
+
+   Hue never decorates: ink is the accent; green / amber / red only say a status, always with a
+   word or an icon. --green/--amber/--blue/--live are the READABLE status inks (Atlas toneText:
+   the hue mixed toward the ink), because this app uses them as text; a fill that carries white
+   text uses the -solid / --live-fill tokens instead.
+   ========================================================================== */
+
+/* ---- Chrome fonts (self-hosted, SIL OFL — public/fonts/LICENSE-OFL.md). The 400 and 600 body
+   weights and the 600 display weight are preloaded by live.html. Hanken Grotesk stays loaded
+   (Google Fonts) only because the compositor draws it into broadcasts and recordings. ---- */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-400-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-500-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-600-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/ibm-plex-sans-latin-700-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-500-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-600-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-latin-700-normal.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ---- Tokens, light (Atlas :root) ---- */
+html[data-ds-skin="atlas"] {
+  color-scheme: light;
+
+  --bg:        #ffffff;                 /* --background            (= --ds-canvas) */
+  --panel:     #ffffff;                 /* --card                  (= --ds-surface) */
+  --panel-2:   #f4f4f4;                 /* --secondary / --muted   (= --ds-surface-soft) */
+  --panel-3:   #efefef;                 /* --accent                (= --ds-accent-soft) */
+  --hover:     #f2f2f2;                 /* --menu-hover            (= --ds-hover) */
+  --line:      rgba(0,0,0,0.10);        /* --border                (= --ds-hairline) */
+  --line-soft: rgba(0,0,0,0.06);        /* border at 60 %          (= --ds-hairline-soft) */
+  --text:      #0a0a0a;                 /* --foreground            (= --ds-ink) */
+  --muted:     #5c5c5c;                 /* --muted-foreground      (= --ds-muted) */
+  --faint:     #6b6b6b;                 /* Stream-only: used as small TEXT, so AA (≥ 4.63:1 on every surface) */
+  --sidebar:   #fafafa;                 /* --sidebar               (= --ds-sidebar) */
+
+  --accent:      #0a0a0a;               /* --primary: ink          (= --ds-accent) */
+  --accent-2:    #2f2f2f;               /* primary at 85 %         (= --ds-accent-hover) */
+  --accent-ink:  #0a0a0a;               /* the readable accent IS the ink (= --ds-accent-text) */
+  --accent-wash: #efefef;               /* --accent                (= --ds-accent-soft) */
+  --on-accent:   #ffffff;               /* --primary-foreground    (= --ds-on-accent) */
+  --chip:        var(--accent-wash);
+
+  /* Status: the hue (marks: dots, bars, edges), the readable ink (text), the tint (surfaces). */
+  --green-mark: #16a34a;                /* --success               (= --ds-success) */
+  --amber-mark: #f59e0b;                /* --warning               (= --ds-warning) */
+  --blue-mark:  #262626;                /* --info: grey, there is no blue (= --ds-info) */
+  --live-mark:  #d4183d;                /* --destructive mark      (= --ds-danger-mark) */
+  --green: color-mix(in srgb, var(--green-mark) 60%, var(--text));  /* = --ds-success-text */
+  --amber: color-mix(in srgb, var(--amber-mark) 57%, var(--text));  /* = --ds-warning-text */
+  --blue:  color-mix(in srgb, var(--blue-mark) 60%, var(--text));   /* = --ds-info-text */
+  --live:  color-mix(in srgb, var(--live-mark) 60%, var(--text));   /* = --ds-danger-text */
+  --green-wash: color-mix(in srgb, var(--green-mark) 10%, var(--panel));
+  --amber-wash: color-mix(in srgb, var(--amber-mark) 10%, var(--panel));
+  --blue-wash:  color-mix(in srgb, var(--blue-mark) 10%, var(--panel));
+  --live-wash:  color-mix(in srgb, var(--live-mark) 10%, var(--panel));
+  /* Fills that carry white text or icons. LIVE / REC is the one red fill, identical in both themes
+     (it sits on or beside the always-dark stage); white on it is 5.25:1. */
+  --live-fill:   #d4183d;               /* = --ds-danger (light) */
+  --green-solid: var(--green);
+  --amber-solid: var(--amber);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);                                          /* soft  (= --ds-shadow-soft) */
+  --shadow:    0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);     /* panel (= --ds-shadow-panel) */
+  --shadow-lg: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);    /* lift  (= --ds-shadow-lift) */
+  /* A focused field: the ink ring with the page between (Atlas ring-2 ring-foreground ring-offset-2). */
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+
+  /* Radius, as Atlas renders it: sm 4 · controls 8 · lg 10 · cards 12 · dialogs 16. */
+  --r-xs: 4px; --r-sm: 8px; --r-md: 10px; --r-lg: 12px; --r-xl: 16px;
+
+  /* Skin-only helpers. */
+  --nav-active:         rgba(0,0,0,0.07);                                   /* --menu-active */
+  --control-border:     color-mix(in srgb, var(--text) 45%, transparent);   /* field edge ≥ 3:1 */
+  --control-border-hover: color-mix(in srgb, var(--text) 60%, transparent);
+  --switch-off:         #d4d4d4;                                            /* --switch-background */
+  --overlay-edge:       rgba(0,0,0,0.08);                                   /* overlays: border/80 */
+  --scrim:              rgba(0,0,0,0.40);
+  --segment-pill-shadow: 0 1px 2px rgb(0 0 0 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --tile-dark: linear-gradient(160deg, #525252, #262626);                  /* camera-off tile (studio.css) */
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* Motion: the --ds-* tokens when a shared motion file is loaded, Atlas's values otherwise. */
+  --motion-fast: var(--ds-motion-fast, 100ms);
+  --motion-panel: var(--ds-motion-panel, 220ms);
+  --motion-enter: var(--ds-motion-enter-slow, 420ms);
+  --motion-enter-quick: var(--ds-motion-enter-quick, 280ms);
+  --motion-stagger: var(--ds-motion-stagger, 40ms);
+  --motion-theme: var(--ds-motion-theme, 260ms);
+  --ease: var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+  --ease-enter: var(--ds-ease-enter, cubic-bezier(0.16, 1, 0.3, 1));
+  --ease-spring: var(--ds-ease-spring, cubic-bezier(0.34, 1.36, 0.64, 1));
+  --header-blur: var(--ds-header-blur, 18px);
+}
+
+/* ---- Tokens, dark (Atlas .dark: the same system inverted). Every derived token restated. ---- */
+html[data-ds-skin="atlas"][data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:        #0a0a0a;
+  --panel:     #111111;
+  --panel-2:   #1a1a1a;
+  --panel-3:   #1f1f1f;
+  --hover:     #1f1f1f;
+  --line:      rgba(255,255,255,0.12);
+  --line-soft: rgba(255,255,255,0.072);
+  --text:      #fafafa;
+  --muted:     #a3a3a3;
+  --faint:     #8a8a8a;                 /* ≥ 4.77:1 on every dark surface */
+  --sidebar:   #0d0d0d;
+
+  --accent:      #fafafa;
+  --accent-2:    #d6d6d6;
+  --accent-ink:  #fafafa;
+  --accent-wash: #1f1f1f;
+  --on-accent:   #0a0a0a;
+  --chip:        var(--accent-wash);
+
+  --green-mark: oklch(0.5 0.15 142);
+  --amber-mark: oklch(0.7 0.15 85);
+  --blue-mark:  #e5e5e5;
+  --live-mark:  oklch(0.637 0.237 25.331);   /* the brighter mark (--destructive-foreground) */
+  --green: color-mix(in srgb, var(--green-mark) 60%, var(--text));
+  --amber: color-mix(in srgb, var(--amber-mark) 60%, var(--text));
+  --blue:  color-mix(in srgb, var(--blue-mark) 60%, var(--text));
+  --live:  color-mix(in srgb, var(--live-mark) 65%, var(--text));
+  --green-wash: color-mix(in srgb, var(--green-mark) 10%, var(--panel));
+  --amber-wash: color-mix(in srgb, var(--amber-mark) 10%, var(--panel));
+  --blue-wash:  color-mix(in srgb, var(--blue-mark) 10%, var(--panel));
+  --live-wash:  color-mix(in srgb, var(--live-mark) 10%, var(--panel));
+  --live-fill:   #d4183d;
+  --green-solid: var(--green-mark);     /* white on it ≥ 4.5:1 (the light readable ink is too pale) */
+  --amber-solid: #905e0b;               /* the light theme's readable amber */
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+  --shadow:    0 16px 36px -16px rgb(0 0 0 / 0.7);
+  /* Overlays in the dark: a deeper shadow and a 1 px light catch along the top (Atlas dark shadow-lg). */
+  --shadow-lg: inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 18px 40px -12px rgb(0 0 0 / 0.75);
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
+
+  --nav-active:         #262626;
+  --control-border:     color-mix(in srgb, var(--text) 45%, transparent);
+  --control-border-hover: color-mix(in srgb, var(--text) 60%, transparent);
+  --switch-off:         #3a3a3a;
+  --overlay-edge:       rgba(255,255,255,0.14);
+  --scrim:              rgba(0,0,0,0.60);
+  --segment-pill-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 0 0 1px rgb(255 255 255 / 0.08);
+  --tile-dark: linear-gradient(160deg, #262626, #111111);
+}
+
+/* Sharp corners stay a choice under the skin (the skin's radii would otherwise win over tokens.css). */
+html[data-ds-skin="atlas"][data-corners="sharp"] { --r-xs: 2px; --r-sm: 3px; --r-md: 4px; --r-lg: 5px; --r-xl: 6px; }
+
+/* OS "increase contrast" (Atlas wave 5): hairlines become edges, secondary text darkens. */
+@media (prefers-contrast: more) {
+  html[data-ds-skin="atlas"] {
+    --line: rgba(0,0,0,0.32);
+    --line-soft: color-mix(in srgb, var(--line) 60%, transparent);
+    --muted: #404040;
+    --faint: #525252;
+    --control-border: color-mix(in srgb, var(--text) 70%, transparent);
+    --control-border-hover: var(--text);
+  }
+  html[data-ds-skin="atlas"][data-theme="dark"] {
+    --line: oklch(0.52 0 0);
+    --line-soft: color-mix(in srgb, var(--line) 60%, transparent);
+    --muted: #d4d4d4;
+    --faint: #b8b8b8;
+  }
+}
+
+/* ============================================================== base rules */
+html[data-ds-skin="atlas"] body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-kerning: normal;
+  font-feature-settings: "kern", "liga", "calt";
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  scrollbar-color: color-mix(in srgb, var(--text) 22%, transparent) transparent;
+}
+html[data-ds-skin="atlas"] ::selection { background: var(--text); color: var(--bg); }
+html[data-ds-skin="atlas"] *::-webkit-scrollbar-thumb { background-color: color-mix(in srgb, var(--text) 22%, transparent); }
+html[data-ds-skin="atlas"] *::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--text) 38%, transparent); }
+/* Keyboard focus: tokens.css already draws the 2 px outline 2 px off in --accent, which is the ink
+   here (the Atlas base rule). 3 px when the OS asks for more contrast, the system colour in forced
+   colours — at :where() weight, so a component that hides its own focus (a heading focused for
+   screen readers) still does. */
+@media (prefers-contrast: more) { :where(html[data-ds-skin="atlas"]) :focus-visible { outline-width: 3px; } }
+@media (forced-colors: active) { :where(html[data-ds-skin="atlas"]) :focus-visible { outline-color: Highlight; } }
+/* Headings wrap into even lines; running text avoids a lone last word (the longhands on purpose:
+   the shorthand would also reset text-wrap-mode and break a nowrap parent). */
+html[data-ds-skin="atlas"] :is(h1, h2, h3, h4) { text-wrap-style: balance; }
+html[data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote) { text-wrap-style: pretty; }
+
+/* ============================================================== typography */
+/* Display face (Space Grotesk 600, Atlas page-title tracking) where the serif was: page titles,
+   sheet / card titles that carried .serif, big numbers and the stage slates. */
+html[data-ds-skin="atlas"] :is(.serif, .page-title, .st-value, .nc-name, .mv-title, .mvs-state, .cam-sheet-head b,
+  .mv-takeover h2, .bs-clock, .viewer-slate .vs-title, .preview-slate .slate-title) {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+html[data-ds-skin="atlas"] .page-title { font-size: 30px; line-height: 1.15; }
+html[data-ds-skin="atlas"] .page-sub { font-size: 14.5px; line-height: 1.55; }
+/* The metrics overlay is chrome, not broadcast content. */
+html[data-ds-skin="atlas"] .metrics-ov h4 { font-family: var(--font-sans); }
+/* The wordmark beside the mark: display face, "Studio" at 55 % (the Atlas lockup). */
+html[data-ds-skin="atlas"] :is(.rail-logo, .gate-brand) { font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -0.02em; }
+html[data-ds-skin="atlas"] :is(.rail-logo, .gate-brand) .sub { color: inherit; font-weight: 600; opacity: 0.55; }
+
+/* Eyebrows → the Atlas overline: 11 px / 600 / 0.12em, uppercase, muted. */
+html[data-ds-skin="atlas"] :is(.nav-sect, .inv-sect, .inv-sub, .save-label, .help-sect h3, .mv-sect-title, .mv-log-day,
+  .cam-extras-title, .al-glabel, .usage-group-title, .epick-name, .scene-strip .ss-head h4, .people-sect,
+  .health-tile .ht-label) {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* A calendar tile's month is a date, not a status: ink, not red. */
+html[data-ds-skin="atlas"] .ev-cal-m { color: var(--muted); }
+
+/* ================================================================ controls */
+html[data-ds-skin="atlas"] .btn { font-weight: 500; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease), transform var(--motion-panel) var(--ease-spring); }
+html[data-ds-skin="atlas"] .btn:active:not(:disabled) { transform: scale(0.98); transition-duration: var(--motion-fast); }
+html[data-ds-skin="atlas"] :is(.btn-sm, .btn-lg) { border-radius: var(--r-sm); }   /* every control is 8 px */
+html[data-ds-skin="atlas"] .btn-md { padding: 10px 16px; font-size: 14px; }
+html[data-ds-skin="atlas"] .btn-ghost:hover:not(:disabled) { border-color: color-mix(in srgb, var(--text) 25%, transparent); background: var(--hover); }
+html[data-ds-skin="atlas"] .pill { border-radius: var(--r-sm); font-weight: 500; }
+html[data-ds-skin="atlas"] :is(.input, .textarea, .select) { background: var(--bg); border-color: var(--control-border); }
+html[data-ds-skin="atlas"] :is(.input, .textarea, .select):hover:not(:focus):not(:disabled) { border-color: var(--control-border-hover); }
+html[data-ds-skin="atlas"] :is(.input, .textarea, .select):focus { border-color: var(--text); }
+/* Switch: a grey track off, ink on; the knob flips to the page colour on ink in the dark. */
+html[data-ds-skin="atlas"] .toggle { background: var(--switch-off); }
+html[data-ds-skin="atlas"] .toggle.on { background: var(--accent); }
+html[data-ds-skin="atlas"] .toggle.on .toggle-knob { background: var(--on-accent); }
+html[data-ds-skin="atlas"] .toggle-knob { transition: left var(--motion-panel) var(--ease-spring); }
+/* Segmented: the raised pill of Atlas PanelTabs. */
+html[data-ds-skin="atlas"] .segmented { background: color-mix(in srgb, var(--panel-2) 60%, transparent); border-color: color-mix(in srgb, var(--line) 70%, transparent); }
+html[data-ds-skin="atlas"] .seg.active { background: var(--bg); box-shadow: var(--segment-pill-shadow); }
+html[data-ds-skin="atlas"][data-theme="dark"] .seg.active { background: #1f1f1f; }
+/* Dashboard stat tiles: their icon chips were tinted per tile (decoration) — ink on grey here. */
+html[data-ds-skin="atlas"] .st-ic { color: var(--text); background: var(--panel-2); }
+/* Cover swatches and selected looks: the ink ring. */
+html[data-ds-skin="atlas"] .cover-sw.sel { border-color: var(--text); }
+
+/* ============================================================ status fills */
+/* LIVE / REC and every red badge carrying white: the one red fill. */
+html[data-ds-skin="atlas"] :is(.btn-live, .tbtn.rec.on, .ms-end, .ms-round.rec-on, .pv-ctl.rec, .nav-badge, .fav-x, .mv-talking,
+  .guard.st-bad .guard-dot) {
+  --live: var(--live-fill);
+}
+html[data-ds-skin="atlas"] .btn-live:hover:not(:disabled) { filter: none; background: color-mix(in srgb, var(--live-fill) 88%, #000); }
+/* Green / amber fills carrying white text or a white check. */
+html[data-ds-skin="atlas"] :is(.cam-check-dot, .setup-steps li.done .setup-num, .guard-dot, .ts-food b, .call-chip.video) {
+  --green: var(--green-solid);
+  --amber: var(--amber-solid);
+}
+/* LIVE badges written over video. */
+html[data-ds-skin="atlas"] :is(.lh-live, .vj-live, .ov-pill.live, .ov-pill.rec, .state-chip.tone-live) {
+  background: color-mix(in srgb, var(--live-fill) 92%, transparent);
+}
+html[data-ds-skin="atlas"] .pv-ctl.off { background: color-mix(in srgb, var(--live-fill) 82%, transparent); }
+
+/* ================================================================== shell */
+html[data-ds-skin="atlas"] .rail { background: var(--sidebar); }
+html[data-ds-skin="atlas"] :is(.nav-item, .set-nav-item) { color: var(--muted); font-weight: 500; transition: background-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
+html[data-ds-skin="atlas"] :is(.nav-item, .set-nav-item):hover { background: var(--hover); color: var(--text); }
+html[data-ds-skin="atlas"] :is(.nav-item, .set-nav-item).active { background: var(--nav-active); color: var(--text); font-weight: 600; }
+html[data-ds-skin="atlas"] .rail-collapse { color: var(--muted); }
+/* Tabs: the ink underline. */
+html[data-ds-skin="atlas"] .tab.active::after { background: var(--text); }
+
+/* Phones: the top bar and the tab bar are the only frosted surfaces (the Atlas header recipe). */
+@media (max-width: 640px) {
+  html[data-ds-skin="atlas"] :is(.mtop, .tabbar) {
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    -webkit-backdrop-filter: saturate(1.4) blur(var(--header-blur));
+    backdrop-filter: saturate(1.4) blur(var(--header-blur));
+  }
+  html[data-ds-skin="atlas"] .mtop { gap: 2px; padding-left: 16px; padding-right: 10px; }
+  html[data-ds-skin="atlas"] .tabbar { padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); gap: 2px; }
+  html[data-ds-skin="atlas"] .tab-item {
+    position: relative; min-height: 52px; gap: 3px; padding: 4px 2px; border-radius: 12px;
+    font-size: 11.5px; font-weight: 500; line-height: 14px; color: var(--muted); background: none;
+  }
+  html[data-ds-skin="atlas"] .tab-item .tab-ic {
+    display: grid; place-items: center; width: 48px; height: 28px; border-radius: 999px;
+    transition: background-color var(--motion-panel) var(--ease), color var(--motion-panel) var(--ease);
+  }
+  /* The current place: an ink pill behind the icon, the label in ink (Atlas's active row). */
+  html[data-ds-skin="atlas"] .tab-item.active { color: var(--text); background: none; font-weight: 600; }
+  html[data-ds-skin="atlas"] .tab-item.active .tab-ic { background: var(--text); color: var(--bg); }
+  html[data-ds-skin="atlas"] .tab-item .nav-badge { top: 0; left: calc(50% + 8px); }
+}
+
+/* ================================================================ overlays */
+html[data-ds-skin="atlas"] :is(.sheet-scrim, .help-scrim) { background: var(--scrim); -webkit-backdrop-filter: none; backdrop-filter: none; }
+html[data-ds-skin="atlas"] .tour-scrim { background: rgba(0,0,0,0.5); }
+html[data-ds-skin="atlas"] .tour-hole { box-shadow: 0 0 0 9999px rgba(0,0,0,0.5), 0 0 0 3px var(--accent); }
+html[data-ds-skin="atlas"] :is(.sheet, .acct-menu, .tour-card, .help-panel, .emoji-pop, .mfa-nudge, .call-confirm, .ready-check,
+  .cam-issue, .mv-soothe) {
+  border-color: var(--overlay-edge);
+}
+html[data-ds-skin="atlas"] .sheet-icon { background: var(--panel-2); color: var(--text); }
+
+/* ============================================================ the stage room */
+/* The video stage and previews stay a dark room in both themes — neutral black, not warm. */
+html[data-ds-skin="atlas"] :is(.lh-preview, .preview, .preview .program-video, .preview .cam-video, .viewer-stage video, .vm-video,
+  .vj-preview, .se-thumb, .gv-preview, .scene-thumb, .phone-screen, .mstudio-fill, .ms-video, .ms-scene-thumb) {
+  background-color: #0a0a0a;
+}
+html[data-ds-skin="atlas"] :is(.gv-stage, .cam-run, .cam-video, .mv-stage, .call-root, .call-tiles, .ze-frame, .phone, .phone-notch) {
+  background-color: #0a0a0a;
+}
+html[data-ds-skin="atlas"] .call-tile { background-color: #111111; }
+html[data-ds-skin="atlas"] :is(.viewer-slate, .preview-slate, .scene.brb) { background: linear-gradient(160deg, #1f1f1f, #0a0a0a); }
+/* Selected controls ON the stage: white on the dark room, whatever the page theme. */
+html[data-ds-skin="atlas"] :is(.ov-pill.active, .ms-round.active, .mv-ctl.on, .mv-listen, .ms-golive, .gv-sharing) {
+  background: #fafafa; color: #0a0a0a;
+}
+html[data-ds-skin="atlas"] :is(.brb-orb, .preview-slate .brb-orb) { background: #fafafa; }
+html[data-ds-skin="atlas"] :is(.brb-orb, .preview-slate .brb-orb) span { background: #0a0a0a; }
+html[data-ds-skin="atlas"] .vc-react.more.active { background: var(--accent); color: var(--on-accent); }
+/* Status words written ON the stage (the cream studio used its pale tints as text there; under the
+   skin's dark theme those tints are dark): fixed pale inks, whatever the page theme. */
+html[data-ds-skin="atlas"] :is(.call-busy, .call-ring.stranger .call-ring-who span, .cam-busy svg) { color: #dcbd64; }
+html[data-ds-skin="atlas"] .call-relay-tag { color: #e5e5e5; }
+/* Keyboard focus on the stage: a light outline (cards floating on it keep the ink one). */
+html[data-ds-skin="atlas"] :is(.preview-wrap, .viewer-stage, .vm-video, .mstudio-fill, .cam-run, .mv-stage, .call-root, .gv-stage, .bedside)
+  :focus-visible:not(:is(.card, .sheet, .ready-check, .cam-issue, .mv-soothe) *) {
+  outline-color: #fafafa;
+}
+
+/* ================================================================== motion */
+/* Entrances (Atlas rise-in / scale-in): CSS only, so content never waits on script to appear;
+   they end at `transform: none` and fill backwards, so nothing arrived keeps a transform. */
+@keyframes live-rise-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes live-scale-in { from { opacity: 0; transform: scale(0.96); } }
+html[data-ds-skin="atlas"] .fade-in { animation: live-rise-in var(--motion-enter) var(--ease-enter) backwards; }
+/* A page arrives section by section, 40 ms apart (the first eight; the rest with the eighth). */
+html[data-ds-skin="atlas"] .page.fade-in { animation: none; }
+html[data-ds-skin="atlas"] .page.fade-in > * {
+  animation: live-rise-in var(--motion-enter) var(--ease-enter) backwards;
+  animation-delay: calc(var(--live-i, 7) * var(--motion-stagger));
+}
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(1) { --live-i: 0; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(2) { --live-i: 1; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(3) { --live-i: 2; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(4) { --live-i: 3; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(5) { --live-i: 4; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(6) { --live-i: 5; }
+html[data-ds-skin="atlas"] .page.fade-in > :nth-child(7) { --live-i: 6; }
+/* Dialogs and tour cards scale in (on phones sheets keep their slide up from the edge). */
+@media (min-width: 641px) {
+  html[data-ds-skin="atlas"] :is(.sheet, .tour-card).fade-in { animation: live-scale-in var(--motion-enter-quick) var(--ease-enter) backwards; }
+}
+html[data-ds-skin="atlas"] .toast { animation: live-rise-in var(--motion-enter-quick) var(--ease-enter) backwards; }
+
+/* A theme flip: one cross-fade of the page (theme.ts switchTheme), no per-element colour fades. */
+html[data-ds-skin="atlas"].live-theme-transition::view-transition-old(root),
+html[data-ds-skin="atlas"].live-theme-transition::view-transition-new(root) {
+  animation-duration: var(--motion-theme);
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+html[data-ds-skin="atlas"].live-no-transitions,
+html[data-ds-skin="atlas"].live-no-transitions *,
+html[data-ds-skin="atlas"].live-no-transitions *::before,
+html[data-ds-skin="atlas"].live-no-transitions *::after {
+  transition: none !important;
+}
+
+/* Reduced motion: no entrances, no press or spring; loops are already held by app.css. */
+@media (prefers-reduced-motion: reduce) {
+  html[data-ds-skin="atlas"] :is(.fade-in, .page.fade-in > *, .toast) { animation: none; }
+  html[data-ds-skin="atlas"] .btn:active:not(:disabled) { transform: none; }
+  html[data-ds-skin="atlas"] :is(.btn, .toggle-knob, .tab-item .tab-ic) { transition: none; }
+}

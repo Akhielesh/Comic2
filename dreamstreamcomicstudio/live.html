@@ -1,10 +1,13 @@
 <!doctype html>
-<html lang="en" data-theme="light" data-density="calm" data-corners="soft">
+<html lang="en" data-density="calm" data-corners="soft" data-ds-skin="atlas">
   <head>
     <meta charset="UTF-8" />
     <!-- interactive-widget keeps the chat composer above the phone keyboard -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
-    <meta name="theme-color" content="#f4f2ea" />
+    <!-- The browser chrome takes the page's own colour. Before the bundle the OS scheme picks one;
+         live-theme-boot.js (below) and live/theme.ts then set both to the in-app theme. -->
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Stream Studio — go live from your browser (viewers join with just a name), plus a private, never-recording baby monitor." />
     <title>Stream Studio</title>
     <link rel="icon" type="image/svg+xml" href="/stream-studio.svg" />
@@ -13,19 +16,88 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Stream Studio" />
+    <!-- The stored theme, density and corners before first paint: an external file, because this page
+         allows no inline script (CSP script-src 'self'). The ?v= is the file's content hash
+         (live/themeBoot.unit.test.ts keeps it current), so it can be cached for good. -->
+    <script src="/live-theme-boot.js?v=9cf4ea09"></script>
+    <!-- Chrome fonts, self-hosted (@font-face in live/styles/atlas-skin.css): the body and label
+         weights, and the display face the wordmark and page titles use. -->
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/space-grotesk-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Hanken Grotesk is content: live/studio/compositor.ts draws it into broadcasts and recordings.
+         JetBrains Mono sets the .mono figures (timers, codes, sizes). -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400;1,6..72,500&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
+    <!-- The boot splash (inside #live-root until React replaces it) and the account splash that
+         follows it (live/views/account/SignInGate.tsx GateSplash) share these rules, so the swap moves
+         nothing. Colours come from the bundle's tokens (its stylesheet is render-blocking, so they're
+         here at first paint), with fallbacks; without JavaScript the OS colour scheme picks. -->
+    <style>
+      .boot-page {
+        box-sizing: border-box; min-height: 100vh; min-height: 100dvh; width: 100%;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+        background: var(--bg, #ffffff); color: var(--text, #0a0a0a);
+        font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      .boot { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+      .boot-mark { display: block; width: 44px; height: 44px; color: var(--text, #0a0a0a); }
+      .boot-mark svg { display: block; }
+      .boot-word {
+        font-family: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap;
+      }
+      .boot-word span { opacity: 0.55; }
+      .boot-bar {
+        position: relative; width: 120px; height: 2px; overflow: hidden; border-radius: 2px;
+        background: var(--line, rgba(0, 0, 0, 0.1));
+        opacity: 0; animation: live-boot-show 0.2s ease 0.4s forwards;
+      }
+      .boot-bar i {
+        position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: currentColor;
+        animation: live-boot-sweep 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+      }
+      .boot-note {
+        position: relative; margin: 0; min-height: 20px; max-width: 320px; text-align: center;
+        font-size: 13px; line-height: 20px; color: var(--muted, #5c5c5c);
+      }
+      /* Out of the flow, so the splash keeps the account splash's exact height. */
+      .boot-slow {
+        position: absolute; top: 0; left: 50%; width: 300px; margin-left: -150px;
+        opacity: 0; animation: live-boot-show 0.3s ease 12s forwards;
+      }
+      .boot-sr {
+        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+        clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+      }
+      @keyframes live-boot-show { to { opacity: 1; } }
+      @keyframes live-boot-sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+      @media (prefers-color-scheme: dark) {
+        html:not([data-theme]) .boot-page { background: #0a0a0a; color: #fafafa; }
+        html:not([data-theme]) .boot-mark { color: #fafafa; }
+        html:not([data-theme]) .boot-bar { background: rgba(255, 255, 255, 0.12); }
+        html:not([data-theme]) .boot-note { color: #a3a3a3; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        /* No moving line, but its box stays, so both splashes keep the same height. */
+        .boot-bar { visibility: hidden; }
+        .boot-slow { animation-duration: 0s; }
+      }
+    </style>
+    <noscript><style>.boot-bar, .boot-slow { display: none; }</style></noscript>
   </head>
   <body style="margin:0">
-    <div id="live-root"></div>
+    <div id="live-root"><div class="boot-page" data-live-boot=""><div class="boot"><svg class="boot-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true" focusable="false"><mask id="live-boot-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" rx="16" fill="#fff"/><path d="M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/><circle cx="32" cy="32" r="3.6" fill="#000"/></mask><rect width="64" height="64" rx="16" fill="currentColor" mask="url(#live-boot-cut)"/></svg><span class="boot-word" aria-hidden="true">Stream <span>Studio</span></span><span class="boot-bar" aria-hidden="true"><i></i></span><p class="boot-note" role="status"><span class="boot-sr">Opening Stream Studio…</span><span class="boot-slow">Still loading — check your connection, then reload this page.</span><noscript>Stream Studio needs JavaScript. Turn it on for this site, then reload the page.</noscript></p></div></div></div>
     <!-- No inline scripts and no on* attributes here, ever: this page runs under an
          enforceable CSP with script-src 'self' (functions/_middleware.ts). Anything that
-         must run before the bundle goes in a file under /assets, or gets a hash in the
-         policy. tests/edge/liveCsp.built.test.ts checks the BUILT page against the header. -->
+         must run before the bundle goes in a file under /assets or public/ (like
+         live-theme-boot.js above), or gets a hash in the policy.
+         tests/edge/liveCsp.built.test.ts checks the BUILT page against the header. -->
     <script type="module" src="/live/main.tsx"></script>
   </body>
 </html>

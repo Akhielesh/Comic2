@@ -162,6 +162,9 @@ Auth: reuse Supabase sessions. Roles per event: `host`, `moderator`, `viewer`
 
 ## 6. Design language (see mockup)
 
+> **Current look: the Atlas skin (§13).** What follows is the original v1 brief; the
+> shipped surface moved to "calm studio" (§9) and then to the Atlas language (§13).
+
 Minimalist and quiet: Inter, hairline borders, 12 px radii, generous whitespace, one
 accent per state (red = live/record, brand yellow reserved for primary CTAs), true
 light + dark themes via CSS variables (`data-theme`), no chrome that competes with the
@@ -553,3 +556,55 @@ defaulted, meeting end log, `ice` STUN-only vs STUN+TURN, never for viewers).
 **Real-device QA still owed:** iOS Safari (audio unlock, share sheet), Android Chrome, a
 guest on mobile data (needs TURN), a 3-person meeting where guests hear each other with
 no echo.
+
+## 13. The Atlas look (2026-11-05)
+
+Stream Studio speaks the Atlas Studio language — the same one Comic Studio's
+`data-ds-skin="atlas"` uses (`docs/design/atlas-skin.md`): monochrome white paper and
+black ink, hue only for status (always with a word or an icon), IBM Plex Sans body at
+14 px, Space Grotesk 600 for page titles and big numbers, 8 px controls, 12 px cards,
+16 px dialogs, Atlas shadows (dark overlays get a light hairline edge), Atlas motion.
+
+**How it is wired (no rewrite of the 2,990 lines of `live/styles/*.css`):**
+
+- `live.html` carries `data-ds-skin="atlas"` on `<html>` statically (no script; the build's
+  kill switch strips it, and without it Stream Studio is the cream-and-clay studio exactly
+  as before).
+- `live/styles/atlas-skin.css` (imported last by `live/main.tsx`) re-points Stream's own
+  tokens (`--bg --panel --text --muted --faint --accent* --green/--amber/--blue/--live …`)
+  to the Atlas values in a light and a dark block, then fixes only what tokens can't
+  reach: hard-coded serif fonts, eyebrow labels (the Atlas overline), the always-dark stage
+  ("room": neutral black in both themes; controls selected on it are white), the red
+  LIVE / REC fills, overlays, the phone tab bar, motion. `--green/--amber/--blue/--live` are
+  the *readable* status inks (Atlas toneText) because the app uses them as text; a fill
+  carrying white text uses `--live-fill` / `--green-solid` / `--amber-solid`.
+- `live/theme.ts`: under the skin no `--accent*` is written inline (an inline style beats
+  every stylesheet), the accent picker is gone (hue never decorates) and a stored accent is
+  ignored, not deleted. Theme (light by default, whatever the OS says), density (calm/pro)
+  and corners (soft/sharp) stay the person's choice. A theme flip is one view-transition
+  cross-fade. `<meta name="theme-color">` follows the in-app theme (`#ffffff` / `#0a0a0a`).
+  New events start on the ink cover; covers stay the host's choice.
+- Fonts are self-hosted from `/fonts/*.woff2` (Plex 400 and 600 and Grotesk 600
+  preloaded). Hanken Grotesk still loads: the compositor draws it into broadcasts and
+  recordings (content). Newsreader is gone. JetBrains Mono stays for `.mono` figures.
+- **Boot:** a static splash in `#live-root` (the on-air mark, the wordmark, a progress line
+  that appears after 400 ms, a CSS-only "still loading" line after 12 s, a `<noscript>`
+  note) instead of a blank page. `public/live-theme-boot.js` (a plain external script —
+  the page allows no inline script) applies the stored theme / density / corners before
+  first paint. The account splash (`SignInGate` `GateSplash`) reuses the splash's rules and
+  continues its progress line (`live/bootSplash.ts`), so the hand-over moves nothing.
+- **Navigation:** the phone tab bar has five places (Dashboard, Go live, Monitor, Calls,
+  Settings; labels ≥ 11 px, 52 px targets, the current one an ink pill). Help & tours moved
+  to the phone top bar (and stays in the account menu), next to a theme switch phones never
+  had (44 px targets). The desktop
+  rail keeps its collapse; its active row is the Atlas menu-active fill.
+
+**Tests:** `live/styles/atlasSkinParity.unit.test.ts` (every mapped colour equals the
+`--ds-*` value in `index.css`'s Atlas block, both themes — the two layers can't drift),
+`live/styles/atlasSkinContrast.unit.test.ts` (every token pair, and a scan of every rule
+that colours text with a token, AA in both themes), `live/theme.unit.test.ts` (both
+looks), `live/themeBoot.unit.test.ts` (the boot script decides exactly what `theme.ts`
+decides; its content-hash URL and caching), `live/liveHtml.unit.test.ts` (the static page:
+attribute, no inline script, theme-color pair, fonts, splash), `live/LiveApp.nav.unit.test.tsx`
+(five tabs, Help and theme in the top bar, the accent picker only without the skin), and
+`tests/edge/liveCsp.built.test.ts` against the built page.

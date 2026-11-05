@@ -12,7 +12,7 @@ import { studioUrl, viewerUrl } from '../nav';
 import { loadPrefs, savePrefs } from '../prefs';
 import { autoTitle, loadAdvancedOpen, quickDefaultsLine, saveAdvancedOpen, takeScheduleRequest, type QuickKind } from '../quickStart';
 import { downloadIcs } from '../schedule';
-import { COVER_THEMES } from '../theme';
+import { COVER_THEMES, coverGradient, defaultCover } from '../theme';
 import { Icon } from '../ui/icons';
 import { Btn, Field, LinkBox, Segmented, Toggle, cx, redactUrlSearchParams, type PushToast } from '../ui/primitives';
 import { QuickStart } from './create/QuickStart';
@@ -35,7 +35,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [date, setDate] = useState('');
   const [time, setTime] = useState('18:00');
   const [desc, setDesc] = useState('');
-  const [cover, setCover] = useState(0);
+  const [cover, setCover] = useState(defaultCover);
   const [quality, setQuality] = useState(prefs.qualityId);
   const [access, setAccess] = useState<'open' | 'approval'>('open');
   const [cap, setCap] = useState(100);
@@ -330,7 +330,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
           <Field label="Cover theme" hint="for the invite page">
             <div className="cover-row" role="radiogroup" aria-label="Cover theme">
-              {COVER_THEMES.map((c, i) => (
+              {COVER_THEMES.map((_, i) => (
                 <button
                   key={i}
                   type="button"
@@ -338,7 +338,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
                   aria-checked={cover === i}
                   aria-label={`Cover theme ${i + 1}`}
                   className={cx('cover-sw', cover === i && 'sel')}
-                  style={{ background: `linear-gradient(135deg, ${c[0]}, ${c[1]})`, border: cover === i ? undefined : '2px solid transparent' }}
+                  style={{ background: coverGradient(i), border: cover === i ? undefined : '2px solid transparent' }}
                   onClick={() => setCover(i)}
                 />
               ))}

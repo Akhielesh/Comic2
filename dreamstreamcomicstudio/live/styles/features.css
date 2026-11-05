@@ -103,7 +103,9 @@
     background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(12px);
     border-top: 1px solid var(--line); padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
   }
-  .tab-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: none; background: none; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 600; cursor: pointer; border-radius: 10px; min-height: 48px; }
+  /* Five tabs at most (Help is in the top bar), so labels stay ≥ 11 px at 360 px. */
+  .tab-item { position: relative; flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: none; background: none; color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; border-radius: 10px; min-height: 48px; }
+  .mtop .mtop-btn { width: 44px; height: 44px; flex: none; }
   .tab-item.active { color: var(--accent-ink); background: var(--accent-wash); }
   .content.has-tabbar { padding-bottom: calc(68px + env(safe-area-inset-bottom)); padding-top: calc(52px + env(safe-area-inset-top)); }
   .mtop {

@@ -20,6 +20,7 @@ import { LiveLegalLinks } from '../../ui/legalLinks';
 import { StreamStudioLogo, StreamStudioMark } from '../../ui/logo';
 import { Avatar, Btn, type PushToast } from '../../ui/primitives';
 import { askForCode } from './StepUp';
+import { bootLineStyles } from '../../bootSplash';
 import './account.css';
 
 export type GateScreen = Exclude<Gate, 'open'>;
@@ -51,12 +52,20 @@ export function SignInGate({ gate, view, finishing, push }: {
   return <SignIn view={view} />;
 }
 
+/**
+ * The same layout as live.html's boot splash (its .boot-* rules), so the boot splash hands over to
+ * this one without anything moving: the mark, the wordmark, the progress line (continued from the
+ * boot splash's, live/bootSplash.ts), and the line that says what's happening.
+ */
 function GateSplash({ finishing }: { finishing?: boolean }) {
+  const [line] = useState(bootLineStyles);
   return (
-    <main className="gate-page" aria-busy="true">
-      <div className="gate-splash" role="status">
-        <span aria-hidden="true"><StreamStudioMark size={44} /></span>
-        <span className="gate-splash-text">{finishing ? 'Finishing sign-in…' : 'Checking your account…'}</span>
+    <main className="gate-page boot-page" aria-busy="true">
+      <div className="boot">
+        <span className="boot-mark" aria-hidden="true"><StreamStudioMark size={44} /></span>
+        <span className="boot-word" aria-hidden="true">Stream <span>Studio</span></span>
+        <span className="boot-bar" aria-hidden="true" style={line.bar}><i style={line.sweep} /></span>
+        <p className="boot-note gate-splash-text" role="status">{finishing ? 'Finishing sign-in…' : 'Checking your account…'}</p>
       </div>
     </main>
   );

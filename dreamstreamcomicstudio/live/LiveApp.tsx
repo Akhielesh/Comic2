@@ -20,7 +20,7 @@ import { sweepDiscardedRecordings } from './components/SaveSheet';
 import { findMyEvent } from './events';
 import type { Nav } from './nav';
 import { pullPrefsFromCloud } from './sync';
-import { ACCENTS, applyAppearance, loadAppearance, saveAppearance, type Appearance } from './theme';
+import { ACCENTS, applyAppearance, atlasSkin, loadAppearance, saveAppearance, switchTheme, type Appearance } from './theme';
 import { CreateView } from './views/CreateView';
 import { DashboardView } from './views/DashboardView';
 import { EventPage } from './views/EventPage';
@@ -158,6 +158,15 @@ const NAV_ITEMS = [
   { id: 'calls', label: 'Calls', icon: 'video' },
   { id: 'settings', label: 'Customize', icon: 'sliders' },
 ] as const;
+
+/** The phone tab bar's short labels (five tabs, so each stays readable at 360 px). */
+export const TAB_LABELS: Record<(typeof NAV_ITEMS)[number]['id'], string> = {
+  dashboard: 'Dashboard',
+  create: 'Go live',
+  monitor: 'Monitor',
+  calls: 'Calls',
+  settings: 'Settings',
+};
 
 const TOUR_FOR: Partial<Record<Route['view'], TourId>> = {
   dashboard: 'welcome',
@@ -338,6 +347,16 @@ export function LiveApp() {
     applyAppearance(appearance);
     saveAppearance(appearance);
   }, [appearance]);
+  // Read once: the attribute is static in live.html (the build's kill switch strips it).
+  const [skin] = useState(atlasSkin);
+  const toggleTheme = () => {
+    const next: Appearance = { ...appearance, theme: appearance.theme === 'dark' ? 'light' : 'dark' };
+    // Under the skin, one cross-fade of the whole page (theme.ts switchTheme); the effect above then
+    // re-applies the same values and saves them.
+    switchTheme(() => applyAppearance(next));
+    setAppearance(next);
+  };
+  const themeLabel = appearance.theme === 'dark' ? 'Light mode' : 'Dark mode';
 
   // Account settings follow the user: adopt cloud prefs when they're newer.
   // Also purge disk copies of recordings that were downloaded a while ago.
@@ -504,14 +523,12 @@ export function LiveApp() {
             </button>
           </div>
           <div className="rail-foot">
-            <button
-              className="nav-item"
-              onClick={() => setAppearance((a) => ({ ...a, theme: a.theme === 'dark' ? 'light' : 'dark' }))}
-            >
+            <button className="nav-item" onClick={toggleTheme} aria-label={themeLabel}>
               <Icon name={appearance.theme === 'dark' ? 'sun' : 'moon'} size={18} />
-              <span className="nav-label">{appearance.theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+              <span className="nav-label">{themeLabel}</span>
             </button>
-            {railOpen && (
+            {/* Accent hues decorate; under the Atlas skin hue is for status only, so no picker. */}
+            {railOpen && !skin && (
               <div className="accent-swatches" role="radiogroup" aria-label="Accent color">
                 {Object.entries(ACCENTS).map(([k, a]) => (
                   <button
@@ -541,24 +558,30 @@ export function LiveApp() {
         )}
       </div>
 
-      {/* Phones: compact top bar (brand + account) and a thumb-reach bottom tab bar. */}
+      {/* Phones: compact top bar (brand, help, theme, account) and a thumb-reach bottom tab bar of
+          the five places — Help lives up here (and in the account menu), not in the tab bar. */}
       {!fullBleed && (
         <header className="mtop">
-          <button className="rail-logo" onClick={() => nav.dashboard()}><StreamStudioLogo /></button>
+          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Stream Studio — dashboard"><StreamStudioLogo /></button>
           <span className="spacer" />
+          <button className="iconbtn mtop-btn" onClick={openHelp} data-tour="help" aria-label="Help & tours" title="Help & tours">
+            <Icon name="help" size={20} />
+          </button>
+          <button className="iconbtn mtop-btn" onClick={toggleTheme} aria-label={themeLabel} title={themeLabel}>
+            <Icon name={appearance.theme === 'dark' ? 'sun' : 'moon'} size={20} />
+          </button>
           <AccountButton onSettings={() => nav.settings()} push={push} compact />
         </header>
       )}
       {!fullBleed && (
         <nav className="tabbar" aria-label="Main">
           {NAV_ITEMS.map((n) => (
-            <button key={n.id} className={cx('tab-item', activeNav === n.id && 'active')} aria-current={activeNav === n.id ? 'page' : undefined} onClick={() => nav[n.id]()}>
-              <Icon name={n.icon} size={20} />
-              <span>{n.id === 'create' ? 'Go live' : n.id === 'monitor' ? 'Monitor' : n.label === 'Customize' ? 'Settings' : n.label}</span>
-              {n.id === 'calls' && missed > 0 && <span className="nav-badge">{missed}</span>}
+            <button key={n.id} className={cx('tab-item', activeNav === n.id && 'active')} aria-current={activeNav === n.id ? 'page' : undefined} onClick={() => nav[n.id]()} data-tour={`nav-${n.id}`}>
+              <span className="tab-ic"><Icon name={n.icon} size={20} /></span>
+              <span className="tab-label">{TAB_LABELS[n.id]}</span>
+              {n.id === 'calls' && missed > 0 && <span className="nav-badge" aria-label={`${missed} missed`}>{missed}</span>}
             </button>
           ))}
-          <button className="tab-item" onClick={openHelp} data-tour="help"><Icon name="help" size={20} /><span>Help</span></button>
         </nav>
       )}
 
