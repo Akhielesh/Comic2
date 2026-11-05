@@ -224,6 +224,16 @@ const STAGED_FOR_STREAM = new Set([
   '/icons/stream-badge-96.png',
 ]);
 
+/**
+ * Generated at a long-standing address that must keep answering after nothing current names it.
+ * /stream-studio.svg: step 2a moves live.html, public/live-sw.js and live/monitor/push.ts to the
+ * files above, but installs, bookmarks and notifications made before that still ask for it, so it
+ * stays a generator output (the On-air favicon) and stays a static file (public/_routes.json).
+ */
+const KEPT_FOR_OLD_LINKS = new Set(['/stream-studio.svg']);
+
+const GENERATED = ICON_SETS.flatMap((s) => s.outputs.map((o) => `/${o.file.replace(/^public\//, '')}`));
+
 describe('icon paths named in code', () => {
   it('every literal /icons/…, /favicon.ico or /stream-studio.svg in the app code exists', () => {
     const refs = codeRefs();
@@ -231,7 +241,7 @@ describe('icon paths named in code', () => {
     for (const [src, from] of refs) expect(existsSync(publicFile(src)), `${src} (named in ${from})`).toBe(true);
   });
 
-  it('every generated icon is used: by a manifest, a page head, the comics edge or app code (or staged for Stream Studio)', () => {
+  it('every generated icon is used: by a manifest, a page head, the comics edge or app code (or staged for Stream Studio, or kept for old links)', () => {
     const used = new Set<string>([
       ...MANIFESTS.flatMap((rel) => {
         const m = manifest(rel);
@@ -243,9 +253,17 @@ describe('icon paths named in code', () => {
       BRAND.iconIco,
       ...codeRefs().keys(),
     ]);
-    const outputs = ICON_SETS.flatMap((s) => s.outputs.map((o) => `/${o.file.replace(/^public\//, '')}`));
-    expect(outputs.filter((src) => !used.has(src) && !STAGED_FOR_STREAM.has(src))).toEqual([]);
-    for (const src of STAGED_FOR_STREAM) expect(outputs, src).toContain(src);
+    const exempt = (src: string) => STAGED_FOR_STREAM.has(src) || KEPT_FOR_OLD_LINKS.has(src);
+    expect(GENERATED.filter((src) => !used.has(src) && !exempt(src))).toEqual([]);
+    for (const src of STAGED_FOR_STREAM) expect(GENERATED, src).toContain(src);
+  });
+
+  it('a path kept for old links is still generated and still served as a static file', () => {
+    const routes = JSON.parse(read('public/_routes.json')) as { exclude: string[] };
+    for (const src of KEPT_FOR_OLD_LINKS) {
+      expect(GENERATED, `${src} is a scripts/gen-icons.mjs output`).toContain(src);
+      expect(routes.exclude, `${src} stays outside Pages Functions`).toContain(src);
+    }
   });
 });
 

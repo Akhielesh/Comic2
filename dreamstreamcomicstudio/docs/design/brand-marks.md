@@ -115,7 +115,7 @@ so the marks move the same where no `--ds-*` token exists.
 | `icons/stream-192/512/maskable-512.png`, `stream-icon.svg` | On air, same set | `stream.webmanifest`, `live.webmanifest` | wired |
 | `icons/stream-favicon.svg/.ico`, `stream-apple-touch-180.png` | On air: tab favicons, the PNG touch icon iOS needs | `live.html` (step 2a) | generated, not wired yet: `live.html` belongs to step 2a, which links them |
 | `icons/stream-badge-96.png` | On-air glyph alone, white on transparent | notification `badge` (Android reads its alpha), with `stream-192.png` as the `icon` | generated, not wired yet: `public/live-sw.js` and `live/monitor/push.ts` belong to step 2a |
-| `stream-studio.svg` | On-air favicon (same art as `stream-favicon.svg`) | `live.html` favicon and touch icon, notification icon and badge | wired; step 2a moves these to the files above |
+| `stream-studio.svg` | On-air favicon (same art as `stream-favicon.svg`) | `live.html` favicon and touch icon, notification icon and badge | wired; step 2a moves these to the files above, and this file stays (generated, static in `_routes.json`) for old links, installs and notifications |
 | `icons/{dreamstream,comics,stream}-mark.svg` | **the sources** (currentColor marks) | `scripts/gen-icons.mjs` | source |
 
 Raster icons put a paper glyph on an ink tile: a transparent cut would show a dark launcher's colour
@@ -140,7 +140,8 @@ the generator refuses anything else, naming what is wrong), put the same numbers
 from what the sources make (SVGs byte for byte, rasters pixel for pixel within 2/255, so another
 libvips build is not drift), if any manifest, page head, the comics edge or app code points at a
 missing icon or one whose real format or size differs from what it declares, if a generated icon is
-used by none of them (except the Stream files step 2a wires, listed in the test), if `/favicon.ico`
-is not a real ICO, or if maskable art leaves the safe zone.
+used by none of them (except the Stream files step 2a wires and `/stream-studio.svg`, kept for old
+links, both listed in the test), if `/favicon.ico` is not a real ICO, or if maskable art leaves the
+safe zone.
 `tests/config/studioMarksGuard.test.ts` keeps `components/brand/**` free of the legacy comic kit,
 hue and Tailwind, and holds the motion contract above.
