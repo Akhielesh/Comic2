@@ -10,7 +10,7 @@ import type { StudioEvent } from '../../../../shared/comic/events.js';
 import { inverseOps } from '../../../../shared/comic/undo.js';
 import { startAction } from '../jobs.js';
 import { newSession, plannedDoc, testContext } from '../orchestrator.fakes.js';
-import { CONFLICT_NOT_AVAILABLE, USE_THEIRS_LABEL, followOps } from './conflict.js';
+import { CONFLICT_NOT_AVAILABLE, TOO_BIG_NO_PAGE_TEXT, USE_THEIRS_LABEL, followOps } from './conflict.js';
 
 const ON: StudioCaps = { ...DEFAULT_CAPS, liveAgent: { queue: false, steer: false, conflicts: true } };
 const OFF: StudioCaps = { ...DEFAULT_CAPS, liveAgent: { queue: true, steer: false, conflicts: false } };
@@ -82,6 +82,13 @@ describe('resolve_conflict', () => {
     const mine = await answer('mine');
     expect(mine.outcome).toEqual({ status: 'done', message: 'Kept your version.' });
     expect(cardNow().items[0].resolved).toBe('mine');
+  });
+
+  it('a tooBig item with no page (the page plan) never points at a Show me the card does not have', async () => {
+    const { answer } = setup([{ id: 'cf_plan', where: { label: 'the page plan' }, mine: 'Your changes to the pages.', theirs: 'A rewritten page plan.', proposed: [], tooBig: true }]);
+    const theirs = await answer('theirs');
+    expect(theirs.outcome).toMatchObject({ status: 'blocked', message: `The page plan: ${TOO_BIG_NO_PAGE_TEXT}.` });
+    expect(theirs.outcome.message).not.toMatch(/Show me/);
   });
 
   it("'mine' keeps the creator's edit and changes nothing but the card", async () => {

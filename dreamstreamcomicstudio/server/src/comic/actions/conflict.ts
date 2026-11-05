@@ -4,7 +4,8 @@
 // held-back ops against the CURRENT doc with the CLIENT patch sanitizer (sanitizePatchOps: the same checks, safety
 // screen included, as any edit the creator sends; a server-only op can never be committed from a card) and commits
 // them with origin 'director', so the creator's Undo brings their version back. It never applies half an item:
-//   - a `tooBig` item (its ops were not stored whole) is refused in plain words and stays open;
+//   - a `tooBig` item (its ops were not stored whole) is refused in plain words and stays open ("Show me opens it" only
+//     when the item has a page to open);
 //   - a stale item (its line was removed since, or the sanitizer refuses an op) is refused in plain words and stays open;
 //   - a line the creator moved to another panel since still takes the director's words (the op follows the line).
 // Items are marked answered by rewriting the card's message (one `message` op), so a reload or another device shows it.
@@ -25,6 +26,8 @@ export const USE_THEIRS_LABEL = "Use the director's version";
 
 /** Plain words for an item "Use the director's" cannot apply. */
 export const TOO_BIG_TEXT = "that change is too big to apply from here; Show me opens it";
+/** The same, for an item with no page to open (the page plan, the lettering), where the card has no Show me. */
+export const TOO_BIG_NO_PAGE_TEXT = "that change is too big to apply from here; ask the director to redo it if you want it";
 export const STALE_TEXT = "it was removed since, so the director's version can't be applied";
 
 const finished = (outcome: ActionOutcome): StartedAction => ({ outcome, done: Promise.resolve() });
@@ -160,7 +163,7 @@ export function resolveConflict(ctx: StudioContext, raw: ResolveConflictAction, 
       continue;
     }
     if (item.tooBig) {
-      refusals.push(`${cap(item.where.label)}: ${TOO_BIG_TEXT}.`);
+      refusals.push(`${cap(item.where.label)}: ${item.where.pageId ? TOO_BIG_TEXT : TOO_BIG_NO_PAGE_TEXT}.`);
       continue;
     }
     if (!item.proposed.length) {

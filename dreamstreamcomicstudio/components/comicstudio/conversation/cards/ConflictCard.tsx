@@ -28,6 +28,8 @@ export const conflictHeading = (items: readonly ConflictItem[]): string => {
 export const moreText = (more?: number): string | null => (typeof more === 'number' && more > 0 ? `…and ${more} more I left alone` : null);
 
 export const TOO_BIG_NOTE = "That change is too big to apply from here; Show me opens it.";
+/** The same, for an item with no page to open (the page plan, the lettering): no Show me button to point at. */
+export const TOO_BIG_NO_PAGE_NOTE = "That change is too big to apply from here. Ask the director to redo it if you want it.";
 export const OFF_NOTE = "Answering conflict questions is switched off right now. Your version stays as it is.";
 export const BUSY_NOTE = 'You can answer once the director finishes this step.';
 
@@ -101,7 +103,7 @@ export const ConflictCard: React.FC<{ card: ConflictCardData; studio: Studio }> 
             )}
             {!it.resolved && it.tooBig && on && (
               <p role="note" className={cn(RADIUS_CONTROL, 'border px-2.5 py-1.5 text-[12px] leading-snug [overflow-wrap:anywhere]', TONE_CHIP.info)}>
-                {TOO_BIG_NOTE}
+                {it.where.pageId ? TOO_BIG_NOTE : TOO_BIG_NO_PAGE_NOTE}
               </p>
             )}
           </li>

@@ -8,7 +8,7 @@ import type { ConflictCard as ConflictCardData, ConflictItem, Msg } from '../../
 import { AssistantMessage } from '../MessageItem';
 import { makeFakeStudio, makeSampleDoc } from '../testing/fixtures';
 import { CardRenderer } from './CardRenderer';
-import { BUSY_NOTE, ConflictCard, OFF_NOTE, TOO_BIG_NOTE, conflictHeading, moreText } from './ConflictCard';
+import { BUSY_NOTE, ConflictCard, OFF_NOTE, TOO_BIG_NOTE, TOO_BIG_NO_PAGE_NOTE, conflictHeading, moreText } from './ConflictCard';
 
 const ON: StudioCaps = { ...DEFAULT_CAPS, liveAgent: { queue: false, steer: false, conflicts: true } };
 
@@ -42,7 +42,9 @@ describe('ConflictCard', () => {
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'resolve_conflict', cardId: 'card_cf', itemIds: ['cf_1'], choice: 'theirs' }));
   });
 
-  it('Show me opens the page with that balloon selected', () => {
+  // The page editor does not pre-select from studio.selection yet (wave note: useLetteringSelection `initial`), so this
+  // pins the card's half: it opens the page and asks for the balloon to be selected.
+  it('Show me opens the page and asks for that balloon to be selected', () => {
     const { studio } = setup(card([item('cf_1')]));
     fireEvent.click(screen.getByRole('button', { name: 'Show me page 2 · panel 2 · line 1' }));
     expect(studio.openPage).toHaveBeenCalledWith('pg_2');
@@ -54,6 +56,14 @@ describe('ConflictCard', () => {
     expect(screen.getByText(TOO_BIG_NOTE)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Use the director’s' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Keep mine' })).toBeTruthy();
+  });
+
+  it('a too-big item with no page to open says so without pointing at a Show me it does not have', () => {
+    setup(card([item('cf_plan', { where: { label: 'the page plan' }, proposed: [], tooBig: true })]));
+    expect(screen.getByText(TOO_BIG_NO_PAGE_NOTE)).toBeTruthy();
+    expect(screen.queryByText(TOO_BIG_NOTE)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Show me/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Use the director’s' })).toBeNull();
   });
 
   it('counts the collisions past the cap: "…and N more I left alone"', () => {
