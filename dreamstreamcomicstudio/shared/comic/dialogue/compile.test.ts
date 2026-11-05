@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { ComicDoc } from '../doc';
 import { applyOps, type DocOp } from '../ops';
 import { inverseOps } from '../undo';
-import { IN_ART_REFUSAL, compileDialogue, compileIntent, compileWith, mergeLineOps } from './compile';
+import { FREE_DIALOGUE_OPS, IN_ART_REFUSAL, compileDialogue, compileIntent, compileWith, dialogueFastPath, mergeLineOps } from './compile';
 import { parseDialogue } from './grammar';
 import { hitOf } from './resolve';
 import type { DialogueIntent, LineHit } from './types';
@@ -269,5 +269,28 @@ describe('compileDialogue', () => {
     const again = compileDialogue(next, [{ act: 'add', panel: { page: 1, panel: 1 }, kind: 'caption', text: 'Even later.' }]);
     const ids = [run.ops[0], again.ops[0]].map((op) => (op as Extract<DocOp, { op: 'line' }>).id);
     expect(new Set(ids).size).toBe(2);
+  });
+});
+
+describe('dialogueFastPath (COMIC_DIALOGUE_FAST)', () => {
+  it('answers only a confident sentence whose every intent is one line, applied whole, with free ops', () => {
+    const run = dialogueFastPath(doc, 'make it a whisper', { lineIds: ['l_leo1'] });
+    expect(run?.ops).toEqual([{ op: 'line', pageId: 'pg_1', panelId: 'pn_2', id: 'l_leo1', patch: { kind: 'whisper' } }]);
+    expect(run?.label).toBe('Make it a whisper');
+    expect(dialogueFastPath(doc, "make Leo's line a whisper", { pageId: 'pg_2' })?.ops).toEqual([
+      { op: 'line', pageId: 'pg_2', panelId: 'pn_5', id: 'l_p2leo', patch: { kind: 'whisper' } }
+    ]);
+    expect(dialogueFastPath(doc, 'add BOOM in panel 3', { pageId: 'pg_1' })?.ops).toHaveLength(2);
+    for (const op of dialogueFastPath(doc, "um so move Mira's line up top and like make it a whisper", { pageId: 'pg_1', panelN: 3 })!.ops) expect(FREE_DIALOGUE_OPS.has(op.op)).toBe(true);
+  });
+
+  it('leaves everything else to the director: questions, plurals, refusals and sentences it only half understood', () => {
+    expect(dialogueFastPath(doc, 'make it a whisper', { pageId: 'pg_1', panelN: 2 })).toBeUndefined(); // which line?
+    expect(dialogueFastPath(doc, 'the second panel needs a shout', { pageId: 'pg_1' })).toBeUndefined();
+    expect(dialogueFastPath(doc, 'make all the shouts red')).toBeUndefined();
+    expect(dialogueFastPath(doc, 'make it a whisper and draw a cat', { lineIds: ['l_leo1'] })).toBeUndefined();
+    expect(dialogueFastPath(doc, 'make it bigger', { pageId: 'pg_1', panelN: 1 })).toBeUndefined();
+    expect(dialogueFastPath(doc, "put it above Leo's head", { lineIds: ['l_bolt1'] })).toBeUndefined();
+    expect(dialogueFastPath(doc, 'draw page 2')).toBeUndefined();
   });
 });
