@@ -12,9 +12,19 @@ component changes for it.
 | Tokens as data | `packages/platform-core/src/brand/skins/{dreamstream,atlas}.ts` | the same blocks for email, decks and documents; `brand.test.ts` fails on any drift |
 | Recipes | `components/chat/studioDesign.ts` (re-exported for the primitives by `components/ds/recipes.ts`) | Tailwind class strings built only from tokens |
 | Primitives | `components/ds/*` (barrel `components/ds`; sheets from `components/ds/sheet`) | React components: Atlas `ui-generated` recipes 1:1 on the tokens |
+| Motion classes | `styles/ds-motion.css` (imported first by `index.css`) | entrances, stagger, reveal, loading and live loops, edge fades, overlines: plain CSS on the tokens |
+| Named colours | `tailwind.config.cjs` `ds` | every colour token as a Tailwind colour (`bg-ds-canvas`, `text-ds-ink/60`) |
 | Gallery | `qa/app/scenes/ds-gallery.tsx` | every primitive, variant and state, light and dark, for the layout smoke |
 
 Adoption starts in DS-2: in this wave (DS-1a) no existing screen was moved onto the primitives.
+
+**One language on every host (wave 9, the bridge).** `index.html` ships `data-ds-skin="atlas"` on `<html>`, so
+every page (chat, settings, home, public pages, the studio) reads the Atlas values of these tokens; the
+comics host also sets it at boot. The build kill switch `VITE_DS_SKIN_EVERYWHERE=off`
+(docs/infrastructure/ENV_MATRIX.md) strips the attribute from every HTML entry and brings back the old
+scope (the comics host and the Comic Studio roots). `initTheme()` runs at the app root and
+`public/theme-boot.js` puts the saved dark theme on `<html>` before first paint. Legacy-kit pages follow the
+skin's tokens and keep their legacy structure until their migration package.
 
 ## Tokens
 
@@ -37,10 +47,21 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-motion-enter-slow` | `420ms` | same (Atlas `--motion-enter`) | page and section entrances |
 | `--ds-motion-stagger` | `40ms` | same (Atlas `--motion-stagger-step`) | the step between list items |
 | `--ds-on-danger` | `#ffffff`; `.dark` `#1a1915` | `#ffffff` (both themes) | the label on a solid danger fill: white on the red, ink on the default dark theme's light red (white there is 2.8:1) |
+| `--ds-glass-blur` (wave 9) | `12px` | `0` | the frosted glass of GLASS, GLASS_STRONG and MENU; Atlas surfaces are opaque |
+| `--ds-header-blur` (wave 9) | `18px` | same | the sticky header's glass layer (HEADER_GLASS), the one blur Atlas keeps |
+| `--ds-chart-1` … `-5` (wave 9) | `#0a0a0a #525252 #858585 #b0b0b0 #d4d4d4`; `.dark` `#fafafa #b8b8b8 #8a8a8a #5e5e5e #3d3d3d` | same | chart series, ink first; a chart picks a step, never a hue |
+| `--ds-grid-dot` (wave 9) | ink at 14 % | same | the dot of `.ds-grid-backdrop` |
+| `--ds-spot-ink` (wave 9) | `var(--ds-ink)` | same | the spotlight pool's ink (the header and home work) |
+| `--ds-radius-hero` / `-feature` (wave 9) | `28px` / `16px` | same | the hero frame; feature cards |
+| `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper |
+| `--sidebar-w` (M1a) | `240px` | same | the wide-screen sidebar, beside `--rail-w` (72 px) |
 
 Atlas has no z or density tokens: the skin restates the same values so every token has a skin value
 (`tests/config/atlasSkin.test.ts`). The non-colour tokens are theme-invariant and are not repeated in
-`.dark`. `--ds-on-danger` on the danger fill and on its hover mix is measured in all six contexts by
+`.dark`. The wave 9 defaults equal their Atlas values, mirrored in both brand skins (`brand.test.ts`).
+Under the skin the control and chip radius is 8 px (Atlas `rounded-md`). A `.dark` subtree inside a light
+page restates the var()-derived tokens (`:where(.dark:not(:root))`), so a dark demo panel or preview reads
+its own pill, edges and marks. `--ds-on-danger` on the danger fill and on its hover mix is measured in all six contexts by
 `tests/config/tokenContrast.test.ts` (≥ 4.5:1).
 
 ## Recipes
@@ -54,6 +75,11 @@ in `atlas-skin.md`, "The shared constants"):
 | `RADIUS_PANEL` / `_CONTROL` / `_PILL`, `SHADOW_SOFT` | shape and depth |
 | `INK`, `MUTED`, `HEADING`, `FONT_DISPLAY`, `OVERLINE`, `DIALOG_TITLE(_FROM_SM)` | type (every small uppercase label is `OVERLINE`) |
 | **`TEXT_XL`, `TEXT_2XL`, `TEXT_3XL`** (DS-1a) | the 20 / 24 / 30 px heading steps (size and leading) |
+
+**The display face (wave 9).** Space Grotesk only where a recipe asks for it: `FONT_DISPLAY` (`.ds-font-display`),
+`HEADING`, `PAGE_TITLE`, `DIALOG_TITLE` and the page and public titles built on them. Card, section-card, sheet
+and empty-state titles are IBM Plex Sans semibold (`CARD_TITLE`, `SECTION_TITLE`, `STATE_TITLE`). Tailwind's
+`font-display` is Bangers, lettering content: never in chrome.
 | `ACCENT_*`, `ON_ACCENT_TEXT`, `PRIMARY_BTN` | the accent (ink under the skin) and the text-bearing accent fill |
 | **`DANGER_FILL`, `DANGER_FILL_HOVER`** (DS-1a) | a solid danger fill under `--ds-on-danger` (destructive buttons and badges) |
 | `TONE_TEXT` / `_SURFACE` / `_FILL` / `_CHIP` / `_CHIP_ON_ART` | status hue — always next to words or an icon |
@@ -65,6 +91,9 @@ in `atlas-skin.md`, "The shared constants"):
 | `SEGMENTED_TRACK` / `_ITEM` / `_ACTIVE` / `_PILL` | segmented controls and tab lists |
 | `SECTION_*`, `TOAST*`, `INVERSE_SURFACE` | section cards, toasts, the inverted ink panel |
 | `TRANSITION`, `PRESS`, `HOVER_LIFT` | motion |
+| **`LIFT`**, **`RISE_IN`** (M1a) | the card lift (hover-capable pointers, the 2 px rise motion-safe, `--ds-shadow-lift`); the entrance (`.ds-rise-in`) |
+| **`STICKY_HEADER`**, **`HEADER_GLASS`** (wave 9) | the sticky header and its glass layer: plain at rest, frosted with `--ds-header-blur` once `data-scrolled="true"` |
+| **`SEGMENTED_ACTIVE_FILL`** (wave 9) | the selected pill's paint without an ink, for an item on `SEGMENTED_ITEM` (which inks the selected item itself) |
 | **`Z`** (DS-1a) | `Z.stage … Z.tooltip` = `z-[var(--ds-z-*)]`: the only place a z-index class is spelled |
 | **`DENSITY`** (DS-1a) | `compact` / `comfortable` / `touch` row heights; `coarse` (44 px tall under a coarse pointer) and `coarseSquare` (44 × 44) |
 
@@ -73,10 +102,19 @@ in `atlas-skin.md`, "The shared constants"):
 - **`cn` from `lib/utils.ts`** (clsx + tailwind-merge: later classes win). Never a local `cx` — it joins
   without merging, and a tone stacked on a base ink renders the base ink.
 - **Focus goes on after the merge.** tailwind-merge 3 reads class names with Tailwind 4 meanings, where a
-  bare `outline` is an outline *width*; merging `FOCUS_RING` drops its `focus-visible:outline` (the outline
-  *style* in this app's Tailwind 3) and the ring disappears. Primitives write
-  `` `${cn(BASE, VARIANT[variant], className)} ${FOCUS_RING}` `` (and use `[outline-style:solid]` where
-  an outline style must pass through `cn`); their tests assert every recipe class survives.
+  bare `outline` is an outline *width*. `lib/utils.ts` now configures `cn` for Tailwind 3.4 (a bare
+  `outline` is the style; `lib/utils.test.ts`), so `cn(FOCUS_RING)` keeps the ring; primitives still write
+  `` `${cn(BASE, VARIANT[variant], className)} ${FOCUS_RING}` `` so a caller's className can never cancel it,
+  and their tests assert every recipe class survives.
+- **The cn rule: no Tailwind 3 alias tailwind-merge cannot dedupe.** Never `flex-shrink-*` / `flex-grow*`
+  (write `shrink-*` / `grow*`), `overflow-ellipsis` (`text-ellipsis`), `decoration-slice` / `-clone`
+  (`box-decoration-*`), or a shadow without its type hint, `shadow-[var(…)]` (write
+  `shadow-[shadow:var(…)]`). cn keeps both sides of such a pair, so an override silently loses to the CSS
+  order. `components/ds/cnAliases.test.ts` scans the app and carries the probe that shows it.
+- **Named `ds` colours make `/NN` legal.** `bg-ds-surface`, `text-ds-ink/60`, `border-ds-hairline/50`
+  (tailwind.config.cjs) compile to the token, or to `color-mix(in srgb, var(--ds-…) NN%, transparent)` with
+  an opacity; a slash on a bare `var()` arbitrary value (`text-[var(--ds-ink)]/60`) is still invalid CSS.
+  The list equals index.css's colour tokens (`tests/config/dsColours.test.ts`).
 - **Choose a colour, never stack two.** One unvariant text colour per class list
   (`danger ? TONE_TEXT.danger : 'text-[var(--ds-ink)]'`); the status-ink guard fails on a stacked pair.
 - **44 px under a coarse pointer** on every interactive control (`DENSITY.coarse` / `coarseSquare`); a
@@ -191,6 +229,29 @@ library decision D6); the AppHeader / NavRail / TabBar wrappers (DS-2); the crea
   library in this wave); the keyboard on Slider is handled in the component so every browser steps alike.
 - Progress grows by width (so it fills from the reading start right-to-left too) on `--ds-motion-enter-slow`
   (Atlas: a 500 ms translate).
+
+### Motion classes and hooks (wave 9)
+
+`styles/ds-motion.css` is Atlas's motion system, renamed `ds-*` and reading the tokens (`--ds-motion-enter-slow`
+420 ms for page and list entrances, `--ds-motion-enter-quick` 280 ms for fades and pops, `--ds-motion-stagger`
+40 ms, `--ds-ease-enter`): entrances `.ds-rise-in .ds-fade-in .ds-scale-in .ds-slide-in-right .ds-blur-in
+.ds-pop .ds-draw .ds-flash` (backwards fill, landing on `transform: none`), `.ds-stagger` (children, or
+`--ds-i` to place one), `.ds-reveal` (on the scroll timeline only, so it is visible without JavaScript),
+`.ds-disclosure` (a `<details>` whose body glides), `.ds-lift` and `.ds-link`, the loading and live loops
+`.ds-skeleton .ds-shimmer-text .ds-progress-indeterminate .ds-live-dot .ds-caret .ds-marquee`, and
+`.ds-fade-edge-x/-y .ds-grid-backdrop .ds-overline .ds-overline-display .ds-display`. One reduced-motion block
+stops every entrance and loop, wraps the marquee and makes shimmer text plain (`tests/config/dsMotion.test.ts`).
+`.studio-stagger` runs on the same tokens.
+
+The hooks and primitives that go with them (Atlas `hooks/` and `components/effects`):
+
+| Export | What it does |
+| --- | --- |
+| `useInViewPause(ref)`, `<InViewPause as>` | ONE shared IntersectionObserver marks the host `data-inview="false"` while off screen or while the tab is hidden; the CSS loops inside it pause |
+| `<LiveDot settle?>` | the decorative live dot (`.ds-live-dot`, current colour), paused off screen; a word beside it says what is live |
+| `<CountUp value format?>` | counts up once in view; the final value at once, with no JavaScript animation, under reduced motion |
+| `<Collapse open>` | a grid-rows height disclosure that exits on `--ds-motion-exit` and is instant under reduced motion |
+| `usePresence`, `useReducedMotion` | the mount-for-exit helper and the live OS motion setting |
 - The switch's off track is ink at 18 % over the page (Atlas's `--switch-background`, #d4d4d4 / #3a3a3a).
 
 ## Guards and the ratchet (DS-0 owns the code)
@@ -207,17 +268,45 @@ excluded; `live/**` excluded until DS-11):
 | `statusInkGuard` | raw chromatic text colours (content and data-viz allowlisted, one line of reason each) |
 | `overlineGuard`, `dialogTitle` | hand-rolled eyebrows; untitled or wrongly titled modals |
 
-**Ratchet.** Baselines are per-file, per-token counts in `tests/config/baselines/<guard>.json`. A file
-absent from the baseline must count 0. A count above its baseline fails; a count *below* it fails too,
-with a message to lower the baseline, so the ratchet only ever moves down. The exact-line pins in the
-three Comic Studio guards stay as they are for `components/comicstudio`. A package that shrinks a baseline
-writes the new numbers in a wave note; the slot's integration owner applies them, so no two packages edit
-the same baseline in one slot.
+**Ratchet** (the full rules: `tests/config/baselines/README.md`).
+- Roots: `components/**`, `App.tsx`, `qa/**`. Excluded: `*.test.*`, `*.spec.*`, `__tests__`, `__mocks__`,
+  `__fixtures__` and `live/**`.
+- Baselines are per-file, per-token counts in `tests/config/baselines/<guard>.json`. A file or token not
+  listed must count 0; a count above its entry fails; a count *below* it fails too until the entry is
+  lowered, so the ratchet only ever moves down.
+- `UPDATE_BASELINES=1` only lowers. `UPDATE_BASELINES=reset` rewrites from the tree and needs a reviewer;
+  it is never used to clear an "over" failure (fix the file instead). Hand-edited JSON fails
+  `ratchet.test.ts` by design (a byte-identical check): use the updater.
+- A moved file is recorded with `BASELINE_MOVES='old=new' UPDATE_BASELINES=1` (README "Moving a file"),
+  never with `reset`.
+- Every scanned file is parsed in its own language (`.ts` as TypeScript, `.tsx` as TSX); `ratchet.test.ts`
+  fails on a syntax error.
+- Allowlists pin exact uses (the token and its trimmed line) with a one-line reason; a pin that matches
+  nothing is stale and fails.
+- zLadder skips `components/ds/**` and `components/chat/studioDesign.ts` (where the `Z` recipe spells the
+  ladder). statusInk, overline and dialogTitle keep their exact pins in `components/comicstudio`.
+- Sizes at DS-0's base: zLadder 122 files and 216 uses (119 `z-NN` including `-z-`, 97 `z-[…]`); legacyKit
+  74 files and 1,719 uses. The totals line of each JSON has today's numbers.
+- A package that shrinks a baseline writes the new numbers in a wave note; the slot's integration owner
+  runs the updater once after merging, so no two packages edit the same baseline in one slot.
 
 `components/ds/ds.hygiene.test.ts` holds the primitives and the gallery scene to zero on all of these
 (stricter: comments included, and no spelled duration), so they enter the guards at 0.
 
 ## QA
+
+**QA scenes.** The contract is in `qa/app/index.tsx`: each `qa/app/scenes/<id>.tsx` default-exports
+`{ id, title, Scene }` with `id` equal to the file name; a scene is a whole page with exactly one `<main>`
+(the harness mounts it bare; `qa/ComicQaApp.test.tsx` checks every discovered scene), unique ids, no
+network, and nothing that moves under `prefers-reduced-motion`. The URL is
+`/qa/comic-qa.html?surface=app[&scene=<id>]&theme=light|dark&skin=atlas|none`. Run them with
+`npm run qa:build && npx playwright test -c tests/e2e/playwright.config.ts --grep @app`.
+
+The smoke matrix for the app scenes (redesign plan M2, `tests/e2e/devices.ts` `APP_SCENE_MATRIX`):
+reflow-320 (320×640), 320×568, 360×740, 768×1024, 1024×768, 1280×800, 1440×900, the Fold5 book posture and
+852×393, each in light and dark under reduced motion, plus the Atlas-skin phone, the OS-dark desktop and
+motion-on. Each page: no overflow, no coarse target under 44 px (on every screen of the page), no legacy class,
+no duplicate id, axe, and on phones the `<main>` keeps ≥ 45 % of the height.
 
 `qa/app/scenes/ds-gallery.tsx` default-exports `{ id: 'ds-gallery', title, Scene }`; the app harness
 (`qa/app/index.tsx`, DS-1b) discovers scenes by glob and the layout smoke runs each at 320–1440 px, light

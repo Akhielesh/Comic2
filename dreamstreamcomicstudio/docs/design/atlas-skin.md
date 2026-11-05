@@ -7,8 +7,12 @@ token layer, the skin block, the fonts, the tokenized shared constants, a transi
 the tests and the visual proof; the **wave 5 port** (Atlas `acd9fdfc`, see the changelog at the end)
 brought the skin up to Atlas's refined foundations, and the **wave 8 port** (Atlas `98240e5b`) moved
 the studio's eyebrow labels onto OVERLINE, its status text onto the readable tone tokens and its
-centred dialogs onto DIALOG_TITLE, each with a guard test. Phases D1/D2 (later packages) rewrite the
-files that still hard-code the old accent and move components onto the Atlas primitive recipes.
+centred dialogs onto DIALOG_TITLE, each with a guard test. **Wave 9, the bridge** (S1, the "token
+commit", see the changelog) put the skin on every host behind a build kill switch, split the glass blur
+from the header blur, matched Atlas's 8 px control radius and display-face rule, added the shared motion
+classes (`styles/ds-motion.css`), the named `ds` Tailwind colours and the chart / grid / spotlight / hero
+tokens. Phases D1/D2 (later packages) rewrite the files that still hard-code the old accent and move
+components onto the Atlas primitive recipes.
 
 ## The language in one paragraph
 
@@ -16,8 +20,10 @@ White paper, black ink, neutral greys. Hue only ever carries meaning — success
 destructive, info — and is always paired with a word or an icon, never colour alone; one status
 vocabulary (healthy, active, waiting, attention, error). Flat surfaces with a hairline border and a
 soft shadow; overlays a step above the cards they cover, with a lighter edge in dark; no frosted
-glass except the sticky header's blur; modal scrims dim without blur. 12 px cards, 10 px controls
-(and chips), 4 px small. IBM Plex Sans body at 14 px, Space Grotesk for display/headings. Motion is
+glass except the sticky header's blur; modal scrims dim without blur. 12 px cards, 8 px controls
+(and chips), 4 px small; 16 px feature cards and a 28 px hero frame. IBM Plex Sans body at 14 px, semibold
+for card, sheet and empty-state titles; Space Grotesk only for display type (page and public titles,
+`.ds-font-display`). Charts are five monochrome steps of the ink. Motion is
 100 / 150 / 200 ms on `cubic-bezier(.2,.8,.2,1)`, panels 220 ms, modals 180 ms, entrances 280 ms on a
 long-tail ease-out and exits a quicker 160 ms, the theme switch one 260 ms cross-fade of the page,
 press feedback (scale .98 / .97), tooltips after 300 ms — all off under reduced motion. A crisp 2 px
@@ -116,6 +122,10 @@ The semantic tokens Atlas has that Comic Studio lacked were added to `:root` / `
 | `--ds-overlay-hover` (wave 5) | menu / select / dropdown items `focus:bg-accent dark:focus:bg-white/[0.08]` | `var(--ds-accent-soft)` (`#efefef`) | `rgba(255,255,255,0.08)` |
 | `--ds-status-error-edge` / `-tint` (wave 5) | status error `border-destructive/35 bg-destructive/[0.06]`, dark `border-destructive-foreground/40 bg-destructive-foreground/[0.08]` | `--ds-danger-mark` at 35 % / 6 % | `--ds-danger-mark` at 40 % / 8 % |
 | `--ds-toast-edge` (wave 5) | toast `border-border/70 dark:border-white/[0.12]` | hairline at 70 % (`rgba(0,0,0,0.07)`) | `rgba(255,255,255,0.12)` |
+| `--ds-on-danger` (DS-1a) | destructive under `text-white` | `#ffffff` | `#ffffff` (default dark theme: `#1a1915`, ink on its light red) |
+| `--ds-chart-1` … `-5` (wave 9) | the chart steps (`--chart-1…5`, monochrome) | `#0a0a0a` `#525252` `#858585` `#b0b0b0` `#d4d4d4` | `#fafafa` `#b8b8b8` `#8a8a8a` `#5e5e5e` `#3d3d3d` (the defaults are the same) |
+| `--ds-grid-dot` (wave 9) | `.atlas-grid-backdrop`'s dot | ink at 14 % | ink at 14 % |
+| `--ds-spot-ink` (wave 9) | `--atlas-spot-ink` | the ink | the ink |
 
 Under the OS **increase contrast** setting (`@media (prefers-contrast: more)`, wave 5) the skin applies
 Atlas's high-contrast tokens: `--ds-hairline` `rgba(0,0,0,0.32)` / dark `oklch(0.52 0 0)` (the soft
@@ -139,9 +149,12 @@ file, so chat, settings and home do not change.
 | `--ds-font-display` | `--font-atlas-display` | `"Space Grotesk", sans-serif` | `Inter, sans-serif` (headings inherit) |
 | `--ds-text-base` / `-lg` | `--text-sm` / `--text-base` | `0.875rem` / `1rem` | `0.875rem` / `1rem` (unchanged) |
 | `--ds-text-xs` / `-sm` | none (Atlas's 11 px labels are `.atlas-overline`) | `0.6875rem` / `0.8125rem` | same |
+| `--ds-text-xl` / `-2xl` / `-3xl` (DS-1a) | `--text-xl` / `--text-2xl` / `--text-3xl` | `1.25rem` / `1.5rem` / `1.875rem` | same |
 | `--ds-radius-panel` | `--radius-xl` | `0.75rem` (12 px) | `1rem` (`rounded-2xl`) |
-| `--ds-radius-control` | `--radius-lg` = radius − 2 | `0.625rem` (10 px) | `0.75rem` (`rounded-xl`) |
-| `--ds-radius-chip` | badge `rounded-md` | `0.625rem` (10 px) | `9999px` (`rounded-full`) |
+| `--ds-radius-control` | `rounded-md` (8 px; wave 9 bridge D1, was `--radius-lg` 10 px) | `0.5rem` (8 px) | `0.75rem` (`rounded-xl`) |
+| `--ds-radius-chip` | badge `rounded-md` (8 px; bridge D1) | `0.5rem` (8 px) | `9999px` (`rounded-full`) |
+| `--ds-radius-feature` (wave 9) | feature cards (`rounded-2xl`) | `16px` | same |
+| `--ds-radius-hero` (wave 9) | the hero frame (`rounded-[28px]`) | `28px` | same |
 | `--ds-radius-sm` | `--radius-sm` | `0.25rem` | `0.25rem` |
 | `--ds-shadow-soft` | `--atlas-soft-shadow` | `0 1px 2px 0 rgb(0 0 0 / 0.05)` · dark `0 1px 2px 0 rgb(0 0 0 / 0.4)` | the old `SHADOW_SOFT` (`0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline)`) |
 | `--ds-shadow-panel` | `--atlas-panel-shadow` | shadow-lg · dark `0 16px 36px -16px rgb(0 0 0 / 0.7)` | the old soft shadow |
@@ -155,8 +168,16 @@ file, so chat, settings and home do not change.
 | `--ds-ease-spring` | `--motion-spring` | `cubic-bezier(0.34, 1.36, 0.64, 1)` | same |
 | `--ds-ease-enter` (wave 5) | `--motion-ease-enter` | `cubic-bezier(0.16, 1, 0.3, 1)` | same |
 | `--ds-motion-enter` / `-exit` (wave 5) | `--motion-enter-quick` / `--motion-exit` | 280 / 160 ms | same |
+| `--ds-motion-enter-quick` (DS-1a) | `--motion-enter-quick` | an alias of the 280 ms `--ds-motion-enter` | same |
+| `--ds-motion-enter-slow` (DS-1a) | `--motion-enter` (page and section entrances) | 420 ms | same |
+| `--ds-motion-stagger` (DS-1a) | `--motion-stagger-step` | 40 ms | same |
 | `--ds-tooltip-delay` | `--tooltip-delay` | 300 ms | 300 ms |
-| `--ds-surface-blur` | the sticky header's `blur(18px)` | 18 px | 12 px (`backdrop-blur-md`) |
+| `--ds-glass-blur` (wave 9, bridge D3) | none: Atlas surfaces are opaque | `0` | 12 px (`backdrop-blur-md`; GLASS, GLASS_STRONG, MENU) |
+| `--ds-header-blur` (wave 9, bridge D3) | the sticky header's `blur(18px)` | 18 px | 18 px (HEADER_GLASS, once content scrolls under) |
+| `--ds-surface-blur` | the pre-split name | `var(--ds-glass-blur)` (an alias; nothing reads it) | `var(--ds-glass-blur)` |
+
+**z ladder and densities** (`--ds-z-*`, `--ds-density-*`, DS-1a): DreamStream-only tokens, the same value
+in every skin (Atlas has none); see `docs/design/design-system.md`.
 
 The wave 5 tokens default, outside the skin, to what the page paints today (`--ds-control-border`
 and `--ds-overlay-edge` = the hairline, `--ds-focus` = `--ds-ring`, `--ds-shadow-overlay` = the soft
@@ -173,8 +194,13 @@ unskinned `<html>`), and a rule that swaps a token inside a subtree (the inverse
 restate whatever is derived from it — or, as the inverse surface now does, not swap it.
 `tests/config/tokenContrast.test.ts` models exactly that inheritance.
 
-Reader-room tokens (`--ds-reader-room`, `--ds-reader-paper-back`, `--ds-reader-endpaper`) are
-content, not chrome, and are deliberately not overridden.
+Reader-room tokens (`--ds-reader-room`, `--ds-reader-paper-back`, `--ds-reader-endpaper`, and since
+wave 9 `--ds-reader-focus`, the reader's focus-ring colour: the reader ink, ≥ 4.5:1 on the paper in every
+context) are content, not chrome, and are deliberately not overridden.
+
+A `.dark` subtree inside a light page (a dark demo panel or preview) restates the var()-derived tokens
+too (`:where(.dark:not(:root))`, zero specificity so a skin block on the same element still wins);
+atlasSkin.test.ts keeps that list equal to `:root`'s.
 
 ## Fonts
 
@@ -307,8 +333,10 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   base rules, the theme-switch rules, the wave 5 tokens, the increase-contrast block, the wave 5
   recipes, and that every rule in the skin section is scoped to the attribute.
 - `tests/config/atlasSkinShim.test.ts` — the shim covers every literal utility; the literal count.
-- `services/productHost.skin.test.ts` — the attribute is set on the comics host and alias, never on
-  the apex; the boot does only what the brief allows (attribute + two preloads; no registration).
+- `services/productHost.skin.test.ts` — wave 9: with the kill switch on (the default) the attribute
+  index.html ships stays on every host, the apex included; with `VITE_DS_SKIN_EVERYWHERE=off` it is set
+  on the comics host and alias only; the boot does only what the brief allows (attribute + two
+  preloads; no registration).
 - `services/dsSkin.theme.test.ts` also overlaps two cross-fades: only the latest one clears
   `ds-theme-transition`, in either finishing order.
 - `services/dsSkin.theme.test.ts` — the theme switch: outside the skin exactly the old toggle; under
@@ -331,6 +359,25 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   on a light amber / yellow fill (2.15:1).
 - `tests/config/dialogTitle.test.ts` (wave 8) — the recipe; every `aria-modal` surface in the studio is
   classified, centred dialogs title with `DIALOG_TITLE(_FROM_SM)`, sheet and popover headers stay 15 px.
+- The three wave 8 guards above also ratchet the rest of the app (`components/**`, `App.tsx`, `qa/**`)
+  against `tests/config/baselines/<guard>.json` (DS-0): `statusInk.json`, `overline.json`,
+  `dialogTitle.json`. The rules are in `tests/config/baselines/README.md`.
+- `tests/config/legacyKitGuard.test.ts` (DS-0) — `border-black`, `shadow-comic`, `font-comic`, the
+  `brand-*` colours and Tailwind's `font-display` (Bangers), ratcheted per file against `legacyKit.json`.
+- `tests/config/terracottaGuard.test.ts` (DS-0) — the `#D97757` / `#c2643f` literals, against
+  `terracotta.json`; the third-party Anthropic logo fill is its one allowlisted use.
+- `tests/config/localCxGuard.test.ts` (DS-0) — no local `cx` class joiner (it joins, it does not merge:
+  the wave 8 ink bug); compose with `cn`.
+- `tests/config/zLadderGuard.test.ts` (DS-0) — no raw `z-NN` / `z-[…]` outside the `Z` recipe
+  (`components/ds/**` and `studioDesign.ts` are where the ladder is spelled).
+- Every scanned file is parsed in its own language (`.ts` as TypeScript, `.tsx` as TSX), and
+  `tests/config/baselines/ratchet.test.ts` fails on a syntax error, because the parser would otherwise guess
+  past it and lose literals. A moved file is recorded with `BASELINE_MOVES='old=new' UPDATE_BASELINES=1`
+  (README "Moving a file"), never with `reset`.
+- The design system itself: `docs/design/design-system.md`, `components/ds/ds.hygiene.test.ts` (the
+  primitives and the gallery scene count 0 for every guard), `tests/config/dsMotion.test.ts`
+  (`styles/ds-motion.css`), `tests/config/dsColours.test.ts` (the named `ds` colours) and
+  `tests/config/dsSkinEverywhere.test.ts` (the skin on every host and its kill switch).
 - `tests/config/tokenContrast.test.ts` measures every status `-text` token on the page, cards, the soft
   glass, raised overlays, hovered and highlighted menu rows and its own tint over each (wave 8), and also
   measures the two "increase contrast" contexts, field edges
@@ -341,25 +388,33 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   surface (with the custom-property inheritance modelled), `FIELD_GROUP`'s focused vs resting edge and
   its ring (≥ 3:1), and both hairlines strengthening under "increase contrast".
 - `components/comicstudio/atlasSkinRoots.test.tsx` — the three roots carry the attribute on the apex.
-- The chat tests and the 4-viewport layout smoke (`node scripts/layout-smoke.mjs`) stay green: the
-  skin changes nothing outside its scope. The smoke runs the scenes **without** `?skin=atlas`, i.e.
-  in the apex case (roots skinned, page not); the page-level skin (fonts, scrollbars, focus outline,
-  shim rules on `<html>`) is only covered by the screenshot script below until the harness owner adds
-  a `QA_SKIN=atlas` env that `tests/e2e/helpers/harness.ts` `open()` appends as `skin=atlas`, plus
-  two smoke projects (`smoke-360x740-atlas`, `smoke-1440x900-atlas`) in `tests/e2e/playwright.config.ts`.
+- The layout smoke (`node scripts/layout-smoke.mjs`): `tests/e2e/helpers/harness.ts` honours
+  `QA_SKIN=atlas` and `QA_THEME=dark` for any project, and each project's `look` (`tests/e2e/devices.ts`
+  `APP_SMOKE_DEVICES`). `smoke-360x740-atlas` (page-level skin) and `smoke-1440x900-dark` (OS dark
+  scheme) run the whole smoke over the app, studio, kit and model-picker scenes; `smoke-320x640` and
+  `motion-on` run the app scenes (`@app`) only, and so do the redesign plan's M2 additions
+  (`smoke-320x568`, `smoke-fold5-dual`, `smoke-852x393`; the full app-scene matrix is `APP_SCENE_MATRIX`).
+  The studio scenes are therefore covered under the page-level skin at 360. The other studio projects
+  still open the harness without `?skin=atlas` (the kill-switch-off case: roots skinned, page not).
 - **Visual proof:** `node scripts/design/atlas-skin-shots.mjs` captures the studio, board, editor,
   immersive reader and public reader at 1440×900 and 360×740, light and dark, with the skin on, into
   `node_modules/.cache/comic-qa/atlas-skin/` (plus `index.json`), from the offline QA harness.
 
 ## Synced from Atlas
 
-- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`acbdaff7`** (2026-10-30; the design
-  files are byte-identical to `98240e5b`, Atlas wave 8 — `cddff16a` "Type scale, shared overline labels and readable
-  status ink", merged in `5f4df1be`, and `98240e5b` "Dialog titles default to 20px under the standard type scale"; the
-  commits since are email and sign-in setup work, no design change; see the wave 8 changelog below; previous syncs
-  `98240e5b`, `496f265c`, `acd9fdfc`, `07935fcf`). Re-sync:
-  `git -C /home/user/atlasd diff acbdaff7 origin/claude/quirky-darwin-fpx23q -- app/globals.css
-  tailwind.config.js app/layout.tsx ui-generated docs/current/guides/ui-ux-and-design-language.md tests/lib`.
+- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`0677199b`** (2026-11-05). The design
+  files are **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
+  `components/WorkspacePrimitives.tsx`, `components/shell/**`, `GlobalNotificationBar`, `PublicSiteChrome`,
+  `GlobalFooter`, `WorkspaceShell`, `AuthenticatedAppHeader`, `app/layout.tsx`, `AppShell` and the UI guide; the
+  12 commits since are security dependency bumps, connector fixes and public beta-copy pages, and the only
+  design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
+  to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
+  agreed with the Atlas session from this commit. Previous syncs `acbdaff7` (= `98240e5b` design files), `496f265c`,
+  `acd9fdfc`, `07935fcf`. Re-sync:
+  `git -C /home/user/atlasd diff 0677199b origin/claude/quirky-darwin-fpx23q -- app/globals.css
+  tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
+- Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
+  `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).
 - Files that define the language, and what each token group was derived from:
   - `app/globals.css` — `:root` / `.dark` colours (wave 5: overlays `#1a1a1a`, `--control-border`,
     the dark `--shadow-lg` behind `--ds-shadow-overlay`), radius, shadows, motion system (`--motion-ease-enter`, `-enter-quick`,
@@ -387,6 +442,50 @@ token layer this way is what makes "unify" and the fun theme two values of one a
     rules Comic Studio's status-ink guard and dialog-title test mirror.
 
 ## Changelog
+
+### Wave 9 (bridge) — the S1 token commit (Atlas `0677199b`, design files = `acbdaff7`, 2026-11-05)
+
+Decisions agreed with the Atlas session, applied in one integration with DS-0 (guards), DS-1a (tokens and
+primitives) and DS-1b (the QA harness).
+
+**Mapping.**
+- D1: `--ds-radius-control` and `--ds-radius-chip` are `0.5rem` under the skin: Atlas's `rounded-md`
+  resolves to 8 px. (The atlas brand kit's email button radius follows: 10 → 8 px.)
+- D2: the display face (Space Grotesk) only on `.ds-font-display` — FONT_DISPLAY, HEADING, `PAGE_TITLE`,
+  `DIALOG_TITLE` and the page and public titles that use them. The blanket `[data-ds-skin] :is(h1…h4)`
+  display rule is gone (headings still balance their lines). `CARD_TITLE`, `SECTION_TITLE`, sheet headers
+  and empty-state titles are IBM Plex Sans semibold. Tailwind's `font-display` (Bangers) is never used.
+- D3: the glass blur and the header blur are two tokens. `--ds-glass-blur` (12 px by default, 0 under the
+  skin) for GLASS, GLASS_STRONG and MENU; `--ds-header-blur` (18 px everywhere) for the new
+  `STICKY_HEADER` + `HEADER_GLASS` recipes (the blur on an aria-hidden layer, only once content scrolls
+  under, so the header never becomes a fixed descendant's containing block). `--ds-surface-blur` stays
+  as an alias of the glass blur.
+- D4: the chat markdown links (`--ds-info-text`, ink on hover), code blocks (well and hairline),
+  `.studio-shimmer` (the skeleton tokens) and `.hiw-gradient-text` (status hues by default, plain ink
+  under the skin) read tokens; their hexes are gone.
+- D5: Atlas on every host. `index.html` ships `data-ds-skin="atlas"` on `<html>`; the build kill switch
+  `VITE_DS_SKIN_EVERYWHERE=off` strips it from every HTML entry (`vite.config.ts`, no file-name filter, so
+  `live.html` rolls back with it once it carries the attribute). `initTheme()` runs at the app root and
+  `public/theme-boot.js` (external, CSP `'self'`) sets `.dark` before first paint. The single inline script
+  and its CSP hash are unchanged.
+- D6: the named `ds` colours in Tailwind (`bg-ds-canvas`, `text-ds-ink/60` via color-mix).
+- D7: `styles/ds-motion.css`, Atlas's motion system on the `--ds-*` tokens (entrances, stagger, scroll
+  reveal, disclosure, lift, link, skeleton, shimmer text, indeterminate progress, live dot, caret,
+  marquee, edge fades, grid backdrop, overlines, display), with one reduced-motion block; the hooks and
+  primitives `useInViewPause` / `InViewPause`, `LiveDot`, `CountUp`, `Collapse` in `components/ds`. The
+  spotlight group is not ported (the header and home work owns it).
+- §3.2 tokens: `--ds-chart-1…5`, `--ds-grid-dot`, `--ds-spot-ink`, `--ds-radius-hero` (28 px),
+  `--ds-radius-feature` (16 px); the defaults equal the skin values.
+- M1a: `--sidebar-w` (240 px, beside `--rail-w`), `--ds-reader-focus`, the `LIFT` and `RISE_IN` recipes,
+  `.studio-stagger` on the entrance and stagger tokens.
+
+**Deviations from Atlas.**
+- `.ds-lift` lifts only on a pointer that really hovers (`(hover: hover) and (pointer: fine)`); Atlas's
+  `.atlas-lift:hover` also lifts after a tap on touch.
+- Atlas's own Settings › Reduced motion (`.atlas-reduced-motion`) has no counterpart: the OS setting is the
+  one switch.
+- The "pixel-identical outside the skin" promise is retired (Scope and mechanism): the owner asked for
+  Atlas everywhere. The kill switch restores the old scope.
 
 ### Wave 8 port (Atlas `496f265c` → `98240e5b`, 2026-10-30)
 
