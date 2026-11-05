@@ -1,7 +1,8 @@
 // B-RESOLVE resolve.ts (agent-editor plan §3 B2): selection wins, scope widens only when empty, 2–5 ask "Which line?",
 // more than 5 ask to tap the balloon, plurals apply to every match (confirming first when big), none says what exists.
 import { describe, expect, it } from 'vitest';
-import type { Line, Resolution } from './types';
+import type { Line } from '../doc';
+import type { Resolution } from './types';
 import { askForResolution, lineChipLabel, lineHits, resolveLineRef, whichLineChoices, type PluralLineRef } from './resolve';
 import { dialogueDoc, line, panel } from './__fixtures__/dialogueDoc';
 
