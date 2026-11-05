@@ -75,7 +75,7 @@ describe('ComicStudio shell', () => {
     expect(screen.getByLabelText('Opening your comic')).toHaveAttribute('aria-busy', 'true');
     // The page keeps exactly one main landmark while the comic loads (studio-loading-no-main).
     expect(screen.getAllByRole('main')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Back to your projects' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to My comics' }));
     expect(onBack).toHaveBeenCalled();
 
     state.studio = makeFakeStudio();
@@ -489,9 +489,9 @@ describe('ComicStudio on other form factors', () => {
   it('phone landscape uses a navigation rail that carries Back (the header drops it)', () => {
     const { onBack } = mountAt(PHONE_LANDSCAPE, makeFakeStudio());
     expect(document.querySelector('[data-layout="single-rail"]')).not.toBeNull();
-    expect(within(screen.getByRole('banner')).queryByRole('button', { name: 'Back to your projects' })).toBeNull();
+    expect(within(screen.getByRole('banner')).queryByRole('button', { name: 'Back to My comics' })).toBeNull();
     const rail = screen.getByRole('navigation', { name: 'Studio views' });
-    fireEvent.click(within(rail).getByRole('button', { name: 'Back to your projects' }));
+    fireEvent.click(within(rail).getByRole('button', { name: 'Back to My comics' }));
     expect(onBack).toHaveBeenCalled();
   });
 

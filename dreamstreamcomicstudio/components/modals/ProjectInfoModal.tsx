@@ -846,7 +846,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     }}
                     className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border-2 border-black transition-all ${isPublic ? 'bg-green-400 shadow-[2px_2px_0px_0px_#000]' : 'bg-slate-200 opacity-70'
                       }`}
-                    title={isPublic ? "Visible in Public Gallery" : "Only visible to you"}
+                    title={isPublic ? "Visible in the Library" : "Only visible to you"}
                   >
                     {isPublic ? <Globe size={14} /> : <Lock size={14} />}
                     {isPublic ? 'Public' : 'Private'}

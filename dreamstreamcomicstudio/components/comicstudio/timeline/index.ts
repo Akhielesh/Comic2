@@ -15,7 +15,7 @@ export const feature: FeatureModule = {
   tabs: [
     {
       id: 'media',
-      label: 'Media',
+      label: 'Assets',
       icon: React.createElement(Images, { className: 'h-4 w-4', 'aria-hidden': true }),
       order: 500,
       Component: MediaTab,

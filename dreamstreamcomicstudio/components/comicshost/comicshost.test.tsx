@@ -144,14 +144,17 @@ describe('ComicsLanding', () => {
     expect(screen.queryByRole('button', { name: /my comics/i })).toBeNull();
   });
 
-  it('offers signed-in visitors their comics and the gallery', () => {
+  it('offers signed-in visitors their comics and the Library', () => {
     const h = handlers();
     render(<ComicsLanding signedIn {...h} />);
     fireEvent.click(screen.getByRole('button', { name: /open my comics/i }));
     fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: /my comics/i }));
     expect(h.onOpenComics).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole('button', { name: /browse the gallery/i }));
+    fireEvent.click(screen.getByRole('button', { name: /browse the library/i }));
     expect(h.onBrowseGallery).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Library' }));
+    expect(h.onBrowseGallery).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/gallery/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in/i })).toBeNull();
     expect(screen.queryByText(/invite-only/i)).toBeNull();
   });

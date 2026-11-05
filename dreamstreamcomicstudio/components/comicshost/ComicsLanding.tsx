@@ -106,7 +106,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
         </div>
         <nav className="flex shrink-0 items-center gap-1 sm:gap-2" aria-label="Comic Studio">
           <button type="button" onClick={onBrowseGallery} className={`hidden sm:inline-flex ${quietLink}`}>
-            Gallery
+            Library
           </button>
           {signedIn ? (
             <button type="button" onClick={onOpenComics} className={primaryButton}>
@@ -146,7 +146,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                   Open my comics <ArrowRight size={16} aria-hidden />
                 </button>
                 <button type="button" onClick={onBrowseGallery} className={secondaryButton}>
-                  <LayoutGrid size={16} aria-hidden /> Browse the gallery
+                  <LayoutGrid size={16} aria-hidden /> Browse the Library
                 </button>
               </>
             ) : (

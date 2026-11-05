@@ -260,7 +260,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 <LayoutGrid className="w-8 h-8 text-black" />
               </div>
               <div>
-                <h1 className="text-4xl font-display text-black">My Comics</h1>
+                <h1 className="text-4xl font-display text-black">My comics</h1>
                 <p className="text-slate-600 font-comic font-bold">Manage your studio projects</p>
               </div>
             </div>
