@@ -81,8 +81,8 @@ const h = vi.hoisted(() => {
       }
       let matched = rows.filter((r) => filters.every((f) => f(r)));
       if (op === 'update') {
-        for (const r of matched) Object.assign(r, payload);
-        return { data: returning ? matched.map((r) => ({ id: r.id })) : null, error: null, count: null };
+        for (const r of matched) Object.assign(r, structuredClone(payload));
+        return { data: returning ? matched.map((r) => structuredClone(r)) : null, error: null, count: null };
       }
       if (op === 'delete') {
         tables[table] = rows.filter((r) => !matched.includes(r));
@@ -108,10 +108,30 @@ const h = vi.hoisted(() => {
         const value = rest.join('.').replace(/^"|"$/g, '');
         if (oper === 'is' && value === 'null') return (r: Row) => (r[col] ?? null) === null;
         if (oper === 'lt') return (r: Row) => r[col] != null && String(r[col]) < value;
+        if (oper === 'gt') return (r: Row) => r[col] != null && String(r[col]) > value;
         if (oper === 'eq') return (r: Row) => String(r[col]) === value;
         throw new Error(`fake: unsupported or() operator ${oper}`);
       });
       return (r) => tests.some((t) => t(r));
+    };
+    // A Postgres array literal with quoted elements ({"a","b\"c"}), as the code sends them.
+    const parseTextArray = (literal: string): string[] => {
+      if (!/^\{.*\}$/.test(literal)) throw new Error(`fake: not an array literal ${literal}`);
+      return [...literal.slice(1, -1).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, '$1'));
+    };
+    // jsonb / array containment (@>), the way Postgres compares them.
+    const contains = (a: unknown, b: unknown): boolean => {
+      if (Array.isArray(b)) return Array.isArray(a) && b.every((x) => a.some((y) => contains(y, x)));
+      if (b && typeof b === 'object') {
+        return Boolean(a) && typeof a === 'object' && !Array.isArray(a) && Object.entries(b).every(([k, v]) => k in (a as Row) && contains((a as Row)[k], v));
+      }
+      return a === b;
+    };
+    const containFilter = (col: string, oper: string, value: string): Filter => {
+      const given = col === 'metadata' ? JSON.parse(value) : parseTextArray(value);
+      if (oper === 'cs') return (r) => r[col] != null && contains(r[col], given);
+      if (oper === 'cd') return (r) => r[col] != null && contains(given, r[col]);
+      throw new Error(`fake: unsupported filter operator ${oper}`);
     };
     // ILIKE with backslash escapes; '*' is PostgREST's alias for '%'.
     const ilikeFilter = (col: string, pattern: string): Filter => {
@@ -146,6 +166,12 @@ const h = vi.hoisted(() => {
       gte: (col: string, val: string) => (filters.push((r) => String(r[col]) >= val), q),
       is: (col: string, val: unknown) => (filters.push((r) => (r[col] ?? null) === val), q),
       or: (expr: string) => (filters.push(orFilter(expr)), q),
+      filter: (col: string, oper: string, value: string) => (filters.push(containFilter(col, oper, value)), q),
+      not: (col: string, oper: string, value: unknown) => {
+        if (oper !== 'is' || value !== null) throw new Error(`fake: unsupported not() ${oper}`);
+        filters.push((r) => (r[col] ?? null) !== null);
+        return q;
+      },
       ilike: (col: string, pattern: string) => (filters.push(ilikeFilter(col, pattern)), q),
       order: (col: string, o?: { ascending?: boolean }) => ((order = { col, asc: o?.ascending !== false }), q),
       limit: (n: number) => ((limit = n), q),
@@ -234,7 +260,7 @@ vi.mock('../services/rbac.js', () => ({
 const { interestRouter, adminInterestRouter } = await import('./interest.js');
 const { newsletterRouter } = await import('./newsletter.js');
 const { requireAdmin } = await import('../middleware/requireAdmin.js');
-const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE } = await import('../services/interestStore.js');
+const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE, checkConfirmThrottle } = await import('../services/interestStore.js');
 const { WAITLIST_PRODUCTS } = await import('../services/emailStore.js');
 const { STUDIO_INTEREST_IDS } = await import('../../../services/studioInterests.js');
 
@@ -735,6 +761,129 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
     // Other mail (sign-in, recovery) doesn't count against it.
     h.tables.email_log = h.tables.email_log.map((r) => ({ ...r, template: 'auth-recovery' }));
     expect((await register()).status).toBe(200);
+  });
+});
+
+describe('POST /api/interest — rows planted, links re-sent, parallel picks, informed confirm', () => {
+  it('a row planted with a future confirm_sent_at does not block the confirmation email', async () => {
+    // What the old all-column anon INSERT allowed (before register_interest_2026_11.sql).
+    h.tables.waitlist_signups.push({ id: 'planted', email: 'vic@example.com', kind: 'updates', confirmed: false, confirm_token: null, confirm_sent_at: '2099-01-01T00:00:00.000Z', unsubscribed_at: null, product_interests: [], metadata: {} });
+    expect(await checkConfirmThrottle('vic@example.com', '2099-01-01T00:00:00.000Z')).toBeNull();
+
+    // A failed send gives the slot back without restoring the planted stamp.
+    h.state.sendOutcome = 'failed';
+    expect((await register({ email: 'vic@example.com' })).body.code).toBe('email_unavailable');
+    expect(row().confirm_sent_at).toBeNull();
+
+    h.state.sendOutcome = 'sent';
+    const res = await register({ email: 'vic@example.com' });
+    expect(res.body.status).toBe('pending');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(2); // the failed one, then this one
+    expect(Date.parse(String(row().confirm_sent_at))).toBeLessThanOrEqual(Date.now());
+    // ...and the address can confirm with the link it got.
+    await pressConfirm('vic@example.com', tokenFromLastEmail());
+    expect(row()).toMatchObject({ confirmed: true });
+  });
+
+  it('back after unsubscribing: a second request re-sends the first link, which still works', async () => {
+    await register({ studios: ['comic_studio'] });
+    const beforeUnsubscribe = tokenFromLastEmail();
+    await pressConfirm('ada@example.com', beforeUnsubscribe);
+    await fetch(`${base}/api/newsletter/unsubscribe?e=ada%40example.com&t=valid-unsub`, { redirect: 'manual' });
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    // age() leaves unsubscribed_at alone; the unsubscribe was a while ago too (a token's issue
+    // time has one-second resolution, and one from the same second as the unsubscribe is rotated).
+    row().unsubscribed_at = new Date(Date.parse(String(row().unsubscribed_at)) - INTEREST_CONFIRM_THROTTLE.minIntervalMs).toISOString();
+
+    await register({ studios: ['stream_studio'] });
+    const linkA = tokenFromLastEmail();
+    expect(linkA).not.toBe(beforeUnsubscribe);
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    await register({ studios: ['stream_studio'] }); // the same person again, or anyone typing the address
+    expect(tokenFromLastEmail()).toBe(linkA);
+    expect(row().confirm_token).toBe(linkA);
+
+    // The link from before the unsubscribe never comes back...
+    expect((await pressConfirm('ada@example.com', beforeUnsubscribe)).headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=invalid');
+    expect(row()).toMatchObject({ confirmed: false, confirm_token: linkA });
+    // ...the first link since does.
+    expect((await openLink('ada@example.com', linkA)).status).toBe(200);
+    expect((await pressConfirm('ada@example.com', linkA)).headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=confirmed');
+    expect(row()).toMatchObject({ confirmed: true, unsubscribed_at: null, product_interests: ['stream_studio'] });
+  });
+
+  it('parallel requests keep every request’s picks, whichever one sends the email', async () => {
+    await register({ studios: ['comic_studio'] });
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    h.state.latencyMs = 5;
+    const [a, b] = await Promise.all([register({ studios: ['stream_studio'] }), register({ studios: ['chat_studio'] })]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(2); // the first registration, then one of these two
+    expect(row().product_interests).toEqual(['comic_studio', 'stream_studio', 'chat_studio']);
+
+    // Inside the cooldown (every request throttled), too.
+    const throttled = await Promise.all([register({ studios: ['atlas_studio'] }), register({ studios: ['future_studios'] })]);
+    expect(throttled.map((r) => r.body.status)).toEqual(['pending', 'pending']);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(2);
+    expect(row().product_interests).toEqual([...STUDIO_INTEREST_IDS]);
+  });
+
+  it('parallel requests for a subscriber all wait for their click, none lost', async () => {
+    await register({ studios: ['comic_studio'] });
+    await pressConfirm('ada@example.com', tokenFromLastEmail());
+    h.state.latencyMs = 5;
+    await Promise.all([register({ studios: ['stream_studio'] }), register({ studios: ['chat_studio'] }), register({ studios: ['atlas_studio'] })]);
+    expect(row()).toMatchObject({ confirmed: true, product_interests: ['comic_studio'] });
+    expect(row().metadata).toMatchObject({ pending_interests: ['stream_studio', 'chat_studio', 'atlas_studio'] });
+  });
+
+  it('the Confirm page says which studios the click confirms, and which it adds', async () => {
+    await register({ studios: ['stream_studio', 'comic_studio'] });
+    const first = await (await openLink('ada@example.com', tokenFromLastEmail())).text();
+    expect(first).toContain('Press Confirm to get DreamStream updates about <strong>Comic Studio and Stream Studio</strong> at <strong>ada@example.com</strong>.');
+    await pressConfirm('ada@example.com', tokenFromLastEmail());
+
+    // Someone (maybe not them) asks for Future studios too.
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    await register({ studios: ['future_studios', 'comic_studio'] });
+    const page = await (await openLink('ada@example.com', tokenFromLastEmail())).text();
+    expect(page).toContain('<strong>ada@example.com</strong> already gets DreamStream updates about <strong>Comic Studio and Stream Studio</strong>.');
+    expect(page).toContain('Pressing Confirm also adds <strong>Future studios</strong>.');
+    expect(page).not.toMatch(/<script/i);
+    await pressConfirm('ada@example.com', tokenFromLastEmail());
+    expect(row().product_interests).toEqual(['comic_studio', 'stream_studio', 'future_studios']);
+
+    // A re-request with nothing new says so.
+    age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+    await register({ studios: ['comic_studio'] });
+    expect(await (await openLink('ada@example.com', tokenFromLastEmail())).text()).toContain('There is nothing new to add');
+  });
+
+  it('the Confirm page escapes what it shows', async () => {
+    const email = `a"<b>'x@example.com`;
+    await register({ email, studios: ['comic_studio'] });
+    const html = await (await openLink(email.toLowerCase(), tokenFromLastEmail())).text();
+    expect(html).toContain('a&quot;&lt;b&gt;&#39;x@example.com');
+    expect(html).not.toContain('<b>');
+  });
+});
+
+describe('POST /api/newsletter/subscribe kind=access — an existing request is never replaced', () => {
+  const access = (over: Record<string, unknown>) =>
+    post({ email: 'vic@example.com', kind: 'access', captchaToken: 'good-token', ...over }, '/api/newsletter/subscribe');
+
+  it('adds new picks to the stored ones and keeps the stored note', async () => {
+    h.tables.waitlist_signups.push({ id: 'acc-1', email: 'vic@example.com', kind: 'access', confirmed: false, product_interests: ['comic_studio', 'stream_studio'], feedback: 'my real note', metadata: {} });
+    const res = await access({ productInterests: ['future_studios'], feedback: 'attacker text' });
+    expect(res.body).toMatchObject({ ok: true, status: 'already-registered' });
+    expect(rows().find((r) => r.id === 'acc-1')).toMatchObject({ product_interests: ['comic_studio', 'stream_studio', 'future_studios'], feedback: 'my real note' });
+  });
+
+  it('stores a note only when the request has none', async () => {
+    h.tables.waitlist_signups.push({ id: 'acc-2', email: 'vic@example.com', kind: 'access', confirmed: false, product_interests: [], feedback: null, metadata: {} });
+    await access({ feedback: 'first note' });
+    await access({ feedback: 'second note' });
+    expect(rows().find((r) => r.id === 'acc-2')).toMatchObject({ feedback: 'first note', product_interests: [] });
   });
 });
 

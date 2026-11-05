@@ -153,13 +153,12 @@ export const submitWaitlistEmail = async (
 
     if (error) {
       const code = (error as { code?: string }).code;
-      // 23505 = unique_violation → this email already joined for this intent.
+      // 23505 = unique_violation: this address already has a row for this intent. Answer exactly
+      // as for a new signup: whoever typed an address is never told whether it is already on the
+      // list. (Once server/sql/register_interest_2026_11.sql is applied the table stops returning
+      // 23505 to clients at all; until then this keeps the page itself from saying it.)
       if (code === '23505' || /duplicate key|already exists/i.test(error.message || '')) {
-        return {
-          ok: true,
-          alreadyJoined: true,
-          message: "You're already on the list — sit tight, we'll be in touch."
-        };
+        return { ok: true, message: DEFAULT_SUCCESS[kind] };
       }
       console.warn('[waitlist] signup failed', error);
       return { ok: false, message: 'Something went wrong on our end. Please try again shortly.' };

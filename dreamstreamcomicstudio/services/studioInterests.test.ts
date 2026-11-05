@@ -95,8 +95,18 @@ describe('server/sql/register_interest_2026_11.sql agrees with the shared list',
     expect(executable.indexOf('revoke insert, references, trigger')).toBeLessThan(executable.indexOf('grant insert (email'));
   });
 
+  /** The policy's WITH CHECK condition, one clause per entry. */
+  const policyClauses = (): string[] => {
+    const start = executable.indexOf('alter policy waitlist_public_insert');
+    const policy = executable.slice(start, executable.indexOf(');', start));
+    return policy
+      .slice(policy.indexOf('with check (') + 'with check ('.length)
+      .split(' and ')
+      .map((c) => c.trim());
+  };
+
   it('the client insert policy requires a lowercase address and default values', () => {
-    const policy = executable.slice(executable.indexOf('alter policy waitlist_public_insert'));
+    const policy = policyClauses().join(' and ');
     for (const clause of [
       'email = lower(email)',
       'confirmed = false',
@@ -109,6 +119,39 @@ describe('server/sql/register_interest_2026_11.sql agrees with the shared list',
     ]) {
       expect(policy).toContain(clause);
     }
+  });
+
+  // No subscription oracle through a direct client INSERT (the unique index used to answer 23505
+  // for a listed address). The trigger runs BEFORE the policy and the NOT NULL checks, so it must
+  // judge a row by exactly the policy's condition: anything looser or stricter answers a new
+  // address and a listed one differently again (checked against Postgres in PGlite, 2026-11-05).
+  it('the client-insert trigger applies exactly the policy’s condition, for client roles only', () => {
+    const fn = executable.slice(executable.indexOf('create or replace function public.waitlist_client_insert()'));
+    expect(fn).toMatch(/^create or replace function public\.waitlist_client_insert\(\) returns trigger language plpgsql security definer set search_path = '' as/);
+    const condition = fn.slice(fn.indexOf('if (') + 'if ('.length, fn.indexOf(') is not true then return new;'));
+    const triggerClauses = condition.split(' and ').map((c) => c.trim().replace(/\bnew\./g, ''));
+    expect(triggerClauses).toEqual(policyClauses());
+    // Rows that pass are written with ON CONFLICT DO NOTHING and the client's own insert skipped,
+    // so a listed and an unlisted address get the same answer (and the same row count).
+    expect(fn).toContain('insert into public.waitlist_signups values (new.*) on conflict do nothing; return null; end;');
+    expect(executable).toContain('revoke all on function public.waitlist_client_insert() from public, anon, authenticated;');
+    expect(executable).toContain(
+      "create or replace trigger waitlist_client_insert before insert on public.waitlist_signups for each row when (current_user in ('anon', 'authenticated')) execute function public.waitlist_client_insert();"
+    );
+    // After the grants are narrowed (section 7), so the definer path never widens what a client may set.
+    expect(executable.indexOf('create or replace trigger waitlist_client_insert')).toBeGreaterThan(executable.indexOf('alter policy waitlist_public_insert'));
+  });
+
+  it('retention never keeps a row forever on a planted future timestamp, and keeps this month’s confirm log', () => {
+    const retention = executable.slice(executable.indexOf('create or replace function public.waitlist_interest_retention()'));
+    for (const col of ['confirm_sent_at', 'created_at', 'unsubscribed_at']) {
+      expect(retention).toContain(`case when w.${col} <= now() + interval '1 minute' then w.${col} end`);
+    }
+    // The monthly email cap and the confirmation budget count rows since the 1st (UTC).
+    expect(retention).toContain(
+      "l.created_at < least( now() - interval '30 days', date_trunc('month', now() at time zone 'UTC') at time zone 'UTC' );"
+    );
+    expect(executable).toContain("update public.waitlist_signups set confirm_sent_at = null where confirm_sent_at > now() + interval '1 minute';");
   });
 });
 

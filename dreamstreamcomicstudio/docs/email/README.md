@@ -88,7 +88,7 @@ the worker, so authentication, branding and abuse-control live in one auditable 
 | `server/src/services/authEmailLinks.ts` | Pure link builder + the strict link-origin allowlist (`APP_PUBLIC_URL` + `AUTH_LINK_ORIGINS`). |
 | `server/src/routes/email.ts` | Public open-tracking pixel. |
 | `server/sql/email_system.sql` | DB migration (log + suppression + double opt-in columns). |
-| `server/sql/register_interest_2026_11.sql` | Register interest: studio `CHECK` on `product_interests`, the summary RPC, the 30-day retention job for unconfirmed / unsubscribed rows and `newsletter-confirm` log rows, an `email_log` lookup index, client INSERT limited to `email, kind, source, metadata`. Not applied yet. |
+| `server/sql/register_interest_2026_11.sql` | Register interest: studio `CHECK` on `product_interests`, the summary RPC, the 30-day retention job for unconfirmed / unsubscribed rows and `newsletter-confirm` log rows (never this month's), an `email_log` lookup index, client INSERT limited to `email, kind, source, metadata`, and the `waitlist_client_insert` trigger that stops a client's direct insert from saying whether an address is already listed. Not applied yet. |
 | `scripts/email-preview.ts` | Renders every template to `docs/email/previews/`. |
 
 ## Storage & logging
@@ -98,8 +98,9 @@ rate_limited | skipped`, with `message_id`, `error`, `opened_at`). This is the a
 the read-receipt store, and the source of truth for the cost cap. Opt-outs live in
 **`email_suppressions`**. Both tables are **service-role only** — no client can read them.
 Once `server/sql/register_interest_2026_11.sql` is applied, `newsletter-confirm` log rows are
-deleted 30 days after sending (the daily `waitlist_interest_retention()` job); no other
-`email_log` rows are purged yet.
+deleted once they are more than 30 days old and from before the current UTC month (the daily
+`waitlist_interest_retention()` job; the monthly cap below counts this month's rows, so they stay
+until the month ends); no other `email_log` rows are purged yet.
 
 ## Cost safety (hard limits)
 

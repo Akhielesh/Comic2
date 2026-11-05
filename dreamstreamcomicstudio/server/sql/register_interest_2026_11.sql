@@ -6,7 +6,9 @@
 -- role. Admins read aggregate counts only, through waitlist_interest_summary() below.
 --
 -- Idempotent: safe to run more than once. Additive: it drops no column or policy; the one policy it
--- alters (waitlist_public_insert, section 7) only gets stricter. The only rows it ever removes
+-- alters (waitlist_public_insert, section 7) only gets stricter, and the one trigger it adds
+-- (section 8) only changes what a client's direct INSERT of an already-listed address answers
+-- (no more 23505, so the table no longer tells anyone whether an address is on it). The only rows it ever removes
 -- are stale, non-subscribed interest rows and their confirmation-email log rows, through the
 -- daily retention job in section 6 (the first run deletes any already past their 30 days).
 -- Apply it AFTER the backend that ships with it is deployed (that backend only writes ids in the
@@ -118,10 +120,16 @@ grant execute on function public.waitlist_interest_summary() to service_role;
 --      * never confirmed: 30 days after the last confirmation email (links expire after 7);
 --      * unsubscribed: 30 days after unsubscribing (its studio picks were already cleared then),
 --        unless they asked to subscribe again within the last 30 days.
+--    A timestamp more than a minute in the future counts as missing: the server only ever stamps
+--    the current time, so such a value came through the old all-column client INSERT grant, and
+--    it must not keep a row forever.
 --    Active subscribers are never touched. Also deletes the email_log rows of confirmation
---    emails (template 'newsletter-confirm') older than 30 days, whoever they went to: someone
---    may have typed an address that isn't theirs, and the per-recipient throttle only needs the
---    last 24 hours. (A subscriber's own row keeps confirm_sent_at and confirmed_at.)
+--    emails (template 'newsletter-confirm') once they are more than 30 days old AND from before
+--    the current UTC month, whoever they went to: someone may have typed an address that isn't
+--    theirs, and the per-recipient throttle only needs the last 24 hours, but the monthly email
+--    cap (EMAIL_MAX_PER_MONTH) and the confirmation budget count this month's rows, so a 31-day
+--    month must not lose its first day's. (A subscriber's own row keeps confirm_sent_at and
+--    confirmed_at.)
 --    The marketing suppression list (email_suppressions) is separate and NOT purged: it is what
 --    keeps an unsubscribed address from being emailed. Request-access rows (kind = 'access') are
 --    out of scope here. Returns how many rows it deleted, both tables together.
@@ -138,13 +146,23 @@ begin
   delete from public.waitlist_signups as w
   where w.kind = 'updates'
     and not (w.confirmed and w.unsubscribed_at is null)
-    and coalesce(w.confirm_sent_at, w.created_at) < now() - interval '30 days'
-    and coalesce(w.unsubscribed_at, '-infinity'::timestamptz) < now() - interval '30 days';
+    and coalesce(
+          case when w.confirm_sent_at <= now() + interval '1 minute' then w.confirm_sent_at end,
+          case when w.created_at <= now() + interval '1 minute' then w.created_at end,
+          '-infinity'::timestamptz
+        ) < now() - interval '30 days'
+    and coalesce(
+          case when w.unsubscribed_at <= now() + interval '1 minute' then w.unsubscribed_at end,
+          '-infinity'::timestamptz
+        ) < now() - interval '30 days';
   get diagnostics v_deleted = row_count;
 
   delete from public.email_log as l
   where l.template = 'newsletter-confirm'
-    and l.created_at < now() - interval '30 days';
+    and l.created_at < least(
+          now() - interval '30 days',
+          date_trunc('month', now() at time zone 'UTC') at time zone 'UTC'
+        );
   get diagnostics v_logs = row_count;
 
   return v_deleted + v_logs;
@@ -210,3 +228,69 @@ alter policy waitlist_public_insert on public.waitlist_signups
     and cardinality(product_interests) = 0
     and feedback is null
   );
+
+-- 8) No subscription oracle through the table itself. The unique index on (lower(email), kind)
+--    turned a client's direct INSERT of an address already on the list into a 23505 error
+--    (PostgREST 409), so anyone holding the public anon key could learn whether an address has
+--    a row: pending, subscribed, or unsubscribed within the retention window, or a request for
+--    access. (Live on 2026-11-05, with or without section 7.)
+--    Now, for client roles only (the WHEN clause: a PostgREST request with the public key or a
+--    signed-in user's session), this function writes a row that passes the policy above itself,
+--    with ON CONFLICT DO NOTHING, and skips the client's own insert. So the client gets the
+--    same answer whether or not the address is on the list (201, and zero rows written by its
+--    statement, should anything report a count), and an existing row is never touched. A row
+--    that fails the policy goes on unchanged and is refused by the policy or a constraint, for a
+--    new address and a listed one alike. Skipping duplicates WITHOUT that check would open a new
+--    oracle: this trigger runs before the policy and the NOT NULL checks, so an uppercase
+--    address or a null metadata would then be refused for a new address and skipped (accepted)
+--    for a listed one.
+--    The condition below must stay exactly the policy's (services/studioInterests.test.ts
+--    compares them). The service role (the server) is not affected: it still gets 23505, which
+--    registerInterest's race handling relies on.
+--    SECURITY DEFINER because client roles can't read the table: it runs as the table owner, to
+--    whom RLS doesn't apply (the table doesn't FORCE it), with an empty search_path. Its own
+--    insert runs as that owner, so the WHEN clause doesn't fire it again.
+create or replace function public.waitlist_client_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (
+    new.email is not null
+    and char_length(new.email) <= 320
+    and new.email ~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+    and new.email = lower(new.email)
+    and new.kind in ('updates', 'access')
+    and new.confirmed = false
+    and new.confirm_token is null
+    and new.confirm_sent_at is null
+    and new.confirmed_at is null
+    and new.unsubscribed_at is null
+    and cardinality(new.product_interests) = 0
+    and new.feedback is null
+  ) is not true then
+    return new;
+  end if;
+  insert into public.waitlist_signups values (new.*) on conflict do nothing;
+  return null;
+end;
+$$;
+
+-- A trigger function; nobody calls it directly.
+revoke all on function public.waitlist_client_insert() from public, anon, authenticated;
+
+create or replace trigger waitlist_client_insert
+  before insert on public.waitlist_signups
+  for each row
+  when (current_user in ('anon', 'authenticated'))
+  execute function public.waitlist_client_insert();
+
+-- 9) A confirm_sent_at in the future can only have come through the old all-column client INSERT
+--    grant (the server stamps the current time). The server already ignores one (it would
+--    otherwise block every confirmation email to that address); this clears any that exist, now
+--    that section 7 stops new ones. Matched no row on 2026-11-05.
+update public.waitlist_signups
+set confirm_sent_at = null
+where confirm_sent_at > now() + interval '1 minute';

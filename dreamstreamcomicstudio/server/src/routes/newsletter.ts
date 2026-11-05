@@ -13,8 +13,10 @@ import {
   markUnsubscribed,
   newConfirmToken,
   normalizeEmail,
-  upsertSubscriber
+  upsertSubscriber,
+  type ConfirmLinkState
 } from '../services/emailStore.js';
+import { formatStudioInterestList } from '../../../services/studioInterests.js';
 import { InterestRetryError, InterestUnavailableError, registerInterest } from '../services/interestStore.js';
 import { resendPendingInvite } from '../services/invites.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
@@ -198,11 +200,33 @@ const originOf = (url: string): string => {
   }
 };
 
+const studioList = (ids: readonly string[]): string => `<strong>${escapeHtml(formatStudioInterestList(ids))}</strong>`;
+
 /**
- * The page the email link opens: one Confirm button that POSTs the link back. No script, so a
- * scanner that fetches (or even renders) the page changes nothing.
+ * What pressing Confirm does, in words, so the click is informed: which studios it subscribes the
+ * address to, or, for an address that already gets updates, which studios it adds (picks anyone
+ * may have typed in since, which only this click applies).
  */
-const sendConfirmPage = (res: Response, email: string, token: string) => {
+const confirmSummary = (link: Extract<ConfirmLinkState, { state: 'ready' }>, email: string): string => {
+  const who = `<strong>${escapeHtml(email)}</strong>`;
+  if (!link.subscribed) {
+    return link.adding.length
+      ? `<p>Press Confirm to get DreamStream updates about ${studioList(link.adding)} at ${who}.</p>`
+      : `<p>Press Confirm to get DreamStream updates at ${who}.</p>`;
+  }
+  const already = link.current.length
+    ? `${who} already gets DreamStream updates about ${studioList(link.current)}.`
+    : `${who} already gets DreamStream updates.`;
+  return link.adding.length
+    ? `<p>${already} Pressing Confirm also adds ${studioList(link.adding)}.</p>`
+    : `<p>${already} There is nothing new to add: pressing Confirm keeps them as they are.</p>`;
+};
+
+/**
+ * The page the email link opens: what the click confirms, and one Confirm button that POSTs the
+ * link back. No script, so a scanner that fetches (or even renders) the page changes nothing.
+ */
+const sendConfirmPage = (res: Response, email: string, token: string, link: Extract<ConfirmLinkState, { state: 'ready' }>) => {
   const appOrigin = originOf(APP_PUBLIC_URL);
   res
     .status(200)
@@ -232,7 +256,8 @@ button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
 </style></head>
 <body><main>
 <h1>Confirm your DreamStream updates</h1>
-<p>Press Confirm to get DreamStream updates at <strong>${escapeHtml(email)}</strong>. We send occasional emails about the studios you picked, and every one has a one-click unsubscribe.</p>
+${confirmSummary(link, email)}
+<p>We send occasional emails${link.current.length || link.adding.length ? ' about these studios' : ''}, and every one has a one-click unsubscribe.</p>
 <form method="post" action="/api/newsletter/confirm">
 <input type="hidden" name="e" value="${escapeHtml(email)}">
 <input type="hidden" name="t" value="${escapeHtml(token)}">
@@ -249,10 +274,10 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const email = normalizeEmail(str(req.query.e));
     const token = str(req.query.t);
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
-    const state = await inspectConfirmLink(email, token);
-    if (!state) return res.redirect(302, redirectToApp('invalid'));
-    if (state === 'already_confirmed') return res.redirect(302, redirectToApp('confirmed'));
-    return sendConfirmPage(res, email, token);
+    const link = await inspectConfirmLink(email, token);
+    if (!link) return res.redirect(302, redirectToApp('invalid'));
+    if (link.state === 'already_confirmed') return res.redirect(302, redirectToApp('confirmed'));
+    return sendConfirmPage(res, email, token, link);
   } catch (err) {
     next(err);
   }

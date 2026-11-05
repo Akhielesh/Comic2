@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import { interpretSubscribeResponse } from './waitlist';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// The direct-insert fallback writes through the public client; the fake answers like PostgREST.
+const insertResult = vi.hoisted(() => ({ current: { error: null as null | { code?: string; message: string } } }));
+vi.mock('./supabase', () => ({
+  supabase: { from: () => ({ insert: async () => insertResult.current }) }
+}));
+
+import { interpretSubscribeResponse, submitWaitlistEmail } from './waitlist';
 
 // The waitlist dedupe contract (server: POST /api/newsletter/subscribe):
 //   - 2xx bodies are authoritative, INCLUDING ok:false 'account-exists' — the client
@@ -58,5 +65,25 @@ describe('interpretSubscribeResponse', () => {
     expect(interpretSubscribeResponse(true, 200, null)).toBeNull();
     // 2xx with a malformed body (no ok flag) must not be trusted either.
     expect(interpretSubscribeResponse(true, 200, { message: 'hi' })).toBeNull();
+  });
+});
+
+// When the backend is down the form inserts directly. Whoever typed an address must not learn
+// whether it is already on the list, so a duplicate (23505) reads exactly like a new signup.
+describe('submitWaitlistEmail offline fallback', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    insertResult.current = { error: null };
+  });
+
+  it.each(['updates', 'access'] as const)('answers a duplicate %s signup exactly like a new one', async (kind) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
+    insertResult.current = { error: null };
+    const fresh = await submitWaitlistEmail('new@example.com', kind);
+    insertResult.current = { error: { code: '23505', message: 'duplicate key value violates unique constraint "idx_waitlist_email_kind"' } };
+    const duplicate = await submitWaitlistEmail('listed@example.com', kind);
+    expect(fresh.ok).toBe(true);
+    expect(duplicate).toEqual(fresh);
+    expect(duplicate.message).not.toMatch(/already/i);
   });
 });

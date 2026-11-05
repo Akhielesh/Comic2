@@ -14,6 +14,8 @@
 //   * a confirmed subscriber's picks never change without their click: new picks wait in
 //     metadata.pending_interests and apply when they press Confirm (emailStore.confirmSubscriber);
 //     an existing row's free-text note is never replaced;
+//   * picks are written with a conditional update on what was read (savePicks), so parallel
+//     requests for one address keep every request's picks, sent or throttled;
 //   * a per-recipient throttle on the confirmation email (security finding abuse-ops-11): none
 //     within 10 minutes of the last one, at most 3 a day. The send slot is CLAIMED atomically (a
 //     conditional update on confirm_sent_at) before mailing, so parallel requests send one email;
@@ -113,6 +115,20 @@ const timeOf = (value: string | null | undefined): number => {
   return Number.isFinite(t) ? t : -Infinity;
 };
 
+/**
+ * How far in the future a row's confirm_sent_at may be and still count. The server only ever
+ * stamps the current time; a later value came through the old all-column client INSERT grant
+ * (before register_interest_2026_11.sql), and trusting it would block every confirmation email
+ * to that address for good.
+ */
+const CLOCK_SKEW_MS = 60_000;
+
+/** The row's confirm_sent_at as a time; -Infinity when missing or planted in the future. */
+const sentAtOf = (value: string | null | undefined, now: number): number => {
+  const t = timeOf(value);
+  return t > now + CLOCK_SKEW_MS ? -Infinity : t;
+};
+
 // ── Per-recipient throttle ──────────────────────────────────────────────────────
 
 export type ConfirmThrottle = { code: 'too_soon' | 'too_many'; retryAfterS: number };
@@ -121,8 +137,9 @@ export type ConfirmThrottle = { code: 'too_soon' | 'too_many'; retryAfterS: numb
  * May we send this address another confirmation email now? The cooldown runs from the later of
  * the last logged send and the row's own confirm_sent_at (stamped before every send), so neither
  * a lagging nor an unreadable log means "unlimited". Only mail that went out (or is going out)
- * counts toward the daily cap: a failed send never locks anyone out. This is the pre-check; the
- * atomic claim in registerInterest is what stops parallel requests.
+ * counts toward the daily cap: a failed send never locks anyone out. A confirm_sent_at in the
+ * future is ignored (sentAtOf). This is the pre-check; the atomic claim in registerInterest is
+ * what stops parallel requests.
  */
 export const checkConfirmThrottle = async (
   email: string,
@@ -131,7 +148,7 @@ export const checkConfirmThrottle = async (
 ): Promise<ConfirmThrottle | null> => {
   const dayAgo = iso(now - DAY_MS);
   const [latestLogged, lastDay] = await Promise.all([latestConfirmEmailAt(email), countRecentConfirmEmails(email, dayAgo)]);
-  const latest = Math.max(timeOf(latestLogged), timeOf(confirmSentAt));
+  const latest = Math.max(timeOf(latestLogged), sentAtOf(confirmSentAt, now));
   const waitMs = INTEREST_CONFIRM_THROTTLE.minIntervalMs - (now - latest);
   if (Number.isFinite(waitMs) && waitMs > 0) {
     return { code: 'too_soon', retryAfterS: Math.max(1, Math.ceil(waitMs / 1000)) };
@@ -181,18 +198,22 @@ export interface RegisterInterestInput {
 export type RegisterInterestResult =
   /** This request holds the send slot: email `token` in a confirm link now, and call `release()` if the send fails. */
   | { outcome: 'send_confirmation'; token: string; release: () => Promise<void> }
-  /** Picks recorded; no email: one went to this address too recently or too often, or a parallel request is sending it. */
+  /** Picks saved (savePicks); no email: one went to this address too recently or too often, or a parallel request is sending it. */
   | { outcome: 'throttled'; reason: 'too_soon' | 'too_many' | 'in_flight' }
   /** Confirmation mail has used its share of the email budget for now. Nothing was stored. */
   | { outcome: 'budget_exhausted' };
 
 /** A token from this row worth sending again, so links already in the inbox keep working. */
 const reusableToken = (row: InterestRow, email: string, now: number): string | null => {
-  // Back after unsubscribing: always a fresh link.
-  if (!row.confirm_token || row.unsubscribed_at) return null;
+  if (!row.confirm_token) return null;
   // Only one this server issued for this address (never one written into the row by anyone else).
   const issuedAt = confirmTokenIssuedAt(email, row.confirm_token);
   if (issuedAt === null) return null;
+  // Back after unsubscribing: never a link from before it. Unsubscribing clears the token
+  // (emailStore.markUnsubscribed), so one that verifies here was issued by the first request
+  // since; this comparison also covers the moment between the two statements of that unsubscribe.
+  // Re-sending that one keeps the link already in their inbox working.
+  if (row.unsubscribed_at && !(issuedAt > timeOf(row.unsubscribed_at))) return null;
   // Its lifetime runs from when it was first issued; don't re-send one about to lapse.
   return confirmTokenExpired(issuedAt, now, 3_600_000) ? null : row.confirm_token;
 };
@@ -269,6 +290,55 @@ const picksUpdate = (row: InterestRow, picked: readonly StudioInterestId[]): Rec
   return fields;
 };
 
+/** A Postgres text[] literal with every element quoted, so any stored value round-trips in a filter. */
+const textArrayLiteral = (values: readonly unknown[]): string =>
+  `{${values.map((v) => `"${String(v).replace(/[\\"]/g, (c) => `\\${c}`)}"`).join(',')}}`;
+
+const loadRowById = async (id: string): Promise<InterestRow | null> => {
+  const { data, error } = await adminOrUnavailable().from(TABLE).select(ROW_COLUMNS).eq('id', id).limit(1).maybeSingle();
+  if (error) raise(error, 'read');
+  return (data as InterestRow | null) ?? null;
+};
+
+const SAVE_PICKS_ATTEMPTS = 3;
+
+/**
+ * Write this request's picks into an existing row without losing a parallel request's. The
+ * update only lands while the row still holds exactly what picksUpdate read: the same picks, the
+ * same metadata (waiting picks), and the same subscribed state, which decides where new picks go.
+ * (Mutual containment is equality here: both sides are sets of studio ids.) On a miss the row is
+ * read again and the merge redone. Runs before the throttle and the send claim, so the picks are
+ * kept whether or not this request ends up sending the email. Returns the row as written.
+ */
+const savePicks = async (initial: InterestRow, picked: readonly StudioInterestId[]): Promise<InterestRow> => {
+  let row: InterestRow | null = initial;
+  for (let attempt = 0; attempt < SAVE_PICKS_ATTEMPTS; attempt++) {
+    if (!row) throw new InterestRetryError('row removed while saving picks');
+    const fields = picksUpdate(row, picked);
+    if (!Object.keys(fields).length) return row;
+    let query = adminOrUnavailable().from(TABLE).update(fields).eq('id', row.id).eq('confirmed', row.confirmed);
+    query = row.unsubscribed_at == null ? query.is('unsubscribed_at', null) : query.not('unsubscribed_at', 'is', null);
+    if (Array.isArray(row.product_interests)) {
+      const picks = textArrayLiteral(row.product_interests);
+      query = query.filter('product_interests', 'cs', picks).filter('product_interests', 'cd', picks);
+    } else {
+      query = query.is('product_interests', null);
+    }
+    if (row.metadata == null) {
+      query = query.is('metadata', null);
+    } else {
+      const metadata = JSON.stringify(row.metadata);
+      query = query.filter('metadata', 'cs', metadata).filter('metadata', 'cd', metadata);
+    }
+    const { data, error } = await query.select(ROW_COLUMNS);
+    if (error) raise(error, 'update');
+    const written = Array.isArray(data) ? (data[0] as InterestRow | undefined) : undefined;
+    if (written) return written;
+    row = await loadRowById(row.id);
+  }
+  throw new InterestRetryError('picks kept changing under parallel requests');
+};
+
 /**
  * Record (or extend) an interest registration and decide whether a confirmation email goes out.
  * Idempotent: one row per address, studios merged in canonical order, re-submits never clear
@@ -335,31 +405,36 @@ export const registerInterest = async (input: RegisterInterestInput): Promise<Re
     if (!row) throw new InterestRetryError('row not found after a unique violation');
   }
 
-  const fields = picksUpdate(row, picked);
+  // The picks first, on their own: kept whether this request sends the email, is throttled, or
+  // loses the send claim to a parallel one.
+  row = await savePicks(row, picked);
   const throttle = await checkConfirmThrottle(email, row.confirm_sent_at, now);
-  if (throttle) {
-    // Keep the picks; leave the token and its clock alone so the link already in their inbox works.
-    if (Object.keys(fields).length) await update(row.id, fields);
-    return { outcome: 'throttled', reason: throttle.code };
-  }
+  // Leave the token and its clock alone so the link already in their inbox works.
+  if (throttle) return { outcome: 'throttled', reason: throttle.code };
 
   // Claim the send slot: the update only lands while no confirmation went out in the last
-  // 10 minutes, so of N parallel requests exactly one gets a row back and sends.
+  // 10 minutes (a confirm_sent_at planted in the future doesn't count), so of N parallel
+  // requests exactly one gets a row back and sends.
   const token = reusableToken(row, email, now) ?? issueConfirmToken(email, now);
   const claimedIso = iso(now);
   const cutoffIso = iso(now - INTEREST_CONFIRM_THROTTLE.minIntervalMs);
-  const previous = { confirm_token: row.confirm_token, confirm_sent_at: row.confirm_sent_at, confirmed: row.confirmed };
+  const futureIso = iso(now + CLOCK_SKEW_MS);
+  const previous = {
+    confirm_token: row.confirm_token,
+    // Never put a planted future stamp back: it would block this address again.
+    confirm_sent_at: Number.isFinite(sentAtOf(row.confirm_sent_at, now)) ? row.confirm_sent_at : null,
+    confirmed: row.confirmed
+  };
   const { data: claimed, error: claimError } = await db
     .from(TABLE)
     .update({
-      ...fields,
       confirm_token: token,
       confirm_sent_at: claimedIso,
       // Back after unsubscribing: must confirm again; unsubscribed_at stays until that click.
       ...(row.unsubscribed_at ? { confirmed: false } : {})
     })
     .eq('id', row.id)
-    .or(`confirm_sent_at.is.null,confirm_sent_at.lt."${cutoffIso}"`)
+    .or(`confirm_sent_at.is.null,confirm_sent_at.lt."${cutoffIso}",confirm_sent_at.gt."${futureIso}"`)
     .select('id');
   if (claimError) raise(claimError, 'claim');
   if (!Array.isArray(claimed) || claimed.length === 0) return { outcome: 'throttled', reason: 'in_flight' };

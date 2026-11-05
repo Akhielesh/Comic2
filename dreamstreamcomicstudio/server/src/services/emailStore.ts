@@ -10,7 +10,7 @@
 import crypto from 'crypto';
 import { getSupabaseAdmin } from './supabase.js';
 import { confirmTokenExpired, confirmTokenIssuedAt } from './confirmToken.js';
-import { STUDIO_INTEREST_IDS, sanitizeStudioInterests } from '../../../services/studioInterests.js';
+import { STUDIO_INTEREST_IDS, sanitizeStudioInterests, type StudioInterestId } from '../../../services/studioInterests.js';
 
 export type EmailKind = 'essential' | 'marketing';
 export type EmailStatus = 'queued' | 'sent' | 'failed' | 'suppressed' | 'rate_limited' | 'skipped';
@@ -329,9 +329,10 @@ const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string
 
 /**
  * Upsert a request-access (kind 'access') waitlist row and return what happened. There is no
- * confirm flow for these: an existing row reports 'already_registered' and is left untouched —
- * except that newly provided intent (studio interests / feedback) is merged in, so someone
- * re-registering with picks still gets them recorded. Idempotent on (lower(email), kind).
+ * confirm flow for these: an existing row reports 'already_registered' and is left as it was,
+ * except that newly picked studios are ADDED to its picks (never replacing or dropping one), and
+ * a note is stored only if the row has none. Anyone can type anyone's address, so a stranger can
+ * neither wipe someone's picks nor overwrite their note. Idempotent on (lower(email), kind).
  *
  * Newsletter / interest rows (kind 'updates') go through registerInterest() in
  * services/interestStore.ts instead: it owns the double opt-in and the per-recipient throttle.
@@ -348,9 +349,11 @@ export const upsertSubscriber = async (
   if (!db) return { outcome: 'new' };
   const intentCols = sanitizeIntent(intent);
 
+  // '*' rather than named columns: on a database without product_interests / feedback the lookup
+  // still finds the row (and there is then nothing to merge).
   const { data: existing } = await db
     .from('waitlist_signups')
-    .select('id, confirmed')
+    .select('*')
     .eq('email', normalized)
     .eq('kind', kind)
     .limit(1)
@@ -358,10 +361,16 @@ export const upsertSubscriber = async (
 
   const now = new Date().toISOString();
   if (existing) {
-    // Merge any newly provided intent onto the existing row (never clears old picks).
-    if (Object.keys(intentCols).length) {
-      await db.from('waitlist_signups').update(intentCols).eq('id', (existing as { id: string }).id);
+    const row = existing as { id: string; product_interests?: unknown; feedback?: unknown };
+    const fields: Record<string, unknown> = {};
+    if (intentCols.product_interests) {
+      const stored = sanitizeStudioInterests(row.product_interests);
+      const merged = sanitizeStudioInterests([...stored, ...intentCols.product_interests]);
+      if (merged.length !== stored.length) fields.product_interests = merged;
     }
+    const hasNote = typeof row.feedback === 'string' && row.feedback.trim() !== '';
+    if (intentCols.feedback && !hasNote) fields.feedback = intentCols.feedback;
+    if (Object.keys(fields).length) await db.from('waitlist_signups').update(fields).eq('id', row.id);
     // 'access' rows have no confirm step — the email is simply already on the list.
     return { outcome: 'already_registered' };
   }
@@ -438,16 +447,32 @@ const loadConfirmTarget = async (
 };
 
 /**
- * GET: is this confirm link still good? 'ready' = show the Confirm button; 'already_confirmed' =
- * nothing left to do; null = invalid or expired. Read-only.
+ * What a still-good confirm link would do, so the Confirm page can say it before the click.
+ * `subscribed`: the address already gets updates, about `current`, and pressing Confirm adds
+ * `adding` (the picks waiting on this click). Otherwise pressing Confirm subscribes it to
+ * `adding` (the picks stored on the row). Studio ids only, from the shared list.
  */
-export const inspectConfirmLink = async (email: string, token: string): Promise<'ready' | 'already_confirmed' | null> => {
+export type ConfirmLinkState =
+  | { state: 'ready'; subscribed: boolean; current: StudioInterestId[]; adding: StudioInterestId[] }
+  | { state: 'already_confirmed' };
+
+/**
+ * GET: is this confirm link still good? 'ready' = show the Confirm button, with what it confirms;
+ * 'already_confirmed' = nothing left to do; null = invalid or expired. Read-only.
+ */
+export const inspectConfirmLink = async (email: string, token: string): Promise<ConfirmLinkState | null> => {
   const db = adminOrNull();
   if (!db || !token) return null;
   const target = await loadConfirmTarget(db, normalizeEmail(email), token);
   if (!target) return null;
-  if (target.matches) return 'ready';
-  return isSubscribedRow(target.row) ? 'already_confirmed' : null;
+  const { row } = target;
+  if (!target.matches) return isSubscribedRow(row) ? { state: 'already_confirmed' } : null;
+  const stored = sanitizeStudioInterests(row.product_interests);
+  if (!isSubscribedRow(row)) return { state: 'ready', subscribed: false, current: [], adding: stored };
+  // The same picks confirmSubscriber applies on the click.
+  const waiting = row.metadata && typeof row.metadata === 'object' ? row.metadata[PENDING_INTERESTS_KEY] : undefined;
+  const adding = sanitizeStudioInterests(waiting).filter((id) => !stored.includes(id));
+  return { state: 'ready', subscribed: true, current: stored, adding };
 };
 
 /**
