@@ -394,7 +394,8 @@ function ThemePanel({ dark, children }: { dark?: boolean; children: React.ReactN
 function DsGallery() {
   const pageIsDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
   return (
-    <main className="min-h-[100dvh] min-w-0 bg-[var(--ds-canvas)] px-4 py-6 text-[var(--ds-ink)] sm:px-6">
+    // A plain block, not <main>: the QA harness owns the page's one main landmark (#qa-main).
+    <div data-qa-scene="ds-gallery" className="min-h-[100dvh] min-w-0 bg-[var(--ds-canvas)] px-4 py-6 text-[var(--ds-ink)] sm:px-6">
       <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-col gap-8">
         <PageHeader eyebrow="Design system" title="DreamStream primitives" description="Atlas recipes on the --ds-* tokens. Every primitive, variant and state, in the page theme and in dark." />
         <ThemePanel>
@@ -406,7 +407,7 @@ function DsGallery() {
           </ThemePanel>
         )}
       </div>
-    </main>
+    </div>
   );
 }
 

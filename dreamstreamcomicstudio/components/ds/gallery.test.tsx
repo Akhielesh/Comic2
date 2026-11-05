@@ -25,6 +25,18 @@ describe('ds-gallery scene', () => {
     expect(typeof scene.Scene).toBe('function');
   });
 
+  it('is page content inside the harness: no landmark of its own that would duplicate the harness’s <main>', () => {
+    const { Scene } = scene;
+    const { container } = render(
+      <main id="qa-main">
+        <Scene />
+      </main>
+    );
+    expect(container.querySelectorAll('main')).toHaveLength(1);
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(container.querySelector('#qa-main > [data-qa-scene="ds-gallery"]')).not.toBeNull();
+  });
+
   it('renders every primitive, in the page theme and in a dark panel', () => {
     const { Scene } = scene;
     render(<Scene />);

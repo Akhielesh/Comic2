@@ -87,6 +87,14 @@ in `atlas-skin.md`, "The shared constants"):
 - **Reduced motion:** transitions read the motion tokens; spinners, pills and thumbs hold still or jump.
 - **Tailwind's `max-*` / `min-*` breakpoint variants throw here** (the screens include raw queries): write
   `w-full sm:w-auto`, not `max-sm:w-full`.
+- **This app runs Tailwind 3.4, not Atlas's Tailwind 4.** Some Atlas variants have no 3.4 name and compile
+  to nothing: 3.4's `aria-*` set has no `invalid`, so the danger edge is
+  `aria-[invalid=true]:border-[var(--ds-danger-mark)]` (`peer-aria-[invalid=true]:` from a peer input).
+  `components/ds/ds.hygiene.test.ts` asks Tailwind (built from `tailwind.config.cjs`) for every class of
+  every exported class string in `components/ds`, so a class that would paint nothing fails by name.
+- **Disabled dims once, and never the help text.** The control dims itself (`disabled:opacity-50`), its
+  label may follow (the label of a disabled control); no wrapper dims the description or the error, which
+  must stay 4.5:1 to say why the control is locked.
 
 ## Primitives (`components/ds`)
 
@@ -171,6 +179,12 @@ library decision D6); the AppHeader / NavRail / TabBar wrappers (DS-2); the crea
   the brand tint.
 - The destructive fill's label is `--ds-on-danger`, not white (white fails on the default dark red); its
   hover mixes 12 % of the ink in rather than fading to 90 %, so the label only gains contrast.
+- The destructive fill stays solid in dark: Atlas's `dark:bg-destructive/80` (and its hover back to full) is
+  dropped, because an 80 % fill lets the dark page through under a label measured on the solid
+  `--ds-danger` (`--ds-on-danger` is 4.5:1 or better on the fill and its hover mix in all six contexts).
+- Textarea focuses like Input: the FIELD recipe's 2 px ring, 2 px off (Atlas's Input ring). Atlas's Textarea
+  alone draws the ink outline (`focus-visible:outline-2 … outline-foreground`); here every text field shows
+  the same focus, and a field set inside a group can drop the ring the same way.
 - Input, Textarea and Select are 16 px on phones (iOS zooms into smaller fields) and the 14 px body size
   from `md` up; Atlas's Input is 14 px everywhere.
 - Select is a styled native `<select>`, Slider a native range and Checkbox a native checkbox (no overlay
