@@ -103,10 +103,10 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
         'Published · In the Library + link',
         'Published · Link only',
         'Listed in the Library, and you get a link to share',
-        "Anyone with the link can read it; it isn't listed"
+        'Anyone with the link can read it; it isn’t listed'
       ])
     );
-    expect(uiText('components/comicstudio/share/PublishPanel.tsx')).toContain("It's listed in the Library, and anyone with the link can read it.");
+    expect(uiText('components/comicstudio/share/PublishPanel.tsx')).toContain('It’s listed in the Library, and anyone with the link can read it.');
   });
 
   it('the board tab for every image in the comic is "Assets" (its id stays media)', () => {

@@ -121,7 +121,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ doc, view, visibilit
         {visibility === 'public' ? <Globe2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> : <Link2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />}
         <span>
           {visibility === 'public'
-            ? "It's listed in the Library, and anyone with the link can read it."
+            ? 'It’s listed in the Library, and anyone with the link can read it.'
             : 'Anyone with the link can read it. It isn’t listed or searchable.'}{' '}
           Readers can never edit. Later changes stay private until you update.
         </span>

@@ -73,7 +73,7 @@ export const LIBRARY_HREF = '/?view=gallery';
 
 /** The two ways to publish, in words (Link only / Library + link): every published comic has a read-only link. */
 export const VISIBILITY_HINT: Record<'unlisted' | 'public', string> = {
-  unlisted: "Anyone with the link can read it; it isn't listed",
+  unlisted: 'Anyone with the link can read it; it isn’t listed',
   public: 'Listed in the Library, and you get a link to share'
 };
 

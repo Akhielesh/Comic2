@@ -306,7 +306,7 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     render(<ShareSheet studio={studioWith(privateView())} open onClose={vi.fn()} />);
     const radios = within(screen.getByRole('radiogroup', { name: 'Who can read it' })).getAllByRole('radio');
     expect(radios.map((r) => r.textContent)).toEqual(['Private', 'Link only', 'Library + link']);
-    expect(screen.getByRole('radio', { name: 'Link only' })).toHaveAccessibleDescription("Anyone with the link can read it; it isn't listed");
+    expect(screen.getByRole('radio', { name: 'Link only' })).toHaveAccessibleDescription('Anyone with the link can read it; it isn’t listed');
     expect(screen.getByRole('radio', { name: 'Library + link' })).toHaveAccessibleDescription('Listed in the Library, and you get a link to share');
     // Not published yet: the hint names both ways to publish.
     expect(screen.getByText(/Only you can see this comic/)).toHaveTextContent('Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.');
@@ -314,10 +314,10 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     // Picking a way shows its hint under the choices and the panel's explainer.
     fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
     expect(screen.getByText('Listed in the Library, and you get a link to share')).toBeVisible();
-    expect(screen.getByText(/It's listed in the Library, and anyone with the link can read it\./)).toBeInTheDocument();
+    expect(screen.getByText(/It’s listed in the Library, and anyone with the link can read it\./)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
-    expect(screen.getByText("Anyone with the link can read it; it isn't listed")).toBeVisible();
+    expect(screen.getByText('Anyone with the link can read it; it isn’t listed')).toBeVisible();
     expect(screen.getByText('Listed in the Library, and you get a link to share')).not.toBeVisible();
     expect(screen.getByText(/Anyone with the link can read it\. It isn’t listed or searchable\./)).toBeInTheDocument();
     expect(screen.getByRole('dialog').textContent).not.toMatch(/gallery/i);
@@ -372,7 +372,7 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     const link = screen.getByLabelText('Read-only link');
     expect(link.compareDocumentPosition(screen.getByRole('radiogroup', { name: 'Who can read it' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'See it in the Library' })).toBeNull();
-    expect(screen.getByText("Anyone with the link can read it; it isn't listed")).toBeVisible();
+    expect(screen.getByText('Anyone with the link can read it; it isn’t listed')).toBeVisible();
   });
 
   it('on a phone the QR sits in the link block that shows first, ahead of the choices and the settings', () => {
