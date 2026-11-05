@@ -213,14 +213,22 @@ export const PRO_FLAG_DEFAULTS: Readonly<Record<ProFlag, FlagStage>> = {
   readerMotion: 'off'
 };
 
+/** The COMIC_READER_MOTION values that turn reader motion on for everyone (case and spaces ignored). */
+const READER_MOTION_ON: ReadonlySet<string> = new Set(['on', 'true', '1', 'all', 'everyone']);
+
 /**
- * COMIC_READER_MOTION's stage: 'off' | 'all' only. Readers are not signed in, so there is no admins stage: anything
- * parseFlagStage reads as 'admins' (including a bare 'on') stays off, and everyone needs an explicit 'all'.
+ * COMIC_READER_MOTION's stage: 'off' | 'all' only. A bare switch ('on', 'true', '1') or 'all' / 'everyone' turns it on
+ * for EVERYONE: unlike the other flags there is no admins-only reading of a bare 'on', since that would leave a
+ * switched-on flag silently off. 'admins' stays OFF for readers: the public reader serves signed-out readers, whose
+ * admin status cannot be checked, so an admins stage cannot be honoured there, and it must never widen to everyone.
+ * Unset, 'off' and any other value are off (PRO_FLAG_DEFAULTS.readerMotion is 'off').
  */
-export const readerMotionStage = (value: unknown): 'off' | 'all' => (parseFlagStage(value, PRO_FLAG_DEFAULTS.readerMotion) === 'all' ? 'all' : 'off');
+export const readerMotionStage = (value: unknown): 'off' | 'all' =>
+  typeof value === 'string' && READER_MOTION_ON.has(value.trim().toLowerCase()) ? 'all' : 'off';
 
 /** The Pro Edit caps for one user, from the server env (access.ts studioCapsFor). The W0 stage pattern: off | admins |
- *  all for motion and stickers (a bare switch = admins only), off | all for reader motion. */
+ *  all for motion and stickers (a bare switch = admins only), off | all for reader motion (a bare switch = everyone;
+ *  readerMotionStage). */
 export const proCapsFromEnv = (
   env: Readonly<Record<string, string | undefined>>,
   isAdmin: boolean

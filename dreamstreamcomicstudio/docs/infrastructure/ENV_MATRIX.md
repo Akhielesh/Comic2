@@ -140,8 +140,9 @@ Read once per request by `server/src/comic/access.ts` (`studioCapsFor` → `proC
 `shared/comic/capabilities.ts`) into `caps.proMotion`, `caps.proStickers` and `caps.readerMotion`; the client reads the
 caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`), never env. `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
 take the stages above (`off` | `admins` | `all`, same synonyms; a bare `on` means admins only).
-`COMIC_READER_MOTION` takes `off` | `all` only: readers are not signed in, so `admins` (and a bare `on`) read as `off`
-(`readerMotionStage`). Every one defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free
+`COMIC_READER_MOTION` is `off` | `all` only (`readerMotionStage`, lead decision S1): a bare `on`, `true` or `1`, and
+`all` / `everyone` (any case), turn it on for **everyone**; `admins` stays `off`, because the public reader serves
+signed-out readers whose admin status cannot be checked; any other value is `off`. Every one defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free
 software: no flag here adds a model or image call. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
 `PRO_EDIT_OPS_PATCHABLE` is a code constant in `shared/comic/ops.ts`, not env: it lets clients send the `motion` /
 `page_motion` ops and is flipped only after the PE-SERVER sanitizer is deployed. Backend env: a `vars` entry in
@@ -151,7 +152,7 @@ software: no flag here adds a model or image call. The workspace itself stays be
 |---|---|---|---|---|
 | `COMIC_PRO_MOTION` | `caps.proMotion`: the Easy Animate row, the Animate timeline, motion edits in the editor and "Export this page as video" | `off` (then `admins` after S3) | — | Frame-determinism and flash (≤ 3 Hz) tests pass; the phone playback budget is met |
 | `COMIC_PRO_STICKERS` | `caps.proStickers`: the Stickers tab in Assets | `off` | — | D6 approved, the licence gate (PE-LICENCE) merged, the credits block live |
-| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
+| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only: `on` = everyone, `admins` = off | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
 
 ## Admin cost centre (optional live Cloudflare usage)
 

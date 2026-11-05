@@ -24,11 +24,12 @@ done by the editor, no AI cost"); "Pro" is never "paid".
 | `COMIC_PRO_EDITOR_V2` (W0) | `caps.proEditorV2` | `admins` | off \| admins \| all | The workspace: header switch, docked inspector, numeric fields, Layers |
 | `COMIC_PRO_MOTION` | `caps.proMotion` | `off` | off \| admins \| all | Easy Animate row, timeline, motion edits, "Export this page as video" |
 | `COMIC_PRO_STICKERS` | `caps.proStickers` | `off` | off \| admins \| all | The Stickers tab (after D6, PE-LICENCE and the credits block) |
-| `COMIC_READER_MOTION` | `caps.readerMotion` | `off` | off \| all | Readers play the creator's motion |
+| `COMIC_READER_MOTION` | `caps.readerMotion` | `off` | off \| all (`on` = all) | Readers play the creator's motion |
 
 `server/src/comic/access.ts` reads them once per request (`proCapsFromEnv`, `shared/comic/capabilities.ts`); the client
-reads the caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only; reader motion has
-no admins stage (readers are not signed in), so only an explicit `all` turns it on (`readerMotionStage`). Details and
+reads the caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`). A bare `on` means admins only for motion and stickers;
+reader motion has no admins stage (readers are not signed in), so a bare `on` (`true`, `1`, `all`, `everyone`) turns it on
+for everyone and `admins` stays off (`readerMotionStage`, lead decision S1). Details and
 rollout criteria: `docs/infrastructure/ENV_MATRIX.md`, "Comic Studio: Pro Edit".
 
 `PRO_EDIT_OPS_PATCHABLE` (`shared/comic/ops.ts`) is a code constant, `false`: the S2 integration flips it **only after**

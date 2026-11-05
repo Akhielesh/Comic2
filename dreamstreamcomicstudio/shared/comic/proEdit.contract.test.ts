@@ -694,17 +694,28 @@ describe('Pro Edit contract (PE-0): opaque layers through frames and panel remov
 });
 
 describe('Pro Edit contract (PE-0): flags and seams', () => {
-  it('the three flags default off; motion and stickers are stages, reader motion is off | all only', () => {
+  it('the three flags default off; motion and stickers are stages, reader motion is off | all only (a bare on = everyone)', () => {
     expect(PRO_FLAG_ENV).toEqual({ proMotion: 'COMIC_PRO_MOTION', proStickers: 'COMIC_PRO_STICKERS', readerMotion: 'COMIC_READER_MOTION' });
     expect(PRO_FLAG_DEFAULTS).toEqual({ proMotion: 'off', proStickers: 'off', readerMotion: 'off' });
     for (const admin of [false, true]) expect(proCapsFromEnv({}, admin)).toEqual({ proMotion: false, proStickers: false, readerMotion: false });
     const env = { COMIC_PRO_MOTION: 'on', COMIC_PRO_STICKERS: 'all', COMIC_READER_MOTION: 'admins' };
     expect(proCapsFromEnv(env, false)).toEqual({ proMotion: false, proStickers: true, readerMotion: false });
     expect(proCapsFromEnv(env, true)).toEqual({ proMotion: true, proStickers: true, readerMotion: false });
-    for (const [value, stage] of [['all', 'all'], [' Everyone ', 'all'], ['on', 'off'], ['admins', 'off'], ['1', 'off'], ['off', 'off'], [undefined, 'off'], ['bogus', 'off']] as const) {
-      expect(readerMotionStage(value), String(value)).toBe(stage);
-    }
+    // Lead decision (S1): a bare switch turns reader motion on for everyone; 'admins' stays off for readers (signed-out
+    // readers cannot be checked); anything else is off.
+    const readerCases: readonly (readonly [unknown, 'off' | 'all'])[] = [
+      ['on', 'all'], [' ON ', 'all'], ['true', 'all'], ['TRUE', 'all'], ['1', 'all'], ['all', 'all'], [' Everyone ', 'all'],
+      ['admins', 'off'], ['Admins', 'off'], ['admin', 'off'], ['off', 'off'], ['false', 'off'], ['0', 'off'], ['yes', 'off'],
+      ['', 'off'], ['bogus', 'off'], [undefined, 'off'], [null, 'off'], [1, 'off'], [true, 'off']
+    ];
+    for (const [value, stage] of readerCases) expect(readerMotionStage(value), String(value)).toBe(stage);
     expect(proCapsFromEnv({ COMIC_READER_MOTION: 'all' }, false).readerMotion).toBe(true);
+    for (const admin of [false, true]) {
+      expect(proCapsFromEnv({ COMIC_READER_MOTION: 'on' }, admin).readerMotion, `on, admin=${admin}`).toBe(true);
+      expect(proCapsFromEnv({ COMIC_READER_MOTION: 'admins' }, admin).readerMotion, `admins, admin=${admin}`).toBe(false);
+    }
+    // Motion and stickers keep the W0 reading: a bare 'on' is admins only.
+    expect(proCapsFromEnv({ COMIC_PRO_MOTION: 'on', COMIC_PRO_STICKERS: 'on' }, false)).toMatchObject({ proMotion: false, proStickers: false });
     // Absent caps (DEFAULT_CAPS, an older server) = every Pro Edit behaviour off.
     for (const caps of [DEFAULT_CAPS, resolveStudioCaps({ byok: false, isAdmin: true }), null, undefined]) {
       expect([proMotionOn(caps), proStickersOn(caps), readerMotionOn(caps)]).toEqual([false, false, false]);
