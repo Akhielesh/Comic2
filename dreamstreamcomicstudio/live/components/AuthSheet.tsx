@@ -12,6 +12,7 @@ import {
   useAccount,
   type AuthMode,
 } from '../account';
+import { legalPath } from '@/components/legal/legalRoutes';
 import { Turnstile, resetTurnstile } from '@/components/Turnstile';
 import { turnstileEnabled } from '@/services/clientConfig';
 import { continueWithDreamStream, mainAppUrl } from '@/services/liveLink';
@@ -108,7 +109,7 @@ function AuthSheet({
         else push('Signed in', { icon: 'check' });
       } else if (mode === 'create') {
         if (!agree) {
-          setErr('Please accept the Terms and Privacy Policy.');
+          setErr('Please accept the Terms of Service and Privacy Policy.');
           return;
         }
         if (!dob) {
@@ -217,7 +218,7 @@ function AuthSheet({
           {mode === 'create' && (
             <label className="auth-agree">
               <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
-              <span>I agree to the <a href={mainAppUrl('/?view=terms')} target="_blank" rel="noopener">Terms</a> and <a href={mainAppUrl('/?view=privacy')} target="_blank" rel="noopener">Privacy Policy</a>.</span>
+              <span>I agree to the <a href={mainAppUrl(legalPath('terms'))} target="_blank" rel="noopener">Terms of Service</a> and <a href={mainAppUrl(legalPath('privacy'))} target="_blank" rel="noopener">Privacy Policy</a>.</span>
             </label>
           )}
         </div>

@@ -151,8 +151,9 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
 
   it('shows the updated date and an email contact instead of only the in-app flow', () => {
     render(<PrivacyPolicy onBack={vi.fn()} />);
-    expect(screen.getByText('November 4, 2026')).toHaveAttribute('dateTime', '2026-11-04');
-    const contact = screen.getByRole('heading', { name: /12\. Contact/ }).closest('section') as HTMLElement;
+    expect(screen.getByText('November 5, 2026', { selector: 'time' })).toHaveAttribute('dateTime', '2026-11-05');
+    const contact = screen.getByRole('heading', { level: 2, name: /^\d+\. Contact$/ }).closest('section') as HTMLElement;
+    expect(contact).toHaveAttribute('id', 'contact');
     expect(within(contact).getByRole('link', { name: 'privacy@dreamstreamstudio.ai' })).toBeInTheDocument();
     // Account Settings still shows an address on a domain we don't own; don't send requesters there.
     expect(textOf(contact)).not.toMatch(/Account Settings/);
@@ -174,6 +175,16 @@ describe('privacy policy: Google user data (OAuth verification)', () => {
     expect(() => render(<PrivacyPolicy onBack={vi.fn()} />)).not.toThrow();
     expect(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument();
     expect(scroll).not.toHaveBeenCalled();
+  });
+
+  it('links the YouTube Terms of Service agreement and the revocation page from the YouTube entry', () => {
+    const section = googleSection();
+    const youtube = within(section).getByText(/DreamStream uses YouTube API Services\./).closest('li') as HTMLElement;
+    expect(within(youtube).getByRole('link', { name: 'Terms of Service' })).toHaveAttribute('href', '/terms#youtube');
+    expect(within(youtube).getByRole('link', { name: 'Google security settings' })).toHaveAttribute(
+      'href',
+      'https://security.google.com/settings/security/permissions'
+    );
   });
 
   it('uses theme tokens only, so it reads in light and dark', () => {

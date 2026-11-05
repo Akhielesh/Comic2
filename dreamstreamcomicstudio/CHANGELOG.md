@@ -6,6 +6,29 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **The full legal suite (2026-11-05):** six documents, each at its own address, all dated
+  November 5, 2026 and written to match what the product does today: **Terms of Service**
+  (`/terms`; one name everywhere, with the YouTube Terms of Service agreement, the AI notice,
+  Stream Studio recording consent, the baby monitor's safety terms and "no charges today"),
+  an expanded **Privacy Policy** (`/privacy`; every category we collect, Stream Studio's
+  monitor, tracker, calls, people search and alerts, the email open-tracking image, interest
+  registrations, legal bases, a retention table, rights and how to use them; the
+  `#google-user-data` section is unchanged apart from the YouTube revocation link), and new
+  **Acceptable Use** (`/acceptable-use`), **Copyright & DMCA** (`/copyright`), **Cookies & Local
+  Storage** (`/cookies`) and **Subprocessors** (`/subprocessors`) pages. Every page has a table of
+  contents and stable section anchors. `?view=privacy` and `?view=terms` still work (the Google
+  consent screen uses them) and land on the new paths. The footer and Stream Studio link to the
+  real paths. Tests tie the retention numbers, providers, contacts and age rule to the code.
+
+### Fixed
+- **Legal wording that didn't match the product (2026-11-05):** the sign-in page's copyright
+  line said "DreamStream Inc." (it is "DreamStream Studio"); the footer called the Terms
+  "Terms & Conditions"; the Stream Studio help said "we never ask for your Google
+  permissions" while saving to Drive from the save sheet does ask; the Privacy Policy's
+  children section and account-data list didn't match sign-up (8+, with phone and date of
+  birth).
+
+### Added
 - **See what's free — and what goes through our servers (2026-10-23):** Stream Studio now shows
   how each thing travels. Before you start: "Direct between you and your guests — free" on
   Instant meeting, and a ready check with the path before any Go live. While live: a small

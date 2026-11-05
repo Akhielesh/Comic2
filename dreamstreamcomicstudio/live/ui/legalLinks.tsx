@@ -1,11 +1,13 @@
 import React from 'react';
+import { legalPath } from '@/components/legal/legalRoutes';
 import { mainAppUrl } from '@/services/liveLink';
 import { cx } from './primitives';
 
-// The legal pages live in the main app: absolute links on Stream Studio's own host.
+// The legal pages live in the main app (components/legal/legalRoutes.ts): absolute links on Stream
+// Studio's own host, where every path is the live app.
 export const LIVE_LEGAL_LINKS = [
-  { label: 'Privacy', href: mainAppUrl('/?view=privacy') },
-  { label: 'Terms', href: mainAppUrl('/?view=terms') },
+  { label: 'Privacy', href: mainAppUrl(legalPath('privacy')) },
+  { label: 'Terms', href: mainAppUrl(legalPath('terms')) },
   { label: 'Support', href: 'mailto:contact@dreamstreamstudio.ai?subject=Stream%20Studio%20support' },
 ] as const;
 

@@ -13,6 +13,10 @@ const PublicProfile = lazyImportWithRetry(() => import('./components/PublicProfi
 const AccountSettings = lazyImportWithRetry(() => import('./components/AccountSettings').then(module => ({ default: module.AccountSettings })));
 const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
+const AcceptableUsePolicy = lazyImportWithRetry(() => import('./components/legal/AcceptableUsePolicy').then(module => ({ default: module.AcceptableUsePolicy })));
+const CopyrightPolicy = lazyImportWithRetry(() => import('./components/legal/CopyrightPolicy').then(module => ({ default: module.CopyrightPolicy })));
+const CookiesNotice = lazyImportWithRetry(() => import('./components/legal/CookiesNotice').then(module => ({ default: module.CookiesNotice })));
+const SubprocessorsPage = lazyImportWithRetry(() => import('./components/legal/SubprocessorsPage').then(module => ({ default: module.SubprocessorsPage })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
 const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
 // Comic Studio v4 — the conversational studio (docs/features/comic-studio-v4.md).
@@ -65,6 +69,7 @@ import { AppStatusBar } from './components/status/AppStatusBar';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
+import { isLegalDocId, legalDocForPath, legalPath, syncLegalPath } from './components/legal/legalRoutes';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 import { useComicsHost } from './components/comicshost/useComicsHost';
 import { isPublicComicPath, parsePublicComicPath, type PublicComicRoute } from './components/comicstudio/reader/publicComicRoute';
@@ -95,6 +100,11 @@ type AppView =
   | 'settings'
   | 'privacy'
   | 'terms'
+  // The other legal documents (components/legal/legalRoutes.ts); each has a real path too (/cookies, …).
+  | 'acceptable-use'
+  | 'copyright'
+  | 'cookies'
+  | 'subprocessors'
   | 'profile'
   | 'pagestudio'
   | 'comicstudio'
@@ -113,6 +123,7 @@ type AppView =
 //  Project workspaces restore through the ?view=…&id= deep-link path instead.)
 const RESTORABLE_VIEWS = new Set<AppView>([
   'dashboard', 'chat', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
+  'acceptable-use', 'copyright', 'cookies', 'subprocessors',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -226,7 +237,10 @@ const App: React.FC = () => {
   // Simple routing state. A /c/<slug> share link is decided before the first paint (no flash of the
   // home page under the reader's boot card).
   const [publicComicRoute] = useState<PublicComicRoute | null>(() => (typeof window === 'undefined' ? null : parsePublicComicPath(window.location.pathname)));
-  const [currentView, setCurrentView] = useState<AppView>(() => (publicComicRoute ? 'publiccomic' : 'home'));
+  // A legal document's own path (/privacy, /terms, …) opens it directly, before the first paint.
+  const [currentView, setCurrentView] = useState<AppView>(() =>
+    publicComicRoute ? 'publiccomic' : (typeof window !== 'undefined' && legalDocForPath(window.location.pathname)) || 'home'
+  );
   // comics.dreamstreamstudio.ai = Comic Studio's own host: signed-in visitors boot into their comics,
   // signed-out ones see the Comic Studio landing, other products open on the main site. Inert elsewhere.
   const comicsHost = useComicsHost({ view: currentView, setView: setCurrentView, signedIn: !!user, ready: !authLoading && !isCheckingKey });
@@ -546,8 +560,11 @@ const App: React.FC = () => {
         url.searchParams.delete('board');
       } else {
         url.searchParams.delete('id');
-        if (currentView === 'home') url.searchParams.delete('view');
-        else url.searchParams.set('view', currentView);
+        // Legal documents live at their own path (/privacy); leaving one puts the path back to '/'.
+        if (!syncLegalPath(url, currentView)) {
+          if (currentView === 'home') url.searchParams.delete('view');
+          else url.searchParams.set('view', currentView);
+        }
       }
       window.history.replaceState({}, '', url);
     } catch { /* history unavailable; navigation still works via state */ }
@@ -788,14 +805,15 @@ const App: React.FC = () => {
       view === 'models' ||
       view === 'chat' ||
       view === 'privacy' ||
-      view === 'terms'
+      view === 'terms' ||
+      isLegalDocId(view)
     ) {
       clearReaderUrlParams();
       setCurrentView(view as AppView);
       // Give the public catalog a real, shareable URL; other views stay at '/'.
       try {
         const url = new URL(window.location.href);
-        url.pathname = view === 'models' ? '/models' : '/';
+        url.pathname = view === 'models' ? '/models' : isLegalDocId(view) ? legalPath(view) : '/';
         window.history.pushState({}, '', url);
       } catch { /* history unavailable; navigation still works via state */ }
     }
@@ -1209,11 +1227,27 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'privacy' && (
-            <PrivacyPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} />
+            <PrivacyPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'terms' && (
-            <TermsOfService onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} />
+            <TermsOfService onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+          )}
+
+          {effectiveView === 'acceptable-use' && (
+            <AcceptableUsePolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+          )}
+
+          {effectiveView === 'copyright' && (
+            <CopyrightPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+          )}
+
+          {effectiveView === 'cookies' && (
+            <CookiesNotice onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
+          )}
+
+          {effectiveView === 'subprocessors' && (
+            <SubprocessorsPage onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} onOpenDoc={setCurrentView} />
           )}
 
           {effectiveView === 'dashboard' && (
@@ -1335,6 +1369,7 @@ const App: React.FC = () => {
           <LegalMicroLinks
             onOpenPrivacy={() => setCurrentView('privacy')}
             onOpenTerms={() => setCurrentView('terms')}
+            onOpenLegal={setCurrentView}
             onOpenFaq={handleOpenFaq}
           />
         )}

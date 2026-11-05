@@ -169,8 +169,9 @@ Console path: **APIs & Services → OAuth consent screen** (newer consoles label
    - App logo: optional now, **required for verification** later.
 3. **App domain:**
    - Application home page: `https://dreamstreamstudio.ai`
-   - Privacy policy: `https://dreamstreamstudio.ai/?view=privacy`
-   - Terms of service: `https://dreamstreamstudio.ai/?view=terms`
+   - Privacy policy: `https://dreamstreamstudio.ai/privacy` (the older `https://dreamstreamstudio.ai/?view=privacy`
+     still works and lands on the same page, so a consent screen already set to it needs no change)
+   - Terms of service: `https://dreamstreamstudio.ai/terms` (likewise, `/?view=terms` still works)
 4. **Authorized domains:** add `dreamstreamstudio.ai`.
 5. **Developer contact information:** `admin@dreamstreamstudio.ai`. → **Save and continue**.
 6. **Scopes → Add or remove scopes** → paste these **exact** scopes (one per line), tick

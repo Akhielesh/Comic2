@@ -1,41 +1,35 @@
-import React, { useEffect } from 'react';
+import React from 'react';
+import { Callout, DataTable, DocLink, ExternalLink, LINK, LIST, LegalDocument, MailLink, SubHeading, type LegalSection } from './legal/LegalDocument';
+import {
+    ATLAS_GOOGLE_USER_DATA_URL,
+    COMIC_PG_CEILING_UNDER_AGE,
+    COVERED_SITES,
+    DATABASE_REGION_LABEL,
+    DIRECT_AI_PROVIDERS,
+    GOOGLE_CONNECTIONS_URL,
+    GOOGLE_PRIVACY_POLICY_URL,
+    GOOGLE_SECURITY_PERMISSIONS_URL,
+    GOOGLE_USER_DATA_POLICY_URL,
+    MIN_SIGNUP_AGE_YEARS,
+    OPERATOR_NAME,
+    PEOPLE_SEARCH,
+    PRIVACY_EMAIL,
+    RECENT_CALLS_KEPT,
+    RETENTION,
+    SECURITY_ADVISORY_URL,
+    SECURITY_EMAIL,
+    SECURITY_SUBJECT,
+    SECURITY_TXT_URL,
+    SUPPORT_EMAIL
+} from './legal/legalFacts';
+import type { LegalDocId } from './legal/legalRoutes';
 
-const PRIVACY_EMAIL = 'privacy@dreamstreamstudio.ai';
-const GOOGLE_USER_DATA_POLICY_URL = 'https://developers.google.com/terms/api-services-user-data-policy';
-const GOOGLE_CONNECTIONS_URL = 'https://myaccount.google.com/connections';
-// Atlas Studio connects through the same Google apps (one consent screen for every studio), so this
-// policy, which that consent screen links to, points at Atlas's own Google user data section.
-const ATLAS_GOOGLE_USER_DATA_URL = 'https://atlas.dreamstreamstudio.ai/privacy#google-user-data';
-const GOOGLE_PRIVACY_POLICY_URL = 'https://policies.google.com/privacy';
+// Privacy Policy. Every statement here describes what the code does today; the tests in
+// components/legal/ and PrivacyPolicy.googleUserData.test.tsx tie the key ones to the code, and
+// the legal suite's claims ledger cites the rest. The #google-user-data section is what Google's
+// OAuth verification reads: keep its anchor and its Limited Use statements exactly as they are.
 
-// Theme tokens only (--ds-*, see index.css) so the page reads in light and dark.
-const LINK = 'font-medium text-[var(--ds-ink)] underline decoration-[var(--ds-accent)] underline-offset-2 hover:decoration-2';
-const LIST = 'list-disc space-y-2 pl-5';
-
-const ExternalLink: React.FC<{ href: string; children: React.ReactNode }> = ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" className={LINK}>
-        {children}
-    </a>
-);
-
-const PrivacyEmail: React.FC = () => (
-    <a href={`mailto:${PRIVACY_EMAIL}`} className={LINK}>
-        {PRIVACY_EMAIL}
-    </a>
-);
-
-const Section: React.FC<{ id?: string; title: string; children: React.ReactNode }> = ({ id, title, children }) => (
-    <section id={id} aria-labelledby={id ? `${id}-title` : undefined} className="mt-10 scroll-mt-24 space-y-3">
-        <h2 id={id ? `${id}-title` : undefined} className="text-lg font-semibold text-[var(--ds-ink)]">
-            {title}
-        </h2>
-        {children}
-    </section>
-);
-
-const SubHeading: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-    <h3 className="pt-3 text-[15px] font-semibold text-[var(--ds-ink)]">{children}</h3>
-);
+const PrivacyEmail: React.FC = () => <MailLink email={PRIVACY_EMAIL} />;
 
 const Scope: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     <code className="whitespace-nowrap rounded bg-[var(--ds-well-strong)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--ds-ink)]">
@@ -55,230 +49,441 @@ const Service: React.FC<{ name: string; scopes: string[]; children: React.ReactN
     </li>
 );
 
-export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
-    // The view mounts after the SPA boots, so the browser's own jump to a #fragment
-    // (e.g. ?view=privacy#google-user-data) has already been missed. Do it here.
-    useEffect(() => {
-        const raw = window.location.hash.slice(1);
-        if (!raw) return;
-        // A mangled shared link (e.g. #%) must not take the whole page down.
-        let id = raw;
-        try {
-            id = decodeURIComponent(raw);
-        } catch {
-            /* keep the raw fragment */
-        }
-        document.getElementById(id)?.scrollIntoView?.();
-    }, []);
+const googleUserData = (
+    <>
+        <p>In Chat Studio and Stream Studio you can connect your own Google account. You pick which Google services to connect, and Google asks for your permission before DreamStream can access anything. This section covers the information DreamStream receives from Google APIs ("Google user data") and applies in addition to the rest of this policy.</p>
+        <p><strong>Atlas Studio</strong> (atlas.dreamstreamstudio.ai), DreamStream's search workspace, connects to Google through the same DreamStream Studio Google apps. In its public beta it uses Sign in with Google (your name, email address and profile picture) and read-only access to Google Drive and Gmail (files, messages, attachments and labels) to index, search and preview them for you. Atlas Studio does not send Google user data to AI models, cannot change, send, draft or delete anything in your Google account, and follows the same Limited Use commitment below. Its full handling is described in the{' '}
+            <ExternalLink href={ATLAS_GOOGLE_USER_DATA_URL}>Atlas Studio Privacy Policy</ExternalLink>.</p>
 
-    return (
-        <div className="min-h-screen bg-[var(--ds-canvas)] font-sans text-[var(--ds-ink)]">
-            <main className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-12">
-                <div className="mb-4 flex items-center justify-between gap-4">
-                    <h1 className="font-display text-3xl text-[var(--ds-ink)]">Privacy Policy</h1>
-                    <button
-                        type="button"
-                        onClick={onBack}
-                        className="rounded-md px-2 py-1 text-xs font-bold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
-                    >
-                        Back
-                    </button>
-                </div>
-                <p className="mb-6 text-sm font-bold uppercase text-[var(--ds-muted)]">
-                    Last Updated: <time dateTime="2026-11-04">November 4, 2026</time>
-                </p>
-                <div className="space-y-3 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-5 text-[15px] leading-relaxed shadow-sm sm:p-8">
-                    <p>DreamStream Studio ("DreamStream", "we", "our", or "us") provides tools for private Stream Studio live events and AI-assisted creative workflows. This Privacy Policy explains what data we process, why we process it, how it moves through our APIs and providers, and what controls you have.</p>
-                    <p className="rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-4 py-3 text-sm">
-                        Connected a Google account (Gmail, Google Drive, Google Calendar, Google Sheets or YouTube)? Section 4,{' '}
-                        <a href="#google-user-data" className={LINK}>Google User Data</a>, explains what we access, how we use it, and how to remove it.
-                    </p>
+        <SubHeading>What we access, for each service</SubHeading>
+        <ul className="space-y-3">
+            <Service name="Every Google service you connect" scopes={['userinfo.email', 'userinfo.profile']}>
+                <p>Your Google account email address and name, so we can show which account is connected.</p>
+            </Service>
+            <Service name="Gmail (read-only)" scopes={['gmail.readonly']}>
+                <p>We keep an index of your messages' sender, subject, date, labels and Google's short preview text, so you can search and ask about your email in Chat Studio. When you open an email or a conversation, we fetch the full message (and any attachment you open) from Gmail at that moment to show it to you; message bodies and attachments are not saved in this index.</p>
+                <p>DreamStream cannot send, delete or change email. When you ask for a draft, DreamStream prepares it and gives you a link that opens it in Gmail, where you review and send it yourself.</p>
+            </Service>
+            <Service name="Google Drive (read-only)" scopes={['drive.readonly']}>
+                <p>We keep an index of your files' names, types, sizes, owners, last-modified dates and links, so you can find files from Chat Studio. DreamStream does not change or delete your Drive files.</p>
+            </Service>
+            <Service name="Google Drive: save recordings (Stream Studio)" scopes={['drive.file']}>
+                <p>Creates a "DreamStream Recordings" folder in your Drive and saves the Stream Studio recordings you choose to save there. With this permission DreamStream can see only the files and folder it created, never the rest of your Drive. Recording files upload from your browser directly to Google.</p>
+            </Service>
+            <Service name="Google Calendar" scopes={['calendar.events']}>
+                <p>Reads the events on your primary calendar (title, time, location, description, organizer, guests and your RSVP) to show your agenda and answer questions about your schedule, and keeps an index of events from 30 days ago onward.</p>
+                <p>DreamStream creates, edits or deletes an event, or RSVPs for you, only after you confirm it in the app. Google may email the event's guests about the change.</p>
+            </Service>
+            <Service name="Google Sheets (read-only)" scopes={['spreadsheets.readonly']}>
+                <p>Reads only the spreadsheet and range you ask about, when you ask. Sheet contents are not saved in our index.</p>
+            </Service>
+            <Service name="YouTube (read-only)" scopes={['youtube.readonly']}>
+                <p>We keep an index of your own channel's uploaded videos (title, description, publish date and thumbnail).</p>
+                <p>DreamStream uses YouTube API Services. Google's handling of your data is described in the{' '}
+                    <ExternalLink href={GOOGLE_PRIVACY_POLICY_URL}>Google Privacy Policy</ExternalLink>. By connecting YouTube you also agree to the YouTube Terms of Service (see our{' '}
+                    <DocLink to="terms" hash="youtube">Terms of Service</DocLink>). You can revoke DreamStream's access to your YouTube data at any time from your{' '}
+                    <ExternalLink href={GOOGLE_SECURITY_PERMISSIONS_URL}>Google security settings</ExternalLink>.</p>
+            </Service>
+        </ul>
+        <p className="text-sm text-[var(--ds-muted)]">Google Maps lookups use an API key (DreamStream's, or one you add), not your Google account; the place or address you search for is sent to Google Maps.</p>
 
-                    <Section title="1. Information We Collect">
-                        <ul className={LIST}>
-                            <li><strong>Account and Profile Data:</strong> Email/login data from Supabase Auth, plus profile fields such as username, avatar, bio, and website.</li>
-                            <li><strong>Consent Data:</strong> Terms acceptance and optional marketing consent values provided during signup.</li>
-                            <li><strong>Creative and Project Data:</strong> Scripts, prompts, scene breakdowns, continuity data, generated images, project state, reviews, and comments.</li>
-                            <li><strong>Stream Studio Live-Event Data:</strong> Event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
-                            <li><strong>Community Data:</strong> Public profile data, follows, likes, views, notifications, and other social interactions tied to your account.</li>
-                            <li><strong>Connected Google Account Data:</strong> If you connect a Google account, the data described in section 4 (Google User Data).</li>
-                            <li><strong>Support Data:</strong> Contact/support messages you submit (for example, email and message body).</li>
-                            <li><strong>Operational and Debug Data:</strong> Token ledger events, pricing snapshot metadata, provider/model timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
-                            <li><strong>Billing Lifecycle Data:</strong> If paid billing is enabled for your account, subscription status, cancel-at-period-end flags, billing-period timestamps, webhook processing records, and overage capture metadata.</li>
-                            <li><strong>Device-Stored Data:</strong> Browser local storage and IndexedDB records used for saved keys, guest projects, test runs/images, reader state, and learning progress.</li>
-                        </ul>
-                    </Section>
+        <SubHeading>How we use it</SubHeading>
+        <p>We use Google user data only to provide the features you use and can see in DreamStream: showing your email, files, agenda, spreadsheets and videos; answering your questions about them in chat; suggesting follow-up questions after an answer; keeping the memory notes that personalize your later chats (described under AI processing); preparing calendar changes for you to confirm; and saving your recordings to Drive. We do not sell Google user data, and we do not use it for advertising, including personalized, retargeted or interest-based ads, or to determine creditworthiness or for lending. DreamStream does not use Google user data to train AI models of its own.</p>
 
-                    <Section title="2. How We Use Data">
-                        <ul className={LIST}>
-                            <li>To authenticate users, manage accounts, and provide profile/community features.</li>
-                            <li>To run text/image/vision generation workflows you request and return results.</li>
-                            <li>To operate Stream Studio live sessions, including event setup, viewer admission, chat/reactions, guest access, stream state, recordings, and replay windows.</li>
-                            <li>To store projects, images, artifacts, and support interactions.</li>
-                            <li>To enforce plan/usage limits, fraud-abuse controls, and operational safeguards.</li>
-                            <li>To monitor reliability, troubleshoot issues, and improve core product behavior.</li>
-                            <li>To send account, legal, billing, and support-related communications.</li>
-                        </ul>
-                        <p>Data from connected Google accounts is used only as described in section 4.</p>
-                    </Section>
+        <SubHeading>AI processing</SubHeading>
+        <p>When you ask Chat Studio something that involves a connected account, the relevant items are included in the request to the AI model that writes the answer: for example the sender, subject, date and preview of matching emails, the events in your agenda, file names, or the spreadsheet rows you asked about. Chat can also include a few matching items from your connected accounts as background for a message you send. This information is sent to generate the response you asked for. After each answer, the last few messages of the conversation, including the answer, are also sent to an AI model, through the provider your chat uses, to suggest follow-up questions (shown under the answer as "You might ask"). Details from a connected account that appear in those messages are included.</p>
+        <p>On Auto, DreamStream picks the model and sends the request through OpenRouter, our AI gateway, which passes it to the company that runs that model (for example Anthropic, Google or OpenAI). You can choose a specific model or provider in Chat Studio instead. Depending on your choice, the request goes through OpenRouter to that model's provider, or directly to OpenAI, Anthropic, Google (Gemini), xAI, DeepSeek, Z.AI, MiniMax, Tencent (Hunyuan) or NVIDIA. If you add your own API key for a provider, requests that use it run under your own account with that provider.</p>
+        <p>While writing an answer, the model can also use tools that contact other services. It writes those requests itself, so a request can include details from a connected account: asked what the company in your latest email does, for example, it may search the web for that company's name. These services are web search (such as Tavily, Brave Search, Serper, Google Programmable Search, SearXNG, DuckDuckGo, Bing and Wikipedia), the websites whose pages it reads (directly, or through the Jina Reader service when a page can't be read directly), maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and any MCP servers you add in Chat Studio. The model makes these requests only to answer the message you sent.</p>
+        <p>When you're signed in, Chat Studio also keeps memory notes automatically: short facts about you, written from your conversations so later chats can be personalized. The notes can include details from a connected account. To write them, the latest messages of a conversation, including the answer, are sent to an AI model through the provider your chat uses. The notes are saved to your DreamStream account, and the text of each note is sent to Google's Gemini API to make it searchable. Your memory notes are then included in every request Chat Studio sends to the AI model in your later chats, not only the ones they relate to: the full list shown in Settings → Memory in Chat Studio, plus up to eight of the notes saved to your account (the ones closest to your message, or the most recent). You can edit or remove notes in that list, but removing a note there does not delete the copy saved to your account, and memory cannot yet be turned off in the app. To see, delete or turn off the memory saved to your account, email <PrivacyEmail />.</p>
 
-                    <Section title="3. AI Processing and Third Parties">
-                        <p>When you use generation features, relevant request data (for example prompts, selected model, and any reference images you submit) may be sent to model providers to produce output.</p>
-                        <ul className={LIST}>
-                            <li><strong>Supabase:</strong> Authentication, database tables, and cloud storage.</li>
-                            <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
-                            <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
-                            <li><strong>OpenRouter and other AI model providers:</strong> Chat Studio responses. OpenRouter is our AI gateway: it passes each request to the company that runs the model you pick, or that Auto picks for you. Requests can also go directly to a provider you choose in Chat Studio. Section 4 explains how this applies to connected Google data.</li>
-                            <li><strong>Search, lookup and reference services:</strong> While answering in Chat Studio, the AI model can use tools that contact other services, writing each request from your conversation: web search (such as Tavily, Brave Search, Serper, Google Programmable Search, SearXNG, DuckDuckGo, Bing and Wikipedia), the websites whose pages it reads (directly, or through the Jina Reader service when a page can't be read directly), maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and MCP servers you add.</li>
-                            <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
-                            <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
-                        </ul>
-                        <p>These providers process data under their own terms and policies. We do not sell personal data.</p>
-                    </Section>
+        <SubHeading>Who we share it with</SubHeading>
+        <p>We do not transfer Google user data to advertising platforms, data brokers or information resellers. We transfer it only:</p>
+        <ul className={LIST}>
+            <li>to the service providers that run DreamStream: Cloudflare, which hosts our website and the servers that handle your connected accounts; Supabase, our database, which stores your connections, encrypted tokens and the indexes described above, plus your memory notes and any chats saved to your account; and the AI providers described under AI processing, which receive it to generate the response you asked for, suggest follow-up questions, and write and index your memory notes;</li>
+            <li>to the services the AI model uses while answering you, described under AI processing: web search, the websites it reads and the page-reading service it uses, maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and MCP servers you add. They receive only the requests the model writes to answer your message;</li>
+            <li>when necessary for security purposes, such as investigating abuse;</li>
+            <li>to comply with applicable laws; or</li>
+            <li>as part of a merger, acquisition or sale of assets, only after obtaining your explicit prior consent.</li>
+        </ul>
 
-                    <Section id="google-user-data" title="4. Google User Data (Connected Google Accounts)">
-                        <p>In Chat Studio and Stream Studio you can connect your own Google account. You pick which Google services to connect, and Google asks for your permission before DreamStream can access anything. This section covers the information DreamStream receives from Google APIs ("Google user data") and applies in addition to the rest of this policy.</p>
-                        <p><strong>Atlas Studio</strong> (atlas.dreamstreamstudio.ai), DreamStream's search workspace, connects to Google through the same DreamStream Studio Google apps. In its public beta it uses Sign in with Google (your name, email address and profile picture) and read-only access to Google Drive and Gmail (files, messages, attachments and labels) to index, search and preview them for you. Atlas Studio does not send Google user data to AI models, cannot change, send, draft or delete anything in your Google account, and follows the same Limited Use commitment below. Its full handling is described in the{' '}
-                            <ExternalLink href={ATLAS_GOOGLE_USER_DATA_URL}>Atlas Studio Privacy Policy</ExternalLink>.</p>
+        <SubHeading>Who can read it</SubHeading>
+        <p>People at DreamStream do not read your Google user data unless you give us permission for specific items (for example, to help with a support request you send us), it is necessary for security purposes such as investigating abuse, or it is required to comply with applicable law.</p>
 
-                        <SubHeading>What we access, for each service</SubHeading>
-                        <ul className="space-y-3">
-                            <Service name="Every Google service you connect" scopes={['userinfo.email', 'userinfo.profile']}>
-                                <p>Your Google account email address and name, so we can show which account is connected.</p>
-                            </Service>
-                            <Service name="Gmail (read-only)" scopes={['gmail.readonly']}>
-                                <p>We keep an index of your messages' sender, subject, date, labels and Google's short preview text, so you can search and ask about your email in Chat Studio. When you open an email or a conversation, we fetch the full message (and any attachment you open) from Gmail at that moment to show it to you; message bodies and attachments are not saved in this index.</p>
-                                <p>DreamStream cannot send, delete or change email. When you ask for a draft, DreamStream prepares it and gives you a link that opens it in Gmail, where you review and send it yourself.</p>
-                            </Service>
-                            <Service name="Google Drive (read-only)" scopes={['drive.readonly']}>
-                                <p>We keep an index of your files' names, types, sizes, owners, last-modified dates and links, so you can find files from Chat Studio. DreamStream does not change or delete your Drive files.</p>
-                            </Service>
-                            <Service name="Google Drive: save recordings (Stream Studio)" scopes={['drive.file']}>
-                                <p>Creates a "DreamStream Recordings" folder in your Drive and saves the Stream Studio recordings you choose to save there. With this permission DreamStream can see only the files and folder it created, never the rest of your Drive. Recording files upload from your browser directly to Google.</p>
-                            </Service>
-                            <Service name="Google Calendar" scopes={['calendar.events']}>
-                                <p>Reads the events on your primary calendar (title, time, location, description, organizer, guests and your RSVP) to show your agenda and answer questions about your schedule, and keeps an index of events from 30 days ago onward.</p>
-                                <p>DreamStream creates, edits or deletes an event, or RSVPs for you, only after you confirm it in the app. Google may email the event's guests about the change.</p>
-                            </Service>
-                            <Service name="Google Sheets (read-only)" scopes={['spreadsheets.readonly']}>
-                                <p>Reads only the spreadsheet and range you ask about, when you ask. Sheet contents are not saved in our index.</p>
-                            </Service>
-                            <Service name="YouTube (read-only)" scopes={['youtube.readonly']}>
-                                <p>We keep an index of your own channel's uploaded videos (title, description, publish date and thumbnail).</p>
-                                <p>DreamStream uses YouTube API Services. Google's handling of your data is described in the{' '}
-                                    <ExternalLink href={GOOGLE_PRIVACY_POLICY_URL}>Google Privacy Policy</ExternalLink>.</p>
-                            </Service>
-                        </ul>
-                        <p className="text-sm text-[var(--ds-muted)]">Google Maps lookups use an API key (DreamStream's, or one you add), not your Google account; the place or address you search for is sent to Google Maps.</p>
+        <SubHeading>How we protect it</SubHeading>
+        <ul className={LIST}>
+            <li>Google access and refresh tokens are encrypted with AES-256-GCM on our servers before they are stored. They are kept separately from your other data, and neither the tokens nor the encryption key are ever sent to your browser.</li>
+            <li>Connecting uses Google's OAuth with PKCE and a one-time state value, so an intercepted authorization code is useless to anyone else.</li>
+            <li>Your connected-account data is stored in database tables that only your own signed-in account and our servers can read, and every request our servers make for it is limited to your account.</li>
+            <li>Data travels over encrypted HTTPS connections.</li>
+            <li>We ask for read-only access wherever a feature only needs to read.</li>
+        </ul>
 
-                        <SubHeading>How we use it</SubHeading>
-                        <p>We use Google user data only to provide the features you use and can see in DreamStream: showing your email, files, agenda, spreadsheets and videos; answering your questions about them in chat; suggesting follow-up questions after an answer; keeping the memory notes that personalize your later chats (described under AI processing); preparing calendar changes for you to confirm; and saving your recordings to Drive. We do not sell Google user data, and we do not use it for advertising, including personalized, retargeted or interest-based ads, or to determine creditworthiness or for lending.</p>
+        <SubHeading>How long we keep it, and how to remove it</SubHeading>
+        <ul className={LIST}>
+            <li>We keep a connection, its encrypted tokens and its index until you disconnect it or your DreamStream account is deleted.</li>
+            <li>To disconnect, open Chat Studio, go to Settings → Connectors and choose Disconnect. This deletes the connection, its encrypted tokens and every item indexed from it.</li>
+            <li>You can remove DreamStream's access from your Google Account at any time at{' '}
+                <ExternalLink href={GOOGLE_CONNECTIONS_URL}>myaccount.google.com/connections</ExternalLink>. After that DreamStream can no longer reach your Google data, and any connection still listed in DreamStream asks you to reconnect. Disconnect it in DreamStream as well to delete what we stored.</li>
+            <li>Disconnecting does not delete your chats or memory notes, which can include details from a connected account. Chats are kept in your browser and can also be synced to your DreamStream account; deleting a chat from the chat list removes both copies. Memory notes saved to your account stay until you ask us to delete them: email <PrivacyEmail /> (removing a note under Settings → Memory does not delete the saved copy).</li>
+            <li>To delete your DreamStream account, including every connection, token, index and memory note, email <PrivacyEmail />.</li>
+        </ul>
 
-                        <SubHeading>AI processing</SubHeading>
-                        <p>When you ask Chat Studio something that involves a connected account, the relevant items are included in the request to the AI model that writes the answer: for example the sender, subject, date and preview of matching emails, the events in your agenda, file names, or the spreadsheet rows you asked about. Chat can also include a few matching items from your connected accounts as background for a message you send. This information is sent to generate the response you asked for. After each answer, the last few messages of the conversation, including the answer, are also sent to an AI model, through the provider your chat uses, to suggest follow-up questions (shown under the answer as "You might ask"). Details from a connected account that appear in those messages are included.</p>
-                        <p>On Auto, DreamStream picks the model and sends the request through OpenRouter, our AI gateway, which passes it to the company that runs that model (for example Anthropic, Google or OpenAI). You can choose a specific model or provider in Chat Studio instead. Depending on your choice, the request goes through OpenRouter to that model's provider, or directly to OpenAI, Anthropic, Google (Gemini), xAI, DeepSeek, Z.AI, MiniMax, Tencent (Hunyuan) or NVIDIA. If you add your own API key for a provider, requests that use it run under your own account with that provider.</p>
-                        <p>While writing an answer, the model can also use tools that contact other services. It writes those requests itself, so a request can include details from a connected account: asked what the company in your latest email does, for example, it may search the web for that company's name. These services are web search (such as Tavily, Brave Search, Serper, Google Programmable Search, SearXNG, DuckDuckGo, Bing and Wikipedia), the websites whose pages it reads (directly, or through the Jina Reader service when a page can't be read directly), maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and any MCP servers you add in Chat Studio. The model makes these requests only to answer the message you sent.</p>
-                        <p>When you're signed in, Chat Studio also keeps memory notes automatically: short facts about you, written from your conversations so later chats can be personalized. The notes can include details from a connected account. To write them, the latest messages of a conversation, including the answer, are sent to an AI model through the provider your chat uses. The notes are saved to your DreamStream account, and the text of each note is sent to Google's Gemini API to make it searchable. Your memory notes are then included in every request Chat Studio sends to the AI model in your later chats, not only the ones they relate to: the full list shown in Settings → Memory in Chat Studio, plus up to eight of the notes saved to your account (the ones closest to your message, or the most recent). You can edit or remove notes in that list, but removing a note there does not delete the copy saved to your account, and memory cannot yet be turned off in the app. To see, delete or turn off the memory saved to your account, email <PrivacyEmail />.</p>
-
-                        <SubHeading>Who we share it with</SubHeading>
-                        <p>We do not transfer Google user data to advertising platforms, data brokers or information resellers. We transfer it only:</p>
-                        <ul className={LIST}>
-                            <li>to the service providers that run DreamStream: Cloudflare, which hosts our website and the servers that handle your connected accounts; Supabase, our database, which stores your connections, encrypted tokens and the indexes described above, plus your memory notes and any chats saved to your account; and the AI providers described under AI processing, which receive it to generate the response you asked for, suggest follow-up questions, and write and index your memory notes;</li>
-                            <li>to the services the AI model uses while answering you, described under AI processing: web search, the websites it reads and the page-reading service it uses, maps, weather, news and similar lookups, image generation, the Context7 and DeepWiki reference services, and MCP servers you add. They receive only the requests the model writes to answer your message;</li>
-                            <li>when necessary for security purposes, such as investigating abuse;</li>
-                            <li>to comply with applicable laws; or</li>
-                            <li>as part of a merger, acquisition or sale of assets, only after obtaining your explicit prior consent.</li>
-                        </ul>
-
-                        <SubHeading>Who can read it</SubHeading>
-                        <p>People at DreamStream do not read your Google user data unless you give us permission for specific items (for example, to help with a support request you send us), it is necessary for security purposes such as investigating abuse, or it is required to comply with applicable law.</p>
-
-                        <SubHeading>How we protect it</SubHeading>
-                        <ul className={LIST}>
-                            <li>Google access and refresh tokens are encrypted with AES-256-GCM on our servers before they are stored. They are kept separately from your other data, and neither the tokens nor the encryption key are ever sent to your browser.</li>
-                            <li>Connecting uses Google's OAuth with PKCE and a one-time state value, so an intercepted authorization code is useless to anyone else.</li>
-                            <li>Your connected-account data is stored in database tables that only your own signed-in account and our servers can read, and every request our servers make for it is limited to your account.</li>
-                            <li>Data travels over encrypted HTTPS connections.</li>
-                            <li>We ask for read-only access wherever a feature only needs to read.</li>
-                        </ul>
-
-                        <SubHeading>How long we keep it, and how to remove it</SubHeading>
-                        <ul className={LIST}>
-                            <li>We keep a connection, its encrypted tokens and its index until you disconnect it or your DreamStream account is deleted.</li>
-                            <li>To disconnect, open Chat Studio, go to Settings → Connectors and choose Disconnect. This deletes the connection, its encrypted tokens and every item indexed from it.</li>
-                            <li>You can remove DreamStream's access from your Google Account at any time at{' '}
-                                <ExternalLink href={GOOGLE_CONNECTIONS_URL}>myaccount.google.com/connections</ExternalLink>. After that DreamStream can no longer reach your Google data, and any connection still listed in DreamStream asks you to reconnect. Disconnect it in DreamStream as well to delete what we stored.</li>
-                            <li>Disconnecting does not delete your chats or memory notes, which can include details from a connected account. Chats are kept in your browser and can also be synced to your DreamStream account; deleting a chat from the chat list removes both copies. Memory notes saved to your account stay until you ask us to delete them: email <PrivacyEmail /> (removing a note under Settings → Memory does not delete the saved copy).</li>
-                            <li>To delete your DreamStream account, including every connection, token, index and memory note, email <PrivacyEmail />.</li>
-                        </ul>
-
-                        <SubHeading>Limited Use</SubHeading>
-                        <div className="space-y-3 border-l-2 border-[var(--ds-accent)] pl-4">
-                            <p>DreamStream Studio's use and transfer of information received from Google APIs to any other app will adhere to the{' '}
-                                <ExternalLink href={GOOGLE_USER_DATA_POLICY_URL}>Google API Services User Data Policy</ExternalLink>, including the Limited Use requirements.</p>
-                            <p>The use of information received from Google Workspace APIs will adhere to the{' '}
-                                <ExternalLink href={GOOGLE_USER_DATA_POLICY_URL}>Google API Services User Data Policy</ExternalLink>, including the Limited Use requirements.</p>
-                        </div>
-                        <p>Questions about Google user data: <PrivacyEmail />.</p>
-                    </Section>
-
-                    <Section title="5. Keys and Security">
-                        <ul className={LIST}>
-                            <li>Data is transmitted over encrypted channels.</li>
-                            <li>Bring-your-own API keys may be stored in browser local storage and sent to the backend in request headers for provider calls.</li>
-                            <li>Flux keys can also be synced to the database in encrypted form; decryption occurs client-side after login.</li>
-                            <li>Payment methods are stored as Stripe token references; DreamStream does not store raw card numbers.</li>
-                            <li>Billing policy actions (for example cancellation scheduling, reactivation, credit checkout completion, and overage charge events) are logged for accounting/security auditability.</li>
-                            <li>No client-side storage method is perfect. You are responsible for securing your device, rotating keys, and protecting account credentials.</li>
-                        </ul>
-                    </Section>
-
-                    <Section title="6. Public vs Private Content">
-                        <p>Projects are private unless you mark them public. Public projects, profile identifiers, comments, and engagement data (likes/views/follows) can be visible to other users.</p>
-                        <p>Stream Studio viewer links are intended for people with the link. Private studio, guest, and recap links may grant control or private access; treat them like passwords and share them only with trusted collaborators.</p>
-                    </Section>
-
-                    <Section title="7. Cookies, Local Storage, and Device Data">
-                        <p>The current app code relies on browser storage (localStorage/IndexedDB) for key settings, local caches, guest-mode data, and session-related client state. The codebase does not include third-party advertising trackers.</p>
-                    </Section>
-
-                    <Section title="8. Retention and Deletion">
-                        <p>We keep account and project data while needed to operate the service and satisfy legal/security obligations. You can delete projects and some user content from the app; account deletion/support requests may be required for full removal workflows. Stream Studio replay segments are designed to expire after about 24 hours, and server-side recordings are designed to expire after about 7 days unless a newer product flow explicitly states otherwise. Certain logs may be retained where required for abuse prevention, accounting, or legal compliance.</p>
-                        <p>Connected Google account data follows section 4.</p>
-                    </Section>
-
-                    <Section title="9. Children">
-                        <p>The service is not intended for children under applicable legal age requirements. If you believe a child submitted personal data, email <PrivacyEmail /> for review/removal.</p>
-                    </Section>
-
-                    <Section title="10. International Processing">
-                        <p>Depending on your location and selected providers, data may be processed in multiple countries where DreamStream and its processors operate infrastructure.</p>
-                    </Section>
-
-                    <Section title="11. Policy Updates">
-                        <p>We may update this policy when features, processors, data flows, or legal requirements change. Material updates may be announced in-product.</p>
-                    </Section>
-
-                    <Section title="12. Contact">
-                        <p>For privacy questions or deletion requests, email <PrivacyEmail />.</p>
-                    </Section>
-
-                    <Section title="Privacy FAQs">
-                        <ul className={LIST}>
-                            <li><strong>Do you sell my personal data?</strong> No.</li>
-                            <li><strong>Do you train your own model on my private projects?</strong> Not by default in this product flow. Third-party model providers may process requests under their own terms.</li>
-                            <li><strong>What is sent to AI providers?</strong> The request data needed to fulfill your action, such as prompts, selected model context, and any reference images you submit. If you've connected a Google account, section 4 explains which of its data can be included.</li>
-                            <li><strong>Do you use my Gmail, Drive or Calendar data for ads?</strong> No. Connected Google data is used only for the features described in section 4.</li>
-                            <li><strong>Where are my API keys stored?</strong> Keys can be stored in browser local storage; Flux keys may also be encrypted and synced to your account record for convenience.</li>
-                            <li><strong>What billing data is stored?</strong> If paid billing is enabled for your account, DreamStream may store wallet balances, token usage events, subscription lifecycle state, and Stripe payment-method references required for billing operations.</li>
-                            <li><strong>Can other users see my drafts?</strong> No, unless you intentionally make a project public.</li>
-                            <li><strong>What data stays on my device?</strong> Local caches including key settings, guest projects, test runs/images, and reader/learning state can be stored in localStorage/IndexedDB.</li>
-                            <li><strong>How do I delete my data?</strong> Delete content in-app where available, disconnect connected accounts in Chat Studio under Settings → Connectors, and email <PrivacyEmail /> to delete the memory saved to your account or for account-level or privacy deletion requests.</li>
-                            <li><strong>Do you send marketing emails automatically?</strong> Marketing communication is optional and based on your signup consent choices.</li>
-                        </ul>
-                    </Section>
-                </div>
-            </main>
+        <SubHeading>Limited Use</SubHeading>
+        <div className="space-y-3 border-l-2 border-[var(--ds-accent)] pl-4">
+            <p>DreamStream Studio's use and transfer of information received from Google APIs to any other app will adhere to the{' '}
+                <ExternalLink href={GOOGLE_USER_DATA_POLICY_URL}>Google API Services User Data Policy</ExternalLink>, including the Limited Use requirements.</p>
+            <p>The use of information received from Google Workspace APIs will adhere to the{' '}
+                <ExternalLink href={GOOGLE_USER_DATA_POLICY_URL}>Google API Services User Data Policy</ExternalLink>, including the Limited Use requirements.</p>
         </div>
-    );
-};
+        <p>Questions about Google user data: <PrivacyEmail />.</p>
+    </>
+);
+
+const sections: LegalSection[] = [
+    {
+        id: 'who-we-are',
+        title: 'Who we are and what this policy covers',
+        content: (
+            <>
+                <p>{OPERATOR_NAME} ("DreamStream", "we", "our" or "us") runs Comic Studio, Chat Studio and Stream Studio at {COVERED_SITES.join(', ')}. DreamStream is responsible for the personal information described in this policy.</p>
+                <p>This policy applies to everyone whose information we handle: people with a DreamStream account; people who join a Stream Studio event, meeting or baby-monitor link without one; people who sign up for updates or register interest in a studio; and people someone invites to DreamStream by email. Atlas Studio (atlas.dreamstreamstudio.ai) has <ExternalLink href={ATLAS_GOOGLE_USER_DATA_URL}>its own privacy policy</ExternalLink>.</p>
+            </>
+        )
+    },
+    {
+        id: 'information-we-collect',
+        title: 'Information we collect',
+        content: (
+            <>
+                <SubHeading id="account-data">Your account</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Account and profile data:</strong> your email address, username, first name, last name (optional), phone number (optional), date of birth (required), Stream Studio display name, and avatar if you add one.</li>
+                    <li><strong>Password:</strong> when you create an account, your password travels to our server over an encrypted connection so we can check it against known data breaches (only the first five characters of a one-way hash of it leave our server, to the Pwned Passwords service), and it is stored by our authentication provider, Supabase, in hashed form.</li>
+                    <li><strong>Consent and preferences:</strong> whether you accepted the Terms and this policy at sign-up (we store a yes/no, not which version or when), whether you agreed to marketing, and your email preferences.</li>
+                    <li><strong>Devices:</strong> on the main site, a list of the browsers you've signed in from (a random device ID kept in your browser, a name such as "Mac · Chrome", the browser's user-agent string and when it was last seen), so you can review them in Settings.</li>
+                </ul>
+
+                <SubHeading>What you create and share</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Comic Studio:</strong> projects, scripts, prompts, story and character notes, reference images you upload, generated pages and images, lettering, translations, versions and publication settings.</li>
+                    <li><strong>Chat Studio:</strong> your conversations (kept in your browser, and synced to your account when you're signed in), memory notes, files you attach, custom agents and recipes you create, and MCP servers you add.</li>
+                    <li><strong>Community:</strong> your public profile, comments, likes, follows, reviews and views of public projects.</li>
+                    <li><strong>Connected Google accounts:</strong> the data described in <a href="#google-user-data" className={LINK}>Google User Data</a>.</li>
+                    <li><strong>Stream Studio:</strong> described in its own section, <a href="#stream-studio" className={LINK}>Stream Studio, the baby monitor and calls</a>.</li>
+                </ul>
+
+                <SubHeading>When you contact us or report something</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Support:</strong> the messages you email us and anything you include in them.</li>
+                    <li><strong>Feedback:</strong> feedback you give in the app (for example a thumbs up or down, a category and a comment).</li>
+                    <li><strong>Reports:</strong> if you report a shared comic, the reason, any note and page you add, your account if you're signed in, and a salted hash of your IP address that changes every day, used only to spot duplicate reports (never the IP address itself).</li>
+                </ul>
+
+                <SubHeading>Information created as you use the Service</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Usage and cost records:</strong> which AI features and models your account used, when, and what they cost us, so usage allowances can be applied.</li>
+                    <li><strong>Safety records:</strong> Comic Studio's automated safety checks record the category and decision of each check, a one-way fingerprint and its cost, never the text or image that was checked. We also keep the moderation status of accounts and the outcome of reports and appeals.</li>
+                    <li><strong>Diagnostics:</strong> error and diagnostic events from the app (what went wrong and where, with a random ID for that visit), stored together with your IP address and your browser's user-agent string. Feedback is stored the same way.</li>
+                    <li><strong>Request data:</strong> our servers and hosting provider handle your IP address, browser user agent and the address you request to deliver pages, block abuse and limit request rates.</li>
+                    <li><strong>Approximate location:</strong> when you use Chat Studio and your browser hasn't shared its location, our server looks up an approximate city for your IP address (through the ip-api.com service) so that questions like "weather near me" work. Your precise location is used only if you allow it in your browser.</li>
+                    <li><strong>Bot protection:</strong> sign-in, sign-up and some forms use Cloudflare Turnstile, which checks signals from your browser to tell people from bots.</li>
+                    <li><strong>Automated visitors:</strong> if an AI agent or automated browser asks for one of our pages, it is redirected to a check-in page, and the visit (IP address, user agent, country, network and some request headers) is logged in an analytics database that the operator of DreamStream also uses for other websites.</li>
+                    <li><strong>On your device:</strong> the <DocLink to="cookies" /> notice lists what the apps store in your browser.</li>
+                </ul>
+                <p>DreamStream does not take payments today, so we hold no payment card or billing details.</p>
+            </>
+        )
+    },
+    {
+        id: 'stream-studio',
+        title: 'Stream Studio, the baby monitor and calls',
+        content: (
+            <>
+                <SubHeading>Live streams and meetings</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Stream Studio live-event data:</strong> event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
+                    <li>Viewers and guests join with just a name and are never asked for an account or their age. A live stream's video passes through our servers to its viewers, and replay segments are stored for about {RETENTION.replayHours} hours after the stream ends. Meetings and calls connect device to device where networks allow; otherwise an encrypted relay forwards them.</li>
+                    <li><strong>Recordings</strong> are made on the host's own device. A host can save them to their device, share them, save them to Google Drive, or choose a 7-day cloud copy that is stored on our servers and deleted after about {RETENTION.cloudCopyDays} days. Stream Studio does not currently show viewers or guests that a host is recording.</li>
+                </ul>
+
+                <SubHeading>Baby monitor</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Nursery details:</strong> the nursery's name, your baby's name, and (if you add them) your baby's birth date and sex, the zones you draw, the people you add with their roles and labels, and your cameras' device names.</li>
+                    <li><strong>Live video and sound are never recorded.</strong> They go device to device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead, in memory only and never stored, and we don't treat that path as end-to-end encrypted. Privacy pause stops the picture for everyone.</li>
+                    <li><strong>Detection happens on the camera phone.</strong> Sound detection (Google's YAMNet model plus our own cry and alarm analysers) and smart vision (Google MediaPipe models) run on the phone itself; the audio and frames they analyse never leave it.</li>
+                    <li><strong>What our servers keep:</strong> alerts and events (what was detected, when, by which camera, for how long, with what confidence and sound level), incidents and who responded, a minute-by-minute summary of the baby's state and the room's sound level, sleep sessions, and weekly summaries.</li>
+                    <li><strong>Share links:</strong> the guest's name, when they last watched, and the passcode in scrambled form only. Your IP address is used to slow down repeated wrong passcodes.</li>
+                </ul>
+
+                <SubHeading>Baby tracker</SubHeading>
+                <p>Entries you or your family log: breastfeeding (side and minutes), bottles, solids, pumping, diapers (including stool colour), sleep, growth (weight, length, head size), medicine, temperature, activities and notes, with who logged each one. Everyone in the nursery sees them. This can be health information about your child and, for breastfeeding and pumping, about you; we use it only to show the tracker to you and the people you share the nursery with.</p>
+
+                <SubHeading>Calls</SubHeading>
+                <ul className={LIST}>
+                    <li>Who called whom, when, for how long and missed calls (your recent-calls list keeps the last {RECENT_CALLS_KEPT}), your favourites, the people you blocked, and your "Who can call you" setting.</li>
+                    <li>Call audio and video go device to device, encrypted, or through an encrypted relay when a network blocks direct links. Calls are never recorded.</li>
+                </ul>
+
+                <SubHeading>Finding people</SubHeading>
+                <p>Your Stream Studio display name can be found by any signed-in Stream Studio member who types {PEOPLE_SEARCH.minLetters} or more letters of it (up to {PEOPLE_SEARCH.maxResults} results at a time). Email addresses are never shown. There is no setting to hide from this search today. Unless you change "Who can call you" to only the people in your nurseries, anyone who finds you can call you; you can decline and block them.</p>
+
+                <SubHeading>Alerts and usage</SubHeading>
+                <ul className={LIST}>
+                    <li><strong>Alerts on this device:</strong> if you turn them on, your browser gives us a push subscription (an address at your browser maker's push service, such as Apple's, Google's or Mozilla's) and keys. Alert contents are encrypted so only your browser can read them. Signing out removes the subscription from that device.</li>
+                    <li><strong>Usage:</strong> how many minutes went which way (on your Wi-Fi, direct, relayed or through our server) and how much relay data and storage were used, per device and per nursery, so the app can show you what's free and apply fair-use allowances.</li>
+                </ul>
+            </>
+        )
+    },
+    {
+        id: 'emails',
+        title: 'Emails, updates and interest registrations',
+        content: (
+            <>
+                <ul className={LIST}>
+                    <li><strong>Account emails:</strong> sign-up confirmations, sign-in links, password resets, security notices, invitations and welcome messages. We send these when you need them, even if you opted out of marketing.</li>
+                    <li><strong>Updates (newsletter):</strong> if you sign up, we store your email address and send a confirmation email first. You only receive updates after you confirm (double opt-in). Every update includes a one-click unsubscribe link.</li>
+                    <li><strong>Early access and interest registrations:</strong> if you ask for early access or register interest, we store your email address, the studios you pick (Comic Studio, Chat Studio, Code Studio, Stream Studio or Dashboards), any note you add (up to 1,000 characters) and the page you signed up from, and we email you to confirm we received it. We check whether your address already has an account or a pending invitation, so we can point you to sign-in or re-send your invitation instead.</li>
+                    <li><strong>Unsubscribing</strong> records when you unsubscribed and puts your address on a suppression list, which we keep so that we don't email you marketing again.</li>
+                    <li><strong>Invitations you send:</strong> if you invite someone, we store their email address, who invited them and how many times, to send the invitation and avoid repeats.</li>
+                    <li><strong>Delivery records:</strong> for every email we send, we record the address, which email it was, whether it was sent, and when.</li>
+                    <li><strong>Open tracking:</strong> emails our server sends contain a tiny image that tells us when the email is first opened, and we store that time with the delivery record. Sign-in links, sign-up confirmations and password-reset emails never contain it. Blocking images in your email app prevents it.</li>
+                </ul>
+                <p>To stop marketing emails, use the unsubscribe link or change your email preferences in Settings. To have your sign-up or interest registration deleted, email <PrivacyEmail />.</p>
+            </>
+        )
+    },
+    {
+        id: 'how-we-use',
+        title: 'How we use information',
+        content: (
+            <ul className={LIST}>
+                <li>To create and run your account, sign you in, and keep the studios, your projects, chats and nurseries working across your devices.</li>
+                <li>To do what you ask: generate text, images and pages, answer in chat, deliver streams, calls and alerts, save recordings and show the tracker.</li>
+                <li>To share what you choose to share: published comics, public profiles, comments and nursery access.</li>
+                <li>To keep people and the Service safe: bot protection, rate limits, safety checks, handling reports, investigating abuse, and enforcing our <DocLink to="terms" /> and <DocLink to="acceptable-use" />.</li>
+                <li>To apply usage allowances and understand what the Service costs to run.</li>
+                <li>To find and fix bugs and improve how the Service works.</li>
+                <li>To send account and service emails, and updates you asked for.</li>
+                <li>To meet legal obligations and respond to lawful requests.</li>
+            </ul>
+        )
+    },
+    {
+        id: 'legal-bases',
+        title: 'Legal bases (EEA, UK and similar laws)',
+        content: (
+            <>
+                <p>Where laws such as the GDPR or UK GDPR apply, we rely on these legal bases:</p>
+                <DataTable
+                    caption="Legal bases for processing"
+                    head={['Legal basis', 'What it covers']}
+                    rows={[
+                        ['Performing our contract with you', 'Running your account and the studios, doing what you ask, Stream Studio, connected accounts you choose to connect, and account emails.'],
+                        ['Legitimate interests', 'Security, bot protection, rate limits, safety checks and abuse investigations; diagnostics and fixing bugs; usage allowances and cost control; approximate location for Chat Studio answers; logging automated visitors. We balance these against your rights, and you can object (see Your rights).'],
+                        ['Consent', 'Updates and marketing emails, precise location if you allow it in your browser, and alerts on your device. You can withdraw consent at any time; that doesn\'t affect what happened before.'],
+                        ['Legal obligation', 'Keeping records and responding to requests where the law requires it.']
+                    ]}
+                />
+                <p>Baby tracker entries can be health information. We process them only because you chose to enter them, to provide the tracker to you and your nursery's members.</p>
+            </>
+        )
+    },
+    {
+        id: 'ai-processing',
+        title: 'AI processing',
+        content: (
+            <>
+                <p>When you use generation features, relevant request data (for example prompts, selected model, and any reference images you submit) is sent to AI model providers to produce output.</p>
+                <ul className={LIST}>
+                    <li><strong>Comic Studio:</strong> the parts of your project a task needs, such as your prompts, script, story and character notes, reference images, and pages to check or translate, are sent to the model that does the work: Google's Gemini API, or a model reached through OpenRouter.</li>
+                    <li><strong>Chat Studio:</strong> your messages, files you attach, memory notes and, if you connected accounts, the items described in <a href="#google-user-data" className={LINK}>Google User Data</a>, are sent through OpenRouter or directly to the provider you choose: {DIRECT_AI_PROVIDERS.join(', ')}. Image requests can also go to Ideogram or a Flux image service (Pixazo).</li>
+                    <li><strong>Your own keys:</strong> requests made with your own API key run under your account with that provider.</li>
+                    <li><strong>Safety checks</strong> on Comic Studio content run on DreamStream's own provider account.</li>
+                    <li><strong>On-device AI:</strong> Stream Studio's sound detection and smart vision run on the camera phone; nothing they analyse is sent to us or to an AI provider.</li>
+                </ul>
+                <p><strong>Training.</strong> DreamStream does not use your content to train AI models of its own. Providers receive requests under their own terms, and whether and how long a provider keeps a request, or uses it to improve its services, depends on that provider and the model or route used. The <DocLink to="subprocessors" /> page links each one.</p>
+            </>
+        )
+    },
+    {
+        id: 'google-user-data',
+        title: 'Google User Data (Connected Google Accounts)',
+        content: googleUserData
+    },
+    {
+        id: 'sharing',
+        title: 'Who we share information with',
+        content: (
+            <>
+                <p>We do not sell personal information, and we do not share it for cross-context behavioural or targeted advertising. There are no advertising or analytics trackers in our apps. We share information only:</p>
+                <ul className={LIST}>
+                    <li><strong>With service providers</strong> that run parts of the Service for us: hosting, database and storage, email delivery, bot protection, AI models and the tools Chat Studio uses. The <DocLink to="subprocessors" /> page lists each one, what it receives and why.</li>
+                    <li><strong>With other people, when you choose:</strong> readers of comics you publish, viewers and guests of your events, members of your nurseries, people you call, and anyone you share a link with.</li>
+                    <li><strong>With services you connect or direct us to:</strong> Google (when you connect it or save to Drive), MCP servers you add, and websites the AI reads for you.</li>
+                    <li><strong>For safety and the law:</strong> when we believe in good faith it is necessary to comply with the law or a valid legal request, to protect someone from harm, to report child sexual abuse material to the authorities where the law requires, or to investigate abuse and security problems.</li>
+                    <li><strong>In a business transfer:</strong> if DreamStream is reorganised, merged or sold, information may pass to the new owner under this policy (Google user data only with your explicit prior consent, as described above).</li>
+                </ul>
+            </>
+        )
+    },
+    {
+        id: 'public',
+        title: 'What other people can see',
+        content: (
+            <ul className={LIST}>
+                <li>Projects are private unless you mark them public or publish them. Public projects, published comics, your profile (username and avatar), comments, likes, follows and view counts can be seen by others. An unlisted share link works for anyone who has it.</li>
+                <li>Stream Studio viewer links are intended for people with the link. Private studio, guest, and recap links may grant control or private access; treat them like passwords and share them only with trusted collaborators.</li>
+                <li>Your Stream Studio display name can be found by other members, as described above. Members of a nursery see its live picture, alerts, history and tracker, and who else is a member.</li>
+                <li>A viewer's name and chat messages are seen by the host and the other people in the event.</li>
+            </ul>
+        )
+    },
+    {
+        id: 'cookies',
+        title: 'Cookies and device storage',
+        content: (
+            <p>Our own code doesn't set cookies. The apps keep your sign-in, preferences, caches, unsaved work and Stream Studio settings in your browser's storage, and load a few services from other companies (Cloudflare Turnstile, Google Fonts and, on the main site, two PDF libraries from Cloudflare's cdnjs). There are no advertising or analytics trackers. The <DocLink to="cookies" /> notice lists everything and how to clear it.</p>
+        )
+    },
+    {
+        id: 'retention',
+        title: 'How long we keep information',
+        content: (
+            <>
+                <DataTable
+                    caption="Retention periods"
+                    head={['Information', 'How long']}
+                    rows={[
+                        ['Account and profile', 'Until your account is deleted (on request, by email).'],
+                        ['Comic projects, uploads and generated images', `Until you delete them or your account. Stored images that no project uses any more are marked to expire after about ${RETENTION.imageUnusedDays} days unused and become due for removal about ${RETENTION.imageExpiryGraceDays} days later.`],
+                        ['Chats', 'In your browser until you delete them; the copy synced to your account until you delete the chat or your account.'],
+                        ['Memory notes', 'Until you ask us to delete them.'],
+                        ['Connected accounts and their indexes', 'Until you disconnect or your account is deleted.'],
+                        ['Live stream replays', `About ${RETENTION.replayHours} hours after the stream ends.`],
+                        ['7-day cloud copies of recordings', `About ${RETENTION.cloudCopyDays} days. If deleting fails, our servers keep retrying for up to ${RETENTION.recordingSweepGraceDays} more days.`],
+                        ['Baby monitor history', `Alerts, events and incidents ${RETENTION.monitorEventsDays} days; minute-by-minute summaries ${RETENTION.monitorMinutesDays} days; sleep sessions ${RETENTION.monitorSleepDays} days. Older entries are removed on a rolling basis while the nursery is in use.`],
+                        ['Baby tracker entries', `About ${RETENTION.trackerYears} years, removed on a rolling basis while the nursery is in use.`],
+                        ['A deleted nursery', 'Everyone loses access at once. Its stored history and tracker entries are not erased automatically at that moment; email us to have them erased.'],
+                        ['Recent calls', `Your last ${RECENT_CALLS_KEPT} calls.`],
+                        ['Alert subscriptions', 'Until you turn alerts off, sign out on that device, or your browser ends the subscription.'],
+                        ['Comic Studio safety records', `Check records ${RETENTION.safetyEventsDays} days; closed reports and appeals ${RETENTION.closedSafetyCasesDays} days after they close; quarantined items ${RETENTION.quarantineDays} days.`],
+                        ['Image-generation call logs', `${RETENTION.imageCallLogDays} days.`],
+                        ['Devices list', `Until you remove a device or your account is deleted (Settings shows those seen in the last ${RETENTION.deviceActiveDays} days).`],
+                        ['Diagnostics and feedback (with IP address and user agent)', 'Not deleted automatically today; email us to have yours deleted.'],
+                        ['Email delivery records and open times', 'Not deleted automatically today.'],
+                        ['Update sign-ups and interest registrations', 'Until you ask us to delete them. Unsubscribing keeps a record of the opt-out so it is respected.'],
+                        ['Welcome-code attempts (a hashed IP address and the time)', 'Not deleted automatically today.'],
+                        ['Automated-visitor log', 'No automatic deletion is set up.']
+                    ]}
+                />
+                <p>When information is deleted, copies may remain for a limited time in backups kept by our infrastructure providers, and anything others already saved (a downloaded comic or recording) stays with them.</p>
+            </>
+        )
+    },
+    {
+        id: 'security',
+        title: 'Security',
+        content: (
+            <>
+                <ul className={LIST}>
+                    <li>Data travels over encrypted HTTPS connections, and our sites tell browsers to use HTTPS only.</li>
+                    <li>Every table in our database has row-level security switched on, which limits what a signed-in account can read and change.</li>
+                    <li>Google tokens are encrypted with AES-256-GCM before they are stored.</li>
+                    <li>Passwords chosen at sign-up are checked against known data breaches without the password itself leaving our server.</li>
+                    <li>Bot protection and rate limits guard sign-in, sign-up, forms, share-link passcodes and welcome codes.</li>
+                    <li>The baby monitor uses end-to-end encryption for device-to-device video and sound wherever the network allows, with keys our servers can't read.</li>
+                    <li>Share-link passcodes are stored only in scrambled form.</li>
+                </ul>
+                <p>No system is perfectly secure. Protect your password and devices, and treat private Stream Studio links like passwords. If we learn of a breach that affects your personal information, we will notify you and the authorities where the law requires.</p>
+                <p><strong>Found a security problem?</strong> Please tell us privately: email <MailLink email={SECURITY_EMAIL} subject={SECURITY_SUBJECT} /> or use our <ExternalLink href={SECURITY_ADVISORY_URL}>private security advisory form</ExternalLink>. Our <ExternalLink href={SECURITY_TXT_URL}>security.txt</ExternalLink> has the details.</p>
+            </>
+        )
+    },
+    {
+        id: 'your-rights',
+        title: 'Your choices and rights',
+        content: (
+            <>
+                <SubHeading>In the app</SubHeading>
+                <ul className={LIST}>
+                    <li>Edit your profile and email preferences in Settings, and unsubscribe from any update.</li>
+                    <li>Delete projects, chats and comments; unpublish a comic.</li>
+                    <li>Disconnect a Google account (Chat Studio → Settings → Connectors).</li>
+                    <li>In Stream Studio: choose who can call you, block people, remove people from a nursery, use privacy pause, delete a nursery, and download monitor history and tracker entries as CSV files.</li>
+                    <li>Sign out: on Stream Studio, and when you sign out of DreamStream, the Stream Studio data on that device is removed.</li>
+                </ul>
+                <SubHeading>Your rights</SubHeading>
+                <p>Depending on where you live, you may have the right to: access the personal information we hold about you and get a copy; correct it; delete it; receive it in a portable format; object to or restrict how we use it; withdraw consent; and not be treated differently for using these rights. Residents of US states with privacy laws can also ask what we collect and why, and appeal a decision we make on their request. We don't sell personal information or use it for targeted advertising, so there is nothing to opt out of there.</p>
+                <SubHeading>How to make a request</SubHeading>
+                <ul className={LIST}>
+                    <li>Email <PrivacyEmail /> from the email address on your account (or tell us how to reach you if you don't have one). There is no self-service download or account deletion in the app yet; we handle requests by hand.</li>
+                    <li>We may need to confirm it's you before acting. Someone you authorise can make a request for you if they can show they have your permission.</li>
+                    <li>We respond within the time the law that applies to you sets (for example, one month under the GDPR and 45 days under the California Consumer Privacy Act), and we tell you if we need longer and why.</li>
+                    <li>If you're in the EEA or the UK, you can also complain to your data protection authority.</li>
+                </ul>
+            </>
+        )
+    },
+    {
+        id: 'children',
+        title: 'Children',
+        content: (
+            <>
+                <p>The sign-up form accepts people aged {MIN_SIGNUP_AGE_YEARS} and over, based on the date of birth they enter. We do not run a separate process to get a parent's consent before a child under 13 creates an account. Accounts whose date of birth shows an age under {COMIC_PG_CEILING_UNDER_AGE} are held to a PG content limit in Comic Studio. Stream Studio viewers and guests are not asked their age.</p>
+                <p>If you are a parent or guardian and believe your child has given us personal information without your consent, email <PrivacyEmail />. We will review it and delete the account and its information where appropriate.</p>
+                <p>Information parents enter about their own baby in the baby monitor and tracker is covered in <a href="#stream-studio" className={LINK}>Stream Studio, the baby monitor and calls</a>.</p>
+            </>
+        )
+    },
+    {
+        id: 'international',
+        title: 'Where information is processed',
+        content: (
+            <p>Our database is hosted by Supabase in {DATABASE_REGION_LABEL}. Cloudflare serves our sites, Stream Studio and email from its global network. AI providers and the services Chat Studio's tools use process requests in the countries where they operate. If you use DreamStream from outside the United States, your information will be transferred to and processed in the United States and those other countries, whose laws may differ from yours.</p>
+        )
+    },
+    {
+        id: 'changes',
+        title: 'Changes to this policy',
+        content: (
+            <p>We update this policy when features, providers or data flows change, and change the date at the top. If a change is material, we will tell you in the product or by email before it takes effect.</p>
+        )
+    },
+    {
+        id: 'contact',
+        title: 'Contact',
+        content: (
+            <ul className={LIST}>
+                <li>Privacy questions and requests: <PrivacyEmail />.</li>
+                <li>Anything else: <MailLink email={SUPPORT_EMAIL} />.</li>
+            </ul>
+        )
+    }
+];
+
+const intro = (
+    <>
+        <p>This Privacy Policy explains what personal information DreamStream processes, why, who receives it, how long we keep it, and the controls and rights you have. It describes how the Service works today.</p>
+        <p className="rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-4 py-3 text-sm">
+            Connected a Google account (Gmail, Google Drive, Google Calendar, Google Sheets or YouTube)?{' '}
+            <a href="#google-user-data" className={LINK}>Google User Data</a> explains what we access, how we use it, and how to remove it.
+        </p>
+    </>
+);
+
+const summary = (
+    <Callout title="The short version">
+        <ul className={LIST}>
+            <li>We don't sell your information, and there are no ad or analytics trackers in our apps.</li>
+            <li>What you ask an AI to do is sent to the AI provider that does it; we don't train AI models of our own on your content.</li>
+            <li>The baby monitor never records. Live video goes device to device where it can; detection runs on the camera phone.</li>
+            <li>Other Stream Studio members can find you by display name and, by default, call you.</li>
+            <li>To see, correct or delete your information, email <PrivacyEmail />.</li>
+        </ul>
+    </Callout>
+);
+
+export const PrivacyPolicy: React.FC<{ onBack: () => void; onOpenDoc?: (id: LegalDocId) => void }> = ({ onBack, onOpenDoc }) => (
+    <LegalDocument doc="privacy" intro={intro} summary={summary} sections={sections} onBack={onBack} onOpenDoc={onOpenDoc} />
+);

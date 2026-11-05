@@ -1,31 +1,54 @@
 import React from 'react';
+import { LEGAL_DOCS, clearFragment, type LegalDocId } from '../legal/legalRoutes';
 
 interface LegalMicroLinksProps {
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
   onOpenFaq: () => void;
+  /** Opens any other legal document in the app; without it the links load their page. */
+  onOpenLegal?: (doc: LegalDocId) => void;
   className?: string;
 }
 
+const LINK = 'hover:text-black transition-colors';
+
+// Every legal document has a real address (/privacy, /terms, …): a plain click opens it inside the
+// app, and a middle-click, a copied link or a new tab still lands on the right page.
 export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
   onOpenPrivacy,
   onOpenTerms,
   onOpenFaq,
+  onOpenLegal,
   className = ''
 }) => {
+  const openIn = (doc: LegalDocId): (() => void) | undefined =>
+    doc === 'privacy' ? onOpenPrivacy : doc === 'terms' ? onOpenTerms : onOpenLegal ? () => onOpenLegal(doc) : undefined;
+
   return (
     <div className={`border-t border-slate-200 bg-white/80 ${className}`}>
       <div className="max-w-7xl mx-auto px-6 py-3 text-[11px] font-bold text-slate-500 flex flex-wrap items-center gap-4">
-        <button type="button" onClick={onOpenPrivacy} className="hover:text-black transition-colors">
-          Privacy Policy
-        </button>
-        <button type="button" onClick={onOpenTerms} className="hover:text-black transition-colors">
-          Terms &amp; Conditions
-        </button>
-        <button type="button" onClick={onOpenFaq} className="hover:text-black transition-colors">
+        {LEGAL_DOCS.map((doc) => {
+          const open = openIn(doc.id);
+          return (
+            <a
+              key={doc.id}
+              href={doc.path}
+              className={LINK}
+              onClick={(e) => {
+                if (!open || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                clearFragment();
+                open();
+              }}
+            >
+              {doc.label}
+            </a>
+          );
+        })}
+        <button type="button" onClick={onOpenFaq} className={LINK}>
           FAQs
         </button>
-        <a href="mailto:contact@dreamstreamstudio.ai" className="hover:text-black transition-colors">
+        <a href="mailto:contact@dreamstreamstudio.ai" className={LINK}>
           Contact
         </a>
       </div>

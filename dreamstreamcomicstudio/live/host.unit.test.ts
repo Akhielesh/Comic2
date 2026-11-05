@@ -67,8 +67,8 @@ describe('on stream.dreamstreamstudio.ai', () => {
 
   it('links to DreamStream’s legal pages absolutely', () => {
     expect(LIVE_LEGAL_LINKS.map((l) => l.href).slice(0, 2)).toEqual([
-      'https://dreamstreamstudio.ai/?view=privacy',
-      'https://dreamstreamstudio.ai/?view=terms',
+      'https://dreamstreamstudio.ai/privacy',
+      'https://dreamstreamstudio.ai/terms',
     ]);
   });
 });

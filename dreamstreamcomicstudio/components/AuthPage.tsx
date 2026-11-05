@@ -613,7 +613,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             </div>
 
             <div className="mt-8 text-center text-xs font-mono text-slate-400">
-                &copy; 2026 DreamStream Inc. All rights reserved.
+                &copy; 2026 DreamStream Studio. All rights reserved.
             </div>
         </div>
     );
