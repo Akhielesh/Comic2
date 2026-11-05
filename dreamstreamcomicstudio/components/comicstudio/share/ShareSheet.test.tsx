@@ -374,6 +374,37 @@ describe('ShareSheet: Library + link in one step (DS-R0)', () => {
     expect(screen.queryByRole('link', { name: 'See it in the Library' })).toBeNull();
     expect(screen.getByText("Anyone with the link can read it; it isn't listed")).toBeVisible();
   });
+
+  it('on a phone the QR sits in the link block that shows first, ahead of the choices and the settings', () => {
+    setViewport(true);
+    render(<ShareSheet studio={studioWith(view({ visibility: 'public' }))} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="bottom"]')).not.toBeNull();
+    const link = screen.getByLabelText('Read-only link');
+    const showQr = screen.getByRole('button', { name: 'Show QR code' });
+    const group = screen.getByRole('radiogroup', { name: 'Who can read it' });
+    expect(link.compareDocumentPosition(showQr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(showQr.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(showQr.compareDocumentPosition(screen.getByRole('region', { name: 'Link settings' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Opened in place, the code itself is still ahead of the choices.
+    fireEvent.click(showQr);
+    const code = screen.getByRole('img', { name: /^QR code for / });
+    expect(code.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+  });
+
+  it('on a tablet dialog (640–1023 px) the QR shows in the first block too; the wide dialog keeps it in its left column', () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => undefined, removeEventListener: () => undefined, addListener: () => undefined, removeListener: () => undefined, onchange: null, dispatchEvent: () => false })) as unknown as typeof window.matchMedia;
+    const { unmount } = render(<ShareSheet studio={studioWith(view())} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="dialog"]')).not.toBeNull();
+    const group = () => screen.getByRole('radiogroup', { name: 'Who can read it' });
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+    expect(screen.getByRole('img', { name: /^QR code for / }).compareDocumentPosition(group()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    setViewport(false);
+    render(<ShareSheet studio={studioWith(view())} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="wide"]')).not.toBeNull();
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+  });
 });
 
 describe('ShareLinkCard options', () => {

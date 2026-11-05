@@ -356,10 +356,13 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
     />
   );
 
-  // Published: the link comes first (copy, Share…), and a listed comic also links to its shelf in the Library.
+  // Published: the link comes first (copy, QR, Share…), and a listed comic also links to its shelf in the Library.
+  // The wide dialog keeps its QR in the left column; every other layout shows it here, ahead of the choices.
   const linkFirst = live && view && !publishAs && (
     <>
       <ShareLinkCard view={view} title={title} description={doc.brief?.logline} onFallback={setFallbackUrl} pageCount={doc.pages.length} />
+      {fallback}
+      {layout !== 'wide' && qr}
       {current === 'public' && (
         <a
           href={LIBRARY_HREF}
@@ -370,7 +373,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
           <LayoutGrid className="h-4 w-4" aria-hidden /> See it in the Library
         </a>
       )}
-      {fallback}
     </>
   );
 
@@ -488,7 +490,6 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
       <div className="min-w-0 space-y-4">
         {controls}
         {!publishAs && preview}
-        {!publishAs && live && qr}
       </div>
     );
 
