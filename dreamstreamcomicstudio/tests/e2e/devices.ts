@@ -21,6 +21,21 @@ export interface Insets {
   left: number;
 }
 
+/**
+ * How a project looks beyond its device (DS-1b, master plan §1.4): the page-level skin, the theme and motion.
+ * The harness (helpers/harness.ts) asks every URL for this look unless a test names its own, and
+ * playwright.config.ts emulates the matching OS preferences. Absent: the default projects' look (no page-level
+ * skin, light, reduced motion).
+ */
+export interface ProjectLook {
+  /** `skin=atlas` on every harness URL: html[data-ds-skin="atlas"], exactly as the comics host boots it. */
+  skin?: 'atlas';
+  /** `theme=dark` on every harness URL, and the OS colour scheme is dark (`colorScheme: 'dark'`). */
+  theme?: 'dark';
+  /** 'on': prefers-reduced-motion is no-preference (every other project reduces motion). */
+  motion?: 'on';
+}
+
 export interface ComicDevice {
   name: string;
   /** The engine mobile.md asks for; the project uses it only when QA_WEBKIT=1 (see header). */
@@ -42,6 +57,8 @@ export interface ComicDevice {
   /** fold5-dual: the hinge between two side-by-side segments (CDP display-feature override). */
   hinge?: { offset: number; maskLength: number };
   notes?: string;
+  /** DS-1b: the look the project runs in (skin / theme / motion); absent for every device project. */
+  look?: ProjectLook;
 }
 
 const NONE: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -293,11 +310,12 @@ export const REFLOW_320: ComicDevice = {
   notes: 'WCAG reflow; assertion 1 (no horizontal overflow) must pass'
 };
 
-/** visualqa.md §7 layout-smoke matrix (light theme; Chromium; phones get touch). */
+/** visualqa.md §7 layout-smoke matrix (light theme; Chromium; phones get touch), plus 1280×800 (DS-1b, master plan §1.4). */
 export const SMOKE_VIEWPORTS: ComicDevice[] = [
   [360, 740],
   [768, 1024],
   [1024, 768],
+  [1280, 800],
   [1440, 900]
 ].map(([w, h]) => {
   const phone = w < 768;
@@ -316,7 +334,27 @@ export const SMOKE_VIEWPORTS: ComicDevice[] = [
   };
 });
 
-export const ALL_DEVICES: ComicDevice[] = [...COMIC_DEVICES, REFLOW_320, ...SMOKE_VIEWPORTS];
+const smoke = (name: string): ComicDevice => {
+  const d = SMOKE_VIEWPORTS.find((v) => v.name === name);
+  if (!d) throw new Error(`no smoke viewport ${name}`);
+  return d;
+};
+
+/**
+ * DS-1b (master plan §1.3, §1.4): the smoke under other looks. The smoke viewports above run the app scenes in
+ * light and dark; these add the page-level Atlas skin on a phone and the OS dark scheme on a desktop (both run the
+ * whole smoke: app, studio, kit and model-picker scenes), and the WCAG reflow width and motion on
+ * (prefers-reduced-motion: no-preference, for the entrances), which run the app scenes (`@app`) only
+ * (playwright.config.ts).
+ */
+export const APP_SMOKE_DEVICES: ComicDevice[] = [
+  { ...REFLOW_320, name: 'smoke-320x640', notes: 'the app scenes at the WCAG reflow width (light and dark)' },
+  { ...smoke('smoke-360x740'), name: 'smoke-360x740-atlas', look: { skin: 'atlas' }, notes: 'html[data-ds-skin="atlas"], light and dark' },
+  { ...smoke('smoke-1440x900'), name: 'smoke-1440x900-dark', look: { theme: 'dark' }, notes: 'colorScheme dark: prefers-color-scheme and the .dark theme' },
+  { ...smoke('smoke-1280x800'), name: 'motion-on', look: { motion: 'on' }, notes: 'prefers-reduced-motion: no-preference; entrances run, then the page is measured' }
+];
+
+export const ALL_DEVICES: ComicDevice[] = [...COMIC_DEVICES, REFLOW_320, ...SMOKE_VIEWPORTS, ...APP_SMOKE_DEVICES];
 
 export const deviceByName = (name: string): ComicDevice | undefined => ALL_DEVICES.find((d) => d.name === name);
 
