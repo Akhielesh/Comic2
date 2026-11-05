@@ -216,6 +216,15 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(DARK_TOKENS.get('--ds-canvas')).toBe('#262624');
   });
 
+  it('a nested .dark subtree recomputes every token :root derives with var() (the restatement block equals them)', () => {
+    const nested = rules.filter((r) => r.parents.length === 0 && r.selector === ':where(.dark:not(:root))');
+    expect(nested).toHaveLength(1);
+    const restated = new Map([...nested[0].body.matchAll(/(--ds-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as const));
+    const derived = [...ROOT_TOKENS].filter(([k, v]) => /var\(/.test(v) && !DARK_TOKENS.has(k) && !isReader(k));
+    expect(derived.length).toBeGreaterThan(10);
+    expect([...restated].sort()).toEqual(derived.sort());
+  });
+
   it('every .dark token exists in :root, and a NEW token is only redefined in .dark when its dark value differs', () => {
     for (const k of DARK_TOKENS.keys()) expect(ROOT_TOKENS.get(k), `${k} exists in :root`).toBeDefined();
     // (--ds-accent is pre-existing and theme-invariant by design; the new tokens must not add noise.)

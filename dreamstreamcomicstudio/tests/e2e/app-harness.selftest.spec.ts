@@ -44,6 +44,20 @@ test.describe('app harness probes', () => {
     expect(left.map((a) => [a.name, a.iterations, a.target])).toEqual([['x', -1, 'div.loop']]);
   });
 
+  test('phone-content on an app page (M2): a <main> squeezed under 45 % of a phone\'s height is reported, a full one is not', async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    const scan = () => scanLayout(page, { device: PHONE, checks: ['phone-content'], contentSelector: 'main, [role="main"]' });
+    // Chrome eats the top 60 % of the screen and the page content starts below it.
+    await page.setContent(html(`<header style="height:450px">chrome</header><main style="min-height:2000px">page</main>`));
+    const hits = await scan();
+    expect(hits.map((f) => f.check)).toEqual(['phone-content']);
+    expect(hits[0].detail).toMatch(/290px = 39% of 740px/);
+    await page.setContent(html(`<header style="height:56px">chrome</header><main style="min-height:2000px">page</main>`));
+    expect(await scan()).toEqual([]);
+    // Off a phone the check is not applied; without a selector it measures the studio panes (none here).
+    expect(await scanLayout(page, { device: deviceByName('smoke-1280x800')!, checks: ['phone-content'], contentSelector: 'main' })).toEqual([]);
+  });
+
   test('pageWidths: a 2000 px wide block at a 360 px viewport is horizontal overflow', async ({ page }, testInfo) => {
     const qa = harness(page, testInfo);
     await page.setViewportSize({ width: 360, height: 740 });

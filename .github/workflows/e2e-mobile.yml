@@ -2,7 +2,9 @@
 #
 # Runs the whole Playwright harness (dreamstreamcomicstudio/tests/e2e) against the QA entry built
 # with QA_BUILD=1: 14 device projects (phones, a Fold cover/unfolded/dual-screen, iPads, desktop) +
-# the WCAG reflow-320 project + the 4 layout-smoke viewports + the harness self-tests. Specs: studio
+# the WCAG reflow-320 project + the 5 layout-smoke viewports (360/768/1024/1280/1440) plus
+# smoke-360x740-atlas and smoke-1440x900-dark (the whole smoke) and the app-scene matrix (smoke-320x640,
+# smoke-320x568, smoke-fold5-dual, smoke-852x393; `@app`) + the harness self-tests. Specs: studio
 # layout per form factor, keyboard-safe composer, Enter rule, Back gesture, balloon touch editing,
 # reader per form factor, public reader + shared-link acceptance (read-only, p=, allowDownload),
 # component scenes, axe a11y, PWA, perf on pixel-8 (variants, ≥ 55 fps p90 page turns, CLS, images).

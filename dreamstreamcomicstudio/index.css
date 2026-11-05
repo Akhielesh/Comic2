@@ -567,6 +567,32 @@
   --ds-chart-5: #3d3d3d;
 }
 .dark { color-scheme: dark; }
+/* A `.dark` subtree inside a light page (a dark demo panel, a preview): the tokens :root derives with var()
+   computed there with the LIGHT sources and inherit as fixed colours, so a nested panel kept the light
+   segment pill, field edges and danger mark under the dark ink (1.2:1 in the ds-gallery scene). Restated here
+   they recompute on the subtree. On <html> the :root rules already do it; zero specificity, so any skin
+   block on the same element still wins. atlasSkin.test.ts keeps this list equal to :root's var() tokens. */
+:where(.dark:not(:root)) {
+  --ds-accent-fill: var(--ds-accent);
+  --ds-shadow-soft: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  --ds-shadow-panel: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  --ds-surface-blur: var(--ds-glass-blur);
+  --ds-control-border: var(--ds-hairline);
+  --ds-control-border-hover: var(--ds-hairline);
+  --ds-focus: var(--ds-ring);
+  --ds-overlay-edge: var(--ds-hairline);
+  --ds-shadow-overlay: var(--ds-shadow-soft);
+  --ds-danger-mark: var(--ds-danger);
+  --ds-segment-pill: var(--ds-raised);
+  --ds-segment-track: var(--ds-well-strong);
+  --ds-overlay-hover: var(--ds-hover);
+  --ds-status-error-edge: color-mix(in srgb, var(--ds-danger-mark) 35%, transparent);
+  --ds-status-error-tint: color-mix(in srgb, var(--ds-danger-mark) 6%, transparent);
+  --ds-toast-edge: var(--ds-overlay-edge);
+  --ds-motion-enter-quick: var(--ds-motion-enter);
+  --ds-grid-dot: color-mix(in srgb, var(--ds-ink) 14%, transparent);
+  --ds-spot-ink: var(--ds-ink);
+}
 
 /* ---- Accent contrast: route the existing accent utilities to the readable tokens ----
    tests/config/tokenContrast.test.ts proves the token pairs (≥ 4.5:1, both themes, both skins) and

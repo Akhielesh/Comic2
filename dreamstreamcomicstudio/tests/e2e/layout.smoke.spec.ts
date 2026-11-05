@@ -11,7 +11,9 @@
 // harness (`?surface=app` publishes window.__QA_APP_SCENES__; no list here), in light and dark, on every project
 // that runs this spec — the smoke viewports 360/768/1024/1280/1440 and devices.ts APP_SMOKE_DEVICES:
 // smoke-360x740-atlas (page-level Atlas skin), smoke-1440x900-dark (OS dark scheme; dark only), and the app-only
-// smoke-320x640 (WCAG reflow) and motion-on (prefers-reduced-motion: no-preference).
+// smoke-320x640 (WCAG reflow), smoke-320x568, smoke-fold5-dual, smoke-852x393 (the redesign plan's M2 matrix,
+// devices.ts APP_SCENE_MATRIX) and motion-on (prefers-reduced-motion: no-preference). On phones the page's
+// <main> keeps ≥ 45 % of the height (phone-content).
 // Each scene and the index: no horizontal overflow (page scroll width, nothing offscreen), exactly one <main>,
 // coarse-pointer controls ≥ 44 px where the project emulates touch (on every screen of the page, not only the
 // first), no legacy kit class in the rendered DOM, no duplicate id, axe serious/critical triaged against
@@ -158,7 +160,16 @@ test.describe('layout smoke @smoke', () => {
 
 // ── App scenes (DS-1b) ───────────────────────────────────────────────────────
 
-const appChecks = (device: ComicDevice): CheckId[] => (device.coarse ? ['overflow', 'offscreen', 'landmarks', 'hit-target'] : ['overflow', 'offscreen', 'landmarks']);
+const appChecks = (device: ComicDevice): CheckId[] => [
+  'overflow',
+  'offscreen',
+  'landmarks',
+  ...(device.coarse ? (['hit-target'] as const) : []),
+  // M2: on a phone the page's content (its <main>) keeps ≥ 45 % of the height after any chrome.
+  ...(device.kind === 'phone' ? (['phone-content'] as const) : [])
+];
+/** What `phone-content` measures on an app page: its one main landmark. */
+const APP_CONTENT = 'main, [role="main"]';
 
 /** Every app-page assertion at the current URL (index or scene). Soft: one run reports every scene's findings. */
 const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, theme: 'light' | 'dark'): Promise<void> => {
@@ -179,7 +190,7 @@ const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, t
   // A duplicated id makes <label for> / aria-labelledby name the wrong element; axe files duplicate-id-aria under
   // "incomplete", which the a11y helper does not report.
   expect.soft(await qa.duplicateIds(), `${where}: duplicate ids`).toEqual([]);
-  await qa.check('app', `${scene}-${theme}`, { checks: appChecks(device), axe: true, hinge: null });
+  await qa.check('app', `${scene}-${theme}`, { checks: appChecks(device), axe: true, hinge: null, contentSelector: APP_CONTENT });
   // The 44 px check measures only controls fully on screen: walk the rest of the page too (app scenes scroll the document).
   if (device.coarse) await qa.eachScrollStep((top) => qa.check('app', `${scene}-${theme}-y${top}`, { checks: ['hit-target'], hinge: null }));
 };

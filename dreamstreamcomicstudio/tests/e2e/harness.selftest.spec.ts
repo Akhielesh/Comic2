@@ -113,10 +113,13 @@ test.describe('layout scanner', () => {
         <button aria-label="Expanded" class="tap" style="width:28px;height:28px;margin:30px;border:0">y</button>
         <button aria-label="Round" style="width:44px;height:44px;border-radius:50%;margin:30px;border:0">o</button>
         <div style="position:relative;margin:30px"><button aria-label="Big" style="width:60px;height:60px">z</button><span style="position:absolute;left:44px;top:0;width:20px;height:20px;background:red;display:block">!</span></div>
+        <div role="tabpanel" tabindex="0" aria-label="Panel" style="height:20px;margin:30px">one line of panel text</div>
+        <div tabindex="0" aria-label="Focusable" style="width:20px;height:20px;margin:30px">f</div>
       </main>`)
     );
     const f = await scanLayout(p, { checks: ['hit-target'] });
-    expect(f.map((x) => x.label).sort()).toEqual(['Big', 'Tiny']);
+    // A tab panel's tabindex is a keyboard stop, not a touch target; any other tabindex=0 element is held to 44 px.
+    expect(f.map((x) => x.label).sort()).toEqual(['Big', 'Focusable', 'Tiny']);
   });
 
   test('floating chrome over a target is layering, a neighbour in the flow is not', async ({ page: p }) => {
