@@ -17,6 +17,7 @@ import {
   noteFocusLabel,
   openQuestion,
   QUEUE_LIMITS,
+  QUEUE_NOTE_MAX_CHARS,
   QUEUE_PREFIX,
   QUEUE_STORAGE_PREFIX,
   readStoredQueue,
@@ -53,6 +54,10 @@ describe('add, edit, remove, move', () => {
     expect(ids(refused.notes)).toEqual(ids(full));
 
     expect(add([], note('l', 'x'.repeat(QUEUE_LIMITS.chars + 1)))).toMatchObject({ added: false, reason: 'too_long' });
+    // A note must still fit one message once the prefix goes in front of it.
+    expect(add([], note('l', 'x'.repeat(QUEUE_LIMITS.chars)))).toMatchObject({ added: false, reason: 'too_long' });
+    expect(add([], note('l', 'x'.repeat(QUEUE_NOTE_MAX_CHARS + 1)))).toMatchObject({ added: false, reason: 'too_long' });
+    expect(add([], note('l', 'x'.repeat(QUEUE_NOTE_MAX_CHARS)))).toMatchObject({ added: true });
     const paths = Array.from({ length: QUEUE_LIMITS.inboxPaths + 1 }, (_, i) => `u/x/inbox/${i}.webp`);
     expect(add([], note('ph', 'look', { inboxPaths: paths }))).toMatchObject({ added: false, reason: 'too_many_photos' });
   });
@@ -61,6 +66,8 @@ describe('add, edit, remove, move', () => {
     expect(edit(three, 'b', '  two, but louder ').map((n) => n.text)).toEqual(['one', 'two, but louder', 'three']);
     expect(edit(three, 'b', '   ')).toEqual(three);
     expect(edit(three, 'b', 'y'.repeat(QUEUE_LIMITS.chars + 1))).toEqual(three);
+    expect(edit(three, 'b', 'y'.repeat(QUEUE_NOTE_MAX_CHARS + 1))).toEqual(three);
+    expect(edit(three, 'b', 'y'.repeat(QUEUE_NOTE_MAX_CHARS))[1].text).toHaveLength(QUEUE_NOTE_MAX_CHARS);
     expect(edit(three, 'missing', 'x')).toEqual(three);
   });
 
@@ -119,6 +126,19 @@ describe('batchesForDrain and the combined message (D1)', () => {
     expect(focusKey(undefined)).toBe('');
   });
 
+  it('a drained message never passes the server cap: a full note fits with its prefix, a full message goes without it', () => {
+    const full = note('a', 'x'.repeat(QUEUE_NOTE_MAX_CHARS));
+    expect(drainRequest([full]).text).toBe(`${QUEUE_PREFIX} ${full.text}`);
+    expect(drainRequest([full]).text).toHaveLength(QUEUE_LIMITS.chars);
+    // A 60,000-character message sent straight from the composer that met BUSY comes back as a note (requeue is never
+    // capped): it drains without the prefix rather than past the cap the server refuses.
+    const message = note('b', 'y'.repeat(QUEUE_LIMITS.chars));
+    expect(drainRequest([message]).text).toBe(message.text);
+    expect(batchesForDrain([full, message]).map(ids)).toEqual([['a'], ['b']]);
+    // A stored note is cut to the same bound.
+    expect(sanitizeNote({ id: 'n', text: 'z'.repeat(QUEUE_LIMITS.chars), at: 1 })?.text).toHaveLength(QUEUE_NOTE_MAX_CHARS);
+  });
+
   it('splits where one message would pass the text or photo cap', () => {
     const big = 'x'.repeat(Math.floor(QUEUE_LIMITS.chars / 2));
     expect(batchesForDrain([note('a', big), note('b', big), note('c', 'small')]).map(ids)).toEqual([['a'], ['b', 'c']]);
@@ -173,6 +193,13 @@ describe('holdReason', () => {
   it('holds after Stop and after a reload, before anything else', () => {
     expect(holdReason({ doc: withConversation([question]), held: 'stopped' })).toBe('stopped');
     expect(holdReason({ doc: withConversation([]), held: 'restored', planning: true })).toBe('restored');
+    expect(holdReason({ doc: withConversation([]), held: 'stopped', failed: true })).toBe('stopped');
+  });
+
+  it('holds while the last message failed before the server took it — next after Stop and a reload', () => {
+    expect(holdReason({ doc: withConversation([]), failed: true })).toBe('failed');
+    expect(holdReason({ doc: withConversation([question]), failed: true, planning: true, held: 'elsewhere' })).toBe('failed');
+    expect(holdReason({ doc: withConversation([]), failed: false })).toBeNull();
   });
 
   it('holds while plan_pages has the turn lock, and after BUSY from another tab', () => {
@@ -185,7 +212,9 @@ describe('holdReason', () => {
   it('every hold has visible words, and the one tap out of it', () => {
     expect(holdLine(null, 2).text).toMatch(/finishes this step/);
     expect(holdLine('question', 2)).toEqual({ text: 'Answer the question above first, or', action: 'send_anyway' });
-    expect(holdLine('gate', 1).action).toBe('send_anyway');
+    // One string for an open spend gate and an unanswered question (plan §3 A1).
+    expect(holdLine('gate', 1)).toEqual({ text: 'Answer the question above first, or', action: 'send_anyway' });
+    expect(holdLine('failed', 2)).toEqual({ text: 'Your last message didn’t go. Try again or dismiss it first, or', action: 'send_anyway' });
     expect(holdLine('stopped', 2)).toEqual({ text: 'Stopped. 2 notes are waiting.', action: 'send', clear: true });
     expect(holdLine('restored', 1)).toMatchObject({ text: '1 note was waiting.', action: 'send', clear: true });
     expect(holdLine('elsewhere', 1).text).toMatch(/another tab/);

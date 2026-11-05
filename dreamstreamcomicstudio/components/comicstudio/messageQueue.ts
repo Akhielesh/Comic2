@@ -4,8 +4,9 @@
 // drains as ONE combined message ("(Sent while you were working:) 1. … 2. …"), split only where the focus differs (a
 // different page or selection) or a size cap would be crossed, in order. The queue holds instead of draining while
 // the last reply asks something (an unanswered options or conflict card), while a spend gate is open, after Stop,
-// while a `plan_pages` action holds the turn lock, after a reload (never auto-sent), and after the server said BUSY
-// (another tab or device). Every hold has visible copy (`holdLine`). useStudio owns the state (studioReducer's queue
+// while a `plan_pages` action holds the turn lock, after a reload (never auto-sent), after the server said BUSY
+// (another tab or device), and while the creator's last message failed before the server took it (the drain must
+// never replace that failed bubble: its words would be lost). Every hold has visible copy (`holdLine`). useStudio owns the state (studioReducer's queue
 // slice) and the drain; QueuedMessages renders it.
 //
 // The queue is saved per project in sessionStorage. Every read and write sits in try/catch: a private window or a
@@ -17,7 +18,7 @@ import { CAST_KINDS, type ComicDoc, type Msg } from '../../shared/comic/doc';
 export const QUEUE_LIMITS = {
   /** Notes waiting at once (plan §3 A1). */
   notes: 10,
-  /** Characters per note, and per drained message (the server's MAX_MESSAGE_CHARS, routes/comic.ts). */
+  /** Characters per drained message (the server's MAX_MESSAGE_CHARS, routes/comic.ts). One note: QUEUE_NOTE_MAX_CHARS. */
   chars: 60_000,
   /** Inbox photos per drained message (the server's cap; useStudio MAX_INBOX_ATTACHMENTS). */
   inboxPaths: 12,
@@ -30,6 +31,12 @@ export const QUEUE_RETRY_MS: readonly number[] = [8_000, 20_000, 45_000];
 
 /** The line that opens a drained message, so the director knows these were typed while it worked (D1). */
 export const QUEUE_PREFIX = '(Sent while you were working:)';
+
+/**
+ * Characters one note may hold: a single note drains as `${QUEUE_PREFIX} ${text}`, which must still fit the server's
+ * message cap (QUEUE_LIMITS.chars), or the drained message would be refused and "Try again" could never fix it.
+ */
+export const QUEUE_NOTE_MAX_CHARS = QUEUE_LIMITS.chars - QUEUE_PREFIX.length - 1;
 
 /** A note waiting in Up next. Photos travel as inbox paths already uploaded by the composer (plan §3 A1). */
 export interface QueuedNote {
@@ -47,8 +54,11 @@ export interface QueuedNote {
 
 /** Holds set by an event: Stop was pressed, the notes came back after a reload, or the server said BUSY. */
 export type QueueEventHold = 'stopped' | 'restored' | 'elsewhere';
-/** Why the queue is not draining on its own right now. */
-export type QueueHold = QueueEventHold | 'plan_pages' | 'gate' | 'question';
+/**
+ * Why the queue is not draining on its own right now. 'failed': the creator's last message did not go (a failed
+ * bubble with Try again is showing); draining would put a new message in its place and lose its words.
+ */
+export type QueueHold = QueueEventHold | 'failed' | 'plan_pages' | 'gate' | 'question';
 
 export type QueueAddRefusal = 'empty' | 'full' | 'too_long' | 'too_many_photos';
 export interface QueueAddResult {
@@ -71,7 +81,7 @@ export const add = (notes: readonly QueuedNote[], note: QueuedNote): QueueAddRes
   const photos = note.inboxPaths?.length ?? 0;
   if (!text && !photos) return { notes: [...notes], added: false, reason: 'empty' };
   if (notes.length >= QUEUE_LIMITS.notes) return { notes: [...notes], added: false, reason: 'full' };
-  if (text.length > QUEUE_LIMITS.chars) return { notes: [...notes], added: false, reason: 'too_long' };
+  if (text.length > QUEUE_NOTE_MAX_CHARS) return { notes: [...notes], added: false, reason: 'too_long' };
   if (photos > QUEUE_LIMITS.inboxPaths) return { notes: [...notes], added: false, reason: 'too_many_photos' };
   return { notes: [...notes, { ...note, text }], added: true };
 };
@@ -79,7 +89,7 @@ export const add = (notes: readonly QueuedNote[], note: QueuedNote): QueueAddRes
 /** Replace a note's text. An empty or over-long edit changes nothing (the editor keeps it open with its hint). */
 export const edit = (notes: readonly QueuedNote[], id: string, text: string): QueuedNote[] => {
   const next = clean(text);
-  if (!next || next.length > QUEUE_LIMITS.chars) return [...notes];
+  if (!next || next.length > QUEUE_NOTE_MAX_CHARS) return [...notes];
   return notes.map((n) => (n.id === id ? { ...n, text: next } : n));
 };
 
@@ -127,13 +137,22 @@ export const focusKey = (focus?: StudioFocus | null): string => {
 };
 
 /** A note's words without a prefix it already carries (a drained message that came back through "Try again"). */
-const unprefixed = (text: string): string => (text.startsWith(QUEUE_PREFIX) ? text.slice(QUEUE_PREFIX.length).trim() : text);
+export const withoutQueuePrefix = (text: string): string => (text.startsWith(QUEUE_PREFIX) ? text.slice(QUEUE_PREFIX.length).trim() : text);
+const unprefixed = withoutQueuePrefix;
 
-/** The text a batch drains as: one note keeps its words after the prefix; several are numbered (D1). */
+/**
+ * The text a batch drains as: one note keeps its words after the prefix; several are numbered (D1). A single note that
+ * is already as long as a message may be (one sent straight from the composer that met BUSY) goes without the prefix
+ * rather than past the server's cap.
+ */
 export const combinedText = (batch: readonly QueuedNote[]): string => {
   const texts = batch.map((n) => unprefixed(clean(n.text)));
   if (!texts.length) return '';
-  if (texts.length === 1) return texts[0] ? `${QUEUE_PREFIX} ${texts[0]}` : '';
+  if (texts.length === 1) {
+    if (!texts[0]) return '';
+    const prefixed = `${QUEUE_PREFIX} ${texts[0]}`;
+    return prefixed.length <= QUEUE_LIMITS.chars ? prefixed : texts[0];
+  }
   return [QUEUE_PREFIX, ...texts.map((t, i) => `${i + 1}. ${t || '(photos)'}`)].join('\n');
 };
 
@@ -230,11 +249,14 @@ export interface QueueHoldInput {
   held?: QueueEventHold | null;
   /** A `plan_pages` action holds the turn lock. */
   planning?: boolean;
+  /** The creator's last message failed before the server took it (its bubble offers Try again). */
+  failed?: boolean;
 }
 
 /** Why the queue waits instead of draining, most binding first; null = it drains as soon as the turn is free. */
 export const holdReason = (input: QueueHoldInput): QueueHold | null => {
   if (input.held === 'stopped' || input.held === 'restored') return input.held;
+  if (input.failed) return 'failed';
   if (input.planning) return 'plan_pages';
   if (input.held === 'elsewhere') return 'elsewhere';
   if (input.doc?.gate && input.doc.gate.status === 'open') return 'gate';
@@ -253,14 +275,16 @@ export const holdLine = (hold: QueueHold | null, count: number, opts: { retriesL
       return { text: `Stopped. ${notes} waiting.`, action: 'send', clear: true };
     case 'restored':
       return { text: `${count === 1 ? '1 note was' : `${count} notes were`} waiting.`, action: 'send', clear: true };
+    case 'failed':
+      return { text: 'Your last message didn’t go. Try again or dismiss it first, or', action: 'send_anyway' };
     case 'plan_pages':
       return { text: 'Planning the pages — these go once the plan is in.' };
     case 'elsewhere':
       return opts.retriesLeft === false
         ? { text: 'Still busy in another tab or on another device.', action: 'retry', clear: true }
         : { text: 'The director is busy in another tab or on another device. Trying again shortly.', action: 'retry', clear: true };
+    // One string for an unanswered options card and an open spend gate (plan §3 A1).
     case 'gate':
-      return { text: 'Approve or skip the drawing above first, or', action: 'send_anyway' };
     case 'question':
       return { text: 'Answer the question above first, or', action: 'send_anyway' };
     default:
@@ -313,7 +337,7 @@ export const sanitizeNote = (raw: unknown): QueuedNote | null => {
   if (!raw || typeof raw !== 'object') return null;
   const n = raw as Record<string, unknown>;
   if (typeof n.id !== 'string' || !n.id || n.id.length > 80) return null;
-  const text = clean(n.text).slice(0, QUEUE_LIMITS.chars);
+  const text = clean(n.text).slice(0, QUEUE_NOTE_MAX_CHARS);
   const inboxPaths = strings(n.inboxPaths, QUEUE_LIMITS.inboxPaths);
   if (!text && !inboxPaths) return null;
   const targets = inboxPaths && Array.isArray(n.attachmentTargets) ? inboxPaths.map((_, i) => targetOf((n.attachmentTargets as unknown[])[i])) : undefined;
