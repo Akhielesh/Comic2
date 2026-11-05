@@ -2,7 +2,7 @@
   "guard": "legacyKit",
   "test": "tests/config/legacyKitGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts lowers it (see README.md).",
-  "totals": { "border-black": 774, "brand-blue": 211, "brand-red": 51, "brand-yellow": 223, "font-comic": 98, "font-display": 224, "shadow-comic": 138 },
+  "totals": { "border-black": 774, "brand-blue": 211, "brand-red": 51, "brand-yellow": 223, "font-comic": 98, "font-display": 223, "shadow-comic": 138 },
   "files": {
     "App.tsx": { "border-black": 5, "brand-yellow": 3, "font-display": 3, "shadow-comic": 5 },
     "components/AccountSettings.tsx": { "border-black": 32, "brand-blue": 5, "brand-yellow": 3, "font-comic": 2, "font-display": 18, "shadow-comic": 5 },
@@ -22,7 +22,7 @@
     "components/NotificationBell.tsx": { "border-black": 5, "brand-blue": 3, "brand-red": 3, "brand-yellow": 3, "font-comic": 1, "font-display": 1, "shadow-comic": 2 },
     "components/PanelDialogue.tsx": { "border-black": 7, "brand-blue": 4, "brand-yellow": 1, "font-comic": 4, "font-display": 4 },
     "components/PrivacyPolicy.tsx": { "font-display": 1 },
-    "components/ProjectDashboard.tsx": { "border-black": 25, "brand-blue": 5, "brand-red": 1, "brand-yellow": 10, "font-comic": 5, "font-display": 9, "shadow-comic": 6 },
+    "components/ProjectDashboard.tsx": { "border-black": 25, "brand-blue": 5, "brand-red": 1, "brand-yellow": 10, "font-comic": 5, "font-display": 8, "shadow-comic": 6 },
     "components/PublicGallery.tsx": { "border-black": 8, "brand-yellow": 2, "font-comic": 3, "font-display": 3, "shadow-comic": 1 },
     "components/PublicProfile.tsx": { "border-black": 3, "font-display": 3, "shadow-comic": 2 },
     "components/ReadinessChecklist.tsx": { "border-black": 5, "brand-blue": 2, "brand-yellow": 1, "font-display": 1, "shadow-comic": 1 },
