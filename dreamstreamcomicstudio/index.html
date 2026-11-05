@@ -18,11 +18,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <!-- Keep the viewport zoomable: never add maximum-scale or user-scalable=no
          (WCAG 1.4.4; a11y.spec.ts asserts it). -->
-    <meta name="description" content="Make comics with an AI director, then read and share them anywhere. DreamStream Studio also does AI chat and code." />
-    <!-- Browser/OS chrome colour follows the calm-studio paper (light) and ink (dark)
-         canvases; the landing page sets its brand blue at runtime. -->
+    <meta name="description" content="Make comics with an AI director, go live, watch the nursery or call family in Stream Studio, and chat with AI in Chat Studio." />
+    <!-- Browser and OS chrome per scheme. Dark is the Atlas canvas (#0a0a0a). Light must equal the app
+         manifest's theme_color (tests/config/appShell.test.ts), so it moves to the Atlas white (#ffffff)
+         together with public/app.webmanifest. -->
     <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
     <link rel="manifest" href="/app.webmanifest" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
@@ -30,13 +31,15 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
+    <meta name="application-name" content="DreamStream Studio" />
+    <title>DreamStream Studio — Comics, Live and Chat</title>
     <!-- Warm up connections to the external origins we pull from, so a slow handshake
          doesn't widen the window before styles/fonts arrive. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
     <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
+    <!-- The lettering faces (comic content only; the chrome faces are self-hosted in index.css). -->
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <!-- PDF Generation Libraries (export-only; deferred so a slow/blocked CDN can't
          stall first paint — they're not needed until the user exports a PDF).
@@ -46,68 +49,130 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" integrity="sha512-qZvrmS2ekKPF2mSznTQsxqPgnpkI4DNTlrdUmTzrDgektczlKNRRhy5X5AAOnx5S09ydFYWWNSfcEqDTTHgtNA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" integrity="sha512-BNaRQnYJYiPSqHHDb58B0yaPfCu+Wgds8Gp/gU33kqBtgNS4tSPHuGibyoeqMV/TJlSKda6FXzoEyYGjTe+vXA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
-  body {
-    background-color: #3B82F6;
-    background-image: 
-      radial-gradient(#60A5FA 15%, transparent 16%),
-      radial-gradient(#60A5FA 15%, transparent 16%);
-    background-size: 20px 20px;
-    background-position: 0 0, 10px 10px;
-  }
-  /* Custom Scrollbar for comic feel */
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 12px;
-  }
-  /* Thinner scrollbars on touch/small screens so they don't eat horizontal space. */
-  @media (max-width: 767px), (pointer: coarse) {
-    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-  }
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: #18181b; 
-    border-left: 2px solid #000;
-  }
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #FACC15;
-    border: 2px solid #000;
-  }
-  /* First-paint splash, rendered inside #root and styled with INLINE CSS only (never
-     depends on the bundled Tailwind sheet). Guarantees a branded, styled first paint —
-     so the app can never show raw/unstyled content while JS/CSS are still loading.
-     React replaces #root's contents on mount, removing it automatically. */
+  /* The page canvas from the first paint: the skin's tokens (index.css loads before first paint), with
+     the Atlas paper and ink as fallbacks so the page is right even if that stylesheet fails. Dark follows
+     `.dark` on <html>, which theme-boot.js sets before first paint from the saved theme: the same switch
+     the app reads, so nothing changes colour when React takes over. Scrollbars and text selection are the
+     skin's (index.css): thin ink-tinted bars, inverted-ink selection. */
+  html, body { background-color: var(--ds-canvas, #ffffff); }
+  html.dark, html.dark body { background-color: var(--ds-canvas, #0a0a0a); }
+  body { margin: 0; }
+
+  /* First-paint splash, inside #root, styled with INLINE CSS only (never depends on the bundled sheet),
+     so the app never shows raw content while JS and CSS load. React replaces #root's contents on mount,
+     and AppLoader (components/loading) draws this same screen with the same numbers
+     (components/loading/bootGeometry.ts; bootSplash.test.ts keeps them equal) and carries on the bar's
+     sweep, so the hand-off is invisible. The DreamStream mark is components/brand STUDIO_MARKS.dreamstream:
+     one tile in currentColor with the D and its point cut out through a mask. */
   #app-splash {
-    position: fixed; inset: 0; z-index: 9999;
+    position: fixed; inset: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 16px; background-color: #3B82F6; color: #ffffff;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 0 16px;
+    background-color: var(--ds-canvas, #ffffff);
+    color: var(--ds-ink, #0a0a0a);
+    font-family: var(--ds-font-sans, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif);
   }
-  #app-splash .spinner {
-    width: 46px; height: 46px; border-radius: 9999px;
-    border: 5px solid rgba(255,255,255,0.35); border-top-color: #FACC15;
-    animation: appSplashSpin 0.8s linear infinite;
+  html.dark #app-splash { background-color: var(--ds-canvas, #0a0a0a); color: var(--ds-ink, #fafafa); }
+  #app-splash .ds-boot { position: relative; display: flex; flex-direction: column; align-items: center; gap: 28px; }
+  #app-splash .ds-boot-lockup { display: flex; align-items: center; gap: 12px; }
+  #app-splash .ds-boot-mark { display: block; flex: none; width: 40px; height: 40px; }
+  /* The wordmark in the skin's display face (StudioLogo's), read from the token: index.html names no font. */
+  #app-splash .ds-boot-word {
+    font-family: var(--ds-font-display, system-ui, sans-serif);
+    font-size: 22px; font-weight: 600; letter-spacing: -0.025em; line-height: 1; white-space: nowrap;
   }
-  #app-splash .brand { font-weight: 800; font-size: 18px; letter-spacing: 0.02em; }
-  #app-splash .slow { display: none; max-width: 300px; text-align: center; font-size: 13px; line-height: 1.5; }
+  #app-splash .ds-boot-word span { font-weight: 500; opacity: 0.55; }
+  /* The indeterminate bar (.ds-progress-indeterminate's shape): a 40 % segment sweeping a hairline track. */
+  #app-splash .ds-boot-track {
+    position: relative; overflow: hidden; width: 160px; height: 2px; border-radius: 9999px;
+    background-color: rgba(128, 128, 128, 0.2);
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  #app-splash .ds-boot-bar {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 40%; border-radius: 9999px;
+    background-color: currentColor;
+    animation: ds-boot-sweep 1300ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) infinite;
+  }
+  @keyframes ds-boot-sweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+  /* Under the bar, out of the flow (the lockup never moves): the "taking longer" prompt and the no-JS note. */
+  #app-splash .ds-boot-below {
+    position: absolute; left: 50%; top: calc(100% + 20px); transform: translateX(-50%);
+    width: min(300px, calc(100vw - 32px)); text-align: center;
+    font-size: 13px; line-height: 20px; color: var(--ds-muted, #5c5c5c);
+  }
+  html.dark #app-splash .ds-boot-below { color: var(--ds-muted, #a3a3a3); }
+  #app-splash .ds-boot-below p { margin: 0; text-wrap: balance; }
+  #app-splash .ds-boot-below strong { font-weight: 500; color: var(--ds-ink, #0a0a0a); }
+  html.dark #app-splash .ds-boot-below strong { color: var(--ds-ink, #fafafa); }
+  #app-splash .slow { display: none; }
+  /* The outline button (components/ds Button, outline): hairline edge, raised fill, ink focus outline. */
   #app-splash .slow button {
-    margin-top: 10px; font-weight: 700; color: #18181b; background: #FACC15;
-    border: 2px solid #000; border-radius: 8px; padding: 8px 16px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-top: 12px; height: 36px; padding: 0 16px;
+    border: 1px solid var(--ds-hairline, rgba(0, 0, 0, 0.1)); border-radius: var(--ds-radius-control, 8px);
+    background-color: var(--ds-raised, #ffffff); color: var(--ds-ink, #0a0a0a);
+    font: inherit; font-size: 14px; font-weight: 500; line-height: 20px; cursor: pointer;
+    transition: background-color 150ms ease, border-color 150ms ease;
   }
-  @keyframes appSplashSpin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { #app-splash .spinner { animation: none; } }
+  html.dark #app-splash .slow button {
+    border-color: var(--ds-hairline, rgba(255, 255, 255, 0.12));
+    background-color: var(--ds-raised, #1a1a1a); color: var(--ds-ink, #fafafa);
+  }
+  #app-splash .slow button:hover { background-color: var(--ds-hover, #f2f2f2); }
+  html.dark #app-splash .slow button:hover { background-color: var(--ds-hover, #1f1f1f); }
+  #app-splash .slow button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+  @media (pointer: coarse) { #app-splash .slow button { height: 44px; padding: 0 20px; } }
+  #app-splash .ds-boot-sr {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+    clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+  }
+  /* Reduced motion: the bar holds still, centred on its track (busy, not a percentage). */
+  @media (prefers-reduced-motion: reduce) {
+    #app-splash .ds-boot-bar { animation: none; transform: translateX(75%); }
+    #app-splash .slow button { transition: none; }
+  }
 </style>
+<!-- Without JavaScript the app cannot start: no sweeping bar (nothing is loading), and the OS scheme picks
+     the colours, since theme-boot.js did not run. -->
+<noscript><style>
+  #app-splash .ds-boot-track { visibility: hidden; }
+  @media (prefers-color-scheme: dark) {
+    html, body, #app-splash { background-color: #0a0a0a; color: #fafafa; }
+    #app-splash .ds-boot-below { color: #a3a3a3; }
+  }
+</style></noscript>
 <link rel="stylesheet" href="/index.css">
 <!--ds:head-->
 </head>
-  <body class="text-slate-900 antialiased selection:bg-brand-yellow selection:text-black">
+  <body class="text-slate-900 antialiased">
     <div id="root">
-      <!-- Styled (inline-CSS) loading splash. React clears #root on mount and this vanishes. -->
-      <div id="app-splash">
-        <div class="spinner"></div>
-        <div class="brand">DreamStream Studio</div>
-        <div class="slow">
-          This is taking longer than usual.
-          <br />
-          <button type="button" id="app-splash-reload">Reload</button>
+      <!-- The boot splash (inline CSS above). React clears #root on mount and AppLoader takes its place. -->
+      <div id="app-splash" role="status">
+        <div class="ds-boot">
+          <div class="ds-boot-lockup" aria-hidden="true">
+            <svg class="ds-boot-mark" viewBox="0 0 64 64" width="40" height="40" fill="none" focusable="false" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <mask id="ds-boot-mark-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+                  <rect width="64" height="64" rx="16" fill="#fff" />
+                  <path d="M21 16 L31 16 A16 16 0 0 1 31 48 L21 48 Z" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter" />
+                  <circle cx="33" cy="32" r="3.6" fill="#000" />
+                </mask>
+              </defs>
+              <rect width="64" height="64" rx="16" fill="currentColor" mask="url(#ds-boot-mark-cut)" />
+            </svg>
+            <span class="ds-boot-word" translate="no">DreamStream <span>Studio</span></span>
+          </div>
+          <div class="ds-boot-track" aria-hidden="true"><span class="ds-boot-bar"></span></div>
+          <div class="ds-boot-below">
+            <div class="slow">
+              <p><strong>This is taking longer than usual.</strong></p>
+              <p>Check your connection, then reload.</p>
+              <button type="button" id="app-splash-reload">Reload</button>
+            </div>
+            <noscript><p>DreamStream Studio needs JavaScript. Turn it on in your browser, then reload this page.</p></noscript>
+          </div>
         </div>
+        <span class="ds-boot-sr">Loading DreamStream Studio…</span>
       </div>
     </div>
     <!-- Watchdog: if the app JS hasn't mounted (splash still present) after a while —

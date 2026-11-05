@@ -58,10 +58,10 @@ import { createStudioProject } from './components/comicstudio/studioApi';
 import type { NewComicMode } from './components/ProjectDashboard';
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 import { Project } from './types';
-import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AppStatusBar } from './components/status/AppStatusBar';
+import { AppLoader, ContentLoader, RouteFallback, trackBackendWake } from './components/loading';
 import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
@@ -182,21 +182,6 @@ const ProductGateScreen: React.FC<{ productLabel: string; canStream: boolean; on
           Back to home
         </button>
       </div>
-    </div>
-  </div>
-);
-
-// Calm full-screen loader. The old solid-blue flash made every lazy-route switch and
-// auth check look like a hard reload; this matches the app surface so transitions read
-// as "loading content", not "losing the app".
-const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
-  <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
-    <div className="w-14 h-14 rounded-2xl bg-brand-yellow border-4 border-black shadow-comic flex items-center justify-center font-display text-2xl animate-pulse">
-      DS
-    </div>
-    <div className="flex items-center gap-2 text-slate-500 text-sm font-bold">
-      <Loader2 className="w-4 h-4 animate-spin" />
-      {label || 'Loading…'}
     </div>
   </div>
 );
@@ -458,8 +443,9 @@ const App: React.FC = () => {
     // full-screen error. Admins still get actionable details via checkSystemDiagnostics.
     // Not on a share link: its whole read path runs at the edge, and a console-only status
     // probe must not wake the backend container for every reader (sharing.md §1.4–1.5).
+    // The same one probe tells the loaders when the container is still waking (components/loading/backendWake).
     if (publicComicRoute) return;
-    checkSystemStatus()
+    trackBackendWake(checkSystemStatus())
       .then((res) => {
         if (res.status === 'error') {
           console.warn('System status check returned an error:', res.message || 'Unknown Error');
@@ -1013,8 +999,11 @@ const App: React.FC = () => {
   // The share reader paints at once from its boot card; it never waits for auth or key checks
   // (owner detection catches up through identityReady).
   const publicComicActive = currentView === 'publiccomic' && !!publicComicRoute;
-  if (!publicComicActive && (isCheckingKey || isHydratingProject || authLoading || comicsHost.leaving)) {
-    return <AppLoader label={comicsHost.leaving ? 'Opening DreamStream…' : isHydratingProject ? 'Opening project…' : 'Loading…'} />;
+  // Boot (and leaving the comics host): the full-screen boot screen, which continues the index.html splash.
+  // Opening a project or a comic is NOT here: the shell and its header stay, and the loader fills only the
+  // content area (below).
+  if (!publicComicActive && (isCheckingKey || authLoading || comicsHost.leaving)) {
+    return <AppLoader label={comicsHost.leaving ? 'Opening DreamStream…' : undefined} />;
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
@@ -1118,8 +1107,10 @@ const App: React.FC = () => {
             canStream={!!allowedProducts?.has('stream_studio')}
             onGoHome={handleBackToHome}
           />
+        ) : isHydratingProject ? (
+          <ContentLoader label="Opening the comic…" studio="comic" fill={showSharedHeader ? 'content' : 'viewport'} />
         ) : (
-        <Suspense fallback={<AppLoader />}>
+        <Suspense fallback={<RouteFallback view={effectiveView} />}>
           {/* Views */}
           {effectiveView === 'home' && (comicsHost.active ? (
             <ComicsLanding
