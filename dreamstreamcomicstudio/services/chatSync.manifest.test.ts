@@ -1,0 +1,185 @@
+// @vitest-environment jsdom
+// CHAT-0 (nav V.3-a, B14 chat half): a Chat Studio mount reads a manifest (`key, updated_at`) and
+// moves bodies only for rows that changed — the old mount downloaded every chat in full (6.3 MB for
+// the heaviest account) every time. Which side changed is judged against the per-device sync base,
+// so an edit written by a device whose clock runs behind still arrives (chat_sync.updated_at is the
+// writer's clock). Real chatStorage + chatSync over an in-memory IndexedDB and chat_sync table.
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createFakeIndexedDb } from '../tests/fakeIndexedDb';
+import type { FakeChatSyncCloud } from './chatSync.testkit';
+
+const A = '11111111-1111-4111-8111-111111111111';
+
+const cloud = vi.hoisted(() => ({ user: null, rows: [], upserts: [], selects: [] }) as unknown as FakeChatSyncCloud);
+
+vi.mock('./supabase', async () => {
+  const { makeFakeChatSyncSupabase } = await import('./chatSync.testkit');
+  return { supabase: makeFakeChatSyncSupabase(cloud) };
+});
+
+const idb = createFakeIndexedDb();
+vi.stubGlobal('indexedDB', idb);
+afterAll(() => vi.unstubAllGlobals());
+
+import { createEmptySession, listChatSessions, saveChatSession, setChatSessionUser, syncFromCloud, type ChatSession } from './chatStorage';
+import { BODY_CHUNK, MANIFEST_PAGE, pullManifest, readSyncBase, syncDecision } from './chatSync';
+import { isBodySelect } from './chatSync.testkit';
+import { setLocalOwner } from './localOwner';
+
+const flush = async () => {
+  for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0));
+};
+const bodySelects = () => cloud.selects.filter((s) => isBodySelect(s.columns));
+const manifestSelects = () => cloud.selects.filter((s) => !isBodySelect(s.columns));
+const byTitle = async () => Object.fromEntries((await listChatSessions()).map((s) => [s.id, s.title]));
+const T0 = Date.UTC(2026, 10, 5, 12, 0, 0);
+
+/** A chat this device has, saved while offline (no push). */
+const seedLocal = async (title: string, updatedAt: number, extra: Partial<ChatSession> = {}): Promise<ChatSession> => {
+  const s = { ...createEmptySession(), title, updatedAt, ...extra };
+  const user = cloud.user;
+  cloud.user = null;
+  await saveChatSession(s);
+  cloud.user = user;
+  return (await listChatSessions()).find((x) => x.id === s.id)!;
+};
+/** Another device writes this row, stamping `updated_at` from its own clock. */
+const remoteWrite = (s: ChatSession, at: number) => {
+  const data = { ...s, updatedAt: at, ownerUserId: A } as unknown as Record<string, unknown>;
+  cloud.rows = [...cloud.rows.filter((r) => (r.key ?? `${r.kind}:${String(r.data.id)}`) !== `session:${s.id}`), {
+    key: `session:${s.id}`, user_id: A, kind: 'session', data, updated_at: new Date(at).toISOString()
+  }];
+};
+
+beforeEach(async () => {
+  localStorage.clear();
+  idb.reset();
+  cloud.user = A;
+  cloud.rows = [];
+  cloud.upserts = [];
+  cloud.selects = [];
+  setChatSessionUser(null);
+  setLocalOwner(A);
+  await listChatSessions(); // creates the database
+});
+
+describe('light chat sync: a manifest, then only what changed', () => {
+  it('a second mount with no changes sends 0 upserts and fetches 0 bodies — one manifest read only', async () => {
+    // This device: two chats never synced. The cloud: one chat this device has never seen.
+    await seedLocal('local one', T0);
+    await seedLocal('local two', T0 + 1);
+    const remoteOnly = { ...createEmptySession(), title: 'from the laptop' };
+    remoteWrite(remoteOnly, T0 + 2);
+
+    // First mount: the two local chats go up, the remote one comes down — once.
+    await syncFromCloud();
+    await flush();
+    expect(cloud.upserts.map((u) => u.data.title).sort()).toEqual(['local one', 'local two']);
+    expect(bodySelects()).toHaveLength(1);
+    expect(Object.values(await byTitle()).sort()).toEqual(['from the laptop', 'local one', 'local two']);
+
+    // Second mount, nothing changed anywhere.
+    cloud.upserts = [];
+    cloud.selects = [];
+    await syncFromCloud();
+    await flush();
+    expect(cloud.upserts).toEqual([]);
+    expect(bodySelects()).toEqual([]);
+    expect(manifestSelects().map((s) => s.columns)).toEqual(['key, updated_at']);
+  });
+
+  it('a device with a skewed clock still receives changes (and its edit is not overwritten)', async () => {
+    const mine = await seedLocal('Trip plan', T0);
+    await syncFromCloud(); // first sync: pushed, the base learns T0
+    await flush();
+    expect(readSyncBase(A)[`session:${mine.id}`]).toBe(T0);
+
+    // The phone, 10 minutes behind, edits the chat later in real time but stamps an EARLIER time.
+    remoteWrite({ ...mine, title: 'Trip plan (edited on the phone)' }, T0 - 10 * 60_000);
+    cloud.upserts = [];
+    cloud.selects = [];
+    await syncFromCloud();
+    await flush();
+
+    expect((await byTitle())[mine.id]).toBe('Trip plan (edited on the phone)');
+    expect(cloud.upserts).toEqual([]); // the stale local copy never goes back up over it
+    expect(bodySelects()).toEqual([{ columns: 'key, kind, data, updated_at', rows: 1 }]);
+    // And the next mount is quiet again.
+    cloud.selects = [];
+    await syncFromCloud();
+    await flush();
+    expect(bodySelects()).toEqual([]);
+    expect(cloud.upserts).toEqual([]);
+  });
+
+  it('a local edit made offline goes up on the next sync; the cloud copy is not pulled over it', async () => {
+    const mine = await seedLocal('Recipes', T0);
+    await syncFromCloud();
+    await flush();
+    await seedLocal('Recipes (offline edit)', T0 + 5_000, { id: mine.id, createdAt: mine.createdAt });
+    cloud.upserts = [];
+    cloud.selects = [];
+    await syncFromCloud();
+    await flush();
+    expect(cloud.upserts.map((u) => u.data.title)).toEqual(['Recipes (offline edit)']);
+    expect(bodySelects()).toEqual([]);
+  });
+
+  it('both sides changed: the later timestamp wins (as before); no base yet: the later timestamp wins too', () => {
+    expect(syncDecision(T0 + 5, T0 + 9, T0)).toBe('pull');
+    expect(syncDecision(T0 + 9, T0 + 5, T0)).toBe('push');
+    expect(syncDecision(T0, T0 - 1, T0)).toBe('pull'); // only the remote moved (clock behind)
+    expect(syncDecision(T0 + 1, T0, T0)).toBe('push'); // only the local copy moved
+    expect(syncDecision(T0, T0, T0)).toBe('same');
+    expect(syncDecision(T0, T0 - 1, undefined)).toBe('push');
+    expect(syncDecision(T0, T0 + 1, undefined)).toBe('pull');
+  });
+
+  it('bodies are fetched in chunks of at most BODY_CHUNK keys', async () => {
+    const n = BODY_CHUNK + 3;
+    for (let i = 0; i < n; i++) remoteWrite({ ...createEmptySession(), title: `remote ${i}` }, T0 + i);
+    await syncFromCloud();
+    await flush();
+    expect(bodySelects().map((s) => s.rows)).toEqual([BODY_CHUNK, 3]);
+    expect((await listChatSessions()).length).toBe(n);
+  });
+
+  it('the manifest pages past the server cap, so no row is ever missed', async () => {
+    const rows = Array.from({ length: MANIFEST_PAGE + 2 }, (_, i) => ({
+      key: `session:${String(i).padStart(5, '0')}`, user_id: A, kind: 'session', data: { id: String(i) }, updated_at: new Date(T0).toISOString()
+    }));
+    cloud.rows = rows;
+    cloud.maxRows = MANIFEST_PAGE; // PostgREST max-rows
+    try {
+      const manifest = await pullManifest();
+      expect(new Set(manifest?.entries.map((e) => e.key)).size).toBe(MANIFEST_PAGE + 2);
+      // The capped first answer, then the rows again in key order, page by page.
+      expect(manifestSelects().map((s) => s.rows)).toEqual([MANIFEST_PAGE, MANIFEST_PAGE, 2]);
+    } finally {
+      cloud.maxRows = undefined;
+    }
+  });
+
+  it('an account under the cap costs exactly one manifest request', async () => {
+    remoteWrite({ ...createEmptySession(), title: 'only one' }, T0);
+    await pullManifest();
+    expect(cloud.selects).toEqual([{ columns: 'key, updated_at', rows: 1 }]);
+  });
+
+  it('storage that throws: sync still works (timestamp rule), nothing breaks', async () => {
+    const mine = await seedLocal('Notes', T0);
+    const realGet = Storage.prototype.getItem;
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (this: Storage, key: string) {
+      if (key.startsWith('dreamstream_chat_sync_base')) throw new Error('blocked');
+      return realGet.call(this, key);
+    });
+    try {
+      await syncFromCloud();
+      await flush();
+      expect(cloud.upserts.map((u) => u.data.title)).toEqual(['Notes']);
+      expect((await byTitle())[mine.id]).toBe('Notes');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
