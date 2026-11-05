@@ -12,7 +12,7 @@ describe('entityKeys', () => {
   it('line: words, kind and speaker are the line; its style is lstyle; a delete takes the balloon and the style too', () => {
     expect(entityKeys(text('ln_a', 'Run!'))).toEqual(['line:ln_a']);
     expect(entityKeys({ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'ln_a', patch: { kind: 'whisper', speakerId: 'c_mira' } })).toEqual(['line:ln_a']);
-    expect(entityKeys({ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'ln_a', patch: { style: { color: '#ff0000' } } })).toEqual(['lstyle:ln_a']);
+    expect(entityKeys({ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'ln_a', patch: { style: { textColor: '#ff0000' } } })).toEqual(['lstyle:ln_a']);
     expect(entityKeys({ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'ln_a', patch: { text: 'Hi', styleId: 'st_1' } })).toEqual(['line:ln_a', 'lstyle:ln_a']);
     expect(entityKeys({ op: 'line', pageId: 'pg_1', panelId: 'pn_1', id: 'ln_a', patch: null })).toEqual(['line:ln_a', 'balloon:ln_a', 'lstyle:ln_a']);
   });
@@ -32,7 +32,7 @@ describe('entityKeys', () => {
   });
 
   it('letter_style: the scopes it touches; a preset switch without keepOverrides and a reset are wildcards', () => {
-    expect(entityKeys({ op: 'letter_style', patch: { kinds: { shout: { color: '#c00' } }, speakers: { c_mira: { italic: true } } } })).toEqual([
+    expect(entityKeys({ op: 'letter_style', patch: { kinds: { shout: { textColor: '#cc0000' } }, speakers: { c_mira: { italic: true } } } })).toEqual([
       'letter:kind:shout',
       'letter:speaker:c_mira'
     ]);
@@ -71,7 +71,7 @@ describe('collidingKeys', () => {
   });
 
   it('a lettering reset covers every scope; a preset switch covers the kind overrides but not a speaker', () => {
-    const shout: DocOp = { op: 'letter_style', patch: { kinds: { shout: { color: '#c00' } } } };
+    const shout: DocOp = { op: 'letter_style', patch: { kinds: { shout: { textColor: '#cc0000' } } } };
     const mira: DocOp = { op: 'letter_style', patch: { speakers: { c_mira: { italic: true } } } };
     expect(collidingKeys([{ op: 'letter_style', patch: null }], [shout])).toEqual(['letter:*']);
     expect(collidingKeys([shout], [{ op: 'letter_style', patch: null }])).toEqual(['letter:kind:shout']);
