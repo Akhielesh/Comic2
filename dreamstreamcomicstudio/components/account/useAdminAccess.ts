@@ -21,26 +21,28 @@ const NO_ACCESS: AdminAccessState = { isAdmin: false, isModerator: false, access
  * user object on every token refresh (each tab refocus), which would re-run the check needlessly.
  */
 export const useAdminAccess = (userId: string | null | undefined): AdminAccessState => {
-  const [state, setState] = useState<AdminAccessState>(() => (userId ? { ...NO_ACCESS, checked: false } : NO_ACCESS));
+  // The answer is stored WITH the account it belongs to, so a render for a different account
+  // (before the effect below runs) can never show the previous account's roles.
+  const [answer, setAnswer] = useState<{ userId: string; state: AdminAccessState } | null>(null);
 
   useEffect(() => {
-    if (!userId) {
-      setState(NO_ACCESS);
-      return;
-    }
-    setState((prev) => ({ ...prev, checked: false }));
+    if (!userId) return;
     let active = true;
     getAdminAccess()
       .then((access) => {
-        if (active) setState({ isAdmin: access.isAdmin === true, isModerator: access.isModerator === true, access, checked: true });
+        if (active) {
+          setAnswer({ userId, state: { isAdmin: access.isAdmin === true, isModerator: access.isModerator === true, access, checked: true } });
+        }
       })
       .catch(() => {
-        if (active) setState(NO_ACCESS);
+        if (active) setAnswer({ userId, state: NO_ACCESS });
       });
     return () => {
       active = false;
     };
   }, [userId]);
 
-  return state;
+  if (!userId) return NO_ACCESS;
+  if (!answer || answer.userId !== userId) return { ...NO_ACCESS, checked: false };
+  return answer.state;
 };
