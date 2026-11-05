@@ -229,6 +229,17 @@ describe('?surface=app', () => {
     expect(window.__QA_APP_SCENES__).toBeUndefined();
   });
 
+  it('every discovered scene is a whole page: mounted by the harness as it ships, each brings exactly one <main>', () => {
+    // The harness wraps a scene in no landmark (QaAppSurface), so a scene without its own <main> fails the smoke's
+    // landmarks check, and one that nests a second fails it too.
+    expect(APP_SCENES.scenes.length).toBeGreaterThan(1);
+    for (const { id } of APP_SCENES.scenes) {
+      const { container, unmount } = render(<QaAppSurface scene={id} theme="light" skin={null} />);
+      expect(container.querySelectorAll('main'), id).toHaveLength(1);
+      unmount();
+    }
+  });
+
   it('skin=none takes the skin off <html>; light takes .dark off; no skin param leaves the boot default', () => {
     const root = document.documentElement;
     root.classList.add('dark');

@@ -762,6 +762,8 @@ describe('Atlas skin — wave 5 recipes in studioDesign (focus, fields, overlays
     expect(design.SEGMENTED_ITEM).toContain(design.FOCUS_RING_FLUSH);
     expect(classes(design.SEGMENTED_ITEM)).toEqual(expect.arrayContaining(['text-[var(--ds-muted)]', 'hover:text-[var(--ds-ink)]', 'aria-checked:text-[var(--ds-ink)]', 'aria-selected:text-[var(--ds-ink)]', 'text-[13px]']));
     expect(design.SEGMENTED_ACTIVE).toBe('bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]');
+    // The fill alone, for an item on SEGMENTED_ITEM (which inks the selected item itself): the same paint, no ink.
+    expect(classes(design.SEGMENTED_ACTIVE_FILL)).toEqual(classes(design.SEGMENTED_ACTIVE).filter((c) => !c.startsWith('text-')));
     expect(classes(design.SEGMENTED_PILL)).toEqual(expect.arrayContaining([
       'bg-[var(--ds-segment-pill)]', 'shadow-[shadow:var(--ds-shadow-segment)]', 'transition-[transform,width]', 'duration-[var(--ds-motion-panel)]', 'ease-[var(--ds-ease-spring)]', 'motion-reduce:transition-none'
     ]));

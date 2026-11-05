@@ -7,6 +7,7 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import scene from '../../qa/app/scenes/ds-gallery';
+import { QaAppSurface } from '../../qa/app/index';
 
 const SLOTS = [
   'button', 'icon-button', 'field', 'input', 'textarea', 'select', 'segmented', 'tabs', 'tabs-list', 'switch', 'slider', 'progress', 'checkbox',
@@ -25,16 +26,11 @@ describe('ds-gallery scene', () => {
     expect(typeof scene.Scene).toBe('function');
   });
 
-  it('is page content inside the harness: no landmark of its own that would duplicate the harness’s <main>', () => {
-    const { Scene } = scene;
-    const { container } = render(
-      <main id="qa-main">
-        <Scene />
-      </main>
-    );
+  it('is a whole page under the real harness: QaAppSurface mounts it bare, and it brings exactly one <main>', () => {
+    const { container } = render(<QaAppSurface scene="ds-gallery" theme="light" skin={null} index={{ scenes: [scene], problems: [] }} />);
     expect(container.querySelectorAll('main')).toHaveLength(1);
     expect(screen.getAllByRole('main')).toHaveLength(1);
-    expect(container.querySelector('#qa-main > [data-qa-scene="ds-gallery"]')).not.toBeNull();
+    expect(container.querySelector('[data-qa-app-scene="ds-gallery"] > main[data-qa-scene="ds-gallery"]')).not.toBeNull();
   });
 
   it('renders every primitive, in the page theme and in a dark panel', () => {

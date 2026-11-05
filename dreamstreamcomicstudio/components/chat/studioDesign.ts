@@ -339,6 +339,12 @@ export const STATUS_CHIP_TONE: Record<StatusState, string> = {
 export const SEGMENTED_TRACK = `relative inline-flex min-w-0 max-w-full gap-0.5 ${RADIUS_CONTROL} border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5`;
 export const SEGMENTED_ITEM = `relative inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--ds-radius-control)-2px)] px-3 text-[13px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-checked:text-[var(--ds-ink)] aria-selected:text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] ${FOCUS_RING_FLUSH}`;
 export const SEGMENTED_ACTIVE = 'bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]';
+/**
+ * The selected pill's paint WITHOUT an ink, for an item built on SEGMENTED_ITEM: that recipe already inks the
+ * selected item through aria-checked / aria-selected, so adding SEGMENTED_ACTIVE would stack its ink on the
+ * item's muted base (the status-ink guard's stacked-inks rule).
+ */
+export const SEGMENTED_ACTIVE_FILL = 'bg-[var(--ds-segment-pill)] shadow-[shadow:var(--ds-shadow-segment)]';
 export const SEGMENTED_PILL = 'pointer-events-none absolute inset-y-0.5 left-0 rounded-[calc(var(--ds-radius-control)-2px)] bg-[var(--ds-segment-pill)] shadow-[shadow:var(--ds-shadow-segment)] transition-[transform,width] duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] motion-reduce:transition-none';
 
 /**

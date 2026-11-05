@@ -40,7 +40,7 @@ import {
   SECTION_HEADER,
   SECTION_ICON_TILE,
   SECTION_TITLE,
-  SEGMENTED_ACTIVE,
+  SEGMENTED_ACTIVE_FILL,
   SEGMENTED_ITEM,
   SEGMENTED_TRACK,
   STATUS_CHIP,
@@ -155,7 +155,7 @@ const Fields: React.FC = () => (
 const SegmentedDemo: React.FC = () => {
   const [mode, setMode] = useState<(typeof MODES)[number]>('Easy');
   return (
-    <Section id="segmented" title="Segmented" description="SEGMENTED_TRACK with SEGMENTED_ACTIVE on the selected SEGMENTED_ITEM." icon={<Check className="size-4" />}>
+    <Section id="segmented" title="Segmented" description="SEGMENTED_TRACK with SEGMENTED_ACTIVE_FILL on the selected SEGMENTED_ITEM (its ink comes from aria-checked)." icon={<Check className="size-4" />}>
       <div role="radiogroup" aria-label="Editing mode" className={cn(SEGMENTED_TRACK, 'w-full sm:w-auto')}>
         {MODES.map((m) => (
           <button
@@ -164,7 +164,7 @@ const SegmentedDemo: React.FC = () => {
             role="radio"
             aria-checked={mode === m}
             onClick={() => setMode(m)}
-            className={cn(SEGMENTED_ITEM, 'h-8 coarse:h-11', mode === m && SEGMENTED_ACTIVE)}
+            className={cn(SEGMENTED_ITEM, 'h-8 coarse:h-11', mode === m && SEGMENTED_ACTIVE_FILL)}
           >
             {m}
           </button>
