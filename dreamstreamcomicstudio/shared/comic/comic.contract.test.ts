@@ -1429,6 +1429,10 @@ describe('Comic History contract (H0)', () => {
     expect(KNOWN_DOC_OPS.size).toBe(
       CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length + (PRO_PAGE_OPS_PATCHABLE ? 0 : PRO_PAGE_PATCH_OPS.length) + (PRO_EDIT_OPS_PATCHABLE ? 0 : PRO_EDIT_OPS.length)
     );
+    for (const op of PRO_EDIT_OPS) {
+      expect(KNOWN_DOC_OPS.has(op), op).toBe(true);
+      expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(PRO_EDIT_OPS_PATCHABLE);
+    }
     const doc = richDoc();
     const restore: DocOp = { op: 'history_restore', set: { brief: { ...doc.brief, title: 'Then' } }, mode: 'merge', versionId: 'v1', at: 5 };
     expect(isUndoable(doc, [restore])).toBe(false);
@@ -2567,18 +2571,23 @@ describe('Live agent, dialogue and Pro editor v2 contract (K3)', () => {
     expect(asCaps({ liveAgent: 'on', dialogueFast: 1 })).toEqual(DEFAULT_CAPS);
   });
 
-  it('stubs carry their final names: conflicts and dialogue answer "nothing / not understood" until wave 1 fills them', () => {
+  it('stubs carry their final names: conflict keys are filled by A3 and dialogue is filled by B-RESOLVE', () => {
     const doc = makeSampleDoc();
+    // A3: a balloon op names its balloon, and the same op on both sides collides on it.
     const op: DocOp = { op: 'balloon', pageId: 'pg_1', lineId: 'pg_1_l1', patch: { x: 0.1 } };
-    expect(entityKeys(op)).toEqual([]);
-    expect(collidingKeys([op], [op])).toEqual([]);
-    expect(parseDialogue('make it a whisper', { selected: true })).toEqual({ intents: [], confident: false });
-    expect(resolveLineRef(doc, { speaker: 'Mira' })).toEqual({ status: 'none', note: DIALOGUE_NOT_READY });
+    expect(entityKeys(op)).toEqual(['balloon:pg_1_l1']);
+    expect(collidingKeys([op], [op])).toEqual(['balloon:pg_1_l1']);
+    // B-RESOLVE: the dialogue engine answers; nothing returns the wave-0 "not ready" note any more.
+    expect(parseDialogue('make it a whisper', { selected: true })).toEqual({ intents: [{ act: 'set_kind', target: { selected: true }, kind: 'whisper' }], confident: true });
+    expect(resolveLineRef(doc, { speaker: 'Mira' })).toEqual({ status: 'none', note: "There's no character called “Mira”. The cast is Maya, Arjun and Vendor. Nothing was changed." });
     expect(matchSpeaker(doc, 'Mira')).toEqual({ status: 'none' });
-    expect(placementFor(doc, 'pg_1', 'pg_1_l1', { frame: 'page', cell: 'top-left' })).toBeNull();
-    expect(cellBox({ x: 0, y: 0, w: 1, h: 1 }, 'center')).toBeNull();
+    expect(matchSpeaker(doc, 'maya')).toEqual({ status: 'one', characterId: 'ch_maya' });
+    expect(placementFor(doc, 'pg_1', 'pg_1_l1', { frame: 'page', cell: 'top-left' })).toEqual({ x: 0.03, y: 0.02 });
+    expect(cellBox({ x: 0, y: 0, w: 1, h: 1 }, 'center')).toEqual({ x: 0.3333, y: 0.3333 });
     const intent: DialogueIntent = { act: 'set_kind', target: { selected: true }, kind: 'whisper' };
-    expect(compileIntent(doc, intent, [])).toEqual({ ops: [], label: '', followUps: [], note: DIALOGUE_NOT_READY });
+    const compiled = compileIntent(doc, intent, []);
+    expect(compiled).toEqual({ ops: [], label: '', followUps: [], note: 'No line matched, so nothing was changed.' });
+    expect(compiled.note).not.toBe(DIALOGUE_NOT_READY);
     // DIALOGUE_ACTS lists exactly the acts of the DialogueIntent union (plan §3 B1).
     expectTypeOf<DialogueIntent['act']>().toEqualTypeOf<DialogueAct>();
     expect(new Set(DIALOGUE_ACTS).size).toBe(DIALOGUE_ACTS.length);
