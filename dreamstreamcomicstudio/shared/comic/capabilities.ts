@@ -54,6 +54,13 @@ export interface StudioCaps {
   dialogueFast?: boolean;
   /** The Pro editor v2: docked inspector, numeric fields, Layers, rotation, named styles (C-*; COMIC_PRO_EDITOR_V2). */
   proEditorV2?: boolean;
+  // --- Pro Edit (master plan §2.10; PE-0). Optional: absent = off (an older server). Filled by access.ts. ---
+  /** The Easy Animate row, the Animate timeline, motion in the editor and "Export this page as video" (COMIC_PRO_MOTION). */
+  proMotion?: boolean;
+  /** The Stickers tab (COMIC_PRO_STICKERS; after the licence gate and the credits block). */
+  proStickers?: boolean;
+  /** Readers play the creator's motion (COMIC_READER_MOTION; stages off | all only: readers are not signed in). */
+  readerMotion?: boolean;
 }
 
 /** agent-editor plan §3 Track A, one switch per part (each its own flag stage). */
@@ -187,3 +194,47 @@ export const steerOn = (caps: LiveCapsView): boolean => caps?.liveAgent?.steer =
 export const conflictGuardOn = (caps: LiveCapsView): boolean => caps?.liveAgent?.conflicts === true;
 export const dialogueFastOn = (caps: LiveCapsView): boolean => caps?.dialogueFast === true;
 export const proEditorV2On = (caps: LiveCapsView): boolean => caps?.proEditorV2 === true;
+
+// --- Pro Edit (master plan §2.10; PE-0): the motion, stickers and reader-motion flags ---
+
+/** The server env var behind each Pro Edit flag (read by access.ts; the client reads caps only). */
+export const PRO_FLAG_ENV = {
+  proMotion: 'COMIC_PRO_MOTION',
+  proStickers: 'COMIC_PRO_STICKERS',
+  readerMotion: 'COMIC_READER_MOTION'
+} as const;
+export type ProFlag = keyof typeof PRO_FLAG_ENV;
+
+/** Every Pro Edit flag starts off (§2.10): motion goes to admins after S3, stickers after D6 and the licence gate,
+ *  reader motion to everyone once the reduced-motion and Calm checks pass on the public reader. */
+export const PRO_FLAG_DEFAULTS: Readonly<Record<ProFlag, FlagStage>> = {
+  proMotion: 'off',
+  proStickers: 'off',
+  readerMotion: 'off'
+};
+
+/**
+ * COMIC_READER_MOTION's stage: 'off' | 'all' only. Readers are not signed in, so there is no admins stage: anything
+ * parseFlagStage reads as 'admins' (including a bare 'on') stays off, and everyone needs an explicit 'all'.
+ */
+export const readerMotionStage = (value: unknown): 'off' | 'all' => (parseFlagStage(value, PRO_FLAG_DEFAULTS.readerMotion) === 'all' ? 'all' : 'off');
+
+/** The Pro Edit caps for one user, from the server env (access.ts studioCapsFor). The W0 stage pattern: off | admins |
+ *  all for motion and stickers (a bare switch = admins only), off | all for reader motion. */
+export const proCapsFromEnv = (
+  env: Readonly<Record<string, string | undefined>>,
+  isAdmin: boolean
+): Required<Pick<StudioCaps, 'proMotion' | 'proStickers' | 'readerMotion'>> => {
+  const on = (flag: Exclude<ProFlag, 'readerMotion'>) => stageAllows(parseFlagStage(env[PRO_FLAG_ENV[flag]], PRO_FLAG_DEFAULTS[flag]), isAdmin);
+  return {
+    proMotion: on('proMotion'),
+    proStickers: on('proStickers'),
+    readerMotion: readerMotionStage(env[PRO_FLAG_ENV.readerMotion]) === 'all'
+  };
+};
+
+type ProCapsView = Pick<StudioCaps, 'proMotion' | 'proStickers' | 'readerMotion'> | null | undefined;
+/** Readers (absent = off, so DEFAULT_CAPS and an older server leave every Pro Edit behaviour off). */
+export const proMotionOn = (caps: ProCapsView): boolean => caps?.proMotion === true;
+export const proStickersOn = (caps: ProCapsView): boolean => caps?.proStickers === true;
+export const readerMotionOn = (caps: ProCapsView): boolean => caps?.readerMotion === true;
