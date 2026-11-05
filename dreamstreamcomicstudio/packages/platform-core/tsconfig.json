@@ -1,0 +1,26 @@
+{
+  // The purity guard (plan §5.1): the shipped sources compile against the ES2017 library ONLY — no DOM, no Node, no
+  // Workers types — so the same files run in both browsers, the backend, a vendored copy elsewhere and, later, the
+  // gateway. ES2017 also rules out Object.fromEntries, .flat, .replaceAll, .at and structuredClone. Node16
+  // resolution makes every relative import name its `.js` file, as the backend's `build:server` requires.
+  // Tests (*.test.ts) and scripts/ use Node and vitest; the app's root tsconfig checks them.
+  // scripts/check-consumers.mjs compiles the same sources the way each consumer does.
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["ES2017"],
+    "types": [],
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts"]
+}

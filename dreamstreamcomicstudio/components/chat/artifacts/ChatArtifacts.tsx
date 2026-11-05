@@ -68,7 +68,10 @@ import { EmailTerminal } from './EmailTerminal';
 import { EmailCompose } from './EmailCompose';
 import { CalendarAgenda } from './CalendarAgenda';
 import { CalendarEventDraft } from './CalendarEventDraft';
+import { EmailDraftCard } from './EmailDraftCard';
+import { DeckDraftCard } from './DeckDraftCard';
 import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact } from '../../../apiTypes';
+import type { EmailDraftArtifact, DeckDraftArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -140,7 +143,10 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   email_unread: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
   email_compose: (d, k) => <EmailCompose key={k} data={d as EmailComposeArtifact} />,
   calendar_agenda: (d, k) => <CalendarAgenda key={k} data={d as CalendarAgendaArtifact} />,
-  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />
+  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />,
+  // Shared-platform drafts (server: ai/tools/platformTools.ts): agents draft, people send or download.
+  email_draft: (d, k) => <EmailDraftCard key={k} data={d as EmailDraftArtifact} />,
+  deck_draft: (d, k) => <DeckDraftCard key={k} data={d as DeckDraftArtifact} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the
@@ -207,7 +213,9 @@ export const DENSITY_AWARE_TYPES = new Set([
   'email_unread',
   'email_compose',
   'calendar_agenda',
-  'calendar_event_draft'
+  'calendar_event_draft',
+  'email_draft',
+  'deck_draft'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
@@ -277,7 +285,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // KPI boards, news) ride a narrower column so several pack into view at once — e.g.
 // "compare gold, oil and the S&P" → three quote cards you swipe through instead of a
 // tall stack you scroll past.
-const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'flight_results', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'code_studio', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
+const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'flight_results', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'code_studio', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft', 'email_draft', 'deck_draft']);
 
 // When an assistant turn produces several cards, present them as a horizontal
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical

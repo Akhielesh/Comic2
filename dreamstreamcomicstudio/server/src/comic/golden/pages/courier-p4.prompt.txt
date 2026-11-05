@@ -1,0 +1,55 @@
+Create one finished comic page as a single image: a comic book page, full color. It must look like a professionally drawn and colored published page.
+FRAME: a tall 2:3 portrait page, taller than wide (2 wide by 3 tall); fill the whole frame — never square, no letterboxing.
+
+ART STYLE — apply identically in every panel:
+Modern comic art: crisp variable-weight inks, warm cel shading, detailed street backgrounds. Palette: navy, burnt orange and mustard. Linework: Crisp variable-weight inks. Never: photorealism, nudity, sexualized poses or outfits, gore or exposed wounds, slurs or hate symbols, real-world brand logos, likeness of real celebrities, dismemberment.
+
+CONTENT RATING PG-13 — Dramatic violence with minimal blood: no exposed wounds, no gore, no dismemberment. Horror relies on shadow, silhouette and reaction shots rather than viscera. Modest clothing and no sexualized poses.
+
+REFERENCE IMAGES (in the order attached):
+Image 1 — CHARACTER SHEET: DEV. Match his face, hairstyle, body type, outfit and colors exactly.
+Image 2 — CHARACTER SHEET: ISHA. Match her face, hairstyle, body type, outfit and colors exactly.
+Image 3 — STYLE BOARD. Match its rendering style, line quality and color treatment (not its content).
+Image 4 — PREVIOUS PAGE. Keep lighting, outfits and props continuous with it (not its layout).
+
+CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people. Each keeps the same face, hair, outfit and colors in every panel:
+- DEV (Image 1): Lanky 18-year-old tinkerer; male; hair: messy black curls under welding goggles; outfit: oil-stained grey kurta with rolled sleeves; colors: grey, copper; props: a satchel of copper tools.
+- ISHA (Image 2): Quick-witted 17-year-old courier with a lantern-shaped pendant; female; hair: two braids tied with orange thread; outfit: teal hooded jacket, cargo shorts; props: brass wrist compass; always visible: small burn scar on her right forearm.
+
+LOCATIONS:
+- EAST GATE: Crumbling stone archway over a shuttered depot by a canal.
+
+PAGE LAYOUT — 4 panels, read left-to-right, top-to-bottom:
+Row 1: one wide panel. Rows 2–3: one tall panel on the left beside two stacked panels on the right.
+Measured proportions: Row 1 (top 31% of the page): panel 1, full width. Row 2 (next 30%): panel 2 on the left, 42% wide, 63% tall (rows 2–3); panel 3 on the right, 52% wide. Row 3 (next 30%): panel 4 on the right, 52% wide.
+Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
+
+PANELS:
+PANEL 1 of 4 — box 1 in the layout (row 1, full width; 96% wide × 31% tall).
+Camera: medium shot (waist up), eye level. Place: EAST GATE.
+Must show: Isha and Dev duck behind stacked crates inside the dark depot.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
+Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.
+Detail: dusty, dim.
+PANEL 2 of 4 — box 2 in the layout (rows 2–3, left; 42% wide × 63% tall).
+Camera: full shot (figures head to toe), low angle. Place: EAST GATE.
+Must show: The parcel in Dev’s satchel glows through the canvas.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar), on the left; DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves), on the right.
+Speaks: nobody (narration only); fill the panel with art to its borders.
+Detail: Shadows stretch up the depot wall; eerie amber glow.
+PANEL 3 of 4 — box 3 in the layout (row 2, right; 52% wide × 30% tall).
+Camera: close-up (head and shoulders), eye level. Place: EAST GATE.
+Must show: Dev stares at the glow, goggles pushed up in shock.
+Who: DEV (Image 1 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
+Speaks: DEV — 1 balloon; compose open background (sky, wall, floor or shadow) beside his head for it.
+Detail: alarmed.
+PANEL 4 of 4 — box 4 in the layout (row 3, right; 52% wide × 30% tall).
+Camera: insert shot (close detail of an object), top-down. Place: EAST GATE.
+Must show: The satchel buckle snaps open by itself.
+Who: no characters.
+Speaks: nobody (sound effects only); fill the panel with art to its borders.
+Detail: sudden.
+
+LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
+
+Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them).

@@ -11,9 +11,9 @@ import type { ChatArtifact, ChatClientContext, CapabilityNotice, AgentActivityEv
 import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
-import { markModelDown, TEXT_FALLBACK } from './autoRouter.js';
-import { buildUsage } from './usage.js';
-import type { AIProviderId } from './providers/types.js';
+import { markModelDown } from './autoRouter.js';
+import { buildUsage, createUsageMeter, withSpentUsage, type MeteredUsage, type UsageMeter } from './usage.js';
+import type { AIProviderId, GenerateTextResult } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
 import { capToolOutput, CHAT_TOOL_OUTPUT_MAX } from './tools/capToolOutput.js';
@@ -88,6 +88,50 @@ export const parseToolArguments = (
  *  done, so typical turns are unaffected. */
 const MAX_TOOL_ITERATIONS = 9;
 
+/**
+ * Per-turn spend cap for a GOVERNED turn (non-admin, non-BYOK, platform-paid — see
+ * routes/chat.ts turnBudgetFor). The route holds ONCE per turn, but a turn can run up to
+ * MAX_TOOL_ITERATIONS tool rounds, each re-sending the whole context and possibly running paid
+ * meta-tools (swarm, delegate, deep research) — so one hold could be overshot many times over.
+ * Before every tool round the engine prices what the turn has already spent; once that exceeds
+ * the hold, the tools the model just asked for are NOT run (each gets an honest "not run"
+ * result), the model is called once more WITHOUT tools to answer calmly from what it has, and a
+ * percent-free notice says so. A turn without a budget (admins, BYOK, signed-out) is unchanged.
+ */
+export interface TurnBudget {
+  /**
+   * The provider cost (USD) this turn reserved; tool rounds stop once the metered spend exceeds
+   * it. A hold that cannot be read (NaN, negative) counts as $0 — fails closed, never "no cap".
+   */
+  holdUsd: number;
+  /**
+   * Prices the turn's metered usage so far the way the settle will (the provider-reported cost,
+   * or the caller's token pricing for calls that reported none). Without it the reported cost
+   * decides — exact on OpenRouter, the only provider with native tools. A hook that throws
+   * falls back to the reported cost; the decision is never lower than it.
+   */
+  spentUsd?: (usage: MeteredUsage) => number | Promise<number>;
+  /** Observability (and tests): the decision taken before each tool round. */
+  onRound?: (round: TurnBudgetRound) => void;
+}
+
+export interface TurnBudgetRound {
+  /** The 1-based tool round the decision was taken for. */
+  round: number;
+  spentUsd: number;
+  holdUsd: number;
+  /** True when the round was not run and the turn answered from what it had. */
+  stop: boolean;
+}
+
+/** The calm note on a reply whose tool rounds stopped at the turn's usage allowance (never dollars). */
+export const TOOL_BUDGET_NOTICE =
+  'This reply stopped its live lookups to stay within your usage for one turn, so it is based on what was gathered so far. Ask a follow-up to keep going.';
+
+/** The model-facing result for a tool call that was not run because the turn's allowance is used up. */
+export const TOOL_BUDGET_TOOL_RESULT =
+  'Not run: this turn has used its allowance for live tools. Answer the user now from what you already have, say briefly what you could not check, and do not call any more tools.';
+
 export interface RunChatParams {
   provider: AIProviderId;
   /** Resolved key for the chosen provider (BYOK header or platform env). */
@@ -105,7 +149,24 @@ export interface RunChatParams {
   maxTokens?: number;
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
+  /**
+   * The paid safety net the caller reserved for (OpenRouter: TEXT_FALLBACK). It is both the
+   * provider-level retry and the engine's own timeout / empty-answer retry. Leave it unset for
+   * a turn that must stay on the models it was given (a free-models-only plan).
+   */
   fallbackModel?: string;
+  /**
+   * No paid retry at all this turn (the usage budget re-planned it onto free models at $0):
+   * the engine never switches to a paid model after a timeout or an empty answer, and the
+   * provider is told not to fall back to one.
+   */
+  noPaidRetry?: boolean;
+  /**
+   * Governed per-turn spend cap (see TurnBudget): once the turn's metered spend exceeds the hold
+   * the route reserved, no further tool round runs and the model answers from what it has.
+   * Unset for admins, BYOK and signed-out turns.
+   */
+  budget?: TurnBudget;
   /** Ordered fallback chain (≤3) → OpenRouter routes past dead/rate-limited models. */
   fallbackModels?: string[];
   timeoutMs?: number;
@@ -522,9 +583,7 @@ export const detectUnsourcedFigures = (
 const UNSOURCED_FIGURE_NOTICE =
   'The answer states a monetary figure that no tool or source confirmed — treat that number as unverified, not a current/live value.';
 
-export const runChat = async (
-  params: RunChatParams
-): Promise<{
+type RunChatResult = {
   text: string;
   usage: ReturnType<typeof buildUsage>;
   model: string;
@@ -534,7 +593,37 @@ export const runChat = async (
   images?: ChatToolImage[];
   artifacts?: ChatArtifact[];
   notices?: CapabilityNotice[];
-}> => {
+};
+
+/** The latest user message flattened to text (the usage record's prompt seed). */
+const lastUserTextOf = (messages: ChatMessage[]): string => {
+  const m = [...messages].reverse().find((x) => x.role === 'user');
+  return typeof m?.content === 'string'
+    ? m.content
+    : Array.isArray(m?.content)
+      ? m!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+      : '';
+};
+
+// Characters a provider call actually sends (system prompt, history, tool results). Only used
+// when a provider reports no token counts; an image part counts as ~1k tokens.
+const IMAGE_PART_CHARS = 4_000;
+const messageChars = (msgs: ChatMessage[]): number =>
+  msgs.reduce((sum, m) => {
+    const content =
+      typeof m.content === 'string'
+        ? m.content.length
+        : Array.isArray(m.content)
+          ? m.content.reduce((s, p) => s + ('text' in p ? p.text.length : IMAGE_PART_CHARS), 0)
+          : 0;
+    const calls = (m.tool_calls || []).reduce((s, c) => s + c.function.name.length + (c.function.arguments || '').length, 0);
+    return sum + content + calls;
+  }, 0);
+
+const replyChars = (r: GenerateTextResult): number =>
+  (r.text || '').length + (r.reasoning || '').length + (r.toolCalls || []).reduce((s, c) => s + c.name.length + (c.arguments || '').length, 0);
+
+const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise<RunChatResult> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
   const base = params.systemOverride ?? CHAT_SYSTEM_PROMPT;
@@ -639,13 +728,21 @@ export const runChat = async (
   const toolSpecs = params.provider === 'openrouter' && tools.length ? tools.map(toToolSpec) : undefined;
 
   const ctx = resolveProviderContext(params.apiKey, params.provider);
+  // The engine's own paid retry (after a timeout or an empty answer) uses the fallback the
+  // caller reserved for — and only when there is one: a free-models-only turn sends none, so it
+  // never lands on a paid model under its $0 hold.
+  const engineRetryModel =
+    params.provider === 'openrouter' && !params.noPaidRetry && params.fallbackModel && params.fallbackModel !== params.model
+      ? params.fallbackModel
+      : undefined;
   const baseReq = {
     model: params.model,
     temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
     maxTokens: params.maxTokens ?? answerTokenBudget(params.provider, params.reasoningLevel),
     timeoutMs: params.timeoutMs,
     retries: 2,
-    fallbackModel: params.fallbackModel,
+    fallbackModel: params.noPaidRetry ? undefined : params.fallbackModel,
+    ...(params.noPaidRetry ? { freeOnly: true } : {}),
     ...(params.provider === 'openrouter' && params.fallbackModels?.length ? { models: params.fallbackModels } : {}),
     ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
     ...(useWeb ? { webSearch: true } : {})
@@ -686,19 +783,30 @@ export const runChat = async (
   const firstAttemptTimeoutMs =
     timeoutProne && params.timeoutMs ? Math.min(45_000, params.timeoutMs) : params.timeoutMs;
 
-  const callModel = (msgs: ChatMessage[], withTools: boolean, modelOverride?: string) => {
+  // Tool specs ride along on every tool-enabled call and count as prompt tokens.
+  const toolSpecChars = toolSpecs ? JSON.stringify(toolSpecs).length : 0;
+  // Every provider result is metered (S9): the first call, each tool round, and every retry.
+  const metered = (r: GenerateTextResult, msgs: ChatMessage[], extraSentChars = 0): GenerateTextResult => {
+    meter.addCall(r?.usage, messageChars(msgs) + extraSentChars, r ? replyChars(r) : 0);
+    return r;
+  };
+
+  const callModel = async (msgs: ChatMessage[], withTools: boolean, modelOverride?: string) => {
+    const sendTools = withTools && Boolean(toolSpecs);
     const r = {
       ...baseReq,
       messages: msgs,
       timeoutMs: modelOverride ? params.timeoutMs : firstAttemptTimeoutMs,
-      ...(withTools && toolSpecs ? { tools: toolSpecs } : {}),
+      ...(sendTools ? { tools: toolSpecs } : {}),
       // On a timeout-triggered retry, pin a single fast model and drop reasoning so the
       // reply actually fits the budget (no `models` chain, no reasoning effort).
       ...(modelOverride ? { model: modelOverride, models: undefined, reasoningEffort: undefined } : {})
     };
-    return trackedOnDelta && provider.generateTextStream
-      ? provider.generateTextStream(r, ctx, trackedOnDelta)
-      : provider.generateText(r, ctx);
+    const result =
+      trackedOnDelta && provider.generateTextStream
+        ? await provider.generateTextStream(r, ctx, trackedOnDelta)
+        : await provider.generateText(r, ctx);
+    return metered(result, msgs, sendTools ? toolSpecChars : 0);
   };
 
   // OpenRouter only: when the chosen model is merely SLOW (not erroring), OpenRouter's
@@ -714,29 +822,44 @@ export const runChat = async (
     try {
       return await callModel(msgs, withTools);
     } catch (err) {
-      const canFallback =
-        params.provider === 'openrouter' &&
-        isTimeoutError(err) &&
-        params.model !== TEXT_FALLBACK &&
-        !streamedAny;
-      if (!canFallback) throw err;
+      // Only onto the paid net the caller reserved for; a free-models-only turn has none and
+      // surfaces the timeout honestly instead.
+      if (!engineRetryModel || !isTimeoutError(err) || streamedAny) throw err;
       markModelDown(params.model);
       addNotice({
         tool: 'agent',
         level: 'warn',
-        message: `Your selected model (${params.model}) was too slow and timed out, so this reply used a faster model (${TEXT_FALLBACK}). Pick a faster model in the switcher to avoid this.`
+        message: `Your selected model (${params.model}) was too slow and timed out, so this reply used a faster model (${engineRetryModel}). Pick a faster model in the switcher to avoid this.`
       });
-      return await callModel(msgs, withTools, TEXT_FALLBACK);
+      return await callModel(msgs, withTools, engineRetryModel);
     }
   };
 
-  const lastUserSeed = (): string => {
-    const m = [...params.messages].reverse().find((x) => x.role === 'user');
-    return typeof m?.content === 'string'
-      ? m.content
-      : Array.isArray(m?.content)
-        ? m!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-        : '';
+  const lastUserSeed = (): string => lastUserTextOf(params.messages);
+
+  // Governed per-turn cap (TurnBudget): may this turn still run a tool round? Decided on the
+  // meter's running total — every provider call so far plus nested meta-tool spend — priced the
+  // way the settle prices it when the caller supplied that pricing.
+  const reportedUsd = (u: MeteredUsage): number => u.providerCostUsd ?? u.partialProviderCostUsd ?? 0;
+  const toolRoundAllowed = async (round: number): Promise<boolean> => {
+    const budget = params.budget;
+    if (!budget) return true;
+    const usage = meter.usage(lastUserSeed());
+    let spentUsd = reportedUsd(usage);
+    if (budget.spentUsd) {
+      try {
+        const priced = Number(await budget.spentUsd(usage));
+        if (Number.isFinite(priced)) spentUsd = Math.max(spentUsd, priced);
+      } catch {
+        /* the reported cost decides */
+      }
+    }
+    // A hold the engine cannot read (NaN, negative) fails CLOSED: it is a $0 allowance, never
+    // "no cap" — a governed turn must not run paid tool rounds on a malformed budget.
+    const holdUsd = Number.isFinite(budget.holdUsd) && budget.holdUsd > 0 ? budget.holdUsd : 0;
+    const stop = spentUsd > holdUsd;
+    budget.onRound?.({ round, spentUsd, holdUsd, stop });
+    return !stop;
   };
 
   // --- JSON tool-protocol loop (non-OpenRouter providers) -------------------------
@@ -747,7 +870,7 @@ export const runChat = async (
     let final = '';
     let lastModel = params.model;
     for (let i = 0; i <= MAX_TOOL_ITERATIONS; i += 1) {
-      const r = await provider.generateText({ ...baseReq, messages: convo }, ctx);
+      const r = metered(await provider.generateText({ ...baseReq, messages: convo }, ctx), convo);
       lastModel = r.model || lastModel;
       if (r.citations) citations.push(...r.citations);
       // On the final allowed turn, force an answer (ignore any further tool call).
@@ -757,6 +880,17 @@ export const runChat = async (
         break;
       }
       convo.push({ role: 'assistant', content: r.text || '' });
+      if (!(await toolRoundAllowed(i + 1))) {
+        // The turn's metered spend already exceeds its hold (governed cap): this call is not run.
+        // The model gets an honest "not run" result and one tool-less closing answer.
+        convo.push({ role: 'user', content: formatToolResult(call.name, TOOL_BUDGET_TOOL_RESULT) });
+        addNotice({ tool: 'usage_budget', level: 'info', message: TOOL_BUDGET_NOTICE });
+        const closing = metered(await provider.generateText({ ...baseReq, messages: convo }, ctx), convo);
+        lastModel = closing.model || lastModel;
+        if (closing.citations) citations.push(...closing.citations);
+        final = stripToolCallJson(closing.text || '') || (closing.text || '');
+        break;
+      }
       const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
       // Announce the tool as it STARTS so the client can show the agent working live.
       params.onToolEvent?.({ phase: 'start', tool: call.name, query, index: 0, iteration: i });
@@ -769,6 +903,8 @@ export const runChat = async (
       }
       try {
         const out = await toolDef.execute(call.arguments, params.signal);
+        // A meta-tool's own model calls (swarm / delegate / deep research) bill to this turn.
+        meter.addNested(out.usage);
         if (out.images) images.push(...out.images);
         if (out.citations) citations.push(...out.citations);
         // Stamp each artifact with the call that produced it so the client's widget
@@ -794,7 +930,8 @@ export const runChat = async (
     // Same empty-answer recovery as the native loop: a 200-with-no-content turn should
     // retry once (tool-less) instead of handing the user a blank bubble.
     if (!final.trim() && images.length === 0 && artifacts.length === 0) {
-      const retry = await provider.generateText({ ...baseReq, messages: [...convo, { role: 'user', content: 'Answer the request above now, in plain text.' }] }, ctx);
+      const retryConvo: ChatMessage[] = [...convo, { role: 'user', content: 'Answer the request above now, in plain text.' }];
+      const retry = metered(await provider.generateText({ ...baseReq, messages: retryConvo }, ctx), retryConvo);
       lastModel = retry.model || lastModel;
       final = stripToolCallJson(retry.text || '') || (retry.text || '');
       if (final.trim()) {
@@ -808,7 +945,7 @@ export const runChat = async (
     }
     return {
       text: final,
-      usage: buildUsage(lastUserSeed(), final, undefined),
+      usage: meter.usage(lastUserSeed()),
       model: lastModel,
       citations: merged.length ? merged : undefined,
       toolEvents: toolEvents.length ? toolEvents : undefined,
@@ -836,6 +973,20 @@ export const runChat = async (
         function: { name: c.name, arguments: c.arguments }
       }))
     });
+
+    if (!(await toolRoundAllowed(iterations))) {
+      // The turn's metered spend already exceeds its hold (governed cap): the tools just asked
+      // for are NOT run. The provider requires a result per call, so each gets an honest "not
+      // run" result; the model is then asked once more WITHOUT tools to answer from what it has,
+      // and the percent-free notice tells the user why the reply stops here.
+      for (const call of result.toolCalls) {
+        messages.push({ role: 'tool', tool_call_id: call.id, content: TOOL_BUDGET_TOOL_RESULT });
+      }
+      addNotice({ tool: 'usage_budget', level: 'info', message: TOOL_BUDGET_NOTICE });
+      params.onReset?.();
+      result = await callModelResilient(messages, false);
+      break;
+    }
 
     // Run all tool calls for this turn concurrently (they're independent), then
     // append their results in the original call order. This cuts latency sharply
@@ -882,6 +1033,8 @@ export const runChat = async (
 
     for (const r of settled) {
       if (r.ok && r.out) {
+        // A meta-tool's own model calls (swarm / delegate / deep research) bill to this turn.
+        meter.addNested(r.out.usage);
         if (r.out.images) images.push(...r.out.images);
         if (r.out.citations) citations.push(...r.out.citations);
         // Stamp origins so widgets can re-run the producing call for live refresh.
@@ -928,19 +1081,19 @@ export const runChat = async (
   // Empty-answer recovery. Some free/preview models return HTTP 200 with EMPTY content
   // (the production "says no response" failure) — the turn "succeeds" but the user gets a
   // blank bubble. If nothing renderable came back (no text, no images, no artifacts),
-  // retry once: on OpenRouter switch to the fast fallback and mark the silent model down
-  // so Auto skips it; otherwise retry the same model tool-less (some models only go
-  // silent when tools are attached).
+  // retry once: on OpenRouter switch to the reserved fast fallback and mark the silent model
+  // down so Auto skips it; otherwise (other providers, or a free-models-only turn with no
+  // paid net) retry the same model tool-less (some models only go silent when tools are attached).
   if (!String(result.text || '').trim() && images.length === 0 && artifacts.length === 0 && !streamedAny) {
-    if (params.provider === 'openrouter' && params.model !== TEXT_FALLBACK) {
+    if (engineRetryModel) {
       markModelDown(params.model);
       addNotice({
         tool: 'agent',
         level: 'warn',
-        message: `Your selected model (${params.model}) returned an empty answer, so this reply used a faster model (${TEXT_FALLBACK}). Pick a different model in the switcher to avoid this.`
+        message: `Your selected model (${params.model}) returned an empty answer, so this reply used a faster model (${engineRetryModel}). Pick a different model in the switcher to avoid this.`
       });
       params.onReset?.();
-      result = await callModel(messages, false, TEXT_FALLBACK);
+      result = await callModel(messages, false, engineRetryModel);
     } else {
       params.onReset?.();
       result = await callModel(messages, false);
@@ -952,16 +1105,6 @@ export const runChat = async (
 
   if (result.citations) citations.push(...result.citations);
 
-  // Build a usage record from the last user turn's text + final response (provider usage
-  // is attached separately by the route's settlement).
-  const lastUserText = [...params.messages].reverse().find((m) => m.role === 'user');
-  const promptSeed =
-    typeof lastUserText?.content === 'string'
-      ? lastUserText.content
-      : Array.isArray(lastUserText?.content)
-        ? lastUserText!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-        : '';
-
   const mergedCitations = dedupeCitations(citations);
   if (detectUnsourcedFigures(result.text || '', toolEvents, mergedCitations)) {
     addNotice({ tool: 'agent', level: 'warn', message: UNSOURCED_FIGURE_NOTICE });
@@ -969,7 +1112,8 @@ export const runChat = async (
 
   return {
     text: result.text,
-    usage: buildUsage(promptSeed, result.text, undefined),
+    // The whole turn's provider usage (every call + nested meta-tool runs), summed by the meter.
+    usage: meter.usage(lastUserSeed()),
     model: result.model || params.model,
     reasoning: result.reasoning,
     citations: mergedCitations.length ? mergedCitations : undefined,
@@ -978,4 +1122,21 @@ export const runChat = async (
     artifacts: artifacts.length ? artifacts : undefined,
     notices: notices.length ? notices : undefined
   };
+};
+
+/**
+ * Run one chat turn (model ⇄ tools loop). Usage (S9): `result.usage` sums the provider-reported
+ * tokens and cost of EVERY call the turn made — the first call, every tool round, the timeout
+ * and empty-answer retries — plus the usage a meta-tool reports for its own nested model calls,
+ * so the route settles the real cost. If the turn fails after spending, the thrown error carries
+ * that spend (`spentUsageOf(err)` in ./usage.ts) so the route settles it instead of releasing.
+ */
+export const runChat = async (params: RunChatParams): Promise<RunChatResult> => {
+  const meter = createUsageMeter();
+  try {
+    return await runChatMetered(params, meter);
+  } catch (err) {
+    if (meter.calls > 0) throw withSpentUsage(err, meter.usage(lastUserTextOf(params.messages)));
+    throw err;
+  }
 };

@@ -1,9 +1,14 @@
 import React, { useRef, useState } from 'react';
-import { FileText, Download, Printer, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { FileText, Download, Printer, Check, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { ChatMarkdown } from '../ChatMarkdown';
 import { downloadTextFile } from '../../../services/chatUtils';
 import type { DocumentArtifact } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
+import { useIsAdmin } from '../../../hooks/useIsAdmin';
+import { platformDocsVisible } from '../../../services/platformFlags';
+import { downloadPlatformFile, exportMarkdownDocx } from '../../../services/platformExport';
+import { friendlyExportError } from '../../comicstudio/export/errors';
+import { FOCUS_RING, RADIUS_CONTROL, STATUS_INK, STATUS_SURFACE } from '../studioDesign';
 
 // A custom document the AI authored, in two densities:
 //  • compact — title + subtitle + word count/preview line + a download affordance.
@@ -43,12 +48,54 @@ const ActionButton: React.FC<{ onClick: () => void; title?: string; children: Re
   </button>
 );
 
+/**
+ * "Word (.docx)": the shared platform's Word export (services/platformExport: Markdown → RichDoc → DOCX, built on the
+ * device in a lazy chunk). Shown only where the platform rollout admits the person (VITE_PLATFORM_DOCS and the stage).
+ */
+const WordButton: React.FC<{ title: string; content: string }> = ({ title, content }) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const downloadDocx = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const file = await exportMarkdownDocx(content || '', { fileName: title });
+      downloadPlatformFile(file);
+    } catch (err) {
+      setError(friendlyExportError(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        onClick={downloadDocx}
+        disabled={busy}
+        aria-busy={busy}
+        title="Download as a Word document"
+        className={`flex min-h-[44px] items-center gap-1 border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2.5 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-well)] disabled:cursor-wait disabled:opacity-60 ${RADIUS_CONTROL} ${FOCUS_RING}`}
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : <Download className="h-3.5 w-3.5" aria-hidden />} Word (.docx)
+      </button>
+      {error && (
+        <p role="alert" className={`basis-full border px-2.5 py-1.5 text-[12px] leading-5 ${RADIUS_CONTROL} ${STATUS_SURFACE.error} ${STATUS_INK.error} [overflow-wrap:anywhere]`}>
+          {error}
+        </p>
+      )}
+    </>
+  );
+};
+
 export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => {
   const compact = useCompact();
   const bodyRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
   const base = safeName(data.filename || data.title);
+  const showWord = platformDocsVisible(useIsAdmin());
 
   const downloadMd = () =>
     downloadTextFile(`${base}.md`, `# ${data.title}\n\n${data.content || ''}`, 'text/markdown');
@@ -129,6 +176,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
           <ActionButton onClick={downloadMd}><Download className="h-3.5 w-3.5" /> .md</ActionButton>
           <ActionButton onClick={downloadHtml}><Download className="h-3.5 w-3.5" /> .html</ActionButton>
           <ActionButton onClick={printPdf}><Printer className="h-3.5 w-3.5" /> PDF</ActionButton>
+          {showWord && <WordButton title={data.title} content={data.content || ''} />}
           <ActionButton onClick={copyMd}>{copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <FileText className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}</ActionButton>
         </div>
       }

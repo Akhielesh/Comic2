@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireModerator, hydrateAccessProfile } from '../middleware/requireAdmin.js';
 import { resolveAccessProfile } from '../services/rbac.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
+import { invalidateModerationCache } from '../comic/safety/index.js';
 
 const moderationRouter = Router();
 
@@ -24,7 +25,7 @@ const isMissingColumnError = (error: unknown) => {
   return code === '42703';
 };
 
-const notifyModerationEvent = async (input: {
+export const notifyModerationEvent = async (input: {
   userId: string;
   actorId: string;
   entityId?: string;
@@ -56,6 +57,22 @@ const notifyModerationEvent = async (input: {
   });
 };
 
+/** Open comic safety cases per project (best-effort: a missing table never breaks the queue). */
+const openComicCaseCounts = async (admin: ReturnType<typeof getSupabaseAdmin>): Promise<Record<string, number>> => {
+  try {
+    const { data, error } = await admin.from('comic_safety_cases').select('project_id').eq('status', 'open').order('created_at', { ascending: false }).limit(500);
+    if (error) return {};
+    const out: Record<string, number> = {};
+    for (const row of (data || []) as Array<{ project_id?: string }>) {
+      const id = String(row.project_id || '');
+      if (id) out[id] = (out[id] || 0) + 1;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
 moderationRouter.get('/projects/queue', requireModerator, async (req, res, next) => {
   try {
     const limit = parseLimit(req.query.limit, 50);
@@ -70,6 +87,21 @@ moderationRouter.get('/projects/queue', requireModerator, async (req, res, next)
 
     if (error) throw error;
     const rows = (data || []) as Array<Record<string, unknown>>;
+
+    // Comic Studio safety cases (reports, appeals, auto) also put a project in the queue.
+    const caseCounts = await openComicCaseCounts(admin);
+    if (offset === 0) {
+      const listed = new Set(rows.map((row) => String(row.id || '')));
+      const extra = Object.keys(caseCounts).filter((id) => !listed.has(id)).slice(0, limit);
+      if (extra.length) {
+        const { data: more } = await admin
+          .from('projects')
+          .select('id, user_id, name, is_public, is_forced_private, forced_private_reason, forced_private_at, republish_request_status, republish_request_reason, republish_requested_at, republish_reviewed_at, republish_review_reason')
+          .in('id', extra);
+        rows.push(...((more || []) as Array<Record<string, unknown>>));
+      }
+    }
+
     const items = rows.map((row) => {
       const statusRaw = String(row.republish_request_status || 'none').toLowerCase();
       const republishRequestStatus = statusRaw === 'pending' || statusRaw === 'approved' || statusRaw === 'rejected'
@@ -87,7 +119,8 @@ moderationRouter.get('/projects/queue', requireModerator, async (req, res, next)
         republishRequestReason: typeof row.republish_request_reason === 'string' ? row.republish_request_reason : undefined,
         republishRequestedAt: typeof row.republish_requested_at === 'string' ? row.republish_requested_at : undefined,
         republishReviewedAt: typeof row.republish_reviewed_at === 'string' ? row.republish_reviewed_at : undefined,
-        republishReviewReason: typeof row.republish_review_reason === 'string' ? row.republish_review_reason : undefined
+        republishReviewReason: typeof row.republish_review_reason === 'string' ? row.republish_review_reason : undefined,
+        openSafetyCases: caseCounts[String(row.id || '')] || 0
       };
     });
 
@@ -313,6 +346,8 @@ moderationRouter.post('/users/:userId/action', requireModerator, async (req, res
         updated_by: actorId,
         updated_at: nowIso()
       }, { onConflict: 'user_id' });
+    // The studio caches moderation status for 60 s: apply this decision now.
+    invalidateModerationCache(targetUserId);
 
     if (targetUserId !== actorId) {
       await notifyModerationEvent({

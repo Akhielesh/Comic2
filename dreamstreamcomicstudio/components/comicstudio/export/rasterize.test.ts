@@ -1,9 +1,22 @@
-import { describe, expect, it, vi } from 'vitest';
-import { LETTERING } from '../board/balloonGeometry';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { estimateMeasure } from '../../../shared/comic/lettering/layout';
+import { languageSpec } from '../../../shared/comic/languages';
 import { makeSampleDoc } from '../board/__fixtures__/sampleDoc';
-import { MAX_EXPORT_EDGE, drawCanvasBalloons, fontFor, planCanvasBalloons, rasterSize } from './rasterize';
-
-const measure = (text: string, fontPx: number) => text.length * fontPx * 0.55;
+import { fakeContext, fakePath, type FakeCtx } from './__fixtures__/fakeCanvas';
+import { makeBook } from './__fixtures__/books';
+import {
+  MAX_EXPORT_EDGE,
+  fontFor,
+  letterCover,
+  letterPage,
+  pageAspectFor,
+  rasterSize,
+  rasterizeImage,
+  renderPlateToBlob,
+  renderSlotToBlob
+} from './rasterize';
+import { collectExportSlots, localizedFor } from './sequence';
+import { fakeUrlFor } from '../board/__fixtures__/sampleDoc';
 
 describe('rasterSize', () => {
   it('keeps the art’s resolution by default and scales to a long edge on request', () => {
@@ -16,84 +29,132 @@ describe('rasterSize', () => {
     const s = rasterSize(6000, 9000);
     expect(Math.max(s.width, s.height)).toBe(MAX_EXPORT_EDGE);
   });
+
+  it('a memory cap (maxEdge) shrinks big art but never upscales small art to reach it', () => {
+    expect(rasterSize(2000, 3000, undefined, 1500)).toEqual({ width: 1000, height: 1500 });
+    expect(rasterSize(800, 1200, undefined, 1500)).toEqual({ width: 800, height: 1200 });
+    // An explicit long edge is capped too (the ZIP guard wins over a caller's bigger request).
+    expect(rasterSize(1000, 1500, 3000, 1500)).toEqual({ width: 1000, height: 1500 });
+  });
 });
 
-describe('planCanvasBalloons', () => {
-  it('plans every lettered line with the board’s metrics', () => {
+describe('fontFor', () => {
+  it('uses the self-hosted lettering faces, script faces for other languages', () => {
+    expect(fontFor('speech', 20)).toMatch(/^700 20px "DSL Comic Neue"/);
+    expect(fontFor('whisper', 20)).toMatch(/^italic 700 20px "DSL Comic Neue"/);
+    expect(fontFor('sfx', 40)).toMatch(/"DSL Bangers"/);
+    const te = languageSpec('te')!;
+    expect(fontFor('speech', 20, 'te')).not.toMatch(/Comic Neue/);
+    expect(fontFor('speech', 20, 'te')).not.toMatch(/^italic/);
+    expect(fontFor('whisper', 20, 'hi')).not.toMatch(/^italic/); // no italics outside Latin
+    expect(te.fonts.dialogue).toBeTruthy();
+  });
+});
+
+describe('pageAspectFor', () => {
+  it('plans at the recorded art size unless the file really has another shape', () => {
     const doc = makeSampleDoc();
-    const plans = planCanvasBalloons(doc, doc.pages[0], 1000, 1500, measure);
-    expect(plans.map((p) => p.lineId)).toEqual(['pg_1_l1', 'pg_1_l2', 'pg_1_l3', 'pg_1_l4', 'pg_1_l5']);
-    const caption = plans[0];
-    expect(caption.x).toBeCloseTo(40, 5);
-    expect(caption.y).toBeCloseTo(60, 5);
-    expect(caption.w).toBeCloseTo(300, 5);
-    expect(caption.fontPx).toBeCloseTo(1000 * LETTERING.fontScale * 0.95, 2);
-    expect(caption.padX).toBeCloseTo(15, 5);
-    expect(caption.shape.fill).toBe(LETTERING.captionFill);
-    expect(caption.lines.join(' ')).toBe('OLD DELHI. BEFORE THE HEAT.');
-    // Height follows the wrapped text.
-    expect(caption.h).toBeCloseTo(caption.lines.length * caption.lineHeightPx + 2 * caption.padY, 5);
+    const page = doc.pages[0]; // recorded 1000×1500
+    expect(pageAspectFor(doc, page, 1000, 1501)).toBeCloseTo(2 / 3, 6);
+    expect(pageAspectFor(doc, page, 1000, 1000)).toBe(1);
+  });
+});
+
+describe('lettering on a canvas', () => {
+  it('letters every line of an overlay page from the engine plans', async () => {
+    const doc = makeSampleDoc();
+    const f = fakeContext(1000, 1500);
+    await letterPage(f.ctx, doc, doc.pages[0], 1000, 1500, { measure: estimateMeasure, makePath: fakePath });
+    const texts = f.calls.filter((c) => c.name === 'fillText').map((c) => String(c.args[0])).join(' ');
+    expect(texts).toContain('OLD DELHI.');
+    expect(texts).toContain('GRAB');
+    expect(texts).toMatch(/EXPLANATION/);
   });
 
-  it('wraps lines inside the balloon’s inner width', () => {
-    const doc = makeSampleDoc();
-    const plans = planCanvasBalloons(doc, doc.pages[0], 1000, 1500, measure);
-    plans
-      .filter((p) => p.kind !== 'sfx')
-      .forEach((p) => p.lines.forEach((line) => expect(measure(line, p.fontPx)).toBeLessThanOrEqual(p.w - 2 * p.padX + 1e-6)));
-  });
-
-  it('gives speech a tail and sfx a color', () => {
-    const doc = makeSampleDoc();
-    const plans = planCanvasBalloons(doc, doc.pages[0], 1000, 1500, measure);
-    expect(plans.find((p) => p.lineId === 'pg_1_l4')!.shape.tail).toBeTruthy();
-    expect(plans.find((p) => p.lineId === 'pg_1_l5')!.sfx?.color).toMatch(/^#/);
-  });
-
-  it('plans nothing for in-art lettering', () => {
+  it('letters nothing for in-art comics', async () => {
     const doc = makeSampleDoc((d) => (d.format.lettering = 'in_art'));
-    expect(planCanvasBalloons(doc, doc.pages[0], 1000, 1500, measure)).toEqual([]);
+    const f = fakeContext();
+    await letterPage(f.ctx, doc, doc.pages[0], 1000, 1500, { measure: estimateMeasure });
+    expect(f.draws()).toHaveLength(0);
+  });
+
+  it('sets the overlay cover title in the edition’s language; a painted cover gets nothing', async () => {
+    const f = fakeContext(1000, 1500);
+    await letterCover(f.ctx, makeBook(undefined, { overlayCover: true }), 1000, 1500, { measure: estimateMeasure });
+    expect(f.calls.filter((c) => c.name === 'fillText').map((c) => c.args[0]).join(' ')).toContain('SAFFRON');
+    const te = fakeContext(1000, 1500);
+    await letterCover(te.ctx, localizedFor(makeBook(undefined, { overlayCover: true }), 'te'), 1000, 1500, { measure: estimateMeasure });
+    expect(te.calls.filter((c) => c.name === 'fillText').map((c) => c.args[0]).join(' ')).toMatch(/\p{Script=Telugu}/u);
+    const painted = fakeContext();
+    await letterCover(painted.ctx, makeBook(), 1000, 1500, { measure: estimateMeasure });
+    expect(painted.draws()).toHaveLength(0);
   });
 });
 
-describe('drawCanvasBalloons', () => {
-  const fakeCtx = () => {
-    const calls: { name: string; args: unknown[] }[] = [];
-    const record = (name: string) => (...args: unknown[]) => calls.push({ name, args });
-    const ctx = {
-      save: record('save'),
-      restore: record('restore'),
-      translate: record('translate'),
-      rotate: record('rotate'),
-      fill: record('fill'),
-      stroke: record('stroke'),
-      beginPath: record('beginPath'),
-      arc: record('arc'),
-      setLineDash: record('setLineDash'),
-      fillText: record('fillText'),
-      strokeText: record('strokeText'),
-      measureText: (t: string) => ({ width: t.length * 10 })
-    } as unknown as CanvasRenderingContext2D;
-    return { ctx, calls };
-  };
+describe('canvas renders', () => {
+  let made: FakeCtx[];
+  beforeEach(() => {
+    made = [];
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement) {
+      const f = fakeContext(this.width, this.height);
+      made.push(f);
+      return f.ctx as never;
+    } as never);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, cb: BlobCallback, type?: string) {
+      cb(new Blob([`${this.width}x${this.height}`], { type: type || 'image/png' }));
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
 
-  it('draws outlines, then the text, for every balloon', () => {
-    const doc = makeSampleDoc();
-    const plans = planCanvasBalloons(doc, doc.pages[0], 1000, 1500, measure);
-    const { ctx, calls } = fakeCtx();
-    const makePath = vi.fn((d: string) => ({ d }) as unknown as Path2D);
-    drawCanvasBalloons(ctx, plans, makePath);
-    const texts = calls.filter((c) => c.name === 'fillText').map((c) => c.args[0]);
-    plans.forEach((p) => p.lines.forEach((line) => expect(texts).toContain(line)));
-    expect(calls.filter((c) => c.name === 'strokeText').length).toBeGreaterThan(0); // sfx outline
-    expect(makePath).toHaveBeenCalledWith(plans[1].shape.body);
-    expect(calls.filter((c) => c.name === 'save').length).toBe(plans.length);
-    expect(calls.filter((c) => c.name === 'restore').length).toBe(plans.length);
+  it('draws a plate (paper, rule, texts) at the requested width and encodes it', async () => {
+    const doc = makeBook();
+    const blob = await renderPlateToBlob(doc, 'end', { plateWidth: 1200, mime: 'image/jpeg' });
+    expect(blob.type).toBe('image/jpeg');
+    expect(blob.size).toBe('1200x1800'.length);
+    const f = made[0];
+    expect((f.ctx.canvas as unknown as { width: number; height: number }).height).toBe(1800);
+    const texts = f.calls.filter((c) => c.name === 'fillText').map((c) => c.args[0]);
+    expect(texts).toContain('The End');
+    expect(texts).toContain('Made with DreamStream Comic Studio');
+    expect(texts.join(' ')).toContain('Story by');
+    expect(f.calls.some((c) => c.name === 'stroke')).toBe(true); // the accent rule
   });
 
-  it('uses the lettering fonts', () => {
-    expect(fontFor('speech', 20)).toBe('700 20px "Comic Neue", "Comic Sans MS", cursive');
-    expect(fontFor('whisper', 20)).toMatch(/^italic 700/);
-    expect(fontFor('sfx', 40)).toMatch(/Bangers/);
+  it('a plate respects the memory cap (maxEdge) on its long edge', async () => {
+    await renderPlateToBlob(makeBook(), 'end', { plateWidth: 1200, maxEdge: 1500 });
+    const canvas = made[0].ctx.canvas as unknown as { width: number; height: number };
+    expect(canvas.height).toBe(1500);
+    expect(canvas.width).toBe(1000);
+  });
+
+  it('a back cover whose vignette cannot load keeps its placeholder instead of failing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
+    const blob = await renderPlateToBlob(makeBook(), 'back_cover', { artUrl: 'https://cdn.test/u/proj/cover.png' });
+    expect(blob.size).toBeGreaterThan(0);
+    expect(made[0].calls.some((c) => c.name === 'drawImage')).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it('renders a slot from an image already loaded (the art is fetched once for every language)', async () => {
+    const doc = makeBook();
+    const { slots } = collectExportSlots(doc, fakeUrlFor);
+    const page = slots.find((s) => s.key === 'pg_1')!;
+    const image = { source: { tag: 'art' } as unknown as CanvasImageSource, width: 1000, height: 1500 };
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    for (const lang of ['en', 'te']) await renderSlotToBlob(localizedFor(doc, lang), page, { image, measure: estimateMeasure, makePath: fakePath });
+    vi.unstubAllGlobals();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(made).toHaveLength(2);
+    expect(made.every((f) => f.calls[1]?.name === 'drawImage' || f.calls.some((c) => c.name === 'drawImage' && c.args[0] === image.source))).toBe(true);
+    const te = made[1].calls.filter((c) => c.name === 'fillText').map((c) => c.args[0]).join(' ');
+    expect(te).toMatch(/\p{Script=Telugu}/u);
+    expect(made[1].calls.filter((c) => c.name === 'fillText').every((c) => c.state.direction === 'ltr')).toBe(true);
+  });
+
+  it('rasterizeImage reports a cancelled export', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(rasterizeImage({ source: {} as CanvasImageSource, width: 10, height: 10 }, { signal: controller.signal })).rejects.toThrow('Export cancelled.');
   });
 });

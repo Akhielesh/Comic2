@@ -100,6 +100,16 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `NANGO_SECRET_KEY` / `NANGO_HOST` | connector SaaS | ⭕ 🔐 | 💸 | In code, not in 58-var set |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URL` | Google connectors | ⭕ 🔐 | — | |
 
+## Shared platform (wave 1: Word, PowerPoint, email drafts)
+
+Both switches are on only when exactly `on`, and then only for the people the rollout stage admits
+(`PLATFORM_DOCS_STAGE` in `shared/platform/flags.ts`: `'admins'` in wave 1). See `docs/platform/README.md`.
+
+| Var | Consumer | Req? | Cost | Notes |
+|---|---|---|---|---|
+| `PLATFORM_DOCS` | `server/src/ai/tools/platformDocs.ts` (`platformDocsFor(req)`: the chat tools `email_draft` and `deck_create`) | ⭕ | — | Backend env: a `vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Default unset = off. `off` rolls back the chat tools |
+| `VITE_PLATFORM_DOCS` | frontend (`services/platformFlags.ts`: the Word button on chat documents, the comic pitch deck, the draft cards, their rows in Settings → Tools) | ⭕ | — | Cloudflare Pages **build** var. Default unset = off, for admins too. Rolling back means unsetting it and rebuilding. Pairs with `PLATFORM_DOCS` |
+
 ## Admin cost centre (optional live Cloudflare usage)
 
 | Var | Consumer | Req? | Cost | Notes |

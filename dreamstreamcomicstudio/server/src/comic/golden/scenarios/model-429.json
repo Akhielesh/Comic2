@@ -1,0 +1,45 @@
+{
+  "name": "model-429",
+  "about": "Upstream 429s (models.md §2.4 R3/R5, reliability.md §2 Director): the director knows the model status, suggests waiting first, keeps the comic on its model and offers the picker; when the studio pauses a run it never says the drawing started.",
+  "doc": "lake-429",
+  "caps": "byok",
+  "health": "rate-limited",
+  "turns": [
+    {
+      "say": "it keeps failing, use another model then",
+      "expectTools": ["model_options", "suggest_model"],
+      "systemIncludes": [
+        "MODEL STATUS (Nano Banana 2.1): not serving (down)",
+        "Suggest waiting first (free).",
+        "3 drawings in this comic failed upstream in the last 10 min (OpenRouter · 429).",
+        "OUTAGE OPTIONS (the studio's own check, real prices): wait and retry (free, about 2 min) · Add a Gemini key to reach Nano Banana 2.1 directly · Nano Banana Pro ≈ $0.13 per image (redraw 6 images ≈ $0.82; same family)"
+      ],
+      "director": [
+        { "text": "", "toolCalls": [{ "name": "model_options", "args": { "want": "other" } }] },
+        { "text": "" }
+      ],
+      "expect": {
+        "toolResultIncludes": { "model_options": ["RIGHT NOW: 3 drawings failed upstream in the last 10 min (OpenRouter · 429). Suggest waiting first"] },
+        "replyStartsWith": "Nano Banana 2.1 is being rate-limited upstream right now (3 drawings failed in the last 10 minutes · OpenRouter · 429). Your comic stays on Nano Banana 2.1 so every page matches — waiting is free, so I'd try again in a minute first.",
+        "replyIncludes": ["If you'd rather not wait, Nano Banana Pro is ≈ $0.14 a page instead of ≈ $0.04", "switching models can affect character consistency"],
+        "nextStepOrder": ["Try again", "See other models"],
+        "nextSteps": [{ "label": "See other models", "client": { "type": "open_model_picker", "suggest": "nano-banana-pro" } }],
+        "imageModel": "nano-banana-2.1",
+        "quality": "draft",
+        "newImageCalls": 0
+      }
+    },
+    {
+      "say": "try again",
+      "about": "The studio's preflight pauses the run while the model writes that it started: the reply says nothing started and nothing was charged, with the options in words.",
+      "outageDuringTurn": "preflight",
+      "director": [{ "text": "Retrying pages 3 to 5 now — they're on their way!" }],
+      "expect": {
+        "reply": "Nano Banana 2.1 isn't drawing right now, so I paused — nothing was started and nothing was charged. You can tap “Wait and retry” and it tries again once it's back, while this page is open (free, about 2 min), add a Gemini key to reach Nano Banana 2.1 directly, or switch to Nano Banana Pro (≈ $0.13 per image; redrawing 6 images to match ≈ $0.82 — character consistency can be affected).",
+        "replyExcludes": ["on their way"],
+        "imageModel": "nano-banana-2.1",
+        "newImageCalls": 0
+      }
+    }
+  ]
+}

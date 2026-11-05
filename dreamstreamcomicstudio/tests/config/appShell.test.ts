@@ -160,7 +160,7 @@ describe('public/_headers and public/_routes.json', () => {
     const routes = JSON.parse(read('public/_routes.json')) as { version: number; include: string[]; exclude: string[] };
     expect(routes.version).toBe(1);
     expect(routes.include.length + routes.exclude.length).toBeLessThanOrEqual(100);
-    expect(routes.exclude).toEqual(expect.arrayContaining(['/app.webmanifest', '/icons/*']));
+    expect(routes.exclude).toEqual(expect.arrayContaining(['/app.webmanifest', '/icons/*', '/fonts/*']));
   });
 });
 

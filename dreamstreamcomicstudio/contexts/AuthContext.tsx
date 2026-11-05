@@ -1,7 +1,8 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { forgetTabSession, getAuthRedirectUrl, isSessionExpiredByInactivity, isStoredSession, supabase, touchLastActivity } from '../services/supabase';
+import { dropStoredSession, forgetTabSession, getAuthRedirectUrl, isSessionExpiredByInactivity, isStoredSession, supabase, touchLastActivity } from '../services/supabase';
+import { clearCachedAuthToken } from '../services/apiClient';
 import { clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener, setChatSessionUser } from '../services/chatStorage';
@@ -9,7 +10,7 @@ import { appStatus } from '../services/appStatus';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { SOURCE_GOVERNANCE_CHANGED, clearGovernanceMap } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
-import { cancelScheduledPush, syncOnLogin, schedulePush } from '../services/cloudSync';
+import { cancelScheduledPush, reconcileOnLogin, schedulePush } from '../services/cloudSync';
 import { purgeLiveAccountData, takeOverDevice } from '../live/accountPurge';
 import { clearLocalOwner, getLocalOwner, setLocalOwner } from '../services/localOwner';
 import { clearPendingInviteCode } from '../services/invites';
@@ -33,6 +34,26 @@ type AuthContextType = {
  */
 export const OTHER_TAB_SIGN_IN_NOTICE =
     'Signed in as another account in another tab. This tab was signed out so the two accounts’ data stay apart — continue in that tab, or sign in again here.';
+
+/**
+ * Shown to a signed-out tab that hears another tab sign in while "Remember me" is off (the tab
+ * that asked for a magic link, once the link's tab signed in): that session is that tab's alone.
+ */
+export const SIGNED_IN_IN_OTHER_TAB_NOTICE =
+    'Signed in in another tab. With “Remember me” off each tab signs in on its own — continue there, or sign in here.';
+
+/** Shown when a sign-out could not be told to the auth server: this device is signed out, nothing else is. */
+export const SIGN_OUT_SERVER_UNREACHABLE_NOTICE =
+    'Signed out on this device. The sign-in server couldn’t be reached, so the sign-out wasn’t recorded there — other devices stay signed in until you sign out on them.';
+
+/** A login sync whose read of the account snapshot failed is run again once after this pause. */
+const LOGIN_SYNC_RETRY_MS = 5_000;
+
+/**
+ * How long a sign-out waits for the auth server before signing this device out without it.
+ * auth-js puts no timeout on POST /logout and keeps the session stored until it settles.
+ */
+const SIGN_OUT_SERVER_TIMEOUT_MS = 8_000;
 
 const AuthContext = createContext<AuthContextType>({
     user: null,
@@ -77,6 +98,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [loading, setLoading] = useState(true);
     const userIdRef = useRef<string | null>(null);
     const syncedUserRef = useRef<string | null>(null);
+    const loginSyncRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    /** The account whose sign-out is still being settled with the auth server (see signOutSession). */
+    const signingOutRef = useRef<{ userId: string | null } | null>(null);
 
     const applyAuthState = (nextSession: Session | null) => {
         // Chat rows are tagged by THIS tab's account (not the device-wide owner marker, which
@@ -106,6 +130,26 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // restore path fires this event under the applyingSnapshot guard, so no loop).
         window.addEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
 
+        // The login sync reads the account's snapshot before anything is written to it. When that
+        // read fails (a backend still waking up, a network blip, a row the server can't read) it
+        // writes nothing — the account keeps its copy, this device its purged state — and is run
+        // again: once after a short pause, then on the next session event (a token refresh) or a
+        // reload, since a failed sync leaves `syncedUserRef` unset.
+        const runLoginSync = (userId: string, retry: boolean) => {
+            syncedUserRef.current = userId;
+            void reconcileOnLogin(userId).then((outcome) => {
+                if (outcome !== 'failed') return;
+                if (syncedUserRef.current === userId) syncedUserRef.current = null;
+                if (!retry || userIdRef.current !== userId) return;
+                cancelLoginSyncRetry();
+                loginSyncRetryRef.current = setTimeout(() => {
+                    loginSyncRetryRef.current = null;
+                    if (userIdRef.current !== userId || syncedUserRef.current === userId) return;
+                    runLoginSync(userId, false);
+                }, LOGIN_SYNC_RETRY_MS);
+            });
+        };
+
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
             const incoming = userId.toLowerCase();
@@ -125,6 +169,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 // then purge, before the login sync could merge any of it into this account.
                 userIdRef.current = null;
                 syncedUserRef.current = null;
+                cancelLoginSyncRetry();
                 cancelScheduledPush();
                 purgeMainAccountData();
                 if (previous) {
@@ -142,10 +187,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setLocalOwner(incoming);
             userIdRef.current = userId;
             void registerDevice(userId);
-            if (syncedUserRef.current !== userId) {
-                syncedUserRef.current = userId;
-                void syncOnLogin(userId);
-            }
+            if (syncedUserRef.current !== userId) runLoginSync(userId, true);
         };
 
         // Sessions idle for 30+ days sign out on this visit (the only automatic sign-out — reloads
@@ -159,12 +201,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             if (session && inactivitySignOutPending) {
                 applyAuthState(null);
                 setLoading(false);
-                void supabase.auth
-                    .signOut({ scope: 'local' })
-                    .catch(() => undefined)
-                    .finally(() => {
-                        inactivitySignOutPending = false;
-                    });
+                void signOutSession('local', session.user?.id ?? null).finally(() => {
+                    inactivitySignOutPending = false;
+                });
                 return;
             }
             inactivitySignOutPending = false;
@@ -182,6 +221,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 setLoading(false);
                 userIdRef.current = null;
                 syncedUserRef.current = null;
+                cancelLoginSyncRetry();
                 // Purge on EVERY sign-out path (incl. Stream Studio's and the
                 // inactivity policy), not just our own buttons — a shared
                 // device must never keep the previous user's keys.
@@ -189,6 +229,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 return;
             }
             if (inactivitySignOutPending) return; // this session is being signed out (see above)
+            // A token refresh for the account being signed out comes from that sign-out's own call
+            // (auth-js refreshes an expired session before POST /logout), finishing after this
+            // device stopped waiting for it: it must not sign that account back in here. A new
+            // sign-in (SIGNED_IN) is a person's choice and is acted on as ever.
+            const leaving = signingOutRef.current?.userId;
+            if (event === 'TOKEN_REFRESHED' && leaving && session?.user?.id?.toLowerCase() === leaving.toLowerCase()) return;
             // supabase-js announces every auth event to every tab without storing the session
             // there. With "Remember me" off each tab keeps its own session, so a session another
             // tab announced is not this tab's: acting on it would flip this tab to that account and
@@ -208,11 +254,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
                 if (current && session.user?.id && session.user.id.toLowerCase() !== current.toLowerCase()) {
                     userIdRef.current = null;
                     syncedUserRef.current = null;
+                    cancelLoginSyncRetry();
                     cancelScheduledPush();
                     forgetTabSession();
                     applyAuthState(null);
                     setLoading(false);
                     appStatus.report('warn', OTHER_TAB_SIGN_IN_NOTICE, { source: 'auth' });
+                } else if (!current && event === 'SIGNED_IN') {
+                    // A signed-out tab with "Remember me" off (nothing stored here): another tab
+                    // signed in — the tab a magic link opened in, say. That session is that tab's
+                    // alone; this one stays signed out, and says why. (Its own sign-ins store the
+                    // session before the event, so they match and are applied as ever.)
+                    appStatus.report('info', SIGNED_IN_IN_OTHER_TAB_NOTICE, { source: 'auth' });
                 }
                 return;
             }
@@ -230,6 +283,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         return () => {
             subscription.unsubscribe();
+            cancelLoginSyncRetry();
             setKeysChangeListener(null);
             setSettingsChangeListener(null);
             setChatDataChangeListener(null);
@@ -245,6 +299,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     // Hoisted: the sign-in handler in the effect above calls these.
+    /** Drop a login-sync retry still waiting (a sign-out, a switch: it was for the old account). */
+    function cancelLoginSyncRetry() {
+        if (loginSyncRetryRef.current) clearTimeout(loginSyncRetryRef.current);
+        loginSyncRetryRef.current = null;
+    }
+
     /** The main app's account-scoped data on this device (keys, settings, model choices). */
     function purgeMainAccountData() {
         // A push still queued for the account being purged must never run.
@@ -277,14 +337,88 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         clearLocalOwner();
     }
 
+    /**
+     * Sign the session out at the auth server — and on this device whatever the server says.
+     * supabase.auth.signOut keeps the stored session when POST /logout fails with anything but
+     * 401/403/404 (offline, a flaky network): no SIGNED_OUT fires, its refresh timer keeps the
+     * session alive, and the next refresh tick or reload would sign the account straight back
+     * in after "Signed out" was shown — on a shared device, as the previous person, with the
+     * keys restored by the login sync. auth-js also sets no timeout on that request, and the
+     * session stays stored until it settles. So when the server says no, or gives no answer
+     * within SIGN_OUT_SERVER_TIMEOUT_MS, this does what SIGNED_OUT would have: the stored
+     * session and the cached token go, the purge runs, the person is told that the server did
+     * not record it, and the sign-out is announced to every tab of this browser. Never throws.
+     */
+    const signOutSession = async (scope: 'local' | 'global', leavingUserId: string | null = userIdRef.current) => {
+        const mark = { userId: leavingUserId };
+        signingOutRef.current = mark;
+        const settled = () => {
+            if (signingOutRef.current === mark) signingOutRef.current = null;
+        };
+        const server = (async () => {
+            try {
+                return !(await supabase.auth.signOut({ scope })).error;
+            } catch {
+                return false;
+            }
+        })();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const answer = await Promise.race([
+            server,
+            new Promise<'timeout'>((resolve) => {
+                timer = setTimeout(() => resolve('timeout'), SIGN_OUT_SERVER_TIMEOUT_MS);
+            })
+        ]);
+        clearTimeout(timer);
+        if (answer === true) {
+            settled();
+            return;
+        }
+        dropStoredSession();
+        clearCachedAuthToken();
+        userIdRef.current = null;
+        syncedUserRef.current = null;
+        cancelLoginSyncRetry();
+        clearLocalAuthState();
+        appStatus.report('warn', SIGN_OUT_SERVER_UNREACHABLE_NOTICE, { source: 'auth' });
+        if (answer === false) {
+            await announceSignOut();
+            settled();
+            return;
+        }
+        // No answer in time: the call still holds auth-js's lock, so an announcement made now
+        // would only queue behind it. Once it settles: a sign-out it recorded announced itself;
+        // otherwise this device is signed out again (a refresh inside that call may have stored
+        // the session anew) and announced — unless someone has signed in here since.
+        void server.then(async (recorded) => {
+            if (!recorded && !userIdRef.current) await announceSignOut();
+            settled();
+        });
+    };
+
+    /**
+     * Tell this browser's tabs (this one too) that the session ended, as a recorded sign-out does:
+     * with nothing stored, auth-js skips POST /logout and its _removeSession fires SIGNED_OUT here
+     * and broadcasts it to every tab of the origin — the main app's, Stream Studio's, and the
+     * caches that listen for it (apiClient's token, productAccess). Never throws.
+     */
+    const announceSignOut = async () => {
+        dropStoredSession();
+        try {
+            if ((await supabase.auth.signOut({ scope: 'local' })).error) dropStoredSession();
+        } catch {
+            dropStoredSession();
+        }
+    };
+
     const signOut = async () => {
         clearLocalAuthState();
-        await supabase.auth.signOut({ scope: 'local' });
+        await signOutSession('local');
     };
 
     const signOutAll = async () => {
         clearLocalAuthState();
-        await supabase.auth.signOut({ scope: 'global' });
+        await signOutSession('global');
     };
 
     /** Sign out every session EXCEPT the current device — you stay logged in. */

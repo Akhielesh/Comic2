@@ -1,8 +1,12 @@
 import { useEffect, useState } from 'react';
+import { switchDsTheme } from './dsSkin';
 
 // Chat Studio theme: light (paper) / dark (Claude-style) / system. The choice is
 // persisted and applied as a `dark` class on <html>, which flips the --ds-* token
 // set in index.css — every studio surface and widget reads colors from those vars.
+// Under a design skin on <html> (the comics host) a change the person makes is one
+// cross-fade of the page (services/dsSkin.ts switchDsTheme); everywhere else the
+// class is simply toggled, as it always was.
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
@@ -24,8 +28,9 @@ const systemDark = (): boolean =>
 export const resolveIsDark = (pref: ThemePreference): boolean =>
   pref === 'dark' || (pref === 'system' && systemDark());
 
-export const applyTheme = (pref: ThemePreference): void => {
-  document.documentElement.classList.toggle('dark', resolveIsDark(pref));
+/** Apply a preference. `animate`: the person just chose it (a cross-fade under the skin); boot syncs and system-theme corrections land at once. */
+export const applyTheme = (pref: ThemePreference, opts: { animate?: boolean } = {}): void => {
+  switchDsTheme(document.documentElement, resolveIsDark(pref), { animate: opts.animate === true });
 };
 
 export const setThemePreference = (pref: ThemePreference): void => {
@@ -34,7 +39,7 @@ export const setThemePreference = (pref: ThemePreference): void => {
   } catch {
     /* preference just won't persist */
   }
-  applyTheme(pref);
+  applyTheme(pref, { animate: true });
   window.dispatchEvent(new CustomEvent(CHANGED));
 };
 

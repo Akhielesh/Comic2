@@ -12,7 +12,13 @@
   "name": "dreamstream-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
-  "observability": { "enabled": true },
+  // Invocation logs are OFF (S19): Cloudflare stores each invocation as "<METHOD> <URL>" for 7
+  // days, and an unlisted share slug in that URL is a READ CAPABILITY — that includes
+  // the share-comic edge routes (/api/comic/public/s/<slug>, oEmbed ?url=…/c/<slug>, the agent
+  // gate ?from=/c/<slug>). Custom console logs (slug-masked) and the backend container's stdout
+  // (masked http_request lines) stay on; request counts come from Workers analytics, not from
+  // logs. Debug a single request with `wrangler tail` (live, not stored).
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Also served at dreamstream-api.akhieleshsrirangam.workers.dev — CI and the smoke
   // checks probe that URL because the custom domain challenges datacenter IPs.
   "workers_dev": true,
@@ -82,6 +88,18 @@
     // owner's shared D1 (also used by akhielesh.com, rows tagged with site) so AI visitors to
     // every site show up in one panel. Optional — the gate still works without it.
     { "binding": "AGENT_DB", "database_name": "akhielesh-portfolio-analytics", "database_id": "30c9f8e8-2ac9-4815-93af-e3d432e2f758" }
+  ],
+
+  // Shared-comic edge read path (src/publicComic.ts, src/cspReport.ts; P1-PUBLISH). Workers Rate
+  // Limiting bindings — per Cloudflare location, keyed by client IP + route class. Not secrets.
+  // The only secret these routes use is SHARE_VIEW_SALT (≥ 32 chars; viewer hash + tracking HMAC):
+  //   wrangler secret put SHARE_VIEW_SALT   — or a D1 backend_env row of the same name (the Worker
+  //   secret wins; src/shareViewSalt.ts) — and the SAME value in Supabase
+  //   comic_publication_config(key='view_salt'). Without it analytics are simply off.
+  "ratelimits": [
+    { "name": "PUBLIC_COMIC_RL", "namespace_id": "4101", "simple": { "limit": 120, "period": 60 } },
+    { "name": "PUBLIC_EVENT_RL", "namespace_id": "4102", "simple": { "limit": 30, "period": 60 } },
+    { "name": "CSP_REPORT_RL", "namespace_id": "4103", "simple": { "limit": 60, "period": 60 } }
   ],
 
   "routes": [

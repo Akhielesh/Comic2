@@ -1,13 +1,22 @@
 // Style panel (composer chip "🎨 Style"): the curated preset grid, "explore 3 directions
 // for my story" (cheap style boards, gated like any spend) and "describe your own".
 // Picking a preset drafts the style bible instantly (a `style` patch, no LLM).
+// Preset tiles show the platform library's real preview art when it is published, with the
+// procedural thumbnail as the instant, offline fallback (assets.md; free either way).
 
 import React, { useState } from 'react';
 import { Check, Lock, PenLine, Sparkles } from 'lucide-react';
 import type { ComicDoc, StyleBible } from '../../../../shared/comic/doc';
 import type { DocOp, StudioAction } from '../../../../shared/comic/ops';
-import { estimateJobs, formatUsd } from '../../../../shared/comic/models';
+import { STYLE_DIRECTIONS_USD, styleDirectionsUsd } from '../../../../shared/comic/models';
+import { estimateDocJobs } from '../../../../shared/comic/plan';
+import type { StudioCaps } from '../../../../shared/comic/capabilities';
 import { STYLE_PRESETS, type StylePreset } from '../../../../shared/comic/stylePresets';
+import { stylePreviewId } from '../../../../shared/comic/library';
+import { LibraryImage } from '../../library/LibraryImage';
+import { PresetThumb } from '../../library/procedural/PresetThumb';
+import { useCostFormat } from '../cost';
+import type { StudioActOutcome } from '../../types';
 import { GhostButton, PrimaryButton, SectionLabel, cx } from '../ui';
 
 /** Ops that make a preset the (drafted) style. A locked board from another look is dropped. */
@@ -31,23 +40,41 @@ export const presetOps = (doc: ComicDoc, preset: StylePreset): DocOp[] => {
 
 export const STYLE_DIRECTION_COUNT = 3;
 
+/** The writer cost for proposing directions — the shared constant the server gate uses (P2-AMEND). */
+export const STYLE_DIRECTIONS_TEXT_USD = STYLE_DIRECTIONS_USD;
+
+/**
+ * The same quote the server gate makes for `render_style_options` (jobs.ts estimateSpendAction):
+ * the style boards on the comic's locked model (else its tier/override), plus the writer call that proposes
+ * directions when none are passed. Shown on the buttons and sent as quotedUsd.
+ */
+export const quoteStyleOptions = (doc: ComicDoc, count: number, byok: boolean, withDirections = false): number => {
+  const est = estimateDocJobs(doc, [{ kind: 'style_option', count, label: 'style options' }], { byok });
+  const text = withDirections ? 0 : styleDirectionsUsd(byok);
+  return Math.round((est.usd + text) * 10000) / 10000;
+};
+
 export interface StylePanelProps {
   doc: ComicDoc;
   patch: (ops: DocOp[]) => Promise<void> | void;
-  act: (action: StudioAction) => Promise<void> | void;
+  /** `studio.act` as is: it resolves the action's outcome, which the panel never reads (it fires and moves on). */
+  act: (action: StudioAction) => Promise<StudioActOutcome | void> | void;
   /** Prefill the composer so the user can describe a look in their own words. */
   onDescribeOwn: () => void;
   /** Close the panel (after an action that moves the conversation on). */
   onDone: () => void;
   byok?: boolean;
+  /** The user's caps (usage-terms prices for governed users; admins and own keys see dollars). */
+  caps?: StudioCaps;
 }
 
-export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescribeOwn, onDone, byok = false }) => {
+export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescribeOwn, onDone, byok = false, caps }) => {
   const [confirming, setConfirming] = useState<StylePreset | null>(null);
+  const cost = useCostFormat({ byok, caps });
   const style = doc.style;
   const locked = style.status === 'locked';
   const exploring = style.options.some((o) => o.render.status === 'queued' || o.render.status === 'rendering');
-  const estimate = estimateJobs([{ kind: 'style_option', count: STYLE_DIRECTION_COUNT, label: 'style options' }], doc.settings.quality, { byok });
+  const quote = quoteStyleOptions(doc, STYLE_DIRECTION_COUNT, byok);
   const custom = style.status !== 'empty' && !style.presetId && (style.name || style.spec);
 
   const choose = (preset: StylePreset) => {
@@ -61,27 +88,33 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
 
   return (
     <div className="space-y-4 p-4">
-      <div className="flex flex-col gap-2 sm:flex-row">
+      {/* Wraps by the panel's own width (it also opens inside the recap card): the buttons take
+          their own rows when narrow, and the long label wraps inside its button instead of
+          spilling out of a fixed-height pill. */}
+      <div className="flex flex-wrap gap-2">
         <PrimaryButton
-          className="sm:flex-1"
+          className="!h-auto min-h-9 flex-1 basis-[13rem] py-2 text-left leading-snug coarse:min-h-11"
           disabled={exploring}
           onClick={() => {
-            void act({ type: 'render_style_options' });
+            void act({ type: 'render_style_options', quotedUsd: quote });
             onDone();
           }}
         >
-          <Sparkles className="h-3.5 w-3.5" aria-hidden />
-          {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
-          {!exploring && <span className="font-normal opacity-80">· ≈ {formatUsd(estimate.usd)}</span>}
+          <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">
+            {exploring ? 'Drawing style options…' : `Explore ${STYLE_DIRECTION_COUNT} directions for my story`}
+            {!exploring && <span className="whitespace-nowrap font-normal opacity-80"> · {cost.approx(quote)}</span>}
+          </span>
         </PrimaryButton>
         <GhostButton
+          className="!h-auto min-h-9 flex-1 basis-[9rem] py-2 leading-snug coarse:min-h-11"
           onClick={() => {
             onDescribeOwn();
             onDone();
           }}
         >
-          <PenLine className="h-3.5 w-3.5" aria-hidden />
-          Describe your own…
+          <PenLine className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0">Describe your own…</span>
         </GhostButton>
       </div>
 
@@ -138,7 +171,19 @@ export const StylePanel: React.FC<StylePanelProps> = ({ doc, patch, act, onDescr
                   on ? 'border-[#D97757]/60 ring-2 ring-[#D97757]/30' : 'border-[var(--ds-hairline)] hover:-translate-y-px hover:border-[#D97757]/35'
                 )}
               >
-                <span className="block h-14 w-full" style={{ background: preset.swatch }} aria-hidden />
+                <span data-preset-art="" className="relative block aspect-[16/9] w-full overflow-hidden bg-[var(--ds-well)]" aria-hidden>
+                  <LibraryImage
+                    id={stylePreviewId(preset.id)}
+                    alt=""
+                    sizes="(min-width: 640px) 160px, 45vw"
+                    className="absolute inset-0 h-full w-full object-cover"
+                    fallback={
+                      <span className="absolute inset-0 block [&>*]:h-full [&>*]:w-full">
+                        <PresetThumb preset={preset} />
+                      </span>
+                    }
+                  />
+                </span>
                 <span className="block bg-[var(--ds-surface-strong)] px-2.5 py-2">
                   <span className="flex items-center gap-1 text-[12px] font-semibold text-[var(--ds-ink)]">
                     <span className="truncate">{preset.name}</span>

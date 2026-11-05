@@ -1,21 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
-import { Loader2, Heart, Eye, Search, BookOpen, User, Star } from 'lucide-react';
+import { Loader2, Heart, Eye, Search, BookOpen, User, Star, Baby } from 'lucide-react';
 import { Project } from '../types';
 import { getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
+import { isStudioV4Project } from '../services/studioDeepLink';
+import { SLUG_RE, SHARE_PATH } from '../shared/comic/publication';
+import { isContentRating, type ContentRating } from '../shared/comic/safety';
+import { RatingBadge } from './comicstudio/safety/RatingBadge';
 import { SmartImage } from './common/SmartImage';
+
+/** The public bucket that holds published (pub/<key>/…) comic copies. */
+const PUBLIC_COMIC_BUCKET = 'comic-assets';
+
+/** A published v4 comic's share slug (server-mirrored onto the listing row), when it has one. */
+export const shareSlugOf = (project: Project): string | undefined => {
+    const slug = (project.state as unknown as { shareSlug?: unknown } | undefined)?.shareSlug;
+    return isStudioV4Project(project) && typeof slug === 'string' && SLUG_RE.test(slug) ? slug : undefined;
+};
+
+/** Public URL of a published v4 cover (state.publicCover: an opaque pub/<key>/… path in the public bucket). */
+export const publicCoverUrl = (project: Project): string | undefined => {
+    const path = (project.state as unknown as { publicCover?: unknown } | undefined)?.publicCover;
+    if (!isStudioV4Project(project) || typeof path !== 'string' || !/^pub\/[A-Za-z0-9]{22}\/[A-Za-z0-9._/-]{1,200}$/.test(path) || path.includes('..')) return undefined;
+    return supabase.storage.from(PUBLIC_COMIC_BUCKET).getPublicUrl(path).data?.publicUrl || undefined;
+};
+
+/** G and PG comics are the kids-friendly ones; an unrated comic is never assumed to be. */
+export const isKidsFriendly = (rating: ContentRating | undefined): boolean => rating === 'G' || rating === 'PG';
+
+/**
+ * The publish gate's rating of a listing row, honoured only for a real publication: a v4 row
+ * carrying its server-mirrored share slug. The column is server-set, but the rest of a row is the
+ * owner's, and a row that no longer reads as a publication (say, its studio marker was flipped)
+ * shows its art outside the gate — it gets no badge and never counts as kids-friendly.
+ */
+const gateRatingOf = (row: { content_rating?: unknown; state?: unknown }): ContentRating | undefined =>
+    isContentRating(row.content_rating) && shareSlugOf({ state: row.state } as Project) ? row.content_rating : undefined;
 
 /**
  * Ordered cover candidates for a comic: the stored cover first, then the first
  * rendered page, then the first style board. SmartImage walks this list so a
  * missing OR broken cover URL falls back to the first page rather than a
  * "no image" icon — the icon only appears when a comic truly has no art yet.
+ * A Comic Studio (v4) comic shows ONLY its public cover (the frozen, safety-cleared pub/ copy):
+ * its classic cover fields are owner-writable and never went through the publish gate, so
+ * without a public cover the card shows the book icon rather than one of them.
  */
 const coverCandidates = (project: Project): string[] => {
     const out: string[] = [];
     const push = (url?: string | null) => { if (typeof url === 'string' && url.trim()) out.push(url); };
+    push(publicCoverUrl(project));
+    if (isStudioV4Project(project)) return out;
     push(project.coverImage);
     push(project.state?.coverImageUrl);
     push(project.state?.panels?.find((p) => p.imageUrl)?.imageUrl);
@@ -33,6 +70,8 @@ interface PublicProject extends Project {
     average_rating?: number;
     review_count?: number;
     isLiked?: boolean;
+    /** The rating the publish gate assigned (projects.content_rating, server-set). */
+    contentRating?: ContentRating;
 }
 
 const normalizeTimestamp = (value: unknown): number | undefined => {
@@ -57,6 +96,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<'trending' | 'recent'>('trending');
     const [search, setSearch] = useState('');
+    const [kidsOnly, setKidsOnly] = useState(false);
     const [likeBusy, setLikeBusy] = useState<Record<string, boolean>>({});
 
     useEffect(() => {
@@ -64,6 +104,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     }, [filter, user?.id]);
 
     const hydratePreview = async (project: PublicProject): Promise<PublicProject> => {
+        // Comic Studio (v4) comics show only their public cover URL: nothing to sign (their other
+        // image ids are drafts, which a public card must never reach).
+        if (isStudioV4Project(project)) return project;
         const nextProject = structuredClone(project);
         let coverImage = nextProject.coverImage;
 
@@ -133,7 +176,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 typeof p.name === 'string' &&
                 typeof p.created_at === 'string' &&
                 typeof p.updated_at === 'string' &&
-                typeof p.state === 'object'
+                typeof p.state === 'object' &&
+                // A comic held by moderation is never listed (the server also unlists it; this
+                // covers a row written before that fix reached the database).
+                p.is_forced_private !== true
             );
             const userIds = Array.from(
                 new Set(
@@ -173,6 +219,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 const viewsCount = typeof row.views_count === 'number'
                     ? row.views_count
                     : (typeof row.views === 'number' ? row.views : 0);
+                const contentRating = gateRatingOf(row);
 
                 return {
                     id: row.id,
@@ -188,7 +235,8 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                     likesCount,
                     viewsCount,
                     average_rating: 0,
-                    review_count: 0
+                    review_count: 0,
+                    ...(contentRating ? { contentRating } : {})
                 };
             });
             const hydrated = await Promise.all(mapped.map((project: PublicProject) => hydratePreview(project)));
@@ -207,8 +255,9 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     };
 
     const filteredProjects = projects.filter((project) =>
-        project.name.toLowerCase().includes(search.toLowerCase()) ||
-        (project.authorName || '').toLowerCase().includes(search.toLowerCase())
+        (!kidsOnly || isKidsFriendly(project.contentRating)) &&
+        (project.name.toLowerCase().includes(search.toLowerCase()) ||
+            (project.authorName || '').toLowerCase().includes(search.toLowerCase()))
     );
 
     return (
@@ -247,6 +296,15 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                         >
                             Recent
                         </button>
+                        <button
+                            type="button"
+                            aria-pressed={kidsOnly}
+                            onClick={() => setKidsOnly((v) => !v)}
+                            title="Only comics rated G or PG by the publish check"
+                            className={`inline-flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-full border px-4 py-2 text-xs font-semibold transition-colors coarse:min-h-[44px] ${kidsOnly ? 'border-[#D97757] bg-[#D97757]/10 text-slate-900' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-400'}`}
+                        >
+                            <Baby size={14} aria-hidden /> Kids-friendly (G/PG)
+                        </button>
                     </div>
                 </div>
 
@@ -272,21 +330,48 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                         <div className="inline-block p-6 bg-white rounded-full mb-4 border-4 border-slate-100">
                             <BookOpen size={48} className="text-slate-300" />
                         </div>
-                        <h2 className="text-2xl font-display text-slate-400">No comics found.</h2>
-                        <p className="text-slate-500 font-comic mt-2">Be the first to publish one!</p>
+                        <h2 className="text-2xl font-display text-slate-400">{kidsOnly ? 'No kids-friendly comics yet.' : 'No comics found.'}</h2>
+                        <p className="text-slate-500 font-comic mt-2">
+                            {kidsOnly ? 'Only comics rated G or PG show here. Turn the filter off to see everything.' : 'Be the first to publish one!'}
+                        </p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                         {filteredProjects.map((project) => {
                             const covers = coverCandidates(project);
+                            // Published v4 comics open their read-only share link (/c/<slug>) as a real
+                            // page load: it serves the boot card, the preview head and its own CSP.
+                            const slug = shareSlugOf(project);
+                            const coverArea = (children: React.ReactNode) =>
+                                slug ? (
+                                    <a href={SHARE_PATH(slug)} aria-label={`Read ${project.name}`} className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]">
+                                        {children}
+                                    </a>
+                                ) : (
+                                    // Classic comics open in-app; the href keeps open-in-new-tab and copy-link working.
+                                    <a
+                                        href={`/?view=read&id=${encodeURIComponent(project.id)}`}
+                                        onClick={(e) => {
+                                            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                                            e.preventDefault();
+                                            onReadComic(project.id);
+                                        }}
+                                        aria-label={`Read ${project.name}`}
+                                        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#D97757]"
+                                    >
+                                        {children}
+                                    </a>
+                                );
 
                             return (
                                 <div
                                     key={project.id}
-                                    onClick={() => onReadComic(project.id)}
-                                    className="bg-white rounded-xl border-2 border-slate-200 overflow-hidden hover:border-black hover:shadow-comic hover:-translate-y-1 transition-all cursor-pointer group"
+                                    data-testid="gallery-card"
+                                    data-share-slug={slug}
+                                    className="bg-white rounded-xl border-2 border-slate-200 overflow-hidden hover:border-black hover:shadow-comic hover:-translate-y-1 transition-all group"
                                 >
-                                    {/* Cover Aspect Ratio 2:3 */}
+                                    {coverArea(
+                                    /* Cover Aspect Ratio 2:3 */
                                     <div className="aspect-[2/3] bg-slate-100 relative overflow-hidden">
                                         <SmartImage
                                             src={covers[0]}
@@ -307,7 +392,13 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                                 Published {new Date(project.publishedAt || project.createdAt).toLocaleDateString()}
                                             </div>
                                         </div>
+                                        {project.contentRating && (
+                                            <div className="absolute left-2 top-2">
+                                                <RatingBadge rating={project.contentRating} />
+                                            </div>
+                                        )}
                                     </div>
+                                    )}
 
                                     {/* Meta Bar */}
                                     <div className="p-3 flex items-center justify-between border-t-2 border-slate-100 bg-white text-xs font-bold text-slate-500">

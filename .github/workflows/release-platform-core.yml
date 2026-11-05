@@ -1,0 +1,204 @@
+# Release platform-core: the shared platform contract (dreamstreamcomicstudio/docs/platform/README.md, ADR 0008).
+#
+# The owner pushes a tag `platform-core-v<version>` once admin QA passes. This workflow packs the contract with
+# dreamstreamcomicstudio/packages/platform-core/scripts/export.mjs and attaches its four files to the GitHub Release
+# of that tag on this public repository:
+#   platform-core-<version>.tgz           the sources as they are (every relative import ends in .js)
+#   platform-core-bundler-<version>.tgz   the same sources without the .js suffixes
+#   MANIFEST.json                         version, git SHA, clean flag, sha256 of each tarball and of every file in it
+#   SHA256SUMS                            `sha256sum -c` lines for the three files above
+# Consumers download them with no token, or rebuild the same bytes from the tag.
+#
+# Least privilege: the workflow token is read-only by default; only the release job may write.
+#   pack     (contents: read)   packs and refuses unless the tag equals package.json's version and MANIFEST.json's,
+#                               MANIFEST.json says clean === true for the tagged commit, SHA256SUMS verifies, and a
+#                               second pack is byte-identical. It keeps the files with the run and hands the release
+#                               job one digest: the sha256 of SHA256SUMS (which covers every other file).
+#   release  (contents: write)  rebuilds on a fresh runner, refuses unless its SHA256SUMS has that same digest, then
+#                               creates the release with the gh CLI the GitHub-hosted runner ships. No third-party
+#                               release action and no secret beyond the job's own token.
+#
+# Every action is pinned to the SHA the other workflows here use; Node 22 as everywhere else. No `${{ }}` expression
+# appears inside a run: block (values reach scripts as env vars). tests/config/publicDocs.test.ts checks this file's
+# shape and runs its steps as a dry run, twice, with a fake gh.
+name: release-platform-core
+
+on:
+  push:
+    tags:
+      - 'platform-core-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-platform-core-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  pack:
+    name: Pack and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.verify.outputs.version }}
+      sums: ${{ steps.verify.outputs.sums }}
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack both flavours
+        run: |
+          rm -rf "$RUNNER_TEMP/platform-core"
+          node dreamstreamcomicstudio/packages/platform-core/scripts/export.mjs --out "$RUNNER_TEMP/platform-core"
+
+      - name: Verify the release files
+        id: verify
+        run: |
+          node - "$RUNNER_TEMP/platform-core" <<'JS'
+          const fs = require('fs');
+          const path = require('path');
+          const crypto = require('crypto');
+          const dir = process.argv[2];
+          const fail = (message) => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
+          const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+          const read = (name) => fs.readFileSync(path.join(dir, name));
+
+          const tag = process.env.GITHUB_REF_NAME || '';
+          const m = /^platform-core-v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.exec(tag);
+          if (!m) fail(`the tag "${tag}" is not platform-core-v<semver>`);
+          const version = m[1];
+          const pkg = JSON.parse(fs.readFileSync('dreamstreamcomicstudio/packages/platform-core/package.json', 'utf8'));
+          if (pkg.version !== version) fail(`the tag says ${version} but package.json says ${pkg.version}`);
+
+          const node16 = `platform-core-${version}.tgz`;
+          const bundler = `platform-core-bundler-${version}.tgz`;
+          const expected = [node16, bundler, 'MANIFEST.json', 'SHA256SUMS'].sort();
+          const present = fs.readdirSync(dir).sort();
+          if (JSON.stringify(present) !== JSON.stringify(expected)) fail(`expected exactly ${expected.join(', ')}; found ${present.join(', ')}`);
+
+          let manifest;
+          try {
+            manifest = JSON.parse(read('MANIFEST.json').toString('utf8'));
+          } catch {
+            fail('MANIFEST.json is not JSON');
+          }
+          if (manifest.version !== version) fail(`MANIFEST.json says ${manifest.version}, the tag ${version}`);
+          if (manifest.clean !== true) fail(`MANIFEST.json clean is ${JSON.stringify(manifest.clean)}, not true: the package folder was not clean`);
+          if (manifest.gitSha !== process.env.GITHUB_SHA) fail(`MANIFEST.json gitSha ${manifest.gitSha} is not the tagged commit ${process.env.GITHUB_SHA}`);
+          for (const [flavour, file] of [['node16', node16], ['bundler', bundler]]) {
+            const f = manifest.flavours && manifest.flavours[flavour];
+            if (!f || f.file !== file) fail(`MANIFEST.json has no ${flavour} flavour named ${file}`);
+            const buf = read(file);
+            if (sha(buf) !== f.sha256 || buf.length !== f.bytes) fail(`${file} does not match MANIFEST.json`);
+            if (!f.files || !Object.keys(f.files).length) fail(`MANIFEST.json lists no files for ${flavour}`);
+          }
+
+          const sums = read('SHA256SUMS');
+          const listed = [];
+          for (const line of sums.toString('utf8').split('\n').filter(Boolean)) {
+            const l = /^([0-9a-f]{64}) {2}(\S+)$/.exec(line);
+            if (!l) fail(`SHA256SUMS has a malformed line: ${line}`);
+            if (!present.includes(l[2]) || l[2] === 'SHA256SUMS') fail(`SHA256SUMS names ${l[2]}`);
+            if (sha(read(l[2])) !== l[1]) fail(`SHA256SUMS does not match ${l[2]}`);
+            listed.push(l[2]);
+          }
+          if (JSON.stringify(listed.sort()) !== JSON.stringify([node16, bundler, 'MANIFEST.json'].sort())) fail(`SHA256SUMS lists ${listed.join(', ')}`);
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nsums=${sha(sums)}\n`);
+          console.log(`platform-core ${version} at ${manifest.gitSha}: ${expected.join(', ')} verified`);
+          JS
+          ( cd "$RUNNER_TEMP/platform-core" && sha256sum -c SHA256SUMS )
+
+      - name: Pack again and compare
+        run: |
+          rm -rf "$RUNNER_TEMP/platform-core-again"
+          node dreamstreamcomicstudio/packages/platform-core/scripts/export.mjs --out "$RUNNER_TEMP/platform-core-again"
+          diff -r "$RUNNER_TEMP/platform-core" "$RUNNER_TEMP/platform-core-again"
+          echo "two packs are byte-identical"
+
+      - name: Keep the files with the run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-core-release
+          path: ${{ runner.temp }}/platform-core
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish the GitHub release
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack both flavours
+        run: |
+          rm -rf "$RUNNER_TEMP/platform-core"
+          node dreamstreamcomicstudio/packages/platform-core/scripts/export.mjs --out "$RUNNER_TEMP/platform-core"
+
+      - name: Check the rebuild matches the pack job
+        env:
+          PACKED_SUMS: ${{ needs.pack.outputs.sums }}
+        run: |
+          ( cd "$RUNNER_TEMP/platform-core" && sha256sum -c SHA256SUMS )
+          rebuilt="$(sha256sum "$RUNNER_TEMP/platform-core/SHA256SUMS" | cut -d ' ' -f 1)"
+          if [ -z "$PACKED_SUMS" ] || [ "$rebuilt" != "$PACKED_SUMS" ]; then
+            echo "::error::the rebuilt SHA256SUMS ($rebuilt) is not the one the pack job verified (${PACKED_SUMS:-none})"
+            exit 1
+          fi
+          echo "the rebuild is byte-identical to the verified pack"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.pack.outputs.version }}
+        run: |
+          dir="$RUNNER_TEMP/platform-core"
+          prerelease=()
+          case "$VERSION" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+          notes="The DreamStream platform contract, @dreamstream/platform-core $VERSION.
+
+          Verify: sha256sum -c SHA256SUMS. MANIFEST.json lists the sha256 of every file in each tarball.
+          Rebuild: git clone --depth 1 --branch $GITHUB_REF_NAME https://github.com/$GITHUB_REPOSITORY, then
+          node dreamstreamcomicstudio/packages/platform-core/scripts/export.mjs --out dist gives the same bytes.
+          Changes: dreamstreamcomicstudio/packages/platform-core/CHANGELOG.md. Wire contract: dreamstreamcomicstudio/docs/platform/contract.md."
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "platform-core $VERSION" \
+            --notes "$notes" \
+            "${prerelease[@]}" \
+            "$dir/platform-core-$VERSION.tgz" \
+            "$dir/platform-core-bundler-$VERSION.tgz" \
+            "$dir/MANIFEST.json" \
+            "$dir/SHA256SUMS"

@@ -10,16 +10,23 @@
 import { del, get, patch as apiPatch, post, postStream } from '../../services/apiClient';
 import { buildApiUrl } from '../../services/clientConfig';
 import { readSSEStream } from '../../services/sse';
-import { normalizeDoc, type ComicDoc, type QualityTier, type RefAsset, type RefLabel, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
+import { REDRAW_SCOPES, normalizeDoc, type ComicDoc, type QualityTier, type RedrawScope, type RefAsset, type RefLabel, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import { STREAM_EVENT_NAMES, type StreamRequest, type StudioEvent } from '../../shared/comic/events';
-import type { ImageModelSpec, TierPreset } from '../../shared/comic/models';
-import type { DocOp } from '../../shared/comic/ops';
-import { DEFAULT_CAPS, type StudioCaps } from '../../shared/comic/capabilities';
+import { getImageModel, type ImageModelSpec, type TierPreset } from '../../shared/comic/models';
+import type { DocOp, StudioAction } from '../../shared/comic/ops';
+import type { StudioActOutcome } from './types';
+import { DEFAULT_CAPS, sanitizeStudioUsage, type StudioCaps } from '../../shared/comic/capabilities';
+import { anchorKindsOf } from '../../shared/comic/anchors';
+import { MAX_ALTERNATIVES } from '../../shared/comic/limits';
 import { CONTENT_RATINGS, type ContentRating } from '../../shared/comic/safety';
 import { refOwnerKey } from '../../shared/comic/refs';
 import type { LibraryIndex, LibraryKind, LibraryQuote, LibraryRunView } from '../../shared/comic/library';
+import { SLUG_RE } from '../../shared/comic/publication';
+import type { VersionRow } from '../../shared/comic/history/types';
 import type {
   PublicComicPayload,
+  PublicPublicationInfo,
+  ReaderLanguage,
   PublicationOwnerView,
   PublicationSettingsPatch,
   PublishRequest,
@@ -45,7 +52,16 @@ export type StudioApiErrorKind =
   | 'connection_lost'
   | 'server'
   | 'not_available'
-  | 'aborted';
+  | 'aborted'
+  // v5 server codes (contract §12.9): each maps to calm, honest copy.
+  /** 422 CONTENT_POLICY / SAFETY_BLOCKED: past this comic's rating — nothing was changed. */
+  | 'content_policy'
+  /** 429 COOLDOWN: a short safety break on new drawings and uploads (reading/editing still work). */
+  | 'cooldown'
+  /** 409 LIMIT: a count limit (refs, pages, editions, doc size). */
+  | 'limit'
+  /** 422 NOT_READY / LANG_INCOMPLETE: something has to be finished first. */
+  | 'not_ready';
 
 export class StudioApiError extends Error {
   readonly kind: StudioApiErrorKind;
@@ -53,16 +69,19 @@ export class StudioApiError extends Error {
   readonly status: number;
   /** Whether "Try again" is a sensible next step. */
   readonly retryable: boolean;
-  /** Raw server/transport message, for logs. */
+  /** Raw server/transport message, for logs. Never shown to the user. */
   readonly detail?: string;
+  /** Server error code (`CONTENT_POLICY`, `COOLDOWN`, `LIMIT`, `NOT_READY`, …) when it sent one. */
+  readonly code?: string;
 
-  constructor(kind: StudioApiErrorKind, message: string, opts: { status?: number; retryable?: boolean; detail?: string } = {}) {
+  constructor(kind: StudioApiErrorKind, message: string, opts: { status?: number; retryable?: boolean; detail?: string; code?: string } = {}) {
     super(message);
     this.name = 'StudioApiError';
     this.kind = kind;
     this.status = opts.status ?? 0;
     this.retryable = opts.retryable ?? false;
     if (opts.detail) this.detail = opts.detail;
+    if (opts.code) this.code = opts.code;
   }
 }
 
@@ -83,7 +102,116 @@ interface ErrorLike {
   status?: unknown;
   message?: unknown;
   name?: unknown;
+  code?: unknown;
+  details?: unknown;
 }
+
+/** Bare HTTP status texts apiClient falls back to when the body had no message. */
+const STATUS_TEXT_RE =
+  /^(bad request|unauthorized|payment required|forbidden|not found|conflict|unprocessable (entity|content)|too many requests|internal server error|not implemented|bad gateway|service unavailable|gateway timeout)$/i;
+/** Text that reads like a stack, a driver/transport error or markup — never shown to a user. */
+const TECHNICAL_RE =
+  /(\b(TypeError|ReferenceError|SyntaxError|RangeError|AbortError|DOMException|Exception|ECONN[A-Z]+|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|fetch failed|Failed to fetch|NetworkError|Load failed|status code|Unexpected token|violates|constraint|stack trace|undefined|NaN|postgres|PGRST\w*|supabase|jwt|bearer|is not a function|is not defined|Cannot read propert(y|ies)|JSON)\b|\bError:|<\/?[a-z!][^>]*>|[{}]|\n\s+at\s)/i;
+
+/**
+ * True when a server message is calm, human copy the studio may show verbatim (the studio
+ * routes send user-safe `userMessage`s). Bare codes, status texts, stack-ish or driver text,
+ * markup and very long strings are not — the caller shows its own copy instead.
+ */
+export const isFriendlyMessage = (text: unknown): text is string => {
+  if (typeof text !== 'string') return false;
+  const t = text.trim();
+  if (t.length < 4 || t.length > 280) return false;
+  if (/^[A-Z0-9_.:-]+$/.test(t)) return false; // a bare code ("NOT_AVAILABLE")
+  if (STATUS_TEXT_RE.test(t)) return false;
+  return !TECHNICAL_RE.test(t);
+};
+
+const CODE_RE = /^[A-Z][A-Z0-9_]{1,40}$/;
+
+/** The server's error code: apiClient keeps the JSON body in `details` (`{error:{message, code}}`). */
+export const errorCodeOf = (err: unknown): string | undefined => {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as ErrorLike;
+  const pick = (v: unknown) => (typeof v === 'string' && CODE_RE.test(v) ? v : undefined);
+  const details = e.details && typeof e.details === 'object' ? (e.details as { code?: unknown; error?: { code?: unknown } }) : undefined;
+  return pick(e.code) ?? pick(details?.error?.code) ?? pick(details?.code);
+};
+
+interface CodeCopy {
+  kind: StudioApiErrorKind;
+  /** Calm fallback when the server's own text isn't fit to show. */
+  message: string;
+  retryable: boolean;
+}
+
+/**
+ * Server codes → kind + honest fallback copy (contract §12.9). The server's text wins when it is
+ * friendly (it is more specific: "Maya can hold 12 photos — remove one to add more.").
+ */
+export const STUDIO_ERROR_COPY: Readonly<Record<string, CodeCopy>> = {
+  CONTENT_POLICY: {
+    kind: 'content_policy',
+    message: "That goes past what this comic allows, so nothing was changed. Try different wording — bold action and spooky moments are fine.",
+    retryable: false
+  },
+  SAFETY_BLOCKED: {
+    kind: 'content_policy',
+    message: 'A page needs a safety fix before this can go ahead. Redraw it a little safer or remove it, then try again.',
+    retryable: false
+  },
+  COOLDOWN: {
+    kind: 'cooldown',
+    message: "Let's take a short break from new drawings and uploads. You can keep reading and editing — it opens again in a few minutes.",
+    retryable: true
+  },
+  LIMIT: {
+    kind: 'limit',
+    message: 'This comic is at its limit for that. Remove something first, then try again.',
+    retryable: false
+  },
+  NOT_READY: {
+    kind: 'not_ready',
+    message: "That isn't ready yet — finish what it needs first, then try again.",
+    retryable: false
+  },
+  LANG_INCOMPLETE: {
+    kind: 'not_ready',
+    message: "A language edition isn't finished yet. Review its translation, then try again.",
+    retryable: false
+  },
+  RATE_LIMIT: {
+    kind: 'rate_limit',
+    message: 'Lots of requests at once — give it a few seconds and try again.',
+    retryable: true
+  },
+  CONFLICT: {
+    kind: 'conflict',
+    message: "That's busy right now — try again once the current drawing finishes.",
+    retryable: true
+  },
+  NOT_AVAILABLE: {
+    kind: 'not_available',
+    message: "That isn't available yet.",
+    retryable: false
+  },
+  // Restricted accounts (contract §7, P1-ROUTES) — the server always sends its own calm text for those
+  // ("Your account is limited right now, so …"), which wins. This is only the fallback for a FORBIDDEN
+  // with no usable text, and FORBIDDEN also covers other 403s (not your comic, admins only, an origin
+  // check), so it claims nothing about a review or moderation.
+  FORBIDDEN: {
+    kind: 'forbidden',
+    message: "Your account can't do that right now. You can keep reading and editing your comic.",
+    retryable: false
+  }
+};
+
+/** The message to show for a coded server refusal (stream `error` events and HTTP errors). */
+export const friendlyErrorMessage = (code: string | undefined, message: unknown, fallback = 'Something went wrong in the studio.'): string => {
+  if (isFriendlyMessage(message)) return message.trim();
+  const copy = code ? STUDIO_ERROR_COPY[code] : undefined;
+  return copy ? copy.message : fallback;
+};
 
 /**
  * Map any thrown error (apiClient ApiError, fetch TypeError, our own) to a StudioApiError
@@ -96,12 +224,21 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
   const e = (err && typeof err === 'object' ? err : {}) as ErrorLike;
   const status = typeof e.status === 'number' ? e.status : undefined;
   const raw = typeof e.message === 'string' ? e.message.trim() : '';
-  // apiClient falls back to the HTTP status text when the body has no message.
-  const serverSaid = raw && !/^(bad request|unauthorized|payment required|forbidden|not found|conflict|internal server error|bad gateway|service unavailable|gateway timeout)$/i.test(raw) ? raw : '';
+  // Only calm, human server text is ever shown; status texts, codes and stack-ish text are not.
+  const serverSaid = isFriendlyMessage(raw) ? raw : '';
+  const code = errorCodeOf(err);
+
+  // A coded refusal (contract §12.9) maps by code; 401/404 keep their context-specific copy.
+  const coded = code && status !== 401 && status !== 404 ? STUDIO_ERROR_COPY[code] : undefined;
+  if (coded) {
+    return new StudioApiError(coded.kind, serverSaid || coded.message, { status: status ?? 0, retryable: coded.retryable, detail: raw, code });
+  }
+  const withCode = code ? { code } : {};
 
   switch (status) {
     case undefined:
-      return new StudioApiError('network', raw || 'Something went wrong talking to the studio.', { retryable: true, detail: raw });
+      // No HTTP status: a client/transport exception, never server copy — don't show its text.
+      return new StudioApiError('network', 'Something went wrong talking to the studio. Try again in a moment.', { retryable: true, detail: raw });
     case 0:
       return new StudioApiError(
         'network',
@@ -114,10 +251,10 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
       return new StudioApiError(
         'billing',
         serverSaid || "You're out of studio credit for now. Top up, or connect your own Gemini or OpenRouter key in Settings → API keys.",
-        { status, detail: raw }
+        { status, detail: raw, ...withCode }
       );
     case 403:
-      return new StudioApiError('forbidden', serverSaid || "You don't have access to do that with this comic.", { status, detail: raw });
+      return new StudioApiError('forbidden', serverSaid || "You don't have access to do that with this comic.", { status, detail: raw, ...withCode });
     case 404:
       return new StudioApiError(
         'not_found',
@@ -129,7 +266,7 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
         { status, detail: raw }
       );
     case 409:
-      return new StudioApiError('conflict', serverSaid || 'That changed in the meantime — refresh and try again.', { status, retryable: true, detail: raw });
+      return new StudioApiError('conflict', serverSaid || 'That changed in the meantime — refresh and try again.', { status, retryable: true, detail: raw, ...withCode });
     case 429:
       return new StudioApiError('rate_limit', 'Too many requests in a short time. Give it a few seconds and try again.', {
         status,
@@ -139,7 +276,8 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
     case 501:
       return new StudioApiError('not_available', serverSaid && !/not.?implemented|not_available/i.test(serverSaid) ? serverSaid : "That isn't available yet.", {
         status,
-        detail: raw
+        detail: raw,
+        ...withCode
       });
     default:
       if (status >= 500) {
@@ -151,7 +289,7 @@ export const toStudioApiError = (err: unknown, context: 'project' | 'public' | '
           { status, retryable: true, detail: raw }
         );
       }
-      return new StudioApiError('bad_request', serverSaid || "The studio couldn't do that.", { status, detail: raw });
+      return new StudioApiError('bad_request', serverSaid || "The studio couldn't do that — nothing was changed.", { status, detail: raw, ...withCode });
   }
 };
 
@@ -197,6 +335,17 @@ export const asCaps = (v: unknown): StudioCaps | undefined => {
   if (typeof v.customFonts === 'boolean') caps.customFonts = v.customFonts;
   if (typeof v.ratingCeiling === 'string' && (CONTENT_RATINGS as readonly string[]).includes(v.ratingCeiling)) caps.ratingCeiling = v.ratingCeiling as ContentRating;
   if (typeof v.admin === 'boolean') caps.admin = v.admin;
+  // Optional fields: absent on the wire = off / unknown, so they are copied only when well formed.
+  const usage = sanitizeStudioUsage(v.usage);
+  if (usage) caps.usage = usage;
+  if (v.history === true) caps.history = true;
+  if (typeof v.maxAlternatives === 'number' && Number.isFinite(v.maxAlternatives) && v.maxAlternatives >= 1) {
+    caps.maxAlternatives = Math.min(Math.floor(v.maxAlternatives), MAX_ALTERNATIVES);
+  }
+  if (isObject(v.anchorKinds)) {
+    const k = v.anchorKinds;
+    caps.anchorKinds = anchorKindsOf({ places: k.places === true, props: k.props === true, styleKey: k.styleKey === true, sheetV2: k.sheetV2 === true });
+  }
   return caps;
 };
 
@@ -234,11 +383,61 @@ export async function loadStudioProject(id: string, opts: { signal?: AbortSignal
   }
 }
 
-/** Published comic for the public reader. Works logged out (the token is optional). */
-export async function loadPublicComic(id: string, opts: { signal?: AbortSignal } = {}): Promise<{ doc: ComicDoc; urls: Record<string, string> }> {
+/** GET /api/comic/public/:id as the legacy `/?view=read&id=` reader reads it (contract §14.1, as amended). */
+export interface PublicComicByIdResult {
+  doc: ComicDoc;
+  urls: Record<string, string>;
+  /** The reader languages (source first). Empty when an older server sent none. */
+  languages: ReaderLanguage[];
+  /** Set when `?lang=` named a published edition (the doc is localized). */
+  lang?: string;
+  /** A live publication (non-owners): the reader can replaceState to `/c/<publication.slug>`. */
+  publication?: PublicPublicationInfo;
+  /** The owner's sanitized private preview (no publication; never shared). */
+  preview?: true;
+}
+
+const LANG_CODE_RE = /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/;
+
+const asReaderLanguages = (v: unknown): ReaderLanguage[] => {
+  if (!Array.isArray(v)) return [];
+  const out: ReaderLanguage[] = [];
+  for (const l of v.slice(0, 64)) {
+    if (!isObject(l) || typeof l.code !== 'string' || !LANG_CODE_RE.test(l.code)) continue;
+    const text = (x: unknown) => (typeof x === 'string' ? x.slice(0, 80) : '');
+    out.push({ code: l.code, endonym: text(l.endonym) || l.code, english: text(l.english) || l.code, complete: l.complete === true, isSource: l.isSource === true });
+  }
+  return out;
+};
+
+/** A publication block only when it carries a well-formed slug (a link must never be built from junk). */
+const asPublicPublication = (v: unknown): PublicPublicationInfo | undefined =>
+  isObject(v) && typeof v.slug === 'string' && SLUG_RE.test(v.slug) && (v.visibility === 'public' || v.visibility === 'unlisted')
+    ? (v as unknown as PublicPublicationInfo)
+    : undefined;
+
+/**
+ * Published comic for the public reader. Works logged out (the token is optional). Keeps the
+ * amended fields: `languages`, `lang`, and either `publication` (anyone else: the live, public
+ * publication — the legacy reader can move to /c/<slug>) or `preview: true` (the owner).
+ */
+export async function loadPublicComic(id: string, opts: { signal?: AbortSignal; lang?: string } = {}): Promise<PublicComicByIdResult> {
   try {
-    const res = await get<{ doc?: unknown; urls?: unknown }>(`/api/comic/public/${encodeURIComponent(id)}`, { signal: opts.signal });
-    return { doc: asDoc(res?.doc), urls: asUrls(res?.urls) };
+    const q = opts.lang && LANG_CODE_RE.test(opts.lang) ? `?lang=${encodeURIComponent(opts.lang)}` : '';
+    const res = await get<{ doc?: unknown; urls?: unknown; languages?: unknown; lang?: unknown; publication?: unknown; preview?: unknown }>(
+      `/api/comic/public/${encodeURIComponent(id)}${q}`,
+      { signal: opts.signal }
+    );
+    const publication = res?.preview === true ? undefined : asPublicPublication(res?.publication);
+    const lang = typeof res?.lang === 'string' && LANG_CODE_RE.test(res.lang) ? res.lang : undefined;
+    return {
+      doc: asDoc(res?.doc),
+      urls: asUrls(res?.urls),
+      languages: asReaderLanguages(res?.languages),
+      ...(lang ? { lang } : {}),
+      ...(publication ? { publication } : {}),
+      ...(res?.preview === true ? { preview: true as const } : {})
+    };
   } catch (err) {
     throw toStudioApiError(err, 'public');
   }
@@ -269,6 +468,47 @@ export async function signStudioUrls(id: string, paths: string[]): Promise<Recor
   return out;
 }
 
+// ── Image model change (models.md §3.4 item 7, §3.6 C) ───────────────────────
+
+export type ChangeImageModelAction = Extract<StudioAction, { type: 'change_image_model' }>;
+
+export interface ChangeImageModelInput {
+  /** A registry id (a route id resolves to its registry id; anything else is refused here). */
+  modelId: string;
+  redraw: RedrawScope;
+  /** The redraw quote the user saw in the confirm (the server re-quotes on drift > 15% + $0.01). 0 for 'none'. */
+  quotedUsd: number;
+}
+
+/**
+ * The `change_image_model` action exactly as the confirm sends it: `ack: true` (the user confirmed the
+ * "consistency can be affected" dialog), a registry id, a known redraw scope and a finite, non-negative quote
+ * (rounded to 4 decimals; 'none' always quotes 0). Throws a calm StudioApiError for anything else, so a malformed
+ * switch never reaches the server. Only ModelChangeConfirm builds it — nothing switches a model without the confirm.
+ */
+export const buildChangeImageModelAction = (input: ChangeImageModelInput): ChangeImageModelAction => {
+  const spec = typeof input?.modelId === 'string' ? getImageModel(input.modelId) : undefined;
+  if (!spec) throw new StudioApiError('bad_request', "That model isn't available in Comic Studio — nothing was changed.");
+  if (!REDRAW_SCOPES.includes(input.redraw)) throw new StudioApiError('bad_request', 'Choose what should happen to the drawn images — nothing was changed.');
+  const quote = input.redraw === 'none' ? 0 : input.quotedUsd;
+  if (typeof quote !== 'number' || !Number.isFinite(quote) || quote < 0) {
+    throw new StudioApiError('bad_request', "This redraw can't be priced yet — nothing was changed.");
+  }
+  return { type: 'change_image_model', modelId: spec.id, redraw: input.redraw, quotedUsd: Math.round(quote * 10000) / 10000, ack: true };
+};
+
+/**
+ * Switch the comic's image model through the controller's `act` (the action streams like every other one, so its
+ * notice, gate or re-quote lands in the conversation). Resolves the action's outcome; rejects only when the input
+ * is invalid (buildChangeImageModelAction).
+ */
+export async function changeImageModel(
+  act: (action: StudioAction) => Promise<StudioActOutcome | void>,
+  input: ChangeImageModelInput
+): Promise<StudioActOutcome | void> {
+  return act(buildChangeImageModelAction(input));
+}
+
 export async function getStudioModels(): Promise<{ models: ImageModelSpec[]; tiers: Record<QualityTier, TierPreset> }> {
   try {
     const res = await get<{ models?: unknown; tiers?: unknown }>('/api/comic/models');
@@ -284,6 +524,13 @@ export async function getStudioModels(): Promise<{ models: ImageModelSpec[]; tie
 // ── Stream ───────────────────────────────────────────────────────────────────
 
 const EVENT_NAMES = new Set<string>(STREAM_EVENT_NAMES);
+
+/**
+ * The `done` event as this client reads it: exactly the shared shape (shared/comic/events.ts), whose optional
+ * `beforeVersionId` names the moment a `history_restore` stream saved just before the restore (versions plan §6.1
+ * step 8), so the restore toast's Undo needs no lookup. An older server simply never sends it.
+ */
+export type StudioDoneEvent = Extract<StudioEvent, { type: 'done' }>;
 
 /**
  * Parse one SSE block into a StudioEvent. The data is the event JSON; its `type` wins,
@@ -312,7 +559,16 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
       const rev = num(parsed.rev);
       if (rev === undefined || !Array.isArray(parsed.ops)) return null;
       const ops = parsed.ops.filter((op) => isObject(op) && typeof op.op === 'string');
-      return { type: 'ops', rev, ops: ops as unknown as Extract<StudioEvent, { type: 'ops' }>['ops'] };
+      // origin: who caused the batch (the undo stack takes 'director' batches); label: undo text.
+      const origin = parsed.origin === 'user' || parsed.origin === 'director' || parsed.origin === 'job' ? parsed.origin : undefined;
+      const label = str(parsed.label)?.trim().slice(0, 120);
+      return {
+        type: 'ops',
+        rev,
+        ops: ops as unknown as Extract<StudioEvent, { type: 'ops' }>['ops'],
+        ...(origin ? { origin } : {}),
+        ...(label ? { label } : {})
+      };
     }
     case 'delta': {
       const msgId = str(parsed.msgId);
@@ -323,24 +579,45 @@ export const parseStudioEvent = (eventName: string, data: string): StudioEvent |
       const id = str(parsed.id);
       const phase = parsed.phase === 'end' ? 'end' : parsed.phase === 'start' ? 'start' : undefined;
       if (!id || !phase) return null;
+      const cost = parsed.cost === 'free' || parsed.cost === 'text' || parsed.cost === 'image' ? parsed.cost : undefined;
       return {
         type: 'activity',
         id,
         label: str(parsed.label) || '',
         phase,
-        ...(typeof parsed.ok === 'boolean' ? { ok: parsed.ok } : {})
+        ...(typeof parsed.ok === 'boolean' ? { ok: parsed.ok } : {}),
+        ...(cost ? { cost } : {})
       };
     }
     case 'urls':
       return { type: 'urls', urls: asUrls(parsed.urls) };
-    case 'error':
+    case 'error': {
+      // Coded refusals get calm copy; a raw/technical message never reaches the UI.
+      const code = str(parsed.code) && CODE_RE.test(str(parsed.code)!) ? str(parsed.code) : undefined;
       return {
         type: 'error',
-        message: str(parsed.message)?.trim() || 'Something went wrong in the studio.',
-        ...(str(parsed.code) ? { code: str(parsed.code) } : {})
+        message: friendlyErrorMessage(code, str(parsed.message)),
+        ...(code ? { code } : {})
       };
-    case 'done':
-      return { type: 'done', rev: num(parsed.rev) ?? -1, spentUsd: num(parsed.spentUsd) ?? 0 };
+    }
+    case 'done': {
+      const saved = num(parsed.savedUsd);
+      // Comic History: only a non-empty string id passes (anything else is dropped, never coerced).
+      const before = str(parsed.beforeVersionId);
+      const done: StudioDoneEvent = {
+        type: 'done',
+        rev: num(parsed.rev) ?? -1,
+        spentUsd: num(parsed.spentUsd) ?? 0,
+        ...(saved !== undefined && saved > 0 ? { savedUsd: saved } : {}),
+        ...(before ? { beforeVersionId: before } : {})
+      };
+      return done;
+    }
+    // --- history: a moment was saved. Only a plain object that names its moment (a non-empty string id: the panel merges
+    //     live rows by id) passes; the reducer stores it as lastHistoryVersion (an open History panel updates live) and
+    //     resyncs after a restore or a switch. Never sent while COMIC_HISTORY is off. ---
+    case 'history':
+      return isObject(parsed.version) && str(parsed.version.id) ? { type: 'history', version: parsed.version as unknown as VersionRow } : null;
     default:
       return null;
   }
@@ -467,24 +744,36 @@ const enc = encodeURIComponent;
 
 class HttpStatusError extends Error {
   readonly status: number;
-  constructor(message: string, status: number) {
+  readonly code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = 'HttpStatusError';
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
-/** Server message from a JSON error body (`{error:{message}}` or `{message}`), else the status text. */
+/** `{error:{message, code}}` (or `{message, code}`) from a JSON error body. */
+const errorFromBody = (body: unknown, status: number, statusText: string): HttpStatusError => {
+  let message = statusText || '';
+  let code: string | undefined;
+  if (isObject(body)) {
+    const src = isObject(body.error) ? body.error : body;
+    if (typeof src.message === 'string' && src.message.trim()) message = src.message.trim();
+    if (typeof src.code === 'string' && CODE_RE.test(src.code)) code = src.code;
+  }
+  return new HttpStatusError(message, status, code);
+};
+
+/** Server message + code from a JSON error body, else the status text. */
 const errorFromResponse = async (res: Response): Promise<HttpStatusError> => {
-  let message = res.statusText || '';
+  let body: unknown;
   try {
-    const body = (await res.json()) as { error?: { message?: unknown }; message?: unknown };
-    const m = isObject(body?.error) ? body.error.message : body?.message;
-    if (typeof m === 'string' && m.trim()) message = m.trim();
+    body = await res.json();
   } catch {
     /* not JSON */
   }
-  return new HttpStatusError(message, res.status);
+  return errorFromBody(body, res.status, res.statusText);
 };
 
 /** fetch that maps a transport failure to status 0 and keeps aborts as aborts. */
@@ -552,39 +841,110 @@ export interface RefUploadResponse {
   urls: Record<string, string>;
 }
 
+/** Parse a refs upload answer (201 `{ref, rev, ops, urls, notice?}` · 200 `{duplicateOf}`). */
+const asRefUploadResponse = (raw: unknown): RefUploadResponse => {
+  const body = isObject(raw) ? raw : {};
+  const ref = isObject(body.ref) && typeof body.ref.path === 'string' ? (body.ref as unknown as RefAsset) : undefined;
+  const notice =
+    isObject(body.notice) && body.notice.kind === 'near_duplicate' && typeof body.notice.of === 'string'
+      ? { kind: 'near_duplicate' as const, of: body.notice.of }
+      : undefined;
+  return {
+    ...(ref ? { ref } : {}),
+    ...(typeof body.duplicateOf === 'string' && body.duplicateOf ? { duplicateOf: body.duplicateOf } : {}),
+    ...(notice ? { notice } : {}),
+    ...(typeof body.rev === 'number' && Number.isFinite(body.rev) ? { rev: body.rev } : {}),
+    ops: asOps(body.ops),
+    urls: asUrls(body.urls)
+  };
+};
+
+const refUploadPath = (id: string, params: RefUploadParams): string => {
+  const q = new URLSearchParams({ to: refOwnerKey(params.to) });
+  if (params.label) q.set('label', params.label);
+  if (params.name) q.set('name', params.name);
+  if (params.hash && /^[0-9a-f]{16}$/.test(params.hash)) q.set('hash', params.hash);
+  if (typeof params.index === 'number' && Number.isInteger(params.index) && params.index >= 0) q.set('index', String(params.index));
+  return `${projectPath(id)}/refs?${q.toString()}`;
+};
+
+/** Upload progress is reported up to this fraction; the rest is the server's safety check. */
+export const UPLOAD_SENT_FRACTION = 0.95;
+/** A stuck upload gives up after this long (phones on bad networks). */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
+export interface RefUploadTransportOptions {
+  signal?: AbortSignal;
+  /** 0..1. Bytes sent map to 0..0.95; 1 once the server has checked and stored the image. Uses XHR. */
+  onProgress?: (fraction: number) => void;
+  /** Injected XMLHttpRequest (tests). */
+  XHR?: typeof XMLHttpRequest;
+}
+
+/** XHR transport: real upload progress, abort via the signal, the user's bearer token, no provider keys. */
+const xhrUpload = (path: string, file: Blob, headers: Record<string, string>, opts: RefUploadTransportOptions, Ctor: typeof XMLHttpRequest): Promise<unknown> =>
+  new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const xhr = new Ctor();
+    let settled = false;
+    const onAbort = () => xhr.abort();
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      opts.signal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+    xhr.open('POST', buildApiUrl(path));
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.timeout = UPLOAD_TIMEOUT_MS;
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
+    if (xhr.upload && opts.onProgress) {
+      xhr.upload.onprogress = (e: ProgressEvent) => {
+        if (e.lengthComputable && e.total > 0) opts.onProgress?.(Math.min(UPLOAD_SENT_FRACTION, (e.loaded / e.total) * UPLOAD_SENT_FRACTION));
+      };
+    }
+    xhr.onload = () =>
+      finish(() => {
+        const text = typeof xhr.responseText === 'string' ? xhr.responseText : '';
+        let body: unknown;
+        try {
+          body = text ? JSON.parse(text) : undefined;
+        } catch {
+          body = undefined;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body);
+        else reject(errorFromBody(body, xhr.status, xhr.statusText || ''));
+      });
+    xhr.onerror = () => finish(() => reject(new HttpStatusError('network error', 0)));
+    xhr.ontimeout = () => finish(() => reject(new HttpStatusError('upload timed out', 0)));
+    xhr.onabort = () => finish(() => reject(abortError()));
+    xhr.send(file);
+  });
+
 /**
  * POST /projects/:id/refs — raw image body (≤ 10 MB after the client downscale).
- * 201 {ref, rev, ops, urls, notice?} · 200 {duplicateOf} · 409 LIMIT · 415 · 422 CONTENT_POLICY.
- * Plain fetch (no progress); P1-CLIENTSTATE swaps in XHR for progress + abort.
+ * 201 {ref, rev, ops, urls, notice?} · 200 {duplicateOf} · 409 LIMIT · 415 · 422 CONTENT_POLICY · 429 COOLDOWN.
+ * With `onProgress` (and an XMLHttpRequest) it uploads via XHR for real progress; otherwise fetch.
+ * Either way the signal aborts it, and failures are StudioApiErrors with calm copy.
  */
-export async function uploadStudioRef(id: string, file: Blob, params: RefUploadParams, opts: { signal?: AbortSignal } = {}): Promise<RefUploadResponse> {
+export async function uploadStudioRef(id: string, file: Blob, params: RefUploadParams, opts: RefUploadTransportOptions = {}): Promise<RefUploadResponse> {
   return call('project', async () => {
-    const q = new URLSearchParams({ to: refOwnerKey(params.to) });
-    if (params.label) q.set('label', params.label);
-    if (params.name) q.set('name', params.name);
-    if (params.hash) q.set('hash', params.hash);
-    if (typeof params.index === 'number' && Number.isInteger(params.index) && params.index >= 0) q.set('index', String(params.index));
-    const res = await rawFetch(`${projectPath(id)}/refs?${q.toString()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': file.type || 'application/octet-stream', ...(await authHeader()) },
-      body: file,
-      signal: opts.signal
-    });
+    const path = refUploadPath(id, params);
+    const headers = { 'Content-Type': file.type || 'application/octet-stream', ...(await authHeader()) };
+    const Ctor = opts.XHR || (opts.onProgress && typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined);
+    if (Ctor) {
+      const body = await xhrUpload(path, file, headers, opts, Ctor);
+      opts.onProgress?.(1);
+      return asRefUploadResponse(body);
+    }
+    const res = await rawFetch(path, { method: 'POST', headers, body: file, signal: opts.signal });
     if (!res.ok) throw await errorFromResponse(res);
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const ref = isObject(body.ref) && typeof body.ref.path === 'string' ? (body.ref as unknown as RefAsset) : undefined;
-    const notice =
-      isObject(body.notice) && body.notice.kind === 'near_duplicate' && typeof body.notice.of === 'string'
-        ? { kind: 'near_duplicate' as const, of: body.notice.of }
-        : undefined;
-    return {
-      ...(ref ? { ref } : {}),
-      ...(typeof body.duplicateOf === 'string' && body.duplicateOf ? { duplicateOf: body.duplicateOf } : {}),
-      ...(notice ? { notice } : {}),
-      ...(typeof body.rev === 'number' && Number.isFinite(body.rev) ? { rev: body.rev } : {}),
-      ops: asOps(body.ops),
-      urls: asUrls(body.urls)
-    };
+    const out = asRefUploadResponse(await res.json().catch(() => ({})));
+    opts.onProgress?.(1);
+    return out;
   });
 }
 
@@ -601,11 +961,24 @@ export interface TranslationQuote {
   byok: boolean;
 }
 
-/** GET /projects/:id/translation-quote?langs= — the client never duplicates the price tables. */
-export async function getTranslationQuote(id: string, langs: string[], opts: { signal?: AbortSignal } = {}): Promise<TranslationQuote> {
+/**
+ * GET /projects/:id/translation-quote?langs= — the client never duplicates the price tables.
+ * Optional scope (the `translate` SpendAction's pageIds / lineIds / force, P2-AMEND): sent as
+ * `pageIds=`, `lineIds=` and `force=1`; a server that does not read them yet quotes the whole edition
+ * (an over-quote, never an under-quote — the spend is re-gated server-side either way).
+ */
+export async function getTranslationQuote(
+  id: string,
+  langs: string[],
+  opts: { signal?: AbortSignal; pageIds?: string[]; lineIds?: string[]; force?: boolean } = {}
+): Promise<TranslationQuote> {
   return call('project', async () => {
     const list = [...new Set(langs.filter((l) => typeof l === 'string' && l))];
-    const res = await get<Partial<TranslationQuote>>(`${projectPath(id)}/translation-quote?langs=${enc(list.join(','))}`, opts);
+    const ids = (v: string[] | undefined, max: number) => [...new Set((v || []).filter((x) => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x)))].slice(0, max);
+    const pageIds = ids(opts.pageIds, 200);
+    const lineIds = ids(opts.lineIds, 200);
+    const scope = `${pageIds.length ? `&pageIds=${enc(pageIds.join(','))}` : ''}${lineIds.length ? `&lineIds=${enc(lineIds.join(','))}` : ''}${opts.force ? '&force=1' : ''}`;
+    const res = await get<Partial<TranslationQuote>>(`${projectPath(id)}/translation-quote?langs=${enc(list.join(','))}${scope}`, opts.signal ? { signal: opts.signal } : {});
     return {
       perLanguage: Array.isArray(res?.perLanguage) ? res.perLanguage : [],
       usd: typeof res?.usd === 'number' && Number.isFinite(res.usd) ? res.usd : 0,
@@ -656,16 +1029,20 @@ export async function requestSafetyReview(id: string, body: { target: RenderTarg
 
 export type ReportReason = 'sexual' | 'violent' | 'hateful' | 'self_harm' | 'real_person' | 'copyright' | 'other';
 
-/** POST /api/comic/public/s/:slug/report — always 202 (even for an unknown slug). Anonymous. */
+/**
+ * POST /api/comic/public/s/:slug/report — always 202 (even for an unknown slug). Works logged out;
+ * a signed-in reader's bearer token is sent (optionalAuth reads it), so their report counts as one
+ * signed-in reporter (weight 1) instead of an anonymous one (0.5). Still no cookies or provider keys.
+ */
 export async function reportPublicComic(
   slug: string,
   body: { reason: ReportReason; pageN?: number; note?: string; turnstileToken?: string },
   opts: { signal?: AbortSignal } = {}
 ): Promise<void> {
-  await call('public', () =>
+  await call('public', async () =>
     publicRequest<unknown>(`/api/comic/public/s/${enc(slug)}/report`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(await authHeader()) },
       body: JSON.stringify(body),
       signal: opts.signal
     })

@@ -2,8 +2,10 @@
 // execute: medium, linework, color, shading and what to avoid. Generic phrases like
 // "comic style" produce generic art, so every preset names concrete, drawable traits.
 // The `swatch` gradient is a UI-only preview used before any image exists.
+// Names, taglines and specs never name an artist, studio or brand (the library manifest lint
+// and stylePresets.test.ts enforce it): presets describe drawable traits, not someone's IP.
 
-import type { ColorMode, ComicKind } from './doc.js';
+import type { ColorMode, ComicDoc, ComicKind } from './doc.js';
 
 export interface StylePreset {
   id: string;
@@ -50,7 +52,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     id: 'ligne-claire',
     name: 'Ligne claire',
-    tagline: 'Clean even lines, flat bright color (Tintin-like)',
+    tagline: 'Clean even lines, flat bright color, Franco-Belgian adventure feel',
     spec:
       'European ligne claire comic art: uniform clean black outlines of even weight, no hatching, flat bright colors with minimal shading, detailed realistic backgrounds with simplified expressive characters, clear readable staging.',
     palette: ['#2a6fdb', '#f4d35e', '#ee964b', '#f5f1e6'],
@@ -127,7 +129,7 @@ export const STYLE_PRESETS: StylePreset[] = [
   {
     id: 'cozy-anime',
     name: 'Cozy anime',
-    tagline: 'Ghibli-esque warmth, lush backgrounds',
+    tagline: 'Warm hand-painted anime-film feel, lush backgrounds',
     spec:
       'Warm hand-painted anime film look: simple clean character designs with soft shading, lush detailed painted backgrounds full of greenery and light, warm golden-hour palette, gentle wind and everyday magic, expressive but restrained faces.',
     palette: ['#90be6d', '#f9c74f', '#577590', '#f8f4e3'],
@@ -177,3 +179,99 @@ export const STYLE_PRESETS: StylePreset[] = [
 ];
 
 export const getStylePreset = (id?: string) => (id ? STYLE_PRESETS.find((p) => p.id === id) : undefined);
+
+// ── Deterministic ranking (assets.md §9, contract §11.6) ─────────────────────
+// `rankPresets` lets the director show a FREE `style_presets` card with the best-fitting looks
+// without an LLM guess and without paid style renders. Pure, stable (ties keep catalogue order).
+
+/** Words in a brief that point at a `bestFor` tag (lower-case; matched on word boundaries). */
+const TAG_SYNONYMS: Readonly<Record<string, readonly string[]>> = {
+  action: ['action', 'fight', 'battle', 'chase', 'martial'],
+  superhero: ['superhero', 'super hero', 'hero', 'heroes', 'powers', 'villain', 'cape'],
+  'sci-fi': ['sci-fi', 'scifi', 'science fiction', 'space', 'robot', 'robots', 'alien', 'aliens', 'future', 'cyber', 'cyberpunk'],
+  crime: ['crime', 'heist', 'gangster', 'mob', 'murder', 'detective', 'noir'],
+  mystery: ['mystery', 'whodunit', 'detective', 'clue', 'clues', 'case'],
+  thriller: ['thriller', 'suspense', 'spy', 'conspiracy'],
+  adventure: ['adventure', 'quest', 'journey', 'expedition', 'treasure', 'explore', 'exploring'],
+  kids: ['kids', 'kid', 'children', 'child', 'toddler', 'toddlers', 'preschool', 'bedtime', 'picture book', 'nursery'],
+  travel: ['travel', 'trip', 'road trip', 'voyage'],
+  drama: ['drama', 'dramatic', 'family drama', 'coming of age'],
+  romance: ['romance', 'romantic', 'love', 'crush', 'date', 'wedding'],
+  'slice of life': ['slice of life', 'everyday', 'daily life', 'school', 'cozy', 'cosy', 'friendship'],
+  fantasy: ['fantasy', 'gothic', 'dark fantasy', 'magic', 'magical', 'dragon', 'dragons', 'wizard', 'witch', 'elf', 'fairy', 'enchanted'],
+  fable: ['fable', 'fairy tale', 'folk tale', 'moral', 'parable'],
+  family: ['family', 'grandma', 'grandpa', 'grandmother', 'grandfather', 'parents', 'siblings'],
+  horror: ['horror', 'scary', 'spooky', 'ghost', 'ghosts', 'monster', 'monsters', 'zombie', 'haunted', 'creepy'],
+  literary: ['literary', 'memoir', 'introspective', 'poetic'],
+  historical: ['historical', 'history', 'period', 'war', 'ancient', 'medieval', 'victorian'],
+  parody: ['parody', 'satire', 'spoof'],
+  'retro adventure': ['retro', 'pulp', 'vintage', '60s', '1960s'],
+  humor: ['humor', 'humour', 'funny', 'comedy', 'gag', 'gags', 'joke', 'jokes', 'silly', 'comic relief'],
+  'personal stories': ['personal', 'diary', 'autobiographical', 'my life', 'true story'],
+  experimental: ['experimental', 'zine', 'art school', 'abstract'],
+  strips: ['strip', 'strips', 'newspaper', 'four panel', '4-panel', 'webcomic'],
+  mythology: ['myth', 'mythology', 'mythic', 'gods', 'legend', 'epic']
+};
+
+/** Audience words → the tags that suit it (young readers get gentle looks). */
+const YOUNG_AUDIENCE_RE = /\b(kids?|child(?:ren)?|toddlers?|preschool(?:ers)?|bedtime|picture[- ]book|ages?\s*[1-8]\b|[1-8]\s*[-–]\s*[1-9]\b|family|young readers?)\b/i;
+const YOUNG_TAGS = ['kids', 'family', 'fable'];
+/** Presets whose look is too grim for very young readers (still allowed when asked for by name). */
+const GRIM_FOR_KIDS = new Set(['noir-ink', 'dark-fantasy', 'graphic-novel-painterly']);
+
+const lowerText = (...parts: Array<string | undefined>): string =>
+  parts
+    .filter((p): p is string => typeof p === 'string' && !!p.trim())
+    .join(' \n ')
+    .toLowerCase()
+    .slice(0, 4000);
+
+const hasWord = (text: string, word: string): boolean => {
+  if (!text || !word) return false;
+  const escaped = word.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'u').test(text);
+};
+
+/** Distinctive words of a preset's own name/id ("noir", "manga", "watercolor", "riso"…). */
+const presetNameWords = (p: StylePreset): string[] =>
+  [...new Set(`${p.id.replace(/-/g, ' ')} ${p.name}`.toLowerCase().split(/[^a-z0-9]+/))].filter(
+    (w) => w.length >= 4 && !['style', 'modern', 'graphic', 'novel', 'cartoon', 'dark'].includes(w)
+  );
+
+/** Fit score of one preset for a doc (exported for tests and the director's summary line). */
+export const presetFitScore = (p: StylePreset, doc: Pick<ComicDoc, 'brief' | 'format'>): number => {
+  const brief = doc.brief || ({} as ComicDoc['brief']);
+  const genre = lowerText(brief.genre, brief.tone);
+  const audience = lowerText(brief.audience);
+  const story = lowerText(brief.premise, brief.logline, brief.setting, ...(brief.themes || []), ...(brief.notes || []));
+  let s = 0;
+  if (p.kind && p.kind === doc.format?.kind) s += 4;
+  for (const tag of p.bestFor) {
+    const words = TAG_SYNONYMS[tag] || [tag];
+    if (words.some((w) => hasWord(genre, w))) s += 3;
+    else if (words.some((w) => hasWord(story, w))) s += 1;
+    if (words.some((w) => hasWord(audience, w))) s += 3;
+  }
+  // The genre names the look itself ("noir thriller", "manga action", "watercolor fable").
+  if (presetNameWords(p).some((w) => hasWord(genre, w) || hasWord(audience, w))) s += 3;
+  const young = YOUNG_AUDIENCE_RE.test(audience) || YOUNG_AUDIENCE_RE.test(genre);
+  if (young) {
+    s += p.bestFor.filter((t) => YOUNG_TAGS.includes(t)).length * 2;
+    if (GRIM_FOR_KIDS.has(p.id)) s -= 4;
+  }
+  const mode = doc.format?.colorMode;
+  if (mode === 'bw') s += p.colorMode === 'bw' ? 3 : -2;
+  else if (p.colorMode === 'bw') s -= 1;
+  if (mode === 'limited' && p.colorMode === 'limited') s += 2;
+  return s;
+};
+
+/**
+ * Preset ids, best fit first, scored on `brief.genre`/`tone`, `brief.audience` and `format.kind`
+ * (plus light hints from the premise). Deterministic and free: the director's `suggest_presets`
+ * uses it instead of paid style options (assets.md §9).
+ */
+export const rankPresets = (doc: Pick<ComicDoc, 'brief' | 'format'>): string[] =>
+  STYLE_PRESETS.map((p, i) => ({ id: p.id, i, s: presetFitScore(p, doc) }))
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((x) => x.id);

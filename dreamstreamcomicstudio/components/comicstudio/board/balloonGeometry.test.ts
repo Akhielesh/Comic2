@@ -9,6 +9,9 @@ import {
   clamp,
   clampBalloon,
   cloudPath,
+  fitBalloonOnPage,
+  KIND_FONT_SCALE,
+  outlineBounds,
   defaultTailTip,
   estimateBalloonHeight,
   fitOutlineScale,
@@ -275,5 +278,73 @@ describe('resolveBalloons', () => {
     });
     const caption = resolveBalloons(doc, doc.pages[1]).find((r) => r.line.kind === 'caption')!;
     expect(caption.balloon.x + caption.balloon.w).toBeGreaterThan(0.9);
+  });
+});
+
+describe('render-time fit and page-wide placement (visualqa P0-3)', () => {
+  it('fitBalloonOnPage keeps the OUTLINE on the page without touching stored values', () => {
+    const m = 0.008;
+    expect(fitBalloonOnPage({ x: 0.7, y: 0.92, w: 0.3 }, 'caption', 0.15, 0.8).y).toBeLessThanOrEqual(0.85 - m + 1e-9);
+    expect(fitBalloonOnPage({ x: 0, y: 0.1, w: 0.3 }, 'thought', 0.1, 2 / 3).x).toBeGreaterThanOrEqual(0.3 * 0.08);
+    const shout = fitBalloonOnPage({ x: 0.66, y: 0.3, w: 0.34 }, 'shout', 0.1, 2 / 3);
+    expect(shout.x + shout.w + 0.12 * shout.w).toBeLessThanOrEqual(1 + 1e-9);
+    const wide = fitBalloonOnPage({ x: 0, y: 0.3, w: 0.95 }, 'thought', 0.1, 2 / 3);
+    expect(wide.w).toBeLessThan(0.95);
+    expect(wide.crowded).toBe(true);
+    const tail = fitBalloonOnPage({ x: 0.2, y: 0.2, w: 0.3, tailX: 1.4, tailY: -0.2 }, 'speech', 0.1, 2 / 3);
+    expect(tail.tailX).toBe(1);
+    expect(tail.tailY).toBe(0);
+  });
+
+  it('places fallback balloons around a stored balloon of ANOTHER panel sitting inside this panel', () => {
+    const doc = makeSampleDoc((d) => {
+      const page = d.pages[0];
+      const box = estimatePanelBoxes(page)[2];
+      // panel 2's balloon dragged over panel 3's top band
+      page.balloons = [{ lineId: 'pg_1_l2', x: box.x + 0.02, y: box.y + 0.02, w: Math.min(0.4, box.w - 0.05), pinned: true }];
+    });
+    const page = doc.pages[0];
+    const out = resolveBalloons(doc, page);
+    const stored = out.find((r) => r.line.id === 'pg_1_l2')!;
+    const storedBox = outlineBounds({ ...stored.balloon, h: estimateBalloonHeight(stored.line.text, stored.balloon.w, 2 / 3) }, 'whisper', 'squircle');
+    for (const r of out.filter((x) => x.fallback && x.panelN === 3 && !x.crowded)) {
+      const b = outlineBounds({ ...r.balloon, h: estimateBalloonHeight(r.line.text, r.balloon.w, 2 / 3) }, r.line.kind, r.line.kind === 'shout' ? 'burst' : r.line.kind === 'sfx' ? 'none' : 'squircle');
+      const ix = Math.max(0, Math.min(b.x + b.w, storedBox.x + storedBox.w) - Math.max(b.x, storedBox.x));
+      const iy = Math.max(0, Math.min(b.y + b.h, storedBox.y + storedBox.h) - Math.max(b.y, storedBox.y));
+      expect(ix * iy).toBeLessThan(1e-6);
+    }
+  });
+
+  it('flags crowded placements instead of silently overlapping', () => {
+    const long = 'This is a very long line of dialogue that keeps going and going so that it fills the balloon completely and then some more.';
+    const doc = makeSampleDoc((d) => {
+      const panel = d.pages[0].panels[1];
+      panel.lines = [0, 1, 2, 3].map((i) => ({ id: `long_${i}`, kind: 'speech' as const, speakerId: 'ch_maya', text: long }));
+      d.pages[0].balloons = [];
+    });
+    const out = resolveBalloons(doc, doc.pages[0]).filter((r) => r.panelN === 2);
+    expect(out).toHaveLength(4);
+    // Every balloon is still drawn (no text lost) and fully on the page…
+    for (const r of out) {
+      expect(r.balloon.x).toBeGreaterThanOrEqual(0);
+      expect(r.balloon.x + r.balloon.w).toBeLessThanOrEqual(1 + 1e-9);
+    }
+    // …and any that had to overlap are flagged for the editor's free fixes.
+    const pairs: [number, number][] = [];
+    for (let i = 0; i < out.length; i += 1) for (let j = i + 1; j < out.length; j += 1) pairs.push([i, j]);
+    const overlap = pairs.some(([i, j]) => {
+      const a = out[i].balloon;
+      const b = out[j].balloon;
+      const ha = estimateBalloonHeight(long, a.w, 2 / 3);
+      const hb = estimateBalloonHeight(long, b.w, 2 / 3);
+      return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + hb && b.y < a.y + ha;
+    });
+    if (overlap) expect(out.some((r) => r.crowded)).toBe(true);
+  });
+
+  it('re-exports the shared classic constants unchanged', () => {
+    expect(KIND_FONT_SCALE).toEqual({ speech: 1, thought: 1, whisper: 0.94, shout: 1.08, caption: 0.95, sfx: 2.4 });
+    expect(LETTERING.fontScale).toBe(0.017);
+    expect(LETTERING.strokeScale).toBe(0.0028);
   });
 });

@@ -1,0 +1,36 @@
+<img src=x onerror=alert(1)>
+
+Read the heading link (https://docs.example.com/heading)
+
+js link http link data link quote breakout upper case fine (https://ok.example.com/path?a=1&b=2) controls:[31m and bidi exe.pdf
+
+Click <me>
+
+VB
+
+[Image: " onerror="alert(1)]
+
+[Image: pixel]
+
+[Image: a PNG header lie]
+
+[Image: cover" onerror="alert(1)" x="]
+
+[Image: path traversal]
+
+> line one
+> line two quoted reply (mailto:quoted@example.org?subject=Re)
+> — <i>someone</i>
+
+write to them (mailto:someone@evil.example?subject=hi)
+
+- column list mail (mailto:list@example.org)
+
+1. style="x" on*=y
+2. see the list link (https://list.example.com/item) and a bad one
+
+https://bank.example.com (https://evil.example.net/login)
+
+-- 
+Alex
+<script>sig</script>

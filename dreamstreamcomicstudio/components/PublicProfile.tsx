@@ -6,12 +6,24 @@ import { useAuth } from '../contexts/AuthContext';
 import { Button } from './Button';
 import { UserPlus, UserCheck, Grid, Heart, Eye, BookOpen } from 'lucide-react';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
+import { isStudioV4Project } from '../services/studioDeepLink';
+import { SHARE_PATH } from '../shared/comic/publication';
+import { publicCoverUrl, shareSlugOf } from './PublicGallery';
+import { RatingBadge } from './comicstudio/safety/RatingBadge';
 import { SmartImage } from './common/SmartImage';
 
-/** Cover candidates: stored cover → first rendered page → first style board. */
-const coverCandidates = (project: Project): string[] => {
+/**
+ * Cover candidates: stored cover → first rendered page → first style board.
+ * Same rule as the public gallery (S4): a Comic Studio (v4) comic shows ONLY its public cover — the
+ * frozen, safety-cleared pub/ copy the publish gate made. Its classic cover fields are the owner's to
+ * write and never went through the gate (a private draft can be re-skinned, then published), so
+ * without a public cover the card shows the book icon rather than one of them.
+ */
+export const coverCandidates = (project: Project): string[] => {
     const out: string[] = [];
     const push = (url?: string | null) => { if (typeof url === 'string' && url.trim()) out.push(url); };
+    push(publicCoverUrl(project));
+    if (isStudioV4Project(project)) return out;
     push(project.coverImage);
     push(project.state?.coverImageUrl);
     push(project.state?.panels?.find((p) => p.imageUrl)?.imageUrl);
@@ -39,6 +51,9 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
     }, [username]);
 
     const hydratePreview = async (project: Project): Promise<Project> => {
+        // Comic Studio (v4) comics show only their public cover URL: nothing to sign (their other
+        // image ids are drafts, which a public card must never reach).
+        if (isStudioV4Project(project)) return project;
         const nextProject = structuredClone(project);
         let coverImage = nextProject.coverImage;
 
@@ -194,11 +209,27 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             {projects.map(project => {
                                 const covers = coverCandidates(project);
+                                // A published v4 comic opens its read-only share link (/c/<slug>) as a real
+                                // page load, like the gallery: it serves the boot card, the preview head and
+                                // its own CSP. Everything else opens the in-app reader; the href keeps
+                                // open-in-new-tab and copy-link working.
+                                const slug = shareSlugOf(project);
                                 return (
-                                    <div
+                                    <a
                                         key={project.id}
-                                        onClick={() => onNavigate('reader', project.id)}
-                                        className="bg-white border-4 border-black rounded-xl overflow-hidden shadow-comic hover:scale-[1.02] transition-transform cursor-pointer group"
+                                        href={slug ? SHARE_PATH(slug) : `/?view=read&id=${encodeURIComponent(project.id)}`}
+                                        onClick={
+                                            slug
+                                                ? undefined
+                                                : (e) => {
+                                                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                                                    e.preventDefault();
+                                                    onNavigate('reader', project.id);
+                                                }
+                                        }
+                                        aria-label={`Read ${project.name}`}
+                                        data-share-slug={slug}
+                                        className="block bg-white border-4 border-black rounded-xl overflow-hidden shadow-comic hover:scale-[1.02] transition-transform cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]"
                                     >
                                         <div className="aspect-[2/3] bg-slate-200 relative overflow-hidden text-center">
                                             <SmartImage
@@ -215,6 +246,14 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                                     Read Comic
                                                 </span>
                                             </div>
+                                            {/* The publish gate's rating — only for a real publication (a v4 row with its server-mirrored
+                                                share slug), the same gate as the gallery: the column is server-set, but a row that no
+                                                longer reads as a publication shows its art outside the gate and gets no badge. */}
+                                            {slug && project.contentRating && (
+                                                <div className="absolute left-2 top-2">
+                                                    <RatingBadge rating={project.contentRating} />
+                                                </div>
+                                            )}
                                         </div>
                                         <div className="p-4">
                                             <h3 className="font-display text-lg truncate mb-1">{project.name}</h3>
@@ -226,7 +265,7 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
+                                    </a>
                                 )
                             })}
                         </div>

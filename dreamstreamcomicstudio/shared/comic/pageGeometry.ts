@@ -1,13 +1,15 @@
 // Page geometry (pure, dependency-free) — contract §11.1, shared by client and server.
 //
-// A VERBATIM copy of the pure functions in components/comicstudio/board/pageLayout.ts
-// (and the server's vision.ts / prompts.ts twins). In wave 1 (P1-BOOKMODEL) both of those
-// files become thin re-exports of this module; until then keep the copies byte-identical.
-// Margins, gutters, row weights and the parsing vocabulary must match the server.
+// The ONE copy of the page-blueprint geometry. The board (components/comicstudio/board/pageLayout.ts)
+// re-exports it; the server's twins (vision.ts estimatePanelBoxes, prompts.ts synthesizeLayout /
+// parseLayout) switch to it in wave 2 once the golden test (pageGeometry.test.ts) keeps showing
+// identical boxes. Margins, gutters, row weights and the parsing vocabulary are the server's.
 //
 // All boxes are page-normalized (0..1, origin top-left).
 
-import type { Box, ComicDoc, ComicKind, Page, Panel, PanelSize } from './doc.js';
+import type { Box, ComicDoc, ComicKind, Format, Page, Panel, PanelSize } from './doc.js';
+// --- Ship 2 (K2a): panels mode reads its frames (artModeOf is pure; doc.ts never imports this module) ---
+import { artModeOf } from './doc.js';
 
 /** Outer page margin and gutter between panels (fractions of the page). */
 const MARGIN = 0.02;
@@ -33,7 +35,35 @@ export interface LayoutCell {
 export interface ParsedLayout {
   mode: 'rows' | 'stack' | 'single';
   rows: LayoutCell[];
+  /** Insets (B9's layout sentence: "… (panel 1) with a small inset panel in its lower right corner (panel 2)"): panels
+   *  drawn inside a corner of another panel, outside every row. Absent when the sentence names none. */
+  insets?: LayoutInset[];
 }
+
+/** A small panel inside a corner of its host panel (indexes are 0-based, reading order). */
+export interface LayoutInset {
+  panel: number;
+  host: number;
+  vert: 'upper' | 'lower';
+  horiz: 'left' | 'right';
+}
+
+/** An inset's size against its host, and its distance from the host's corner beyond one gutter. The same numbers as
+ *  the editor's layoutText (shared/comic/editor/layoutText.ts INSET / insetBox), so the plan and the frames agree. */
+export const LAYOUT_INSET = { wShare: 1 / 3, hShare: 0.26, pad: 0.01 } as const;
+
+/** The inset box in one corner of its host (page fractions, rounded like every estimated box). */
+export const layoutInsetBox = (host: Box, vert: LayoutInset['vert'], horiz: LayoutInset['horiz'], gutter = GUTTER): Box => {
+  const w = host.w * LAYOUT_INSET.wShare;
+  const h = host.h * LAYOUT_INSET.hShare;
+  const pad = gutter + LAYOUT_INSET.pad;
+  return {
+    x: round4(horiz === 'right' ? host.x + host.w - w - pad : host.x + pad),
+    y: round4(vert === 'lower' ? host.y + host.h - h - pad : host.y + pad),
+    w: round4(w),
+    h: round4(h)
+  };
+};
 
 const NUMBER_WORDS: Record<string, number> = {
   a: 1, an: 1, one: 1, single: 1, two: 2, pair: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9
@@ -147,10 +177,58 @@ const countInSegment = (segment: string): number => {
   return phrases.reduce((sum, p) => sum + p.n, 0);
 };
 
-/** Parse a row blueprint into rows (mirrors server prompts.ts parseLayout). Null when unreadable. */
+/**
+ * The inset clause exactly as the editor's layoutText writes it: "with a small inset panel in its lower right corner
+ * (panel 2)", or "… in the upper left corner of panel 3 (panel 4)" when the host is not the panel just named.
+ */
+const INSET_RE = /,?\s*with an? small inset panel in (?:its|the) (upper|lower) (left|right) corner(?: of panel (\d+))? \(panel (\d+)\)/gi;
+
+/**
+ * Parse a row blueprint into rows (mirrors server prompts.ts parseLayout). Null when unreadable.
+ *
+ * A sentence with the inset clause parses without it (the rows), then each inset takes its own reading number and its
+ * host (named, or the nearest panel before it that is not an inset) — the editor's framesFromLayoutText rule. A
+ * sentence without the clause, or whose clause does not add up (a number used twice, out of range, an inset hosting
+ * an inset), parses exactly as before.
+ */
 export const parseLayout = (layout: string): ParsedLayout | null => {
   const text = clean(layout);
   if (!text) return null;
+  if (!new RegExp(INSET_RE.source, 'i').test(text)) return parseRows(text);
+  return parseWithInsets(text) ?? parseRows(text);
+};
+
+const parseWithInsets = (text: string): ParsedLayout | null => {
+  const clauses: { vert: LayoutInset['vert']; horiz: LayoutInset['horiz']; host?: number; n: number }[] = [];
+  const rest = clean(
+    text.replace(new RegExp(INSET_RE.source, 'gi'), (_m, vert: string, horiz: string, host: string | undefined, k: string) => {
+      clauses.push({ vert: vert.toLowerCase() as LayoutInset['vert'], horiz: horiz.toLowerCase() as LayoutInset['horiz'], ...(host ? { host: Number(host) } : {}), n: Number(k) });
+      return '';
+    })
+  );
+  const main = rest ? parseRows(rest) : null;
+  if (!main) return null;
+  const total = layoutPanelCount(main) + clauses.length;
+  const insetAt = new Set(clauses.map((c) => c.n - 1));
+  if (insetAt.size !== clauses.length || clauses.some((c) => !(c.n >= 1 && c.n <= total))) return null;
+  // A full-page splash is panel 1 (the single-mode boxes and harmonizePanelSizes write index 0): an inset numbered
+  // first would leave the splash elsewhere and the boxes with a hole, so that sentence does not add up either.
+  if (main.mode === 'single' && insetAt.has(0)) return null;
+  // The rows' panels take the reading numbers the insets leave free, in order.
+  const free: number[] = [];
+  for (let i = 0; i < total; i++) if (!insetAt.has(i)) free.push(i);
+  const insets: LayoutInset[] = [];
+  for (const c of [...clauses].sort((a, b) => a.n - b.n)) {
+    let host = c.host ? c.host - 1 : -1;
+    if (host < 0) for (let i = c.n - 2; i >= 0 && host < 0; i--) if (!insetAt.has(i)) host = i;
+    if (host < 0 || host >= total || insetAt.has(host)) return null;
+    insets.push({ panel: c.n - 1, host, vert: c.vert, horiz: c.horiz });
+  }
+  return { mode: main.mode, rows: main.rows.map((r) => ({ ...r, panels: r.panels.map((i) => free[i]) })), insets };
+};
+
+/** The rows of a blueprint with no inset clause (the parser before insets; unchanged). */
+const parseRows = (text: string): ParsedLayout | null => {
   if (/\bstacked vertically\b|\bvertical stack\b/i.test(text)) {
     const m = /(\d+|one|two|three|four|five|six|seven|eight|nine)\s+(?:[a-z-]+\s+){0,2}panels?/i.exec(text);
     const n = m ? numberFrom(m[1]) : undefined;
@@ -190,7 +268,74 @@ export const parseLayout = (layout: string): ParsedLayout | null => {
 };
 
 export const layoutPanelCount = (parsed: ParsedLayout | null): number =>
-  parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) : 0;
+  parsed ? parsed.rows.reduce((n, r) => n + r.panels.length, 0) + (parsed.insets?.length ?? 0) : 0;
+
+// ── The layout as drawn (moved from server prompts.ts, which re-exports them under the same names) ──
+//
+// The page prompt draws `effectiveLayout`: the page's blueprint when it agrees with its panels (count, format and
+// sizes), else a blueprint synthesized from the panel sizes. Every measure of "the plan as it will be drawn" (the
+// page-plan check, the Render-all hold-back, the breakdown card's fit dots) reads this same layout, so the gate and
+// the drawing never disagree about a stored page whose layout text and panel sizes conflict.
+
+const FULL_WIDTH_SIZES: ReadonlySet<PanelSize> = new Set<PanelSize>(['wide', 'large', 'splash']);
+
+/** True when a panel's size contradicts its row (a wide/large/splash panel sharing a row). */
+export const layoutConflicts = (parsed: ParsedLayout, panels: Pick<Panel, 'size'>[]): boolean =>
+  parsed.mode === 'rows' &&
+  parsed.rows.some((r) => !r.span && r.panels.length > 1 && r.panels.some((i) => FULL_WIDTH_SIZES.has(panels[i]?.size)));
+
+/** Index (into the page's panels) of the tall panel of a span row, by reading order. */
+const tallIndexOf = (row: LayoutCell, rtl: boolean): number => {
+  const startSide = rtl ? 'right' : 'left';
+  return row.span?.tallSide === startSide ? row.panels[0] : row.panels[1] ?? row.panels[0];
+};
+
+/**
+ * Make panel sizes agree with a parsed blueprint (the writer's layout is the page's
+ * design): full-width single rows are "wide" (unless large/splash/tall), shared rows never
+ * hold wide/large/splash panels, a span row's tall panel is "tall", a single-panel page is
+ * a "splash". Returns new panel objects; unchanged sizes are kept.
+ */
+export const harmonizePanelSizes = <P extends Pick<Panel, 'size'>>(panels: P[], parsed: ParsedLayout, rtl = false): P[] => {
+  const out = panels.map((p) => ({ ...p }));
+  const set = (i: number, size: PanelSize) => {
+    if (out[i]) out[i].size = size;
+  };
+  if (parsed.mode === 'single') {
+    set(0, 'splash');
+    return out;
+  }
+  if (parsed.mode === 'stack') return out;
+  for (const row of parsed.rows) {
+    if (row.span) {
+      const tall = tallIndexOf(row, rtl);
+      for (const i of row.panels) {
+        if (i === tall) set(i, 'tall');
+        else if (out[i] && out[i].size !== 'small' && out[i].size !== 'medium') set(i, 'medium');
+      }
+    } else if (row.panels.length > 1) {
+      for (const i of row.panels) if (out[i] && FULL_WIDTH_SIZES.has(out[i].size)) set(i, 'medium');
+    } else {
+      const i = row.panels[0];
+      if (out[i] && (out[i].size === 'small' || out[i].size === 'medium')) set(i, 'wide');
+    }
+  }
+  return out;
+};
+
+/**
+ * The page's layout when it matches its panels (count, format and sizes), else a
+ * blueprint synthesized from the panel sizes — so the prompt never describes a layout
+ * that contradicts its own panel list. This is the layout the page is DRAWN on.
+ */
+export const effectiveLayout = (page: Pick<Page, 'panels' | 'layout'>, format: Pick<Format, 'kind' | 'readingDirection'>): string => {
+  const layout = clean(page.layout);
+  const parsed = layout ? parseLayout(layout) : null;
+  // Webtoon segments must be a vertical stack; a row grid would contradict the format.
+  const fits = parsed && (format.kind !== 'webtoon' || parsed.mode === 'stack');
+  if (fits && layoutPanelCount(parsed) === page.panels.length && !layoutConflicts(parsed, page.panels)) return layout;
+  return synthesizeLayout(page.panels, format);
+};
 
 const boxesFromLayout = (parsed: ParsedLayout, n: number, rtl: boolean): Box[] => {
   const boxes: Box[] = new Array(n);
@@ -259,7 +404,16 @@ export const estimatePanelBoxes = (page: Pick<Page, 'panels' | 'layout'>, opts: 
   let parsed = page.layout ? parseLayout(page.layout) : null;
   if (!fits(parsed)) parsed = parseLayout(synthesizeLayout(page.panels, { kind, readingDirection: rtl ? 'rtl' : 'ltr' }));
   if (!fits(parsed)) parsed = gridLayout(n);
-  return boxesFromLayout(parsed, n, rtl).map((b) => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) }));
+  const round = (b: Box): Box => ({ x: round4(b.x), y: round4(b.y), w: round4(b.w), h: round4(b.h) });
+  const boxes = boxesFromLayout(parsed, n, rtl).map(round);
+  // Insets sit in a corner of their host's (rounded) box, as the editor places them (layoutText framesFromLayoutText).
+  for (const inset of parsed.insets ?? []) {
+    const host = boxes[inset.host];
+    if (host && inset.panel < n) boxes[inset.panel] = layoutInsetBox(host, inset.vert, inset.horiz);
+  }
+  // Every reader indexes one box per panel: a parse that leaves a panel without one (none known) gets the plain grid.
+  if (boxes.length !== n || Array.from({ length: n }, (_, i) => boxes[i]).some((b) => !b)) return boxesFromLayout(gridLayout(n), n, rtl).map(round);
+  return boxes;
 };
 
 const validBox = (b: unknown): b is Box => {
@@ -269,13 +423,50 @@ const validBox = (b: unknown): b is Box => {
 };
 
 /**
- * The best panel rectangles we know for a page: the vision pass's measured boxes when
- * they match the panel count, else the blueprint estimate.
+ * The panel rectangles a page is DRAWN at, from its plan: the boxes of `effectiveLayout` (never a drawn take's
+ * measured boxes). Equal to estimatePanelBoxes(page) unless the page's layout text contradicts its panel sizes,
+ * where the prompt draws the layout synthesized from the sizes — and so do these boxes.
  */
-export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout' | 'render'>): Box[] => {
+export const drawnLayoutBoxes = (doc: Pick<ComicDoc, 'format'>, page: Pick<Page, 'panels' | 'layout'>): Box[] =>
+  estimatePanelBoxes({ panels: page.panels, layout: effectiveLayout(page, doc.format) }, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+
+/** Ship 2 (K2a; pro plan §4.3): the page shape the box readers take — artMode is optional (absent = as drawn). */
+export type PanelBoxesPage = Pick<Page, 'panels' | 'layout' | 'render'> & Partial<Pick<Page, 'artMode'>>;
+
+/** The frames of a page shown in panels mode (artModeOf), in reading order; undefined in page mode. */
+export const frameBoxesFor = (page: PanelBoxesPage): Box[] | undefined =>
+  artModeOf(page) === 'panels' ? page.panels.map((p) => ({ ...p.frame!.box })) : undefined;
+
+/**
+ * The best panel rectangles we know for a page: in panels mode its frames (the page as shown — balloons, Guided
+ * View, the transcript, motion export and wireframes follow them with no code of their own); else the vision pass's
+ * measured boxes when they match the panel count, else the blueprint estimate.
+ */
+export const panelBoxesFor = (doc: Pick<ComicDoc, 'format'>, page: PanelBoxesPage): Box[] => {
+  const frames = frameBoxesFor(page);
+  if (frames) return frames;
   const measured = page.render?.qc?.panelBoxes;
   if (Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
   return estimatePanelBoxes(page, { readingDirection: doc.format.readingDirection, kind: doc.format.kind });
+};
+
+/**
+ * Like panelBoxesFor, but the fallback is the layout as drawn (drawnLayoutBoxes): the vision pass's boxes when it
+ * really measured them (not `boxesFrom: 'estimate'`) and they match the panel count, else the boxes of
+ * effectiveLayout. Used where a fit is judged (the breakdown card's dots on a drawn page, the director's line-edit
+ * budget), so a page whose layout text contradicts its panel sizes is measured on the panels the prompt drew. A
+ * check that fell back (no usable reading, or another panel count) stored an ESTIMATE as panelBoxes — one made on
+ * the stored layout text — so those boxes are not a measurement and never stand in for the layout as drawn. QC
+ * written before boxesFrom existed has no marker and is read as measured, as before.
+ */
+export const drawnPanelBoxes = (doc: Pick<ComicDoc, 'format'>, page: PanelBoxesPage): Box[] => {
+  // Ship 2: in panels mode the frames are where the lettering goes, so a fit is judged on them.
+  const frames = frameBoxesFor(page);
+  if (frames) return frames;
+  const qc = page.render?.qc;
+  const measured = qc?.panelBoxes;
+  if (qc?.boxesFrom !== 'estimate' && Array.isArray(measured) && measured.length === page.panels.length && measured.every(validBox)) return measured;
+  return drawnLayoutBoxes(doc, page);
 };
 
 // ── Regions (Mark-up) ────────────────────────────────────────────────────────

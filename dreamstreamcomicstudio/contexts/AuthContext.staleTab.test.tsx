@@ -70,9 +70,14 @@ vi.mock('../services/supabase', () => ({
   },
   getAuthRedirectUrl: () => '/auth/callback',
   isSessionExpiredByInactivity: () => false,
-  // The real one compares the announced session with the one stored for THIS tab.
-  isStoredSession: (session: { access_token?: string } | null) =>
-    !session?.access_token || !h.tab().storedToken || session.access_token === h.tab().storedToken,
+  // The real one compares the announced session with the one stored for THIS tab; a tab that
+  // stores nothing while "Remember me" is off holds no session, so the answer is a definite no.
+  isStoredSession: (session: { access_token?: string } | null) => {
+    if (!session?.access_token) return true;
+    const own = h.tab().storedToken;
+    if (own) return session.access_token === own;
+    return localStorage.getItem('dreamstream_auth_persist') !== 'session';
+  },
   // The real one removes this tab's stored session: from then on it has none.
   forgetTabSession: vi.fn(() => {
     h.tab().storedToken = null;
@@ -98,7 +103,7 @@ const idb = createFakeIndexedDb();
 vi.stubGlobal('indexedDB', idb);
 afterAll(() => vi.unstubAllGlobals());
 
-import { AuthProvider, OTHER_TAB_SIGN_IN_NOTICE, useAuth } from './AuthContext';
+import { AuthProvider, OTHER_TAB_SIGN_IN_NOTICE, SIGNED_IN_IN_OTHER_TAB_NOTICE, useAuth } from './AuthContext';
 import { addKey, listKeys } from '../services/apiKeys';
 import { appStatus } from '../services/appStatus';
 import { createChatProject, createEmptySession, listChatSessions, saveChatSession, setChatSessionUser, syncFromCloud } from '../services/chatStorage';
@@ -141,6 +146,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   localStorage.clear();
   sessionStorage.clear();
+  localStorage.setItem('dreamstream_auth_persist', 'session'); // "Remember me" off: one session per tab
   idb.reset();
   appStatus.clear();
   h.tabs = {};
@@ -232,14 +238,32 @@ describe('AuthProvider — "Remember me" off: another tab switches the device to
     expect(listKeys().map((k) => k.key)).toEqual(['sk-A-secret']);
   });
 
-  it('a signed-out tab hearing another tab’s sign-in has nothing to step aside from: nothing forgotten, no notice', async () => {
+  it('a signed-out tab hearing another tab’s sign-in (the tab a magic link opened in) stays signed out — that session is not its own — and is told', async () => {
     h.tabs[1] = { session: null, storedToken: null };
     await mountTab(1, 'A');
     expect(screen.getByTestId('tab1-user')).toHaveTextContent('signed-out');
     h.tabs[2] = { session: session(B), storedToken: session(B).access_token };
     await act(async () => h.emit('SIGNED_IN', session(B)));
     await advance(2_000);
-    expect(forgetTabSession).not.toHaveBeenCalled();
+    // Without the fix tab 1 shows B while holding no session (empty dashboard, saves dropped).
+    expect(screen.getByTestId('tab1-user')).toHaveTextContent('signed-out');
+    expect(getLocalOwner()).toBeNull(); // tab 2's own AuthProvider is not mounted here: nothing took the device
+    expect(forgetTabSession).not.toHaveBeenCalled(); // nothing to step aside from
+    expect(appStatus.getSnapshot().events).toEqual([expect.objectContaining({ level: 'info', message: SIGNED_IN_IN_OTHER_TAB_NOTICE })]);
+  });
+
+  it('with "Remember me" on, storage is shared: the sign-in another tab stored is this tab’s too, no notice', async () => {
+    localStorage.setItem('dreamstream_auth_persist', 'local');
+    h.tabs[1] = { session: null, storedToken: null };
+    await mountTab(1, 'A');
+    expect(screen.getByTestId('tab1-user')).toHaveTextContent('signed-out');
+    // Tab 2 signed in as B: its _saveSession landed in the localStorage both tabs read.
+    h.tabs[2] = { session: session(B), storedToken: session(B).access_token };
+    h.tabs[1] = { session: session(B), storedToken: session(B).access_token };
+    await act(async () => h.emit('SIGNED_IN', session(B)));
+    await advance(5_000);
+    expect(screen.getByTestId('tab1-user')).toHaveTextContent(B);
+    expect(getLocalOwner()).toBe(B);
     expect(appStatus.getSnapshot().events).toEqual([]);
   });
 });

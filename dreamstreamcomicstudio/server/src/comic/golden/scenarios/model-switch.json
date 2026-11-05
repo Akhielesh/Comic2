@@ -1,0 +1,65 @@
+{
+  "name": "model-switch",
+  "about": "Model lock (models.md §3.8): \"use GPT image\" gets the real price per page, the 4:5 block, the consistency trade-off and the picker chip — never a switch; a model that claims one is corrected; \"make it cheaper\" offers Draft on the same model (the user's own tap), never an unranked model as equal.",
+  "doc": "lake-standard",
+  "caps": "byok",
+  "turns": [
+    {
+      "say": "use GPT image for this comic",
+      "expectTools": ["model_options", "suggest_model"],
+      "director": [
+        { "text": "", "toolCalls": [{ "name": "model_options", "args": { "want": "specific", "model": "GPT image" } }, { "name": "suggest_model", "args": {} }] },
+        { "text": "" }
+      ],
+      "expect": {
+        "toolResultIncludes": {
+          "model_options": ["ASKED FOR: GPT Image 2.5 — NOT POSSIBLE for this comic", "Can't draw 4:5 pages", "≈ $0.21 per page at 1K", "OPTION 1: Nano Banana Pro"],
+          "suggest_model": ["Nothing changed — the comic stays on Nano Banana 2.1."]
+        },
+        "replyIncludes": ["GPT Image 2.5 is ≈ $0.21 a page at 1K (Nano Banana 2.1 is ≈ $0.05)", "can't draw 4:5 pages", "Your comic stays on Nano Banana 2.1", "switching models can affect character consistency", "Want to see the options?"],
+        "nextSteps": [{ "label": "See models", "client": { "type": "open_model_picker" } }],
+        "imageModel": "nano-banana-2.1",
+        "quality": "standard",
+        "newImageCalls": 0
+      }
+    },
+    {
+      "say": "just use GPT for it, I don't care about consistency",
+      "about": "A model that misbehaves: it tries the quality tier and claims a switch. The tool refuses, the reply is corrected.",
+      "expectTools": ["model_options", "suggest_model", "set_settings"],
+      "director": [
+        { "text": "Done — I've switched your comic to GPT Image 2.5.", "toolCalls": [{ "name": "set_settings", "args": { "quality": "draft" } }] },
+        { "text": "" }
+      ],
+      "expect": {
+        "toolResultIncludes": { "set_settings": ["Error: Locked comic: resolution changes are the user's call. Offer the quality chip."] },
+        "replyStartsWith": "Your comic stays on Nano Banana 2.1 — only you can change the image model, in the model picker, and switching can affect character consistency.",
+        "replyExcludes": ["switched your comic"],
+        "nextSteps": [{ "label": "See models", "client": { "type": "open_model_picker" } }],
+        "imageModel": "nano-banana-2.1",
+        "quality": "standard"
+      }
+    },
+    {
+      "say": "make it cheaper",
+      "expectTools": ["model_options", "suggest_model"],
+      "director": [
+        { "text": "", "toolCalls": [{ "name": "model_options", "args": { "want": "cheaper" } }, { "name": "suggest_model", "args": { "tier": "draft" } }] },
+        { "text": "" }
+      ],
+      "expect": {
+        "toolResultIncludes": { "model_options": ["SAME MODEL, CHEAPER: Draft draws new pages with Nano Banana 2.1 at 1K for ≈ $0.04 per page instead of ≈ $0.05 at 2K."] },
+        "reply": "The cheapest way that keeps your characters consistent is Draft: the same Nano Banana 2.1 at 1K, ≈ $0.04 a page instead of ≈ $0.05 at 2K. Your 5 drawn pages (1 at 2K, 4 at 1K) stay as they are unless you redraw them.",
+        "replyExcludes": ["equal", "as good as"],
+        "nextSteps": [{ "label": "Use Draft for new pages", "action": { "type": "patch", "ops": [{ "op": "settings", "patch": { "quality": "draft" } }] }, "usd": 0 }],
+        "imageModel": "nano-banana-2.1",
+        "quality": "standard"
+      }
+    },
+    {
+      "about": "The user taps “Use Draft for new pages”: the tier changes by their hand; the model stays.",
+      "action": { "type": "patch", "ops": [{ "op": "settings", "patch": { "quality": "draft" } }] },
+      "expect": { "imageModel": "nano-banana-2.1", "quality": "draft" }
+    }
+  ]
+}

@@ -1,0 +1,413 @@
+{
+  "plan": {
+    "assetKey": "KKKKKKKKKKKKKKKKKKKKKK",
+    "pageIds": [
+      "pg_1",
+      "pg_2"
+    ],
+    "includeCover": true,
+    "languages": [
+      "en"
+    ],
+    "paths": {
+      "u/user-fx/p/proj-fx/img/p1.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763.webp",
+      "u/user-fx/p/proj-fx/img/p1_w480.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763-w480.webp",
+      "u/user-fx/p/proj-fx/img/p1_w1080.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763-w1080.webp",
+      "u/user-fx/p/proj-fx/img/p2.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673.webp",
+      "u/user-fx/p/proj-fx/img/p2_w480.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673-w480.webp",
+      "u/user-fx/p/proj-fx/img/p2_w1080.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673-w1080.webp",
+      "u/user-fx/p/proj-fx/img/cover.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a.webp",
+      "u/user-fx/p/proj-fx/img/cover_w480.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a-w480.webp",
+      "u/user-fx/p/proj-fx/img/cover_w1080.webp": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a-w1080.webp"
+    },
+    "publicationId": "pub-fx",
+    "publishedAt": 77,
+    "rev": 9
+  },
+  "snapshot": {
+    "v": 1,
+    "id": "pub-fx",
+    "createdAt": 77,
+    "updatedAt": 77,
+    "rev": 9,
+    "brief": {
+      "title": "Spice Run",
+      "notes": [],
+      "logline": "A courier races through a spice market."
+    },
+    "format": {
+      "kind": "comic",
+      "pageCount": 2,
+      "pageAspect": "2:3",
+      "panelsPerPage": "auto",
+      "readingDirection": "ltr",
+      "lettering": "overlay",
+      "colorMode": "color",
+      "language": "en"
+    },
+    "source": {},
+    "style": {
+      "status": "locked",
+      "refs": [],
+      "options": [],
+      "name": "Ligne claire"
+    },
+    "cast": [
+      {
+        "id": "c_maya",
+        "name": "Maya",
+        "tier": "lead",
+        "look": {
+          "summary": ""
+        },
+        "refs": [],
+        "sheet": {
+          "status": "none",
+          "history": []
+        }
+      }
+    ],
+    "places": [],
+    "pages": [
+      {
+        "id": "pg_1",
+        "n": 1,
+        "summary": "",
+        "layout": "Row 1: one wide panel. Row 2: two equal panels.",
+        "panels": [
+          {
+            "id": "pn_1_1",
+            "n": 1,
+            "size": "wide",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_1_1",
+                "kind": "speech",
+                "text": "Line 1.1",
+                "speakerId": "c_maya"
+              }
+            ]
+          },
+          {
+            "id": "pn_1_2",
+            "n": 2,
+            "size": "medium",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_1_2",
+                "kind": "speech",
+                "text": "Line 1.2",
+                "speakerId": "c_maya"
+              }
+            ]
+          },
+          {
+            "id": "pn_1_3",
+            "n": 3,
+            "size": "medium",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_1_3",
+                "kind": "speech",
+                "text": "Line 1.3",
+                "speakerId": "c_maya"
+              }
+            ]
+          }
+        ],
+        "balloons": [
+          {
+            "lineId": "ln_1_1",
+            "x": 0.1,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          },
+          {
+            "lineId": "ln_1_2",
+            "x": 0.2,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          },
+          {
+            "lineId": "ln_1_3",
+            "x": 0.30000000000000004,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          }
+        ],
+        "render": {
+          "status": "ready",
+          "asset": {
+            "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763.webp",
+            "source": "generated",
+            "at": 0,
+            "w": 1024,
+            "h": 1536,
+            "variants": [
+              {
+                "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763-w480.webp",
+                "w": 480,
+                "h": 720
+              },
+              {
+                "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-d6a2f7ec9763-w1080.webp",
+                "w": 1080,
+                "h": 1620
+              }
+            ]
+          },
+          "history": [],
+          "qc": {
+            "score": 0,
+            "issues": [],
+            "checkedAt": 0,
+            "panelBoxes": [
+              {
+                "x": 0.02,
+                "y": 0.02,
+                "w": 0.96,
+                "h": 0.46
+              },
+              {
+                "x": 0.02,
+                "y": 0.52,
+                "w": 0.46,
+                "h": 0.46
+              },
+              {
+                "x": 0.52,
+                "y": 0.52,
+                "w": 0.46,
+                "h": 0.46
+              }
+            ],
+            "keepOut": [],
+            "heads": []
+          }
+        }
+      },
+      {
+        "id": "pg_2",
+        "n": 2,
+        "summary": "",
+        "layout": "Row 1: one wide panel. Row 2: two equal panels.",
+        "panels": [
+          {
+            "id": "pn_2_1",
+            "n": 1,
+            "size": "wide",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_2_1",
+                "kind": "speech",
+                "text": "Line 2.1",
+                "speakerId": "c_maya"
+              }
+            ]
+          },
+          {
+            "id": "pn_2_2",
+            "n": 2,
+            "size": "medium",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_2_2",
+                "kind": "speech",
+                "text": "Line 2.2",
+                "speakerId": "c_maya"
+              }
+            ]
+          },
+          {
+            "id": "pn_2_3",
+            "n": 3,
+            "size": "medium",
+            "shot": "medium",
+            "action": "",
+            "castIds": [
+              "c_maya"
+            ],
+            "lines": [
+              {
+                "id": "ln_2_3",
+                "kind": "speech",
+                "text": "Line 2.3",
+                "speakerId": "c_maya"
+              }
+            ]
+          }
+        ],
+        "balloons": [
+          {
+            "lineId": "ln_2_1",
+            "x": 0.1,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          },
+          {
+            "lineId": "ln_2_2",
+            "x": 0.2,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          },
+          {
+            "lineId": "ln_2_3",
+            "x": 0.30000000000000004,
+            "y": 0.1,
+            "w": 0.25,
+            "tailX": 0.2,
+            "tailY": 0.3
+          }
+        ],
+        "render": {
+          "status": "ready",
+          "asset": {
+            "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673.webp",
+            "source": "generated",
+            "at": 0,
+            "w": 1024,
+            "h": 1536,
+            "variants": [
+              {
+                "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673-w480.webp",
+                "w": 480,
+                "h": 720
+              },
+              {
+                "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/page-b97a255be673-w1080.webp",
+                "w": 1080,
+                "h": 1620
+              }
+            ]
+          },
+          "history": [],
+          "qc": {
+            "score": 0,
+            "issues": [],
+            "checkedAt": 0,
+            "panelBoxes": [
+              {
+                "x": 0.02,
+                "y": 0.02,
+                "w": 0.96,
+                "h": 0.46
+              },
+              {
+                "x": 0.02,
+                "y": 0.52,
+                "w": 0.46,
+                "h": 0.46
+              },
+              {
+                "x": 0.52,
+                "y": 0.52,
+                "w": 0.46,
+                "h": 0.46
+              }
+            ],
+            "keepOut": [],
+            "heads": []
+          }
+        }
+      }
+    ],
+    "cover": {
+      "render": {
+        "status": "ready",
+        "asset": {
+          "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a.webp",
+          "source": "generated",
+          "at": 0,
+          "w": 1024,
+          "h": 1536,
+          "variants": [
+            {
+              "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a-w480.webp",
+              "w": 480,
+              "h": 720
+            },
+            {
+              "path": "pub/KKKKKKKKKKKKKKKKKKKKKK/cover-e9b87b39ee7a-w1080.webp",
+              "w": 1080,
+              "h": 1620
+            }
+          ]
+        },
+        "history": []
+      },
+      "title": "Spice Run",
+      "tagline": "Hot on the trail"
+    },
+    "planStatus": "approved",
+    "settings": {
+      "quality": "standard",
+      "confirm": "big",
+      "bigSpendUsd": 0.5,
+      "reviewFirstRender": true
+    },
+    "spend": {
+      "totalUsd": 0,
+      "byKind": {},
+      "entries": []
+    },
+    "gate": null,
+    "conversation": [],
+    "letterStyle": {
+      "presetId": "classic",
+      "auto": true
+    },
+    "book": {
+      "titlePage": false,
+      "endPage": false,
+      "backCover": "none",
+      "firstPageRight": true,
+      "uniformTrim": true
+    },
+    "reader": {
+      "turn": "paper",
+      "guidedOverview": true,
+      "paperTexture": true,
+      "ambient": true
+    },
+    "i18n": {
+      "editions": {},
+      "glossary": []
+    }
+  },
+  "fingerprint": "f9afa894"
+}

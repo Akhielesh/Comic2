@@ -21,6 +21,7 @@ import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
 import type { StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { ContentRating } from '../../../shared/comic/safety.js';
 import type { ImageModelSpec, ImageRoute } from '../../../shared/comic/models.js';
+import type { PriceBook } from '../../../shared/comic/modelLock.js';
 import type { ChatMessage, JsonSchemaSpec, ToolCall, ToolSpec } from '../ai/providers/types.js';
 
 // ── Errors ───────────────────────────────────────────────────────────────────
@@ -52,7 +53,14 @@ export type StudioErrorCode =
   /** 409: a conflicting operation is running (busy render, publish in progress). */
   | 'CONFLICT'
   /** 501 (not built yet) or 503 (dependency down): the feature cannot run right now. */
-  | 'NOT_AVAILABLE';
+  | 'NOT_AVAILABLE'
+  /** 422: a language edition is not complete/reviewed enough for this (publish, per-language export). */
+  | 'LANG_INCOMPLETE'
+  // W-M model lock (models.md §3.4)
+  /** 409: the comic's image model is locked; only the user's confirmed change_image_model action may change it. */
+  | 'MODEL_LOCKED'
+  /** 409: a render run is under way; the model cannot change until it finishes or is stopped. */
+  | 'RUN_ACTIVE';
 
 export class StudioError extends Error {
   readonly code: StudioErrorCode;
@@ -138,6 +146,13 @@ export interface ImageRequest {
   prompt: string;
   references: ImageReference[];
   signal?: AbortSignal;
+  /**
+   * The route the money-safe preflight chose (reliability.md §2): the same model on the other route, used ONLY when
+   * that route's key has the same payer as the primary's (pickAlternateRoute); anything else is ignored.
+   */
+  preferRoute?: ImageRoute;
+  /** Images-API transport: the per-image provider price the run was quoted at (`provider.only` keeps endpoints ≤ it). */
+  maxUsd?: number;
 }
 
 export interface ImageResult {
@@ -150,6 +165,10 @@ export interface ImageResult {
   /** Any text the model returned alongside the image. */
   text?: string;
   latencyMs: number;
+  /** The upstream provider that served the call (OpenRouter's `provider`), when reported. */
+  providerName?: string;
+  /** The model version the provider reported (OpenRouter `model`, Gemini `modelVersion`; models.md §2.5). */
+  modelVersion?: string;
 }
 
 export type ImageGenerator = (req: ImageRequest) => Promise<ImageResult>;
@@ -161,6 +180,13 @@ export interface CompiledImageJob {
   aspect: AspectRatio;
   prompt: string;
   references: { label: string; path: string }[];
+  /**
+   * USER reference paths the compiler attached (author photos, place photos, user style refs — never
+   * generated sheets/boards/pages), in attachment order; for a character sheet exactly that character's
+   * photos. The job runner records them (filtered to what was really attached) as VersionMeta.refPaths;
+   * an empty list is meaningful ("drawn without photos"). Absent = unknown (older compilers).
+   */
+  refPaths?: string[];
 }
 
 // ── Assets ───────────────────────────────────────────────────────────────────
@@ -175,9 +201,8 @@ export interface EncodedImage {
 }
 
 /**
- * Storage for studio images. The v5 methods (encodeUploadBuffer … removePrefix) throw
- * StudioError NOT_AVAILABLE in the real store until P1-STORAGE lands them; the in-memory
- * fakes (orchestrator.fakes.ts) implement all of them so feature tests run today.
+ * Storage for studio images (contract §12.5). The real store is assets.ts (P1-STORAGE); the
+ * in-memory fakes (orchestrator.fakes.ts) implement every method so feature tests run offline.
  */
 export interface AssetStore {
   /** Store a generated image (no cropping) under the project; returns its AssetRef. */
@@ -216,6 +241,12 @@ export interface AssetStore {
   putObject(path: string, buffer: Buffer, contentType: string, cacheControl?: string): Promise<void>;
   /** Delete every object under a prefix (pub/<key>/ cleanup); returns the count removed. */
   removePrefix(prefix: string): Promise<number>;
+  /**
+   * Optional (P1-SAFETY): bring a quarantined object back — copy q/… from the private bucket to
+   * `originalPath` in its own bucket and clear the quarantine hold. Resolves on success. Stores
+   * without it make an appeal/moderator restore answer honestly that a human must finish it.
+   */
+  restoreQuarantined?(quarantinePath: string, originalPath: string): Promise<void>;
 }
 
 // ── Persistence ──────────────────────────────────────────────────────────────
@@ -260,6 +291,8 @@ export interface BillingHooks {
     resolution?: Resolution;
     inputTokens?: number;
     outputTokens?: number;
+    /** Text calls: every model the call may be served by (the route's fallback chain, primary first). The hold covers the dearest. */
+    models?: string[];
   }): Promise<BillingReserveResult>;
 }
 
@@ -304,4 +337,9 @@ export interface StudioContext {
   caps?: StudioCaps;
   /** v5: effectiveRating() resolved for this request (account ceiling applied). Absent ⇒ computed from the doc. */
   rating?: ContentRating;
+  /**
+   * W-M (models.md §2.3): this request's PriceBook, memoised per request (live OpenRouter prices + the user's observed
+   * costs; never throws). Absent ⇒ jobs.ts priceBookFor builds one itself.
+   */
+  prices?: () => Promise<PriceBook>;
 }

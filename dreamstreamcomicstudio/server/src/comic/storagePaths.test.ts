@@ -8,6 +8,7 @@ import {
   isLibraryPath,
   isPrivatePath,
   isPublicationPath,
+  isQuarantinePath,
   pubPath,
   pubPrefix,
   signedTtlFor
@@ -30,6 +31,8 @@ describe('storagePaths (contract §12.5)', () => {
     // A "ref" segment anywhere else is not the private lane.
     expect(isPrivatePath('u/user-1/tmp/ref/abc.webp')).toBe(false);
     expect(isPrivatePath('xq/abc.webp')).toBe(false);
+    expect(isQuarantinePath('q/user-1/proj-1/abc.webp')).toBe(true);
+    expect(isQuarantinePath('u/user-1/p/proj-1/ref/abc.webp')).toBe(false);
   });
 
   it('signs private paths for 5 minutes and public ones for an hour', () => {

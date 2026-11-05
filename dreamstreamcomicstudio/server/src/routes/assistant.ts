@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { AssistantAccountSummary, UniversalAssistantResponse } from '../../../apiTypes.js';
 import { queryUniversalAssistant } from '../ai/assistant.js';
-import { pickTextModel } from '../ai/autoRouter.js';
+import { NoFreeModelAvailableError, pickTextModel } from '../ai/autoRouter.js';
 import {
   ASSISTANT_POLICY_SCOPE,
   buildOffTopicResponse,
@@ -14,6 +14,7 @@ import { getBillingSummary } from '../services/billingLedger.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
+  hasByokForProvider,
   releaseReservedOperation,
   reserveForOperation,
   settleReservedOperation
@@ -21,6 +22,22 @@ import {
 import { assertModelAllowedForTier } from '../services/modelAccessPolicy.js';
 
 export const assistantRouter = Router();
+
+/** The calm answer when no free model can take the call right now (nothing was spent). */
+const ASSISTANT_BUSY_BODY = {
+  error: {
+    code: 'ASSISTANT_BUSY',
+    message: "The assistant's free model is busy right now. Nothing was spent — try again in a minute."
+  }
+};
+
+/** A free model that couldn't take the call: none free in the catalog, retired (404), rate-limited (429). */
+const isFreeModelMiss = (err: unknown): boolean => {
+  const e = err as { status?: number; message?: string; code?: string } | null | undefined;
+  if (err instanceof NoFreeModelAvailableError || e?.code === 'NO_FREE_MODEL_AVAILABLE') return true;
+  if (e?.status === 404 || e?.status === 429) return true;
+  return /no endpoints|rate.?limit|too many requests|\b404\b|\b429\b/i.test(String(e?.message || ''));
+};
 
 const maskEmail = (email?: string) => {
   if (!email || !email.includes('@')) return undefined;
@@ -115,8 +132,20 @@ assistantRouter.post('/chat', async (req, res, next) => {
       return res.json(blocked);
     }
 
-    // Auto-routed free model from the live catalog (no hardcoded/retired model id).
-    const effectiveModel = await pickTextModel({ preferFree: true });
+    // S10: on the PLATFORM key the assistant only ever runs free models — a free-only pick (never
+    // the cheapest paid model or the catalog-down TEXT_FALLBACK) and no paid retry — so the
+    // platform never pays for it and its $0 hold and $0 settle are true for guests, governed users
+    // and admins alike. The user's own key (BYOK) keeps the paid safety net, unless they turned
+    // Free-only on.
+    const freeOnly = !hasByokForProvider(req, 'openrouter') || req.freeOnly === true;
+    let effectiveModel: string;
+    try {
+      // Auto-routed free model from the live catalog (no hardcoded/retired model id).
+      effectiveModel = await pickTextModel(freeOnly ? { costPref: 'free-only', stageHint: 'assistant' } : { preferFree: true });
+    } catch (err) {
+      if (freeOnly && isFreeModelMiss(err)) return res.status(503).json(ASSISTANT_BUSY_BODY);
+      throw err;
+    }
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
@@ -136,7 +165,7 @@ assistantRouter.post('/chat', async (req, res, next) => {
     }
 
     try {
-      const result = await queryUniversalAssistant(apiKey, message, history, context, effectiveModel);
+      const result = await queryUniversalAssistant(apiKey, message, history, context, effectiveModel, { freeOnly });
       const settled = reserve && reserve.allowed
         ? await settleReservedOperation({
             req,
@@ -184,6 +213,8 @@ assistantRouter.post('/chat', async (req, res, next) => {
           }
         });
       }
+      // A busy/retired free model: a calm answer (never the raw provider error), nothing spent.
+      if (freeOnly && isFreeModelMiss(error)) return res.status(503).json(ASSISTANT_BUSY_BODY);
       throw error;
     }
   } catch (err) {

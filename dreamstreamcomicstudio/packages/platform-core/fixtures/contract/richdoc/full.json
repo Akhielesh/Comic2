@@ -1,0 +1,79 @@
+{
+  "v": 1,
+  "rev": 3,
+  "title": "The Lighthouse Keeper — pitch and script",
+  "meta": { "author": "Sample Creator", "subject": "Comic pitch", "keywords": ["comic", "pitch"], "lang": "en" },
+  "sections": [
+    {
+      "id": "s-intro",
+      "pageBreakBefore": false,
+      "blocks": [
+        { "type": "heading", "id": "h1", "level": 1, "runs": [{ "text": "The Lighthouse Keeper" }] },
+        {
+          "type": "paragraph",
+          "id": "p-lead",
+          "style": "lead",
+          "runs": [
+            { "text": "A 24-page " },
+            { "text": "all-ages", "marks": ["b", "i"] },
+            { "text": " mystery. Read the " },
+            { "text": "full outline", "link": { "href": "https://example.com/outline#part-1" } },
+            { "text": " or write to " },
+            { "text": "the author", "link": { "href": "mailto:author@example.com?subject=Pitch" } },
+            { "text": "." }
+          ]
+        },
+        { "type": "paragraph", "id": "p-body", "runs": [{ "text": "Run " }, { "text": "npm test", "marks": ["code"] }, { "text": " before you print." }] },
+        { "type": "paragraph", "id": "p-quote", "style": "quote", "runs": [{ "text": "The light never lies.", "marks": ["u"] }] },
+        { "type": "paragraph", "id": "p-caption", "style": "caption", "runs": [{ "text": "Figure 1: the coast." }] },
+        {
+          "type": "list",
+          "id": "l1",
+          "ordered": true,
+          "items": [
+            { "runs": [{ "text": "Act one: the storm" }] },
+            { "runs": [{ "text": "The keeper finds the map" }], "indent": 1 },
+            { "runs": [{ "text": "Act two: the island" }], "indent": 0 }
+          ]
+        },
+        {
+          "type": "table",
+          "id": "t1",
+          "header": true,
+          "rows": [
+            { "cells": [{ "runs": [{ "text": "Issue" }] }, { "runs": [{ "text": "Pages" }] }] },
+            { "cells": [{ "runs": [{ "text": "#1" }] }, { "runs": [{ "text": "24", "marks": ["b"] }] }] }
+          ]
+        },
+        {
+          "type": "image",
+          "id": "img1",
+          "ref": { "kind": "data", "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" },
+          "alt": "A lighthouse at night",
+          "caption": "Cover sketch",
+          "width": 0.5
+        },
+        { "type": "divider", "id": "d1" }
+      ]
+    },
+    {
+      "id": "s-script",
+      "pageBreakBefore": true,
+      "blocks": [
+        { "type": "heading", "id": "h2", "level": 2, "runs": [{ "text": "Page 1" }] },
+        { "type": "script", "id": "sc1", "kind": "scene", "runs": [{ "text": "EXT. LIGHTHOUSE — NIGHT" }] },
+        { "type": "script", "id": "sc2", "kind": "panel", "runs": [{ "text": "Waves smash the rocks. A lamp turns." }] },
+        { "type": "script", "id": "sc3", "kind": "dialogue", "speaker": "MARA", "runs": [{ "text": "Someone's out there." }] },
+        { "type": "script", "id": "sc4", "kind": "caption", "speaker": "NARRATOR", "runs": [{ "text": "She was right." }] },
+        { "type": "script", "id": "sc5", "kind": "sfx", "runs": [{ "text": "KRAKOOM" }] },
+        { "type": "heading", "id": "h3", "level": 3, "runs": [{ "text": "Notes" }] },
+        {
+          "type": "image",
+          "id": "img2",
+          "ref": { "kind": "asset", "id": "user-0001/assets/cover-v2.png" },
+          "alt": "Cover, second pass"
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 // Pure board view-model helpers: what state a page/sheet is in, what a click would draw
-// and what it would cost, labels. Kept free of React so the decisions are unit-tested and
-// mirror the server's own targeting (server/src/comic/jobs.ts pageTargets/sheetTargets).
+// and what it would cost, labels. Kept free of React so the decisions are unit-tested.
+// Targeting comes from the ONE shared core (shared/comic/plan.ts), the same functions the
+// server's gate uses, so the board can never quote a page the server would not draw.
 
 import {
   findCharacter,
@@ -20,13 +21,13 @@ import {
 } from '../../../shared/comic/doc';
 import type { DocOp } from '../../../shared/comic/ops';
 import {
-  estimateJobs,
   getImageModel,
   resolveImageJob,
   type ImageJobKind,
   type ImageModelSpec,
   type SpendEstimate
 } from '../../../shared/comic/models';
+import { estimateDocJobs, missingSheetsFor, pageTargets, quoteLockOf } from '../../../shared/comic/plan';
 import type { StylePreset } from '../../../shared/comic/stylePresets';
 
 // ── Render states ────────────────────────────────────────────────────────────
@@ -74,25 +75,20 @@ export const DEVELOP_WINDOW_MS = 15_000;
 export const isFreshRender = (render?: RenderState | null, now = Date.now()) =>
   !!render && render.status === 'ready' && !!render.updatedAt && now - render.updatedAt < DEVELOP_WINDOW_MS;
 
-// ── Spend targeting (mirrors server pageTargets / missingSheetsFor) ───────────
+// ── Spend targeting (shared/comic/plan.ts — the server's own pageTargets / missingSheetsFor) ──
 
 /** Pages "render all" would draw now: planned, failed or out of date — never ones already drawing. */
-export const pagesToDraw = (doc: ComicDoc): Page[] =>
-  doc.pages
-    .filter((p) => p.panels.length > 0 && !isBusy(p.render) && (p.render.status !== 'ready' || isPageStale(doc, p)))
-    .sort((a, b) => a.n - b.n);
+export const pagesToDraw = (doc: ComicDoc): Page[] => pageTargets(doc);
 
 /** Forced redraw of specific pages (Render selected / Re-render): everything chosen that isn't already drawing. */
 export const pagesForIds = (doc: ComicDoc, ids: Iterable<string>): Page[] => {
-  const set = new Set(ids);
-  return doc.pages.filter((p) => set.has(p.id) && p.panels.length > 0 && !isBusy(p.render)).sort((a, b) => a.n - b.n);
+  const pageIds = [...new Set(ids)];
+  // An empty selection draws nothing (pageTargets treats "no ids" as the whole book).
+  return pageIds.length ? pageTargets(doc, { pageIds, force: true }) : [];
 };
 
 /** Lead/support cast on these pages with no usable sheet yet (the server draws those first, billed too). */
-export const sheetsNeededFor = (doc: ComicDoc, pages: Page[]): Character[] => {
-  const ids = new Set(pages.flatMap((p) => p.panels.flatMap((panel) => panel.castIds)));
-  return doc.cast.filter((c) => ids.has(c.id) && c.tier !== 'extra' && c.sheet.status !== 'ready' && !isBusy(c.sheet));
-};
+export const sheetsNeededFor = (doc: ComicDoc, pages: Page[]): Character[] => missingSheetsFor(doc, pages);
 
 /** Whether image spend is on the user's own key: the most recent image spend says so. */
 export const byokFromDoc = (doc: ComicDoc): boolean => {
@@ -108,26 +104,27 @@ export interface DrawPlan {
 
 export const estimateDraw = (doc: ComicDoc, pages: Page[], byok: boolean): DrawPlan => {
   const sheets = sheetsNeededFor(doc, pages);
-  const estimate = estimateJobs(
+  // Lock-aware (plan.ts estimateDocJobs): a locked comic prices on its locked model, as the server draws it.
+  const estimate = estimateDocJobs(
+    doc,
     [
       { kind: 'page', count: pages.length, label: 'pages' },
       { kind: 'sheet', count: sheets.length, label: 'character sheets' }
     ],
-    doc.settings.quality,
-    { override: doc.settings.imageModelOverride, byok }
+    { byok }
   );
   return { pages, sheets, estimate };
 };
 
-/** Estimate for one image job of a kind (edit, cover, a sheet, style options). */
+/** Estimate for one image job of a kind (edit, cover, a sheet, style options), on the comic's locked model if any. */
 export const estimateOne = (doc: ComicDoc, kind: ImageJobKind, byok: boolean, count = 1): SpendEstimate =>
-  estimateJobs([{ kind, count, label: kind }], doc.settings.quality, { override: doc.settings.imageModelOverride, byok });
+  estimateDocJobs(doc, [{ kind, count, label: kind }], { byok });
 
 // ── Models ───────────────────────────────────────────────────────────────────
 
-/** The registry model a job of this kind runs on right now (tier + override). */
+/** The registry model a job of this kind runs on right now: the comic's locked model, else tier + override. */
 export const jobModel = (doc: ComicDoc, kind: ImageJobKind): ImageModelSpec =>
-  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride).spec;
+  resolveImageJob(kind, doc.settings.quality, doc.settings.imageModelOverride, quoteLockOf(doc)).spec;
 
 /** Friendly model name for a render: what drew it, else what will. */
 export const renderModelNickname = (doc: ComicDoc, render: RenderState | undefined, kind: ImageJobKind): string =>

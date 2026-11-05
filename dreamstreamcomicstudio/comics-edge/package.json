@@ -1,0 +1,14 @@
+{
+  "name": "dreamstream-comics-edge",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261019.1",
+    "typescript": "5.8.3",
+    "wrangler": "4.151.2"
+  }
+}

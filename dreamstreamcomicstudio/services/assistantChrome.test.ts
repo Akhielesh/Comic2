@@ -12,8 +12,8 @@ describe('assistantChrome', () => {
     }
   });
 
-  it('is not mounted on the chat product, the v4 studio, the shared viewer or the auth callback', () => {
-    for (const view of ['chat', 'comicstudio', 'shared', 'auth-callback']) {
+  it('is not mounted on the chat product, the v4 studio, the shared viewer, the public share reader or the auth callback', () => {
+    for (const view of ['chat', 'comicstudio', 'shared', 'publiccomic', 'auth-callback']) {
       expect(assistantChrome(view).mounted).toBe(false);
     }
   });

@@ -1,12 +1,19 @@
-// AdaptiveSheet (contract §13.3; owner P1-SHELL): one sheet that presents as a popover,
-// bottom sheet or side sheet by form factor. Wave 0 (P0-C) stub: always today's PopSheet,
-// so callers can adopt the final props now and get the adaptive behaviour when P1-SHELL lands.
+// AdaptiveSheet (contract §13.3; mobile.md §4): ONE sheet API that presents as
+//   - a popover on desktop / fine pointers (today's PopSheet; viewport-clamped when anchored),
+//   - a BottomSheet with detents on phones (compact width or compact height),
+//   - a SideSheet on touch tablets for panel-like content (`panel`), or when asked for 'side'.
+// Callers keep PopSheet's props and get the right presentation on every form factor.
 
-import React from 'react';
+import React, { useLayoutEffect, useState } from 'react';
 import { PopSheet, type PopSheetProps } from '../../conversation/PopSheet';
+import { sideBySideScreens } from '../formFactor';
+import { useFormFactor } from '../useFormFactor';
+import { BottomSheet } from './BottomSheet';
+import { SideSheet } from './SideSheet';
+import { resolvePresentation, type ResolvedPresentation, type SheetDetent, type SheetPresentation } from './snap';
 
-export type SheetPresentation = 'auto' | 'popover' | 'bottom' | 'side';
-export type SheetDetent = 'peek' | 'half' | 'full' | 'content' | number;
+export type { SheetDetent, SheetPresentation } from './snap';
+export { resolvePresentation, snapDetent, detentHeights } from './snap';
 
 export interface AdaptiveSheetProps extends PopSheetProps {
   /** Default 'auto'. */
@@ -20,16 +27,74 @@ export interface AdaptiveSheetProps extends PopSheetProps {
   modal?: boolean;
   /** Shown in the sheet header on bottom/side. */
   title?: string;
+  /** Panel-like content (settings, inspector, media): becomes a side sheet on touch tablets. */
+  panel?: boolean;
+  /** Side sheet width in px (default 420). */
+  sideWidth?: number;
+  /** Bottom sheets: whether drag-down / scrim / Esc may close it (default true). */
+  dismissible?: boolean;
+  /** Reports the presentation actually used (tests, callers that adapt their content). */
+  onPresentation?: (p: ResolvedPresentation) => void;
 }
 
 export const AdaptiveSheet: React.FC<AdaptiveSheetProps> = ({
-  presentation: _presentation,
-  detents: _detents,
-  initialDetent: _initialDetent,
-  side: _side,
-  modal: _modal,
-  title: _title,
+  presentation = 'auto',
+  detents,
+  initialDetent,
+  side,
+  modal,
+  title,
+  panel,
+  sideWidth,
+  dismissible,
+  onPresentation,
   ...popSheet
-}) => <PopSheet {...popSheet} />;
+}) => {
+  const ff = useFormFactor();
+  const { open, anchorRef } = popSheet;
+  // Coarse pointers: a sheet that pops ABOVE its anchor (composer panels) with little room there — the
+  // keyboard is up — becomes a bottom sheet. Header popovers open below and are never affected.
+  const above = (popSheet.placement ?? 'above') === 'above';
+  const [anchorTop, setAnchorTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!open || !ff.coarse || presentation !== 'auto' || !above) return;
+    const r = anchorRef?.current?.getBoundingClientRect();
+    setAnchorTop(r ? r.top : null);
+  }, [open, ff.coarse, presentation, anchorRef, above]);
+
+  const resolved = resolvePresentation(ff, presentation, { panel, anchorRect: above && anchorTop !== null ? { top: anchorTop } : null });
+  useLayoutEffect(() => {
+    if (open) onPresentation?.(resolved);
+  }, [open, resolved, onPresentation]);
+
+  if (resolved === 'bottom') {
+    return (
+      <BottomSheet
+        open={popSheet.open}
+        onClose={popSheet.onClose}
+        label={popSheet.label}
+        title={title}
+        detents={detents}
+        initialDetent={initialDetent}
+        modal={modal ?? true}
+        dismissible={dismissible}
+        anchorRef={anchorRef}
+      >
+        {popSheet.children}
+      </BottomSheet>
+    );
+  }
+  if (resolved === 'side') {
+    return (
+      <SideSheet open={popSheet.open} onClose={popSheet.onClose} label={popSheet.label} title={title} side={side} modal={modal ?? false} width={sideWidth} anchorRef={anchorRef}>
+        {popSheet.children}
+      </SideSheet>
+    );
+  }
+  // Anchored popovers are portalled and viewport-clamped unless the caller pinned a strategy; on a
+  // dual-screen device they stay on the screen that holds their anchor (never across the fold) — also
+  // when only the media query saw the two screens (no segment rects: the window's halves).
+  return <PopSheet {...popSheet} strategy={popSheet.strategy ?? (anchorRef ? 'fixed' : 'absolute')} segments={popSheet.segments ?? sideBySideScreens(ff.segments, ff.width)} />;
+};
 
 export default AdaptiveSheet;

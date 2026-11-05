@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getMissingRequiredEnvVars, STORAGE_BUCKET, STRICT_ENV_VALIDATION } from '../config.js';
+import { getMissingRequiredEnvVars, STRICT_ENV_VALIDATION } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
@@ -10,10 +10,13 @@ import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/wor
 import { capabilityReport } from '../ai/capabilities.js';
 import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
 import { projectHasComicDoc } from '../comic/store.js';
+import { bucketForPath, isPrivatePath, isPublicationPath, isQuarantinePath, SIGNED_TTL_SEC } from '../comic/storagePaths.js';
 import { createPublicReaderPathCache, loadPublicProjectStates, loadPublicReaderPaths, showsIn, shownPathsOf } from './publicReaderPaths.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
+/** Private lanes (reference photos) sign for 5 minutes at most (contract §12.5). */
+const PRIVATE_SIGNED_URL_TTL_SECONDS = SIGNED_TTL_SEC.private;
 const STORAGE_PATH_MAX_LENGTH = 512;
 type SignedTransform = { width?: number; height?: number; quality?: number; format?: 'origin' };
 const SERVER_START_TIMESTAMP = new Date().toISOString();
@@ -258,6 +261,10 @@ const loadProjectAccessRow = async (supabaseAdmin: SupabaseClient, projectId: st
  * Who may get a signed URL for a storage path. The requester id comes only from the
  * verified bearer token (resolveRequesterId), never from the query.
  *
+ * Bucket lanes first (storagePaths.ts): quarantine `q/…` is never signed here; private
+ * `…/ref/…` paths are owner-only and sign from the private bucket for 5 minutes; opaque `pub/`
+ * publication copies and versioned `library/v<n>/` objects are public.
+ *
  * Project-scoped paths (`u/<owner>/p/<pid>/...`):
  *  - the path owner always may;
  *  - `.../ref/...` (reference uploads) are owner-only for every project;
@@ -271,6 +278,19 @@ const canAccessImagePath = async (
   imagePath: string,
   requesterId: string | null
 ): Promise<AccessCheckResult> => {
+  // Quarantine (q/…) is never served here — not even to its owner. Moderators reach it only
+  // through the audited moderation route.
+  if (isQuarantinePath(imagePath)) return denied(requesterId);
+  // Private lanes (…/ref/… reference photos, wherever the project id is a UUID or not) are
+  // owner-only, decided by the path's own namespace — no project, share or public flag can
+  // widen them.
+  if (isPrivatePath(imagePath)) {
+    return requesterId && imagePath.startsWith(`u/${requesterId}/`) ? { allowed: true } : denied(requesterId);
+  }
+  // Opaque publication copies (pub/<22-char key>/…) and versioned platform-library objects
+  // (library/v<n>/…) are public by design: no user or project id inside.
+  if (isPublicationPath(imagePath) || /^library\/v\d+\//.test(imagePath)) return { allowed: true };
+
   const projectScoped = parseProjectScopedPath(imagePath);
   if (projectScoped) {
     if (requesterId && requesterId === projectScoped.ownerId) return { allowed: true };
@@ -443,10 +463,12 @@ systemRouter.get('/image-url', async (req, res, next) => {
     // 504 — telemetry showed exactly that. Fail fast (~12s) with a clear, retryable
     // STORAGE_TIMEOUT instead, so the client can retry and the connection is released.
     const SIGN_TIMEOUT_MS = 12_000;
+    // Each path signs from the bucket that holds it; private lanes for 5 minutes only.
+    const ttlFor = (p: string) => (isPrivatePath(p) ? PRIVATE_SIGNED_URL_TTL_SECONDS : SIGNED_URL_TTL_SECONDS);
     const signUrl = async (p: string) => {
       try {
         return await Promise.race([
-          supabaseAdmin.storage.from(STORAGE_BUCKET).createSignedUrl(p, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined),
+          supabaseAdmin.storage.from(bucketForPath(p)).createSignedUrl(p, ttlFor(p), transform ? { transform } : undefined),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(Object.assign(new Error('Storage sign timed out'), { status: 504, publicCode: 'STORAGE_TIMEOUT' })), SIGN_TIMEOUT_MS)
           )
@@ -479,10 +501,11 @@ systemRouter.get('/image-url', async (req, res, next) => {
       return res.status(404).json({ error: { message: 'Image not found.' } });
     }
 
+    if (isPrivatePath(finalPath)) res.setHeader('Cache-Control', 'private, no-store');
     return res.json({
       url: data.signedUrl,
       path: finalPath,
-      expiresIn: SIGNED_URL_TTL_SECONDS
+      expiresIn: ttlFor(finalPath)
     });
   } catch (error) {
     const maybeError = error as { publicCode?: string; status?: number; message?: string };

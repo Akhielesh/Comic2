@@ -11,10 +11,10 @@ import {
   continuityAudit
 } from '../ai/text.js';
 import { TEXT_MODEL, NVIDIA_TEXT_MODEL } from '../config.js';
-import { pickTextModel, type CostPref } from '../ai/autoRouter.js';
+import { pickTextModel, TEXT_FALLBACK, type CostPref } from '../ai/autoRouter.js';
 import { resolveStageModel, type PipelineStage } from '../ai/stageModels.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
-import type { ChatMessage } from '../ai/providers/types.js';
+import type { ChatMessage, GenerateTextResult } from '../ai/providers/types.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -23,6 +23,7 @@ import {
   settleReservedOperation
 } from '../services/usageEnforcer.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
+import { logger } from '../lib/logger.js';
 import { validateExtractWorldBody } from './text.validation.js';
 
 export const textRouter = Router();
@@ -46,6 +47,45 @@ const assertTextModelAccess = async (
 };
 
 type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' | 'nvidia' };
+
+/**
+ * Every model a /api/text/* pipeline call may be billed for (usage budget). These routes run
+ * through ai/client.ts, whose gateway text client ALWAYS sends a provider-level retry model —
+ * TEXT_FALLBACK (a paid model) on an OpenRouter key, NVIDIA_TEXT_MODEL on an NVIDIA key — and the
+ * provider retries on it when the primary fails (a busy `:free` model 429s/404s routinely). The
+ * hold is priced at the most expensive of them (reserveForOperation `pricedModels`), so a `:free`
+ * primary held at $0 can never fall through to the paid retry unreserved, and an exhausted
+ * governed user is refused before anything is spent. The Gemini SDK path has no retry model.
+ */
+export const textPricedModels = (provider: TextProvider['provider'], model: string): string[] | undefined => {
+  const retryModel = provider === 'openrouter' ? TEXT_FALLBACK : provider === 'nvidia' ? NVIDIA_TEXT_MODEL : undefined;
+  if (!retryModel) return undefined;
+  return Array.from(new Set([model, retryModel].map((m) => String(m || '').trim()).filter(Boolean)));
+};
+
+// ── Metering around a provider text call ────────────────────────────────────────────────────────
+// The provider call IS the spend. When it fails, the hold is released (nothing was spent). Once it
+// succeeded the spend is real and is SETTLED — a settle that fails must never release the hold,
+// because a release flips the RESERVED cost event to RELEASED and erases real platform spend from
+// the user's usage and the ledger (same rule as routes/chat.ts and routes/image.ts).
+
+type SettleResult = Awaited<ReturnType<typeof settleReservedOperation>>;
+
+/**
+ * Settle a call whose provider spend already happened. Never throws: a failed settle leaves the
+ * RESERVED hold in place (it keeps counting for its 20-minute window, server/sql/user_usage_budgets.sql),
+ * is logged with the reservation, and the reconciliation sweep (jobs/strandedHolds.ts,
+ * `npm run billing:reconcile`) settles it at its held cost when it runs; the user still gets the
+ * result they paid for.
+ */
+const settleSpentQuietly = async (operation: string, reservationId: string | undefined, settle: () => Promise<SettleResult>): Promise<SettleResult | null> => {
+  try {
+    return await settle();
+  } catch (settleError) {
+    logger.error('text_settle_failed', { operation, reservationId, message: (settleError as Error)?.message || String(settleError) });
+    return null;
+  }
+};
 
 // Text generation routes through OpenRouter or NVIDIA Build (both OpenAI-compatible, via the
 // gateway shim in ai/client.ts) when their key is present, otherwise the legacy Gemini path.
@@ -125,6 +165,7 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       operation: 'text.analyze_script',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'script',
@@ -135,10 +176,24 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
     }
 
+    let result: Awaited<ReturnType<typeof analyzeScript>>;
     try {
       const creativeDirection = typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined;
-      const result = await analyzeScript(apiKey, script, effectiveModel, creativeDirection);
-      const settled = await settleReservedOperation({
+      result = await analyzeScript(apiKey, script, effectiveModel, creativeDirection);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.analyze_script',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.analyze_script', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.analyze_script',
         provider,
@@ -154,21 +209,10 @@ textRouter.post('/analyze-script', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
+      })
+    );
 
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.analyze_script',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -185,6 +229,7 @@ textRouter.post('/story-outline', async (req, res, next) => {
       operation: 'text.story_outline',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_outline',
@@ -192,9 +237,23 @@ textRouter.post('/story-outline', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof generateStoryOutline>>;
     try {
-      const result = await generateStoryOutline(apiKey, req.body || {}, effectiveModel);
-      const settled = await settleReservedOperation({
+      result = await generateStoryOutline(apiKey, req.body || {}, effectiveModel);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.story_outline',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.story_outline', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.story_outline',
         provider,
@@ -210,20 +269,9 @@ textRouter.post('/story-outline', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.story_outline',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -240,6 +288,7 @@ textRouter.post('/story-draft', async (req, res, next) => {
       operation: 'text.story_draft',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_draft',
@@ -247,9 +296,23 @@ textRouter.post('/story-draft', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof generateStoryDraft>>;
     try {
-      const result = await generateStoryDraft(apiKey, req.body || {}, effectiveModel);
-      const settled = await settleReservedOperation({
+      result = await generateStoryDraft(apiKey, req.body || {}, effectiveModel);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.story_draft',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.story_draft', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.story_draft',
         provider,
@@ -265,20 +328,9 @@ textRouter.post('/story-draft', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.story_draft',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -299,6 +351,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
       operation: 'text.story_tool',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_tool',
@@ -306,9 +359,23 @@ textRouter.post('/story-tool', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof runStoryToolPrompt>>;
     try {
-      const result = await runStoryToolPrompt(apiKey, script, instruction, Array.isArray(history) ? history : [], effectiveModel);
-      const settled = await settleReservedOperation({
+      result = await runStoryToolPrompt(apiKey, script, instruction, Array.isArray(history) ? history : [], effectiveModel);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.story_tool',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.story_tool', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.story_tool',
         provider,
@@ -324,20 +391,9 @@ textRouter.post('/story-tool', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.story_tool',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -357,6 +413,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
       operation: 'text.extract_world',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'world',
@@ -364,30 +421,44 @@ textRouter.post('/extract-world', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof extractWorldDetails>>;
     try {
-      const result = await extractWorldDetails(
+      result = await extractWorldDetails(
         apiKey,
         scenes,
         script,
         effectiveModel,
         typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
       );
-      const diagnostics = result.diagnostics || {
-        input_scene_count: Array.isArray(scenes) ? scenes.length : 0,
-        entity_counts: {
-          characters: Array.isArray(result.characters) ? result.characters.length : 0,
-          items: Array.isArray(result.items) ? result.items.length : 0,
-          locations: Array.isArray(result.locations) ? result.locations.length : 0
-        },
-        filtered_entity_count: 0,
-        dropped_entities: [],
-        ungrounded_characters_dropped: 0
-      };
-      const resultWithDiagnostics = {
-        ...result,
-        diagnostics
-      };
-      const settled = await settleReservedOperation({
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.extract_world',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const diagnostics = result.diagnostics || {
+      input_scene_count: Array.isArray(scenes) ? scenes.length : 0,
+      entity_counts: {
+        characters: Array.isArray(result.characters) ? result.characters.length : 0,
+        items: Array.isArray(result.items) ? result.items.length : 0,
+        locations: Array.isArray(result.locations) ? result.locations.length : 0
+      },
+      filtered_entity_count: 0,
+      dropped_entities: [],
+      ungrounded_characters_dropped: 0
+    };
+    const resultWithDiagnostics = {
+      ...result,
+      diagnostics
+    };
+    const settled = await settleSpentQuietly('text.extract_world', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.extract_world',
         provider,
@@ -403,20 +474,9 @@ textRouter.post('/extract-world', async (req, res, next) => {
         },
         usage: resultWithDiagnostics.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(resultWithDiagnostics as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.extract_world',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(resultWithDiagnostics as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -440,6 +500,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
       operation: 'text.panel_breakdown',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: typeof req.body?.stage === 'string' ? req.body.stage : 'preview',
@@ -447,8 +508,9 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof generatePanelBreakdown>>;
     try {
-      const result = await generatePanelBreakdown(
+      result = await generatePanelBreakdown(
         apiKey,
         scene,
         effectiveStyle,
@@ -461,8 +523,21 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
         typeof continuitySummary === 'string' ? continuitySummary : undefined,
         typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
       );
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.panel_breakdown',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
 
-      const settled = await settleReservedOperation({
+    const settled = await settleSpentQuietly('text.panel_breakdown', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.panel_breakdown',
         provider,
@@ -478,20 +553,9 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.panel_breakdown',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -512,6 +576,7 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
       operation: 'text.continuity_audit',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_audit',
@@ -519,9 +584,23 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof continuityAudit>>;
     try {
-      const result = await continuityAudit(apiKey, req.body || {}, effectiveModel);
-      const settled = await settleReservedOperation({
+      result = await continuityAudit(apiKey, req.body || {}, effectiveModel);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.continuity_audit',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.continuity_audit', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.continuity_audit',
         provider,
@@ -537,20 +616,9 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.continuity_audit',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -571,6 +639,7 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       operation: 'text.continuity_summary',
       fallbackModel: effectiveModel,
       provider,
+      pricedModels: textPricedModels(provider, effectiveModel),
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_summary',
@@ -578,9 +647,23 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: Awaited<ReturnType<typeof updateContinuitySummary>>;
     try {
-      const result = await updateContinuitySummary(apiKey, currentSummary, scene, panels, effectiveModel);
-      const settled = await settleReservedOperation({
+      result = await updateContinuitySummary(apiKey, currentSummary, scene, panels, effectiveModel);
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.continuity_summary',
+        provider,
+        model: effectiveModel,
+        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+    const settled = await settleSpentQuietly('text.continuity_summary', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.continuity_summary',
         provider,
@@ -596,20 +679,9 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
         },
         usage: result.usage,
         metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.continuity_summary',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+      })
+    );
+    res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
   } catch (err) {
     next(err);
   }
@@ -653,8 +725,9 @@ textRouter.post('/generate', async (req, res, next) => {
     });
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
+    let result: GenerateTextResult;
     try {
-      const result = await getProvider('openrouter').generateText(
+      result = await getProvider('openrouter').generateText(
         {
           model: effectiveModel,
           messages: chatMessages,
@@ -664,15 +737,28 @@ textRouter.post('/generate', async (req, res, next) => {
         },
         resolveProviderContext(apiKey)
       );
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.openrouter.generate',
+        provider: 'openrouter',
+        model: effectiveModel,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
 
-      const usage = {
-        promptTokens: result.usage.promptTokens,
-        candidatesTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens,
-        providerCostUsd: result.usage.costUsd
-      };
+    const usage = {
+      promptTokens: result.usage.promptTokens,
+      candidatesTokens: result.usage.completionTokens,
+      totalTokens: result.usage.totalTokens,
+      providerCostUsd: result.usage.costUsd
+    };
 
-      const settled = await settleReservedOperation({
+    const settled = await settleSpentQuietly('text.openrouter.generate', reserve.reservation.reservationId, () =>
+      settleReservedOperation({
         req,
         operation: 'text.openrouter.generate',
         provider: 'openrouter',
@@ -688,25 +774,14 @@ textRouter.post('/generate', async (req, res, next) => {
         },
         usage,
         metadata: { route: req.path, method: req.method }
-      });
+      })
+    );
 
-      res.json(attachBillingToPayload(
-        { text: result.text, json: result.json, model: result.model, usage } as Record<string, unknown>,
-        reserve.reservation,
-        settled
-      ));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.openrouter.generate',
-        provider: 'openrouter',
-        model: effectiveModel,
-        projectId: typeof projectId === 'string' ? projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
+    res.json(attachBillingToPayload(
+      { text: result.text, json: result.json, model: result.model, usage } as Record<string, unknown>,
+      reserve.reservation,
+      settled
+    ));
   } catch (err) {
     next(err);
   }

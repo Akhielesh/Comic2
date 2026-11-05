@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '../types';
 import { ComicReader } from './ComicReader';
+import { resetBackStack } from './comicstudio/mobile/backStack';
 
 // Safe gestures in the classic reader's Page Flip (mobile-reading hotfix): a pinch released one finger at a time used
 // to turn the page (the last finger's touchend read as a swipe), and after zooming in a sideways drag turned the page
@@ -45,6 +46,8 @@ beforeEach(() => {
   setZoom(1);
 });
 afterEach(() => {
+  // v5: the reader is a Back-stack layer; no layer (or its deferred history pop) outlives its test.
+  resetBackStack();
   window.matchMedia = realMatchMedia;
   if (realVV) Object.defineProperty(window, 'visualViewport', realVV);
   else delete (window as unknown as Record<string, unknown>).visualViewport;

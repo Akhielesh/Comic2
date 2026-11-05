@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { ScriptInput } from './steps/ScriptInput';
 import { StyleSelection } from './steps/StyleSelection';
@@ -26,11 +26,50 @@ import { confirmGateNeeded } from '../services/comicAgentSettings';
 import { estimateComicCostUsd, planBeats } from '../services/beatPlanner';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
-import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { getSelectedImageModel, getSelectedImageSource, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { API_KEYS_CHANGED, getActiveKeyForUse } from '../services/apiKeys';
+import { isProviderEnabled, SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { getComicCost, BILLING_SUMMARY_REFRESH_EVENT } from '../services/billing';
-import { DollarSign, Loader2, MessageSquare, X } from 'lucide-react';
+import { DollarSign, Gauge, Loader2, MessageSquare, X } from 'lucide-react';
+import { costContextFromAllowance } from '../services/costDisplay';
+import { useUsageAllowance } from './usage/useUsageAllowance';
+import { comicCostView, isGovernedComicCost, type ComicCostResponse } from './steps/comicCostDisplay';
 import { createStudioProject } from './comicstudio/studioApi';
 import { ACCENT_TEXT, GLASS, PRIMARY_BTN, RADIUS_PILL } from './chat/studioDesign';
+
+/**
+ * Will the classic pipeline's image calls run on the user's OWN provider key (they pay the provider; their
+ * included usage is untouched)? Mirrors services/geminiService routing: NVIDIA when it is the picked image
+ * source and has a key, else OpenRouter when it has an active key, else Gemini. Only a key the request itself
+ * carries counts — a provider switched off in source governance sends none (that call runs on the platform
+ * key), and an account-stored key can stay suppressed while the included usage applies. The Gemini fallback is
+ * treated as the platform's: when in doubt the price stays in usage terms, never dollars for a governed user.
+ */
+export const legacyRunUsesOwnKey = (): boolean => {
+  // The routing checks for an active key ENTRY; the header (services/apiClient) needs a VALUE. An entry with a blank
+  // value still routes to that provider but carries no key, so the platform would pay: never call that "own key".
+  const sends = (provider: 'nvidia' | 'openrouter') => !!getActiveKeyForUse(provider).key?.key?.trim() && isProviderEnabled(provider);
+  try {
+    if (getSelectedImageSource() === 'nvidia' && getActiveKeyForUse('nvidia').key) return sends('nvidia');
+    if (getActiveKeyForUse('openrouter').key) return sends('openrouter');
+  } catch {
+    /* storage unavailable: no own key can be sent either */
+  }
+  return false;
+};
+
+/** legacyRunUsesOwnKey, kept current when keys, the image source or source governance change (events, never polled). */
+export const useLegacyOwnKey = (): boolean => {
+  const [own, setOwn] = useState(legacyRunUsesOwnKey);
+  useEffect(() => {
+    const sync = () => setOwn(legacyRunUsesOwnKey());
+    const events = [API_KEYS_CHANGED, MODEL_SELECTION_CHANGED, SOURCE_GOVERNANCE_CHANGED, 'focus'];
+    events.forEach((e) => window.addEventListener(e, sync));
+    sync();
+    return () => events.forEach((e) => window.removeEventListener(e, sync));
+  }, []);
+  return own;
+};
 
 const NEW_STUDIO_BANNER_DISMISS_KEY = 'ds.comicstudio.banner.dismissed';
 
@@ -134,25 +173,18 @@ export const OpenInNewStudioBanner: React.FC<{
 
 // Always-visible "what has THIS comic cost so far" chip — real settled spend from the
 // billing ledger, refreshed after every generation. Hover shows the per-stage split.
-const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
-  const [totalUsd, setTotalUsd] = useState<number | null>(null);
-  const [byStage, setByStage] = useState<Array<{ stage: string; usd: number }>>([]);
+// Governed users (the usage budget limits them) see a share of their usage, never dollars.
+export const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [report, setReport] = useState<ComicCostResponse | null>(null);
   useEffect(() => {
     let active = true;
     const load = async () => {
       try {
-        const report = await getComicCost(projectId);
-        if (!active) return;
-        setTotalUsd(report.totalBillableUsd ?? 0);
-        setByStage(
-          Object.entries(report.byStage || {})
-            .map(([stage, v]) => ({ stage, usd: v.usd }))
-            .filter((s) => s.usd > 0)
-            .sort((a, b) => b.usd - a.usd)
-        );
+        const next = (await getComicCost(projectId)) as ComicCostResponse;
+        if (active) setReport(next);
       } catch {
         // Billing backend unavailable → hide rather than show a broken chip.
-        if (active) setTotalUsd(null);
+        if (active) setReport(null);
       }
     };
     void load();
@@ -162,23 +194,33 @@ const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
       window.removeEventListener(BILLING_SUMMARY_REFRESH_EVENT, load);
     };
   }, [projectId]);
-  if (totalUsd === null) return null;
+  // Read on mount / focus and once after the recorded spend changes — never polled.
+  const spendKey = report ? (isGovernedComicCost(report) ? report.usagePct : report.totalProviderCostUsd) : null;
+  const allowance = useUsageAllowance({ refreshKey: spendKey });
+  const ctx = useMemo(() => costContextFromAllowance(allowance), [allowance]);
+  const view = useMemo(() => (report ? comicCostView(report, ctx, { digits: 2, lineDigits: 3 }) : null), [report, ctx]);
+  if (!view) return null;
+  const Icon = view.governed ? Gauge : DollarSign;
   return (
     <div className="relative group hidden md:block">
-      <div className="flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default" title="What this comic has cost so far">
-        <DollarSign size={12} className="text-green-600" />
-        <span className="tabular-nums">This comic: ${totalUsd.toFixed(2)}</span>
+      <div
+        className="flex max-w-[18rem] items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default"
+        title={view.governed ? 'How much of your usage this comic has used' : 'What this comic has cost so far'}
+      >
+        <Icon size={12} className={`shrink-0 ${view.governed ? 'text-slate-500' : 'text-green-600'}`} aria-hidden />
+        <span className="truncate tabular-nums">This comic: {view.total}</span>
       </div>
-      {byStage.length > 0 && (
-        <div className="absolute right-0 mt-2 w-56 z-50 hidden group-hover:block">
+      {(view.byStage.length > 0 || view.ownKeyNote) && (
+        <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] z-50 hidden group-hover:block">
           <div className="bg-white border-2 border-black rounded-xl shadow-comic p-3 text-left space-y-1">
-            <div className="text-[10px] font-bold uppercase text-slate-500">Cost by stage</div>
-            {byStage.map((s) => (
-              <div key={s.stage} className="flex justify-between text-[11px] text-slate-600 tabular-nums">
-                <span className="capitalize truncate">{s.stage.replace(/_/g, ' ')}</span>
-                <span>${s.usd.toFixed(3)}</span>
+            <div className="text-[10px] font-bold uppercase text-slate-500">{view.governed ? 'Usage by stage' : 'Cost by stage'}</div>
+            {view.byStage.map((line) => (
+              <div key={line.key} className="flex justify-between gap-2 text-[11px] text-slate-600 tabular-nums">
+                <span className="min-w-0 capitalize truncate">{line.key.replace(/_/g, ' ')}</span>
+                <span className="shrink-0">{line.value}</span>
               </div>
             ))}
+            {view.ownKeyNote && <div className="pt-1 text-[11px] text-slate-500">{view.ownKeyNote}</div>}
           </div>
         </div>
       )}
@@ -253,6 +295,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streamAnalyzing, setStreamAnalyzing] = useState(false);
   const [pendingGate, setPendingGate] = useState<{ estimateUsd: number } | null>(null);
+  // Own-key runs show real prices in the stream (ComicStreamView); everyone else reads usage shares.
+  const streamByok = useLegacyOwnKey();
 
   // Approving the plan requests a build, but per the confirm policy we may pause with a
   // spend gate first (the spec's trust feature). This only gates the *start* — it never
@@ -757,6 +801,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             projectTitle={project.name}
             analyzing={streamAnalyzing}
             pendingGate={pendingGate}
+            byok={streamByok}
             onConfirmGate={() => { setPendingGate(null); onStartGeneration(project.id); }}
             onCancelGate={() => setPendingGate(null)}
             onBack={onBack}

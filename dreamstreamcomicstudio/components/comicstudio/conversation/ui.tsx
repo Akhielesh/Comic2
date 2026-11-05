@@ -10,8 +10,11 @@ import {
   HAIRLINE,
   INK,
   MUTED,
+  OVERLINE,
   RADIUS_PANEL,
+  SEGMENTED_ACTIVE,
   SHADOW_SOFT,
+  TONE_CHIP,
   TRANSITION
 } from '../../chat/studioDesign';
 
@@ -34,7 +37,10 @@ export const CardShell: React.FC<{
       <header className="mb-3 flex items-center justify-between gap-3">
         <span className={`flex min-w-0 items-center gap-2 text-[14px] font-semibold tracking-tight ${INK}`}>
           {icon && <span className="shrink-0 text-[var(--ds-accent)]">{icon}</span>}
-          <span className="truncate">{title}</span>
+          {/* A long gate or renders title truncates; the full text stays readable on hover. */}
+          <span className="truncate" title={typeof title === 'string' ? title : undefined}>
+            {title}
+          </span>
         </span>
         {right && <span className={`shrink-0 text-[12px] ${MUTED}`}>{right}</span>}
       </header>
@@ -45,7 +51,8 @@ export const CardShell: React.FC<{
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & { busy?: boolean; size?: 'sm' | 'md' };
 
-const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px]' : 'h-9 px-4 text-[13px]');
+// Coarse pointers get real 44 px buttons (mobile.md §2.4); fine pointers keep today's sizes.
+const sizeCls = (size: 'sm' | 'md' = 'md') => (size === 'sm' ? 'h-8 px-3 text-[12px] coarse:h-11 coarse:px-3.5' : 'h-9 px-4 text-[13px] coarse:h-11');
 
 export const PrimaryButton: React.FC<ButtonProps> = ({ busy, size, className, children, disabled, ...rest }) => (
   <button
@@ -93,7 +100,7 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
     {...rest}
     aria-pressed={selected === undefined ? undefined : selected}
     className={cx(
-      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
+      `inline-flex max-w-full items-center gap-1.5 rounded-full border px-3 py-1.5 text-left text-[13px] leading-snug ${TRANSITION} disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px] coarse:text-[14px]`,
       selected
         ? // An answered card keeps the chosen chip at full strength; only the others fade.
           'border-[#D97757]/45 bg-[#D97757]/10 text-[var(--ds-ink)] disabled:opacity-100'
@@ -103,6 +110,32 @@ export const ChipButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> 
   >
     {children}
   </button>
+);
+
+/**
+ * A chip's badge: "Free", "Done", "Started" or what it costs ("≈$0.07", "≈1% of your usage", "adds ≈$0.07 on your
+ * key"). One rule for every card's chips (the notices, the breakdown's held-back fixes): a one-word badge never wraps
+ * and never shrinks (a 320 px chip broke "Free" into "Fr / ee" and "≈$0.90" into "≈$0. / 90", which reads as $0); a
+ * longer one wraps only between words, never inside a word or an amount.
+ */
+export const ChipBadge: React.FC<Omit<React.HTMLAttributes<HTMLSpanElement>, 'children'> & { children: string; tone: 'paid' | 'free' }> = ({
+  children,
+  tone,
+  className,
+  ...rest
+}) => (
+  <span
+    {...rest}
+    data-chip-badge={/\s/.test(children.trim()) ? 'words' : 'word'}
+    className={cx(
+      'rounded-full px-1.5 py-px text-[10.5px] font-semibold tabular-nums',
+      /\s/.test(children.trim()) ? '[overflow-wrap:normal]' : 'shrink-0 whitespace-nowrap',
+      tone === 'paid' ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : TONE_CHIP.success,
+      className
+    )}
+  >
+    {children}
+  </span>
 );
 
 /** Segmented control (format kind, reading direction, panels per page). */
@@ -119,9 +152,21 @@ export function Segmented<T extends string | number>({
   label: string;
   className?: string;
 }) {
+  const checked = options.findIndex((o) => o.value === value);
+  const focusIndex = checked >= 0 ? checked : 0;
+  // Arrow keys move between options (and choose), like a native radio group.
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!step || !options.length) return;
+    e.preventDefault();
+    const next = (focusIndex + step + options.length) % options.length;
+    onChange(options[next].value);
+    const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    buttons[next]?.focus();
+  };
   return (
-    <div role="radiogroup" aria-label={label} className={cx('flex rounded-xl bg-[var(--ds-well-strong)] p-0.5', className)}>
-      {options.map((o) => {
+    <div role="radiogroup" aria-label={label} onKeyDown={onKeyDown} className={cx('flex min-w-0 rounded-xl bg-[var(--ds-segment-track)] p-0.5', className)}>
+      {options.map((o, i) => {
         const on = o.value === value;
         return (
           <button
@@ -129,14 +174,17 @@ export function Segmented<T extends string | number>({
             type="button"
             role="radio"
             aria-checked={on}
-            title={o.title}
+            // Roving focus: the checked option — or the first one when none matches — is the Tab stop.
+            tabIndex={i === focusIndex ? 0 : -1}
+            title={o.title ?? (typeof o.label === 'string' ? o.label : undefined)}
             onClick={() => onChange(o.value)}
             className={cx(
-              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40`,
-              on ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.08)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+              `flex min-w-0 flex-1 items-center justify-center gap-1 rounded-[10px] px-2 py-1.5 text-[12px] font-medium ${TRANSITION} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:min-h-[44px]`,
+              on ? SEGMENTED_ACTIVE : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
             )}
           >
-            {o.label}
+            {/* Text labels truncate inside their segment instead of running into the neighbour. */}
+            {typeof o.label === 'string' || typeof o.label === 'number' ? <span className="min-w-0 truncate">{o.label}</span> : o.label}
           </button>
         );
       })}
@@ -147,11 +195,11 @@ export function Segmented<T extends string | number>({
 /** Quiet section label inside panels and sheets. */
 export const SectionLabel: React.FC<{ children: React.ReactNode; htmlFor?: string; className?: string }> = ({ children, htmlFor, className }) =>
   htmlFor ? (
-    <label htmlFor={htmlFor} className={cx('mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]', className)}>
+    <label htmlFor={htmlFor} className={cx('mb-1.5 block', OVERLINE, className)}>
       {children}
     </label>
   ) : (
-    <div className={cx('mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]', className)}>{children}</div>
+    <div className={cx('mb-1.5', OVERLINE, className)}>{children}</div>
   );
 
 /** Tiny aspect-ratio glyph ("▭" drawn at the real ratio). */

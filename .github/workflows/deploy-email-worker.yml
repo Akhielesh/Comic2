@@ -18,6 +18,9 @@ on:
     paths:
       - 'dreamstreamcomicstudio/email-worker/**'
       - 'dreamstreamcomicstudio/shared/email/**'
+      # Bundled into the worker (Stream Studio links). tests/config/deployPaths.test.ts enforces
+      # that every bundled file is listed here.
+      - 'dreamstreamcomicstudio/shared/streamHost.ts'
       - '.github/workflows/deploy-email-worker.yml'
   workflow_dispatch:
 

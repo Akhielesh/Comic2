@@ -1,5 +1,6 @@
-// Wave-0 seams (P0-B): the three registries, the per-turn toolset merge and the jobs.ts
-// dispatch. With every feature still a stub, the studio must behave exactly as before.
+// The three registries, the per-turn toolset merge and the jobs.ts dispatch (P0-B seams), as wired
+// after wave 1: every feature group, action and sanitizer is real now (P2-AMEND rewrote the wave-0
+// "stub" assertions into checks of the real wiring; the merge rules are still tested with fakes).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createEmptyDoc, type ComicDoc } from '../../../shared/comic/doc.js';
 import { CLIENT_PATCHABLE_OPS, NON_SPEND_ACTION_TYPES, SPEND_ACTION_TYPES, type DocOp } from '../../../shared/comic/ops.js';
@@ -30,10 +31,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-/** The core tool surface as of v4 (golden: order and names). */
+/** The core tool surface (golden: order and names). v4's 20 tools + set_line (P1-DIRECTOR) = 21. */
 const CORE_TOOL_NAMES = [
   'update_brief', 'add_notes', 'set_format', 'save_source', 'upsert_character', 'remove_character', 'upsert_place', 'remove_place',
-  'set_style', 'propose_styles', 'render_character_sheets', 'plan_pages', 'revise_pages', 'read_pages', 'edit_panel_text',
+  'set_style', 'propose_styles', 'render_character_sheets', 'plan_pages', 'revise_pages', 'read_pages', 'edit_panel_text', 'set_line',
   'render_pages', 'edit_page', 'render_cover', 'set_settings', 'ask_user'
 ];
 
@@ -43,41 +44,84 @@ const group = (g: Partial<ToolGroup> & Pick<ToolGroup, 'id' | 'priority'>): Tool
 describe('tool registry', () => {
   it('registers every feature group exactly once and never core', () => {
     const ids = toolGroups().map((g) => g.id);
-    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'publish', 'reader', 'refs', 'safety', 'timeline']);
+    expect(ids.sort()).toEqual(['breakdown', 'i18n', 'lettering', 'library', 'models', 'publish', 'reader', 'refs', 'safety', 'timeline']);
     expect(TOOL_GROUPS).toBe(toolGroups());
     expect(toolGroupById('core')).toBeUndefined();
     expect(toolGroupById('constructor')).toBeUndefined();
     expect(toolGroupById('lettering')?.id).toBe('lettering');
   });
 
-  it('wave-0 stub groups contribute no tools, rules or summary lines', () => {
-    const ctx = testContext(newSession(plannedDoc()));
+  it('every feature group is real: its own non-core tools, each with an activity label, and well-formed rules/lines', () => {
     const turn = createDirectorTurn();
-    for (const g of toolGroups()) {
-      expect(g.tools(ctx, turn)).toEqual([]);
-      expect(g.promptRules?.(ctx.session.doc)).toBeUndefined();
-      expect(g.summaryLines?.(ctx.session.doc, turn) ?? []).toEqual([]);
+    const owner = new Map<string, string>();
+    for (const doc of [plannedDoc(), createEmptyDoc('proj-1')]) {
+      const ctx = testContext(newSession(doc));
+      for (const g of toolGroups()) {
+        const names = directorToolNames(g.tools(ctx, turn));
+        for (const name of names) {
+          expect(CORE_TOOL_NAMES, `${g.id} shadows core ${name}`).not.toContain(name);
+          expect(owner.get(name) ?? g.id, `${name} is offered by two groups`).toBe(g.id);
+          owner.set(name, g.id);
+          expect(typeof g.activity?.[name], `${g.id}.${name} has no activity label`).toBe('string');
+        }
+        const rules = g.promptRules?.(ctx.session.doc);
+        expect(rules === undefined || (typeof rules === 'string' && rules.trim().length > 0)).toBe(true);
+        for (const line of g.summaryLines?.(ctx.session.doc, turn) ?? []) expect(typeof line === 'string' && line.length > 0 && !line.includes('\n')).toBe(true);
+      }
+    }
+    // Every group contributes something on some doc (no stub left behind) — refs only when the turn carries photos.
+    const contributing = new Set(owner.values());
+    for (const id of ['safety', 'breakdown', 'lettering', 'timeline', 'publish', 'i18n', 'library', 'reader']) expect(contributing, id).toContain(id);
+    expect(toolGroupById('refs')!.activity).toMatchObject({ attach_refs: expect.any(String) });
+  });
+
+  it('directors send core + the active groups, whole and in priority order, within MAX_TOOLS_PER_TURN', () => {
+    for (const doc of [plannedDoc(), createEmptyDoc('proj-1')]) {
+      const ctx = testContext(newSession(doc));
+      const turn = createDirectorTurn();
+      const set = buildTurnToolset(ctx, turn, toolGroups());
+      const names = directorToolNames(set.tools);
+      expect(names.slice(0, CORE_TOOL_NAMES.length)).toEqual(CORE_TOOL_NAMES);
+      expect(directorToolNames(buildDirectorTools(ctx, turn))).toEqual(CORE_TOOL_NAMES);
+      const priorities = set.groups.map((id) => toolGroupById(id)!.priority);
+      expect([...priorities].sort((a, b) => a - b)).toEqual(priorities);
+      const expected = [...CORE_TOOL_NAMES, ...set.groups.flatMap((id) => directorToolNames(toolGroupById(id)!.tools(ctx, turn)))];
+      expect(names).toEqual(expected);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names.length).toBeLessThanOrEqual(MAX_TOOLS_PER_TURN);
+      // The always-on content-rating and breakdown groups are offered on every doc.
+      expect(set.groups.slice(0, 2)).toEqual(['safety', 'breakdown']);
+      expect(set.promptRules.length).toBe(set.groups.filter((id) => toolGroupById(id)!.promptRules?.(ctx.session.doc)).length);
+      for (const tool of set.tools.slice(CORE_TOOL_NAMES.length)) expect(set.activity[tool.spec.function.name]).toEqual(expect.any(String));
     }
   });
 
-  it('directors build the identical (golden) tool list with the empty groups', () => {
+  it('the wave-1 groups the director relies on: safety and breakdown always on, lettering on overlay comics', () => {
     const ctx = testContext(newSession(plannedDoc()));
     const turn = createDirectorTurn();
-    const set = buildTurnToolset(ctx, turn, toolGroups());
-    expect(directorToolNames(set.tools)).toEqual(CORE_TOOL_NAMES);
-    expect(directorToolNames(set.tools)).toEqual(directorToolNames(buildDirectorTools(ctx, turn)));
-    expect(set.promptRules).toEqual([]);
-    expect(set.summaryLines).toEqual([]);
-    expect(set.activity).toEqual({});
+    const safety = toolGroupById('safety')!;
+    expect(safety.priority).toBe(5);
+    expect(directorToolNames(safety.tools(ctx, turn))).toEqual(['set_content_rating', 'request_safety_review']);
+    expect(safety.summaryLines?.(ctx.session.doc, turn)).toEqual(['Rating: PG-13']);
+    const breakdown = toolGroupById('breakdown')!;
+    expect(breakdown.priority).toBe(10);
+    const bdTools = breakdown.tools(ctx, turn);
+    expect(directorToolNames(bdTools)).toEqual(['show_pages', 'quote']);
+    for (const t of bdTools) expect(t.cost).toBe('free');
+    expect(breakdown.promptRules?.(ctx.session.doc)).toMatch(/^BREAKDOWN/);
+    expect(breakdown.summaryLines?.(ctx.session.doc, turn)).toEqual([expect.stringMatching(/^Breakdown: 3 pages, 0 drawn/)]);
+    const lettering = toolGroupById('lettering')!;
+    expect(directorToolNames(lettering.tools(ctx, turn))).toEqual(['set_lettering_style', 'restyle_balloons', 'arrange_balloons']);
+    expect(lettering.summaryLines?.(ctx.session.doc, turn)[0]).toMatch(/^Lettering: preset classic/);
   });
 
-  it('keeps core tool descriptions verbatim in wave 0 and records each tool cost', () => {
+  it('prefixes every core tool description with its cost class and records each tool cost', () => {
     const ctx = testContext(newSession(plannedDoc()));
     const tools = new Map(buildDirectorTools(ctx).map((t) => [t.spec.function.name, t]));
-    for (const t of tools.values()) for (const prefix of Object.values(TOOL_COST_PREFIX)) expect(t.spec.function.description.startsWith(prefix)).toBe(false);
+    for (const t of tools.values()) expect(t.spec.function.description.startsWith(TOOL_COST_PREFIX[t.cost]), t.spec.function.name).toBe(true);
     const costs = Object.fromEntries([...tools].map(([n, t]) => [n, t.cost]));
     expect(costs).toMatchObject({ render_pages: 'paid', edit_page: 'paid', render_cover: 'paid', propose_styles: 'paid', render_character_sheets: 'paid' });
-    expect(costs).toMatchObject({ plan_pages: 'text', revise_pages: 'text', save_source: 'text', update_brief: 'free', ask_user: 'free' });
+    expect(costs).toMatchObject({ plan_pages: 'text', revise_pages: 'text', save_source: 'text', update_brief: 'free', ask_user: 'free', set_line: 'free' });
   });
 
   it('createDirectorTurn fills every v5 field with its documented default', () => {
@@ -139,13 +183,18 @@ describe('buildTurnToolset (core + groups)', () => {
 });
 
 describe('director with the registry', () => {
-  it('sends exactly the v4 system prompt and doc summary when no group adds rules', async () => {
+  it('sends the system prompt, then the active groups\' rules, then the doc summary — and exactly the merged toolset', async () => {
     const session = newSession(createEmptyDoc('proj-1'));
     const llm = scriptedLlm({ director: [{ text: 'Hi!' }] });
-    await runDirectorTurn(testContext(session, { llm }), { text: 'hello', attachments: [] });
+    const ctx = testContext(session, { llm });
+    const expected = buildTurnToolset(ctx, createDirectorTurn(), toolGroups());
+    await runDirectorTurn(ctx, { text: 'hello', attachments: [] });
     const system = llm.calls[0].messages[0].content as string;
-    expect(system.startsWith(`${DIRECTOR_SYSTEM_PROMPT}\n\nDOC SUMMARY`)).toBe(true);
-    expect(llm.calls[0].tools!.map((t) => t.function.name)).toEqual(CORE_TOOL_NAMES);
+    expect(expected.promptRules.length).toBeGreaterThan(0);
+    expect(system.startsWith(`${DIRECTOR_SYSTEM_PROMPT}\n\n${expected.promptRules.join('\n')}\n\nDOC SUMMARY`)).toBe(true);
+    expect(system).toContain('CONTENT RATING');
+    for (const line of expected.summaryLines) expect(system).toContain(line);
+    expect(llm.calls[0].tools!.map((t) => t.function.name)).toEqual(directorToolNames(expected.tools));
   });
 
   it('summarizeDocForDirector is unchanged without extra lines and places extra lines before the money lines', () => {
@@ -176,8 +225,23 @@ describe('action registry', () => {
     for (const type of all) expect(CORE_ACTION_TYPES.has(type) !== registered.includes(type)).toBe(true);
     for (const type of registered) expect(all.has(type)).toBe(true);
     for (const type of CORE_ACTION_TYPES) expect(all.has(type)).toBe(true);
-    expect(ACTION_HANDLERS.translate.spend).toBe(true);
-    for (const type of registered.filter((t) => t !== 'translate')) expect(ACTION_HANDLERS[type].spend).toBe(false);
+    // Spend handlers: translate, and Ship 2's enrich_pages (a writer pass, quoted and gated like translate).
+    const spends = ['translate', 'enrich_pages'];
+    for (const type of spends) expect(ACTION_HANDLERS[type].spend, type).toBe(true);
+    for (const type of registered.filter((t) => !spends.includes(t))) expect(ACTION_HANDLERS[type].spend, type).toBe(false);
+  });
+
+  it('lists the Ship 2 actions once shared/comic/doc.ts names them: fix_panel is core (jobs.ts spend pipeline), the rest registered', () => {
+    expect(CORE_ACTION_TYPES.has('fix_panel')).toBe(true);
+    expect(actionHandlerFor('fix_panel')).toBeUndefined();
+    expect(ACTION_HANDLERS.enrich_pages).toMatchObject({ type: 'enrich_pages', spend: true });
+    expect(typeof ACTION_HANDLERS.enrich_pages.estimate).toBe('function');
+    for (const type of ['panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page']) {
+      expect(ACTION_HANDLERS[type], type).toMatchObject({ type, spend: false });
+      expect(SPEND_ACTION_TYPES.has(type), type).toBe(false);
+      expect(NON_SPEND_ACTION_TYPES.has(type), type).toBe(true);
+    }
+    for (const type of ['fix_panel', 'enrich_pages']) expect(SPEND_ACTION_TYPES.has(type), type).toBe(true);
   });
 
   it('is prototype-safe', () => {
@@ -186,27 +250,35 @@ describe('action registry', () => {
     expect(actionHandlerFor('render_pages')).toBeUndefined();
   });
 
-  it('dispatches a feature action to its stub: blocked NOT_AVAILABLE with an honest notice', async () => {
+  it('dispatches a feature action to its real handler: fit_render on an undrawn page is refused honestly (NOT_READY), $0', async () => {
     const session = newSession(plannedDoc());
     const ctx = testContext(session);
     const started = await startAction(ctx, { type: 'fit_render', target: { kind: 'page', id: 'pg_1' } }, { confirmed: true });
     await started.done;
-    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'NOT_AVAILABLE' });
+    expect(started.outcome).toMatchObject({ status: 'blocked', code: 'NOT_READY' });
     const last = session.doc.conversation.at(-1)!;
     expect(last.role).toBe('assistant');
-    expect(last.text).toMatch(/isn't available yet/);
+    expect(last.text).toMatch(/isn.t drawn yet, so there is nothing to fit/);
     expect(last.cards?.[0]).toMatchObject({ type: 'notice', tone: 'info' });
+    expect(session.doc.spend.totalUsd).toBe(0);
   });
 
-  it('puts the stub notice into the director message when collecting cards', async () => {
+  it('puts the handler\'s card into the director message when collecting cards (refusals and started spends)', async () => {
     const session = newSession(plannedDoc());
     const ctx = testContext(session);
-    const cards: unknown[] = [];
+    const cards: { type: string }[] = [];
     const before = session.doc.conversation.length;
-    const started = await startAction(ctx, { type: 'translate', languages: ['hi'] }, { confirmed: false, collectCard: (c) => cards.push(c) });
-    expect(started.outcome.status).toBe('blocked');
+    const refused = await startAction(ctx, { type: 'fit_render', target: { kind: 'page', id: 'pg_1' } }, { confirmed: false, collectCard: (c) => cards.push(c) });
+    await refused.done;
+    expect(refused.outcome.status).toBe('blocked');
     expect(cards).toEqual([expect.objectContaining({ type: 'notice' })]);
     expect(session.doc.conversation.length).toBe(before);
+    // translate is a registered SPEND action: quoted, started (small spend, under the confirm threshold) and carded.
+    const started = await startAction(ctx, { type: 'translate', languages: ['hi'] }, { confirmed: false, collectCard: (c) => cards.push(c) });
+    expect(started.outcome).toMatchObject({ status: 'started', message: expect.stringMatching(/into Hindi/) });
+    expect((started.outcome as { estimate?: { usd: number } }).estimate?.usd).toBeGreaterThan(0);
+    expect(cards.at(-1)).toMatchObject({ type: 'translation', languages: ['hi'] });
+    await started.done;
   });
 
   it('still runs core actions in jobs.ts (cancel, patch)', async () => {
@@ -231,25 +303,31 @@ describe('op sanitizer registry', () => {
     expect(opSanitizerFor('brief')).toBeUndefined();
   });
 
-  it('rejects feature ops with 400 NOT_AVAILABLE until their owner lands (whole batch)', () => {
+  it('feature ops go through their real sanitizers: clean input passes, bad input rejects the whole batch with 400', () => {
     const doc = plannedDoc();
+    expect(sanitizePatchOps(doc, [{ op: 'letter_style', patch: { presetId: 'manga', bogus: 1 } as never }])).toEqual([{ op: 'letter_style', patch: { presetId: 'manga' } }]);
+    // P2-AMEND: book blurb/credits may be cleared with null.
+    expect(sanitizePatchOps(doc, [{ op: 'book', patch: { blurb: null, credits: null } }])).toEqual([{ op: 'book', patch: { blurb: null, credits: null } }]);
     let caught: unknown;
     try {
-      sanitizePatchOps(doc, [{ op: 'brief', patch: { title: 'x' } }, { op: 'letter_style', patch: { presetId: 'manga' } }]);
+      sanitizePatchOps(doc, [{ op: 'brief', patch: { title: 'x' } }, { op: 'letter_style', patch: { presetId: 'nope' } }]);
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(StudioError);
-    expect(caught).toMatchObject({ code: 'NOT_AVAILABLE', status: 400 });
+    expect(caught).toMatchObject({ code: 'BAD_REQUEST', status: 400 });
+    // A ref the doc never had cannot be smuggled in by path.
+    expect(() => sanitizePatchOps(doc, [{ op: 'ref_add', owner: { kind: 'style' }, ref: { path: 'u/other/evil.webp', source: 'upload', at: 1 } }])).toThrow(/isn't part of this comic/);
   });
 
-  it('keeps rejecting server-only ops and still sanitizes the core ops identically', () => {
+  it('keeps rejecting server-only ops (plan_input_hash included) and still sanitizes the core ops identically', () => {
     const doc = plannedDoc();
     expect(() => sanitizePatchOps(doc, [{ op: 'render', target: { kind: 'cover' }, patch: {} }])).toThrow(/can't be changed directly/);
+    expect(() => sanitizePatchOps(doc, [{ op: 'plan_input_hash', hash: 'x' }])).toThrow(/can't be changed directly/);
     expect(sanitizePatchOps(doc, [{ op: 'note_add', text: '  keep it cozy  ' }])).toEqual([{ op: 'note_add', text: 'keep it cozy' }]);
   });
 
-  it('runs the whole-batch screens (safety stub passes everything through)', () => {
+  it('runs the whole-batch screens (the safety screen lets clean text through unchanged)', () => {
     expect(patchScreens()).toHaveLength(1);
     const ops: DocOp[] = [{ op: 'note_add', text: 'hi' }];
     expect(patchScreens()[0](plannedDoc(), ops, { userId: 'u', caps: {} as never, rating: 'PG-13', now: 0 })).toBe(ops);

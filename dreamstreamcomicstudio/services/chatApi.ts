@@ -115,8 +115,18 @@ export const refreshArtifact = async (
  * Improve a rough prompt draft without changing the user's intent. Returns the
  * enhanced text for the user to accept or discard — it never auto-sends.
  */
-export const enhancePrompt = (text: string, options?: { signal?: AbortSignal }): Promise<{ enhanced: string; model?: string }> =>
-  post<{ text: string }, { enhanced: string; model?: string }>('/api/chat/enhance', { text }, options);
+export interface EnhancePromptResult {
+  enhanced: string;
+  model?: string;
+  /**
+   * `'usage'`: the included usage is used up, so the server spent nothing and echoed the draft back
+   * unchanged (routes/chat.ts /api/chat/enhance). The composer then says so instead of "enhancing".
+   */
+  skipped?: 'usage';
+}
+
+export const enhancePrompt = (text: string, options?: { signal?: AbortSignal }): Promise<EnhancePromptResult> =>
+  post<{ text: string }, EnhancePromptResult>('/api/chat/enhance', { text }, options);
 
 /**
  * Name a conversation from what the user is actually trying to do (a concise, specific

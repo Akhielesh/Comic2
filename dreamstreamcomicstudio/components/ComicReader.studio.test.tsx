@@ -1,11 +1,11 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComicState, Project } from '../types';
 
 vi.mock('./comicstudio/PublicComicReader', () => ({
-  PublicComicReader: ({ projectId, onClose }: { projectId: string; onClose?: () => void }) => (
-    <div data-testid="v4-reader">
-      v4 reader for {projectId}
+  PublicComicReader: ({ source, isOwner, onClose }: { source?: { kind: string; projectId?: string }; isOwner?: boolean; onClose?: () => void }) => (
+    <div data-testid="v4-reader" data-kind={source?.kind} data-owner={String(!!isOwner)}>
+      v4 reader for {source?.projectId}
       <button onClick={onClose}>close v4</button>
     </div>
   )
@@ -42,6 +42,10 @@ vi.mock('../contexts/AuthContext', () => ({
 }));
 
 import { ComicReader } from './ComicReader';
+import { resetBackStack } from './comicstudio/mobile/backStack';
+
+// v5: both readers are Back-stack layers; no layer (or its deferred history pop) outlives its test.
+afterEach(() => resetBackStack());
 
 const state = (extra: Record<string, unknown> = {}): ComicState =>
   ({
@@ -70,10 +74,11 @@ const project = (id: string, extra: Record<string, unknown> = {}): Project => ({
   state: state(extra)
 });
 
-const renderReader = (p: Project, onClose = vi.fn()) => {
+const renderReader = (p: Project, onClose = vi.fn(), isReadOnly?: boolean) => {
   render(
     <ComicReader
       project={p}
+      isReadOnly={isReadOnly}
       onClose={onClose}
       onUpdateProject={() => undefined}
       onOpenPrivacy={() => undefined}
@@ -96,6 +101,46 @@ describe('ComicReader → v4 delegation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'close v4' }));
     // The reader pops its own history entry first (so Back never lands on a stale reader entry), then closes.
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    // A local project is the owner's: the v4 reader hides Report and sends no analytics.
+    expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-kind', 'project');
+    expect(screen.getByTestId('v4-reader')).toHaveAttribute('data-owner', 'true');
+    // The layer sizes to the visible height (keyboard / browser bars), not a fixed 100vh.
+    expect(screen.getByTestId('studio-comic-reader').style.height).toBe('var(--app-h, 100dvh)');
+  });
+
+  it('treats a public (read-only) v4 comic as someone else’s', async () => {
+    renderReader(project('22222222-2222-3333-4444-555555555555', { studioVersion: 4 }), vi.fn(), true);
+    expect(await screen.findByTestId('v4-reader')).toHaveAttribute('data-owner', 'false');
+  });
+
+  it('lays the FX halftone over the art with the seamless library tile (no legacy CSS class)', () => {
+    const { container } = render(
+      <ComicReader
+        project={project('classic-3', { pipelineMode: 'classic', panels: [{ id: 'p1', imageUrl: 'https://cdn.test/a.png', description: 'A street' }] })}
+        onClose={() => undefined}
+        onUpdateProject={() => undefined}
+        onOpenPrivacy={() => undefined}
+        onOpenTerms={() => undefined}
+        onOpenFaq={() => undefined}
+      />
+    );
+    expect(screen.queryAllByTestId('reader-halftone')).toHaveLength(0);
+    fireEvent.click(screen.getByTitle('Halftone comic texture'));
+    const overlays = screen.getAllByTestId('reader-halftone');
+    expect(overlays.length).toBeGreaterThan(0);
+    expect(overlays[0].style.backgroundImage).toMatch(/^url\("data:image\/svg\+xml,/);
+    expect(container.querySelector('.comic-halftone')).toBeNull();
+  });
+
+  it('keeps the classic reader out of the notch and the home indicator', () => {
+    const { container } = render(
+      <ComicReader project={project('classic-2', { pipelineMode: 'classic' })} onClose={() => undefined} onUpdateProject={() => undefined} onOpenPrivacy={() => undefined} onOpenTerms={() => undefined} onOpenFaq={() => undefined} />
+    );
+    const frame = container.firstElementChild as HTMLElement;
+    expect(frame.style.paddingTop).toBe('var(--sa-top)');
+    expect(frame.style.paddingBottom).toBe('var(--sa-bottom)');
+    expect(frame.style.paddingLeft).toBe('var(--sa-left)');
+    expect(frame.style.paddingRight).toBe('var(--sa-right)');
   });
 
   it('keeps classic comics in the classic reader', () => {

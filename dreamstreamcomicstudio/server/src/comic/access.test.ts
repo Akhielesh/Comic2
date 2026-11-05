@@ -1,7 +1,19 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request } from 'express';
-import { __resetAccessCacheForTests, checkQualityAccess, PRO_QUALITY_DENIED_MESSAGE } from './access.js';
+import { ANCHOR_KINDS_OFF, ANCHORS_ENV, anchorKindsFromFlag } from '../../../shared/comic/anchors.js';
+import { PAID_PLAN_IDS } from '../../../shared/comic/capabilities.js';
+import { toEffectiveTier } from '../services/modelAccessPolicy.js';
+import {
+  __resetAccessCacheForTests,
+  CEILING_ON_LOOKUP_FAILURE,
+  checkQualityAccess,
+  PAID_PLAN_TIERS,
+  PRO_QUALITY_DENIED_MESSAGE,
+  PRO_QUALITY_USAGE_MESSAGE,
+  qualityDeniedFromCaps,
+  studioCapsFor
+} from './access.js';
 
 const req = (userId?: string) => ({ user: userId ? { id: userId } : undefined }) as unknown as Request;
 
@@ -40,9 +52,26 @@ describe('checkQualityAccess', () => {
     expect(await checkQualityAccess(req('u'), 'pro', false, { planFor, billingEnabled: true })).toEqual({ ok: true });
   });
 
-  it('denies Pro without a signed-in user, and allows everything when billing is off', async () => {
+  it('denies Pro without a signed-in user (billing on or off)', async () => {
     expect((await checkQualityAccess(req(), 'pro', false, { planFor: async () => 'pro', billingEnabled: true })).ok).toBe(false);
-    expect(await checkQualityAccess(req(), 'pro', false, { planFor: async () => 'free', billingEnabled: false })).toEqual({ ok: true });
+    expect((await checkQualityAccess(req(), 'pro', false, { billingEnabled: false, meteringEnabled: true })).ok).toBe(false);
+  });
+
+  it('billing off: the usage budget decides Pro (admin, exempt or allow_pro only; lookups fail closed)', async () => {
+    const off = { billingEnabled: false, meteringEnabled: true, isAdminFor: async () => false };
+    const governed = vi.fn(async () => ({ governed: true, allowPro: false }));
+    expect(await checkQualityAccess(req('g'), 'pro', false, { ...off, budgetFlagsFor: governed })).toEqual({ ok: false, message: PRO_QUALITY_USAGE_MESSAGE });
+    expect(PRO_QUALITY_USAGE_MESSAGE).not.toMatch(/\$|paid plan/);
+    expect(await checkQualityAccess(req('g'), 'standard', false, { ...off, budgetFlagsFor: governed })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('g'), 'pro', true, { ...off, budgetFlagsFor: governed })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('p'), 'pro', false, { ...off, budgetFlagsFor: async () => ({ governed: true, allowPro: true }) })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('e'), 'pro', false, { ...off, budgetFlagsFor: async () => ({ governed: false, allowPro: false }) })).toEqual({ ok: true });
+    expect(await checkQualityAccess(req('a'), 'pro', false, { ...off, isAdminFor: async () => true, budgetFlagsFor: governed })).toEqual({ ok: true });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect((await checkQualityAccess(req('x'), 'pro', false, { ...off, budgetFlagsFor: async () => { throw new Error('db down'); } })).ok).toBe(false);
+    warn.mockRestore();
+    // Metering switched off entirely: nothing is metered, the legacy open gate applies.
+    expect(await checkQualityAccess(req('y'), 'pro', false, { billingEnabled: false, meteringEnabled: false })).toEqual({ ok: true });
   });
 
   it('caches the plan lookup briefly per user', async () => {
@@ -50,5 +79,118 @@ describe('checkQualityAccess', () => {
     await checkQualityAccess(req('same'), 'pro', false, { planFor, billingEnabled: true });
     await checkQualityAccess(req('same'), 'pro', false, { planFor, billingEnabled: true });
     expect(planFor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('studioCapsFor', () => {
+  const deps = (over: Partial<Parameters<typeof studioCapsFor>[2]> = {}) => ({
+    billingEnabled: true,
+    planFor: async () => 'free',
+    isAdminFor: async () => false,
+    accountCeilingFor: async () => 'PG-13' as const,
+    ...over
+  });
+
+  it('free with no key → draft + standard, no model picker, Pro editor still on, 40 pages', async () => {
+    const caps = await studioCapsFor(req('u1'), { byok: false }, deps());
+    expect(caps).toMatchObject({ plan: 'free', byok: false, qualityTiers: ['draft', 'standard'], modelOverride: false, maxPages: 40, defaultMode: 'easy', proEditor: true, customFonts: false, ratingCeiling: 'PG-13', admin: false });
+    expect(qualityDeniedFromCaps(caps)).toBe(PRO_QUALITY_DENIED_MESSAGE);
+  });
+
+  it('own key → Pro tier and the model picker; paid plan → paid + pro default mode; admin → admin', async () => {
+    expect(await studioCapsFor(req('u2'), { byok: true }, deps())).toMatchObject({ plan: 'free', byok: true, qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    const paid = await studioCapsFor(req('u3'), { byok: false }, deps({ planFor: async () => 'Studio' }));
+    expect(paid).toMatchObject({ plan: 'paid', qualityTiers: ['draft', 'standard', 'pro'], defaultMode: 'pro' });
+    expect(qualityDeniedFromCaps(paid)).toBeUndefined();
+    expect(await studioCapsFor(req('u4'), { byok: false }, deps({ isAdminFor: async () => true }))).toMatchObject({ plan: 'admin', admin: true, modelOverride: true });
+  });
+
+  it('applies the account-age ceiling; a failed ceiling lookup never lifts it (PG)', async () => {
+    expect((await studioCapsFor(req('u5'), { byok: false }, deps({ accountCeilingFor: async () => 'PG' }))).ratingCeiling).toBe('PG');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const failed = await studioCapsFor(req('u6'), { byok: false }, deps({ accountCeilingFor: async () => { throw new Error('db down'); } }));
+    expect(failed.ratingCeiling).toBe(CEILING_ON_LOOKUP_FAILURE);
+    expect(CEILING_ON_LOOKUP_FAILURE).toBe('PG');
+    warn.mockRestore();
+  });
+
+  it('billing off: governed users keep Easy AND Pro editors but render Draft/Standard; Pro for admin/own key/exempt/allow_pro', async () => {
+    const off = (over: Partial<Parameters<typeof studioCapsFor>[2]> = {}) =>
+      deps({ billingEnabled: false, meteringEnabled: true, budgetFlagsFor: async () => ({ governed: true, allowPro: false }), ...over });
+    const governed = await studioCapsFor(req('u7'), { byok: false }, off());
+    expect(governed).toMatchObject({ plan: 'free', qualityTiers: ['draft', 'standard'], modelOverride: false, proEditor: true });
+    expect(await studioCapsFor(req('u7b'), { byok: false }, off({ budgetFlagsFor: async () => ({ governed: true, allowPro: true }) }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req('u7c'), { byok: false }, off({ budgetFlagsFor: async () => ({ governed: false, allowPro: false }) }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'] });
+    expect(await studioCapsFor(req('u7d'), { byok: true }, off())).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req('u7e'), { byok: false }, off({ isAdminFor: async () => true }))).toMatchObject({ admin: true, qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+    expect(await studioCapsFor(req(), { byok: false }, off())).toMatchObject({ qualityTiers: ['draft', 'standard'], modelOverride: false });
+    const warnOff = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await studioCapsFor(req('u7f'), { byok: false }, off({ budgetFlagsFor: async () => { throw new Error('db down'); } }))).toMatchObject({ qualityTiers: ['draft', 'standard'] });
+    warnOff.mockRestore();
+    expect(await studioCapsFor(req('u7g'), { byok: false }, off({ meteringEnabled: false }))).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], modelOverride: true });
+  });
+
+  it('fails open on the tier gate when the plan lookup fails (billing on); admin lookup fails closed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const failed = await studioCapsFor(req('u8'), { byok: false }, deps({ planFor: async () => { throw new Error('ledger down'); }, isAdminFor: async () => { throw new Error('roles down'); } }));
+    expect(failed).toMatchObject({ qualityTiers: ['draft', 'standard', 'pro'], admin: false, plan: 'free' });
+    warn.mockRestore();
+  });
+
+  it('shares the plan cache with checkQualityAccess (one lookup per user per minute)', async () => {
+    const planFor = vi.fn(async () => 'creator');
+    await studioCapsFor(req('same-user'), { byok: false }, deps({ planFor }));
+    await checkQualityAccess(req('same-user'), 'pro', false, { planFor, billingEnabled: true });
+    expect(planFor).toHaveBeenCalledTimes(1);
+  });
+
+  it('PAID_PLAN_IDS is the single source for access.ts and modelAccessPolicy.ts', () => {
+    expect([...PAID_PLAN_TIERS].sort()).toEqual([...PAID_PLAN_IDS].sort());
+    for (const plan of PAID_PLAN_IDS) expect(toEffectiveTier(plan)).toBe('pro');
+    for (const plan of ['free', 'starter', '', 'enterprise-trial']) expect(toEffectiveTier(plan)).toBe('free');
+  });
+});
+
+// StudioCaps.anchorKinds (B4 amendment 2): the server fills it from COMIC_CONSISTENCY_ANCHORS, so the client passes the
+// same kinds to summarizeBook's consistency view and quoteRenderPages' anchors. Unset = every kind off, the same object
+// as ANCHOR_KINDS_OFF.
+describe('studioCapsFor · consistency anchor kinds', () => {
+  const deps = (over: Partial<Parameters<typeof studioCapsFor>[2]> = {}) => ({
+    billingEnabled: true,
+    planFor: async () => 'free',
+    isAdminFor: async () => false,
+    accountCeilingFor: async () => 'PG-13' as const,
+    ...over
+  });
+
+  it('env unset → every kind off: caps.anchorKinds is ANCHOR_KINDS_OFF itself', async () => {
+    const caps = await studioCapsFor(req('k1'), { byok: false }, deps({ env: {} }));
+    expect(caps.anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect(caps.anchorKinds).toEqual({ places: false, props: false, styleKey: false, sheetV2: false });
+    // Every return path carries it: billing off (governed and admin), own key, no user.
+    const off = { billingEnabled: false, meteringEnabled: true, budgetFlagsFor: async () => ({ governed: true, allowPro: false }), env: {} };
+    expect((await studioCapsFor(req('k2'), { byok: false }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req('k3'), { byok: false }, deps({ ...off, isAdminFor: async () => true }))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req('k4'), { byok: true }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+    expect((await studioCapsFor(req(), { byok: false }, deps(off))).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+  });
+
+  it('reads process.env by default: unset → off, set → the named kinds', async () => {
+    vi.stubEnv(ANCHORS_ENV, undefined as unknown as string);
+    try {
+      expect((await studioCapsFor(req('k5'), { byok: false }, deps())).anchorKinds).toBe(ANCHOR_KINDS_OFF);
+      vi.stubEnv(ANCHORS_ENV, 'places,styleKey');
+      expect((await studioCapsFor(req('k6'), { byok: false }, deps())).anchorKinds).toEqual({ places: true, props: false, styleKey: true, sheetV2: false });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('set → the kinds anchorKindsFromFlag gives (the same rule the runs use)', async () => {
+    for (const value of ['all', '1', 'props', 'places, props', 'sheetV2', 'nonsense', '']) {
+      const caps = await studioCapsFor(req(`k-${value}`), { byok: false }, deps({ env: { [ANCHORS_ENV]: value } }));
+      expect(caps.anchorKinds, value).toEqual(anchorKindsFromFlag(value));
+    }
+    expect((await studioCapsFor(req('k7'), { byok: false }, deps({ env: { [ANCHORS_ENV]: 'all' } }))).anchorKinds).toEqual({ places: true, props: true, styleKey: true, sheetV2: true });
   });
 });

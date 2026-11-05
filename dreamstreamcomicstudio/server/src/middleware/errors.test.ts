@@ -46,4 +46,24 @@ describe('errorHandler', () => {
     expect((res.body as { error: { code: string } }).error.code).toBe('INTERNAL_ERROR');
     expect(recordServerError).toHaveBeenCalledTimes(1);
   });
+
+  it('never logs or records a share capability or a query token (S19)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const cases: [string, string][] = [
+      ['/api/shares/token/tok_abc123XYZ?x=1', '/api/shares/token/:token'],
+      ['/api/comic/public/s/Ab3dEf6hIj9kLm2nP/report', '/api/comic/public/s/:slug/report'],
+      ['/api/newsletter/confirm?t=NEWSLETTERTOKEN', '/api/newsletter/confirm']
+    ];
+    for (const [originalUrl, masked] of cases) {
+      vi.mocked(recordServerError).mockClear();
+      error.mockClear();
+      const req = { requestId: 'r1', originalUrl, url: originalUrl, method: 'GET', ip: '1.2.3.4' } as never;
+      errorHandler({ message: 'boom' }, req, mockRes() as never, (() => {}) as never);
+      const line = String(error.mock.calls[0][0]);
+      expect(JSON.parse(line).path).toBe(masked);
+      for (const secret of ['tok_abc123XYZ', 'Ab3dEf6hIj9kLm2nP', 'NEWSLETTERTOKEN']) expect(line).not.toContain(secret);
+      expect(vi.mocked(recordServerError).mock.calls[0][0].path).toBe(masked);
+    }
+    error.mockRestore();
+  });
 });

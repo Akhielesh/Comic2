@@ -126,8 +126,12 @@ client (components/comicstudio)                 server (server/src/comic, routes
   started settle (keeps the container sleepable — no idle open streams, no polling).
 - **Interrupted jobs**: on session load, renders stuck in `queued/rendering` for >3 min
   become `failed` ("Interrupted — retry").
-- **Cancel**: `POST /cancel` aborts the session's current AbortController (director
-  loop + not-yet-started renders). In-flight image calls finish and are kept (paid).
+- **Cancel**: `POST /cancel` is scoped to what it says it stops. Each message request runs
+  its turn on its own session AbortController (renders capture the controller current when
+  they start). While a director turn is in flight it is "Stop the director": that turn's loop
+  and the not-yet-started renders it queued stop, and renders an earlier request queued keep
+  drawing. With no turn in flight it is "Stop drawing": every not-yet-started render of the
+  session stops. In-flight image calls finish and are kept (paid).
 
 ### Transport & events
 `POST /api/comic/projects/:id/stream`, body `StreamRequest` (`shared/comic/events.ts`).
@@ -155,6 +159,24 @@ writes are server-only (service role). `server/sql/comic_docs.sql` also extends
 studio asset. The `projects` row stays the listing record: the server mirrors
 `name`, `updated_at`, and a minimal legacy-compatible `state` (`studioVersion: 4`,
 empty legacy arrays, `coverImageId` = cover or page-1 asset, `overview` = logline).
+
+**Canonical hashes (back-compat F1, v5).** Postgres `jsonb` reorders object keys on save (shorter keys first), so a
+hash of `JSON.stringify` in memory order changed after a reload and drawn pages read "Out of date" for nothing. Every
+hash that decides staleness or "changed since" now serialises with `stableStringify` (`shared/comic/hash.ts`: keys
+sorted at every depth, array order kept): `pageSpecHash`, `sheetSpecHash`, `placeSpecHash`, `coverSpecHash`,
+`planInputHashOf`, and the publication's `contentFingerprint` (`server/src/comic/publication/snapshot.ts`). The
+hashed tuples themselves are unchanged.
+- **Load-time legacy acceptance.** A doc stamped before F1 is repaired once per load: `session.ts recoveryOps` runs
+  `legacySpecHashOps`, which tries a bounded set of likely key-order variants of each non-canonical render (and the
+  plan input hash) with the pre-F1 serialisation. On a match it writes a server-only render patch with the
+  canonical hash, so nothing is redrawn, re-quoted or charged; no match stays stale, honestly.
+- **Publication.** `fingerprintMatches(doc, languages, stored)` accepts the canonical fingerprint or the pre-F1
+  `legacyContentFingerprint`, so a link published before F1 does not show "Update the published version" after a
+  reload. The next publish stores the canonical form. A legacy hash stamped in a session whose keys were later
+  reordered can still read "behind" once; republishing clears it ($0, cosmetic).
+- **Release order.** Ship the v5 server and client together (a cached old client computes the pre-F1 page hash
+  until it reloads), and cut over only when v5 replaces production: once v5 has re-stamped a doc, older v4 code
+  reading the same row would show those pages as out of date (cosmetic, $0).
 
 ### Keys, routing, billing
 - Keys from `req.apiKeys.providerKeys` (`openrouter`, `gemini`), already governed by
@@ -191,11 +213,98 @@ strip the `google/` prefix. **The client's `X-Text-Model` is ignored** for these
 
 Reference budget per page job (from `refs` caps):
 - characters ≤ `refs.characters` (NB 2.1: 4, Pro: 5) — the page's lead/support cast
-  ranked by panel appearances; extras are text-locked only.
+  ranked by panel appearances. Extras are described in words until they have a sheet; an on-page extra (not a
+  prop) with a ready sheet or photo is attached within the character slots on every page it appears on. The cast
+  card says "Described in text" / "Sheet ready · used on pages" ("Sheet ready" for a prop, whose sheet is never
+  attached on a page; "Queued" / "Drawing sheet…" while a sheet the user asked for is being drawn), and the
+  director's summary "text only" / "sheet ready". The Cast tab's extra note and its optional "Draw a sheet anyway"
+  button say "a ready sheet is attached on every page they appear on"; an extra the tab calls an Object (a prop)
+  says instead that it is described in words on pages and its sheet isn't attached to pages ("set it to Support for
+  that"), and its optional button is "Draw a reference sheet".
 - style: Pro → board + up to 2 user style refs as style refs; others → board as an object ref.
 - objects/places ≤ remaining `refs.objects`: place sheets used on the page, then the
   previous page (continuity) last.
 - total ≤ `refs.total`.
+
+Cost & model insights (v5, `components/comicstudio/insights/`): the Pages tab lists every drawn
+image as a stacked row and switches to two columns at the named `medium` screen (600 px). The
+spec said 480 px; the lead accepted 600 px (2026-10-29) because arbitrary `min-[…]:` screens do
+not work in this Tailwind config and the ordered screen list (`tests/config/appShell.test.ts`)
+has no 480 px step. Between 480 and 599 px the rows stay stacked, which never overflows.
+
+### 5.1 Model lock, preflight and recording (v5)
+
+One comic, one image model. The table above is what an **unlocked** comic draws with; once it is locked, a
+tier only picks the resolution on the locked model.
+
+- **Lock.** The server locks the comic (`doc.imageModel`, `origin: 'first_render'`) in the same op batch as the
+  first comic image (sheet, place, page, cover or edit; style swatches do not lock). Legacy comics get the lock
+  they were drawn with (`deriveLock`, persisted with the next image commit). Every job resolves through
+  `resolveImageJob(kind, tier, override, lock)` and `jobs.ts` refuses, with no provider call, any job whose model
+  is not the lock (`MODEL_LOCKED`, logged as `comic_model_lock_violation`). Jobs never switch models: not on a 429,
+  an outage, a safety retry or a tier change.
+- **Who can change it.** Only the user, through the picker's confirm (`change_image_model` with `ack`, the redraw
+  scope and the quote they saw). The server re-checks pickable, plan access, transport, fit (4:5 on GPT Image is a
+  block), no active run (409 `RUN_ACTIVE`), the redraw quote (outside 15 % + $0.01 → a requote, nothing switched)
+  and the budget, then writes the lock and a `changes[]` entry and posts the switch notice with "Redraw them" and
+  "Switch back" chips. Before the lock, `settings.imageModelOverride` is only a preference; after it, a settings
+  patch that would change the model is refused (409 `MODEL_LOCKED`). The director has no tool that changes the
+  model and cannot change the tier of a locked comic; it explains options with `model_options` (real prices,
+  characters held, redraw cost) and offers the picker chip (`suggest_model`).
+- **Preflight.** Before any spend reserves money, `preflightImageRun` (`server/src/comic/models/health.ts`)
+  reads the process health port (OpenRouter's free public endpoint status, cached 3 min, plus our own outcomes).
+  When the locked model is down on every route this account can use, nothing starts and nothing is charged: the
+  action answers `blocked` and the conversation gets one `model_outage` card (origin `preflight`) with real
+  alternatives. An upstream 429 mid-run ends with the same card and "Try again" / "See other models" chips; a model
+  this comic can no longer use (access lost, retired, no transport) fails honestly with "See other models".
+- **Prices.** Gates, reservations and the model change (`jobs.ts`, `actions/models.ts`) read the request's
+  PriceBook (`ctx.prices`, built on the first quote and memoised per request): the live OpenRouter price, or our
+  observed median when it is higher, plus QC, × the platform markup unless the user's own key pays. Chips on free
+  actions wait up to 800 ms for it, else quote the registry list. `model_options` builds the same live PriceBook for
+  its numbers. Gates re-quote before anything is reserved, so money stays safe.
+- **Lock-aware quotes everywhere.** The shared quote helpers derive the lock from the doc themselves:
+  `shared/comic/plan.ts` `quoteRenderPages`, `unitPrice` and `estimateDocJobs` price on `quoteLockOf(doc)` (the
+  persisted `doc.imageModel`, else the legacy `deriveLock`), with the tier only picking the resolution, exactly as
+  `jobs.ts resolveJobFor` draws. So a comic locked to Nano Banana Pro quotes Pro in the breakdown card and tool, the
+  plan card, the Pages tab, the cast card, every next-step and "Try again" chip (`replies.ts estimateOf`), the $0
+  intents (`intents.ts`) and the director's DOC SUMMARY, with no call-site change. A caller can pass `lock: null` to
+  price a what-if on the unlocked tier model. `BookSummary.pricing.locked` is true when the comic is locked (or has
+  an explicit override). Every other display quotes and names the locked model too: the board's draw and sheet
+  prices and its "drawn with / will draw on" model names (`boardModel.ts`), the style panel's boards, the format
+  panel's redraw quote and "≈ $X to draw all N on {model}" line (`unitPrice`, so it matches the breakdown card),
+  the renders card's sheet, style and cover retries, the languages tab and the server's translated-edition overlay
+  and textless-cover quotes (`i18n/index.ts`), all through `estimateDocJobs`. Reference slots follow the lock as
+  well: the refs badges (`refsModel.ts`), the refs tool's sheet photos (`tools/refs.ts`), the writer's per-page
+  cast limit (`writer.ts`) and the page check's estimate of an unsized page's shape (`vision.ts`) resolve the page
+  or sheet model with `quoteLockOf(doc)`, as the prompt compiler does. Chip quotes outside a gate use the registry
+  list; the gate's PriceBook re-quote is still the price that is reserved.
+- **Recording.** Every image attempt, paid or failed, writes a SpendEntry and a fire-and-forget
+  `comic_image_calls` row (route, provider, resolution, references, outcome, provider-reported cost and model
+  version) and bumps `model_usage_monthly`. Recording never blocks or fails a job; until
+  `server/sql/comic_image_calls_model_version.sql` is applied the row is written without `model_version`.
+- **Model Lab** (Admin → Model Lab, `server/src/comic/models/lab.ts`): the owner's paid checks (D1–D4) run only on
+  an explicit admin click, one provider call per click, under a hard $2 per UTC day cap reserved atomically in the
+  database before the call. A call that reached the provider is also a `comic_image_calls` row.
+- **Model Lab P1 · Pro pages A/B** (Ship 1, the `COMIC_LAYOUT_GUIDE` decision, PD-8): the owner's 3 golden pages
+  (b4b5774f pages 2 and 4, f8312c86 page 1) are each drawn twice with everything else the same, layout guide off
+  and on, and each drawing gets one page check (beats matched, panels drawn, art crossing a border). The pair is
+  shown blind as A and B; the names appear after the vote, and a voted pair is final (its arms can't be drawn
+  again). After the vote the owner marks, per side, whether the drawing copied the guide's lines. The beats tally
+  and that guide-lines mark are the two inputs to the decision: turn `COMIC_LAYOUT_GUIDE` on only if the guide-on
+  pages bind their beats better and never copy the guide's lines.
+  - Off until the server switch `COMIC_LAB_AB_BUDGET_USD` is set; its value is the A/B's limit, never above the
+    hard cap `LAB_AB_HARD_CAP_USD` ($1.20), shared across days and with part 2 (P2). Every run also counts against
+    the $2 day cap.
+  - A/B runs reserve only through `comic_model_lab_reserve_ab` (`server/sql/comic_model_lab_pro_pages.sql`, applied
+    after `comic_model_lab.sql`; that file's check-id list includes P1/P2 and its `comic_model_lab_reserve` refuses
+    them). The reservation leaves headroom for the unquoted reference cost: it reserves against
+    `limit − images × LAB_AB_REF_ALLOWANCE_USD` ($0.004 per image).
+  - Before the paid call the arm asserts the comic's model lock, withholds blocked, quarantined and not-yet-checked
+    uploads (`shared/comic/sendable.ts`, the same helpers as the runner), and skips the page check when the drawing
+    couldn't be stored. Runs and votes reuse the lab's endpoints and vote table (pair ids `p1-…`).
+- **Tests never reach the network.** `tests/setup.ts` refuses any fetch to a real host and fails the test that tried.
+  Server tests that build a real context install `__setModelHealthForTests(fakeModelHealth())` and pass registry
+  prices (`testContext()` in `orchestrator.fakes.ts` does both).
 
 ## 6. Prompts (the craft)
 
@@ -229,7 +338,7 @@ ART STYLE — apply identically in every panel:
 CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people:
 - MAYA (Image 1): {look.summary}; {hair}; {outfit}; {marks}.
 - ARJUN (Image 2): …
-- VENDOR (no reference): {look.summary}   ← extras: text lock only
+- VENDOR (no reference): {look.summary}   ← extras: described in words until they have a ready sheet
 
 PAGE LAYOUT — {n} panels, read {left-to-right, top-to-bottom | right-to-left (manga)}:
 {page.layout}
@@ -333,6 +442,119 @@ Flash-class vision model, image + page spec → strict JSON:
 [{lineId, x, y, w, tailX, tailY}]}` — balloons placed inside their panel, near the
 speaker's head, never covering faces/hands/key action, top-to-bottom in reading order.
 Fallback (vision unavailable): even grid boxes from the layout + top-of-panel stacking.
+
+### 6.10 Plan fit, the layout as drawn and honest page checks (v5, Ship 1)
+"Better pages at the same price": one image call per page, fewer and larger panels, and words that fit them.
+- **Panel rules and budgets** (`shared/comic/panelRules.ts`, `density.ts`): auto plans use about 3 panels (2–4; 5
+  only for a fast, nearly silent sequence); storybooks set above 3 per page plan new pages with at most 3 and show
+  a note (PD-2, `PLAN_POLICY.clampStorybook`; existing pages untouched). Each panel's lettering need is measured
+  against its area: roomy ≤ 0.18, fits ≤ 0.22, tight ≤ 0.30, overfull above (kids: 0.25).
+- **The layout as drawn.** The page prompt draws `effectiveLayout(page, format)`: the page's blueprint when it agrees
+  with its panels (count, format, sizes), else the blueprint synthesized from the panel sizes. It lives in
+  `shared/comic/pageGeometry.ts` with `harmonizePanelSizes` and `layoutConflicts` (one implementation; `prompts.ts`
+  re-exports them under the same names, and `ops.ts layoutFixOps` uses them). The page-plan check
+  (`pagePlanCheck.ts planBoxes`), the Render-all hold-back and its quote, the breakdown card's fit dots
+  (`summarizeBook` planFit; `drawnPanelBoxes` for a drawn page without measured boxes) and the director's line-edit
+  budget all measure that layout. So a stored page whose layout text contradicts its panel sizes is held back exactly
+  when it would be drawn overfull, and never because of layout text the prompt does not draw. The prompt's own panel
+  rectangles (`prompts.ts pageLayoutBoxes`) are `drawnLayoutBoxes` — one implementation — and when the page check
+  can't use its reading (no usable reply, or another panel count) the estimate it stores as `panelBoxes`
+  (`boxesFrom: 'estimate'`) and letters the fallback balloons on is made on `effectiveLayout` too (`vision.ts`).
+- **The Render-all hold-back** (PD-1, `PLAN_POLICY.holdBackOverfull`; `server/src/comic/planCheckGate.ts`): applies
+  only to "Render all" (`render_pages` with no explicit `pageIds` and no `force`). An overfull page that Render all
+  would draw is left out of the run AND its quote; it is never refused. The notice ("Page 2 is held back: panel 3 has
+  70 words in 22% of the page …") carries fix chips, free first:
+  - "Use the layout that fits" — a free patch from `layoutFixOps`: the blueprint plus panel sizes that agree with
+    it (a bare layout patch would be drawn as the old layout). Offered only when the page really fits once applied.
+  - "Draw page N anyway (with the rest)" next to an open Render-all gate: that same Render all with the page added
+    to `render_pages.drawOverfull`, quoted for the whole run, so it extends the open gate instead of replacing it.
+  - "Draw page N anyway" after a run, or when nothing else is left to draw: that page alone (`pageIds: [id]`),
+    quoted. Explicit page draws and forced new takes always pass through the gate unchanged.
+  A spend retires an open `render_pages` gate only when it draws every page that gate would still draw (and its
+  cover), so a single-page draw never silently drops the other pages' approval. The gate itself is stored bound to the
+  pages it draws (`bindSpendAction`: held-back pages left out, no `drawOverfull`, no chip quote), and the breakdown
+  posted with it is scoped to those pages, so the user sees exactly what they approve; the held-back notice beside it
+  is where "Draw page N anyway (with the rest)" lives. The breakdown card shows held-back pages in red with the same
+  free fixes and, outside a gate, "Draw anyway" (`summarizeBook(…, { drawOverfull })` re-quotes).
+- **Plan fit in the UI** (Ship 1 A5). Every wireframe panel carries a fit dot: green fits, amber tight, red too
+  full, in the readable status tones (`--ds-success-text`, `--ds-warning-text`, `--ds-danger-text`, `FIT_DOT_COLOR`)
+  and in different shapes (a filled dot, a ring, a diamond), and the tile and its detail row say it in words
+  ("Fits (12 of 18 words)", "Tight — …", "Too full — 34 words, fits about 32"). A held-back page is a red tile, left
+  out of the quote and the run. Its free fixes come first: the layout that fits (`layoutFixOps`), the page editor,
+  then "Split the page…" / "Shorten it…", which only prefill the composer for the director. "Draw anyway" outside a
+  gate is a toggle that adds the page to `drawOverfull` and re-quotes (`summarizeBook(…, { drawOverfull })`). Inside
+  a gate's breakdown nothing spends (the gate owns approval): a held-back page there offers its free fixes only, and
+  drawing it anyway is the held-back notice's chip, which extends the open Render all.
+  The cost view never says "drawn and up to date" while pages are held back: "To draw now" reads "Nothing yet"
+  with "N pages held back — too many words for a panel, not in this price. Fix free or draw anyway.", or adds
+  "· N pages held back (not in this price)" after the quote lines. The Format panel offers Auto (what Auto plans for the kind, from `panelCountRule`
+  like the hint under it: "3–4 big panels" for a comic, "2–3 large panels" for a storybook, "3–5 panels" for a
+  webtoon; the beats decide within the kind's range) or a fixed 2–6, with the storybook note.
+- **Notice fix chips** (`NoticeCard`, rendered through `CardRenderer` with the studio controller): free chips come
+  first; a paid chip shows its quote in the user's terms (a usage share for governed users, never dollars; "on
+  your key" for BYOK) and needs a positive quote, else it isn't offered. Chips are re-checked against the live doc:
+  a free fix already applied reads "Done", a paid one already drawing reads "Started", and a chip with nothing
+  left to do (or a free edit that would put a drawn page out of date) is hidden. So is a paid chip whose page was
+  checked again after the notice was posted (`CardRenderer` passes the message time): the newer check, not the old
+  notice, says what the page needs, so a new take checked clean is never offered a paid fix for the old one. A paid "draw" chip
+  (`render_pages`) shows and sends the live quote of what it would draw now, not the price when the notice was
+  posted, and "(with the rest)" is dropped once nothing else is left to draw with it. Every chip badge (here and in
+  the breakdown) is `ui.tsx ChipBadge`: a one-word badge or amount never wraps, a longer one only between words.
+- **Planning quote.** "Plan the pages" is one writer pass per page; the plan check can send it back for one repair
+  round, so the chip and the director's DOC SUMMARY (when `planStatus` is `none`) say the honest bound:
+  "≈ $0.09 for 6 pages (up to ≈ $0.19 if the plan needs its one writer repair)" — in usage words for governed users.
+- **The honest page-check notice** (`server/src/comic/qcNotice.ts qcNoticeFor`, called from `jobs.ts letterPage`):
+  after a page is checked, the chat speaks only for a major structured problem (the drawn panel count differs from
+  the plan, the planned moments look reordered or missing, a speaker who should be visible may not be drawn) or a
+  score below 0.75. The words hedge ("looks like", "may not be drawn") because beat accuracy is not yet measured;
+  off-panel voices are never blamed; a page the safety check withheld gets no notice (its safety card speaks).
+  Fix chips are free first; paid ones carry their quote and go through the spend gate. Badges and the page's
+  quality list always show everything.
+- **Letter fit: the coverage cap** (Ship 1 A4, FX2/F8; `shared/comic/lettering/layout.ts`, `place.ts`). A panel's
+  lettering may cover at most `PANEL_LIMITS.coverCap` (0.30) of its picture, 0.25 for children's books
+  (`coverCapFor`); coverage is fill × (outline ∩ panel) ÷ panel area, with fill π/4 for elliptical outlines and 1 for
+  boxy ones (`outlineFill`, which `density.ts` uses too, so the chip, the plan check and the cap agree).
+  - At render time `planLettering` applies it to stored, unpinned balloons: a panel over the cap is lettered again,
+    its movable balloons re-placed (partly across the panel's border when that helps). Pinned and locked balloons
+    never move. Stored values never change; "Re-letter page" (free) saves the re-placement.
+  - The published comic is lettered exactly as the studio letters it: the public snapshot carries what the cap
+    reads, as geometry and categories only (`snapshot.ts`): the page check's face and head boxes (`keepOut`/`heads`,
+    always present, empty when the check stored none), each panel's cast ids, and `brief.audience: 'children'` for a
+    children's comic that is not a storybook (the owner's audience, notes and premise stay private), so the reader
+    and its downloads use the same cap and letter around the same faces. A snapshot published before the faces
+    were (a geometry-only check, `checkedAt` 0, no face lists: `storedFrozen`) never has its stored balloons moved
+    blind: the reader draws them where they are stored, as it did before the cap, and only flags the panel `dense`.
+    Republishing carries the faces and lets the cap re-place them around the faces.
+  - The cap re-places only: it never shrinks text unless the owner flips `LETTER_FIT_POLICY.coverShrink` (off; a
+    one-line edit), and even then never below 82% (`COVER_STEPS` 1, 0.9, 0.82), panel by panel.
+  - A panel still over the cap is flagged `dense` (words, what it holds, coverage before and as drawn). Balloons
+    the cap drew elsewhere are crowded with reason `'cover'`, so a first drag, nudge, "Keep here" or Lock starts
+    from where the balloon is drawn (`withDrawnSpots` and `drawnSpotPatch`, in `layout.ts`; the editor's `lockOps`
+    pins the drawn spot too) and never jumps back to its stored spot. The director's `arrange_balloons` uses the
+    same rule: its move, nudge, resize, tail aim, fit and lock start from where the board draws the balloon (on the
+    estimate measure) and pin it there.
+  - No balloon is left over another balloon's text while the page has a text-free spot for it; the settle
+    fallback keeps a stored balloon within its own tier and panel, never carried panels away.
+  - A pinned balloon stored narrower than its longest word is drawn as wide as that word within its panel (FX6).
+  - Every placement that is SAVED uses the doc's cap and fills (`placementCoverOptions`): the page check's
+    balloons, its fallback and the free re-layout (`vision.ts`), Tidy and Reset position (`styleOps.ts`) and the
+    director's `arrange_balloons` (`tools/lettering.ts`). The board's and lettering hooks' own unsaved placements
+    stay uncapped: the render-time cap is what is drawn.
+  - Two editor chips: "Too much text for panel 6" / "Too much text in N panels" selects the panel, and the
+    inspector says how much it holds ("Too much text for panel N: W words cover about P% of the picture — it holds
+    about M.") with the free fixes; "Fix balloon placement" (drawn pages whose check has no face data)
+    offers the free placement around the art's busy areas first, then the paid face-aware re-check
+    (`recheck_page`) quoted in the user's terms. A face-aware check stores its `keepOut`/`heads` even when it
+    found no faces, so a page re-checked once is not offered the paid re-check again (`busyGrid.ts hasFaceData`).
+  - The board's page script shows each lettered panel's "N words / fits about M", with "too full" said in words on
+    an overfull panel. It is measured on the same boxes as the breakdown's dots, the Render-all gate and the
+    director's line-edit budget (`pagePlanCheck fitBoxesFor`): a page Render all would draw (undrawn, failed or out
+    of date) on the layout it will be drawn on, a drawn, current page on the panels it was drawn with — so a free
+    "Use the layout that fits" shows in the script at once.
+- **Flags, both off.** `COMIC_LAYOUT_GUIDE` attaches a text-free layout-guide image (`panelize/wireframe.ts`) as
+  Image 1 on page renders; it stays unset until the owner approves the paid Model Lab A/B (PD-8). With it off, page
+  references and quotes are unchanged. `COMIC_IDENTITY_NOTICES` (identity findings in the chat notice) stays unset
+  until Ship 2.
 
 ## 7. Client modules (`components/comicstudio/`)
 `ComicStudio.tsx` (shell), `useStudio.ts` (state + stream), `studioApi.ts`,

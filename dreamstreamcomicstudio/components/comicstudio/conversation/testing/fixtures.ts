@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import { createEmptyDoc, emptyRender, type ComicDoc, type Page } from '../../../../shared/comic/doc';
 import { DEFAULT_CAPS } from '../../../../shared/comic/capabilities';
 import type { ComicStudioController } from '../../useStudio';
+import { __resetAllowanceStore, normalizeAllowanceStatus, publishAllowanceStatus } from '../../../../services/usageAllowance';
 
 const NOW = 1_760_000_000_000;
 
@@ -133,3 +134,27 @@ export const makeFakeStudio = (overrides: Partial<ComicStudioController> = {}): 
     ...overrides
   } as FakeStudio;
 };
+
+// ── Price display (P1-LIMITS rule: governed users never see dollars) ──────────
+// Tests that assert dollar figures publish an ungoverned status (admins / no limit); tests of the
+// governed wording publish a governed one. Call resetUsageStatus() in afterEach.
+
+/** The usage status of an admin / exempt account: prices show in dollars. */
+export const showDollarPrices = (): void => {
+  publishAllowanceStatus(normalizeAllowanceStatus({ enabled: true, governed: false, pctUsed: 0, pctLeft: 100 })!);
+};
+
+/** A governed tester whose usage makes one Standard page `pctPerStandardPage` percent. */
+export const showUsagePrices = (pctPerStandardPage: number | null = 1): void => {
+  publishAllowanceStatus(
+    normalizeAllowanceStatus({
+      enabled: true,
+      governed: true,
+      pctUsed: 10,
+      pctLeft: 90,
+      friendlyUnits: { standardPages: 90, draftPages: 120, pctPerStandardPage, label: 'about 90 standard comic pages left' }
+    })!
+  );
+};
+
+export const resetUsageStatus = (): void => __resetAllowanceStore();

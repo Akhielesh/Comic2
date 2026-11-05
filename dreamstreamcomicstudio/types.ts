@@ -1,3 +1,5 @@
+import type { ContentRating } from './shared/comic/safety.js';
+
 
 export type AspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9";
 export type ImageResolution = "1K" | "2K" | "4K";
@@ -762,6 +764,13 @@ export interface Project {
   authorName?: string;
   likesCount?: number;
   viewsCount?: number;
+  /**
+   * The publish gate's rating of a published Comic Studio comic (projects.content_rating, server-set;
+   * read-only here — services/db.ts validates it with isContentRating, and saveProject never sends it).
+   * Honoured only beside the row's server-mirrored share slug (PublicGallery / PublicProfile
+   * shareSlugOf): the rest of a listing row is the owner's to write.
+   */
+  contentRating?: ContentRating;
 }
 
 export interface ChatMessage {

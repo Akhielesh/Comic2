@@ -4,6 +4,12 @@
 User-agent: *
 Content-Signal: search=yes, ai-train=no, ai-input=no
 Allow: /
+# Shared comics: previews need the page, its same-origin image and oEmbed. Unlisted comics are
+# kept out of search by noindex (meta + header), never by robots (a block would kill previews).
+Allow: /c/
+Allow: /og/
+Allow: /api/comic/oembed
+Disallow: /c/*/embed
 Disallow: /api/
 Disallow: /live-api/
 Disallow: /egress/
