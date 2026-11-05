@@ -50,6 +50,7 @@ import { normalizeQuick } from '../emoji';
 import { SceneSketch } from '../components/scenes';
 import { HelpButton } from '../components/Guide';
 import { Icon } from '../ui/icons';
+import { isImeComposing, isModalOpen, isSpaceActivatable, shouldHandleStudioHotkey } from '../ui/hotkeys';
 import { StreamStudioMark } from '../ui/logo';
 import {
   Btn, FloatLayer, IconBtn, Pill, Segmented, Tabs, cx,
@@ -1163,18 +1164,22 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const delChat = (id: string) => socketRef.current?.send({ t: 'delete', id });
 
   // --------------------------------------------------------------- hotkeys
+  // Plain key presses only (ui/hotkeys.ts): never ⌘/Ctrl/Alt shortcuts (⌘G Find next, Ctrl+R
+  // reload, ⌘V paste), auto-repeat, IME composition or typing — and not under an open sheet.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (!shouldHandleStudioHotkey(e) || inviteOpen || pendingSave || isModalOpen()) return;
       const k = e.key.toLowerCase();
       if (k === 'g') {
+        // Ending goes through endStream's own "End the stream for everyone?" confirm.
         if (isLive || status === 'paused') void endStream();
         else if (meetingIdle) push('Use “Go live with this meeting” to broadcast — G won’t do it by accident', { icon: 'info' });
         else if (status === 'idle') requestGoLive();
       } else if (k === 'i') {
         setInviteOpen(true);
       } else if (k === ' ') {
+        // Space on a focused button, link, toggle or tab is that control's own press.
+        if (isSpaceActivatable(e.target)) return;
         e.preventDefault();
         toggleMic();
       } else if (k === 'v') toggleCam();
@@ -1942,7 +1947,7 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
               aria-label="Chat message"
               onKeyDown={(e) => {
                 const t = (e.target as HTMLInputElement);
-                if (e.key === 'Enter' && t.value.trim()) {
+                if (e.key === 'Enter' && !isImeComposing(e) && t.value.trim()) {
                   ctl.sendChat(t.value.trim());
                   t.value = '';
                 }
