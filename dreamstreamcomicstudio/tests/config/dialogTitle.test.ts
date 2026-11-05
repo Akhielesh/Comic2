@@ -22,7 +22,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
-import { type Counts, type TokenHit, compareToBaseline, countTokens, listScannedFiles, PINNED_DIR, ratchet, readBaseline, scanTree } from './classLists';
+import {
+  type Counts,
+  type TokenHit,
+  compareToBaseline,
+  countTokens,
+  listScannedFiles,
+  PINNED_DIR,
+  ratchet,
+  readBaseline,
+  REAL_TREE_TIMEOUT,
+  scanTree
+} from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCANNED_DIR = 'components/comicstudio';
@@ -85,7 +96,7 @@ describe('dialog titles — the recipe', () => {
 });
 
 describe('dialog titles — every modal dialog in Comic Studio is classified', () => {
-  it('finds the modal dialogs and classifies each one', () => {
+  it('finds the modal dialogs and classifies each one', { timeout: REAL_TREE_TIMEOUT }, () => {
     const modal = listSourceFiles(path.join(ROOT, SCANNED_DIR))
       .map((f) => path.relative(ROOT, f).split(path.sep).join('/'))
       .filter((rel) => /\baria-modal\b/.test(read(rel)));
@@ -161,7 +172,7 @@ describe('dialog titles — the rest of the app (ratchet)', () => {
     ]);
   });
 
-  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/dialogTitle.json exactly', () => {
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/dialogTitle.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
     const files = listScannedFiles({ exclude: [PINNED_DIR] });
     expect(files.length).toBeGreaterThan(200);
     const { counts, stale } = scanTree(files, unclassifiedModalHits);

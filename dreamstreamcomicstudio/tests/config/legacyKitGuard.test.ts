@@ -13,21 +13,26 @@
  * Scope: every source file under `components/**`, `App.tsx` and `qa/**` (tests, specs and `live/**` are
  * not scanned; tests/config/classLists.ts SCANNED_ROOTS / EXCLUDED). Only literals count — class strings,
  * attribute values, templates — so a comment or a sentence that names a token is never a use. The app
- * still carries the kit in about 250 files, so this RATCHETS against tests/config/baselines/legacyKit.json:
- * a file or token not listed must count 0, a count above its entry fails, and a count below fails until
- * the entry is lowered (`UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts`).
+ * still carries the kit in 74 files (1,719 uses at the base commit; the totals line of
+ * tests/config/baselines/legacyKit.json has today's numbers), so this RATCHETS against that baseline: a
+ * file or token not listed must count 0, a count above its entry fails, and a count below fails until the
+ * entry is lowered (`UPDATE_BASELINES=1 npx vitest run tests/config/legacyKitGuard.test.ts`).
  */
+import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   type Allowlist,
   type Counts,
+  APP_ROOT,
   compareToBaseline,
   countTokens,
   findInLiterals,
   listScannedFiles,
   ratchet,
   readBaseline,
+  REAL_TREE_TIMEOUT,
   scanTree,
+  tempTree,
   VARIANT,
   withoutOpacity,
   withoutVariant
@@ -57,7 +62,8 @@ export function legacyToken(match: string): string {
   return brand ? brand[1] : cls;
 }
 
-export const findLegacyKit = (source: string) => findInLiterals(source, LEGACY_KIT, legacyToken);
+/** Every legacy kit use in a source's literals; a scan passes the file's path so a `.ts` file parses as TypeScript. */
+export const findLegacyKit = (source: string, fileName?: string) => findInLiterals(source, LEGACY_KIT, legacyToken, fileName);
 
 /**
  * Content exemptions, keyed by app-relative path; each pins the exact uses it permits (token and trimmed
@@ -66,6 +72,12 @@ export const findLegacyKit = (source: string) => findInLiterals(source, LEGACY_K
  * migrate (and DS-10 deletes the utilities themselves).
  */
 const ALLOWLIST: Allowlist = {};
+
+/** The guard's scan of an app tree (the real-tree test runs exactly this), each file read in its own language. */
+export function legacyKitScan(root = APP_ROOT) {
+  const files = listScannedFiles({ root });
+  return { files, ...scanTree(files, (rel, source) => findLegacyKit(source, rel), ALLOWLIST, root) };
+}
 
 const PLANTED = 'components/__planted__/Fixture.tsx';
 const plant = (classes: string) => `export const Fixture = () => <div className="p-2 ${classes}">x</div>;\n`;
@@ -125,6 +137,17 @@ describe('legacy kit guard — the detector', () => {
     expect(findLegacyKit('const A = () => <div>{/* not font-comic */}<p>Use border-black and font-display</p></div>;')).toEqual([]);
     expect(findLegacyKit("import x from './font-comic';\nconst y = import('./shadow-comic');")).toEqual([]);
   });
+
+  it('reads a .ts file as TypeScript: a generic arrow or a type assertion does not hide the literals after it', () => {
+    // Parsed as TSX, `<T>(v: unknown) => …` opens a JSX element and every literal after it is lost.
+    const src = "const f = <T>(x: T) => x;\nconst g = <string>(x as unknown);\nexport const A = 'border-2 border-black shadow-comic';\n";
+    expect(findLegacyKit(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([
+      [3, 'border-black'],
+      [3, 'shadow-comic']
+    ]);
+    // A .tsx file still reads JSX.
+    expect(findLegacyKit(plant('font-display'), 'components/x.tsx').map((h) => h.token)).toEqual(['font-display']);
+  });
 });
 
 describe('legacy kit guard — the ratchet', () => {
@@ -152,11 +175,19 @@ describe('legacy kit guard — the ratchet', () => {
     ]);
   });
 
-  it('components/**, App.tsx and qa/** match tests/config/baselines/legacyKit.json exactly', () => {
-    const files = listScannedFiles();
+  it('the scan reads a .ts file in full: a use after a generic helper counts', () => {
+    const root = tempTree({ 'components/api.ts': `const list = <T>(v: unknown): T[] => [] as T[];\nexport const A = 'border-2 border-black';\n`, 'App.tsx': plant('shadow-comic') });
+    try {
+      expect(legacyKitScan(root).counts).toEqual({ 'App.tsx': { 'shadow-comic': 1 }, 'components/api.ts': { 'border-black': 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('components/**, App.tsx and qa/** match tests/config/baselines/legacyKit.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = legacyKitScan();
     expect(files.length).toBeGreaterThan(400);
     expect(files).toContain('App.tsx');
-    const { counts, stale } = scanTree(files, (_rel, source) => findLegacyKit(source), ALLOWLIST);
     expect(stale).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
     expect(problems).toEqual([]);

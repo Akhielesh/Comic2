@@ -25,7 +25,8 @@
  * section "App-wide scanning and the ratchet" below and tests/config/baselines/README.md).
  * Not a test file (no `.test.` in the name), so vitest does not collect it; the typecheck covers it.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -48,6 +49,38 @@ const fromText = (text: string): Ink => {
 
 const CLASS_HELPERS = new Set(['cx', 'clsx', 'cn', 'twJoin']);
 
+/**
+ * The parser's language for a file, from its extension. A `.ts` file must be read as TypeScript, not
+ * TSX: there `<T>(v: T) => …` is a generic arrow and `<T>value` a type assertion, while TSX reads either
+ * as a JSX opening tag and loses (or turns into JSX text) every literal after it. `.js` / `.mjs` /
+ * `.cjs` read as JavaScript (which TypeScript parses with JSX allowed), `.jsx` as JSX, and anything else
+ * — the in-memory snippets the detector tests pass without a name — as TSX.
+ */
+export function scriptKindOf(fileName: string): ts.ScriptKind {
+  if (/\.tsx$/.test(fileName)) return ts.ScriptKind.TSX;
+  if (/\.jsx$/.test(fileName)) return ts.ScriptKind.JSX;
+  if (/\.(?:mjs|cjs|js)$/.test(fileName)) return ts.ScriptKind.JS;
+  if (/\.(?:mts|cts|ts)$/.test(fileName)) return ts.ScriptKind.TS;
+  return ts.ScriptKind.TSX;
+}
+
+/** A source's syntax tree, parsed in the language its file name implies (scriptKindOf). */
+const parseSource = (source: string, fileName: string): ts.SourceFile =>
+  ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
+
+/**
+ * The syntax errors the guards' parser reports for a source, as `fileName:line message`. A guard reads a
+ * file in full only when this is empty: after an error the parser recovers by guessing, and the literals
+ * it guesses past are lost or become JSX text (the `.ts`-read-as-TSX bug). The ratchet test asserts it
+ * for every scanned file.
+ */
+export function parseErrorsOf(source: string, fileName = 'file.tsx'): string[] {
+  const sf = parseSource(source, fileName);
+  // parseDiagnostics is the parser's own list (not in the public typings; the ratchet test checks it is read).
+  const diagnostics = (sf as ts.SourceFile & { parseDiagnostics?: readonly ts.DiagnosticWithLocation[] }).parseDiagnostics ?? [];
+  return diagnostics.map((d) => `${fileName}:${sf.getLineAndCharacterOfPosition(d.start).line + 1} ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`);
+}
+
 export interface InkConflict {
   line: number;
   /** The distinct text colours that compete in this class list. */
@@ -59,10 +92,11 @@ export interface InkConflict {
 
 /**
  * Class lists that can apply two different unvariant text colours together.
- * `external` maps imported constant names to their values (the studioDesign module).
+ * `external` maps imported constant names to their values (the studioDesign module); `fileName` picks the
+ * parser's language (see scriptKindOf: pass the file's path when scanning a `.ts` file).
  */
-export function findCompetingInks(source: string, external: Record<string, unknown> = {}): InkConflict[] {
-  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function findCompetingInks(source: string, external: Record<string, unknown> = {}, fileName = 'file.tsx'): InkConflict[] {
+  const sf = parseSource(source, fileName);
   const consts = new Map<string, ts.Expression>();
   const collect = (node: ts.Node) => {
     if (
@@ -249,10 +283,11 @@ function literalText(node: ts.Node, sf: ts.SourceFile): string {
  * `{…}` expression — however many lines it spans) also spells a wide tracking, or an eyebrow-sized
  * text with no tracking class at all (a plain `uppercase`). The studioDesign
  * recipes are constants, not literals in the file, so `cx('mb-1', OVERLINE)` is never a hit; a
- * file-local constant is a hit once, where its literal is written.
+ * file-local constant is a hit once, where its literal is written. A scan passes the file's path as
+ * `fileName`, so a `.ts` file is parsed as TypeScript (scriptKindOf).
  */
-export function findHandRolledOverlines(source: string): Array<{ line: number; snippet: string }> {
-  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function findHandRolledOverlines(source: string, fileName = 'file.tsx'): Array<{ line: number; snippet: string }> {
+  const sf = parseSource(source, fileName);
   const hits: Array<{ line: number; snippet: string }> = [];
   const lines = source.split('\n');
   const visit = (node: ts.Node) => {
@@ -276,9 +311,10 @@ export function findHandRolledOverlines(source: string): Array<{ line: number; s
 /**
  * Every class list in a source (see classListOf), once each: its first line and all the class names
  * written in it (the literals of a `cx(…)` call with its conditionals, a template, a JSX `{…}`).
+ * A scan passes the file's path as `fileName` (scriptKindOf).
  */
-export function classListsOf(source: string): Array<{ line: number; classes: string }> {
-  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function classListsOf(source: string, fileName = 'file.tsx'): Array<{ line: number; classes: string }> {
+  const sf = parseSource(source, fileName);
   const seen = new Set<ts.Node>();
   const out: Array<{ line: number; classes: string }> = [];
   const visit = (node: ts.Node) => {
@@ -321,11 +357,19 @@ export function matchPinned(hits: string[], pinned: readonly string[] = []): { e
 // entry fails (a new use); a count BELOW its entry fails too, until the entry is lowered, so a
 // migration's gain is locked in and the numbers only ever fall. Entries are generated, never typed:
 // `UPDATE_BASELINES=1 npx vitest run tests/config/<guard test>` lowers every entry to today's count and
-// drops the zeros (it never raises one); `UPDATE_BASELINES=reset` rewrites the file from the tree (the
-// first generation, or a reviewed exception: the JSON diff shows the rise). See baselines/README.md.
+// drops the zeros (it never raises one), after renaming the files `BASELINE_MOVES='old=new'` names (a moved
+// file keeps its entry); `UPDATE_BASELINES=reset` rewrites the file from the tree (the first generation,
+// or a reviewed exception: the JSON diff shows the rise). Every file is parsed in its own language
+// (scriptKindOf), so a `.ts` file's generic arrow never hides a literal. See baselines/README.md.
 
 /** The app directory (`dreamstreamcomicstudio/`). Every path the scan reports is relative to it, with `/`. */
 export const APP_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+/**
+ * The time a real-tree scan may take (it parses every scanned file, about 600): vitest's 5 s default is
+ * too tight when the full suite runs it beside other workers.
+ */
+export const REAL_TREE_TIMEOUT = 60_000;
 
 /** What every app-wide guard scans: the components, the root App and the QA harness. */
 export const SCANNED_ROOTS: readonly string[] = ['components', 'App.tsx', 'qa'];
@@ -363,6 +407,19 @@ export function globToRegExp(glob: string): RegExp {
     else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
   }
   return new RegExp(`^${re}$`);
+}
+
+/**
+ * A fresh OS temp folder holding the given app-relative files, for a guard's scan to run on (tests only:
+ * never the repository). The caller removes it.
+ */
+export function tempTree(files: Record<string, string>): string {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ds0-tree-'));
+  for (const [rel, body] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    writeFileSync(path.join(root, rel), body);
+  }
+  return root;
 }
 
 /** Whether an app-relative path matches any of the globs. */
@@ -417,10 +474,11 @@ const isModuleSpecifier = (node: ts.Node): boolean => {
  * Every string and template literal in a source with the line it starts on, as written (quotes and
  * `${` / `}` included, so a token at an edge keeps its boundary). Comments, JSX text, identifiers,
  * regular expressions and module specifiers are not literals here, so a comment that explains a rule
- * ("never `shadow-comic`") or a visible sentence never counts.
+ * ("never `shadow-comic`") or a visible sentence never counts. A scan passes the file's path as
+ * `fileName`, so a `.ts` file is parsed as TypeScript (scriptKindOf); in-memory snippets default to TSX.
  */
-export function literalsOf(source: string): Array<{ line: number; text: string }> {
-  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+export function literalsOf(source: string, fileName = 'file.tsx'): Array<{ line: number; text: string }> {
+  const sf = parseSource(source, fileName);
   const out: Array<{ line: number; text: string }> = [];
   const visit = (node: ts.Node) => {
     if (isLiteral(node) && !isModuleSpecifier(node)) {
@@ -442,13 +500,13 @@ export interface TokenHit {
 
 /**
  * Every match of a global pattern inside the literals of a source (see literalsOf), each named by
- * `token(match)` (the per-token key of the ratchet).
+ * `token(match)` (the per-token key of the ratchet). `fileName` as in literalsOf.
  */
-export function findInLiterals(source: string, pattern: RegExp, token: (match: string) => string): TokenHit[] {
+export function findInLiterals(source: string, pattern: RegExp, token: (match: string) => string, fileName = 'file.tsx'): TokenHit[] {
   if (!pattern.global) throw new Error(`findInLiterals needs a global pattern: ${pattern}`);
   const lines = source.split('\n');
   const hits: TokenHit[] = [];
-  for (const lit of literalsOf(source)) {
+  for (const lit of literalsOf(source, fileName)) {
     for (const m of lit.text.matchAll(pattern)) {
       const line = lit.line + (lit.text.slice(0, m.index).match(/\n/g)?.length ?? 0);
       hits.push({ line, token: token(m[0]), match: m[0], text: (lines[line - 1] ?? '').trim() });
@@ -588,10 +646,56 @@ export function compareToBaseline(actual: Counts, baseline: Counts, testFile: st
   return { over, under };
 }
 
-/** The baseline lowered to the tree where the tree is lower, zeros dropped; never raised, never extended. */
-export function shrinkBaseline(actual: Counts, baseline: Counts): Counts {
+/**
+ * Renames applied to a baseline before it is lowered (`BASELINE_MOVES`, README "Moving a file"): old
+ * app-relative path → new one. Without them a moved file fails twice (over at its new path, under at its
+ * old one) and only a reset, which rewrites every entry, would record it. A key ending in `/` moves a
+ * whole folder (`components/comicstudio/editor/kit/` → `components/ds/creative/`).
+ */
+export type BaselineMoves = Record<string, string>;
+
+/**
+ * `BASELINE_MOVES` as moves: `old=new` pairs separated by commas, semicolons or whitespace. A folder
+ * move names folders on both sides (each ends in `/`). Anything else is an error, never a silent no-op.
+ */
+export function parseMoves(value: string | undefined = process.env.BASELINE_MOVES): BaselineMoves {
+  const moves: BaselineMoves = {};
+  const bad = (p: string) => p.startsWith('/') || p.split('/').includes('..');
+  for (const pair of (value ?? '').split(/[\s,;]+/).filter(Boolean)) {
+    const m = /^([^=]+)=([^=]+)$/.exec(pair);
+    if (!m || m[1] === m[2] || m[1].endsWith('/') !== m[2].endsWith('/') || bad(m[1]) || bad(m[2])) {
+      throw new Error(`BASELINE_MOVES: "${pair}" is not old=new (app-relative paths; a folder ends in / on both sides)`);
+    }
+    moves[m[1]] = m[2];
+  }
+  return moves;
+}
+
+/**
+ * A baseline with its moved files renamed (folders by prefix). Files moved onto one path add up: the
+ * uses they carried together, never more. Everything else is unchanged.
+ */
+export function moveBaseline(baseline: Counts, moves: BaselineMoves): Counts {
+  const target = (rel: string): string => {
+    if (rel in moves) return moves[rel];
+    const folder = Object.keys(moves).find((from) => from.endsWith('/') && rel.startsWith(from));
+    return folder ? moves[folder] + rel.slice(folder.length) : rel;
+  };
   const out: Counts = {};
   for (const [rel, tokens] of Object.entries(baseline)) {
+    const to = (out[target(rel)] ??= {});
+    for (const [token, n] of Object.entries(tokens)) to[token] = (to[token] ?? 0) + n;
+  }
+  return out;
+}
+
+/**
+ * The baseline lowered to the tree where the tree is lower, zeros dropped; never raised, never extended.
+ * `moves` renames moved files first (moveBaseline), so their entries follow them.
+ */
+export function shrinkBaseline(actual: Counts, baseline: Counts, moves: BaselineMoves = {}): Counts {
+  const out: Counts = {};
+  for (const [rel, tokens] of Object.entries(moveBaseline(baseline, moves))) {
     const kept: FileCounts = {};
     for (const [token, base] of Object.entries(tokens)) {
       const n = Math.min(base, actual[rel]?.[token] ?? 0);
@@ -654,26 +758,29 @@ export function readBaseline(guard: string, dir = BASELINE_DIR): { baseline: Cou
 
 /**
  * Compares a guard's counts with its baseline, first applying `UPDATE_BASELINES` (see ratchetMode):
- * `shrink` lowers the file and drops the zeros (what is over stays over and still fails), `reset`
- * rewrites it from the counts. Returns the over / under lines and any problem with the file itself.
+ * `shrink` lowers the file and drops the zeros (what is over stays over and still fails), after renaming
+ * the files `BASELINE_MOVES` names (parseMoves); `reset` rewrites it from the counts. Returns the over /
+ * under lines and any problem with the file itself.
  */
 export function ratchet(
   guard: string,
   testFile: string,
   actual: Counts,
-  options: { mode?: RatchetMode; dir?: string } = {}
+  options: { mode?: RatchetMode; dir?: string; moves?: BaselineMoves } = {}
 ): { over: string[]; under: string[]; problems: string[]; written: boolean } {
   const dir = options.dir ?? BASELINE_DIR;
   const mode = options.mode ?? ratchetMode();
+  const moves = options.moves ?? parseMoves();
   let { baseline, problems, exists } = readBaseline(guard, dir);
   let written = false;
   if (mode === 'reset' || (mode === 'shrink' && exists && problems.length === 0)) {
-    const next = mode === 'reset' ? actual : shrinkBaseline(actual, baseline);
+    const next = mode === 'reset' ? actual : shrinkBaseline(actual, baseline, moves);
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, `${guard}.json`), serialiseBaseline(guard, testFile, next));
     written = true;
     ({ baseline, problems, exists } = readBaseline(guard, dir));
   }
   if (!exists) problems.push(`no baseline tests/config/baselines/${guard}.json: generate it from the tree with UPDATE_BASELINES=reset npx vitest run ${testFile}`);
+  if (mode !== 'shrink' && Object.keys(moves).length) problems.push(`BASELINE_MOVES only applies with UPDATE_BASELINES=1 (${shrinkCommand(testFile)})`);
   return { ...compareToBaseline(actual, baseline, testFile), problems, written };
 }

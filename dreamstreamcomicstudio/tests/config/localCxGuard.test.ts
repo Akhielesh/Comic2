@@ -17,9 +17,24 @@
  * components/**, App.tsx and qa/** (`UPDATE_BASELINES=1 npx vitest run tests/config/localCxGuard.test.ts`
  * once a file moves onto `cn`).
  */
+import { rmSync } from 'node:fs';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { type Allowlist, type Counts, type TokenHit, compareToBaseline, countTokens, listScannedFiles, ratchet, readBaseline, scanTree } from './classLists';
+import {
+  type Allowlist,
+  type Counts,
+  type TokenHit,
+  APP_ROOT,
+  compareToBaseline,
+  countTokens,
+  listScannedFiles,
+  ratchet,
+  readBaseline,
+  REAL_TREE_TIMEOUT,
+  scanTree,
+  scriptKindOf,
+  tempTree
+} from './classLists';
 
 const GUARD = 'localCx';
 const TEST_FILE = 'tests/config/localCxGuard.test.ts';
@@ -33,9 +48,12 @@ const isFunctionValue = (init: ts.Expression): boolean => {
   return ts.isArrowFunction(e) || ts.isFunctionExpression(e) || (ts.isIdentifier(e) && CLASS_HELPERS.has(e.text));
 };
 
-/** Every local class joiner named `cx` in a source (its declaration's line). */
-export function findLocalCx(source: string): TokenHit[] {
-  const sf = ts.createSourceFile('file.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+/**
+ * Every local class joiner named `cx` in a source (its declaration's line). A scan passes the file's
+ * path as `fileName`, so a `.ts` file is parsed as TypeScript (classLists.ts scriptKindOf).
+ */
+export function findLocalCx(source: string, fileName = 'file.tsx'): TokenHit[] {
+  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKindOf(fileName));
   const lines = source.split('\n');
   const hits: TokenHit[] = [];
   const report = (node: ts.Node) => {
@@ -53,6 +71,12 @@ export function findLocalCx(source: string): TokenHit[] {
 
 /** Content exemptions (token and trimmed line, one-line reason). None: no `cx` is content. */
 const ALLOWLIST: Allowlist = {};
+
+/** The guard's scan of an app tree (the real-tree test runs exactly this), each file read in its own language. */
+export function localCxScan(root = APP_ROOT) {
+  const files = listScannedFiles({ root });
+  return { files, ...scanTree(files, (rel, source) => findLocalCx(source, rel), ALLOWLIST, root) };
+}
 
 const PLANTED = 'components/__planted__/Fixture.tsx';
 
@@ -88,6 +112,12 @@ describe('local cx guard — the detector', () => {
     ];
     for (const src of allowed) expect(findLocalCx(src), src).toEqual([]);
   });
+
+  it('reads a .ts file as TypeScript: a generic arrow does not hide a cx declared after it', () => {
+    const src = "const f = <T>(x: T) => x;\nconst cx = (...p: string[]) => p.join(' ');\nfunction other<T>(v: T) { return <T>v; }\n";
+    expect(findLocalCx(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([[2, 'cx']]);
+    expect(findLocalCx("const f = <T>(x: T) => x;\nfunction cx(...p: string[]) { return p.join(' '); }\n", 'components/x.ts').map((h) => h.line)).toEqual([2]);
+  });
 });
 
 describe('local cx guard — the ratchet', () => {
@@ -113,10 +143,18 @@ describe('local cx guard — the ratchet', () => {
     ]);
   });
 
-  it('components/**, App.tsx and qa/** match tests/config/baselines/localCx.json exactly', () => {
-    const files = listScannedFiles();
+  it('the scan reads a .ts file in full: a cx declared after a generic helper counts', () => {
+    const root = tempTree({ 'components/classes.ts': `const list = <T>(v: unknown): T[] => [] as T[];\nexport const cx = (...p: string[]) => p.join(' ');\n` });
+    try {
+      expect(localCxScan(root).counts).toEqual({ 'components/classes.ts': { cx: 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('components/**, App.tsx and qa/** match tests/config/baselines/localCx.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = localCxScan();
     expect(files.length).toBeGreaterThan(400);
-    const { counts, stale } = scanTree(files, (_rel, source) => findLocalCx(source), ALLOWLIST);
     expect(stale).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
     expect(problems).toEqual([]);

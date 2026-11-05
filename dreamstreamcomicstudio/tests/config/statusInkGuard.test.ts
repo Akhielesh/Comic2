@@ -38,7 +38,7 @@
  * (`UPDATE_BASELINES=1 npx vitest run tests/config/statusInkGuard.test.ts`). The one allowlist below
  * serves both: Comic Studio's pins, and any data-viz or content exemption elsewhere.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -55,7 +55,9 @@ import {
   PINNED_DIR,
   ratchet,
   readBaseline,
+  REAL_TREE_TIMEOUT,
   scanTree,
+  tempTree,
   textColours
 } from './classLists';
 
@@ -133,6 +135,18 @@ export function statusInkOffenders(rel: string, source: string): { offenders: st
   return { offenders, stale: missing };
 }
 
+/** One Comic Studio file's class lists that put white on a light warm fill (`rel:line`), read in the file's own language. */
+export function whiteOnFillOffenders(rel: string, source: string): string[] {
+  return classListsOf(source, rel)
+    .filter((list) => whiteOnLightFill(list.classes))
+    .map((list) => `${rel}:${list.line}`);
+}
+
+/** One Comic Studio file's class lists that stack two text colours (`rel:line  colours  snippet`), read in its own language. */
+export function stackedInkOffenders(rel: string, source: string): string[] {
+  return findCompetingInks(source, design, rel).map((c) => `${rel}:${c.line}  ${c.colours.join(' vs ')}  ${c.snippet}`);
+}
+
 function listSourceFiles(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir)) {
@@ -202,7 +216,7 @@ describe('status ink guard (components/comicstudio/**)', () => {
     expect(stale).toEqual([useKey(allowed)]);
   });
 
-  it('finds no raw hue text or icon colour in components/comicstudio/** outside the allowlist', () => {
+  it('finds no raw hue text or icon colour in components/comicstudio/** outside the allowlist', { timeout: REAL_TREE_TIMEOUT }, () => {
     const offenders: string[] = [];
     const seen = new Set<string>();
     const files = listSourceFiles(path.join(ROOT, SCANNED_DIR));
@@ -266,22 +280,27 @@ describe('status ink guard (components/comicstudio/**)', () => {
     expect(textColours('text-white/80 text-[#D97757] text-[color:var(--x)] text-[13px]/5 text-xs')).toEqual(['text-white/80', 'text-[#D97757]', 'text-[color:var(--x)]']);
   });
 
-  it('no white text or icon on a light amber or yellow fill (white on amber-500 is 2.15:1; status words read TONE_CHIP / TONE_CHIP_ON_ART)', () => {
+  it('the Comic Studio scans read a .ts file in full: a class list after a generic helper is checked', () => {
+    const rel = 'components/comicstudio/x.ts';
+    const src = "const list = <T>(v: unknown): T[] => [] as T[];\nexport const A = 'rounded bg-amber-400 text-white';\nexport const B = cx('text-[var(--ds-muted)]', on && 'text-[var(--ds-ink)]');\n";
+    expect(whiteOnFillOffenders(rel, src)).toEqual([`${rel}:2`]);
+    expect(stackedInkOffenders(rel, src)).toEqual([`${rel}:3  text-[var(--ds-ink)] vs text-[var(--ds-muted)]  cx('text-[var(--ds-muted)]', on && 'text-[var(--ds-ink)]')`]);
+  });
+
+  it('no white text or icon on a light amber or yellow fill (white on amber-500 is 2.15:1; status words read TONE_CHIP / TONE_CHIP_ON_ART)', { timeout: REAL_TREE_TIMEOUT }, () => {
     const offenders: string[] = [];
     for (const file of listSourceFiles(path.join(ROOT, SCANNED_DIR))) {
       const rel = path.relative(ROOT, file).split(path.sep).join('/');
-      for (const list of classListsOf(readFileSync(file, 'utf8'))) {
-        if (whiteOnLightFill(list.classes)) offenders.push(`${rel}:${list.line}`);
-      }
+      offenders.push(...whiteOnFillOffenders(rel, readFileSync(file, 'utf8')));
     }
     expect(offenders).toEqual([]);
   });
 
-  it('no class list in components/comicstudio/** stacks two text colours (the applied one would be an accident of stylesheet order)', () => {
+  it('no class list in components/comicstudio/** stacks two text colours (the applied one would be an accident of stylesheet order)', { timeout: REAL_TREE_TIMEOUT }, () => {
     const offenders: string[] = [];
     for (const file of listSourceFiles(path.join(ROOT, SCANNED_DIR))) {
       const rel = path.relative(ROOT, file).split(path.sep).join('/');
-      for (const c of findCompetingInks(readFileSync(file, 'utf8'), design)) offenders.push(`${rel}:${c.line}  ${c.colours.join(' vs ')}  ${c.snippet}`);
+      offenders.push(...stackedInkOffenders(rel, readFileSync(file, 'utf8')));
     }
     expect(
       offenders,
@@ -293,18 +312,25 @@ describe('status ink guard (components/comicstudio/**)', () => {
 /**
  * Every status-ink use in one source as ratchet hits: each raw hue class as written (variant and
  * opacity kept, as the pins read it), each class list that stacks two text colours (`stacked-inks`) and
- * each that puts white on a light warm fill (`white-on-light-fill`).
+ * each that puts white on a light warm fill (`white-on-light-fill`). A scan passes the file's path as
+ * `fileName`, so a `.ts` file is parsed as TypeScript (classLists.ts scriptKindOf).
  */
-export function statusInkHits(source: string): TokenHit[] {
+export function statusInkHits(source: string, fileName = 'file.tsx'): TokenHit[] {
   const lines = source.split('\n');
   const at = (line: number) => (lines[line - 1] ?? '').trim();
   return [
     ...findRawStatusInk(source).map((h) => ({ line: h.line, token: h.token, match: h.token, text: h.text })),
-    ...findCompetingInks(source, design).map((c) => ({ line: c.line, token: 'stacked-inks', match: c.colours.join(' vs '), text: at(c.line) })),
-    ...classListsOf(source)
+    ...findCompetingInks(source, design, fileName).map((c) => ({ line: c.line, token: 'stacked-inks', match: c.colours.join(' vs '), text: at(c.line) })),
+    ...classListsOf(source, fileName)
       .filter((l) => whiteOnLightFill(l.classes))
       .map((l) => ({ line: l.line, token: 'white-on-light-fill', match: 'text-white', text: at(l.line) }))
   ];
+}
+
+/** The ratchet's scan of an app tree outside Comic Studio (the real-tree test runs exactly this), each file in its own language. */
+export function statusInkScan(root = ROOT) {
+  const files = listScannedFiles({ root, exclude: [PINNED_DIR] });
+  return { files, ...scanTree(files, (rel, source) => statusInkHits(source, rel), ALLOWLIST, root) };
 }
 
 describe('status ink guard — the rest of the app (ratchet)', () => {
@@ -323,6 +349,19 @@ describe('status ink guard — the rest of the app (ratchet)', () => {
       [3, 'text-red-600/80'],
       [4, 'stacked-inks'],
       [5, 'white-on-light-fill']
+    ]);
+  });
+
+  it('reads a .ts file as TypeScript: a generic arrow does not hide the class lists after it', () => {
+    const src =
+      `const f = <T>(x: T) => x;\n` +
+      `export const A = cx('text-[var(--ds-muted)]', on && 'text-[var(--ds-ink)]');\n` +
+      `export const B = 'bg-amber-400 text-white';\n` +
+      `export const C = 'text-red-600';\n`;
+    expect(statusInkHits(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([
+      [4, 'text-red-600'],
+      [2, 'stacked-inks'],
+      [3, 'white-on-light-fill']
     ]);
   });
 
@@ -353,11 +392,22 @@ describe('status ink guard — the rest of the app (ratchet)', () => {
     ]);
   });
 
-  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/statusInk.json exactly', () => {
-    const files = listScannedFiles({ exclude: [PINNED_DIR] });
+  it('the scan reads a .ts file in full: a use after a generic helper counts', () => {
+    const root = tempTree({
+      'components/api.ts': "const list = <T>(v: unknown): T[] => [] as T[];\nexport const A = 'rounded bg-amber-400 text-white';\n",
+      'components/comicstudio/skipped.ts': "export const A = 'rounded bg-amber-400 text-white';\n"
+    });
+    try {
+      expect(statusInkScan(root).counts).toEqual({ 'components/api.ts': { 'white-on-light-fill': 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/statusInk.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = statusInkScan();
     expect(files.length).toBeGreaterThan(200);
     expect(files.some((f) => f.startsWith(`${SCANNED_DIR}/`))).toBe(false);
-    const { counts, stale } = scanTree(files, (_rel, source) => statusInkHits(source), ALLOWLIST);
     // Comic Studio's pins are checked by the exact-line tests above; only the rest is stale here.
     expect(stale.filter((s) => !s.startsWith(`${SCANNED_DIR}/`))).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);

@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   APP_ROOT,
@@ -16,13 +17,19 @@ import {
   type Counts,
   globToRegExp,
   listScannedFiles,
+  literalsOf,
   matchesGlob,
+  moveBaseline,
+  parseErrorsOf,
+  parseMoves,
   PINNED_DIR,
   RECIPE_FILES,
   ratchet,
   ratchetMode,
   readBaseline,
+  REAL_TREE_TIMEOUT,
   SCANNED_ROOTS,
+  scriptKindOf,
   serialiseBaseline,
   shrinkBaseline,
   totalsOf
@@ -100,6 +107,27 @@ describe('the app-wide scan', () => {
     expect(listScannedFiles({ root, exclude: ['components/deep/**'] })).toEqual(['App.tsx', 'components/a.tsx', 'components/b.ts', 'qa/scene.tsx']);
   });
 
+  it('reads each file in its own language: .ts as TypeScript (a generic arrow never hides a literal), .tsx as TSX', () => {
+    expect(scriptKindOf('components/comicstudio/studioApi.ts')).toBe(ts.ScriptKind.TS);
+    expect(scriptKindOf('server/x.mts')).toBe(ts.ScriptKind.TS);
+    expect(scriptKindOf('App.tsx')).toBe(ts.ScriptKind.TSX);
+    expect(scriptKindOf('components/a.jsx')).toBe(ts.ScriptKind.JSX);
+    expect(scriptKindOf('components/a.js')).toBe(ts.ScriptKind.JS);
+    expect(scriptKindOf('components/a.mjs')).toBe(ts.ScriptKind.JS);
+    // In-memory snippets (no file name) keep reading as TSX.
+    expect(scriptKindOf('file')).toBe(ts.ScriptKind.TSX);
+    const src = "const list = <T>(v: unknown): T[] => [] as T[];\nconst one = <T>(v: T) => <T>v;\nexport const A = 'fixed z-[9999] shadow-comic';\n";
+    expect(literalsOf(src, 'components/a.ts')).toEqual([{ line: 3, text: "'fixed z-[9999] shadow-comic'" }]);
+    expect(parseErrorsOf(src, 'components/a.ts')).toEqual([]);
+    // Read as TSX the same text is a parse error (a JSX element is opened): what the guards must never do.
+    expect(parseErrorsOf(src, 'components/a.tsx').length).toBeGreaterThan(0);
+  });
+
+  it('on the real tree: every scanned file parses without a syntax error in its own language, so no literal is lost', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const errors = listScannedFiles().flatMap((rel) => parseErrorsOf(readFileSync(path.join(APP_ROOT, rel), 'utf8'), rel));
+    expect(errors, 'a guard reads a file in full only when it parses; fix the syntax (or the file kind) before trusting its counts').toEqual([]);
+  });
+
   it('on the real tree: components/**, App.tsx and qa/**, no tests, nothing from live/**', () => {
     const files = listScannedFiles();
     expect(files.length).toBeGreaterThan(400);
@@ -161,6 +189,45 @@ describe('the ratchet', () => {
     expect(shrinkBaseline(actual, baseline)).toEqual({ 'App.tsx': { 'border-black': 1, 'font-display': 1 } });
   });
 
+  it('BASELINE_MOVES: old=new pairs (a folder ends in / on both sides); anything else is an error, never a silent no-op', () => {
+    expect(parseMoves(undefined)).toEqual({});
+    expect(parseMoves('')).toEqual({});
+    expect(parseMoves('components/board/ui.tsx=components/ds/Board.tsx, components/kit/=components/ds/creative/;\nApp.tsx=qa/App.tsx')).toEqual({
+      'components/board/ui.tsx': 'components/ds/Board.tsx',
+      'components/kit/': 'components/ds/creative/',
+      'App.tsx': 'qa/App.tsx'
+    });
+    for (const bad of ['a.tsx', 'a.tsx=', '=b.tsx', 'a.tsx=a.tsx', 'a=b=c', 'dir/=file.tsx', 'file.tsx=dir/', '/abs.tsx=b.tsx', 'a.tsx=../b.tsx']) {
+      expect(() => parseMoves(bad), bad).toThrow(/^BASELINE_MOVES: /);
+    }
+  });
+
+  it('a move renames a file’s or a folder’s entries, adds up files moved onto one path, and leaves the rest alone', () => {
+    const before: Counts = {
+      'App.tsx': { 'border-black': 1 },
+      'components/board/ui.tsx': { 'shadow-comic': 2 },
+      'components/kit/A.tsx': { 'z-50': 1 },
+      'components/kit/deep/B.tsx': { 'z-50': 2, 'z-10': 1 },
+      'components/kitchen/C.tsx': { 'z-50': 4 },
+      'components/conversation/ui.tsx': { 'shadow-comic': 1, 'font-comic': 1 }
+    };
+    const moves = {
+      'components/board/ui.tsx': 'components/ds/Board.tsx',
+      'components/conversation/ui.tsx': 'components/ds/Board.tsx',
+      'components/kit/': 'components/ds/creative/'
+    };
+    expect(moveBaseline(before, moves)).toEqual({
+      'App.tsx': { 'border-black': 1 },
+      'components/ds/Board.tsx': { 'shadow-comic': 3, 'font-comic': 1 },
+      'components/ds/creative/A.tsx': { 'z-50': 1 },
+      'components/ds/creative/deep/B.tsx': { 'z-50': 2, 'z-10': 1 },
+      'components/kitchen/C.tsx': { 'z-50': 4 }
+    });
+    expect(moveBaseline(before, {})).toEqual(before);
+    // Shrinking after a move still never raises an entry.
+    expect(shrinkBaseline({ 'components/ds/Board.tsx': { 'shadow-comic': 9 } }, before, moves)).toEqual({ 'components/ds/Board.tsx': { 'shadow-comic': 3 } });
+  });
+
   it('UPDATE_BASELINES: unset, 0 or false checks; reset rewrites; anything else only shrinks', () => {
     expect(ratchetMode(undefined)).toBe('check');
     expect(ratchetMode('')).toBe('check');
@@ -192,7 +259,7 @@ describe('the baseline files', () => {
   it('a missing, malformed or inconsistent file is a problem, never a silent pass', () => {
     const dir = tempDir();
     const counts: Counts = { 'App.tsx': { 'z-50': 1 } };
-    expect(ratchet('example', TEST, counts, { mode: 'check', dir }).problems).toEqual([
+    expect(ratchet('example', TEST, counts, { mode: 'check', dir, moves: {} }).problems).toEqual([
       `no baseline tests/config/baselines/example.json: generate it from the tree with UPDATE_BASELINES=reset npx vitest run ${TEST}`
     ]);
     writeFileSync(path.join(dir, 'example.json'), '{ not json');
@@ -209,17 +276,17 @@ describe('the baseline files', () => {
   it('UPDATE_BASELINES=reset writes the tree; =1 then only lowers, and a new use still fails', () => {
     const dir = tempDir();
     const first: Counts = { 'App.tsx': { 'z-50': 2 }, 'qa/a.tsx': { 'z-10': 1 } };
-    expect(ratchet('example', TEST, first, { mode: 'reset', dir })).toEqual({ over: [], under: [], problems: [], written: true });
+    expect(ratchet('example', TEST, first, { mode: 'reset', dir, moves: {} })).toEqual({ over: [], under: [], problems: [], written: true });
     // Check mode never writes.
     const before = readFileSync(path.join(dir, 'example.json'), 'utf8');
     const later: Counts = { 'App.tsx': { 'z-50': 1, 'z-[90]': 1 }, 'components/New.tsx': { 'z-40': 1 } };
-    const checked = ratchet('example', TEST, later, { mode: 'check', dir });
+    const checked = ratchet('example', TEST, later, { mode: 'check', dir, moves: {} });
     expect(checked.written).toBe(false);
     expect(checked.over).toHaveLength(2);
     expect(checked.under).toHaveLength(2);
     expect(readFileSync(path.join(dir, 'example.json'), 'utf8')).toBe(before);
     // Shrink: the falls are written down, the rises still fail.
-    const shrunk = ratchet('example', TEST, later, { mode: 'shrink', dir });
+    const shrunk = ratchet('example', TEST, later, { mode: 'shrink', dir, moves: {} });
     expect(shrunk.written).toBe(true);
     expect(shrunk.under).toEqual([]);
     expect(shrunk.over).toEqual([
@@ -229,8 +296,43 @@ describe('the baseline files', () => {
     expect(readBaseline('example', dir).baseline).toEqual({ 'App.tsx': { 'z-50': 1 } });
     // Shrink never creates a missing file.
     const empty = tempDir();
-    expect(ratchet('example', TEST, first, { mode: 'shrink', dir: empty }).written).toBe(false);
+    expect(ratchet('example', TEST, first, { mode: 'shrink', dir: empty, moves: {} }).written).toBe(false);
     expect(existsSync(path.join(empty, 'example.json'))).toBe(false);
+  });
+
+  it('UPDATE_BASELINES=1 with BASELINE_MOVES records a moved file without a reset: the entry follows it, nothing else is added', () => {
+    const dir = tempDir();
+    ratchet('example', TEST, { 'components/old.tsx': { 'z-50': 2 }, 'App.tsx': { 'z-10': 1 } }, { mode: 'reset', dir, moves: {} });
+    // The file moved, and an unrelated new use appeared elsewhere at the same time.
+    const moved: Counts = { 'components/new.tsx': { 'z-50': 2 }, 'App.tsx': { 'z-10': 1, 'z-20': 1 } };
+    const fix = `(UPDATE_BASELINES=1 npx vitest run ${TEST}) so the gain is kept`;
+    // Without the move the file fails twice: over at its new path, under at its old one.
+    expect(ratchet('example', TEST, moved, { mode: 'check', dir, moves: {} })).toEqual({
+      over: [
+        'App.tsx  z-20: 1, baseline 0 — a file or token the baseline does not list must count 0',
+        'components/new.tsx  z-50: 2, baseline 0 — a file or token the baseline does not list must count 0'
+      ],
+      under: [`components/old.tsx  z-50: 0, baseline 2 — the count fell: lower the baseline to 0 ${fix}`],
+      problems: [],
+      written: false
+    });
+    // With it the entry follows the file; the unrelated new use is not absorbed (a reset would have).
+    const shrunk = ratchet('example', TEST, moved, { mode: 'shrink', dir, moves: { 'components/old.tsx': 'components/new.tsx' } });
+    expect(shrunk).toEqual({
+      over: ['App.tsx  z-20: 1, baseline 0 — a file or token the baseline does not list must count 0'],
+      under: [],
+      problems: [],
+      written: true
+    });
+    expect(readBaseline('example', dir).baseline).toEqual({ 'App.tsx': { 'z-10': 1 }, 'components/new.tsx': { 'z-50': 2 } });
+    // A moved file gains nothing: a third use at the new path still fails.
+    expect(ratchet('example', TEST, { ...moved, 'components/new.tsx': { 'z-50': 3 } }, { mode: 'check', dir, moves: {} }).over).toContain(
+      'components/new.tsx  z-50: 3, baseline 2 — 1 new use'
+    );
+    // Moves only apply while shrinking; set in check mode they are a problem, not silently ignored.
+    expect(ratchet('example', TEST, moved, { mode: 'check', dir, moves: { 'a.tsx': 'b.tsx' } }).problems).toEqual([
+      `BASELINE_MOVES only applies with UPDATE_BASELINES=1 (UPDATE_BASELINES=1 npx vitest run ${TEST})`
+    ]);
   });
 
   it('every checked-in baseline is clean, names its guard and test, and lists only scanned files that exist', () => {

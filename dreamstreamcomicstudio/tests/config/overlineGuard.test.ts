@@ -24,7 +24,7 @@
  * (`UPDATE_BASELINES=1 npx vitest run tests/config/overlineGuard.test.ts`). The one allowlist below
  * serves both parts.
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -40,7 +40,9 @@ import {
   PINNED_DIR,
   ratchet,
   readBaseline,
-  scanTree
+  REAL_TREE_TIMEOUT,
+  scanTree,
+  tempTree
 } from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -110,7 +112,7 @@ const relative = (file: string) => path.relative(ROOT, file).split(path.sep).joi
 
 /** The hits in one file the allowlist does not permit (`rel:line  snippet`), and its stale pinned lines. */
 export function overlineOffenders(rel: string, source: string): { offenders: string[]; stale: string[] } {
-  const hits = findHandRolledOverlines(source);
+  const hits = findHandRolledOverlines(source, rel);
   const { extra, missing } = matchPinned(
     hits.map((h) => h.snippet),
     ALLOWLIST[rel]?.lines
@@ -194,7 +196,13 @@ describe('overline guard (components/comicstudio/**)', () => {
     expect(stale).toEqual([allowed]);
   });
 
-  it('finds no hand-rolled small uppercase eyebrow outside the allowlist (use OVERLINE from studioDesign)', () => {
+  it('the Comic Studio scan reads a .ts file in full: an eyebrow after a generic helper is an offender', () => {
+    const rel = 'components/comicstudio/x.ts';
+    const src = "const list = <T>(v: unknown): T[] => [] as T[];\nexport const L = 'text-[11px] uppercase tracking-wider';\n";
+    expect(overlineOffenders(rel, src)).toEqual({ offenders: [`${rel}:2  export const L = 'text-[11px] uppercase tracking-wider';`], stale: [] });
+  });
+
+  it('finds no hand-rolled small uppercase eyebrow outside the allowlist (use OVERLINE from studioDesign)', { timeout: REAL_TREE_TIMEOUT }, () => {
     const offenders: string[] = [];
     const seen = new Set<string>();
     const files = listSourceFiles(path.join(ROOT, SCANNED_DIR));
@@ -213,7 +221,7 @@ describe('overline guard (components/comicstudio/**)', () => {
     }
   });
 
-  it('no studio file imports the pre-Atlas LABEL recipe (10 px, 0.05em); eyebrows read OVERLINE', () => {
+  it('no studio file imports the pre-Atlas LABEL recipe (10 px, 0.05em); eyebrows read OVERLINE', { timeout: REAL_TREE_TIMEOUT }, () => {
     const legacy = listSourceFiles(path.join(ROOT, SCANNED_DIR))
       .filter((f) => IMPORTS_LEGACY_LABEL.test(stripComments(readFileSync(f, 'utf8'))))
       .map(relative);
@@ -228,16 +236,23 @@ const RATCHET_ALLOWLIST: Allowlist = Object.fromEntries(
 
 /**
  * Every overline use in one source as ratchet hits: each hand-rolled eyebrow (`hand-rolled-eyebrow`,
- * keyed by its snippet as the pins read it) and an import of the pre-Atlas LABEL (`LABEL-import`).
+ * keyed by its snippet as the pins read it) and an import of the pre-Atlas LABEL (`LABEL-import`). A
+ * scan passes the file's path as `fileName`, so a `.ts` file is parsed as TypeScript (scriptKindOf).
  */
-export function overlineHits(source: string): TokenHit[] {
-  const hits: TokenHit[] = findHandRolledOverlines(source).map((h) => ({ line: h.line, token: 'hand-rolled-eyebrow', match: 'uppercase', text: h.snippet }));
+export function overlineHits(source: string, fileName = 'file.tsx'): TokenHit[] {
+  const hits: TokenHit[] = findHandRolledOverlines(source, fileName).map((h) => ({ line: h.line, token: 'hand-rolled-eyebrow', match: 'uppercase', text: h.snippet }));
   if (IMPORTS_LEGACY_LABEL.test(stripComments(source))) {
     const at = IMPORTS_LEGACY_LABEL.exec(source);
     const line = at ? source.slice(0, at.index).split('\n').length : 1;
     hits.push({ line, token: 'LABEL-import', match: 'LABEL', text: (source.split('\n')[line - 1] ?? '').trim() });
   }
   return hits;
+}
+
+/** The ratchet's scan of an app tree outside Comic Studio (the real-tree test runs exactly this), each file in its own language. */
+export function overlineScan(root = ROOT) {
+  const files = listScannedFiles({ root, exclude: [PINNED_DIR] });
+  return { files, ...scanTree(files, (rel, source) => overlineHits(source, rel), RATCHET_ALLOWLIST, root) };
 }
 
 describe('overline guard — the rest of the app (ratchet)', () => {
@@ -258,6 +273,12 @@ describe('overline guard — the rest of the app (ratchet)', () => {
     }
   });
 
+  it('reads a .ts file as TypeScript: a generic arrow does not hide the eyebrows after it', () => {
+    const src = "const f = <T>(x: T) => x;\nexport const L = 'text-[11px] uppercase tracking-wider';\n";
+    expect(overlineHits(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([[2, 'hand-rolled-eyebrow']]);
+    expect(findHandRolledOverlines(src, 'components/comicstudio/x.ts')).toHaveLength(1);
+  });
+
   it('above a file’s baseline fails; below it fails until the baseline is lowered', () => {
     const [rel, tokens] = Object.entries(baseline)[0];
     const [token, n] = Object.entries(tokens)[0];
@@ -269,10 +290,21 @@ describe('overline guard — the rest of the app (ratchet)', () => {
     ]);
   });
 
-  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/overline.json exactly', () => {
-    const files = listScannedFiles({ exclude: [PINNED_DIR] });
+  it('the scan reads a .ts file in full: an eyebrow after a generic helper counts', () => {
+    const root = tempTree({
+      'components/labels.ts': "const list = <T>(v: unknown): T[] => [] as T[];\nexport const L = 'text-[11px] uppercase tracking-wider';\n",
+      'components/comicstudio/skipped.ts': "export const L = 'text-[11px] uppercase tracking-wider';\n"
+    });
+    try {
+      expect(overlineScan(root).counts).toEqual({ 'components/labels.ts': { 'hand-rolled-eyebrow': 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/overline.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = overlineScan();
     expect(files.length).toBeGreaterThan(200);
-    const { counts, stale } = scanTree(files, (_rel, source) => overlineHits(source), RATCHET_ALLOWLIST);
     expect(stale.filter((s) => !s.startsWith(`${SCANNED_DIR}/`))).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
     expect(problems).toEqual([]);

@@ -15,18 +15,22 @@
  * RATCHETS against tests/config/baselines/zLadder.json
  * (`UPDATE_BASELINES=1 npx vitest run tests/config/zLadderGuard.test.ts` once a file reads `Z.*`).
  */
+import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   type Allowlist,
   type Counts,
+  APP_ROOT,
   compareToBaseline,
   countTokens,
   findInLiterals,
   listScannedFiles,
   ratchet,
   readBaseline,
+  REAL_TREE_TIMEOUT,
   RECIPE_FILES,
   scanTree,
+  tempTree,
   VARIANT,
   withoutVariant
 } from './classLists';
@@ -40,10 +44,23 @@ export const Z_CLASS = new RegExp(String.raw`(?<![\w-])${VARIANT}-?z-(?:\d+|\[[^
 /** `md:!z-[70]` → `z-[70]`; `-z-10` keeps its sign. */
 export const zToken = (match: string) => withoutVariant(match);
 
-export const findZClasses = (source: string) => findInLiterals(source, Z_CLASS, zToken);
+/** Every raw z-index class in a source's literals; a scan passes the file's path so a `.ts` file parses as TypeScript. */
+export const findZClasses = (source: string, fileName?: string) => findInLiterals(source, Z_CLASS, zToken, fileName);
 
 /** Content exemptions (token and trimmed line, one-line reason). None: a z-index is never content. */
 const ALLOWLIST: Allowlist = {};
+
+/** The files the guard reads: every scanned file except the recipe files (RECIPE_FILES). */
+export const zLadderFiles = (root = APP_ROOT) => listScannedFiles({ root, exclude: RECIPE_FILES });
+
+/**
+ * The guard's scan of an app tree, each file read in its own language. The real-tree test runs exactly
+ * this, and the recipe test runs it on a temp tree, so dropping the recipe exclusion fails there.
+ */
+export function zLadderScan(root = APP_ROOT) {
+  const files = zLadderFiles(root);
+  return { files, ...scanTree(files, (rel, source) => findZClasses(source, rel), ALLOWLIST, root) };
+}
 
 const PLANTED = 'components/__planted__/Fixture.tsx';
 const plant = (classes: string) => `export const Fixture = () => <div className="fixed inset-0 ${classes}">x</div>;\n`;
@@ -74,12 +91,35 @@ describe('z-ladder guard — the detector', () => {
     expect(findZClasses('<p>{/* z-50 */}Layer z-50 sits on top</p>')).toEqual([]);
   });
 
+  it('reads a .ts file as TypeScript: a generic arrow does not hide the literals after it', () => {
+    const src = "const f = <T>(x: T) => x;\nexport const A = 'fixed z-[9999] md:z-50';\n";
+    expect(findZClasses(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([
+      [2, 'z-[9999]'],
+      [2, 'z-50']
+    ]);
+  });
+
   it('skips the recipe files only: components/ds/** and components/chat/studioDesign.ts', () => {
-    const files = listScannedFiles({ exclude: RECIPE_FILES });
-    expect(files).not.toContain('components/chat/studioDesign.ts');
-    expect(files.some((f) => f.startsWith('components/ds/'))).toBe(false);
-    expect(files).toContain('components/chat/ChatConversation.tsx');
+    // A temp tree (never the repo) where the recipe files spell the ladder and ordinary files do not;
+    // Other.ts also proves the scan reads a .ts file in full (a generic helper comes first).
+    const root = tempTree({
+      'components/ds/Layer.tsx': "export const LAYER = 'fixed z-[var(--ds-z-sheet)]';\n",
+      'components/ds/overlay/Sheet.tsx': "export const SHEET = 'z-[var(--ds-z-sheet)]';\n",
+      'components/chat/studioDesign.ts': "export const Z = { sheet: 'z-[var(--ds-z-sheet)]' } as const;\n",
+      'components/x.tsx': 'export const X = () => <div className="fixed z-50" />;\n',
+      'components/chat/Other.ts': "const pick = <T>(v: T) => v;\nexport const O = 'z-[var(--ds-z-sheet)]';\n"
+    });
+    try {
+      const { files, counts } = zLadderScan(root);
+      expect(files).toEqual(['components/chat/Other.ts', 'components/x.tsx']);
+      expect(counts).toEqual({ 'components/chat/Other.ts': { 'z-[var(--ds-z-sheet)]': 1 }, 'components/x.tsx': { 'z-50': 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    // On the real tree the recipe module exists, is scanned by the other guards and skipped here.
     expect(listScannedFiles()).toContain('components/chat/studioDesign.ts');
+    expect(zLadderFiles()).not.toContain('components/chat/studioDesign.ts');
+    expect(zLadderFiles()).toContain('components/chat/ChatConversation.tsx');
   });
 });
 
@@ -106,10 +146,9 @@ describe('z-ladder guard — the ratchet', () => {
     expect(under).toEqual([`${rel}  ${token}: ${n - 1}, baseline ${n} — the count fell: lower the baseline to ${n - 1} (UPDATE_BASELINES=1 npx vitest run ${TEST_FILE}) so the gain is kept`]);
   });
 
-  it('components/**, App.tsx and qa/** (minus the recipe files) match tests/config/baselines/zLadder.json exactly', () => {
-    const files = listScannedFiles({ exclude: RECIPE_FILES });
+  it('components/**, App.tsx and qa/** (minus the recipe files) match tests/config/baselines/zLadder.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = zLadderScan();
     expect(files.length).toBeGreaterThan(400);
-    const { counts, stale } = scanTree(files, (_rel, source) => findZClasses(source), ALLOWLIST);
     expect(stale).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
     expect(problems).toEqual([]);

@@ -15,7 +15,7 @@
  * listed must count 0, above its entry fails, below fails until lowered
  * (`UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts`).
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -28,7 +28,9 @@ import {
   listScannedFiles,
   ratchet,
   readBaseline,
-  scanTree
+  REAL_TREE_TIMEOUT,
+  scanTree,
+  tempTree
 } from './classLists';
 
 const GUARD = 'terracotta';
@@ -40,7 +42,8 @@ export const TERRACOTTA = /#(?:d97757|c2643f)(?:[0-9a-f]{2})?(?![0-9a-f])/gi;
 /** `#D97757cc` → `#d97757`. */
 export const terracottaToken = (match: string) => match.slice(0, 7).toLowerCase();
 
-export const findTerracotta = (source: string) => findInLiterals(source, TERRACOTTA, terracottaToken);
+/** Every terracotta literal in a source; a scan passes the file's path so a `.ts` file parses as TypeScript. */
+export const findTerracotta = (source: string, fileName?: string) => findInLiterals(source, TERRACOTTA, terracottaToken, fileName);
 
 /**
  * Content exemptions, keyed by app-relative path; each pins the exact uses it permits (token and trimmed
@@ -52,6 +55,12 @@ const ALLOWLIST: Allowlist = {
     reason: "a third-party provider's logo drawn in its own brand colour (content, not our accent)"
   }
 };
+
+/** The guard's scan of an app tree (the real-tree test runs exactly this), each file read in its own language. */
+export function terracottaScan(root = APP_ROOT) {
+  const files = listScannedFiles({ root });
+  return { files, ...scanTree(files, (rel, source) => findTerracotta(source, rel), ALLOWLIST, root) };
+}
 
 const PLANTED = 'components/__planted__/Fixture.tsx';
 
@@ -77,6 +86,21 @@ describe('terracotta guard — the detector', () => {
       '<p>{/* #c2643f */}Our accent used to be #D97757.</p>'
     ];
     for (const src of allowed) expect(findTerracotta(src), src).toEqual([]);
+  });
+
+  it('reads a .ts file as TypeScript: a generic arrow does not hide the literals after it', () => {
+    const src = "const f = <T>(x: T) => x;\nexport const A = 'text-[#D97757] hover:bg-[#c2643f]';\n";
+    expect(findTerracotta(src, 'components/x.ts').map((h) => [h.line, h.token])).toEqual([
+      [2, '#d97757'],
+      [2, '#c2643f']
+    ]);
+  });
+
+  it('a terracotta literal appended to a real .ts API module with generic helpers is found (the review repro)', () => {
+    for (const rel of ['components/comicstudio/models/modelsApi.ts', 'components/comicstudio/studioApi.ts']) {
+      const source = `${readFileSync(path.join(APP_ROOT, rel), 'utf8')}\nexport const PLANTED_ACCENT = 'text-[#D97757] z-50';\n`;
+      expect(findTerracotta(source, rel).map((h) => h.text), rel).toContain("export const PLANTED_ACCENT = 'text-[#D97757] z-50';");
+    }
   });
 });
 
@@ -110,20 +134,28 @@ describe('terracotta guard — the ratchet', () => {
     const rel = 'components/models/ProviderIcon.tsx';
     const source = readFileSync(path.join(APP_ROOT, rel), 'utf8');
     expect(source).toContain(ALLOWLIST[rel].uses[0].line);
-    expect(scanTree([rel], () => findTerracotta(source), ALLOWLIST)).toMatchObject({ counts: {}, stale: [] });
+    expect(scanTree([rel], () => findTerracotta(source, rel), ALLOWLIST)).toMatchObject({ counts: {}, stale: [] });
     // A second literal beside the pinned mark is a use; dropping the mark leaves a stale pin.
     const extra = `${source}\nexport const EXTRA = '#D97757';\n`;
-    expect(scanTree([rel], () => findTerracotta(extra), ALLOWLIST)).toMatchObject({ counts: { [rel]: { '#d97757': 1 } }, stale: [] });
+    expect(scanTree([rel], () => findTerracotta(extra, rel), ALLOWLIST)).toMatchObject({ counts: { [rel]: { '#d97757': 1 } }, stale: [] });
     const swapped = source.replace('fill="#D97757"', 'fill="currentColor"');
-    expect(scanTree([rel], () => findTerracotta(swapped), ALLOWLIST).stale).toEqual([
+    expect(scanTree([rel], () => findTerracotta(swapped, rel), ALLOWLIST).stale).toEqual([
       `${rel}: allowlisted use no longer present: #d97757  @  ${ALLOWLIST[rel].uses[0].line} (${ALLOWLIST[rel].reason})`
     ]);
   });
 
-  it('components/**, App.tsx and qa/** match tests/config/baselines/terracotta.json exactly', () => {
-    const files = listScannedFiles();
+  it('the scan reads a .ts file in full: a literal after a generic helper counts', () => {
+    const root = tempTree({ 'components/api.ts': `const list = <T>(v: unknown): T[] => [] as T[];\nexport const A = 'text-[#D97757]';\n`, 'qa/Scene.tsx': '<p className="bg-[#c2643f]">x</p>' });
+    try {
+      expect(terracottaScan(root).counts).toEqual({ 'components/api.ts': { '#d97757': 1 }, 'qa/Scene.tsx': { '#c2643f': 1 } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('components/**, App.tsx and qa/** match tests/config/baselines/terracotta.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const { files, counts, stale } = terracottaScan();
     expect(files.length).toBeGreaterThan(400);
-    const { counts, stale } = scanTree(files, (_rel, source) => findTerracotta(source), ALLOWLIST);
     expect(stale).toEqual([]);
     const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
     expect(problems).toEqual([]);

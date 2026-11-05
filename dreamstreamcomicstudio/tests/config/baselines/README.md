@@ -14,8 +14,21 @@ are not scanned. The scan lives in `tests/config/classLists.ts` (`SCANNED_ROOTS`
 | `overlineGuard.test.ts` | `overline.json` | `hand-rolled-eyebrow`, `LABEL-import`. Comic Studio is skipped: exact pins cover it. |
 | `dialogTitle.test.ts` | `dialogTitle.json` | `unclassified-modal`. Comic Studio is skipped: its classification covers it. |
 
-Only literals count: class strings, attribute values and templates. A comment or a visible sentence that
-names a token never counts. The one exception is `localCx`, which reads declarations.
+What each guard reads:
+
+- `legacyKit`, `terracotta` and `zLadder` count string and template literals only: class strings,
+  attribute values and templates. A comment or a visible sentence that names a token never counts.
+- `statusInk` (each raw hue), `dialogTitle` (`aria-modal`) and `overline` (`LABEL-import`, an import
+  declaration) read the source with comments stripped, so JSX text such as `<p>text-red-500</p>` or a
+  string counts too.
+- `statusInk`'s `stacked-inks` and `white-on-light-fill` and `overline`'s `hand-rolled-eyebrow` read class
+  lists through TypeScript's parser (`classListsOf`, `findCompetingInks`, `findHandRolledOverlines`).
+- `localCx` reads declarations (a `cx` whose value is a function or a class helper, or `function cx`).
+
+Every parsed file is read in its own language (`scriptKindOf` in `classLists.ts`): `.ts` as TypeScript,
+`.tsx` as TSX, `.js` / `.mjs` as JavaScript. Read as TSX, a `.ts` file's generic arrow (`<T>(v: T) => v`)
+opens a JSX element and every literal after it is lost. `ratchet.test.ts` fails if any scanned file has a
+syntax error in its own language, because the parser then guesses and can skip literals.
 
 ## The rules
 
@@ -54,6 +67,31 @@ UPDATE_BASELINES=reset npx vitest run tests/config/<guard test>
 
 This rewrites the file from the tree exactly. Use it for the first generation, or for an exception a
 reviewer accepts. The JSON diff then shows every rise. Never use it to make a red guard green.
+
+## Moving a file
+
+A moved or renamed file fails twice: **over** at its new path (a file the baseline does not list must count
+0) and **under** at its old one. A plain `UPDATE_BASELINES=1` cannot fix that, because it never adds an
+entry. Name the move instead, and shrink:
+
+```sh
+BASELINE_MOVES='components/comicstudio/board/ui.tsx=components/ds/board.tsx' \
+  UPDATE_BASELINES=1 npx vitest run tests/config/*Guard.test.ts tests/config/dialogTitle.test.ts
+# a folder: both sides end in /
+BASELINE_MOVES='components/comicstudio/editor/kit/=components/ds/creative/' UPDATE_BASELINES=1 npx vitest run …
+```
+
+`BASELINE_MOVES` takes `old=new` pairs, separated by commas, semicolons or spaces. Before lowering, the
+updater renames each moved file's entries (`moveBaseline`). Files moved onto one path add up. Then it
+lowers as usual: a moved file keeps at most the uses it had, and a new use anywhere else still fails. A
+malformed pair is an error. `BASELINE_MOVES` set without `UPDATE_BASELINES=1` is reported as a problem.
+A move into a path a guard skips (for example `components/ds/**` for `zLadder`, or Comic Studio for the
+three wave 8 guards) simply drops the entry for that guard.
+
+The review step is the same as for any baseline change. The JSON diff must show only the renamed keys,
+with counts equal or lower. If a move cannot be named this way, use `UPDATE_BASELINES=reset` instead, and
+the reviewer checks the whole diff line by line: a reset also absorbs any unrelated new use in the tree at
+that moment.
 
 ## Format
 
