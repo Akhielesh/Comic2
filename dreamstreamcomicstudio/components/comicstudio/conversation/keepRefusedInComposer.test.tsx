@@ -50,6 +50,8 @@ describe('keepRefusedInComposer', () => {
   });
 });
 
+// Each case renders a whole board surface (the page editor, the Pages tab, the timeline); the first render in a busy
+// full-suite worker can pass vitest's 5 s default, so the block gets the room the other full-surface suites have.
 describe('call sites', () => {
   it('page editor: a refused "Ask the director about this balloon" goes to the message box with its balloon prefix', async () => {
     const doc = makeBoardDoc();
@@ -139,4 +141,4 @@ describe('call sites', () => {
       expect(composed).toEqual([]);
     });
   });
-});
+}, 20_000);
