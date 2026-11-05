@@ -5,10 +5,10 @@ import type { ComicDoc } from '../doc';
 import { applyOps, type DocOp } from '../ops';
 import { inverseOps } from '../undo';
 import { FREE_DIALOGUE_OPS, IN_ART_REFUSAL, compileDialogue, compileIntent, compileWith, dialogueFastPath, mergeLineOps } from './compile';
-import { parseDialogue } from './grammar';
+import { intentFromArgs, parseDialogue } from './grammar';
 import { hitOf } from './resolve';
 import type { DialogueIntent, LineHit } from './types';
-import { apply, dialogueDoc, line } from './__fixtures__/dialogueDoc';
+import { apply, dialogueDoc, line, panel } from './__fixtures__/dialogueDoc';
 
 const doc = dialogueDoc();
 const hits = (d: ComicDoc, ...ids: string[]): LineHit[] => ids.map((id) => hitOf(d, id)!);
@@ -96,14 +96,19 @@ describe('compileIntent', () => {
     }
     const kind = opsOf(inArt, { act: 'set_kind', target: {}, kind: 'whisper' }, 'l_leo1');
     expect(kind.ops).toHaveLength(1);
-    expect(kind.note).toBe('Page 1 is lettered in the art, so it is now out of date (redrawing is paid and quoted first).');
+    expect(kind.note).toBe('Made “Wait for me” a whisper. Page 1 is lettered in the art, so it is now out of date (redrawing is paid and quoted first).');
   });
 
   it('never re-assigns a speaker when moving a line: a speaker not drawn there asks; an off-panel voice moves it', () => {
     const ask = opsOf(doc, { act: 'move_to_panel', target: {}, panel: 3 }, 'l_leo1');
     expect(ask.ops).toEqual([]);
-    expect(ask.ask?.question).toBe("Leo isn't drawn in panel 3. Move the line there as an off-panel voice, or add Leo to the panel?");
-    expect(ask.followUps.map((f) => f.say)).toEqual(['Move “Wait for me” to panel 3 as an off-panel voice', 'Add Leo to panel 3 on page 1, then move “Wait for me” there']);
+    expect(ask.ask?.question).toBe("Leo isn't drawn in panel 3. Move the line there as an off-panel voice, add Leo to the panel, or give the line to someone drawn there?");
+    // Plan B4's three options: an off-panel voice, add the speaker to the panel, change the speaker.
+    expect(ask.followUps.map((f) => f.say)).toEqual([
+      'Move “Wait for me” to panel 3 as an off-panel voice',
+      'Add Leo to panel 3 on page 1, then move “Wait for me” there',
+      'Move “Wait for me” to panel 3 and give it to Bolt'
+    ]);
     const ok = compileWith(doc, { act: 'move_to_panel', target: {}, panel: 3 }, hits(doc, 'l_leo1'), { offPanelOk: true });
     expect(ok.ops[0]).toEqual({ op: 'line_move', pageId: 'pg_1', id: 'l_leo1', toPanelId: 'pn_3' });
     // Its stored balloon is placed fresh in the new panel.
@@ -162,8 +167,12 @@ describe('compileIntent', () => {
   it('emphasis on one word is answered honestly with the whole-balloon chip', () => {
     const r = opsOf(doc, { act: 'emphasis', target: {}, words: ['never'], style: 'bold' }, 'l_leo1');
     expect(r.ops).toEqual([]);
-    expect(r.note).toBe("I can make the whole balloon bold now; bold on single words like “never” isn't available yet.");
-    expect(r.followUps).toEqual([{ label: 'Make the balloon bold', say: 'Make “Wait for me” bold' }]);
+    // Plan B4's exact copy.
+    expect(r.note).toBe("I can bold the whole balloon now; single-word bold isn't available yet.");
+    expect(r.followUps).toEqual([{ label: 'Bold the balloon', say: 'Make “Wait for me” bold' }]);
+    const it = opsOf(doc, { act: 'emphasis', target: {}, words: ['never'], style: 'italic' }, 'l_leo1');
+    expect(it.note).toBe("I can italicize the whole balloon now; single-word italics aren't available yet.");
+    expect(it.followUps).toEqual([{ label: 'Italicize the balloon', say: 'Make “Wait for me” italic' }]);
   });
 
   it('"make \'Run!\' bold" when the balloon says just that word styles the whole balloon', () => {
@@ -252,6 +261,8 @@ describe('compileDialogue', () => {
     for (const [intents, sel] of cases) {
       const run = compileDialogue(doc, intents, { lineIds: sel, pageId: 'pg_1' });
       expect(run.status, intents[0].act).toBe('apply');
+      // Never silent: every applied act says what it did.
+      expect(run.note?.trim(), `${intents[0].act} reply`).toBeTruthy();
       const undo = inverseOps(doc, run.ops);
       const back = applyOps(applyOps(doc, run.ops), undo);
       expect(back.pages, intents[0].act).toEqual(doc.pages);
@@ -294,3 +305,169 @@ describe('dialogueFastPath (COMIC_DIALOGUE_FAST)', () => {
     expect(dialogueFastPath(doc, 'draw page 2')).toBeUndefined();
   });
 });
+
+/** Every chip of a question, re-said: it parses, and never asks the very same question again (no chip loops). */
+const noLoop = (d: ComicDoc, question: string | undefined, say: string, ctx = { pageId: 'pg_1' }) => {
+  const g = parseDialogue(say);
+  expect(g.intents.length, say).toBeGreaterThan(0);
+  const run = compileDialogue(d, g.intents, ctx);
+  expect(run.ask?.question ?? '', say).not.toBe(question);
+  return run;
+};
+
+describe('review fixes: confirm, reply text, unknown fonts, B4 asks', () => {
+  const big = dialogueDoc((d) => {
+    for (const n of [3, 4]) d.pages.push({ ...d.pages[1], id: `pg_${n}`, n, panels: [panel(`pn_${n}`, 1, ['c_leo'], [line(`l_w${n}`, 'whisper', `Psst ${n}`, 'c_leo')])], balloons: [] });
+    d.pages[1].panels[0].lines.push(line('l_w2', 'whisper', 'Psst 2', 'c_mira'));
+  });
+
+  it('a big plural edit asks once; the confirmed re-run applies every match and undoes exactly', () => {
+    const g = parseDialogue('make all the whispers shouts');
+    const asked = compileDialogue(big, g.intents);
+    expect(asked.status).toBe('ask');
+    expect(asked.ask?.question).toBe("That changes 4 lines on 4 pages. Go ahead? It's free and undoable.");
+    expect(asked.followUps).toEqual([{ label: 'Yes, all 4', say: 'Yes, change all 4 of them.' }]);
+    // The answer: the same instruction with the confirmation (B-TOOL maps the chip to it).
+    for (const intents of [g.intents, ['intent' in intentFromArgs({ action: 'set_kind', target: { kind: 'whisper', all: true }, kind: 'shout' }) ? (intentFromArgs({ action: 'set_kind', target: { kind: 'whisper', all: true }, kind: 'shout' }) as { intent: DialogueIntent }).intent : g.intents[0]]]) {
+      const yes = compileDialogue(big, intents, { confirmed: true });
+      expect(yes.status).toBe('apply');
+      expect(yes.ops.map((op) => (op as Extract<DocOp, { op: 'line' }>).id)).toEqual(['l_mira2', 'l_w2', 'l_w3', 'l_w4']);
+      expect(yes.note).toBe('Made 4 lines shouts.');
+      expect(applyOps(applyOps(big, yes.ops), inverseOps(big, yes.ops)).pages).toEqual(big.pages);
+    }
+    // Explicit ids confirm too.
+    const byIds = [{ act: 'set_kind', target: { lineIds: ['l_mira2', 'l_w2', 'l_w3', 'l_w4'] }, kind: 'shout' }] as DialogueIntent[];
+    expect(compileDialogue(big, byIds).status).toBe('ask');
+    expect(compileDialogue(big, byIds, { confirmed: true }).status).toBe('apply');
+  });
+
+  it('never silent: each step of a longer instruction is in the reply, and stale ids are named', () => {
+    const run = compileDialogue(doc, parseDialogue("change the text to 'Hi' and make it red", { selected: true }).intents, { lineIds: ['l_leo1'] });
+    expect(run.status).toBe('apply');
+    expect(run.note).toBe('Changed “Wait for me” to “Hi”. Restyled “Wait for me” (red text).');
+    expect(run.steps.map((s) => s.note)).toEqual(['Changed “Wait for me” to “Hi”.', 'Restyled “Wait for me” (red text).']);
+    const stale = compileDialogue(doc, [{ act: 'set_kind', target: { lineIds: ['l_leo1', 'gone1'] }, kind: 'whisper' }]);
+    expect(stale.note).toBe("Made “Wait for me” a whisper. 1 of those lines isn't in the comic any more, so it was left out.");
+    for (const [intent, said] of [
+      [{ act: 'tail_style', target: {}, tail: 'none' }, 'Removed the tail of “Wait for me”.'],
+      [{ act: 'z', target: {}, dir: 'front' }, 'Brought “Wait for me” to the front.'],
+      [{ act: 'set_speaker', target: {}, speaker: 'Mira' }, 'Gave “Wait for me” to Mira Patel.'],
+      [{ act: 'edit_text', target: {}, text: 'Hi' }, 'Changed “Wait for me” to “Hi”.']
+    ] as [DialogueIntent, string][]) {
+      expect(opsOf(doc, intent, 'l_leo1').note, intent.act).toBe(said);
+    }
+  });
+
+  it('a refusal stops the whole instruction (all or nothing); "already so" parts are skipped and said', () => {
+    const refused = compileDialogue(doc, parseDialogue('make it a whisper and give it to Zed', { selected: true }).intents, { lineIds: ['l_leo1'] });
+    expect(refused).toMatchObject({ status: 'none', ops: [] });
+    expect(refused.note).toBe("There's no character called “zed”. The cast is Mira Patel, Leo, Bolt and Asha Patel. Nothing was changed.");
+    const half = compileDialogue(doc, parseDialogue('make it a whisper and make it red', { selected: true }).intents, { lineIds: ['l_mira2'] });
+    expect(half.status).toBe('apply');
+    expect(half.note).toBe("It's already a whisper. Restyled “Quietly now” (red text).");
+  });
+
+  it('an unknown font asks with the 3 nearest; each chip applies that font with the rest of the request', () => {
+    const m = intentFromArgs({ action: 'restyle', scope: 'speaker', target: { speaker: 'Leo' }, style: { font: 'Comic Sans', bold: true } });
+    const run = compileDialogue(doc, ['intent' in m ? m.intent : (undefined as never)]);
+    expect(run.status).toBe('ask');
+    expect(run.ops).toEqual([]);
+    expect(run.ask?.question).toBe("I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead? Nothing changed yet: the bold comes with the font you pick.");
+    expect(run.followUps.map((f) => f.label)).toEqual(['Use Comic Neue', 'Use Noto Sans', 'Use Patrick Hand']);
+    for (const [chip, font] of run.followUps.map((f, i) => [f, ['comic-neue', 'noto-sans', 'patrick-hand'][i]] as const)) {
+      const g = parseDialogue(chip.say!);
+      expect(g.confident, chip.say).toBe(true);
+      const picked = compileDialogue(doc, g.intents);
+      expect(picked.status, chip.say).toBe('apply');
+      expect(picked.ops, chip.say).toEqual([{ op: 'letter_style', patch: { speakers: { c_leo: { font, weight: 700 } } } }]);
+    }
+  });
+
+  it('B4 asks: a character not in the panel, "between" with too few or too many people, and a tail at someone absent', () => {
+    const above = compileDialogue(doc, parseDialogue("put it above Leo's head", { selected: true }).intents, { lineIds: ['l_bolt1'] });
+    expect(above.status).toBe('ask');
+    expect(above.followUps.map((f) => f.label)).toEqual(['Move it to panel 2', 'Above Bolt', 'Above Mira Patel', 'Top of the panel']);
+    for (const f of above.followUps) noLoop(doc, above.ask?.question, f.say!);
+    expect(noLoop(doc, above.ask?.question, above.followUps[1].say!).status).toBe('apply');
+
+    const crowd = dialogueDoc((d) => d.pages[0].panels[1].castIds.push('c_asha'));
+    const which = compileDialogue(crowd, parseDialogue('put it between them', { selected: true }).intents, { lineIds: ['l_leo1'] });
+    expect(which.ask?.question).toBe('Panel 2 has 3 characters (Mira Patel, Leo and Asha Patel), so “between them” could mean any two. Which two?');
+    expect(which.followUps.map((f) => f.say)).toEqual([
+      'Put “Wait for me” between Mira Patel and Leo',
+      'Put “Wait for me” between Mira Patel and Asha Patel',
+      'Put “Wait for me” between Leo and Asha Patel'
+    ]);
+    // A pair chip keeps "between" (never "next to") and applies.
+    const pair = parseDialogue(which.followUps[0].say!).intents;
+    expect(pair[0]).toMatchObject({ act: 'move', place: { relation: 'between', near: 'mira patel', and: 'leo' } });
+    expect(compileDialogue(crowd, pair).status).toBe('apply');
+
+    const nobody = compileDialogue(doc, parseDialogue('put it between them', { selected: true }).intents, { lineIds: ['l_cap'] });
+    expect(nobody.status).toBe('ask');
+    expect(nobody.followUps.map((f) => f.label)).toEqual(['Top of the panel']);
+    expect(noLoop(doc, nobody.ask?.question, nobody.followUps[0].say!).status).toBe('apply');
+
+    const tail = compileDialogue(doc, parseDialogue('the tail should point at the robot', { selected: true }).intents, { lineIds: ['l_leo1'] });
+    expect(tail.status).toBe('ask');
+    expect(tail.followUps.map((f) => f.label)).toEqual(['Point at Mira Patel', 'Point at Leo', 'Move it to panel 3', 'Off-panel voice']);
+    for (const f of tail.followUps) noLoop(doc, tail.ask?.question, f.say!);
+    expect(noLoop(doc, tail.ask?.question, tail.followUps[0].say!).status).toBe('apply');
+    expect(noLoop(doc, tail.ask?.question, tail.followUps[3].say!).status).toBe('apply');
+  });
+
+  it('move_to_panel offers the plan\'s third option, and "give it to" someone drawn there moves it without asking', () => {
+    const ask = opsOf(doc, { act: 'move_to_panel', target: {}, panel: 3 }, 'l_leo1');
+    const give = noLoop(doc, ask.ask?.question, ask.followUps[2].say!);
+    expect(give.status).toBe('apply');
+    expect(give.note).toBe('Moved “Wait for me” to panel 3. Its balloon is placed fresh in panel 3. Gave “Wait for me” to Bolt.');
+    expect(noLoop(doc, ask.ask?.question, ask.followUps[0].say!).status).toBe('apply');
+  });
+
+  it('caption across the top squares a scroll caption into a rectangle bar, measured as drawn, and undoes exactly', () => {
+    const scroll = dialogueDoc((d) => {
+      d.letterStyle = { ...(d.letterStyle ?? { presetId: 'classic' }), presetId: 'storybook' };
+    });
+    const run = compileDialogue(scroll, parseDialogue('caption across the top').intents, { pageId: 'pg_1' });
+    expect(run.status).toBe('apply');
+    expect(run.ops[0]).toEqual({ op: 'line_style', pageId: 'pg_1', lineIds: ['l_cap'], patch: { shape: 'rect' } });
+    expect(run.ops[1]).toMatchObject({ op: 'balloon', lineId: 'l_cap', patch: { pinned: true, w: expect.any(Number) } });
+    expect(applyOps(applyOps(scroll, run.ops), inverseOps(scroll, run.ops)).pages).toEqual(scroll.pages);
+    // Already a rectangle (classic): no style op.
+    expect(compileDialogue(doc, parseDialogue('caption across the top').intents, { pageId: 'pg_1' }).ops.map((op) => op.op)).toEqual(['balloon']);
+  });
+
+  it('add questions: "needs a" offers lines, "New shout…" and cast; an explicit add asks only for the words; chips never loop', () => {
+    const needs = compileDialogue(doc, parseDialogue('the second panel needs a shout').intents, { pageId: 'pg_1' });
+    expect(needs.followUps.map((f) => f.label)).toEqual(['Make “We have to go” a shout', 'Make “Wait for me” a shout', 'Make “Quietly now” a shout', 'New shout…', 'New shout by Mira Patel', 'New shout by Leo']);
+    for (const f of needs.followUps) noLoop(doc, needs.ask?.question, f.say!);
+    const custom = noLoop(doc, needs.ask?.question, needs.followUps[3].say!);
+    expect(custom.ask?.question).toBe('What should the shout in panel 2 say, and who shouts it? Type the words, or pick who first.');
+    const byMira = noLoop(doc, needs.ask?.question, needs.followUps[4].say!);
+    expect(byMira.ask?.question).toBe('What should Mira Patel shout? Type the words.');
+
+    const sfx = compileDialogue(doc, parseDialogue('the first panel needs a sound effect').intents, { pageId: 'pg_1' });
+    expect(sfx.followUps.map((f) => f.label)).toEqual(['Make “The lab, midnight.” a sound effect', 'New sound effect…']);
+    const words = noLoop(doc, sfx.ask?.question, sfx.followUps[1].say!);
+    expect(words.ask?.question).toBe('What should the sound effect in panel 1 say? Type the words.');
+    expect(words.followUps).toEqual([]);
+  });
+
+  it('reorder at a 0-based position puts the line there (index 1 = second), not last', () => {
+    const m = intentFromArgs({ action: 'reorder', target: { line_ids: ['l_mira2'] }, index: 1 });
+    const run = compileDialogue(doc, ['intent' in m ? m.intent : (undefined as never)]);
+    expect(run.status).toBe('apply');
+    const after = applyOps(doc, run.ops);
+    expect(after.pages[0].panels[1].lines.map((l) => l.id)).toEqual(['l_mira1', 'l_mira2', 'l_leo1']);
+    expect(run.note).toBe('“Quietly now” now comes second in panel 2.');
+    expect(applyOps(after, inverseOps(doc, run.ops)).pages).toEqual(doc.pages);
+  });
+
+  it('the fast path never takes a kind-, speaker- or comic-wide restyle, even with exactly one balloon selected', () => {
+    for (const say of ['make every bubble cloud', 'make all bubbles see-through', 'make all the shouts red', 'same style as this one for every caption']) {
+      expect(dialogueFastPath(doc, say, { lineIds: ['l_leo1'] }), say).toBeUndefined();
+    }
+    expect(dialogueFastPath(doc, 'make it a cloud bubble', { lineIds: ['l_leo1'] })?.ops).toEqual([{ op: 'line_style', pageId: 'pg_1', lineIds: ['l_leo1'], patch: { shape: 'cloud' } }]);
+  });
+});
+

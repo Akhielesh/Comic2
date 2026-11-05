@@ -14,7 +14,7 @@
 import type { ComicDoc, LineKind, NextStep, OptionChoice, Page } from '../doc.js';
 import { normalizeLetteringText } from '../textLayout.js';
 import { lineBox } from './placement.js';
-import { castList, matchSpeaker, noSuchSpeaker, speakerName } from './speakers.js';
+import { castList, isSpeakerPronoun, matchSpeaker, noSuchSpeaker, pronounQuestion, speakerName } from './speakers.js';
 import type { LineHit, LineRef, Resolution, ResolveContext } from './types.js';
 
 /**
@@ -24,8 +24,24 @@ import type { LineHit, LineRef, Resolution, ResolveContext } from './types.js';
 export type PluralLineRef = LineRef & { all?: boolean };
 export const isPluralRef = (ref: LineRef | undefined): boolean => !!ref && (ref as PluralLineRef).all === true;
 
+/**
+ * A 'none' resolution that is really a question: a pronoun ("her", "his") with no selection or earlier name to point to.
+ * askForResolution turns it into "Who do you mean by “her”?" with cast chips (`among`: the selection's speakers).
+ */
+export type PronounResolution = Extract<Resolution, { status: 'none' }> & { pronoun: string; among?: string[] };
+export const isPronounResolution = (res: Resolution): res is PronounResolution => res.status === 'none' && typeof (res as PronounResolution).pronoun === 'string';
+
 /** Resolver bounds (plan §3 B2 step 5–6). */
 export const RESOLVE_LIMITS = { whichMax: 5, confirmLines: 20, confirmPages: 3 } as const;
+
+/**
+ * ResolveContext plus `confirmed` (amendment: `ResolveContext.confirmed?: boolean`): the creator already answered yes to
+ * "That changes N lines on M pages. Go ahead?", so a big plural edit applies instead of asking again. It never widens a
+ * match, never answers "Which line?" and never skips a lock; the compilers still keep DOC_LIMITS (line_style ops carry at
+ * most lineIdsPerOp ids each).
+ */
+export type DialogueContext = ResolveContext & { confirmed?: boolean };
+export const isConfirmed = (ctx: ResolveContext | undefined): boolean => !!ctx && (ctx as DialogueContext).confirmed === true;
 
 const KIND_NOUN: Record<LineKind, [string, string]> = {
   speech: ['speech balloon', 'speech balloons'],
@@ -168,7 +184,8 @@ const finish = (doc: ComicDoc, hits: LineHit[], many: boolean, ctx: ResolveConte
   const sorted = [...hits].sort((a, b) => (order.get(a.lineId) ?? 0) - (order.get(b.lineId) ?? 0));
   if (many) {
     const pages = new Set(sorted.map((h) => h.pageId)).size;
-    if (sorted.length > RESOLVE_LIMITS.confirmLines || pages > RESOLVE_LIMITS.confirmPages) return { status: 'confirm', lines: sorted, pages };
+    const big = sorted.length > RESOLVE_LIMITS.confirmLines || pages > RESOLVE_LIMITS.confirmPages;
+    if (big && !isConfirmed(ctx)) return { status: 'confirm', lines: sorted, pages };
     return { status: 'lines', lines: sorted };
   }
   if (sorted.length === 1) return { status: 'lines', lines: sorted };
@@ -202,6 +219,11 @@ export function resolveLineRef(doc: ComicDoc, ref: LineRef, ctx: ResolveContext 
   if (r.speaker) {
     const pronounOf = [...new Set(selected.map((h) => h.speakerId).filter((x): x is string => !!x))];
     const m = matchSpeaker(doc, r.speaker, { pronounOf: pronounOf.length === 1 ? pronounOf[0] : undefined });
+    if (m.status === 'none' && isSpeakerPronoun(r.speaker)) {
+      // "her second line" with nothing to point to: ask who (cast chips; the selection's speakers first when several).
+      const who: PronounResolution = { status: 'none', note: pronounQuestion(r.speaker), pronoun: r.speaker, ...(pronounOf.length > 1 ? { among: pronounOf } : {}) };
+      return who;
+    }
     if (m.status === 'none') return { status: 'none', note: `${noSuchSpeaker(doc, r.speaker)} Nothing was changed.` };
     speakerIds = m.status === 'one' ? [m.characterId] : m.characterIds;
   }
@@ -318,7 +340,11 @@ export function askForResolution(doc: ComicDoc, res: Resolution): ResolutionAsk 
         question: `That changes ${plural(res.lines.length, 'line')} on ${plural(res.pages, 'page')}. Go ahead? It's free and undoable.`,
         followUps: [{ label: `Yes, all ${res.lines.length}`, say: `Yes, change all ${res.lines.length} of them.` }]
       };
-    case 'none':
-      return { question: res.note, followUps: [] };
+    case 'none': {
+      if (!isPronounResolution(res)) return { question: res.note, followUps: [] };
+      const ids = [...new Set([...(res.among ?? []), ...doc.cast.map((c) => c.id)])];
+      const names = ids.map((id) => speakerName(doc, id)).filter((n): n is string => !!n && !!n.trim());
+      return { question: res.note, followUps: names.slice(0, 4).map((name) => ({ label: name, say: `I mean ${name}.` })) };
+    }
   }
 }

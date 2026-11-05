@@ -274,10 +274,37 @@ const whoIs = (doc: ComicDoc, name: string, pronounOf?: string): Who => {
 
 // ── Placement ────────────────────────────────────────────────────────────────
 
+/**
+ * Why a character-relative spot failed, so the studio can ask instead of only refusing: `candidates` = a name that could
+ * be several people; `absent` = that character isn't drawn in the line's panel (`elsewhere`: the panels of the page that
+ * show them; `drawn`: who the line's panel does show); `pairs` = "between them" with more than two people (`drawn`);
+ * `few` = "between them" with fewer than two (`drawn`).
+ */
+export interface PlaceMiss {
+  reason: string;
+  candidates?: string[];
+  absent?: { characterId: string; panelN: number; elsewhere: number[]; drawn: string[] };
+  pairs?: string[];
+  few?: string[];
+}
+
 /** A placement outcome: the stored spot (text box x, y and, for a bar, its width) with a plain-words `where`, or why not. */
-export type PlaceOutcome =
-  | { ok: true; x: number; y: number; w?: number; note?: string; where: string }
-  | { ok: false; reason: string; candidates?: string[] };
+export type PlaceOutcome = { ok: true; x: number; y: number; w?: number; note?: string; where: string } | ({ ok: false } & PlaceMiss);
+
+/** Who a panel shows (its cast, plus anyone with a head mark there), in cast order. */
+const drawnIn = (page: Page, panelIndex: number): string[] => {
+  const panel = page.panels[panelIndex];
+  if (!panel) return [];
+  const marked = (page.render?.qc?.heads ?? []).filter((m) => m.panel === panel.n).map((m) => m.characterId);
+  return [...new Set([...(panel.castIds ?? []), ...marked])];
+};
+
+/** The miss for a character not drawn in the line's panel. */
+const absentMiss = (doc: ComicDoc, page: Page, panelIndex: number, panelN: number, characterId: string): { ok: false } & PlaceMiss => ({
+  ok: false,
+  reason: notInPanel(doc, page, panelN, characterId),
+  absent: { characterId, panelN, elsewhere: panelsWith(page, characterId).filter((n) => n !== panelN), drawn: drawnIn(page, panelIndex).filter((id) => id !== characterId) }
+});
 
 const describeFrame = (geo: PageGeo, g: LineGeo, frame: Placement['frame']): string =>
   frame === 'page' ? `page ${geo.page.n}` : `panel ${geo.page.panels[g.panelIndex]?.n ?? g.panelIndex + 1}`;
@@ -341,18 +368,17 @@ export function placeLine(doc: ComicDoc, pageId: string, lineId: string, place: 
       ids = [a.id, b.id];
     } else {
       const cast = [...new Set(page.panels[g.panelIndex]?.castIds ?? [])];
-      if (cast.length !== 2) {
-        return {
-          ok: false,
-          reason: cast.length > 2 ? `Panel ${panelN} has ${cast.length} characters (${castList(doc, cast)}), so “between them” could mean any two. Which two?` : `Panel ${panelN} has ${cast.length ? `only ${castList(doc, cast)}` : 'nobody'} in it, so there's no “between” there.`,
-          candidates: cast
-        };
+      if (cast.length > 2) {
+        return { ok: false, reason: `Panel ${panelN} has ${cast.length} characters (${castList(doc, cast)}), so “between them” could mean any two. Which two?`, pairs: cast };
+      }
+      if (cast.length < 2) {
+        return { ok: false, reason: `Panel ${panelN} has ${cast.length ? `only ${castList(doc, cast)}` : 'nobody'} in it, so there's no “between” there. Where should it go?`, few: cast };
       }
       ids = cast;
     }
     const spots = ids.map((id) => characterSpot(geo, g.panelIndex, id));
     const missing = ids.filter((_, i) => !spots[i]);
-    if (missing.length) return { ok: false, reason: notInPanel(doc, page, panelN, missing[0]) };
+    if (missing.length) return absentMiss(doc, page, g.panelIndex, panelN, missing[0]);
     const [a, b] = spots as CharacterSpot[];
     const cx = (a.head.x + b.head.x) / 2;
     const top = Math.min(a.head.y, b.head.y) - HEAD_CLEAR;
@@ -371,7 +397,7 @@ export function placeLine(doc: ComicDoc, pageId: string, lineId: string, place: 
       const others = page.panels.map((_, i) => characterSpot(geo, i, who.id)).filter((s): s is CharacterSpot => !!s);
       if (others.length === 1) spot = others[0];
     }
-    if (!spot) return { ok: false, reason: notInPanel(doc, page, panelN, who.id) };
+    if (!spot) return absentMiss(doc, page, g.panelIndex, panelN, who.id);
     const room = frame === 'page' ? region : panelRegion(geo, spot.panelIndex);
     const relation = place.relation ?? 'near';
     const at = spot.head;
@@ -421,7 +447,7 @@ export function placementFor(doc: ComicDoc, pageId: string, lineId: string, plac
 
 // ── Tails ────────────────────────────────────────────────────────────────────
 
-export type TipOutcome = { ok: true; x: number; y: number; note?: string; who?: string } | { ok: false; reason: string; candidates?: string[] };
+export type TipOutcome = { ok: true; x: number; y: number; note?: string; who?: string } | ({ ok: false } & PlaceMiss);
 
 /**
  * Where a tail should point: at a character (their mouth, else head mark, else where the page staged them, said out
@@ -456,7 +482,7 @@ export function tailTip(doc: ComicDoc, pageId: string, lineId: string, to: { cha
     id = who.id;
   }
   const spot = characterSpot(geo, g.panelIndex, id);
-  if (!spot) return { ok: false, reason: notInPanel(doc, page, panelN, id) };
+  if (!spot) return absentMiss(doc, page, g.panelIndex, panelN, id);
   const name = speakerName(doc, id) ?? 'them';
   if (spot.staged) {
     const y = Math.min(Math.max(g.text.y + g.h + 0.035, box.y + box.h * 0.4), box.y + box.h - PANEL_PAD);

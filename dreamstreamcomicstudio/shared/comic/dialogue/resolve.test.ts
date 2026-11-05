@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Line } from '../doc';
 import type { Resolution } from './types';
-import { askForResolution, lineChipLabel, lineHits, resolveLineRef, whichLineChoices, type PluralLineRef } from './resolve';
+import { askForResolution, isPronounResolution, lineChipLabel, lineHits, resolveLineRef, whichLineChoices, type DialogueContext, type PluralLineRef } from './resolve';
 import { dialogueDoc, line, panel } from './__fixtures__/dialogueDoc';
 
 const ids = (r: Resolution): string[] =>
@@ -121,4 +121,45 @@ describe('resolveLineRef', () => {
     expect(ids(resolveLineRef(doc, { lineIds: ['l_sfx', 'l_cap', 'gone'] }))).toEqual(['l_cap', 'l_sfx']);
     expect(resolveLineRef(doc, { lineIds: ['gone'] }).status).toBe('none');
   });
+
+  it('a confirmed plural applies instead of asking again (still exact, still every match)', () => {
+    const big = dialogueDoc((d) => {
+      for (const n of [3, 4]) {
+        d.pages.push({ ...d.pages[1], id: `pg_${n}`, n, panels: [panel(`pn_${n}`, 1, ['c_leo'], [line(`l_w${n}`, 'whisper', `Psst ${n}`, 'c_leo')])], balloons: [] });
+      }
+      d.pages[1].panels[0].lines.push(line('l_w2', 'whisper', 'Psst 2', 'c_mira'));
+    });
+    const ref: PluralLineRef = { kind: 'whisper', all: true };
+    const asked = resolveLineRef(big, ref);
+    expect(asked).toMatchObject({ status: 'confirm', pages: 4 });
+    const yes: DialogueContext = { confirmed: true };
+    expect(ids(resolveLineRef(big, ref, yes))).toEqual(['l_mira2', 'l_w2', 'l_w3', 'l_w4']);
+    expect(resolveLineRef(big, ref, yes).status).toBe('lines');
+    // Explicit ids confirm the same way.
+    expect(resolveLineRef(big, { lineIds: ['l_mira2', 'l_w2', 'l_w3', 'l_w4'] }).status).toBe('confirm');
+    expect(resolveLineRef(big, { lineIds: ['l_mira2', 'l_w2', 'l_w3', 'l_w4'] }, yes).status).toBe('lines');
+    // A confirmation never turns a singular "Which line?" into an apply.
+    expect(resolveLineRef(big, { kind: 'whisper' }, { ...yes, pageId: 'pg_1', panelN: 2 }).status).toBe('lines');
+    expect(resolveLineRef(doc, { speaker: 'Mira' }, { ...yes, pageId: 'pg_1', panelN: 2 }).status).toBe('which');
+  });
+
+  it('a pronoun with nothing to point to asks who it means, with cast chips (the selection\'s speakers first)', () => {
+    const res = resolveLineRef(doc, { speaker: 'her', nth: 2 }, { pageId: 'pg_1' });
+    expect(res).toMatchObject({ status: 'none', note: 'Who do you mean by “her”? Select one of her balloons or say her name.' });
+    expect(isPronounResolution(res)).toBe(true);
+    expect(askForResolution(doc, res)?.followUps.map((f) => [f.label, f.say])).toEqual([
+      ['Mira Patel', 'I mean Mira Patel.'],
+      ['Leo', 'I mean Leo.'],
+      ['Bolt', 'I mean Bolt.'],
+      ['Asha Patel', 'I mean Asha Patel.']
+    ]);
+    expect(resolveLineRef(doc, { speaker: 'his' }).status === 'none' && (resolveLineRef(doc, { speaker: 'his' }) as { note: string }).note).toBe('Who do you mean by “his”? Select one of his balloons or say his name.');
+    // Two speakers selected: still a question, theirs first.
+    const two = resolveLineRef(doc, { speaker: 'her' }, { lineIds: ['l_bolt1', 'l_leo1'] });
+    expect(askForResolution(doc, two)?.followUps.slice(0, 2).map((f) => f.label)).toEqual(['Bolt', 'Leo']);
+    // A pronoun with one speaker selected still resolves, and a real unknown name is still the honest inventory.
+    expect(ids(resolveLineRef(doc, { speaker: 'her', all: true } as PluralLineRef, { lineIds: ['l_mira1'] }))).toEqual(['l_mira1', 'l_mira2', 'l_mira3', 'l_p2mira']);
+    expect(isPronounResolution(resolveLineRef(doc, { speaker: 'Zed' }))).toBe(false);
+  });
 });
+

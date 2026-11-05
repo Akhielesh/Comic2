@@ -1,5 +1,5 @@
 {
- "_about": "Agent-editor plan §3 B4: every row of the table, run through grammar → resolve → compile on __fixtures__/dialogueDoc.ts. `args` rows are the director's structured dialogue_edit arguments (Hindi, Telugu), not grammar. Goldens: regenerate only on a reviewed behaviour change.",
+ "_about": "Agent-editor plan §3 B4: every row of the table, run through grammar → resolve → compile on __fixtures__/dialogueDoc.ts. `args` rows are the director's structured dialogue_edit arguments (Hindi, Telugu, and English rows for an unknown font and a stale line id), not grammar. `preset` rows letter the comic with that preset. Goldens: regenerate only on a reviewed behaviour change.",
  "rows": [
   {
    "id": "whisper-selected",
@@ -37,6 +37,7 @@
      }
     ],
     "label": "Make it a whisper",
+    "note": "Made “Wait for me” a whisper.",
     "followUps": [
      "Make it a shout",
      "Try another font",
@@ -70,6 +71,92 @@
      "l_mira1",
      "l_leo1",
      "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "pronoun-nobody",
+   "b4": "make it a whisper",
+   "say": "make her second line a whisper",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "her",
+       "nth": 2
+      },
+      "kind": "whisper"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Who do you mean by “her”? Select one of her balloons or say her name.",
+    "ask": "Who do you mean by “her”? Select one of her balloons or say her name.",
+    "followUps": [
+     "Mira Patel",
+     "Leo",
+     "Bolt",
+     "Asha Patel"
+    ]
+   }
+  },
+  {
+   "id": "ids-dropped",
+   "b4": "make it a whisper",
+   "lang": "en",
+   "say": "make these whispers (one id is stale)",
+   "args": {
+    "action": "set_kind",
+    "target": {
+     "line_ids": [
+      "l_leo1",
+      "gone1"
+     ]
+    },
+    "kind": "whisper"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "lineIds": [
+        "l_leo1",
+        "gone1"
+       ]
+      },
+      "kind": "whisper"
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "kind": "whisper"
+      }
+     }
+    ],
+    "label": "Make it a whisper",
+    "note": "Made “Wait for me” a whisper. 1 of those lines isn't in the comic any more, so it was left out.",
+    "followUps": [
+     "Make it a shout",
+     "Try another font",
+     "Move it"
     ]
    }
   },
@@ -109,6 +196,7 @@
      }
     ],
     "label": "Make it a thought balloon",
+    "note": "Made “Wait for me” a thought balloon.",
     "followUps": [
      "Make it speech",
      "Try another font",
@@ -187,6 +275,7 @@
      }
     ],
     "label": "Make it a caption",
+    "note": "Made “Wait for me” a caption. Captions have no speaker, so it is no longer Leo's line.",
     "followUps": [
      "Try another font",
      "Move it"
@@ -229,6 +318,7 @@
      }
     ],
     "label": "Make it a caption",
+    "note": "Made “Intruder detected” a caption. Captions have no speaker, so it is no longer Bolt's line.",
     "followUps": [
      "Try another font",
      "Move it"
@@ -282,7 +372,8 @@
       }
      }
     ],
-    "label": "Make it a shout · Change the words"
+    "label": "Make it a shout · Change the words",
+    "note": "Made “Bolt, quiet!” a shout. Changed “Bolt, quiet!” to “Run!”."
    }
   },
   {
@@ -336,7 +427,8 @@
       "panel": {
        "panel": 2
       },
-      "kind": "shout"
+      "kind": "shout",
+      "orChange": true
      }
     ],
     "confident": false,
@@ -351,8 +443,69 @@
      "Make “We have to go” a shout",
      "Make “Wait for me” a shout",
      "Make “Quietly now” a shout",
+     "New shout…",
      "New shout by Mira Patel",
      "New shout by Leo"
+    ]
+   }
+  },
+  {
+   "id": "add-sfx-no-words",
+   "b4": "the second panel needs a shout",
+   "say": "add a sound effect in panel 2",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 2
+      },
+      "kind": "sfx"
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "What should the sound effect in panel 2 say? Type the words.",
+    "ask": "What should the sound effect in panel 2 say? Type the words."
+   }
+  },
+  {
+   "id": "add-shout-no-words",
+   "b4": "the second panel needs a shout",
+   "say": "add a shout in panel 2",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 2
+      },
+      "kind": "shout"
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "What should the shout in panel 2 say, and who shouts it? Type the words, or pick who first.",
+    "ask": "What should the shout in panel 2 say, and who shouts it? Type the words, or pick who first.",
+    "followUps": [
+     "New shout by Mira Patel",
+     "New shout by Leo",
+     "New shout by Bolt",
+     "New shout by Asha Patel"
     ]
    }
   },
@@ -726,6 +879,65 @@
    }
   },
   {
+   "id": "caption-across-top-scroll",
+   "b4": "caption across the top",
+   "say": "caption across the top",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "preset": "storybook",
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "kind": "caption"
+      },
+      "place": {
+       "frame": "panel",
+       "edge": "top"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_cap"
+      ],
+      "patch": {
+       "shape": "rect"
+      }
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_cap",
+      "patch": {
+       "x": 0.042,
+       "y": 0.042,
+       "pinned": true,
+       "w": 0.916
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “The lab, midnight.” to a full-width bar across the top of panel 1. Pinned, so auto-layout won't move it. Its bubble is now a rectangle, so the bar runs edge to edge. Say “of the page” to use the whole page.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
    "id": "up-a-bit",
    "b4": "move it up a bit",
    "say": "move it up a bit",
@@ -973,14 +1185,21 @@
      }
     ],
     "confident": true,
-    "status": "none",
+    "status": "ask",
     "lines": [
      [
       "l_bolt1"
      ]
     ],
     "ops": [],
-    "note": "Leo isn't in panel 3 (they appear in panel 2 on page 1)."
+    "note": "Leo isn't in panel 3 (they appear in panel 2 on page 1). Move the line to Leo's panel, or place it somewhere in panel 3?",
+    "ask": "Leo isn't in panel 3 (they appear in panel 2 on page 1). Move the line to Leo's panel, or place it somewhere in panel 3?",
+    "followUps": [
+     "Move it to panel 2",
+     "Above Bolt",
+     "Above Mira Patel",
+     "Top of the panel"
+    ]
    }
   },
   {
@@ -1051,14 +1270,18 @@
      }
     ],
     "confident": true,
-    "status": "none",
+    "status": "ask",
     "lines": [
      [
       "l_cap"
      ]
     ],
     "ops": [],
-    "note": "Panel 1 has nobody in it, so there's no “between” there."
+    "note": "Panel 1 has nobody in it, so there's no “between” there. Where should it go?",
+    "ask": "Panel 1 has nobody in it, so there's no “between” there. Where should it go?",
+    "followUps": [
+     "Top of the panel"
+    ]
    }
   },
   {
@@ -1121,14 +1344,21 @@
      }
     ],
     "confident": true,
-    "status": "none",
+    "status": "ask",
     "lines": [
      [
       "l_leo1"
      ]
     ],
     "ops": [],
-    "note": "Bolt isn't in panel 2 (they appear in panel 3 on page 1)."
+    "note": "Bolt isn't in panel 2 (they appear in panel 3 on page 1). Point the tail at someone in panel 2, or move the line to Bolt's panel?",
+    "ask": "Bolt isn't in panel 2 (they appear in panel 3 on page 1). Point the tail at someone in panel 2, or move the line to Bolt's panel?",
+    "followUps": [
+     "Point at Mira Patel",
+     "Point at Leo",
+     "Move it to panel 3",
+     "Off-panel voice"
+    ]
    }
   },
   {
@@ -1248,7 +1478,8 @@
       }
      }
     ],
-    "label": "Remove the tail"
+    "label": "Remove the tail",
+    "note": "Removed the tail of “Wait for me”."
    }
   },
   {
@@ -1287,7 +1518,8 @@
       }
      }
     ],
-    "label": "Lightning tail"
+    "label": "Lightning tail",
+    "note": "Gave “Wait for me” a lightning tail."
    }
   },
   {
@@ -1432,11 +1664,12 @@
      ]
     ],
     "ops": [],
-    "note": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, or add Leo to the panel?",
-    "ask": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, or add Leo to the panel?",
+    "note": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, add Leo to the panel, or give the line to someone drawn there?",
+    "ask": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, add Leo to the panel, or give the line to someone drawn there?",
     "followUps": [
      "Off-panel voice",
-     "Add Leo to panel 3"
+     "Add Leo to panel 3",
+     "Give it to Bolt"
     ]
    }
   },
@@ -1577,7 +1810,8 @@
       }
      }
     ],
-    "label": "Give the line to Leo"
+    "label": "Give the line to Leo",
+    "note": "Gave “We have to go” to Leo."
    }
   },
   {
@@ -1684,7 +1918,70 @@
       }
      }
     ],
-    "label": "Change the words"
+    "label": "Change the words",
+    "note": "Changed “Wait for me” to “We have to go”."
+   }
+  },
+  {
+   "id": "change-words-and-red",
+   "b4": "change it to 'We have to go'",
+   "say": "change the text to 'Hi' and make it red",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "edit_text",
+      "target": {
+       "selected": true
+      },
+      "text": "Hi"
+     },
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "textColor": "#e63946"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ],
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "text": "Hi"
+      }
+     },
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "textColor": "#e63946"
+      }
+     }
+    ],
+    "label": "Change the words · Restyle balloon",
+    "note": "Changed “Wait for me” to “Hi”. Restyled “Wait for me” (red text)."
    }
   },
   {
@@ -2018,6 +2315,88 @@
    }
   },
   {
+   "id": "font-unknown",
+   "b4": "use a handwritten font for Leo",
+   "say": "use a comic sans font for Leo",
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "leo",
+       "all": true
+      },
+      "scope": "speaker",
+      "style": {},
+      "unknownFont": "comic sans"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [],
+    "note": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead?",
+    "ask": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead?",
+    "followUps": [
+     "Use Comic Neue",
+     "Use Noto Sans",
+     "Use Patrick Hand"
+    ]
+   }
+  },
+  {
+   "id": "font-unknown-args",
+   "b4": "use a handwritten font for Leo",
+   "lang": "en",
+   "say": "use Comic Sans for Leo, bold",
+   "args": {
+    "action": "restyle",
+    "scope": "speaker",
+    "target": {
+     "speaker": "Leo"
+    },
+    "style": {
+     "font": "Comic Sans",
+     "bold": true
+    }
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "Leo"
+      },
+      "scope": "speaker",
+      "style": {
+       "weight": 700
+      },
+      "unknownFont": "Comic Sans"
+     }
+    ],
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [],
+    "note": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead? Nothing changed yet: the bold comes with the font you pick.",
+    "ask": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead? Nothing changed yet: the bold comes with the font you pick.",
+    "followUps": [
+     "Use Comic Neue",
+     "Use Noto Sans",
+     "Use Patrick Hand"
+    ]
+   }
+  },
+  {
    "id": "radio",
    "b4": "make it sound like a radio",
    "say": "make it sound like a radio",
@@ -2137,7 +2516,8 @@
       }
      }
     ],
-    "label": "Bring to front"
+    "label": "Bring to front",
+    "note": "Brought “Wait for me” to the front."
    }
   },
   {
@@ -2174,7 +2554,8 @@
       }
      }
     ],
-    "label": "Send to back"
+    "label": "Send to back",
+    "note": "Sent “Wait for me” to the back."
    }
   },
   {
@@ -2377,9 +2758,9 @@
      ]
     ],
     "ops": [],
-    "note": "I can make the whole balloon bold now; bold on single words like “never” isn't available yet.",
+    "note": "I can bold the whole balloon now; single-word bold isn't available yet.",
     "followUps": [
-     "Make the balloon bold"
+     "Bold the balloon"
     ]
    }
   },
@@ -2444,7 +2825,7 @@
      }
     ],
     "label": "Move balloon · Make it a whisper",
-    "note": "Moved “Bolt, quiet!” to the top of panel 3. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page.",
+    "note": "Moved “Bolt, quiet!” to the top of panel 3. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page. Made “Bolt, quiet!” a whisper.",
     "followUps": [
      "Make it a shout",
      "Try another font",
@@ -2496,6 +2877,7 @@
      }
     ],
     "label": "Make it a whisper",
+    "note": "Made “Bolt, quiet!” a whisper.",
     "followUps": [
      "Make it a shout",
      "Try another font",

@@ -170,3 +170,48 @@ describe('intentFromArgs (the director\'s dialogue_edit arguments)', () => {
     expect(intentFromArgs(null)).toEqual({ error: 'dialogue_edit needs an object with an action.' });
   });
 });
+
+describe('intentFromArgs: review fixes (reorder index, size, unknown fonts)', () => {
+  it('reorder: index 0 is first, -1 last, any other index a 0-based position the compiler places (never silently "last")', () => {
+    expect(intentFromArgs({ action: 'reorder', target: { selected: true }, index: 0 })).toEqual({ intent: { act: 'reorder', target: { selected: true }, to: 'first' } });
+    expect(intentFromArgs({ action: 'reorder', target: { selected: true }, index: -1 })).toEqual({ intent: { act: 'reorder', target: { selected: true }, to: 'last' } });
+    expect(intentFromArgs({ action: 'reorder', target: { selected: true }, index: 1 })).toEqual({ intent: { act: 'reorder', target: { selected: true }, to: 'last', atIndex: 1 } });
+    expect(intentFromArgs({ action: 'reorder', target: { selected: true }, index: -3 })).toEqual({ error: expect.stringMatching(/^reorder needs index/) });
+  });
+
+  it('size always comes from the args: words stay relative (even with opts.style), numbers are an absolute size', () => {
+    // B-TOOL's converted patch carries one absolute size; the size word wins and stays relative to each line.
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: 'larger', bold: true } }, { style: { weight: 700, sizeScale: 1.38 } })).toEqual({
+      intent: { act: 'restyle', target: { selected: true }, scope: 'line', style: { weight: 700 }, scaleBy: 1.2 }
+    });
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: '1.3' } })).toEqual({ intent: { act: 'restyle', target: { selected: true }, scope: 'line', style: { sizeScale: 1.3 } } });
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: 5 } })).toEqual({ intent: { act: 'restyle', target: { selected: true }, scope: 'line', style: { sizeScale: 3.5 } } });
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: 'normal' } })).toEqual({ intent: { act: 'restyle', target: { selected: true }, scope: 'line', style: { sizeScale: 1 } } });
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: 'medium' } })).toEqual({ error: 'Size must be "smaller", "larger" or a scale like 1.2 (got "medium").' });
+  });
+
+  it('a font the studio lacks is carried through (never dropped while the rest applies)', () => {
+    expect(intentFromArgs({ action: 'restyle', scope: 'speaker', target: { speaker: 'Leo' }, style: { font: 'Comic Sans', bold: true } })).toEqual({
+      intent: { act: 'restyle', target: { speaker: 'Leo' }, scope: 'speaker', style: { weight: 700 }, unknownFont: 'Comic Sans' }
+    });
+    // The font alone is still an intent (the compiler asks), not "restyle needs style changes".
+    expect(intentFromArgs({ action: 'restyle', scope: 'speaker', target: { speaker: 'Leo' }, style: { font: 'Comic Sans' } })).toEqual({
+      intent: { act: 'restyle', target: { speaker: 'Leo' }, scope: 'speaker', style: {}, unknownFont: 'Comic Sans' }
+    });
+    // A known font word maps as before.
+    expect(intentFromArgs({ action: 'restyle', scope: 'speaker', target: { speaker: 'Leo' }, style: { font: 'handwritten' } })).toEqual({
+      intent: { act: 'restyle', target: { speaker: 'Leo' }, scope: 'speaker', style: { font: 'patrick-hand' } }
+    });
+  });
+
+  it('the grammar carries a font name it lacks, but leaves mood words ("a nicer font") to the director', () => {
+    expect(parseDialogue('use a comic sans font for Leo').intents).toEqual([
+      { act: 'restyle', target: { speaker: 'leo', all: true }, scope: 'speaker', style: {}, unknownFont: 'comic sans' }
+    ]);
+    expect(parseDialogue('use a nicer font for Leo').intents).toEqual([]);
+    // "bold in …" is a style, not one-word emphasis; the font is the three words before "font".
+    expect(parseDialogue("make Leo's lines bold in the Patrick Hand font").intents).toEqual([
+      { act: 'restyle', target: { speaker: 'leo', all: true }, scope: 'speaker', style: { weight: 700, font: 'patrick-hand' } }
+    ]);
+  });
+});

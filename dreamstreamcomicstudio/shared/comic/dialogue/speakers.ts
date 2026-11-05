@@ -126,8 +126,21 @@ export const castList = (doc: ComicDoc, ids?: readonly string[]): string => {
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 };
 
-/** The plain sentence for a speaker that matched nobody. */
+/** "her", "his", "they": a pronoun, which names a speaker only through the selection or the sentence. */
+export const isSpeakerPronoun = (word: string | undefined): boolean => !!word && SPEAKER_PRONOUNS.has(word.trim().toLowerCase().replace(/[^a-z]/g, ''));
+
+const POSSESSIVE: Readonly<Record<string, string>> = { he: 'his', him: 'his', his: 'his', himself: 'his', she: 'her', her: 'her', hers: 'her', herself: 'her', it: 'its', its: 'its' };
+
+/** "Who do you mean by “her”? Select one of her balloons or say her name." (a pronoun with nothing to point to). */
+export const pronounQuestion = (word: string): string => {
+  const w = word.trim().toLowerCase().replace(/[^a-z]/g, '');
+  const pos = POSSESSIVE[w] ?? 'their';
+  return `Who do you mean by “${word.trim().slice(0, 20)}”? Select one of ${pos} balloons or say ${pos} name.`;
+};
+
+/** The plain sentence for a speaker that matched nobody (a pronoun with nothing to point to asks who it means). */
 export const noSuchSpeaker = (doc: ComicDoc, name: string): string => {
+  if (isSpeakerPronoun(name)) return pronounQuestion(name);
   const cast = castList(doc);
   return `There's no character called “${name.trim().slice(0, 40)}”${cast ? `. The cast is ${cast}.` : ': the cast is empty.'}`;
 };

@@ -90,7 +90,12 @@ describe('placeLine / placementFor', () => {
   });
 
   it('a character who is not in the panel is refused in plain words; an ambiguous name asks', () => {
-    expect(placeLine(doc, 'pg_1', 'l_mira3', { frame: 'panel', near: 'Leo', relation: 'above' })).toEqual({ ok: false, reason: "Leo isn't in panel 3 (they appear in panel 2 on page 1)." });
+    // The miss says who IS drawn there and where Leo appears, so the studio can ask instead of only refusing.
+    expect(placeLine(doc, 'pg_1', 'l_mira3', { frame: 'panel', near: 'Leo', relation: 'above' })).toEqual({
+      ok: false,
+      reason: "Leo isn't in panel 3 (they appear in panel 2 on page 1).",
+      absent: { characterId: 'c_leo', panelN: 3, elsewhere: [2], drawn: ['c_bolt', 'c_mira'] }
+    });
     expect(placementFor(doc, 'pg_1', 'l_mira3', { frame: 'panel', near: 'Leo' })).toBeNull();
     // "of the page": the one panel with Leo is enough.
     expect(placeLine(doc, 'pg_1', 'l_mira3', { frame: 'page', near: 'Leo', relation: 'above' }).ok).toBe(true);
@@ -107,8 +112,11 @@ describe('placeLine / placementFor', () => {
     // Three people in the panel: "between them" asks which two.
     const crowd = dialogueDoc((d) => d.pages[0].panels[1].castIds.push('c_asha'));
     const out = placeLine(crowd, 'pg_1', 'l_leo1', { frame: 'panel', relation: 'between' });
-    expect(out).toMatchObject({ ok: false, candidates: ['c_mira', 'c_leo', 'c_asha'] });
+    expect(out).toMatchObject({ ok: false, pairs: ['c_mira', 'c_leo', 'c_asha'] });
     expect(out.ok === false && out.reason).toMatch(/Panel 2 has 3 characters/);
+    // One person: no "between" there, and the miss names who is.
+    const alone = placeLine(dialogueDoc((d) => (d.pages[0].panels[1].castIds = ['c_mira'])), 'pg_1', 'l_leo1', { frame: 'panel', relation: 'between' });
+    expect(alone).toMatchObject({ ok: false, few: ['c_mira'] });
   });
 
   it('nudge: 0.02 of the page for "a bit", 0.08 for "a lot", from where it is drawn; never off the page', () => {

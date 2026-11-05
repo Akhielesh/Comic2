@@ -17,10 +17,10 @@ import { setBoxEdit } from '../editor/transform.js';
 import { FONT_REGISTRY } from '../lettering/fonts.js';
 import { NAMED_COLORS, normalizeColor, resolveLetterStyle, sanitizeLetterStylePatch, type LetterStyle, type LetterStylePatch } from '../lettering/style.js';
 import { applyOps, type DocOp } from '../ops.js';
-import { balloonPatchOp, lineGeo, pageGeo, placeLine, tailTip } from './placement.js';
-import { askForResolution, resolveLineRef, type ResolutionAsk } from './resolve.js';
-import { parseDialogue } from './grammar.js';
-import { castList, matchSpeaker, noSuchSpeaker, speakerName } from './speakers.js';
+import { balloonPatchOp, lineGeo, pageGeo, placeLine, tailTip, type PlaceMiss } from './placement.js';
+import { askForResolution, isPronounResolution, lineHits, resolveLineRef, type DialogueContext, type ResolutionAsk } from './resolve.js';
+import { fontFromWords, parseDialogue } from './grammar.js';
+import { castList, isSpeakerPronoun, matchSpeaker, noSuchSpeaker, pronounQuestion, speakerName } from './speakers.js';
 import type { CompileResult, DialogueIntent, LineHit, LineRef, Placement, Resolution, ResolveContext } from './types.js';
 
 // ── Extras the B1 union does not carry yet (amendments; the grammar sets them, the compiler reads them) ─────────────
@@ -32,6 +32,21 @@ import type { CompileResult, DialogueIntent, LineHit, LineRef, Placement, Resolu
 export interface RestyleExtras {
   scaleBy?: number;
   asKind?: LineKind;
+  /** A font name the studio does not have ("Comic Sans"): nothing changes until the creator picks one of the 3 nearest. */
+  unknownFont?: string;
+}
+
+/**
+ * Optional extra on an `add` intent: `orChange` = the creator said a panel NEEDS a line ("the second panel needs a
+ * shout"), which may mean changing an existing line; an explicit "add a shout" asks only for the words.
+ */
+export interface AddExtras {
+  orChange?: boolean;
+}
+
+/** Optional extra on a `reorder` intent: a 0-based position in the line's panel (dialogue_edit `index`), clamped to it. */
+export interface ReorderExtras {
+  atIndex?: number;
 }
 
 /** The question a compile result asks instead of changing anything (the deterministic question card). */
@@ -40,13 +55,19 @@ export interface CompileAsk {
   options?: OptionChoice[];
 }
 
-/** CompileResult plus `ask` (amendment): set when nothing changed because the studio needs an answer first. */
-export type CompileOutcome = CompileResult & { ask?: CompileAsk };
+/**
+ * CompileResult plus `ask` (amendment): set when nothing changed because the studio needs an answer first; and
+ * `already`: nothing changed because it already is so ("It's already a whisper"), which a longer instruction may skip.
+ * Any other empty result is a refusal, and stops the whole instruction (all or nothing).
+ */
+export type CompileOutcome = CompileResult & { ask?: CompileAsk; already?: boolean };
 
 /** Compile-time options the pipeline passes (never part of an intent). */
 export interface CompileOptions {
   /** move_to_panel: the creator already chose an off-panel voice for a speaker not drawn in the destination. */
   offPanelOk?: boolean;
+  /** move_to_panel: the next step gives the line to someone else, so the old speaker's absence there doesn't matter. */
+  speakerFollows?: boolean;
   /** Where the creator is (the "other" line of reorder / link resolves near the target first). */
   focus?: ResolveContext;
 }
@@ -59,6 +80,10 @@ const KIND_NOUN: Record<LineKind, string> = { speech: 'speech balloon', thought:
 const KIND_PLURAL: Record<LineKind, string> = { speech: 'speech balloons', thought: 'thought balloons', whisper: 'whispers', shout: 'shouts', caption: 'captions', sfx: 'sound effects' };
 const WHO_VERB: Record<LineKind, string> = { speech: 'Who says it?', thought: "Who's thinking it?", whisper: "Who's whispering it?", shout: "Who's shouting it?", caption: 'Who says it?', sfx: 'Who says it?' };
 const DO_VERB: Record<LineKind, string> = { speech: 'say', thought: 'think', whisper: 'whisper', shout: 'shout', caption: 'say', sfx: 'say' };
+/** "a speech balloon", "a whisper" (a kind with its article, for reply sentences). */
+const kindA = (kind: LineKind): string => (kind === 'speech' ? 'a speech balloon' : KIND_A[kind]);
+/** "“Wait for me”" for one line, "3 balloons" for several. */
+const whoWords = (lines: readonly { text: string }[], n: number, noun = 'balloon'): string => (n === 1 && lines.length ? quote(lines[0].text, 30) : plural(n, noun));
 
 /** "a pov shot", "an establishing shot". */
 const shotWords = (shot: string): string => {
@@ -123,12 +148,11 @@ const castChips = (doc: ComicDoc, panel: Panel | undefined, max: number, say: (n
 
 // ── Results ──────────────────────────────────────────────────────────────────
 
-const result = (ops: DocOp[], label: string, followUps: NextStep[] = [], note?: string): CompileOutcome => ({
-  ops,
-  label: ops.length ? label : '',
-  followUps: followUps.slice(0, 3),
-  ...(note ? { note } : {})
-});
+/** An applied result. Never silent: every compiler says what it did; the label is the last-resort sentence. */
+const result = (ops: DocOp[], label: string, followUps: NextStep[] = [], note?: string): CompileOutcome => {
+  const said = note?.trim() ? note : ops.length && label ? `${label}.` : undefined;
+  return { ops, label: ops.length ? label : '', followUps: followUps.slice(0, 3), ...(said ? { note: said } : {}) };
+};
 const asking = (question: string, followUps: NextStep[] = [], options?: OptionChoice[], note?: string): CompileOutcome => ({
   ops: [],
   label: '',
@@ -137,6 +161,8 @@ const asking = (question: string, followUps: NextStep[] = [], options?: OptionCh
   ask: { question, ...(options?.length ? { options } : {}) }
 });
 const nothing = (note: string): CompileOutcome => ({ ops: [], label: '', followUps: [], note });
+/** Nothing to change because it already is so (benign: a longer instruction carries on with its other parts). */
+const alreadySo = (note: string): CompileOutcome => ({ ...nothing(note), already: true });
 
 /** Follow-up chips after a kind change (plan §3 A4): another kind, another font, a move. */
 const afterKind = (hit: LineHit | undefined, kind: LineKind): NextStep[] => {
@@ -194,6 +220,8 @@ const sameValue = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSO
 function compileSetKind(doc: ComicDoc, kind: LineKind, lines: LineHit[]): CompileOutcome {
   const ops: DocOp[] = [];
   const needSpeaker: Where[] = [];
+  const changed: Where[] = [];
+  const unvoiced: Where[] = [];
   let already = 0;
   for (const hit of lines) {
     const w = whereOf(doc, hit.lineId);
@@ -208,8 +236,12 @@ function compileSetKind(doc: ComicDoc, kind: LineKind, lines: LineHit[]): Compil
     }
     const patch: Partial<Line> = { kind };
     // A caption or sound effect has no speaker (the server's set_line rule).
-    if (!SPOKEN.has(kind) && w.line.speakerId) patch.speakerId = undefined;
+    if (!SPOKEN.has(kind) && w.line.speakerId) {
+      patch.speakerId = undefined;
+      unvoiced.push(w);
+    }
     ops.push({ op: 'line', pageId: w.page.id, panelId: w.panel.id, id: w.line.id, patch });
+    changed.push(w);
   }
   if (needSpeaker.length) {
     // Never invent a speaker: ask, and change nothing until the answer comes.
@@ -221,9 +253,17 @@ function compileSetKind(doc: ComicDoc, kind: LineKind, lines: LineHit[]): Compil
       `${quote(w.line.text)} is ${KIND_A[w.line.kind]}, so it has no speaker yet.`
     );
   }
-  if (!ops.length) return nothing(already ? `${lines.length === 1 ? "It's" : "They're"} already ${lines.length === 1 ? KIND_A[kind] : KIND_PLURAL[kind]}.` : 'Nothing to change.');
+  if (!ops.length) return already ? alreadySo(`${lines.length === 1 ? "It's" : "They're"} already ${lines.length === 1 ? KIND_A[kind] : KIND_PLURAL[kind]}.`) : nothing('Nothing to change.');
   const label = ops.length === 1 ? `Make it ${KIND_A[kind]}` : `Make ${ops.length} lines ${KIND_PLURAL[kind]}`;
-  const note = join(already ? `${plural(already, 'line')} already ${already === 1 ? 'was' : 'were'} ${KIND_A[kind]}.` : undefined, artNote(doc, lines.map((h) => h.pageId)));
+  const made = changed.length === 1 ? `Made ${quote(changed[0].line.text, 30)} ${kindA(kind)}.` : `Made ${plural(changed.length, 'line')} ${KIND_PLURAL[kind]}.`;
+  // Never silent about a speaker the kind change takes away.
+  const lost =
+    unvoiced.length === 1
+      ? `${KIND_PLURAL[kind][0].toUpperCase()}${KIND_PLURAL[kind].slice(1)} have no speaker, so it is no longer ${speakerName(doc, unvoiced[0].line.speakerId) ?? 'anyone'}'s line.`
+      : unvoiced.length
+        ? `${KIND_PLURAL[kind][0].toUpperCase()}${KIND_PLURAL[kind].slice(1)} have no speaker, so ${plural(unvoiced.length, 'line')} lost theirs.`
+        : undefined;
+  const note = join(made, lost, already ? `${plural(already, 'line')} already ${already === 1 ? 'was' : 'were'} ${KIND_A[kind]}.` : undefined, artNote(doc, lines.map((h) => h.pageId)));
   return result(ops, label, afterKind(lines.length === 1 ? lines[0] : undefined, kind), note);
 }
 
@@ -231,13 +271,16 @@ function compileEditText(doc: ComicDoc, text: string, lines: LineHit[]): Compile
   const next = (text || '').replace(/\s+/g, ' ').trim().slice(0, 600);
   if (!next) return asking('What should it say?');
   const ops: DocOp[] = [];
+  const was: string[] = [];
   for (const hit of lines) {
     const w = whereOf(doc, hit.lineId);
     if (!w || w.line.text === next) continue;
     ops.push({ op: 'line', pageId: w.page.id, panelId: w.panel.id, id: w.line.id, patch: { text: next } });
+    was.push(w.line.text);
   }
-  if (!ops.length) return nothing('It already says that.');
-  return result(ops, ops.length === 1 ? 'Change the words' : `Change the words of ${ops.length} lines`, [], artNote(doc, lines.map((h) => h.pageId)));
+  if (!ops.length) return alreadySo('It already says that.');
+  const said = ops.length === 1 ? `Changed ${quote(was[0], 30)} to ${quote(next, 60)}.` : `Changed the words of ${plural(ops.length, 'line')} to ${quote(next, 60)}.`;
+  return result(ops, ops.length === 1 ? 'Change the words' : `Change the words of ${ops.length} lines`, [], join(said, artNote(doc, lines.map((h) => h.pageId))));
 }
 
 function compileSetSpeaker(doc: ComicDoc, speaker: string, lines: LineHit[]): CompileOutcome {
@@ -281,6 +324,7 @@ function compileSetSpeaker(doc: ComicDoc, speaker: string, lines: LineHit[]): Co
   const id = m.characterId;
   const name = speakerName(doc, id) ?? 'them';
   let already = 0;
+  const given: string[] = [];
   for (const hit of lines) {
     const w = whereOf(doc, hit.lineId);
     if (!w) continue;
@@ -294,6 +338,7 @@ function compileSetSpeaker(doc: ComicDoc, speaker: string, lines: LineHit[]): Co
       notes.push(`${quote(w.line.text)} was ${KIND_A[w.line.kind]}; it's a speech balloon now.`);
     }
     ops.push({ op: 'line', pageId: w.page.id, panelId: w.panel.id, id: w.line.id, patch });
+    given.push(w.line.text);
     const drawnHere = (w.panel.castIds ?? []).includes(id) || (w.page.render?.qc?.heads ?? []).some((h) => h.panel === w.panel.n && h.characterId === id);
     if (!drawnHere) notes.push(`${name} isn't drawn in panel ${w.panel.n}, so the line reads as an off-panel voice${OFF_PANEL_SHOTS.has(w.panel.shot) ? ` (heard, not drawn: ${shotWords(w.panel.shot)})` : ''}.`);
     // A tail someone aimed at the old speaker follows the new one (or the panel edge for an off-panel voice).
@@ -306,8 +351,9 @@ function compileSetSpeaker(doc: ComicDoc, speaker: string, lines: LineHit[]): Co
       if (tip.ok && tip.note) notes.push(tip.note);
     }
   }
-  if (!ops.length) return nothing(`${lines.length === 1 ? 'It is' : 'They are'} already ${name}'s.`);
-  return result(ops, `Give the line to ${name}`, [], join(...notes, artNote(doc, lines.map((h) => h.pageId))));
+  if (!ops.length) return alreadySo(`${lines.length === 1 ? 'It is' : 'They are'} already ${name}'s.`);
+  const gave = given.length === 1 ? `Gave ${quote(given[0], 30)} to ${name}.` : `Gave ${plural(given.length, 'line')} to ${name}.`;
+  return result(ops, `Give the line to ${name}`, [], join(gave, ...notes, already ? `${plural(already, 'line')} already ${already === 1 ? 'was' : 'were'} ${name}'s.` : undefined, artNote(doc, lines.map((h) => h.pageId))));
 }
 
 /** The panel an `add` goes to: numbers in the intent, else the panel of a resolved line. */
@@ -340,6 +386,9 @@ function compileAdd(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'add' 
   if (SPOKEN.has(kind)) {
     if (intent.speaker) {
       const m = matchSpeaker(doc, intent.speaker);
+      if (m.status === 'none' && isSpeakerPronoun(intent.speaker)) {
+        return asking(pronounQuestion(intent.speaker), castChips(doc, panel, 4, (name) => `Add ${kindA(kind)} by ${name} in ${where}${text ? ` saying ${quote(text, 60)}` : ''}`));
+      }
       if (m.status === 'none') return nothing(`${noSuchSpeaker(doc, intent.speaker)} Nothing was added.`);
       if (m.status === 'many') {
         return asking(
@@ -351,18 +400,24 @@ function compileAdd(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'add' 
     }
   }
   if (!text) {
-    // "the second panel needs a shout": change a line, or add a new one (and who says it).
     if (speakerId) return asking(`What should ${speakerName(doc, speakerId)} ${DO_VERB[kind]}? Type the words.`);
-    const lineChips: NextStep[] = panel.lines
-      .filter((l) => l.kind !== kind && (SPOKEN.has(kind) ? !!l.speakerId : true) && l.text.trim())
-      .slice(0, 3)
-      .map((l) => ({ label: `Make ${quote(l.text, 22)} ${KIND_A[kind] === 'speech' ? 'speech' : KIND_A[kind]}`, say: `Make ${quote(l.text, 40)} ${KIND_A[kind] === 'speech' ? 'speech' : KIND_A[kind]}` }));
-    const newChips: NextStep[] = SPOKEN.has(kind)
-      ? castChips(doc, panel, 2, (name) => `Add ${KIND_A[kind] === 'speech' ? 'a speech balloon' : KIND_A[kind]} by ${name} in ${where}`).map((c) => ({ ...c, label: `New ${KIND_NOUN[kind]} by ${c.label}` }))
-      : [{ label: `New ${KIND_NOUN[kind]}…`, say: `Add ${KIND_A[kind]} in ${where}` }];
+    const addSay = `Add ${kindA(kind)} in ${where}`;
+    const byChips = (max: number): NextStep[] =>
+      SPOKEN.has(kind) ? castChips(doc, panel, max, (name) => `Add ${kindA(kind)} by ${name} in ${where}`).map((c) => ({ ...c, label: `New ${KIND_NOUN[kind]} by ${c.label}` })) : [];
+    const candidates = panel.lines.filter((l) => l.kind !== kind && (SPOKEN.has(kind) ? !!l.speakerId : true) && l.text.trim());
+    if ((intent as AddExtras).orChange && candidates.length) {
+      // "the second panel needs a shout": change a line, or add a new one (custom words, and who says it).
+      const lineChips: NextStep[] = candidates
+        .slice(0, 3)
+        .map((l) => ({ label: `Make ${quote(l.text, 22)} ${KIND_A[kind] === 'speech' ? 'speech' : KIND_A[kind]}`, say: `Make ${quote(l.text, 40)} ${KIND_A[kind] === 'speech' ? 'speech' : KIND_A[kind]}` }));
+      return asking(`Change a line in panel ${panel.n} to ${KIND_A[kind]}, or add a new one?`, [...lineChips, { label: `New ${KIND_NOUN[kind]}…`, say: addSay }, ...byChips(2)]);
+    }
+    // An explicit add ("add a sound effect in panel 2", or the "New …" chip): only the words (and who) are missing.
     return asking(
-      panel.lines.length ? `Change a line in panel ${panel.n} to ${KIND_A[kind]}, or add a new one?` : `What should the ${KIND_NOUN[kind]} in panel ${panel.n} say? Type the words.`,
-      [...lineChips, ...newChips]
+      SPOKEN.has(kind)
+        ? `What should the ${KIND_NOUN[kind]} in panel ${panel.n} say, and who ${DO_VERB[kind] === 'say' ? 'says' : `${DO_VERB[kind]}s`} it? Type the words, or pick who first.`
+        : `What should the ${KIND_NOUN[kind]} in panel ${panel.n} say? Type the words.`,
+      byChips(4)
     );
   }
   if (SPOKEN.has(kind) && !speakerId) {
@@ -387,9 +442,13 @@ function compileAdd(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'add' 
     const previewPage = preview.pages.find((p) => p.id === page.id)!;
     const geo = pageGeo(preview, previewPage);
     if (intent.place) {
-      const placed = placeOps(preview, previewPage, id, intent.place);
+      // A full-width bar is a rectangle, measured as drawn (same rule as compileMove).
+      const newLine = previewPage.panels.flatMap((p) => p.lines).find((l) => l.id === id);
+      const rect = intent.place.edge && newLine && resolveLetterStyle(preview, newLine).shape !== 'rect' ? lineStyleOps([{ pageId: page.id, lineId: id, patch: { shape: 'rect' } }]) : [];
+      const shaped = rect.length ? applyOps(preview, rect) : preview;
+      const placed = placeOps(shaped, shaped.pages.find((p) => p.id === page.id)!, id, intent.place);
       if (placed.ok) {
-        ops.push(...placed.ops);
+        ops.push(...rect, ...placed.ops);
         notes.push(`Placed at ${placed.where}.`, ...(placed.note ? [placed.note] : []));
       } else notes.push(`${placed.reason} The lettering placed it instead.`);
     } else {
@@ -408,7 +467,7 @@ function compileDelete(doc: ComicDoc, lines: LineHit[]): CompileOutcome {
     const w = whereOf(doc, hit.lineId);
     if (w) ops.push({ op: 'line', pageId: w.page.id, panelId: w.panel.id, id: w.line.id, patch: null });
   }
-  if (!ops.length) return nothing('Those lines are already gone.');
+  if (!ops.length) return alreadySo('Those lines are already gone.');
   const words = lines.length === 1 ? `Deleted ${quote(lines[0].text)}.` : `Deleted ${plural(lines.length, 'line')}.`;
   return result(ops, ops.length === 1 ? 'Delete balloon' : `Delete ${ops.length} balloons`, [], join(words, 'Undo brings it back with its translations.', artNote(doc, lines.map((h) => h.pageId))));
 }
@@ -416,7 +475,7 @@ function compileDelete(doc: ComicDoc, lines: LineHit[]): CompileOutcome {
 /** A placement committed through the editor's setBoxEdit (locks, undo and the stored shape match the editor). */
 function placeOps(doc: ComicDoc, page: Page, lineId: string, place: Placement, stackAfter?: { panelIndex: number; top: number; bottom: number; fromBottom: boolean }) {
   const out = placeLine(doc, page.id, lineId, place);
-  if (out.ok === false) return { ok: false as const, reason: out.reason, candidates: out.candidates };
+  if (out.ok === false) return { ...out, ok: false as const };
   const geo = pageGeo(doc, page);
   const g = lineGeo(geo, lineId);
   if (!g) return { ok: false as const, reason: 'That line has no balloon on this page.' };
@@ -433,29 +492,94 @@ function placeOps(doc: ComicDoc, page: Page, lineId: string, place: Placement, s
   return { ok: true as const, ops: edit.ops, where: out.where, note: out.note, panelIndex: g.panelIndex, top: to.y, bottom: to.y + to.h };
 }
 
+/** How a character-relative spot reads back in a chip ("above Mira's head", "next to Leo"). */
+const relationSay = (relation: Placement['relation'], name: string): string =>
+  relation === 'above' ? `above ${name}'s head` : relation === 'below' ? `below ${name}` : relation === 'left' ? `to the left of ${name}` : relation === 'right' ? `to the right of ${name}` : `next to ${name}`;
+
+/**
+ * The question for a spot that needs a character the panel can't give (plan B4 "asks"): which of several people, which
+ * two for "between", or — when they aren't drawn there — move the line to their panel or pick someone who is.
+ */
+function placeAsk(doc: ComicDoc, w: Where, place: Placement, miss: PlaceMiss): CompileOutcome | undefined {
+  const q = quote(w.line.text, 40);
+  const names = (ids: readonly string[]) => ids.map((id) => speakerName(doc, id)).filter((n): n is string => !!n && !!n.trim());
+  // "between Mira and Leo" where "Mira" is ambiguous: the chip keeps the name that did resolve.
+  const otherName = (): string | undefined => {
+    for (const n of [place.near, place.and]) {
+      const m = n ? matchSpeaker(doc, n) : undefined;
+      if (m?.status === 'one') return speakerName(doc, m.characterId);
+    }
+    return undefined;
+  };
+  if (miss.candidates?.length) {
+    // "Mira" could be two people: one chip each, keeping the spot the creator asked for.
+    return asking(
+      miss.reason,
+      names(miss.candidates).slice(0, 4).map((name) => {
+        const and = place.relation === 'between' ? otherName() : undefined;
+        return { label: name, say: `Put ${q} ${and ? `between ${name} and ${and}` : relationSay(place.relation, name)}` };
+      })
+    );
+  }
+  if (miss.pairs?.length) {
+    // "between them" with three or more people: one chip per pair ("between Mira Patel and Leo").
+    const ns = names(miss.pairs);
+    const pairs: NextStep[] = [];
+    for (let i = 0; i < ns.length && pairs.length < 4; i++) for (let j = i + 1; j < ns.length && pairs.length < 4; j++) pairs.push({ label: `${ns[i]} and ${ns[j]}`, say: `Put ${q} between ${ns[i]} and ${ns[j]}` });
+    return asking(miss.reason, pairs);
+  }
+  if (miss.few) {
+    const chips: NextStep[] = names(miss.few).slice(0, 2).map((name) => ({ label: `Above ${name}`, say: `Put ${q} above ${name}'s head` }));
+    chips.push({ label: 'Top of the panel', say: `Move ${q} to the top` });
+    return asking(miss.reason, chips);
+  }
+  if (miss.absent) {
+    const who = speakerName(doc, miss.absent.characterId) ?? 'They';
+    const chips: NextStep[] = miss.absent.elsewhere.slice(0, 2).map((n) => ({ label: `Move it to panel ${n}`, say: `Move ${q} to panel ${n}` }));
+    for (const name of names(miss.absent.drawn).slice(0, 2)) chips.push({ label: `${place.relation === 'above' ? 'Above' : 'Next to'} ${name}`, say: `Put ${q} ${relationSay(place.relation === 'between' ? 'near' : place.relation, name)}` });
+    chips.push({ label: 'Top of the panel', say: `Move ${q} to the top` });
+    const where = miss.absent.elsewhere.length ? `Move the line to ${who}'s panel, or place it somewhere in panel ${miss.absent.panelN}?` : `Where in panel ${miss.absent.panelN} should it go?`;
+    return asking(`${miss.reason} ${where}`, chips);
+  }
+  return undefined;
+}
+
 function compileMove(doc: ComicDoc, place: Placement, lines: LineHit[]): CompileOutcome {
   if (inArt(doc)) return nothing(IN_ART_REFUSAL);
+  // "Caption across the top": a full-width bar is a rectangle (plan B4 line_style {shape:'rect'}). The shape is applied
+  // first, so the bar is measured with the outline it will be drawn with.
+  const bars = place.edge
+    ? lines
+        .map((h) => whereOf(doc, h.lineId))
+        .filter((w): w is Where => !!w && !w.page.balloons.find((b) => b.lineId === w.line.id)?.locked && resolveLetterStyle(doc, w.line).shape !== 'rect')
+        .map((w) => ({ pageId: w.page.id, lineId: w.line.id, patch: { shape: 'rect' } as LetterStylePatch }))
+    : [];
+  const base = bars.length ? applyOps(doc, lineStyleOps(bars)) : doc;
   const ops: DocOp[] = [];
+  const placed = new Set<string>();
   const notes: string[] = [];
   const refused: string[] = [];
   let where = '';
-  let ask: { reason: string; candidates?: string[] } | undefined;
+  let ask: CompileOutcome | undefined;
   const stacks = new Map<string, { panelIndex: number; top: number; bottom: number; fromBottom: boolean }>();
   const fromBottom = !!(place.cell?.startsWith('bottom') || place.edge === 'bottom');
   for (const hit of lines) {
-    const w = whereOf(doc, hit.lineId);
+    const w = whereOf(base, hit.lineId);
     if (!w) continue;
     // One spot per region: a page-frame spot is shared by every panel's line, so they stack too.
     const key = place.frame === 'page' ? w.page.id : `${w.page.id}|${w.panel.id}`;
     const stackable = !place.nudge && lines.length > 1;
-    const res = placeOps(doc, w.page, w.line.id, place, stackable ? stacks.get(key) : undefined);
+    const res = placeOps(base, w.page, w.line.id, place, stackable ? stacks.get(key) : undefined);
     if (res.ok === false) {
       if ('same' in res && res.same) notes.push(`${quote(w.line.text)} is already there.`);
-      else if (res.candidates?.length) ask = { reason: res.reason, candidates: res.candidates };
-      else refused.push(res.reason);
+      else if (!ask && lines.length === 1 && ('candidates' in res || 'absent' in res || 'pairs' in res || 'few' in res)) {
+        ask = placeAsk(doc, w, place, res);
+        if (!ask) refused.push(res.reason);
+      } else refused.push(res.reason);
       continue;
     }
     ops.push(...res.ops);
+    placed.add(w.line.id);
     where = res.where;
     if (res.note && !notes.includes(res.note)) notes.push(res.note);
     if (stackable) {
@@ -463,17 +587,19 @@ function compileMove(doc: ComicDoc, place: Placement, lines: LineHit[]): Compile
       stacks.set(key, { panelIndex: res.panelIndex, top: Math.min(prev?.top ?? res.top, res.top), bottom: Math.max(prev?.bottom ?? res.bottom, res.bottom), fromBottom });
     }
   }
-  if (ask && !ops.length) {
-    return asking(ask.reason, (ask.candidates ?? []).map((id) => speakerName(doc, id)).filter((n): n is string => !!n).slice(0, 4).map((name) => ({ label: name, say: `Put ${lines.length === 1 ? quote(lines[0].text, 30) : 'them'} next to ${name}` })));
-  }
-  if (!ops.length) return nothing(join(...[...new Set(refused)], ...notes) ?? 'Nothing to change.');
-  const who = lines.length === 1 ? quote(lines[0].text) : plural(ops.length, 'balloon');
+  if (ask && !ops.length) return ask;
+  if (!ops.length) return refused.length ? nothing(join(...[...new Set(refused)], ...notes) ?? 'Nothing to change.') : notes.length ? alreadySo(join(...notes)!) : nothing('Nothing to change.');
+  const squared = bars.filter((b) => placed.has(b.lineId));
+  if (squared.length) ops.unshift(...lineStyleOps(squared));
+  const n = placed.size;
+  const who = lines.length === 1 ? quote(lines[0].text) : plural(n, 'balloon');
   const hint = !place.nudge && !place.near && !place.relation && place.frame !== 'page' ? 'Say “of the page” to use the whole page.' : undefined;
+  const barNote = squared.length ? (squared.length === 1 && n === 1 ? 'Its bubble is now a rectangle, so the bar runs edge to edge.' : `${plural(squared.length, 'bubble')} became rectangles, so the bars run edge to edge.`) : undefined;
   return result(
     ops,
-    ops.length === 1 ? 'Move balloon' : `Move ${ops.length} balloons`,
+    n === 1 ? 'Move balloon' : `Move ${n} balloons`,
     afterMove(lines.length === 1 ? lines[0] : undefined),
-    join(`Moved ${who} ${place.nudge || place.near || place.relation ? where : `to ${where}`}. Pinned, so auto-layout won't move ${ops.length === 1 ? 'it' : 'them'}.`, hint, ...notes, ...[...new Set(refused)])
+    join(`Moved ${who} ${place.nudge || place.near || place.relation ? where : `to ${where}`}. Pinned, so auto-layout won't move ${n === 1 ? 'it' : 'them'}.`, barNote, hint, ...notes, ...[...new Set(refused)])
   );
 }
 
@@ -491,8 +617,21 @@ function compileAimTail(doc: ComicDoc, to: string, lines: LineHit[]): CompileOut
     const target = /^(?:mouth|her mouth|his mouth|their mouth|the mouth)$/i.test(to.trim()) ? 'mouth' : { name: to };
     const tip = tailTip(doc, w.page.id, w.line.id, target);
     if (tip.ok === false) {
+      const q = quote(w.line.text, 30);
       if (tip.candidates?.length) {
-        return asking(tip.reason, tip.candidates.map((id) => speakerName(doc, id)).filter((n): n is string => !!n).slice(0, 4).map((name) => ({ label: name, say: `Point the tail of ${quote(w.line.text, 30)} at ${name}` })));
+        return asking(tip.reason, tip.candidates.map((id) => speakerName(doc, id)).filter((n): n is string => !!n).slice(0, 4).map((name) => ({ label: name, say: `Point the tail of ${q} at ${name}` })));
+      }
+      if (tip.absent && lines.length === 1) {
+        // The one they named isn't drawn here: aim at someone who is, or move the line to their panel.
+        const who = speakerName(doc, tip.absent.characterId) ?? 'They';
+        const chips: NextStep[] = tip.absent.drawn
+          .map((id) => speakerName(doc, id))
+          .filter((n): n is string => !!n && !!n.trim())
+          .slice(0, 2)
+          .map((name) => ({ label: `Point at ${name}`, say: `Point the tail of ${q} at ${name}` }));
+        for (const n of tip.absent.elsewhere.slice(0, 2)) chips.push({ label: `Move it to panel ${n}`, say: `Move ${q} to panel ${n}` });
+        if (w.line.speakerId && SPOKEN.has(w.line.kind)) chips.push({ label: 'Off-panel voice', say: `The voice of ${q} comes from off-panel` });
+        return asking(`${tip.reason} Point the tail at someone in panel ${tip.absent.panelN}${tip.absent.elsewhere.length ? `, or move the line to ${who}'s panel` : ''}?`, chips);
       }
       notes.push(tip.reason);
       continue;
@@ -527,6 +666,7 @@ const lineStyleOps = (entries: { pageId: string; lineId: string; patch: LetterSt
 function compileTailStyle(doc: ComicDoc, tail: LetterStyle['tail'], lines: LineHit[]): CompileOutcome {
   if (inArt(doc)) return nothing(IN_ART_REFUSAL);
   const entries: { pageId: string; lineId: string; patch: LetterStylePatch }[] = [];
+  const touched: string[] = [];
   let locked = 0;
   for (const hit of lines) {
     const w = whereOf(doc, hit.lineId);
@@ -537,27 +677,37 @@ function compileTailStyle(doc: ComicDoc, tail: LetterStyle['tail'], lines: LineH
     }
     if (resolveLetterStyle(doc, w.line).tail === tail) continue;
     entries.push({ pageId: w.page.id, lineId: w.line.id, patch: { tail } });
+    touched.push(w.line.text);
   }
   const lockedNote = locked ? `${plural(locked, 'locked balloon')} stayed as ${locked === 1 ? 'it is' : 'they are'}.` : undefined;
-  if (!entries.length) return nothing(join(lockedNote, `${lines.length === 1 ? 'It already has' : 'They already have'} ${tail === 'none' ? 'no tail' : `a ${tail} tail`}.`)!);
-  return result(lineStyleOps(entries), tail === 'none' ? 'Remove the tail' : `${tail[0].toUpperCase()}${tail.slice(1)} tail`, [], lockedNote);
+  if (!entries.length) {
+    const has = `${lines.length === 1 ? 'It already has' : 'They already have'} ${tail === 'none' ? 'no tail' : `a ${tail} tail`}.`;
+    return locked ? nothing(join(lockedNote, locked < lines.length ? has : undefined)!) : alreadySo(has);
+  }
+  const who = whoWords(touched.map((text) => ({ text })), touched.length);
+  const did = tail === 'none' ? `Removed the tail of ${who}.` : `Gave ${who} ${/^[aeiou]/.test(tail) ? 'an' : 'a'} ${tail} tail.`;
+  return result(lineStyleOps(entries), tail === 'none' ? 'Remove the tail' : `${tail[0].toUpperCase()}${tail.slice(1)} tail`, [], join(did, lockedNote));
 }
 
 /** Ops that move `hit`'s line into `dest` at `index`, asking first when its speaker is not drawn there. */
-function moveToPanelOps(doc: ComicDoc, w: Where, dest: Panel, index: number | undefined, offPanelOk: boolean): { ops: DocOp[]; note?: string } | { ask: CompileOutcome } {
+function moveToPanelOps(doc: ComicDoc, w: Where, dest: Panel, index: number | undefined, opts: CompileOptions): { ops: DocOp[]; note?: string } | { ask: CompileOutcome } {
   const ops: DocOp[] = [{ op: 'line_move', pageId: w.page.id, id: w.line.id, toPanelId: dest.id, ...(index !== undefined ? { index } : {}) }];
   let note: string | undefined;
   const sp = w.line.speakerId;
-  if (dest.id !== w.panel.id && sp && SPOKEN.has(w.line.kind) && !(dest.castIds ?? []).includes(sp)) {
+  if (dest.id !== w.panel.id && sp && SPOKEN.has(w.line.kind) && !(dest.castIds ?? []).includes(sp) && !opts.speakerFollows) {
     const name = speakerName(doc, sp) ?? 'The speaker';
     if (OFF_PANEL_SHOTS.has(dest.shot)) note = `${name} speaks off-panel there (heard, not drawn: ${shotWords(dest.shot)}).`;
-    else if (offPanelOk) note = `${name} speaks off-panel in panel ${dest.n}.`;
+    else if (opts.offPanelOk) note = `${name} speaks off-panel in panel ${dest.n}.`;
     else {
-      // Never re-assign a speaker when moving a line: ask how the line should work there.
+      // Never re-assign a speaker when moving a line: ask how the line should work there (plan B4: add the speaker to
+      // the panel / an off-panel voice / change the speaker).
+      const q = quote(w.line.text, 40);
+      const drawnThere = (dest.castIds ?? []).map((id) => speakerName(doc, id)).find((n): n is string => !!n && !!n.trim());
       return {
-        ask: asking(`${name} isn't drawn in panel ${dest.n}. Move the line there as an off-panel voice, or add ${name} to the panel?`, [
-          { label: 'Off-panel voice', say: `Move ${quote(w.line.text, 40)} to panel ${dest.n} as an off-panel voice` },
-          { label: `Add ${name} to panel ${dest.n}`, say: `Add ${name} to panel ${dest.n} on page ${w.page.n}, then move ${quote(w.line.text, 40)} there` }
+        ask: asking(`${name} isn't drawn in panel ${dest.n}. Move the line there as an off-panel voice, add ${name} to the panel, or give the line to someone drawn there?`, [
+          { label: 'Off-panel voice', say: `Move ${q} to panel ${dest.n} as an off-panel voice` },
+          { label: `Add ${name} to panel ${dest.n}`, say: `Add ${name} to panel ${dest.n} on page ${w.page.n}, then move ${q} there` },
+          drawnThere ? { label: `Give it to ${drawnThere}`, say: `Move ${q} to panel ${dest.n} and give it to ${drawnThere}` } : { label: 'Change the speaker', say: `Who should say ${q} in panel ${dest.n}?` }
         ])
       };
     }
@@ -571,16 +721,26 @@ function moveToPanelOps(doc: ComicDoc, w: Where, dest: Panel, index: number | un
   return { ops, note };
 }
 
-function compileReorder(doc: ComicDoc, to: Extract<DialogueIntent, { act: 'reorder' }>['to'], lines: LineHit[], opts: CompileOptions): CompileOutcome {
+const ORDINAL_WORDS = ['first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh', 'eighth'];
+
+function compileReorder(doc: ComicDoc, to: Extract<DialogueIntent, { act: 'reorder' }>['to'], lines: LineHit[], opts: CompileOptions, atIndex?: number): CompileOutcome {
   if (lines.length !== 1) return nothing(`Reordering moves one line at a time; that matched ${plural(lines.length, 'line')}.`);
   const w = whereOf(doc, lines[0].lineId);
   if (!w) return nothing('That line is not in the comic any more.');
   const ids = w.panel.lines.map((l) => l.id);
   const rest = ids.filter((id) => id !== w.line.id);
+  // A 0-based position ("index 1" = second), clamped to the panel; its last slot is "last".
+  if (typeof atIndex === 'number' && Number.isInteger(atIndex) && atIndex > 0 && atIndex < rest.length) {
+    const want = [...rest.slice(0, atIndex), w.line.id, ...rest.slice(atIndex)];
+    const nth = ORDINAL_WORDS[atIndex] ?? `number ${atIndex + 1}`;
+    const ops = lineOrderOps(w.page, w.panel.id, want);
+    if (!ops.length) return alreadySo(`${quote(w.line.text)} already comes ${nth} in panel ${w.panel.n}.`);
+    return result(ops, 'Reorder lines', [], join(`${quote(w.line.text)} now comes ${nth} in panel ${w.panel.n}.`, artNote(doc, [w.page.id])));
+  }
   if (to === 'first' || to === 'last') {
     const want = to === 'first' ? [w.line.id, ...rest] : [...rest, w.line.id];
     const ops = lineOrderOps(w.page, w.panel.id, want);
-    if (!ops.length) return nothing(`${quote(w.line.text)} already comes ${to} in panel ${w.panel.n}.`);
+    if (!ops.length) return alreadySo(`${quote(w.line.text)} already comes ${to} in panel ${w.panel.n}.`);
     return result(ops, 'Reorder lines', [], join(`${quote(w.line.text)} now comes ${to} in panel ${w.panel.n}.`, artNote(doc, [w.page.id])));
   }
   const otherRef = 'before' in to ? to.before : to.after;
@@ -594,11 +754,11 @@ function compileReorder(doc: ComicDoc, to: Extract<DialogueIntent, { act: 'reord
     const at = rest.indexOf(other.line.id) + (before ? 0 : 1);
     const want = [...rest.slice(0, at), w.line.id, ...rest.slice(at)];
     const ops = lineOrderOps(w.page, w.panel.id, want);
-    if (!ops.length) return nothing(`${quote(w.line.text)} already comes ${before ? 'before' : 'after'} ${quote(other.line.text)}.`);
+    if (!ops.length) return alreadySo(`${quote(w.line.text)} already comes ${before ? 'before' : 'after'} ${quote(other.line.text)}.`);
     return result(ops, 'Reorder lines', [], join(`${quote(w.line.text)} now comes ${before ? 'before' : 'after'} ${quote(other.line.text)}.`, artNote(doc, [w.page.id])));
   }
   const index = other.panel.lines.findIndex((l) => l.id === other.line.id) + (before ? 0 : 1);
-  const moved = moveToPanelOps(doc, w, other.panel, index, !!opts.offPanelOk);
+  const moved = moveToPanelOps(doc, w, other.panel, index, opts);
   if ('ask' in moved) return moved.ask;
   return result(moved.ops, 'Move line', [], join(`Moved ${quote(w.line.text)} to panel ${other.panel.n}, ${before ? 'before' : 'after'} ${quote(other.line.text)}.`, moved.note, artNote(doc, [w.page.id])));
 }
@@ -647,13 +807,13 @@ function compileMoveToPanel(doc: ComicDoc, panelN: number, pageN: number | undef
       continue;
     }
     if (dest.lines.length >= DOC_LIMITS.linesPerPanel) return nothing(`Panel ${panelN} already has ${DOC_LIMITS.linesPerPanel} lines, the most a panel holds.`);
-    const moved = moveToPanelOps(doc, w, dest, undefined, !!opts.offPanelOk);
+    const moved = moveToPanelOps(doc, w, dest, undefined, opts);
     if ('ask' in moved) return moved.ask;
     ops.push(...moved.ops);
     notes.push(`Moved ${quote(w.line.text, 30)} to panel ${panelN}.`);
     if (moved.note) notes.push(moved.note);
   }
-  if (!ops.length) return nothing(notes.join(' ') || 'Nothing to change.');
+  if (!ops.length) return notes.length ? alreadySo(notes.join(' ')) : nothing('Nothing to change.');
   return result(ops, ops.length === 1 ? `Move line to panel ${panelN}` : `Move lines to panel ${panelN}`, [], join(...notes, artNote(doc, lines.map((h) => h.pageId))));
 }
 
@@ -682,8 +842,9 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
     const copy: Record<string, unknown> = {};
     for (const k of LOOK_KEYS) if (!sameValue(from[k], now[k])) copy[k] = from[k];
     style = { ...(sanitizeLetterStylePatch(copy) ?? {}), ...style };
-    if (!Object.keys(style).length) return nothing(`Every ${KIND_NOUN[extras.asKind]} already looks like ${quote(w.line.text, 30)}.`);
+    if (!Object.keys(style).length) return alreadySo(`Every ${KIND_NOUN[extras.asKind]} already looks like ${quote(w.line.text, 30)}.`);
   }
+  if (extras.unknownFont) return askFont(doc, intent, lines, style, scaleBy, extras.unknownFont);
   if (!Object.keys(style).length && !scaleBy) return nothing('That style has nothing I can change. Try a font, a colour, a bubble shape, bold or italic.');
 
   if (scope === 'line') {
@@ -715,15 +876,18 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
   }
   if (scope === 'speaker') {
     let id: string | undefined;
+    const theirs = [...new Set(lines.map((h) => h.speakerId).filter((x): x is string => !!x))];
     if (intent.target.speaker) {
-      const m = matchSpeaker(doc, intent.target.speaker);
+      // "her lines": the pronoun means the speaker the resolver already found (the selection's).
+      const m = matchSpeaker(doc, intent.target.speaker, { pronounOf: theirs.length === 1 ? theirs[0] : undefined });
+      if (m.status === 'none' && isSpeakerPronoun(intent.target.speaker)) {
+        const rest = styleSayWords(style, scaleBy);
+        return asking(pronounQuestion(intent.target.speaker), castChips(doc, undefined, 4, (name) => `Make ${name}'s lines ${rest || 'look different'}`));
+      }
       if (m.status === 'none') return nothing(`${noSuchSpeaker(doc, intent.target.speaker)} Nothing was changed.`);
       if (m.status === 'many') return asking(`“${intent.target.speaker.trim()}” could be ${castList(doc, m.characterIds)}. Which one?`);
       id = m.characterId;
-    } else {
-      const ids = [...new Set(lines.map((h) => h.speakerId).filter((x): x is string => !!x))];
-      if (ids.length === 1) id = ids[0];
-    }
+    } else if (theirs.length === 1) id = theirs[0];
     if (!id) return asking('Whose lines?', castChips(doc, undefined, 4, (name) => `Restyle ${name}'s lines`));
     const patch = sizeAt(resolveLetterStyle(doc, { id: '', kind: 'speech', text: '', speakerId: id }));
     const name = speakerName(doc, id) ?? 'their';
@@ -733,10 +897,64 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
   return result([{ op: 'letter_style', patch: { base: patch } }], 'Restyle all lettering', [], join(`Restyled all the lettering (${describeStyle(style, scaleBy)}).`, sizeTip));
 }
 
+/** A style patch as words the grammar reads back ("bold italic red text"), for a chip that repeats the request. */
+const styleSayWords = (p: LetterStylePatch, scaleBy?: number): string => {
+  const w: string[] = [];
+  if (scaleBy) w.push(scaleBy >= 1 ? 'bigger' : 'smaller');
+  if (p.weight !== undefined) w.push(p.weight >= 700 ? 'bold' : 'not bold');
+  if (p.italic !== undefined) w.push(p.italic ? 'italic' : 'not italic');
+  if (p.textCase === 'upper') w.push('all caps');
+  else if (p.textCase === 'lower') w.push('lower case');
+  if (p.textColor && p.textColor !== 'none') w.push(`${colorWords(p.textColor).replace(/, see-through$/, '')} text`);
+  if (p.fill && p.fill !== 'none') w.push(`with a ${colorWords(p.fill).replace(/, see-through$/, '')} box`);
+  if (p.border && p.border !== 'none') w.push(`with a ${colorWords(p.border).replace(/, see-through$/, '')} border`);
+  if (p.shape) w.push(p.shape === 'none' ? 'with no bubble' : `with a ${p.shape === 'rounded_rect' ? 'rounded' : p.shape === 'rect' ? 'rectangle' : p.shape} bubble`);
+  return w.join(' ');
+};
+
+/** "Use a handwritten font for Leo" with a font the studio lacks: ask with the 3 nearest, and change nothing yet. */
+function askFont(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'restyle' }>, lines: LineHit[], style: LetterStylePatch, scaleBy: number | undefined, unknown: string): CompileOutcome {
+  const extras = intent as unknown as RestyleExtras;
+  const scope = extras.asKind ? 'kind' : intent.scope;
+  let forWords: string;
+  let sayTarget: string;
+  if (scope === 'speaker') {
+    const m = intent.target.speaker ? matchSpeaker(doc, intent.target.speaker) : undefined;
+    const ids = m?.status === 'one' ? [m.characterId] : [...new Set(lines.map((h) => h.speakerId).filter((x): x is string => !!x))];
+    const name = ids.length === 1 ? speakerName(doc, ids[0]) : undefined;
+    forWords = name ? `${name}'s lines` : 'their lines';
+    sayTarget = name ? `${name}'s lines` : 'their lines';
+  } else if (scope === 'kind') {
+    const kind = scopeKind(intent.target, lines, extras);
+    forWords = kind ? `every ${KIND_NOUN[kind]}` : 'those balloons';
+    sayTarget = kind ? `all the ${KIND_PLURAL[kind]}` : 'them';
+  } else if (scope === 'comic') {
+    forWords = 'all the lettering';
+    sayTarget = 'all the lettering';
+  } else {
+    forWords = lines.length === 1 ? quote(lines[0].text, 30) : plural(lines.length, 'balloon');
+    sayTarget = lines.length === 1 ? quote(lines[0].text, 40) : 'them';
+  }
+  const { font: _drop, ...rest } = style;
+  const restWords = styleSayWords(rest, scaleBy);
+  const nearest = fontFromWords(unknown).nearest.slice(0, 3);
+  const labels = nearest.map((id) => FONT_REGISTRY[id]?.label ?? id);
+  const typed = unknown.trim().slice(0, 40);
+  const shown = /\p{Lu}/u.test(typed) ? typed : typed.replace(/(^|\s)(\p{L})/gu, (_, sp: string, c: string) => `${sp}${c.toUpperCase()}`);
+  const question = `I don't have a font called “${shown}”. Use ${labels.length > 1 ? `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}` : labels[0]} for ${forWords} instead?${
+    restWords ? ` Nothing changed yet: the ${describeStyle(rest, scaleBy)} comes with the font you pick.` : ''
+  }`;
+  return asking(
+    question,
+    labels.map((label) => ({ label: `Use ${label}`, say: `Make ${sayTarget}${restWords ? ` ${restWords}` : ''} in the ${label} font` }))
+  );
+}
+
 function compileZ(doc: ComicDoc, dir: 'front' | 'back', lines: LineHit[]): CompileOutcome {
   if (inArt(doc)) return nothing(IN_ART_REFUSAL);
   const ops: DocOp[] = [];
   const notes: string[] = [];
+  const moved: string[] = [];
   for (const hit of lines) {
     let w = whereOf(doc, hit.lineId);
     if (!w) continue;
@@ -748,6 +966,7 @@ function compileZ(doc: ComicDoc, dir: 'front' | 'back', lines: LineHit[]): Compi
       notes.push(edit.reason === 'It already looks like that.' ? `${quote(w.line.text, 30)} is already at the ${dir}.` : edit.reason);
       continue;
     }
+    moved.push(w.line.text);
     for (const op of edit.ops) {
       // A software-placed line gets its complete drawn balloon with the new z (never a half balloon).
       if (op.op === 'balloon') {
@@ -756,8 +975,12 @@ function compileZ(doc: ComicDoc, dir: 'front' | 'back', lines: LineHit[]): Compi
       } else ops.push(op);
     }
   }
-  if (!ops.length) return nothing(join(...new Set(notes)) ?? 'Nothing to change.');
-  return result(ops, dir === 'front' ? 'Bring to front' : 'Send to back', [], join(...new Set(notes)));
+  if (!ops.length) {
+    const said = join(...new Set(notes)) ?? 'Nothing to change.';
+    return notes.length && notes.every((n) => n.endsWith(`is already at the ${dir}.`)) ? alreadySo(said) : nothing(said);
+  }
+  const who = whoWords(moved.map((text) => ({ text })), moved.length);
+  return result(ops, dir === 'front' ? 'Bring to front' : 'Send to back', [], join(dir === 'front' ? `Brought ${who} to the front.` : `Sent ${who} to the back.`, ...new Set(notes)));
 }
 
 function compileLock(doc: ComicDoc, lock: boolean, lines: LineHit[]): CompileOutcome {
@@ -775,7 +998,7 @@ function compileLock(doc: ComicDoc, lock: boolean, lines: LineHit[]): CompileOut
     const op = balloonPatchOp(pageGeo(doc, w.page), w.line.id, lock ? { locked: true, pinned: true } : { locked: false });
     if (op) ops.push(op);
   }
-  if (!ops.length) return nothing(same ? `${lines.length === 1 ? "It's" : "They're"} already ${lock ? 'locked' : 'unlocked'}.` : 'Nothing to change.');
+  if (!ops.length) return same ? alreadySo(`${lines.length === 1 ? "It's" : "They're"} already ${lock ? 'locked' : 'unlocked'}.`) : nothing('Nothing to change.');
   const who = ops.length === 1 ? quote(lines[0].text, 30) : plural(ops.length, 'balloon');
   return result(
     ops,
@@ -804,7 +1027,7 @@ function compileLink(doc: ComicDoc, intent: LinkIntent, lines: LineHit[], opts: 
     const ids = new Set(ws.filter((w) => w.page.id === page.id).map((w) => w.line.id));
     const touches = (b: Balloon) => !!b.linkTo && (ids.has(b.lineId) || ids.has(b.linkTo));
     const linked = page.balloons.filter(touches);
-    if (!linked.length) return nothing(`None of those balloons are linked on page ${page.n}, so nothing changed.`);
+    if (!linked.length) return alreadySo(`None of those balloons are linked on page ${page.n}, so nothing changed.`);
     const balloons = page.balloons.map((b) => {
       if (!touches(b)) return b;
       const { linkTo: _drop, ...rest } = b;
@@ -838,7 +1061,7 @@ function compileLink(doc: ComicDoc, intent: LinkIntent, lines: LineHit[], opts: 
     const op = balloonPatchOp(geo, chain[0], {});
     if (op && op.op === 'balloon' && Object.keys(op.patch).length) ops.unshift(op);
   }
-  if (!ops.length) return nothing('Those balloons are already linked.');
+  if (!ops.length) return alreadySo('Those balloons are already linked.');
   return result(ops, 'Link balloons', [], `Linked ${plural(chain.length, 'balloon')} in panel ${ws[0].panel.n} on page ${page.n} with connector necks, in reading order.`);
 }
 
@@ -849,13 +1072,14 @@ function compileEmphasis(doc: ComicDoc, intent: Extract<DialogueIntent, { act: '
   if (lines.length === 1 && bare(lines[0].text) && bare(lines[0].text) === bare(intent.words.join(' '))) {
     return compileRestyle(doc, { act: 'restyle', target: intent.target, scope: 'line', style: intent.style === 'italic' ? { italic: true } : { weight: 700 } }, lines);
   }
-  const words = intent.words.filter(Boolean).map((w) => `“${w}”`).join(', ') || 'single words';
+  // Plan B4's copy: the whole balloon now, single words later (inline runs ship with C-TYPO).
   const q = lines.length === 1 ? quote(lines[0].text, 30) : 'it';
+  const italic = intent.style === 'italic';
   return {
     ops: [],
     label: '',
-    followUps: [{ label: `Make the balloon ${intent.style}`, say: `Make ${q} ${intent.style}` }],
-    note: `I can make the whole balloon ${intent.style} now; ${intent.style} on single words like ${words} isn't available yet.`
+    followUps: [{ label: italic ? 'Italicize the balloon' : 'Bold the balloon', say: `Make ${q} ${italic ? 'italic' : 'bold'}` }],
+    note: italic ? "I can italicize the whole balloon now; single-word italics aren't available yet." : "I can bold the whole balloon now; single-word bold isn't available yet."
   };
 }
 
@@ -863,7 +1087,7 @@ function compileEmphasis(doc: ComicDoc, intent: Extract<DialogueIntent, { act: '
 function askFrom(doc: ComicDoc, res: Resolution): CompileOutcome {
   const ask: ResolutionAsk | undefined = askForResolution(doc, res);
   if (!ask) return nothing('Nothing to change.');
-  if (res.status === 'none') return nothing(ask.question);
+  if (res.status === 'none' && !isPronounResolution(res)) return nothing(ask.question);
   return asking(ask.question, ask.followUps, ask.options);
 }
 
@@ -893,7 +1117,7 @@ export function compileWith(doc: ComicDoc, intent: DialogueIntent, lines: LineHi
     case 'tail_style':
       return compileTailStyle(doc, intent.tail, hits);
     case 'reorder':
-      return compileReorder(doc, intent.to, hits, opts);
+      return compileReorder(doc, intent.to, hits, opts, (intent as unknown as ReorderExtras).atIndex);
     case 'swap':
       return compileSwap(doc, hits);
     case 'move_to_panel':
@@ -936,13 +1160,28 @@ export interface DialogueRun {
   followUps: NextStep[];
   /** The question card when status is 'ask'. */
   ask?: CompileAsk;
-  /** Each intent with the lines it resolved to (in order). */
-  steps: { intent: DialogueIntent; lines: LineHit[] }[];
+  /** Each intent with the lines it resolved to (in order) and what the reply says about it. */
+  steps: { intent: DialogueIntent; lines: LineHit[]; note?: string }[];
   /** The resolution that stopped the run (which / tap / confirm / none), when one did. */
   resolution?: Resolution;
 }
 
 const sameRef = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** "1 of those lines isn't in the comic any more, so it was left out." for explicit ids that name no lettered line. */
+const droppedNote = (doc: ComicDoc, refs: (LineRef | undefined)[]): string | undefined => {
+  const ids = [...new Set(refs.flatMap((r) => r?.lineIds ?? []))];
+  if (!ids.length) return undefined;
+  const live = new Set(lineHits(doc).map((h) => h.lineId));
+  const missing = ids.filter((id) => !live.has(id));
+  if (!missing.length || missing.length === ids.length) return undefined;
+  const empty = missing.filter((id) => !!whereOf(doc, id));
+  const gone = missing.length - empty.length;
+  return join(
+    gone ? `${gone} of those lines ${gone === 1 ? "isn't" : "aren't"} in the comic any more, so ${gone === 1 ? 'it was' : 'they were'} left out.` : undefined,
+    empty.length ? `${empty.length} of those lines ${empty.length === 1 ? 'has' : 'have'} no words yet, so ${empty.length === 1 ? 'it was' : 'they were'} left out.` : undefined
+  );
+};
 
 /** Consecutive `line` patches of one line become one op ("Mira should shout 'Run!'" → {kind, text}). */
 export const mergeLineOps = (ops: DocOp[]): DocOp[] => {
@@ -967,7 +1206,7 @@ const targetOf = (intent: DialogueIntent): LineRef | undefined =>
  * as the earlier intents left it. Any question or empty match stops the run with no ops at all, so an instruction is
  * applied whole or not at all. Free: no model call.
  */
-export function compileDialogue(doc: ComicDoc, intents: readonly DialogueIntent[], ctx: ResolveContext = {}): DialogueRun {
+export function compileDialogue(doc: ComicDoc, intents: readonly DialogueIntent[], ctx: DialogueContext = {}): DialogueRun {
   let work = doc;
   const ops: DocOp[] = [];
   const labels: string[] = [];
@@ -1025,19 +1264,29 @@ export function compileDialogue(doc: ComicDoc, intents: readonly DialogueIntent[
     const next = intents[i + 1];
     const offPanelOk =
       intent.act === 'move_to_panel' && !!next && next.act === 'set_speaker' && next.speaker === 'off_panel' && sameRef(next.target, intent.target);
-    const out = compileWith(work, intent, lines, { offPanelOk, focus: ctx });
-    steps.push({ intent, lines });
+    // "Move it to panel 3 and give it to Bolt": the next step names who says it there, so the move need not ask.
+    const speakerFollows =
+      intent.act === 'move_to_panel' && !!next && next.act === 'set_speaker' && next.speaker !== 'off_panel' && sameRef(next.target, intent.target);
+    const out = compileWith(work, intent, lines, { offPanelOk, speakerFollows, focus: ctx });
+    // Never silent about ids that no longer name a lettered line ("1 of those lines isn't in the comic any more").
+    const stepNote = join(out.note, out.ask ? undefined : droppedNote(doc, intent.act === 'swap' ? [intent.a, intent.b] : [targetOf(intent)]));
+    steps.push({ intent, lines, ...(stepNote ? { note: stepNote } : {}) });
     if (out.ask) return stop('ask', { note: out.note, ask: out.ask, followUps: out.followUps });
     if (!out.ops.length) {
+      if (intents.length === 1) return stop('none', { note: stepNote ?? 'Nothing to change.', followUps: out.followUps });
+      // A refusal ("there's no character called…", a lock, in-art lettering) stops the whole instruction: all or nothing.
+      if (!out.already) {
+        const said = stepNote ?? 'That part could not be done.';
+        return stop('none', { note: /nothing (?:else )?was (?:changed|added)/i.test(said) ? said : `${said} So nothing was changed.`, followUps: out.followUps });
+      }
       // Nothing to do for this part ("it's already a whisper"): say so and carry on with the rest.
-      if (out.note) notes.push(out.note);
-      if (intents.length === 1) return stop('none', { note: out.note ?? 'Nothing to change.', followUps: out.followUps });
+      if (stepNote) notes.push(stepNote);
       prev = { ref: targetOf(intent), lines };
       continue;
     }
     ops.push(...out.ops);
     labels.push(out.label);
-    if (out.note) notes.push(out.note);
+    if (stepNote) notes.push(stepNote);
     followUps = out.followUps;
     work = applyOps(work, out.ops);
     prev = { ref: targetOf(intent), lines };
@@ -1054,7 +1303,7 @@ export function compileDialogue(doc: ComicDoc, intents: readonly DialogueIntent[
 
   function stopFor(d: ComicDoc, res: Resolution): DialogueRun {
     const ask = askForResolution(d, res);
-    if (res.status === 'none') return stop('none', { note: res.note, resolution: res });
+    if (res.status === 'none' && !isPronounResolution(res)) return stop('none', { note: res.note, resolution: res });
     return stop('ask', { note: ask?.question, ask: ask ? { question: ask.question, ...(ask.options ? { options: ask.options } : {}) } : undefined, followUps: ask?.followUps, resolution: res });
   }
 }
@@ -1074,6 +1323,9 @@ export function dialogueFastPath(doc: ComicDoc, text: string, ctx: ResolveContex
   if (!g.confident || !g.intents.length) return undefined;
   const run = compileDialogue(doc, g.intents, ctx);
   if (run.status !== 'apply' || !run.ops.length) return undefined;
+  // A kind-, speaker- or comic-wide restyle changes every such line however few are selected: the director takes it.
+  const wide = (i: DialogueIntent) => i.act === 'restyle' && (i.scope !== 'line' || !!(i as unknown as RestyleExtras).asKind);
+  if (run.steps.some((s) => wide(s.intent))) return undefined;
   if (!run.steps.every((s) => (s.intent.act === 'add' ? s.lines.length === 0 : s.lines.length === 1))) return undefined;
   if (!run.ops.every((op) => FREE_DIALOGUE_OPS.has(op.op))) return undefined;
   return run;

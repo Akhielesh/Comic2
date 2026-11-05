@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { applyOps, type DocOp } from '../ops';
 import { inverseOps } from '../undo';
-import { compileDialogue, intentFromArgs, parseDialogue, type DialogueIntent } from './index';
+import { compileDialogue, dialogueFastPath, intentFromArgs, parseDialogue, type DialogueIntent, type RestyleExtras } from './index';
 import { dialogueDoc } from './__fixtures__/dialogueDoc';
 
 interface Row {
@@ -18,6 +18,8 @@ interface Row {
   args?: Record<string, unknown>;
   selected?: string[];
   focus?: { pageId?: string; panelN?: number };
+  /** A lettering preset for this row's comic (e.g. storybook, whose captions are scrolls). */
+  preset?: string;
   expect: {
     intents: DialogueIntent[];
     confident?: boolean;
@@ -48,12 +50,20 @@ const B4_ROWS = [
 ];
 
 describe('B4 phrase corpus', () => {
-  const doc = dialogueDoc();
+  const plain = dialogueDoc();
+  const docFor = (row: Row) =>
+    row.preset
+      ? dialogueDoc((d) => {
+          d.letterStyle = { ...(d.letterStyle ?? { presetId: 'classic' }), presetId: row.preset as never };
+        })
+      : plain;
+  const ctxOf = (row: Row) => ({ ...(row.selected?.length ? { lineIds: row.selected } : {}), ...(row.focus ?? {}) });
 
-  it('covers every row of the B4 table, with Hindi and Telugu structured rows', () => {
+  // A fixture guard (it reads only phrases.json): the corpus keeps covering every B4 row.
+  it('fixture guard: covers every row of the B4 table, with Hindi and Telugu structured rows', () => {
     const covered = new Set(rows.map((r) => r.b4));
     expect(B4_ROWS.filter((b) => !covered.has(b))).toEqual([]);
-    expect(rows.filter((r) => r.args).map((r) => r.lang).sort()).toEqual(['hi', 'hi', 'hi', 'te', 'te', 'te']);
+    expect(rows.filter((r) => r.args).map((r) => r.lang).sort()).toEqual(['en', 'en', 'hi', 'hi', 'hi', 'te', 'te', 'te']);
     expect(new Set(rows.map((r) => r.id)).size).toBe(rows.length);
   });
 
@@ -70,7 +80,8 @@ describe('B4 phrase corpus', () => {
         intents = g.intents;
       }
       expect(intents, 'intents').toEqual(row.expect.intents);
-      const run = compileDialogue(doc, intents, { ...(row.selected?.length ? { lineIds: row.selected } : {}), ...(row.focus ?? {}) });
+      const doc = docFor(row);
+      const run = compileDialogue(doc, intents, ctxOf(row));
       expect(run.status, 'status').toBe(row.expect.status);
       expect(run.steps.map((s) => s.lines.map((h) => h.lineId)), 'resolved lines').toEqual(row.expect.lines);
       expect(run.ops, 'ops').toEqual(row.expect.ops);
@@ -82,13 +93,40 @@ describe('B4 phrase corpus', () => {
       // Every applied phrase is undone exactly by the inverse-op undo; a question changes nothing.
       if (run.status === 'apply') expect(applyOps(applyOps(doc, run.ops), inverseOps(doc, run.ops)).pages).toEqual(doc.pages);
       else expect(run.ops).toEqual([]);
+      // Never silent: an applied instruction says what it did, step by step, and the reply carries every step.
+      if (run.status === 'apply') {
+        expect(run.note?.trim(), 'reply').toBeTruthy();
+        for (const step of run.steps) {
+          expect(step.note?.trim(), `step ${step.intent.act} says what it did`).toBeTruthy();
+          expect(run.note, `reply covers ${step.intent.act}`).toContain(step.note!);
+        }
+      }
     });
   }
 
-  it('the fast path would run only for confident, single-line, applied phrases', () => {
-    const fast = rows.filter((r) => !r.args && r.expect.confident && r.expect.status === 'apply' && r.expect.lines.every((l) => l.length <= 1));
-    // Never for a question, a refusal or a sentence the grammar only partly understood.
-    expect(fast.some((r) => r.id === 'panel-needs-shout' || r.id === 'whisper-ask' || r.id === 'tidy')).toBe(false);
+  // The engine's own fast-path answer for every grammar row (plan §3 B3): a run exactly when the grammar is confident,
+  // the whole instruction applies, every intent resolves to one line (an add, to a panel), and nothing is comic-wide.
+  const wide = (i: DialogueIntent) => i.act === 'restyle' && (i.scope !== 'line' || !!(i as unknown as RestyleExtras).asKind);
+  for (const row of rows.filter((r) => !r.args)) {
+    it(`fast path ${row.id}: ${row.say}`, () => {
+      const fast = dialogueFastPath(docFor(row), row.say, ctxOf(row));
+      const expected =
+        row.expect.confident === true &&
+        row.expect.status === 'apply' &&
+        row.expect.intents.every((i, k) => (i.act === 'add' ? row.expect.lines[k]?.length === 0 : row.expect.lines[k]?.length === 1)) &&
+        !row.expect.intents.some(wide);
+      expect(!!fast, 'fast path runs').toBe(expected);
+      if (fast) {
+        expect(fast.ops).toEqual(row.expect.ops);
+        expect(fast.note).toBe(row.expect.note);
+      }
+    });
+  }
+
+  it('the fast path runs for enough of the corpus, and never for a question, a refusal or a partial parse', () => {
+    const fast = rows.filter((r) => !r.args && !!dialogueFastPath(docFor(r), r.say, ctxOf(r)));
+    expect(fast.some((r) => r.expect.status !== 'apply' || !r.expect.confident)).toBe(false);
+    expect(fast.map((r) => r.id)).not.toContain('tidy');
     expect(fast.length).toBeGreaterThan(25);
   });
 });

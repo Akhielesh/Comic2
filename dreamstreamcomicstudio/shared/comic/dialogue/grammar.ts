@@ -15,7 +15,7 @@
 import { POS9, type LineKind, type Pos9 } from '../doc.js';
 import { FONT_REGISTRY } from '../lettering/fonts.js';
 import { BUBBLE_SHAPES, FONT_IDS, LINE_KINDS, NAMED_COLORS, normalizeColor, TAIL_STYLES, type BubbleShape, type FontId, type LetterStylePatch, type TailStyle } from '../lettering/style.js';
-import type { RestyleExtras } from './compile.js';
+import type { AddExtras, ReorderExtras, RestyleExtras } from './compile.js';
 import type { PluralLineRef } from './resolve.js';
 import { DIALOGUE_ACTS, type DialogueAct, type DialogueIntent, type GrammarResult, type LineRef, type Placement } from './types.js';
 
@@ -478,8 +478,13 @@ const parseStyle = (clause: string): StyleParse => {
     scaleBy = m[3] === 'huge' ? 1.6 : m[3] === 'tiny' ? 0.7 : bigger ? (/^(?:much|a lot|way)$/.test(amount) ? 1.45 : /^(?:a bit|slightly|a little)$/.test(amount) ? 1.1 : 1.2) : /^(?:much|a lot|way)$/.test(amount) ? 0.7 : /^(?:a bit|slightly|a little)$/.test(amount) ? 0.9 : 0.85;
   }
   // Fonts: "a handwritten font", "in Bangers", "typewriter lettering".
-  if ((m = /\b(?:use |in |with |to )?(?:a |an |the )?([\p{L}][\p{L} -]*?)\s+(?:font|typeface|lettering)\b/u.exec(s))) {
-    const words = m[1].replace(/^(?:use|in|with|to|a|an|the|make|it|its|their|this|that)\s+/g, '').trim();
+  // At most three words name a font ("comic sans ms"), so "Leo's lines in the Patrick Hand font" reads "patrick hand".
+  if ((m = /(?:\b(?:use|in|with|to)\s+)?(?:\b(?:a|an|the)\s+)?\b((?:[\p{L}][\p{L}-]*\s+){0,2}[\p{L}][\p{L}-]*)\s+(?:font|typeface|lettering)\b/u.exec(s))) {
+    let words = m[1].trim();
+    for (let prev = ''; prev !== words; ) {
+      prev = words;
+      words = words.replace(/^(?:use|in|with|to|a|an|the|make|it|its|their|this|that|for)\s+/, '').trim();
+    }
     const f = fontFromWords(words);
     if (f.font) style.font = f.font;
     else if (words && !/^(?:the|a|new|different|another|other|same)$/.test(words)) unknownFont = words;
@@ -542,7 +547,7 @@ const emphasisX: Extractor = (c, prep, selected) => {
     word = m[1] !== undefined && /^\d+$/.test(m[1]) ? prep.quotes[Number(m[1])] : m[2];
     style = /^italic/.test(m[m.length - 1]) ? 'italic' : 'bold';
     if (m[0].includes('«q') && !/\bwords?\b/.test(m[0]) && /\s/.test(word ?? '')) return null; // a whole quoted line: a restyle
-  } else if ((m = /\b(bold|italici[sz]e|embolden|emphasi[sz]e|stress)\s+(?:the\s+words?\s+)?(?:«q(\d+)»|([\p{L}']+))/u.exec(c))) {
+  } else if ((m = /^(bold|italici[sz]e|embolden|emphasi[sz]e|stress)\s+(?:the\s+words?\s+)?(?:«q(\d+)»|([\p{L}']+))/u.exec(c))) {
     word = m[2] !== undefined ? prep.quotes[Number(m[2])] : m[3];
     if (!word || STOP_NAMES.has(word)) return null;
     style = /^italic/.test(m[1]) ? 'italic' : 'bold';
@@ -800,7 +805,9 @@ const addX: Extractor = (c, prep) => {
     if (!kind || !/\b(?:panel|page)\b/.test(m[1])) return null;
     const q = Q_RE.exec(m[3]);
     const panel = panelRefOf(m[1]);
-    return { intents: [{ act: 'add', panel, kind, ...(q ? { text: prep.quotes[Number(q[1])] } : {}) }], confident: false };
+    // "needs a" may mean changing an existing line (the compiler asks which, or for new words): AddExtras.orChange.
+    const intent = { act: 'add', panel, kind, ...(q ? { text: prep.quotes[Number(q[1])] } : {}), orChange: true } as DialogueIntent & AddExtras;
+    return { intents: [intent], confident: false };
   }
   // "Leo says 'wait for me' in the last panel" (a new line, said by a named character).
   if ((m = new RegExp(`^${NAME}\\s+(says|shouts|yells|screams|whispers|murmurs|thinks|wonders)\\s+«q(\\d+)»(.*)$`, 'u').exec(c))) {
@@ -940,9 +947,22 @@ const setKindX: Extractor = (c, prep, selected) => {
   return null;
 };
 
+/** Mood words that describe a font rather than name one ("a nicer font", "a scary font"): the director picks those. */
+const FONT_MOOD_RE =
+  /^(?:nice|nicer|better|cool|cooler|good|fun|funny|fancy|fancier|pretty|prettier|cute|cuter|serious|scary|spooky|creepy|thin|thinner|thick|thicker|clean|cleaner|simple|simpler|elegant|cursive|script|happy|sad|angry|loud|quiet|small|big|large|tiny|huge|bigger|smaller|larger|old|older|young|kid|childish|adult|professional|cartoony|cartoonish|messy|neat|neater|curly|blocky|round|rounder|smooth|rough|wild|crazy|weird|unique|special|matching|consistent|whole|entire|my|our|your|their|his|her|same|other|another|different|new|nicest|best|coolest)$/;
+
+/** "comic sans", "papyrus": words that read as a font NAME the studio lacks (asked about with the 3 nearest fonts). */
+const fontNameLike = (words: string): boolean => {
+  const tokens = words.split(/[\s-]+/).filter(Boolean);
+  if (!tokens.length || tokens.length > 3) return false;
+  return tokens.every(
+    (t) => /^\p{L}{2,}$/u.test(t) && !STOP_NAMES.has(t) && !FONT_MOOD_RE.test(t) && !new RegExp(`^(?:${VERBS})$`).test(t) && !KIND_TERM_RE.test(t) && !LINE_NOUN_RE.test(t)
+  );
+};
+
 const restyleX: Extractor = (c, prep, selected) => {
   const st = parseStyle(c);
-  if (!st.matched || st.unknownFont) return null;
+  if (!st.matched || (st.unknownFont && !fontNameLike(st.unknownFont))) return null;
   let rest = st.rest;
   let scope: 'line' | 'kind' | 'speaker' | 'comic' = 'line';
   let ref: PluralLineRef | undefined;
@@ -964,7 +984,14 @@ const restyleX: Extractor = (c, prep, selected) => {
     if (ref.speaker && ref.all && !ref.kind && ref.page === undefined && ref.panel === undefined && !ref.selected) scope = 'speaker';
     else if (ref.kind && ref.all && ref.page === undefined && ref.panel === undefined && !ref.speaker && !ref.selected && !ref.textContains) scope = 'kind';
   }
-  const intent = { act: 'restyle', target: ref, scope, style: st.style, ...(st.scaleBy !== undefined ? { scaleBy: st.scaleBy } : {}) } as DialogueIntent & RestyleExtras;
+  const intent = {
+    act: 'restyle',
+    target: ref,
+    scope,
+    style: st.style,
+    ...(st.scaleBy !== undefined ? { scaleBy: st.scaleBy } : {}),
+    ...(st.unknownFont ? { unknownFont: st.unknownFont } : {})
+  } as DialogueIntent & RestyleExtras;
   return { intents: [intent], confident: anchoredOk || scope !== 'line', target: ref };
 };
 
@@ -1104,15 +1131,19 @@ const SIZE_WORDS: Readonly<Record<string, number>> = {
   larger: 1.2, bigger: 1.2, big: 1.2, large: 1.2, 'a bit larger': 1.1, 'a bit bigger': 1.1, 'slightly larger': 1.1, 'slightly bigger': 1.1,
   'much larger': 1.45, 'much bigger': 1.45, huge: 1.6, smaller: 0.85, small: 0.85, 'a bit smaller': 0.9, 'slightly smaller': 0.9, 'much smaller': 0.7, tiny: 0.7
 };
-const sizeWordScale = (raw: unknown): number | undefined => (typeof raw === 'string' ? SIZE_WORDS[raw.trim().toLowerCase()] : undefined);
 
-/** The flat style args a model may send, for the parts that need no current style (B-TOOL converts the rest). */
-const styleFromArgs = (raw: unknown): LetterStylePatch => {
-  if (!isObj(raw)) return {};
+/**
+ * The flat style args a model may send, for the parts that need no current style (B-TOOL converts the rest), and a font
+ * name the studio does not have (never dropped silently: the compiler asks with the 3 nearest fonts).
+ */
+const styleFromArgs = (raw: unknown): { style: LetterStylePatch; unknownFont?: string } => {
+  if (!isObj(raw)) return { style: {} };
   const out: LetterStylePatch = {};
-  if (typeof raw.font === 'string') {
+  let unknownFont: string | undefined;
+  if (typeof raw.font === 'string' && raw.font.trim()) {
     const f = fontFromWords(raw.font);
     if (f.font) out.font = f.font;
+    else unknownFont = raw.font.trim().slice(0, 40);
   }
   if (typeof raw.bold === 'boolean') out.weight = raw.bold ? 700 : 400;
   if (typeof raw.italic === 'boolean') out.italic = raw.italic;
@@ -1124,7 +1155,26 @@ const styleFromArgs = (raw: unknown): LetterStylePatch => {
   if (shape) out.shape = shape;
   const tail = oneOf(raw.tail, TAIL_STYLES);
   if (tail) out.tail = tail;
-  return out;
+  return { style: out, ...(unknownFont ? { unknownFont } : {}) };
+};
+
+/**
+ * dialogue_edit's style.size (the server's STYLE_SCHEMA: "smaller", "larger" or a scale like "1.2") → a factor of each
+ * line's own size (`scaleBy`, for words) or an absolute text size (`sizeScale` 0.5–3.5, for a number; "normal" = 1).
+ */
+const sizeFromArgs = (raw: unknown): { scaleBy?: number; sizeScale?: number } | { error: string } | undefined => {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const abs = (n: number) => ({ sizeScale: Math.round(Math.min(3.5, Math.max(0.5, n)) * 100) / 100 });
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return abs(raw);
+  if (typeof raw === 'string') {
+    const key = raw.trim().toLowerCase();
+    const word = SIZE_WORDS[key];
+    if (word !== undefined) return { scaleBy: word };
+    if (/^(?:normal|default|reset|regular)$/.test(key)) return { sizeScale: 1 };
+    const n = /^(\d+(?:\.\d+)?)\s*x?$/.exec(key);
+    if (n && Number(n[1]) > 0) return abs(Number(n[1]));
+  }
+  return { error: `Size must be "smaller", "larger" or a scale like 1.2 (got "${String(raw).slice(0, 20)}").` };
 };
 
 /**
@@ -1166,7 +1216,7 @@ export function intentFromArgs(args: unknown, opts: { style?: LetterStylePatch }
       return to ? { intent: { act, target, to } } : { error: 'aim_tail needs tail_to: a character, or "mouth".' };
     }
     case 'tail_style': {
-      const style = opts.style ?? styleFromArgs(args.style);
+      const style = opts.style ?? styleFromArgs(args.style).style;
       const tail = style.tail ?? oneOf(args.tail, TAIL_STYLES);
       return tail ? { intent: { act, target, tail } } : { error: `tail_style needs style.tail: ${TAIL_STYLES.join(', ')}.` };
     }
@@ -1174,8 +1224,10 @@ export function intentFromArgs(args: unknown, opts: { style?: LetterStylePatch }
       const index = int(args.index);
       if (second) return { intent: { act, target, to: index !== undefined && index > 0 ? { after: second } : { before: second } } };
       if (index === 0) return { intent: { act, target, to: 'first' } };
-      if (index !== undefined) return { intent: { act, target, to: 'last' } };
-      return { error: 'reorder needs index (0 = first) or second (the line to go before).' };
+      if (index === -1) return { intent: { act, target, to: 'last' } };
+      // "0-based position in the panel": the compiler places it there (the panel's length is known only with the doc).
+      if (index !== undefined && index > 0) return { intent: { act, target, to: 'last', atIndex: index } as DialogueIntent & ReorderExtras };
+      return { error: 'reorder needs index (0 = first, -1 = last, or a 0-based position) or second (the line to go before).' };
     }
     case 'swap':
       return second ? { intent: { act, a: target, b: second } } : { intent: { act, a: { ...target, all: true } as PluralLineRef, b: { ...target, all: true } as PluralLineRef } };
@@ -1185,11 +1237,20 @@ export function intentFromArgs(args: unknown, opts: { style?: LetterStylePatch }
     }
     case 'restyle': {
       const scope = oneOf(args.scope, ['line', 'kind', 'speaker', 'comic'] as const) ?? 'line';
-      const style = opts.style ?? styleFromArgs(args.style);
-      // "larger" / "smaller" are relative to each line's own size (compile.ts scaleBy), never one absolute number.
-      const scaleBy = opts.style ? undefined : sizeWordScale(isObj(args.style) ? args.style.size : undefined);
-      if (!Object.keys(style).length && scaleBy === undefined) return { error: 'restyle needs style changes (font, colours, shape, bold, italic, size…).' };
-      const intent = { act, target, scope, style, ...(scaleBy !== undefined ? { scaleBy } : {}) } as DialogueIntent & RestyleExtras;
+      const flat = styleFromArgs(args.style);
+      const style: LetterStylePatch = { ...(opts.style ?? flat.style) };
+      // Size always comes from the args: "larger" / "smaller" stay relative to each line's own size (compile.ts scaleBy),
+      // a number is an absolute text size. A size B-TOOL already converted against one style is replaced.
+      const sized = sizeFromArgs(isObj(args.style) ? args.style.size : undefined);
+      if (sized && 'error' in sized) return { error: sized.error };
+      const size = sized as { scaleBy?: number; sizeScale?: number } | undefined;
+      if (size) delete style.sizeScale;
+      if (size?.sizeScale !== undefined) style.sizeScale = size.sizeScale;
+      const scaleBy = size?.scaleBy;
+      // A font the studio does not have is carried through (the compiler asks with the 3 nearest), never dropped.
+      const unknownFont = style.font ? undefined : flat.unknownFont;
+      if (!Object.keys(style).length && scaleBy === undefined && !unknownFont) return { error: 'restyle needs style changes (font, colours, shape, bold, italic, size…).' };
+      const intent = { act, target, scope, style, ...(scaleBy !== undefined ? { scaleBy } : {}), ...(unknownFont ? { unknownFont } : {}) } as DialogueIntent & RestyleExtras;
       return { intent };
     }
     case 'z': {
