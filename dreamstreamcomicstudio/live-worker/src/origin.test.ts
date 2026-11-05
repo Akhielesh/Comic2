@@ -36,6 +36,8 @@ describe('wrangler.jsonc (the repo is public)', () => {
       RL_GUEST: { limit: 10, period: 60 },
       RL_GUEST_NID: { limit: 30, period: 60 },
       RL_EVENT: { limit: 10, period: 60 },
+      // Invite-page RSVPs, per address and event (abuse-ops-13).
+      RL_RSVP: { limit: 3, period: 60 },
     });
     expect(new Set(rl.map((r) => r.namespace_id)).size).toBe(rl.length);
     for (const r of rl) expect(r.simple.period).toBe(LIMIT_PERIOD_S);

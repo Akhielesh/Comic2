@@ -9,7 +9,10 @@ import { recordFeedback, recordTelemetryEvents, type TelemetryContext } from '..
 // worse than accepting a partial one.
 export const telemetryRouter = Router();
 
+// A signed-out batch is smaller (abuse-ops-3): the page-hide beacon is the main anonymous
+// sender, and what it can make us store is budgeted in telemetryStore.ts as well.
 const MAX_EVENTS_PER_BATCH = 50;
+const MAX_ANON_EVENTS_PER_BATCH = 20;
 
 const contextFromReq = (req: Request): TelemetryContext => ({
   userId: req.user?.id ?? null,
@@ -21,7 +24,8 @@ const contextFromReq = (req: Request): TelemetryContext => ({
 telemetryRouter.post('/events', async (req, res, next) => {
   try {
     const rawEvents = Array.isArray(req.body?.events) ? req.body.events : [];
-    const result = await recordTelemetryEvents(rawEvents.slice(0, MAX_EVENTS_PER_BATCH), contextFromReq(req));
+    const max = req.user ? MAX_EVENTS_PER_BATCH : MAX_ANON_EVENTS_PER_BATCH;
+    const result = await recordTelemetryEvents(rawEvents.slice(0, max), contextFromReq(req));
     const payload: TelemetryIngestResponse = { ok: true, accepted: result.accepted, persisted: result.persisted };
     res.json(payload);
   } catch (err) {

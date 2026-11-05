@@ -348,6 +348,21 @@ export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
 // emitted to the server logs. See docs/email/cloudflare-email-cost-and-limits.md.
 export const EMAIL_MAX_PER_DAY = parseIntegerEnv(process.env.EMAIL_MAX_PER_DAY, 200, 'EMAIL_MAX_PER_DAY', 0);
 export const EMAIL_MAX_PER_MONTH = parseIntegerEnv(process.env.EMAIL_MAX_PER_MONTH, 2_500, 'EMAIL_MAX_PER_MONTH', 0);
+// Part of those caps kept for auth mail (auth-* templates: sign-up confirm, password reset, magic
+// link, …; abuse-ops-4). Every other template — newsletter, invites, access requests, admin
+// sends — stops at the cap minus the reserve, so mail a stranger can trigger never uses up what
+// sign-in needs. Auth mail may use the whole cap. A reserve is never more than half its cap
+// (services/mailer.ts), so a small cap still leaves other mail room. 0 = no reserve.
+export const EMAIL_AUTH_RESERVE_PER_DAY = parseIntegerEnv(process.env.EMAIL_AUTH_RESERVE_PER_DAY, 50, 'EMAIL_AUTH_RESERVE_PER_DAY', 0);
+export const EMAIL_AUTH_RESERVE_PER_MONTH = parseIntegerEnv(process.env.EMAIL_AUTH_RESERVE_PER_MONTH, 500, 'EMAIL_AUTH_RESERVE_PER_MONTH', 0);
+// Mail a signed-out request triggers (newsletter confirm, access-request acknowledgement), per
+// IPv4 address / IPv6 /64 in a rolling day (abuse-ops-4). In memory, per process. 0 = no limit.
+export const EMAIL_ANON_MAX_PER_CLIENT_PER_DAY = parseIntegerEnv(
+  process.env.EMAIL_ANON_MAX_PER_CLIENT_PER_DAY,
+  10,
+  'EMAIL_ANON_MAX_PER_CLIENT_PER_DAY',
+  0
+);
 // Double opt-in confirm links expire after this many hours (strict link timeout). 0 = never.
 export const NEWSLETTER_CONFIRM_TTL_HOURS = parseIntegerEnv(
   process.env.NEWSLETTER_CONFIRM_TTL_HOURS,

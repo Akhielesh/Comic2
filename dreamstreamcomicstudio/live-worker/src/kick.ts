@@ -82,14 +82,45 @@ export const reply = (data: unknown, status = 200, headers: Record<string, strin
 export const methodNotAllowed = (allow: string): Response => reply({ ok: false, error: 'method_not_allowed' }, 405, { allow });
 
 /**
- * The request body as text, or null when it's larger than `max` bytes (declared or actual).
- * Read once: proofs (DS-Proof) are checked against these exact bytes.
+ * The request body as text, or null when it's larger than `max` bytes (declared or actual) or the
+ * upload breaks off. Read once: proofs (DS-Proof) are checked against these exact bytes.
+ *
+ * Streamed with a running count, never `req.text()` first: a chunked (HTTP/1.1) or HTTP/2 upload
+ * carries no Content-Length, and buffering it whole before measuring would let an anonymous
+ * caller make the isolate hold up to the zone's upload limit. The stream is cancelled the moment
+ * the count passes `max`, so this never holds more than `max` bytes (api-proxy's readCapped.ts).
  */
 export async function readBody(req: Request, max: number): Promise<string | null> {
   const declared = Number(req.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > max) return null;
-  const text = await req.text();
-  return new TextEncoder().encode(text).length > max ? null : text;
+  if (!req.body) return '';
+  const reader = req.body.getReader();
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > max) {
+        reader.cancel().catch(() => undefined); // stop receiving the rest of the upload
+        return null;
+      }
+      parts.push(value);
+    }
+  } catch {
+    reader.cancel().catch(() => undefined);
+    return null;
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    bytes.set(part, at);
+    at += part.byteLength;
+  }
+  // Same decoding as req.text(): UTF-8, a leading BOM dropped, invalid bytes as U+FFFD.
+  return new TextDecoder().decode(bytes);
 }
 
 export function parseJson(text: string): unknown {

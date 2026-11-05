@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Nav } from '../nav';
 import type { EventMeta } from '../protocol';
 
-vi.mock('../api', () => ({ getEvent: vi.fn(), rsvpEvent: vi.fn() }));
+vi.mock('../api', () => ({ getEvent: vi.fn(), rsvpEvent: vi.fn(), RsvpRefused: class RsvpRefused extends Error {} }));
 
 import { getEvent } from '../api';
 import { EventPage } from './EventPage';

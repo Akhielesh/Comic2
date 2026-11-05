@@ -9,7 +9,9 @@ import {
 import {
   confirmSubscriber,
   markUnsubscribed,
+  mergeSubscriberIntent,
   newConfirmToken,
+  newsletterConfirmThrottled,
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
@@ -25,7 +27,17 @@ export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const reqMeta = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
+const reqIds = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
+// Mail a signed-out /subscribe triggers counts against its sender's daily allowance (mailer.ts,
+// abuse-ops-4). The welcome after a confirm click does not: it goes out only when that click's
+// live token flips a pending row (confirmSubscriber → 'confirmed'), which happens once per confirm
+// email, and that confirm email was already counted. A click on an already-confirmed address
+// (any `t` gets there) sends nothing. Counting the click as well would halve a shared network's
+// allowance for real sign-ups.
+const subscribeMeta = (req: Request) => ({
+  ...reqIds(req),
+  ...(req.user ? {} : { anonymousClientIp: req.ip ?? '' })
+});
 
 // Prefer the configured public origin; fall back to the request's own origin so confirm
 // links still work before EMAIL_PUBLIC_BASE_URL is set.
@@ -124,7 +136,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       // NEW signup: acknowledge with the access-requested template (essential) —
       // best-effort and non-blocking; a mailer failure is logged by the mailer and
       // must never fail the signup itself.
-      void sendAccessRequested(email, firstName, reqMeta(req));
+      void sendAccessRequested(email, firstName, subscribeMeta(req));
       return res.json({
         ok: true,
         status: 'joined',
@@ -133,14 +145,20 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       });
     }
 
-    // Newsletter double opt-in.
+    // Newsletter double opt-in. A pending address re-submitted too soon (or too often) keeps
+    // the link already in its inbox: no new token, no new email (abuse-ops-11). New picks or
+    // feedback it sent are still recorded, as on any re-submit.
+    if (await newsletterConfirmThrottled(email)) {
+      await mergeSubscriberIntent(email, 'updates', intent);
+      return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
+    }
     const token = newConfirmToken();
     const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
     if (outcome === 'already_confirmed') {
       return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
     }
     const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
-    void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
+    void sendNewsletterConfirm(email, confirmUrl, firstName, subscribeMeta(req));
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
     next(err);
@@ -154,11 +172,13 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     const token = String(req.query.t ?? '');
     if (!email || !token) return res.redirect(302, redirectToApp('invalid'));
 
-    const confirmed = await confirmSubscriber(email, token);
-    if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
+    const outcome = await confirmSubscriber(email, token);
+    if (!outcome) return res.redirect(302, redirectToApp('invalid'));
 
-    // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    // Welcome is marketing → only once they've opted in, and only from the click that opted them
+    // in. A repeat click (or a scanner's prefetch beating the person to it) still lands on
+    // "confirmed", without a second welcome.
+    if (outcome === 'confirmed') void sendNewsletterWelcome(email, undefined, reqIds(req));
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

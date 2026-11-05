@@ -120,6 +120,13 @@ const safeFetch = async (url: string, init: RequestInit): Promise<Response> => {
   }
 };
 
+/**
+ * The bearer token already in memory, without any storage read — for code that must send right
+ * now, synchronously (services/telemetry.ts's page-hide flush). Undefined when signed out or not
+ * yet known; the server then treats the request as signed out.
+ */
+export const getCachedAuthToken = (): string | undefined => cachedAccessToken;
+
 const getAuthToken = async (): Promise<string | undefined> => {
   if (cachedAccessToken) return cachedAccessToken;
 

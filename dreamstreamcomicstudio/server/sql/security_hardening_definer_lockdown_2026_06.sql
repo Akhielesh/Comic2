@@ -1,3 +1,9 @@
+-- SUPERSEDED by definer_lockdown_billing_2026_11.sql (applied to production 2026-11-05 as migration
+-- 20261105012658 `definer_lockdown_billing_2026_11`). That file locks these four functions AND
+-- free_tier_try_consume_model_usage + bump_model_usage, and asserts the result. This file was never
+-- applied; it is kept for history and is harmless to re-run (it only revokes), but run the 2026-11
+-- file instead.
+--
 -- Security hardening (follow-up) — lock down anon/authenticated-executable admin/
 -- server-only SECURITY DEFINER functions. 2026-06.
 --

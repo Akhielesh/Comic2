@@ -7,10 +7,14 @@ import {
   LIVE_WATCHDOG_MS,
   RECORDING_RETENTION_MS,
   REPLAY_WINDOW_MS,
+  RSVP_CAP,
+  RSVP_NEW_PER_CLIENT_PER_HOUR,
+  RSVP_NEW_PER_HOUR,
   SEG_SAVE_EVERY,
   SWEEP_GRACE_MS,
   type ChatMsg,
   type EventMeta,
+  rsvpNameHasLink,
 } from './eventRoom';
 import { Sim, type SimWS } from './eventTestKit';
 import { STUN, includesTurn, resetIceCache } from './ice';
@@ -848,5 +852,87 @@ describe('EventRoom · guest links (unchanged by C10)', () => {
     expect(old.msgs('pending')).toHaveLength(1); // only the lobby: never on air
     const g2 = await sim.open(e.id, `g=${k2}&name=New link`);
     expect(g2.msgs('hello')[0].you).toMatchObject({ role: 'guest' });
+  });
+});
+
+// ─────────────── abuse-ops-13: RSVPs stay name-only, without links, and a script can't flood an invite
+
+describe('EventRoom · RSVP names (abuse-ops-13)', () => {
+  afterEach(cleanup);
+
+  it('refuses a link as a name and keeps ordinary names, initials and handles', () => {
+    for (const bad of [
+      'evil.com', 'Visit evil.com!', 'bit.ly/x', 'http://x', 'HTTPS://A.B', 'www.spam', 'see shop.xyz', 'spam.example/path', 'free.app',
+      // Any TLD, not just a list; the dots browsers accept besides '.'; a dotted address; an honorific in front.
+      'evil.fun', 'evil.store', 'evil．com', 'evil。com', 'evil｡com', 'ｅｖｉｌ.ｃｏｍ', '10.0.0.1', 'Dr.evil.com', 'xn--80ak6aa92e.xn--p1ai',
+    ]) {
+      expect([bad, rsvpNameHasLink(bad)]).toEqual([bad, true]);
+    }
+    for (const ok of ['Grandma', 'J.R. Smith', 'Dr. Ana', 'Mrs.Cole', 'St.Louis Crew', 'Dr.Ana', '@ana', 'Ana & Raj', 'Zoë', 'A.J.', 'Jean-Luc P.', 'Ana B. Silva', 'Ms. O’Neil']) {
+      expect([ok, rsvpNameHasLink(ok)]).toEqual([ok, false]);
+    }
+  });
+
+  it('a link name is refused in words the invite page shows, and never reaches the list or the log', async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 2 * HOUR });
+    const res = await sim.worker(`/api/events/${e.id}/rsvp`, { method: 'POST', body: JSON.stringify({ name: 'cheap-pills.com' }) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'name_not_allowed', message: expect.stringContaining('links') });
+    const meta = (await (await sim.worker(`/api/events/${e.id}`)).json()) as { rsvpCount: number };
+    expect(meta.rsvpCount).toBe(0);
+  });
+
+  const rsvpFrom = (sim: Sim, id: string, name: string, ip: string) =>
+    sim.worker(`/api/events/${id}/rsvp`, { method: 'POST', body: JSON.stringify({ name }), headers: { 'cf-connecting-ip': ip } });
+
+  it(`one sender adds ${RSVP_NEW_PER_CLIENT_PER_HOUR} new names an hour, and that never closes the invite to anyone else`, async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 5 * HOUR });
+    for (let i = 0; i < RSVP_NEW_PER_CLIENT_PER_HOUR; i++) expect((await rsvpFrom(sim, e.id, `Bot ${i}`, '2001:db8:66:1::1')).status).toBe(200);
+    // The same /64 from another address is the same sender.
+    const busy = await rsvpFrom(sim, e.id, 'Bot again', '2001:db8:66:1::abcd');
+    expect(busy.status).toBe(429);
+    expect(Number(busy.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await busy.json()).toMatchObject({ error: 'rsvp_busy', message: expect.stringContaining('from here') });
+    // A real guest on another network is not held back.
+    expect((await rsvpFrom(sim, e.id, 'Grandma', '198.51.100.20')).status).toBe(200);
+    // Saving the same spot twice is still fine, even for the capped sender.
+    expect(((await (await rsvpFrom(sim, e.id, 'Bot 3', '2001:db8:66:1::1')).json()) as { rsvpCount: number }).rsvpCount).toBe(RSVP_NEW_PER_CLIENT_PER_HOUR + 1);
+    sim.now += HOUR + 1;
+    expect((await rsvpFrom(sim, e.id, 'Bot again', '2001:db8:66:1::1')).status).toBe(200);
+  });
+
+  it(`takes ${RSVP_NEW_PER_HOUR} new names an hour from everyone together; the next hour opens again`, async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 5 * HOUR });
+    for (let i = 0; i < RSVP_NEW_PER_HOUR; i++) expect((await rsvpFrom(sim, e.id, `Guest ${i}`, `198.51.${Math.floor(i / 5)}.${(i % 5) + 1}`)).status).toBe(200);
+    const busy = await rsvpFrom(sim, e.id, 'One too many', '203.0.113.1');
+    expect(busy.status).toBe(429);
+    expect(await busy.json()).toMatchObject({ error: 'rsvp_busy', message: expect.stringContaining('a lot of new names') });
+    sim.now += HOUR + 1;
+    expect((await rsvpFrom(sim, e.id, 'One too many', '203.0.113.1')).status).toBe(200);
+    const meta = (await (await sim.worker(`/api/events/${e.id}`)).json()) as { rsvpCount: number };
+    expect(meta.rsvpCount).toBe(RSVP_NEW_PER_HOUR + 1);
+  });
+
+  it(`a full list (${RSVP_CAP}) refuses new names instead of pushing the first guests off`, async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 50 * HOUR });
+    let n = 0;
+    while (n < RSVP_CAP) {
+      for (let k = 0; k < RSVP_NEW_PER_HOUR && n < RSVP_CAP; k++, n++) {
+        expect((await rsvpFrom(sim, e.id, `Guest ${n}`, `10.${Math.floor(n / 250)}.${Math.floor((n % 250) / 5)}.${(n % 5) + 1}`)).status).toBe(200);
+      }
+      sim.now += HOUR + 1;
+    }
+    const full = await rsvpFrom(sim, e.id, 'Late guest', '203.0.113.9');
+    expect(full.status).toBe(409);
+    expect(await full.json()).toMatchObject({ error: 'rsvp_full', message: expect.stringContaining('full') });
+    const meta = (await (await sim.worker(`/api/events/${e.id}`)).json()) as { rsvpCount: number; rsvpNames: string[] };
+    expect(meta.rsvpCount).toBe(RSVP_CAP);
+    expect(meta.rsvpNames[0]).toBe('Guest 0');
+    // Someone already on the list can still confirm their spot.
+    expect((await rsvpFrom(sim, e.id, 'Guest 0', '203.0.113.9')).status).toBe(200);
   });
 });

@@ -207,6 +207,11 @@ export const EmailConsole: React.FC = () => {
           <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-black bg-slate-50 px-3 py-2 text-xs font-bold">
             <span>This month: {usage.month}/{usage.maxPerMonth} ({usage.monthPct}%)</span>
             <span>Today: {usage.day}/{usage.maxPerDay}</span>
+            {typeof usage.otherMaxPerDay === 'number' && usage.otherMaxPerDay > 0 && (
+              <span title="Newsletter, invite and admin mail stop here; the rest of the cap is kept for sign-up and password emails.">
+                Non-auth today: {usage.otherDay ?? 0}/{usage.otherMaxPerDay} · {usage.authReservePerDay ?? 0} kept for sign-in mail
+              </span>
+            )}
             <span className={usage.freeTierRemaining > 0 ? 'text-green-700' : 'text-red-700'}>
               Free tier left: {usage.freeTierRemaining}
             </span>

@@ -89,6 +89,8 @@ export interface Env extends DeviceTokenEnv, ActTokenEnv {
   RL_GUEST?: RateLimiterLike;
   RL_GUEST_NID?: RateLimiterLike;
   RL_EVENT?: RateLimiterLike;
+  /** Invite-page RSVPs, per address + event (abuse-ops-13). */
+  RL_RSVP?: RateLimiterLike;
   /** Secret: x-ops-key for /api/ops/* (ops.ts). */
   OPS_KEY?: string;
   /** Secret: signs /x/user/:uid/notify and /kick (ops.ts); the email Worker's, the backend's and Supabase Vault's value. */
@@ -96,6 +98,8 @@ export interface Env extends DeviceTokenEnv, ActTokenEnv {
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
+/** An RSVP body is `{"name": "<≤24 chars>"}`; 512 bytes leaves room for escapes and nothing else. */
+const RSVP_MAX_BYTES = 512;
 
 /** Host-key gate shared by the recording routes (the DO owns the key). */
 async function authHost(env: Env, id: string, key: string | null): Promise<boolean> {
@@ -446,13 +450,25 @@ export default {
         );
       }
 
-      // POST /api/events/:id/rsvp — save a spot on the invite page (name only)
+      // POST /api/events/:id/rsvp — save a spot on the invite page (name only; no account, by
+      // design — whether the "going" names stay public is an open product decision). At the edge
+      // (abuse-ops-13), before the room is woken: a body that can only be `{"name": "…"}` (512
+      // bytes, counted as it streams in), then 3 a minute per IPv4 address / IPv6 /64 per event
+      // (RL_RSVP). The room still refuses links as names, caps the new names one sender adds in an
+      // hour (10) and an event takes in an hour (120), and refuses new names once 500 are listed.
       if (sub === 'rsvp' && req.method === 'POST') {
+        const body = await readBody(req, RSVP_MAX_BYTES);
+        if (body == null) return withCors(json({ error: 'too_large' }, 413), cors);
+        const ipKey = clientKey(req);
+        if (!(await withinLimit(env.RL_RSVP, ipKey && `rsvp:${id}:${ipKey}`))) {
+          return withCors(tooMany({ error: 'rate_limited', message: 'That’s a lot of spots saved from here — wait a minute and try again.' }), cors);
+        }
         return withCors(
           await roomCall(env, id, '/rsvp', {
             method: 'POST',
-            body: await req.text(),
-            headers: { 'content-type': 'application/json' },
+            body,
+            // The room's per-sender hourly cap keys on this; the Worker sets it, a client can't.
+            headers: { 'content-type': 'application/json', ...(ipKey ? { 'x-rsvp-client': ipKey } : {}) },
           }),
           cors,
         );

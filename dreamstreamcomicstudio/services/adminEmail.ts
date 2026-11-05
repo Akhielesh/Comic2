@@ -25,6 +25,10 @@ export interface EmailUsage {
   dayPct: number;
   monthPct: number;
   freeTierRemaining: number;
+  /** Auth-reserve split (abuse-ops-4); absent from an older backend. */
+  otherDay?: number;
+  otherMaxPerDay?: number;
+  authReservePerDay?: number;
 }
 
 export interface EmailLogRow {

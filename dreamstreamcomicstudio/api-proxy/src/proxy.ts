@@ -32,6 +32,12 @@
  *   POST     /api/csp-report                  CSP violation reports (cspReport.ts, sampled log)
  * (POST /api/comic/public/s/:slug/report is still proxied: Turnstile + the safety store.)
  * Rate limits: Workers Rate Limiting bindings PUBLIC_COMIC_RL / PUBLIC_EVENT_RL / CSP_REPORT_RL.
+ *
+ * The workers.dev hostname (abuse-ops-7) skips everything the custom domain puts in front of the
+ * API — WAF rules, bot protection, challenges. It answers only GET|HEAD /api/health (what CI and the
+ * smoke checks probe there, since the custom domain challenges datacenter IPs); every other request
+ * gets a 404 before any routing or backend work. Turning workers_dev off altogether waits for a
+ * smoke-check bypass on the custom domain (owner step O5).
  * Secret: SHARE_VIEW_SALT (viewer hash + tracking HMAC; `wrangler secret put`, never in wrangler.jsonc;
  * falls back to the D1 backend_env row of the same name — src/shareViewSalt.ts).
  */
@@ -67,6 +73,16 @@ interface Ctx {
 }
 
 const GATE_PATH = '/api/agent-gate';
+
+/** `<script>.<account>.workers.dev`: Cloudflare's default hostname, outside the zone's protections. */
+export const isWorkersDevHost = (hostname: string): boolean => /\.workers\.dev$/i.test(hostname.replace(/\.$/, ''));
+
+function workersDevRefusal(): Response {
+  return new Response(JSON.stringify({ error: { message: 'Not found. The DreamStream API is at https://dreamstreamstudio.ai/api/.' } }), {
+    status: 404,
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-robots-tag': 'noindex' },
+  });
+}
 const CHECKIN_PATH = '/api/agent-gate/checkin';
 
 function json(body: unknown, status = 200): Response {
@@ -139,6 +155,11 @@ async function handleAgents(req: Request, env: Env, ctx: Ctx, url: URL): Promise
 export default {
   async fetch(req: Request, env: Env, ctx: Ctx): Promise<Response> {
     const url = new URL(req.url);
+
+    // workers.dev: health only (abuse-ops-7; see the top of this file).
+    if (isWorkersDevHost(url.hostname) && !(url.pathname === '/api/health' && (req.method === 'GET' || req.method === 'HEAD'))) {
+      return workersDevRefusal();
+    }
 
     if (url.pathname === GATE_PATH || url.pathname.startsWith(`${GATE_PATH}/`)) return handleAgents(req, env, ctx, url);
 
