@@ -198,7 +198,10 @@ app.use('/api/keys', systemRateLimit, keysRouter);
 // is attached when a valid session is present.
 app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
-// signed-in user's id is attached when present; mounted before requireAuth.
+// signed-in user's id is attached when present; mounted before requireAuth. /subscribe sends the
+// same confirmation email as /api/interest, so it gets the same per-IP limiter (one shared
+// bucket, keyed by IP because it runs before optionalAuth) on top of systemRateLimit.
+app.use('/api/newsletter/subscribe', interestRateLimit);
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
 // Register interest in studios (public, logged-out; double opt-in through the newsletter row).
 app.use('/api/interest', interestRateLimit, optionalAuth, interestRouter);

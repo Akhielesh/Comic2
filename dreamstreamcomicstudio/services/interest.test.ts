@@ -7,22 +7,24 @@ import { interpretInterestResponse, registerInterest } from './interest';
 
 // The /api/interest answer contract (server/src/routes/interest.ts).
 describe('interpretInterestResponse', () => {
-  it('passes pending and confirmed through, keeping only known studios', () => {
+  it('passes pending through, keeping only known studios', () => {
     expect(
-      interpretInterestResponse(200, { ok: true, status: 'pending', studios: ['comic_studio', 'code_studio'], message: 'Check your inbox.', retryAfterS: 300 })
-    ).toEqual({ ok: true, status: 'pending', message: 'Check your inbox.', studios: ['comic_studio'], retryAfterS: 300 });
-    expect(interpretInterestResponse(200, { ok: true, status: 'confirmed', studios: [], message: 'Already in.' })).toMatchObject({
-      ok: true,
-      status: 'confirmed'
-    });
+      interpretInterestResponse(200, { ok: true, status: 'pending', studios: ['comic_studio', 'code_studio'], message: 'Check your inbox.' })
+    ).toEqual({ ok: true, status: 'pending', message: 'Check your inbox.', studios: ['comic_studio'] });
+  });
+
+  it('has no "already subscribed" success: the backend never says so, and the page never shows it', () => {
+    expect(interpretInterestResponse(200, { ok: true, status: 'confirmed', studios: [], message: 'Already in.' }).ok).toBe(false);
+    // Throttle details from an older answer aren't carried through.
+    expect(interpretInterestResponse(200, { ok: true, status: 'pending', message: 'x', retryAfterS: 300 })).not.toHaveProperty('retryAfterS');
   });
 
   it('passes known error codes and their messages through', () => {
     for (const [status, code] of [
       [400, 'invalid_email'],
       [400, 'captcha_failed'],
-      [429, 'too_many'],
       [503, 'email_unavailable'],
+      [503, 'try_again'],
       [503, 'interest_unavailable']
     ] as const) {
       expect(interpretInterestResponse(status, { ok: false, code, message: `m-${code}` })).toEqual({ ok: false, code, message: `m-${code}` });

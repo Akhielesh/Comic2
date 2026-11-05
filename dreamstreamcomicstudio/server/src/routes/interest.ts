@@ -2,9 +2,14 @@ import { Router, type Request, type Response } from 'express';
 import { APP_PUBLIC_URL, EMAIL_PUBLIC_BASE_URL } from '../config.js';
 import { mailerConfigured, sendNewsletterConfirm } from '../services/mailer.js';
 import { normalizeEmail } from '../services/emailStore.js';
-import { InterestUnavailableError, getInterestSummary, registerInterest } from '../services/interestStore.js';
+import {
+  InterestRetryError,
+  InterestUnavailableError,
+  getInterestSummary,
+  registerInterest
+} from '../services/interestStore.js';
 import { turnstileConfigured, verifyTurnstile } from '../services/turnstile.js';
-import { formatStudioInterestList, sanitizeStudioInterests } from '../../../services/studioInterests.js';
+import { formatStudioInterestList, sanitizeStudioInterests, type StudioInterestId } from '../../../services/studioInterests.js';
 
 // Register interest in DreamStream studios (public, logged-out) + the admin summary.
 //
@@ -12,12 +17,18 @@ import { formatStudioInterestList, sanitizeStudioInterests } from '../../../serv
 //   Mounted in index.ts BEFORE the global requireAuth, behind its own per-IP limiter and
 //   optionalAuth. Pipeline: validate → Turnstile (a sent token must verify; none is accepted only
 //   while Turnstile isn't configured) → mailer configured? → registerInterest (one row per
-//   address, studios merged, per-recipient throttle) → send the double opt-in link (the existing
-//   newsletter-confirm email and /api/newsletter/confirm) → answer.
-//   Answers carry `status` (pending | confirmed) or `code` (invalid_email, invalid_studios,
-//   captcha_required, captcha_failed, too_many, email_unavailable, interest_unavailable).
-//   interest_unavailable (503) means this deployment can't take registrations at all (database
-//   without the columns, no service role, no mailer): the form hides itself.
+//   address, studios merged, per-recipient throttle, atomic send claim) → send the double opt-in
+//   link (the existing newsletter-confirm email and /api/newsletter/confirm) → answer.
+//
+//   Anyone can type anyone's address, so a valid request ALWAYS gets the same answer:
+//   200 {ok, status:'pending', studios, message} with `studios` echoing only what this request
+//   picked. Whether the address was new, pending, already subscribed, unsubscribed or throttled
+//   is never told, and nothing stored is ever echoed. Other answers are about the request or the
+//   service, never the address: 400 invalid_email | invalid_studios | captcha_required |
+//   captcha_failed; 503 email_unavailable (a send failed, or confirmation mail has used its share
+//   of the email budget) | try_again | interest_unavailable (this deployment can't take
+//   registrations at all: database without the columns, no service role, no mailer; the form
+//   then hides itself).
 //
 // GET /api/admin/interest/summary — admin only (index.ts mounts requireAdmin): counts per studio,
 //   confirmed vs pending. No address ever leaves the server here.
@@ -52,7 +63,20 @@ const readSource = (raw: unknown): string | null => {
 // Never the Host header: a forged Host would put an attacker's domain in an email we send.
 const confirmBase = (): string => EMAIL_PUBLIC_BASE_URL || APP_PUBLIC_URL;
 
-const minutes = (seconds: number) => Math.max(1, Math.ceil(seconds / 60));
+const emailUnavailable = (res: Response) =>
+  fail(res, 503, 'email_unavailable', 'We couldn’t send the confirmation email right now. Please try again in a few minutes.');
+
+/**
+ * The one answer every valid request gets, whatever the address's state. True in every case: a
+ * link went out now, or one did within the throttle window (at most one every 10 minutes and
+ * three a day), or the address is already subscribed and the link confirms these picks.
+ */
+const pendingAnswer = (studios: StudioInterestId[]) => ({
+  ok: true,
+  status: 'pending' as const,
+  studios,
+  message: `Almost there. Check your inbox and click the link in our email to confirm updates about ${formatStudioInterestList(studios)}. Nothing yet? Check your spam folder. To protect your inbox, we send at most one link every 10 minutes and three a day.`
+});
 
 interestRouter.post('/', async (req, res, next) => {
   try {
@@ -86,72 +110,39 @@ interestRouter.post('/', async (req, res, next) => {
     // 3) Without a mailer nobody could ever confirm: don't store a registration that can't complete.
     if (!mailerConfigured()) return unavailable(res);
 
-    // 4) Record (idempotent, merged, throttled).
+    // 4) Record (idempotent, merged, throttled, send slot claimed atomically).
     const result = await registerInterest({ email, studios, source });
-    const named = formatStudioInterestList(result.studios);
-
-    if (result.outcome === 'confirmed') {
-      return res.json({
-        ok: true,
-        status: 'confirmed',
-        studios: result.studios,
-        message: result.added.length
-          ? `You’re already subscribed. We’ve added ${formatStudioInterestList(result.added)} to your picks.`
-          : `You’re already subscribed. We’ll keep you posted about ${named}.`
-      });
-    }
-
-    if (result.outcome === 'throttled') {
-      if (result.throttle.code === 'too_many') {
-        res.setHeader('Retry-After', String(result.throttle.retryAfterS));
-        return fail(
-          res,
-          429,
-          'too_many',
-          'We’ve already sent several confirmation emails to this address today. Check your inbox and spam folder, or try again tomorrow.',
-          { retryAfterS: result.throttle.retryAfterS }
-        );
-      }
-      // The link sent a few minutes ago still works, and the picks are saved: still "pending".
-      return res.json({
-        ok: true,
-        status: 'pending',
-        resent: false,
-        retryAfterS: result.throttle.retryAfterS,
-        studios: result.studios,
-        message: `We sent a confirmation link to this address a few minutes ago, so check your inbox and spam folder. Your picks are saved. You can ask for another link in ${minutes(result.throttle.retryAfterS)} min.`
-      });
+    if (result.outcome === 'budget_exhausted') {
+      console.warn('[interest] confirmation budget used up for now', { requestId: req.requestId });
+      return emailUnavailable(res);
     }
 
     // 5) Send the double opt-in link (same email + confirm route as the newsletter).
-    const confirmUrl = `${confirmBase()}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${result.token}`;
-    const sent = await sendNewsletterConfirm(email, confirmUrl, undefined, {
-      userId: req.user?.id ?? null,
-      requestId: req.requestId ?? null
-    });
-    if (!sent.ok) {
-      if (sent.skipped === 'not_configured') return unavailable(res);
-      // Cost cap or a worker hiccup. The picks are saved; a retry isn't throttled (failed and
-      // capped sends don't count toward the per-recipient limits).
-      console.warn('[interest] confirmation email not sent', { reason: sent.skipped || 'send_failed', requestId: req.requestId });
-      return fail(
-        res,
-        503,
-        'email_unavailable',
-        'We couldn’t send the confirmation email right now. Your picks are saved. Please try again in a few minutes.'
-      );
+    if (result.outcome === 'send_confirmation') {
+      const confirmUrl = `${confirmBase()}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${result.token}`;
+      const sent = await sendNewsletterConfirm(email, confirmUrl, undefined, {
+        userId: req.user?.id ?? null,
+        requestId: req.requestId ?? null
+      });
+      if (!sent.ok) {
+        // Give the slot back so a retry isn't throttled (failed and capped sends don't count).
+        await result.release();
+        if (sent.skipped === 'not_configured') return unavailable(res);
+        console.warn('[interest] confirmation email not sent', { reason: sent.skipped || 'send_failed', requestId: req.requestId });
+        return emailUnavailable(res);
+      }
     }
-    return res.json({
-      ok: true,
-      status: 'pending',
-      resent: !result.firstTime,
-      studios: result.studios,
-      message: `Almost there! Check your inbox and click the link to confirm. Then we’ll email you about ${named}.`
-    });
+
+    // 6) Sent now, or throttled: the same answer (see the header).
+    return res.json(pendingAnswer(studios));
   } catch (err) {
     if (err instanceof InterestUnavailableError) {
       console.warn('[interest] unavailable:', err.message);
       return unavailable(res);
+    }
+    if (err instanceof InterestRetryError) {
+      console.warn('[interest] retry:', err.message);
+      return fail(res, 503, 'try_again', 'We couldn’t save that just now. Please try again in a minute.');
     }
     next(err);
   }

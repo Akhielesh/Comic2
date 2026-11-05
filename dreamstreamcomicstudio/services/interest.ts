@@ -8,16 +8,20 @@
 import { buildApiUrl } from './clientConfig';
 import { sanitizeStudioInterests, type StudioInterestId } from './studioInterests';
 
-/** pending = check your inbox; confirmed = already subscribed (picks merged). */
-export type InterestStatus = 'pending' | 'confirmed';
+/**
+ * The only success there is: "check your inbox". The backend answers every valid request the same
+ * way, whatever the address's state, so the page can't tell (and never shows) whether an address
+ * was already subscribed: anyone can type anyone's address.
+ */
+export type InterestStatus = 'pending';
 
 export type InterestErrorCode =
   | 'invalid_email'
   | 'invalid_studios'
   | 'captcha_required'
   | 'captcha_failed'
-  | 'too_many'
   | 'email_unavailable'
+  | 'try_again'
   | 'interest_unavailable'
   | 'rate_limited'
   | 'network';
@@ -27,9 +31,8 @@ export interface InterestResult {
   status?: InterestStatus;
   code?: InterestErrorCode;
   message: string;
+  /** The studios this request asked about (the backend never echoes stored picks). */
   studios?: StudioInterestId[];
-  /** Seconds until another confirmation email may be sent (throttled answers). */
-  retryAfterS?: number;
 }
 
 export interface RegisterInterestInput {
@@ -47,8 +50,8 @@ const KNOWN_CODES = new Set<InterestErrorCode>([
   'invalid_studios',
   'captcha_required',
   'captcha_failed',
-  'too_many',
   'email_unavailable',
+  'try_again',
   'interest_unavailable'
 ]);
 
@@ -61,18 +64,16 @@ const GENERIC_FAILURE = 'Something went wrong on our end. Please try again in a 
 export const interpretInterestResponse = (httpStatus: number, data: unknown): InterestResult => {
   const body = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
   const message = typeof body.message === 'string' && body.message ? body.message : '';
-  const retryAfterS = typeof body.retryAfterS === 'number' ? body.retryAfterS : undefined;
-  if (httpStatus >= 200 && httpStatus < 300 && body.ok === true && (body.status === 'pending' || body.status === 'confirmed')) {
+  if (httpStatus >= 200 && httpStatus < 300 && body.ok === true && body.status === 'pending') {
     return {
       ok: true,
-      status: body.status,
-      message: message || (body.status === 'pending' ? 'Check your inbox to confirm.' : 'You’re already subscribed.'),
-      studios: sanitizeStudioInterests(body.studios),
-      ...(retryAfterS !== undefined ? { retryAfterS } : {})
+      status: 'pending',
+      message: message || 'Check your inbox and click the link to confirm.',
+      studios: sanitizeStudioInterests(body.studios)
     };
   }
   const code = typeof body.code === 'string' && KNOWN_CODES.has(body.code as InterestErrorCode) ? (body.code as InterestErrorCode) : undefined;
-  if (code) return { ok: false, code, message: message || GENERIC_FAILURE, ...(retryAfterS !== undefined ? { retryAfterS } : {}) };
+  if (code) return { ok: false, code, message: message || GENERIC_FAILURE };
   // The per-IP limiter's own 429 ({ error: { code: 'RATE_LIMITED' } }).
   if (httpStatus === 429) {
     return { ok: false, code: 'rate_limited', message: 'Too many attempts from this connection. Please wait a few minutes and try again.' };

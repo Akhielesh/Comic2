@@ -47,7 +47,10 @@ const okTone = (isDark: boolean) =>
 /** Inline error text colour, per variant. */
 const errorInk = (isDark: boolean) => (isDark ? 'text-red-400' : 'text-red-600');
 
-/** Where the privacy policy lives (a restorable app view; works logged out). */
+/**
+ * Where the privacy policy lives: a restorable app view that works logged out (the legal pages'
+ * own /privacy path keeps restoring it). Opened in a new tab so a half-filled form survives.
+ */
 const PRIVACY_HREF = '/?view=privacy';
 const CONTACT_EMAIL = 'contact@dreamstreamstudio.ai';
 
@@ -56,7 +59,9 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = (props) =>
 
 // ── Register interest (kind 'updates') ──────────────────────────────────────────
 
-type InterestPhase = 'idle' | 'loading' | 'pending' | 'confirmed' | 'error' | 'unavailable';
+// No "already subscribed" phase on purpose: the backend gives every valid request the same answer
+// (anyone can type anyone's address), so 'pending' is the only success.
+type InterestPhase = 'idle' | 'loading' | 'pending' | 'error' | 'unavailable';
 
 const LANDING_COPY: Record<NewsletterLanding, { tone: 'ok' | 'warn'; text: string }> = {
   confirmed: {
@@ -101,12 +106,17 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
   const [phase, setPhase] = useState<InterestPhase>(() => (interestKnownUnavailable() ? 'unavailable' : 'idle'));
   const [message, setMessage] = useState<string | null>(null);
   const [studiosError, setStudiosError] = useState(false);
+  // Only an invalid address marks the email field invalid (not a network or service error).
+  const [emailError, setEmailError] = useState(false);
   // Arrived from a confirm / unsubscribe email link (?newsletter=…): say what happened, here.
   const [landing, setLanding] = useState<NewsletterLanding | null>(() => readNewsletterLanding());
   const landingRef = useRef<HTMLDivElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
   // Set by a submit, so only an answer to the visitor's own action moves focus (never page load).
   const focusResult = useRef(false);
+  // Set by "Use a different email": the button that had focus unmounts, so focus goes to the field.
+  const focusEmail = useRef(false);
 
   useEffect(() => {
     if (!landing) return;
@@ -122,7 +132,13 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
   useEffect(() => {
     if (!focusResult.current || phase === 'loading') return;
     focusResult.current = false;
-    if (phase === 'pending' || phase === 'confirmed' || phase === 'unavailable') resultRef.current?.focus();
+    if (phase === 'pending' || phase === 'unavailable') resultRef.current?.focus();
+  }, [phase]);
+
+  useEffect(() => {
+    if (!focusEmail.current || phase !== 'idle') return;
+    focusEmail.current = false;
+    emailRef.current?.focus();
   }, [phase]);
 
   const toggle = (id: StudioInterestId) => {
@@ -135,17 +151,20 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
     if (phase === 'loading') return;
     if (studios.length === 0) {
       setStudiosError(true);
+      setEmailError(false);
       setPhase('error');
       setMessage('Pick at least one studio.');
       return;
     }
     if (turnstileEnabled() && !captchaToken) {
+      setEmailError(false);
       setPhase('error');
       setMessage('Please complete the verification challenge.');
       return;
     }
     setPhase('loading');
     setMessage(null);
+    setEmailError(false);
     focusResult.current = true;
 
     const result = await registerInterest({ email, studios, source, captchaToken: captchaToken || undefined });
@@ -154,7 +173,7 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
     resetTurnstile();
 
     if (result.ok) {
-      setPhase(result.status === 'confirmed' ? 'confirmed' : 'pending');
+      setPhase('pending');
       setMessage(result.message);
       onJoined?.(email.trim().toLowerCase());
       return;
@@ -166,13 +185,16 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
       return;
     }
     if (result.code === 'invalid_studios') setStudiosError(true);
+    setEmailError(result.code === 'invalid_email');
     setPhase('error');
     setMessage(result.message);
   };
 
   const startOver = () => {
+    focusEmail.current = true;
     setPhase('idle');
     setMessage(null);
+    setEmailError(false);
     setEmail('');
   };
 
@@ -204,16 +226,18 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
       <div className={`w-full ${className}`}>
         {landingBanner}
         <div ref={resultRef} tabIndex={-1} role="status" className={`rounded-xl border-2 px-4 py-3 text-sm font-bold focus:outline-none ${warnPanel}`}>
-          {message || 'Registering interest isn’t available right now.'}{' '}
+          {/* Our own copy (not the server message, which spells out the address as text too). */}
+          Registering interest isn’t available right now. Email{' '}
           <a href={`mailto:${CONTACT_EMAIL}`} className={linkClass}>
             {CONTACT_EMAIL}
-          </a>
+          </a>{' '}
+          and we’ll add you by hand.
         </div>
       </div>
     );
   }
 
-  if (phase === 'pending' || phase === 'confirmed') {
+  if (phase === 'pending') {
     return (
       <div className={`w-full ${className}`}>
         {landingBanner}
@@ -224,16 +248,14 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
           className={`flex items-start gap-3 rounded-xl border-2 px-4 py-3 font-bold focus:outline-none ${okPanel}`}
         >
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 border-current">
-            {phase === 'pending' ? <Mail size={15} aria-hidden /> : <Check size={16} aria-hidden />}
+            <Mail size={15} aria-hidden />
           </span>
           <span className="flex-1 text-sm">
-            <span className="block">{phase === 'pending' ? 'Check your inbox' : 'You’re on the list'}</span>
+            <span className="block">Check your inbox</span>
             <span className="mt-0.5 block font-medium">{message}</span>
-            {phase === 'pending' && (
-              <button type="button" onClick={startOver} className={`mt-1 text-xs ${linkClass}`}>
-                Wrong address? Use a different email
-              </button>
-            )}
+            <button type="button" onClick={startOver} className={`mt-1 text-xs ${linkClass}`}>
+              Wrong address? Use a different email
+            </button>
           </span>
         </div>
       </div>
@@ -290,6 +312,7 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
             </label>
             <Mail size={16} aria-hidden className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${faint}`} />
             <input
+              ref={emailRef}
               id={ids.email}
               type="email"
               name="email"
@@ -300,10 +323,11 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
               value={email}
               onChange={(e) => {
                 setEmail(e.target.value);
+                setEmailError(false);
                 if (phase === 'error') setPhase('idle');
               }}
               placeholder={placeholder}
-              aria-invalid={(phase === 'error' && !studiosError) || undefined}
+              aria-invalid={(phase === 'error' && emailError) || undefined}
               aria-describedby={phase === 'error' ? ids.status : ids.consent}
               className={emailInputClass(isDark)}
             />
@@ -331,8 +355,8 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
           We’ll email you once to confirm your address. Once you confirm, we’ll send occasional DreamStream updates,
           focused on the studios you picked. Every email has a one-click unsubscribe, and we never sell your
           address. See our{' '}
-          <a href={PRIVACY_HREF} className={linkClass}>
-            Privacy Policy
+          <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer" className={linkClass}>
+            Privacy Policy<span className="sr-only"> (opens in a new tab)</span>
           </a>
           .
         </p>
@@ -515,8 +539,8 @@ const AccessRequestForm: React.FC<WaitlistFormProps> = ({
       />
       <p className={`mt-1 text-xs ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
         We’ll use your email to let you know about access, and we never sell it. See our{' '}
-        <a href={PRIVACY_HREF} className="underline underline-offset-2 hover:no-underline">
-          Privacy Policy
+        <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:no-underline">
+          Privacy Policy<span className="sr-only"> (opens in a new tab)</span>
         </a>
         .
       </p>

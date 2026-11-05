@@ -5,9 +5,10 @@
 -- /api/interest (server/src/routes/interest.ts) is the only writer for it, through the service
 -- role. Admins read aggregate counts only, through waitlist_interest_summary() below.
 --
--- Idempotent: safe to run more than once. Additive: it drops no column or policy. The only rows
--- it ever removes are stale, non-subscribed interest rows, through the daily retention job in
--- section 6 (the first run deletes any that are already past their 30 days).
+-- Idempotent: safe to run more than once. Additive: it drops no column or policy; the one policy it
+-- alters (waitlist_public_insert, section 7) only gets stricter. The only rows it ever removes
+-- are stale, non-subscribed interest rows and their confirmation-email log rows, through the
+-- daily retention job in section 6 (the first run deletes any already past their 30 days).
 -- Apply it AFTER the backend that ships with it is deployed (that backend only writes ids in the
 -- list below; an older one still accepts 'code_studio' / 'dashboards' and its inserts would fail
 -- the new CHECK). The backend works before this file is applied: the live table already has
@@ -30,6 +31,13 @@ alter table public.waitlist_signups
   add column if not exists confirm_sent_at timestamptz,
   add column if not exists confirmed_at timestamptz,
   add column if not exists unsubscribed_at timestamptz;
+
+-- 1b) One spelling per address. Lookups compare the stored address exactly, and the unique index
+--     is on lower(email), so a row stored with capitals (only a direct client insert could write
+--     one) would be invisible to them yet block the server's own insert. Lowercasing can't
+--     collide: that index already forbids two rows differing only in case. Matched no row on
+--     2026-11-05; section 7 stops new ones.
+update public.waitlist_signups set email = lower(email) where email <> lower(email);
 
 -- 2) Retired ids (Code Studio was retired on 2026-10-22, ADR 0005; "Dashboards" was never a
 --    studio). Nothing is lost: any such value moves to metadata.retired_product_interests before
@@ -110,9 +118,13 @@ grant execute on function public.waitlist_interest_summary() to service_role;
 --      * never confirmed: 30 days after the last confirmation email (links expire after 7);
 --      * unsubscribed: 30 days after unsubscribing (its studio picks were already cleared then),
 --        unless they asked to subscribe again within the last 30 days.
---    Active subscribers are never touched. The marketing suppression list (email_suppressions)
---    is separate and NOT purged: it is what keeps an unsubscribed address from being emailed.
---    Request-access rows (kind = 'access') are out of scope here.
+--    Active subscribers are never touched. Also deletes the email_log rows of confirmation
+--    emails (template 'newsletter-confirm') older than 30 days, whoever they went to: someone
+--    may have typed an address that isn't theirs, and the per-recipient throttle only needs the
+--    last 24 hours. (A subscriber's own row keeps confirm_sent_at and confirmed_at.)
+--    The marketing suppression list (email_suppressions) is separate and NOT purged: it is what
+--    keeps an unsubscribed address from being emailed. Request-access rows (kind = 'access') are
+--    out of scope here. Returns how many rows it deleted, both tables together.
 create or replace function public.waitlist_interest_retention()
 returns integer
 language plpgsql
@@ -121,6 +133,7 @@ set search_path = ''
 as $$
 declare
   v_deleted integer;
+  v_logs integer;
 begin
   delete from public.waitlist_signups as w
   where w.kind = 'updates'
@@ -128,7 +141,13 @@ begin
     and coalesce(w.confirm_sent_at, w.created_at) < now() - interval '30 days'
     and coalesce(w.unsubscribed_at, '-infinity'::timestamptz) < now() - interval '30 days';
   get diagnostics v_deleted = row_count;
-  return v_deleted;
+
+  delete from public.email_log as l
+  where l.template = 'newsletter-confirm'
+    and l.created_at < now() - interval '30 days';
+  get diagnostics v_logs = row_count;
+
+  return v_deleted + v_logs;
 end;
 $$;
 
@@ -156,11 +175,38 @@ exception when undefined_table then
   raise notice 'cron.job table unavailable; skip schedule setup.';
 end $do$;
 
--- 7) Access. Nothing here widens client access: RLS stays on, with no SELECT/UPDATE/DELETE
---    policy and those privileges revoked (waitlist_signups.sql). The service role (the server)
---    is the only reader and the only writer of interest registrations.
---    NOT done here, on purpose: the anon INSERT policy waitlist_public_insert stays, because the
---    request-access form's offline fallback in services/waitlist.ts still inserts directly.
---    Revoking it is a separate step, run only after a frontend without that fallback is live.
+-- 7) Access. RLS stays on, with no SELECT/UPDATE/DELETE policy and those privileges revoked
+--    (waitlist_signups.sql): the service role (the server) is the only reader and the only one
+--    that can change a row.
+--    Clients keep INSERT, because the request-access form's offline fallback in
+--    services/waitlist.ts (and older tabs) still insert directly, but ONLY of email, kind, source
+--    and metadata: exactly what that fallback writes. Before this, anon could set every column
+--    (live on 2026-11-05: INSERT on all 13 columns), so the public anon key could create an
+--    already-"confirmed" subscriber, pick its confirm_token, or plant studio picks, skipping the
+--    double opt-in. Every other column now takes its default (confirmed = false, no token, no
+--    picks). The policy also requires the address in lowercase and repeats those defaults, so a
+--    later blanket GRANT can't reopen it. (The server no longer trusts a token it didn't sign,
+--    services/confirmToken.ts, so a forged token was already useless; this closes the rest.)
+--    Safe to apply at any time: no current client writes any other column.
 alter table public.waitlist_signups enable row level security;
 revoke select, update, delete, truncate on public.waitlist_signups from anon, authenticated;
+revoke insert, references, trigger on public.waitlist_signups from anon, authenticated;
+grant insert (email, kind, source, metadata) on public.waitlist_signups to anon, authenticated;
+
+-- Altered in place (waitlist_signups.sql created it), so there is no moment without the policy.
+alter policy waitlist_public_insert on public.waitlist_signups
+  to anon, authenticated
+  with check (
+    email is not null
+    and char_length(email) <= 320
+    and email ~* '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+    and email = lower(email)
+    and kind in ('updates', 'access')
+    and confirmed = false
+    and confirm_token is null
+    and confirm_sent_at is null
+    and confirmed_at is null
+    and unsubscribed_at is null
+    and cardinality(product_interests) = 0
+    and feedback is null
+  );

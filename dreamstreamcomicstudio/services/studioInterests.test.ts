@@ -86,8 +86,29 @@ describe('server/sql/register_interest_2026_11.sql agrees with the shared list',
       expect(executable).toContain(`revoke all on function public.${fn}() from public, anon, authenticated;`);
       expect(executable).toContain(`grant execute on function public.${fn}() to service_role;`);
     }
-    // Nothing grants client roles anything on the table.
+    // Client roles get nothing on the table but INSERT of the four columns the offline fallback
+    // writes (services/waitlist.ts): never a table-wide grant, never confirmed / token / picks.
     expect(executable).not.toMatch(/grant [a-z, ]+ on (table )?public\.waitlist_signups to (anon|authenticated)/i);
+    expect(executable).toContain('revoke insert, references, trigger on public.waitlist_signups from anon, authenticated;');
+    const grants = [...executable.matchAll(/grant ([^;]+) on (?:table )?public\.waitlist_signups to ([^;]+);/gi)].map((m) => `${m[1]} → ${m[2]}`);
+    expect(grants).toEqual(['insert (email, kind, source, metadata) → anon, authenticated']);
+    expect(executable.indexOf('revoke insert, references, trigger')).toBeLessThan(executable.indexOf('grant insert (email'));
+  });
+
+  it('the client insert policy requires a lowercase address and default values', () => {
+    const policy = executable.slice(executable.indexOf('alter policy waitlist_public_insert'));
+    for (const clause of [
+      'email = lower(email)',
+      'confirmed = false',
+      'confirm_token is null',
+      'confirm_sent_at is null',
+      'confirmed_at is null',
+      'unsubscribed_at is null',
+      'cardinality(product_interests) = 0',
+      'feedback is null'
+    ]) {
+      expect(policy).toContain(clause);
+    }
   });
 });
 

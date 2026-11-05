@@ -48,10 +48,13 @@ describe('WaitlistForm — register interest', () => {
     expect(screen.queryByText(/Dashboards/)).toBeNull();
   });
 
-  it('shows the consent text with a link to the privacy policy', () => {
+  it('shows the consent text with a link to the privacy policy, in a new tab so the form survives', () => {
     render(<WaitlistForm />);
-    const link = screen.getByRole('link', { name: 'Privacy Policy' });
+    const link = screen.getByRole('link', { name: /Privacy Policy/ });
     expect(link).toHaveAttribute('href', '/?view=privacy');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toMatch(/noopener/);
+    expect(link).toHaveTextContent('opens in a new tab');
     expect(link.closest('p')).toHaveTextContent(/confirm your address/);
     expect(link.closest('p')).toHaveTextContent(/one-click unsubscribe/);
   });
@@ -82,30 +85,47 @@ describe('WaitlistForm — register interest', () => {
     expect(status).toHaveFocus();
     expect(onJoined).toHaveBeenCalledWith('ada@example.com');
 
-    // "Wrong address?" brings the form back, picks kept, email cleared.
+    // "Wrong address?" brings the form back, picks kept, email cleared, focus on the field.
     fireEvent.click(screen.getByRole('button', { name: /Use a different email/ }));
-    expect(screen.getByLabelText('Email address')).toHaveValue('');
+    const field = screen.getByLabelText('Email address');
+    expect(field).toHaveValue('');
+    expect(field).toHaveFocus();
     expect(screen.getByRole('checkbox', { name: /Atlas Studio/ })).toBeChecked();
   });
 
-  it('shows the already-subscribed outcome', async () => {
-    answer(200, { ok: true, status: 'confirmed', studios: ['comic_studio'], message: 'You’re already subscribed.' });
+  it('has one success state, whatever the address: never "already subscribed"', async () => {
+    answer(200, { ok: true, status: 'pending', studios: ['comic_studio'], message: 'Almost there.' });
     render(<WaitlistForm />);
     fill();
     fireEvent.click(screen.getByRole('button', { name: /Register interest/ }));
     await settle();
-    expect(screen.getByRole('status')).toHaveTextContent('You’re on the list');
+    expect(screen.getByRole('status')).toHaveTextContent('Check your inbox');
+    expect(screen.queryByText(/on the list|already subscribed/i)).toBeNull();
   });
 
-  it('keeps the form and shows the server message on an error (e.g. the daily cap)', async () => {
-    answer(429, { ok: false, code: 'too_many', message: 'We’ve already sent several confirmation emails to this address today.' });
+  it('keeps the form and shows the server message on a service error, without blaming the email', async () => {
+    answer(503, { ok: false, code: 'email_unavailable', message: 'We couldn’t send the confirmation email right now.' });
     render(<WaitlistForm />);
     fill();
     fireEvent.click(screen.getByRole('button', { name: /Register interest/ }));
     await settle();
-    expect(screen.getByRole('alert')).toHaveTextContent('several confirmation emails');
-    expect(screen.getByLabelText('Email address')).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+    expect(screen.getByRole('alert')).toHaveTextContent('couldn’t send the confirmation email');
+    const field = screen.getByLabelText('Email address');
+    expect(field).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+    expect(field).not.toHaveAttribute('aria-invalid');
     expect(screen.getAllByRole('checkbox')).toHaveLength(STUDIO_INTERESTS.length);
+  });
+
+  it('marks the email field invalid only for an invalid address', async () => {
+    answer(400, { ok: false, code: 'invalid_email', message: 'That email doesn’t look right. Please check it.' });
+    render(<WaitlistForm />);
+    fill('ada@example.com');
+    fireEvent.click(screen.getByRole('button', { name: /Register interest/ }));
+    await settle();
+    expect(screen.getByLabelText('Email address')).toHaveAttribute('aria-invalid', 'true');
+    // Typing again clears it.
+    fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'ada@example.org' } });
+    expect(screen.getByLabelText('Email address')).not.toHaveAttribute('aria-invalid');
   });
 
   it('reports a network failure honestly (no fake success)', async () => {
@@ -124,7 +144,9 @@ describe('WaitlistForm — register interest', () => {
     fireEvent.click(screen.getByRole('button', { name: /Register interest/ }));
     await settle();
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
-    expect(screen.getByRole('status')).toHaveTextContent('isn’t available');
+    const panel = screen.getByRole('status');
+    expect(panel).toHaveTextContent('Registering interest isn’t available right now. Email contact@dreamstreamstudio.ai and we’ll add you by hand.');
+    expect(panel.textContent?.match(/contact@dreamstreamstudio\.ai/g)).toHaveLength(1);
     expect(screen.getByRole('link', { name: 'contact@dreamstreamstudio.ai' })).toHaveAttribute('href', 'mailto:contact@dreamstreamstudio.ai');
     unmount();
 
