@@ -21,6 +21,18 @@ const opensTag = (lower: string, lt: number, name: string): boolean =>
   lower.startsWith(name, lt + 1) && !isWordCode(lower.charCodeAt(lt + 1 + name.length));
 
 /**
+ * The tag name among `names` that opens at `lt`, or null. `firsts` (each name's first char code)
+ * rejects most `<` at once, so a page of `<p<p<p…` costs one comparison per `<` for names that
+ * cannot start there.
+ */
+const openerAt = (lower: string, lt: number, names: readonly string[], firsts: ReadonlySet<number>): string | null => {
+  if (!firsts.has(lower.charCodeAt(lt + 1))) return null;
+  for (const name of names) if (opensTag(lower, lt, name)) return name;
+  return null;
+};
+const firstCodes = (names: readonly string[]): Set<number> => new Set(names.map((n) => n.charCodeAt(0)));
+
+/**
  * Finder for `</name` (name followed by a non-word char) that only ever moves forward: callers
  * pass non-decreasing `from` values, and a cached answer is reused while it is still ahead.
  */
@@ -171,6 +183,7 @@ export const firstElement = (
 export const removeElements = (html: string, names: readonly string[], opts: { comments?: boolean } = {}): string => {
   const lower = asciiLower(html);
   const findClose = closeFinder(lower);
+  const firsts = firstCodes(names);
   let commentEnd = -2; // cached index of the next '-->' (-2 unknown, -1 none)
   const out: string[] = [];
   let last = 0;
@@ -188,13 +201,7 @@ export const removeElements = (html: string, names: readonly string[], opts: { c
       last = pos = commentEnd + 3;
       continue;
     }
-    let matched: string | null = null;
-    for (const name of names) {
-      if (opensTag(lower, lt, name)) {
-        matched = name;
-        break;
-      }
-    }
+    const matched = openerAt(lower, lt, names, firsts);
     if (!matched) {
       pos = lt + 1;
       continue;
@@ -225,18 +232,13 @@ export const forEachBlock = (
 ): void => {
   const lower = asciiLower(html);
   const findClose = closeFinder(lower);
+  const firsts = firstCodes(names);
   let nextGt = -2; // cached index of the next '>' at or after the current opener (-2 unknown, -1 none)
   let pos = 0;
   while (true) {
     const lt = lower.indexOf('<', pos);
     if (lt === -1) return;
-    let matched: string | null = null;
-    for (const name of names) {
-      if (opensTag(lower, lt, name)) {
-        matched = name;
-        break;
-      }
-    }
+    const matched = openerAt(lower, lt, names, firsts);
     if (!matched) {
       pos = lt + 1;
       continue;
