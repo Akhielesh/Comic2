@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cutFor, type Balloon, type ComicDoc, type Page } from '../doc.js';
+import { cutFor, type Balloon, type ComicDoc, type Page, type PageLayer } from '../doc.js';
 import { EDITOR_LIMITS } from '../limits.js';
 import { frameAffine } from '../panelize/space.js';
 import { inverseOps } from '../undo.js';
@@ -443,5 +443,37 @@ describe('nothing is lost or changed behind the user’s back', () => {
     const fd = withPages(doc, [free]);
     const split = roundTrip(fd, splitFrameEdit(fd, free, 'p1', 'across'));
     expect(pageOf(split, 'pg_a').layers!.find((l) => l.id === 'ly_right')!.clip).toBe('pe1');
+  });
+
+  it('split and join never patch an opaque layer (a newer build’s kind): it stays as written; known overlays still follow', () => {
+    const base = drawnPage('pg_a', 1, 'four-grid', [panel('p1', 1), panel('p2', 2), panel('p3', 3), panel('p4', 4)]);
+    // A layer of a kind this build does not know (PE-0 opaque passthrough), kept in p1's right half and in p2. One is
+    // locked and carries no box at all: neither may stop, or break, a frame edit.
+    const future = (id: string, clip: string, extra: Record<string, unknown> = {}) =>
+      ({ id, kind: 'hologram', box: { x: 0.35, y: 0.1, w: 0.1, h: 0.1 }, clip, glow: { hue: 200 }, ...extra }) as unknown as PageLayer;
+    const page: Page = {
+      ...base,
+      render: { ...base.render, cuts: { ...base.render.cuts!, cuts: base.render.cuts!.cuts.filter((c) => c.panelId !== 'p2') } },
+      layers: [
+        shape('ly_right', { x: 0.35, y: 0.1, w: 0.1, h: 0.1 }, 'p1', false),
+        future('ly_future', 'p1'),
+        future('ly_future_locked', 'p1', { box: undefined, locked: true }),
+        future('ly_future_p2', 'p2')
+      ]
+    };
+    const doc = withPages(baseDoc(), [page]);
+    const layerOps = (r: EditResult) => okOf(r).ops.filter((o) => o.op === 'layer').map((o) => (o as { id: string }).id);
+
+    const split = splitFrameEdit(doc, page, 'p1', 'across');
+    expect(layerOps(split)).toEqual(['ly_right']);
+    const afterSplit = roundTrip(doc, split);
+    const layers = pageOf(afterSplit, 'pg_a').layers!;
+    expect(layers.find((l) => l.id === 'ly_right')!.clip).toBe('pe1');
+    expect(layers.find((l) => l.id === 'ly_future')).toEqual(page.layers![1]);
+
+    const join = joinFramesEdit(doc, page, 'p1', 'p2');
+    expect(layerOps(join)).toEqual([]);
+    const afterJoin = roundTrip(doc, join);
+    expect(pageOf(afterJoin, 'pg_a').layers!.find((l) => l.id === 'ly_future_p2')).toEqual(page.layers![3]);
   });
 });
