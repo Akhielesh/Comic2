@@ -25,16 +25,19 @@
 //   * A hard cap of $2 per UTC day, enforced on the server before any call: the quote is reserved atomically with the
 //     key (server/sql/comic_model_lab.sql comic_model_lab_reserve), a running call holds its quote, a finished one
 //     counts the provider-reported cost (or the quote when none was reported).
-//   * The platform key only (platformStudioKeys, OpenRouter), never a user's. No timers: nothing here runs unless an
-//     admin asked. Honest refusals (missing key, storage off, cap reached, provider down per the health module) say
-//     why and that nothing was charged.
-// Every call is recorded twice: a comic_image_calls row (same column meanings as the studio's own calls, so the
-// PriceBook's observed costs learn from it) and a lab run row whose JSON holds every fact (pixel size, file size,
+//   * The admin spend key only (adminSpendKeys: the model-test key DREAMSTREAMSTUDIO_MODELTEST, OpenRouter, never a
+//     user's and never the user-serving platform key unless COMIC_ADMIN_SPEND_KEY=platform; Program 3 ST-A). No
+//     timers: nothing here runs unless an admin asked. Honest refusals (missing key, storage off, cap reached,
+//     provider down per the health module) say why and that nothing was charged.
+// Every call is recorded twice: a comic_image_calls row (same column meanings as the studio's own calls, under a
+// 'lab_' kind since Program 3 ST-A: on the record, but out of users' model stats and observed prices) and a lab run
+// row whose JSON holds every fact (pixel size, file size,
 // latency, provider-reported model version, what the transport actually sent, watermark yes/no).
 
 import { createHash, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { mapAssetRefs, normalizeDoc, type AspectRatio, type ComicDoc, type Page, type Resolution } from '../../../../shared/comic/doc.js';
+import { labCallKind } from '../../../../shared/comic/library.js';
 import type { HealthState, ModelHealth } from '../../../../shared/comic/modelHealth.js';
 import { lockOf, lockedSpecId } from '../../../../shared/comic/modelLock.js';
 import { QC_USD_PER_PAGE, getImageModel, type ImageModelSpec } from '../../../../shared/comic/models.js';
@@ -56,7 +59,8 @@ import {
   type ImageClientDeps
 } from '../imageClient.js';
 import { measureImage, withSharpSlot } from '../imageMeasure.js';
-import { platformStudioKeys } from '../keys.js';
+import { adminSpendKeys } from '../keys.js';
+import { adminSpendKeyMissing } from '../library/adminSpend.js';
 import { tryRenderPageLayoutGuide, type LayoutGuideImage } from '../panelize/wireframe.js';
 import { LAYOUT_REFERENCE_PATH, compilePage, type CompiledRenderJob } from '../prompts.js';
 import { buildRefPath } from '../storagePaths.js';
@@ -1579,7 +1583,7 @@ export const labVisionClient = (keys: StudioKeys, network: typeof fetch, now: ()
   const llm: LlmClient = {
     async complete(req) {
       const route = resolveTextRoute(req.role, keys);
-      if (!route || route.route !== 'openrouter') throw new StudioError('NO_TEXT_KEY', "The platform OpenRouter key isn't set on this server, so the page can't be checked.", { status: 503 });
+      if (!route || route.route !== 'openrouter') throw new StudioError('NO_TEXT_KEY', `${adminSpendKeyMissing()} The page can't be checked.`, { status: 503 });
       const defaults = TEXT_ROLE_DEFAULTS[req.role];
       const effort = defaults.reasoningEffort;
       const body: Record<string, unknown> = {
@@ -1988,7 +1992,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       const mine = runs.filter((r) => r.itemId === item.id);
       let reason: string | undefined;
       if (item.unavailable) reason = item.unavailable;
-      else if (!keys) reason = "The platform OpenRouter key isn't set on this server.";
+      else if (!keys) reason = adminSpendKeyMissing();
       else if (!store || !deps.storage) reason = "Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep.";
       else if (item.pair && pairState.get(item.pair.id) === 'ready') reason = pairReadyCopy(item.pair.label);
       else if (!quote) reason = `There's no price to quote for ${spec?.nickname ?? item.modelId} at ${item.res}, so the lab won't run it.`;
@@ -2203,7 +2207,8 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
         provider_model: spec.routes.openrouter ?? null,
         route: 'openrouter',
         provider_name: facts.providerName ?? null,
-        kind: shape.kind,
+        // 'lab_page' / 'lab_sheet': admin spend, kept out of users' model stats (catalog.ts) — Program 3 ST-A.
+        kind: labCallKind(shape.kind),
         res: shape.res,
         aspect: shape.aspect,
         refs: facts.refsSent,
@@ -2299,7 +2304,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     const spec = labModel(item.modelId);
     if (!spec?.routes.openrouter) throw labError('NOT_RUNNABLE', 409, `This check has no OpenRouter model to call. ${NOTHING_CHARGED}`);
     const keys = platformOpenRouter(deps.keys());
-    if (!keys) throw labError('NO_PLATFORM_KEY', 503, `The platform OpenRouter key isn't set on this server, so this check can't run. ${NOTHING_CHARGED}`);
+    if (!keys) throw labError('NO_PLATFORM_KEY', 503, `${adminSpendKeyMissing()} This check can't run. ${NOTHING_CHARGED}`);
     if (!deps.storage) throw labError('NO_STORAGE', 503, `Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep. ${NOTHING_CHARGED}`);
     claimInflight(input.key);
     try {
@@ -2538,7 +2543,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
       const h = await healthFor(spec);
       let reason: string | undefined;
       if (!budget.enabled) reason = budget.reason ?? LAB_AB_NOT_ENABLED_COPY;
-      else if (!ctx.keys) reason = "The platform OpenRouter key isn't set on this server.";
+      else if (!ctx.keys) reason = adminSpendKeyMissing();
       else if (!store || !deps.storage) reason = "Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep.";
       else if (pairState.get(item.pair.id) === 'voted' || votedPairs.has(item.pair.id)) reason = proPairVotedCopy(item.pair.label);
       else if (pairState.get(item.pair.id) === 'ready') reason = proPairReadyCopy(item.pair.label);
@@ -2650,7 +2655,7 @@ export function createModelLab(deps: ModelLabDeps): ModelLab {
     const limit = budget.limitUsd;
     const source = deps.proPages?.source ?? null;
     const keys = platformOpenRouter(deps.keys());
-    if (!keys) throw labError('NO_PLATFORM_KEY', 503, `The platform OpenRouter key isn't set on this server, so this check can't run. ${NOTHING_CHARGED}`);
+    if (!keys) throw labError('NO_PLATFORM_KEY', 503, `${adminSpendKeyMissing()} This check can't run. ${NOTHING_CHARGED}`);
     if (!deps.storage) throw labError('NO_STORAGE', 503, `Results can't be saved on this server (storage isn't configured), so the lab won't spend on a result it can't keep. ${NOTHING_CHARGED}`);
     if (!source) throw labError('NO_STORAGE', 503, `${NO_SOURCE_COPY} ${NOTHING_CHARGED}`);
     if (!store.spentOn) throw labError('NOT_RUNNABLE', 409, AB_UNCOUNTED_COPY);
@@ -2875,7 +2880,8 @@ export function createDefaultLabDeps(): ModelLabDeps {
           signUrls: (paths) => assets.signUrls(paths)
         }
       : null,
-    keys: () => platformStudioKeys(),
+    // Program 3 ST-A (bug B7): the model-test key, OpenRouter only; unset → every check refuses (fail closed).
+    keys: () => adminSpendKeys(),
     prices: (userId) => createPriceBook({ userId }),
     health: { getModelHealth: (spec, opts) => modelHealth().getModelHealth(spec, opts) },
     network: (input, init) => fetch(input, init),

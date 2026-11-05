@@ -375,7 +375,7 @@ describe('one click = one image call + its one page check', () => {
     expect(row.result.proPages!.check).toMatchObject({ ok: true, callMade: true, costReported: true, costUsd: 0.0024, panelsPlanned: 6, panelsDrawn: 6, beatsMatched: 6, crosses: [1], boxesFrom: 'vision', score: 0.88 });
     expect(row.result.imagePath).toMatch(new RegExp(`^u/${ADMIN}/p/model-lab/ref/`));
     // comic_image_calls gets the image call (its own cost); billed to nobody.
-    expect(h.store.imageCalls).toEqual([expect.objectContaining({ kind: 'page', res: '2K', outcome: 'ok', provider_cost_usd: 0.0611, billed_usd: 0, byok: false, user_id: ADMIN })]);
+    expect(h.store.imageCalls).toEqual([expect.objectContaining({ kind: 'lab_page', res: '2K', outcome: 'ok', provider_cost_usd: 0.0611, billed_usd: 0, byok: false, user_id: ADMIN })]);
     expect(h.deps.audit).toHaveBeenCalledWith(expect.objectContaining({ action: 'comic_model_lab_run', detail: expect.objectContaining({ check: 'P1', arm: 'on', golden: 'b4b5774f-p2', checked: true }) }));
     expect(JSON.stringify([h.store.runs, h.store.imageCalls, answer])).not.toContain('sk-or-platform-test');
     // The check went to the studio's page checker on the platform key, with the drawn page attached.

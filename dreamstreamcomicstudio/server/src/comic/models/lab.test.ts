@@ -241,7 +241,8 @@ describe('running a check', () => {
         provider_model: 'google/gemini-nano-banana-2.1',
         route: 'openrouter',
         provider_name: 'Google AI Studio',
-        kind: 'page',
+        // Program 3 ST-A: lab calls are admin spend, recorded as 'lab_page' and kept out of users' model stats.
+        kind: 'lab_page',
         res: '4K',
         aspect: '2:3',
         refs: 4,
@@ -491,7 +492,7 @@ describe('running a check', () => {
 
     const noKey = harness({ keys: () => null });
     expect(await labCodeOf(runItemUnchecked(noKey))).toBe('NO_PLATFORM_KEY');
-    expect((await noKey.lab.overview(ADMIN)).checks[0].items[0].reason).toBe("The platform OpenRouter key isn't set on this server.");
+    expect((await noKey.lab.overview(ADMIN)).checks[0].items[0].reason).toBe("The model-test key (DREAMSTREAMSTUDIO_MODELTEST) isn't set on this server.");
     // A user's own key never counts as the platform's.
     const byok = harness({ keys: () => ({ openrouter: { key: 'sk-or-user', byok: true } }) });
     expect(await labCodeOf(runItemUnchecked(byok))).toBe('NO_PLATFORM_KEY');
