@@ -353,6 +353,10 @@ export const asCaps = (v: unknown): StudioCaps | undefined => {
   }
   if (typeof v.dialogueFast === 'boolean') caps.dialogueFast = v.dialogueFast;
   if (typeof v.proEditorV2 === 'boolean') caps.proEditorV2 = v.proEditorV2;
+  // Pro Edit (PE-0): the motion, stickers and reader-motion switches, copied only when the server sends a boolean.
+  if (typeof v.proMotion === 'boolean') caps.proMotion = v.proMotion;
+  if (typeof v.proStickers === 'boolean') caps.proStickers = v.proStickers;
+  if (typeof v.readerMotion === 'boolean') caps.readerMotion = v.readerMotion;
   return caps;
 };
 
