@@ -1,7 +1,7 @@
 // "Page 3 deleted · Undo" (timeline.md §4.1): an 8-second toast after every free timeline edit, with
 // the exact inverse computed BEFORE the edit (shared/comic/undo.ts inverseOps). The toast pauses
 // while hovered or focused, announces politely, and sits above the safe area. Deleted pages also
-// stay in Media → Deleted, so nothing depends on catching the toast in time.
+// stay in Assets → Deleted, so nothing depends on catching the toast in time.
 //
 // One undo stack (P1-CLIENTSTATE/P1-TIMELINE): a timeline edit is committed through studio.patch, which
 // records it on the studio's global undo stack. The toast's Undo therefore runs studio.undo() while that

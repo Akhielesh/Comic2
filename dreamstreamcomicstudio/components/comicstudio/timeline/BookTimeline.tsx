@@ -653,16 +653,16 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
           </p>
           {/* Comic History (versions plan §8): opens the History panel at the list; nothing while History is off. */}
           <TimelineHistoryLink studio={studio} />
-          {/* The Media tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
+          {/* The Assets tab exists once the comic has an image (feature tab `visible`); no dead button before that. */}
           {hasMedia(doc) && (
             <button
               type="button"
               onClick={() => studio.setTab('media')}
               className={SUMMARY_ACTION}
-              aria-label="Open Media: every image in this comic"
+              aria-label="Open Assets: every image in this comic"
             >
               <Images className="h-3.5 w-3.5" aria-hidden />
-              <span className="hidden sm:inline">Media</span>
+              <span className="hidden sm:inline">Assets</span>
             </button>
           )}
         </div>

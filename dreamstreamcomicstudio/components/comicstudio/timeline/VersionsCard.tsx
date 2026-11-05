@@ -23,7 +23,7 @@ export const VersionsCard: React.FC<CardProps<VersionsCardData>> = ({ card, stud
       {exists ? (
         <VersionStack studio={studio} target={card.target} compact />
       ) : (
-        <p className="text-[13px] text-[var(--ds-muted)]">That image is no longer in the comic (it may have been deleted — check Media → Deleted).</p>
+        <p className="text-[13px] text-[var(--ds-muted)]">That image is no longer in the comic (it may have been deleted — check Assets → Deleted).</p>
       )}
     </CardShell>
   );
