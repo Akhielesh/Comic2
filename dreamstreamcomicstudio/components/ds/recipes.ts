@@ -11,12 +11,18 @@
  * which the status-ink guard's class-list reader follows), so a caller's className can never cancel it,
  * and their tests assert every recipe class survives. Class strings never use the Tailwind 3 aliases
  * tailwind-merge cannot dedupe against their modern names (components/ds/cnAliases.test.ts).
+ *
+ * The colour layer "Ink & Spark" (SPARK_*, MAKING_DOT, HUE_*, ART_*) is a DreamStream extension, not from Atlas: the
+ * spark marks creation only and never sits on a price (tests/config/sparkGuard.test.ts). Its three hand-written CSS
+ * classes (MAKING_SWEEP, MAKING_TEXT, BENDAY: styles/ds-motion.css) are imported from studioDesign directly.
  */
 
 export {
   ACCENT_FILL,
   ACCENT_FILL_HOVER,
   ACCENT_TEXT,
+  ART_GLOW,
+  ART_PLACEHOLDER,
   CHIP,
   CHIP_VARIANT,
   DANGER_FILL,
@@ -27,7 +33,12 @@ export {
   FOCUS_RING_FLUSH,
   FONT_DISPLAY,
   HEADER_GLASS,
+  HUE_DOT,
+  HUE_FILL,
+  HUE_STROKE,
+  hueSlot,
   LIFT,
+  MAKING_DOT,
   ON_ACCENT_TEXT,
   OVERLINE,
   RADIUS_CONTROL,
@@ -45,6 +56,10 @@ export {
   SEGMENTED_PILL,
   SEGMENTED_TRACK,
   SHADOW_SOFT,
+  SPARK_FILL,
+  SPARK_RING_ON_ART,
+  SPARK_SOFT_BG,
+  SPARK_TEXT,
   STATUS_CHIP,
   STATUS_CHIP_TONE,
   STATUS_DOT,

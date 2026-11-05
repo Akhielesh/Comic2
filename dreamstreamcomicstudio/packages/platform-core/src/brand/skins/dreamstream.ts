@@ -2,6 +2,8 @@
  * The `dreamstream` skin: the semantic `--ds-*` design tokens of the DreamStream apps as data, exactly as Comic2's
  * `index.css` declares them (`:root` for light, `.dark` for dark; the reader-room `--ds-reader-*` tokens are page
  * content, not chrome, and are left out). Values are CSS as written, `var()` references included.
+ * The colour layer "Ink & Spark" (`--ds-spark*`, `--ds-hue-1…5`, `--ds-art`) is a DreamStream extension, not from Atlas:
+ * the same values in both skins (docs/design/design-system.md § Colour layer).
  *
  * Design tokens only. `src/brand/brand.test.ts` re-reads `index.css` and fails on any drift, so change a token there
  * and here together.
@@ -39,8 +41,8 @@ export const DREAMSTREAM_SKIN: SkinTokens = {
     '--ds-warning-text': '#a84e0a',
     '--ds-danger': '#dc2626',
     '--ds-danger-text': '#b91c1c',
-    '--ds-info': '#2563eb',
-    '--ds-info-text': '#1d4ed8',
+    '--ds-info': '#525252',
+    '--ds-info-text': '#404040',
     '--ds-ring': '#c2643f',
     '--ds-font-sans': 'Inter, sans-serif',
     '--ds-font-display': 'Inter, sans-serif',
@@ -115,6 +117,18 @@ export const DREAMSTREAM_SKIN: SkinTokens = {
     '--ds-spot-ink': 'var(--ds-ink)',
     '--ds-radius-hero': '28px',
     '--ds-radius-feature': '16px',
+    '--ds-spark': '#3d44e8',
+    '--ds-spark-hover': '#3438cc',
+    '--ds-on-spark': '#ffffff',
+    '--ds-spark-text': '#3d44e8',
+    '--ds-spark-soft': 'color-mix(in srgb, var(--ds-spark) 8%, var(--ds-canvas))',
+    '--ds-spark-glow': 'color-mix(in srgb, var(--ds-spark) 24%, transparent)',
+    '--ds-hue-1': '#3d44e8',
+    '--ds-hue-2': '#d13d91',
+    '--ds-hue-3': '#db6b04',
+    '--ds-hue-4': '#079a94',
+    '--ds-hue-5': '#9548cc',
+    '--ds-art': 'var(--ds-well-strong)',
   },
   dark: {
     '--ds-canvas': '#262624',
@@ -142,8 +156,8 @@ export const DREAMSTREAM_SKIN: SkinTokens = {
     '--ds-warning-text': '#fbbf24',
     '--ds-danger': '#f87171',
     '--ds-danger-text': '#fca5a5',
-    '--ds-info': '#60a5fa',
-    '--ds-info-text': '#93c5fd',
+    '--ds-info': '#e5e5e5',
+    '--ds-info-text': '#e5e5e5',
     '--ds-ring': '#D97757',
     '--ds-shadow-lift': '0 8px 24px rgba(0,0,0,0.5)',
     '--ds-scrim': 'rgba(0,0,0,0.60)',
@@ -153,5 +167,17 @@ export const DREAMSTREAM_SKIN: SkinTokens = {
     '--ds-chart-3': '#8a8a8a',
     '--ds-chart-4': '#5e5e5e',
     '--ds-chart-5': '#3d3d3d',
+    '--ds-spark': '#8b9bfe',
+    '--ds-spark-hover': '#a3b2fe',
+    '--ds-on-spark': '#0a0a0a',
+    '--ds-spark-text': '#abb9fe',
+    '--ds-spark-soft': 'color-mix(in srgb, var(--ds-spark) 16%, var(--ds-canvas))',
+    '--ds-spark-glow': 'color-mix(in srgb, var(--ds-spark) 30%, transparent)',
+    '--ds-hue-1': '#5568fd',
+    '--ds-hue-2': '#d84497',
+    '--ds-hue-3': '#df6e07',
+    '--ds-hue-4': '#04a19b',
+    '--ds-hue-5': '#a155da',
+    '--ds-art': 'var(--ds-well-strong)',
   },
 };

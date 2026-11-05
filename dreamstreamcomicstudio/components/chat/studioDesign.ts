@@ -488,6 +488,47 @@ export const DANGER_FILL = 'bg-[var(--ds-danger)] text-[var(--ds-on-danger)]';
 export const DANGER_FILL_HOVER = 'hover:bg-[color:color-mix(in_srgb,var(--ds-danger)_88%,var(--ds-ink))]';
 
 // ---------------------------------------------------------------------------
+// Colour layer "Ink & Spark" (docs/design/design-system.md § Colour layer; a DreamStream extension, not
+// from Atlas). The studio is black ink on white paper; colour is a spot with one meaning each:
+//   - the SPARK (--ds-spark*, ultramarine) marks creation: the one "start making" fill in a view, what the
+//     studio is drawing right now, and what is selected on the art. Never on a price, never on a control that
+//     spends (Approve, Draw · price, Redraw, Translate, Get more stay the ink primary), never a focus ring,
+//     never in the reader. tests/config/sparkGuard.test.ts holds every spark fill to its allowlist;
+//   - HUES 1–5 tell series and tags apart (fixed order, a legend or a word always; never as status);
+//   - the ART tint is a comic's own colour around it (set inline as --ds-art; never under text).
+// tokenContrast.test.ts measures every pairing in all six contexts; huePalette.test.ts validates the hues.
+// ---------------------------------------------------------------------------
+
+/** The one "start making" fill in a view (New comic, Start a comic, composer Send, Share when ready): label 6.58:1+. */
+export const SPARK_FILL = 'bg-[var(--ds-spark)] text-[var(--ds-on-spark)] hover:bg-[var(--ds-spark-hover)]';
+/** Spark as text, or an icon beside its words ("Drawing page 3 of 6"): ≥ 4.5:1 on every surface and on SPARK_SOFT_BG. */
+export const SPARK_TEXT = 'text-[var(--ds-spark-text)]';
+/** The selected / making tint behind a tile or row (spark at 8 %, 16 % in dark, mixed into the page). */
+export const SPARK_SOFT_BG = 'bg-[var(--ds-spark-soft)]';
+/** Selection ON ART only (a page, panel, version or tile): a 2 px spark outline with a 2 px gap, so it reads on any edge. */
+export const SPARK_RING_ON_ART = 'outline outline-2 outline-offset-2 outline-[color:var(--ds-spark)]';
+/** "Being drawn now": put on a LiveDot (it paints currentColor), always beside its words. */
+export const MAKING_DOT = 'text-[var(--ds-spark)]';
+/** The sweep over a tile being drawn: a spark glint ≤ 30 %, paused off screen, still under reduced motion (styles/ds-motion.css). */
+export const MAKING_SWEEP = 'ds-making-sweep';
+/** A "Drawing page 3 of 6…" label: the shimmer-text loop with a spark glint (plain muted text under reduced motion). */
+export const MAKING_TEXT = 'ds-shimmer-text [--ds-shimmer-glint:var(--ds-spark-text)]';
+/** Comic Ben-Day dots in the spark behind hero art and empty states only (static; styles/ds-motion.css). */
+export const BENDAY = 'ds-benday';
+/** A cover or tile before its image decodes: the comic's own tint (--ds-art), the neutral well by default. */
+export const ART_PLACEHOLDER = 'bg-[var(--ds-art)]';
+/** A cover card's glow in its own colour, on pointers that really hover (always-on for a hero cover: add it yourself). */
+export const ART_GLOW = 'can-hover:hover:shadow-[0_10px_28px_-10px_color-mix(in_srgb,var(--ds-art)_55%,transparent)]';
+/** Categorical identity, slots 1–5 in fixed order (a 6 px tag dot before its word, a legend swatch). "Other" folds past five. */
+export const HUE_DOT = ['bg-[var(--ds-hue-1)]', 'bg-[var(--ds-hue-2)]', 'bg-[var(--ds-hue-3)]', 'bg-[var(--ds-hue-4)]', 'bg-[var(--ds-hue-5)]'] as const;
+/** The same slots for SVG chart marks (inline-SVG kit charts): fills and strokes. */
+export const HUE_FILL = ['fill-[var(--ds-hue-1)]', 'fill-[var(--ds-hue-2)]', 'fill-[var(--ds-hue-3)]', 'fill-[var(--ds-hue-4)]', 'fill-[var(--ds-hue-5)]'] as const;
+export const HUE_STROKE = ['stroke-[var(--ds-hue-1)]', 'stroke-[var(--ds-hue-2)]', 'stroke-[var(--ds-hue-3)]', 'stroke-[var(--ds-hue-4)]', 'stroke-[var(--ds-hue-5)]'] as const;
+/** The categorical slot for the n-th series (0-based), or null past the fifth: fold the rest into "Other" (a chart step). */
+export const hueSlot = (index: number): 1 | 2 | 3 | 4 | 5 | null =>
+  Number.isInteger(index) && index >= 0 && index < 5 ? ((index + 1) as 1 | 2 | 3 | 4 | 5) : null;
+
+// ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)
 // ---------------------------------------------------------------------------
 
