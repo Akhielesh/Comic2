@@ -162,7 +162,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         isAuthenticated: true,
         username: profile?.username || undefined,
         maskedEmail: maskEmail(user?.email),
-        isAdmin: user?.email === 'admin@test.com',
+        // No isAdmin here: the server rebuilds the account summary (routes/assistant.ts) from the
+        // plan it holds, and an email address never makes anyone an admin.
         planTier: usage?.plan_tier,
         usage: usage ? {
           imagesGenerated: usage.images_generated_count,
