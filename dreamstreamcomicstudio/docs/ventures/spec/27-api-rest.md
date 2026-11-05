@@ -224,7 +224,7 @@ does not duplicate them. Summary catalog (verified against `server/src/index.ts`
 |---|---|---|---|---|
 | **Health** | `/api/health` | public | liveness | ✅ shipped |
 | **System** | `/api/system` | public | `status`, `capabilities`, `dashboard`, `version`, `ready`, `diagnostics` | ✅ shipped |
-| **Models** | `/api/models` | public | `catalog` (stale-while-revalidate), `verify` | ✅ shipped |
+| **Models** | `/api/models` | public | `catalog` (stale-while-revalidate), `verify` (required; the caller's own keys only — platform-key `/key` + `/credits` telemetry is admin-only) | ✅ shipped |
 | **Keys** | `/api/keys` | required | BYOK provider key `validate` (caller's own key only) | ✅ shipped |
 | **Assistant** | `/api/assistant` | optional | in-app help `chat` | ✅ shipped |
 | **Billing** | `/api/billing` | optional | pricing catalog, summary, subscription, Stripe checkout/portal, credits, spend cap, usage history, coupons | ✅ shipped |
