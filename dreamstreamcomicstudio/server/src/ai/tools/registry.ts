@@ -41,6 +41,7 @@ import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { FLIGHT_TOOLS } from './flights.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
+import { currentAccountId } from '../../lib/accountContext.js';
 import { generativeUiTool, renderReactTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
@@ -1155,7 +1156,8 @@ const readUrlTool: ChatTool = {
     const cached = getCachedPage(url);
     if (cached) return { content: cached, citations: [{ url, title: host || url }] };
     try {
-      const data = await readArticle(url, signal);
+      // The Jina fallback (a shared, budgeted quota) only for a signed-in caller of this turn.
+      const data = await readArticle(url, signal, { allowJina: Boolean(currentAccountId()) });
       if (!data.ok || !data.blocks.length) {
         // Only a fetch-level failure means the HOST blocks reads — penalize the whole host.
         // A merely-thin page (`empty`) is page-specific, so don't skip the rest of the host.

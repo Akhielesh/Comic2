@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import {
   firstElement,
   forEachBlock,
+  MAX_ATTR_VALUE_CHARS,
+  MAX_META_TAG_CHARS,
   metaTags,
   parseAttributes,
   removeElements,
@@ -41,12 +43,36 @@ describe('htmlScan semantics', () => {
     expect(Object.fromEntries(a)).toEqual({ a: '1', b: '2', c: '3', d: '4', e: '', f: 'unterminated' });
   });
 
+  it('drops attribute values over 1000 chars and skips meta tags over 2 KB (the reference limits)', () => {
+    const long = 'v'.repeat(MAX_ATTR_VALUE_CHARS + 1);
+    expect(parseAttributes(` content="${'v'.repeat(MAX_ATTR_VALUE_CHARS)}"`).get('content')).toHaveLength(MAX_ATTR_VALUE_CHARS);
+    expect(parseAttributes(` content="${long}" name=x`).has('content')).toBe(false);
+    const html = `<meta property="og:title" content="kept"><meta name="description" content="short" data-pad="${'p'.repeat(
+      MAX_META_TAG_CHARS
+    )}"><meta property="og:image" content="${long}"><meta name="author" content="Ann">`;
+    const meta = metaTags(html);
+    expect(meta.get('og:title')).toBe('kept');
+    expect(meta.has('description')).toBe(false); // the whole >2 KB tag is skipped
+    expect(meta.has('og:image')).toBe(false); // a value over the cap is dropped, never cut into a broken URL
+    expect(meta.get('author')).toBe('Ann');
+  });
+
+  it('extractArticle never echoes a huge lead-image URL', () => {
+    const body = `<article><p>${'Real article text. '.repeat(20)}</p></article>`;
+    const longPage = `https://site.test/${'a'.repeat(2100)}/`;
+    expect(extractArticle(`<meta property="og:image" content="lead.jpg">${body}`, 'https://site.test/x/').image).toBe('https://site.test/x/lead.jpg');
+    expect(extractArticle(`<meta property="og:image" content="lead.jpg">${body}`, longPage).image).toBeUndefined();
+    expect(extractArticle(`<meta property="og:image" content="https://cdn.test/${'i'.repeat(1500)}.jpg">${body}`, 'https://site.test/').image).toBeUndefined();
+  });
+
   it('title text, first element, removed elements, blocks', () => {
     expect(titleText('<html><TITLE lang="en">Hello &amp; bye</TITLE>')).toBe('Hello &amp; bye');
     expect(titleText('<title>has <b>markup</b></title>')).toBeUndefined();
     expect(titleText('<titles>no</titles>')).toBeUndefined();
     expect(firstElement('x<main id=a>one</main><main>two</main>', 'main')).toBe('<main id=a>one</main>');
     expect(firstElement('<article>never closed', 'article')).toBeUndefined();
+    expect(firstElement('x<article id=a>cut off at the cap', 'article', undefined, { openEnded: true })).toBe('<article id=a>cut off at the cap');
+    expect(firstElement('x<main>closed</main>', 'main', undefined, { openEnded: true })).toBe('<main>closed</main>');
     expect(removeElements('a<script>x</script>b<!-- c -->d<style>never closed', ['script', 'style'], { comments: true })).toBe(
       'a b d<style>never closed'
     );
@@ -55,6 +81,21 @@ describe('htmlScan semantics', () => {
       seen.push(`${n}:${inner}`);
     });
     expect(seen).toEqual(['li:<p>in li</p>', 'p:one', 'h2:two']);
+    // Openers that share one far '>' (the cached search) still pair with the right close.
+    const shared: string[] = [];
+    forEachBlock('<p<p<p x>a</p><li <li>b</li><p>c</p>', ['p', 'li'], (n, inner) => {
+      shared.push(`${n}:${inner}`);
+    });
+    expect(shared).toEqual(['p:a', 'li:b', 'p:c']);
+  });
+
+  it('extractArticle reads a region cut off before its close (the page was truncated at the cap)', () => {
+    const para = (t: string) => `<p>${t} ${'Words that make this a real paragraph. '.repeat(3)}</p>`;
+    const sidebar = `<div class="promo">${para('SIDEBAR promo outside the main region')}</div>`;
+    const truncated = `<html><body>${sidebar}<main>${para('MAIN one')}${para('MAIN two')}${para('MAIN three')}`;
+    const out = extractArticle(truncated, 'https://wiki.test/');
+    expect(out.blocks.map((b) => b.text.split(' ')[0])).toEqual(['MAIN', 'MAIN', 'MAIN']);
+    expect(out.charCount).toBeGreaterThan(240);
   });
 
   it('strips tags like /<[^>]+>/ but keeps a stray < as text', () => {
@@ -108,15 +149,24 @@ describe('linear time on adversarial pages', () => {
     return runs.sort((a, b) => a - b)[1]; // median of 3
   };
 
-  const parsers: [string, (html: string) => unknown][] = [
+  // Openers that all share ONE far '>' (each opener used to rescan to it: quadratic).
+  const sharedGt = (unit: string) => (bytes: number): string => unit.repeat(Math.floor((bytes - 1) / unit.length)) + '>';
+  const blockNames = ['h2', 'h3', 'p', 'li'] as const;
+
+  const parsers: [string, (html: string) => unknown, ((bytes: number) => string)?][] = [
     ['extractArticle (read-url)', (h) => extractArticle(h, 'https://x.test/')],
     ['parseUnfurl (unfurl)', (h) => parseUnfurl(h, 'https://x.test/')],
     ['htmlToText (deep research)', (h) => htmlToText(h)],
-    ['parseJinaReader (Jina fallback)', (h) => parseJinaReader(h)]
+    ['parseJinaReader (Jina fallback)', (h) => parseJinaReader(h), jinaAdversarial],
+    ['forEachBlock on <p<p<p…>', (h) => forEachBlock(h, blockNames, () => undefined), sharedGt('<p')],
+    ['forEachBlock on <li <li …>', (h) => forEachBlock(h, blockNames, () => undefined), sharedGt('<li ')],
+    ['extractArticle on <p<p<p…>', (h) => extractArticle(h, 'https://x.test/'), sharedGt('<p')],
+    ['extractArticle on <li <li …>', (h) => extractArticle(h, 'https://x.test/'), sharedGt('<li ')],
+    ['metaTags on <meta <meta …>', (h) => metaTags(h), sharedGt('<meta ')]
   ];
 
-  it.each(parsers)('%s: 1 MB parses fast and scales linearly', (_name, parse) => {
-    const make = _name.startsWith('parseJinaReader') ? jinaAdversarial : adversarial;
+  it.each(parsers)('%s: 1 MB parses fast and scales linearly', (_name, parse, maker) => {
+    const make = maker || adversarial;
     const small = make(256 * 1024);
     const big = make(1024 * 1024);
     parse(small); // warm up the JIT

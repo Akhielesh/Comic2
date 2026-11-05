@@ -3,9 +3,12 @@
 // The previous whole-document regexes (`<p\b[^>]*>([\s\S]*?)<\/p>`, `<meta[^>]+…[^>]+content=…`,
 // `<[^>]+>`) backtrack: every unclosed `<p` / `<meta` / `<` rescans to the end of the page, so a
 // few hundred KB of adversarial markup froze the event loop for seconds. Everything here walks
-// the page with indexOf and never looks at a character more than a constant number of times
-// (close-tag searches are cached per tag name and only move forward). Same results as the old
-// patterns on ordinary pages; on hostile ones the work stays proportional to the input.
+// the page with indexOf and never looks at a character more than a constant number of times:
+// every search for a `>` or a close tag is cached and only moves forward, so each `>` is found
+// once however many openers share it (`'<p'.repeat(n) + '>'` is one search, not n). Same results
+// as the old patterns on ordinary pages; on hostile ones the work stays proportional to the input.
+// Meta tags longer than 2 KB are skipped and attribute values longer than 1000 characters are
+// dropped (the reference scanner's limits), so no single tag can feed a huge value downstream.
 
 const isWordCode = (c: number): boolean =>
   (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
@@ -34,9 +37,15 @@ const closeFinder = (lower: string) => {
   };
 };
 
+/** Longest attribute value kept; a longer one is dropped (never cut into a broken URL). */
+export const MAX_ATTR_VALUE_CHARS = 1000;
+/** Longest `<meta …>` tag read; a longer one is skipped whole. */
+export const MAX_META_TAG_CHARS = 2048;
+
 /**
  * Attributes of one tag's inner text (between the tag name and its `>`), lower-cased names,
- * first occurrence wins. Quoted values may contain the other quote character.
+ * first occurrence wins. Quoted values may contain the other quote character. A value longer
+ * than MAX_ATTR_VALUE_CHARS is dropped: the attribute reads as absent.
  */
 export const parseAttributes = (inner: string): Map<string, string> => {
   const attrs = new Map<string, string>();
@@ -64,7 +73,7 @@ export const parseAttributes = (inner: string): Map<string, string> => {
         value = inner.slice(vs, i);
       }
     }
-    if (name && !attrs.has(name)) attrs.set(name, value);
+    if (name && !attrs.has(name) && value.length <= MAX_ATTR_VALUE_CHARS) attrs.set(name, value);
     if (i === start) i += 1; // never stall on a stray character
   }
   return attrs;
@@ -90,6 +99,11 @@ export const metaTags = (html: string, lower = asciiLower(html)): Map<string, st
     const gt = lower.indexOf('>', lt + 5);
     if (gt === -1) break; // no tag can close after this point
     seen += 1;
+    // Every `<meta` before gt shares this '>': resuming past it consumes each '>' once.
+    if (gt - lt > MAX_META_TAG_CHARS) {
+      pos = gt + 1;
+      continue;
+    }
     const attrs = parseAttributes(html.slice(lt + 5, gt));
     const content = (attrs.get('content') || '').trim();
     if (content) {
@@ -123,8 +137,17 @@ export const titleText = (html: string, lower = asciiLower(html)): string | unde
   }
 };
 
-/** The first `<tag …>…</tag>` element (outer HTML), or undefined when none closes. */
-export const firstElement = (html: string, tag: string, lower = asciiLower(html)): string | undefined => {
+/**
+ * The first `<tag …>…</tag>` element (outer HTML), or undefined when none closes. With
+ * `openEnded`, a first element that never closes (a page cut off at a download cap) runs to the
+ * end of the text instead.
+ */
+export const firstElement = (
+  html: string,
+  tag: string,
+  lower = asciiLower(html),
+  opts: { openEnded?: boolean } = {}
+): string | undefined => {
   let pos = 0;
   while (true) {
     const lt = lower.indexOf(`<${tag}`, pos);
@@ -134,7 +157,7 @@ export const firstElement = (html: string, tag: string, lower = asciiLower(html)
       continue;
     }
     const close = closeFinder(lower)(tag, lt + 1 + tag.length);
-    if (close === -1) return undefined; // no later opening can close either
+    if (close === -1) return opts.openEnded ? html.slice(lt) : undefined; // no later opening can close either
     const gt = lower.indexOf('>', close);
     return html.slice(lt, gt === -1 ? html.length : gt + 1);
   }
@@ -202,6 +225,7 @@ export const forEachBlock = (
 ): void => {
   const lower = asciiLower(html);
   const findClose = closeFinder(lower);
+  let nextGt = -2; // cached index of the next '>' at or after the current opener (-2 unknown, -1 none)
   let pos = 0;
   while (true) {
     const lt = lower.indexOf('<', pos);
@@ -217,7 +241,11 @@ export const forEachBlock = (
       pos = lt + 1;
       continue;
     }
-    const gt = lower.indexOf('>', lt + 1 + matched.length);
+    // Openers only move forward, so the cached '>' stays valid until an opener passes it: a run
+    // of openers with no '>' (`<p<p<p…>`) shares one search instead of rescanning per opener.
+    const from = lt + 1 + matched.length;
+    if (nextGt === -2 || (nextGt !== -1 && nextGt < from)) nextGt = lower.indexOf('>', from);
+    const gt = nextGt;
     if (gt === -1) return; // no opening tag can end after this point
     const close = findClose(matched, gt + 1);
     if (close === -1) {

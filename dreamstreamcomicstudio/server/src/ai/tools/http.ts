@@ -8,6 +8,7 @@
 import { assertProviderBudget, noteProviderCall, pageProviderFor, providerForUrl } from '../../lib/providerUsage.js';
 import { egressHeaders, egressUrlFor } from '../../lib/egressProxy.js';
 import { fetchPublicUrl } from './mcpClient.js';
+import { readTextCapped } from './cappedBody.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -22,12 +23,17 @@ interface FetchOptions {
   accept?: string;
 }
 
-/** Run a fetch with a hard timeout chained to an optional caller abort signal. */
-const withTimeout = async (
+/**
+ * Run a fetch with a hard timeout chained to an optional caller abort signal. `read` consumes the
+ * response INSIDE the same deadline and abort wiring, so a server that sends its headers and then
+ * stalls the body can neither hold the call past timeoutMs nor ignore the caller's cancel.
+ */
+const withTimeout = async <T>(
   url: string,
   accept: string,
-  opts: FetchOptions
-): Promise<Response> => {
+  opts: FetchOptions,
+  read: (res: Response) => Promise<T>
+): Promise<T> => {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
   // Track whether OUR timeout fired so we can turn the otherwise-opaque
@@ -43,10 +49,11 @@ const withTimeout = async (
     else opts.signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
-    return await fetch(url, {
+    const res = await fetch(url, {
       headers: { 'User-Agent': USER_AGENT, Accept: accept, ...(opts.headers || {}) },
       signal: controller.signal
     });
+    return await read(res);
   } catch (err) {
     // Our timeout → a clear message. A caller-initiated abort (user cancel) or a real
     // network error propagates unchanged so callers can tell them apart.
@@ -60,49 +67,84 @@ const withTimeout = async (
 
 // Direct attempt first; for relay-allowlisted hosts (lib/egressProxy.ts) a
 // failure retries once through the edge egress worker — several market-data
-// upstreams block this backend's datacenter IPs.
-const fetchDirectThenEgress = async (url: string, accept: string, opts: FetchOptions): Promise<Response> => {
+// upstreams block this backend's datacenter IPs. Only a failed REQUEST (network error,
+// timeout, non-2xx) is retried: a body that arrived but would not parse is the upstream's
+// answer, and relaying it again would not change it.
+const fetchDirectThenEgress = async <T>(
+  url: string,
+  accept: string,
+  opts: FetchOptions,
+  read: (res: Response) => Promise<T>
+): Promise<T> => {
+  let readFailed = false;
+  const okThenRead = (via: string) => async (res: Response): Promise<T> => {
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new Error(`${hostOf(url)} returned ${res.status}${via}`);
+    }
+    try {
+      return await read(res);
+    } catch (err) {
+      readFailed = true;
+      throw err;
+    }
+  };
   try {
-    const res = await withTimeout(url, accept, opts);
-    if (res.ok) return res;
-    throw new Error(`${hostOf(url)} returned ${res.status}`);
+    return await withTimeout(url, accept, opts, okThenRead(''));
   } catch (err) {
-    const relay = egressUrlFor(url);
+    const relay = readFailed ? null : egressUrlFor(url);
     if (!relay) throw err;
-    const res = await withTimeout(relay, accept, {
-      ...opts,
-      timeoutMs: Math.max(opts.timeoutMs ?? 0, 14_000),
-      headers: { ...(opts.headers || {}), ...egressHeaders() }
-    });
-    if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status} (via egress)`);
-    return res;
+    return withTimeout(
+      relay,
+      accept,
+      {
+        ...opts,
+        timeoutMs: Math.max(opts.timeoutMs ?? 0, 14_000),
+        headers: { ...(opts.headers || {}), ...egressHeaders() }
+      },
+      okThenRead(' (via egress)')
+    );
   }
 };
 
-/** GET JSON, throwing on a non-2xx status or invalid body. Budget-metered. */
+const isAbortError = (err: unknown): boolean => (err as { name?: string } | null)?.name === 'AbortError';
+
+/**
+ * GET JSON, throwing on a non-2xx status or invalid body. Budget-metered. One deadline (and the
+ * caller's cancel) covers the headers AND the body.
+ */
 export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {}): Promise<T> => {
   assertProviderBudget(url);
-  const res = await fetchDirectThenEgress(url, opts.accept || 'application/json', opts).then(
-    (r) => (noteProviderCall(url, true), r),
-    (err) => (noteProviderCall(url, false), Promise.reject(err))
-  );
-  // A non-JSON body (HTML error page served with 200, empty body, gateway error) would
-  // otherwise surface as an opaque SyntaxError — map it to a clear, honest message.
   try {
-    return (await res.json()) as T;
-  } catch {
-    throw new Error(`${hostOf(url)} returned an invalid (non-JSON) response`);
+    const out = await fetchDirectThenEgress(url, opts.accept || 'application/json', opts, async (res) => {
+      try {
+        return (await res.json()) as T;
+      } catch (err) {
+        if (isAbortError(err)) throw err; // our deadline or the caller's cancel, mid-body
+        // A non-JSON body (HTML error page served with 200, empty body, gateway error) would
+        // otherwise surface as an opaque SyntaxError — map it to a clear, honest message.
+        throw new Error(`${hostOf(url)} returned an invalid (non-JSON) response`);
+      }
+    });
+    noteProviderCall(url, true);
+    return out;
+  } catch (err) {
+    noteProviderCall(url, false);
+    throw err;
   }
 };
 
-/** GET text/XML/CSV, throwing on a non-2xx status. Budget-metered. */
+/** GET text/XML/CSV, throwing on a non-2xx status. Budget-metered; one deadline covers the body. */
 export const fetchText = async (url: string, opts: FetchOptions = {}): Promise<string> => {
   assertProviderBudget(url);
-  const res = await fetchDirectThenEgress(url, opts.accept || 'text/plain, */*', opts).then(
-    (r) => (noteProviderCall(url, true), r),
-    (err) => (noteProviderCall(url, false), Promise.reject(err))
-  );
-  return res.text();
+  try {
+    const out = await fetchDirectThenEgress(url, opts.accept || 'text/plain, */*', opts, (res) => res.text());
+    noteProviderCall(url, true);
+    return out;
+  } catch (err) {
+    noteProviderCall(url, false);
+    throw err;
+  }
 };
 
 export interface CappedFetchOptions extends FetchOptions {
@@ -121,44 +163,10 @@ export interface CappedText {
   text: string;
   /** True when the body was longer than maxBytes and the read stopped at the cap. */
   truncated: boolean;
-  /** Decoded bytes kept. */
+  /** Body bytes kept (after any Content-Encoding was undone). */
   bytes: number;
   contentType: string;
 }
-
-/** Read at most maxBytes of a body, then cancel the stream (the connection stops downloading). */
-const readCapped = async (res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean; bytes: number }> => {
-  const body = res.body as ReadableStream<Uint8Array> | null;
-  if (!body) {
-    const all = new TextEncoder().encode(await res.text());
-    const kept = all.subarray(0, maxBytes);
-    return { text: new TextDecoder().decode(kept), truncated: all.length > maxBytes, bytes: kept.length };
-  }
-  const reader = body.getReader();
-  const dec = new TextDecoder();
-  let text = '';
-  let bytes = 0;
-  let truncated = false;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const room = maxBytes - bytes;
-      if (value.length > room) {
-        if (room > 0) text += dec.decode(value.subarray(0, room), { stream: true });
-        bytes += Math.max(0, room);
-        truncated = true;
-        break;
-      }
-      bytes += value.length;
-      text += dec.decode(value, { stream: true });
-    }
-  } finally {
-    if (truncated) await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-  return { text: text + dec.decode(), truncated, bytes };
-};
 
 /**
  * GET text with ONE deadline over the whole exchange — headers AND body — and a streamed byte
@@ -205,8 +213,9 @@ export const fetchTextCapped = async (url: string, opts: CappedFetchOptions): Pr
       await res.body?.cancel().catch(() => undefined);
       throw new Error(`${hostOf(url)} returned ${contentType.split(';')[0].trim()}, not a readable page`);
     }
-    // Still inside the deadline: the body read is covered by the same timer and signal.
-    const out = await readCapped(res, Math.max(0, opts.maxBytes));
+    // Still inside the deadline: the body read is covered by the same timer and signal. The
+    // text is decoded in the charset the page declares (Content-Type, BOM or <meta charset>).
+    const out = await readTextCapped(res, Math.max(0, opts.maxBytes));
     return { ...out, contentType };
   } catch (err) {
     if (timedOut) throw new Error(`${hostOf(url)} timed out after ${Math.round(timeoutMs / 1000)}s`);

@@ -10,14 +10,28 @@
 import { fetchTextCapped, hostOf } from './http.js';
 import { decodeGoogleNewsUrl, isGoogleNewsUrl } from './googleNews.js';
 import { asciiLower, firstElement, forEachBlock, metaTags, removeElements, stripMarkdownInline, stripTagsLinear, titleText } from './htmlScan.js';
-import { currentAccountId, hasRequestContext } from '../../lib/accountContext.js';
+import { currentAccountId } from '../../lib/accountContext.js';
 
-/** Download cap for a page read (the body stops streaming here). */
+/**
+ * Download cap for a page read (the body stops streaming here). The parser sees all of it: the
+ * scanners are linear (htmlScan.ts), and real articles start deep in big pages (a GitHub README's
+ * <article> sits past 400 KB).
+ */
 export const READ_MAX_BYTES = 1_000_000;
-/** What the parser sees: the first 256 KB of the page (articles start well inside it). */
-export const READ_PARSE_CHARS = 256 * 1024;
 /** Cap for the Jina reader fallback's response. */
 const JINA_MAX_BYTES = 1_000_000;
+/** Longest lead-image URL kept (a longer og:image is dropped, never echoed back whole). */
+const MAX_IMAGE_URL_CHARS = 2048;
+
+export interface ReadArticleOptions {
+  /**
+   * May a thin direct read fall back to the Jina reader proxy (a shared, budgeted quota)? Only
+   * for signed-in callers. Defaults to "is there a signed-in account in this request's context",
+   * so a caller with no account context — anonymous, or work started outside a request — never
+   * reaches Jina unless it says so explicitly.
+   */
+  allowJina?: boolean;
+}
 
 export interface ReadArticleResult {
   url: string;
@@ -107,9 +121,6 @@ const absolutize = (src: string | undefined, base: string): string | undefined =
   }
 };
 
-/** Is the current caller an anonymous web request (signed-out visitor)? Background work is not. */
-const isAnonymousCaller = (): boolean => hasRequestContext() && !currentAccountId();
-
 /**
  * Extract the readable article from a page's HTML (pure, linear-time: see htmlScan.ts).
  * Exported for tests and for callers that already hold the HTML.
@@ -122,12 +133,20 @@ export const extractArticle = (
   const meta = metaTags(html, lower);
   const titleTag = titleText(html, lower);
   const title = metaContent(meta, ['og:title', 'twitter:title']) || (titleTag ? decodeEntities(titleTag).trim() || undefined : undefined);
-  const image = absolutize(metaContent(meta, ['og:image', 'og:image:url', 'twitter:image']), url);
+  const lead = absolutize(metaContent(meta, ['og:image', 'og:image:url', 'twitter:image']), url);
+  const image = lead && lead.length <= MAX_IMAGE_URL_CHARS ? lead : undefined;
   const byline = metaContent(meta, ['author', 'article:author']);
 
-  // Isolate the main content region: prefer <article>, then <main>, then the whole body.
+  // Isolate the main content region: prefer <article>, then <main>, then the whole body. A page
+  // cut off at the download cap (Wikipedia's <main> closes ~2.8 MB in) keeps the region from its
+  // opening tag to the end of what was read.
   const region =
-    firstElement(html, 'article', lower) || firstElement(html, 'main', lower) || firstElement(html, 'body', lower) || html;
+    firstElement(html, 'article', lower) ||
+    firstElement(html, 'main', lower) ||
+    firstElement(html, 'article', lower, { openEnded: true }) ||
+    firstElement(html, 'main', lower, { openEnded: true }) ||
+    firstElement(html, 'body', lower) ||
+    html;
 
   // Drop non-content chrome before pulling text.
   const cleaned = removeElements(
@@ -153,7 +172,8 @@ export const extractArticle = (
   return { title: title?.slice(0, 300), byline: byline?.slice(0, 160), image, blocks: blocks.slice(0, 80), charCount };
 };
 
-export const readArticle = async (url: string, signal?: AbortSignal): Promise<ReadArticleResult> => {
+export const readArticle = async (url: string, signal?: AbortSignal, opts: ReadArticleOptions = {}): Promise<ReadArticleResult> => {
+  const allowJina = opts.allowJina ?? Boolean(currentAccountId());
   const host = hostOf(url);
   const base: ReadArticleResult = { url, host, blocks: [], ok: false };
   if (!isFetchableUrl(url)) return base;
@@ -173,7 +193,7 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
   // SSRF gate: this route is reachable pre-auth, so every hop goes through fetchPublicUrl
   // (https + public host, the resolved IP pinned for the connection, each redirect
   // re-checked — a 302 to 127.0.0.1 or cloud metadata is refused, not followed). One 9 s
-  // deadline covers headers AND body, and the download stops at 1 MB.
+  // deadline covers headers AND body, and the download stops at 1 MB (all of it is parsed).
   let html: string;
   try {
     const page = await fetchTextCapped(target, {
@@ -183,7 +203,7 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
       maxBytes: READ_MAX_BYTES,
       publicOnly: true
     });
-    html = page.text.slice(0, READ_PARSE_CHARS);
+    html = page.text;
   } catch {
     // The request itself failed (timeout / refused / anti-bot 403 / SSRF) — the host is
     // likely blocking automated reads. Flag it so the caller can skip the host next time
@@ -206,9 +226,9 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
   // Direct fetch came back thin (bot wall / JS-only site — most large publishers
   // 403 datacenter IPs). Best-effort second pass through the Jina reader proxy,
   // which fetches + extracts on its own infra. Budget-metered and only for signed-in
-  // callers: an anonymous visitor must not be able to spend the shared Jina quota (or
-  // use it to fetch pages for them). Failures keep the honest "open original" fallback.
-  if (isAnonymousCaller()) return direct;
+  // callers (allowJina): an anonymous visitor must not be able to spend the shared Jina quota
+  // (or use it to fetch pages for them). Failures keep the honest "open original" fallback.
+  if (!allowJina) return direct;
   const viaJina = await readViaJina(target, signal).catch((): null => null);
   if (viaJina && viaJina.blocks.length) {
     return {
@@ -227,7 +247,7 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
 /** Parse a Jina Reader text/plain response ("Title: …\n…\nMarkdown Content:\n…")
  *  into reader blocks. Pure + exported for tests. */
 export const parseJinaReader = (text: string): { title?: string; image?: string; blocks: ReadArticleResult['blocks'] } | null => {
-  const title = text.match(/^Title:\s*(.+)$/m)?.[1]?.trim();
+  const title = text.match(/^Title:\s*(.+)$/m)?.[1]?.trim().slice(0, 300);
   const idx = text.indexOf('Markdown Content:');
   const md = idx >= 0 ? text.slice(idx + 'Markdown Content:'.length) : text;
   const blocks: ReadArticleResult['blocks'] = [];
@@ -239,7 +259,7 @@ export const parseJinaReader = (text: string): { title?: string; image?: string;
     if (!line) continue;
     const img = line.match(/^!\[[^\]]*\]\((https?:[^)\s]+)/);
     if (img) {
-      image = image || img[1];
+      if (img[1].length <= MAX_IMAGE_URL_CHARS) image = image || img[1];
       continue;
     }
     const head = line.match(/^#{1,4}\s+(.+)$/);
@@ -275,5 +295,5 @@ const readViaJina = async (url: string, signal?: AbortSignal) => {
     signal,
     maxBytes: JINA_MAX_BYTES
   });
-  return parseJinaReader(text.slice(0, READ_PARSE_CHARS));
+  return parseJinaReader(text);
 };
