@@ -27,11 +27,15 @@ export const CANVAS_BG = 'bg-[var(--ds-canvas)]';
 /** Slightly deeper paper for the sidebar column. */
 export const SIDEBAR_BG = 'bg-[var(--ds-sidebar)]';
 
-/** Floating glass surface (panels, toolbars, menus). The blur amount is a token (12 px = blur-md). */
-export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-[var(--ds-surface-blur)]';
+/**
+ * Floating glass surface (panels, toolbars, menus). The blur is the glass token (bridge D3): 12 px
+ * (blur-md) by default, 0 under the Atlas skin, whose surfaces are opaque — the sticky header's own blur
+ * (--ds-header-blur, HEADER_GLASS) is the only frosted glass there.
+ */
+export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-[var(--ds-glass-blur)]';
 
-/** Stronger glass for the composer bar and modals that sit over content. */
-export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-[var(--ds-surface-blur)]';
+/** Stronger glass for the composer bar and modals that sit over content (the same glass blur). */
+export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-[var(--ds-glass-blur)]';
 
 // ---------------------------------------------------------------------------
 // Lines, depth, shape
@@ -180,6 +184,22 @@ export const TRANSITION = 'transition-all duration-[var(--ds-motion-medium)] eas
 
 /** Subtle hover lift for floating elements. */
 export const HOVER_LIFT = 'hover:-translate-y-px';
+
+/**
+ * The card lift (M1a; Atlas .atlas-lift): on a pointer that really hovers, the card rises 2 px and takes
+ * the lift shadow (--ds-shadow-lift: Atlas shadow-xl in light, the deep dark drop in dark). The rise is
+ * motion-safe only; under reduced motion the shadow still answers the hover, without travelling. A touch
+ * tap never leaves a card raised (no sticky :hover). styles/ds-motion.css `.ds-lift` is the same in CSS.
+ */
+export const LIFT =
+  'transition-[transform,box-shadow] duration-[var(--ds-motion-panel)] ease-[var(--ds-ease)] motion-reduce:transition-none can-hover:hover:shadow-[shadow:var(--ds-shadow-lift)] can-hover:motion-safe:hover:-translate-y-0.5';
+
+/**
+ * The entrance (M1a; Atlas .atlas-rise-in): fade and rise 10 px over --ds-motion-enter-slow on the enter
+ * curve, ending on `transform: none`; nothing moves under reduced motion (styles/ds-motion.css). For a list,
+ * put `ds-stagger` on the parent instead: its children rise --ds-motion-stagger apart.
+ */
+export const RISE_IN = 'ds-rise-in';
 
 /** Press feedback: dips while pressed and springs back (index.css; motion-safe, skin only). */
 export const PRESS = 'ds-press';
@@ -355,7 +375,8 @@ export const SEGMENTED_PILL = 'pointer-events-none absolute inset-y-0.5 left-0 r
 export const SECTION_CARD = `overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)] ${SHADOW_SOFT}`;
 export const SECTION_HEADER = 'flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-[var(--ds-hairline)] px-5 py-5 sm:px-6';
 export const SECTION_ICON_TILE = `flex h-9 w-9 shrink-0 items-center justify-center ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-ink)]`;
-export const SECTION_TITLE = `m-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)] ${FONT_DISPLAY}`;
+/** The card title is the body face, semibold (bridge D2: Atlas sets no display face on card titles). */
+export const SECTION_TITLE = 'm-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)]';
 export const SECTION_DESCRIPTION = 'm-0 mt-0.5 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]';
 export const SECTION_BODY = 'px-5 py-5 sm:px-6';
 
@@ -421,6 +442,18 @@ export const Z = {
 export type ZLayer = keyof typeof Z;
 
 /**
+ * The sticky app header (Atlas AuthenticatedAppHeader, bridge D3): sticky on the header layer, and a named
+ * group so its glass layer can follow `data-scrolled`. Put HEADER_GLASS on an aria-hidden first child: the
+ * blur lives on that layer, never on the header itself, so the header is never the containing block of a
+ * position: fixed descendant. At rest the layer is the plain page surface (nothing under it to blur);
+ * with data-scrolled="true" on the header it frosts with --ds-header-blur, the one blur the Atlas language
+ * keeps, over a 90 % page tint, and its edge firms up.
+ */
+export const STICKY_HEADER = `group/header sticky top-0 ${Z.header}`;
+export const HEADER_GLASS =
+  'pointer-events-none absolute inset-0 -z-10 border-b border-[color:color-mix(in_srgb,var(--ds-hairline)_50%,transparent)] bg-[var(--ds-canvas)] transition-[border-color,background-color] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none group-data-[scrolled=true]/header:border-[var(--ds-hairline)] group-data-[scrolled=true]/header:bg-[color:color-mix(in_srgb,var(--ds-canvas)_90%,transparent)] group-data-[scrolled=true]/header:backdrop-blur-[var(--ds-header-blur)] group-data-[scrolled=true]/header:backdrop-saturate-150';
+
+/**
  * Control row heights (index.css `--ds-density-*`): compact 28 px (dense tables, toolbars on a fine
  * pointer), comfortable 36 px (Atlas's default control) and touch 44 px. `coarse` is the floor every
  * interactive control carries under a coarse pointer (a 44 px tall target; `coarseSquare` also 44 px
@@ -475,8 +508,8 @@ export const HOVER_ROW = `${RADIUS_CONTROL} hover:bg-[var(--ds-hover)] ${TRANSIT
 /** Active sidebar row: soft accent tint with ink text. */
 export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-ink)]`;
 
-/** Floating dropdown/context menu. */
-export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-surface-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+/** Floating dropdown/context menu (the glass blur: frosted by default, opaque under the skin). */
+export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-glass-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
 
 /**
  * Row inside a floating menu (icon + label, quiet hover). The hover reads --ds-overlay-hover: the

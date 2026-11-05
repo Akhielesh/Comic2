@@ -131,8 +131,8 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
  * the studioDesign recipes that recipes.ts re-exports among them, must get a Tailwind sort order.
  */
 const twRequire = createRequire(import.meta.url);
-/** Hand-written classes in index.css (no Tailwind utility behind them). */
-export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press'];
+/** Hand-written classes in index.css or styles/ds-motion.css (no Tailwind utility behind them). */
+export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'ds-rise-in'];
 /** A named group or peer (`group/checkbox`) only anchors `group-…/checkbox:` variants; it has no CSS of its own. */
 const NAMED_MARKER = /^(?:group|peer)\/[\w-]+$/;
 
@@ -182,7 +182,8 @@ describe('components/ds classes compile under this app’s Tailwind', () => {
     expect(ungeneratedClasses([['ok', 'aria-[invalid=true]:border-[var(--ds-danger-mark)] peer-aria-[invalid=true]:border-[var(--ds-danger-mark)] coarse:min-h-11']])).toEqual([]);
   });
 
-  it('the hand-written allowlist names real index.css rules', () => {
-    for (const c of HAND_WRITTEN_CLASSES) expect(indexCss, c).toContain(`.${c}`);
+  it('the hand-written allowlist names real rules (index.css or the motion classes it imports)', () => {
+    const motionCss = readFileSync(path.join(APP_ROOT, 'styles/ds-motion.css'), 'utf8');
+    for (const c of HAND_WRITTEN_CLASSES) expect(`${indexCss}\n${motionCss}`, c).toMatch(new RegExp(`\\.${c}[\\s,{:]`));
   });
 });

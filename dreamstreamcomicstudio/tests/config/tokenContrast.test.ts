@@ -872,6 +872,19 @@ describe('token contrast — non-text: the focus ring and accent state borders r
     expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
   });
 
+  it('the reader focus colour (--ds-reader-focus, M1a) is AA on the reader paper in every context: ≥ 4.5:1 on the page back and the endpaper', () => {
+    // The reader's paper is content and the same in both themes and both skins, so the ring colour is one
+    // value; the floor here is the text one (4.5:1), above WCAG 1.4.11's 3:1 for a focus indicator.
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      for (const paper of ['--ds-reader-paper-back', '--ds-reader-endpaper']) {
+        const r = ratio(token('--ds-reader-focus', ctx), token(paper, ctx));
+        expect(r, `${ctx}: --ds-reader-focus on ${paper} = ${r.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // The default focus colours were not enough there (the brand ring on the paper is under 3:1).
+    expect(ratio(token('--ds-ring', 'default dark'), token('--ds-reader-paper-back', 'default dark'))).toBeLessThan(3);
+  });
+
   it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {
     const focus = measureNonText('--ds-focus');
     expect(focus.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);

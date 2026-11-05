@@ -5,10 +5,11 @@
  */
 import React from 'react';
 import { cn } from '../../lib/utils';
-import { FONT_DISPLAY, RADIUS_PANEL } from './recipes';
+import { RADIUS_PANEL } from './recipes';
 
 export const CARD = `flex min-w-0 flex-col gap-6 ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)] transition-[border-color,box-shadow,background-color] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)]`;
-export const CARD_TITLE = `m-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] ${FONT_DISPLAY}`;
+/** The body face, semibold (bridge D2: Atlas CardTitle sets no display face). */
+export const CARD_TITLE = 'm-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em]';
 export const CARD_DESCRIPTION = 'm-0 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]';
 
 export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(function Card({ className, ...rest }, ref) {

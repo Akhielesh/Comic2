@@ -5,11 +5,12 @@
  * never spells a token, radius, duration or z-index a recipe already names.
  *
  * One composition rule lives here too. `cn` (lib/utils.ts) is tailwind-merge 3, which reads class names
- * with Tailwind 4 meanings: there a bare `outline` is an outline WIDTH, so merging FOCUS_RING drops its
- * `focus-visible:outline` (the outline STYLE in this app's Tailwind 3) and the focus ring disappears.
- * A primitive therefore merges its own classes with `cn` and appends the focus recipe after the merge,
- * in a template (`${cn(BASE, VARIANT[variant], className)} ${FOCUS_RING}`, which the status-ink guard's
- * class-list reader follows), and its tests assert every recipe class survives.
+ * with Tailwind 4 meanings; lib/utils.ts now configures it for this app's Tailwind 3.4 (a bare `outline` is
+ * the outline STYLE), so cn(FOCUS_RING) keeps the ring (lib/utils.test.ts). The primitives still append
+ * the focus recipe after the merge, in a template (`${cn(BASE, VARIANT[variant], className)} ${FOCUS_RING}`,
+ * which the status-ink guard's class-list reader follows), so a caller's className can never cancel it,
+ * and their tests assert every recipe class survives. Class strings never use the Tailwind 3 aliases
+ * tailwind-merge cannot dedupe against their modern names (components/ds/cnAliases.test.ts).
  */
 
 export {
@@ -25,17 +26,21 @@ export {
   FOCUS_RING,
   FOCUS_RING_FLUSH,
   FONT_DISPLAY,
+  HEADER_GLASS,
+  LIFT,
   ON_ACCENT_TEXT,
   OVERLINE,
   RADIUS_CONTROL,
   RADIUS_PANEL,
   RADIUS_PILL,
+  RISE_IN,
   SECTION_BODY,
   SECTION_CARD,
   SECTION_DESCRIPTION,
   SECTION_HEADER,
   SECTION_ICON_TILE,
   SECTION_TITLE,
+  SEGMENTED_ACTIVE_FILL,
   SEGMENTED_ITEM,
   SEGMENTED_PILL,
   SEGMENTED_TRACK,
@@ -46,6 +51,7 @@ export {
   STATUS_EDGE,
   STATUS_INK,
   STATUS_SURFACE,
+  STICKY_HEADER,
   TEXT_2XL,
   TEXT_3XL,
   TEXT_XL,

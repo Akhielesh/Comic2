@@ -183,7 +183,7 @@ describe('the built-in kits derive from the skins', () => {
 
   it('radii are the skin panel and control radii in px', () => {
     expect(DREAMSTREAM_BRAND.emailTheme).toMatchObject({ radius: 16, buttonRadius: 12, header: 'none' });
-    expect(ATLAS_BRAND.emailTheme).toMatchObject({ radius: 12, buttonRadius: 10, header: 'none' });
+    expect(ATLAS_BRAND.emailTheme).toMatchObject({ radius: 12, buttonRadius: 8, header: 'none' });
   });
 
   it('every built-in kit passes checkBrandKit, and every text pair clears 4.5:1', () => {
