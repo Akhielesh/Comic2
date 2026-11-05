@@ -160,5 +160,22 @@ describe('followOps', () => {
     // A new line the director wanted to add passes through (the sanitizer checks its panel).
     const add: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_1', id: 'ln_new', patch: { kind: 'caption', text: 'Later' }, index: 0 };
     expect(followOps(doc, [add])).toEqual({ ops: [add] });
+    // Ops on the line the item itself adds follow it (its balloon, its look), never "removed since".
+    const balloon: DocOp = { op: 'balloon', pageId: 'pg_1', lineId: 'ln_new', patch: { x: 0.2, y: 0.1 } };
+    const look: DocOp = { op: 'line_style', pageId: 'pg_1', lineIds: ['ln_new'], patch: { italic: true } };
+    expect(followOps(doc, [add, balloon, look])).toEqual({ ops: [add, balloon, look] });
+    expect(followOps(doc, [balloon])).toHaveProperty('stale');
+  });
+
+  it("'theirs' on a new line the director wanted to add puts it in, with its balloon", async () => {
+    const add: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_new', patch: { id: 'ln_new', kind: 'caption', text: 'Later that day' }, index: 2 };
+    const balloon: DocOp = { op: 'balloon', pageId: 'pg_1', lineId: 'ln_new', patch: { x: 0.6, y: 0.1, w: 0.3 } };
+    const { session, answer, lineText } = setup([
+      item('cf_1', 'ln_new', [add, balloon], { where: { pageId: 'pg_1', panelId: 'pn_1_2', lineId: 'ln_new', label: 'page 1 · panel 2 · a new line' } })
+    ]);
+    expect((await answer('theirs')).outcome).toEqual({ status: 'done', message: "Used the director's version. Undo brings yours back." });
+    expect(lineText('ln_new')).toBe('Later that day');
+    expect(session.doc.pages[0].panels[1].lines.map((l) => l.id)).toEqual(['ln_a', 'ln_b', 'ln_new']);
+    expect(session.doc.pages[0].balloons.find((b) => b.lineId === 'ln_new')).toMatchObject({ x: 0.6, y: 0.1 });
   });
 });

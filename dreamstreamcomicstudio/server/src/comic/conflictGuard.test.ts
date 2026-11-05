@@ -133,7 +133,82 @@ describe('guardUserEdits', () => {
     const speaker: DocOp = { op: 'letter_style', patch: { speakers: { c_maya: { italic: true } } } };
     const { allowed, blocked } = guardUserEdits(ctx, turn, [preset, speaker]);
     expect(allowed).toEqual([speaker]);
-    expect(blocked).toEqual([{ where: { label: 'the lettering preset' }, mine: 'Your choices for the lettering preset.', theirs: 'Switch to the Manga lettering.', proposed: [preset] }]);
+    // Labelled from what the CREATOR changed (their shout look), not from the director's preset switch.
+    expect(blocked).toEqual([
+      { where: { label: 'the shout lettering' }, mine: 'Your look for shouts (text colour).', theirs: 'Switch to the Manga lettering, which drops your look for shouts.', proposed: [preset] }
+    ]);
+    expect(conflictToolNote(blocked)).toBe(
+      'Conflict: you changed the shout lettering ("Your look for shouts (text colour).") while I was working, so I left it. Do not redo it; the studio will ask.'
+    );
+  });
+
+  it("a lettering reset over the creator's speaker look names that speaker; a preset switch that keeps overrides drops nothing", () => {
+    const { session, ctx, turn } = setup();
+    session.commit([{ op: 'letter_style', patch: { speakers: { c_maya: { italic: true } } } }], { origin: 'user' });
+    const reset = guardUserEdits(ctx, turn, [{ op: 'letter_style', patch: null }]);
+    expect(reset.blocked).toEqual([
+      { where: { label: 'Maya’s lettering' }, mine: 'Your look for Maya (italic).', theirs: 'Reset the lettering to the default look, which drops your look for Maya.', proposed: [{ op: 'letter_style', patch: null }] }
+    ]);
+    const two = setup();
+    two.session.commit([{ op: 'letter_style', patch: { presetId: 'noir', keepOverrides: true } }], { origin: 'user' });
+    const blocked = guardUserEdits(two.ctx, two.turn, [{ op: 'letter_style', patch: { presetId: 'manga', keepOverrides: true } }]).blocked;
+    expect(blocked.map((b) => [b.where.label, b.mine, b.theirs])).toEqual([['the lettering preset', 'Your pick: the Noir lettering.', 'Switch to the Manga lettering.']]);
+    // The creator's own preset switch dropped their kind looks: a director restyle of shouts collides with it.
+    const three = setup();
+    three.session.commit([{ op: 'letter_style', patch: { presetId: 'noir' } }], { origin: 'user' });
+    const shout = guardUserEdits(three.ctx, three.turn, [{ op: 'letter_style', patch: { kinds: { shout: { textColor: '#cc0000', font: 'bangers' } } } }]).blocked;
+    expect(shout.map((b) => [b.where.label, b.mine, b.theirs])).toEqual([['the lettering preset', 'Your pick: the Noir lettering.', 'Change the look for shouts (text colour and font).']]);
+  });
+
+  it('a new line the director wanted to add into a panel the creator reordered reads as an addition, never "a line you removed"', () => {
+    const { session, ctx, turn } = setup();
+    session.commit([{ op: 'line_move', pageId: 'pg_1', id: 'ln_b', toPanelId: 'pn_1_2', index: 0 }], { origin: 'user' });
+    const create: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_new', patch: { id: 'ln_new', kind: 'caption', text: 'Later that day' }, index: 2 };
+    const { allowed, blocked } = guardUserEdits(ctx, turn, [create]);
+    expect(allowed).toEqual([]);
+    expect(blocked).toEqual([
+      {
+        where: { pageId: 'pg_1', panelId: 'pn_1_2', lineId: 'ln_new', label: 'page 1 · panel 2 · a new line' },
+        mine: 'Your order of the lines in this panel.',
+        theirs: 'Add “Later that day”, as a caption.',
+        proposed: [create]
+      }
+    ]);
+    expect(conflictToolNote(blocked)).not.toMatch(/removed/);
+    // An edit of a line that IS gone still says so.
+    session.commit([{ op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_a', patch: null }], { origin: 'user' });
+    expect(guardUserEdits(ctx, turn, [text('ln_a', 'Run!')]).blocked[0].mine).toBe('You removed this line.');
+  });
+});
+
+describe('the same entity held back twice in one turn (two real tool calls)', () => {
+  it("text, then kind: the card shows both of the director's changes and the creator's current words", () => {
+    const { session, ctx, turn } = setup();
+    session.commit([text('ln_a', 'We have to go')], { origin: 'user' });
+    recordConflicts(turn, guardUserEdits(ctx, turn, [text('ln_a', 'Run!')]).blocked);
+    const kind: DocOp = { op: 'line', pageId: 'pg_1', panelId: 'pn_1_2', id: 'ln_a', patch: { kind: 'shout' } };
+    const second = guardUserEdits(ctx, turn, [kind]);
+    expect(second.blocked[0].proposed).toEqual([kind]);
+    recordConflicts(turn, second.blocked);
+    const card = conflictCardFor(turn)!;
+    expect(card.items).toHaveLength(1);
+    const [it] = card.items;
+    expect(it.proposed).toEqual([text('ln_a', 'Run!'), kind]);
+    expect(it.theirs).toContain('“Run!”');
+    expect(it.theirs).toContain('as a shout');
+    expect(it.theirs).toBe('“Run!”, as a shout');
+    expect(it.mine).toBe('“We have to go”, as speech');
+  });
+
+  it("text, then a balloon move: both show, and the creator's words are theirs as they are now", () => {
+    const { session, ctx, turn } = setup();
+    session.commit([text('ln_a', 'We have to go'), move('ln_a', 0.05, 0.05)], { origin: 'user' });
+    recordConflicts(turn, guardUserEdits(ctx, turn, [text('ln_a', 'Run!')]).blocked);
+    recordConflicts(turn, guardUserEdits(ctx, turn, [move('ln_a', 0.7, 0.8)]).blocked);
+    const [it] = conflictCardFor(turn)!.items;
+    expect(it.theirs).toBe('“Run!”, balloon moved to the bottom right of the page');
+    expect(it.mine).toBe('“We have to go”, balloon where you put it, at the top left of the page');
+    expect(it.proposed).toEqual([text('ln_a', 'Run!'), move('ln_a', 0.7, 0.8)]);
   });
 });
 

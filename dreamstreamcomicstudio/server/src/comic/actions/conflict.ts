@@ -65,11 +65,20 @@ const parseAnswer = (action: unknown): ResolveConflictAction => {
  */
 export function followOps(doc: ComicDoc, ops: readonly DocOp[]): { ops: DocOp[] } | { stale: string } {
   const out: DocOp[] = [];
+  // Lines this item itself adds: later ops on them (its balloon, its look) follow the new line, never "removed since".
+  const created = new Set<string>();
+  const isNew = (id: string) => created.has(id) && !locateLine(doc, id);
   for (const op of ops) {
     switch (op.op) {
       case 'line': {
         if (typeof op.index === 'number' && op.patch !== null) {
           // A new line the director wanted to add: the sanitizer checks its panel still exists.
+          if (!locateLine(doc, op.id)) created.add(op.id);
+          out.push(op);
+          break;
+        }
+        if (isNew(op.id)) {
+          if (op.patch === null) created.delete(op.id);
           out.push(op);
           break;
         }
@@ -80,13 +89,17 @@ export function followOps(doc: ComicDoc, ops: readonly DocOp[]): { ops: DocOp[] 
       }
       case 'line_move':
       case 'balloon': {
+        if (isNew(op.op === 'balloon' ? op.lineId : op.id)) {
+          out.push(op);
+          break;
+        }
         const at = locateLine(doc, op.op === 'balloon' ? op.lineId : op.id);
         if (!at || at.page.id !== op.pageId) return { stale: STALE_TEXT };
         out.push(op);
         break;
       }
       case 'line_style': {
-        if (!op.lineIds.length || op.lineIds.some((id) => locateLine(doc, id)?.page.id !== op.pageId)) return { stale: STALE_TEXT };
+        if (!op.lineIds.length || op.lineIds.some((id) => !isNew(id) && locateLine(doc, id)?.page.id !== op.pageId)) return { stale: STALE_TEXT };
         out.push(op);
         break;
       }

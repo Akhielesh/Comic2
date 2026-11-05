@@ -10,7 +10,7 @@
 // split as finely as their entities allow: a restyle of five lines where the creator restyled one applies to the other
 // four, and a page-wide balloon layout keeps the creator's balloon where they put it while every other balloon moves.
 
-import { CONFLICT_LIMITS, findCharacter, findPage, newId, normalizeConflictCard, type Balloon, type ComicDoc, type ConflictCard, type ConflictItem, type ConflictWhere, type Line, type LineKind, type Page, type Panel } from '../../../shared/comic/doc.js';
+import { CONFLICT_LIMITS, findCharacter, findPage, letterStyleOf, newId, normalizeConflictCard, type Balloon, type ComicDoc, type ConflictCard, type ConflictItem, type ConflictWhere, type Line, type LineKind, type Page, type Panel } from '../../../shared/comic/doc.js';
 import { conflictGuardOn } from '../../../shared/comic/capabilities.js';
 import { entityKeys, keysCollide, type EntityKey } from '../../../shared/comic/conflicts.js';
 import { LETTERING_PRESETS, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
@@ -165,9 +165,36 @@ const pageIdOf = (op: DocOp): string | undefined => {
   return undefined;
 };
 
+type LineOp = Extract<DocOp, { op: 'line' }>;
+
+/**
+ * A line the director wanted to ADD (edit_panel_text: a `line` op with an index and a patch) into a panel whose order
+ * the creator changed mid-turn. The creator removed nothing: the item says what the director would have added.
+ */
+function addedLineItem(doc: ComicDoc, lineId: string, ops: DocOp[], add: LineOp): BlockedEdit {
+  const page = findPage(doc, add.pageId);
+  const panel = page?.panels.find((p) => p.id === add.panelId);
+  let text = '';
+  let kind: LineKind | undefined;
+  for (const op of ops) {
+    if (op.op !== 'line' || !op.patch) continue;
+    if (typeof op.patch.text === 'string') text = op.patch.text;
+    if (op.patch.kind) kind = op.patch.kind;
+  }
+  const label = page && panel ? `page ${page.n} · panel ${panel.n} · a new line` : page ? `page ${page.n} · a new line` : 'a new line';
+  return {
+    where: { ...(page ? { pageId: page.id } : {}), ...(panel ? { panelId: panel.id } : {}), lineId, label },
+    mine: panel ? 'Your order of the lines in this panel.' : 'You removed this panel.',
+    theirs: `Add “${clip(text, 120)}”${kind ? `, as ${kindWord(kind)}` : ''}.`,
+    proposed: ops
+  };
+}
+
 /** One line's item: where it is now, the creator's current version and what the director would have made of it. */
 function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
   const at = locateLine(doc, lineId);
+  const add = at ? undefined : ops.find((op): op is LineOp => op.op === 'line' && typeof op.index === 'number' && op.patch !== null);
+  if (add) return addedLineItem(doc, lineId, ops, add);
   const pageId = at?.page.id ?? ops.map(pageIdOf).find(Boolean);
   const page = pageId ? findPage(doc, pageId) : undefined;
   const where: ConflictWhere = {
@@ -239,37 +266,87 @@ function lineItem(doc: ComicDoc, lineId: string, ops: DocOp[]): BlockedEdit {
   return { where, mine, theirs, proposed: ops };
 }
 
-/** "Mira's lettering", "the shout lettering", "the lettering". */
-const letterScopeWords = (doc: ComicDoc, ops: DocOp[]): string => {
-  const scopes = new Set<string>();
-  for (const op of ops) {
-    if (op.op !== 'letter_style' || !op.patch) continue;
-    if (op.patch.presetId) scopes.add('preset');
-    for (const k of Object.keys(op.patch.kinds || {})) scopes.add(`kind:${k}`);
-    for (const id of Object.keys(op.patch.speakers || {})) scopes.add(`speaker:${id}`);
+const KIND_ONE: Record<string, string> = { speech: 'speech', thought: 'thought', whisper: 'whisper', shout: 'shout', caption: 'caption', sfx: 'sound effect' };
+const KIND_MANY: Record<string, string> = { speech: 'speech', thought: 'thoughts', whisper: 'whispers', shout: 'shouts', caption: 'captions', sfx: 'sound effects' };
+const presetName = (id: unknown): string =>
+  typeof id === 'string' && Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, id) ? LETTERING_PRESETS[id as keyof typeof LETTERING_PRESETS].name : String(id);
+/** " (text colour)" for a stored look, '' when it has nothing to name. */
+const lookWords = (patch: unknown): string => (patch && typeof patch === 'object' && Object.keys(patch).length ? ` (${styleWords(patch)})` : '');
+
+/** One lettering scope the CREATOR changed, in words: the card label, their current version, and what a switch drops. */
+interface LetterScope {
+  label: string;
+  mine: string;
+  /** "your look for shouts": what a preset switch (switch) or a reset (reset) by the director would drop. */
+  dropped?: { words: string; by: 'switch' | 'reset' };
+}
+
+const letterScope = (doc: ComicDoc, key: EntityKey): LetterScope => {
+  const ls = letterStyleOf(doc);
+  const scope = key.slice('letter:'.length);
+  const pick = { label: 'the lettering preset', mine: `Your pick: the ${presetName(ls.presetId)} lettering.` };
+  if (scope === '*') return { label: 'the lettering', mine: 'You reset the lettering to its default look.' };
+  // The creator's own preset switch (its wildcard) or auto flag: their pick of preset.
+  if (scope === 'preset' || scope === 'auto' || scope === 'kind:*') return pick;
+  if (scope === 'base') return { label: 'the base lettering', mine: `Your base look${lookWords(ls.base)}.`, dropped: { words: 'your base look', by: 'switch' } };
+  if (scope === 'margin') return { label: 'the lettering margin', mine: 'Your safe margin for the balloons.' };
+  if (scope.startsWith('kind:')) {
+    const k = scope.slice('kind:'.length);
+    const many = KIND_MANY[k] ?? k;
+    return {
+      label: `the ${KIND_ONE[k] ?? k} lettering`,
+      mine: `Your look for ${many}${lookWords((ls.kinds as Record<string, unknown> | undefined)?.[k])}.`,
+      dropped: { words: `your look for ${many}`, by: 'switch' }
+    };
   }
-  if (scopes.size !== 1) return 'the lettering';
-  const [only] = [...scopes];
-  if (only === 'preset') return 'the lettering preset';
-  if (only.startsWith('kind:')) return `the ${only.slice(5)} lettering`;
-  const name = nameOf(doc, only.slice(8));
-  return `${name}’s lettering`;
+  if (scope.startsWith('speaker:')) {
+    const id = scope.slice('speaker:'.length);
+    const name = nameOf(doc, id);
+    return { label: `${name}’s lettering`, mine: `Your look for ${name}${lookWords(ls.speakers?.[id])}.`, dropped: { words: `your look for ${name}`, by: 'reset' } };
+  }
+  return { label: 'the lettering', mine: 'Your lettering choices.' };
 };
 
-function letterItem(doc: ComicDoc, ops: DocOp[]): BlockedEdit {
-  const label = letterScopeWords(doc, ops);
+const listWords = (items: string[]): string => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/**
+ * The lettering item, labelled from what the CREATOR changed (`creatorKeys`, the creator's keys these ops collide with):
+ * a kind look that collided with the director's preset switch reads "the shout lettering" / "Your look for shouts
+ * (text colour)" / "Switch to the Manga lettering, which drops your look for shouts." — never "the lettering preset".
+ */
+function letterItem(doc: ComicDoc, ops: DocOp[], creatorKeys: readonly EntityKey[]): BlockedEdit {
+  const scopes: LetterScope[] = [];
+  for (const key of creatorKeys) {
+    const scope = letterScope(doc, key);
+    if (!scopes.some((s) => s.label === scope.label)) scopes.push(scope);
+  }
+  const label = scopes.length === 1 ? scopes[0].label : 'the lettering';
+  const mine = scopes.length ? scopes.slice(0, 3).map((s) => s.mine).join(' ') : 'Your lettering choices.';
   const preset = ops.map((op) => (op.op === 'letter_style' && op.patch?.presetId ? op.patch.presetId : undefined)).filter(Boolean).pop();
+  const keeps = ops.some((op) => op.op === 'letter_style' && !!op.patch?.presetId && op.patch.keepOverrides === true);
   const reset = ops.some((op) => op.op === 'letter_style' && op.patch === null);
   const patches = ops.flatMap((op) =>
     op.op === 'letter_style' && op.patch ? [op.patch.base, ...Object.values(op.patch.kinds || {}), ...Object.values(op.patch.speakers || {})] : []
   );
   const changed = Object.assign({}, ...patches.filter((p) => p && typeof p === 'object')) as LetterStylePatch;
+  const drops = (by: 'switch' | 'reset') => {
+    const words = scopes.flatMap((s) => (s.dropped && (by === 'reset' || s.dropped.by === 'switch') ? [s.dropped.words] : []));
+    return words.length ? `, which drops ${listWords(words)}` : '';
+  };
+  // What the director's own change is about ("the look for shouts"), when it is about one thing.
+  const theirScopes = new Set<string>();
+  for (const op of ops) {
+    if (op.op !== 'letter_style' || !op.patch) continue;
+    if (op.patch.base !== undefined) theirScopes.add('the base look');
+    for (const k of Object.keys(op.patch.kinds || {})) theirScopes.add(`the look for ${KIND_MANY[k] ?? k}`);
+    for (const id of Object.keys(op.patch.speakers || {})) theirScopes.add(`the look for ${nameOf(doc, id)}`);
+  }
+  const what = theirScopes.size === 1 ? [...theirScopes][0] : 'the lettering';
   const theirs = reset
-    ? 'Reset the lettering to the default look.'
+    ? `Reset the lettering to the default look${drops('reset')}.`
     : preset
-      ? `Switch to the ${LETTERING_PRESETS[preset]?.name ?? preset} lettering${Object.keys(changed).length ? `, and change its ${styleWords(changed)}` : ''}.`
-      : `Change its ${styleWords(changed)}.`;
-  const mine = label === 'the lettering' ? 'Your lettering choices.' : `Your choices for ${label}.`;
+      ? `Switch to the ${presetName(preset)} lettering${keeps ? '' : drops('switch')}${Object.keys(changed).length ? `, and change its ${styleWords(changed)}` : ''}.`
+      : `Change ${what} (${styleWords(changed)}).`;
   return { where: { label }, mine, theirs, proposed: ops };
 }
 
@@ -312,19 +389,42 @@ function pageItem(doc: ComicDoc, group: string, ops: DocOp[]): BlockedEdit {
   };
 }
 
-/** One BlockedEdit per entity, in the order the director planned them. */
-function blockedEdits(doc: ComicDoc, held: HeldOp[]): BlockedEdit[] {
+/** The entity an item is about (merging two holds of the same line in one turn into one item). */
+const itemKey = (where: ConflictWhere): string => where.lineId ?? where.panelId ?? where.pageId ?? where.label;
+
+/** Join two descriptions of the director's version, once each ("Rewritten panels. A new balloon layout."). */
+const joinTheirs = (a: string, b: string): string => {
+  const end = (s: string) => (/[.!?…]$/.test(s) ? s : `${s}.`);
+  return a === b || !a ? b : !b ? a : `${end(a)} ${b}`;
+};
+
+/**
+ * One BlockedEdit per entity, in the order the director planned them. An entity already held earlier this turn
+ * (`earlier`, turn.conflicts) is described from ALL its held ops, earlier ones first, so the card's Yours / The
+ * director's show exactly what "Use the director's" would apply; `proposed` stays this call's ops (recordConflicts
+ * appends them to the item's).
+ */
+function blockedEdits(doc: ComicDoc, held: HeldOp[], creatorKeys: readonly EntityKey[], earlier: readonly ConflictItem[] = []): BlockedEdit[] {
   const groups = new Map<string, DocOp[]>();
   for (const { op, group } of held) groups.set(group, [...(groups.get(group) || []), op]);
-  return [...groups].map(([group, ops]) =>
-    group.startsWith('line:')
-      ? lineItem(doc, group.slice(5), ops)
-      : group === 'letter'
-        ? letterItem(doc, ops)
-        : group.startsWith('panel:')
-          ? panelItem(doc, group, ops)
-          : pageItem(doc, group, ops)
-  );
+  const build = (group: string, ops: DocOp[]): BlockedEdit => {
+    if (group.startsWith('line:')) return lineItem(doc, group.slice(5), ops);
+    if (group === 'letter') {
+      const keys = creatorKeys.filter((k) => ops.some((op) => entityKeys(op).some((d) => keysCollide(d, k))));
+      return letterItem(doc, ops, keys);
+    }
+    return group.startsWith('panel:') ? panelItem(doc, group, ops) : pageItem(doc, group, ops);
+  };
+  return [...groups].map(([group, ops]) => {
+    const first = build(group, ops);
+    const prev = earlier.find((it) => itemKey(it.where) === itemKey(first.where));
+    if (!prev) return first;
+    if (prev.tooBig) return { ...first, where: prev.where, theirs: joinTheirs(prev.theirs, first.theirs) };
+    const merged = build(group, [...prev.proposed, ...ops]);
+    // The item keeps its identity even if its words broaden ("the shout lettering" → "the lettering").
+    const where = itemKey(merged.where) === itemKey(prev.where) ? merged.where : prev.where;
+    return { where, mine: merged.mine, theirs: merged.theirs, proposed: ops };
+  });
 }
 
 // ── The guard ────────────────────────────────────────────────────────────────
@@ -383,7 +483,7 @@ export function guardUserEdits(ctx: StudioContext, turn: DirectorTurn, plannedOp
     else allowed.push(op);
   }
   if (!held.length) return { allowed, blocked: [] };
-  return { allowed, blocked: blockedEdits(doc, held) };
+  return { allowed, blocked: blockedEdits(doc, held, mine, turn.conflicts ?? []) };
 }
 
 /**
@@ -396,12 +496,10 @@ export function conflictToolNote(blocked: readonly BlockedEdit[]): string {
   return `Conflict: you changed ${where} while I was working, so I left it. Do not redo it; the studio will ask.`;
 }
 
-/** The entity an item is about (merging two holds of the same line in one turn into one item). */
-const itemKey = (where: ConflictWhere): string => where.lineId ?? where.panelId ?? where.pageId ?? where.label;
-
 /**
  * Record blocked edits on the turn (each becomes a ConflictItem the card will show). The same entity held back twice
- * in one turn stays ONE item (its ops in order, the director's latest version). An item whose ops a card cannot apply
+ * in one turn stays ONE item: its ops in order, and the words of the newest BlockedEdit, which guardUserEdits already
+ * built from ALL the item's ops (so the card shows everything "Use the director's" applies). An item whose ops a card cannot apply
  * (a server-only op such as a whole page rewrite) keeps `proposed: []` and `tooBig`, so "Use the director's" refuses it
  * in plain words instead of failing half-way.
  */
@@ -416,7 +514,7 @@ export function recordConflicts(turn: DirectorTurn, blocked: readonly BlockedEdi
     const item: ConflictItem = {
       id: prev?.id ?? newId('cf'),
       where: b.where,
-      mine: prev?.mine ?? b.mine,
+      mine: b.mine,
       theirs: b.theirs,
       proposed: tooBig ? [] : proposed,
       ...(tooBig ? { tooBig: true as const } : {})
