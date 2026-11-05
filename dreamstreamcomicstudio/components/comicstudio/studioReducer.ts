@@ -26,6 +26,8 @@ import type { VersionRow } from '../../shared/comic/history/types';
 import type { AttachmentTarget, OpsOrigin, StudioEvent, StudioFocus } from '../../shared/comic/events';
 import { getRender, renderTargetKey, type AssetRef, type ComicDoc, type Msg, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
 import type { ActivityItem, BoardTab, PendingAttachment } from './types';
+// --- live agent: the visible message queue (agent-editor plan §3 A1) ---
+import { add as addNote, edit as editNote, move as moveNote, moveTo as moveNoteTo, remove as removeNote, requeue, type QueuedNote, type QueueEventHold } from './messageQueue';
 
 // ── Signed URLs ──────────────────────────────────────────────────────────────
 
@@ -131,7 +133,31 @@ export interface PendingUserMessage {
   focus?: StudioFocus;
   /** The option card the message answers (OptionCardAnswer in useStudio), re-sent by "Try again". */
   card?: { id: string; choiceIds?: string[]; custom?: string };
+  /**
+   * Live queue (plan §3 A1): the notes this message carries. If the server answers BUSY (another tab or device holds
+   * the turn) they go back to Up next — drained notes at the head, a message sent straight from the composer at the
+   * tail — and no failed bubble shows.
+   */
+  requeue?: { notes: QueuedNote[]; at: 'head' | 'tail' };
 }
+
+/** The live queue ("Up next", plan §3 A1): notes typed while the director works, and why they wait. */
+export interface QueueState {
+  notes: QueuedNote[];
+  /** A hold set by an event: Stop was pressed, the notes came back after a reload, or the server said BUSY. */
+  held: QueueEventHold | null;
+  /** BUSY answers in a row (the automatic retry is bounded, messageQueue QUEUE_LIMITS.busyRetries). */
+  busyRetries: number;
+  /** "Send anyway": the next drain goes past an open question or spend gate once. */
+  force: boolean;
+  /** "Send now" with steering off (D2): this note goes alone as soon as the director has stopped. */
+  express: string | null;
+}
+
+export const EMPTY_QUEUE: QueueState = Object.freeze({ notes: [], held: null, busyRetries: 0, force: false, express: null }) as QueueState;
+
+/** The queue slice (absent on a fresh state = empty). */
+export const queueOf = (state: Pick<StudioState, 'queue'>): QueueState => state.queue ?? EMPTY_QUEUE;
 
 export interface OptimisticPatch {
   id: string;
@@ -193,6 +219,8 @@ export interface StudioState {
   aiChangeAt?: number;
   /** The latest moment the server saved (the `history` event): an open History panel updates live. */
   lastHistoryVersion?: VersionRow;
+  // --- live agent (plan §3 A1; optional so an older state shape stays valid; absent = empty) ---
+  queue?: QueueState;
 }
 
 export const initialStudioState = (): StudioState => ({
@@ -241,7 +269,25 @@ export type StudioReducerAction =
   | { type: 'urls_invalidate'; paths: string[] }
   | { type: 'set_error'; message: string | null; code?: string | null }
   | { type: 'cancel_start' }
-  | { type: 'cancel_end' };
+  | { type: 'cancel_end' }
+  // --- live agent: the message queue (plan §3 A1) ---
+  | { type: 'queue_add'; note: QueuedNote }
+  | { type: 'queue_edit'; id: string; text: string }
+  | { type: 'queue_remove'; id: string }
+  | { type: 'queue_move'; id: string; dir: -1 | 1 }
+  | { type: 'queue_move_to'; id: string; index: number }
+  | { type: 'queue_clear' }
+  /** These notes left the queue to be sent (a drain, Send now): the event hold, the force and the express clear. */
+  | { type: 'queue_take'; ids: string[] }
+  | { type: 'queue_hold'; held: QueueEventHold }
+  /** "Send anyway" / "Send" / "Try again": the hold lifts and the next drain may pass a question or a gate. */
+  | { type: 'queue_release' }
+  /** The bounded automatic retry after BUSY. */
+  | { type: 'queue_retry' }
+  /** Notes saved in this tab before a reload: shown, never auto-sent. */
+  | { type: 'queue_restore'; notes: QueuedNote[] }
+  /** "Send now" with steering off: this note moves to the head and goes alone once the director has stopped. */
+  | { type: 'queue_express'; id: string };
 
 const MAX_ACTIVITY = 24;
 
@@ -268,6 +314,16 @@ export const visibleStreams = (state: StudioState): StreamInfo[] =>
 /** A director turn is in flight: a message stream whose reply has not landed yet (renders may go on after). */
 export const isMessageBusy = (state: StudioState): boolean =>
   Object.values(state.streams).some((s) => s.kind === 'message' && !s.replied);
+
+/** A `plan_pages` action is running: it holds the server's turn lock (routes/comic.ts runExclusive), like a turn. */
+export const isPlanning = (state: StudioState): boolean =>
+  Object.values(state.streams).some((s) => s.kind === 'action' && s.actionType === 'plan_pages');
+
+/**
+ * The server's turn lock is (or may be) held by this tab: a director turn whose reply has not landed, or a
+ * `plan_pages` action (plan §3 A1). A message sent now would be refused BUSY, so the live queue keeps it instead.
+ */
+export const isTurnLocked = (state: StudioState): boolean => isMessageBusy(state) || isPlanning(state);
 
 export const isRenderBusy = (status?: string): boolean => status === 'queued' || status === 'rendering';
 
@@ -480,6 +536,7 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
 
   let drafts = state.drafts;
   let pendingMessage = state.pendingMessage;
+  let queue = state.queue;
   let replyLanded = false;
   for (const op of event.ops) {
     if (op.op === 'message') {
@@ -489,7 +546,11 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
         delete drafts[op.msg.id];
       }
       // Our optimistic user bubble is replaced by the server's copy.
-      if (pendingMessage && op.msg.role === 'user' && !knownIds.has(op.msg.id)) pendingMessage = null;
+      if (pendingMessage && op.msg.role === 'user' && !knownIds.has(op.msg.id)) {
+        // Live queue: the server took a message that carried queued notes, so the BUSY retries start over.
+        if (pendingMessage.requeue && queue?.busyRetries) queue = { ...queue, busyRetries: 0 };
+        pendingMessage = null;
+      }
       // The director's reply: a NEW assistant message with text, committed by the turn itself and
       // delivered by a stream (a job notice carries origin 'job'; an older message re-committed,
       // e.g. with an option answer recorded on its card, is not new; server_ops have no stream).
@@ -521,6 +582,7 @@ const applyOpsEvent = (state: StudioState, event: Extract<StudioEvent, { type: '
     streams,
     drafts,
     pendingMessage,
+    ...(queue !== state.queue ? { queue } : {}),
     behindRev: Math.max(state.behindRev, event.rev),
     syncDue: state.syncDue || mayHaveDroppedClears(event.ops),
     ...(unknownOp ? { hardRefresh: true } : {}),
@@ -599,11 +661,26 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
   let pendingMessage = state.pendingMessage;
   const failure = action.aborted ? undefined : action.error || stream.errored;
 
+  let queue = state.queue;
   // A message turn that ended before the server recorded the user's message: keep the
   // text on screen as "not sent" (with retry) instead of silently losing it.
   if (stream.kind === 'message' && pendingMessage && pendingMessage.streamId === action.streamId) {
-    if (failure) {
-      const code = action.error ? action.code : stream.erroredCode;
+    const failedCode = failure ? (action.error ? action.code : stream.erroredCode) : undefined;
+    if (failure && failedCode === 'BUSY' && pendingMessage.requeue?.notes.length) {
+      // Live queue (plan §3 A1): another tab or device holds the turn. The notes go back to Up next and wait (a bounded
+      // automatic retry, then a tap); never a failed bubble, never lost.
+      const q = queueOf(state);
+      queue = {
+        ...q,
+        notes: requeue(q.notes, pendingMessage.requeue.notes, pendingMessage.requeue.at),
+        held: 'elsewhere',
+        busyRetries: q.busyRetries + 1,
+        force: false
+      };
+      pendingMessage = null;
+      if (error === failure) error = null;
+    } else if (failure) {
+      const code = failedCode;
       pendingMessage = { ...pendingMessage, status: 'failed', error: failure, ...(code ? { code } : {}) };
       if (error === failure) error = null; // shown on the bubble instead
     } else if (action.aborted) {
@@ -638,6 +715,7 @@ const endStream = (state: StudioState, action: Extract<StudioReducerAction, { ty
     error,
     errorCode: error ? errorCode : null,
     pendingMessage,
+    ...(queue !== state.queue ? { queue } : {}),
     drafts,
     activity,
     // A stream that broke (not cancelled by us) may have missed ops: resync once idle.
@@ -752,6 +830,57 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
       return { ...state, cancelling: true };
     case 'cancel_end':
       return { ...state, cancelling: false };
+    default:
+      return reduceQueue(state, action);
+  }
+};
+
+// ── The live queue (plan §3 A1) ──────────────────────────────────────────────
+
+/** A queue that ran out of notes forgets its hold, force and express (a Stop hold set on an empty queue stays). */
+const settleQueue = (q: QueueState): QueueState => (q.notes.length ? q : EMPTY_QUEUE);
+
+const withQueue = (state: StudioState, next: QueueState): StudioState => (next === queueOf(state) ? state : { ...state, queue: next });
+
+const reduceQueue = (state: StudioState, action: StudioReducerAction): StudioState => {
+  const q = queueOf(state);
+  switch (action.type) {
+    case 'queue_add': {
+      const res = addNote(q.notes, action.note);
+      return res.added ? withQueue(state, { ...q, notes: res.notes }) : state;
+    }
+    case 'queue_edit':
+      return withQueue(state, { ...q, notes: editNote(q.notes, action.id, action.text) });
+    case 'queue_remove':
+      return withQueue(state, settleQueue({ ...q, notes: removeNote(q.notes, action.id), express: q.express === action.id ? null : q.express }));
+    case 'queue_move':
+      return withQueue(state, { ...q, notes: moveNote(q.notes, action.id, action.dir) });
+    case 'queue_move_to':
+      return withQueue(state, { ...q, notes: moveNoteTo(q.notes, action.id, action.index) });
+    case 'queue_clear':
+      return withQueue(state, EMPTY_QUEUE);
+    case 'queue_take': {
+      const ids = new Set(action.ids);
+      const notes = q.notes.filter((n) => !ids.has(n.id));
+      // The BUSY count survives a take: the notes may come straight back (another BUSY), and the retries stay bounded.
+      // It resets once the server records the message (applyOpsEvent).
+      if (!notes.length) return withQueue(state, q.busyRetries ? { ...EMPTY_QUEUE, busyRetries: q.busyRetries } : EMPTY_QUEUE);
+      return withQueue(state, { ...q, notes, held: null, force: false, express: q.express && ids.has(q.express) ? null : q.express });
+    }
+    case 'queue_hold':
+      return q.held === action.held ? state : withQueue(state, { ...q, held: action.held });
+    case 'queue_release':
+      return withQueue(state, settleQueue({ ...q, held: null, force: true, busyRetries: 0 }));
+    case 'queue_retry':
+      return q.held === 'elsewhere' ? withQueue(state, { ...q, held: null }) : state;
+    case 'queue_restore': {
+      const notes = requeue(q.notes, action.notes, 'head');
+      return notes.length === q.notes.length ? state : withQueue(state, { ...q, notes, held: 'restored' });
+    }
+    case 'queue_express': {
+      if (!q.notes.some((n) => n.id === action.id)) return state;
+      return withQueue(state, { ...q, notes: moveNoteTo(q.notes, action.id, 0), express: action.id, held: null });
+    }
     default:
       return state;
   }

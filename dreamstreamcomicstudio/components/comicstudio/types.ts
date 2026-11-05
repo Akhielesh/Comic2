@@ -13,6 +13,7 @@ import type { DocOp, StudioAction } from '../../shared/comic/ops';
 import type { AttachmentTarget, StudioFocus } from '../../shared/comic/events';
 import type { StudioCaps, StudioMode } from '../../shared/comic/capabilities';
 import type { PublicationOwnerView } from '../../shared/comic/publication';
+import type { QueuedNote, QueueHold } from './messageQueue';
 
 export type { StudioTab };
 /** Alias kept for existing imports (contract §1: `BoardTab = StudioTab`). */
@@ -252,4 +253,31 @@ export interface StudioController {
 
   /** Where the director is editing right now (from activity.where), or null. */
   presence?: StudioPresence | null;
+
+  // ── Live agent: the message queue, "Up next" (agent-editor plan §3 A1; optional: present only while
+  //    caps.liveAgent.queue is on — absent = no queue, today's behaviour) ─────────────────────────────────────────
+
+  /** Notes waiting in Up next, in the order they will go. */
+  queue?: QueuedNote[];
+  /** Why the queue waits instead of draining when the director finishes (null = it goes then). Always shown in words. */
+  queueHold?: QueueHold | null;
+  /** The note "Send now" sends as soon as the director has stopped (steering off, D2), or null. */
+  queueSendingNow?: string | null;
+  /** False once the automatic retries after a BUSY (another tab or device) are used up: the queue waits for a tap. */
+  queueRetriesLeft?: boolean;
+  /** The server's turn lock is (or may be) held — a director turn, or a plan_pages run: a message now goes to Up next. */
+  turnLocked?: boolean;
+  /** Replace a queued note's text (an empty edit changes nothing). */
+  editQueued?(id: string, text: string): void;
+  /** Move a queued note one step up (-1) or down (+1). */
+  moveQueued?(id: string, dir: -1 | 1): void;
+  /** Move a queued note to a position (drag and drop). */
+  moveQueuedTo?(id: string, index: number): void;
+  removeQueued?(id: string): void;
+  /** Remove every queued note. */
+  clearQueue?(): void;
+  /** "Send anyway" / "Send" / "Try again": lift the hold; the queue drains as soon as the turn is free. */
+  releaseQueue?(): void;
+  /** Send this note now: into the running turn with steering on, else Stop the director and then send it (D2). */
+  sendNow?(id: string): Promise<SendOutcome>;
 }
