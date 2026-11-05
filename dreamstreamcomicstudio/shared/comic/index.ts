@@ -38,6 +38,9 @@ export * from './directions.js';
 export * from './anchors.js';
 // Ship 2 (B9): the pro editor's engine, under one namespace (comic.editor.*) so its many helpers never shadow a name
 export * as editor from './editor/index.js';
+// Live agent wave 1 (B-RESOLVE): dialogue understanding as one namespace (comic.dialogue.*); its Resolution, inventory and
+// PANEL_PAD would shadow doc.ts / lettering names in a flat export.
+export * as dialogue from './dialogue/index.js';
 // Pro Edit (master plan §2.3; PE-0): the Pro lettering font seam, and the effect, motion, asset and editor contracts under
 // their own namespaces (comic.fx.*, comic.motion.*, comic.assets.*, comic.pro.*) so their helpers never shadow a name.
 // The stored types (PageMotion, MotionClip, LayerFx, AssetLibRef…) are also re-exported by doc.ts.

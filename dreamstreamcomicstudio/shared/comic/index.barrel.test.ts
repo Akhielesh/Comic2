@@ -14,6 +14,7 @@ import * as continuity from './continuity';
 import * as directions from './directions';
 import * as anchors from './anchors';
 import * as editor from './editor/index';
+import * as dialogue from './dialogue/index';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** Every module index.ts re-exports, in order (`export * from './x.js'` → './x'). */
@@ -120,6 +121,43 @@ describe('shared/comic barrel — B4 modules and the B9 editor namespace', () =>
     expectTypeOf<comic.ContinuityState>().toEqualTypeOf<continuity.ContinuityState>();
     expectTypeOf<comic.editor.EditResult>().toEqualTypeOf<editor.EditResult>();
     expectTypeOf<typeof comic.planAnchors>().toEqualTypeOf<typeof anchors.planAnchors>();
+  });
+});
+
+// Live agent wave 1 (B-RESOLVE wave note 2): the dialogue engine joins the barrel as one namespace (`comic.dialogue`),
+// like the editor: its Resolution, inventory and PANEL_PAD would otherwise shadow doc.ts and lettering names.
+describe('shared/comic barrel — the B-RESOLVE dialogue namespace', () => {
+  it('lists the dialogue engine as a namespace, not a flat export', () => {
+    const src = readFileSync(join(here, 'index.ts'), 'utf8');
+    expect(src).toMatch(/^export \* as dialogue from '\.\/dialogue\/index\.js';$/m);
+    expect(barrelModules()).not.toContain('./dialogue/index');
+  });
+
+  it('exposes the dialogue engine as comic.dialogue: every runtime export, the same binding', () => {
+    const ns = comic.dialogue as unknown as Record<string, unknown>;
+    const names = Object.keys(dialogue);
+    expect(names.length).toBeGreaterThan(10);
+    for (const name of names) expect(ns[name], name).toBe((dialogue as Record<string, unknown>)[name]);
+    expect(Object.keys(ns).sort()).toEqual([...names].sort());
+    expect(comic.dialogue.parseDialogue).toBe(dialogue.parseDialogue);
+    expect(comic.dialogue.compileDialogue).toBe(dialogue.compileDialogue);
+    expect(comic.dialogue.DIALOGUE_NOT_READY).toBe(dialogue.DIALOGUE_NOT_READY);
+    // A namespace, not a flat re-export: the engine's own helpers do not appear as top-level barrel names.
+    const flat = comic as unknown as Record<string, unknown>;
+    expect('parseDialogue' in flat).toBe(false);
+    expect('compileDialogue' in flat).toBe(false);
+  });
+
+  it('no barrel module exports a runtime name "dialogue" (the namespace would shadow it)', async () => {
+    for (const path of barrelModules()) {
+      const mod = (await import(/* @vite-ignore */ `${path}.ts`)) as Record<string, unknown>;
+      expect(Object.keys(mod), path).not.toContain('dialogue');
+    }
+  });
+
+  it('re-exports its types unchanged', () => {
+    expectTypeOf<comic.dialogue.DialogueIntent>().toEqualTypeOf<dialogue.DialogueIntent>();
+    expectTypeOf<typeof comic.dialogue.compileIntent>().toEqualTypeOf<typeof dialogue.compileIntent>();
   });
 });
 
