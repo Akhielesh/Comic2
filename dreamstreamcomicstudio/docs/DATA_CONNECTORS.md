@@ -270,12 +270,9 @@ user's own key (BYOK, header or account key) is their own account and is not gat
 - *Free only with a pinned paid model is a flagged paid turn:* connector tools stay, data collection is denied, no paid
   retry. Its swarm, delegation and deep-research workers run on that pinned model, and `/api/recipes/distill` runs it
   rather than refusing.
-
-**Awaiting the lead's confirmation:**
-- *402 notice: New chat + API keys (deviation from note 3).* Wave note 3 asks for "Use a standard model" and "New
-  chat" on both refusals. The usage refusal offers **New chat** and **API keys** instead: the usage is what ran out,
-  so a standard model cannot run, and the server's budget sentence names exactly those two ways forward. If the
-  lead does not accept it, the note's pair applies.
+- *402 notice: New chat + API keys* (accepted 2026-11-05; replaces wave note 3's pair for the usage refusal only). The
+  usage is what ran out, so a standard model cannot run either; the notice offers **New chat** and **API keys**, the two
+  ways forward the server's budget sentence names. The Free only refusal keeps "Use a standard model" and "New chat".
 
 **Known gaps** (also in `docs/infrastructure/SECURITY_FINDINGS.md`, C1):
 - *History provenance (C1a, partly fixed).* Replies are recognised by the server's provenance store
