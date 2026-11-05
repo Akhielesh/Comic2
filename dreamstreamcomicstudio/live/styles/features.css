@@ -127,6 +127,16 @@
     clip: rect(0 0 0 0); white-space: nowrap; border: 0;
   }
 }
+/* An ended event's bar also holds the "Ended" pill (.has-pill). Mark + wordmark + the legal links
+   on one line (touch screens, app.css) + the pill need a 414 px wide window with the skin's IBM
+   Plex (422 px in Hanken Grotesk without the skin), so under 440 px that bar shows the mark only,
+   the same way. Measured by the capture harness (stream-qa/scripts/topbar-event.mjs). */
+@media (max-width: 439px) {
+  .event-topbar.has-pill .ds-logo-word {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+}
 
 /* -------------------------------------------------------------- studio */
 .studio-banner { margin: 10px 0 0; align-items: center; }

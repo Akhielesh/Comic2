@@ -153,7 +153,9 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
 
   return (
     <div className="event-page-root">
-      <div className="event-topbar">
+      {/* has-pill: an ended event's bar also holds the "Ended" pill — too wide for a phone with the
+          wordmark (features.css shows the mark only there). */}
+      <div className={cx('event-topbar', meta.status === 'ended' && 'has-pill')}>
         <span className="rail-logo" style={{ cursor: 'default' }}><StudioLogo studio="stream" size="compact" /></span>
         <span className="spacer" />
         <LiveLegalLinks compact />
