@@ -9,7 +9,7 @@ import type { FontId } from './style.js';
 /** A Pro lettering font id (none yet). */
 export type ProFontId = never;
 /** Every Pro font id, in picker order. */
-export const PRO_FONT_IDS: readonly ProFontId[] = [];
+export const PRO_FONT_IDS: readonly ProFontId[] = Object.freeze(new Array<ProFontId>());
 /** Any lettering font: the base faces and the Pro ones. */
 export type AnyFontId = FontId | ProFontId;
 /** A Pro font id this build ships. */
