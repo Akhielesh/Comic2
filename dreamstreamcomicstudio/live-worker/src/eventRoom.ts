@@ -209,6 +209,17 @@ export const LIVE_WATCHDOG_MS = 10 * 60_000;
 export const SWEEP_GRACE_MS = 2 * 24 * 60 * 60_000;
 const HEALTH_MIN_INTERVAL_MS = 20_000;
 const RSVP_CAP = 500;
+/** New names an event takes in an hour (abuse-ops-13): a real invite never comes close; a script does. */
+export const RSVP_NEW_PER_HOUR = 60;
+const RSVP_WINDOW_MS = 60 * 60_000;
+/**
+ * A link where a name should be (abuse-ops-13): the names are shown on the public invite page and
+ * in the host's activity log, so a name may not advertise a site. Catches a scheme, `www.`, and a
+ * `word.tld` with a common TLD or a path; leaves `J.R. Smith`, `Dr. Ana` and `@handle` alone.
+ */
+const LINK_IN_NAME =
+  /(?:[a-z][a-z0-9+.-]*:\/\/|\bwww\.|[a-z0-9-]{2,}\.(?:com|net|org|io|ai|co|app|dev|me|info|biz|xyz|ly|gg|tk|ru|cn|link|site|online|top|shop|club|live|tv|to|cc|us|uk|de|in)\b|[a-z0-9-]+\.[a-z]{2,}\/)/i;
+export const rsvpNameHasLink = (name: string): boolean => LINK_IN_NAME.test(name);
 const REC_CAP = 20;
 /** Platform ceiling — hosts can set any cap up to this, never beyond. */
 export const HARD_VIEWER_CAP = 200;
@@ -813,10 +824,24 @@ export class EventRoom {
     const { name } = (await req.json().catch(() => ({}))) as { name?: string };
     const clean = String(name ?? '').trim().slice(0, 24);
     if (!clean) return json({ error: 'name required' }, 400);
+    if (rsvpNameHasLink(clean)) return json({ error: 'name_not_allowed', message: 'Add your name — links aren’t allowed here.' }, 400);
     const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
     if (!rsvps.includes(clean)) {
+      // A name already on the list costs nothing; only new names count against the hour.
+      const now = Date.now();
+      const stored = await this.state.storage.get<{ at: number; n: number }>('rsvpWindow');
+      const win = stored && now - stored.at < RSVP_WINDOW_MS ? stored : { at: now, n: 0 };
+      if (win.n >= RSVP_NEW_PER_HOUR) {
+        return new Response(
+          JSON.stringify({ error: 'rsvp_busy', message: 'This invite is taking a lot of new names right now — try again in a little while.' }),
+          {
+            status: 429,
+            headers: { 'content-type': 'application/json', 'retry-after': String(Math.max(1, Math.ceil((win.at + RSVP_WINDOW_MS - now) / 1000))) },
+          },
+        );
+      }
       rsvps.push(clean);
-      await this.state.storage.put('rsvps', rsvps.slice(-RSVP_CAP));
+      await this.state.storage.put({ rsvps: rsvps.slice(-RSVP_CAP), rsvpWindow: { at: win.at, n: win.n + 1 } });
       await this.addLog('join', 'RSVP', `“${clean}” saved a spot`);
     }
     return json({ ok: true, rsvpCount: rsvps.length });

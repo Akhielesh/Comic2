@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import type { AssistantLimitInfo } from '../../../apiTypes.js';
+import { clientKey } from '../lib/clientKey.js';
 import { getBillingSummary } from '../services/billingLedger.js';
 
 const GUEST_LIMIT = 5;
@@ -63,7 +64,8 @@ const setLimitHeaders = (res: Response, limitInfo: AssistantLimitInfo) => {
 export const assistantLimits = async (req: Request, res: Response, next: NextFunction) => {
   const requester = req.user;
   if (!requester) {
-    const key = `assistant:guest:${req.ip || 'unknown'}`;
+    // IPv4 address or IPv6 /64: a single v6 address is free to rotate (abuse-ops-8).
+    const key = `assistant:guest:${clientKey(req.ip) ?? 'unknown'}`;
     const bucket = resolveBucket(key, GUEST_LIMIT, GUEST_WINDOW_MS);
     const info: AssistantLimitInfo = {
       scope: 'guest',

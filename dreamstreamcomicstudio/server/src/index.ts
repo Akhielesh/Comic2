@@ -154,6 +154,9 @@ const moderationRateLimit = createRateLimit({
 // Auth emails (sign-up confirm / resend / reset / magic link): 10 per 10 minutes per IP. Runs
 // BEFORE optionalAuth so it always keys by IP; the route adds a durable per-recipient throttle.
 const authEmailRateLimit = createRateLimit({ scope: 'auth-email', windowMs: 600_000, maxRequests: 10 });
+// Telemetry + feedback (abuse-ops-3): the client flushes every 8 s, so 30 a minute leaves room
+// for several tabs; the store bounds what a signed-out sender can make it keep.
+const telemetryRateLimit = createRateLimit({ scope: 'telemetry', windowMs: 60_000, maxRequests: 30 });
 
 // Comic Studio v5 per-route limits (contract §14.3). Scoped by user when signed in, else IP.
 // Mounted on their exact paths by routes/comicMounts.ts (never on the whole /api/comic prefix).
@@ -189,8 +192,10 @@ app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/models', systemRateLimit, modelsRouter);
 // Telemetry + feedback capture. Public + optionalAuth so failures that happen
 // while logged-out (or while auth itself is failing) are still recorded; userId
-// is attached when a valid session is present.
-app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
+// is attached when a valid session is present. The telemetry limiter runs after
+// optionalAuth, so it counts per account when signed in and per IPv4 address /
+// IPv6 /64 otherwise; it covers /events and /feedback alike (abuse-ops-3).
+app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRateLimit, telemetryRouter);
 // Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
 // signed-in user's id is attached when present; mounted before requireAuth.
 app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);

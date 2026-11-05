@@ -126,7 +126,7 @@ wave deploys (capability-gated); "Fixed" means live in production.
 | F14 | Low | `onRtc` lets admin / line sockets signal viewers | **Open until** WS-9 (camera ↔ viewer only). |
 | F15 | Low | No `Origin` allowlist on upgrades | Built: `origin.ts` (WS-7). |
 | F16 | Low | Stream Studio host / guest keys in query strings | **Open until** WS-11 (first-frame auth, `DS-Event` header, constant-time compare). |
-| F17 | Med | Supply chain | **Fixed (WS-1):** `npm audit --omit=dev` 0, `onnxruntime-web` 1.30.0, `supabase-js` 2.118, every action SHA-pinned, Dependabot with a 7-day cooldown, CODEOWNERS, Scorecard, the third-party importmap and the Hugging Face model fallback removed. Owner: one Cloudflare token per Worker, protected Environments (owner checklist §6–§7). |
+| F17 | Med | Supply chain | **Fixed (WS-1):** `npm audit --omit=dev` 0, `onnxruntime-web` 1.30.0, `supabase-js` 2.118, every action SHA-pinned, Dependabot with a 7-day cooldown, CODEOWNERS, Scorecard, the third-party importmap and the Hugging Face model fallback removed. Owner: one Cloudflare token per Worker, protected Environments (owner checklist §6–§7). **2026-11 (abuse-ops-14):** the audit had regressed to 4 moderate through `gaxios` 7.1.3 → `rimraf` → `glob` → `minimatch` (via `@google/genai` → `google-auth-library`); the lockfile now resolves `gaxios` 7.3.1, which drops that chain — `npm audit --omit=dev` 0 again. |
 | F18 | Info | Push payloads carry baby and nursery names | Web Push keeps them (encrypted to the browser). Native pushes never carry the nursery name and seal everything else to the device (WS-3; Phase 1). |
 
 Watch them: Admin → Costs → **Security** (counts only). When something looks wrong:
@@ -189,6 +189,23 @@ so a table without RLS is readable and writable by any client the moment it is c
 
 ---
 
+## Abuse limits (2026-11 security plan, PR-2 `atlas-sec-abuse-limits`)
+
+| # | Sev | Finding | Status (2026-11-05, on the branch, not yet deployed) |
+|---|---|---|---|
+| abuse-ops-3 | High | Signed-out telemetry could fill the 500 MB free database | **Fixed in code:** a `telemetry` limiter (30/min per account, else per IPv4 address / IPv6 /64) on `/api/telemetry/*`; signed-out batches of 20 (signed-in 50); signed-out rows stored only for warn / error / critical, message ≤ 1,000 characters, metadata ≤ 4,500 bytes, 300 rows per /64 and 3,000 in all per UTC day (in memory); nothing more stored above 150 MB except signed-in feedback, once `server/sql/telemetry_table_bytes_2026_11.sql` is applied. **Owner:** apply that file; retention (§2.4f purge) waits on O8. |
+| abuse-ops-4 | Med | Auth mail shared one global cap with mail anyone could trigger | **Fixed in code:** `auth-*` templates keep a reserve (`EMAIL_AUTH_RESERVE_PER_*`, 50 / 500) the rest cannot use; signed-out-triggered mail is capped per /64 (`EMAIL_ANON_MAX_PER_CLIENT_PER_DAY`, 10); 50% / 80% warnings once each. `routes/authEmail.ts` is unchanged: its `emailReady` already reads the whole cap, which is the auth rule. |
+| abuse-ops-7 | Low | The API was also served, unprotected, on `workers.dev` | **Mitigated in code:** that host answers `GET /api/health` only (`api-proxy/src/proxy.ts`). `workers_dev: false` waits for O5 (a smoke-check bypass on the custom domain). |
+| abuse-ops-8 | Med | IPv6 callers were limited per address, not per /64 | **Fixed in code:** `server/src/lib/clientKey.ts` (IPv4 as-is, IPv6 → /64) keys `createRateLimit` and the assistant guest limit. |
+| abuse-ops-11 | Low | Newsletter re-subscribe re-sent the confirm email without limit | **Fixed in code:** at most one per 10 minutes and 3 per day per address; a throttled re-submit keeps the existing link. |
+| abuse-ops-13 | Low | RSVPs: no sign-in, no limit | **Fixed in code (no sign-in change — the public names are an open owner decision):** `RL_RSVP` (3/min per /64 per event), a 512-byte body, links refused as names, 60 new names per event per hour. |
+| abuse-ops-14 | Low | `npm audit --omit=dev`: 4 moderate | **Fixed (lockfile):** see F17. |
+| abuse-ops-15 | Low | Mailer logs carried full recipient addresses | **Fixed in code:** `a***@example.com` in every mailer log line. |
+| authz-data-1 (repo) | Low | Re-running repo SQL could re-grant the billing / usage definer functions | **Fixed in the repo:** `definer_lockdown_billing_2026_11.sql` committed verbatim (applied as 20261105012658); the grants in `coupon_single_use_global_and_free_model_usage.sql`, `model_bench_scores_and_usage.sql`, `token_billing_foundation.sql` and `rbac_moderation_plan_entitlements.sql` are service-role only; `server/src/services/definerGrants.sql.test.ts` pins it. |
+| authz-data-6 (step 1) | Med | Sign-up's username check returned the account's email | **Fixed in code:** sign-up asks `public.username_available` (`server/sql/username_available_2026_11.sql`, boolean only; **owner: apply**). Sign-in still resolves usernames until the owner's decision (O9); the resolver's client grant is revoked only in plan §2.5a. The repo's two resolver files no longer grant it to clients. |
+
+---
+
 ## Change log
 
 | Date | Change |
@@ -200,3 +217,4 @@ so a table without RLS is readable and writable by any client the moment it is c
 | 2026-11-04 | C1 review: reply provenance store (C1a partly fixed), memory marked and kept off free turns (C1d), $0 catalog models count as free, the operator's Nango MCP is a connector, honest capacity and refusal copy, connector swarm holds priced. C1 status now "Partially fixed". |
 | 2026-11-05 | SEC-DS: web-surface-1/2, abuse-ops-1/6/10, N8, authz-data-5 fixed on `sec/ds-hardening` (not yet deployed); browser uploads moved to the policy-allowed `<uid>/<file>` lane; N4 migration rule added; deferred storage and lockdown items listed. |
 | 2026-11-05 | SEC-DS review round: host-only provider metering and reserve-at-check budgets (abuse-ops-6); `forEachBlock` made linear and read-url parses its whole 1 MB download (abuse-ops-1); meta / attribute / image-URL limits; charset decoding; explicit `allowJina`; `fetchJson` body inside the deadline; MCP operator headers and an 8 MB response cap (web-surface-1); `convert_image` pinned (N8); the remaining email-literal admin derivations removed (authz-data-5). |
+| 2026-11-05 | Abuse limits (PR-2): per-/64 rate-limit keys, telemetry caps and size gate, auth-mail reserve, newsletter re-send throttle, RSVP limits, masked mailer logs, `workers.dev` health-only, `gaxios` 7.3.1, repo SQL grants aligned with production's definer lockdown, `username_available` for sign-up. |

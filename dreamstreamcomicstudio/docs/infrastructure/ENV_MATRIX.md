@@ -149,6 +149,8 @@ only make the existing director more accurate.
 | Var | Consumer | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
+| `EMAIL_AUTH_RESERVE_PER_DAY` / `EMAIL_AUTH_RESERVE_PER_MONTH` | `services/mailer.ts` | ⭕ | — | Default 50 / 500: the part of `EMAIL_MAX_PER_DAY` / `_PER_MONTH` kept for `auth-*` mail. Every other template stops at cap − reserve (`email_log.error='auth_reserve'`). Never more than half the cap; `0` = no reserve (abuse-ops-4) |
+| `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` | `services/mailer.ts` (newsletter / access-request mail) | ⭕ | — | Default 10: mail a signed-out request triggers, per IPv4 address / IPv6 /64 in a rolling day, in memory (`error='anon_sender_cap'`). `0` = off (abuse-ops-4) |
 | `SECURITY_HOOK_SECRET` (email Worker) | `email-worker` `POST /security` | ⭕ 🔐 | — | New-sign-in alerts from the Supabase access-token hook (`x-ds-signature`, ±5 min). The same value is the Supabase Vault secret `SECURITY_HOOK_SECRET` and the live Worker secret of that name; `old\|new` while rotating. Unset ⇒ `/security` answers 503 and no alert is sent (sign-ins are unaffected). Runbook §1 |
 | `SECURE_ACCOUNT_PAGE` (email Worker var) | `email-worker` sign-in alert template | ⭕ | — | `on` ⇒ the alert carries the one-time "Not you? Secure my account" button (`/live#/secure/<token>`); anything else ⇒ it points to Settings → Security. Set in `email-worker/wrangler.jsonc` when the `#/secure` page ships (ADR 0006 WS-5) |
 | `AUTH_LINK_ORIGINS` | `services/authEmailLinks.ts` (backend auth emails) | ⭕ | — | Comma-separated **exact** origins auth-email links may point at besides `APP_PUBLIC_URL` (e.g. `http://localhost:3000,http://localhost:7000` for local dev). Default empty. Never wildcards — see `docs/email/SETUP.md` |
@@ -189,7 +191,7 @@ the chat agent-tool sidecars (`deploy/studio-tools/`) and keep their names.
 | `OPS_KEY` | dreamstream-live | ⭕ 🔐 | — | 16+ characters: `POST /api/ops/apns-probe` (`x-ops-key`). Unset ⇒ the route refuses everything |
 | `APNS_KEY_P8` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_BUNDLE` / `FCM_SA_JSON` | dreamstream-live | ⭕ 🔐 | — (APNs and FCM are free) | Native push (`src/push/*`, Phase 1). Unset ⇒ native kinds make no request (the router is dormant) |
 | `PUSH_IOS_VIA` / `PUSH_CRITICAL_ALERTS` / `PUSH_LA_SEALED` / `PUSH_VOIP` | dreamstream-live (vars) | ⭕ | — | Non-secret switches (`src/push/router.ts`): `PUSH_IOS_VIA=fcm` if the APNs HTTP/2 probe fails; the others `1` only once Critical Alerts are granted, sealed Live Activity state is proven, and VoIP push ships (Phase 1.1) |
-| `RL_WS` / `RL_GUEST` / `RL_GUEST_NID` / `RL_EVENT` (bindings) | dreamstream-live | ⭕ | — | Workers Rate Limiting (`ratelimits` in `wrangler.jsonc`, ADR 0006 WS-7): 60 upgrades/60 s per address, 10 share-link joins/60 s per address, 30 per nursery, 10 events/60 s per account. Every check fails open. Runbook §3 |
+| `RL_WS` / `RL_GUEST` / `RL_GUEST_NID` / `RL_EVENT` / `RL_RSVP` (bindings) | dreamstream-live | ⭕ | — | Workers Rate Limiting (`ratelimits` in `wrangler.jsonc`, ADR 0006 WS-7): 60 upgrades/60 s per address, 10 share-link joins/60 s per address, 30 per nursery, 10 events/60 s per account, 3 invite-page RSVPs/60 s per address and event (abuse-ops-13). Every check fails open. Runbook §3 |
 
 **Supabase-side configuration (not env vars, but set by the owner — `server/sql/live_security_v2.sql`):**
 Vault secret `SECURITY_HOOK_SECRET`; `public.live_private_config` row `security_hook_url` =

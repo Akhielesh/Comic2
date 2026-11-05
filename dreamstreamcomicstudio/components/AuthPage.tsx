@@ -6,6 +6,7 @@ import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 import { EMAIL_SERVICE_DOWN, requestAuthEmail } from '../services/authEmail';
 import { clearSignInIntents } from '../services/pendingSignIn';
+import { checkUsernameAvailable } from '../services/usernameAvailability';
 
 // New registrations are invite-only for now: existing accounts can still sign in,
 // while everyone else can leave their email to request access. Flip this to true
@@ -145,20 +146,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 minAllowedDob.setFullYear(today.getFullYear() - MIN_SIGNUP_AGE_YEARS);
                 if (dobDate > minAllowedDob) throw new Error(`You must be at least ${MIN_SIGNUP_AGE_YEARS} years old to sign up.`);
 
-                // Fast username availability check before submit.
-                const { data: usernameLookupData, error: usernameLookupError } = await supabase.rpc('resolve_email_from_username', { login_username: normalizedUsername });
-                if (usernameLookupError) {
-                    const usernameLookupMessage = String(usernameLookupError?.message || '').toLowerCase();
-                    const missingResolver = usernameLookupMessage.includes('resolve_email_from_username') && usernameLookupMessage.includes('does not exist');
-                    if (!missingResolver) throw usernameLookupError;
-                    console.warn('Username resolver RPC missing; relying on DB uniqueness enforcement.');
-                } else {
-                    const existingEmailForUsername = Array.isArray(usernameLookupData)
-                        ? usernameLookupData[0]?.email
-                        : (usernameLookupData as { email?: string } | null)?.email;
-                    if (existingEmailForUsername) {
-                        throw new Error("Username is already taken. Please choose another.");
-                    }
+                // Fast username availability check before submit: a yes/no answer, never an email
+                // (authz-data-6). Without the function yet, the unique index still refuses a taken name.
+                if ((await checkUsernameAvailable(normalizedUsername)) === 'taken') {
+                    throw new Error("Username is already taken. Please choose another.");
                 }
 
                 // Sign up with metadata. Profile rows are created by Supabase DB trigger.

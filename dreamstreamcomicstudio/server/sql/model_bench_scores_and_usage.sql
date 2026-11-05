@@ -61,4 +61,8 @@ as $$
         updated_at = now();
 $$;
 
-revoke execute on function public.bump_model_usage(text, text, text, text) from anon, authenticated;
+-- Server-only (services/modelStats.ts, service role). PUBLIC too: a new function is executable by
+-- PUBLIC by default, so revoking only anon/authenticated left it callable through PUBLIC.
+-- Matches definer_lockdown_billing_2026_11.sql.
+revoke execute on function public.bump_model_usage(text, text, text, text) from public, anon, authenticated;
+grant execute on function public.bump_model_usage(text, text, text, text) to service_role;

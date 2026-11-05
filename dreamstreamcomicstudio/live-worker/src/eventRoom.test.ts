@@ -7,10 +7,12 @@ import {
   LIVE_WATCHDOG_MS,
   RECORDING_RETENTION_MS,
   REPLAY_WINDOW_MS,
+  RSVP_NEW_PER_HOUR,
   SEG_SAVE_EVERY,
   SWEEP_GRACE_MS,
   type ChatMsg,
   type EventMeta,
+  rsvpNameHasLink,
 } from './eventRoom';
 import { Sim, type SimWS } from './eventTestKit';
 import { STUN, includesTurn, resetIceCache } from './ice';
@@ -848,5 +850,47 @@ describe('EventRoom · guest links (unchanged by C10)', () => {
     expect(old.msgs('pending')).toHaveLength(1); // only the lobby: never on air
     const g2 = await sim.open(e.id, `g=${k2}&name=New link`);
     expect(g2.msgs('hello')[0].you).toMatchObject({ role: 'guest' });
+  });
+});
+
+// ─────────────── abuse-ops-13: RSVPs stay name-only, without links, and a script can't flood an invite
+
+describe('EventRoom · RSVP names (abuse-ops-13)', () => {
+  afterEach(cleanup);
+
+  it('refuses a link as a name and keeps ordinary names, initials and handles', () => {
+    for (const bad of ['evil.com', 'Visit evil.com!', 'bit.ly/x', 'http://x', 'HTTPS://A.B', 'www.spam', 'see shop.xyz', 'spam.example/path', 'free.app']) {
+      expect([bad, rsvpNameHasLink(bad)]).toEqual([bad, true]);
+    }
+    for (const ok of ['Grandma', 'J.R. Smith', 'Dr. Ana', 'Mrs.Cole', 'St.Louis Crew', '@ana', 'Ana & Raj', 'Zoë', 'A.J.']) {
+      expect([ok, rsvpNameHasLink(ok)]).toEqual([ok, false]);
+    }
+  });
+
+  it('a link name is refused in words the invite page shows, and never reaches the list or the log', async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 2 * HOUR });
+    const res = await sim.worker(`/api/events/${e.id}/rsvp`, { method: 'POST', body: JSON.stringify({ name: 'cheap-pills.com' }) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: 'name_not_allowed', message: expect.stringContaining('links') });
+    const meta = (await (await sim.worker(`/api/events/${e.id}`)).json()) as { rsvpCount: number };
+    expect(meta.rsvpCount).toBe(0);
+  });
+
+  it(`takes ${RSVP_NEW_PER_HOUR} new names an hour; a repeat name costs nothing; the next hour opens again`, async () => {
+    const sim = new Sim();
+    const e = await onAir(sim, { scheduledAt: sim.now + 5 * HOUR });
+    const go = (name: string) => sim.worker(`/api/events/${e.id}/rsvp`, { method: 'POST', body: JSON.stringify({ name }) });
+    for (let i = 0; i < RSVP_NEW_PER_HOUR; i++) expect((await go(`Guest ${i}`)).status).toBe(200);
+    const busy = await go('One too many');
+    expect(busy.status).toBe(429);
+    expect(Number(busy.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(await busy.json()).toMatchObject({ error: 'rsvp_busy' });
+    // Saving the same spot twice is still fine.
+    expect(((await (await go('Guest 3')).json()) as { rsvpCount: number }).rsvpCount).toBe(RSVP_NEW_PER_HOUR);
+    sim.now += HOUR + 1;
+    expect((await go('One too many')).status).toBe(200);
+    const meta = (await (await sim.worker(`/api/events/${e.id}`)).json()) as { rsvpCount: number };
+    expect(meta.rsvpCount).toBe(RSVP_NEW_PER_HOUR + 1);
   });
 });

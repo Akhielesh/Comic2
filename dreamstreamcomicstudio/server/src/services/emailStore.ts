@@ -132,31 +132,45 @@ export const suppress = async (
 };
 
 export interface EmailUsage {
+  /** Every template, sent this UTC day / month. */
   day: number;
   month: number;
+  /** The auth-* templates alone (abuse-ops-4: they have a reserve the rest cannot use). */
+  authDay: number;
+  authMonth: number;
 }
 
-/** Count emails actually SENT in the current UTC day + month (drives the hard cap). */
+/** Templates that count as auth mail for the reserve: every `auth-*` template. */
+export const isAuthTemplate = (template: string): boolean => template.startsWith('auth-');
+
+/** Count emails actually SENT in the current UTC day + month, in all and for auth mail (drives the hard cap). */
 export const getUsage = async (): Promise<EmailUsage> => {
   const db = adminOrNull();
-  if (!db) return { day: 0, month: 0 };
+  if (!db) return { day: 0, month: 0, authDay: 0, authMonth: 0 };
   const now = new Date();
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
-  const count = async (since: string): Promise<number> => {
+  const count = async (since: string, authOnly: boolean): Promise<number> => {
     try {
-      const { count: c } = await db
+      let query = db
         .from('email_log')
         .select('id', { count: 'exact', head: true })
         .eq('status', 'sent')
         .gte('created_at', since);
+      if (authOnly) query = query.like('template', 'auth-%');
+      const { count: c } = await query;
       return c ?? 0;
     } catch {
       return 0;
     }
   };
-  const [day, month] = await Promise.all([count(dayStart), count(monthStart)]);
-  return { day, month };
+  const [day, month, authDay, authMonth] = await Promise.all([
+    count(dayStart, false),
+    count(monthStart, false),
+    count(dayStart, true),
+    count(monthStart, true)
+  ]);
+  return { day, month, authDay, authMonth };
 };
 
 // ── Per-recipient auth-email throttle (routes/authEmail.ts) ─────────────────────
@@ -311,6 +325,51 @@ export const upsertSubscriber = async (
     confirm_sent_at: now
   });
   return { outcome: 'new' };
+};
+
+// ── Newsletter confirm re-send throttle (abuse-ops-11) ──────────────────────────
+// Re-submitting a pending address re-issues its token and mails a fresh confirm link. Without a
+// throttle anyone can make us mail a stranger's inbox on a loop. Fails open (false): a lookup
+// hiccup must not block a real sign-up, and the mailer's caps still stand behind this.
+export const NEWSLETTER_CONFIRM_MIN_INTERVAL_MS = 10 * 60_000;
+export const NEWSLETTER_CONFIRM_MAX_PER_DAY = 3;
+
+/**
+ * True when a confirm email must NOT be re-sent to this pending address now: the last one went
+ * out under 10 minutes ago, or 3 already went out in the last 24 hours (email_log, template
+ * newsletter-confirm, queued or sent). The caller then leaves the row — and its live token —
+ * alone, so the link already in the inbox keeps working. A confirmed or unknown address is
+ * never throttled here (upsertSubscriber answers those).
+ */
+export const newsletterConfirmThrottled = async (email: string, now = Date.now()): Promise<boolean> => {
+  const db = adminOrNull();
+  if (!db) return false;
+  const normalized = normalizeEmail(email);
+  try {
+    const { data: row } = await db
+      .from('waitlist_signups')
+      .select('confirmed, confirm_sent_at')
+      .eq('email', normalized)
+      .eq('kind', 'updates')
+      .limit(1)
+      .maybeSingle();
+    const existing = row as { confirmed?: boolean; confirm_sent_at?: string | null } | null;
+    if (!existing || existing.confirmed) return false;
+    const sentAt = existing.confirm_sent_at ? Date.parse(existing.confirm_sent_at) : NaN;
+    if (Number.isFinite(sentAt) && now - sentAt < NEWSLETTER_CONFIRM_MIN_INTERVAL_MS) return true;
+    const { count, error } = await db
+      .from('email_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('to_email', normalized)
+      .eq('template', 'newsletter-confirm')
+      .in('status', ['queued', 'sent'])
+      .gte('created_at', new Date(now - 24 * 3_600_000).toISOString());
+    if (error) return false;
+    return (count ?? 0) >= NEWSLETTER_CONFIRM_MAX_PER_DAY;
+  } catch (err) {
+    console.warn('[email] newsletterConfirmThrottled error', (err as Error)?.message);
+    return false;
+  }
 };
 
 /** Verify a confirm token and flip the row to confirmed. Returns true on success. */

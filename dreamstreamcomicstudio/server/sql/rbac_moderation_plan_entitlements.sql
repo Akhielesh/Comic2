@@ -229,4 +229,6 @@ begin
 end;
 $$;
 
+-- Server-only; matches definer_lockdown_billing_2026_11.sql.
+revoke execute on function public.billing_try_reserve_tokens(uuid, integer, boolean) from public, anon, authenticated;
 grant execute on function public.billing_try_reserve_tokens(uuid, integer, boolean) to service_role;

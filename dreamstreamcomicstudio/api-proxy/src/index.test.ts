@@ -445,3 +445,45 @@ describe('backend env', () => {
     expect(await loadBackendEnv({ X: 'y' }, undefined)).toEqual({ X: 'y' });
   });
 });
+
+describe('the workers.dev hostname answers health only (abuse-ops-7)', () => {
+  const WD = 'https://dreamstream-api.akhieleshsrirangam.workers.dev';
+  const go = (path: string, init: RequestInit = {}) =>
+    worker.fetch(new Request(`${WD}${path}`, { ...init, headers: { 'user-agent': HUMAN, ...(init.headers as Record<string, string>) } }), env, { waitUntil: () => undefined });
+
+  it('GET /api/health still reaches the backend there (CI and the smoke checks probe it)', async () => {
+    const backend = vi.fn(async () => new Response('{"status":"ok"}', { headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', backend);
+    expect((await go('/api/health')).status).toBe(200);
+    expect((await go('/api/health', { method: 'HEAD' })).status).toBe(200);
+    expect(backend).toHaveBeenCalledTimes(2);
+  });
+
+  it('everything else is a 404 before any routing, edge route or backend work', async () => {
+    const backend = vi.fn();
+    vi.stubGlobal('fetch', backend);
+    for (const [path, method] of [
+      ['/api/telemetry/events', 'POST'],
+      ['/api/newsletter/subscribe', 'POST'],
+      ['/api/chat/unfurl', 'POST'],
+      ['/api/health', 'POST'],
+      ['/api/health/../projects', 'GET'],
+      ['/api/agent-gate', 'GET'],
+      ['/api/comic/public/s/abc', 'GET'],
+      ['/api/csp-report', 'POST'],
+      ['/', 'GET']
+    ] as const) {
+      const res = await go(path, { method, body: method === 'POST' ? '{}' : undefined });
+      expect([path, method, res.status]).toEqual([path, method, 404]);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+    }
+    expect(backend).not.toHaveBeenCalled();
+  });
+
+  it('the custom domain is unaffected', async () => {
+    const backend = vi.fn(async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', backend);
+    expect((await call('/api/telemetry/events', { method: 'POST', body: '{}', ua: HUMAN }).res).status).toBe(200);
+    expect(backend).toHaveBeenCalledTimes(1);
+  });
+});

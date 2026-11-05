@@ -10,6 +10,7 @@ import {
   confirmSubscriber,
   markUnsubscribed,
   newConfirmToken,
+  newsletterConfirmThrottled,
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
@@ -25,7 +26,12 @@ export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const reqMeta = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
+// A signed-out request's mail counts against its sender's daily allowance (mailer.ts, abuse-ops-4).
+const reqMeta = (req: Request) => ({
+  userId: req.user?.id ?? null,
+  requestId: req.requestId ?? null,
+  ...(req.user ? {} : { anonymousClientIp: req.ip ?? '' })
+});
 
 // Prefer the configured public origin; fall back to the request's own origin so confirm
 // links still work before EMAIL_PUBLIC_BASE_URL is set.
@@ -133,7 +139,11 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       });
     }
 
-    // Newsletter double opt-in.
+    // Newsletter double opt-in. A pending address re-submitted too soon (or too often) keeps
+    // the link already in its inbox: no new token, no new email (abuse-ops-11).
+    if (await newsletterConfirmThrottled(email)) {
+      return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
+    }
     const token = newConfirmToken();
     const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
     if (outcome === 'already_confirmed') {

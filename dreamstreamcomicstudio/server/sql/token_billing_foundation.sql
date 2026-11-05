@@ -419,6 +419,16 @@ begin
 end;
 $$;
 
+-- Server-only (services/billingLedger.ts, service role): these trust p_user_id. A newly created
+-- function is executable by PUBLIC by default, so a fresh build would expose all three without
+-- this. Matches definer_lockdown_billing_2026_11.sql (applied to production 2026-11-05).
+revoke execute on function public.billing_try_reserve_tokens(uuid, integer, boolean) from public, anon, authenticated;
+revoke execute on function public.billing_release_reserved_tokens(uuid, integer) from public, anon, authenticated;
+revoke execute on function public.billing_settle_tokens(uuid, integer, integer, numeric) from public, anon, authenticated;
+grant execute on function public.billing_try_reserve_tokens(uuid, integer, boolean) to service_role;
+grant execute on function public.billing_release_reserved_tokens(uuid, integer) to service_role;
+grant execute on function public.billing_settle_tokens(uuid, integer, integer, numeric) to service_role;
+
 alter table public.billing_plans enable row level security;
 alter table public.user_plan_subscriptions enable row level security;
 alter table public.token_wallets enable row level security;

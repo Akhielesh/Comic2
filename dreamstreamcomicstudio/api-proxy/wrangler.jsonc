@@ -20,7 +20,10 @@
   // logs. Debug a single request with `wrangler tail` (live, not stored).
   "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   // Also served at dreamstream-api.akhieleshsrirangam.workers.dev — CI and the smoke
-  // checks probe that URL because the custom domain challenges datacenter IPs.
+  // checks probe that URL because the custom domain challenges datacenter IPs. That host
+  // skips the zone's WAF and bot protection, so it answers GET /api/health only and 404s
+  // everything else (src/proxy.ts, abuse-ops-7). Set this to false once the smoke checks
+  // can reach the custom domain (owner step O5 in the security plan).
   "workers_dev": true,
 
   // COST (docs/infrastructure/COST_RUNBOOK.md §2): billed only while awake. `basic` =

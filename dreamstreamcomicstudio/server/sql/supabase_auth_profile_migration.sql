@@ -127,8 +127,14 @@ as $$
   limit 1;
 $$;
 
+-- Not granted to anon/authenticated here (authz-data-6: it maps any username to its email). On
+-- production the client grant still exists for AuthPage's username sign-in, and it is revoked only
+-- in SECURITY-PLAN §2.5a, after the client stops calling it (sign-up availability now uses
+-- public.username_available, username_available_2026_11.sql; sign-in awaits the owner's decision).
+-- `revoke … from public` does not touch that explicit grant, so re-running this file changes nothing
+-- live; a fresh database built from these files simply has no client resolver.
 revoke all on function public.resolve_email_from_username(text) from public;
-grant execute on function public.resolve_email_from_username(text) to anon, authenticated;
+grant execute on function public.resolve_email_from_username(text) to service_role;
 
 -- 7) RLS for private table
 alter table public.profile_private enable row level security;

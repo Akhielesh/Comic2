@@ -18,6 +18,7 @@
  *   RL_GUEST      10 / 60 s per address, share-link joins (F13)
  *   RL_GUEST_NID  30 / 60 s per nursery, share-link joins
  *   RL_EVENT      10 / 60 s per account, Stream Studio event creation
+ *   RL_RSVP        3 / 60 s per address and event, invite-page RSVPs (abuse-ops-13; index.ts)
  * Keys are prefixed `edge:` so the room's own limiter (monitorGuests.ts `ip:`/`n:` keys, if a
  * room is given the same binding) counts separately instead of halving the allowance.
  * An address is the client's IPv4 address, or its IPv6 /64 (one subscriber's whole prefix —

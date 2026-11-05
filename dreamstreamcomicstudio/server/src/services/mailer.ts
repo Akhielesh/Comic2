@@ -5,7 +5,11 @@
 //   1. dormant unless configured (EMAIL_WORKER_URL + EMAIL_HMAC_SECRET) — never throws;
 //   2. marketing suppression — refuses 'marketing' mail to opted-out addresses;
 //   3. HARD cost cap — refuses to send past EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH (defaults
-//      sit under Cloudflare's free 3,000/mo), emitting a cost alert to the logs;
+//      sit under Cloudflare's free 3,000/mo), emitting a cost alert to the logs. Part of each
+//      cap is reserved for auth mail (EMAIL_AUTH_RESERVE_PER_*; abuse-ops-4): other templates
+//      stop at the cap minus the reserve, and a send a signed-out request triggered counts
+//      against that sender's daily allowance (EMAIL_ANON_MAX_PER_CLIENT_PER_DAY, per IPv4
+//      address / IPv6 /64), so a stranger can never use up the mail sign-in needs;
 //   4. logs every attempt to email_log (observability + the cost accounting above);
 //   5. builds the working one-click unsubscribe link (marketing) + read-receipt pixel.
 //
@@ -15,6 +19,9 @@
 import crypto from 'crypto';
 import {
   APP_PUBLIC_URL,
+  EMAIL_ANON_MAX_PER_CLIENT_PER_DAY,
+  EMAIL_AUTH_RESERVE_PER_DAY,
+  EMAIL_AUTH_RESERVE_PER_MONTH,
   EMAIL_HMAC_SECRET,
   EMAIL_MAX_PER_DAY,
   EMAIL_MAX_PER_MONTH,
@@ -23,7 +30,10 @@ import {
   EMAIL_WORKER_URL
 } from '../config.js';
 import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
-import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { clientKey } from '../lib/clientKey.js';
+import { getRateLimitStore } from '../middleware/rateLimitStore.js';
+import { maskEmail } from './authEmailLinks.js';
+import { getUsage, isAuthTemplate, isSuppressed, logSend, normalizeEmail, patchLog, type EmailUsage } from './emailStore.js';
 
 export { APP_PUBLIC_URL };
 
@@ -69,20 +79,91 @@ export interface SendOptions {
   brand?: 'stream-studio';
   /** false ⇒ no read-receipt pixel. Auth mail opts out: it carries sign-in links, not campaigns. */
   track?: boolean;
+  /**
+   * Set (to req.ip, even when empty) when a signed-out request triggered this send: it then
+   * counts against that sender's EMAIL_ANON_MAX_PER_CLIENT_PER_DAY, per IPv4 address / IPv6 /64.
+   * Leave it out for signed-in and admin sends.
+   */
+  anonymousClientIp?: string;
 }
+
+// ── Auth reserve (abuse-ops-4) ──────────────────────────────────────────────────
+/** A reserve is never more than half its cap, so a small cap still leaves other mail room. */
+const effectiveReserve = (cap: number, reserve: number): number => (cap > 0 ? Math.min(reserve, Math.floor(cap / 2)) : 0);
+
+/** What non-auth templates may use of each cap (0 = that cap is off). */
+const otherShare = () => ({
+  day: EMAIL_MAX_PER_DAY > 0 ? EMAIL_MAX_PER_DAY - effectiveReserve(EMAIL_MAX_PER_DAY, EMAIL_AUTH_RESERVE_PER_DAY) : 0,
+  month: EMAIL_MAX_PER_MONTH > 0 ? EMAIL_MAX_PER_MONTH - effectiveReserve(EMAIL_MAX_PER_MONTH, EMAIL_AUTH_RESERVE_PER_MONTH) : 0
+});
+
+const usageParts = (usage: EmailUsage) => {
+  const authDay = usage.authDay ?? 0;
+  const authMonth = usage.authMonth ?? 0;
+  return { authDay, authMonth, otherDay: Math.max(0, usage.day - authDay), otherMonth: Math.max(0, usage.month - authMonth) };
+};
+
+// One warning per bucket, period and threshold (50%, 80%) — not one per send.
+const warnedThresholds = new Set<string>();
+const noteThreshold = (label: string, period: 'day' | 'month', used: number, cap: number): void => {
+  if (cap <= 0) return;
+  const now = new Date().toISOString();
+  const periodKey = period === 'day' ? now.slice(0, 10) : now.slice(0, 7);
+  for (const pct of [80, 50]) {
+    if (used < Math.ceil((cap * pct) / 100)) continue;
+    const key = `${label}:${period}:${periodKey}:${pct}`;
+    if (!warnedThresholds.has(key)) {
+      if (warnedThresholds.size > 200) warnedThresholds.clear();
+      warnedThresholds.add(key);
+      console.warn(
+        `[email][COST] ${label}: ${used}/${cap} this ${period} (≥${pct}%).` +
+          (label === 'all mail' ? " Cloudflare's free tier is 3,000/mo, then $0.35/1,000." : ' The rest is kept for sign-in and password mail.')
+      );
+    }
+    return;
+  }
+};
+
+/** Test hook: forget which thresholds were already reported. */
+export const resetMailerWarnings = (): void => warnedThresholds.clear();
+
+const ANON_WINDOW_MS = 24 * 60 * 60_000;
+/** True when this signed-out sender has used up its daily allowance (and counts this try). */
+const anonymousSenderOverLimit = async (ip: string): Promise<boolean> => {
+  if (EMAIL_ANON_MAX_PER_CLIENT_PER_DAY <= 0) return false;
+  try {
+    const hit = await getRateLimitStore().hit(`email_anon:${clientKey(ip) ?? 'unknown'}`, ANON_WINDOW_MS, EMAIL_ANON_MAX_PER_CLIENT_PER_DAY);
+    return hit.count > EMAIL_ANON_MAX_PER_CLIENT_PER_DAY;
+  } catch {
+    return false; // a limiter-store hiccup never blocks mail; the global caps still stand
+  }
+};
 
 /** Usage snapshot + caps, for ops/cost dashboards and honest cost alerts. */
 export const getEmailUsageStatus = async () => {
   const usage = await getUsage();
+  const parts = usageParts(usage);
+  const share = otherShare();
   const pct = (n: number, max: number) => (max > 0 ? Math.round((n / max) * 100) : 0);
   return {
     configured: mailerConfigured(),
+    // day / month against maxPerDay / maxPerMonth is also the auth-mail rule: auth may use the
+    // whole cap (routes/authEmail.ts emailReady reads exactly this).
     day: usage.day,
     month: usage.month,
     maxPerDay: EMAIL_MAX_PER_DAY,
     maxPerMonth: EMAIL_MAX_PER_MONTH,
     dayPct: pct(usage.day, EMAIL_MAX_PER_DAY),
     monthPct: pct(usage.month, EMAIL_MAX_PER_MONTH),
+    // abuse-ops-4: auth mail's own count, and what every other template may use.
+    authDay: parts.authDay,
+    authMonth: parts.authMonth,
+    otherDay: parts.otherDay,
+    otherMonth: parts.otherMonth,
+    otherMaxPerDay: share.day,
+    otherMaxPerMonth: share.month,
+    authReservePerDay: effectiveReserve(EMAIL_MAX_PER_DAY, EMAIL_AUTH_RESERVE_PER_DAY),
+    authReservePerMonth: effectiveReserve(EMAIL_MAX_PER_MONTH, EMAIL_AUTH_RESERVE_PER_MONTH),
     // Cloudflare bills $0.35/1k only past 3,000/mo; under that it's free.
     freeTierRemaining: Math.max(0, 3000 - usage.month)
   };
@@ -112,25 +193,48 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     return { ok: false, skipped: 'suppressed' };
   }
 
-  // (3) hard cost cap — never exceed the configured ceiling
+  // (3a) a signed-out sender's own daily allowance (abuse-ops-4) — checked before the DB counts
+  if (opts.anonymousClientIp !== undefined && (await anonymousSenderOverLimit(opts.anonymousClientIp))) {
+    console.warn(`[email][ANON-CAP] A signed-out sender reached ${EMAIL_ANON_MAX_PER_CLIENT_PER_DAY} emails today. Skipping ${template} → ${maskEmail(to)}.`);
+    await logSend({ ...baseLog, status: 'rate_limited', error: 'anon_sender_cap' });
+    return { ok: false, skipped: 'rate_limited' };
+  }
+
+  // (3b) hard cost cap — never exceed the configured ceiling
   const usage = await getUsage();
   const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
   const overDay = EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY;
   if (overMonth || overDay) {
     console.error(
       `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
-        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${to}. ` +
+        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
         `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
     );
     await logSend({ ...baseLog, status: 'rate_limited' });
     return { ok: false, skipped: 'rate_limited' };
   }
-  // Honest early warning at 80% of the monthly cap.
-  if (EMAIL_MAX_PER_MONTH > 0 && usage.month >= Math.floor(EMAIL_MAX_PER_MONTH * 0.8)) {
-    console.warn(
-      `[email][COST] ${usage.month}/${EMAIL_MAX_PER_MONTH} emails this month (≥80%). ` +
-        `Cloudflare's free tier is 3,000/mo, then $0.35/1,000.`
-    );
+  // (3c) the auth reserve: every other template stops at its share of the caps
+  const parts = usageParts(usage);
+  const share = otherShare();
+  if (!isAuthTemplate(template)) {
+    const overShareDay = EMAIL_MAX_PER_DAY > 0 && parts.otherDay >= share.day;
+    const overShareMonth = EMAIL_MAX_PER_MONTH > 0 && parts.otherMonth >= share.month;
+    if (overShareDay || overShareMonth) {
+      console.warn(
+        `[email][RESERVE] Non-auth mail reached its share (day ${parts.otherDay}/${share.day}, month ` +
+          `${parts.otherMonth}/${share.month}); the rest is kept for sign-in and password mail. ` +
+          `Skipping ${template} → ${maskEmail(to)}.`
+      );
+      await logSend({ ...baseLog, status: 'rate_limited', error: 'auth_reserve' });
+      return { ok: false, skipped: 'rate_limited' };
+    }
+  }
+  // Honest early warnings at 50% and 80%: all mail against the caps, other mail against its share.
+  noteThreshold('all mail', 'day', usage.day, EMAIL_MAX_PER_DAY);
+  noteThreshold('all mail', 'month', usage.month, EMAIL_MAX_PER_MONTH);
+  if (!isAuthTemplate(template)) {
+    noteThreshold('non-auth mail', 'day', parts.otherDay, share.day);
+    noteThreshold('non-auth mail', 'month', parts.otherMonth, share.month);
   }
 
   // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
@@ -177,12 +281,12 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     }
     const error = json?.error || `worker responded ${res.status}`;
     if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send failed (${template} → ${to}): ${error}`);
+    console.warn(`[email] send failed (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } catch (err) {
     const error = (err as Error)?.message || 'network error';
     if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send error (${template} → ${to}): ${error}`);
+    console.warn(`[email] send error (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } finally {
     clearTimeout(timer);
@@ -190,9 +294,10 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
 };
 
 // ── Typed convenience wrappers ──────────────────────────────────────────────────
-const meta = (req?: { userId?: string | null; requestId?: string | null }) => ({
+const meta = (req?: { userId?: string | null; requestId?: string | null; anonymousClientIp?: string }) => ({
   userId: req?.userId ?? null,
-  requestId: req?.requestId ?? null
+  requestId: req?.requestId ?? null,
+  ...(req?.anonymousClientIp !== undefined ? { anonymousClientIp: req.anonymousClientIp } : {})
 });
 
 export const sendNewsletterConfirm = (email: string, confirmUrl: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>

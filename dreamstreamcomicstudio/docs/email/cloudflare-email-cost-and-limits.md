@@ -53,8 +53,25 @@ backend enforces its own hard ceiling** before every send (`server/src/services/
 - `EMAIL_MAX_PER_DAY` — default **200**
 
 When a cap is hit the send is **skipped** (logged `status='rate_limited'`) and a
-`[email][COST-CAP]` line is written to the server logs. At ≥80% of the monthly cap a
-`[email][COST]` warning fires. **You cannot incur overage charges unless you deliberately
+`[email][COST-CAP]` line is written to the server logs. At 50% and again at 80% of each cap a
+single `[email][COST]` warning fires (once per day / month, not once per send).
+
+**Auth reserve (2026-11, abuse-ops-4).** Part of each cap is kept for auth mail (every `auth-*`
+template: sign-up confirm, password reset, magic link …), so mail a stranger can trigger can never
+use up what sign-in needs:
+
+- `EMAIL_AUTH_RESERVE_PER_DAY` — default **50**; `EMAIL_AUTH_RESERVE_PER_MONTH` — default **500**.
+  Every other template (newsletter, access requests, invites, admin sends) stops at the cap minus
+  the reserve and is logged `rate_limited` with `error='auth_reserve'`. Auth mail may use the
+  whole cap. A reserve is never more than half its cap; `0` turns it off.
+- `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` — default **10**: mail a signed-out request triggers
+  (newsletter confirm, access-request acknowledgement) per IPv4 address / IPv6 /64 in a rolling
+  day, in memory (`error='anon_sender_cap'`). `0` turns it off.
+- A pending newsletter address is re-sent its confirm link at most once per 10 minutes and 3
+  times a day (`email_log`); otherwise the link already in its inbox stays valid.
+- `getEmailUsageStatus()` (Admin → Email) also reports `authDay` / `authMonth`, `otherDay` /
+  `otherMonth` against `otherMaxPerDay` / `otherMaxPerMonth`, and the effective reserves.
+- Mailer log lines name recipients masked (`a***@example.com`), never in full (abuse-ops-15). **You cannot incur overage charges unless you deliberately
 raise `EMAIL_MAX_PER_MONTH` above 3,000.** Usage is countable any time from `email_log`
 (`status='sent'`) or via `getEmailUsageStatus()`.
 
