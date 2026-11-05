@@ -92,6 +92,24 @@ All notable user-facing changes. Format loosely follows
   by the server (`GET /api/account/studios`) so the apps can't disagree.
 
 ### Changed
+- **The privacy policy now covers connected Google accounts (2026-11-04):** a new section,
+  **Google User Data** (`/?view=privacy#google-user-data`), says what DreamStream reads from
+  Gmail, Drive, Calendar, Sheets and YouTube and why, what is sent to the AI model that answers
+  you and which providers that can be (including for the "You might ask" follow-up
+  suggestions), which search, lookup and reference services the model's tools can contact
+  (including the Jina Reader service used when a page can't be read directly), how chat memory
+  notes are kept and that they go with every later chat (and that deleting the saved copy
+  currently takes an email), who else receives it, how tokens are protected, how long it is
+  kept, and how to disconnect in DreamStream or remove access at
+  myaccount.google.com/connections. It
+  includes Google's Limited Use statements, the YouTube API Services notice with a link to the
+  Google Privacy Policy, a privacy contact (privacy@dreamstreamstudio.ai), and a November 4,
+  2026 date. The page follows the light/dark theme and jumps straight to a section from a `#`
+  link. Every contact address that pointed at dreamstream.com, a domain we don't own, is now on
+  dreamstreamstudio.ai: the Contact link in the Privacy · Terms · FAQs footer, Stream Studio's
+  Support link and guide, the comic reader's footer (contact@dreamstreamstudio.ai), and the
+  support address in Account Settings (support@dreamstreamstudio.ai). The section also covers Atlas Studio,
+  which connects through the same Google apps, and links its own privacy policy.
 - **Stream Studio needs your DreamStream account (2026-10-29):** signed out, Stream Studio now
   shows one screen — sign in or create your DreamStream account, the same one as Comic Studio
   and Chat Studio — instead of the whole studio. Nothing sits behind it: no dashboard, events,

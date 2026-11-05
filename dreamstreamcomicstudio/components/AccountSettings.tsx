@@ -105,7 +105,7 @@ const ContactSection = () => {
             </p>
             <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
                 <p className="font-bold mb-1">Basic Contact Info</p>
-                <p className="text-slate-600">Support Email: support@dreamstream.com</p>
+                <p className="text-slate-600">Support Email: support@dreamstreamstudio.ai</p>
                 <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
             </div>
             <form onSubmit={send} className="space-y-4">
