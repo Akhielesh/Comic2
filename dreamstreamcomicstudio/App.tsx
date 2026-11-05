@@ -35,6 +35,7 @@ import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiServ
 import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { useIsAdmin } from './hooks/useIsAdmin';
+import { useAdminAccess } from './components/account/useAdminAccess';
 import { useProductAccess, PRODUCT_LABELS, type ProductId } from './services/productAccess';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
@@ -204,6 +205,9 @@ const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
   const isAdmin = useIsAdmin();
+  // Diagnostics are admin-only: gated on the server's answer for THIS account (bound to the
+  // user id, so an account switch never runs the check on the previous account's answer).
+  const diagnosticsAdmin = useAdminAccess(user?.id).isAdmin;
   // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
   const allowedProducts = useProductAccess();
   const streamOnlyRedirectedRef = useRef(false);
@@ -554,7 +558,9 @@ const App: React.FC = () => {
   }, [currentView, activeProjectId, pendingStudioTarget]);
 
   useEffect(() => {
-    if (!user?.email || user.email !== 'admin@test.com') {
+    // Never from an email address (anyone can sign up with any address): only the server's
+    // admin flag; the server also requireAdmin's /api/system/diagnostics.
+    if (!user || !diagnosticsAdmin) {
       setSystemDiagnostics(null);
       return;
     }
@@ -575,7 +581,7 @@ const App: React.FC = () => {
           message: err?.message || 'Unable to load system diagnostics'
         });
       });
-  }, [user?.email]);
+  }, [user?.id, diagnosticsAdmin]);
 
   useEffect(() => {
     const checkKey = async () => {

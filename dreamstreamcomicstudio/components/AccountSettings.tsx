@@ -4,7 +4,7 @@ import { supabase } from '../services/supabase';
 import {
     getPrivateProfile,
     getUserProfile,
-    saveImage,
+    saveAvatarImage,
     savePublicContactMessage,
     syncMarketingConsentLegacy,
     updateUserProfile,
@@ -20,11 +20,9 @@ import { patchUrlParams, persistUiState, resolveInitialUiState } from '../servic
 import { listDevices, removeDevice, currentDeviceId, type UserDevice } from '../services/deviceSessions';
 import { isImageModelAllowedForPlan } from '../services/imageModels';
 import { TEXT_MODEL } from '../services/modelPolicy';
-import type {
-    AdminAccessResponse,
-    BillingSummaryResponse
-} from '../shared/types/billing';
-import { getAdminAccess, getBillingSummary } from '../services/billing';
+import type { BillingSummaryResponse } from '../shared/types/billing';
+import { getBillingSummary } from '../services/billing';
+import { useAdminAccess } from './account/useAdminAccess';
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { AdminConsole } from './admin/AdminConsole';
@@ -171,13 +169,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [privateProfile, setPrivateProfile] = useState<UserPrivateProfile | null>(null);
     const [privateProfileWarning, setPrivateProfileWarning] = useState<string | null>(null);
 
-    const [isAdmin, setIsAdmin] = useState(false);
-    const [isModerator, setIsModerator] = useState(false);
-    const [adminAccess, setAdminAccess] = useState<AdminAccessResponse | null>(null);
-    // Whether the /api/admin/me probe has settled (success OR failure). The admin tab
-    // renders a "checking access" state until then, so the console never mounts with a
+    // Admin / moderator come only from the server's admin flag (/api/admin/me); a failed check
+    // means no access. `accessChecked`: whether the probe has settled (success OR failure). The
+    // admin tab renders a "checking access" state until then, so the console never mounts with a
     // not-yet-true isAdmin and silently downgrades a deep-linked admin-only section.
-    const [accessChecked, setAccessChecked] = useState(false);
+    const { isAdmin, isModerator, access: adminAccess, checked: accessChecked } = useAdminAccess(user?.id);
     const [settingsState, setSettingsState] = useState(() => getSettingsState());
     // Billing summary is only fetched to derive model entitlements (default text/image
     // models) for the API & Models tab — there is no plan/billing UI anymore.
@@ -236,43 +232,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setSecurityMessage({ type: 'success', text: 'Recovery link verified. Set a new password below.' });
         onPasswordResetHandled?.();
     }, [openPasswordReset, onPasswordResetHandled]);
-
-    useEffect(() => {
-        if (!user) {
-            setIsAdmin(false);
-            setIsModerator(false);
-            setAdminAccess(null);
-            setAccessChecked(true);
-            return;
-        }
-
-        setAccessChecked(false);
-        let active = true;
-        const loadAccess = async () => {
-            try {
-                const access = await getAdminAccess();
-                if (!active) return;
-                setAdminAccess(access);
-                setIsAdmin(access.isAdmin);
-                setIsModerator(access.isModerator);
-            } catch {
-                if (!active) return;
-                const fallbackAdmin = user.email === 'admin@test.com';
-                setIsAdmin(fallbackAdmin);
-                setIsModerator(fallbackAdmin);
-                setAdminAccess(null);
-            } finally {
-                if (active) setAccessChecked(true);
-            }
-        };
-
-        void loadAccess();
-        return () => {
-            active = false;
-        };
-        // Keyed on the user id, not the user object: Supabase mints a fresh user object on
-        // every token refresh (each tab refocus), which used to re-run this needlessly.
-    }, [user?.id]);
 
     useEffect(() => {
         if (activeTab !== 'settings' || !user) return;
@@ -394,11 +353,12 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         const reader = new FileReader();
         reader.onloadend = async () => {
             try {
-                const path = await saveImage(reader.result as string);
+                const path = await saveAvatarImage(reader.result as string);
                 const { data } = supabase.storage.from('comic-assets').getPublicUrl(path);
                 setAvatarUrl(normalizeText(data.publicUrl));
             } catch (err) {
-                alert("Upload failed");
+                const reason = err instanceof Error && err.message ? ` ${err.message}` : '';
+                alert(`Upload failed.${reason}`);
             }
         };
         reader.readAsDataURL(file);

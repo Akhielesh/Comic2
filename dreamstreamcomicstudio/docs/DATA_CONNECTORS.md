@@ -32,8 +32,9 @@ verification status, plus the complete logs/analytics/metrics collection list):
 | Crypto | CoinGecko (+ demo/pro key; misconfigured keys auto-fall back keyless; majors skip /search; 60s result cache) | none legal (exchange-direct feeds PROHIBIT commercial display) | `COINGECKO_API_KEY`, `COINGECKO_API_PLAN` | $35/mo Basic for commercial + attribution | **rich card** ✓ |
 | Fiat FX rates | Frankfurter (ECB) | — | — | commercial-ok ✓ | text |
 | News | Google News RSS (unofficial; article links decoded to publisher URLs server-side) | — (GDELT is the planned fallback) | — | unofficial — never sole source | **rich card** ✓ + split reader |
-| Article reader (extraction) | Direct fetch + heuristic reader | Jina Reader proxy (keyless best-effort; key lifts limits) | `JINA_API_KEY` (optional) | per-publisher; honest open-original fallback | **reader pane** ✓ |
-| Places/POI | Foursquare (keyed) | OpenStreetMap Overpass (overpass-api.de → kumi.systems mirror; name/brand/cuisine-aware search) | `FOURSQUARE_API_KEY` | conditional | **rich card** ✓ |
+| Article reader (extraction) | Direct fetch + heuristic reader (`fetchPublicUrl`: every redirect hop re-checked, resolved IP pinned; 9 s deadline over headers and body; 1 MB download cap, all of it parsed — a `<main>`/`<article>` still open at the cap is read from its opening tag; text decoded in the page's declared charset; linear-time scanner) | Jina Reader proxy — **signed-in callers only** (`readArticle(…, { allowJina })`; no account context = no Jina; keyless best-effort; key lifts limits; response capped at 1 MB) | `JINA_API_KEY` (optional) | per-publisher; honest open-original fallback | **reader pane** ✓ |
+| Places/POI | Foursquare (keyed; budgeted 20/min, 300/day) | OpenStreetMap Overpass (overpass-api.de → kumi.systems mirror; name/brand/cuisine-aware search) | `FOURSQUARE_API_KEY` | conditional | **rich card** ✓ |
+| Video search | YouTube Data API (keyed; budgeted 10/min, 80/day — a search costs 100 of the key's 10,000 daily units) | DuckDuckGo video scrape (keyless) | `YOUTUBE_API_KEY` | YouTube API ToS | **rich card** ✓ |
 | Geocoding/maps | OSM Nominatim | Open-Meteo geocoder | — | fair-use ✓ | **map** ✓ |
 | Directions/routing | FOSSGIS OSRM (drive/bike/foot, alternatives) | — (transit deep-links to Google Maps) | — | fair-use demo server ✓ (budgeted 20/min) | **rich card** ✓ animated routes |
 | IP geolocation | IPinfo Lite (keyed) | ip-api.com (NON-commercial — dev only) | `IPINFO_TOKEN` | attribution ✓ | text |
@@ -56,6 +57,20 @@ fundamentals (EDGAR companyfacts — free, commercial-ok, NOT yet integrated).
 - Every upstream call is metered by `server/src/lib/providerUsage.ts`: per-minute +
   per-day budgets under each free tier (override: `PROVIDER_BUDGETS` JSON env).
   Budget hit ⇒ graceful skip to next provider / honest notice — never burn quota.
+  The provider is decided by the URL's **host only** (YouTube: the googleapis host plus its
+  `/youtube/` path) — user text in a query string never moves a call into another budget.
+  `assertProviderBudget` **reserves** the call before it is sent (calls in flight count, so
+  concurrent requests cannot overshoot); `noteProviderCall` records only the outcome, and
+  `releaseProviderReservation` gives a slot back when the caller sends nothing after all.
+  Keyed providers called with a custom `fetch` used to bypass this (Foursquare, YouTube —
+  fixed 2026-11-05): route every keyed call through `fetchJson`/`fetchText`/`fetchTextCapped`.
+- User/model-supplied pages (reader mode, link unfurl, deep-research reads) are metered in
+  their own per-host bucket (`page:<host>`, the 60/min · 3000/day fallback) — never as the
+  provider a URL happens to name — with at most 500 hosts tracked and one `web-page` row per
+  account and day in the usage log. They are not shown as providers in the dashboard.
+- **Open:** budgets are shared by everyone. A per-anonymous-caller share cap (signed-out
+  visitors may spend at most a slice of a keyed provider's day) needs a caller identity the
+  helper does not have yet — see `docs/infrastructure/SECURITY_FINDINGS.md` (abuse-ops-6).
 - Live view: Settings → Tools → "Provider usage today", or `GET /api/usage/providers`.
 - **Account-wise cloud log**: per-(account, provider, day) call/error/blocked deltas
   flush every ~60 s to Supabase `provider_usage_log` (append-only; daily totals in
@@ -335,9 +350,12 @@ Nango and MCP results.
 1. **License first**: confirm the free tier permits commercial display (TOS, not
    the pricing page headline). "Free tier" ≠ "free for commercial use."
 2. Implement in `server/src/ai/tools/` using `http.ts` fetchers (auto-metered) or
-   call `assertProviderBudget`/`noteProviderCall` in a custom fetcher; add the
-   hostname to `HOST_TO_PROVIDER` + a budget in `DEFAULT_BUDGETS`
-   (`lib/providerUsage.ts`).
+   call `assertProviderBudget` (it reserves the call) then `noteProviderCall` (the outcome) in
+   a custom fetcher — never a bare `fetch`, which skips the budget; add a host pattern to
+   `HOST_TO_PROVIDER` (it is matched against the hostname only: `(^|\.)example\.com$`; a
+   path-specific provider on a shared host, like YouTube on `googleapis.com`, is a special
+   case in `providerForUrl`) + a budget in `DEFAULT_BUDGETS` (`lib/providerUsage.ts`). A URL
+   that comes from a user or the model goes through `fetchTextCapped({ publicOnly: true })`.
 3. Register in `registry.ts`; add catalog entry in `toolCatalog.ts` with honest
    `license`/`licenseNote`/`rateLimit`; add env var to `.env.example` and, if
    keyed, to `CONNECTOR_KEYS`.

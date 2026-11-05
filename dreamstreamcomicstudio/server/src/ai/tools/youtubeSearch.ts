@@ -4,6 +4,7 @@
 
 import { YOUTUBE_API_KEY } from '../../config.js';
 import type { VideoSearchResult } from './duckduckgo.js';
+import { fetchJson } from './http.js';
 
 const YT_SEARCH = 'https://www.googleapis.com/youtube/v3/search';
 
@@ -25,9 +26,10 @@ export const youtubeVideoSearch = async (query: string, signal?: AbortSignal, li
   const url =
     `${YT_SEARCH}?part=snippet&type=video&safeSearch=none&maxResults=${Math.min(12, Math.max(1, limit))}` +
     `&q=${encodeURIComponent(query)}&key=${encodeURIComponent(YOUTUBE_API_KEY)}`;
-  const res = await fetch(url, { headers: { Accept: 'application/json' }, signal });
-  if (!res.ok) throw new Error(`YouTube search returned ${res.status}`);
-  const json = (await res.json()) as { items?: YtSearchItem[] };
+  // Through fetchJson so the provider budget (lib/providerUsage.ts: 'youtube') meters and caps
+  // every call — each search costs 100 of the key's 10,000 daily quota units. A budget hit
+  // throws and video_search falls back to the keyless scraper.
+  const json = await fetchJson<{ items?: YtSearchItem[] }>(url, { accept: 'application/json', timeoutMs: 10_000, signal });
   const items = Array.isArray(json.items) ? json.items : [];
   return items
     .map((it): VideoSearchResult | null => {

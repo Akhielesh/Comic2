@@ -852,16 +852,52 @@ export const toggleProjectLike = async (projectId: string, ownerUserId?: string)
 
 const BUCKET_NAME = 'comic-assets';
 
-export const saveImage = async (dataUrl: string): Promise<string> => {
+/** Image types a client upload may carry, mapped to the stored extension (anything else is refused). */
+const CLIENT_UPLOAD_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpeg',
+  'image/jpg': 'jpeg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/avif': 'avif'
+};
+
+/** An avatar is a small picture: refuse anything bigger before it is uploaded. */
+export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Storage path for an upload the BROWSER writes to `comic-assets` (with the user's own token).
+ * The bucket's storage policies ("Authenticated Upload" / "Authenticated Manage") let a
+ * signed-in user write only under a first folder equal to their uid, so a client upload lives at
+ * `<uid>/<file>` — the classic lane every reader already resolves (getImageUrl's candidates,
+ * the /api/system/image-url owner/public rules, publicReaderPaths, the Comic Studio importers).
+ * The `u/<uid>/…` lanes (tmp, p/<project>/img, ref) are written by the server with the service
+ * role only; a browser upload there is refused by RLS, which is why avatar uploads failed.
+ */
+export const clientUploadPath = (
+  userId: string,
+  id: string,
+  mimeType: string,
+  kind: 'image' | 'avatar' = 'image'
+): string => {
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) throw new Error('Invalid user id for an upload.');
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(id)) throw new Error('Invalid upload id.');
+  const ext = CLIENT_UPLOAD_EXT[String(mimeType || '').toLowerCase()];
+  if (!ext) throw new Error('That file type is not supported. Use a PNG, JPEG, WebP, GIF or AVIF image.');
+  return `${userId}/${kind === 'avatar' ? 'avatar-' : ''}${id}.${ext}`;
+};
+
+const uploadClientImage = async (dataUrl: string, kind: 'image' | 'avatar'): Promise<string> => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("User not logged in");
 
   const id = crypto.randomUUID();
   const blob = dataUrlToBlob(dataUrl);
-  const ext = blob.type.split('/')[1] || 'png';
-  const filePath = `u/${user.id}/tmp/${id}.${ext}`;
+  if (kind === 'avatar' && blob.size > AVATAR_MAX_BYTES) {
+    throw new Error('That picture is larger than 5 MB. Choose a smaller one.');
+  }
+  const filePath = clientUploadPath(user.id, id, blob.type, kind);
 
-  console.log('[DB] saveImage uploading to:', filePath);
   const { error } = await supabase.storage
     .from(BUCKET_NAME)
     .upload(filePath, blob, {
@@ -879,6 +915,10 @@ export const saveImage = async (dataUrl: string): Promise<string> => {
     throw error;
   }
 
+  // An avatar is referenced from profiles.avatar_url, which the image-asset retention job does
+  // not scan: registering it would mark it unreferenced and purge it after the grace period.
+  if (kind === 'avatar') return filePath;
+
   // Best-effort metadata write if image_assets migration exists.
   const { error: metadataError } = await supabase.rpc("register_image_asset", {
     p_path: filePath,
@@ -894,6 +934,12 @@ export const saveImage = async (dataUrl: string): Promise<string> => {
 
   return filePath;
 };
+
+/** Upload a studio image from the browser; returns its storage path (registered for retention). */
+export const saveImage = (dataUrl: string): Promise<string> => uploadClientImage(dataUrl, 'image');
+
+/** Upload a profile picture (≤ 5 MB); returns its storage path. Not registered for retention. */
+export const saveAvatarImage = (dataUrl: string): Promise<string> => uploadClientImage(dataUrl, 'avatar');
 
 export const getImageUrl = async (
   imageId: string,
@@ -1209,7 +1255,12 @@ export const getAccountProfile = async (userId: string): Promise<AccountProfile>
   return { publicProfile, privateProfile };
 };
 
-export const updateUserProfile = async (userId: string, updates: Partial<UserProfile>) => {
+// Only the columns a client may write on profiles (the planned client_privilege_lockdown keeps
+// exactly these client-writable); everything else on the row is server-owned.
+export const updateUserProfile = async (
+  userId: string,
+  updates: Pick<Partial<UserProfile>, 'username' | 'avatar_url' | 'marketing_consent'>
+) => {
   const { error } = await supabase
     .from('profiles')
     .update(updates)
