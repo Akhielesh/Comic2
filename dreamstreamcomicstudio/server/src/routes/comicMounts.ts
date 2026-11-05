@@ -88,7 +88,7 @@ const EARLY_REFUSALS: ReadonlySet<number> = new Set([401, 429]);
 const STATIC_SEGMENTS: ReadonlySet<string> = new Set([
   'api', 'comic', 'moderation', 'comic-cases', 'public', 'library', 's', 'report', 'admin', 'storage', 'migrate-refs', 'projects',
   'stream', 'publication', 'regenerate', 'refs', 'inbox', 'crop', 'translation-quote', 'safety-review', 'urls', 'cancel', 'runs',
-  'step', 'quote', 'assets', 'reject', 'publish', 'manifest', 'appeal', 'og', 'embed', 'tail',
+  'step', 'quote', 'assets', 'reject', 'publish', 'manifest', 'appeal', 'og', 'embed', 'tail', 'steer',
   'models', 'catalog', 'trends', 'status', 'lab',
   // --- history ---
   'history', 'compare', 'book', 'legacy', 'alternatives', 'forget'
