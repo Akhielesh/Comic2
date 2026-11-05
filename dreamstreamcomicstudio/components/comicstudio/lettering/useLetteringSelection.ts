@@ -32,9 +32,14 @@ export function useLetteringSelection(opts: {
   validIds?: readonly string[];
   setStudioSelection?: (sel: StudioSelection | null) => void;
   panelOf?: (lineId: string) => number | undefined;
+  /**
+   * The selection the editor opens with, read once on mount: the balloons a "Show me" (the conflict card, agent-editor
+   * plan §3 A3) asked to see. Ids not on the page are dropped.
+   */
+  initial?: readonly string[];
 }): LetteringSelection {
   const { pageId, validIds, setStudioSelection, panelOf } = opts;
-  const [ids, setIds] = useState<string[]>([]);
+  const [ids, setIds] = useState<string[]>(() => [...new Set(opts.initial ?? [])].filter((id) => !validIds || validIds.includes(id)));
   const validKey = validIds ? validIds.join('|') : '';
 
   // Drop ids whose line was deleted (undo, director edits, another tab).

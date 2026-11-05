@@ -803,7 +803,22 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
   const { plans, placements, measure, H } = useLetterPlans(vDoc, page, aspect);
   const validIds = useMemo(() => page.panels.flatMap((p) => p.lines.map((l) => l.id)), [page.panels]);
   const panelOf = useCallback((id: string) => page.panels.find((p) => p.lines.some((l) => l.id === id))?.n, [page.panels]);
-  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection, panelOf });
+  // "Show me" (the conflict card, agent-editor plan §3 A3) opens this page and sets studio.selection on its balloon. An
+  // editor that opens then starts with that balloon selected instead of clearing it; one already open (desktop: the
+  // chat beside the board) selects it when the request arrives. Our own mirror of the selection reads back the same ids
+  // and changes nothing; ids not on this page are ignored.
+  const shown = studio.selection;
+  const requestedLineIds = shown && shown.pageId === page.id && shown.surface === 'page_editor' ? shown.lineIds : undefined;
+  const selection = useLetteringSelection({ pageId: page.id, validIds, setStudioSelection: studio.setSelection, panelOf, initial: requestedLineIds });
+  const requestedKey = requestedLineIds?.join('|') ?? '';
+  const lastRequestedRef = useRef(requestedKey);
+  useEffect(() => {
+    if (requestedKey === lastRequestedRef.current) return;
+    lastRequestedRef.current = requestedKey;
+    const ids = requestedLineIds?.filter((id) => validIds.includes(id)) ?? [];
+    if (ids.length && ids.join('|') !== selection.ids.join('|')) selection.set(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedKey]);
   const selectedLine = selection.primary;
   const selectionKey = selection.ids.join('|');
   useEffect(() => setInspectorClosed(false), [selectionKey]);

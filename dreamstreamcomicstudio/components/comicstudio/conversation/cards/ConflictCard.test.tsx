@@ -42,8 +42,8 @@ describe('ConflictCard', () => {
     await waitFor(() => expect(studio.act).toHaveBeenCalledWith({ type: 'resolve_conflict', cardId: 'card_cf', itemIds: ['cf_1'], choice: 'theirs' }));
   });
 
-  // The page editor does not pre-select from studio.selection yet (wave note: useLetteringSelection `initial`), so this
-  // pins the card's half: it opens the page and asks for the balloon to be selected.
+  // The card's half: it opens the page and asks for the balloon to be selected. The page editor's half (it starts with
+  // that balloon selected, or selects it when already open) is board/PageEditor.showMe.test.tsx.
   it('Show me opens the page and asks for that balloon to be selected', () => {
     const { studio } = setup(card([item('cf_1')]));
     fireEvent.click(screen.getByRole('button', { name: 'Show me page 2 · panel 2 · line 1' }));
