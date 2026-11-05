@@ -6,12 +6,17 @@
 // position and the composer draft survive; `replaceList` stays for compatibility only.
 // Keyboard-safe: the bottom inset follows --sa-bottom-eff (0 while the keyboard is up), and a
 // pinned conversation stays pinned when the keyboard opens or closes.
+//
+// Live queue (agent-editor plan §3 A1; only while the controller carries `queue`): "Up next" sits under the activity
+// line, and the latest reply keeps its chips while the director works on the next message — text chips go to Up
+// next, action chips wait (NextStepChips).
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown } from 'lucide-react';
 import type { ComicStudioController } from '../useStudio';
 import { conversationEntries } from '../studioReducer';
 import { ActivityLine } from './ActivityLine';
+import { QueuedMessages } from './QueuedMessages';
 import { composeInStudio } from './composerBus';
 import { EmptyConversation } from './EmptyConversation';
 import { AssistantMessage, DirectorMark, UserBubble } from './MessageItem';
@@ -77,6 +82,14 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
 
   const lastEntry = entries[entries.length - 1];
   const lastAssistantId = [...entries].reverse().find((e) => e.msg.role === 'assistant')?.msg.id;
+  // Live queue: while the director works on the creator's next message, the latest committed reply keeps its chips
+  // (only the creator's messages follow it) so a text chip can still be tapped into Up next.
+  const queueMode = Array.isArray(studio.queue);
+  const lastReplyIndex = docEntries.map((e) => e.msg.role).lastIndexOf('assistant');
+  const chipsWhileWorkingId =
+    queueMode && (messageBusy || !!pendingMessage || !!studio.turnLocked) && lastReplyIndex >= 0 && docEntries.slice(lastReplyIndex + 1).every((e) => e.msg.role === 'user')
+      ? docEntries[lastReplyIndex].msg.id
+      : undefined;
   const streamingSomething = Object.keys(drafts).length > 0;
   const showThinking = messageBusy && !streamingSomething && (!lastEntry || lastEntry.msg.role === 'user' || !!pendingMessage);
 
@@ -182,7 +195,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
                         msg={msg}
                         draft={draft}
                         streaming={!!draft && messageBusy}
-                        showSuggestions={msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage}
+                        showSuggestions={(msg.id === lastAssistantId && lastEntry?.msg.id === msg.id && !messageBusy && !pendingMessage) || msg.id === chipsWhileWorkingId}
                         studio={studio}
                       />
                     );
@@ -248,6 +261,7 @@ export const ConversationPane: React.FC<ConversationPaneProps> = ({ studio, repl
           <StudioNoticeToast studio={studio} className="mb-2" />
           <SavedByEditorNote studio={studio} className="mb-1" />
           <ActivityLine studio={studio} className="mb-0.5" onView={onViewActivity} />
+          <QueuedMessages studio={studio} className="mb-1.5" />
           {aboveComposer}
           <StudioComposer studio={studio} apiRef={setComposer} />
         </div>
