@@ -24,21 +24,29 @@ localStorage (`mcpRegistry.ts:1-4`).
 
 ### SSRF guarding (`server/src/ai/tools/mcpClient.ts`)
 
-User-supplied URLs go through three layers:
+User-supplied URLs go through four layers:
 
-1. **String guard** — `isSafeMcpUrl` (`mcpClient.ts:31-53`): https only; hostname must
-   not match localhost/loopback/RFC1918/link-local/ULA patterns or `.local`.
-   Operator-configured servers may pass `allowInternal` (self-hosted sidecars).
-2. **DNS resolution guard** — `assertResolvedHostSafe` (`:74-91`): resolves the host
-   and rejects if **any** resolved IP is private/loopback/link-local/CGNAT/metadata
-   (`isPrivateIp`, `:56-69`) — closes the DNS-rebinding bypass of the string guard
-   (a public name pointing at 169.254.169.254). Re-checked on every `tools/call`,
-   not just at save (`:243`).
-3. **No redirects** — `redirect: 'manual'`; a 3xx is treated as an error since a
-   redirect to an internal host is a classic SSRF escape (`:162-170`).
+1. **String guard** — `isSafeMcpUrl`: https only; hostname must not match
+   localhost/loopback/RFC1918/link-local/ULA patterns or `.local`. Only operator-configured
+   servers may pass `allowInternal` (self-hosted sidecars): `buildMcpTools` grants it when the
+   server carries `trusted: true` **and** its URL is one `envDesignMcpServers()` lists
+   (`mayUseInternalHosts`). The flag alone never counts — it travels on objects a request body
+   can shape (SEC-DS web-surface-1, 2026-11-05).
+2. **DNS resolution guard** — `assertResolvedHostSafe`: resolves the host and rejects if
+   **any** resolved IP is private/loopback/link-local/CGNAT/metadata/ULA (`isPrivateAddress`
+   in `safeNet.ts`, which also decodes IPv4-mapped, NAT64 and 6to4 forms). Re-checked on
+   every `tools/call`, not just at save.
+3. **Pinned connection** — every untrusted request (MCP JSON-RPC and `fetchPublicUrl`)
+   connects through `pinnedFetch` (`safeNet.ts`): node:http(s) with a `lookup` hook that
+   resolves once, refuses any private answer and hands the socket only the addresses it
+   checked, so a DNS-rebinding answer between layer 2 and the connect is refused too
+   (SEC-DS N8). IP-literal hosts are checked up front (no lookup runs for them).
+4. **No redirects** — MCP requests use `redirect: 'manual'` and treat a 3xx as an error;
+   `fetchPublicUrl` follows at most 3 redirects and re-runs layers 1-3 on every hop.
 
-`assertSafePublicUrl` (`:97-101`) packages 1+2 for any other outbound fetch of a
-user/model-supplied URL.
+`assertSafePublicUrl` packages 1+2, and `fetchPublicUrl` 1-4, for any other outbound fetch
+of a user/model-supplied URL (reader mode, link unfurl, deep-research reads — all through
+`fetchTextCapped({ publicOnly: true })` in `http.ts`).
 
 ### Routes — `/api/mcp` (`server/src/routes/mcp.ts`)
 
@@ -72,8 +80,9 @@ synced successor — both sources are merged per request.
    registry (`enabledMcpConfigs`), merge + dedupe by URL, cap at **10 servers**
    (`:461-478`). When the user is already using tools, curated always-on reference
    MCPs (Context7, DeepWiki) and operator self-hosted design MCPs join the set —
-   operator servers are `trusted` (may be http/internal), user servers stay strict
-   (`:465-476`).
+   operator servers are `trusted` (may be http/internal), user servers stay strict;
+   `buildMcpTools` re-checks the operator list itself, so a `trusted` flag on a
+   request-body server is ignored.
 2. `buildMcpTools(servers)` (`mcpClient.ts:301-333`) discovers all servers **in
    parallel** (`Promise.allSettled` — a broken server is skipped, never fails the
    chat), doing the MCP handshake (`initialize` → `notifications/initialized`,

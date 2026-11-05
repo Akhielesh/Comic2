@@ -1,7 +1,8 @@
 # Security Findings — Infrastructure
 
 **Status:** Live snapshot. **Last verified:** 2026-06-16 (Supabase `get_advisors` +
-repo config); Stream Studio findings (ADR 0006 F1–F18) 2026-10-29. **Companions:** `INFRA_MAP.md`,
+repo config); Stream Studio findings (ADR 0006 F1–F18) 2026-10-29; chat web surface and storage
+policies (SEC-DS) 2026-11-05. **Companions:** `INFRA_MAP.md`,
 [`live-security-runbook.md`](./live-security-runbook.md). Re-run `get_advisors` after any DDL change.
 
 > Not exhaustive app-security review — this captures the **infra-level** posture surfaced
@@ -145,6 +146,49 @@ Watch them: Admin → Costs → **Security** (counts only). When something looks
 
 ---
 
+## Chat web surface, MCP, provider budgets and account screens (re-verify of production `4817b38a`, 2026-11-05)
+
+Peer findings from the Atlas session's security re-verify, each reproduced against the code before
+it was changed (refuted items would be listed as such; none were). "Fixed" = on branch
+`sec/ds-hardening`, with a test that fails without the fix; not yet deployed.
+
+| # | Sev | Finding | Status (2026-11-05) |
+|---|---|---|---|
+| web-surface-1 | High | `buildMcpTools` honoured a `trusted: true` flag on any server object, and `routes/chat.ts` passes request-body `mcpServers` through unsanitised, so a request could mark `http://127.0.0.1` or cloud metadata as trusted and skip the SSRF guard. | **Fixed:** `trusted` counts only when the URL is one the operator configured (`envDesignMcpServers`, `mayUseInternalHosts` in `mcpClient.ts`). The route-side sanitising of `mcpServers` is the Atlas session's PR-1. |
+| web-surface-2 / abuse-ops-10 | High | Pre-auth `/api/chat/read-url` and the deep-research reader checked only the first URL (`assertSafePublicUrl` / `isSafeMcpUrl`) and then fetched with redirects followed, so a public page could 302 the server into `127.0.0.1` / `169.254.169.254`. | **Fixed:** both read through `fetchTextCapped({ publicOnly: true })` → `fetchPublicUrl` (every hop re-checked). A 302 to an internal address now fails after exactly one request. |
+| abuse-ops-1 | Med–High | Anonymous unfurl / read-url could freeze or exhaust the container: (a) timeouts covered only the headers, (b) bodies were read whole, (c) whole-document regexes backtracked (~7 s on 300 KB), (d) the unfurl cache was unbounded, (e) anonymous callers could spend the shared Jina quota. | **Fixed:** one deadline through the body and a streamed byte cap (`fetchTextCapped`); read-url downloads ≤ 1 MB and parses the first 256 KB; linear `indexOf` scanners (`htmlScan.ts`, timing test on 1 MB adversarial input); unfurl cache LRU-bounded at 500 with clipped owned copies and expiry swept on access (no timer); Jina only for signed-in callers. Page reads are metered per host (`page:<host>`, ≤ 500 hosts tracked) so a URL naming a provider cannot spend that provider's budget. Route-level limiters for `/unfurl` and `/read-url` are the Atlas session's PR-1. |
+| abuse-ops-6 | Med | Foursquare and YouTube searches called `fetch` directly and bypassed `assertProviderBudget`; YouTube would also have shared the Custom Search bucket. | **Fixed:** both go through `fetchJson`; budgets Foursquare 20/min · 300/day, YouTube 10/min · 80/day (`DATA_CONNECTORS.md`). **Open:** a per-anonymous-caller share of each budget — `providerUsage` has no caller identity beyond `anon`; needs the request IP (or a signed visitor id) threaded into the account context. |
+| N8 | Low | DNS rebinding between the resolved-IP check and the connect (`fetch` looked the name up again). | **Fixed** for every MCP request and `fetchPublicUrl`: `pinnedFetch` (`safeNet.ts`) connects with a lookup hook that refuses private / loopback / link-local / ULA / metadata answers (IPv4-mapped, NAT64, 6to4 decoded) and passes only the checked addresses to the socket. **Open:** `convert_image` (`convertImage.ts`) still checks then calls `fetch` (redirects already refused) — switch it to `pinnedFetch` with its tests' fakes moved to `__setNetForTests`. |
+| authz-data-5 | Low–Med | Settings derived admin / moderator from `user.email === 'admin@test.com'` whenever `/api/admin/me` failed. | **Fixed:** `useAdminAccess` takes roles only from the server flag; a failed check means no access. **Open (listed, not changed):** other email-literal derivations — `App.tsx:557` (gates only the client's call to `/api/system/diagnostics`, which the server already gates with `requireAdmin`), `components/UniversalAssistant.tsx:165` (ignored: the server rebuilds the assistant's account summary), `server/src/routes/assistant.ts:76-89` (the assistant's prompt context calls that address an admin), `server/src/routes/admin.ts:113` (`ADMIN_EMAILS` defaults to `admin@test.com` when counting admins before a revoke). |
+| storage-avatar | Functional | Browser uploads (`saveImage`) wrote to `u/<uid>/tmp/…`, but the `comic-assets` policies ("Authenticated Upload", "Authenticated Manage") require the first folder to be the uid, so every browser upload — avatars included — was refused. Verified with read-only catalog queries (`pg_policies`, 2026-11-05). | **Fixed in code (no SQL):** browser uploads go to `<uid>/<file>`, the classic lane every reader already resolves; only png / jpeg / webp / gif / avif; avatars ≤ 5 MB and not registered with image-asset retention (`profiles.avatar_url` is not scanned by `collect_active_image_paths`, so a registered avatar would be purged after 30 + 15 days). |
+
+**Deferred (design / owner):**
+- authz-data-7 — storage paths redesign (signed URLs or opaque copies for classic readers), Program 3.
+- Owner storage steps: MIME and size limits on `comic-assets` (currently none; `public = true`); deleting
+  the typo bucket `comic-aasets` and its 4 public-role policies (destructive — owner only, after
+  checking it is empty or backed up).
+- `client_privilege_lockdown_2026_11` (Atlas, owner go pending): `profiles` column-locked to `username`,
+  `avatar_url`, `marketing_consent`; `usage_limits` read-only for clients. DreamStream's client writes
+  today: `services/db.ts` `updateUserProfile` (username + avatar_url, from `AccountSettings.tsx`; its type
+  now admits only the three allowed columns) and `syncMarketingConsentLegacy` (marketing_consent);
+  `usage_limits` is only read (`services/db.ts` `getUsageLimits`). Nothing to move server-side first.
+
+### Rule for every new migration (N4 — default ACL)
+
+Supabase grants `anon` and `authenticated` full table privileges on new tables in `public` by default,
+so a table without RLS is readable and writable by any client the moment it is created. Every new
+`server/sql/*.sql` file must, in the same file:
+
+1. `alter table … enable row level security;` for every table it creates (no exceptions — server-only
+   tables get RLS with no policies);
+2. `revoke all on … from anon, authenticated;` and then `grant` back only what the client really needs
+   (most tables need nothing: the server uses the service role);
+3. pin `set search_path = public` (or `''`) on every function, `revoke execute … from public, anon,
+   authenticated` on SECURITY DEFINER functions the client does not call, and grant `service_role`;
+4. after applying, re-run `get_advisors(security)` and record anything new here.
+
+---
+
 ## Change log
 
 | Date | Change |
@@ -154,3 +198,4 @@ Watch them: Admin → Costs → **Security** (counts only). When something looks
 | 2026-10-29 | Stream Studio / baby monitor findings F1–F18 (ADR 0006) with their Phase 0 status; leaked-password note updated (backend Pwned Passwords check); `SECURITY_HOOK_SECRET` added to the HMAC secrets. Runbook: `live-security-runbook.md`. |
 | 2026-11-04 | Chat connected-account privacy C1–C1c (Google Limited Use): connector turns deny OpenRouter data collection and never use free models; free turns get no connector content. |
 | 2026-11-04 | C1 review: reply provenance store (C1a partly fixed), memory marked and kept off free turns (C1d), $0 catalog models count as free, the operator's Nango MCP is a connector, honest capacity and refusal copy, connector swarm holds priced. C1 status now "Partially fixed". |
+| 2026-11-05 | SEC-DS: web-surface-1/2, abuse-ops-1/6/10, N8, authz-data-5 fixed on `sec/ds-hardening` (not yet deployed); browser uploads moved to the policy-allowed `<uid>/<file>` lane; N4 migration rule added; deferred storage and lockdown items listed. |

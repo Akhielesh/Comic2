@@ -1255,7 +1255,12 @@ export const getAccountProfile = async (userId: string): Promise<AccountProfile>
   return { publicProfile, privateProfile };
 };
 
-export const updateUserProfile = async (userId: string, updates: Partial<UserProfile>) => {
+// Only the columns a client may write on profiles (the planned client_privilege_lockdown keeps
+// exactly these client-writable); everything else on the row is server-owned.
+export const updateUserProfile = async (
+  userId: string,
+  updates: Pick<Partial<UserProfile>, 'username' | 'avatar_url' | 'marketing_consent'>
+) => {
   const { error } = await supabase
     .from('profiles')
     .update(updates)
