@@ -12,7 +12,7 @@ import { SafetyVeil } from '../safety/SafetyVeil';
 import { isWithheld, type ReaderItem } from '../reader/readerModel';
 import { BAND_REACH } from './flipGeometry';
 import { letterbox, type SlotContent, type SlotSide } from './readerLayout';
-import { pickVariant, useCachedImage, type CachePriority } from './pageImageCache';
+import { pickVariant, standInVariant, useCachedImage, type CachePriority } from './pageImageCache';
 
 export const CURL_GRADIENT =
   'linear-gradient(to right, rgba(0,0,0,0.20) 0%, rgba(0,0,0,0.10) 3%, rgba(255,255,255,0.16) 7%, rgba(0,0,0,0.06) 14%, rgba(0,0,0,0) 32%)';
@@ -51,7 +51,25 @@ export const slotImageSource = (item: ReaderItem, cssWidth: number, img: SlotIma
   return variantUrl ? { path: pick.path, url: variantUrl } : { path: item.asset.path, url: img.urlFor(item.asset) };
 };
 
-/** The page image for an item, through the shared cache (variant-aware, decoded before it shows). */
+/**
+ * A page's low-resolution stand-in (reader.md §8.1, V2 N6): its ~480 px variant, signed for this viewer —
+ * never for a withheld item (its art is never downloaded, at any size), and never the source itself.
+ */
+export const slotStandIn = (item: ReaderItem, img: Pick<SlotImage, 'urlFor'>, sourcePath?: string): { path: string; url: string } | undefined => {
+  if (isWithheld(item)) return undefined;
+  const v = standInVariant(item.asset);
+  if (!v || v.path === sourcePath) return undefined;
+  const url = img.urlFor(v.path);
+  return url ? { path: v.path, url } : undefined;
+};
+
+/**
+ * The page image for an item, through the shared cache (variant-aware, decoded before it shows). A slot
+ * shows the first decoded of (reader.md §8.1): the source it wants → the original, if already cached →
+ * the fit-width variant, if already cached (guided zoom asks for the original; never blank meanwhile) →
+ * the stand-in, which is fetched only while none of those is ready. `standIn` says the stand-in is what
+ * shows (the page cross-fades when the real image lands).
+ */
 export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img: SlotImage, prio: CachePriority) => {
   const withheld = !!item && isWithheld(item);
   const source = item && !withheld ? slotImageSource(item, cssWidth, img) : undefined;
@@ -60,7 +78,48 @@ export const useSlotImage = (item: ReaderItem | undefined, cssWidth: number, img
   const cached = useCachedImage(path, url, prio);
   // While a sharper variant loads, keep showing the one already decoded.
   const fallback = useCachedImage(item && !withheld && path !== item.asset.path ? item.asset.path : undefined, undefined, prio);
-  return { src: cached.src || fallback.src, state: cached.state, palette: cached.palette ?? fallback.palette, expired: cached.expired, retrying: cached.retrying, withheld };
+  // Guided zoom wants the original: the fit-width variant it showed a moment ago stays up meanwhile.
+  const fit = item && !withheld && img.original ? slotImageSource(item, cssWidth, { ...img, original: false }) : undefined;
+  const fitImage = useCachedImage(fit && fit.path !== path && fit.path !== item?.asset.path ? fit.path : undefined, undefined, prio);
+  const sharp = cached.src || fallback.src || fitImage.src;
+  const standIn = item && !withheld && !sharp ? slotStandIn(item, img, path) : undefined;
+  const low = useCachedImage(standIn?.path, standIn?.url, prio);
+  const showStandIn = !sharp && !!low.src;
+  return {
+    src: sharp || low.src,
+    standIn: showStandIn,
+    state: cached.state,
+    palette: cached.palette ?? fallback.palette ?? fitImage.palette ?? low.palette,
+    expired: cached.expired,
+    retrying: cached.retrying,
+    withheld
+  };
+};
+
+/**
+ * The stand-in → page swap (reader.md §8.1): when the real image replaces a stand-in, the stand-in stays
+ * underneath for `ms` while the page fades in over it (opacity only). Returns the stand-in URL to lay under
+ * the page during the swap (undefined otherwise). Reduced motion: an instant swap.
+ */
+export const useStandInSwap = (src: string | undefined, standIn: boolean, reduced: boolean, ms: number): string | undefined => {
+  const last = React.useRef<{ src?: string; standIn: boolean }>({ standIn: false });
+  const [under, setUnder] = React.useState<string | undefined>(undefined);
+  // A layout effect: the swap is caught before the frame paints, so the page never flashes in un-faded.
+  React.useLayoutEffect(() => {
+    const prev = last.current;
+    last.current = { src, standIn };
+    if (reduced || !prev.standIn || standIn || !src || !prev.src || prev.src === src) return;
+    setUnder(prev.src);
+    const t = setTimeout(() => setUnder(undefined), ms + 40);
+    return () => clearTimeout(t);
+  }, [src, standIn, reduced, ms]);
+  return under;
+};
+
+/** Fade the page's own image inside `box` in over `ms` (WAAPI: opacity only, nothing per frame from React). */
+const fadeInImage = (box: HTMLElement | null, ms: number) => {
+  const el = Array.from(box?.querySelectorAll('img') ?? []).find((i) => !i.closest('[data-testid="standin-under"]'));
+  if (el && typeof el.animate === 'function') el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: ms, easing: 'linear' });
 };
 
 /** What a page that failed to load says — only what is really happening next. */
@@ -87,21 +146,42 @@ export interface SlotContentProps {
   onExpired?: () => void;
   dedication?: string;
   endCard?: React.ReactNode;
+  /** Reduced motion: the stand-in → page swap is instant. */
+  reduced?: boolean;
+  /** The stand-in → page cross-fade (ms; the reader's --ds-reader-standin-swap). */
+  swapMs?: number;
 }
 
-const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, item, width, height, contentAspect, img, prio, paper, letteringAriaHidden, visibleLineIds, onImageError, onExpired }) => {
+const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, item, width, height, contentAspect, img, prio, paper, letteringAriaHidden, visibleLineIds, onImageError, onExpired, reduced, swapMs = 120 }) => {
   const box = letterbox(width, height, contentAspect);
   const image = useSlotImage(item, box.w, img, prio);
   React.useEffect(() => {
     if (image.expired) onExpired?.();
   }, [image.expired, onExpired]);
+  // Stand-in → page: the stand-in lies under the page while the real image fades in over it.
+  const under = useStandInSwap(image.src, image.standIn, !!reduced, swapMs);
+  const artRef = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    if (under) fadeInImage(artRef.current, swapMs);
+  }, [under, swapMs]);
   const veil = (child: React.ReactNode) => (
     <SafetyVeil asset={item.asset} rating={PLATFORM_CEILING}>
       {child}
     </SafetyVeil>
   );
   return (
-    <div className="absolute overflow-hidden" style={{ left: box.x, top: box.y, width: box.w, height: box.h }}>
+    <div
+      ref={artRef}
+      className="absolute overflow-hidden"
+      style={{ left: box.x, top: box.y, width: box.w, height: box.h }}
+      data-standin={image.standIn ? 'true' : undefined}
+    >
+      {under && (
+        // The stand-in the page is fading in over (the page's own background is see-through meanwhile).
+        <div aria-hidden className="absolute inset-0 bg-white" data-testid="standin-under">
+          <img src={under} alt="" draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" />
+        </div>
+      )}
       {image.withheld
         ? veil(null)
         : item.page
@@ -116,11 +196,11 @@ const PageContent: React.FC<SlotContentProps & { item: ReaderItem }> = ({ doc, i
                 visibleLineIds={visibleLineIds}
                 paper={paper}
                 onImageError={onImageError}
-                style={{ width: '100%', height: '100%' }}
+                style={under ? { width: '100%', height: '100%', background: 'transparent' } : { width: '100%', height: '100%' }}
               />
             )
           : veil(
-              <div className="relative h-full w-full bg-white">
+              <div className={under ? 'relative h-full w-full' : 'relative h-full w-full bg-white'}>
                 {image.src ? (
                   <img src={image.src} alt={`Cover of ${doc.brief.title}`} draggable={false} className="absolute inset-0 h-full w-full select-none object-contain" onError={onImageError} />
                 ) : (

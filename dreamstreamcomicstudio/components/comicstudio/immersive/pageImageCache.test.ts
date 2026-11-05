@@ -2,7 +2,16 @@
 // priority order, LRU with retained paths, expired links (400/403), CORS fallback, abort.
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { PageImageCache, pickVariant, useCachedImage, type CacheDeps } from './pageImageCache';
+import {
+  byteBudgetFor,
+  CACHE_BYTE_BUDGET,
+  holdUntilDecoded,
+  PageImageCache,
+  pickVariant,
+  standInVariant,
+  useCachedImage,
+  type CacheDeps
+} from './pageImageCache';
 import { loadErrorText } from './ReaderSlot';
 
 const flush = async () => {
@@ -264,5 +273,166 @@ describe('a page that failed to load says only what really happens next', () => 
     expect(loadErrorText(true, false, false)).not.toMatch(/fresh|trying again/);
     expect(loadErrorText(false, true, true)).toMatch(/trying again/);
     expect(loadErrorText(false, true, false)).toMatch(/reopen the reader/);
+  });
+});
+
+// ── RD-5 engine (reader.md §8, V1 C7/C8): blob-byte budget, isDecoded, stand-ins, the turn gate ─────────
+const MB = 1024 * 1024;
+/** Deps whose fetched files are `mb` megabytes each (a response whose blob reports that size). */
+const sizedDeps = (mb: (url: string) => number) =>
+  deps({ fetch: vi.fn(async (url: string) => ({ ok: true, status: 200, blob: async () => ({ size: Math.round(mb(url) * MB), type: 'image/webp' }) }) as unknown as Response) });
+
+describe('PageImageCache · byte budget (blob bytes, not a count)', () => {
+  it('evicts least-recently-used entries by blob bytes at 48 MB, revoking their URLs; the count alone would keep them', async () => {
+    const d = sizedDeps(() => 10);
+    const c = new PageImageCache(d, 48, 3, undefined, CACHE_BYTE_BUDGET.phone);
+    for (let i = 0; i < 6; i += 1) await c.ensure(`p${i}`, `U${i}`, 'now');
+    // 6 × 10 MB > 48 MB: the two oldest go, although 6 entries are far under the 48-entry cap.
+    expect(c.get('p0')).toBeUndefined();
+    expect(c.get('p1')).toBeUndefined();
+    expect(c.get('p5')?.state).toBe('ready');
+    expect(c.totalBytes()).toBeLessThanOrEqual(48 * MB);
+    expect(c.get('p5')?.bytes).toBe(10 * MB);
+    expect(d.revoked.length).toBe(2);
+  });
+
+  it('never evicts an entry a mounted page is showing (in use) or the reader retains, even over budget', async () => {
+    const d = sizedDeps(() => 30);
+    const c = new PageImageCache(d, 48, 3, undefined, CACHE_BYTE_BUDGET.phone);
+    const release = c.acquire('shown');
+    c.retain(['kept']);
+    await c.ensure('shown', 'S', 'now');
+    await c.ensure('kept', 'K', 'now');
+    await c.ensure('other', 'O', 'now');
+    expect(c.get('shown')?.state).toBe('ready');
+    expect(c.get('kept')?.state).toBe('ready');
+    expect(c.get('other')?.state).toBe('ready'); // the newest stays too: nothing else can go, so it is over budget for now
+    await c.ensure('later', 'L', 'now');
+    expect(c.get('other')).toBeUndefined();
+    release();
+    c.retain([]);
+    await c.ensure('last', 'Z', 'now');
+    expect(c.totalBytes()).toBeLessThanOrEqual(48 * MB);
+  });
+
+  it('a lower budget evicts at once, least recently used first', async () => {
+    const d = sizedDeps((u) => (u.startsWith('S') ? 0.03 : 20));
+    const c = new PageImageCache(d);
+    expect(c.byteBudget()).toBe(CACHE_BYTE_BUDGET.desktop);
+    for (let i = 0; i < 4; i += 1) {
+      await c.ensure(`p${i}`, `U${i}`, 'now');
+      await c.ensure(`s${i}`, `S${i}`, 'now');
+    }
+    expect(c.totalBytes()).toBeGreaterThan(48 * MB);
+    c.setByteBudget(CACHE_BYTE_BUDGET.lowMemory);
+    expect(c.totalBytes()).toBeLessThanOrEqual(24 * MB);
+    for (let i = 0; i < 3; i += 1) expect(c.get(`p${i}`), `page ${i}`).toBeUndefined();
+    expect(c.get('p3')?.state).toBe('ready');
+    expect(c.get('s3')?.state).toBe('ready');
+  });
+
+  it('the budget follows the device: 24 MB at ≤ 2 GB, 48 MB on phones or ≤ 4 GB, else 96 MB', () => {
+    expect(byteBudgetFor({ deviceMemory: 2 })).toBe(24 * MB);
+    expect(byteBudgetFor({ coarse: true })).toBe(48 * MB);
+    expect(byteBudgetFor({ deviceMemory: 4 })).toBe(48 * MB);
+    expect(byteBudgetFor({ coarse: true, deviceMemory: 1 })).toBe(24 * MB);
+    expect(byteBudgetFor({ deviceMemory: 8 })).toBe(96 * MB);
+    expect(byteBudgetFor({})).toBe(96 * MB);
+  });
+});
+
+describe('PageImageCache · isDecoded', () => {
+  it('is true only once a path is decoded and ready (synchronous)', async () => {
+    let open!: () => void;
+    const d = deps({ fetch: vi.fn(() => new Promise<Response>((r) => (open = () => r(new Response(new Blob(['x']), { status: 200 }))))) });
+    const c = new PageImageCache(d);
+    expect(c.isDecoded('p')).toBe(false);
+    const p = c.ensure('p', 'U', 'now');
+    expect(c.isDecoded('p')).toBe(false);
+    open();
+    await p;
+    expect(c.isDecoded('p')).toBe(true);
+    expect(c.isDecoded(undefined)).toBe(false);
+  });
+});
+
+describe('stand-ins', () => {
+  const asset = { path: 'u/p.png', source: 'generated' as const, at: 0, w: 1696, h: 2528, variants: [{ path: 'u/p_w480.webp', w: 480, h: 715 }, { path: 'u/p_w1080.webp', w: 1080, h: 1610 }] };
+  it('a page’s stand-in is its ~480 px variant; none without one (old pages) or when the image is no wider', () => {
+    expect(standInVariant(asset)).toEqual({ path: 'u/p_w480.webp', w: 480 });
+    expect(standInVariant({ ...asset, variants: [{ path: 'u/p_w1080.webp', w: 1080, h: 1610 }] })).toBeUndefined();
+    expect(standInVariant({ path: 'u/old.png', source: 'generated', at: 0 })).toBeUndefined();
+    expect(standInVariant({ ...asset, w: 480 })).toBeUndefined();
+  });
+});
+
+describe('holdUntilDecoded (the turn gate)', () => {
+  const fakeCache = () => {
+    const ready = new Set<string>();
+    const subs = new Set<() => void>();
+    return {
+      ready,
+      isDecoded: (p: string | undefined) => !!p && ready.has(p),
+      subscribe: (fn: () => void) => {
+        subs.add(fn);
+        return () => subs.delete(fn);
+      },
+      decode(p: string) {
+        ready.add(p);
+        for (const fn of [...subs]) fn();
+      },
+      subs
+    };
+  };
+
+  it('goes at once when every page is decoded (by its source or its original)', () => {
+    const c = fakeCache();
+    c.ready.add('orig-a');
+    const go = vi.fn();
+    holdUntilDecoded(c, [['var-a', 'orig-a']], 300, go);
+    expect(go).toHaveBeenCalledWith(false);
+  });
+
+  it('holds an undecoded turn until its pages decode, never longer than the limit, and goes once', () => {
+    vi.useFakeTimers();
+    try {
+      const c = fakeCache();
+      const go = vi.fn();
+      holdUntilDecoded(c, [['a'], ['b']], 300, go);
+      expect(go).not.toHaveBeenCalled();
+      c.decode('a');
+      expect(go).not.toHaveBeenCalled();
+      c.decode('b');
+      expect(go).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1000);
+      expect(go).toHaveBeenCalledTimes(1);
+      expect(c.subs.size).toBe(0);
+
+      const late = vi.fn();
+      holdUntilDecoded(c, [['never']], 300, late);
+      vi.advanceTimersByTime(299);
+      expect(late).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(late).toHaveBeenCalledWith(true);
+      expect(c.subs.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a replaced turn cancels its hold (no late start)', () => {
+    vi.useFakeTimers();
+    try {
+      const c = fakeCache();
+      const go = vi.fn();
+      const cancel = holdUntilDecoded(c, [['x']], 300, go);
+      cancel();
+      c.decode('x');
+      vi.advanceTimersByTime(500);
+      expect(go).not.toHaveBeenCalled();
+      expect(c.subs.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

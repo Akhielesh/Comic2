@@ -1,7 +1,8 @@
 // Reader HUD (reader.md §2.2): dark glass chips over the room, so contrast never depends on the page's
 // ambient colour. Top: close, title and position, then language, Guided View, layout, settings and full
 // screen. Bottom: the page scrubber (or panel controls in Guided View). Auto-hides; padding follows
-// the safe areas; every control is ≥ 44 px.
+// the safe areas; every control is ≥ 44 px. Focus rings over the room use the room's own focus colour
+// (--ds-reader-hud-focus): the app accent is ink in the Atlas light theme, invisible on the dark room.
 
 import React from 'react';
 import { ChevronLeft, ChevronRight, Columns2, Download, Maximize2, Minimize2, Pause, Play, ScanEye, Settings2, Share2, Square, X } from 'lucide-react';
@@ -20,7 +21,7 @@ export const HudButton: React.FC<
     aria-pressed={active === undefined ? undefined : active}
     className={[
       'press inline-flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium outline-none transition-colors',
-      'focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)] disabled:opacity-40',
+      'focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)] disabled:opacity-40',
       active ? 'bg-white/25 text-white' : 'text-white/90 hover:bg-white/15',
       className || ''
     ].join(' ')}
@@ -66,6 +67,12 @@ export interface ReaderHudProps {
  */
 export const HUD_HIDDEN_ROW = 'pointer-events-none [&_*]:!pointer-events-none';
 
+/**
+ * The HUD rows show and hide on the reader motion tokens (reader.md §5.1): the skinned --ds-motion-medium and
+ * --ds-ease, opacity and transform only; reduced motion keeps the opacity fade alone.
+ */
+export const HUD_ROW_MOTION = 'transition-[opacity,transform] duration-[var(--ds-reader-hud-motion)] ease-[var(--ds-ease)] motion-reduce:transition-opacity';
+
 export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
   const hidden = !p.visible;
   const bar = `${hidden ? 'pointer-events-none' : 'pointer-events-auto'} flex items-center gap-1 rounded-full p-1 shadow-[0_8px_30px_rgba(0,0,0,0.35)]`;
@@ -79,7 +86,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
       <div
         className={[
           'absolute inset-x-0 top-0 flex items-start justify-between gap-2 px-[max(12px,var(--sa-left))] pr-[max(12px,var(--sa-right))] pt-[max(10px,var(--sa-top))]',
-          'transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0.7,0.2,1)] motion-reduce:transition-opacity',
+          HUD_ROW_MOTION,
           hidden ? `${HUD_HIDDEN_ROW} -translate-y-1.5 opacity-0` : 'opacity-100'
         ].join(' ')}
       >
@@ -141,7 +148,7 @@ export const ReaderHud: React.FC<ReaderHudProps> = (p) => {
       <div
         className={[
           'absolute inset-x-0 bottom-0 flex justify-center px-[max(12px,var(--sa-left))] pr-[max(12px,var(--sa-right))] pb-[max(10px,var(--sa-bottom))]',
-          'transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.2,0.7,0.2,1)] motion-reduce:transition-opacity',
+          HUD_ROW_MOTION,
           hidden ? `${HUD_HIDDEN_ROW} translate-y-1.5 opacity-0` : 'opacity-100'
         ].join(' ')}
       >

@@ -15,6 +15,7 @@ import { i18nOf, localizeDoc } from '../../../shared/comic/i18n';
 import { sameLanguage } from '../../../shared/comic/languages';
 import { canServeToOwner } from '../../../shared/comic/safety';
 import { COMIC_STUDIO_SKIN } from '../../../services/productHost';
+import { Z } from '../../chat/studioDesign';
 import { ExportError } from '../export/errors';
 import type { PdfExportResult } from '../export/pdfExport';
 import type { StudioController } from '../types';
@@ -30,12 +31,13 @@ import { BookStage } from './BookStage';
 import { CoverIntro } from './CoverIntro';
 import { EndCard } from './EndCard';
 import { guidedStops, stopAtPoint, type GuidedStop } from './guidedModel';
-import { connectionHints, pageImageCache, useCacheVersion } from './pageImageCache';
+import { byteBudgetFor, connectionHints, deviceMemoryGb, pageImageCache, useCacheVersion, type CachePriority } from './pageImageCache';
 import { panelTranscript, pageTranscript } from './pageTranscript';
 import { closePaperSound, primePaperSound } from './paperSound';
 import { keyCommand, type ReaderCommand } from './readerInput';
 import { bookGeometry, bookViews, decideLayout, firstItemOfView, letterbox, viewIndexOfItem, type BookView, type LayoutPref, type ReaderLayout } from './readerLayout';
-import { slotImageSource } from './ReaderSlot';
+import { slotImageSource, slotStandIn } from './ReaderSlot';
+import './readerDesigns.css';
 import { initialReaderState, readerReducer, escapeTarget, type MachineCtx, type ReaderEvent, type ReaderState } from './readerMachine';
 import {
   effectiveReader,
@@ -95,15 +97,57 @@ export interface ImmersiveReaderProps {
   onPageChange?(n: number): void;
 }
 
-const READER_TOKENS: React.CSSProperties = {
-  // Reader-local ink on paper (identical in both themes, like the room itself).
-  ['--ds-reader-ink' as string]: '#3b3026',
-  ['--ds-reader-ink-soft' as string]: '#5b4a3a',
-  ['--ds-reader-ink-faint' as string]: '#8a7865',
-  ['--ds-reader-wash' as string]: 'rgba(59,48,38,0.10)',
-  ['--ds-reader-wash-strong' as string]: 'rgba(59,48,38,0.16)',
-  ['--ds-reader-edge' as string]: '#ebe4d6',
-  ['--ds-reader-edge-line' as string]: '#cdc3b0'
+// Reader tokens (ink on paper, the room's accent and focus, motion) live in readerDesigns.css on
+// `[data-reader-root]` (reader.md §5.1): one token set, read by CSS and, once per mount, by the engine.
+
+/** One preload the reader asks for: which file, at what priority, and why (reader.md §8.3). */
+export interface PreloadAsk {
+  item: number;
+  kind: 'target' | 'standIn';
+  prio: CachePriority;
+}
+
+/**
+ * Direction-aware preloading (reader.md §8.3): the view ahead (+1, in the direction you are reading) gets its
+ * pages AND their stand-ins at `next`; the view behind (−1) its pages at `next`; +2…+3 their pages at `idle`;
+ * +4…+5 only their stand-ins at `idle`. Save-Data or a 2G link: stand-ins for +1…+2 only, nothing else.
+ * Spreads count both pages of a view. The mounted views (current ±1) also ask for themselves; asking twice
+ * is free (the cache is keyed by path), and the higher priority wins. `standIns: false` (the scrolling
+ * column, which loads its own pages ahead and shows no stand-ins) asks for pages only.
+ */
+export const preloadPlan = (views: BookView[], view: number, dir: 1 | -1, polite: boolean, opts: { standIns?: boolean } = {}): PreloadAsk[] => {
+  const out: PreloadAsk[] = [];
+  const standIns = opts.standIns !== false;
+  const add = (offset: number, kind: PreloadAsk['kind'], prio: CachePriority) => {
+    if (kind === 'standIn' && !standIns) return;
+    for (const item of views[view + offset * dir]?.items ?? []) out.push({ item, kind, prio });
+  };
+  if (polite) {
+    add(1, 'standIn', 'next');
+    add(2, 'standIn', 'idle');
+    return out;
+  }
+  add(1, 'target', 'next');
+  add(1, 'standIn', 'next');
+  add(-1, 'target', 'next');
+  add(2, 'target', 'idle');
+  add(3, 'target', 'idle');
+  add(4, 'standIn', 'idle');
+  add(5, 'standIn', 'idle');
+  return out;
+};
+
+/**
+ * The paths the cache must keep (never evicted): the current view ±2 (±1 on coarse pointers, reader.md V1
+ * C8), each page's shown source and its stand-in — the original only when it IS the shown source.
+ */
+export const retainedPaths = (views: BookView[], view: number, coarse: boolean, sourceOf: (i: number) => { path: string } | undefined, standInOf: (i: number) => { path: string } | undefined): string[] => {
+  const reach = coarse ? 1 : 2;
+  return views
+    .slice(Math.max(0, view - reach), view + reach + 1)
+    .flatMap((v) => v.items)
+    .flatMap((i) => [sourceOf(i)?.path, standInOf(i)?.path])
+    .filter((p): p is string => !!p);
 };
 
 const HUD_IDLE_MS = 2500;
@@ -720,22 +764,32 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
     },
     [items, state.layout, pageBox, aspectOf, img]
   );
-  // Polite preloading: a few pages ahead when the connection allows it (never a withheld page).
+  const standInOf = useCallback(
+    (i: number) => {
+      const it = items[i];
+      return it ? slotStandIn(it, img, sourceOf(i)?.path) : undefined;
+    },
+    [items, img, sourceOf]
+  );
+  // The cache's byte budget follows the device (96 MB desktop, 48 MB phones, 24 MB on 2 GB devices).
+  useEffect(() => pageImageCache.setByteBudget(byteBudgetFor({ coarse: ff.coarse, deviceMemory: deviceMemoryGb() })), [ff.coarse]);
+  // Reading direction of travel: preloads lean the way you are turning (back through the book → behind you).
+  const travel = useRef<{ view: number; dir: 1 | -1 }>({ view, dir: 1 });
+  if (travel.current.view !== view) travel.current = { view, dir: view > travel.current.view ? 1 : -1 };
+  const dir = travel.current.dir;
+  // Direction-aware preloading (never a withheld page: it has no source and no stand-in).
   useEffect(() => {
-    const keep = views
-      .slice(Math.max(0, view - 2), view + 3)
-      .flatMap((v) => v.items)
-      .flatMap((i) => [items[i]?.asset.path, sourceOf(i)?.path])
-      .filter(Boolean) as string[];
-    pageImageCache.retain(keep);
-    if (net.saveData || net.slow || ff.saveData) return;
+    pageImageCache.retain(retainedPaths(views, view, ff.coarse, sourceOf, standInOf));
+    const polite = net.saveData || net.slow || ff.saveData;
     const controller = new AbortController();
-    for (const i of views.slice(view + 2, view + 6).flatMap((v) => v.items)) {
-      const src = sourceOf(i);
-      if (src?.url) void pageImageCache.ensure(src.path, src.url, 'idle', controller.signal);
+    for (const ask of preloadPlan(views, view, dir, polite, { standIns: state.layout !== 'scroll' })) {
+      const src = ask.kind === 'target' ? sourceOf(ask.item) : standInOf(ask.item);
+      // A stand-in is only worth its bytes while the page itself is not decoded.
+      if (ask.kind === 'standIn' && pageImageCache.isDecoded(sourceOf(ask.item)?.path)) continue;
+      if (src?.url) void pageImageCache.ensure(src.path, src.url, ask.prio, ask.prio === 'idle' ? controller.signal : undefined);
     }
     return () => controller.abort();
-  }, [view, views, items, sourceOf, net.saveData, net.slow, ff.saveData]);
+  }, [view, views, dir, sourceOf, standInOf, net.saveData, net.slow, ff.saveData, ff.coarse, state.layout]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   const title = localized.cover.title || localized.brief.title || 'Untitled comic';
@@ -776,8 +830,10 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       // Portaled to <body>, so the reader carries the Atlas skin attribute itself: its chrome (HUD,
       // sheets, end card) follows the skin while the room stays a content surface (--ds-reader-*).
       data-ds-skin={COMIC_STUDIO_SKIN}
-      className={cx('gesture-root fixed inset-0 z-[80] overflow-hidden text-white outline-none', fullscreenCursorHidden && 'cursor-none')}
-      style={{ ...READER_TOKENS, background: 'var(--ds-reader-room)' }}
+      // The reader's own token set (readerDesigns.css): motion, ink on paper, and the room's accent / focus.
+      data-reader-root=""
+      className={cx('gesture-root fixed inset-0 overflow-hidden text-white outline-none', Z.reader, fullscreenCursorHidden && 'cursor-none')}
+      style={{ background: 'var(--ds-reader-room)' }}
       onKeyDown={onKeyDown}
       onPointerMove={(e) => {
         if (e.pointerType === 'mouse') pokeHud(true);
@@ -789,7 +845,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           key={l.id}
           aria-hidden
           className="pointer-events-none absolute inset-0"
-          style={{ background: l.bg, opacity: i === bgLayers.length - 1 ? 1 : 0, transition: reduced ? undefined : 'opacity 900ms linear' }}
+          style={{ background: l.bg, opacity: i === bgLayers.length - 1 ? 1 : 0, transition: reduced ? undefined : 'opacity var(--ds-reader-ambient-fade, 900ms) linear' }}
         />
       ))}
       <div
@@ -802,7 +858,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
             <div className="max-w-sm space-y-3">
               <p className="text-[15px] font-semibold">Nothing to read yet</p>
               <p className="text-[13px] text-white/70">Pages appear here as soon as they are drawn.</p>
-              <button type="button" onClick={() => immersive.exit()} className="press min-h-11 rounded-full bg-white/15 px-5 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]">
+              <button type="button" onClick={() => immersive.exit()} className="press min-h-11 rounded-full bg-white/15 px-5 text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]">
                 Close
               </button>
             </div>
@@ -888,10 +944,19 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
         )}
       </div>
 
-      {/* Hairline progress while the HUD is hidden. */}
+      {/* Hairline progress while the HUD is hidden: a full-width bar scaled from the reading edge (transform
+          only — never an animated width), in the room's accent (visible on the room in both themes). */}
       {!state.hud && views.length > 1 && (
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 z-[41] h-[2px] bg-white/10" style={{ marginBottom: 'var(--sa-bottom)' }}>
-          <div className="h-full bg-[var(--ds-accent)]" style={{ width: `${(view / (views.length - 1)) * 100}%`, marginLeft: rtl ? 'auto' : undefined, transition: reduced ? undefined : 'width 300ms ease' }} />
+          <div
+            data-testid="reader-progress"
+            className="h-full w-full bg-[var(--ds-reader-accent)]"
+            style={{
+              transform: `scaleX(${Math.round((view / (views.length - 1)) * 10000) / 10000})`,
+              transformOrigin: rtl ? 'right' : 'left',
+              transition: reduced ? undefined : 'transform var(--ds-reader-edge-motion, 200ms) var(--ds-ease, ease)'
+            }}
+          />
         </div>
       )}
 
@@ -930,10 +995,10 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
       {resume && state.phase !== 'intro' && (
         <div className="absolute inset-x-0 top-[calc(var(--sa-top)+68px)] z-[45] flex justify-center px-4" data-no-turn>
           <div className="flex items-center gap-1 rounded-full bg-black/55 p-1 pl-4 text-[13px] text-white shadow-lg backdrop-blur-md">
-            <button type="button" className="press min-h-11 rounded-full px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]" onClick={() => { dispatch({ type: 'GOTO', view: resume.view }); setResume(null); }}>
+            <button type="button" className="press min-h-11 rounded-full px-2 font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]" onClick={() => { dispatch({ type: 'GOTO', view: resume.view }); setResume(null); }}>
               Continue from {resume.label.toLowerCase()}
             </button>
-            <button type="button" aria-label="Start from the beginning" className="press min-h-11 min-w-11 rounded-full px-3 text-white/75 outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]" onClick={() => setResume(null)}>
+            <button type="button" aria-label="Start from the beginning" className="press min-h-11 min-w-11 rounded-full px-3 text-white/75 outline-none hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]" onClick={() => setResume(null)}>
               ✕
             </button>
           </div>
@@ -975,7 +1040,7 @@ export const ImmersiveReader: React.FC<ImmersiveReaderProps> = (props) => {
           type="button"
           data-no-turn
           onClick={() => toggleGuided(true)}
-          className="press absolute left-1/2 top-[calc(var(--sa-top)+68px)] z-[44] inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] font-medium text-white shadow-lg backdrop-blur-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-accent)]"
+          className="press absolute left-1/2 top-[calc(var(--sa-top)+68px)] z-[44] inline-flex min-h-11 -translate-x-1/2 items-center gap-2 rounded-full bg-black/55 px-4 text-[13px] font-medium text-white shadow-lg backdrop-blur-md outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-reader-hud-focus)]"
         >
           <ScanEye className="h-4 w-4" aria-hidden /> Read panel by panel
         </button>

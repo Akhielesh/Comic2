@@ -1,0 +1,62 @@
+/* Reader tokens (reader.md §5.1 / §5.3, RD-0; imported by ImmersiveReader.tsx, so it ships in the reader
+   chunk). One token set for the reading room: the turn engine, the guided camera, the HUD, the cover intro,
+   the page-edge stacks and the progress hairline all read these. `readerTokens.ts` holds the TS defaults
+   and `readerTokens.test.ts` pins them to the values below (resolved against the Atlas skin the reader root
+   carries: --ds-motion-medium 150 ms, --ds-motion-slow 200 ms).
+
+   Colours here are CONTENT tokens (the room, its paper, its ink): the room does not follow the app theme
+   (`--ds-reader-room` stays the dark room in both themes until a Day room is chosen), so the controls that
+   sit over it never use the app accent. --ds-accent is #0a0a0a in the Atlas light theme, 1.02:1 on the
+   #0e0d0c room (WCAG 1.4.11 / 2.4.7, reader.md V2 N1): the hairline progress, the scrubber fill and every
+   focus ring over the room use --ds-reader-accent / --ds-reader-hud-focus instead. Controls on the PAPER
+   (the End card) keep --ds-reader-focus (index.css). */
+
+[data-reader-root] {
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+  --ds-reader-turn: 560ms;                               /* paper, one page */
+  --ds-reader-turn-spread: 680ms;                        /* paper across a spread */
+  --ds-reader-turn-board: 820ms;                         /* the hardcover board */
+  --ds-reader-turn-slide: var(--ds-motion-enter-slow);   /* 420 ms: strip, low power, "slide" */
+  --ds-reader-turn-fade: var(--ds-motion-enter);         /* 280 ms: "fade" (one value; was 180 vs 300) */
+  --ds-reader-riffle-leaf: 180ms;
+  --ds-reader-riffle-step: 70ms;
+  --ds-reader-chain: 0.65;                               /* a chained turn plays this much faster */
+  --ds-reader-ease-paper: cubic-bezier(0.38, 0.02, 0.18, 1);
+  --ds-reader-ease-camera: cubic-bezier(0.65, 0, 0.35, 1);
+  --ds-reader-hud-motion: var(--ds-motion-medium);       /* HUD show / hide (Atlas: 150 ms) */
+  --ds-reader-edge-motion: var(--ds-motion-slow);        /* page-edge stacks, progress (Atlas: 200 ms) */
+  --ds-reader-intro-rise: 700ms;
+  --ds-reader-intro-ease: var(--ds-ease-enter);
+  --ds-reader-ambient-fade: 900ms;
+  --ds-reader-spot-fade: 220ms;
+  --ds-reader-spot-fade-reduced: 140ms;
+  --ds-reader-standin-swap: 120ms;                       /* stand-in → page cross-fade */
+  --ds-reader-turn-gate: 300ms;                          /* longest a tap waits for its pages to decode */
+
+  /* ── Guided spotlight (four shutters, transform-only) ────────────────── */
+  --ds-reader-spot: 0.78;
+  --ds-reader-spot-fill: rgba(10, 9, 8, var(--ds-reader-spot));
+
+  /* ── Ink on paper (the paper is the same in both themes) ─────────────── */
+  --ds-reader-ink: #3b3026;
+  --ds-reader-ink-soft: #5b4a3a;
+  --ds-reader-ink-faint: #8a7865;
+  --ds-reader-wash: rgba(59, 48, 38, 0.10);
+  --ds-reader-wash-strong: rgba(59, 48, 38, 0.16);
+  --ds-reader-edge: #ebe4d6;
+  --ds-reader-edge-line: #cdc3b0;
+
+  /* ── Night room (today; the default) ────────────────────────────────── */
+  --ds-reader-glass: rgba(0, 0, 0, 0.45);                /* the HUD glass (ReaderHud `glass`) */
+  --ds-reader-accent: #fafafa;                           /* progress fills: 18:1 on the room */
+  --ds-reader-hud-focus: #fafafa;                        /* focus rings over the room and its glass */
+}
+
+/* Day room (reader.md §4.2; RD-2 renders it and sets the attribute). Defined here so the pair is
+   contrast-tested from the start: ink on a light room, never the app accent. */
+[data-reader-root][data-reader-room="day"] {
+  --ds-reader-room: #ebe8e2;
+  --ds-reader-glass: rgba(255, 255, 255, 0.74);
+  --ds-reader-accent: #3b3026;
+  --ds-reader-hud-focus: #3b3026;
+}
