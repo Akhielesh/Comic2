@@ -20,6 +20,9 @@ const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/api\.tavily\.com/, 'tavily'],
   [/api\.search\.brave\.com/, 'brave'],
   [/google\.serper\.dev/, 'serper'],
+  // YouTube Data API shares the googleapis.com host with Custom Search: match it first so a
+  // video search never spends (or is blocked by) the search budget.
+  [/^https:\/\/(?:www|youtube)\.googleapis\.com\/youtube\//, 'youtube'],
   [/googleapis\.com/, 'google-cse'],
   [/duckduckgo\.com/, 'duckduckgo'],
   [/bing\.com/, 'bing-scrape'],
@@ -36,8 +39,27 @@ const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/ip-api\.com/, 'ip-api'],
   [/r\.jina\.ai/, 'jina-reader'],
   [/overpass-api\.de|overpass\.kumi\.systems/, 'overpass'],
-  [/routing\.openstreetmap\.de/, 'osrm']
+  [/routing\.openstreetmap\.de/, 'osrm'],
+  [/^https:\/\/(?:[a-z0-9-]+\.)*foursquare\.com\//i, 'foursquare']
 ];
+
+/**
+ * Meter key for a user/model-supplied page (reader mode, link unfurl, research reads): its own
+ * per-host politeness bucket, never a named provider's — a page URL that merely CONTAINS
+ * "api.tavily.com" or "foursquare.com" must not spend (or exhaust) that provider's budget.
+ */
+export const PAGE_PROVIDER_PREFIX = 'page:';
+export const pageProviderFor = (url: string): string => {
+  try {
+    return `${PAGE_PROVIDER_PREFIX}${new URL(url).hostname.toLowerCase()}`;
+  } catch {
+    return `${PAGE_PROVIDER_PREFIX}unknown`;
+  }
+};
+/** Page hosts tracked at once (oldest dropped first): anonymous reads of many hosts stay bounded. */
+const MAX_PAGE_HOSTS = 500;
+/** Account deltas for page hosts are summed under one name so the usage log never grows per host. */
+const PAGE_ACCOUNT_PROVIDER = 'web-page';
 
 export const providerForUrl = (url: string): string => {
   // SEARXNG_URL is user-configured, so match it explicitly before the host table.
@@ -78,7 +100,9 @@ const DEFAULT_BUDGETS: Record<string, ProviderBudget> = {
   'ip-api': { perMin: 40, perDay: 1500 }, // hard upstream cap is 45/min
   'jina-reader': { perMin: 15, perDay: 400 }, // anonymous tier ~20 rpm/IP — stay under
   overpass: { perMin: 6, perDay: 500 }, // public instances rate-limit busy IPs hard
-  osrm: { perMin: 20, perDay: 1500 } // FOSSGIS demo server — fair use
+  osrm: { perMin: 20, perDay: 1500 }, // FOSSGIS demo server — fair use
+  foursquare: { perMin: 20, perDay: 300 }, // keyed Places API: protect the account's free calls
+  youtube: { perMin: 10, perDay: 80 } // Data API: 10,000 units/day, search = 100 units → 100/day max
 };
 const FALLBACK_BUDGET: ProviderBudget = { perMin: 60, perDay: 3000 };
 
@@ -172,7 +196,8 @@ export const flushUsageDeltas = async (): Promise<void> => {
   }
 };
 
-const noteAccountDelta = (provider: string, now: number, field: 'calls' | 'errors' | 'blocked'): void => {
+const noteAccountDelta = (meterKey: string, now: number, field: 'calls' | 'errors' | 'blocked'): void => {
+  const provider = meterKey.startsWith(PAGE_PROVIDER_PREFIX) ? PAGE_ACCOUNT_PROVIDER : meterKey;
   const account = currentAccountId() || 'anon';
   const day = dayKey(now);
   const key = `${account}|${provider}|${day}`;
@@ -184,10 +209,24 @@ const noteAccountDelta = (provider: string, now: number, field: 'calls' | 'error
   d[field] += 1;
 };
 
+let pageHosts = 0;
+
 const statFor = (provider: string, now: number): ProviderStat => {
   let s = stats.get(provider);
   const dk = dayKey(now);
   if (!s) {
+    if (provider.startsWith(PAGE_PROVIDER_PREFIX)) {
+      if (pageHosts >= MAX_PAGE_HOSTS) {
+        for (const key of stats.keys()) {
+          if (key.startsWith(PAGE_PROVIDER_PREFIX)) {
+            stats.delete(key); // Map order = first seen: the oldest page host goes
+            pageHosts -= 1;
+            break;
+          }
+        }
+      }
+      pageHosts += 1;
+    }
     s = { dayKey: dk, dayCalls: 0, dayErrors: 0, blockedToday: 0, minuteStamps: [], lastCallAt: 0, lastErrorAt: 0, warned80: false };
     stats.set(provider, s);
   }
@@ -210,9 +249,11 @@ export class ProviderBudgetError extends Error {
   }
 }
 
-/** Throws ProviderBudgetError when the call would exceed the provider's budget. */
-export const assertProviderBudget = (url: string, now = Date.now()): void => {
-  const provider = providerForUrl(url);
+/**
+ * Throws ProviderBudgetError when the call would exceed the provider's budget. `provider`
+ * overrides the URL lookup (pageProviderFor for user-supplied pages).
+ */
+export const assertProviderBudget = (url: string, now = Date.now(), provider = providerForUrl(url)): void => {
   const s = statFor(provider, now);
   const b = budgetFor(provider);
   if (s.minuteStamps.length >= b.perMin) {
@@ -230,8 +271,7 @@ export const assertProviderBudget = (url: string, now = Date.now()): void => {
 };
 
 /** Record a completed upstream call (after the fetch resolves/throws). */
-export const noteProviderCall = (url: string, ok: boolean, now = Date.now()): void => {
-  const provider = providerForUrl(url);
+export const noteProviderCall = (url: string, ok: boolean, now = Date.now(), provider = providerForUrl(url)): void => {
   const s = statFor(provider, now);
   const b = budgetFor(provider);
   s.dayCalls += 1;
@@ -284,6 +324,7 @@ export interface ProviderUsageRow {
 export const getProviderUsageSnapshot = (now = Date.now()): ProviderUsageRow[] => {
   const rows: ProviderUsageRow[] = [];
   for (const [provider] of stats) {
+    if (provider.startsWith(PAGE_PROVIDER_PREFIX)) continue; // per-host politeness buckets, not provider quotas
     const s = statFor(provider, now);
     const b = budgetFor(provider);
     const lastMinute = s.minuteStamps.length;
@@ -318,6 +359,7 @@ export const getProviderUsageSnapshot = (now = Date.now()): ProviderUsageRow[] =
 /** Test hook. */
 export const __resetProviderUsage = (): void => {
   stats.clear();
+  pageHosts = 0;
   pendingDeltas.clear();
   envOverrides = null;
 };

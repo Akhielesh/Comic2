@@ -10,6 +10,13 @@ const als = new AsyncLocalStorage<{ accountId: string | null }>();
 /** The account id for the current request, or null (unauthenticated/background). */
 export const currentAccountId = (): string | null => als.getStore()?.accountId ?? null;
 
+/**
+ * True inside a request's account context (attachAccountContext ran, signed in or not).
+ * Background work has none, so `hasRequestContext() && !currentAccountId()` means "an
+ * anonymous web caller" — the gate for features signed-out visitors must not reach.
+ */
+export const hasRequestContext = (): boolean => als.getStore() !== undefined;
+
 /** Run fn with an explicit account context (tests, background jobs). */
 export const runWithAccount = <T>(accountId: string | null, fn: () => T): T => als.run({ accountId }, fn);
 

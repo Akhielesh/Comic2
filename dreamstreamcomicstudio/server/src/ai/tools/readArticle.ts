@@ -7,9 +7,17 @@
 // densest text container, keep paragraphs + subheads) rather than a full readability
 // port. Best-effort — callers fall back to "open original" when extraction is thin.
 
-import { fetchText, hostOf } from './http.js';
-import { assertSafePublicUrl } from './mcpClient.js';
+import { fetchTextCapped, hostOf } from './http.js';
 import { decodeGoogleNewsUrl, isGoogleNewsUrl } from './googleNews.js';
+import { asciiLower, firstElement, forEachBlock, metaTags, removeElements, stripMarkdownInline, stripTagsLinear, titleText } from './htmlScan.js';
+import { currentAccountId, hasRequestContext } from '../../lib/accountContext.js';
+
+/** Download cap for a page read (the body stops streaming here). */
+export const READ_MAX_BYTES = 1_000_000;
+/** What the parser sees: the first 256 KB of the page (articles start well inside it). */
+export const READ_PARSE_CHARS = 256 * 1024;
+/** Cap for the Jina reader fallback's response. */
+const JINA_MAX_BYTES = 1_000_000;
 
 export interface ReadArticleResult {
   url: string;
@@ -77,15 +85,15 @@ const decodeEntities = (s: string): string =>
       }
     });
 
-const stripTags = (html: string): string => decodeEntities(html.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+const stripTags = (html: string): string => decodeEntities(stripTagsLinear(html)).replace(/\s+/g, ' ').trim();
 
-const metaContent = (html: string, patterns: RegExp[]): string | undefined => {
-  for (const re of patterns) {
-    const m = html.match(re);
-    if (m && m[1]) {
-      const v = decodeEntities(m[1]).trim();
-      if (v) return v;
-    }
+/** First non-empty meta value among the keys (property or name), entity-decoded. */
+const metaContent = (meta: Map<string, string>, keys: string[]): string | undefined => {
+  for (const k of keys) {
+    const raw = meta.get(k);
+    if (!raw) continue;
+    const v = decodeEntities(raw).trim();
+    if (v) return v;
   }
   return undefined;
 };
@@ -97,6 +105,52 @@ const absolutize = (src: string | undefined, base: string): string | undefined =
   } catch {
     return undefined;
   }
+};
+
+/** Is the current caller an anonymous web request (signed-out visitor)? Background work is not. */
+const isAnonymousCaller = (): boolean => hasRequestContext() && !currentAccountId();
+
+/**
+ * Extract the readable article from a page's HTML (pure, linear-time: see htmlScan.ts).
+ * Exported for tests and for callers that already hold the HTML.
+ */
+export const extractArticle = (
+  html: string,
+  url: string
+): Pick<ReadArticleResult, 'title' | 'byline' | 'image' | 'blocks'> & { charCount: number } => {
+  const lower = asciiLower(html);
+  const meta = metaTags(html, lower);
+  const titleTag = titleText(html, lower);
+  const title = metaContent(meta, ['og:title', 'twitter:title']) || (titleTag ? decodeEntities(titleTag).trim() || undefined : undefined);
+  const image = absolutize(metaContent(meta, ['og:image', 'og:image:url', 'twitter:image']), url);
+  const byline = metaContent(meta, ['author', 'article:author']);
+
+  // Isolate the main content region: prefer <article>, then <main>, then the whole body.
+  const region =
+    firstElement(html, 'article', lower) || firstElement(html, 'main', lower) || firstElement(html, 'body', lower) || html;
+
+  // Drop non-content chrome before pulling text.
+  const cleaned = removeElements(
+    region,
+    ['script', 'style', 'noscript', 'svg', 'nav', 'header', 'footer', 'aside', 'form', 'figure', 'figcaption'],
+    { comments: true }
+  );
+
+  // Walk block elements in order, keeping subheads and substantive paragraphs.
+  const blocks: ReadArticleResult['blocks'] = [];
+  const seen = new Set<string>();
+  forEachBlock(cleaned, ['h2', 'h3', 'p', 'li'], (tag, inner) => {
+    const text = stripTags(inner);
+    if (!text || text.length < (tag === 'h2' || tag === 'h3' ? 3 : 40)) return true; // skip nav-ish fragments
+    if (seen.has(text)) return true;
+    seen.add(text);
+    blocks.push({ type: tag === 'h2' || tag === 'h3' ? 'h' : 'p', text: text.slice(0, 2000) });
+    return blocks.length < 120;
+  });
+
+  // Total readable text length is the quality signal.
+  const charCount = blocks.reduce((n, b) => n + (b.type === 'p' ? b.text.length : 0), 0);
+  return { title: title?.slice(0, 300), byline: byline?.slice(0, 160), image, blocks: blocks.slice(0, 80), charCount };
 };
 
 export const readArticle = async (url: string, signal?: AbortSignal): Promise<ReadArticleResult> => {
@@ -116,13 +170,20 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
     }
   }
 
-  // SSRF gate: the hostname-pattern check in isFetchableUrl misses DNS rebinding
-  // (a public name resolving to 127.0.0.1 / cloud metadata) — verify the RESOLVED
-  // IPs too. This route is reachable pre-auth, so the check must be airtight.
+  // SSRF gate: this route is reachable pre-auth, so every hop goes through fetchPublicUrl
+  // (https + public host, the resolved IP pinned for the connection, each redirect
+  // re-checked — a 302 to 127.0.0.1 or cloud metadata is refused, not followed). One 9 s
+  // deadline covers headers AND body, and the download stops at 1 MB.
   let html: string;
   try {
-    await assertSafePublicUrl(target);
-    html = await fetchText(target, { timeoutMs: 9000, accept: 'text/html,*/*', signal });
+    const page = await fetchTextCapped(target, {
+      timeoutMs: 9000,
+      accept: 'text/html,*/*',
+      signal,
+      maxBytes: READ_MAX_BYTES,
+      publicOnly: true
+    });
+    html = page.text.slice(0, READ_PARSE_CHARS);
   } catch {
     // The request itself failed (timeout / refused / anti-bot 403 / SSRF) — the host is
     // likely blocking automated reads. Flag it so the caller can skip the host next time
@@ -131,58 +192,10 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
     return base;
   }
 
-  const title =
-    metaContent(html, [
-      /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
-      /<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i,
-      /<title[^>]*>([^<]+)<\/title>/i
-    ]) || undefined;
-  const image = absolutize(
-    metaContent(html, [
-      /<meta[^>]+property=["']og:image(?::url)?["'][^>]+content=["']([^"']+)["']/i,
-      /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i
-    ]),
-    url
-  );
-  const byline = metaContent(html, [
-    /<meta[^>]+name=["']author["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+property=["']article:author["'][^>]+content=["']([^"']+)["']/i
-  ]);
-
-  // Isolate the main content region: prefer <article>, then <main>, then the whole body.
-  const region =
-    html.match(/<article[\s\S]*?<\/article>/i)?.[0] ||
-    html.match(/<main[\s\S]*?<\/main>/i)?.[0] ||
-    html.match(/<body[\s\S]*?<\/body>/i)?.[0] ||
-    html;
-
-  // Drop non-content chrome before pulling text.
-  const cleaned = region
-    .replace(/<(script|style|noscript|svg|nav|header|footer|aside|form|figure|figcaption)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ');
-
-  // Walk block elements in order, keeping subheads and substantive paragraphs.
-  const blocks: ReadArticleResult['blocks'] = [];
-  const blockRe = /<(h2|h3|p|li)\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m: RegExpExecArray | null;
-  const seen = new Set<string>();
-  while ((m = blockRe.exec(cleaned)) && blocks.length < 120) {
-    const tag = m[1].toLowerCase();
-    const text = stripTags(m[2]);
-    if (!text || text.length < (tag === 'h2' || tag === 'h3' ? 3 : 40)) continue; // skip nav-ish fragments
-    if (seen.has(text)) continue;
-    seen.add(text);
-    blocks.push({ type: tag === 'h2' || tag === 'h3' ? 'h' : 'p', text: text.slice(0, 2000) });
-  }
-
-  // Total readable text length is the quality signal.
-  const charCount = blocks.reduce((n, b) => n + (b.type === 'p' ? b.text.length : 0), 0);
+  const { charCount, ...extracted } = extractArticle(html, url);
   const direct: ReadArticleResult = {
     ...base,
-    title: title?.slice(0, 300),
-    byline: byline?.slice(0, 160),
-    image,
-    blocks: blocks.slice(0, 80),
+    ...extracted,
     ok: charCount >= 240, // a couple of real paragraphs
     // Fetched fine but thin → this PAGE is paywalled/JS-only; the host isn't blocking us,
     // so don't penalize the whole host (only `fetch_failed` does that).
@@ -192,8 +205,10 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
 
   // Direct fetch came back thin (bot wall / JS-only site — most large publishers
   // 403 datacenter IPs). Best-effort second pass through the Jina reader proxy,
-  // which fetches + extracts on its own infra. Budget-metered; failures keep the
-  // honest "open original" fallback.
+  // which fetches + extracts on its own infra. Budget-metered and only for signed-in
+  // callers: an anonymous visitor must not be able to spend the shared Jina quota (or
+  // use it to fetch pages for them). Failures keep the honest "open original" fallback.
+  if (isAnonymousCaller()) return direct;
   const viaJina = await readViaJina(target, signal).catch((): null => null);
   if (viaJina && viaJina.blocks.length) {
     return {
@@ -248,22 +263,17 @@ export const parseJinaReader = (text: string): { title?: string; image?: string;
   return { title, image, blocks };
 };
 
-/** Strip inline markdown (links, emphasis, images) down to plain text. */
-const stripMdInline = (s: string): string =>
-  s
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[*_`]{1,3}([^*_`]+)[*_`]{1,3}/g, '$1')
-    .replace(/\s+/g, ' ')
-    .trim();
+/** Strip inline markdown (links, emphasis, images) down to plain text (linear: htmlScan.ts). */
+const stripMdInline = stripMarkdownInline;
 
 const readViaJina = async (url: string, signal?: AbortSignal) => {
   const key = process.env.JINA_API_KEY;
-  const text = await fetchText(`https://r.jina.ai/${url}`, {
+  const { text } = await fetchTextCapped(`https://r.jina.ai/${url}`, {
     timeoutMs: 14_000,
     accept: 'text/plain',
     headers: key ? { Authorization: `Bearer ${key}` } : undefined,
-    signal
+    signal,
+    maxBytes: JINA_MAX_BYTES
   });
-  return parseJinaReader(text);
+  return parseJinaReader(text.slice(0, READ_PARSE_CHARS));
 };
