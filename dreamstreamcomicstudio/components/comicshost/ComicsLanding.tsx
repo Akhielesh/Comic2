@@ -8,7 +8,7 @@ import { ArrowRight, LayoutGrid, LogIn, Mail } from 'lucide-react';
 import { EmptyArt, type EmptyArtVariant } from '../comicstudio/library/procedural/EmptyArt';
 import { LayoutGlyph } from '../comicstudio/library/procedural/LayoutGlyph';
 import { mainAppUrl } from '../../services/productHost';
-import { FONT_DISPLAY } from '../chat/studioDesign';
+import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../chat/studioDesign';
 import { ComicsMark } from './ComicsMark';
 
 export interface ComicsLandingProps {
@@ -54,7 +54,7 @@ const STEPS: { title: string; body: string }[] = [
 
 const focusRing =
   'focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#D97757]';
-const primaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[var(--ds-accent)] px-5 text-sm font-semibold text-white motion-safe:transition-colors hover:bg-[var(--ds-accent-hover)] ${focusRing}`;
+const primaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full bg-[var(--ds-accent)] px-5 text-sm font-semibold ${ON_ACCENT_TEXT} motion-safe:transition-colors hover:bg-[var(--ds-accent-hover)] ${focusRing}`;
 const secondaryButton = `inline-flex min-h-[44px] items-center justify-center gap-2 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-5 text-sm font-semibold text-[var(--ds-ink)] motion-safe:transition-colors hover:bg-[var(--ds-hover)] ${focusRing}`;
 const quietLink = `inline-flex min-h-[44px] items-center rounded-lg px-2 text-sm text-[var(--ds-muted)] hover:text-[var(--ds-ink)] ${focusRing}`;
 
@@ -107,7 +107,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
         </div>
         <nav className="flex shrink-0 items-center gap-1 sm:gap-2" aria-label="Comic Studio">
           <button type="button" onClick={onBrowseGallery} className={`hidden sm:inline-flex ${quietLink}`}>
-            Gallery
+            Library
           </button>
           {signedIn ? (
             <button type="button" onClick={onOpenComics} className={primaryButton}>
@@ -147,7 +147,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
                   Open my comics <ArrowRight size={16} aria-hidden />
                 </button>
                 <button type="button" onClick={onBrowseGallery} className={secondaryButton}>
-                  <LayoutGrid size={16} aria-hidden /> Browse the gallery
+                  <LayoutGrid size={16} aria-hidden /> Browse the Library
                 </button>
               </>
             ) : (

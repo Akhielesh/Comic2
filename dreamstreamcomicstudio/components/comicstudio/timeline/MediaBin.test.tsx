@@ -28,10 +28,10 @@ afterEach(() => {
 });
 
 describe('feature module', () => {
-  it('registers the versions card and the Media tab (shown once any image exists)', () => {
+  it('registers the versions card and the Assets tab (id media; shown once any image exists)', () => {
     expect(feature.cards).toEqual([{ type: 'versions', Component: VersionsCard }]);
     const tab = feature.tabs![0];
-    expect(tab).toMatchObject({ id: 'media', label: 'Media', order: 500, Component: MediaTab });
+    expect(tab).toMatchObject({ id: 'media', label: 'Assets', order: 500, Component: MediaTab });
     expect(tab.visible!(richDoc(), {} as never)).toBe(true);
     const empty = makeSampleDoc({ pages: [], cast: [] });
     empty.style = { ...empty.style, options: [] };

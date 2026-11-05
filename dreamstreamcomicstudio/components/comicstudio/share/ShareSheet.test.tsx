@@ -114,12 +114,12 @@ describe('ShareSheet', () => {
     expect(sheetLayout()).toBe('side');
   });
 
-  it('private comic: choosing "Anyone with link" opens the publish panel; Publish posts the request and refreshes', async () => {
+  it('private comic: choosing "Link only" opens the publish panel; Publish posts the request and refreshes', async () => {
     const studio = studioWith(view({ visibility: 'private', status: null, slug: undefined, url: undefined, stats: undefined }));
     vi.mocked(api.publishComic).mockResolvedValue(view());
     render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
     expect(screen.getByText(/Only you can see this comic/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: 'Anyone with link' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
     expect(screen.getByRole('checkbox', { name: /Readers can download/ })).toBeChecked(); // addendum default
     fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
     await waitFor(() => expect(api.publishComic).toHaveBeenCalledWith(studio.doc!.id, expect.objectContaining({ visibility: 'unlisted', allowDownload: true, showCreator: false })));
@@ -130,7 +130,7 @@ describe('ShareSheet', () => {
     const studio = studioWith(view({ visibility: 'private', status: null, slug: undefined, url: undefined }));
     vi.mocked(api.publishComic).mockRejectedValue(new Error("Safety checks are unavailable right now, so nothing was published — your comic stays private."));
     render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('radio', { name: 'Public gallery' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Safety checks are unavailable');
   });
@@ -150,20 +150,20 @@ describe('ShareSheet', () => {
     await waitFor(() => expect(api.regeneratePublicationLink).toHaveBeenCalled());
   });
 
-  it('going PUBLIC from a live unlisted link asks first; "Keep it unlisted" changes nothing', async () => {
+  it('listing a live Link only comic in the Library asks first; "Keep it link only" changes nothing', async () => {
     const studio = studioWith(view());
     vi.mocked(api.updatePublication).mockResolvedValue(view({ visibility: 'public' }));
     render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
-    fireEvent.click(screen.getByRole('radio', { name: 'Public gallery' }));
-    const dialog = screen.getByRole('alertdialog', { name: 'List it in the public gallery?' });
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'List it in the Library?' });
     // Focus lands on the safe choice so the question is announced.
-    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Keep it unlisted' }));
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Keep it link only' }));
     expect(api.updatePublication).not.toHaveBeenCalled();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it unlisted' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it link only' }));
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(api.updatePublication).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('radio', { name: 'Public gallery' }));
-    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Make it public' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'List it in the Library' }));
     await waitFor(() => expect(api.updatePublication).toHaveBeenCalledWith(studio.doc!.id, { visibility: 'public' }));
   });
 
@@ -299,6 +299,114 @@ describe('ShareSheet', () => {
   });
 });
 
+describe('ShareSheet: Library + link in one step (DS-R0)', () => {
+  const privateView = () => view({ visibility: 'private', status: null, slug: undefined, url: undefined, stats: undefined });
+
+  it('names the choices Private · Link only · Library + link, each with its hint, and never says "gallery"', () => {
+    render(<ShareSheet studio={studioWith(privateView())} open onClose={vi.fn()} />);
+    const radios = within(screen.getByRole('radiogroup', { name: 'Who can read it' })).getAllByRole('radio');
+    expect(radios.map((r) => r.textContent)).toEqual(['Private', 'Link only', 'Library + link']);
+    expect(screen.getByRole('radio', { name: 'Link only' })).toHaveAccessibleDescription('Anyone with the link can read it; it isn’t listed');
+    expect(screen.getByRole('radio', { name: 'Library + link' })).toHaveAccessibleDescription('Listed in the Library, and you get a link to share');
+    // Not published yet: the hint names both ways to publish.
+    expect(screen.getByText(/Only you can see this comic/)).toHaveTextContent('Choose “Link only” for a read-only link people can open on any device, or “Library + link” to also list it in the Library.');
+    expect(screen.getByRole('dialog').textContent).not.toMatch(/gallery/i);
+    // Picking a way shows its hint under the choices and the panel's explainer.
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
+    expect(screen.getByText('Listed in the Library, and you get a link to share')).toBeVisible();
+    expect(screen.getByText(/It’s listed in the Library, and anyone with the link can read it\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
+    expect(screen.getByText('Anyone with the link can read it; it isn’t listed')).toBeVisible();
+    expect(screen.getByText('Listed in the Library, and you get a link to share')).not.toBeVisible();
+    expect(screen.getByText(/Anyone with the link can read it\. It isn’t listed or searchable\./)).toBeInTheDocument();
+    expect(screen.getByRole('dialog').textContent).not.toMatch(/gallery/i);
+  });
+
+  it('choosing "Library + link" publishes ONE request with visibility public, then shows the link and the Library entry', async () => {
+    const studio = studioWith(privateView());
+    vi.mocked(api.publishComic).mockResolvedValue(view({ visibility: 'public' }));
+    const onClose = vi.fn();
+    const { rerender } = render(<ShareSheet studio={studio} open onClose={onClose} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Library + link' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    await waitFor(() => expect(api.publishComic).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.publishComic).mock.calls[0]).toEqual([studio.doc!.id, expect.objectContaining({ visibility: 'public', languages: ['en'], allowDownload: true })]);
+    // The privacy confirm guards listing a LIVE link; from private, the panel is the one confirmation.
+    expect(api.updatePublication).not.toHaveBeenCalled();
+    await waitFor(() => expect(studio.refresh).toHaveBeenCalled());
+    // The owner view comes back listed and live: the sheet leaves the panel and leads with the link.
+    rerender(<ShareSheet studio={{ ...studio, publication: view({ visibility: 'public' }) }} open onClose={onClose} />);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull());
+    expect(screen.getByLabelText('Read-only link')).toHaveValue(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    expect(screen.getByRole('link', { name: 'See it in the Library' })).toHaveAttribute('href', '/?view=gallery');
+    expect(api.publishComic).toHaveBeenCalledTimes(1);
+  });
+
+  it('published as Library + link: the read-only link comes first, then a 44 px "See it in the Library" link to the public Library', () => {
+    const studio = studioWith(view({ visibility: 'public' }));
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    expect(screen.getByText('Published · In the Library + link')).toBeInTheDocument();
+    const link = screen.getByLabelText('Read-only link') as HTMLInputElement;
+    expect(link.value).toBe(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    expect(screen.getByRole('button', { name: /^Copy$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Share…/ })).toBeInTheDocument();
+    const library = screen.getByRole('link', { name: 'See it in the Library' });
+    // The same view StaticSiteHeader's Library item opens (App restores ?view=gallery).
+    expect(library).toHaveAttribute('href', '/?view=gallery');
+    expect(library.className).toContain('min-h-[44px]');
+    expect(library.getAttribute('rel')).toBe('noopener noreferrer');
+    // Link first, then the Library entry, then the choices.
+    const group = screen.getByRole('radiogroup', { name: 'Who can read it' });
+    expect(link.compareDocumentPosition(library) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(library.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Library + link' })).toHaveAttribute('aria-checked', 'true');
+    // Readers still only read: downloads are the owner's toggle, nothing grants editing.
+    expect(screen.getByRole('checkbox', { name: /Readers can download/ })).toBeChecked();
+    expect(screen.getByRole('dialog').textContent).not.toMatch(/gallery|can edit/i);
+  });
+
+  it('published as Link only: the link comes first and there is no Library entry', () => {
+    render(<ShareSheet studio={studioWith(view())} open onClose={vi.fn()} />);
+    expect(screen.getByText('Published · Link only')).toBeInTheDocument();
+    const link = screen.getByLabelText('Read-only link');
+    expect(link.compareDocumentPosition(screen.getByRole('radiogroup', { name: 'Who can read it' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'See it in the Library' })).toBeNull();
+    expect(screen.getByText('Anyone with the link can read it; it isn’t listed')).toBeVisible();
+  });
+
+  it('on a phone the QR sits in the link block that shows first, ahead of the choices and the settings', () => {
+    setViewport(true);
+    render(<ShareSheet studio={studioWith(view({ visibility: 'public' }))} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="bottom"]')).not.toBeNull();
+    const link = screen.getByLabelText('Read-only link');
+    const showQr = screen.getByRole('button', { name: 'Show QR code' });
+    const group = screen.getByRole('radiogroup', { name: 'Who can read it' });
+    expect(link.compareDocumentPosition(showQr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(showQr.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(showQr.compareDocumentPosition(screen.getByRole('region', { name: 'Link settings' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Opened in place, the code itself is still ahead of the choices.
+    fireEvent.click(showQr);
+    const code = screen.getByRole('img', { name: /^QR code for / });
+    expect(code.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+  });
+
+  it('on a tablet dialog (640–1023 px) the QR shows in the first block too; the wide dialog keeps it in its left column', () => {
+    window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener: () => undefined, removeEventListener: () => undefined, addListener: () => undefined, removeListener: () => undefined, onchange: null, dispatchEvent: () => false })) as unknown as typeof window.matchMedia;
+    const { unmount } = render(<ShareSheet studio={studioWith(view())} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="dialog"]')).not.toBeNull();
+    const group = () => screen.getByRole('radiogroup', { name: 'Who can read it' });
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+    expect(screen.getByRole('img', { name: /^QR code for / }).compareDocumentPosition(group()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount();
+    setViewport(false);
+    render(<ShareSheet studio={studioWith(view())} open onClose={vi.fn()} />);
+    expect(document.querySelector('[data-share-layout="wide"]')).not.toBeNull();
+    expect(screen.getAllByRole('img', { name: /^QR code for / })).toHaveLength(1);
+  });
+});
+
 describe('ShareLinkCard options', () => {
   it('language and start page chips update the link', () => {
     render(<ShareLinkCard view={view({ languages: ['en', 'hi'] })} title="T" pageCount={3} />);
@@ -333,7 +441,8 @@ describe('shareModel', () => {
     expect(snippet).toContain(`src="https://comics.dreamstreamstudio.ai/c/${SLUG}/embed"`);
     expect(snippet).toContain('title="&quot;&gt;&lt;script&gt;x&lt;/script&gt;"');
     expect(snippet).toContain('aspect-ratio:4/5');
-    expect(statusLine(view()).label).toMatch(/Anyone with the link/);
+    expect(statusLine(view()).label).toBe('Published · Link only');
+    expect(statusLine(view({ visibility: 'public' })).label).toBe('Published · In the Library + link');
     expect(statusLine(null).label).toMatch(/Private/);
     expect(middleEllipsis('abcdefghijklmnopqrstuvwxyz', 10)).toHaveLength(10);
     expect(isInAppBrowser('Mozilla/5.0 Instagram 300.0')).toBe(true);

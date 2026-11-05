@@ -9,6 +9,7 @@ import { BookOpen, Rows3, ScanEye, Sparkles } from 'lucide-react';
 import type { ContentRating } from '../../../shared/comic/safety';
 import { FONT_DISPLAY } from '../../chat/studioDesign';
 import { RatingBadge } from '../safety/RatingBadge';
+import { ON_ACCENT_TEXT } from '../../chat/studioDesign';
 
 export interface ReaderCoverCardProps {
   title: string;
@@ -111,7 +112,7 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
           )}
         </div>
         <div className="flex max-w-full flex-wrap items-center justify-center gap-2">
-          <button type="button" onClick={onRead} disabled={loading} aria-busy={loading || undefined} className={`${BTN} bg-[var(--ds-accent)] text-white hover:bg-[var(--ds-accent-hover)]`}>
+          <button type="button" onClick={onRead} disabled={loading} aria-busy={loading || undefined} className={`${BTN} bg-[var(--ds-accent)] ${ON_ACCENT_TEXT} hover:bg-[var(--ds-accent-hover)]`}>
             <BookOpen className="h-4 w-4" aria-hidden /> {loading ? 'Opening…' : labels?.read || 'Read'}
           </button>
           {onGuided && (

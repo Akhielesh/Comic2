@@ -416,7 +416,7 @@ export const StudioHeader: React.FC<StudioHeaderProps> = ({ studio, doc, ff, onB
   const lead = (
     <>
       {showBack && (
-        <button type="button" onClick={onBack} aria-label="Back to your projects" title="Back" className={headerIconBtn}>
+        <button type="button" onClick={onBack} aria-label="Back to My comics" title="My comics" className={headerIconBtn}>
           <ArrowLeft className="h-4 w-4" />
         </button>
       )}
@@ -846,7 +846,7 @@ export const SettingsPanel: React.FC<{
 const StudioSkeleton: React.FC<{ onBack: () => void; wide: boolean; chrome?: React.CSSProperties }> = ({ onBack, wide, chrome }) => (
   <div role="status" className={`flex h-full min-h-0 w-full flex-col ${CANVAS_BG}`} style={chrome} aria-busy="true" aria-label="Opening your comic">
     <header className="flex shrink-0 items-center gap-3 border-b border-[var(--ds-hairline-soft)] px-3" style={{ height: 'var(--header-h, 56px)', paddingTop: 'var(--sa-top, 0px)', boxSizing: 'content-box' }}>
-      <button type="button" onClick={onBack} aria-label="Back to your projects" className={headerIconBtn}>
+      <button type="button" onClick={onBack} aria-label="Back to My comics" title="My comics" className={headerIconBtn}>
         <ArrowLeft className="h-4 w-4" />
       </button>
       <Skeleton className="h-4 w-44 max-w-[40%]" />
