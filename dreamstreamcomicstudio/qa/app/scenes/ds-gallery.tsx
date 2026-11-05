@@ -23,12 +23,16 @@ import {
   CardTitle,
   Checkbox,
   Chip,
+  Collapse,
+  CountUp,
   EmptyState,
   ErrorBoundary,
   ErrorState,
   Field,
   IconButton,
   Input,
+  InViewPause,
+  LiveDot,
   LoadingState,
   MetricCard,
   PageHeader,
@@ -46,6 +50,7 @@ import {
   TabsList,
   TabsTrigger,
   Textarea,
+  TONE_TEXT,
   type CheckedState
 } from '../../../components/ds';
 
@@ -364,6 +369,39 @@ function States() {
   );
 }
 
+function Motion() {
+  const [open, setOpen] = useState(false);
+  const bodyId = React.useId();
+  return (
+    <SectionCard title="Live state and motion" description="A live dot, a count that runs once in view, a height disclosure and a loading label. All still under reduced motion." icon={<Sparkles />}>
+      <div className={STACK}>
+        <InViewPause className={ROW}>
+          <span className={`inline-flex items-center gap-2 text-[length:var(--ds-text-sm)] ${TONE_TEXT.success}`}>
+            <LiveDot />
+            Live
+          </span>
+          <span className="inline-flex items-center gap-2 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
+            <LiveDot settle />
+            Synced a moment ago
+          </span>
+          <span className="ds-shimmer-text text-[length:var(--ds-text-sm)]">Drawing page 3…</span>
+        </InViewPause>
+        <p className="m-0 text-[length:var(--ds-text-sm)] text-[var(--ds-muted)]">
+          <CountUp value={1280} className="text-[length:var(--ds-text-xl)] font-semibold text-[var(--ds-ink)]" /> pages drawn this month
+        </p>
+        <div className={STACK}>
+          <Button size="sm" variant="outline" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)} className="self-start">
+            {open ? 'Hide details' : 'Show details'}
+          </Button>
+          <Collapse open={open} id={bodyId}>
+            <p className={NOTE}>The body grows to its own height and leaves after a short exit; nothing is measured in JavaScript.</p>
+          </Collapse>
+        </div>
+      </div>
+    </SectionCard>
+  );
+}
+
 function Gallery() {
   return (
     <div className="flex min-w-0 flex-col gap-6">
@@ -373,6 +411,7 @@ function Gallery() {
       <Labels />
       <Containers />
       <States />
+      <Motion />
     </div>
   );
 }

@@ -11,7 +11,8 @@ import { QaAppSurface } from '../../qa/app/index';
 
 const SLOTS = [
   'button', 'icon-button', 'field', 'input', 'textarea', 'select', 'segmented', 'tabs', 'tabs-list', 'switch', 'slider', 'progress', 'checkbox',
-  'chip', 'badge', 'status-chip', 'card', 'section-card', 'metric-card', 'empty-state', 'loading-state', 'error-state', 'skeleton'
+  'chip', 'badge', 'status-chip', 'card', 'section-card', 'metric-card', 'empty-state', 'loading-state', 'error-state', 'skeleton',
+  'live-dot', 'count-up'
 ];
 
 describe('ds-gallery scene', () => {

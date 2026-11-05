@@ -36,3 +36,12 @@ export { ErrorState, type ErrorStateProps } from './ErrorState';
 export { StateIconTile, STATE_DESCRIPTION, STATE_TITLE, type StateAction, type StateHeading, type StateVariant } from './stateParts';
 export { Skeleton, SKELETON_SHAPE, type SkeletonProps, type SkeletonShape } from './Skeleton';
 export { ErrorBoundary, type ErrorBoundaryFallbackProps, type ErrorBoundaryProps } from './ErrorBoundary';
+
+// Motion and live state (bridge: Atlas effects ported onto styles/ds-motion.css)
+export { useInViewPause, inViewAttribute, inViewRootMargin } from './useInViewPause';
+export { InViewPause, type InViewPauseProps } from './InViewPause';
+export { LiveDot, type LiveDotProps } from './LiveDot';
+export { CountUp, COUNT_UP_MS, type CountUpProps } from './CountUp';
+export { Collapse, COLLAPSE_BASE, COLLAPSE_CLOSED, COLLAPSE_OPEN, COLLAPSE_SETTLE_MS, type CollapseProps } from './Collapse';
+export { usePresence, PRESENCE_EXIT_MS } from './usePresence';
+export { useReducedMotion, prefersReducedMotion } from './useReducedMotion';
