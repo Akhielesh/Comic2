@@ -18,6 +18,7 @@ import {
   getRender,
   isPageStale,
   isTargetStale,
+  letterStyleOf,
   renderTargetKey,
   targetLabel,
   totalPanels,
@@ -27,9 +28,13 @@ import {
   type NextStep,
   type RenderTarget
 } from '../../../shared/comic/doc.js';
+import type { StudioFocus } from '../../../shared/comic/events.js';
+import { LANGUAGES } from '../../../shared/comic/languages.js';
+import { LETTERING_PRESETS, type LetteringPresetId } from '../../../shared/comic/lettering/style.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { formatUsd, type ImageJobKind } from '../../../shared/comic/models.js';
 import { coverNeedsDraw, estimateDocJobs, pageTargets } from '../../../shared/comic/plan.js';
+import { letteringPresetName, ownLooks, pinnedBalloons, pinnedLabel } from './decided.js';
 import type { DirectorTurn } from './tools.js';
 
 // ── Text helpers ─────────────────────────────────────────────────────────────
@@ -261,7 +266,27 @@ export function recapLine(doc: ComicDoc): string {
 
 // ── Material gaps (director.md §3.3) ─────────────────────────────────────────
 
-export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent';
+/**
+ * The four contradiction gaps (agent-editor plan §3 A3.2; behind COMIC_CONFLICT_GUARD): the request would override
+ * something the creator already settled. Each tells the director to ask ONE Keep / Change question, quoting the earlier
+ * decision, and never to override silently.
+ */
+export type ContradictionGap = 'contradiction_pages' | 'contradiction_style' | 'contradiction_pinned' | 'contradiction_note';
+export type MaterialGap = 'attachments_purpose' | 'vague_group' | 'page_count' | 'spend_intent' | ContradictionGap;
+
+/** What the OPEN QUESTIONS line may consider beyond the four classic gaps. */
+export interface GapOptions {
+  /** The contradiction gaps (caps.liveAgent.conflicts, conflictGuardOn); off = exactly the classic gaps. */
+  contradictions?: boolean;
+  /** What the creator has selected (a pinned balloon they ask to move). */
+  focus?: StudioFocus;
+}
+
+/** One contradiction, with the director-facing words that quote the earlier decision. */
+export interface Contradiction {
+  gap: ContradictionGap;
+  text: string;
+}
 
 const VAGUE_GROUP_RE =
   /\b(?:other|some|more|lots of|many|few|several|different|cute|little|baby|forest|farm|sea|ocean|jungle|wild|pet)?\s*(animals|creatures|critters|pets|beasts|friends|toys|vehicles|robots|monsters|sea creatures|bugs|insects|birds)\b/i;
@@ -269,10 +294,187 @@ const PAGE_COUNT_RE = /\b(\d{1,2}|one|single|two|three|four|five|six|seven|eight
 const PURPOSE_RE =
   /\b(this|these|that|those|here)(?:'s| is| are)\b|\b(?:is|are|it'?s|that'?s) (?:me|my|our|him|her|them|the)\b|\bme\b|\bmy (?:son|daughter|kid|baby|child|dog|cat|pet|friend|mom|dad|family)\b|\b(style|reference|ref|look like|inspired|place|location|background|setting)\b|\bas (?:the )?[A-Z]/i;
 
-/** Open questions, highest priority first (only the first is surfaced per turn). */
-export function materialGaps(doc: ComicDoc, userText: string): MaterialGap[] {
+// ── Contradictions (agent-editor plan §3 A3.2) ──
+
+const NUMBER_WORDS: Record<string, number> = {
+  one: 1, single: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+  fifteen: 15, twenty: 20
+};
+/** A number + "page(s)": "4 pages", "a 6-page comic", "one page". */
+const COUNT_RE = /\b(\d{1,2}|one|single|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)(-| )(?:page|pager)s?\b/gi;
+/** Words just before a page number that make it a reference to pages that exist, or an action on them, not a count. */
+const NOT_A_COUNT_BEFORE =
+  /\b(?:the|these|those|first|last|next|previous|both|other|all|remaining|existing|following|add|insert|another|delete|remove|drop|redraw|draw|render|fix|edit|check|recheck|swap|move|reorder|translate|letter|read|show|on|from|than)\s*$/i;
+
+/**
+ * The page count a sentence asks for ("make it 4 pages", "a one-shot", "an 8-page comic"), or undefined. A number that
+ * names pages that already exist ("the first 2 pages", "redraw 2 pages", "add 2 pages") is not a count.
+ */
+export function requestedPageCount(text: string): number | undefined {
+  const t = clean(text);
+  if (/\bone[- ]shot\b/i.test(t)) return 1;
+  let found: number | undefined;
+  for (const m of t.matchAll(COUNT_RE)) {
+    const before = t.slice(Math.max(0, (m.index ?? 0) - 24), m.index ?? 0);
+    // "a 6-page comic" is always a count; a spaced number is one unless the words before it point at existing pages.
+    if (m[2] !== '-' && NOT_A_COUNT_BEFORE.test(before)) continue;
+    const raw = m[1].toLowerCase();
+    const n = /^\d+$/.test(raw) ? Number(raw) : NUMBER_WORDS[raw];
+    if (n && n >= 1 && n <= DOC_LIMITS.pages) found = n;
+  }
+  return found;
+}
+
+/** The lettering preset a sentence asks to switch to ("use the manga lettering"), or undefined. */
+const LETTERING_WORDS_RE = /\b(letter(?:ing|s)?|fonts?|balloons?|bubbles?|speech|dialogue|dialog|captions?|text|preset)\b/i;
+/** The words a creator uses for each lettering preset (its id and the distinctive part of its name). */
+const PRESET_ALIASES: Record<LetteringPresetId, string[]> = {
+  classic: ['classic'],
+  manga: ['manga'],
+  storybook: ['storybook', 'story book'],
+  noir: ['noir'],
+  webtoon: ['webtoon'],
+  retro_pulp: ['retro pulp', 'pulp'],
+  minimal: ['minimal', 'minimalist'],
+  handwritten: ['handwritten', 'hand-written', 'hand written']
+};
+export function requestedLetteringPreset(text: string): LetteringPresetId | undefined {
+  const t = clean(text).toLowerCase();
+  if (!LETTERING_WORDS_RE.test(t)) return undefined;
+  for (const id of Object.keys(PRESET_ALIASES) as LetteringPresetId[]) {
+    if (!Object.prototype.hasOwnProperty.call(LETTERING_PRESETS, id)) continue;
+    if (PRESET_ALIASES[id].some((w) => new RegExp(`\\b${w}\\b`).test(t))) return id;
+  }
+  return undefined;
+}
+
+/** A request to move or re-place balloons ("move it to the top", "rearrange the balloons", "re-letter page 2"). */
+const MOVE_RE =
+  /\b(move|moving|put|place|position|reposition|shift|drag|nudge|slide|arrange|rearrange|re-?arrange|re-?layout|lay (?:it |them )?out|layout|tidy|re-?letter|auto[- ]?(?:place|layout)|spread)\b|\b(?:to|at|in|into) the (?:top|bottom|left|right|corner|middle|center|centre)\b|\b(?:higher|lower|further (?:up|down|left|right))\b/i;
+const PAGE_REF_RE = /\bpages? (\d{1,3})\b/gi;
+const ALL_BALLOONS_RE = /\b(?:all|every|the) (?:balloons|bubbles|lettering|dialogue|lines)\b|\bre-?letter\b|\bre-?layout\b|\brearrange\b/i;
+
+const AUDIENCE: { bucket: string; re: RegExp }[] = [
+  { bucket: 'all ages', re: /\b(?:all ages|everyone|whole family|families|family[- ]friendly|rated g|g[- ]rated)\b/i },
+  { bucket: 'kids', re: /\b(?:kids?|children|child|toddlers?|preschool(?:ers)?|little ones|babies|ages? (?:[1-9]|1[0-2])\s*(?:[-–to]+\s*(?:[1-9]|1[0-2]))?\b(?!\s*\+))/i },
+  { bucket: 'teens', re: /\b(?:teens?|teenagers?|young adults?|ya|ages? 1[3-7]\b|pg-13)\b/i },
+  { bucket: 'adults', re: /\b(?:adults?|grown[- ]ups?|mature|ages? (?:18|21)\+?|rated r|r[- ]rated)\b/i }
+];
+const AUDIENCE_CONTEXT_RE = /\b(?:for|audience|aimed at|suitable for|reader(?:s|ship)?|ages?|age group|rated|rating|pg-13|g-rated)\b|\b(?:kids?|children'?s?|teen|adult|family)\s+(?:comic|book|story|strip|audience|version)\b/i;
+
+/**
+ * The audience a sentence states ("for kids 2–6", "a teen comic", "rated PG-13"), as a bucket, or undefined. A brief
+ * note is already a fact ("kids 2–6"), so `note` needs no "for …" around it.
+ */
+export function statedAudience(text: string, note = false): string | undefined {
+  const t = clean(text);
+  if (!note && !AUDIENCE_CONTEXT_RE.test(t)) return undefined;
+  for (const { bucket, re } of AUDIENCE) if (re.test(t)) return bucket;
+  return undefined;
+}
+
+/**
+ * The language a sentence asks the comic to be written in ("in Hindi", "a Telugu comic"), or undefined. A brief note
+ * (`note`) is a fact, so the bare name counts there ("Telugu dialogue", "language Telugu").
+ */
+export function statedLanguage(text: string, note = false): string | undefined {
+  const t = clean(text);
+  if (/\btranslat/i.test(t)) return undefined; // a translation is another edition, never the comic's own language
+  for (const l of LANGUAGES) {
+    const name = l.english.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (note && new RegExp(`\\b${name}\\b`, 'i').test(t)) return l.english;
+    if (new RegExp(`\\b(?:in|into|language:?|write (?:it|this|the \\w+) in)\\s+${name}\\b|\\b${name}\\s+(?:language|comic|book|story|version|dialogue|text|only)\\b`, 'i').test(t)) return l.english;
+  }
+  return undefined;
+}
+
+/** The slot values a sentence states: page count, audience, language. */
+const slotsOf = (text: string, note = false) => ({ pages: requestedPageCount(text), audience: statedAudience(text, note), language: statedLanguage(text, note) });
+
+/**
+ * The contradictions in a request, most important first (plan §3 A3.2). Deterministic, free, no model call:
+ * - contradiction_pinned: the target is a balloon the creator pinned or locked;
+ * - contradiction_pages: a new page count while the plan is approved or pages are drawn;
+ * - contradiction_style: a lettering preset switch while the comic has its own kind, speaker or line looks;
+ * - contradiction_note: a page count, audience or language that differs from an earlier brief note.
+ */
+export function contradictionsOf(doc: ComicDoc, userText: string, focus?: StudioFocus): Contradiction[] {
   const text = clean(userText);
-  const gaps: MaterialGap[] = [];
+  if (!text) return [];
+  const out: Contradiction[] = [];
+
+  // Pinned or locked balloons the request would move.
+  if (MOVE_RE.test(text)) {
+    const selected = new Set((focus?.lineIds || []).filter((id) => typeof id === 'string'));
+    const pageNs = new Set([...text.matchAll(PAGE_REF_RE)].map((m) => Number(m[1])));
+    const wholePages = new Set(doc.pages.filter((p) => pageNs.has(p.n) || (focus?.pageId === p.id && !selected.size && ALL_BALLOONS_RE.test(text))).map((p) => p.id));
+    const hit = pinnedBalloons(doc).filter((p) => selected.has(p.line.id) || (ALL_BALLOONS_RE.test(text) && wholePages.has(p.page.id)));
+    if (hit.length) {
+      const locked = hit.some((p) => p.locked);
+      const shown = hit.slice(0, 3).map(pinnedLabel).join('; ');
+      out.push({
+        gap: 'contradiction_pinned',
+        text: `the user asked to move ${hit.length === 1 ? 'a balloon' : `${hit.length} balloons`} they ${locked ? 'pinned or locked' : 'pinned'} by hand (${shown}${hit.length > 3 ? '; …' : ''}) — ask_user once: "Keep ${hit.length === 1 ? 'it' : 'them'} where ${hit.length === 1 ? 'it is' : 'they are'}" / "Move ${hit.length === 1 ? 'it' : 'them'}" before moving; until then leave pinned balloons where they are. Never move them silently.`
+      });
+    }
+  }
+
+  // A new page count against an approved plan or drawn pages.
+  const asked = requestedPageCount(text);
+  const drawn = doc.pages.filter((p) => p.render.status === 'ready').length;
+  const current = doc.pages.length || doc.format.pageCount;
+  if (asked !== undefined && asked !== current && (doc.planStatus === 'approved' || drawn > 0)) {
+    const what = doc.planStatus === 'approved' ? `the approved plan has ${plural(current, 'page')}` : `the comic has ${plural(current, 'page')}`;
+    out.push({
+      gap: 'contradiction_pages',
+      text: `the user asked for ${plural(asked, 'page')}, but ${what}${drawn ? ` (${drawn} drawn)` : ''} — ask_user once: "Keep ${plural(current, 'page')}" / "Change to ${plural(asked, 'page')}", saying what changes (the plan is rewritten${drawn ? '; drawn pages may need redrawing, which costs' : ''}). Never change it silently.`
+    });
+  }
+
+  // A lettering preset switch over the comic's own looks.
+  const preset = requestedLetteringPreset(text);
+  const ls = letterStyleOf(doc);
+  if (preset && preset !== ls.presetId) {
+    const looks = ownLooks(doc);
+    if (looks.words.length) {
+      const dropped = looks.base || looks.kinds.length;
+      out.push({
+        gap: 'contradiction_style',
+        text: `the user asked for the ${letteringPresetName(preset)} lettering, but the comic has its own looks for ${joinList(looks.words.slice(0, 5))} on top of ${letteringPresetName(ls.presetId)} — ask_user once: "Keep my looks" (switch with keepOverrides) / "Start fresh"${dropped ? ' (the base and kind looks are dropped)' : ''}, naming those looks. Never drop them silently.`
+      });
+    }
+  }
+
+  // The same slot as an earlier brief note, with a different value.
+  const now = slotsOf(text);
+  const notes = doc.brief.notes.map((n) => clean(n)).filter(Boolean);
+  const slotWords: Record<keyof typeof now, string> = { pages: 'the page count', audience: 'the audience', language: 'the language' };
+  for (const slot of ['pages', 'audience', 'language'] as const) {
+    const value = now[slot];
+    if (value === undefined) continue;
+    // The latest earlier note that states this slot.
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const before = slotsOf(notes[i], true)[slot];
+      if (before === undefined) continue;
+      if (before !== value) {
+        const said = slot === 'pages' ? plural(value as number, 'page') : String(value);
+        const was = slot === 'pages' ? plural(before as number, 'page') : String(before);
+        out.push({
+          gap: 'contradiction_note',
+          text: `the user now says ${slotWords[slot]} is ${said}, but an earlier note says “${clip(notes[i], 120)}” (${was}) — ask_user once: "Keep ${was}" / "Change to ${said}", quoting that note. Never override it silently.`
+        });
+      }
+      break;
+    }
+    if (out.some((c) => c.gap === 'contradiction_note')) break;
+  }
+  return out;
+}
+
+/** Open questions, highest priority first (only the first is surfaced per turn). Contradictions lead when enabled. */
+export function materialGaps(doc: ComicDoc, userText: string, opts: GapOptions = {}): MaterialGap[] {
+  const text = clean(userText);
+  const gaps: MaterialGap[] = opts.contradictions ? contradictionsOf(doc, userText, opts.focus).map((c) => c.gap) : [];
   const lastUser = [...doc.conversation].reverse().find((m) => m.role === 'user');
   const attached = lastUser?.attachments?.map((a) => a.path) || [];
   if (attached.length) {
@@ -293,17 +495,24 @@ export function materialGaps(doc: ComicDoc, userText: string): MaterialGap[] {
   return gaps;
 }
 
-const GAP_TEXT: Record<MaterialGap, string> = {
+const GAP_TEXT: Record<Exclude<MaterialGap, ContradictionGap>, string> = {
   attachments_purpose: 'the user attached images without saying what they are — ask who/what they show (a character, the style to follow, or a place) unless it is obvious.',
   vague_group: 'the user mentioned a vague group (e.g. "other animals") — pick 2–3 that fit, cast them (kind, count), name them in your reply; do not ask open-ended.',
   page_count: 'no page count yet — propose one (default first) in an ask_user, or pick a sensible one and say so.',
   spend_intent: 'the user gave feedback on drawn art — ask which fix they want (free options first, paid ones with prices) before spending anything.'
 };
 
-/** The OPEN QUESTIONS line for the doc summary ('' when nothing is open). */
-export const openQuestionsLine = (doc: ComicDoc, userText: string): string => {
+/**
+ * The OPEN QUESTIONS line for the doc summary ('' when nothing is open). With `opts.contradictions` (the conflict
+ * guard's flag) a contradiction comes first, in words that quote the earlier decision.
+ */
+export const openQuestionsLine = (doc: ComicDoc, userText: string, opts: GapOptions = {}): string => {
+  if (opts.contradictions) {
+    const first = contradictionsOf(doc, userText, opts.focus)[0];
+    if (first) return `OPEN QUESTIONS: ${first.text}`;
+  }
   const first = materialGaps(doc, userText)[0];
-  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first]}` : '';
+  return first ? `OPEN QUESTIONS: ${GAP_TEXT[first as Exclude<MaterialGap, ContradictionGap>]}` : '';
 };
 
 // ── Run outcomes (honest replies about renders this turn started) ────────────
