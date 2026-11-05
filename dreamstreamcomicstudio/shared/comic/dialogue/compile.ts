@@ -19,6 +19,7 @@ import { NAMED_COLORS, normalizeColor, resolveLetterStyle, sanitizeLetterStylePa
 import { applyOps, type DocOp } from '../ops.js';
 import { balloonPatchOp, lineGeo, pageGeo, placeLine, tailTip } from './placement.js';
 import { askForResolution, resolveLineRef, type ResolutionAsk } from './resolve.js';
+import { parseDialogue } from './grammar.js';
 import { castList, matchSpeaker, noSuchSpeaker, speakerName } from './speakers.js';
 import type { CompileResult, DialogueIntent, LineHit, LineRef, Placement, Resolution, ResolveContext } from './types.js';
 
@@ -1056,4 +1057,24 @@ export function compileDialogue(doc: ComicDoc, intents: readonly DialogueIntent[
     if (res.status === 'none') return stop('none', { note: res.note, resolution: res });
     return stop('ask', { note: ask?.question, ask: ask ? { question: ask.question, ...(ask.options ? { options: ask.options } : {}) } : undefined, followUps: ask?.followUps, resolution: res });
   }
+}
+
+// ── The fast path (plan §3 B3, flag COMIC_DIALOGUE_FAST) ──────────────────────
+
+/** Op kinds the dialogue engine emits: every one is a free overlay or script edit (no image, no model, no spend). */
+export const FREE_DIALOGUE_OPS: ReadonlySet<DocOp['op']> = new Set<DocOp['op']>(['line', 'line_move', 'balloon', 'balloons', 'line_style', 'letter_style']);
+
+/**
+ * The free fast path's answer for a sentence, or undefined when the director should take it: the grammar is confident,
+ * every intent resolves to exactly one line (an `add`, to one panel), the whole instruction applies, and every op is a
+ * free dialogue op. No model call; the caller commits `ops` with origin 'director' and replies with `note` and Undo.
+ */
+export function dialogueFastPath(doc: ComicDoc, text: string, ctx: ResolveContext = {}): DialogueRun | undefined {
+  const g = parseDialogue(text, { selected: !!ctx.lineIds?.length });
+  if (!g.confident || !g.intents.length) return undefined;
+  const run = compileDialogue(doc, g.intents, ctx);
+  if (run.status !== 'apply' || !run.ops.length) return undefined;
+  if (!run.steps.every((s) => (s.intent.act === 'add' ? s.lines.length === 0 : s.lines.length === 1))) return undefined;
+  if (!run.ops.every((op) => FREE_DIALOGUE_OPS.has(op.op))) return undefined;
+  return run;
 }
