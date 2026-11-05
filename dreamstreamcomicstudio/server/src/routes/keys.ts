@@ -7,9 +7,9 @@
 // (on add, on an explicit check, and when a stored verdict is over a day old on open).
 //
 // The candidate key is read from the same provider header attachKeys() already resolves
-// (X-Nvidia-Key / X-OpenRouter-Key / X-Gemini-Key / X-Pixazo-Key), so the client can
-// validate ANY of its keys — including one not yet saved or not the active one — by sending
-// it in that header.
+// (X-Nvidia-Key / X-OpenRouter-Key / X-Gemini-Key / X-Pixazo-Key / X-Ideogram-Key), so the
+// client can validate ANY of its keys — including one not yet saved or not the active one —
+// by sending it in that header.
 //
 // Security: this route only ever checks a key the CALLER owns — the one sent in the
 // provider header, or the signed-in user's own account key (attachAccountKeys). The
@@ -17,16 +17,23 @@
 // route can neither confirm nor describe it. Mounted after requireAuth + attachAccountKeys
 // (Settings → API Configuration is a signed-in page), and the response carries only
 // { provider, status, valid, message } — never a provider's raw account record (usage,
-// limits, credits).
+// limits, credits). Messages are fixed text: a network error's own text (internal hosts,
+// IPs, a configured base URL) is logged on the server and never sent back, and an unknown
+// provider name is never echoed.
 
 import { Request, Response, Router } from 'express';
-import { GEMINI_BASE_URL, NVIDIA_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
-import { fetchOpenRouterKeyStatus } from '../ai/providers/openrouter.js';
+import { GEMINI_BASE_URL, NVIDIA_BASE_URL, OPENROUTER_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
+import { logger } from '../lib/logger.js';
 import { getProviderDef, isTextProvider, type ProviderDef, type ProviderId } from '../../../shared/providers.js';
 
 export const keysRouter = Router();
 
-type ValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing';
+/**
+ * `unavailable` is NOT a verdict on the key: the provider could not be reached, or answered
+ * with an error that says nothing about the key (5xx, 429, …). The client shows it without
+ * storing it, so a passing outage never marks a good key Invalid.
+ */
+type ValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing' | 'unavailable';
 
 interface ValidationResult {
   provider: string;
@@ -42,7 +49,7 @@ interface ValidationResult {
  * attachAccountKeys. A platform env fallback (BYOK false) is never returned, so with no
  * caller key the answer is `missing` even when the server has a key for that provider.
  */
-export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo'): string | null => {
+export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo' | 'ideogram'): string | null => {
   const k = req.apiKeys;
   if (!k) return null;
   switch (provider) {
@@ -54,6 +61,8 @@ export const callerKeyFor = (req: Request, provider: ProviderId | 'pixazo'): str
       return k.geminiByok ? k.geminiKey || null : null;
     case 'pixazo':
       return k.pixazoByok ? k.pixazoKey || null : null;
+    case 'ideogram':
+      return k.ideogramByok ? k.ideogramKey || null : null;
     default: {
       const entry = k.providerKeys?.[provider];
       return entry?.byok ? entry.key || null : null;
@@ -90,6 +99,15 @@ const missing = (provider: string): ValidationResult => ({
   message: 'No key provided to validate.'
 });
 
+// The provider could not be reached (DNS, refused, timeout, a malformed configured base URL).
+// The error's own text can name internal hosts, IPs or the configured URL, so it goes to the
+// server log only; the caller gets fixed text.
+const unreachable = (provider: string, name: string, err: unknown): ValidationResult => {
+  const e = err as (Error & { cause?: { code?: string } }) | undefined;
+  logger.warn('key_validate_unreachable', { provider, error: e?.name, code: e?.cause?.code, message: e?.message });
+  return { provider, status: 'unavailable', valid: false, message: `Could not reach ${name} right now.` };
+};
+
 // NVIDIA Build: GET /models requires auth, so a 200 proves the key works (and tells us how
 // many models it can reach); 401/403 means invalid/revoked/out-of-credits.
 const validateNvidia = async (key: string): Promise<ValidationResult> => {
@@ -115,36 +133,30 @@ const validateNvidia = async (key: string): Promise<ValidationResult> => {
         message: 'Rejected by NVIDIA (auth failed) — key is invalid, revoked, or out of credits.'
       };
     }
-    return { provider: 'nvidia', status: 'invalid', valid: false, message: `NVIDIA returned ${res.status}.` };
+    return { provider: 'nvidia', status: 'unavailable', valid: false, message: `NVIDIA returned ${res.status}.` };
   } catch (err) {
-    return {
-      provider: 'nvidia',
-      status: 'invalid',
-      valid: false,
-      message: `Could not reach NVIDIA Build: ${(err as Error)?.message || 'network error'}.`
-    };
+    return unreachable('nvidia', 'NVIDIA Build', err);
   }
 };
 
-// OpenRouter: GET /api/v1/key returns the key's account/usage record for a good key, and
-// null on rejection or network failure. Only the verdict is used — the record (usage,
-// limits, credits) is never passed through to the response.
+// OpenRouter: GET /api/v1/key answers 200 for a good key and 401/403 for a bad one. Only the
+// HTTP status is used — the body (the key's account record: usage, limits, credits) is never
+// read, let alone passed through to the response.
 const validateOpenRouter = async (key: string): Promise<ValidationResult> => {
-  const status = await fetchOpenRouterKeyStatus(key);
-  if (status) {
-    return {
-      provider: 'openrouter',
-      status: 'valid',
-      valid: true,
-      message: 'Valid OpenRouter key.'
-    };
+  try {
+    const res = await timedFetch(`${OPENROUTER_BASE_URL}/key`, {
+      headers: { Authorization: `Bearer ${key}` }
+    });
+    if (res.ok) {
+      return { provider: 'openrouter', status: 'valid', valid: true, message: 'Valid OpenRouter key.' };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { provider: 'openrouter', status: 'invalid', valid: false, message: 'OpenRouter rejected this key.' };
+    }
+    return { provider: 'openrouter', status: 'unavailable', valid: false, message: `OpenRouter returned ${res.status}.` };
+  } catch (err) {
+    return unreachable('openrouter', 'OpenRouter', err);
   }
-  return {
-    provider: 'openrouter',
-    status: 'invalid',
-    valid: false,
-    message: 'OpenRouter rejected this key (or it could not be reached).'
-  };
 };
 
 // Gemini: the public models list 400/401/403s on a bad key, 200s on a good one. The key
@@ -159,14 +171,9 @@ const validateGemini = async (key: string): Promise<ValidationResult> => {
     if (res.status === 400 || res.status === 401 || res.status === 403) {
       return { provider: 'gemini', status: 'invalid', valid: false, message: 'Google rejected this Gemini key.' };
     }
-    return { provider: 'gemini', status: 'invalid', valid: false, message: `Gemini returned ${res.status}.` };
+    return { provider: 'gemini', status: 'unavailable', valid: false, message: `Gemini returned ${res.status}.` };
   } catch (err) {
-    return {
-      provider: 'gemini',
-      status: 'invalid',
-      valid: false,
-      message: `Could not reach Google: ${(err as Error)?.message || 'network error'}.`
-    };
+    return unreachable('gemini', 'Google', err);
   }
 };
 
@@ -203,9 +210,9 @@ const validateDirectProvider = async (def: ProviderDef, key: string): Promise<Va
     if (res.status === 401 || res.status === 403) {
       return { provider: def.id, status: 'invalid', valid: false, message: `Rejected by ${def.label} (auth failed) — key is invalid, revoked, or out of credits.` };
     }
-    return { provider: def.id, status: 'invalid', valid: false, message: `${def.label} returned ${res.status}.` };
+    return { provider: def.id, status: 'unavailable', valid: false, message: `${def.label} returned ${res.status}.` };
   } catch (err) {
-    return { provider: def.id, status: 'invalid', valid: false, message: `Could not reach ${def.label}: ${(err as Error)?.message || 'network error'}.` };
+    return unreachable(def.id, def.label, err);
   }
 };
 
@@ -242,10 +249,24 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
       };
       break;
     }
+    case 'ideogram': {
+      // Ideogram has no documented key-introspection endpoint either — same honest treatment.
+      const key = callerKeyFor(req, 'ideogram');
+      result = {
+        provider: 'ideogram',
+        status: key ? 'unsupported' : 'missing',
+        valid: false,
+        message: key
+          ? 'Stored — Ideogram has no validation endpoint, so it can’t be live-checked.'
+          : 'No Ideogram key provided.'
+      };
+      break;
+    }
     default: {
       // Direct providers (openai, anthropic, deepseek, zai, minimax, tencent, xai).
       const def = isTextProvider(provider) ? getProviderDef(provider) : undefined;
-      if (!def) return res.status(400).json({ error: { message: `Unknown provider "${provider}".` } });
+      // Never echo the caller's input back.
+      if (!def) return res.status(400).json({ error: { message: 'Unknown provider.' } });
       const key = callerKeyFor(req, def.id);
       result = key ? await validateDirectProvider(def, key) : missing(def.id);
       break;
