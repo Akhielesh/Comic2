@@ -19,7 +19,7 @@ export interface SelectOption {
   disabled?: boolean;
 }
 
-export const SELECT_CLASSES = `${FIELD} w-full min-w-0 cursor-pointer appearance-none truncate py-0 pe-9 ps-3 text-base md:text-[length:var(--ds-text-base)] aria-invalid:border-[var(--ds-danger-mark)] data-[placeholder]:text-[var(--ds-muted)] ${DENSITY.coarse}`;
+export const SELECT_CLASSES = `${FIELD} w-full min-w-0 cursor-pointer appearance-none truncate py-0 pe-9 ps-3 text-base md:text-[length:var(--ds-text-base)] aria-[invalid=true]:border-[var(--ds-danger-mark)] data-[placeholder]:text-[var(--ds-muted)] ${DENSITY.coarse}`;
 export const SELECT_SIZE: Record<SelectSize, string> = { sm: 'h-8', default: 'h-9' };
 
 export interface SelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, 'size'> {

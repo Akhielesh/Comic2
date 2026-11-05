@@ -105,7 +105,7 @@ describe('Input, Textarea, Select — the FIELD recipe', () => {
     const input = screen.getByLabelText('Name');
     expectClasses(input, INPUT_CLASSES, FIELD);
     expect(input).toHaveAttribute('type', 'text');
-    expect(INPUT_CLASSES).toContain('aria-invalid:border-[var(--ds-danger-mark)]');
+    expect(INPUT_CLASSES).toContain('aria-[invalid=true]:border-[var(--ds-danger-mark)]');
     expect(INPUT_CLASSES).toContain('text-base md:text-[length:var(--ds-text-base)]');
     expect(INPUT_CLASSES.split(' ')).toContain('h-10'); // Atlas input height
   });

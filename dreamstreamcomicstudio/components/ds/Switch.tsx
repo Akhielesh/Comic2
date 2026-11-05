@@ -15,7 +15,7 @@ import { useFieldControl } from './Field';
 import { FOCUS_RING } from './recipes';
 
 export const SWITCH_TRACK =
-  "group/switch relative inline-flex h-[1.15rem] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-[background-color,box-shadow,border-color] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-[var(--ds-accent-fill)] data-[state=unchecked]:bg-[color:color-mix(in_srgb,var(--ds-ink)_18%,var(--ds-canvas))] aria-invalid:border-[var(--ds-danger-mark)]";
+  "group/switch relative inline-flex h-[1.15rem] w-8 shrink-0 cursor-pointer items-center rounded-full border border-transparent transition-[background-color,box-shadow,border-color] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-[var(--ds-accent-fill)] data-[state=unchecked]:bg-[color:color-mix(in_srgb,var(--ds-ink)_18%,var(--ds-canvas))] aria-[invalid=true]:border-[var(--ds-danger-mark)]";
 /** The coarse-pointer hit area: an invisible 44 × 44 square centred on the track. */
 export const SWITCH_HIT_AREA =
   "coarse:after:absolute coarse:after:left-1/2 coarse:after:top-1/2 coarse:after:h-[var(--ds-density-touch)] coarse:after:w-[var(--ds-density-touch)] coarse:after:-translate-x-1/2 coarse:after:-translate-y-1/2 coarse:after:content-['']";

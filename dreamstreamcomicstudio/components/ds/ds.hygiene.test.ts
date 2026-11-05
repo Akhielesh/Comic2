@@ -12,6 +12,7 @@
  * text colours, no hand-rolled eyebrow; and every `var(--ds-*)` it reads must exist in index.css.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../chat/studioDesign';
@@ -119,5 +120,70 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
 
   it('no overlay here yet (Dialog, Menu, Popover, Tooltip and the Toast host wait for DS-1c)', () => {
     for (const { rel, text } of files) expect(text, rel).not.toMatch(/aria-modal|role="dialog"|role="menu"|role="tooltip"/);
+  });
+});
+
+/**
+ * Every class the primitives export must be one this app's Tailwind (3.4, tailwind.config.cjs) can
+ * generate. A class-presence test only proves a string is on the element; a Tailwind 4 idiom such as a
+ * bare `aria-invalid:` variant (3.4's `theme.aria` has no `invalid`) sits there and compiles to no CSS.
+ * So each class of each exported SCREAMING_CASE string (or record of strings) in components/ds/*.ts(x),
+ * the studioDesign recipes that recipes.ts re-exports among them, must get a Tailwind sort order.
+ */
+const twRequire = createRequire(import.meta.url);
+/** Hand-written classes in index.css (no utility behind them), and the named-group marker on the switch. */
+export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'group/switch'];
+
+/** [where, class string] for every exported class-string constant of a module. */
+export function exportedClassStrings(moduleName: string, mod: Record<string, unknown>): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const visit = (value: unknown, at: string) => {
+    if (typeof value === 'string') out.push([at, value]);
+    else if (value && typeof value === 'object' && !Array.isArray(value) && !('$$typeof' in value)) {
+      for (const [k, v] of Object.entries(value)) visit(v, `${at}.${k}`);
+    }
+  };
+  for (const [name, value] of Object.entries(mod)) if (/^[A-Z][A-Z0-9_]*$/.test(name)) visit(value, `${moduleName}:${name}`);
+  return out;
+}
+
+/** The classes of `classStrings` Tailwind cannot generate (each as `where: class`). */
+let tailwindContext: { getClassOrder(classes: string[]): Array<[string, bigint | null]> } | undefined;
+export function ungeneratedClasses(classStrings: Array<[string, string]>, allow: readonly string[] = HAND_WRITTEN_CLASSES): string[] {
+  if (!tailwindContext) {
+    const resolveConfig = twRequire('tailwindcss/resolveConfig');
+    const { createContext } = twRequire('tailwindcss/lib/lib/setupContextUtils');
+    tailwindContext = createContext(resolveConfig(twRequire(path.join(APP_ROOT, 'tailwind.config.cjs'))));
+  }
+  const where = new Map<string, string>();
+  for (const [at, s] of classStrings) for (const c of s.split(/\s+/)) if (c && !allow.includes(c) && !where.has(c)) where.set(c, at);
+  const order = tailwindContext!.getClassOrder([...where.keys()]);
+  return order.filter(([, o]) => o === null).map(([c]) => `${where.get(c)}: ${c}`);
+}
+
+describe('components/ds classes compile under this app’s Tailwind', () => {
+  it('every class of every exported class-string constant generates CSS', async () => {
+    const strings: Array<[string, string]> = [];
+    for (const entry of readdirSync(DS_DIR).sort()) {
+      if (!/\.tsx?$/.test(entry) || isTest(entry)) continue;
+      strings.push(...exportedClassStrings(entry, await import(path.join(DS_DIR, entry))));
+    }
+    const owners = new Set(strings.map(([at]) => at.split(':')[0]));
+    expect([...owners]).toEqual(expect.arrayContaining(['Button.tsx', 'Input.tsx', 'Select.tsx', 'Switch.tsx', 'Checkbox.tsx', 'recipes.ts', 'stateParts.tsx']));
+    expect(strings.length).toBeGreaterThan(100);
+    expect(ungeneratedClasses(strings)).toEqual([]);
+  });
+
+  it('flags a Tailwind 4 idiom and keeps the 3.4 spelling (planted samples)', () => {
+    const planted: Array<[string, string]> = [['planted', 'aria-invalid:border-[var(--ds-danger-mark)] peer-aria-invalid:border-[var(--ds-danger-mark)] size-4']];
+    expect(ungeneratedClasses(planted)).toEqual(['planted: aria-invalid:border-[var(--ds-danger-mark)]', 'planted: peer-aria-invalid:border-[var(--ds-danger-mark)]']);
+    expect(ungeneratedClasses([['ok', 'aria-[invalid=true]:border-[var(--ds-danger-mark)] peer-aria-[invalid=true]:border-[var(--ds-danger-mark)] coarse:min-h-11']])).toEqual([]);
+  });
+
+  it('the hand-written allowlist names real index.css rules', () => {
+    for (const c of HAND_WRITTEN_CLASSES) {
+      if (c.includes('/')) continue; // the named-group marker is a variant anchor, not a rule
+      expect(indexCss, c).toContain(`.${c}`);
+    }
   });
 });

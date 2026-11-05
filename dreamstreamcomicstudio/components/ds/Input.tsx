@@ -10,7 +10,7 @@ import { cn } from '../../lib/utils';
 import { useFieldControl } from './Field';
 import { DENSITY, FIELD } from './recipes';
 
-const FIELD_TYPE = 'text-base md:text-[length:var(--ds-text-base)] aria-invalid:border-[var(--ds-danger-mark)]';
+const FIELD_TYPE = 'text-base md:text-[length:var(--ds-text-base)] aria-[invalid=true]:border-[var(--ds-danger-mark)]';
 
 export const INPUT_CLASSES = `${FIELD} ${FIELD_TYPE} flex h-10 w-full min-w-0 px-3 py-2 file:border-0 file:bg-transparent file:text-[length:var(--ds-text-base)] file:font-medium ${DENSITY.coarse}`;
 /** At least 64 px tall, so it clears the 44 px touch floor without the coarse rule (which would lower its minimum). */

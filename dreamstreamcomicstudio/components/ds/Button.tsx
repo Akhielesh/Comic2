@@ -35,7 +35,7 @@ export const BUTTON_VARIANTS: readonly ButtonVariant[] = ['default', 'destructiv
 export const BUTTON_SIZES: readonly ButtonSize[] = ['sm', 'default', 'lg', 'icon'];
 
 /** Shape, type, motion and states shared by every variant (the focus outline is appended after the merge). */
-export const BUTTON_BASE = `inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap ${RADIUS_CONTROL} border text-[length:var(--ds-text-base)] font-medium transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-invalid:border-[var(--ds-danger-mark)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 ${DENSITY.coarse}`;
+export const BUTTON_BASE = `inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap ${RADIUS_CONTROL} border text-[length:var(--ds-text-base)] font-medium transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] motion-safe:active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-[invalid=true]:border-[var(--ds-danger-mark)] [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 ${DENSITY.coarse}`;
 
 export const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   default: `border-transparent ${ACCENT_FILL} ${ON_ACCENT_TEXT} ${ACCENT_FILL_HOVER} ${SHADOW_SOFT}`,
