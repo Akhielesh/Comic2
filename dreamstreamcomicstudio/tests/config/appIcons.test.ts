@@ -283,21 +283,28 @@ describe('the art', () => {
   });
 
   const maskables = ICON_SETS.flatMap((s) => s.outputs.filter((o) => o.kind === 'square' && o.size === 512).map((o) => o.file));
-  it.each(maskables)('%s keeps the glyph inside the maskable safe zone (radius 40%%) on full-bleed ink', async (rel) => {
+  // One expect per check, not per pixel: 262k expect() calls per 512px icon took ~3s alone and
+  // timed out at vitest's 5s default when the whole suite runs in parallel.
+  it.each(maskables)('%s keeps the glyph inside the maskable safe zone (a 40 percent radius) on full-bleed ink', async (rel) => {
     const img = await rgba(path.join(ROOT, rel));
     const c = img.w / 2;
     let glyph = 0;
     let farthest = 0;
+    let seeThrough = 0;
     for (let y = 0; y < img.h; y++) {
       for (let x = 0; x < img.w; x++) {
-        const [r, g, b, a] = img.at(x, y);
-        expect(a).toBe(255);
+        const i = (y * img.w + x) * 4;
+        const r = img.data[i];
+        const g = img.data[i + 1];
+        const b = img.data[i + 2];
+        if (img.data[i + 3] !== 255) seeThrough++;
         if (r + g + b > 3 * 128) {
           glyph++;
           farthest = Math.max(farthest, Math.hypot(x + 0.5 - c, y + 0.5 - c));
         }
       }
     }
+    expect(seeThrough, 'full bleed: every pixel opaque').toBe(0);
     expect(glyph, 'the glyph is drawn').toBeGreaterThan(img.w * img.h * 0.05);
     expect(farthest / img.w, 'inside the 80% safe-zone circle').toBeLessThanOrEqual(0.4);
     expect(farthest / img.w, 'not shrunk into a dot').toBeGreaterThan(0.3);
@@ -307,7 +314,9 @@ describe('the art', () => {
   it.each(touches)('%s is full bleed (iOS shows black behind transparency)', async (rel) => {
     const img = await rgba(path.join(ROOT, rel));
     expect([img.w, img.h]).toEqual([180, 180]);
-    for (let i = 3; i < img.data.length; i += 4) expect(img.data[i]).toBe(255);
+    let seeThrough = 0;
+    for (let i = 3; i < img.data.length; i += 4) if (img.data[i] !== 255) seeThrough++;
+    expect(seeThrough, 'every pixel opaque').toBe(0);
   });
 
   const tiles = ICON_SETS.flatMap((s) => s.outputs.filter((o) => o.kind === 'tile').map((o) => o.file));
