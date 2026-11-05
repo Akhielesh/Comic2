@@ -2162,7 +2162,9 @@ const normalizePageShip2 = (page: Page): Page => {
 const normalizeLine = (l: Line): Line => {
   if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined && l.styleId === undefined) return l; // identity
   const next: Line = { ...l }; // key order kept
-  const style = sanitizeLetterStylePatch(l.style);
+  // Load: a newer build's Pro lettering is kept (structurally checked) so a rollback never strips it; resolveLetterStyle
+  // draws only what this build knows. Client patches go through the same sanitizer WITHOUT the option.
+  const style = sanitizeLetterStylePatch(l.style, { keepStoredPro: true });
   if (style) next.style = style;
   else delete next.style;
   if (typeof l.lang !== 'string' || !l.lang) delete next.lang;
@@ -2504,7 +2506,8 @@ export const normalizeDoc = (input: Partial<ComicDoc> & { id: string }): ComicDo
   doc.gate = input.gate || null;
   doc.conversation = asArray<Msg>(input.conversation).map(normalizeMsg);
   // ── v5 additions: explicit assignment (R3) ──
-  doc.letterStyle = sanitizeLetteringStyle(input.letterStyle); // missing/invalid → { presetId: 'classic' } (NO auto)
+  // missing/invalid → { presetId: 'classic' } (NO auto). Load: Pro keys and `named` a newer build stored are kept.
+  doc.letterStyle = sanitizeLetteringStyle(input.letterStyle, { keepStoredPro: true });
   doc.book = pickBook(input.book); // storybook plates default is applied only on create / set_format
   doc.reader = pickReader(input.reader);
   doc.archive = asArray<ArchivedVersion>(input.archive).filter(

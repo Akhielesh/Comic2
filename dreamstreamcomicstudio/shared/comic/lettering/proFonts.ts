@@ -2,7 +2,8 @@
 // OFL / Apache faces (Bungee, Titan One, Creepster, Caveat…), so lettering/style.ts keeps one owner per wave.
 //
 // Until then there is no Pro font: ProFontId is `never`, PRO_FONT_IDS is empty, and the lettering sanitizer accepts
-// only FONT_IDS (style.ts). A stored font id this build does not know is dropped by that sanitizer, exactly as today.
+// only FONT_IDS from a client (style.ts). A font id a newer build stored is kept on load (sanitizeLetterStylePatch with
+// keepStoredPro), so a rollback never strips it, and resolveLetterStyle draws the cascade's face instead.
 
 import type { FontId } from './style.js';
 

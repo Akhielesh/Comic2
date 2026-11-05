@@ -9,6 +9,8 @@ import type { Request } from 'express';
 import { DEFAULT_CAPS } from '../../../shared/comic/capabilities.js';
 import { normalizeDoc, type ComicDoc, type PageLayer } from '../../../shared/comic/doc.js';
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
+import { inverseOps } from '../../../shared/comic/undo.js';
+import { resolveLetterStyle } from '../../../shared/comic/lettering/style.js';
 import { __resetAccessCacheForTests, studioCapsFor } from './access.js';
 import { sanitizePatchOps } from './jobs.js';
 import type { SanitizeCtx } from './extensions.js';
@@ -86,3 +88,66 @@ describe('no client can write a Pro op or a Pro field (PE-0)', () => {
     expect(applyOps(doc, del).pages[0].layers!.map((l) => l.id)).toEqual(['ly_future', 'ly_shape']);
   });
 });
+
+describe('rollback safety (PE-0): what a newer build stored survives this server, and its undo is accepted', () => {
+  const PRO_STYLE = { italic: true, shape: 'heart', sfxEffect: 'wobble', font: 'bungee', fillGradient: { from: '#ff0000', to: '#ffff00', angle: 90 }, strokes: [{ color: '#000000', w: 0.1 }], warp: 'arc', warpAmount: 0.5 };
+  const NAMED = { st_radio: { name: 'Radio', patch: { shape: 'radio', glow: { color: '#00ff00', size: 0.1 } } } };
+  /** The planned book as S2 would store it: Pro lettering on its first line, named styles, then the server's load. */
+  const stored = (): ComicDoc => {
+    const raw = JSON.parse(JSON.stringify(plannedDoc())) as ComicDoc;
+    const page = raw.pages.find((p) => p.panels.some((pn) => pn.lines.length))!;
+    const panel = page.panels.find((pn) => pn.lines.length)!;
+    panel.lines[0] = { ...panel.lines[0], style: JSON.parse(JSON.stringify(PRO_STYLE)) };
+    raw.letterStyle = { ...(raw.letterStyle ?? { presetId: 'classic' }), named: JSON.parse(JSON.stringify(NAMED)) };
+    return normalizeDoc(raw);
+  };
+  const firstLine = (doc: ComicDoc) => {
+    const page = doc.pages.find((p) => p.panels.some((pn) => pn.lines.length))!;
+    const panel = page.panels.find((pn) => pn.lines.length)!;
+    return { page, panel, line: panel.lines[0] };
+  };
+
+  it('stored Pro lettering and named styles survive the load and an ordinary edit; a client still cannot write them', () => {
+    const doc = stored();
+    const { page, line } = firstLine(doc);
+    expect(line.style).toEqual(PRO_STYLE);
+    expect(doc.letterStyle?.named).toEqual(NAMED);
+    // Drawn exactly as a line styled only { italic: true }.
+    expect(resolveLetterStyle(doc, line)).toEqual(resolveLetterStyle(doc, { ...line, style: { italic: true } }));
+    // A client restyle (merge) keeps the stored Pro keys; a client cannot add any.
+    const ops = sanitizePatchOps(doc, [{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { textColor: '#aa0000', shape: 'radio', glow: { color: '#ffffff', size: 0.2 } } }], sctx()) as DocOp[];
+    expect(ops).toEqual([{ op: 'line_style', pageId: page.id, lineIds: [line.id], patch: { textColor: '#aa0000' } }]);
+    const after = normalizeDoc(JSON.parse(JSON.stringify(applyOps(doc, ops))));
+    expect(firstLine(after).line.style).toEqual({ ...PRO_STYLE, textColor: '#aa0000' });
+    for (const patch of [{ shape: 'heart' }, { sfxEffect: 'wobble' }, { font: 'bungee' }, { warp: 'arc' }]) {
+      refuseStyle(doc, page.id, line.id, patch);
+    }
+    expect(() => sanitizePatchOps(doc, [{ op: 'letter_style', patch: { base: { warp: 'arc' } } }], sctx())).toThrow(/nothing valid/);
+    // A preset switch through the client keeps the saved named styles (the op never drops them).
+    const preset = sanitizePatchOps(doc, [{ op: 'letter_style', patch: { presetId: 'manga' } }], sctx()) as DocOp[];
+    expect(applyOps(doc, preset).letterStyle?.named).toEqual(NAMED);
+  });
+
+  it('panel_remove next to an opaque layer clipped to it: the layer is kept as written and the undo batch passes the sanitizer', () => {
+    const doc = normalizeDoc(JSON.parse(JSON.stringify(plannedDoc())));
+    const page = doc.pages.find((p) => p.panels.length >= 2)!;
+    const [gone, keep] = page.panels;
+    const withLayers = normalizeDoc({
+      ...doc,
+      pages: doc.pages.map((p) => (p.id === page.id ? { ...p, layers: [{ id: 'ly_future', kind: 'hologram', box, clip: gone.id } as unknown as PageLayer, { id: 'ly_shape', kind: 'shape', box, shape: { type: 'rect' }, clip: gone.id }] } : p))
+    });
+    const ops = sanitizePatchOps(withLayers, [{ op: 'panel_remove', pageId: page.id, id: gone.id, linesTo: keep.id }], sctx()) as DocOp[];
+    const after = applyOps(withLayers, ops);
+    const layers = after.pages.find((p) => p.id === page.id)!.layers!;
+    expect(layers.find((l) => l.id === 'ly_future')).toEqual({ id: 'ly_future', kind: 'hologram', box, clip: gone.id });
+    expect(layers.find((l) => l.id === 'ly_shape')!.clip).toBeUndefined();
+    // The undo (what the client sends back) is accepted, and restores the page exactly.
+    const undo = sanitizePatchOps(after, inverseOps(withLayers, ops), sctx()) as DocOp[];
+    const back = applyOps(after, undo);
+    expect(back.pages.find((p) => p.id === page.id)).toEqual(withLayers.pages.find((p) => p.id === page.id));
+  });
+});
+
+function refuseStyle(doc: ComicDoc, pageId: string, lineId: string, patch: Record<string, unknown>) {
+  expect(() => sanitizePatchOps(doc, [{ op: 'line_style', pageId, lineIds: [lineId], patch }], sctx()), JSON.stringify(patch)).toThrow(/nothing valid/);
+}

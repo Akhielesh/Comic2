@@ -1027,7 +1027,12 @@ const applyPageDelete = (doc: ComicDoc, op: Extract<DocOp, { op: 'page_delete' }
 };
 
 const applyLetterStyle = (doc: ComicDoc, patch: LetteringStyleOpPatch | null): ComicDoc => {
-  if (patch === null) return { ...doc, letterStyle: { presetId: 'classic' } };
+  if (patch === null) {
+    // A reset clears the look. Saved named styles stay: lines link to them, no op of this build writes them, and the
+    // inverse (a reset, then the old look) must give them back exactly, so a rollback never loses them (PE-0).
+    const named = doc.letterStyle?.named;
+    return { ...doc, letterStyle: named ? { presetId: 'classic', named } : { presetId: 'classic' } };
+  }
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return doc;
   const cur = letterStyleOf(doc);
   const next: LetteringStyle = { ...cur };
@@ -1500,7 +1505,8 @@ const followFrames = (beforeDoc: ComicDoc, afterDoc: ComicDoc, pageId: string): 
   });
   const layers = after.layers?.map((l) => {
     const m = l.clip ? maps.get(l.clip) : undefined;
-    if (!m) return l;
+    // An opaque layer (a kind a newer build wrote) is kept exactly as written: its box never follows here (PE-0).
+    if (!m || isOpaqueLayer(l)) return l;
     const x0 = m.x(l.box.x);
     const x1 = m.x(l.box.x + l.box.w);
     const y0 = m.y(l.box.y);
@@ -1721,9 +1727,11 @@ const applyPanelRemove = (doc: ComicDoc, op: Extract<DocOp, { op: 'panel_remove'
   const deleted = target ? new Set<string>() : new Set(rest.map((l) => l.id));
   const nextPage: Page = { ...page, panels: renumberPanels(panels) };
   if (deleted.size) nextPage.balloons = page.balloons.filter((b) => !deleted.has(b.lineId));
-  if (page.layers?.some((l) => l.clip === op.id)) {
+  // Overlays clipped to the removed panel are unclipped; an opaque layer is kept exactly as written (PE-0), so its undo
+  // never needs a patch the server would refuse.
+  if (page.layers?.some((l) => l.clip === op.id && !isOpaqueLayer(l))) {
     nextPage.layers = page.layers.map((l) => {
-      if (l.clip !== op.id) return l;
+      if (l.clip !== op.id || isOpaqueLayer(l)) return l;
       const out = { ...l };
       delete out.clip;
       return out;

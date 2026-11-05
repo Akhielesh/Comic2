@@ -17,6 +17,8 @@
 import {
   bookOf,
   findPage,
+  isOpaqueLayer,
+  knownLayersOf,
   letterStyleOf,
   readerOf,
   getRender,
@@ -87,7 +89,8 @@ const lettersRestore = (doc: ComicDoc, page: Page, lineIds: string[]): DocOp[] =
 const followRestore = (doc: ComicDoc, after: ComicDoc, page: Page, now: Page): DocOp[] => {
   const restore: DocOp[] = [];
   if (!sameJson(page.balloons, now.balloons)) restore.push({ op: 'balloons', pageId: page.id, balloons: page.balloons });
-  for (const layer of page.layers || []) {
+  // Opaque layers never follow (ops.ts), so they are never patched back: the server refuses any patch to one.
+  for (const layer of knownLayersOf(page)) {
     const moved = now.layers?.find((l) => l.id === layer.id);
     if (moved && !sameJson(moved.box, layer.box)) restore.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { box: layer.box } });
   }
@@ -150,7 +153,8 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
       const moved = new Set([...(op.lineHomes || []).map((h) => h.lineId), ...(op.linesTo ? removed.lines.map((l) => l.id) : [])]);
       const deleted = removed.lines.map((l) => l.id).filter((id) => !moved.has(id));
       if (deleted.length) restore.push(...lettersRestore(doc, page, deleted));
-      for (const layer of page.layers || []) if (layer.clip === op.id) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { clip: op.id } });
+      // Only the overlays it unclipped: an opaque layer keeps its clip (ops.ts), and the server refuses a patch to one.
+      for (const layer of knownLayersOf(page)) if (layer.clip === op.id) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { clip: op.id } });
       return restore;
     }
     case 'layer': {
@@ -160,6 +164,7 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
       const index = layers.findIndex((l) => l.id === op.id);
       if (index < 0) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: null }];
       const prev = layers[index];
+      if (isOpaqueLayer(prev)) return []; // the layer op never changes an opaque layer (ops.ts): nothing to undo
       if (op.patch === null || op.patch === undefined) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: withoutId(prev), index }];
       // The whole previous overlay (a kind change drops keys the normalizer no longer allows).
       const now = findPage(after, op.pageId)?.layers?.find((l) => l.id === op.id);

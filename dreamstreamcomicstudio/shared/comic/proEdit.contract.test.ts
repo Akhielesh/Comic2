@@ -51,7 +51,7 @@ import {
   type DocOp
 } from './ops';
 import { describeOps, inverseOps, isUndoable } from './undo';
-import { FX_LIMITS, MOTION_LIMITS } from './limits';
+import { FX_LIMITS, MOTION_LIMITS, PRO_LETTER_LIMITS } from './limits';
 import {
   BUBBLE_SHAPES,
   PRO_BUBBLE_SHAPES,
@@ -60,7 +60,8 @@ import {
   SFX_EFFECTS,
   proLetterOf,
   resolveLetterStyle,
-  sanitizeLetterStylePatch
+  sanitizeLetterStylePatch,
+  sanitizeLetteringStyle
 } from './lettering/style';
 import { PRO_FONT_IDS, isProFontId } from './lettering/proFonts';
 import { FX_GENERATORS, fxName, fxParamsOf, renderFx } from './fx/index';
@@ -522,6 +523,126 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     expect(PRO_SFX_EFFECTS.filter((s) => (SFX_EFFECTS as readonly string[]).includes(s))).toEqual([]);
     expect(PRO_FONT_IDS).toEqual([]);
     expect(isProFontId('bungee')).toBe(false);
+  });
+
+  // ── Rollback (§2.3 graft 1, §6.4): S2 writes Pro lettering; rolled back to PE-0, a load + write-back must keep it. ──
+  const PRO_LINE_STYLE = {
+    italic: true,
+    font: 'bungee',
+    shape: 'heart',
+    sfxEffect: 'wobble',
+    fillGradient: { from: '#ff0000', to: '#ffff00', angle: 90 },
+    strokes: [{ color: '#000000', w: 0.1 }, { color: '#ffffff', w: 0.05 }],
+    glow: { color: '#ffcc00', size: 0.2 },
+    warp: 'arc',
+    warpAmount: 0.5
+  };
+  const NAMED = {
+    st_radio: { name: 'Radio', patch: { shape: 'radio', textColor: '#00aa00', glow: { color: '#00ff00', size: 0.1 } } },
+    st_plain: { name: 'Plain', patch: { italic: false } }
+  };
+  /** The v5 book as S2 would store it: Pro text styling on a line and in the comic-wide base, and named styles. */
+  const proLettered = (): ComicDoc => {
+    const d = json(v5());
+    const line = d.pages[0].panels[2].lines[0];
+    d.pages[0].panels[2].lines[0] = { ...line, styleId: 'st_radio', style: json(PRO_LINE_STYLE) as never };
+    d.letterStyle = { ...(d.letterStyle ?? { presetId: 'classic' }), base: { warp: 'wave', warpAmount: -0.25, textColor: '#222222' } as never, named: json(NAMED) as never };
+    return d;
+  };
+
+  it('stored Pro lettering and named styles round-trip normalizeDoc (rollback-safe) and draw exactly as today', () => {
+    const stored = proLettered();
+    const loaded = normalizeDoc(json(stored));
+    expect(loaded.pages[0].panels[2].lines[0].style).toEqual(PRO_LINE_STYLE);
+    expect(loaded.letterStyle).toEqual(stored.letterStyle);
+    expect(loaded.letterStyle?.named).toEqual(NAMED);
+    // Idempotent, and a jsonb reload (keys reordered) changes nothing.
+    expect(normalizeDoc(json(loaded))).toEqual(loaded);
+    expect(normalizeDoc(jsonbOrder(json(loaded)) as ComicDoc)).toEqual(loaded);
+    // Draws exactly as today: the cascade skips what this build cannot draw (Pro text keys, a Pro shape, SFX effect or
+    // font), so the line resolves as if only its base keys were stored, and every id is one the exhaustive records know.
+    const line = loaded.pages[0].panels[2].lines[0];
+    const today = { ...loaded, letterStyle: { ...loaded.letterStyle!, base: { textColor: '#222222' } } };
+    const resolved = resolveLetterStyle(loaded, line);
+    expect(resolved).toEqual(resolveLetterStyle(today, { ...line, style: { italic: true } }));
+    expect(BUBBLE_SHAPES).toContain(resolved.shape);
+    expect(SFX_EFFECTS).toContain(resolved.sfxEffect);
+    expect(JSON.stringify(resolved)).not.toMatch(/fillGradient|strokes|glow|warp|bungee|heart|wobble/);
+    const sfx = { ...line, kind: 'sfx' as const };
+    expect(resolveLetterStyle(loaded, sfx)).toEqual(resolveLetterStyle(today, { ...sfx, style: { italic: true } }));
+    // No spec hash moves.
+    expect(specHashes(loaded)).toEqual(specHashes(v5()));
+  });
+
+  it('the load keep is structural and bounded; a client patch still gets none of it', () => {
+    // A client patch (no option): every Pro key and id is dropped, exactly as before.
+    expect(sanitizeLetterStylePatch(PRO_LINE_STYLE)).toEqual({ italic: true });
+    expect(sanitizeLetteringStyle({ presetId: 'classic', base: { warp: 'arc' }, named: NAMED })).toEqual({ presetId: 'classic' });
+    // Load: malformed Pro values are dropped; finite numbers are kept as stored (write bounds are the sanitizer's).
+    const keep = { keepStoredPro: true };
+    expect(sanitizeLetterStylePatch({ fillGradient: { from: 'nope', to: '#fff', angle: 0 }, glow: { color: '#fff', size: -1 }, warp: 'twist', warpAmount: 7, shape: 'blob', sfxEffect: 'melt', font: 'Not A Font' }, keep)).toEqual({ warpAmount: 7 });
+    expect(sanitizeLetterStylePatch({ strokes: Array.from({ length: 5 }, () => ({ color: '#000', w: 2 })) }, keep)).toEqual({ strokes: Array.from({ length: PRO_LETTER_LIMITS.strokes }, () => ({ color: '#000000', w: 2 })) });
+    expect(sanitizeLetterStylePatch({ strokes: [], fillGradient: null, glow: null }, keep)).toEqual({ fillGradient: null, strokes: [], glow: null });
+    expect(sanitizeLetterStylePatch({ strokes: [{ color: 'x', w: 1 }] }, keep)).toBeUndefined();
+    // Named styles: names ≤ 40, ≤ 32 styles, keys are short ids (never __proto__), each patch sanitized with the keep.
+    const many = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`st_${i}`, { name: `Style ${i}`, patch: {} }]));
+    expect(Object.keys(sanitizeLetteringStyle({ presetId: 'classic', named: many }, keep).named!)).toHaveLength(PRO_LETTER_LIMITS.namedStyles);
+    const named = sanitizeLetteringStyle(
+      JSON.parse('{"presetId":"classic","named":{"__proto__":{"name":"Evil","patch":{}},"st_long":{"name":"' + 'x'.repeat(41) + '","patch":{}},"bad key":{"name":"A","patch":{}},"st_ok":{"name":"Ok","patch":{"shape":"heart","nope":1}},"st_nopatch":{"name":"B"}}}'),
+      keep
+    ).named;
+    expect(named).toEqual({ st_ok: { name: 'Ok', patch: { shape: 'heart' } } });
+    expect(({} as Record<string, unknown>).name).toBeUndefined();
+  });
+
+  it('the letter_style op and its exact inverse keep named styles; a reset keeps them too', () => {
+    const doc = normalizeDoc(json(proLettered()));
+    for (const op of [
+      { op: 'letter_style', patch: { presetId: 'manga' } },
+      { op: 'letter_style', patch: { base: { italic: true }, safeMargin: 0.05 } },
+      { op: 'letter_style', patch: null }
+    ] as DocOp[]) {
+      const after = applyOp(doc, op);
+      expect(after.letterStyle?.named, JSON.stringify(op)).toEqual(NAMED);
+      expect(apply(after, inverseOps(doc, [op])).letterStyle, JSON.stringify(op)).toEqual(doc.letterStyle);
+    }
+  });
+});
+
+describe('Pro Edit contract (PE-0): opaque layers through frames and panel removal', () => {
+  /** The Pro doc with the opaque layer clipped to the first panel (a newer build's layer, kept as written). */
+  const clippedOpaque = (): ComicDoc => {
+    const d = json(proDoc());
+    d.pages[0].layers = d.pages[0].layers!.map((l) => (l.id === 'ly_future' ? ({ ...l, clip: 'pg_1_p1' } as PageLayer) : l));
+    // The drawing is cut into its panels and shown in frames, so a frame edit moves what is clipped to the panel.
+    const frames = [bx(0.02, 0.02, 0.96, 0.3), bx(0.02, 0.34, 0.47, 0.64), bx(0.51, 0.34, 0.47, 0.64)];
+    d.pages[0].render = { ...d.pages[0].render, cuts: { status: 'ok', by: 'detect', at: 11, cuts: frames.map((box, i) => ({ panelId: d.pages[0].panels[i].id, drawn: i + 1, box, conf: 0.95 })) } };
+    d.pages[0].artMode = 'panels';
+    d.pages[0].panels.forEach((p, i) => (p.frame = { ...p.frame, box: frames[i] }));
+    return normalizeDoc(d);
+  };
+  const opaqueOf = (d: ComicDoc) => d.pages[0].layers!.find((l) => l.id === 'ly_future');
+
+  it('an opaque layer clipped to a panel survives page_frames and panel_remove unchanged, and op + inverse is exact', () => {
+    const doc = clippedOpaque();
+    const written = json(opaqueOf(doc));
+    expect(written).toEqual({ ...FUTURE, clip: 'pg_1_p1' });
+    const frames: DocOp = { op: 'page_frames', pageId: 'pg_1', frames: [{ panelId: 'pg_1_p1', frame: { box: bx(0.1, 0.05, 0.8, 0.45) } }] };
+    const remove: DocOp = { op: 'panel_remove', pageId: 'pg_1', id: 'pg_1_p1', linesTo: 'pg_1_p2' };
+    for (const op of [frames, remove]) {
+      const after = applyOp(doc, op);
+      expect(after, op.op).not.toBe(doc);
+      expect(opaqueOf(after), op.op).toEqual(written);
+      const inverse = inverseOps(doc, [op]);
+      // No inverse op names the opaque layer (the server refuses any patch to one).
+      expect(inverse.filter((o) => o.op === 'layer' && o.id === 'ly_future'), op.op).toEqual([]);
+      expect(apply(after, inverse), op.op).toEqual(doc);
+    }
+    // The known effect layer clipped to the same panel still follows and unclips (unchanged behaviour).
+    expect(applyOp(doc, frames).pages[0].layers!.find((l) => l.id === 'ly_fx')!.box).not.toEqual(doc.pages[0].layers!.find((l) => l.id === 'ly_fx')!.box);
+    expect(applyOp(doc, remove).pages[0].layers!.find((l) => l.id === 'ly_fx')!.clip).toBeUndefined();
+    // A layer op on the opaque layer is a no-op, so its inverse is empty.
+    expect(inverseOps(doc, [{ op: 'layer', pageId: 'pg_1', id: 'ly_future', patch: null }])).toEqual([]);
   });
 });
 

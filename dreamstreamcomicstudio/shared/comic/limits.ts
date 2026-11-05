@@ -210,14 +210,17 @@ export const FX_LIMITS = {
 } as const;
 export type FxLimitKey = keyof typeof FX_LIMITS;
 
-/** Pro text styling (lettering/style.ts PRO_STYLE_KEYS). */
+/** Pro text styling (lettering/style.ts PRO_STYLE_KEYS) and named styles. */
 export const PRO_LETTER_LIMITS = {
-  /** Stacked outline strokes on one line's text. */
+  /** Stacked outline strokes on one line's text (§2.3; the load normalizer keeps at most this many too). */
   strokes: 3,
-  /** Stroke width and glow size, in em. */
+  /** WRITE bounds, LEAD TO CONFIRM (not in the plan): stroke width and glow size in em, warp −max..max. Only the client
+   *  sanitizer (PE-LETTER / PE-SERVER) and the drawing apply them; the load normalizer keeps any finite stored value. */
   strokeWMax: 0.3,
   glowSizeMax: 0.5,
-  /** Warp amount is −warpAmountMax..warpAmountMax. */
-  warpAmountMax: 1
+  warpAmountMax: 1,
+  /** `letterStyle.named` (§2.3): at most this many saved styles, names of at most this many characters. */
+  namedStyles: 32,
+  namedNameChars: 40
 } as const;
 export type ProLetterLimitKey = keyof typeof PRO_LETTER_LIMITS;
