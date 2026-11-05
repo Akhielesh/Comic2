@@ -96,6 +96,12 @@ describe('ShareCardView', () => {
     doc.publication = { visibility: 'unlisted', status: 'live', slug: SLUG, publishedRev: 1, publishedAt: 1, languages: ['en'] };
     const { rerender } = render(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio({ doc })} />);
     expect((screen.getByLabelText('Share link') as HTMLInputElement).value).toBe(`https://comics.dreamstreamstudio.ai/c/${SLUG}`);
+    // The tag names the choice the way the Share sheet does (DS-R0): Link only / Library + link.
+    expect(screen.getByText('Link only')).toBeInTheDocument();
+    const listed = makeSampleDoc();
+    listed.publication = { ...doc.publication, visibility: 'public' };
+    rerender(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio({ doc: listed })} />);
+    expect(screen.getByText('Library + link')).toBeInTheDocument();
     rerender(<ShareCardView card={{ type: 'share', id: 's1' }} message={msg} studio={makeFakeStudio()} />);
     expect(screen.getByText(/Only you can see this comic/)).toBeInTheDocument();
   });

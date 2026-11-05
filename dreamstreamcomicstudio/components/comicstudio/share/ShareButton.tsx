@@ -1,5 +1,5 @@
 // Share button (contract §13.3): the studio header's Share slot (opens the Share sheet; a status
-// dot shows green = public, blue = unlisted, amber = changes since publishing), and the reader's
+// dot shows green = Library + link, blue = Link only, amber = changes since publishing), and the reader's
 // share action when given a `target` (Web Share, else a small popover with Copy + intents).
 // Icon + label from 768 px, icon-only when compact; 44 px targets. The sheet can also be opened
 // from anywhere with `openShareSheet()` (a window event the mounted button listens for).
@@ -110,7 +110,7 @@ export const ShareButton: React.FC<ShareButtonProps> = ({ studio, target, compac
   const m = studio.doc.publication;
   const behind = !!studio.publication?.behind;
   const dot = !m ? null : m.status === 'suspended' || behind ? 'bg-amber-500' : m.visibility === 'public' ? 'bg-emerald-500' : 'bg-sky-500';
-  const label = !m ? 'Share (private)' : m.status === 'suspended' ? 'Share (paused)' : `Share (${m.visibility === 'public' ? 'public' : 'unlisted'}${behind ? ', changes not published' : ''})`;
+  const label = !m ? 'Share (private)' : m.status === 'suspended' ? 'Share (paused)' : `Share (${m.visibility === 'public' ? 'Library + link' : 'Link only'}${behind ? ', changes not published' : ''})`;
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-label={label} title={label} className={buttonCls(compact)}>

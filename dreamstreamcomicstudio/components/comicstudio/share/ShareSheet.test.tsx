@@ -99,7 +99,7 @@ describe('ShareSheet', () => {
     setViewport(false);
     expect(sheetLayout()).toBe('wide');
     render(<ShareButton studio={studio} />);
-    const trigger = screen.getByRole('button', { name: /Share \(unlisted\)/ });
+    const trigger = screen.getByRole('button', { name: /Share \(Link only\)/ });
     trigger.focus();
     fireEvent.click(trigger);
     expect(screen.queryByTestId('share-drag-handle')).toBeNull();
@@ -455,7 +455,7 @@ describe('ShareButton', () => {
     const studio = studioWith(view({ visibility: 'public' }));
     studio.doc!.publication = { ...studio.doc!.publication!, visibility: 'public' };
     const { unmount } = render(<ShareButton studio={studio} compact />);
-    expect(screen.getByRole('button', { name: 'Share (public)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Share (Library + link)' })).toBeInTheDocument();
     act(() => {
       window.dispatchEvent(new CustomEvent('ds:open-share'));
     });
