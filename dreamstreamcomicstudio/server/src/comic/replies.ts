@@ -309,8 +309,8 @@ const NUMBER_WORDS: Record<string, number> = {
 const NUMBER_WORD = '(?:\\d{1,2}|one|single|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)';
 /** A number + "page(s)": "4 pages", "a 6-page comic", "one page". Group 1 the number, group 2 the joiner. */
 const COUNT_RE = new RegExp(`\\b(${NUMBER_WORD})(-| )(?:page|pager)s?\\b`, 'gi');
-/** "page count to 4", "number of pages: 6", "pages: 6" (a note), with the number in group 1. */
-const COUNT_NAMED_RE = new RegExp(`\\b(?:page count|number of pages)\\s*(?:is|of|to|at|:|=)?\\s*(${NUMBER_WORD})\\b(?!\\s*(?:panels?|words?|lines?)\\b)|\\bpages\\s*[:=]\\s*(${NUMBER_WORD})\\b`, 'i');
+/** "page count to 4", "number of pages: 6", "pages: 6" (a note; not "pages: 2 and 3 are dark"), the number in group 1 or 2. */
+const COUNT_NAMED_RE = new RegExp(`\\b(?:page count|number of pages)\\s*(?:is|of|to|at|:|=)?\\s*(${NUMBER_WORD})\\b(?!\\s*(?:panels?|words?|lines?)\\b)|\\bpages\\s*[:=]\\s*(${NUMBER_WORD})\\b(?=\\s*(?:$|[.,;)]))`, 'i');
 /** Words just before a number that SET the length, whatever follows: "make it 4 pages", "cut it down to 3 pages". */
 const COUNT_SET_BEFORE_RE =
   /(?:\bmake (?:it|this|the (?:comic|book|story|whole thing))|\bturn (?:it|this|the (?:comic|book|story)) into|\b(?:cut|trim|shorten|reduce|bring|take) (?:it |this |the (?:comic|book|story) )?(?:down |back )?to|\b(?:expand|extend|stretch|grow|increase|bump|lengthen) (?:it |this |the (?:comic|book|story) )?(?:up )?to|\bchange (?:it|this|the page count|the length|the comic|the story) to|\bkeep (?:it|this|the (?:comic|book|story)) (?:at|to)|\b(?:go|going|come) (?:down |up |back )?to|\bfrom \w+ to|\b(?:should|must|will|would|could|can|to) (?:only |just )?be)(?: (?:only|just|exactly))?(?: a| an)?\s*$/i;

@@ -323,6 +323,7 @@ describe('contradiction gaps (agent-editor plan §3 A3.2: ask once, never overri
     expect(requestedPageCount('redo 2 pages')).toBeUndefined();
     expect(requestedPageCount('1 page, 4:5')).toBe(1);
     expect(requestedPageCount('pages: 6')).toBe(6);
+    expect(requestedPageCount('pages: 2 and 3 are dark')).toBeUndefined();
     expect(statedLanguage('the sign says hello in Hindi')).toBeUndefined();
     expect(statedLanguage('Telugu dialogue', true)).toBe('Telugu');
     expect(statedLanguage('a Tamil comic')).toBe('Tamil');
