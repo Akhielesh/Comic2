@@ -7,9 +7,8 @@
 import React from 'react';
 import { BookOpen, Rows3, ScanEye, Sparkles } from 'lucide-react';
 import type { ContentRating } from '../../../shared/comic/safety';
-import { FONT_DISPLAY } from '../../chat/studioDesign';
+import { FONT_DISPLAY, ON_ACCENT_TEXT } from '../../chat/studioDesign';
 import { RatingBadge } from '../safety/RatingBadge';
-import { ON_ACCENT_TEXT } from '../../chat/studioDesign';
 
 export interface ReaderCoverCardProps {
   title: string;
