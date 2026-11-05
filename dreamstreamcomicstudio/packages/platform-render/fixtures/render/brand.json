@@ -1,0 +1,32 @@
+{
+  "note": "A synthetic BrandKit-shaped kit (the docStyles and deckTheme fields of platform-core's BrandKit) with values unlike the default, so a test can see each one land in the file.",
+  "name": "Harbor Press",
+  "docStyles": {
+    "headingFont": "space-grotesk",
+    "bodyFont": "ibm-plex-sans",
+    "headingColor": "#0B1F33",
+    "bodyColor": "#222222",
+    "mutedColor": "#5C6470",
+    "linkColor": "#0B5CAD",
+    "accentColor": "#0B5CAD",
+    "sizes": {
+      "body": 10.5,
+      "lead": 12,
+      "caption": 8,
+      "h1": 28,
+      "h2": 20,
+      "h3": 15
+    },
+    "lineSpacing": 1.25
+  },
+  "deckTheme": {
+    "theme": {
+      "preset": "brand",
+      "background": "#F4F1EA",
+      "text": "#0B1F33",
+      "accent": "#0B5CAD"
+    },
+    "titleFont": "space-grotesk",
+    "bodyFont": "ibm-plex-sans"
+  }
+}

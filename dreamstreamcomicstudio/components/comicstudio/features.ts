@@ -1,8 +1,11 @@
-// Feature registry (contract §13.2; created by P0-C, FROZEN after wave 0).
+// Feature registry (contract §13.2; created by P0-C; wave 2: P2-AMEND registered `usage`; W-M registered
+// `models`, `insights` and `reliability`).
 //
-// Imports exactly the ten client feature indexes and folds their `FeatureModule`s into the
-// registries the hotspot files read (CardRenderer, BoardPane, ComicStudio header,
-// AdminConsole). A wave-1 package fills its own `<feature>/index.ts`; nothing here changes.
+// Imports the client feature indexes (the ten wave-0 folders plus `usage`, P1-LIMITS' "usage left"
+// meter at header order 220, plus the three W-M folders) and folds their `FeatureModule`s into the
+// registries the hotspot files read (CardRenderer, BoardPane, ComicStudio header, AdminConsole). A feature
+// package fills its own `<feature>/index.ts`; a NEW feature folder is added here once, at the end (lowest
+// precedence).
 //
 // The registries are built lazily on first read (not at import time), so a feature module
 // that imports a hotspot file — directly or through a component — never sees a
@@ -32,6 +35,18 @@ import { feature as i18n } from './i18n/index';
 import { feature as immersive } from './immersive/index';
 import { feature as library } from './library/index';
 import { feature as mobile } from './mobile/index';
+import { feature as usage } from './usage/index';
+import { feature as models } from './models/index';
+import { feature as insights } from './insights/index';
+import { feature as reliability } from './reliability/index';
+// --- history (versions plan §8; H0 stub, H5 fills it) ---
+import { feature as history } from './history/index';
+// --- Ship 2/3 (pro plan §10; K2b stubs: C7 editor, C4 confidence, C5 consistency, C3 save, C6 guide fill them) ---
+import { feature as editor } from './editor/index';
+import { feature as confidence } from './confidence/index';
+import { feature as consistency } from './consistency/index';
+import { feature as save } from './save/index';
+import { feature as guide } from './guide/index';
 
 export type {
   AdminSectionRegistration,
@@ -66,7 +81,8 @@ export const BUILTIN_TAB_ORDER: Readonly<Partial<Record<StudioTab, number>>> = {
 /**
  * Merge positions of the built-in header controls. A slot with `order` o renders after every
  * built-in whose position is ≤ o (e.g. 250 sits between the spend chip and Read; < 100 comes
- * first; ≥ 900 comes after the More menu).
+ * first; ≥ 900 comes after the More menu). Registered today: share 10, mode/savings (mobile),
+ * usage 220 (after the spend chip and savings, before Read).
  */
 export const BUILTIN_HEADER_ORDER = { quality: 100, spend: 200, read: 300, more: 900 } as const;
 
@@ -81,7 +97,20 @@ let cache: Registries | null = null;
 
 /** Every feature module, in precedence order. */
 export const featureModules = (): readonly FeatureModule[] =>
-  [breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile].map((m) => m || {});
+  [
+    breakdown, lettering, timeline, refs, share, safety, i18n, immersive, library, mobile, usage, models, insights, reliability,
+    // The pro editor and its companions (pro plan §10 Wave 3), before History. Each is listed once it registers
+    // something: the K2b stubs register nothing, so the registries are exactly what they were without them.
+    ...[editor, confidence, consistency, save, guide].filter(hasRegistrations),
+    // Comic History (versions plan §8), LAST = lowest precedence (H0's rule; features.test.tsx). Listed once it registers
+    // something (H5): the H0 stub registers nothing, so the registries — and this list — are exactly what they were.
+    ...(hasRegistrations(history) ? [history] : [])
+  ].map((m) => m || {});
+
+/** A feature module that contributes at least one registration. */
+function hasRegistrations(mod: FeatureModule | undefined): boolean {
+  return !!mod && [mod.cards, mod.tabs, mod.headerSlots, mod.adminSections].some((list) => Array.isArray(list) && list.length > 0);
+}
 
 const byOrder = <T extends { order: number }>(list: T[]): T[] =>
   list

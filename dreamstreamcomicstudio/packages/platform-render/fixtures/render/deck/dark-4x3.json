@@ -1,0 +1,210 @@
+{
+ "v": 1,
+ "title": "Night Shift — pitch",
+ "size": "4:3",
+ "theme": {
+  "preset": "dark",
+  "accent": "#E0A43A"
+ },
+ "slides": [
+  {
+   "id": "s1",
+   "layout": "title",
+   "notes": "Thirty seconds, then the cover.",
+   "elements": [
+    {
+     "kind": "text",
+     "id": "t",
+     "rect": [
+      0.08,
+      0.3,
+      0.84,
+      0.18
+     ],
+     "layer": "content",
+     "role": "title",
+     "align": "center",
+     "paragraphs": [
+      {
+       "runs": [
+        {
+         "text": "Night Shift"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "kind": "text",
+     "id": "st",
+     "rect": [
+      0.08,
+      0.52,
+      0.84,
+      0.1
+     ],
+     "layer": "content",
+     "role": "subtitle",
+     "align": "center",
+     "paragraphs": [
+      {
+       "runs": [
+        {
+         "text": "A comic about a night bus"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s2",
+   "layout": "two-col",
+   "elements": [
+    {
+     "kind": "image",
+     "id": "cover",
+     "rect": [
+      0.05,
+      0.1,
+      0.42,
+      0.8
+     ],
+     "layer": "content",
+     "fit": "contain",
+     "alt": "Cover rough",
+     "ref": {
+      "kind": "data",
+      "dataUri": "data:image/jpeg;base64,/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAADAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAABv/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AK4Aydv/2Q=="
+     }
+    },
+    {
+     "kind": "image",
+     "id": "strip",
+     "rect": [
+      0.53,
+      0.1,
+      0.42,
+      0.3
+     ],
+     "layer": "content",
+     "fit": "cover",
+     "alt": "Panel strip",
+     "ref": {
+      "kind": "data",
+      "dataUri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEElEQVQImWO4WR4ORww4OQCI9BPVE1EnMgAAAABJRU5ErkJggg=="
+     }
+    },
+    {
+     "kind": "text",
+     "id": "pts",
+     "rect": [
+      0.53,
+      0.45,
+      0.42,
+      0.45
+     ],
+     "layer": "content",
+     "role": "body",
+     "paragraphs": [
+      {
+       "runs": [
+        {
+         "text": "22 pages, "
+        },
+        {
+         "text": "weekly",
+         "marks": [
+          "b"
+         ]
+        }
+       ],
+       "bullet": true
+      },
+      {
+       "runs": [
+        {
+         "text": "Line one\nline two"
+        }
+       ],
+       "bullet": true,
+       "indent": 1
+      },
+      {
+       "runs": [
+        {
+         "text": "Script: ",
+         "marks": [
+          "i"
+         ]
+        },
+        {
+         "text": "read it",
+         "link": {
+          "href": "https://example.com/script"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "s3",
+   "layout": "end",
+   "elements": [
+    {
+     "kind": "shape",
+     "id": "band",
+     "rect": [
+      0,
+      0.8,
+      1,
+      0.2
+     ],
+     "layer": "background",
+     "shape": "rect",
+     "fill": "#E0A43A"
+    },
+    {
+     "kind": "shape",
+     "id": "dot",
+     "rect": [
+      0.45,
+      0.3,
+      0.1,
+      0.1
+     ],
+     "layer": "content",
+     "shape": "ellipse",
+     "stroke": "#F5F4EF"
+    },
+    {
+     "kind": "text",
+     "id": "q",
+     "rect": [
+      0.1,
+      0.45,
+      0.8,
+      0.2
+     ],
+     "layer": "content",
+     "role": "quote",
+     "align": "center",
+     "fontSize": 28,
+     "paragraphs": [
+      {
+       "runs": [
+        {
+         "text": "Thank you"
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

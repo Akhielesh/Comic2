@@ -1,0 +1,30 @@
+The Lighthouse Keeper
+
+Hi Sam, thanks for the call. The sample pages (https://example.com/samples?issue=1) are ready.
+
+What is in the pack
+
+- A one-page pitch
+  - Six sample pages
+- A pitch deck
+
+Open the samples: https://example.com/samples
+
+> Send me the first issue when it is ready.
+> — Sam Editor
+
+---
+
+[Image: Cover]
+
+Schedule
+
+Issue one in March; questions to me (mailto:creator@example.com).
+
+Reply: mailto:creator@example.com?subject=Lighthouse
+
+[Image: Page one]
+
+-- 
+Sample Creator
+The Lighthouse Keeper

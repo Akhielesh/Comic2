@@ -1,12 +1,16 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 
 
 import type { Msg } from '../../../shared/comic/doc';
 import { ConversationPane } from './ConversationPane';
 import { STARTERS } from './EmptyConversation';
-import { makeFakeStudio, makeSampleDoc } from './testing/fixtures';
+import { makeFakeStudio, makeSampleDoc, resetUsageStatus, showDollarPrices } from './testing/fixtures';
+
+// Dollar figures below are what admins / own-key users see; the governed wording has its own tests.
+beforeEach(showDollarPrices);
+afterEach(resetUsageStatus);
 
 const msg = (id: string, role: Msg['role'], text: string, extra: Partial<Msg> = {}): Msg => ({ id, role, text, at: 1, ...extra });
 
@@ -53,7 +57,7 @@ describe('ConversationPane — messages', () => {
     render(<ConversationPane studio={studio} />);
     const log = screen.getByRole('log');
     expect(within(log).getByText('A heist comic')).toBeInTheDocument();
-    expect(within(log).getByRole('img', { name: 'Attachment' })).toHaveAttribute('src', 'https://cdn.test/u/x/maya.webp');
+    expect(within(log).getByRole('img', { name: 'Photo 1' })).toHaveAttribute('src', 'https://cdn.test/u/x/maya.webp');
     expect(within(log).getByText('Maya').tagName).toBe('STRONG');
     expect(within(log).getByText('Captured the cast.')).toBeInTheDocument();
     fireEvent.click(within(log).getByRole('button', { name: 'Show me 3 styles' }));
@@ -133,7 +137,7 @@ describe('ConversationPane — status', () => {
     const alert = screen.getByRole('alert');
     fireEvent.click(within(alert).getByRole('button', { name: /Resync/ }));
     expect(studio.refresh).toHaveBeenCalled();
-    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss error' }));
+    fireEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
     expect(studio.clearError).toHaveBeenCalled();
   });
 
@@ -142,5 +146,28 @@ describe('ConversationPane — status', () => {
     expect(screen.getByText('BOARD VIEW')).toBeInTheDocument();
     expect(screen.queryByRole('log')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Message the Comic Director')).toBeInTheDocument();
+  });
+});
+
+describe('ConversationPane — layout (visualqa P2-1; mobile.md §3.9)', () => {
+  it('an empty conversation starts at the top (the heading is never scrolled away on short phones)', () => {
+    render(<ConversationPane studio={makeFakeStudio()} />);
+    const log = screen.getByRole('log', { name: 'Messages' });
+    expect((log.parentElement as HTMLElement).scrollTop).toBe(0);
+    expect(screen.getByRole('heading', { name: "What's your comic about?" })).toBeInTheDocument();
+  });
+
+  it('pads the bottom safe area unless the phone tab bar owns it', () => {
+    const { rerender } = render(<ConversationPane studio={makeFakeStudio()} />);
+    const dock = document.querySelector('[data-composer-dock]') as HTMLElement;
+    expect(dock.className).toContain('var(--sa-bottom-eff');
+    rerender(<ConversationPane studio={makeFakeStudio()} insetBottom={false} />);
+    expect((document.querySelector('[data-composer-dock]') as HTMLElement).className).not.toContain('var(--sa-bottom-eff');
+  });
+
+  it('older messages skip offscreen rendering (content-visibility) while the latest stay live', () => {
+    const conversation = Array.from({ length: 9 }, (_, i) => msg(`m${i}`, i % 2 ? 'assistant' : 'user', `Message ${i}`));
+    render(<ConversationPane studio={makeFakeStudio({ doc: makeSampleDoc({ conversation }) })} />);
+    expect(document.querySelectorAll('.cv-auto').length).toBe(3);
   });
 });

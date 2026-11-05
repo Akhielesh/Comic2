@@ -1,7 +1,28 @@
 // The book as a sequence of slots (cover → title → pages → end → back cover) (contract §11.3).
-// WAVE-0: working minimal implementation; P1-BOOKMODEL owns it in wave 1.
+//
+// One ordering for every surface that walks the book: the studio reader, the timeline, the chat
+// breakdown card, exports and the public reader (`audience: 'public'` keeps only what a reader may
+// see: drawn pages and the free software plates that are switched on). Pure and dependency-free.
 
-import { bookOf, isPageStale, type AssetRef, type ComicDoc, type Page } from './doc.js';
+import {
+  archiveOf,
+  bookOf,
+  coverSpecHash,
+  currentVersion,
+  getRender,
+  isPageStale,
+  renderTargetKey,
+  type ArchivedVersion,
+  type AspectRatio,
+  type AssetRef,
+  type ComicDoc,
+  type Page,
+  type RenderState,
+  type RenderTarget,
+  type RenderVersion
+} from './doc.js';
+import { aspectFromSize, aspectMatches } from './models.js';
+import { isPanelSourceArchive } from './history/apply.js';
 
 export type BookSlotKind = 'cover' | 'title' | 'page' | 'end' | 'back_cover';
 export interface BookSlot {
@@ -32,6 +53,30 @@ export function clipStatus(doc: ComicDoc, page: Page): BookSlot['status'] {
   }
 }
 
+/** Cover status with the same vocabulary as pages (an older title/style ⇒ stale; adopted art ⇒ custom). */
+export function coverStatus(doc: ComicDoc): BookSlot['status'] {
+  const r: RenderState = doc.cover.render;
+  switch (r.status) {
+    case 'queued':
+    case 'rendering':
+    case 'failed':
+    case 'stale':
+      return r.status;
+    case 'ready':
+      if (r.specHash && r.specHash !== coverSpecHash(doc)) return 'stale';
+      return !r.specHash && r.origin === 'adopted' ? 'custom' : 'ready';
+    default:
+      return 'planned';
+  }
+}
+
+/** The art came back at a different shape than the book's page aspect (unknown sizes never flag). */
+export function aspectMismatch(doc: ComicDoc, asset?: AssetRef): { want: AspectRatio; got: AspectRatio } | null {
+  if (!asset || !asset.w || !asset.h) return null;
+  const want = doc.format.pageAspect;
+  return aspectMatches(want, asset.w, asset.h) ? null : { want, got: aspectFromSize(asset.w, asset.h) };
+}
+
 /** studio: includes undrawn pages; public: drawn pages + enabled plates only. Order: cover → title → pages by n → end → back cover. */
 export function bookSequence(doc: ComicDoc, opts: { audience?: 'studio' | 'public' } = {}): BookSlot[] {
   const pub = opts.audience === 'public';
@@ -40,10 +85,7 @@ export function bookSequence(doc: ComicDoc, opts: { audience?: 'studio' | 'publi
   const cover = doc.cover.render;
   const coverDrawn = cover.status === 'ready' && !!cover.asset;
   if (!pub || coverDrawn) {
-    slots.push({
-      key: 'cover', kind: 'cover', label: 'Cover', asset: cover.asset, drawn: coverDrawn,
-      status: cover.status === 'none' ? 'planned' : cover.status === 'ready' ? 'ready' : cover.status
-    });
+    slots.push({ key: 'cover', kind: 'cover', label: 'Cover', asset: cover.asset, drawn: coverDrawn, status: coverStatus(doc) });
   }
   if (book.titlePage) slots.push({ key: 'title', kind: 'title', label: 'Title page', plate: true, drawn: true, status: 'ready' });
   for (const page of [...doc.pages].sort((a, b) => a.n - b.n)) {
@@ -91,4 +133,41 @@ export function continuityHint(doc: ComicDoc, page: Page): boolean {
   const idx = sorted.findIndex((p) => p.id === page.id);
   const prev = idx > 0 ? sorted[idx - 1] : undefined;
   return prev?.render.asset?.path !== path;
+}
+
+// ── Versions (v1 = oldest) ───────────────────────────────────────────────────
+
+/** One version of a render target (P2-AMEND, from P1-TIMELINE): the single numbering for the director's
+ *  list_versions/use_version (server tools/timeline.ts) and the client timeline (bookModel.ts). */
+export interface VersionEntry {
+  /** v-number: 1 = oldest (AssetRef.at, then path) — stable across swaps. */
+  n: number;
+  path: string;
+  version: RenderVersion | ArchivedVersion;
+  current: boolean;
+  archived: boolean;
+}
+
+/** Every version of a target — current, history and its archived versions — numbered v1 = oldest.
+ *  A path appears once (current wins over history, history over archive). Missing target → [].
+ *  A page's frame picture or overlay that a restore archived under the page (history/apply.ts isPanelSourceArchive)
+ *  is not a drawing of the page: it is left out before numbering, so the v-numbers count drawings only and nothing
+ *  that reads this list (the director's list_versions/use_version, the timeline, the board's version strip) offers
+ *  it as the page's art. The media bin and Earlier list it under its page by its own label. */
+export function versionList(doc: ComicDoc, target: RenderTarget): VersionEntry[] {
+  const r = getRender(doc, target);
+  if (!r) return [];
+  const key = renderTargetKey(target);
+  const seen = new Set<string>();
+  const items: Omit<VersionEntry, 'n'>[] = [];
+  const push = (v: RenderVersion | ArchivedVersion | undefined, current: boolean, archived: boolean) => {
+    if (!v?.path || seen.has(v.path)) return;
+    seen.add(v.path);
+    items.push({ path: v.path, version: v, current, archived });
+  };
+  push(currentVersion(r), true, false);
+  for (const v of r.history) push(v, false, false);
+  for (const a of archiveOf(doc)) if (a.targetKey === key && !isPanelSourceArchive(a)) push(a, false, true);
+  items.sort((a, b) => (a.version.at || 0) - (b.version.at || 0) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return items.map((it, i) => ({ ...it, n: i + 1 }));
 }

@@ -34,13 +34,15 @@ vi.mock('./mobile/index', async () => {
             throw new Error('slot exploded');
           }
         },
-        { id: 'savings', order: 950, Component: () => createElement('span', null, 'Saved $0.40') }
+        { id: 'savings', order: 950, Component: () => createElement('span', null, 'Saved $0.40') },
+        { id: 'statusBanner', order: 1000, Component: ({ compact }: { compact: boolean }) => createElement('p', { role: 'status' }, compact ? 'Model slow (compact)' : 'Model slow') }
       ]
     }
   };
 });
 
-import { ComicStudio } from './ComicStudio';
+import { ComicStudio, ComicStudioShell } from './ComicStudio';
+import { FormFactorProvider, formFactorFor } from './mobile/useFormFactor';
 
 beforeEach(() => {
   state.wide = true;
@@ -71,10 +73,20 @@ describe('ComicStudio header slots', () => {
     expect(screen.getByLabelText('Comic title')).toBeInTheDocument();
   });
 
-  it('passes compact on narrow screens', () => {
-    state.wide = false;
+  it('renders banner slots (order ≥ 1000) in a strip under the header, not inside it', () => {
     state.studio = makeFakeStudio();
     render(<ComicStudio projectId="proj_1" onBack={vi.fn()} />);
+    const banner = screen.getByText('Model slow');
+    expect(within(screen.getByRole('banner')).queryByText('Model slow')).toBeNull();
+    expect(banner.closest('[data-header-banners]')).not.toBeNull();
+  });
+
+  it('passes compact on narrow screens', () => {
+    render(
+      <FormFactorProvider value={formFactorFor({ w: 390, h: 844, coarse: true })}>
+        <ComicStudioShell studio={makeFakeStudio()} onBack={vi.fn()} />
+      </FormFactorProvider>
+    );
     expect(within(screen.getByRole('banner')).getByRole('button', { name: 'Share (compact)' })).toBeInTheDocument();
   });
 });

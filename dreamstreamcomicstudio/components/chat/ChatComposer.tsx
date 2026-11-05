@@ -38,6 +38,11 @@ interface ChatComposerProps {
 
 const MAX_ATTACHMENTS = 6;
 
+/** Shown when /api/chat/enhance answers `skipped: 'usage'`: nothing was spent and the draft is unchanged. */
+export const ENHANCE_PAUSED_NOTE = 'Prompt polish is paused while your usage is used up — your draft is unchanged, and you can still send it.';
+/** Shown when the enhance request failed (network, server): calm, no raw error. */
+export const ENHANCE_FAILED_NOTE = 'Couldn’t polish the prompt right now — your draft is unchanged.';
+
 const fileToAttachment = (file: File): Promise<ChatAttachment> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -106,6 +111,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
+  // A calm one-line note when "Improve my prompt" couldn't change the draft (never silent, never a raw error).
+  const [enhanceNote, setEnhanceNote] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Draft snapshot taken when a dictation take starts, so streamed partials replace
@@ -209,15 +216,20 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     if (!canEnhance) return;
     const prev = text;
     setEnhancing(true);
+    setEnhanceNote(null);
     try {
-      const { enhanced } = await enhancePrompt(prev);
-      if (enhanced && enhanced.trim() && enhanced.trim() !== prev.trim()) {
+      // The server answers `skipped: 'usage'` (draft echoed back, nothing spent) once the included usage is used up.
+      const { enhanced, skipped } = (await enhancePrompt(prev)) as { enhanced: string; skipped?: string };
+      if (skipped === 'usage') {
+        setEnhanceNote(ENHANCE_PAUSED_NOTE);
+      } else if (enhanced && enhanced.trim() && enhanced.trim() !== prev.trim()) {
         setText(enhanced.trim());
         setBeforeEnhance(prev);
         requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
       }
     } catch {
-      /* leave the draft untouched on failure */
+      // The draft is left untouched; say so calmly instead of failing silently.
+      setEnhanceNote(ENHANCE_FAILED_NOTE);
     } finally {
       setEnhancing(false);
     }
@@ -234,6 +246,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     setText('');
     setAttachments([]);
     setBeforeEnhance(null);
+    setEnhanceNote(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
@@ -427,6 +440,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         </div>
       )}
 
+      {enhanceNote !== null && (
+        <div role="status" className={`flex min-w-0 items-start gap-1.5 mb-1.5 text-[11px] ${MUTED}`}>
+          <Wand2 className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden />
+          {/* Clears itself on the next keystroke, send or polish. */}
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{enhanceNote}</span>
+        </div>
+      )}
+
       {beforeEnhance !== null && (
         <div className={`flex items-center gap-1.5 mb-1.5 text-[11px] ${ACCENT_TEXT}`}>
           <Wand2 className="w-3.5 h-3.5" />
@@ -489,6 +510,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             const v = e.target.value;
             setText(v);
             if (beforeEnhance !== null) setBeforeEnhance(null);
+            if (enhanceNote !== null) setEnhanceNote(null);
             autoGrow(e.target);
           }}
           onKeyDown={handleKeyDown}

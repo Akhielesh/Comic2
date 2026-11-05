@@ -62,6 +62,8 @@ import { EmailTerminal } from './artifacts/EmailTerminal';
 import { EmailCompose } from './artifacts/EmailCompose';
 import { CalendarAgenda } from './artifacts/CalendarAgenda';
 import { CalendarEventDraft } from './artifacts/CalendarEventDraft';
+import { EmailDraftCard } from './artifacts/EmailDraftCard';
+import { DeckDraftCard } from './artifacts/DeckDraftCard';
 import { GameCard } from './artifacts/GameCard';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
@@ -86,6 +88,7 @@ import type {
   EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact
 } from '../../apiTypes';
 import type { Balloon, ComicDoc, Page } from '../../shared/comic/doc';
+import { emailComposeLinks, type DeckDraftArtifact, type EmailDraftArtifact } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
   title: 'SQL practice — filter & sort',
@@ -1314,6 +1317,99 @@ const emailComposeDemo: EmailComposeArtifact = {
   mailto: 'mailto:dana@northwind.co?subject=Re%3A%20Q3%20board%20deck'
 };
 
+// Shared-platform drafts (email_draft, deck_create). The email demo is exactly what the server tool returns for this
+// draft: `html`/`text` are platform-core's renderEmail output and `review` its reviewEmail with the person having typed
+// dana@ and marcus@ (artifacts/EmailDraftCard.test.tsx re-renders and compares them, so they cannot drift).
+const emailDraftDoc: EmailDraftArtifact['doc'] = {"v": 1, "mode": "compose", "subject": "Northwind studio opening — Friday 6pm", "preheader": "Tours, a short talk and drinks. RSVP by Wednesday.", "to": [{"address": "dana@northwind.co", "name": "Dana Ortiz"}, {"address": "press@citydesk.news"}], "cc": [{"address": "marcus@northwind.co"}], "blocks": [{"type": "heading", "id": "h1", "level": 1, "runs": [{"text": "We open the doors on Friday"}]}, {"type": "paragraph", "id": "p1", "runs": [{"text": "Hi Dana, the new studio is finally ready. Join us from 6pm for a tour of the space, a ten-minute talk on the first season, and drinks on the roof."}]}, {"type": "list", "id": "l1", "ordered": false, "items": [{"runs": [{"text": "6:00 — doors and studio tours"}]}, {"runs": [{"text": "6:45 — \"Season one\" talk"}]}, {"runs": [{"text": "7:15 — roof terrace"}]}]}, {"type": "button", "id": "b1", "label": "RSVP for Friday", "href": "https://northwind.co/opening/rsvp"}, {"type": "paragraph", "id": "p2", "runs": [{"text": "Directions and parking are on the "}, {"text": "event page", "link": {"href": "https://northwind.co/opening"}}, {"text": "."}]}], "signature": "Priya Raman\nStudio lead, Northwind"};
+const emailDraftReview: EmailDraftArtifact['review'] = {"prefill": {"to": [{"address": "dana@northwind.co"}], "cc": [{"address": "marcus@northwind.co"}], "bcc": []}, "flagged": [{"address": "press@citydesk.news", "field": "to", "reason": "model-only"}], "links": [{"href": "https://northwind.co/opening/rsvp", "text": "RSVP for Friday", "blockId": "b1", "source": "button"}, {"href": "https://northwind.co/opening", "text": "event page", "blockId": "p2", "source": "run"}], "warnings": []};
+const emailDraftText = "We open the doors on Friday\n\nHi Dana, the new studio is finally ready. Join us from 6pm for a tour of the space, a ten-minute talk on the first season, and drinks on the roof.\n\n- 6:00 — doors and studio tours\n- 6:45 — \"Season one\" talk\n- 7:15 — roof terrace\n\nRSVP for Friday: https://northwind.co/opening/rsvp\n\nDirections and parking are on the event page (https://northwind.co/opening).\n\n-- \nPriya Raman\nStudio lead, Northwind";
+const emailDraftLinks = emailComposeLinks({
+  to: emailDraftReview.prefill.to.map((r) => r.address),
+  cc: emailDraftReview.prefill.cc.map((r) => r.address),
+  subject: emailDraftDoc.subject,
+  body: emailDraftText
+});
+export const emailDraftDemo: EmailDraftArtifact = {
+  draftId: 'draft-demo-opening',
+  doc: emailDraftDoc,
+  html: "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<meta name=\"x-apple-disable-message-reformatting\">\n<meta name=\"color-scheme\" content=\"light only\">\n<meta name=\"supported-color-schemes\" content=\"light only\">\n<title>Northwind studio opening — Friday 6pm</title>\n<style>\nbody { margin:0; padding:0; width:100% !important; -webkit-text-size-adjust:100%; }\n@media (max-width:600px) { .ds-card { padding:24px 18px !important; } .ds-col { display:block !important; width:100% !important; padding:0 !important; } }\n</style>\n</head>\n<body style=\"margin:0;padding:0;background:#faf9f5;\">\n<div style=\"display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#faf9f5;\">Tours, a short talk and drinks. RSVP by Wednesday.&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>\n<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#faf9f5;\">\n<tr><td align=\"center\" style=\"padding:24px 12px;\">\n<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"width:100%;max-width:600px;\">\n<tr><td class=\"ds-card\" style=\"background:#ffffff;border:1px solid #e6e6e6;border-radius:16px;padding:32px;\">\n<h1 style=\"margin:0 0 16px;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:26px;line-height:1.25;font-weight:700;color:#1a1915;\">We open the doors on Friday</h1>\n<p style=\"margin:0 0 16px;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:16px;line-height:1.6;color:#1a1915;\">Hi Dana, the new studio is finally ready. Join us from 6pm for a tour of the space, a ten-minute talk on the first season, and drinks on the roof.</p>\n<ul style=\"margin:0 0 16px;padding:0 0 0 24px;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:16px;line-height:1.6;color:#1a1915;\"><li style=\"margin:0 0 6px;\">6:00 — doors and studio tours</li><li style=\"margin:0 0 6px;\">6:45 — &quot;Season one&quot; talk</li><li style=\"margin:0 0 6px;\">7:15 — roof terrace</li></ul>\n<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:8px 0 24px;\"><tr><td align=\"center\" bgcolor=\"#d97757\" style=\"border-radius:12px;background:#d97757;\"><a href=\"https://northwind.co/opening/rsvp\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"display:inline-block;padding:12px 24px;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:16px;font-weight:600;line-height:1.2;color:#1a1915;text-decoration:none;border-radius:12px;\">RSVP for Friday</a></td></tr></table>\n<p style=\"margin:0 0 16px;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:16px;line-height:1.6;color:#1a1915;\">Directions and parking are on the <a href=\"https://northwind.co/opening\" target=\"_blank\" rel=\"noopener noreferrer\" style=\"color:#a0472a;text-decoration:underline;\">event page</a>.</p>\n<p style=\"margin:24px 0 0;font-family:'Inter', -apple-system, 'Segoe UI', Arial, Helvetica, sans-serif;font-size:15px;line-height:1.6;color:#67635a;\">Priya Raman<br>Studio lead, Northwind</p>\n</td></tr>\n</table>\n</td></tr>\n</table>\n</body>\n</html>\n",
+  text: emailDraftText,
+  review: emailDraftReview,
+  gmailUrl: emailDraftLinks.gmailUrl,
+  mailto: emailDraftLinks.mailto,
+  governed: true
+};
+const deckText = (id: string, rect: [number, number, number, number], role: 'title' | 'subtitle' | 'body' | 'caption', lines: string[], bullet = false) => ({
+  kind: 'text' as const,
+  id,
+  rect,
+  layer: 'content' as const,
+  role,
+  paragraphs: lines.map((text) => ({ runs: [{ text }], ...(bullet ? { bullet: true } : {}) }))
+});
+const deckDraftDeck: DeckDraftArtifact['deck'] = {
+  v: 1,
+  title: 'Northwind studio — season one',
+  size: '16:9',
+  theme: { preset: 'light', accent: '#D97757' },
+  slides: [
+    {
+      id: 's1',
+      layout: 'title',
+      elements: [
+        { kind: 'shape', id: 'band', rect: [0, 0.82, 1, 0.18], layer: 'background', shape: 'rect', fill: '#D97757' },
+        deckText('t1', [0.08, 0.3, 0.84, 0.2], 'title', ['Season one']),
+        deckText('t2', [0.08, 0.52, 0.84, 0.1], 'subtitle', ['Northwind studio · opening review'])
+      ]
+    },
+    {
+      id: 's2',
+      layout: 'content',
+      notes: 'Lead with the RSVP numbers, then the press list.',
+      elements: [
+        deckText('h2', [0.06, 0.06, 0.88, 0.12], 'title', ['What we shipped']),
+        deckText('b2', [0.06, 0.24, 0.42, 0.66], 'body', ['New studio space open', 'Six-episode first season', '312 RSVPs for the opening'], true),
+        { kind: 'chart', id: 'c2', rect: [0.52, 0.24, 0.42, 0.66], layer: 'content', chart: 'bar', title: 'RSVPs by week', categories: ['W1', 'W2', 'W3', 'W4'], series: [{ name: 'RSVPs', values: [40, 72, 96, 104] }] }
+      ]
+    },
+    {
+      id: 's3',
+      layout: 'content',
+      elements: [
+        deckText('h3', [0.06, 0.06, 0.88, 0.12], 'title', ['Budget']),
+        {
+          kind: 'table',
+          id: 'tb3',
+          rect: [0.06, 0.24, 0.88, 0.5],
+          layer: 'content',
+          header: true,
+          rows: [
+            { cells: [{ runs: [{ text: 'Line' }] }, { runs: [{ text: 'Planned' }] }, { runs: [{ text: 'Spent' }] }] },
+            { cells: [{ runs: [{ text: 'Fit-out' }] }, { runs: [{ text: '48k' }] }, { runs: [{ text: '45k' }] }] },
+            { cells: [{ runs: [{ text: 'Launch' }] }, { runs: [{ text: '12k' }] }, { runs: [{ text: '13k' }] }] }
+          ]
+        },
+        deckText('cap3', [0.06, 0.8, 0.88, 0.08], 'caption', ['Figures in thousands, as of the opening week.'])
+      ]
+    }
+  ]
+};
+export const deckDraftDemo: DeckDraftArtifact = { draftId: 'draft-demo-deck', deck: deckDraftDeck, overlaps: [], governed: true };
+const deckOverlapDemo: DeckDraftArtifact = {
+  draftId: 'draft-demo-deck-overlap',
+  deck: {
+    ...deckDraftDeck,
+    slides: [
+      {
+        ...deckDraftDeck.slides[1],
+        elements: deckDraftDeck.slides[1].elements.map((el) => (el.id === 'c2' ? { ...el, rect: [0.4, 0.2, 0.54, 0.7] as [number, number, number, number] } : el))
+      }
+    ]
+  },
+  overlaps: [{ slideId: 's2', pairs: [{ a: 'b2', b: 'c2', area: 0.0528 }] }],
+  governed: true
+};
+
 // Calendar demos — events anchored to "now" so the agenda/week/month views always look live.
 const calAt = (days: number, hh: number, mm = 0): string => {
   const d = new Date();
@@ -1363,6 +1459,9 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
   { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },
   { title: 'Email compose (editable draft · open in Gmail · mailto)', type: 'email_compose', category: 'News & knowledge', node: <EmailCompose data={emailComposeDemo} /> },
+  { title: 'Email draft (AI-suggested address flagged until you add it · sandboxed preview · every link listed · no Send)', type: 'email_draft', category: 'News & knowledge', node: <EmailDraftCard data={emailDraftDemo} /> },
+  { title: 'Slide deck (live slide previews · chart and table · Download .pptx built on your device)', type: 'deck_draft', category: 'News & knowledge', node: <DeckDraftCard data={deckDraftDemo} /> },
+  { title: 'Slide deck — overlap check (outlined elements · download blocked until fixed)', type: 'deck_draft', category: 'News & knowledge', node: <DeckDraftCard data={deckOverlapDemo} /> },
   { title: 'Calendar agenda (agenda · week · month views · click-to-detail · create/RSVP/edit)', type: 'calendar_agenda', category: 'News & knowledge', node: <CalendarAgenda data={calendarAgendaDemo} /> },
   { title: 'Calendar event draft (AI-prepared action · confirm to create/edit/delete/RSVP)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} /> },
   { title: 'Calendar batch draft (AI parsed an itinerary · review/remove · Add all)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} /> },

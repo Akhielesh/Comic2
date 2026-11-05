@@ -5,6 +5,7 @@ import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorag
 import { isMissingPrivateProfileTableError } from "./profilePrivate";
 import { buildApiUrl } from "./clientConfig";
 import { isStudioV4Project } from "./studioDeepLink";
+import { isContentRating } from "../shared/comic/safety";
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -242,6 +243,8 @@ type ProjectRow = {
   views?: number;
   likes_count?: number;
   views_count?: number;
+  /** projects.content_rating: the publish gate's rating (server-set); anything but G / PG / PG-13 is ignored. */
+  content_rating?: unknown;
   profiles?: { username?: string } | null;
 };
 
@@ -347,7 +350,10 @@ const mapProjectRow = (row: ProjectRow, profileMap?: Map<string, ProfilePreview>
     authorName,
     publishedAt: resolvePublishedAt(row),
     likesCount: row.likes_count ?? row.likes ?? 0,
-    viewsCount: row.views_count ?? row.views ?? 0
+    viewsCount: row.views_count ?? row.views ?? 0,
+    // Validated here so no listing ever renders a rating word the gate never assigned; the cards
+    // (PublicGallery / PublicProfile) honour it only beside the row's server-mirrored share slug.
+    ...(isContentRating(row.content_rating) ? { contentRating: row.content_rating } : {})
   };
 };
 

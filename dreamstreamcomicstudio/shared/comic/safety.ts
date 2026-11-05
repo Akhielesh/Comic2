@@ -182,12 +182,21 @@ export const softenAction = (text: string): string => {
 };
 
 /** Every publishable word for the text hash/check: title, logline, cover title/tagline, cast names, every line,
- *  plus the given published languages' translations. Stable order. */
+ *  chapter titles, book blurb + credits, End-card credits + dedication, the style name, plus the given published
+ *  languages' translations. Stable order. */
 export const publishableText = (doc: ComicDoc, langs?: string[]): string => {
   const parts: string[] = [doc.brief.title || '', doc.brief.logline || '', doc.cover.title || '', doc.cover.tagline || ''];
   for (const c of doc.cast) parts.push(c.name || '');
   const lines = doc.pages.flatMap((p) => p.panels.flatMap((panel) => panel.lines));
   for (const l of lines) parts.push(l.text || '');
+  // Every other author text the public snapshot publishes (P2-AMEND, from P1-PUBLISH): chapter titles, the
+  // back-cover blurb, book credits, the End-card credits and dedication, and the style name. Appended after the
+  // lines, so docs without them keep their exact text (and their cached text-check hash).
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  for (const p of doc.pages) parts.push(str(p.chapterTitle));
+  parts.push(str(doc.book?.blurb));
+  for (const c of Array.isArray(doc.book?.credits) ? doc.book!.credits : []) parts.push(str(c));
+  parts.push(str(doc.reader?.credits), str(doc.reader?.dedication), str(doc.style?.name));
   const editions = i18nOf(doc).editions;
   for (const lang of [...(langs || [])].sort()) {
     const e = editions[lang];

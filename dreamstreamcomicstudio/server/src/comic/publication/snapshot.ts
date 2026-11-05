@@ -1,0 +1,651 @@
+// The public snapshot of a comic (contract §9.3, sharing.md §3.2): an allow-listed,
+// ComicDoc-shaped object built BY CONSTRUCTION from explicit fields — never by spreading the
+// live doc — so a private field added to ComicDoc later can never leak by accident. The
+// snapshot test asserts the exact key set at every level.
+//
+// Also: the publish plan (which live paths become which opaque pub/<key>/ copies), the
+// ShareCard (what previews and the edge need), and the content fingerprint that drives the
+// "changes since publishing" badge. Pure: no I/O.
+
+import crypto from 'node:crypto';
+import {
+  COMIC_DOC_VERSION,
+  DEFAULT_SETTINGS,
+  frameStyleOf,
+  mapAssetRefs,
+  pageSourcePaths,
+  type AssetRef,
+  type AssetVariant,
+  type Balloon,
+  type ComicDoc,
+  type ComicKind,
+  type Cover,
+  type I18nState,
+  type Line,
+  type Page,
+  type Box,
+  type KeepOut,
+  type Panel,
+  type PanelCuts,
+  type PanelFrame,
+  type PageLayer,
+  type QcReport,
+  type SpeakerMark,
+  type TextTranslation
+} from '../../../../shared/comic/doc.js';
+import { hashString, stableStringify } from '../../../../shared/comic/hash.js';
+import { i18nOf, lineSourceHash, localizeDoc, publicI18n } from '../../../../shared/comic/i18n.js';
+import { languageSpec, sameLanguage } from '../../../../shared/comic/languages.js';
+import { PUBLIC_KIDS_AUDIENCE, PUBLIC_QC_CHECKED_AT, type ShareCard } from '../../../../shared/comic/publication.js';
+import { canServeToPublic, effectiveRating, isKidsAudience, type ContentRating } from '../../../../shared/comic/safety.js';
+import { isSafeStoragePath, variantPathFor } from '../assets.js';
+import { isLibraryPath, pubPath } from '../storagePaths.js';
+import type { SnapshotPlan } from './index.js';
+
+// ── Text hygiene ─────────────────────────────────────────────────────────────
+
+/** Strip control/bidi-override characters, collapse whitespace, clamp to `max` graphemes-ish (code points). */
+export function cleanText(value: unknown, max: number): string {
+  const text = String(value ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200B\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = Array.from(text);
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : text;
+}
+
+const KIND_LABEL: Record<ComicKind, string> = {
+  comic: 'Comic',
+  manga: 'Manga',
+  webtoon: 'Webtoon',
+  strip: 'Comic strip',
+  storybook: 'Storybook'
+};
+export const kindLabelOf = (kind: ComicKind | undefined): string => KIND_LABEL[kind as ComicKind] || 'Comic';
+
+// ── Which pages are drawn ────────────────────────────────────────────────────
+
+/** A page (or cover) whose current art can be published: it has an asset and is not mid-render. */
+export const hasPublishableArt = (render: { status: string; asset?: AssetRef } | undefined): boolean =>
+  !!render?.asset?.path && (render.status === 'ready' || render.status === 'stale');
+
+/** Pages with art, in reading order. */
+export const drawnPages = (doc: ComicDoc): Page[] => (doc.pages || []).filter((p) => hasPublishableArt(p.render));
+
+// ── The publication boundary (S6) ────────────────────────────────────────────
+
+const IMG_LANE_RE = /^u\/[^/]+\/p\/[^/]+\/img\/[^/]+$/;
+const REF_LANE_RE = /^u\/[^/]+\/p\/[^/]+\/ref\/[^/]+$/;
+
+/**
+ * Only bytes the SERVER wrote, in a lane no client can rewrite, are ever published:
+ *  - `u/<user>/p/<project>/ref/…` — the private bucket (no storage policies): uploads, crops and
+ *    fits, always re-encoded server-side to static WebP (saveRef / cropRef / fitToAspect);
+ *  - `u/<user>/p/<project>/img/…` the server made (generated, derived, library picks) — random
+ *    UUID names, re-encoded static WebP (saveGenerated / storeEncoded);
+ *  - `library/…` — the platform library.
+ * Refused: the classic `<uid>/<file>` lane and `u/<uid>/tmp/…` (both client-writable), anything
+ * else, and an `upload` in the public img lane (a legacy import can point a ref at any owned path
+ * there). So a client-placed object, an animated GIF/APNG that only had its first frame checked,
+ * or bytes swapped after their check can never reach pub/: every allowed object is a server
+ * re-encode at a path the client can't write.
+ */
+export const isServerArt = (asset: AssetRef | undefined): boolean => {
+  const path = asset?.path;
+  if (!path || !isSafeStoragePath(path)) return false;
+  if (isLibraryPath(path) || REF_LANE_RE.test(path)) return true;
+  return IMG_LANE_RE.test(path) && asset!.source !== 'upload';
+};
+
+/**
+ * A size variant is published only from its deterministic sibling path (`<base>_w480.webp`), which
+ * the server derives from the original and overwrites (assets.ts writeVariants) — or the library.
+ */
+const isServerVariant = (asset: AssetRef, v: AssetVariant): boolean =>
+  isSafeStoragePath(v.path) && (v.path === variantPathFor(asset.path, v.w) || (isLibraryPath(asset.path) && isLibraryPath(v.path)));
+
+// ── Paths ────────────────────────────────────────────────────────────────────
+
+/** 12 hex of sha256(live path): the copy's name is stable for the same source (republish skips it). */
+export const sha12 = (livePath: string): string => crypto.createHash('sha256').update(livePath).digest('hex').slice(0, 12);
+
+const VARIANT_WIDTHS = new Set([480, 1080]);
+
+/** The opaque copies of one live asset: original + its 480/1080 variants. */
+export function copiesFor(assetKey: string, slot: 'cover' | 'page', asset: AssetRef): Record<string, string> {
+  const out: Record<string, string> = {};
+  const hash = sha12(asset.path);
+  out[asset.path] = pubPath(assetKey, slot, hash);
+  for (const v of asset.variants || []) {
+    if (!v || typeof v.path !== 'string' || !VARIANT_WIDTHS.has(v.w)) continue;
+    out[v.path] = pubPath(assetKey, slot, hash, v.w as 480 | 1080);
+  }
+  return out;
+}
+
+/**
+ * The asset with only the variants the server derived at their deterministic paths (see
+ * isServerVariant). Every reader of a live asset's variants on the publish path goes through it: the
+ * copies (planSnapshot) and the share image the OG card is drawn from (publication.ts previewPathOf).
+ */
+export const withServerVariants = (asset: AssetRef): AssetRef =>
+  asset.variants?.length ? { ...asset, variants: asset.variants.filter((v) => !!v && typeof v.path === 'string' && isServerVariant(asset, v)) } : asset;
+
+/** Every AssetRef the doc holds, by path (first one seen): what a frame or overlay path names. */
+const assetsByPath = (doc: ComicDoc): Map<string, AssetRef> => {
+  const out = new Map<string, AssetRef>();
+  mapAssetRefs(doc, (a) => {
+    if (a?.path && !out.has(a.path)) out.set(a.path, a);
+    return a;
+  });
+  return out;
+};
+
+/**
+ * Ship 2 (pro plan §8 "Publication"): the extra pictures a published page's frames and PRINTED overlays show, when they
+ * may go public — server art in a lane no client can rewrite (isServerArt, S6) that passed the content check at the
+ * publication's rating (canServeToPublic: an unchecked or over-rated picture is never copied). One original each, no
+ * variants. A picture that can't go out is left out: its frame shows its cut of the page's drawing, its overlay is not
+ * printed. Guide-only overlays (print: false) are never published.
+ */
+const extraSourceCopies = (doc: ComicDoc, page: Page, assetKey: string, rating: ContentRating, index: () => Map<string, AssetRef>): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const path of pageSourcePaths(page, { printOnly: true })) {
+    if (path === page.render.asset?.path) continue; // the page's own drawing is copied with the page
+    const asset = index().get(path);
+    if (!asset || !isServerArt(asset) || !canServeToPublic(asset, rating)) continue;
+    out[path] = pubPath(assetKey, 'page', sha12(path));
+  }
+  return out;
+};
+
+/** The publish plan: which pages/cover go out and where every live path is copied. */
+export function planSnapshot(
+  doc: ComicDoc,
+  opts: {
+    assetKey: string;
+    pageIds: string[];
+    includeCover: boolean;
+    languages: string[];
+    defaultLang?: string;
+    /** The rating the publish gate verified (frame and overlay pictures must pass it); default the doc's effective rating. */
+    rating?: ContentRating;
+  }
+): SnapshotPlan {
+  const paths: Record<string, string> = {};
+  const wanted = new Set(opts.pageIds);
+  const pageIds: string[] = [];
+  const rating = opts.rating ?? effectiveRating(doc).rating;
+  let index: Map<string, AssetRef> | null = null;
+  const lazyIndex = () => (index ??= assetsByPath(doc));
+  for (const page of doc.pages || []) {
+    if (!wanted.has(page.id) || !hasPublishableArt(page.render)) continue;
+    pageIds.push(page.id);
+    Object.assign(paths, copiesFor(opts.assetKey, 'page', withServerVariants(page.render.asset!)));
+    if (pageSourcePaths(page, { printOnly: true }).length) Object.assign(paths, extraSourceCopies(doc, page, opts.assetKey, rating, lazyIndex));
+  }
+  const includeCover = opts.includeCover && hasPublishableArt(doc.cover?.render);
+  if (includeCover) Object.assign(paths, copiesFor(opts.assetKey, 'cover', withServerVariants(doc.cover.render.asset!)));
+  return {
+    assetKey: opts.assetKey,
+    pageIds,
+    includeCover,
+    languages: [...opts.languages],
+    ...(opts.defaultLang ? { defaultLang: opts.defaultLang } : {}),
+    paths
+  };
+}
+
+// ── Snapshot builder ─────────────────────────────────────────────────────────
+
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** Plain JSON copy (drops functions/undefined; the snapshot is stored as jsonb anyway). */
+const plain = <T>(v: T): T => (v === undefined ? v : (JSON.parse(JSON.stringify(v)) as T));
+
+/** PublicAsset: path/size/variants of the opaque copy, nothing else (no model, safety, libraryId, derivedFrom). */
+function publicAsset(asset: AssetRef, plan: SnapshotPlan): AssetRef | null {
+  const path = plan.paths[asset.path];
+  if (!path) return null;
+  const out: AssetRef = { path, source: 'generated', at: 0 };
+  if (num(asset.w)) out.w = asset.w;
+  if (num(asset.h)) out.h = asset.h;
+  const variants: AssetVariant[] = [];
+  for (const v of asset.variants || []) {
+    const vp = v && plan.paths[v.path];
+    if (vp && num(v.w) && num(v.h)) variants.push({ path: vp, w: v.w, h: v.h });
+  }
+  if (variants.length) out.variants = variants.sort((a, b) => a.w - b.w);
+  return out;
+}
+
+const publicLine = (line: Line): Line => {
+  const out: Line = { id: String(line.id), kind: line.kind, text: String(line.text ?? '') };
+  if (typeof line.speakerId === 'string' && line.speakerId) out.speakerId = line.speakerId;
+  if (line.style && typeof line.style === 'object') out.style = plain(line.style);
+  // A rendering hint, not private: a never-translated line (spell, made-up word, song) stays in the
+  // source language in every edition, so the reader neither counts it as "untranslated" nor marks a
+  // published edition incomplete (editionProgress / fallbackLineIds read it; P2-PUBLIC-PAYLOAD).
+  if (line.noTranslate === true) out.noTranslate = true;
+  return out;
+};
+
+/**
+ * A panel: its number, size and lines, and who is in it (`castIds`, only ids of the published cast list — the
+ * lettering stages a speaker's balloon by them, so the reader letters the panel as the studio does). The shot and
+ * the action text stay private.
+ */
+const publicPanel = (panel: Panel, castIds: ReadonlySet<string>, plan?: SnapshotPlan): Panel => {
+  const out: Panel = {
+    id: String(panel.id),
+    n: num(panel.n) ? panel.n : 1,
+    size: panel.size,
+    shot: 'medium',
+    action: '',
+    castIds: (Array.isArray(panel.castIds) ? panel.castIds : []).filter((id): id is string => typeof id === 'string' && castIds.has(id)),
+    lines: (panel.lines || []).map(publicLine)
+  };
+  // Ship 2: the frame's geometry only (box, crop, border, stacking). Its own picture goes out as its opaque copy; one
+  // that can't go public is left out (the frame shows its cut of the page). Never `locked` (editor state) or the
+  // direction (prompt text).
+  const frame = plan && panel.frame ? publicFrame(panel.frame, plan) : undefined;
+  if (frame) out.frame = frame;
+  return out;
+};
+
+const validFrameBox = (b: Box | undefined): b is Box => validBox(b) && b.w > 0 && b.h > 0;
+
+/** A frame as readers draw it (pro plan §8): box, fit, border, z, and src through the plan's copies. */
+const publicFrame = (frame: PanelFrame, plan: SnapshotPlan): PanelFrame | undefined => {
+  if (!validFrameBox(frame.box)) return undefined;
+  const out: PanelFrame = { box: boxOf(frame.box) };
+  if (frame.fit && num(frame.fit.s) && num(frame.fit.x) && num(frame.fit.y)) out.fit = { s: frame.fit.s, x: frame.fit.x, y: frame.fit.y };
+  // Another take, an uploaded image, or a re-crop of the page's own drawing: always its opaque copy.
+  const srcPath = frame.src?.path;
+  if (srcPath && plan.paths[srcPath]) out.src = { path: plan.paths[srcPath], ...(validFrameBox(frame.src!.box) ? { box: boxOf(frame.src!.box) } : {}) };
+  if (frame.border) {
+    const border: NonNullable<PanelFrame['border']> = {};
+    if (frame.border.none === true) border.none = true;
+    if (num(frame.border.w)) border.w = frame.border.w;
+    if (typeof frame.border.color === 'string' && HEX_COLOR_RE.test(frame.border.color)) border.color = frame.border.color;
+    if (Object.keys(border).length) out.border = border;
+  }
+  if (num(frame.z)) out.z = frame.z;
+  return out;
+};
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * The current drawing's cut boxes (pro plan §8), only for a page shown in frames: which part of the drawing each frame
+ * shows. No detector diagnostics: status, provenance and time are constants, every confidence is 1, and `shows`,
+ * `crosses` and the note are left out. Shadow-mode cuts on a page shown as drawn are never published.
+ */
+const publicCuts = (cuts: PanelCuts | undefined): PanelCuts | undefined => {
+  if (!cuts || !Array.isArray(cuts.cuts)) return undefined;
+  const list = cuts.cuts
+    .filter((c) => !!c && num(c.drawn) && validFrameBox(c.box))
+    .map((c) => ({ ...(typeof c.panelId === 'string' && c.panelId ? { panelId: c.panelId } : {}), drawn: c.drawn, box: boxOf(c.box), conf: 1 }));
+  return list.length ? { status: 'ok', by: 'user', at: 0, cuts: list } : undefined;
+};
+
+/**
+ * The printed overlays of a page (pro plan §8): guide-only ones (print: false) never go out, nor an image overlay whose
+ * picture can't go public. Geometry and look only: no name, no lock.
+ */
+const publicLayers = (layers: PageLayer[] | undefined, plan: SnapshotPlan): PageLayer[] => {
+  const out: PageLayer[] = [];
+  for (const l of layers || []) {
+    if (!l || l.print === false || !validFrameBox(l.box) || typeof l.id !== 'string') continue;
+    const layer: PageLayer = { id: l.id, kind: l.kind, box: boxOf(l.box) };
+    if (l.kind === 'image') {
+      const path = l.src?.path ? plan.paths[l.src.path] : undefined;
+      if (!path) continue;
+      layer.src = { path, ...(validFrameBox(l.src!.crop) ? { crop: boxOf(l.src!.crop) } : {}) };
+    } else {
+      if (!l.shape) continue;
+      layer.shape = plain(l.shape);
+    }
+    if (num(l.rot)) layer.rot = l.rot;
+    if (num(l.z)) layer.z = l.z;
+    if (typeof l.clip === 'string' && l.clip) layer.clip = l.clip;
+    if (num(l.opacity)) layer.opacity = l.opacity;
+    if (l.flip === 'h' || l.flip === 'v') layer.flip = l.flip;
+    out.push(layer);
+  }
+  return out;
+};
+
+// Ship 2: rot and minH are lettering geometry, shared by every language (pro plan §8).
+const BALLOON_KEYS: (keyof Balloon)[] = ['lineId', 'x', 'y', 'w', 'tailX', 'tailY', 'pinned', 'z', 'locked', 'linkTo', 'rot', 'minH'];
+const publicBalloon = (b: Balloon): Balloon => {
+  const out: Record<string, unknown> = {};
+  for (const key of BALLOON_KEYS) if (b[key] !== undefined) out[key] = b[key];
+  return out as unknown as Balloon;
+};
+
+const validBox = (b: Box | undefined): b is Box => !!b && num(b.x) && num(b.y) && num(b.w) && num(b.h);
+const boxOf = (b: Box): Box => ({ x: b.x, y: b.y, w: b.w, h: b.h });
+const pointOf = (p: { x: number; y: number } | undefined): { x: number; y: number } | undefined => (p && num(p.x) && num(p.y) ? { x: p.x, y: p.y } : undefined);
+const KEEP_OUT_KINDS: ReadonlySet<KeepOut['kind']> = new Set<KeepOut['kind']>(['face', 'hands', 'action', 'text', 'other']);
+
+/**
+ * What the reader's lettering needs from the page check, as geometry only (no issue text, score, model or time):
+ * the panel boxes, and where the faces and heads are (`keepOut`, `heads`) so a balloon the coverage cap places
+ * again in the reader goes around the faces exactly as it does in the studio. Both face lists are always present
+ * (empty when the check stored none: the studio then letters the page as if no face is known, and so does the
+ * reader). `checkedAt` is PUBLIC_QC_CHECKED_AT: a snapshot written before the faces were published has no face
+ * lists, and the lettering never moves its stored balloons blind (layout.ts storedFrozen).
+ */
+const publicQc = (qc: QcReport | undefined, castIds: ReadonlySet<string>): QcReport | undefined => {
+  if (!qc) return undefined;
+  const panelBoxes = (Array.isArray(qc.panelBoxes) ? qc.panelBoxes : []).filter(validBox).map(boxOf);
+  const keepOut: KeepOut[] = (Array.isArray(qc.keepOut) ? qc.keepOut : [])
+    .filter((k) => !!k && num(k.panel) && validBox(k.box) && KEEP_OUT_KINDS.has(k.kind))
+    .map((k) => ({ panel: k.panel, box: boxOf(k.box), kind: k.kind }));
+  const heads: SpeakerMark[] = [];
+  for (const h of Array.isArray(qc.heads) ? qc.heads : []) {
+    const head = pointOf(h?.head);
+    if (!head || !num(h.panel)) continue;
+    const mark: SpeakerMark = { panel: h.panel, head };
+    if (typeof h.characterId === 'string' && castIds.has(h.characterId)) mark.characterId = h.characterId;
+    const mouth = pointOf(h.mouth);
+    if (mouth) mark.mouth = mouth;
+    heads.push(mark);
+  }
+  if (!panelBoxes.length && !keepOut.length && !heads.length) return undefined;
+  return { score: 0, issues: [], checkedAt: PUBLIC_QC_CHECKED_AT, ...(panelBoxes.length ? { panelBoxes } : {}), keepOut, heads };
+};
+
+function publicPage(page: Page, n: number, plan: SnapshotPlan, castIds: ReadonlySet<string>): Page | null {
+  const asset = page.render.asset ? publicAsset(page.render.asset, plan) : null;
+  if (!asset) return null;
+  const qc = publicQc(page.render.qc, castIds);
+  const out: Page = {
+    id: String(page.id),
+    n,
+    summary: '',
+    layout: typeof page.layout === 'string' ? page.layout : '',
+    panels: (page.panels || []).map((panel) => publicPanel(panel, castIds, plan)),
+    balloons: (page.balloons || []).map(publicBalloon),
+    render: { status: 'ready', asset, history: [], ...(qc ? { qc } : {}) }
+  };
+  if (typeof page.chapterTitle === 'string' && page.chapterTitle.trim()) out.chapterTitle = page.chapterTitle;
+  // Ship 2 (pro plan §8): how the page is shown, as geometry. Absent on a page without these fields (old snapshots stay
+  // deep-equal); readers fall back to the drawing as drawn (artModeOf) whenever anything here is missing.
+  if (page.artMode === 'panels') {
+    out.artMode = 'panels';
+    const cuts = publicCuts(page.render.cuts);
+    if (cuts) out.render.cuts = cuts;
+  }
+  if (page.frameStyle) out.frameStyle = { ...frameStyleOf(page) };
+  const layers = publicLayers(page.layers, plan);
+  if (layers.length) out.layers = layers;
+  return out;
+}
+
+function publicCover(cover: Cover | undefined, plan: SnapshotPlan): Cover {
+  const out: Cover = { render: { status: 'none', history: [] } };
+  if (typeof cover?.title === 'string' && cover.title) out.title = cover.title;
+  if (typeof cover?.tagline === 'string' && cover.tagline) out.tagline = cover.tagline;
+  if (cover?.lettering === 'overlay' || cover?.lettering === 'in_art') out.lettering = cover.lettering;
+  if (cover?.titleStyle && typeof cover.titleStyle === 'object') out.titleStyle = plain(cover.titleStyle);
+  const asset = plan.includeCover && cover?.render?.asset ? publicAsset(cover.render.asset, plan) : null;
+  if (asset) out.render = { status: 'ready', asset, history: [] };
+  return out;
+}
+
+/**
+ * §9.3 allow-list snapshot. Every path is the opaque pub/<assetKey>/ copy; no u/<user>/p/<project>
+ * path, no project id, no private field anywhere. Pages are the planned (cleared + drawn) ones,
+ * renumbered contiguously.
+ */
+export function buildSnapshot(doc: ComicDoc, plan: SnapshotPlan): ComicDoc {
+  const at = num(plan.publishedAt) ? plan.publishedAt : 0;
+  const wanted = new Set(plan.pageIds);
+  const castIds = new Set((doc.cast || []).map((c) => String(c.id)));
+  const pages: Page[] = [];
+  for (const page of doc.pages || []) {
+    if (!wanted.has(page.id)) continue;
+    const pub = publicPage(page, pages.length + 1, plan, castIds);
+    if (pub) pages.push(pub);
+  }
+  const source = doc.format?.language || 'en';
+  const editions = (plan.languages || []).filter((l) => !sameLanguage(l, source));
+  const brief: ComicDoc['brief'] = { title: String(doc.brief?.title ?? ''), notes: [] };
+  if (typeof doc.brief?.logline === 'string' && doc.brief.logline) brief.logline = doc.brief.logline;
+  // A children's book that is not a storybook (a kids' comic or manga) is lettered under the children's coverage
+  // cap (layout.ts coverCapFor reads the brief). The owner's audience, notes and premise stay private: the snapshot
+  // carries only the fixed category word, so the reader letters every page under the same cap as the studio.
+  if (doc.format?.kind !== 'storybook' && doc.brief && isKidsAudience(doc)) brief.audience = PUBLIC_KIDS_AUDIENCE;
+  const style: ComicDoc['style'] = { status: 'locked', refs: [], options: [] };
+  if (typeof doc.style?.name === 'string' && doc.style.name) style.name = doc.style.name;
+
+  const snapshot: ComicDoc = {
+    v: COMIC_DOC_VERSION,
+    id: String(plan.publicationId || 'publication'),
+    createdAt: at,
+    updatedAt: at,
+    rev: num(plan.rev) ? plan.rev : 0,
+    brief,
+    format: {
+      kind: doc.format.kind,
+      pageCount: pages.length,
+      pageAspect: doc.format.pageAspect,
+      panelsPerPage: doc.format.panelsPerPage,
+      readingDirection: doc.format.readingDirection,
+      lettering: doc.format.lettering,
+      colorMode: doc.format.colorMode,
+      language: source
+    },
+    source: {},
+    style,
+    cast: (doc.cast || []).map((c) => ({
+      id: String(c.id),
+      name: String(c.name ?? ''),
+      tier: c.tier,
+      look: { summary: '' },
+      refs: [],
+      sheet: { status: 'none', history: [] }
+    })),
+    places: [],
+    pages,
+    cover: publicCover(doc.cover, plan),
+    planStatus: 'approved',
+    settings: { ...DEFAULT_SETTINGS },
+    spend: { totalUsd: 0, byKind: {}, entries: [] },
+    gate: null,
+    conversation: []
+  };
+  if (doc.letterStyle) snapshot.letterStyle = plain(doc.letterStyle);
+  if (doc.book) snapshot.book = plain(doc.book);
+  if (doc.reader) snapshot.reader = plain(doc.reader);
+  snapshot.i18n = onlyPublishedLines(publicI18n(i18nOf(doc), editions), pages, i18nOf(doc));
+  return snapshot;
+}
+
+/**
+ * Translations (and per-language balloon geometry) of the published lines only: a withheld page's
+ * lines, or a line deleted since it was translated, never ride along in the public payload. Cover
+ * and brief translations stay (the snapshot publishes both).
+ *
+ * Each kept line translation carries the source hash of the PUBLISHED line when it was current in
+ * the live doc (publicI18n blanks it), so the snapshot is self-consistent: editionProgress /
+ * editionReadiness over the public doc see a published edition as complete (the legacy
+ * /public/:id `languages[].complete` and the reader's language list rely on it). The hash is of
+ * public text only; a stale translation keeps '' (publishing refuses stale editions anyway).
+ */
+function onlyPublishedLines(i18n: NonNullable<ComicDoc['i18n']>, pages: Page[], live: I18nState): NonNullable<ComicDoc['i18n']> {
+  const lines = new Map<string, Line>();
+  for (const p of pages) for (const panel of p.panels) for (const l of panel.lines) lines.set(l.id, l);
+  const keep = <T>(rec: Record<string, T> | undefined): Record<string, T> => Object.fromEntries(Object.entries(rec || {}).filter(([id]) => lines.has(id)));
+  const editions: typeof i18n.editions = {};
+  for (const [lang, e] of Object.entries(i18n.editions)) {
+    const liveLines = live.editions[lang]?.lines || {};
+    const out: Record<string, TextTranslation> = {};
+    for (const [id, t] of Object.entries(keep(e.lines))) {
+      const hash = lineSourceHash(lines.get(id)!);
+      const current = Object.prototype.hasOwnProperty.call(liveLines, id) && liveLines[id]?.sourceHash === hash;
+      out[id] = { ...t, sourceHash: current ? hash : '' };
+    }
+    editions[lang] = { ...e, lines: out, balloons: keep(e.balloons) };
+  }
+  return { ...i18n, editions };
+}
+
+/** Every storage path inside a snapshot (assets + variants), for the reader's url map. */
+export function snapshotPaths(snapshot: ComicDoc): string[] {
+  const out = new Set<string>();
+  const add = (a?: AssetRef) => {
+    if (!a?.path) return;
+    out.add(a.path);
+    for (const v of a.variants || []) if (v?.path) out.add(v.path);
+  };
+  add(snapshot.cover?.render?.asset);
+  for (const p of snapshot.pages || []) {
+    add(p.render?.asset);
+    // Ship 2: the pictures published frames and printed overlays show (their opaque copies).
+    for (const path of pageSourcePaths(p, { printOnly: true })) out.add(path);
+  }
+  return [...out];
+}
+
+// ── Content fingerprint ("changes since publishing") ─────────────────────────
+
+/** Everything a reader would see from the live doc, as one value (hashed by the two fingerprints below). */
+const fingerprintView = (doc: ComicDoc, languages: string[]) => {
+  const source = doc.format?.language || 'en';
+  const editions = languages.filter((l) => !sameLanguage(l, source));
+  return {
+    brief: [doc.brief?.title, doc.brief?.logline],
+    format: [doc.format?.kind, doc.format?.pageAspect, doc.format?.readingDirection, doc.format?.lettering],
+    cover: [doc.cover?.title, doc.cover?.tagline, doc.cover?.lettering, doc.cover?.titleStyle, hasPublishableArt(doc.cover?.render) ? doc.cover.render.asset!.path : ''],
+    pages: drawnPages(doc).map((p) => {
+      const tuple: unknown[] = [
+        p.id,
+        p.render.asset!.path,
+        p.chapterTitle,
+        (p.panels || []).map((pn) => (pn.lines || []).map((l) => [l.id, l.kind, l.speakerId, l.text, l.style])),
+        p.balloons
+      ];
+      // Ship 2: the published layout geometry, appended only when the page has some, so a page without frames,
+      // overlays or a frame style keeps the fingerprint it had (no false "changes since publishing").
+      const geometry = layoutGeometryOf(p);
+      if (geometry) tuple.push(geometry);
+      return tuple;
+    }),
+    cast: (doc.cast || []).map((c) => [c.id, c.name]),
+    letterStyle: doc.letterStyle,
+    book: doc.book,
+    reader: doc.reader,
+    i18n: publicI18n(i18nOf(doc), editions)
+  };
+};
+
+/**
+ * What a reader sees of a page's Ship 2 layout (pro plan §8): display mode, frame style, frames (box, crop, border,
+ * stacking, picture), the current cut boxes in panels mode and the printed overlays. Undefined when the page has none.
+ */
+const layoutGeometryOf = (p: Page): unknown => {
+  const frames = (p.panels || []).filter((pn) => !!pn.frame).map((pn) => [pn.id, pn.frame!.box, pn.frame!.fit, pn.frame!.src?.path, pn.frame!.src?.box, pn.frame!.border, pn.frame!.z]);
+  const printed = (p.layers || []).filter((l) => l.print !== false).map((l) => [l.id, l.kind, l.box, l.rot, l.z, l.clip, l.opacity, l.flip, l.src, l.shape]);
+  const cuts = p.artMode === 'panels' ? (p.render.cuts?.cuts || []).map((c) => [c.panelId, c.drawn, c.box]) : [];
+  if (p.artMode !== 'panels' && !p.frameStyle && !frames.length && !printed.length) return undefined;
+  return { mode: p.artMode ?? null, style: p.frameStyle ?? null, frames, cuts, layers: printed };
+};
+
+/**
+ * Hash of everything a reader would see from the live doc (art paths, text, layout, lettering,
+ * published translations). Equal fingerprints ⇒ republishing would change nothing.
+ *
+ * Canonical (back-compat F1, like the spec hashes): object keys are sorted at every depth, so a jsonb save and
+ * reload — which reorders the keys of balloons, line styles, letterStyle, book, reader and i18n — never makes
+ * the published version look behind when nothing changed. Array order (pages, panels, lines) still counts.
+ */
+export function contentFingerprint(doc: ComicDoc, languages: string[]): string {
+  return hashString(stableStringify(fingerprintView(doc, languages)));
+}
+
+/**
+ * The pre-F1 fingerprint (JSON.stringify in the doc's in-memory key order), which rows published before canonical
+ * fingerprints carry. Accepted by fingerprintMatches until the next publish stores the canonical one.
+ */
+export function legacyContentFingerprint(doc: ComicDoc, languages: string[]): string {
+  return hashString(JSON.stringify(fingerprintView(doc, languages)));
+}
+
+/**
+ * Whether a publication row's stored fingerprint still describes the live doc: the canonical fingerprint, or —
+ * for a row published before canonical fingerprints — the legacy one. A legacy hash stamped in a session whose
+ * keys were later reordered can still differ once; the next publish stores the canonical form and that clears.
+ */
+export function fingerprintMatches(doc: ComicDoc, languages: string[], stored: string): boolean {
+  if (!stored) return false;
+  return stored === contentFingerprint(doc, languages) || stored === legacyContentFingerprint(doc, languages);
+}
+
+// ── Share card ───────────────────────────────────────────────────────────────
+
+export interface CardInputs {
+  doc: ComicDoc;
+  snapshot: ComicDoc;
+  languages: string[];
+  /** Public URL builder for a pub/ path. */
+  publicUrl: (path: string) => string;
+  og: ShareCard['og'];
+  themeColor?: string;
+  creator?: string;
+}
+
+/** Localized title/description for one published language (source when lang is the source). */
+export function localizedText(doc: ComicDoc, lang: string, pageCount: number): { title: string; description: string } {
+  const view = sameLanguage(lang, doc.format?.language) ? doc : localizeDoc(doc, lang);
+  const title = cleanText(view.brief?.title || view.cover?.title || 'Untitled comic', 90) || 'Untitled comic';
+  const label = kindLabelOf(doc.format?.kind).toLowerCase();
+  const fallback = `A ${pageCount}-page ${label} made with DreamStream Studio`;
+  const description = cleanText(view.brief?.logline || view.cover?.tagline || fallback, 200) || fallback;
+  return { title, description };
+}
+
+/** The 1080w public URL of the cover (else the first page), for instant first paint. */
+export function coverUrlOf(snapshot: ComicDoc, publicUrl: (path: string) => string): string | undefined {
+  const asset = snapshot.cover?.render?.asset || snapshot.pages?.[0]?.render?.asset;
+  if (!asset) return undefined;
+  const v1080 = (asset.variants || []).find((v) => v.w === 1080) || (asset.variants || []).slice(-1)[0];
+  return publicUrl((v1080 || asset).path);
+}
+
+export function buildShareCard(input: CardInputs): ShareCard {
+  const { doc, snapshot, languages } = input;
+  const pageCount = snapshot.pages.length;
+  const kindLabel = kindLabelOf(doc.format?.kind);
+  const source = localizedText(doc, doc.format?.language || 'en', pageCount);
+  const i18n: ShareCard['i18n'] = {};
+  for (const lang of languages) i18n[lang] = localizedText(doc, lang, pageCount);
+  const primary = i18n[languages[0]] || source;
+  const card: ShareCard = {
+    v: 1,
+    title: primary.title,
+    description: primary.description,
+    kindLabel,
+    pageCount,
+    aspect: doc.format.pageAspect,
+    og: input.og,
+    i18n
+  };
+  const coverUrl = coverUrlOf(snapshot, input.publicUrl);
+  if (coverUrl) card.coverUrl = coverUrl;
+  if (input.creator) card.creator = cleanText(input.creator, 40);
+  if (input.themeColor && /^#[0-9a-fA-F]{6}$/.test(input.themeColor)) card.themeColor = input.themeColor;
+  return card;
+}
+
+/** "English / हिन्दी" for the OG meta row. */
+export const languagesLabel = (languages: string[]): string =>
+  languages.map((l) => languageSpec(l)?.endonym || l).slice(0, 4).join(' / ');
+
+/** File-name-safe language slot: 'zh-Hans' → 'zhhans'. */
+export const langSlot = (lang: string): string => (String(lang || '').toLowerCase().replace(/[^a-z0-9]/g, '') || 'src').slice(0, 12);
+
+export const OG_PATH_RE = /^pub\/[A-Za-z0-9]{22}\/og-[a-z0-9]{2,12}-[0-9a-f]{12}\.jpg$/;
+export const ogPath = (assetKey: string, lang: string, hash12: string): string => `pub/${assetKey}/og-${langSlot(lang)}-${hash12}.jpg`;

@@ -1,0 +1,12 @@
+Hi Dana,
+
+A friendly reminder that invoice INV-0042 for $2,400 was due on 15 October.
+
+Pay the invoice: https://pay.example.com/inv-0042
+
+If it's already on its way, thank you, and please ignore this note.
+
+Thanks,
+
+-- 
+Alex Rivera

@@ -1,0 +1,21 @@
+{
+  // A synthetic external consumer: a Next.js-style app that vendors the bundler flavour of this package and
+  // type-checks it with these options. Only the compiler settings matter (ES2017 library plus the DOM, bundler
+  // resolution, isolated modules, strict); nothing here names or reads any other repository.
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": ["dom", "dom.iterable", "es2017"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": []
+  },
+  "include": ["../src/**/*.ts"],
+  "exclude": ["../src/**/*.test.ts"]
+}

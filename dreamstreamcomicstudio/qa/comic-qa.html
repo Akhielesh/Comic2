@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Same viewport contract as the production index.html (keyboard resize on Android, notch
+         safe areas, zoomable: never maximum-scale / user-scalable=no — a11y.spec.ts asserts it). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)" />
+    <title>Comic Studio QA harness</title>
+    <!-- Comic Studio QA harness (P1-QA, mobile.md §10.2): built ONLY with QA_BUILD=1 into dist-qa/,
+         never into the production dist/. Mounts the real studio, editor and readers on synthetic
+         fixtures with an in-memory controller; it makes no network calls. -->
+    <style>
+      /* Mirrors the production body background: every studio surface must paint its own canvas. */
+      body { margin: 0; background-color: #3B82F6; }
+    </style>
+  </head>
+  <body class="antialiased">
+    <div id="root"></div>
+    <script type="module" src="./ComicQaApp.tsx"></script>
+  </body>
+</html>

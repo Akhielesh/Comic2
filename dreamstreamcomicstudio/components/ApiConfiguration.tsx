@@ -29,10 +29,13 @@ import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { reconcileProviderMirror, syncByokKeyToServer } from '../services/byokSync';
 import {
+  USAGE_EXHAUSTED_COPY,
   fetchAllowanceStatus,
+  formatPctLeft,
   getLastAllowanceStatus,
   patchBillingPrefs,
   publishAllowanceStatus,
+  refreshAllowanceStatus,
   resetsLabel,
   subscribeAllowanceStatus,
   type AllowanceStatus,
@@ -326,25 +329,27 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
   );
 };
 
-// ── DreamStream allowance ────────────────────────────────────────────────────
+// ── DreamStream usage left (P1-LIMITS: percent + friendly units, never dollars) ──
 
-const ALLOWANCE_POLL_MS = 60_000;
 const FALLBACK_OPTIONS: { mode: ByokFallbackMode; label: string }[] = [
   { mode: 'ask', label: 'Ask me first' },
   { mode: 'auto', label: 'Switch to my key' },
-  { mode: 'never', label: 'Stop until reset' }
+  { mode: 'never', label: 'Just stop' }
 ];
-const allowanceMeterColor = (pct: number) => (pct >= 90 ? 'bg-red-500' : pct >= 30 ? 'bg-amber-500' : 'bg-emerald-500');
+// Colour by usage LEFT: plenty → emerald, under 30% → amber, under 10% → red.
+const usageLeftColor = (pctLeft: number) => (pctLeft < 10 ? 'bg-red-500' : pctLeft < 30 ? 'bg-amber-500' : 'bg-emerald-500');
 
 const DreamStreamAllowancePanel: React.FC = () => {
   const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    // Read on open and when the window regains focus — never on a timer (the backend sleeps).
     const unsubscribe = subscribeAllowanceStatus(setStatus);
-    void fetchAllowanceStatus();
-    const id = setInterval(() => void fetchAllowanceStatus(), ALLOWANCE_POLL_MS);
-    return () => { unsubscribe(); clearInterval(id); };
+    void refreshAllowanceStatus(0);
+    const onFocus = () => void refreshAllowanceStatus(60_000);
+    window.addEventListener('focus', onFocus);
+    return () => { unsubscribe(); window.removeEventListener('focus', onFocus); };
   }, []);
 
   if (!status || !status.enabled) return null;
@@ -362,17 +367,17 @@ const DreamStreamAllowancePanel: React.FC = () => {
     setSaving(false);
   };
 
-  const pct = Math.min(100, Math.max(0, Math.round(status.pctUsed)));
+  const pctLeft = status.exhausted ? 0 : Math.min(100, Math.max(0, status.pctLeft));
   const reset = resetsLabel(status.resetsAt);
-  const crossed90 = status.exhausted || status.crossed.includes(90) || status.pctUsed >= 90;
-  const showConsent = status.exhausted && status.byokAvailable && status.byokFallbackMode === 'ask';
+  const crossed90 = status.governed && (status.exhausted || status.crossed.includes(90) || status.pctUsed >= 90);
+  const showConsent = status.governed && status.exhausted && status.byokAvailable && status.byokFallbackMode === 'ask';
 
   return (
     <div className={`${PANEL} p-4`}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <Gauge className={`w-4 h-4 ${ACCENT_TEXT}`} />
-          <h4 className={`${HEADING} text-sm`}>DreamStream monthly allowance</h4>
+          <h4 className={`${HEADING} text-sm`}>DreamStream usage left</h4>
         </div>
         <button
           role="switch"
@@ -385,24 +390,33 @@ const DreamStreamAllowancePanel: React.FC = () => {
         </button>
       </div>
       <p className={`text-[11px] ${MUTED} mt-1`}>
-        On: generation runs on the platform key until your monthly allowance is used. Off: only your own keys below are used.
+        On: generation runs on DreamStream's key while you have usage left — shared across every studio. Off: only your own keys below are used. Your own keys never use your DreamStream usage.
       </p>
 
-      <div className="mt-3">
-        <div className="relative h-2 w-full bg-[var(--ds-well)] rounded-full overflow-hidden">
-          <div className={`h-full ${allowanceMeterColor(status.pctUsed)}`} style={{ width: `${Math.max(2, pct)}%` }} />
-          {[30, 70, 90].map((t) => (
-            <span key={t} className="absolute top-0 bottom-0 w-px bg-[var(--ds-hairline)]" style={{ left: `${t}%` }} title={`${t}%`} />
-          ))}
+      {status.governed ? (
+        <div className="mt-3">
+          <div
+            className="relative h-2 w-full bg-[var(--ds-well)] rounded-full overflow-hidden"
+            role="meter"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(pctLeft)}
+            aria-label="DreamStream usage left"
+          >
+            <div className={`h-full ${usageLeftColor(pctLeft)}`} style={{ width: `${pctLeft > 0 ? Math.max(2, pctLeft) : 0}%` }} />
+          </div>
+          <div className={`mt-1 text-[11px] ${MUTED}`}>
+            <span className={`font-semibold tabular-nums ${pctLeft < 10 ? 'text-red-600' : INK}`}>{status.exhausted ? '0%' : formatPctLeft(pctLeft)}</span> of your usage left
+            {status.friendlyUnits && !status.exhausted && <> · {status.friendlyUnits.label}</>}
+            {reset ? <> · comes back {reset}</> : <> · doesn't reset on its own</>}
+          </div>
         </div>
-        <div className={`mt-1 text-[11px] ${MUTED}`}>
-          <span className={`font-semibold ${pct >= 90 ? 'text-red-600' : INK}`}>{pct}%</span> of your monthly allowance used
-          {reset && <> · resets {reset}</>}
-        </div>
-      </div>
+      ) : (
+        <p className={`mt-3 text-xs ${INK}`}>Your account has no usage limit.</p>
+      )}
 
       <div className="mt-3">
-        <div className={SECTION_LABEL}>When my allowance runs out</div>
+        <div className={SECTION_LABEL}>When my usage runs out</div>
         <div className={`mt-1.5 inline-flex flex-wrap rounded-xl ${HAIRLINE} overflow-hidden`} role="radiogroup">
           {FALLBACK_OPTIONS.map((opt, i) => {
             const active = status.byokFallbackMode === opt.mode;
@@ -431,7 +445,7 @@ const DreamStreamAllowancePanel: React.FC = () => {
             <div className="flex items-start gap-2 flex-wrap sm:flex-nowrap">
               <AlertTriangle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
               <div className="flex-1 min-w-[12rem]">
-                <div className="text-sm font-semibold text-red-600">You've used 100% of this month's allowance. Continue with your own key?</div>
+                <div className="text-sm font-semibold text-red-600">You've used all of your DreamStream usage. Continue with your own key?</div>
                 <p className={`text-[11px] ${MUTED} mt-0.5`}>Your key's own limits still apply.</p>
               </div>
               <PrimaryBtn onClick={() => void applyPrefs({ byokFallbackMode: 'auto' })} disabled={saving}>Continue with my key</PrimaryBtn>
@@ -443,12 +457,14 @@ const DreamStreamAllowancePanel: React.FC = () => {
             <div className={`text-xs ${INK}`}>
               {status.exhausted ? (
                 status.byokFallbackMode === 'auto' && status.byokAvailable ? (
-                  <>You've used <span className="font-semibold">100%</span> of this month's allowance — generation now runs on your own key{reset && <> until it resets {reset}</>}.</>
+                  <>You've used all of your DreamStream usage — generation now runs on your own key{reset && <> until it comes back {reset}</>}.</>
+                ) : reset ? (
+                  <>You've used all of this month's DreamStream usage. Nothing more is spent until it comes back {reset}{!status.byokAvailable && <> — or add a key below to keep going now</>}.</>
                 ) : (
-                  <>You've used <span className="font-semibold">100%</span> of this month's allowance. Platform generation is paused{reset && <> until it resets {reset}</>}{!status.byokAvailable && <> — add a key below to keep going</>}.</>
+                  <>{USAGE_EXHAUSTED_COPY}</>
                 )
               ) : (
-                <>You've used over <span className="font-semibold">90%</span> of this month's allowance{reset && <> — it resets {reset}</>}.</>
+                <>Less than <span className="font-semibold">10%</span> of your DreamStream usage is left{reset ? <> — it comes back {reset}</> : <> — ask us for a top-up or add a key below when you need more</>}.</>
               )}
             </div>
           </div>

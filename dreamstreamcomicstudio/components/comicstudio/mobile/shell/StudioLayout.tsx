@@ -1,0 +1,328 @@
+// StudioLayout (mobile.md §3.0): the studio's body per form factor — ONE place that decides.
+//
+//   single       phones portrait (< 720 wide)   one pane at a time + bottom MobileTabBar
+//   single-rail  phones landscape (< 480 tall)  one pane at a time + left NavigationRail
+//   split        tablets ≥ 720, desktop         resizable conversation | board (pane switcher collapses)
+//   dual-screen  foldable spanning (book)       chat in segment 0, board in segment 1, gap = hinge
+//   (split with vertical segments — tabletop posture — puts the board on top, chat + composer below)
+//
+// Both panes STAY MOUNTED: the hidden one gets `hidden` + `inert` instead of unmounting, so chat
+// scroll, the composer draft and the board's tab scroll survive every switch (and images in the
+// hidden pane are released by the image budget). That holds across LAYOUT changes too — rotating a
+// phone (single ↔ single-rail), unfolding a foldable (single → split / dual-screen) or resizing an
+// iPad Split View: each pane renders through a portal into one persistent host node, and whichever
+// layout is active adopts that node into its slot. The React trees (drafts, upload progress, open
+// editors) never remount; only the host node moves.
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { applyGutterDelta } from '../../../studio/kit/ResizableSplit';
+import { RADIUS_PILL, SHADOW_SOFT, TRANSITION } from '../../../chat/studioDesign';
+import { defaultSplitFor, minPanePx, type FormFactor } from '../formFactor';
+import { isDoubleTap, type Tap } from '../touch/gestureMath';
+import { DualScreen } from './DualScreen';
+import { MobileTabBar, type StudioNavItem } from './MobileTabBar';
+import { NavigationRail } from './NavigationRail';
+import type { PaneMode } from './PaneSwitcher';
+
+const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(' ');
+
+export const SPLIT_STORAGE_KEY = 'comicstudio.split';
+
+// ── Split view ───────────────────────────────────────────────────────────────
+
+export const readSplit = (fallback: number[]): number[] => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SPLIT_STORAGE_KEY) || 'null');
+    if (Array.isArray(parsed) && parsed.length === 2 && parsed.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0)) return parsed;
+  } catch {
+    /* fall through */
+  }
+  return fallback.slice();
+};
+
+/** Two-pane horizontal split; the gutter drags (mouse, touch, pen), takes arrow keys and resets on double tap. */
+export const SplitView: React.FC<{ left: React.ReactNode; right: React.ReactNode; ff: FormFactor; mode?: PaneMode }> = ({ left, right, ff, mode = 'both' }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const defaults = defaultSplitFor(ff);
+  const [sizes, setSizes] = useState<number[]>(() => readSplit(defaults));
+  const lastTap = useRef<Tap | null>(null);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SPLIT_STORAGE_KEY, JSON.stringify(sizes));
+    } catch {
+      /* not persisted */
+    }
+  }, [sizes]);
+
+  const minFrac = (sum: number) => {
+    const width = containerRef.current?.getBoundingClientRect().width || 0;
+    return width > 0 ? Math.min(sum * 0.45, (minPanePx(width) / width) * sum) : sum * 0.25;
+  };
+
+  const reset = () => setSizes(defaults.slice());
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0) return;
+    const start = sizes.slice();
+    const sum = start[0] + start[1];
+    const startX = e.clientX;
+    const min = minFrac(sum);
+    let moved = false;
+    const onMove = (ev: PointerEvent) => {
+      if (Math.abs(ev.clientX - startX) > 3) moved = true;
+      setSizes(applyGutterDelta(start, 0, ((ev.clientX - startX) / rect.width) * sum, min));
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (!moved && ev.type === 'pointerup') {
+        const tap = { t: Date.now(), x: ev.clientX, y: ev.clientY };
+        if (isDoubleTap(lastTap.current, tap)) {
+          lastTap.current = null;
+          reset();
+        } else lastTap.current = tap;
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const sum = sizes[0] + sizes[1];
+    const step = sum * 0.03;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      setSizes((s) => applyGutterDelta(s, 0, e.key === 'ArrowLeft' ? -step : step, minFrac(sum)));
+    } else if (e.key === 'Home' || e.key === 'Enter') {
+      e.preventDefault();
+      reset();
+    }
+  };
+
+  const leftPct = Math.round((sizes[0] / (sizes[0] + sizes[1])) * 100);
+  const both = mode === 'both';
+  const hideLeft = mode === 'board';
+  const hideRight = mode === 'chat';
+
+  return (
+    <div ref={containerRef} data-layout-split className="flex h-full min-h-0 w-full min-w-0">
+      <div
+        hidden={hideLeft}
+        inert={hideLeft || undefined}
+        data-pane="chat"
+        className={cx(hideLeft ? 'hidden' : 'flex', 'min-h-0 min-w-0')}
+        style={both ? { flexGrow: sizes[0], flexShrink: 1, flexBasis: 0 } : { flex: '1 1 0%' }}
+      >
+        {left}
+      </div>
+      {both &&
+        (ff.coarse ? (
+          // Touch: the gutter is a 24 px strip of its own (it never lies over a pane, so it steals no
+          // pane taps and the panes keep their edges) that drags anywhere along its line, and the
+          // focusable control is a 44 × 64 grab handle in its middle — clear of the notch and the
+          // home-indicator bands, and only 10 px over each pane, inside their own padding.
+          <div
+            data-split-gutter
+            onPointerDown={onPointerDown}
+            onDoubleClick={reset}
+            className="relative z-10 flex w-6 shrink-0 cursor-col-resize touch-none justify-center"
+          >
+            <span aria-hidden className="w-px bg-[var(--ds-hairline)]" />
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize conversation and board"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={leftPct}
+              tabIndex={0}
+              title="Drag to resize · double-tap to reset"
+              onKeyDown={onKeyDown}
+              data-split-handle
+              className={`group absolute left-1/2 top-1/2 grid h-16 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center ${RADIUS_PILL} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ds-ring)]`}
+            >
+              <span
+                aria-hidden
+                className={`h-10 w-1.5 ${RADIUS_PILL} border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] ${SHADOW_SOFT} ${TRANSITION} group-active:bg-[var(--ds-hover)]`}
+              />
+            </div>
+          </div>
+        ) : (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize conversation and board"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={leftPct}
+            tabIndex={0}
+            title="Drag to resize · double-click to reset"
+            onPointerDown={onPointerDown}
+            onKeyDown={onKeyDown}
+            onDoubleClick={reset}
+            data-hit-exempt="gutter: 8 px on fine pointers by design"
+            className="group relative z-10 flex w-2 shrink-0 cursor-col-resize touch-none items-stretch justify-center focus-visible:outline-none"
+          >
+            <span className={`w-px bg-[var(--ds-hairline)] ${TRANSITION} group-hover:bg-[var(--ds-muted)] group-focus-visible:bg-[var(--ds-ring)]`} />
+          </div>
+        ))}
+      <div
+        hidden={hideRight}
+        inert={hideRight || undefined}
+        data-pane="board"
+        className={cx(hideRight ? 'hidden' : 'flex', 'min-h-0 min-w-0')}
+        style={both ? { flexGrow: sizes[1], flexShrink: 1, flexBasis: 0 } : { flex: '1 1 0%' }}
+      >
+        {right}
+      </div>
+    </div>
+  );
+};
+
+// ── Persistent panes ─────────────────────────────────────────────────────────
+
+/** One detached node per pane, created once; the pane's React tree portals into it. */
+const usePaneHost = (name: 'chat' | 'board'): HTMLDivElement | null => {
+  const [node] = useState<HTMLDivElement | null>(() => {
+    if (typeof document === 'undefined') return null;
+    const el = document.createElement('div');
+    el.setAttribute('data-pane-host', name);
+    // Fills its slot like the pane content it replaces (a flex item that may shrink to 0).
+    el.style.cssText = 'display:flex;flex:1 1 0%;min-width:0;min-height:0;width:100%;height:100%';
+    return el;
+  });
+  return node;
+};
+
+/**
+ * Where a pane shows in the current layout: adopts the pane's host node (a `display: contents`
+ * wrapper, so the layout's own flex rules apply to the host). Without a DOM (SSR) it renders the
+ * content inline.
+ */
+const PaneSlot: React.FC<{ host: HTMLDivElement | null; fallback: React.ReactNode }> = ({ host, fallback }) => {
+  const adopt = useCallback(
+    (slot: HTMLDivElement | null) => {
+      if (slot && host && host.parentNode !== slot) slot.appendChild(host);
+    },
+    [host]
+  );
+  return host ? <div ref={adopt} className="contents" /> : <>{fallback}</>;
+};
+
+// ── Layout ───────────────────────────────────────────────────────────────────
+
+export interface StudioLayoutProps {
+  ff: FormFactor;
+  chat: React.ReactNode;
+  board: React.ReactNode;
+  /** Phones: the visible pane. */
+  view: 'chat' | 'board';
+  /** Split / dual: Chat | Both | Board. */
+  paneMode?: PaneMode;
+  /** Phone navigation (tab bar / rail). */
+  navItems: StudioNavItem[];
+  onBack: () => void;
+}
+
+const PhonePane: React.FC<{ id: 'chat' | 'board'; hidden: boolean; children: React.ReactNode }> = ({ id, hidden, children }) => (
+  <div hidden={hidden} inert={hidden || undefined} data-pane={id} className={cx(hidden ? 'hidden' : 'flex', 'absolute inset-0 min-h-0 min-w-0')}>
+    {children}
+  </div>
+);
+
+export const StudioLayout: React.FC<StudioLayoutProps> = ({ ff, chat, board, view, paneMode = 'both', navItems, onBack }) => {
+  const chatHost = usePaneHost('chat');
+  const boardHost = usePaneHost('board');
+  // The portals sit at a fixed place in this tree, so a layout switch never remounts the panes.
+  const portals = (
+    <>
+      {chatHost ? createPortal(chat, chatHost) : null}
+      {boardHost ? createPortal(board, boardHost) : null}
+    </>
+  );
+  // LayoutBody comes FIRST: React attaches refs and runs layout effects children-first in tree order, so
+  // the slot adopts each host node (into the document) before the panes' own mount-time layout effects
+  // run — a pane measuring itself on mount (autosizing fields, scroll pinning) sees real geometry, not a
+  // detached node.
+  return (
+    <>
+      <LayoutBody
+        ff={ff}
+        chat={<PaneSlot host={chatHost} fallback={chat} />}
+        board={<PaneSlot host={boardHost} fallback={board} />}
+        view={view}
+        paneMode={paneMode}
+        navItems={navItems}
+        onBack={onBack}
+      />
+      {portals}
+    </>
+  );
+};
+
+const LayoutBody: React.FC<StudioLayoutProps> = ({ ff, chat, board, view, paneMode = 'both', navItems, onBack }) => {
+  const { layout, segments } = ff;
+
+  if (layout === 'single' || layout === 'single-rail') {
+    const panes = (
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <PhonePane id="chat" hidden={view !== 'chat'}>
+          {chat}
+        </PhonePane>
+        <PhonePane id="board" hidden={view !== 'board'}>
+          {board}
+        </PhonePane>
+      </div>
+    );
+    if (layout === 'single-rail') {
+      return (
+        <div data-layout="single-rail" className="flex min-h-0 w-full min-w-0 flex-1">
+          <NavigationRail items={navItems} onBack={onBack} />
+          {panes}
+        </div>
+      );
+    }
+    return (
+      <div data-layout="single" className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
+        {panes}
+        <MobileTabBar items={navItems} />
+      </div>
+    );
+  }
+
+  if (layout === 'dual-screen' || (segments.count === 2 && segments.axis === 'vertical')) {
+    const vertical = segments.axis === 'vertical';
+    // Book posture: chat | board. Tabletop: board on top, chat + composer below (like a laptop).
+    const show: 'both' | 'first' | 'second' =
+      paneMode === 'both' ? 'both' : (paneMode === 'chat') === !vertical ? 'first' : 'second';
+    return (
+      <div data-layout={vertical ? 'tabletop' : 'dual-screen'} className="flex min-h-0 w-full min-w-0 flex-1">
+        <DualScreen
+          segments={segments}
+          first={vertical ? <div data-pane="board" className="flex h-full min-h-0 w-full min-w-0">{board}</div> : <div data-pane="chat" className="flex h-full min-h-0 w-full min-w-0">{chat}</div>}
+          second={vertical ? <div data-pane="chat" className="flex h-full min-h-0 w-full min-w-0">{chat}</div> : <div data-pane="board" className="flex h-full min-h-0 w-full min-w-0">{board}</div>}
+          show={show}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div data-layout="split" className="flex min-h-0 w-full min-w-0 flex-1">
+      <SplitView left={chat} right={board} ff={ff} mode={paneMode} />
+    </div>
+  );
+};
+
+export default StudioLayout;

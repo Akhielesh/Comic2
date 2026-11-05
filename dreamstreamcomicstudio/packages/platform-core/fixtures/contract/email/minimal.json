@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "mode": "compose",
+  "subject": "Hello",
+  "to": [],
+  "blocks": [
+    { "type": "paragraph", "id": "p1", "runs": [{ "text": "Hi there," }] }
+  ]
+}

@@ -19,6 +19,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `ventures/` | Autopilot (Ventures) specs, moved from `docs/studio/autopilot/`. **Target design**; the build stage was retired with Code Studio (ADR 0005) — its `README.md` says what works today. | When Ventures behaviour changes. |
 | `chat/` | Chat agent-tool integrations kept from Code Studio: Nango connectors, HTML→MP4 video, Open Design credits (Apache-2.0 attribution). | When those tools or their sidecars change. |
 | `email/` | Transactional + newsletter email (Cloudflare Email Sending): cost/limits, setup, security, design previews. | When email templates, routes, or the worker change. |
+| `platform/` | **The shared docs/design/agent platform** (`packages/platform-core`, `packages/platform-render`): what it is and what wave 1 ships, the flags, the [wire contract](platform/contract.md), [onboarding](platform/onboarding.md) and the [security model](platform/security.md). Decisions in ADR 0008. | When the platform contract, its flags, its release or its security controls change. |
 | `production/` | Runbooks, go-live checklist, alerting, scaling (pre-existing). | Ops changes. |
 | `OVERHAUL_PLAN.md` | The original product/tech overhaul strategy (historical context). | Read-only history. |
 | `ai_flow_documentation.md` | Deep dive on the AI generation pipeline. | When the pipeline changes. |

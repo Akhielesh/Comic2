@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "title": "Notes",
+  "sections": [
+    {
+      "id": "s1",
+      "pageBreakBefore": false,
+      "blocks": [
+        { "type": "paragraph", "id": "p1", "runs": [{ "text": "Hello." }] }
+      ]
+    }
+  ]
+}

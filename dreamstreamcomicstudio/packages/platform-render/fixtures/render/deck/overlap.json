@@ -1,0 +1,217 @@
+{
+ "note": "A SmartArt-style diagram (three rounded boxes and a label) dropped onto a bar chart: content elements collide, so renderPptx must refuse the deck and name every pair. The background and the rule under the title touch nothing. With the chart moved to `fixedChartRect`, the deck exports.",
+ "deck": {
+  "v": 1,
+  "title": "Readers by channel",
+  "size": "16:9",
+  "theme": {
+   "preset": "light"
+  },
+  "slides": [
+   {
+    "id": "sl-ok",
+    "layout": "title",
+    "elements": [
+     {
+      "kind": "text",
+      "id": "t",
+      "rect": [
+       0.1,
+       0.35,
+       0.8,
+       0.2
+      ],
+      "layer": "content",
+      "role": "title",
+      "paragraphs": [
+       {
+        "runs": [
+         {
+          "text": "Readers"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "sl-smartart",
+    "layout": "content",
+    "elements": [
+     {
+      "kind": "shape",
+      "id": "bg",
+      "rect": [
+       0,
+       0,
+       1,
+       1
+      ],
+      "layer": "background",
+      "shape": "rect",
+      "fill": "#0F172A"
+     },
+     {
+      "kind": "text",
+      "id": "title",
+      "rect": [
+       0.05,
+       0.04,
+       0.9,
+       0.12
+      ],
+      "layer": "content",
+      "role": "title",
+      "paragraphs": [
+       {
+        "runs": [
+         {
+          "text": "Readers by channel"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "kind": "shape",
+      "id": "rule",
+      "rect": [
+       0.05,
+       0.18,
+       0.9,
+       0
+      ],
+      "layer": "content",
+      "shape": "line",
+      "stroke": "#D97757"
+     },
+     {
+      "kind": "chart",
+      "id": "chart",
+      "rect": [
+       0.1,
+       0.2,
+       0.8,
+       0.7
+      ],
+      "layer": "content",
+      "chart": "bar",
+      "title": "Readers",
+      "categories": [
+       "Print",
+       "Web",
+       "App"
+      ],
+      "series": [
+       {
+        "name": "Readers",
+        "values": [
+         120,
+         340,
+         910
+        ]
+       }
+      ]
+     },
+     {
+      "kind": "shape",
+      "id": "sa-1",
+      "rect": [
+       0.15,
+       0.3,
+       0.2,
+       0.15
+      ],
+      "layer": "content",
+      "shape": "roundRect",
+      "fill": "#D97757"
+     },
+     {
+      "kind": "shape",
+      "id": "sa-2",
+      "rect": [
+       0.4,
+       0.3,
+       0.2,
+       0.15
+      ],
+      "layer": "content",
+      "shape": "roundRect",
+      "fill": "#D97757"
+     },
+     {
+      "kind": "shape",
+      "id": "sa-3",
+      "rect": [
+       0.65,
+       0.3,
+       0.2,
+       0.15
+      ],
+      "layer": "content",
+      "shape": "roundRect",
+      "fill": "#D97757"
+     },
+     {
+      "kind": "text",
+      "id": "sa-label",
+      "rect": [
+       0.15,
+       0.47,
+       0.7,
+       0.08
+      ],
+      "layer": "content",
+      "role": "caption",
+      "paragraphs": [
+       {
+        "runs": [
+         {
+          "text": "Plan, draw, ship"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "slideId": "sl-smartart",
+   "slideNumber": 2,
+   "a": "chart",
+   "b": "sa-1",
+   "area": 0.03
+  },
+  {
+   "slideId": "sl-smartart",
+   "slideNumber": 2,
+   "a": "chart",
+   "b": "sa-2",
+   "area": 0.03
+  },
+  {
+   "slideId": "sl-smartart",
+   "slideNumber": 2,
+   "a": "chart",
+   "b": "sa-3",
+   "area": 0.03
+  },
+  {
+   "slideId": "sl-smartart",
+   "slideNumber": 2,
+   "a": "chart",
+   "b": "sa-label",
+   "area": 0.056
+  }
+ ],
+ "fixedChartRect": [
+  0.1,
+  0.58,
+  0.8,
+  0.38
+ ]
+}

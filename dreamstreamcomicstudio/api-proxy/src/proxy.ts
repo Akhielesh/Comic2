@@ -23,9 +23,24 @@
  *   POST /api/agent-gate/checkin   answers (JSON or the HTML form)
  * (Not /api/agents — that is the product's own custom-agents API on the backend.)
  *   any other /api/* from an AI agent → 403 with a pointer to the check-in.
+ *
+ * Shared comics, answered at the edge (publicComic.ts; P1-PUBLISH) — a share link never wakes
+ * the backend container, and none of these routes can change anything:
+ *   GET|HEAD /api/comic/public/s/:slug        the frozen, allow-listed snapshot (anon RPC)
+ *   POST     /api/comic/public/s/:slug/event  view/complete/share analytics (always 204)
+ *   GET      /api/comic/oembed?url=…          oEmbed for our own /c/<slug> links
+ *   POST     /api/csp-report                  CSP violation reports (cspReport.ts, sampled log)
+ * (POST /api/comic/public/s/:slug/report is still proxied: Turnstile + the safety store.)
+ * Rate limits: Workers Rate Limiting bindings PUBLIC_COMIC_RL / PUBLIC_EVENT_RL / CSP_REPORT_RL.
+ * Secret: SHARE_VIEW_SALT (viewer hash + tracking HMAC; `wrangler secret put`, never in wrangler.jsonc;
+ * falls back to the D1 backend_env row of the same name — src/shareViewSalt.ts).
  */
 import { AGENT_HEADERS, AGENT_POLICY, AGENT_QUESTIONS, AGENT_TIER_LABELS, buildDecoy, detectAgent, newCanary, renderGateHtml } from './agent-gate';
 import { logVisit, parseAnswers, storeCheckin, type D1Like } from './agent-log';
+import { handleCspReport, type CspReportEnv } from './cspReport';
+import { handlePublicComic, type PublicComicEnv } from './publicComic';
+import { readCappedText } from './readCapped';
+import { withShareViewSalt, type ShareSaltEnv } from './shareViewSalt';
 
 /** The slice of a Durable Object namespace the proxy needs to reach the Backend container. */
 export interface BackendNamespace {
@@ -33,7 +48,7 @@ export interface BackendNamespace {
   get(id: unknown): { fetch(req: Request): Promise<Response> };
 }
 
-interface Env {
+interface Env extends PublicComicEnv, CspReportEnv, ShareSaltEnv {
   /** "container" (default) or "origin". */
   BACKEND_TARGET?: string;
   /** Public origin of an external backend (Railway), used when BACKEND_TARGET is "origin". */
@@ -60,8 +75,9 @@ function json(body: unknown, status = 200): Response {
 
 async function readBody(req: Request): Promise<Record<string, unknown>> {
   const type = req.headers.get('content-type') ?? '';
-  const text = await req.text();
-  if (text.length > 120_000) throw new Error('too large');
+  // Capped read (anonymous route, no limiter before it): never buffers more than 120 KB.
+  const text = await readCappedText(req, 120_000);
+  if (text === null) throw new Error('too large');
   if (type.includes('application/x-www-form-urlencoded')) return Object.fromEntries(new URLSearchParams(text));
   const parsed = JSON.parse(text || '{}') as unknown;
   return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
@@ -135,6 +151,13 @@ export default {
         403,
       );
     }
+
+    // Edge-only routes: CSP reports and the shared-comic read path never reach the container.
+    if (url.pathname === '/api/csp-report') return handleCspReport(req, env);
+    // The share routes' only secret may live in D1 rather than as a Worker secret; resolve it (cached)
+    // only for those paths so the rest of the API never touches D1 here.
+    const publicComic = url.pathname.startsWith('/api/comic/') ? await handlePublicComic(req, await withShareViewSalt(env), ctx, url) : null;
+    if (publicComic) return publicComic;
 
     const headers = new Headers(req.headers);
     const clientIp = req.headers.get('CF-Connecting-IP');

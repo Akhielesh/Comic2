@@ -84,3 +84,20 @@ Go through each script's `checks` list, then the general bar:
 Compare tiers before changing defaults, and keep the folders of the last accepted run so a
 prompt change can be judged against it. `golden.test.ts` keeps these files valid in CI
 (no network); it does not render anything.
+
+## Director scenarios (`scenarios/*.json`, $0, run in CI)
+
+The render goldens above judge pictures. The **director** golden set judges the conversation and
+the tool surface, with scripted model replies and fake images — no network, nothing spent:
+
+| Scenario | What it locks in |
+|---|---|
+| `lake-kids.json` | The owner's real session: "a baby near a lake with other animals, a kids comic, single page". The first reply is never empty and opens with the recap ("Got it — a 1-page storybook for kids 2–6 … The Baby with three Ducklings, a Frog and a Bunny"); the animals are first-class cast (`kind`, `count`); "generate all pages" on the drawn page answers for $0 with next steps. |
+| `shinchan-homage.json` | Named IP becomes an original homage (decisions-final #5): an `IP NOTE` steers the model, the reply says so once, `doc.safety.ipNoted` stops repeats. |
+| `generate-all-drawn.json` | The re-render bug: page numbers never redraw a drawn, current page (`nothing`, $0, breakdown + chips); a real "another take" is a `redraw` gate. |
+
+`scenarios.test.ts` replays them through `runDirectorTurn` and also measures the tool surface:
+every tool a golden turn needs must be offered (tool-choice accuracy stays 100 %), and the median
+prompt (system prompt + doc summary + core tool specs) may grow at most 15 % over the wave-0
+baseline (18,413 chars on commit `d785cac`). Other packages add their own scenario files here
+(for example `kids-telugu.json`); fixtures for the docs live in `fixtures.ts`.

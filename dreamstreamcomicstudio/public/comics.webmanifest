@@ -1,0 +1,42 @@
+{
+  "id": "/comics",
+  "name": "DreamStream Comics",
+  "short_name": "Comics",
+  "description": "Make comics with an AI director: plan every page, keep your cast consistent, letter each balloon, then read and share them anywhere.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#FAF9F5",
+  "theme_color": "#FAF9F5",
+  "categories": ["entertainment", "books", "productivity"],
+  "icons": [
+    { "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/comics-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/comics-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/comics-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    {
+      "name": "My comics",
+      "short_name": "My comics",
+      "url": "/?view=dashboard&source=pwa",
+      "icons": [{ "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "New comic",
+      "short_name": "New comic",
+      "url": "/?view=dashboard&new=1&source=pwa",
+      "icons": [{ "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Comic gallery",
+      "short_name": "Gallery",
+      "url": "/?view=gallery&source=pwa",
+      "icons": [{ "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

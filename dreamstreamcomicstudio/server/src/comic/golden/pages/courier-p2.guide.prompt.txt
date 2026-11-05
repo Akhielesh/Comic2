@@ -1,0 +1,71 @@
+Create one finished comic page as a single image: a comic book page, full color. It must look like a professionally drawn and colored published page.
+FRAME: a tall 2:3 portrait page, taller than wide (2 wide by 3 tall); fill the whole frame — never square, no letterboxing.
+
+ART STYLE — apply identically in every panel:
+Modern comic art: crisp variable-weight inks, warm cel shading, detailed street backgrounds. Palette: navy, burnt orange and mustard. Linework: Crisp variable-weight inks. Never: photorealism, nudity, sexualized poses or outfits, gore or exposed wounds, slurs or hate symbols, real-world brand logos, likeness of real celebrities, dismemberment.
+
+CONTENT RATING PG-13 — Dramatic violence with minimal blood: no exposed wounds, no gore, no dismemberment. Horror relies on shadow, silhouette and reaction shots rather than viscera. Modest clothing and no sexualized poses.
+
+REFERENCE IMAGES (in the order attached):
+Image 1 — PAGE LAYOUT GUIDE. Draw the panel borders exactly on its black lines and keep its white gutters; it shows layout only — never copy its flat fill, and it holds no characters or text.
+Image 2 — CHARACTER SHEET: ISHA. Match her face, hairstyle, body type, outfit and colors exactly.
+Image 3 — CHARACTER SHEET: DEV. Match his face, hairstyle, body type, outfit and colors exactly.
+Image 4 — STYLE BOARD. Match its rendering style, line quality and color treatment (not its content).
+Image 5 — PREVIOUS PAGE. Keep lighting, outfits and props continuous with it (not its layout).
+
+CAST ON THIS PAGE — keep every identity distinct; never merge, swap or duplicate people. Each keeps the same face, hair, outfit and colors in every panel:
+- ISHA (Image 2): Quick-witted 17-year-old courier with a lantern-shaped pendant; female; hair: two braids tied with orange thread; outfit: teal hooded jacket, cargo shorts; props: brass wrist compass; always visible: small burn scar on her right forearm.
+- DEV (Image 3): Lanky 18-year-old tinkerer; male; hair: messy black curls under welding goggles; outfit: oil-stained grey kurta with rolled sleeves; colors: grey, copper; props: a satchel of copper tools.
+- GATE GUARD (no reference — follow this description exactly): Stern market guard in a khaki uniform; male; props: a bamboo staff.
+
+LOCATIONS:
+- NIGHT BAZAAR: Lantern-strung lanes of flower stalls and spice carts.
+- EAST GATE: Crumbling stone archway over a shuttered depot by a canal.
+
+PAGE LAYOUT — 6 panels, read left-to-right, top-to-bottom:
+Row 1: two equal panels. Row 2: one wide panel. Row 3: three small panels.
+Measured proportions: Row 1 (top 32% of the page): panels 1 and 2 side by side, 47% wide each. Row 2 (next 32%): panel 3, full width. Row 3 (next 27%): panels 4, 5 and 6 side by side, 31% wide each.
+Clean white gutters between panels, crisp black panel borders, no panel overlaps unless stated.
+Panel borders: follow the PAGE LAYOUT GUIDE (Image 1) exactly — its black lines are the borders, its white bands the gutters.
+
+PANELS:
+PANEL 1 of 6 — box 1 in the layout guide (row 1, left; 47% wide × 32% tall).
+Camera: wide shot, eye level. Place: NIGHT BAZAAR.
+Must show: Isha and Dev weave between lantern-lit stalls while the gate guard blocks the lane ahead.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves); GATE GUARD (bamboo staff).
+Speaks: GATE GUARD — 1 balloon; compose open background (sky, wall, floor or shadow) beside his head for it.
+Detail: Crowds part around them; busy, warm lantern light.
+PANEL 2 of 6 — box 2 in the layout guide (row 1, right; 47% wide × 32% tall).
+Camera: medium shot (waist up), low angle. Place: NIGHT BAZAAR.
+Must show: Dev kneels and pries open a rusted drain cover with a copper lever.
+Who: DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves).
+Speaks: nobody (sound effects only); fill the panel with art to its borders.
+Detail: focused.
+PANEL 3 of 6 — box 3 in the layout guide (row 2, full width; 96% wide × 32% tall).
+Camera: wide shot, high angle. Place: EAST GATE.
+Must show: The two couriers slip along the canal path below the market.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar), on the left; DEV (Image 3 — messy black curls under welding goggles, oil-stained grey kurta with rolled sleeves), on the right.
+Speaks: nobody (a silent panel); fill the panel with art to its borders.
+Detail: Lantern reflections ripple on the water; hushed, blue night.
+PANEL 4 of 6 — box 4 in the layout guide (row 3, left; 31% wide × 27% tall).
+Camera: insert shot (close detail of an object), top-down. Place: EAST GATE.
+Must show: Isha's brass wrist compass spins and then points at the depot.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar).
+Speaks: nobody (sound effects only); fill the panel with art to its borders.
+Detail: tense.
+PANEL 5 of 6 — box 5 in the layout guide (row 3, center; 31% wide × 27% tall).
+Camera: close-up (head and shoulders), high angle. Place: EAST GATE.
+Must show: Isha crouches by the archway, squinting at a fresh tyre track in the mud.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar).
+Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it.
+Detail: worried, cold blue.
+PANEL 6 of 6 — box 6 in the layout guide (row 3, right; 31% wide × 27% tall).
+Camera: point-of-view shot, eye level. Place: EAST GATE.
+Must show: From Dev's view, a sleek unmarked delivery van idles behind the flower stalls with its headlights off.
+Who: ISHA (Image 2 — two braids tied with orange thread, teal hooded jacket, small burn scar); seen through DEV's eyes (do not draw DEV; at most a hand at the frame edge).
+Speaks: ISHA — 1 balloon; compose open background (sky, wall, floor or shadow) beside her head for it. OFF-PANEL VOICE: DEV (do not draw) — 1 balloon.
+Detail: suspicious, dim.
+
+LETTERING: Do not draw any text, letters, speech balloons, captions or sound effects. Balloons are added later by software. Where a panel lists 'Speaks', compose open background (sky, wall, floor, shadow) beside the speaker's head. Never draw blank boxes, empty bars or white strips.
+
+Only the characters named in a panel's Who line appear in it (unnamed background figures only where the action mentions them).

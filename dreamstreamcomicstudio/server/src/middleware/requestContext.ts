@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { NextFunction, Request, Response } from 'express';
+import { loggablePath } from '../../../shared/capabilityPath.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -37,7 +38,8 @@ export const requestLogger = (req: Request, res: Response, next: NextFunction) =
         event: 'http_request',
         requestId: req.requestId,
         method: req.method,
-        path: req.originalUrl,
+        // Never the raw URL: share slugs/tokens are read capabilities and queries carry tokens (S19).
+        path: loggablePath(req.originalUrl || req.url),
         status: res.statusCode,
         latencyMs: Number(elapsedMs.toFixed(2)),
         userId: req.user?.id ?? null,

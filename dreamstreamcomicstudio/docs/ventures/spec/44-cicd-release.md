@@ -71,7 +71,7 @@ the root `ci.yml` had to exist), only on schedule, dispatch, or pushes to
 | `verification.yml` | nightly `03:15 UTC` + dispatch | `npm ci` → typecheck (client + `server/tsconfig.json`) → tests → run all enabled **verification checks**; files findings to the DB |
 | `auto-fix.yml` | issue `labeled: auto-fix`, PR events, dispatch | guards (kill-switch `AUTO_FIX_DISABLED`, authorized-labeller) → dispatch **Claude Code Action** (`issue_to_pr`) → `auto-merge` job: protected-path regex (billing/auth/migrations/workflows), `MAX_DIFF_LINES=600`, re-run the originally-failing check, then squash auto-merge |
 | `post-merge-verify.yml` | push → `Dreamstrream-v1` (commit msg contains `verification-fix`) | reinstall + typecheck + tests → re-run all checks → on regression, **`git revert -m 1` and push** (auto-rollback of source) |
-| `daily-billing-check.yml` | `03:30 UTC` + dispatch | `npm run billing:reconcile:check` |
+| `daily-billing-check.yml` | `03:30 UTC` + dispatch (declared) | `npm run billing:reconcile:check` — **never runs today**: this folder is never scanned and the root `.github/workflows/` has no billing workflow, so the reconciliation (and its stranded-hold sweep, 41.9) runs only by hand (`npm run billing:reconcile`) until the owner adds the root workflow |
 | `daily-pricing-check.yml` | scheduled + dispatch | pricing drift check |
 | `refresh-model-catalog.yml` | hourly `:30` + dispatch | `npm run catalog:refresh` (keeps public `/models` fresh; uses platform keys) |
 

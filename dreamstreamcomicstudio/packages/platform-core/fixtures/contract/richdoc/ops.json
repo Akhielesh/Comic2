@@ -1,0 +1,9 @@
+[
+  { "op": "insert_block", "id": "op-1", "baseRev": 0, "sectionId": "s1", "index": 0, "block": { "type": "heading", "id": "h-new", "level": 2, "runs": [{ "text": "Summary" }] } },
+  { "op": "insert_block", "id": "op-2", "baseRev": 0, "sectionId": "s1", "block": { "type": "divider", "id": "d-new" } },
+  { "op": "update_block", "id": "op-3", "baseRev": 0, "blockId": "p1", "block": { "type": "paragraph", "id": "p1", "style": "body", "runs": [{ "text": "Hello again." }] } },
+  { "op": "remove_block", "id": "op-4", "baseRev": 0, "blockId": "p1" },
+  { "op": "insert_section", "id": "op-5", "baseRev": 0, "index": 1, "section": { "id": "s2", "pageBreakBefore": true, "blocks": [] } },
+  { "op": "set_title", "id": "op-6", "baseRev": 0, "title": "Notes, revised" },
+  { "op": "remove_section", "id": "op-7", "baseRev": 0, "sectionId": "s2" }
+]

@@ -203,24 +203,37 @@ accountRouter.get('/settings', async (req, res, next) => {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'User not authenticated' } });
     if (!storageReady()) return res.json({ ok: true, data: null, reason: 'storage_disabled' });
 
+    // `data: null` WITHOUT a reason means "this account has no snapshot yet" — the client then
+    // seeds the account from the device. Anything that stops the row from being read is told
+    // apart with a `reason`, so a snapshot that exists is never reported as absent (the device,
+    // just purged at sign-in, would overwrite it with nothing).
     const { data, error } = await getSupabaseAdmin()
       .from('user_settings')
       .select('encrypted_data, iv')
       .eq('user_id', req.user.id)
       .maybeSingle();
-    if (error || !data?.encrypted_data || !data?.iv) return res.json({ ok: true, data: null });
+    if (error) {
+      logger.warn('account_settings_read_failed', { message: error.message });
+      return res.json({ ok: true, data: null, reason: 'read_failed' });
+    }
+    if (!data?.encrypted_data || !data?.iv) return res.json({ ok: true, data: null });
 
     const ciphertext = String(data.encrypted_data);
     const iv = String(data.iv);
     // New rows are server-encrypted; rows from before the migration used the legacy
     // in-browser scheme. The GCM auth tag makes trying both safe and unambiguous.
     const json = decryptSecret(ciphertext, iv) ?? decryptLegacyClientBlob(ciphertext, iv);
-    if (!json) return res.json({ ok: true, data: null });
+    if (!json) {
+      // Neither scheme opens it (a rotated server secret, say): the row is there, unreadable.
+      logger.warn('account_settings_unreadable', { stage: 'decrypt' });
+      return res.json({ ok: true, data: null, reason: 'unreadable' });
+    }
 
     try {
       return res.json({ ok: true, data: JSON.parse(json) });
     } catch {
-      return res.json({ ok: true, data: null });
+      logger.warn('account_settings_unreadable', { stage: 'parse' });
+      return res.json({ ok: true, data: null, reason: 'unreadable' });
     }
   } catch (err) {
     next(err);

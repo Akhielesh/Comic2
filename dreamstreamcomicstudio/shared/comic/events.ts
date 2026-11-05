@@ -8,6 +8,8 @@
 
 import type { DocOp, StudioAction } from './ops.js';
 import type { CastKind, RefOwner } from './doc.js';
+// --- history (versions plan §3.3; H0) ---
+import type { VersionRow } from './history/types.js';
 
 /** Who caused an ops batch (the client undo stack takes 'director' batches). */
 export type OpsOrigin = 'user' | 'director' | 'job';
@@ -18,6 +20,12 @@ export interface StudioFocus {
   lineIds?: string[];
   panelN?: number;
   surface?: 'board' | 'page_editor' | 'reader' | 'timeline';
+  // --- Ship 2 (K2a; pro plan §4.5): what the editor has selected on `pageId`. Ids only; the server keeps the ones on
+  //     that page (≤ DOC_LIMITS.panelsPerPage panels, ≤ EDITOR_LIMITS.layersPerPage overlays). ---
+  /** Selected panels (frames). */
+  panelIds?: string[];
+  /** Selected overlays ('ly_…'). */
+  layerIds?: string[];
 }
 /** Optional quick-assign of one image attachment. */
 export type AttachmentTarget = RefOwner | { kind: 'new_character'; name: string; castKind?: CastKind } | null;
@@ -33,9 +41,14 @@ export type StudioEvent =
   | { type: 'activity'; id: string; label: string; phase: 'start' | 'end'; ok?: boolean; cost?: 'free' | 'text' | 'image' }
   /** Signed, short-lived URLs for storage paths referenced by the doc. */
   | { type: 'urls'; urls: Record<string, string> }
-  /** Codes include CONTENT_POLICY, COOLDOWN, LIMIT, NOT_READY, CONFLICT, NOT_AVAILABLE (additive strings). */
+  /** `code` is one of STREAM_ERROR_CODES (additive strings; clients must tolerate unknown codes). */
   | { type: 'error'; message: string; code?: string }
-  | { type: 'done'; rev: number; spentUsd: number; savedUsd?: number };
+  /** `beforeVersionId` (Comic History): a `history_restore` stream names the moment saved just before the restore
+   *  (versions plan §6.1 step 8), or the reused latest moment when none was written, so the toast's Undo needs no
+   *  lookup. Optional and additive: every other stream, and an older server, simply omits it. */
+  | { type: 'done'; rev: number; spentUsd: number; savedUsd?: number; beforeVersionId?: string }
+  // --- history: a moment was saved, so an open History panel updates live (the client also resyncs) ---
+  | { type: 'history'; version: VersionRow };
 
 export type StreamRequest =
   | {
@@ -46,8 +59,29 @@ export type StreamRequest =
       /** Optional quick-assign per IMAGE attachment, aligned by order. */
       attachmentTargets?: AttachmentTarget[];
       focus?: StudioFocus;
+      /** The sender's IANA time zone (history: "this morning", "yesterday"); validated with Intl (normalizeTimeZone). */
+      tz?: string;
     }
-  | { kind: 'action'; action: StudioAction };
+  | { kind: 'action'; action: StudioAction; tz?: string };
+
+/**
+ * Known `error` event codes (contract §7). FORBIDDEN (P2-AMEND, from P1-ROUTES) = a restricted account was refused
+ * a spend, approve_gate, upload, publish, update_publication or regenerate_link; BUSY = another turn holds the
+ * project; COOLDOWN = a short safety break. The list is additive: never switch on it exhaustively.
+ */
+export const STREAM_ERROR_CODES = [
+  'CONTENT_POLICY',
+  'COOLDOWN',
+  'BUSY',
+  'FORBIDDEN',
+  'LIMIT',
+  'NOT_READY',
+  'CONFLICT',
+  'NOT_AVAILABLE'
+] as const;
+export type StreamErrorCode = (typeof STREAM_ERROR_CODES)[number];
+export const isStreamErrorCode = (code: unknown): code is StreamErrorCode =>
+  typeof code === 'string' && (STREAM_ERROR_CODES as readonly string[]).includes(code);
 
 export const STREAM_EVENT_NAMES: ReadonlyArray<StudioEvent['type']> = [
   'hello',
@@ -56,8 +90,30 @@ export const STREAM_EVENT_NAMES: ReadonlyArray<StudioEvent['type']> = [
   'activity',
   'urls',
   'error',
-  'done'
+  'done',
+  // --- history ---
+  'history'
 ];
+
+// --- history: the request time zone ---
+
+/** Longest IANA zone name accepted ("America/Argentina/ComodRivadavia" is 32). */
+export const TIME_ZONE_MAX_CHARS = 64;
+
+/**
+ * The canonical IANA time zone for `raw`, or undefined when Intl does not know it (or it is not a plain zone name).
+ * Pure; never throws. The runtime's own spelling comes back (ICU may answer 'Asia/Calcutta' for 'Asia/Kolkata').
+ */
+export const normalizeTimeZone = (raw: unknown): string | undefined => {
+  if (typeof raw !== 'string') return undefined;
+  const tz = raw.trim();
+  if (!tz || tz.length > TIME_ZONE_MAX_CHARS || !/^[A-Za-z][A-Za-z0-9_+\-/]*$/.test(tz)) return undefined;
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Serialize an event for the wire. DocOps clear fields by setting them to `undefined`

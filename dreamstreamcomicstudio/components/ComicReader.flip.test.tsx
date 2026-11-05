@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComicPanel, Project, TextLayout } from '../types';
 import { ComicReader } from './ComicReader';
+import { resetBackStack } from './comicstudio/mobile/backStack';
 import { loadReaderState } from '../services/db';
 
 // Page Flip on phones (mobile-reading hotfix): chat-bubble dialogue used to sit BESIDE the art in an inline-flex row,
@@ -73,6 +74,8 @@ beforeEach(() => {
   };
 });
 afterEach(() => {
+  // v5: the reader is a Back-stack layer; no layer (or its deferred history pop) outlives its test.
+  resetBackStack();
   window.matchMedia = realMatchMedia;
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = realRO;
   for (const [prop, d] of descs.splice(0)) {

@@ -15,7 +15,12 @@ export interface ComposeRequest {
   focus?: boolean;
   /** Open the attachment file picker. */
   pickFiles?: boolean;
+  /** Open one of the composer's option panels (format / style / quality). Additive: composers
+   *  that don't handle it just focus, so callers must never rely on it as their only path. */
+  openPanel?: ComposerPanel;
 }
+
+export type ComposerPanel = 'format' | 'style' | 'quality';
 
 export const composeInStudio = (request: ComposeRequest = {}): void => {
   if (typeof window === 'undefined') return;

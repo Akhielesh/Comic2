@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { getSupabaseAdmin } from '../services/supabase.js';
+import { supabaseStrandedHoldStore, sweepStrandedHolds, type StrandedHoldSweepResult } from './strandedHolds.js';
 
 type LedgerRow = {
   id: string;
@@ -20,7 +21,9 @@ const parseArgs = () => {
   const args = new Set(process.argv.slice(2));
   return {
     strict: args.has('--strict') || args.has('--check'),
-    hours: Number(process.env.BILLING_RECON_WINDOW_HOURS || '24')
+    hours: Number(process.env.BILLING_RECON_WINDOW_HOURS || '24'),
+    sweep: !args.has('--no-sweep'),
+    sweepMaxAgeHours: process.env.BILLING_SWEEP_MAX_AGE_HOURS ? Number(process.env.BILLING_SWEEP_MAX_AGE_HOURS) : undefined
   };
 };
 
@@ -49,7 +52,14 @@ const listRelevantPaymentIntents = async (fromEpoch: number) => {
   return intents;
 };
 
-export const runDailyBillingReconciliation = async (options?: { strict?: boolean; windowHours?: number }) => {
+export const runDailyBillingReconciliation = async (options?: {
+  strict?: boolean;
+  windowHours?: number;
+  /** Settle stranded usage holds first (default on; jobs/strandedHolds.ts). */
+  sweepStrandedHolds?: boolean;
+  /** Look-back for the sweep (hours); older stranded holds are reported, not settled. */
+  sweepMaxAgeHours?: number;
+}) => {
   const strict = options?.strict === true;
   const windowHours = Number.isFinite(options?.windowHours) ? Number(options?.windowHours) : 24;
 
@@ -58,6 +68,15 @@ export const runDailyBillingReconciliation = async (options?: { strict?: boolean
   const fromEpoch = Math.floor(fromDate.getTime() / 1000);
 
   const admin = getSupabaseAdmin();
+
+  // Stranded usage holds first, so a Stripe outage below never skips them. The sweep logs its own
+  // count (billing_stranded_hold_sweep); a failure is reported in the result (and fails --check).
+  let strandedHolds: StrandedHoldSweepResult | { error: string } | undefined;
+  if (options?.sweepStrandedHolds !== false) {
+    strandedHolds = await sweepStrandedHolds({ store: supabaseStrandedHoldStore(admin), maxAgeHours: options?.sweepMaxAgeHours }).catch((err) => ({
+      error: (err as Error)?.message || 'sweep failed'
+    }));
+  }
 
   const { data: ledgerRowsRaw, error: ledgerError } = await admin
     .from('token_ledger_entries')
@@ -120,12 +139,14 @@ export const runDailyBillingReconciliation = async (options?: { strict?: boolean
     failedWebhookCount,
     missingInStripe,
     missingInLedger,
-    failedWebhooks: failedWebhookRows || []
+    failedWebhooks: failedWebhookRows || [],
+    ...(strandedHolds ? { strandedHolds } : {})
   };
 
-  if (strict && (missingInStripe.length > 0 || missingInLedger.length > 0 || failedWebhookCount > 0)) {
+  const sweepFailed = !!strandedHolds && ('error' in strandedHolds || strandedHolds.failed > 0);
+  if (strict && (missingInStripe.length > 0 || missingInLedger.length > 0 || failedWebhookCount > 0 || sweepFailed)) {
     throw new Error(
-      `Billing reconciliation failed: missingInStripe=${missingInStripe.length}, missingInLedger=${missingInLedger.length}, failedWebhooks=${failedWebhookCount}`
+      `Billing reconciliation failed: missingInStripe=${missingInStripe.length}, missingInLedger=${missingInLedger.length}, failedWebhooks=${failedWebhookCount}, strandedHoldSweepFailed=${sweepFailed}`
     );
   }
 
@@ -136,7 +157,7 @@ const isDirectRun = Boolean(process.argv[1] && process.argv[1].includes('dailyBi
 
 if (isDirectRun) {
   const args = parseArgs();
-  runDailyBillingReconciliation({ strict: args.strict, windowHours: args.hours })
+  runDailyBillingReconciliation({ strict: args.strict, windowHours: args.hours, sweepStrandedHolds: args.sweep, sweepMaxAgeHours: args.sweepMaxAgeHours })
     .then((result) => {
       console.log(JSON.stringify({ ok: true, ...result }));
     })

@@ -16,6 +16,8 @@ import {
 import { listMcpServers, onMcpServersChanged, addMcpServer } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
 import { API_BASE_URL } from '../../services/clientConfig';
+import { useIsAdmin } from '../../hooks/useIsAdmin';
+import { platformDocsVisible } from '../../services/platformFlags';
 
 // Server-side provider usage row (mirrors server/src/lib/providerUsage.ts snapshot).
 interface ProviderUsageRow {
@@ -223,6 +225,14 @@ export const ToolsDashboard: React.FC = () => {
   const [query, setQuery] = useState('');
   const [activeCat, setActiveCat] = useState<ToolCategory | 'all'>('all');
   const [usage, setUsage] = useState<ProviderUsageRow[] | null>(null);
+  // Tools behind the shared-platform rollout (email_draft, deck_create) are listed only for a person the
+  // rollout admits (VITE_PLATFORM_DOCS exactly 'on' and the stage), the same rule the server routes them by.
+  const isAdmin = useIsAdmin();
+  const showPlatformDocs = platformDocsVisible(isAdmin);
+  const catalog = useMemo(
+    () => TOOL_CATALOG.filter((t) => t.rollout !== 'platform-docs' || showPlatformDocs),
+    [showPlatformDocs]
+  );
 
   // Server-side provider usage (counts + budgets) — refresh every 30s while open.
   useEffect(() => {
@@ -242,15 +252,15 @@ export const ToolsDashboard: React.FC = () => {
 
   const summary = useMemo(() => summarizeToolStats(stats), [stats]);
   const counts = useMemo(() => {
-    const api = TOOL_CATALOG.filter((t) => t.kind === 'api').length;
-    const builtin = TOOL_CATALOG.filter((t) => t.kind === 'builtin').length;
-    const keyless = TOOL_CATALOG.filter((t) => t.auth === 'none').length;
-    return { api, builtin, keyless, total: TOOL_CATALOG.length };
-  }, []);
+    const api = catalog.filter((t) => t.kind === 'api').length;
+    const builtin = catalog.filter((t) => t.kind === 'builtin').length;
+    const keyless = catalog.filter((t) => t.auth === 'none').length;
+    return { api, builtin, keyless, total: catalog.length };
+  }, [catalog]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return TOOL_CATALOG.filter((t) => {
+    return catalog.filter((t) => {
       if (activeCat !== 'all' && t.category !== activeCat) return false;
       if (!q) return true;
       return (
@@ -261,7 +271,7 @@ export const ToolsDashboard: React.FC = () => {
         t.keywords.some((k) => k.includes(q))
       );
     });
-  }, [query, activeCat]);
+  }, [catalog, query, activeCat]);
 
   const grouped = useMemo(() => {
     const map = new Map<ToolCategory, ToolMeta[]>();
@@ -425,11 +435,11 @@ export const ToolsDashboard: React.FC = () => {
               : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
           }`}
         >
-          All ({TOOL_CATALOG.length})
+          All ({catalog.length})
         </button>
         {CATEGORY_META.map((c) => {
           const Icon = CAT_ICONS[c.icon] || Wrench;
-          const n = TOOL_CATALOG.filter((t) => t.category === c.id).length;
+          const n = catalog.filter((t) => t.category === c.id).length;
           return (
             <button
               key={c.id}

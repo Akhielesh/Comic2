@@ -248,6 +248,35 @@ describe('studioReducer — streaming text, activity and errors', () => {
     expect(isMessageBusy(m)).toBe(true);
   });
 
+  it('the composer unlocks once the director reply lands while its stream keeps carrying render progress', () => {
+    const earlier = { ...msg('a0', 'assistant', 'Which tone?'), cards: [{ type: 'options' as const, id: 'c0', question: 'Which tone?', choices: [{ id: 'o1', label: 'Funny' }, { id: 'o2', label: 'Tense' }] }] };
+    let s = run(initialStudioState(), { type: 'load_success', doc: makeSampleDoc({ rev: 5, conversation: [earlier] }), urls: {}, now: T });
+    s = run(s, start('m', 'message'), ev('m', { type: 'ops', rev: 6, ops: [{ op: 'message', msg: msg('u1', 'user', 'Funny') }] }));
+    expect(isMessageBusy(s)).toBe(true);
+    // An older message re-committed (the option answer recorded on its card) is not the reply…
+    s = run(s, ev('m', { type: 'ops', rev: 7, ops: [{ op: 'message', msg: { ...earlier, cards: [{ ...earlier.cards[0], answered: ['o1'] }] } }] }));
+    expect(isMessageBusy(s)).toBe(true);
+    // …nor is a job's notice (origin 'job') that lands while the director is still working.
+    s = run(s, ev('m', { type: 'ops', rev: 8, ops: [{ op: 'message', msg: msg('j1', 'assistant', 'Page 2 could not be drawn.') }], origin: 'job' }));
+    expect(isMessageBusy(s)).toBe(true);
+    // The director's reply: before the fix the composer stayed locked until the stream closed (every render done).
+    s = run(s, ev('m', { type: 'ops', rev: 9, ops: [{ op: 'message', msg: msg('a1', 'assistant', 'On its way.') }] }));
+    expect(isMessageBusy(s)).toBe(false);
+    expect(s.streams.m.replied).toBe(true);
+    expect(visibleStreams(s)).toHaveLength(1); // still open: live render progress
+    expect(needsRefresh(s)).toBe(false);
+    // A second message locks the composer again, and the first stream closing does not unlock it.
+    s = run(s, start('m2', 'message'));
+    expect(isMessageBusy(s)).toBe(true);
+    s = run(s, end('m'));
+    expect(isMessageBusy(s)).toBe(true);
+    expect(s.streams.m2).toBeDefined();
+    // Every open stream delivers every batch: the reply counts whichever stream brings it first.
+    s = run(s, start('a', 'action'), ev('a', { type: 'ops', rev: 10, ops: [{ op: 'message', msg: msg('a2', 'assistant', 'Pages 1–2 are drawn.') }] }));
+    expect(isMessageBusy(s)).toBe(false);
+    expect(s.streams.a.replied).toBeUndefined();
+  });
+
   it('cancelling clears once the last stream ends', () => {
     const s = run(loaded(), start('a'), { type: 'cancel_start' }, end('a'));
     expect(s.cancelling).toBe(false);
@@ -375,6 +404,8 @@ describe('studio helpers', () => {
     expect(tabForOps([{ op: 'render', target: { kind: 'sheet', id: 'c' }, patch: {} }])).toBe('cast');
     expect(tabForOps([{ op: 'pages', pages: [] }, { op: 'message', msg: msg('m', 'assistant', 'x') }])).toBe('pages');
     expect(tabForOps([{ op: 'brief', patch: {} }])).toBe('story');
+    // A director's line move switches the board like a line edit does.
+    expect(tabForOps([{ op: 'line_move', pageId: 'p', id: 'l', toPanelId: 'pn', index: 0 }])).toBe('pages');
     expect(tabForOps([{ op: 'spend', entry: { id: 's', at: T, kind: 'page', label: 'x', usd: 1, byok: false, estimated: false } }])).toBeNull();
     expect(tabForOps([{ op: 'format', patch: {} }, { op: 'settings', patch: {} }])).toBeNull();
   });

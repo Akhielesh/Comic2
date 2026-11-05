@@ -1,0 +1,71 @@
+{
+  "name": "kids-telugu",
+  "about": "The owner's ask (2026-10-22): 'truly good translation (Telugu, Hindi…) and readers pick the language'. A kids storybook in English is translated into Telugu by the writer-class translator, EVERY line is reviewed by the linguist with an English gloss, the edition is publishable, the comic is then made natively Telugu for free (swap), and a rerun costs $0 with no model call.",
+  "doc": "lake-planned",
+  "runner": "server/src/comic/i18n/kidsTelugu.golden.test.ts",
+  "turns": [
+    {
+      "say": "please translate it into Telugu for my kids",
+      "expectTools": ["translate_comic", "read_translation", "set_comic_language"],
+      "director": [
+        { "toolCalls": [{ "name": "translate_comic", "args": { "languages": ["Telugu"] } }] },
+        { "text": "Translating into Telugu now — every line gets a native review; the result arrives as a new message." }
+      ],
+      "translator": [
+        {
+          "json": {
+            "lines": [
+              { "id": "ln_l2", "text": "చప్ చప్! చప్ చప్!", "fits": true },
+              { "id": "ln_l3", "text": "టాటా, నేస్తాలూ!", "fits": true },
+              { "id": "brief.title", "text": "నీటి ఆటల రోజు", "fits": true }
+            ],
+            "glossary": [{ "term": "The Baby", "form": "పాపాయి" }],
+            "notes": "Used the everyday kids' word టాటా for bye-bye."
+          }
+        }
+      ],
+      "linguist": [
+        {
+          "json": {
+            "lines": [
+              { "id": "ln_l2", "gloss": "Splash splash! Splash splash!", "verdict": "ok", "severity": "none", "issue": "", "suggestion": "" },
+              { "id": "ln_l3", "gloss": "Ta-ta, friends!", "verdict": "ok", "severity": "none", "issue": "", "suggestion": "" },
+              { "id": "brief.title", "gloss": "The day of water games", "verdict": "ok", "severity": "none", "issue": "", "suggestion": "" }
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "replyIncludes": "Telugu",
+        "completionIncludes": "Telugu is translated and reviewed",
+        "publishable": ["te"],
+        "glosses": { "ln_l3": "Ta-ta, friends!" },
+        "calls": { "translator": 1, "linguist": 1 },
+        "spendKind": "translate"
+      }
+    },
+    {
+      "say": "actually make the comic itself in Telugu",
+      "expectTools": ["set_comic_language"],
+      "director": [
+        { "toolCalls": [{ "name": "set_comic_language", "args": { "language": "te", "mode": "rewrite" } }] },
+        { "text": "Done — the comic is now written in Telugu, and English became a reviewed translation." }
+      ],
+      "expect": {
+        "replyIncludes": "Telugu",
+        "language": "te",
+        "lineText": { "ln_l3": "టాటా, నేస్తాలూ!" },
+        "publishable": ["en"],
+        "calls": { "translator": 0, "linguist": 0 }
+      }
+    },
+    {
+      "action": { "type": "translate", "languages": ["en"] },
+      "expect": {
+        "completionIncludes": "already up to date",
+        "calls": { "translator": 0, "linguist": 0 },
+        "newSpendUsd": 0
+      }
+    }
+  ]
+}

@@ -737,12 +737,15 @@ const recordCostEvent = async (event: Record<string, unknown>) => {
   }
 };
 
-const updateCostEvent = async (reservationId: string, patch: Record<string, unknown>) => {
+// Scoped to the reservation AND its owner: a reservation id alone must never let one user (or a
+// replayed id) rewrite someone else's recorded spend (P1-LIMITS metering-integrity fix).
+const updateCostEvent = async (reservationId: string, userId: string, patch: Record<string, unknown>) => {
   const admin = getBillingAdmin();
   const { error } = await admin
     .from('generation_cost_events')
     .update(patch)
-    .eq('reservation_id', reservationId);
+    .eq('reservation_id', reservationId)
+    .eq('user_id', userId);
 
   if (error) {
     throw createBillingBackendUnavailableError(error);
@@ -821,6 +824,97 @@ const buildLimitExceeded = (
   };
 };
 
+/** `metadata.platformPaid` excludes a cost event from the usage budget — never on metered spend. */
+const withoutPlatformPaidMeta = (metadata?: Record<string, unknown>): Record<string, unknown> => {
+  if (!metadata || typeof metadata !== 'object') return {};
+  const { platformPaid: _dropped, ...rest } = metadata;
+  return rest;
+};
+
+/** Wallet-neutral usage state for reservations that never touched the token wallet. */
+const walletSkippedUsageState = (): UsageLimitState => {
+  const at = now();
+  return {
+    planTier: 'free',
+    dailyGuardrailCt: 0,
+    dailyUsedCt: 0,
+    dailyRemainingCt: 0,
+    monthlyResetAt: toIso(nextUtcMonth(at)),
+    dailyResetAt: toIso(nextUtcDay(at))
+  };
+};
+
+const reserveWithoutWallet = async (input: {
+  userId: string;
+  estimate: TokenEstimateResponse;
+  provider: string;
+  model: string;
+  operation: string;
+  projectId?: string;
+  comicId?: string;
+  stage?: string;
+  metadata?: Record<string, unknown>;
+  reservationId?: string;
+  costEventRecorded?: boolean;
+  governed?: boolean;
+}): Promise<{ allowed: true; reservation: ReservationState }> => {
+  const reservationId = input.reservationId || crypto.randomUUID();
+  const requiredCt = Math.max(0, Math.floor(input.estimate.estimatedCt));
+
+  await recordLedgerEntry(input.userId, {
+    entryType: 'RESERVE',
+    ctDelta: 0,
+    usdDelta: 0,
+    operation: input.operation,
+    provider: input.provider,
+    model: input.model,
+    projectId: input.projectId,
+    reservationId,
+    metadata: {
+      ...input.metadata,
+      estimatedCt: requiredCt,
+      estimatedBillableUsd: input.estimate.estimatedBillableUsd,
+      estimatedProviderCostUsd: input.estimate.estimatedProviderCostUsd,
+      walletSkipped: true,
+      usageBudget: input.governed === true
+    }
+  });
+
+  if (!input.costEventRecorded) {
+    await recordCostEvent({
+      id: crypto.randomUUID(),
+      user_id: input.userId,
+      project_id: input.projectId,
+      comic_id: input.comicId || input.projectId,
+      operation: input.operation,
+      stage: input.stage,
+      provider: input.provider,
+      model: input.model,
+      reservation_id: reservationId,
+      estimated_ct: requiredCt,
+      actual_ct: 0,
+      provider_cost_usd: input.estimate.estimatedProviderCostUsd,
+      billable_usd: input.estimate.estimatedBillableUsd,
+      is_byok: false,
+      status: 'RESERVED',
+      metadata: input.metadata || {},
+      created_at: toIso(now())
+    });
+  }
+
+  return {
+    allowed: true,
+    reservation: {
+      reservationId,
+      byokBypass: false,
+      estimated: input.estimate,
+      usage: walletSkippedUsageState(),
+      governed: input.governed === true,
+      walletSkipped: true
+    }
+  };
+};
+
 export const reserveUsageTokens = async (input: {
   userId: string;
   estimate: TokenEstimateResponse;
@@ -832,7 +926,24 @@ export const reserveUsageTokens = async (input: {
   stage?: string;
   byok?: boolean;
   metadata?: Record<string, unknown>;
+  /**
+   * Usage budgets are on (P1-LIMITS): the budget RPC — or the admin/exempt rule — already decided
+   * this call may spend, so the token wallet's deny branches and CT holds are skipped entirely
+   * (the free plan's ~$0.08/day guardrail must not stop a governed tester long before their
+   * budget). The ledger is still written.
+   */
+  skipWalletLimits?: boolean;
+  /** Reservation id already used by the budget RPC (keeps one id across ledger + cost event). */
+  reservationId?: string;
+  /** The budget RPC already inserted the RESERVED cost event — don't insert a duplicate. */
+  costEventRecorded?: boolean;
+  /** Recorded on the reservation (governed by the usage budget). */
+  governed?: boolean;
 }): Promise<{ allowed: true; reservation: ReservationState } | { allowed: false; details: LimitExceededDetails }> => {
+  if (input.skipWalletLimits && !input.byok) {
+    return reserveWithoutWallet(input);
+  }
+
   let walletContext = await ensureWalletContext(input.userId);
   let wallet = walletContext.wallet;
 
@@ -991,12 +1102,16 @@ export const releaseReservation = async (input: {
   model?: string;
   projectId?: string;
   metadata?: Record<string, unknown>;
+  /** The reservation never held wallet CT (usage budgets on) — don't release any. */
+  walletSkipped?: boolean;
 }) => {
   if (!input.reservationId) return;
-  await callReleaseReservedTokens({
-    userId: input.userId,
-    releaseCt: Math.max(0, Math.floor(input.estimatedCt))
-  });
+  if (!input.walletSkipped) {
+    await callReleaseReservedTokens({
+      userId: input.userId,
+      releaseCt: Math.max(0, Math.floor(input.estimatedCt))
+    });
+  }
 
   await recordLedgerEntry(input.userId, {
     entryType: 'RELEASE',
@@ -1009,11 +1124,12 @@ export const releaseReservation = async (input: {
     reservationId: input.reservationId,
     metadata: {
       ...input.metadata,
-      reason: input.reason || 'request_failed'
+      reason: input.reason || 'request_failed',
+      ...(input.walletSkipped ? { walletSkipped: true } : {})
     }
   });
 
-  await updateCostEvent(input.reservationId, {
+  await updateCostEvent(input.reservationId, input.userId, {
     status: 'RELEASED',
     metadata: {
       ...input.metadata,
@@ -1079,10 +1195,60 @@ export const settleReservation = async (input: {
   projectId?: string;
   metadata?: Record<string, unknown>;
   byokBypass?: boolean;
+  /** The reservation never held wallet CT (usage budgets on): record spend, move no CT. */
+  walletSkipped?: boolean;
 }) => {
   const actualCt = Math.max(0, Math.floor(input.actual.estimatedCt));
   const billableUsd = Number(input.actual.estimatedBillableUsd.toFixed(6));
   const providerCostUsd = Number(input.actual.estimatedProviderCostUsd.toFixed(6));
+
+  if (input.walletSkipped && !input.byokBypass) {
+    await recordLedgerEntry(input.userId, {
+      entryType: 'SETTLE',
+      ctDelta: 0,
+      usdDelta: 0,
+      providerCostUsd,
+      billableUsd,
+      operation: input.operation,
+      provider: input.provider,
+      model: input.model,
+      projectId: input.projectId,
+      reservationId: input.reservationId,
+      metadata: {
+        ...input.metadata,
+        estimatedCt: Math.max(0, Math.floor(input.estimatedCt)),
+        actualCt,
+        walletSkipped: true,
+        markup: DEFAULT_MARKUP
+      }
+    });
+
+    if (input.reservationId) {
+      // The real provider cost lands on the RESERVED row the budget gate wrote; this is the
+      // figure the usage budget counts from now on.
+      await updateCostEvent(input.reservationId, input.userId, {
+        status: 'SETTLED',
+        actual_ct: actualCt,
+        provider_cost_usd: providerCostUsd,
+        billable_usd: billableUsd,
+        // Never let settle metadata mark metered spend as platform overhead (budget-excluded).
+        metadata: { ...withoutPlatformPaidMeta(input.metadata), walletSkipped: true }
+      });
+    }
+
+    await upsertDailyRollup(input.userId, actualCt, 0, billableUsd);
+
+    return {
+      actualCt,
+      billableUsd,
+      providerCostUsd,
+      reservationReleased: true,
+      usage: walletSkippedUsageState(),
+      wallet: undefined,
+      overageCapture: undefined,
+      autoReload: undefined
+    };
+  }
 
   if (input.byokBypass) {
     await recordLedgerEntry(input.userId, {
@@ -1101,7 +1267,7 @@ export const settleReservation = async (input: {
     });
 
     if (input.reservationId) {
-      await updateCostEvent(input.reservationId, {
+      await updateCostEvent(input.reservationId, input.userId, {
         status: 'BYOK_SETTLED',
         actual_ct: 0,
         provider_cost_usd: providerCostUsd,
@@ -1159,7 +1325,7 @@ export const settleReservation = async (input: {
   });
 
   if (input.reservationId) {
-    await updateCostEvent(input.reservationId, {
+    await updateCostEvent(input.reservationId, input.userId, {
       status: 'SETTLED',
       actual_ct: actualCt,
       provider_cost_usd: providerCostUsd,

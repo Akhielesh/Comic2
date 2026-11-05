@@ -89,6 +89,10 @@ login ──► GET /api/account/byok  ──► provider "key on file" metadata
             merge with local (keys: union by secret · settings: cloud wins ·
             memory: item union · agents: id union · studios.code: cloud wins)
             apply locally (listeners suspended) ──► PUT back (server-encrypted)
+            `data: null` with no `reason` = no snapshot yet → seed from the device;
+            a read that fails (network, 5xx, `reason: unreadable | read_failed |
+            storage_disabled`) applies and pushes NOTHING (pushes stay off until a
+            read succeeds) and is retried — 5 s later, then on the next session event
 
 any local change (keys / settings / model selection / studio model / memory / agents)
       └─► debounced 1.5s ──► PUT /api/account/settings

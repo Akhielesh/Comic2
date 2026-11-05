@@ -1,0 +1,79 @@
+{
+  "v": 1,
+  "rev": 1,
+  "mode": "compose",
+  "subject": "The Lighthouse Keeper: pitch, sample pages and next steps",
+  "preheader": "24 pages, all ages, ready for your list",
+  "to": [{ "address": "editor@example.com", "name": "Sam Editor" }],
+  "cc": [{ "address": "agent@example.org" }],
+  "bcc": [],
+  "brand": "dreamstream",
+  "blocks": [
+    { "type": "heading", "id": "h1", "level": 1, "runs": [{ "text": "The Lighthouse Keeper" }] },
+    {
+      "type": "paragraph",
+      "id": "p1",
+      "runs": [
+        { "text": "Hi Sam, " },
+        { "text": "thanks", "marks": ["b"] },
+        { "text": " for the call. The " },
+        { "text": "sample pages", "link": { "href": "https://example.com/samples?issue=1" } },
+        { "text": " are ready." }
+      ]
+    },
+    { "type": "heading", "id": "h2", "level": 2, "runs": [{ "text": "What is in the pack" }] },
+    {
+      "type": "list",
+      "id": "l1",
+      "ordered": false,
+      "items": [
+        { "runs": [{ "text": "A one-page pitch" }] },
+        { "runs": [{ "text": "Six sample pages" }], "indent": 1 },
+        { "runs": [{ "text": "A pitch deck" }] }
+      ]
+    },
+    { "type": "button", "id": "b1", "label": "Open the samples", "href": "https://example.com/samples" },
+    { "type": "quote", "id": "q1", "cite": "Sam Editor", "runs": [{ "text": "Send me the first issue when it is ready." }] },
+    { "type": "divider", "id": "d1" },
+    {
+      "type": "columns",
+      "id": "c1",
+      "columns": [
+        {
+          "blocks": [
+            { "type": "image", "id": "img1", "ref": { "kind": "data", "dataUri": "data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==" }, "alt": "Cover", "width": 240 }
+          ]
+        },
+        {
+          "blocks": [
+            { "type": "heading", "id": "h3", "level": 3, "runs": [{ "text": "Schedule" }] },
+            { "type": "paragraph", "id": "p2", "runs": [{ "text": "Issue one in March; questions to " }, { "text": "me", "link": { "href": "mailto:creator@example.com" } }, { "text": "." }] },
+            { "type": "button", "id": "b2", "label": "Reply", "href": "mailto:creator@example.com?subject=Lighthouse" }
+          ]
+        }
+      ]
+    },
+    { "type": "image", "id": "img2", "ref": { "kind": "asset", "id": "user-0001/assets/page-1.png" }, "alt": "Page one" }
+  ],
+  "signature": "Sample Creator\nThe Lighthouse Keeper",
+  "attachments": [
+    {
+      "id": "a1",
+      "name": "Lighthouse pitch",
+      "kind": "docx",
+      "spec": {
+        "type": "doc",
+        "doc": { "v": 1, "title": "Pitch", "sections": [{ "id": "s1", "pageBreakBefore": false, "blocks": [{ "type": "paragraph", "id": "p1", "runs": [{ "text": "One page." }] }] }] }
+      }
+    },
+    {
+      "id": "a2",
+      "name": "Lighthouse deck",
+      "kind": "pdf",
+      "spec": {
+        "type": "deck",
+        "deck": { "v": 1, "title": "Deck", "size": "4:3", "theme": { "preset": "dark" }, "slides": [{ "id": "sl1", "layout": "title", "elements": [] }] }
+      }
+    }
+  ]
+}

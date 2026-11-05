@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import { recordServerError } from '../services/telemetryStore.js';
+import { loggablePath } from '../../../shared/capabilityPath.js';
 
 type ErrorLike = {
   code?: string;
@@ -68,11 +69,13 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
   const status = Number.isInteger(err?.status) ? Number(err.status) : 500;
   const code = getPublicErrorCode(status, err);
 
+  // Capability-safe path (S19): no share slug/token, no query string, in the log or telemetry.
+  const path = loggablePath(req.originalUrl || req.url);
   const logEvent = {
     ts: new Date().toISOString(),
     event: 'server_error',
     requestId: req.requestId,
-    path: req.originalUrl,
+    path,
     method: req.method,
     status,
     code,
@@ -93,7 +96,7 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
   if (status >= 500 && err.publicCode !== 'MODEL_TIMEOUT') {
     recordServerError({
       requestId: req.requestId,
-      path: req.originalUrl,
+      path,
       method: req.method,
       status,
       code,

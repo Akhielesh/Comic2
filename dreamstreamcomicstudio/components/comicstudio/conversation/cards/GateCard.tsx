@@ -1,21 +1,133 @@
-// "gate" card: a spend waiting for the user's OK — what, on which model, and how much —
+// "gate" card: a spend waiting for the user's OK — why it stopped, what (with the page
+// breakdown when pages are involved, decisions-final #3), on which model, and how much —
 // with Approve (showing the amount) and Not now. Renders the live gate, so it flips to
 // approved/declined (or "replaced") as soon as the doc says so.
+//
+// Layout (visualqa P0-1): the summary and the price block WRAP instead of squeezing each
+// other — real model ids are long unbroken tokens (OpenRouter slugs, 60+ characters), so
+// the model line is truncated with the full id in its title and the registry nickname shown.
+//
+// Governed users (the included DreamStream usage) never see dollars here: the quote, the
+// Approve button, the reason line and the server's summary all read as a share of their
+// usage ("≈2% of your usage"); admins and own-key comics keep real prices (conversation/cost.ts).
 
 import React from 'react';
 import { CheckCircle2, CircleSlash, Coins, TriangleAlert } from 'lucide-react';
-import type { Card } from '../../../../shared/comic/doc';
-import { formatUsd } from '../../../../shared/comic/models';
+import type { Card, ComicDoc, Gate, Msg } from '../../../../shared/comic/doc';
+import { getImageModel } from '../../../../shared/comic/models';
 import { CountUp } from '../../../studio/kit/streamMotion';
+import { registeredCard } from '../../features';
+import type { CardProps } from '../../extensions';
 import type { ComicStudioController } from '../../useStudio';
+import { DOLLAR_CONTEXT } from '../../../../services/costDisplay';
+import { costFormat, useCostFormat, usageSafeSpendText, type CostFormat } from '../cost';
+import { TONE_CHIP, TONE_TEXT } from '../../../chat/studioDesign';
 import { CardShell, GhostButton, PrimaryButton, plural } from '../ui';
 import { useAction } from './useAction';
 
 type GateCardData = Extract<Card, { type: 'gate' }>;
 
-export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioController }> = ({ card, studio }) => {
+/** Model shown to people: the registry nickname when the id is known, else the raw id. */
+export const gateModelName = (model: string | undefined): string => {
+  const raw = (model || '').trim();
+  if (!raw) return '';
+  return getImageModel(raw)?.nickname || raw;
+};
+
+const DOLLARS = costFormat(DOLLAR_CONTEXT);
+
+/**
+ * One honest sentence: why the studio stopped to ask (contract §4.6 Gate.reason). `cost` decides
+ * how amounts read (dollars by default; usage terms for governed users).
+ */
+export const gateReasonCopy = (gate: Gate, doc: ComicDoc, cost: CostFormat = DOLLARS): string => {
+  switch (gate.reason) {
+    case 'budget': {
+      const cap = doc.settings.budgetUsd;
+      const spent = doc.spend.totalUsd;
+      if (cost.governed)
+        return 'This would take this comic past the budget you set for it. Approve to go over it just this once, or raise the budget in Settings.';
+      return typeof cap === 'number' && cap > 0
+        ? `This would take you past your ${cost.exact(cap)} budget (${cost.exact(spent)} spent so far). Approve to go over it just this once, or raise the budget in Settings.`
+        : 'This would take you past your budget. Approve to go over it just this once, or raise the budget in Settings.';
+    }
+    case 'first_render':
+      return 'Your first pages cost real money, so here is exactly what I would draw. Nothing is spent until you approve.';
+    case 'plan_review':
+      return 'The page plan is new — have a look at it first. Nothing is drawn until you approve.';
+    case 'redraw':
+      return 'These are already drawn. Redrawing replaces them — the current versions stay in history, so you can switch back for free.';
+    case 'no_intent':
+      return 'You didn’t ask me to draw yet, so I’m quoting it first. Nothing is spent unless you approve.';
+    case 'policy':
+    default: {
+      const s = doc.settings;
+      if (s.confirm === 'always') return 'You asked me to check before every spend.';
+      // Only claim the threshold when this spend really is over it. A smaller "policy" gate is a
+      // re-quote (the price moved since a button showed it, or a chip carried no price) or a turn
+      // whose spends add up — say what is true instead of blaming a setting.
+      if (s.confirm !== 'never' && Number.isFinite(s.bigSpendUsd) && gate.estimateUsd > s.bigSpendUsd)
+        return cost.governed ? 'You asked me to check before bigger spends.' : `You asked me to check before spends over ${cost.exact(s.bigSpendUsd)}.`;
+      return 'Here’s the up-to-date price first — nothing is spent until you approve.';
+    }
+  }
+};
+
+/** The page breakdown a gate is quoting (render_pages only), or null. */
+export const gateBreakdownCard = (gate: Gate, cardId: string): Extract<Card, { type: 'breakdown' }> | null => {
+  const action = gate.action;
+  if (action.type !== 'render_pages') return null;
+  const pageIds = Array.isArray(action.pageIds) ? action.pageIds.filter((id): id is string => typeof id === 'string' && !!id) : [];
+  return {
+    type: 'breakdown',
+    id: `${cardId}__breakdown`,
+    gateId: gate.id,
+    ...(pageIds.length ? { pageIds } : {}),
+    ...(action.includeCover ? { cover: true } : {}),
+    view: 'plan'
+  };
+};
+
+type EmbeddedCard = React.ComponentType<CardProps<Card> & { compact?: boolean }>;
+
+/** The message already shows this gate's breakdown as its own card (v5 servers put it above the gate). */
+export const messageHasGateBreakdown = (message: Msg | undefined, gateId: string): boolean =>
+  !!message?.cards?.some((c) => c && c.type === 'breakdown' && (c as { gateId?: unknown }).gateId === gateId);
+
+/** "drawing now" / "translating now" — what an approved gate is doing. */
+export const approvedCopy = (gate: Gate): string =>
+  gate.action.type === 'translate' ? 'Approved — translating now.' : gate.action.type === 'edit_page' ? 'Approved — editing now.' : 'Approved — drawing now.';
+
+/**
+ * The big quote. Dollars count up ("≈ $0.21"); a share of the usage reads "≈2%" large with
+ * "of your usage" under it, so the number stays scannable without ever showing a dollar.
+ */
+export const GatePrice: React.FC<{ usd: number; cost: CostFormat }> = ({ usd, cost }) => {
+  if (!cost.governed) {
+    return (
+      <div className="text-[22px] font-semibold leading-none tracking-tight tabular-nums text-[var(--ds-ink)]">
+        ≈ <CountUp value={usd} prefix="$" decimals={2} />
+      </div>
+    );
+  }
+  const text = cost.approx(usd);
+  const m = /^([≈<][\d.]+%)\s+(of your usage)$/.exec(text);
+  return m ? (
+    <div className="leading-none text-[var(--ds-ink)]" data-testid="gate-usage-price">
+      <span className="text-[22px] font-semibold tracking-tight tabular-nums">{m[1]}</span>
+      <span className="ml-1 text-[12px] font-medium text-[var(--ds-muted)]">{m[2]}</span>
+    </div>
+  ) : (
+    <div className="text-[14px] font-semibold leading-tight text-[var(--ds-ink)]" data-testid="gate-usage-price">
+      {text}
+    </div>
+  );
+};
+
+export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioController; message?: Msg }> = ({ card, studio, message }) => {
   const doc = studio.doc;
   const { run, isPending } = useAction(studio.act);
+  const cost = useCostFormat(studio);
   if (!doc) return null;
   const gate = doc.gate && doc.gate.id === card.gateId ? doc.gate : null;
 
@@ -32,6 +144,13 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
   const open = gate.status === 'open';
   const deciding = isPending('approve') || isPending('decline');
   const overBudget = gate.reason === 'budget';
+  const modelName = gateModelName(gate.model);
+  // Embed the breakdown only when the message doesn't already carry it (older conversations had
+  // the gate alone; v5 servers emit a sibling breakdown card above the gate — never show it twice).
+  const breakdown = open && !messageHasGateBreakdown(message, gate.id) ? gateBreakdownCard(gate, card.id) : null;
+  // The breakdown card lives in its own feature (P1-BOOKMODEL); embed it through the registry.
+  const Breakdown = breakdown ? (registeredCard('breakdown')?.Component as EmbeddedCard | undefined) : undefined;
+  const msg: Msg = message || { id: `gate_${card.id}`, role: 'assistant', text: '', at: 0, cards: [card] };
 
   return (
     <CardShell
@@ -39,45 +158,55 @@ export const GateCard: React.FC<{ card: GateCardData; studio: ComicStudioControl
       icon={<Coins className="h-4 w-4" />}
       right={
         overBudget ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${TONE_CHIP.warning}`}>
             <TriangleAlert className="h-3 w-3" aria-hidden /> Over budget
           </span>
         ) : undefined
       }
       aria-label="Spend approval"
+      className="min-w-0 max-w-full"
     >
-      <div className="flex items-end justify-between gap-3">
-        <p className="min-w-0 text-[13px] leading-snug text-[var(--ds-ink)]">{gate.summary}</p>
-        <div className="shrink-0 text-right">
-          <div className="text-[22px] font-semibold leading-none tracking-tight tabular-nums text-[var(--ds-ink)]">
-            ≈ <CountUp value={gate.estimateUsd} prefix="$" decimals={2} />
-          </div>
-          <div className="mt-1 text-[11px] text-[var(--ds-muted)]">
-            {plural(gate.imageCount, 'image')} · {gate.model}
+      {open && <p className="mb-2.5 text-[12.5px] leading-snug text-[var(--ds-muted)] [overflow-wrap:anywhere]">{gateReasonCopy(gate, doc, cost)}</p>}
+
+      {/* Wraps: the price block drops under the summary when space is short, never squeezing it. */}
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+        <p className="min-w-0 flex-1 basis-[14rem] text-[13px] leading-snug text-[var(--ds-ink)] [overflow-wrap:anywhere]">{usageSafeSpendText(gate.summary, cost)}</p>
+        <div className="min-w-0 max-w-full shrink-0 text-right">
+          <GatePrice usd={gate.estimateUsd} cost={cost} />
+          <div className="mt-1 max-w-[16rem] truncate text-[11px] text-[var(--ds-muted)]" title={gate.model || undefined} data-testid="gate-model">
+            {[gate.imageCount > 0 ? plural(gate.imageCount, 'image') : '', modelName].filter(Boolean).join(' · ')}
           </div>
         </div>
       </div>
 
+      {breakdown && Breakdown && (
+        <div className="mt-3 min-w-0">
+          <Breakdown card={breakdown} message={msg} studio={studio} compact />
+        </div>
+      )}
+
       {open ? (
         <div className="mt-3.5 flex flex-wrap gap-2">
           <PrimaryButton
+            // Grows (never clips) when a usage-terms price makes the label longer on a phone.
+            className="tap-target !h-auto min-h-9 max-w-full py-1.5 text-center coarse:min-h-11"
             busy={isPending('approve')}
             disabled={deciding}
             onClick={() => void run('approve', { type: 'approve_gate', gateId: gate.id })}
           >
-            Approve · {formatUsd(gate.estimateUsd)}
+            Approve · {cost.governed ? cost.approx(gate.estimateUsd) : cost.exact(gate.estimateUsd)}
           </PrimaryButton>
-          <GhostButton busy={isPending('decline')} disabled={deciding} onClick={() => void run('decline', { type: 'decline_gate', gateId: gate.id })}>
+          <GhostButton className="tap-target" busy={isPending('decline')} disabled={deciding} onClick={() => void run('decline', { type: 'decline_gate', gateId: gate.id })}>
             Not now
           </GhostButton>
         </div>
       ) : gate.status === 'approved' ? (
-        <p className="mt-3 flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="h-4 w-4" aria-hidden /> Approved — drawing now.
+        <p className={`mt-3 flex items-center gap-1.5 text-[12.5px] font-medium ${TONE_TEXT.success}`}>
+          <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden /> {approvedCopy(gate)}
         </p>
       ) : (
         <p className="mt-3 flex items-center gap-1.5 text-[12.5px] text-[var(--ds-muted)]">
-          <CircleSlash className="h-4 w-4" aria-hidden /> Not now — nothing was spent.
+          <CircleSlash className="h-4 w-4 shrink-0" aria-hidden /> {gate.closedReason === 'nothing_to_draw' ? 'Nothing left to draw — nothing was spent.' : 'Not now — nothing was spent.'}
         </p>
       )}
     </CardShell>

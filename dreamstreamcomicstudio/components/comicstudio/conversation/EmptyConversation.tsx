@@ -41,9 +41,11 @@ export const STARTERS: Starter[] = [
 
 export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disabled?: boolean }> = ({ onSend, disabled }) => (
   // flex-1 (not min-h-full): the log is a flex column, so this fills it and centres for real.
-  <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-center px-2 pb-[6vh] pt-10 studio-reveal">
+  // `safe center`: on a short phone the content starts at the top instead of overflowing upward
+  // past the heading (visualqa P2-1).
+  <div className="mx-auto flex w-full max-w-xl flex-1 flex-col justify-[safe_center] px-2 pb-[6vh] pt-6 studio-reveal sm:pt-10">
     <DirectorMark className="mb-4 h-9 w-9" />
-    <h2 className="text-[26px] font-semibold leading-tight tracking-tight text-[var(--ds-ink)]">What's your comic about?</h2>
+    <h2 className="text-[22px] font-semibold leading-tight tracking-tight text-[var(--ds-ink)] sm:text-[26px]">What's your comic about?</h2>
     <p className="mt-2 max-w-md text-[14px] leading-relaxed text-[var(--ds-muted)]">
       Tell me the idea in your own words — or paste a script. I'll capture the story, cast and style, show you a page plan, and only draw once
       you say go.
@@ -56,7 +58,7 @@ export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disab
           type="button"
           disabled={disabled}
           onClick={() => (s.mode === 'send' ? onSend(s.text) : composeInStudio({ text: s.text, hint: s.hint }))}
-          className="group flex items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-200 hover:-translate-y-px hover:border-[#D97757]/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40"
+          className="group flex min-h-[44px] items-start justify-between gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3.5 py-3 text-left text-[13px] leading-snug text-[var(--ds-ink)] transition-all duration-200 hover:-translate-y-px hover:border-[#D97757]/35 hover:bg-[var(--ds-surface)] disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#D97757]/40 coarse:text-[14px]"
         >
           <span>{s.label}</span>
           <ArrowUpRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-colors group-hover:text-[var(--ds-accent)]" aria-hidden />
@@ -69,7 +71,7 @@ export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disab
         type="button"
         disabled={disabled}
         onClick={() => composeInStudio({ hint: 'Paste your script or story here — any length. I’ll turn it into pages.' })}
-        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50 coarse:min-h-[44px]"
       >
         <ClipboardPaste className="h-4 w-4" aria-hidden /> Paste a script
       </button>
@@ -82,7 +84,7 @@ export const EmptyConversation: React.FC<{ onSend: (text: string) => void; disab
             hint: 'Who is this? e.g. “This is Maya, my lead — 30s, sharp, always in her red scarf.”'
           })
         }
-        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:opacity-50 coarse:min-h-[44px]"
       >
         <ImagePlus className="h-4 w-4" aria-hidden /> Add character photos
       </button>

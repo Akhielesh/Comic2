@@ -1,19 +1,46 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createEmptyDoc, emptyRender, type ComicDoc } from '../../../shared/comic/doc.js';
-import { fakeDocStore, plannedDoc } from './orchestrator.fakes.js';
 import {
+  CHARACTER_LOOK_KEYS,
+  createEmptyDoc,
+  emptyRender,
+  isPageStale,
+  isTargetStale,
+  legacyPlanInputHashOf,
+  legacySpecHashFor,
+  normalizeDoc,
+  pageSpecHash,
+  planInputHashOf,
+  sheetSpecHash,
+  type ArchivedVersion,
+  type Character,
+  type ComicDoc,
+  type Page
+} from '../../../shared/comic/doc.js';
+import { applyOps } from '../../../shared/comic/ops.js';
+import { DOC_LIMITS as SHARED_LIMITS, MAX_ARCHIVE, MAX_RENDER_HISTORY } from '../../../shared/comic/limits.js';
+import type { StudioEvent } from '../../../shared/comic/events.js';
+import { fakeAssetStore, fakeDocStore, plannedDoc } from './orchestrator.fakes.js';
+import {
+  REF_INBOX_TTL_MS,
+  archiveEvictionNotice,
+  evictedArchivePaths,
+  pruneRefInboxOps,
   GATE_EXPIRY_MS,
   INTERRUPTED_RENDER_ERROR,
   INTERRUPTED_RENDER_MS,
+  LEGACY_HASH_MAX_VARIANTS,
   SESSION_IDLE_MS,
   StudioSession,
   __resetSessionsForTests,
   drainStudioSessions,
   getStudioSession,
+  legacySpecHashOps,
   peekStudioSession,
   projectSummary,
   recoveryOps,
-  sweepIdleSessions
+  scheduleVariantBackfill,
+  sweepIdleSessions,
+  variantBackfillTargets
 } from './session.js';
 import { StudioError } from './types.js';
 
@@ -248,6 +275,209 @@ describe('recovery', () => {
   });
 });
 
+// ── Back-compat F1: legacy spec hashes (plan §5.1, §8; investigation RC1) ────
+
+/** What Postgres jsonb does to object key order on save: shorter keys first, then bytewise. */
+const jsonbOrder = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(jsonbOrder)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.keys(v as object)
+            .sort((a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0))
+            .map((k) => [k, jsonbOrder((v as Record<string, unknown>)[k])])
+        )
+      : v;
+/** A save and a reload: jsonb key order, then the load path's normalizeDoc. */
+const reload = (doc: ComicDoc): ComicDoc => normalizeDoc(jsonbOrder(JSON.parse(JSON.stringify(doc))) as ComicDoc);
+/** A look in the writer's key order (writer.ts cleanLook, the director's tools). */
+const writerOrder = <T extends object>(look: T): T => {
+  const out: Record<string, unknown> = {};
+  for (const k of CHARACTER_LOOK_KEYS) if (k in look) out[k] = (look as Record<string, unknown>)[k];
+  for (const k of Object.keys(look)) if (!(k in out)) out[k] = (look as Record<string, unknown>)[k];
+  return out as T;
+};
+const generated = (path: string, at = 1_792_000_000_000) => ({ path, source: 'generated' as const, at, model: 'google/gemini-3.1-flash-image-preview' });
+
+/**
+ * Shaped like f8312c86 (synthetic names, looks and paths): a 5-page storybook whose protagonist is an EXTRA with a ready
+ * sheet in every panel, plus three animal companions the cast scan added DURING the drawing session (looks in the
+ * writer's key order). The protagonist's look was loaded from jsonb earlier (summary first, then shortest keys first).
+ * Every page was drawn and stamped in that session with the pre-F1 hash, then the doc was saved and reloaded.
+ */
+const f8312c86Shaped = (): { session: ComicDoc; stored: ComicDoc } => {
+  const doc = createEmptyDoc('pond-legacy', 'Pond Friends', 1_792_000_000_000);
+  doc.format = { ...doc.format, kind: 'storybook', pageCount: 5, pageAspect: '4:5', panelsPerPage: 4, lettering: 'overlay' };
+  doc.style = { ...doc.style, status: 'locked', name: 'Watercolor', spec: 'Soft watercolor washes, gentle ink outlines.' };
+  doc.brief = { title: 'Pond Friends', notes: ['gentle'], logline: 'A toddler meets pond animals.', genre: 'storybook', audience: 'kids 2–6' };
+  const pipRest = { age: 'toddler', eyes: 'brown', hair: 'curly black', build: 'chubby', outfit: 'yellow raincoat, red boots' };
+  const baby: Character = {
+    id: 'c_pip', name: 'Pip', tier: 'extra', refs: [],
+    // Loaded earlier from jsonb: summary first (normalizeDoc), then jsonb order.
+    look: { summary: 'A toddler in a yellow raincoat', ...(jsonbOrder(pipRest) as object) },
+    sheet: { status: 'ready', history: [], asset: generated('u/x/p/pond/img/pip.webp') }
+  };
+  const animal = (id: string, name: string, look: Character['look'], count?: number): Character => ({
+    id, name, tier: 'support', kind: 'animal', ...(count ? { count } : {}), refs: [], look: writerOrder(look),
+    sheet: { status: 'ready', history: [], asset: generated(`u/x/p/pond/img/${id}.webp`) }
+  });
+  doc.cast = [
+    baby,
+    // Writer order puts longer keys before shorter ones here (build/eyes, outfit/marks, palette/marks), which jsonb swaps.
+    animal('c_duck', 'Ducklings', { summary: 'Three fluffy yellow ducklings', species: 'mallard duckling', markings: 'orange bills', palette: 'yellow, orange', build: 'tiny', eyes: 'black beads' }, 3),
+    animal('c_frog', 'Frog', { summary: 'A small green frog', species: 'tree frog', markings: 'dark spots', outfit: 'a tiny leaf hat', marks: 'a white belly' }),
+    animal('c_bun', 'Bunny', { summary: 'A brown bunny', species: 'cottontail', markings: 'white tail', build: 'small', palette: 'brown, white', marks: 'a notched ear' })
+  ];
+  const casts = [['c_pip'], ['c_pip', 'c_duck'], ['c_pip', 'c_duck', 'c_frog'], ['c_pip', 'c_duck', 'c_frog', 'c_bun'], ['c_pip', 'c_frog', 'c_bun', 'c_duck']];
+  doc.pages = casts.map((castIds, i): Page => ({
+    id: `pg_${i + 1}`, n: i + 1, summary: `Beat ${i + 1}`,
+    layout: 'Row 1: two equal panels. Row 2: two equal panels.',
+    panels: [1, 2, 3, 4].map((k) => ({
+      id: `pn_${i + 1}_${k}`, n: k, size: 'medium' as const, shot: 'medium' as const, action: `Pip at the pond, moment ${i + 1}.${k}.`, castIds,
+      lines: k === 2 ? [{ id: `ln_${i + 1}_${k}`, kind: 'caption' as const, text: 'Splash!' }] : []
+    })),
+    render: { status: 'ready', history: [], asset: generated(`u/x/p/pond/img/p${i + 1}.webp`, 1_792_000_000_000 + i), aspect: '4:5', origin: 'render' },
+    balloons: []
+  }));
+  doc.planStatus = 'approved';
+  // Stamped in the drawing session with the pre-F1 serialisation (what production stores today).
+  for (const p of doc.pages) p.render.specHash = legacySpecHashFor(doc, { kind: 'page', id: p.id });
+  for (const c of doc.cast) c.sheet.specHash = legacySpecHashFor(doc, { kind: 'sheet', id: c.id });
+  // An earlier take of page 4, drawn from the same spec, sits in its history.
+  doc.pages[3].render.history = [{ ...generated('u/x/p/pond/img/p4-old.webp', 1), specHash: doc.pages[3].render.specHash }];
+  doc.planInputHash = legacyPlanInputHashOf(doc);
+  return { session: doc, stored: reload(doc) };
+};
+
+describe('back-compat F1: legacy spec hashes are accepted once per load (recoveryOps)', () => {
+  it('reproduces the bug without the migration: the reload reorders keys, drawn pages read "Out of date"', () => {
+    const { session, stored } = f8312c86Shaped();
+    expect(session.pages.every((p) => p.render.specHash === legacySpecHashFor(session, { kind: 'page', id: p.id }))).toBe(true);
+    // Pages 2–5 carry a companion whose writer-ordered look jsonb reordered; page 1 has only the protagonist.
+    expect(stored.pages.map((p) => legacySpecHashFor(stored, { kind: 'page', id: p.id }) === p.render.specHash)).toEqual([true, false, false, false, false]);
+    // Canonical hashes differ from every legacy stamp, so before the migration all five read stale.
+    expect(stored.pages.filter((p) => isPageStale(stored, p))).toHaveLength(5);
+  });
+
+  it('an f8312c86-shaped legacy doc migrates: every page, sheet, history take and the plan input hash get the canonical hash', () => {
+    const { stored } = f8312c86Shaped();
+    const ops = recoveryOps(stored, { now: Date.now(), allInFlight: true });
+    const fixed = applyOps(stored, ops);
+    expect(fixed.pages.filter((p) => isPageStale(fixed, p))).toEqual([]);
+    for (const p of fixed.pages) expect(p.render.specHash).toBe(pageSpecHash(fixed, p));
+    expect(fixed.pages[3].render.history[0].specHash).toBe(pageSpecHash(fixed, fixed.pages[3]));
+    for (const c of fixed.cast) {
+      expect(isTargetStale(fixed, { kind: 'sheet', id: c.id })).toBe(false);
+      expect(c.sheet.specHash).toBe(sheetSpecHash(fixed, c));
+    }
+    expect(fixed.planInputHash).toBe(planInputHashOf(fixed));
+    // Only server-only ops; nothing but the hashes changes (assets, status, history paths are untouched).
+    expect(ops.every((o) => o.op === 'render' || o.op === 'plan_input_hash')).toBe(true);
+    for (const o of ops) if (o.op === 'render') expect(Object.keys(o.patch).every((k) => k === 'specHash' || k === 'history')).toBe(true);
+    expect(fixed.pages.map((p) => p.render.asset?.path)).toEqual(stored.pages.map((p) => p.render.asset?.path));
+    // Once migrated, a second load (another save + reload) finds nothing to do.
+    expect(legacySpecHashOps(reload(fixed))).toEqual([]);
+  });
+
+  it('a real edit still goes stale: a changed action or look matches no key-order variant', () => {
+    const { stored } = f8312c86Shaped();
+    const acted = applyOps(stored, [{ op: 'panel', pageId: 'pg_3', id: 'pn_3_1', patch: { action: 'Pip falls into the pond.' } }]);
+    const fixed = applyOps(acted, recoveryOps(acted, { now: Date.now(), allInFlight: true }));
+    expect(fixed.pages.filter((p) => isPageStale(fixed, p)).map((p) => p.n)).toEqual([3]);
+    // A look edit to the frog: pages 3–5 show the frog and stay out of date; the frog's sheet too.
+    const looked = applyOps(stored, [{ op: 'character', id: 'c_frog', patch: { look: { summary: 'A small green frog', outfit: 'a tiny red hat' } } }]);
+    const fixed2 = applyOps(looked, recoveryOps(looked, { now: Date.now(), allInFlight: true }));
+    expect(fixed2.pages.filter((p) => isPageStale(fixed2, p)).map((p) => p.n)).toEqual([3, 4, 5]);
+    expect(isTargetStale(fixed2, { kind: 'sheet', id: 'c_frog' })).toBe(true);
+    expect(isTargetStale(fixed2, { kind: 'sheet', id: 'c_duck' })).toBe(false);
+    // A changed brief keeps the old plan stamp (the next unchanged-input re-plan is a real writer call).
+    const briefed = applyOps(stored, [{ op: 'brief', patch: { logline: 'A toddler meets a dragon.' } }]);
+    expect(legacySpecHashOps(briefed).some((o) => o.op === 'plan_input_hash')).toBe(false);
+  });
+
+  it('is bounded: at most LEGACY_HASH_MAX_VARIANTS variants per target, and never throws into a load', () => {
+    expect(LEGACY_HASH_MAX_VARIANTS).toBeLessThanOrEqual(64);
+    const { stored } = f8312c86Shaped();
+    // A page whose stamp matches nothing (a stranger's hash) is left as it is, honestly stale.
+    stored.pages[0].render.specHash = 'deadbeef';
+    const ops = legacySpecHashOps(stored);
+    expect(ops.some((o) => o.op === 'render' && o.target.kind === 'page' && o.target.id === 'pg_1')).toBe(false);
+    // A malformed render (no history array) is skipped by the try/catch in recoveryOps, never a crash.
+    const broken = { ...stored, pages: [{ ...stored.pages[1], render: { ...stored.pages[1].render, history: undefined } }] } as unknown as ComicDoc;
+    expect(() => recoveryOps(broken, { now: Date.now(), allInFlight: true })).not.toThrow();
+  });
+
+  // The likely variants come first for EVERY outer order (brief or line field order): with 5+ cast whose looks need
+  // reordering, the 2^n look masks of the first outer order must not use up the bound before the others are tried.
+  const sixLooks = (n: number) =>
+    Array.from({ length: n }, (_, i): Character => ({
+      id: `c${i}`, name: `C${i}`, tier: 'support', refs: [], sheet: emptyRender(),
+      // Writer key order (CHARACTER_LOOK_KEYS), which a jsonb reload reorders.
+      look: writerOrder({ summary: `s${i}`, age: 'a', build: 'b', hair: 'h', outfit: 'o', palette: 'p', marks: 'm' })
+    }));
+
+  for (const nCast of [5, 6, 7]) {
+    for (const briefOrder of ['sanitizer', 'type'] as const) {
+      it(`${nCast} cast with writer-ordered looks and a ${briefOrder}-order brief: the plan input hash migrates`, () => {
+        const doc = createEmptyDoc('plan-legacy', 'T', 1);
+        doc.brief =
+          briefOrder === 'sanitizer'
+            ? { title: 'T', notes: ['n'], logline: 'L', premise: 'P', genre: 'G', tone: 'To', audience: 'A', setting: 'S' }
+            : ({ title: 'T', logline: 'L', premise: 'P', genre: 'G', tone: 'To', audience: 'A', setting: 'S', notes: ['n'] } as ComicDoc['brief']);
+        doc.cast = sixLooks(nCast);
+        doc.planInputHash = legacyPlanInputHashOf(doc);
+        const stored = reload(doc);
+        expect(Object.keys(stored.cast[0].look)).not.toEqual(Object.keys(doc.cast[0].look));
+        expect(stored.planInputHash).not.toBe(planInputHashOf(stored));
+        const ops = legacySpecHashOps(stored);
+        expect(ops).toContainEqual({ op: 'plan_input_hash', hash: planInputHashOf(stored) });
+      });
+    }
+  }
+
+  it('an in_art page with 6 reorder-needing cast and director-tool line order (id last) still migrates', () => {
+    const doc = createEmptyDoc('inart-legacy', 'T', 1);
+    doc.format = { ...doc.format, lettering: 'in_art', pageCount: 1 };
+    doc.cast = sixLooks(6);
+    const ids = doc.cast.map((c) => c.id);
+    doc.pages = [
+      {
+        id: 'pg_1', n: 1, summary: 'Beat', layout: 'Row 1: one wide panel. Row 2: two equal panels.',
+        panels: [1, 2, 3].map((k) => ({
+          id: `pn_${k}`, n: k, size: k === 1 ? ('wide' as const) : ('medium' as const), shot: 'medium' as const, action: `Moment ${k}.`, castIds: ids,
+          // The director's tools build a line id-last: { kind, text, speakerId, id }.
+          lines: [{ kind: 'speech' as const, text: `Line ${k}`, speakerId: ids[k], id: `ln_${k}` }]
+        })),
+        render: { status: 'ready', history: [], asset: generated('u/x/p/inart/img/p1.webp'), aspect: '2:3', origin: 'render' },
+        balloons: []
+      }
+    ];
+    doc.pages[0].render.specHash = legacySpecHashFor(doc, { kind: 'page', id: 'pg_1' });
+    const stored = reload(doc);
+    expect(isPageStale(stored, stored.pages[0])).toBe(true);
+    const fixed = applyOps(stored, legacySpecHashOps(stored));
+    expect(isPageStale(fixed, fixed.pages[0])).toBe(false);
+    expect(fixed.pages[0].render.specHash).toBe(pageSpecHash(fixed, fixed.pages[0]));
+    // A real line edit on that page still matches no variant.
+    const edited = applyOps(stored, [{ op: 'line', pageId: 'pg_1', panelId: 'pn_2', id: 'ln_2', patch: { text: 'Another line' } }]);
+    const fixed2 = applyOps(edited, legacySpecHashOps(edited));
+    expect(isPageStale(fixed2, fixed2.pages[0])).toBe(true);
+  });
+
+  it('getStudioSession runs it on load and persists the canonical hashes (no false "Out of date", no false redraw quote)', async () => {
+    __resetSessionsForTests();
+    const store = fakeDocStore();
+    const { stored } = f8312c86Shaped();
+    store.docs.set('pond-legacy', { userId: 'u1', doc: stored });
+    const session = await getStudioSession('pond-legacy', 'u1', store);
+    expect(session.doc.pages.filter((p) => isPageStale(session.doc, p))).toEqual([]);
+    await session.flush();
+    const saved = store.docs.get('pond-legacy')!.doc;
+    expect(saved.pages.every((p) => p.render.specHash === pageSpecHash(saved, p))).toBe(true);
+    __resetSessionsForTests();
+  });
+});
+
 describe('getStudioSession', () => {
   afterEach(() => __resetSessionsForTests());
 
@@ -281,6 +511,47 @@ describe('getStudioSession', () => {
     store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
     const [a, b] = await Promise.all([getStudioSession('p1', 'u1', store), getStudioSession('p1', 'u1', store)]);
     expect(a).toBe(b);
+  });
+
+  // S8: the in-flight load map is keyed by caller too — a stranger's failed (owner-filtered) load
+  // must never become the owner's answer while no session is cached.
+  it("a stranger's in-flight failed load never answers the owner", async () => {
+    const store = fakeDocStore();
+    store.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    const intruder = getStudioSession('p1', 'u2', store).catch((e) => e);
+    const owner = getStudioSession('p1', 'u1', store);
+    const session = await owner;
+    expect(session.userId).toBe('u1');
+    expect(await intruder).toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    expect(peekStudioSession('p1')).toBe(session);
+  });
+
+  it("a stranger's transient store error never reaches the owner's concurrent load", async () => {
+    const base = fakeDocStore();
+    base.docs.set('p1', { userId: 'u1', doc: plannedDoc('p1') });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const store = {
+      ...base,
+      async load(projectId: string, userId: string) {
+        if (userId === 'u2') {
+          await gate;
+          throw new StudioError('NOT_AVAILABLE', 'db', { status: 503 });
+        }
+        return base.load(projectId, userId);
+      }
+    } as typeof base;
+    const intruder = getStudioSession('p1', 'u2', store).catch((e) => e);
+    const owner = getStudioSession('p1', 'u1', store).catch((e) => e);
+    release();
+    const got = await owner;
+    expect(got).not.toBeInstanceOf(Error);
+    expect(got.userId).toBe('u1');
+    expect(await intruder).toMatchObject({ code: 'NOT_AVAILABLE', status: 503 });
+    // Concurrent owner loads still share one session after the stranger's attempt.
+    const [a, b] = await Promise.all([getStudioSession('p1', 'u1', store), getStudioSession('p1', 'u1', store)]);
+    expect(a).toBe(got);
+    expect(b).toBe(got);
   });
 
   it('evicts idle sessions only (no subscribers, no work) after flushing', async () => {
@@ -372,3 +643,138 @@ describe('projectSummary', () => {
     expect(projectSummary(doc).coverPath).toBe('cover.webp');
   });
 });
+
+// ── v5 (contract §12.4) ──────────────────────────────────────────────────────
+
+describe('commit origin/label, archive eviction notice, inbox prune, size guard', () => {
+  afterEach(() => __resetSessionsForTests());
+
+  it('the ops event carries origin and label', () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    session.commit([{ op: 'note_add', text: 'x' }], { origin: 'director', label: 'Add note' });
+    expect(events[0]).toMatchObject({ type: 'ops', origin: 'director', label: 'Add note' });
+    session.dispose();
+  });
+
+  const fullArchive = (): ArchivedVersion[] =>
+    Array.from({ length: MAX_ARCHIVE }, (_, i) => ({
+      path: `arch-${i}.webp`,
+      source: 'generated' as const,
+      at: i,
+      targetKey: 'page:pg_9',
+      label: 'Page 9',
+      archivedAt: 1_000 + i
+    }));
+
+  it('a commit that evicts archived versions is followed by an info notice (never silent)', () => {
+    const doc = plannedDoc('p1');
+    doc.archive = fullArchive();
+    doc.archive[0] = { ...doc.archive[0], starred: true }; // starred: never evicted
+    const history = Array.from({ length: MAX_RENDER_HISTORY }, (_, i) => ({ path: `h-${i}.webp`, source: 'generated' as const, at: i }));
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: { path: 'cur.webp', source: 'generated', at: 9 }, history };
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc, store: fakeDocStore() });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    session.commit([{ op: 'render', target: { kind: 'page', id: 'pg_1' }, patch: { status: 'ready', asset: { path: 'new.webp', source: 'generated', at: 10 }, updatedAt: 999_999 } }]);
+    const after = session.doc;
+    expect(after.archive).toHaveLength(MAX_ARCHIVE);
+    expect(after.archive!.some((a) => a.path === 'arch-0.webp')).toBe(true);
+    expect(after.archive!.some((a) => a.path === 'arch-1.webp')).toBe(false);
+    const notice = after.conversation.at(-1)!;
+    expect(notice.text).toBe(`Version archive is full (${MAX_ARCHIVE}): removed 1 oldest unstarred version that nothing uses. Star a version to keep it forever.`);
+    expect(notice.cards?.[0]).toMatchObject({ type: 'notice', tone: 'info' });
+    expect(events.filter((e) => e.type === 'ops')).toHaveLength(2);
+    expect(events[1]).toMatchObject({ origin: 'job' });
+    session.dispose();
+  });
+
+  it('no notice when nothing was evicted; a version restored out of the archive is not an eviction', () => {
+    const before = plannedDoc('p1');
+    before.archive = fullArchive();
+    const restored = { ...before, archive: before.archive.slice(1), pages: before.pages.map((p, i) => (i === 0 ? { ...p, render: { ...p.render, asset: { path: 'arch-0.webp', source: 'generated' as const, at: 0 } } } : p)) };
+    expect(evictedArchivePaths(before, restored)).toEqual([]);
+    expect(evictedArchivePaths(before, { ...before, archive: before.archive.slice(2) })).toEqual([]); // under the cap ⇒ not an eviction
+    expect(evictedArchivePaths(before, before)).toEqual([]);
+    expect(archiveEvictionNotice(3, 1).msg.text).toContain('removed 3 oldest unstarred versions');
+  });
+
+  it('prunes composer uploads older than 24 h on load and on the sweeper, keeping fresh ones', async () => {
+    const now = Date.now();
+    const store = fakeDocStore();
+    const doc = plannedDoc('p1');
+    doc.refInbox = [
+      { path: 'u/u1/p/p1/ref/old.webp', source: 'upload', at: now - REF_INBOX_TTL_MS - 1000 },
+      { path: 'u/u1/p/p1/ref/new.webp', source: 'upload', at: now - 1000 }
+    ];
+    expect(pruneRefInboxOps(doc, now)).toEqual([{ op: 'ref_remove', owner: { kind: 'inbox' }, path: 'u/u1/p/p1/ref/old.webp' }]);
+    store.docs.set('p1', { userId: 'u1', doc });
+    const session = await getStudioSession('p1', 'u1', store, { now: () => now });
+    expect(session.doc.refInbox!.map((r) => r.path)).toEqual(['u/u1/p/p1/ref/new.webp']);
+    const unsubscribe = session.subscribe(() => undefined); // live, so not evicted
+    await sweepIdleSessions(now + REF_INBOX_TTL_MS + 5000);
+    expect(session.doc.refInbox).toEqual([]);
+    expect(peekStudioSession('p1')).toBe(session);
+    unsubscribe();
+  });
+
+  it('refuses a user/director edit past docBytesMax with 409 LIMIT; server job commits still land', () => {
+    const session = new StudioSession({ projectId: 'p1', userId: 'u1', doc: createEmptyDoc('p1'), store: fakeDocStore() });
+    const big = 'x'.repeat(SHARED_LIMITS.docBytesMax + 10);
+    const rev = session.doc.rev;
+    expect(() => session.commit([{ op: 'source', patch: { script: big } }], { origin: 'user' })).toThrow(expect.objectContaining({ code: 'LIMIT', status: 409 }));
+    expect(session.doc.rev).toBe(rev);
+    expect(session.doc.source.script).toBeUndefined();
+    session.commit([{ op: 'note_add', text: 'job work' }], { origin: 'job' });
+    expect(session.doc.brief.notes).toEqual(['job work']);
+    session.dispose();
+  });
+});
+
+describe('size-variant backfill on session load (contract §12.4)', () => {
+  const img = (name: string, extra: Record<string, unknown> = {}) => ({ path: `u/user-1/p/proj-1/img/${name}.webp`, source: 'generated' as const, at: 1, w: 2048, h: 3072, ...extra });
+
+  it('targets on-screen images first, skips blocked, already-sized, too-small, pub/, library/ and variant paths, capped', () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: img('p1'), history: [img('p1-old'), img('tiny', { w: 400, h: 600 })] };
+    doc.pages[1].render = { ...emptyRender(), status: 'ready', asset: img('p2', { variants: [{ path: 'u/user-1/p/proj-1/img/p2_w480.webp', w: 480, h: 720 }] }) };
+    doc.pages[2].render = { ...emptyRender(), status: 'ready', asset: img('p3', { safety: { assessed: 'X', at: 1 } }) };
+    doc.cover.render = { ...emptyRender(), status: 'ready', asset: { ...img('c'), path: 'pub/AAAAAAAAAAAAAAAAAAAAAA/cover-0123456789ab.webp' } };
+    doc.cast[0].sheet = { ...emptyRender(), status: 'ready', asset: img('maya') };
+    doc.style.refs = [{ ...img('lib'), path: 'library/style/x.webp' }];
+    expect(variantBackfillTargets(doc).map((a) => a.path.split('/').pop())).toEqual(['p1.webp', 'maya.webp', 'p1-old.webp']);
+    expect(variantBackfillTargets(doc, 1)).toHaveLength(1);
+  });
+
+  it('records variants one image at a time with asset_meta (origin job), once per session', async () => {
+    const doc = plannedDoc();
+    doc.pages[0].render = { ...emptyRender(), status: 'ready', asset: img('p1') };
+    doc.pages[1].render = { ...emptyRender(), status: 'ready', asset: img('p2') };
+    const session = new StudioSession({ projectId: doc.id, userId: 'user-1', doc, store: fakeDocStore(), saveDebounceMs: 5 });
+    const events: StudioEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    const assets = fakeAssetStore();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const ensure = assets.ensureVariants.bind(assets);
+    assets.ensureVariants = async (a) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+      return ensure(a);
+    };
+    const urls: string[][] = [];
+    expect(await scheduleVariantBackfill(session, assets, { onUrls: async (p) => void urls.push(p) })).toBe(2);
+    expect(maxInFlight).toBe(1);
+    expect(session.doc.pages[0].render.asset!.variants!.map((v) => v.w)).toEqual([480, 1080]);
+    const metaOps = events.filter((e) => e.type === 'ops' && e.ops[0].op === 'asset_meta');
+    expect(metaOps).toHaveLength(2);
+    expect(metaOps.every((e) => e.type === 'ops' && e.origin === 'job')).toBe(true);
+    expect(urls.flat()).toContain('u/user-1/p/proj-1/img/p1_w480.webp');
+    expect(scheduleVariantBackfill(session, assets)).toBeNull(); // once per session
+    session.dispose();
+  });
+});
+
