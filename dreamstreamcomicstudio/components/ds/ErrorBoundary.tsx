@@ -44,8 +44,10 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, State> {
     this.props.onError?.(error instanceof Error ? error : new Error(String(error)), info);
   }
 
-  componentDidUpdate(prev: ErrorBoundaryProps) {
-    if (this.state.error && changed(prev.resetKeys, this.props.resetKeys)) this.reset();
+  componentDidUpdate(prev: ErrorBoundaryProps, prevState: State) {
+    // Only an error caught in an EARLIER update is cleared: when the keys change and the new children
+    // crash in the same update, clearing at once would render them again and catch (and report) twice.
+    if (prevState.error !== null && this.state.error && changed(prev.resetKeys, this.props.resetKeys)) this.reset();
   }
 
   reset = () => {

@@ -7,6 +7,10 @@
  *
  * The error is always paired with an icon and reads the readable danger ink (TONE_TEXT.danger), never
  * colour alone. Focus the first invalid field on submit; the field itself does not announce.
+ *
+ * Disabled dims the label only (the label of a disabled control, which contrast rules exempt) and the
+ * control itself (its own `disabled:opacity-50`); the description and the error keep their full ink, so
+ * the help that says why it is locked stays readable (4.5:1).
  */
 import React, { createContext, useContext, useId } from 'react';
 import { AlertCircle } from 'lucide-react';
@@ -78,8 +82,8 @@ export function Field({ label, description, error, id, required, disabled, hideL
   const describedBy = [errorId, descriptionId].filter(Boolean).join(' ') || undefined;
   const value: FieldContextValue = { id: controlId, describedBy, invalid: Boolean(error), required, disabled };
   return (
-    <div data-slot="field" data-invalid={error ? '' : undefined} className={cn('flex min-w-0 flex-col gap-1.5', disabled && 'opacity-70', className)}>
-      <label htmlFor={controlId} className={cn(FIELD_LABEL, hideLabel && 'sr-only')}>
+    <div data-slot="field" data-invalid={error ? '' : undefined} className={cn('flex min-w-0 flex-col gap-1.5', className)}>
+      <label htmlFor={controlId} className={cn(FIELD_LABEL, disabled && 'opacity-70', hideLabel && 'sr-only')}>
         {label}
         {required ? (
           <span aria-hidden="true" className="ml-0.5">

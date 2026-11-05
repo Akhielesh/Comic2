@@ -131,8 +131,10 @@ describe('components/ds hygiene (DS-0 guards pass at integration)', () => {
  * the studioDesign recipes that recipes.ts re-exports among them, must get a Tailwind sort order.
  */
 const twRequire = createRequire(import.meta.url);
-/** Hand-written classes in index.css (no utility behind them), and the named-group marker on the switch. */
-export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press', 'group/switch'];
+/** Hand-written classes in index.css (no Tailwind utility behind them). */
+export const HAND_WRITTEN_CLASSES: readonly string[] = ['studio-shimmer', 'ds-font-display', 'ds-press'];
+/** A named group or peer (`group/checkbox`) only anchors `group-…/checkbox:` variants; it has no CSS of its own. */
+const NAMED_MARKER = /^(?:group|peer)\/[\w-]+$/;
 
 /** [where, class string] for every exported class-string constant of a module. */
 export function exportedClassStrings(moduleName: string, mod: Record<string, unknown>): Array<[string, string]> {
@@ -156,7 +158,7 @@ export function ungeneratedClasses(classStrings: Array<[string, string]>, allow:
     tailwindContext = createContext(resolveConfig(twRequire(path.join(APP_ROOT, 'tailwind.config.cjs'))));
   }
   const where = new Map<string, string>();
-  for (const [at, s] of classStrings) for (const c of s.split(/\s+/)) if (c && !allow.includes(c) && !where.has(c)) where.set(c, at);
+  for (const [at, s] of classStrings) for (const c of s.split(/\s+/)) if (c && !allow.includes(c) && !NAMED_MARKER.test(c) && !where.has(c)) where.set(c, at);
   const order = tailwindContext!.getClassOrder([...where.keys()]);
   return order.filter(([, o]) => o === null).map(([c]) => `${where.get(c)}: ${c}`);
 }
@@ -181,9 +183,6 @@ describe('components/ds classes compile under this app’s Tailwind', () => {
   });
 
   it('the hand-written allowlist names real index.css rules', () => {
-    for (const c of HAND_WRITTEN_CLASSES) {
-      if (c.includes('/')) continue; // the named-group marker is a variant anchor, not a rule
-      expect(indexCss, c).toContain(`.${c}`);
-    }
+    for (const c of HAND_WRITTEN_CLASSES) expect(indexCss, c).toContain(`.${c}`);
   });
 });

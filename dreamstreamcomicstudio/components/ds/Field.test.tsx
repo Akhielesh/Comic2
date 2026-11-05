@@ -66,6 +66,32 @@ describe('Field — label, description and error wired to the control', () => {
     expect(screen.getByText('*')).toHaveAttribute('aria-hidden', 'true');
   });
 
+  it('disabled dims the label and the control once, never the description (it stays 4.5:1)', () => {
+    render(
+      <Field label="Disabled field" disabled description="Locked while the page draws." error="Finish the draft first." id="locked">
+        <Input />
+      </Field>
+    );
+    const input = screen.getByLabelText('Disabled field');
+    expect(input).toBeDisabled();
+    const root = input.closest('[data-slot="field"]')!;
+    const opacity = (el: Element) => [...el.classList].filter((c) => /(^|:)opacity-/.test(c));
+    const chain = (from: Element) => {
+      const els: Element[] = [];
+      for (let el: Element | null = from; el; el = el.parentElement) {
+        els.push(el);
+        if (el === root) break;
+      }
+      return els;
+    };
+    for (const id of ['locked-description', 'locked-error']) {
+      expect(chain(document.getElementById(id)!).flatMap(opacity), id).toEqual([]);
+    }
+    // The control dims itself (disabled:opacity-50) and nothing above it adds a second step.
+    expect(chain(input).flatMap(opacity)).toEqual(['disabled:opacity-50']);
+    expect(opacity(screen.getByText('Disabled field'))).toEqual(['opacity-70']);
+  });
+
   it('a hidden label still names the control', () => {
     render(
       <Field label="Search comics" hideLabel>

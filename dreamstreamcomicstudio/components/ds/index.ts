@@ -16,7 +16,7 @@ export { Tabs, TabsContent, TabsList, TabsTrigger, type TabsContentProps, type T
 export { Switch, SWITCH_HIT_AREA, SWITCH_THUMB, SWITCH_TRACK, type SwitchProps } from './Switch';
 export { Slider, SLIDER_CLASSES, snapToStep, type SliderProps } from './Slider';
 export { Progress, PROGRESS_BAR, PROGRESS_SIZE, PROGRESS_TRACK, type ProgressProps, type ProgressSize } from './Progress';
-export { Checkbox, CHECKBOX_BOX, CHECKBOX_CHECK, CHECKBOX_DASH, CHECKBOX_INPUT, type CheckboxProps, type CheckedState } from './Checkbox';
+export { Checkbox, CHECKBOX_BOX, CHECKBOX_CHECK, CHECKBOX_CONTROL, CHECKBOX_DASH, CHECKBOX_DESCRIPTION, CHECKBOX_INPUT, CHECKBOX_LABEL, CHECKBOX_ROW, type CheckboxProps, type CheckedState } from './Checkbox';
 
 // Labels
 export { Chip, type ChipProps, type ChipVariant } from './Chip';

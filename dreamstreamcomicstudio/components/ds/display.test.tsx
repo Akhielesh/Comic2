@@ -156,7 +156,11 @@ describe('EmptyState, LoadingState, ErrorState, Skeleton', () => {
     render(<EmptyState title="No comics yet" description="Start one from a single sentence." icon={<Star />} action={{ label: 'New comic', onClick }} />);
     const status = screen.getByRole('status');
     expectClasses(status, EMPTY_FRAME.panel);
-    expectClasses(within(status).getByRole('heading', { level: 3, name: 'No comics yet' }), STATE_TITLE, TEXT_2XL);
+    const title = within(status).getByRole('heading', { level: 3, name: 'No comics yet' });
+    expectClasses(title, STATE_TITLE);
+    // Atlas text-2xl/7: the 24 px step on a 28 px line, and not the heading step's 32 px leading.
+    expectClasses(title, 'text-[length:var(--ds-text-2xl)] leading-7');
+    expect(title).not.toHaveClass(TEXT_2XL.split(' ').find((c) => c.startsWith('leading-'))!);
     fireEvent.click(within(status).getByRole('button', { name: 'New comic' }));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
@@ -254,6 +258,35 @@ describe('ErrorBoundary', () => {
       </ErrorBoundary>
     );
     expect(screen.getByText('Recovered content')).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it('new resetKeys and a crash in the same update: caught and reported once, the fallback stays', () => {
+    let throws = 0;
+    function Broken({ broken }: { broken: boolean }) {
+      if (broken) {
+        throws += 1;
+        throw new Error('broken view');
+      }
+      return <p>Working view</p>;
+    }
+    const onError = vi.fn();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const view = (broken: boolean) => (
+      <ErrorBoundary resetKeys={[broken]} onError={onError}>
+        <Broken broken={broken} />
+      </ErrorBoundary>
+    );
+    const { rerender } = render(view(false));
+    rerender(view(true)); // a route change into a broken view (the gallery's Break button)
+    expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong');
+    expect(onError).toHaveBeenCalledTimes(1);
+    const throwsAfterCrash = throws;
+    // The keys change back to a working view: the error clears and the children render again.
+    rerender(view(false));
+    expect(screen.getByText('Working view')).toBeInTheDocument();
+    expect(throws).toBe(throwsAfterCrash);
+    expect(onError).toHaveBeenCalledTimes(1);
     spy.mockRestore();
   });
 });

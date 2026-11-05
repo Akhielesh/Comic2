@@ -6,7 +6,7 @@
 import React from 'react';
 import { cn } from '../../lib/utils';
 import type { ButtonVariant } from './Button';
-import { RADIUS_CONTROL, RADIUS_PANEL, SHADOW_SOFT, STATUS_EDGE, STATUS_INK, TEXT_2XL } from './recipes';
+import { RADIUS_CONTROL, RADIUS_PANEL, SHADOW_SOFT, STATUS_EDGE, STATUS_INK } from './recipes';
 
 export type StateVariant = 'panel' | 'bare' | 'inline';
 
@@ -37,7 +37,12 @@ export function StateIconTile({ tone = 'neutral', children }: { tone?: 'neutral'
   );
 }
 
-export const STATE_TITLE = `m-0 text-balance font-semibold tracking-[-0.03em] text-[var(--ds-ink)] ${TEXT_2XL}`;
+/**
+ * Atlas's state panels set the 24 px title on a 28 px line (`text-2xl/7`), tighter than the TEXT_2XL
+ * heading step (32 px): spelled here, not appended to TEXT_2XL, because this string is used without `cn`
+ * and the step's leading-8 would win by CSS order.
+ */
+export const STATE_TITLE = 'm-0 text-balance font-semibold tracking-[-0.03em] text-[var(--ds-ink)] text-[length:var(--ds-text-2xl)] leading-7';
 export const STATE_DESCRIPTION = 'm-0 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]';
 export const INLINE_TITLE = 'm-0 text-balance text-[0.9375rem] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)]';
 export const PANEL_FRAME = `flex min-w-0 flex-col items-center justify-center ${RADIUS_PANEL} px-6 py-12 text-center`;

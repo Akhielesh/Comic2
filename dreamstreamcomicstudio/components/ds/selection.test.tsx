@@ -6,7 +6,7 @@ import { Segmented, SEGMENTED_ITEM_EDGE, SEGMENTED_SIZE } from './Segmented';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './Tabs';
 import { Switch, SWITCH_THUMB, SWITCH_TRACK } from './Switch';
 import { Slider, SLIDER_CLASSES, snapToStep } from './Slider';
-import { Checkbox, CHECKBOX_BOX, CHECKBOX_INPUT } from './Checkbox';
+import { Checkbox, CHECKBOX_BOX, CHECKBOX_CONTROL, CHECKBOX_INPUT, CHECKBOX_LABEL, CHECKBOX_ROW } from './Checkbox';
 import { Progress, PROGRESS_BAR, PROGRESS_TRACK } from './Progress';
 import { FOCUS_RING, FOCUS_RING_FLUSH, SEGMENTED_ITEM, SEGMENTED_TRACK, STATUS_DOT } from './recipes';
 import { nextRovingIndex } from './roving';
@@ -286,6 +286,33 @@ describe('Checkbox — native, with indeterminate', () => {
     for (const slot of ['checkbox-box', 'checkbox-check', 'checkbox-dash']) expect(wrap.querySelector(`[data-slot="${slot}"]`)).toHaveAttribute('aria-hidden', 'true');
     // The drawn box takes FOCUS_RING from the input (peer-focus-visible), spelled out in full.
     expect(CHECKBOX_BOX).toContain(FOCUS_RING.replace(/focus-visible:/g, 'peer-focus-visible:'));
+  });
+
+  it('disabled dims the drawn control once (box and mark together, never again by the row) and the label, never the description', () => {
+    const opacity = (el: Element) => [...el.classList].filter((c) => /(^|:)opacity-/.test(c));
+    const upToBody = (from: Element) => {
+      const els: Element[] = [];
+      for (let el: Element | null = from; el && el !== document.body; el = el.parentElement) els.push(el);
+      return els;
+    };
+    const { rerender } = render(<Checkbox label="Accept the licence" description="Locked until the draft is saved." disabled defaultChecked />);
+    const input = screen.getByRole('checkbox', { name: 'Accept the licence' });
+    expect(input).toBeDisabled();
+    const row = input.closest('[data-slot="checkbox-row"]')!;
+    expectClasses(row, CHECKBOX_ROW);
+    // One dimming step from the drawn box, and from the check mark, up to the page.
+    for (const slot of ['checkbox-box', 'checkbox-check', 'checkbox-dash']) {
+      expect(upToBody(row.querySelector(`[data-slot="${slot}"]`)!).flatMap(opacity), slot).toEqual(['has-[:disabled]:opacity-50']);
+    }
+    expect(input.parentElement).toHaveAttribute('data-slot', 'checkbox');
+    expectClasses(input.parentElement!, CHECKBOX_CONTROL);
+    // The label dims with its disabled control (from the input's state); the description never does.
+    expectClasses(screen.getByText('Accept the licence'), CHECKBOX_LABEL);
+    expect(opacity(screen.getByText('Accept the licence'))).toEqual(['group-has-[:disabled]/checkbox:opacity-50']);
+    expect(upToBody(screen.getByText('Locked until the draft is saved.')).flatMap(opacity)).toEqual([]);
+    // A bare box dims through the same control wrapper.
+    rerender(<Checkbox aria-label="Bare" disabled />);
+    expectClasses(screen.getByRole('checkbox', { name: 'Bare' }).parentElement!, CHECKBOX_CONTROL);
   });
 });
 
