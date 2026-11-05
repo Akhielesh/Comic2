@@ -21,8 +21,9 @@ Adoption starts in DS-2: in this wave (DS-1a) no existing screen was moved onto 
 **One language on every host (wave 9, the bridge).** `index.html` ships `data-ds-skin="atlas"` on `<html>`, so
 every page (chat, settings, home, public pages, the studio) reads the Atlas values of these tokens; the
 comics host also sets it at boot. The build kill switch `VITE_DS_SKIN_EVERYWHERE=off`
-(docs/infrastructure/ENV_MATRIX.md) strips the attribute from every HTML entry and brings back the old
-scope (the comics host and the Comic Studio roots). `initTheme()` runs at the app root and
+(docs/infrastructure/ENV_MATRIX.md) strips the attribute from every HTML entry, so the token block is back
+to the old scope (the comics host and the Comic Studio roots); dark from first paint on every page and the
+bridge token moves stay (a code revert, docs/design/atlas-skin.md "Scope and mechanism"). `initTheme()` runs at the app root and
 `public/theme-boot.js` puts the saved dark theme on `<html>` before first paint. Legacy-kit pages follow the
 skin's tokens and keep their legacy structure until their migration package.
 
@@ -53,7 +54,7 @@ The colour, type, shape, depth and motion tokens, their defaults and their Atlas
 | `--ds-grid-dot` (wave 9) | ink at 14 % | same | the dot of `.ds-grid-backdrop` |
 | `--ds-spot-ink` (wave 9) | `var(--ds-ink)` | same | the spotlight pool's ink (the header and home work) |
 | `--ds-radius-hero` / `-feature` (wave 9) | `28px` / `16px` | same | the hero frame; feature cards |
-| `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper |
+| `--ds-reader-focus` (M1a) | `#3b3026` (the reader ink) | not skinned (reader content) | keyboard focus on the reader's paper: ≥ 4.5:1 on the page back and the endpaper. Paper only (1.5:1 on `--ds-reader-room`): controls over the room use `--ds-focus` on their own chrome surface |
 | `--sidebar-w` (M1a) | `240px` | same | the wide-screen sidebar, beside `--rail-w` (72 px) |
 
 Atlas has no z or density tokens: the skin restates the same values so every token has a skin value
@@ -77,8 +78,9 @@ in `atlas-skin.md`, "The shared constants"):
 | **`TEXT_XL`, `TEXT_2XL`, `TEXT_3XL`** (DS-1a) | the 20 / 24 / 30 px heading steps (size and leading) |
 
 **The display face (wave 9).** Space Grotesk only where a recipe asks for it: `FONT_DISPLAY` (`.ds-font-display`),
-`HEADING`, `PAGE_TITLE`, `DIALOG_TITLE` and the page and public titles built on them. Card, section-card, sheet
-and empty-state titles are IBM Plex Sans semibold (`CARD_TITLE`, `SECTION_TITLE`, `STATE_TITLE`). Tailwind's
+`HEADING`, `PAGE_TITLE` and the page and public titles built on them (the comics landing's hero and section
+titles, the public reader cover). Card, section-card, dialog, sheet and empty-state titles are IBM Plex Sans
+semibold (`CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, `STATE_TITLE`), as Atlas's. Tailwind's
 `font-display` is Bangers, lettering content: never in chrome.
 | `ACCENT_*`, `ON_ACCENT_TEXT`, `PRIMARY_BTN` | the accent (ink under the skin) and the text-bearing accent fill |
 | **`DANGER_FILL`, `DANGER_FILL_HOVER`** (DS-1a) | a solid danger fill under `--ds-on-danger` (destructive buttons and badges) |

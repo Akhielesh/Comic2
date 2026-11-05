@@ -270,10 +270,11 @@ export const OVERLINE = 'text-[11px] font-semibold leading-4 tracking-[0.12em] u
  * titles rendered before the type-scale change): Atlas's DialogTitle restates leading-none, which here
  * would clip descenders in the one-line truncating dialog headers and crowd a title that wraps on a
  * phone. No colour: it inherits the dialog's ink (the immersive reader's shortcuts dialog is white on
- * its dark glass). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM for a dialog
- * that docks to the bottom as a sheet on phones.
+ * its dark glass). The body face, as Atlas's DialogTitle and SheetTitle (bridge D2: the display face is
+ * for page and public titles only). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM
+ * for a dialog that docks to the bottom as a sheet on phones.
  */
-export const DIALOG_TITLE = `text-xl font-semibold leading-7 tracking-normal ${FONT_DISPLAY}`;
+export const DIALOG_TITLE = 'text-xl font-semibold leading-7 tracking-normal';
 /**
  * DIALOG_TITLE from `sm` up, for a dialog that is a bottom sheet below `sm` and a centred dialog above
  * (the timeline dialog, the model-change and lab-run confirmations): the element keeps its sheet-header

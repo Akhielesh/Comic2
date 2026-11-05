@@ -151,6 +151,14 @@ describe('public/_headers and public/_routes.json', () => {
     }
   });
 
+  it('caches the blocking no-flash theme script for an hour, then revalidates it in the background', () => {
+    // Without a block it got the Pages default (max-age=0, must-revalidate): every full page load waited one
+    // conditional round trip (through comics-edge on the comics host) before the parser reached the CSS.
+    const b = block('/theme-boot.js');
+    expect(b).toBe('Cache-Control: public, max-age=3600, stale-while-revalidate=86400');
+    expect(read('index.html')).toContain('<script src="/theme-boot.js"></script>');
+  });
+
   it('isolates no page cross-origin (Code Studio and its /studio.html were removed)', () => {
     expect(headers).not.toContain('Cross-Origin-Embedder-Policy');
   });

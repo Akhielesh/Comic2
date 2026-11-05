@@ -885,6 +885,15 @@ describe('token contrast — non-text: the focus ring and accent state borders r
     expect(ratio(token('--ds-ring', 'default dark'), token('--ds-reader-paper-back', 'default dark'))).toBeLessThan(3);
   });
 
+  it('the reader focus colour is for the paper only: under 3:1 on the reader room, so it is never a ring over the room', () => {
+    // Pinned so the name does not invite using it for every reader ring: controls over the room (HUD, sheets,
+    // end card) draw --ds-focus on their own chrome surface (index.css, docs/design/design-system.md).
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const r = ratio(token('--ds-reader-focus', ctx), token('--ds-reader-room', ctx));
+      expect(r, `${ctx}: --ds-reader-focus on --ds-reader-room = ${r.toFixed(2)}`).toBeLessThan(3);
+    }
+  });
+
   it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {
     const focus = measureNonText('--ds-focus');
     expect(focus.filter((p) => p.ratio < 3).map((p) => `${p.name} = ${p.ratio.toFixed(2)}`)).toEqual([]);

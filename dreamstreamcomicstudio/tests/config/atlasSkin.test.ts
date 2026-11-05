@@ -19,7 +19,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { ATLAS_PRELOAD_FONTS, DS_NO_TRANSITIONS_CLASS, DS_THEME_TRANSITION_CLASS } from '../../services/dsSkin';
-import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, resolveColor, tokenBlocks, topLevelSplit } from './cssTokens';
+import { APP_ROOT, type Rule, contrastRatio, indexCss, over, parseRules, ratio, resolveColor, tokenBlocks, topLevelSplit } from './cssTokens';
 
 const ROOT = APP_ROOT;
 const css = indexCss;
@@ -231,6 +231,30 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(shim[0].body.trim()).toBe('color-scheme: light;');
     // Only the kit's marked controls: a DS Field (token edge, no border-black) still takes the dark scheme.
     expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector) && r.selector !== shim[0].selector)).toBe(false);
+  });
+
+  it('the legacy assistant bubble pins light markdown tokens in dark (white bubble on every legacy view since D5)', () => {
+    // UniversalAssistant renders each answer (MessageCard → .message-body) in a hard-coded white bubble.
+    const assistant = readFileSync(path.join(ROOT, 'components/UniversalAssistant.tsx'), 'utf8');
+    expect(assistant).toMatch(/className="[^"]*\bbg-white\b[^"]*\bborder-black\b[^"]*"[^>]*>[\s\S]{0,400}<MessageCard\b/);
+    const sel = '.dark .bg-white.border-black .message-body';
+    const pin = rules.filter((r) => r.parents.length === 0 && r.selector === sel);
+    expect(pin).toHaveLength(1);
+    const pinned = new Map([...pin[0].body.matchAll(/(--ds-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as const));
+    // Every colour token a .message-body rule reads is pinned, so a new markdown rule cannot escape the pin.
+    const read = new Set(rules.filter((r) => r.parents.length === 0 && /^\.message-body\b/.test(r.selector))
+      .flatMap((r) => [...r.body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1])));
+    const colourTokens = [...read].filter((t) => !t.startsWith('--ds-radius-'));
+    expect(colourTokens.length).toBeGreaterThanOrEqual(5);
+    for (const t of colourTokens) expect([...pinned.keys()], t).toContain(t);
+    const white = resolveColor('#ffffff');
+    const tok = (n: string) => resolveColor(pinned.get(n)!);
+    // Measured as painted: the link on the bubble, code-block ink on its well, the slate-800 header text on its fill.
+    expect(ratio(tok('--ds-info-text'), white)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-ink'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-ink'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-muted'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(resolveColor('#1e293b'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
   });
 
   it('every .dark token exists in :root, and a NEW token is only redefined in .dark when its dark value differs', () => {
@@ -579,7 +603,7 @@ describe('Atlas skin — wave 9 bridge tokens (blur split, charts, grid dot, spo
     expect(body).not.toMatch(/(?<![\w-])0?\.\d+s\b|\d+ms\b/);
   });
 
-  it('bridge D4: the chat markdown, skeleton and How It Works gradient read tokens (no legacy hex), the gradient is ink under the skin', () => {
+  it('bridge D4: the chat markdown, skeleton and How It Works gradient read tokens (no legacy hex), the gradient takes the heading ink under the skin', () => {
     const outside = rules.filter((r) => r.parents.length === 0 && /^(?:\.dark )?\.(?:message-body|studio-shimmer|hiw-gradient-text)\b/.test(r.selector));
     expect(outside.map((r) => r.selector)).toEqual(expect.arrayContaining(['.message-body a', '.message-body pre', '.studio-shimmer', '.hiw-gradient-text']));
     for (const r of outside) expect(`${r.selector} { ${r.body} }`).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(\s*\d/i);
@@ -587,7 +611,10 @@ describe('Atlas skin — wave 9 bridge tokens (blur split, charts, grid dot, spo
     expect(rules.find((r) => r.selector === '.message-body a')?.body).toContain('color: var(--ds-info-text)');
     expect(rules.find((r) => r.selector === '.message-body pre')?.body).toContain('border: 1px solid var(--ds-hairline)');
     const hiw = rules.find((r) => r.selector === '[data-ds-skin="atlas"] .hiw-gradient-text')?.body ?? '';
-    expect(hiw).toContain('color: var(--ds-ink)');
+    // The heading's own ink, not the theme token: How It Works is a legacy page that stays light in dark, so
+    // --ds-ink painted the two words #fafafa inside the slate-900 heading (1.04:1 where the gradient is white).
+    expect(hiw).toContain('color: inherit');
+    expect(hiw).not.toContain('var(--ds-ink)');
     expect(hiw).toContain('background-image: none');
     expect(hiw).toContain('-webkit-text-fill-color: currentColor');
   });

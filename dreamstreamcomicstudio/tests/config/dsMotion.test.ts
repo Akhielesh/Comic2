@@ -81,6 +81,14 @@ describe('styles/ds-motion.css', () => {
     expect(CODE).not.toMatch(/\.ds-reveal\s*\{[^}]*opacity:\s*0/);
   });
 
+  it('the scroll reveal always finishes: its range is capped at the element’s own entry (a deviation from Atlas’s fixed 200 px)', () => {
+    // `entry 0% entry 200px` (Atlas) never completes for an element shorter than 200 px at the end of a page,
+    // or for anything in the bottom 200 px of a page that cannot scroll: a 60 px last row stayed at opacity
+    // 0.84. min(200px, 100%) ends at the element's full entry when that comes first; tall panels are unchanged.
+    const reveal = rules.find((r) => r.selector === '.ds-reveal');
+    expect(reveal?.body).toMatch(/animation-range:\s*entry 0% entry min\(200px,\s*100%\);/);
+  });
+
   it('the live dot, caret, marquee, skeleton and shimmer-text pause while their host is off screen', () => {
     const pause = rules.find((r) => /animation-play-state: paused/.test(r.body) && r.selector.includes('[data-inview="false"]'));
     const selectors = pause ? topLevelSplit(pause.selector).map((s) => s.trim()) : [];

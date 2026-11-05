@@ -83,15 +83,17 @@ const appModalFiles = () => listScannedFiles({ exclude: [PINNED_DIR] }).filter((
 const h2ClassNames = (src: string) => [...src.matchAll(/<h2\b([^>]*?)className=(\{[^}]*\}|"[^"]*")/g)].map((m) => m[2]);
 
 describe('dialog titles — the recipe', () => {
-  it('DIALOG_TITLE is Atlas’s 20 px semibold dialog title in the display face, with no colour of its own', () => {
-    expect(classes(design.DIALOG_TITLE)).toEqual(['text-xl', 'font-semibold', 'leading-7', 'tracking-normal', design.FONT_DISPLAY]);
+  it('DIALOG_TITLE is Atlas’s 20 px semibold dialog title in the body face, with no colour of its own', () => {
+    // Bridge D2: Atlas's DialogTitle and SheetTitle never use the display face (only page and public titles do).
+    expect(classes(design.DIALOG_TITLE)).toEqual(['text-xl', 'font-semibold', 'leading-7', 'tracking-normal']);
+    expect(classes(design.DIALOG_TITLE)).not.toContain(design.FONT_DISPLAY);
     expect(design.DIALOG_TITLE).not.toMatch(/text-\[(?:var|#)|text-(?:white|black)\b/);
   });
 
   it('DIALOG_TITLE_FROM_SM is the same title from `sm` up (the face is the heading’s own)', () => {
     const fromSm = classes(design.DIALOG_TITLE_FROM_SM);
     expect(fromSm.every((c) => c.startsWith('sm:'))).toBe(true);
-    expect(fromSm.map((c) => c.slice(3))).toEqual(classes(design.DIALOG_TITLE).filter((c) => c !== design.FONT_DISPLAY));
+    expect(fromSm.map((c) => c.slice(3))).toEqual(classes(design.DIALOG_TITLE));
   });
 });
 

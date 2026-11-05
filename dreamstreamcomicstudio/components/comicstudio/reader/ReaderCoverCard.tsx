@@ -7,6 +7,7 @@
 import React from 'react';
 import { BookOpen, Rows3, ScanEye, Sparkles } from 'lucide-react';
 import type { ContentRating } from '../../../shared/comic/safety';
+import { FONT_DISPLAY } from '../../chat/studioDesign';
 import { RatingBadge } from '../safety/RatingBadge';
 
 export interface ReaderCoverCardProps {
@@ -95,7 +96,7 @@ export const ReaderCoverCard: React.FC<ReaderCoverCardProps> = ({
           )}
         </div>
         <div className="flex w-full min-w-0 flex-col items-center gap-1.5 text-center">
-          <h1 className="max-w-full text-[22px] font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-[26px]">{title}</h1>
+          <h1 className={`max-w-full text-[22px] font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-[26px] ${FONT_DISPLAY}`}>{title}</h1>
           {logline && <p className="line-clamp-3 max-w-full text-[14px] leading-snug text-white/75 [overflow-wrap:anywhere]">{logline}</p>}
           {(meta.length > 0 || rating) && (
             <div className="flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[12px] text-white/70">

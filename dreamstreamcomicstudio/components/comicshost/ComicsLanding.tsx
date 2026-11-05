@@ -8,6 +8,7 @@ import { ArrowRight, LayoutGrid, LogIn, Mail } from 'lucide-react';
 import { EmptyArt, type EmptyArtVariant } from '../comicstudio/library/procedural/EmptyArt';
 import { LayoutGlyph } from '../comicstudio/library/procedural/LayoutGlyph';
 import { mainAppUrl } from '../../services/productHost';
+import { FONT_DISPLAY } from '../chat/studioDesign';
 import { ComicsMark } from './ComicsMark';
 
 export interface ComicsLandingProps {
@@ -130,7 +131,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
       <section className="mx-auto grid max-w-6xl items-center gap-10 px-4 pb-12 pt-10 sm:px-6 sm:pt-16 lg:grid-cols-[1.1fr_0.9fr] lg:pb-20">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#D97757]">Comic Studio</p>
-          <h1 className="mt-3 break-words text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl">
+          <h1 className={`mt-3 break-words text-[2rem] font-semibold leading-[1.1] tracking-tight sm:text-5xl ${FONT_DISPLAY}`}>
             Talk it through.
             <br />
             Get a finished comic.
@@ -171,7 +172,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
 
       <section aria-labelledby="comics-features" className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-sidebar)]">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-          <h2 id="comics-features" className="text-xl font-semibold sm:text-2xl">
+          <h2 id="comics-features" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
             Built for stories, not prompts
           </h2>
           <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -187,7 +188,7 @@ export const ComicsLanding: React.FC<ComicsLandingProps> = ({
       </section>
 
       <section aria-labelledby="comics-steps" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 lg:py-16">
-        <h2 id="comics-steps" className="text-xl font-semibold sm:text-2xl">
+        <h2 id="comics-steps" className={`text-xl font-semibold sm:text-2xl ${FONT_DISPLAY}`}>
           From idea to pages in four steps
         </h2>
         <ol className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

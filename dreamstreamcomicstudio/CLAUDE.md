@@ -88,8 +88,10 @@ old literal `bg-[#D97757]/10`. Charts read `--ds-chart-1…5` (monochrome steps,
 language through one attribute, `data-ds-skin="atlas"`, which `index.html` ships on `<html>`
 for every host (and the boot sets on the comics host, `services/dsSkin.ts`; the Comic Studio
 and reader roots carry it too); a skin is one block of `--ds-*` overrides at the end of
-`index.css`. The build kill switch `VITE_DS_SKIN_EVERYWHERE=off` strips the attribute and
-brings back the old comics-only scope. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
+`index.css`. The build kill switch `VITE_DS_SKIN_EVERYWHERE=off` strips only the attribute (the
+token block; the comics host still boots it): dark on every page from first paint
+(`public/theme-boot.js` + the root `initTheme()` in `index.tsx`) and the bridge token moves stay, and
+reverting those is a code change. Compose from the semantic tokens the skin adds — `--ds-on-accent`,
 `--ds-accent-soft`, `--ds-active`, `--ds-success|warning|danger|info` (+ `-text` for
 readable status text, always with a word or icon; `--ds-danger-mark` for dots and edges),
 `--ds-ring`, `--ds-focus`, `--ds-control-border(-hover)`, `--ds-overlay-edge|hover`, `--ds-scrim`,

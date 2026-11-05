@@ -79,9 +79,24 @@ export function stripDsSkinAttribute(html: string): string {
 /** True when the build keeps the skin attribute: every value but exactly `off`. */
 export const dsSkinEverywhere = (value: string | undefined): boolean => value !== 'off';
 
+/**
+ * The build-log warning for a value that looks like an attempt to switch the skin off but is not exactly
+ * `off` (`OFF`, `false`, `0`, ` off`, `disabled`…): the switch keeps its exact-match rule, so during an
+ * incident such a value gives a green build that still ships the skin; the warning says so. null otherwise.
+ */
+export function dsSkinEverywhereWarning(value: string | undefined): string | null {
+  if (value === undefined || value === 'off') return null;
+  if (!/^\s*(?:off|false|0|no|disabled?)\s*$/i.test(value)) return null;
+  return `${DS_SKIN_EVERYWHERE_VAR}="${value}" keeps the Atlas skin: only the exact value "off" strips it`;
+}
+
 export function dsSkinEverywherePlugin(value: string | undefined): Plugin {
   return {
     name: 'ds-skin-everywhere',
+    configResolved(config) {
+      const warning = dsSkinEverywhereWarning(value);
+      if (warning) config.logger.warn(warning);
+    },
     transformIndexHtml: {
       order: 'pre',
       handler: (html) => (dsSkinEverywhere(value) ? html : stripDsSkinAttribute(html))

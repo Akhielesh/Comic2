@@ -196,12 +196,15 @@
 .ds-stagger > :nth-child(12) { --ds-i: 11; }
 
 /* Scroll reveal: CSS only where the browser has scroll-driven animations; elsewhere (and before any JS)
-   the content is simply visible. A fixed range, so tall panels arrive as promptly as short ones. */
+   the content is simply visible. A fixed range, so tall panels arrive as promptly as short ones; capped
+   at the element's own entry (min(200px, 100%)), so a short last row, or anything in the bottom 200 px of
+   a page that cannot scroll further, still ends fully arrived. Atlas's `entry 200px` left a 60 px last
+   row at opacity 0.84, 3 px short (docs/design/atlas-skin.md "Deviations from Atlas"). */
 @supports (animation-timeline: view()) {
   .ds-reveal {
     animation: ds-reveal-in var(--ds-ease) both;
     animation-timeline: view();
-    animation-range: entry 0% entry 200px;
+    animation-range: entry 0% entry min(200px, 100%);
   }
 }
 

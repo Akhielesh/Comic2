@@ -9,8 +9,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
-import viteConfig, { DS_SKIN_EVERYWHERE_VAR, dsSkinEverywhere, dsSkinEverywherePlugin, stripDsSkinAttribute } from '../../vite.config';
+import { describe, expect, it, vi } from 'vitest';
+import viteConfig, { DS_SKIN_EVERYWHERE_VAR, dsSkinEverywhere, dsSkinEverywherePlugin, dsSkinEverywhereWarning, stripDsSkinAttribute } from '../../vite.config';
+import { applySecurityHeaders } from '../../comics-edge/src/policy';
+import { SUPABASE_ORIGIN, mainCsp } from '../../functions/_middleware';
+import { buildCsp, inlineHashes } from '../../functions/_shared/csp';
+import { allowsUrl, parsePolicy } from '../edge/cspEval';
 import { APP_ROOT } from './cssTokens';
 
 const INDEX_HTML = readFileSync(path.join(APP_ROOT, 'index.html'), 'utf8');
@@ -46,6 +50,28 @@ describe('the kill switch (vite.config.ts)', () => {
     for (const v of [undefined, '', 'on', 'true', '1', 'ON', 'Off', 'OFF', ' off']) expect(dsSkinEverywhere(v), String(v)).toBe(true);
     expect(dsSkinEverywhere('off')).toBe(false);
     expect(DS_SKIN_EVERYWHERE_VAR).toBe('VITE_DS_SKIN_EVERYWHERE');
+  });
+
+  it('warns in the build log when a value looks like "off" but is not exactly `off` (the skin stays; nothing is silent)', () => {
+    // During an incident `OFF` or `false` in the Pages build vars would otherwise give a green build that
+    // still ships data-ds-skin="atlas". The exact-match rule stays; the plugin says so at configResolved.
+    const warnings = (value: string | undefined) => {
+      const warn = vi.fn();
+      const hook = dsSkinEverywherePlugin(value).configResolved as (config: { logger: { warn: (msg: string) => void } }) => void;
+      hook({ logger: { warn } });
+      return warn.mock.calls.map((c) => String(c[0]));
+    };
+    for (const v of ['OFF', 'Off', ' off', 'off ', 'false', 'FALSE', '0', 'no', 'disable', 'Disabled']) {
+      const got = warnings(v);
+      expect(got, JSON.stringify(v)).toHaveLength(1);
+      expect(got[0]).toBe(`VITE_DS_SKIN_EVERYWHERE="${v}" keeps the Atlas skin: only the exact value "off" strips it`);
+      expect(dsSkinEverywhere(v), JSON.stringify(v)).toBe(true);
+    }
+    // Unset, the exact `off`, and values that mean "on" stay quiet.
+    for (const v of [undefined, 'off', '', 'on', 'true', '1', 'atlas']) {
+      expect(warnings(v), JSON.stringify(v)).toEqual([]);
+      expect(dsSkinEverywhereWarning(v)).toBeNull();
+    }
   });
 
   it('strips only the attribute from <html> (any quoting), leaving the rest of the page byte for byte', () => {
@@ -98,6 +124,47 @@ describe('the kill switch (vite.config.ts)', () => {
     expect(htmlTag(on!.transformIndexHtml!.handler(INDEX_HTML, { path: '/index.html', filename: 'index.html' }))).toContain('data-ds-skin="atlas"');
     const off = build('off');
     expect(htmlTag(off!.transformIndexHtml!.handler(INDEX_HTML, { path: '/index.html', filename: 'index.html' }))).toBe('<html lang="en">');
+  });
+});
+
+describe('every host\'s CSP lets the page load its same-origin scripts (the no-flash theme script first)', () => {
+  // theme-boot.js is a blocking classic script: if a policy stopped allowing it (hashes only, 'strict-dynamic',
+  // or an enforced main policy without 'self'), the page would flash light again and nothing else would fail.
+  const ORIGINS = ['https://dreamstreamstudio.ai', 'https://comics.dreamstreamstudio.ai'];
+  const SCRIPTS = [...new JSDOM(INDEX_HTML).window.document.querySelectorAll('script[src^="/"]')].map((el) => el.getAttribute('src')!);
+
+  it('index.html loads /theme-boot.js as a same-origin script (what the policies below must allow)', () => {
+    expect(SCRIPTS).toContain('/theme-boot.js');
+  });
+
+  it('the app policy (functions/_middleware.ts mainCsp), as served on the apex and through comics-edge on the comics host', () => {
+    for (const origin of ORIGINS) {
+      const policy = mainCsp({ origin });
+      for (const src of SCRIPTS) expect(allowsUrl(parsePolicy(policy), 'script-src-elem', new URL(src, origin), origin), `${origin} ${src}`).toBe(true);
+      // comics-edge adds frame-ancestors to the enforced header (Pages sends the app policy Report-Only):
+      // whichever header the browser applies, the script stays allowed.
+      for (const header of ['content-security-policy', 'content-security-policy-report-only']) {
+        const headers = new Headers({ [header]: policy, 'content-type': 'text/html' });
+        applySecurityHeaders(headers, '/');
+        for (const name of ['content-security-policy', 'content-security-policy-report-only']) {
+          const value = headers.get(name);
+          if (!value) continue;
+          for (const src of SCRIPTS) expect(allowsUrl(parsePolicy(value), 'script-src-elem', new URL(src, origin), origin), `${origin} ${header} → ${name} ${src}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('the enforced share-page policy (functions/_shared/csp.ts buildCsp, /c/*) with index.html\'s own inline hashes', async () => {
+    const policy = buildCsp({ hashes: await inlineHashes(INDEX_HTML), supabaseOrigin: SUPABASE_ORIGIN, embed: false });
+    for (const origin of ORIGINS) {
+      for (const src of SCRIPTS) expect(allowsUrl(parsePolicy(policy), 'script-src-elem', new URL(src, origin), origin), `${origin} ${src}`).toBe(true);
+    }
+  });
+
+  it('Pages serves /theme-boot.js as a static file (public/_routes.json excludes it from the Functions)', () => {
+    const routes = JSON.parse(readFileSync(path.join(APP_ROOT, 'public/_routes.json'), 'utf8')) as { exclude: string[] };
+    expect(routes.exclude).toContain('/theme-boot.js');
   });
 });
 

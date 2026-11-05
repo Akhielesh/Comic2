@@ -40,9 +40,15 @@ host:** `index.html` ships it on `<html>`, so chat, settings, home and the publi
 Atlas language too. The old promise that "chat, settings, home and Stream Studio render
 pixel-identical" is retired on purpose: the owner asked for Atlas everywhere ("Atlas everywhere",
 master plan §1.2 step 2). Legacy-kit pages read the tokens, so they follow the skin's colours and
-radii, and look legacy in their structure until their migration package (DS-3 and on). One build
-switch rolls it all back: `VITE_DS_SKIN_EVERYWHERE=off` (docs/infrastructure/ENV_MATRIX.md) strips the
-attribute from every HTML entry, and then the old rule below (comics host only) applies again.
+radii, and look legacy in their structure until their migration package (DS-3 and on). The build
+switch `VITE_DS_SKIN_EVERYWHERE=off` (docs/infrastructure/ENV_MATRIX.md) strips the skin attribute (the
+Atlas token block) from every HTML entry, and then the old rule below (comics host only) applies again
+to the skin. It does not roll back the rest of wave 9: dark on every page from first paint
+(`public/theme-boot.js` plus the root `initTheme()` in `index.tsx`) and the D4 token moves stay, so a
+saved dark theme still opens the legacy pages in dark (with the default dark tokens, see "Known limits"
+under Wave 9 (bridge)). Reverting the theme change needs a code revert of the `theme-boot.js` script tag in
+`index.html` and of that `initTheme()` call. Only the exact value `off` counts; the build warns when the
+value looks like an attempt (`OFF`, `false`, `0`, …) and keeps the skin.
 
 | Where | Who sets it | When |
 | --- | --- | --- |
@@ -138,8 +144,9 @@ The `-text` variants are the readable status colours (≥ 4.5:1 on the page, on 
 glass, on overlays and their highlighted menu rows and on the tinted status surfaces, all six contexts;
 wave 8 added the glass, overlay and menu-row surfaces to the measurement); the base tokens are for
 fills and borders. Outside the skin the default dark `--ds-danger-text` is `#fca5a5` (wave 8; it was
-`#fb8b8b`, 4.15:1 on a hovered row of a raised sheet). Every consumer of the token is a Comic Studio
-file, so chat, settings and home do not change.
+`#fb8b8b`, 4.15:1 on a hovered row of a raised sheet). Since wave 9 every host carries the skin, so
+every page, chat, settings and home included, reads the skin's value (with the kill switch off, only the
+comics host and the Comic Studio roots do, and the other pages read this default).
 
 ### Type, shape, depth, motion
 
@@ -196,7 +203,7 @@ restate whatever is derived from it — or, as the inverse surface now does, not
 
 Reader-room tokens (`--ds-reader-room`, `--ds-reader-paper-back`, `--ds-reader-endpaper`, and since
 wave 9 `--ds-reader-focus`, the reader's focus-ring colour: the reader ink, ≥ 4.5:1 on the paper in every
-context) are content, not chrome, and are deliberately not overridden.
+context, and for the paper only: 1.5:1 on the room, where controls use `--ds-focus`) are content, not chrome, and are deliberately not overridden.
 
 A `.dark` subtree inside a light page (a dark demo panel or preview) restates the var()-derived tokens
 too (`:where(.dark:not(:root))`, zero specificity so a skin block on the same element still wins);
@@ -259,7 +266,7 @@ them):
 | `FIELD`, `FIELD_EMBEDDED`, `FIELD_GROUP` | `ui-generated/input.tsx`, `textarea`, `select` trigger; the document viewer / PDF / sheet search pills | the 3:1 control edge, focus drawn as a **ring** (2 px, offset 2) so an embedded field drops ring **and** offset; the group rests on the hairline as Atlas's pills do (hover ink 25 %) and shows focus **as a field does** — the edge in `--ds-focus` plus the 2 px ring (deviation below) |
 | `OVERLAY`, `SCRIM` | dialog / popover / dropdown / select / hover-card / sheet content and overlays | raised step, overlay edge and shadow, opaque; 40 / 60 % scrim without blur |
 | `OVERLINE` | `.atlas-overline` | 11 px semibold, leading 1rem, 0.12em, uppercase, muted. **Live since wave 8:** every eyebrow in `components/comicstudio` (below) |
-| `DIALOG_TITLE`, `DIALOG_TITLE_FROM_SM` (wave 8) | `DialogTitle` / `AlertDialogTitle` (`text-xl font-semibold`) | 20 px semibold, leading 1.75rem, display face, no colour of its own; the `_FROM_SM` form applies from `sm` up for a dialog that is a bottom sheet on phones. **Live:** the five centred modal dialogs |
+| `DIALOG_TITLE`, `DIALOG_TITLE_FROM_SM` (wave 8) | `DialogTitle` / `AlertDialogTitle` (`text-xl font-semibold`) | 20 px semibold, leading 1.75rem, the body face (wave 9: Atlas's dialog titles are not `atlas-display`), no colour of its own; the `_FROM_SM` form applies from `sm` up for a dialog that is a bottom sheet on phones. **Live:** the five centred modal dialogs |
 | `CHIP`, `CHIP_VARIANT` | `MetaChip` outline / filled / dashed | neutral chips |
 | `StatusState`, `STATUS_INK`, `STATUS_SURFACE`, `STATUS_DOT`, `STATUS_CHIP(_TONE)` | `components/connectors/status.tsx` | one status vocabulary: healthy / active / waiting / attention / error |
 | `STATUS_EDGE` (wave 8) | the status surfaces' border alone | a neutral surface (a toast, a hint bubble) that borders in a state's colour; `STATUS_SURFACE` is this edge plus the tint (same strings as before) |
@@ -451,18 +458,22 @@ primitives) and DS-1b (the QA harness).
 **Mapping.**
 - D1: `--ds-radius-control` and `--ds-radius-chip` are `0.5rem` under the skin: Atlas's `rounded-md`
   resolves to 8 px. (The atlas brand kit's email button radius follows: 10 → 8 px.)
-- D2: the display face (Space Grotesk) only on `.ds-font-display` — FONT_DISPLAY, HEADING, `PAGE_TITLE`,
-  `DIALOG_TITLE` and the page and public titles that use them. The blanket `[data-ds-skin] :is(h1…h4)`
-  display rule is gone (headings still balance their lines). `CARD_TITLE`, `SECTION_TITLE`, sheet headers
-  and empty-state titles are IBM Plex Sans semibold. Tailwind's `font-display` (Bangers) is never used.
+- D2: the display face (Space Grotesk) only on `.ds-font-display` — FONT_DISPLAY, HEADING, `PAGE_TITLE`
+  and the page and public titles that use them. The blanket `[data-ds-skin] :is(h1…h4)` display rule is
+  gone (headings still balance their lines). `CARD_TITLE`, `SECTION_TITLE`, `DIALOG_TITLE`, sheet headers
+  and empty-state titles are IBM Plex Sans semibold. Tailwind's `font-display` (Bangers) is never used. The
+  public titles that relied on the blanket rule now ask for it, as Atlas's own public hero and section
+  titles carry `atlas-display`: the comics landing's hero `h1` and its two section `h2`s
+  (`ComicsLanding.tsx`) and the public reader cover's `h1` (`ReaderCoverCard.tsx`).
 - D3: the glass blur and the header blur are two tokens. `--ds-glass-blur` (12 px by default, 0 under the
   skin) for GLASS, GLASS_STRONG and MENU; `--ds-header-blur` (18 px everywhere) for the new
   `STICKY_HEADER` + `HEADER_GLASS` recipes (the blur on an aria-hidden layer, only once content scrolls
   under, so the header never becomes a fixed descendant's containing block). `--ds-surface-blur` stays
   as an alias of the glass blur.
 - D4: the chat markdown links (`--ds-info-text`, ink on hover), code blocks (well and hairline),
-  `.studio-shimmer` (the skeleton tokens) and `.hiw-gradient-text` (status hues by default, plain ink
-  under the skin) read tokens; their hexes are gone.
+  `.studio-shimmer` (the skeleton tokens) and `.hiw-gradient-text` (status hues by default, the heading's
+  own ink under the skin: `color: inherit`, since How It Works stays light in dark) read tokens; their
+  hexes are gone.
 - D5: Atlas on every host. `index.html` ships `data-ds-skin="atlas"` on `<html>`; the build kill switch
   `VITE_DS_SKIN_EVERYWHERE=off` strips it from every HTML entry (`vite.config.ts`, no file-name filter, so
   `live.html` rolls back with it once it carries the attribute). `initTheme()` runs at the app root and
@@ -489,7 +500,22 @@ primitives) and DS-1b (the QA harness).
 - Atlas's own Settings › Reduced motion (`.atlas-reduced-motion`) has no counterpart: the OS setting is the
   one switch.
 - The "pixel-identical outside the skin" promise is retired (Scope and mechanism): the owner asked for
-  Atlas everywhere. The kill switch restores the old scope.
+  Atlas everywhere. The kill switch restores the old scope of the skin attribute only: dark on every page
+  from first paint and the D4 token moves stay (Scope and mechanism).
+- `.ds-reveal`'s range is `entry 0% entry min(200px, 100%)`, not Atlas's `entry 0% entry 200px`: with a
+  fixed 200 px an element shorter than that at the end of a page, or anything in the bottom 200 px of a
+  page that cannot scroll, never finished (a 60 px last row stayed at opacity 0.84, 3 px short). Tall
+  panels arrive exactly as in Atlas (`dsMotion.test.ts`).
+- `DIALOG_TITLE` is the body face, as Atlas's DialogTitle and SheetTitle (no `atlas-display`); until wave 9
+  review it carried the display face, which Atlas never gave a dialog title (`dialogTitle.test.ts`).
+
+**Known limits.**
+- With the kill switch off, in dark, the How It Works headline words take the default dark hues
+  (`#60a5fa`, `#f87171`, `#fbbf24`) on a page that stays light: 2.5, 2.8 and 1.6:1 on white. Under the
+  skin they take the heading's own ink (`color: inherit`).
+- The legacy Universal Assistant's answer bubble stays white in dark; `index.css` pins the light markdown
+  tokens inside it (`.dark .bg-white.border-black .message-body`, link 6.7:1, code 16:1, table header
+  13:1). The pin goes with the legacy-kit package, with the form-control rule.
 
 ### Wave 8 port (Atlas `496f265c` → `98240e5b`, 2026-10-30)
 
