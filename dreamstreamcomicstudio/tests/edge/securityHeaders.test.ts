@@ -14,6 +14,7 @@ import {
   HSTS,
   INDEX_INLINE_SCRIPT_HASHES,
   LIVE_WORKER_DEV_ORIGIN,
+  MAIN_ENFORCED_CSP,
   SUPABASE_ORIGIN,
   createOnRequest,
   liveCsp,
@@ -191,21 +192,53 @@ describe('Stream Studio pages (/live and the stream host)', () => {
 });
 
 describe('the comic / chat app (everything else)', () => {
-  it('gets CSP Report-Only — never enforced — with the splash watchdog hashed', async () => {
+  it('gets CSP Report-Only with the splash watchdog hashed; only framing and plugins are enforced', async () => {
     const { go } = harness({ enforceLive: true });
     for (const u of ['https://dreamstreamstudio.ai/', 'https://dreamstreamstudio.ai/share/abc', 'https://dreamstreamstudio.ai/live-guide']) {
       const res = await go(u);
-      expect(res.headers.get('content-security-policy'), u).toBeNull();
+      // web-surface-3 / N7: another site cannot frame the app (clickjacking); scripts stay Report-Only.
+      expect(res.headers.get('content-security-policy'), u).toBe(MAIN_ENFORCED_CSP);
+      const enforced = parsePolicy(res.headers.get('content-security-policy')!);
+      expect([...enforced.keys()].sort()).toEqual(['frame-ancestors', 'object-src']);
+      expect(enforced.get('frame-ancestors')).toEqual(["'self'"]);
+      expect(enforced.get('object-src')).toEqual(["'none'"]);
+      expect(res.headers.get('x-frame-options'), u).toBe('SAMEORIGIN');
       const p = parsePolicy(res.headers.get('content-security-policy-report-only')!);
       for (const h of INDEX_INLINE_SCRIPT_HASHES) expect(p.get('script-src')).toContain(h);
       expect(p.get('report-to')).toEqual(['csp']);
       expect(res.headers.get('strict-transport-security')).toBe(HSTS);
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
       expect(res.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
-      // No COOP / X-Frame-Options on the comic app yet: OAuth popups and embeds are inventoried first.
+      // No COOP on the comic app yet: OAuth popups are inventoried first.
       expect(res.headers.get('cross-origin-opener-policy')).toBeNull();
-      expect(res.headers.get('x-frame-options')).toBeNull();
       expect(res.headers.get('permissions-policy')).not.toMatch(/camera|microphone|geolocation/);
+    }
+  });
+
+  it('a route with its own enforced CSP keeps its framing: /c/<slug>/embed gets no X-Frame-Options', async () => {
+    const { go, next } = harness();
+    // What functions/c/[[path]].ts answers: its own policy; frame-ancestors * on /embed, 'self' + XFO elsewhere.
+    next.mockImplementationOnce(async () => new Response('<p>', { headers: { 'content-type': 'text/html', 'content-security-policy': "default-src 'none'; frame-ancestors *" } }));
+    const embed = await go('https://dreamstreamstudio.ai/c/abc123/embed');
+    expect(embed.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors *");
+    expect(embed.headers.get('x-frame-options')).toBeNull();
+    next.mockImplementationOnce(
+      async () =>
+        new Response('<p>', { headers: { 'content-type': 'text/html', 'content-security-policy': "default-src 'none'; frame-ancestors 'self'", 'x-frame-options': 'SAMEORIGIN' } })
+    );
+    const page = await go('https://dreamstreamstudio.ai/c/abc123');
+    expect(page.headers.get('x-frame-options')).toBe('SAMEORIGIN');
+    expect(page.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'self'");
+  });
+
+  it("the sign-in landing page stays frame-ancestors 'none' (the main app's 'self' never loosens it)", async () => {
+    const { go } = harness();
+    for (const u of ['https://dreamstreamstudio.ai/auth/callback', 'https://dreamstreamstudio.ai/auth/callback/']) {
+      const res = await go(u);
+      expect(res.headers.get('x-frame-options'), u).toBe('DENY');
+      const p = parsePolicy(res.headers.get('content-security-policy')!);
+      expect(p.get('frame-ancestors'), u).toEqual(["'none'"]);
+      expect(p.get('object-src'), u).toEqual(["'none'"]);
     }
   });
 

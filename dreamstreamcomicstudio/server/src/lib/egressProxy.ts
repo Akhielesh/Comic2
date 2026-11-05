@@ -7,7 +7,11 @@
 // and ONLY for the allowlisted hosts below (mirrors the worker's allowlist).
 //
 // Config: DATA_EGRESS_URL overrides the relay base ('' disables entirely);
-// DATA_EGRESS_SECRET must match the worker's EGRESS_SHARED_SECRET when set.
+// DATA_EGRESS_SECRET must match the worker's EGRESS_SHARED_SECRET. The worker
+// refuses every request without it (503, abuse-ops-12), so an unset secret here
+// is logged once instead of failing quietly on every relayed fetch.
+
+import { logger } from './logger.js';
 
 const DEFAULT_EGRESS_BASE = 'https://dreamstreamstudio.ai/egress';
 
@@ -41,8 +45,16 @@ export const egressUrlFor = (url: string): string | null => {
   }
 };
 
-/** Extra headers the relay requires (shared secret, when configured). */
+let warnedNoSecret = false;
+
+/** Extra headers the relay requires (the shared secret). */
 export const egressHeaders = (): Record<string, string> => {
   const secret = (process.env.DATA_EGRESS_SECRET || '').trim();
+  if (!secret && !warnedNoSecret && egressBase()) {
+    warnedNoSecret = true;
+    logger.warn('egress_secret_missing', {
+      note: 'DATA_EGRESS_SECRET is unset: the data-egress relay refuses unauthenticated requests, so relayed market-data fetches will fail. Set it to the worker’s EGRESS_SHARED_SECRET.'
+    });
+  }
   return secret ? { 'x-egress-key': secret } : {};
 };

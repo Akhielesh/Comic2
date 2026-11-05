@@ -124,7 +124,10 @@ describe('Pages middleware', () => {
       expect(res.status, path).toBe(200);
       expect(await res.text()).toBe('app'); // served as before…
       expect(res.headers.get('x-frame-options'), path).toBe('DENY'); // …never to a frame
-      expect(res.headers.get('content-security-policy'), path).toBe("frame-ancestors 'none'");
+      // On the main app the frame block is merged into its enforced policy (frame-ancestors 'self' → 'none').
+      expect(res.headers.get('content-security-policy'), path).toBe(
+        path.startsWith('/auth/') ? "frame-ancestors 'none'; object-src 'none'" : "frame-ancestors 'none'"
+      );
       expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8'); // the page's own headers stay
       expect(res.headers.get('cache-control')).toBe('no-store');
     }
@@ -133,9 +136,13 @@ describe('Pages middleware', () => {
     expect(cb.status).toBe(200);
     expect(cb.headers.get('x-frame-options')).toBe('DENY');
     expect((await go('/live?after=monitor', true)).status).toBe(301);
-    // Other pages and files are untouched; AI agents still go to the check-in first.
+    // Other pages and files get no frame block; AI agents still go to the check-in first. (Main-app pages
+    // may still be framed by the app itself: X-Frame-Options SAMEORIGIN, web-surface-3.)
     for (const path of ['/', '/models', '/auth/callbacks', '/auth/callback.txt', '/assets/index.js', '/api/health']) {
-      expect((await go(path)).headers.get('x-frame-options'), path).toBeNull();
+      expect((await go(path)).headers.get('x-frame-options'), path).not.toBe('DENY');
+    }
+    for (const path of ['/', '/models', '/auth/callbacks']) {
+      expect((await go(path)).headers.get('x-frame-options'), path).toBe('SAMEORIGIN');
     }
     expect((await go('/auth/callback', false, 'GPTBot/1.2')).status).toBe(302);
   });
