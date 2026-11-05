@@ -115,7 +115,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                 ) : (
                     comments.map(c => (
                         <div key={c.id} className="flex gap-4 group">
-                            <div className="flex-shrink-0">
+                            <div className="shrink-0">
                                 <UserAvatar
                                     url={c.user?.avatar_url}
                                     name={c.user?.username || 'User'}
@@ -204,7 +204,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
             {/* Input */}
             {user ? (
                 <div className="flex gap-3 items-start">
-                    <div className="flex-shrink-0 pt-1">
+                    <div className="shrink-0 pt-1">
                         <UserAvatar url={undefined} name={user.email?.[0] || 'U'} size="sm" />
                         {/* Ideally current user avatar from profile context, but user object usually just has auth info. 
                             We fetched profile in dashboard usually. 

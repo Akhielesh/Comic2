@@ -40,6 +40,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `SUPABASE_SERVICE_ROLE_KEY` | `services/supabase.ts` (admin client) | ✅ 🔐 | — | The workhorse client (~43 sites) |
 | `VITE_API_BASE_URL` | frontend | ✅ | — | Unset in production → same-origin `/api` (the `dreamstream-api` Worker → backend container) |
 | `VITE_AUTH_REDIRECT_URL` | frontend auth | ✅ | — | |
+| `VITE_DS_SKIN_EVERYWHERE` | build only (`vite.config.ts` `dsSkinEverywherePlugin`; docs/design/atlas-skin.md "Wave 9 (bridge)") | ⭕ | — | Cloudflare Pages **build** var, the kill switch for the Atlas design language on every host. Unset (the default) or any value but exactly `off` keeps the `data-ds-skin="atlas"` attribute that `index.html` (and every page entry that carries it, such as `live.html`) ships on `<html>`. `off` strips the skin attribute (the Atlas token block) from every HTML entry at build time; the comics host still boots the skin at runtime (`services/dsSkin.ts`). It is not a full rollback: dark on every page from first paint (`public/theme-boot.js` plus the root `initTheme()` in `index.tsx`) and the bridge D4 token moves stay, so a saved dark theme still opens the legacy pages in dark. Reverting the theme change needs a code revert of the `<script src="/theme-boot.js">` tag in `index.html` and of that `initTheme()` call. Only the exact value `off` strips the attribute; `OFF`, `false`, `0` keep the skin, and the build logs a warning for them. Setting `off` takes a rebuild |
 | `STORAGE_BUCKET` | `imageStorage.ts` | ⭕ | — | Defaults `comic-assets` |
 | `DATA_EGRESS_URL` / `DATA_EGRESS_SECRET` | `lib/egressProxy.ts` | ⭕ 🔐 | — | Finance host failover via data-egress worker |
 | `REDIS_URL` | `ventures:worker` / `connectors:worker` only | ⭕ | 💸 | **Keep UNSET on the always-on backend** (blocks App-Sleeping) |
@@ -98,6 +99,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `MCP_OUTBOUND_TOKEN` | `/api/connect` | ⭕ 🔐 | — | **missing from .env.example** |
 | `CONNECTORS_WEBHOOK_TOKEN` / `CONNECTORS_SYNC_COLOR` / `CONNECTORS_APP_RETURN_URL` | connectors | ⭕ 🔐 | — | |
 | `NANGO_SECRET_KEY` / `NANGO_HOST` | connector SaaS | ⭕ 🔐 | 💸 | In code, not in 58-var set |
+| `CONNECTOR_PROVIDERS_CONFIRMED` | `ai/privacy/providerPolicies.ts` (`routes/chat.ts`, `services/userMemory.ts`) | ⭕ | — | Comma-separated direct providers (e.g. `gemini,nvidia`) whose **platform** key the owner confirmed for connected-account content (a paid, no-training tier). Unset = none: those providers get no connector tools, connector context or memory distilled from connected content on the platform key, and that memory is stored without a Gemini embedding until `gemini` is listed. OpenAI and Anthropic need no entry; BYOK keys are never gated. See `docs/DATA_CONNECTORS.md` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URL` | Google connectors | ⭕ 🔐 | — | |
 
 ## Shared platform (wave 1: Word, PowerPoint, email drafts)
@@ -109,6 +111,28 @@ Both switches are on only when exactly `on`, and then only for the people the ro
 |---|---|---|---|---|
 | `PLATFORM_DOCS` | `server/src/ai/tools/platformDocs.ts` (`platformDocsFor(req)`: the chat tools `email_draft` and `deck_create`) | ⭕ | — | Backend env: a `vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Default unset = off. `off` rolls back the chat tools |
 | `VITE_PLATFORM_DOCS` | frontend (`services/platformFlags.ts`: the Word button on chat documents, the comic pitch deck, the draft cards, their rows in Settings → Tools) | ⭕ | — | Cloudflare Pages **build** var. Default unset = off, for admins too. Rolling back means unsetting it and rebuilding. Pairs with `PLATFORM_DOCS` |
+
+## Comic Studio: live agent, dialogue, Pro editor v2 (agent-editor plan §5)
+
+Each flag is a rollout **stage**, read once per request by `server/src/comic/access.ts` (`studioCapsFor` →
+`liveCapsFromEnv`, `shared/comic/capabilities.ts`) into the studio caps (`caps.liveAgent.{queue,steer,conflicts}`,
+`caps.dialogueFast`, `caps.proEditorV2`). The client reads the caps only, never env. Values: `off` | `admins` | `all`
+(case and spaces ignored; `everyone` = `all`; a bare switch `on` / `true` / `1` / `yes` means **admins only**, so
+everyone always needs an explicit `all`; `false` / `0` / `no` = `off`; unset or anything else = the default below).
+"Admins" is the studio's admin check (bootstrap `ADMIN_EMAILS` + `user_roles`), which fails closed. All of these are
+free software: none adds a model or image call of its own, and nothing here bypasses the spend gate. Backend env: a
+`vars` entry in `api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`.
+
+| Var | Turns on | Default | Cost | Safe to go to `all` when |
+|---|---|---|---|---|
+| `COMIC_LIVE_QUEUE` | `caps.liveAgent.queue`: the visible "Up next" message queue while the director works (A1; client only; queued notes drain as one combined message, D1) | `admins` | — | A1 tests pass, plus one week of admin use with no lost notes |
+| `COMIC_STEER` | `caps.liveAgent.steer`: `POST …/steer` and "Send now" adding a note to the running turn (A2/A4). Off, "Send now" = Stop the director, then send (D2) | `off` | — (a few hundred tokens inside the same turn) | The steer screen passes the safety tests; no stranded steers in the logs |
+| `COMIC_CONFLICT_GUARD` | `caps.liveAgent.conflicts`: the creator's mid-turn edits win and the agent asks with a conflict card; contradiction questions (A3; D3) | `admins` | — | Conflict cards seen and answered without false positives on two-balloon pages |
+| `COMIC_DIALOGUE_FAST` | `caps.dialogueFast`: clear dialogue edits ("make it a whisper") answered with no model call (B3 fast path; D4) | `off` | — (saves a model call) | The phrase corpus passes and the Undo-after-fast-edit rate is low |
+| `COMIC_PRO_EDITOR_V2` | `caps.proEditorV2`: docked inspector, numeric fields, Layers, rotation, named styles (C-*) | `admins` | — | Layout smoke at 320, 360, 768, 1024 and 1280 px; reader/export parity with rotation |
+
+`dialogue_edit` (a reserved core director tool), the `GROUP_HINTS` fix and the `read_pages` line ids need no flag: they
+only make the existing director more accurate.
 
 ## Admin cost centre (optional live Cloudflare usage)
 

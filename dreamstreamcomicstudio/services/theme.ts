@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react';
 import { switchDsTheme } from './dsSkin';
 
-// Chat Studio theme: light (paper) / dark (Claude-style) / system. The choice is
-// persisted and applied as a `dark` class on <html>, which flips the --ds-* token
-// set in index.css — every studio surface and widget reads colors from those vars.
-// Under a design skin on <html> (the comics host) a change the person makes is one
-// cross-fade of the page (services/dsSkin.ts switchDsTheme); everywhere else the
-// class is simply toggled, as it always was.
+// The app theme: light (paper) / dark / system. The choice is persisted (KEY below; public/theme-boot.js
+// reads the same key and values to set `dark` before first paint) and applied as a `dark` class on <html>,
+// which flips the --ds-* token set in index.css — every surface and widget reads colors from those vars.
+// Under a design skin on <html> (every host since bridge D5) a change the person makes is one cross-fade
+// of the page (services/dsSkin.ts switchDsTheme); without it the class is simply toggled.
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
@@ -43,7 +42,7 @@ export const setThemePreference = (pref: ThemePreference): void => {
   window.dispatchEvent(new CustomEvent(CHANGED));
 };
 
-/** Apply the persisted theme on startup (call once from the chat shell). */
+/** Apply the persisted theme: once at the app root (index.tsx), so dark applies on every page. Idempotent, so the chat and Comic Studio shells may call it again. */
 export const initTheme = (): void => applyTheme(loadThemePreference());
 
 export const useTheme = (): { preference: ThemePreference; isDark: boolean; setPreference: (p: ThemePreference) => void } => {

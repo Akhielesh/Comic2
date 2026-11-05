@@ -78,6 +78,25 @@ export interface ReaderRequest {
   guided: boolean;
 }
 
+// --- live agent (agent-editor plan §3 A1/A2/A4; K3 contract) ---
+
+/**
+ * What `send()` did with a message (A1): 'sent' = a stream started; 'queued' = added to Up next while the director works;
+ * 'held' = queued but waiting (an unanswered question, an open spend gate, Stop pressed); 'refused' = nothing was sent or
+ * queued (the composer keeps the draft and shows why). Never silent: every outcome but 'sent' has visible copy.
+ */
+export type SendOutcome = 'sent' | 'queued' | 'held' | 'refused';
+
+/** Where the director is working right now (activity.where; A2/A4): the page editor outlines "Director is editing". */
+export interface StudioPresence {
+  pageId?: string;
+  lineIds: string[];
+  /** The live activity line it came from ("Moving a balloon"). */
+  label: string;
+  /** When it started (ms); cleared on the activity's end or the stream's done. */
+  at: number;
+}
+
 export interface PendingAttachment {
   name: string;
   mimeType: string;
@@ -162,8 +181,12 @@ export interface StudioController {
    */
   urlFor(asset?: AssetRef | string | null, opts?: { width?: number }): string | undefined;
 
-  /** Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. */
-  send(text: string, opts?: SendOptions | PendingAttachment[]): Promise<void>;
+  /**
+   * Send a user message to the Comic Director. Overloaded: (text, PendingAttachment[]) stays valid. The live controller
+   * resolves a SendOutcome once the live queue ships (agent-editor plan §3 A1); `void` stays allowed for test fakes and
+   * older controllers (treat void as 'sent').
+   */
+  send(text: string, opts?: SendOptions | PendingAttachment[]): Promise<SendOutcome | void>;
   /**
    * Run a direct action (button clicks): renders, gates, picks, patches. The live controller resolves the
    * action's StudioActOutcome (`ok`, `aborted`, `gated`, …) so card sequences can stop on a refusal or an
@@ -224,4 +247,9 @@ export interface StudioController {
 
   /** The save pill's state (always visible in the pro editor once C3 ships). */
   saveState?: StudioSaveState;
+
+  // ── Live agent (agent-editor plan §3 A4; optional: absent = today's behaviour) ─────────────────────────────
+
+  /** Where the director is editing right now (from activity.where), or null. */
+  presence?: StudioPresence | null;
 }

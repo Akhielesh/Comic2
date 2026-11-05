@@ -1,0 +1,489 @@
+/* ============================================================================================
+ * DreamStream motion and effect classes (bridge D7; docs/design/design-system.md "Motion classes").
+ *
+ * Framework-free CSS, imported at the top of index.css: no Tailwind directive, so any page or Worker
+ * bundle can take it as it is. Ported from Atlas app/globals.css ("Motion system"), atlas-* renamed to
+ * ds-* and reading the --ds-* tokens:
+ *   Atlas --motion-enter (420 ms)        → --ds-motion-enter-slow    page and section entrances, staggers
+ *   Atlas --motion-enter-quick (280 ms)  → --ds-motion-enter-quick   fades, scale-ins, slide-ins
+ *   Atlas --motion-ease / -ease-enter    → --ds-ease / --ds-ease-enter
+ *   Atlas --motion-spring                → --ds-ease-spring
+ *   Atlas --motion-stagger-step (40 ms)  → --ds-motion-stagger
+ *   Atlas --foreground / --muted-foreground / --border → --ds-ink / --ds-muted / --ds-hairline
+ * The spotlight group is not here (it belongs to the header and home work).
+ *
+ * Catalogue
+ *   Entrances (backwards fill; every keyframe ends on `transform: none`, so an element that has arrived
+ *   carries no transform and never becomes the containing block of a position: fixed descendant):
+ *     .ds-rise-in            fade and rise 10 px        (studioDesign RISE_IN)
+ *     .ds-fade-in            fade
+ *     .ds-scale-in           fade and grow from 96 %
+ *     .ds-slide-in-right     fade and slide 14 px in from the right
+ *     .ds-blur-in            fade and sharpen (swapping a label or a number)
+ *     .ds-pop                springy scale-in (a success check, a new badge)
+ *     .ds-draw               on an SVG icon: strokes it in (--ds-draw-length, default 24)
+ *     .ds-flash              a brief ink wash on a row that just changed
+ *     .ds-stagger            direct children rise in one after another: the first twelve by position,
+ *                            or set --ds-i on a child to place it
+ *     .ds-reveal             rises in as it scrolls into view, on the scroll timeline alone (no JS): it
+ *                            is plainly visible wherever scroll-driven animations are missing, and it
+ *                            moves `translate`, so hover lifts on the same element still work
+ *     .ds-disclosure         on a <details>: the body's height glides open and shut, its content rises in
+ *   Interaction
+ *     .ds-lift               hover-capable pointers: rises 2 px with the lift shadow (studioDesign LIFT)
+ *     .ds-link               the underline draws in on hover or focus
+ *   Loading and live state (the only infinite animations allowed on screen)
+ *     .ds-skeleton           a shimmering placeholder block (the skeleton tokens)
+ *     .ds-shimmer-text       a glint sweeps across a loading label (muted ink, the glint is the ink)
+ *     .ds-progress-indeterminate  a sweeping bar (::after, takes currentColor)
+ *     .ds-live-dot           a status dot with a soft ping (currentColor); + .ds-live-dot-settle to ping
+ *                            three times and rest (decorative dots)
+ *     .ds-caret              a blinking text caret
+ *     .ds-marquee > .ds-marquee-track  an endless row that pauses on hover and focus
+ *     [data-inview="false"]  holds the live dot, caret, marquee, skeleton and shimmer-text loops while
+ *                            their host is off screen (components/ds/useInViewPause.ts)
+ *   Containers
+ *     .ds-fade-edge-x, .ds-fade-edge-y  a scroller fades its content at an edge only while there is more
+ *                            to scroll that way (--ds-fade-size, 24 px); masks clip, so keep unportaled
+ *                            popovers out of it
+ *     .ds-grid-backdrop      a faint dot grid (--ds-grid-dot) fading toward the edges
+ *   Type
+ *     .ds-overline           the small uppercase label (11 px, 600, 0.12em, muted); studioDesign OVERLINE
+ *                            is the utility spelling of the same thing
+ *     .ds-overline-display   the larger one over public page sections (12 px, 500, 0.18em)
+ *     .ds-display            the display face (--ds-font-display), unconditionally
+ *
+ * Reduced motion: ONE block at the end. Entrances and loops do not run, the marquee wraps into rows,
+ * shimmer-text is plain muted text, hover lifts and underline draws land without travelling.
+ * Never collides with .studio-*, .hiw-*, .animate-*, .press or .ds-gallery-* / .ds-map* (index.css).
+ * ============================================================================================ */
+
+@keyframes ds-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes ds-rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ds-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ds-slide-in-right {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* The scroll reveal moves the individual `translate` property, not `transform`: its fill holds the end
+   frame while the element is on screen, and a held `transform: none` would cancel a hover lift. */
+@keyframes ds-reveal-in {
+  from { opacity: 0; translate: 0 18px; }
+  to { opacity: 1; translate: none; }
+}
+
+@keyframes ds-blur-in {
+  from { opacity: 0; filter: blur(6px); }
+  to { opacity: 1; filter: none; }
+}
+
+@keyframes ds-pop {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { opacity: 1; transform: scale(1.1); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes ds-draw {
+  from {
+    stroke-dasharray: var(--ds-draw-length, 24);
+    stroke-dashoffset: var(--ds-draw-length, 24);
+  }
+  to {
+    stroke-dasharray: var(--ds-draw-length, 24);
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ds-flash {
+  from { background-color: color-mix(in srgb, var(--ds-ink) 9%, transparent); }
+}
+
+@keyframes ds-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* Moves a 200 %-wide repeating gradient by exactly one tile, so the loop is seamless. */
+@keyframes ds-shimmer-text {
+  from { background-position: 0 0; }
+  to { background-position: -200% 0; }
+}
+
+@keyframes ds-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@keyframes ds-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes ds-ping {
+  0% { transform: scale(1); opacity: 0.55; }
+  80%, 100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes ds-progress-indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
+/* ---- Entrances ---- */
+.ds-rise-in {
+  animation: ds-rise-in var(--ds-motion-enter-slow) var(--ds-ease-enter) backwards;
+}
+
+.ds-fade-in {
+  animation: ds-fade-in var(--ds-motion-enter-quick) var(--ds-ease) backwards;
+}
+
+.ds-scale-in {
+  animation: ds-scale-in var(--ds-motion-enter-quick) var(--ds-ease-enter) backwards;
+}
+
+.ds-slide-in-right {
+  animation: ds-slide-in-right var(--ds-motion-enter-quick) var(--ds-ease-enter) backwards;
+}
+
+.ds-blur-in {
+  animation: ds-blur-in var(--ds-motion-enter-quick) var(--ds-ease) backwards;
+}
+
+.ds-pop {
+  animation: ds-pop 380ms var(--ds-ease) backwards;
+}
+
+.ds-draw :is(path, polyline, line) {
+  animation: ds-draw var(--ds-motion-enter-slow) var(--ds-ease) 80ms backwards;
+}
+
+.ds-flash {
+  animation: ds-flash 1.4s var(--ds-ease) backwards;
+}
+
+/* Lists: direct children arrive one after another. --ds-i places a child explicitly; otherwise the first
+   twelve are staggered by position and the rest arrive together with the twelfth. */
+.ds-stagger > * {
+  animation: ds-rise-in var(--ds-motion-enter-slow) var(--ds-ease-enter) backwards;
+  animation-delay: calc(var(--ds-i, 12) * var(--ds-motion-stagger));
+}
+
+.ds-stagger > :nth-child(1) { --ds-i: 0; }
+.ds-stagger > :nth-child(2) { --ds-i: 1; }
+.ds-stagger > :nth-child(3) { --ds-i: 2; }
+.ds-stagger > :nth-child(4) { --ds-i: 3; }
+.ds-stagger > :nth-child(5) { --ds-i: 4; }
+.ds-stagger > :nth-child(6) { --ds-i: 5; }
+.ds-stagger > :nth-child(7) { --ds-i: 6; }
+.ds-stagger > :nth-child(8) { --ds-i: 7; }
+.ds-stagger > :nth-child(9) { --ds-i: 8; }
+.ds-stagger > :nth-child(10) { --ds-i: 9; }
+.ds-stagger > :nth-child(11) { --ds-i: 10; }
+.ds-stagger > :nth-child(12) { --ds-i: 11; }
+
+/* Scroll reveal: CSS only where the browser has scroll-driven animations; elsewhere (and before any JS)
+   the content is simply visible. A fixed range, so tall panels arrive as promptly as short ones; capped
+   at the element's own entry (min(200px, 100%)), so a short last row, or anything in the bottom 200 px of
+   a page that cannot scroll further, still ends fully arrived. Atlas's `entry 200px` left a 60 px last
+   row at opacity 0.84, 3 px short (docs/design/atlas-skin.md "Deviations from Atlas"). */
+@supports (animation-timeline: view()) {
+  .ds-reveal {
+    animation: ds-reveal-in var(--ds-ease) both;
+    animation-timeline: view();
+    animation-range: entry 0% entry min(200px, 100%);
+  }
+}
+
+.ds-disclosure[open] > :not(summary) {
+  animation: ds-rise-in var(--ds-motion-enter-quick) var(--ds-ease-enter) backwards;
+}
+
+/* The body's height glides where the browser exposes ::details-content (0 shut, auto open, with
+   interpolate-size); elsewhere the body simply appears and disappears. */
+@supports selector(::details-content) {
+  .ds-disclosure {
+    interpolate-size: allow-keywords;
+  }
+
+  .ds-disclosure::details-content {
+    height: 0;
+    overflow-y: clip;
+    transition-property: height, content-visibility;
+    transition-duration: var(--ds-motion-slow);
+    transition-timing-function: var(--ds-ease);
+    transition-behavior: allow-discrete;
+  }
+
+  .ds-disclosure[open]::details-content {
+    height: auto;
+  }
+}
+
+/* ---- Interaction ---- */
+/* Hover lifts only where hovering is real (a sticky :hover after a tap would leave a card raised). */
+.ds-lift {
+  transition:
+    transform var(--ds-motion-panel) var(--ds-ease),
+    box-shadow var(--ds-motion-panel) var(--ds-ease),
+    border-color var(--ds-motion-panel) var(--ds-ease),
+    background-color var(--ds-motion-panel) var(--ds-ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ds-lift:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--ds-hairline) 60%, var(--ds-ink) 40%);
+    box-shadow: var(--ds-shadow-lift);
+  }
+}
+
+.ds-link {
+  background-image: linear-gradient(currentColor, currentColor);
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  background-size: 0% 1px;
+  transition: background-size var(--ds-motion-slow) var(--ds-ease), color var(--ds-motion-fast) var(--ds-ease);
+}
+
+.ds-link:hover,
+.ds-link:focus-visible {
+  background-size: 100% 1px;
+}
+
+/* ---- Loading and live state ---- */
+.ds-skeleton {
+  background-color: var(--ds-skeleton);
+  background-image: linear-gradient(90deg, transparent 0%, var(--ds-skeleton-glint) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ds-shimmer 1.6s ease-in-out infinite;
+}
+
+/* A loading label: muted ink with a glint of full ink sweeping across. The glint is darker than the label
+   in light (and lighter in dark), so contrast only ever rises while it passes. */
+.ds-shimmer-text {
+  --ds-shimmer-base: var(--ds-muted);
+  --ds-shimmer-glint: var(--ds-ink);
+  color: var(--ds-shimmer-base);
+  background-image: linear-gradient(
+    90deg,
+    var(--ds-shimmer-base) 0%,
+    var(--ds-shimmer-base) 38%,
+    var(--ds-shimmer-glint) 50%,
+    var(--ds-shimmer-base) 62%,
+    var(--ds-shimmer-base) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ds-shimmer-text 2.4s linear infinite;
+}
+
+.ds-progress-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+.ds-progress-indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 40%;
+  border-radius: inherit;
+  background: currentColor;
+  animation: ds-progress-indeterminate 1.3s var(--ds-ease) infinite;
+}
+
+/* A live-status dot with a soft ping in its own colour. It is decoration: a word beside it says what is live. */
+.ds-live-dot {
+  position: relative;
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+.ds-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  animation: ds-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.ds-live-dot-settle::after {
+  animation-iteration-count: 3;
+}
+
+.ds-caret {
+  display: inline-block;
+  width: 1px;
+  height: 1.1em;
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: ds-caret 1s steps(1) infinite;
+}
+
+/* Endless row: the track holds the items twice and slides by half its width. */
+.ds-marquee {
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+.ds-marquee-track {
+  display: flex;
+  width: max-content;
+  animation: ds-marquee 38s linear infinite;
+}
+
+.ds-marquee:hover .ds-marquee-track,
+.ds-marquee:focus-within .ds-marquee-track {
+  animation-play-state: paused;
+}
+
+/* Off screen a loop still costs a frame every 16 ms: useInViewPause marks its host (or an ancestor)
+   data-inview="false" and the loop holds still until it is back. Without the attribute loops run. */
+[data-inview="false"] .ds-marquee-track,
+[data-inview="false"] .ds-live-dot::after,
+.ds-live-dot[data-inview="false"]::after,
+[data-inview="false"] .ds-caret,
+.ds-caret[data-inview="false"],
+[data-inview="false"] .ds-skeleton,
+.ds-skeleton[data-inview="false"],
+[data-inview="false"] .ds-shimmer-text,
+.ds-shimmer-text[data-inview="false"] {
+  animation-play-state: paused;
+}
+
+/* ---- Containers ---- */
+.ds-grid-backdrop {
+  background-image: radial-gradient(var(--ds-grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, #000 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 35%, #000 30%, transparent 75%);
+}
+
+/* Scroll-edge fades: each edge's fade length follows the scroller's own position, so the top only fades
+   once scrolled and the bottom stops fading at the end. Without scroll-driven animations: no mask. */
+@property --ds-fade-start { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --ds-fade-end { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
+@keyframes ds-fade-edge-start {
+  from { --ds-fade-start: 0px; }
+  to { --ds-fade-start: var(--ds-fade-size); }
+}
+
+@keyframes ds-fade-edge-end {
+  from { --ds-fade-end: var(--ds-fade-size); }
+  to { --ds-fade-end: 0px; }
+}
+
+@supports (animation-timeline: scroll()) {
+  .ds-fade-edge-y,
+  .ds-fade-edge-x {
+    --ds-fade-size: 24px;
+    animation:
+      ds-fade-edge-start linear both,
+      ds-fade-edge-end linear both;
+    animation-range:
+      0 var(--ds-fade-size),
+      calc(100% - var(--ds-fade-size)) 100%;
+  }
+
+  .ds-fade-edge-y {
+    animation-timeline: scroll(self block), scroll(self block);
+    mask-image: linear-gradient(to bottom, transparent, #000 var(--ds-fade-start), #000 calc(100% - var(--ds-fade-end)), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--ds-fade-start), #000 calc(100% - var(--ds-fade-end)), transparent);
+  }
+
+  .ds-fade-edge-x {
+    animation-timeline: scroll(self inline), scroll(self inline);
+    mask-image: linear-gradient(to right, transparent, #000 var(--ds-fade-start), #000 calc(100% - var(--ds-fade-end)), transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ds-fade-start), #000 calc(100% - var(--ds-fade-end)), transparent);
+  }
+}
+
+/* ---- Type ---- */
+.ds-overline {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+}
+
+.ds-overline-display {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ds-muted);
+}
+
+.ds-display {
+  font-family: var(--ds-font-display);
+}
+
+/* ---- Reduced motion (the OS setting): one block for every class above ---- */
+@media (prefers-reduced-motion: reduce) {
+  .ds-rise-in,
+  .ds-fade-in,
+  .ds-scale-in,
+  .ds-slide-in-right,
+  .ds-blur-in,
+  .ds-pop,
+  .ds-draw :is(path, polyline, line),
+  .ds-flash,
+  .ds-stagger > *,
+  .ds-reveal,
+  .ds-disclosure[open] > :not(summary),
+  .ds-skeleton,
+  .ds-live-dot::after,
+  .ds-caret,
+  .ds-progress-indeterminate::after {
+    animation: none;
+  }
+
+  .ds-marquee-track {
+    animation: none;
+    flex-wrap: wrap;
+    width: auto;
+  }
+
+  .ds-shimmer-text {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  .ds-lift,
+  .ds-link,
+  .ds-disclosure::details-content {
+    transition: none;
+  }
+
+  .ds-lift:hover {
+    transform: none;
+  }
+}

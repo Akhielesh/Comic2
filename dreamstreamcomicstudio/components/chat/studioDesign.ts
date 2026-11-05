@@ -27,11 +27,15 @@ export const CANVAS_BG = 'bg-[var(--ds-canvas)]';
 /** Slightly deeper paper for the sidebar column. */
 export const SIDEBAR_BG = 'bg-[var(--ds-sidebar)]';
 
-/** Floating glass surface (panels, toolbars, menus). The blur amount is a token (12 px = blur-md). */
-export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-[var(--ds-surface-blur)]';
+/**
+ * Floating glass surface (panels, toolbars, menus). The blur is the glass token (bridge D3): 12 px
+ * (blur-md) by default, 0 under the Atlas skin, whose surfaces are opaque — the sticky header's own blur
+ * (--ds-header-blur, HEADER_GLASS) is the only frosted glass there.
+ */
+export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-[var(--ds-glass-blur)]';
 
-/** Stronger glass for the composer bar and modals that sit over content. */
-export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-[var(--ds-surface-blur)]';
+/** Stronger glass for the composer bar and modals that sit over content (the same glass blur). */
+export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-[var(--ds-glass-blur)]';
 
 // ---------------------------------------------------------------------------
 // Lines, depth, shape
@@ -181,6 +185,22 @@ export const TRANSITION = 'transition-all duration-[var(--ds-motion-medium)] eas
 /** Subtle hover lift for floating elements. */
 export const HOVER_LIFT = 'hover:-translate-y-px';
 
+/**
+ * The card lift (M1a; Atlas .atlas-lift): on a pointer that really hovers, the card rises 2 px and takes
+ * the lift shadow (--ds-shadow-lift: Atlas shadow-xl in light, the deep dark drop in dark). The rise is
+ * motion-safe only; under reduced motion the shadow still answers the hover, without travelling. A touch
+ * tap never leaves a card raised (no sticky :hover). styles/ds-motion.css `.ds-lift` is the same in CSS.
+ */
+export const LIFT =
+  'transition-[transform,box-shadow] duration-[var(--ds-motion-panel)] ease-[var(--ds-ease)] motion-reduce:transition-none can-hover:hover:shadow-[shadow:var(--ds-shadow-lift)] can-hover:motion-safe:hover:-translate-y-0.5';
+
+/**
+ * The entrance (M1a; Atlas .atlas-rise-in): fade and rise 10 px over --ds-motion-enter-slow on the enter
+ * curve, ending on `transform: none`; nothing moves under reduced motion (styles/ds-motion.css). For a list,
+ * put `ds-stagger` on the parent instead: its children rise --ds-motion-stagger apart.
+ */
+export const RISE_IN = 'ds-rise-in';
+
 /** Press feedback: dips while pressed and springs back (index.css; motion-safe, skin only). */
 export const PRESS = 'ds-press';
 
@@ -250,10 +270,11 @@ export const OVERLINE = 'text-[11px] font-semibold leading-4 tracking-[0.12em] u
  * titles rendered before the type-scale change): Atlas's DialogTitle restates leading-none, which here
  * would clip descenders in the one-line truncating dialog headers and crowd a title that wraps on a
  * phone. No colour: it inherits the dialog's ink (the immersive reader's shortcuts dialog is white on
- * its dark glass). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM for a dialog
- * that docks to the bottom as a sheet on phones.
+ * its dark glass). The body face, as Atlas's DialogTitle and SheetTitle (bridge D2: the display face is
+ * for page and public titles only). Sheet and popover headers keep their 15 px; use DIALOG_TITLE_FROM_SM
+ * for a dialog that docks to the bottom as a sheet on phones.
  */
-export const DIALOG_TITLE = `text-xl font-semibold leading-7 tracking-normal ${FONT_DISPLAY}`;
+export const DIALOG_TITLE = 'text-xl font-semibold leading-7 tracking-normal';
 /**
  * DIALOG_TITLE from `sm` up, for a dialog that is a bottom sheet below `sm` and a centred dialog above
  * (the timeline dialog, the model-change and lab-run confirmations): the element keeps its sheet-header
@@ -339,6 +360,12 @@ export const STATUS_CHIP_TONE: Record<StatusState, string> = {
 export const SEGMENTED_TRACK = `relative inline-flex min-w-0 max-w-full gap-0.5 ${RADIUS_CONTROL} border border-[color:color-mix(in_srgb,var(--ds-hairline)_70%,transparent)] bg-[var(--ds-segment-track)] p-0.5`;
 export const SEGMENTED_ITEM = `relative inline-flex min-w-0 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-[calc(var(--ds-radius-control)-2px)] px-3 text-[13px] font-medium text-[var(--ds-muted)] hover:text-[var(--ds-ink)] aria-checked:text-[var(--ds-ink)] aria-selected:text-[var(--ds-ink)] transition-colors duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)] ${FOCUS_RING_FLUSH}`;
 export const SEGMENTED_ACTIVE = 'bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]';
+/**
+ * The selected pill's paint WITHOUT an ink, for an item built on SEGMENTED_ITEM: that recipe already inks the
+ * selected item through aria-checked / aria-selected, so adding SEGMENTED_ACTIVE would stack its ink on the
+ * item's muted base (the status-ink guard's stacked-inks rule).
+ */
+export const SEGMENTED_ACTIVE_FILL = 'bg-[var(--ds-segment-pill)] shadow-[shadow:var(--ds-shadow-segment)]';
 export const SEGMENTED_PILL = 'pointer-events-none absolute inset-y-0.5 left-0 rounded-[calc(var(--ds-radius-control)-2px)] bg-[var(--ds-segment-pill)] shadow-[shadow:var(--ds-shadow-segment)] transition-[transform,width] duration-[var(--ds-motion-panel)] ease-[var(--ds-ease-spring)] motion-reduce:transition-none';
 
 /**
@@ -349,7 +376,8 @@ export const SEGMENTED_PILL = 'pointer-events-none absolute inset-y-0.5 left-0 r
 export const SECTION_CARD = `overflow-hidden ${RADIUS_PANEL} border border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-ink)] ${SHADOW_SOFT}`;
 export const SECTION_HEADER = 'flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-[var(--ds-hairline)] px-5 py-5 sm:px-6';
 export const SECTION_ICON_TILE = `flex h-9 w-9 shrink-0 items-center justify-center ${RADIUS_CONTROL} border border-[var(--ds-hairline)] bg-[var(--ds-well)] text-[var(--ds-ink)]`;
-export const SECTION_TITLE = `m-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)] ${FONT_DISPLAY}`;
+/** The card title is the body face, semibold (bridge D2: Atlas sets no display face on card titles). */
+export const SECTION_TITLE = 'm-0 text-[length:var(--ds-text-lg)] font-semibold leading-6 tracking-[-0.01em] text-[var(--ds-ink)]';
 export const SECTION_DESCRIPTION = 'm-0 mt-0.5 text-pretty text-[length:var(--ds-text-base)] leading-6 text-[var(--ds-muted)]';
 export const SECTION_BODY = 'px-5 py-5 sm:px-6';
 
@@ -388,6 +416,78 @@ export const TOAST_SLOT_CLOSED = 'grid-rows-[0fr]';
 export const INVERSE_SURFACE = 'ds-inverse-surface bg-[var(--ds-ink)] text-[var(--ds-canvas)]';
 
 // ---------------------------------------------------------------------------
+// DS-1a recipes (docs/design/design-system.md): the stacking ladder, control densities and the
+// heading steps. Token-driven like the rest; the primitives in components/ds read them through
+// components/ds/recipes.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * The stacking ladder (index.css `--ds-z-*`). A screen takes a LAYER, never a number: stage 0 (the
+ * canvas / page content; its own layers stack 1–30 inside it), chrome and the sticky header 40, the
+ * full-screen page editor 70 and reader 80, a sheet's scrim 85 and the sheet 86 (the ladder
+ * mobile/sheets documents), popovers and menus 90, toasts 95, tooltips 100. This is the one place a
+ * z-index class is spelled; anywhere else a raw z class is off the ladder (DS-0's z-ladder guard).
+ */
+export const Z = {
+  stage: 'z-[var(--ds-z-stage)]',
+  chrome: 'z-[var(--ds-z-chrome)]',
+  header: 'z-[var(--ds-z-header)]',
+  editor: 'z-[var(--ds-z-editor)]',
+  reader: 'z-[var(--ds-z-reader)]',
+  scrim: 'z-[var(--ds-z-scrim)]',
+  sheet: 'z-[var(--ds-z-sheet)]',
+  popover: 'z-[var(--ds-z-popover)]',
+  toast: 'z-[var(--ds-z-toast)]',
+  tooltip: 'z-[var(--ds-z-tooltip)]'
+} as const;
+export type ZLayer = keyof typeof Z;
+
+/**
+ * The sticky app header (Atlas AuthenticatedAppHeader, bridge D3): sticky on the header layer, and a named
+ * group so its glass layer can follow `data-scrolled`. Put HEADER_GLASS on an aria-hidden first child: the
+ * blur lives on that layer, never on the header itself, so the header is never the containing block of a
+ * position: fixed descendant. At rest the layer is the plain page surface (nothing under it to blur);
+ * with data-scrolled="true" on the header it frosts with --ds-header-blur, the one blur the Atlas language
+ * keeps, over a 90 % page tint, and its edge firms up.
+ */
+export const STICKY_HEADER = `group/header sticky top-0 ${Z.header}`;
+export const HEADER_GLASS =
+  'pointer-events-none absolute inset-0 -z-10 border-b border-[color:color-mix(in_srgb,var(--ds-hairline)_50%,transparent)] bg-[var(--ds-canvas)] transition-[border-color,background-color] duration-[var(--ds-motion-slow)] ease-[var(--ds-ease)] motion-reduce:transition-none group-data-[scrolled=true]/header:border-[var(--ds-hairline)] group-data-[scrolled=true]/header:bg-[color:color-mix(in_srgb,var(--ds-canvas)_90%,transparent)] group-data-[scrolled=true]/header:backdrop-blur-[var(--ds-header-blur)] group-data-[scrolled=true]/header:backdrop-saturate-150';
+
+/**
+ * Control row heights (index.css `--ds-density-*`): compact 28 px (dense tables, toolbars on a fine
+ * pointer), comfortable 36 px (Atlas's default control) and touch 44 px. `coarse` is the floor every
+ * interactive control carries under a coarse pointer (a 44 px tall target; `coarseSquare` also 44 px
+ * wide, for icon-only controls), so no screen spells the touch size itself.
+ */
+export const DENSITY = {
+  compact: 'min-h-[var(--ds-density-compact)]',
+  comfortable: 'min-h-[var(--ds-density-comfortable)]',
+  touch: 'min-h-[var(--ds-density-touch)]',
+  coarse: 'coarse:min-h-[var(--ds-density-touch)]',
+  coarseSquare: 'coarse:min-h-[var(--ds-density-touch)] coarse:min-w-[var(--ds-density-touch)]'
+} as const;
+export type Density = 'compact' | 'comfortable' | 'touch';
+
+/**
+ * The heading steps above the chrome scale (`--ds-text-xs…lg`): Atlas's text-xl / 2xl / 3xl (20 / 24 /
+ * 30 px, rem so they follow the reader's text size) with Tailwind's line heights. Size and leading only:
+ * pair with a weight and, for a heading, the display face.
+ */
+export const TEXT_XL = 'text-[length:var(--ds-text-xl)] leading-7';
+export const TEXT_2XL = 'text-[length:var(--ds-text-2xl)] leading-8';
+export const TEXT_3XL = 'text-[length:var(--ds-text-3xl)] leading-9';
+
+/**
+ * A solid danger fill that carries a label (Atlas's destructive button and badge, `bg-destructive
+ * text-white`): the danger hue under `--ds-on-danger` — white on the red, and the light ink on the
+ * default dark theme's light red, where white measured 2.8:1. The hover mixes 12 % of the ink in (darker
+ * in light, lighter in dark), so the label only gains contrast. tokenContrast.test.ts measures both.
+ */
+export const DANGER_FILL = 'bg-[var(--ds-danger)] text-[var(--ds-on-danger)]';
+export const DANGER_FILL_HOVER = 'hover:bg-[color:color-mix(in_srgb,var(--ds-danger)_88%,var(--ds-ink))]';
+
+// ---------------------------------------------------------------------------
 // Composites (the everyday building blocks)
 // ---------------------------------------------------------------------------
 
@@ -409,8 +509,8 @@ export const HOVER_ROW = `${RADIUS_CONTROL} hover:bg-[var(--ds-hover)] ${TRANSIT
 /** Active sidebar row: soft accent tint with ink text. */
 export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-ink)]`;
 
-/** Floating dropdown/context menu. */
-export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-surface-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+/** Floating dropdown/context menu (the glass blur: frosted by default, opaque under the skin). */
+export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-[var(--ds-glass-blur)] ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
 
 /**
  * Row inside a floating menu (icon + label, quiet hover). The hover reads --ds-overlay-hover: the

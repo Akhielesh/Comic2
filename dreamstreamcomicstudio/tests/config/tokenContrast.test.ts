@@ -194,8 +194,27 @@ function pairs(): Pair[] {
     for (const tone of TONES) {
       for (const [bg, c] of statusSurfaces(ctx, tone)) out.push({ ctx, fg: `--ds-${tone}-text`, bg, ratio: ratio(over(token(`--ds-${tone}-text`, ctx), c), c), min: 4.5 });
     }
+    // DS-1a: the label on a solid danger fill (studioDesign DANGER_FILL: the destructive Button and Badge)
+    // and on its hover mix (DANGER_FILL_HOVER), each painted over the page.
+    for (const [name, fill] of dangerFills()) {
+      const bg = over(resolve(fill, ctx), token('--ds-canvas', ctx));
+      out.push({ ctx, fg: '--ds-on-danger', bg: name, ratio: ratio(token('--ds-on-danger', ctx), bg), min: 4.5 });
+    }
   }
   return out;
+}
+
+/** The two fills DANGER_FILL / DANGER_FILL_HOVER paint, read from the recipes (a class value back to CSS). */
+function dangerFills(): Array<[string, string]> {
+  const value = (cls: string, prefix: string) => {
+    const m = new RegExp(`(?:^|\\s)${prefix.replace(/[[\]()]/g, '\\$&')}\\[(?:color:)?(.+?)\\](?:\\s|$)`).exec(cls);
+    if (!m) throw new Error(`tokenContrast: no ${prefix}[…] in "${cls}"`);
+    return m[1].replace(/_/g, ' ');
+  };
+  return [
+    ['danger fill', value(design.DANGER_FILL, 'bg-')],
+    ['danger fill hover', value(design.DANGER_FILL_HOVER, 'hover:bg-')]
+  ];
 }
 const label = (p: Pair) => `${p.ctx}: ${p.fg} on ${p.bg}`;
 
@@ -212,6 +231,22 @@ describe('token contrast — every text token on every surface it is used on (WC
   it('body and label text reach 4.5:1 everywhere (light, dark, Atlas light, Atlas dark) — no exceptions', () => {
     const failing = measure().filter((p) => !p.exempt && p.ratio < p.min).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`);
     expect(failing).toEqual([]);
+  });
+
+  it('the label on a solid danger fill (DS-1a: destructive Button and Badge) is in the matrix in every context, fill and hover', () => {
+    const danger = measure().filter((p) => p.fg === '--ds-on-danger');
+    expect(danger.map((p) => `${p.ctx}: ${p.bg}`)).toEqual(
+      Object.keys(CONTEXTS).flatMap((ctx) => [`${ctx}: danger fill`, `${ctx}: danger fill hover`])
+    );
+    expect(danger.filter((p) => p.ratio < 4.5).map((p) => `${label(p)} = ${p.ratio.toFixed(2)}`)).toEqual([]);
+    // Why the token exists: white on the default dark theme's light red is far under 4.5:1.
+    expect(ratio(hexColor('#ffffff'), token('--ds-danger', 'default dark'))).toBeLessThan(3);
+    // The recipes spell the fill, its label and the hover mix the matrix reads.
+    expect(design.DANGER_FILL).toBe('bg-[var(--ds-danger)] text-[var(--ds-on-danger)]');
+    expect(dangerFills()).toEqual([
+      ['danger fill', 'var(--ds-danger)'],
+      ['danger fill hover', 'color-mix(in srgb,var(--ds-danger) 88%,var(--ds-ink))']
+    ]);
   });
 
   it('--ds-faint is in the matrix too: below 4.5:1 everywhere, and the only exempt token', () => {
@@ -659,7 +694,7 @@ describe('token contrast — studioDesign spells the readable tokens', () => {
 
   it('every text constant reads a token this matrix measures', () => {
     // --ds-canvas as TEXT appears only on an ink fill (INVERSE_SURFACE): the same pair as ink on canvas.
-    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-canvas', ...TONES.map((t) => `--ds-${t}-text`)]);
+    const measured = new Set(['--ds-ink', '--ds-muted', '--ds-accent-text', '--ds-on-accent', '--ds-on-danger', '--ds-canvas', ...TONES.map((t) => `--ds-${t}-text`)]);
     const textTokens = (s: string) => [...s.matchAll(/(?<![\w-])text-\[var\((--ds-[\w-]+)\)\]/g)].map((m) => m[1]);
     for (const [name, value] of Object.entries(design)) {
       const values = typeof value === 'string' ? [value] : value && typeof value === 'object' ? Object.values(value).filter((v): v is string => typeof v === 'string') : [];
@@ -835,6 +870,28 @@ describe('token contrast — non-text: the focus ring and accent state borders r
     // The old translucent rings really failed (45 % / 50 % terracotta: 1.6 and 2.2:1).
     expect(ratio(over(resolveColor('rgba(217,119,87,0.45)'), token('--ds-canvas', 'default light')), token('--ds-canvas', 'default light'))).toBeLessThan(3);
     expect(ratio(over(resolveColor('rgba(217,119,87,0.50)'), token('--ds-canvas', 'default dark')), token('--ds-canvas', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the reader focus colour (--ds-reader-focus, M1a) is AA on the reader paper in every context: ≥ 4.5:1 on the page back and the endpaper', () => {
+    // The reader's paper is content and the same in both themes and both skins, so the ring colour is one
+    // value; the floor here is the text one (4.5:1), above WCAG 1.4.11's 3:1 for a focus indicator.
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      for (const paper of ['--ds-reader-paper-back', '--ds-reader-endpaper']) {
+        const r = ratio(token('--ds-reader-focus', ctx), token(paper, ctx));
+        expect(r, `${ctx}: --ds-reader-focus on ${paper} = ${r.toFixed(2)}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    // The default focus colours were not enough there (the brand ring on the paper is under 3:1).
+    expect(ratio(token('--ds-ring', 'default dark'), token('--ds-reader-paper-back', 'default dark'))).toBeLessThan(3);
+  });
+
+  it('the reader focus colour is for the paper only: under 3:1 on the reader room, so it is never a ring over the room', () => {
+    // Pinned so the name does not invite using it for every reader ring: controls over the room (HUD, sheets,
+    // end card) draw --ds-focus on their own chrome surface (index.css, docs/design/design-system.md).
+    for (const ctx of Object.keys(CONTEXTS) as ContextName[]) {
+      const r = ratio(token('--ds-reader-focus', ctx), token('--ds-reader-room', ctx));
+      expect(r, `${ctx}: --ds-reader-focus on --ds-reader-room = ${r.toFixed(2)}`).toBeLessThan(3);
+    }
   });
 
   it('the keyboard focus colour (--ds-focus) is ≥ 3:1 on every backdrop in every context (the ink under the skin)', () => {

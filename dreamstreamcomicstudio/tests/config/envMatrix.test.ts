@@ -43,6 +43,10 @@ describe(`${FILE} renders every variable inside a table`, () => {
     expect(stray).toEqual([]);
   });
 
+  it('keeps the build-time design-skin kill switch in the map (bridge D5)', () => {
+    expect(firstCells.some((c) => c.includes('VITE_DS_SKIN_EVERYWHERE'))).toBe(true);
+  });
+
   it('keeps the live Worker’s Phase 0 variables in the map', () => {
     for (const name of ['ALLOWED_ORIGINS', 'DEVICE_TOKEN_JWK', 'ACT_TOKEN_KEY', 'SECURITY_HOOK_SECRET', 'OPS_KEY', 'APNS_KEY_P8', 'PUSH_IOS_VIA', 'RL_WS', 'CSP_REPORTS']) {
       expect(firstCells.some((c) => c.includes(name)), name).toBe(true);

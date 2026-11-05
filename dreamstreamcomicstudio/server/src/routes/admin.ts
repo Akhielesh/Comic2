@@ -21,7 +21,7 @@ import {
   validateUsageBudgetPatch,
   type UsageBudgetPatch
 } from '../services/platformAllowance.js';
-import { isBootstrapAdminEmail } from '../services/rbac.js';
+import { isBootstrapAdminEmail, parseAdminEmails } from '../services/rbac.js';
 import { recordAudit } from '../observability/auditLog.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 
@@ -91,7 +91,8 @@ const notifyModerationEvent = async (input: {
   });
 };
 
-const resolveActiveAdminCount = async () => {
+/** Active admins: user_roles admins plus the bootstrap emails requireAdmin honours. Exported for tests. */
+export const resolveActiveAdminCount = async () => {
   const admin = getSupabaseAdmin();
   const [{ data: roleRows }, { data: bootstrapRows }] = await Promise.all([
     admin
@@ -110,10 +111,10 @@ const resolveActiveAdminCount = async () => {
     if (userId) admins.add(userId);
   }
 
-  const configuredEmails = (process.env.ADMIN_EMAILS || 'admin@test.com')
-    .split(',')
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
+  // The same bootstrap list requireAdmin honours (services/rbac.ts: the owner + ADMIN_EMAILS),
+  // never a hard-coded test address: a profile that merely signed up with an old test address must not
+  // count as an admin, or it could let the last real admin's role be revoked.
+  const configuredEmails = parseAdminEmails();
 
   for (const row of (bootstrapRows || []) as Array<Record<string, unknown>>) {
     const email = String(row.email || '').toLowerCase();

@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
   Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play,
-  RefreshCw, Pencil, ChevronLeft, ChevronRight, X, Info, Clock
+  RefreshCw, Pencil, ChevronLeft, ChevronRight, X, Info, Clock, KeyRound, MessageSquarePlus,
+  type LucideIcon
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
@@ -17,8 +18,11 @@ import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload
 import { FeedbackButtons } from '../feedback/FeedbackButtons';
 import {
   GLASS, HAIRLINE, MENU, MUTED, TRANSITION, PILL,
-  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT
+  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT,
+  CONTROL_BTN, FOCUS_RING, PRESS, PRIMARY_BTN, RADIUS_CONTROL, RADIUS_PANEL, TONE_SURFACE, TONE_TEXT
 } from './studioDesign';
+import { cn } from '../../lib/utils';
+import { CONNECTED_DATA_ACTIONS, type ConnectedDataAction, type ConnectedDataNoticeKind } from './connectorPrivacy';
 
 /** Format an elapsed duration compactly: "0.8s", "12.3s", "1m 04s". */
 const formatDuration = (ms: number): string => {
@@ -26,6 +30,71 @@ const formatDuration = (ms: number): string => {
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
   const totalSeconds = Math.round(ms / 1000);
   return `${Math.floor(totalSeconds / 60)}m ${String(totalSeconds % 60).padStart(2, '0')}s`;
+};
+
+const NOTICE_TITLE: Record<ConnectedDataNoticeKind, string> = {
+  'standard-model': 'Not sent: this chat needs a standard model',
+  budget: "This chat can't continue on free models"
+};
+
+const NOTICE_ACTION: Record<ConnectedDataAction, { label: string; Icon: LucideIcon }> = {
+  'standard-model': { label: 'Use a standard model', Icon: Cpu },
+  'new-chat': { label: 'New chat', Icon: MessageSquarePlus },
+  'api-keys': { label: 'API keys', Icon: KeyRound }
+};
+
+const NOTICE_ACTION_BTN = cn(
+  'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-medium disabled:cursor-not-allowed disabled:opacity-50 coarse:min-h-11 coarse:px-4',
+  RADIUS_CONTROL,
+  FOCUS_RING,
+  PRESS
+);
+
+/**
+ * The calm notice that stands in for an answer connected-account privacy did not send
+ * (components/chat/connectorPrivacy.ts): an info card, never an error. The server's own copy says
+ * what happened and why; the two actions are the ways forward it names — "Use a standard model" and
+ * "New chat" for the free-model refusal, "New chat" and "API keys" when the usage is used up. 44 px
+ * targets on touch screens.
+ */
+export const ConnectedDataNoticeCard: React.FC<{
+  kind: ConnectedDataNoticeKind;
+  message: string;
+  /** A generation is running: "Use a standard model" (which sends again) waits for it. */
+  busy?: boolean;
+  onAction?: (action: ConnectedDataAction) => void;
+}> = ({ kind, message, busy, onAction }) => {
+  const actions = CONNECTED_DATA_ACTIONS[kind];
+  return (
+    <div role="status" className={cn('w-full border px-4 py-3', RADIUS_PANEL, TONE_SURFACE.info)}>
+      <div className="flex items-start gap-2.5">
+        <Info aria-hidden className={cn('mt-0.5 h-4 w-4 shrink-0', TONE_TEXT.info)} />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-[var(--ds-ink)]">{NOTICE_TITLE[kind]}</p>
+          <p className="mt-1 text-sm leading-6 text-[var(--ds-ink)] [overflow-wrap:anywhere]">{message}</p>
+        </div>
+      </div>
+      {onAction && (
+        <div className="mt-3 flex flex-wrap gap-2 sm:pl-[26px]">
+          {actions.map((action, i) => {
+            const { label, Icon } = NOTICE_ACTION[action];
+            return (
+              <button
+                key={action}
+                type="button"
+                onClick={() => onAction(action)}
+                disabled={busy && action === 'standard-model'}
+                className={cn(NOTICE_ACTION_BTN, i === 0 ? PRIMARY_BTN : cn(CONTROL_BTN, 'text-[var(--ds-ink)]'))}
+              >
+                <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 };
 
 /** A live, ticking elapsed-time counter shown while the model is generating. */
@@ -55,9 +124,11 @@ interface ChatMessageViewProps {
   onEdit?: (newText: string) => void;
   /** Switch which regenerated version is shown. */
   onSelectVariant?: (index: number) => void;
+  /** An action on this turn's calm connected-data notice (only for notice turns). */
+  onNoticeAction?: (action: ConnectedDataAction) => void;
 }
 
-export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant }) => {
+export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant, onNoticeAction }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [noticesOpen, setNoticesOpen] = useState(false);
@@ -67,6 +138,9 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
   const branchRef = useRef<HTMLDivElement>(null);
   const openPanel = useChatPanel();
   const isUser = turn.role === 'user';
+  // A calm notice in place of an answer (never an error): no answer chrome, no retry, no feedback.
+  const notice = !isUser ? turn.notice : undefined;
+  const isAnswer = !isUser && !turn.error && !notice;
 
   // Version navigation (regenerate history) for assistant turns.
   const variantCount = turn.variants?.length || 0;
@@ -187,6 +261,8 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
             </div>
           ) : isUser ? (
             <p className="whitespace-pre-wrap break-words text-sm">{turn.content}</p>
+          ) : notice ? (
+            <ConnectedDataNoticeCard kind={notice.kind} message={turn.content} busy={busy} onAction={onNoticeAction} />
           ) : turn.error ? (
             <MessageBody text={turn.content || '…'} className="text-sm" />
           ) : turn.content ? (
@@ -235,7 +311,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         </div>
 
         {/* Live response timer — counts up while the model is generating this turn. */}
-        {!isUser && busy && isLast && !turn.error && (
+        {!isUser && busy && isLast && !turn.error && !notice && (
           <div className="mt-1 px-1 text-[11px] text-[var(--ds-muted)] flex items-center gap-1" title="Time elapsed generating this answer">
             <Clock className="w-3 h-3 animate-pulse" />
             <LiveDuration startedAt={turn.startedAt} />
@@ -326,7 +402,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {/* Model-switch transparency: shown when the answer came from a different model. This is
             ROUTINE resilience (an automatic reroute that still produced a good answer), not a
             failure — so it reads as a calm, muted note, never an alarming red/amber warning. */}
-        {!isUser && !turn.error && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (
+        {isAnswer && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (
           <div className="mt-1 flex items-start gap-1.5 text-[10px] text-[var(--ds-muted)] bg-[var(--ds-surface-soft)] border border-[var(--ds-hairline)] rounded px-2 py-1 max-w-full">
             <RefreshCw className="w-3 h-3 shrink-0 mt-0.5" />
             <span>
@@ -337,7 +413,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         )}
 
         {/* Structured "thinking & sources" dropdown */}
-        {!isUser && !turn.error && hasDetails && (
+        {isAnswer && hasDetails && (
           <div className="w-full mt-1">
             <button
               onClick={() => setShowDetails((v) => !v)}
@@ -385,7 +461,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           </div>
         )}
 
-        {!isUser && !turn.error && (
+        {isAnswer && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 sm:gap-2 mt-1 px-1 text-[11px] text-[var(--ds-muted)]">
             {turn.model && <span className="font-bold truncate max-w-[160px]">{turn.model}</span>}
             {typeof turn.durationMs === 'number' && turn.durationMs >= 0 && (
@@ -470,7 +546,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
 
         {/* Per-response feedback. Shown on every finished assistant turn — including
             failed ones — so a like/dislike signal is captured no matter the outcome. */}
-        {!isUser && !(busy && isLast) && (turn.content || turn.error) && (
+        {!isUser && !notice && !(busy && isLast) && (turn.content || turn.error) && (
           <FeedbackButtons
             targetType="chat_response"
             targetId={turn.id}

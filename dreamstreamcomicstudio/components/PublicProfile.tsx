@@ -150,7 +150,7 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                 </div>
                 {/* Profile Card */}
                 <div className="bg-white border-4 border-black shadow-comic rounded-xl p-6 md:p-8 mb-10 flex flex-col md:flex-row items-center md:items-start gap-8">
-                    <div className="flex-shrink-0">
+                    <div className="shrink-0">
                         <UserAvatar url={profile.avatar_url} name={profile.username} size="lg" className="w-32 h-32 text-4xl" />
                     </div>
                     <div className="flex-1 text-center md:text-left">

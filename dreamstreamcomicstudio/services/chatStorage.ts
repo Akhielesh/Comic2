@@ -78,6 +78,18 @@ export interface ChatTurnVariant {
   /** Wall-clock time the model took to produce this answer, in ms (shown as a timer). */
   durationMs?: number;
   error?: boolean;
+  /** Connected-account content entered this answer (the server's `connectorData` on the reply). */
+  connectorData?: boolean;
+}
+
+/**
+ * A calm notice standing in for an answer that was not sent (components/chat/connectorPrivacy.ts):
+ * 'standard-model' — the chat carries connected-account content and the turn would have run on a
+ * free model; 'budget' — the usage is used up and the free fallback is off for this chat. The turn's
+ * content is the server's own copy. A notice is not an error and is never sent back as history.
+ */
+export interface ChatTurnNotice {
+  kind: 'standard-model' | 'budget';
 }
 
 export interface ChatTurn {
@@ -114,6 +126,13 @@ export interface ChatTurn {
   durationMs?: number;
   /** True when this assistant turn is an error placeholder. */
   error?: boolean;
+  /**
+   * Connected-account content entered this answer: the server said so (`connectorData: true` on its
+   * reply). Echoed on the request message for this turn (AIChatPlatform toRequestMessage).
+   */
+  connectorData?: boolean;
+  /** Set on a calm notice turn instead of an answer (never together with `error`). */
+  notice?: ChatTurnNotice;
 }
 
 export interface ChatSession {
@@ -613,6 +632,35 @@ export const getChatMemory = (userId?: string): string => {
 export const setChatMemory = (text: string, userId?: string): void => {
   try {
     localStorage.setItem(`${MEMORY_KEY}:${userId || 'anon'}`, text.slice(0, MAX_CHAT_MEMORY_CHARS));
+    // Clearing the memory clears what it was distilled from.
+    if (!text.trim()) localStorage.removeItem(`${MEMORY_CONNECTED_KEY}:${userId || 'anon'}`);
+  } catch {
+    /* ignore */
+  }
+  notifyChatDataChanged();
+};
+
+// Memory distilled from a conversation that carries (or may carry) connected-account content
+// (POST /api/chat/memory answered `connectorData: true`). Sticky until the memory is cleared:
+// a later exchange without connected content does not make the facts already learnt any less
+// connected. The chat never composes flagged memory into a turn that may run on a free model.
+const MEMORY_CONNECTED_KEY = 'dreamstream_chat_memory_connected';
+
+/** True when the user's local memory may hold facts distilled from connected-account content. */
+export const isChatMemoryConnected = (userId?: string): boolean => {
+  try {
+    return localStorage.getItem(`${MEMORY_CONNECTED_KEY}:${userId || 'anon'}`) === '1';
+  } catch {
+    // Unreadable storage: assume the safer answer.
+    return true;
+  }
+};
+
+/** Flag the user's local memory as distilled from connected-account content (no-op while it is empty). */
+export const markChatMemoryConnected = (userId?: string): void => {
+  if (!getChatMemory(userId).trim() || isChatMemoryConnected(userId)) return;
+  try {
+    localStorage.setItem(`${MEMORY_CONNECTED_KEY}:${userId || 'anon'}`, '1');
   } catch {
     /* ignore */
   }

@@ -19,7 +19,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
 import { ATLAS_PRELOAD_FONTS, DS_NO_TRANSITIONS_CLASS, DS_THEME_TRANSITION_CLASS } from '../../services/dsSkin';
-import { APP_ROOT, type Rule, contrastRatio, indexCss, parseRules, resolveColor, tokenBlocks, topLevelSplit } from './cssTokens';
+import { APP_ROOT, type Rule, contrastRatio, indexCss, over, parseRules, ratio, resolveColor, tokenBlocks, topLevelSplit } from './cssTokens';
 
 const ROOT = APP_ROOT;
 const css = indexCss;
@@ -47,6 +47,19 @@ const WAVE5_TOKENS = [
   '--ds-skeleton', '--ds-skeleton-glint', '--ds-segment-pill', '--ds-shadow-segment', '--ds-segment-track',
   '--ds-overlay-hover', '--ds-status-error-edge', '--ds-status-error-tint', '--ds-toast-edge',
   '--ds-ease-enter', '--ds-motion-enter', '--ds-motion-exit'
+];
+/**
+ * The tokens DS-1a added (docs/design/design-system.md, master plan §1.1 "New tokens"): the stacking
+ * ladder, the control densities, the heading steps, Atlas's slow entrance, stagger and the 280 ms
+ * entrance under its Atlas name, and the label on a solid danger fill.
+ */
+const DS1A_Z = ['stage', 'chrome', 'header', 'editor', 'reader', 'scrim', 'sheet', 'popover', 'toast', 'tooltip'] as const;
+const DS1A_TOKENS = [
+  ...DS1A_Z.map((l) => `--ds-z-${l}`),
+  '--ds-density-compact', '--ds-density-comfortable', '--ds-density-touch',
+  '--ds-text-xl', '--ds-text-2xl', '--ds-text-3xl',
+  '--ds-motion-enter-quick', '--ds-motion-enter-slow', '--ds-motion-stagger',
+  '--ds-on-danger'
 ];
 /** A token's colour in Atlas light / Atlas dark, var() followed through that block's cascade. */
 const atlasColor = (name: string, theme: 'light' | 'dark') => {
@@ -151,8 +164,9 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
     expect(ATLAS_LIGHT.get('--ds-font-sans')).toBe('"IBM Plex Sans", sans-serif');
     expect(ATLAS_LIGHT.get('--ds-font-display')).toBe('"Space Grotesk", sans-serif');
     expect(ATLAS_LIGHT.get('--ds-radius-panel')).toBe('0.75rem');
-    expect(ATLAS_LIGHT.get('--ds-radius-control')).toBe('0.625rem');
-    expect(ATLAS_LIGHT.get('--ds-radius-chip')).toBe('0.625rem');
+    // Bridge D1: controls and chips are Atlas rounded-md (8 px), not --radius-lg (10 px).
+    expect(ATLAS_LIGHT.get('--ds-radius-control')).toBe('0.5rem');
+    expect(ATLAS_LIGHT.get('--ds-radius-chip')).toBe('0.5rem');
     expect(ATLAS_LIGHT.get('--ds-radius-sm')).toBe('0.25rem');
     expect(ATLAS_LIGHT.get('--ds-shadow-soft')).toBe('0 1px 2px 0 rgb(0 0 0 / 0.05)');
     expect(ATLAS_DARK.get('--ds-shadow-soft')).toBe('0 1px 2px 0 rgb(0 0 0 / 0.4)');
@@ -167,7 +181,10 @@ describe('Atlas skin — (a) every token has a skin override, with the Atlas val
     expect(ATLAS_LIGHT.get('--ds-motion-theme')).toBe('260ms');
     expect(ATLAS_LIGHT.get('--ds-ease')).toBe('cubic-bezier(0.2, 0.8, 0.2, 1)');
     expect(ATLAS_LIGHT.get('--ds-tooltip-delay')).toBe('300ms');
-    expect(ATLAS_LIGHT.get('--ds-surface-blur')).toBe('18px');
+    // Bridge D3: opaque surfaces (no glass blur); the sticky header's 18 px is the one blur left.
+    expect(ATLAS_LIGHT.get('--ds-glass-blur')).toBe('0');
+    expect(ATLAS_LIGHT.get('--ds-header-blur')).toBe('18px');
+    expect(ATLAS_LIGHT.get('--ds-surface-blur')).toBe('var(--ds-glass-blur)');
   });
 });
 
@@ -184,7 +201,8 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(ROOT_TOKENS.get('--ds-shadow-soft')).toBe('0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline)');
     expect(ROOT_TOKENS.get('--ds-motion-medium')).toBe('200ms'); // duration-200
     expect(ROOT_TOKENS.get('--ds-ease')).toBe('cubic-bezier(0.4, 0, 0.2, 1)'); // tailwind's default curve
-    expect(ROOT_TOKENS.get('--ds-surface-blur')).toBe('12px'); // backdrop-blur-md
+    expect(ROOT_TOKENS.get('--ds-glass-blur')).toBe('12px'); // backdrop-blur-md (GLASS, MENU)
+    expect(ROOT_TOKENS.get('--ds-surface-blur')).toBe('var(--ds-glass-blur)'); // the pre-split name, an alias
     expect(ROOT_TOKENS.get('--ds-motion-theme')).toBe('0ms'); // no cross-fade outside a skin
     // The one deliberate change: the label on a solid accent fill is ink (5.6:1 on the brand
     // terracotta; the old text-white measured 3.1:1). tests/config/tokenContrast.test.ts.
@@ -198,11 +216,52 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(DARK_TOKENS.get('--ds-canvas')).toBe('#262624');
   });
 
+  it('a nested .dark subtree recomputes every token :root derives with var() (the restatement block equals them)', () => {
+    const nested = rules.filter((r) => r.parents.length === 0 && r.selector === ':where(.dark:not(:root))');
+    expect(nested).toHaveLength(1);
+    const restated = new Map([...nested[0].body.matchAll(/(--ds-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as const));
+    const derived = [...ROOT_TOKENS].filter(([k, v]) => /var\(/.test(v) && !DARK_TOKENS.has(k) && !isReader(k));
+    expect(derived.length).toBeGreaterThan(10);
+    expect([...restated].sort()).toEqual(derived.sort());
+  });
+
+  it('legacy-kit form controls keep the light scheme in dark (dark applies on every page since D5; their ink stays slate-900)', () => {
+    const shim = rules.filter((r) => r.parents.length === 0 && r.selector === '.dark :is(input, select, textarea).border-black');
+    expect(shim).toHaveLength(1);
+    expect(shim[0].body.trim()).toBe('color-scheme: light;');
+    // Only the kit's marked controls: a DS Field (token edge, no border-black) still takes the dark scheme.
+    expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector) && r.selector !== shim[0].selector)).toBe(false);
+  });
+
+  it('the legacy assistant bubble pins light markdown tokens in dark (white bubble on every legacy view since D5)', () => {
+    // UniversalAssistant renders each answer (MessageCard → .message-body) in a hard-coded white bubble.
+    const assistant = readFileSync(path.join(ROOT, 'components/UniversalAssistant.tsx'), 'utf8');
+    expect(assistant).toMatch(/className="[^"]*\bbg-white\b[^"]*\bborder-black\b[^"]*"[^>]*>[\s\S]{0,400}<MessageCard\b/);
+    const sel = '.dark .bg-white.border-black .message-body';
+    const pin = rules.filter((r) => r.parents.length === 0 && r.selector === sel);
+    expect(pin).toHaveLength(1);
+    const pinned = new Map([...pin[0].body.matchAll(/(--ds-[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()] as const));
+    // Every colour token a .message-body rule reads is pinned, so a new markdown rule cannot escape the pin.
+    const read = new Set(rules.filter((r) => r.parents.length === 0 && /^\.message-body\b/.test(r.selector))
+      .flatMap((r) => [...r.body.matchAll(/var\((--ds-[\w-]+)\)/g)].map((m) => m[1])));
+    const colourTokens = [...read].filter((t) => !t.startsWith('--ds-radius-'));
+    expect(colourTokens.length).toBeGreaterThanOrEqual(5);
+    for (const t of colourTokens) expect([...pinned.keys()], t).toContain(t);
+    const white = resolveColor('#ffffff');
+    const tok = (n: string) => resolveColor(pinned.get(n)!);
+    // Measured as painted: the link on the bubble, code-block ink on its well, the slate-800 header text on its fill.
+    expect(ratio(tok('--ds-info-text'), white)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-ink'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-ink'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(tok('--ds-muted'), over(tok('--ds-well'), white))).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(resolveColor('#1e293b'), over(tok('--ds-well-strong'), white))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it('every .dark token exists in :root, and a NEW token is only redefined in .dark when its dark value differs', () => {
     for (const k of DARK_TOKENS.keys()) expect(ROOT_TOKENS.get(k), `${k} exists in :root`).toBeDefined();
     // (--ds-accent is pre-existing and theme-invariant by design; the new tokens must not add noise.)
     for (const [k, v] of DARK_TOKENS) {
-      if (!NEW_TOKENS.includes(k) && !WAVE5_TOKENS.includes(k)) continue;
+      if (!NEW_TOKENS.includes(k) && !WAVE5_TOKENS.includes(k) && !DS1A_TOKENS.includes(k)) continue;
       expect(v, `${k} differs in .dark`).not.toBe(ROOT_TOKENS.get(k));
     }
   });
@@ -213,8 +272,9 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect(design.RADIUS_PILL).toBe('rounded-[var(--ds-radius-chip)]');
     expect(design.SHADOW_SOFT).toBe('shadow-[shadow:var(--ds-shadow-soft)]');
     expect(design.TRANSITION).toBe('transition-all duration-[var(--ds-motion-medium)] ease-[var(--ds-ease)]');
-    expect(design.GLASS).toContain('backdrop-blur-[var(--ds-surface-blur)]');
-    expect(design.GLASS_STRONG).toContain('backdrop-blur-[var(--ds-surface-blur)]');
+    expect(design.GLASS).toContain('backdrop-blur-[var(--ds-glass-blur)]');
+    expect(design.GLASS_STRONG).toContain('backdrop-blur-[var(--ds-glass-blur)]');
+    expect(design.MENU).toContain('backdrop-blur-[var(--ds-glass-blur)]');
     expect(design.ACCENT_SOFT_BG).toBe('bg-[var(--ds-accent-soft)]');
     expect(design.ON_ACCENT_TEXT).toBe('text-[var(--ds-on-accent)]');
     expect(design.PRIMARY_BTN).toContain(design.ON_ACCENT_TEXT);
@@ -376,6 +436,190 @@ describe('Atlas skin — wave 5 tokens (Atlas acd9fdfc)', () => {
   });
 });
 
+describe('Atlas skin — DS-1a tokens (z ladder, densities, heading steps, motion, the danger label)', () => {
+  it('defines every DS-1a token in :root and gives each a skin value (no token without one)', () => {
+    expect(DS1A_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
+    expect(DS1A_TOKENS.filter((k) => !ATLAS_LIGHT.has(k))).toEqual([]);
+    // Only the danger label is a colour that changes with the theme; the rest are numbers and lengths.
+    expect(DS1A_TOKENS.filter((k) => DARK_TOKENS.has(k))).toEqual(['--ds-on-danger']);
+    expect(DS1A_TOKENS.filter((k) => ATLAS_DARK.has(k))).toEqual(['--ds-on-danger']);
+  });
+
+  it('the stacking ladder: stage 0, chrome and header 40, editor 70, reader 80, scrim 85, sheet 86, popover 90, toast 95, tooltip 100', () => {
+    const ladder = (block: Map<string, string>) => DS1A_Z.map((l) => Number(block.get(`--ds-z-${l}`)));
+    expect(ladder(ROOT_TOKENS)).toEqual([0, 40, 40, 70, 80, 85, 86, 90, 95, 100]);
+    // Atlas has no z tokens: the skin restates the same ladder (never a different stacking under the skin).
+    expect(ladder(ATLAS_LIGHT)).toEqual(ladder(ROOT_TOKENS));
+    // Non-decreasing, and every overlay layer clears the page editor and the reader it may open over.
+    const values = ladder(ROOT_TOKENS);
+    expect([...values].sort((a, b) => a - b)).toEqual(values);
+    for (const l of ['scrim', 'sheet', 'popover', 'toast', 'tooltip']) expect(Number(ROOT_TOKENS.get(`--ds-z-${l}`))).toBeGreaterThan(80);
+    // The ladder the mobile sheets already document (BottomSheet / SideSheet) is the same one.
+    const sheet = readFileSync(path.join(ROOT, 'components/comicstudio/mobile/sheets/BottomSheet.tsx'), 'utf8');
+    expect(sheet).toMatch(/z 85 \(scrim\) \/ 86 \(sheet\)/);
+    expect(sheet).toMatch(/page[\s/]+editor \(70\) and the full-screen reader \(80\)/);
+  });
+
+  it('densities 28 / 36 / 44 px (touch = the coarse-pointer minimum --tap-min); heading steps are Atlas’s 20 / 24 / 30 px in rem', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
+      expect(block.get('--ds-density-compact')).toBe('28px');
+      expect(block.get('--ds-density-comfortable')).toBe('36px');
+      expect(block.get('--ds-density-touch')).toBe('44px');
+      expect(block.get('--ds-text-xl')).toBe('1.25rem');
+      expect(block.get('--ds-text-2xl')).toBe('1.5rem');
+      expect(block.get('--ds-text-3xl')).toBe('1.875rem');
+    }
+    const tapMin = rules.find((r) => r.selector === ':root' && /--tap-min\s*:/.test(r.body))?.body.match(/--tap-min\s*:\s*([^;]+);/)?.[1];
+    expect(tapMin).toBe(ROOT_TOKENS.get('--ds-density-touch'));
+  });
+
+  it('motion: -enter-quick is an alias of the 280 ms entrance (the existing token keeps its name and value), -enter-slow 420 ms and -stagger 40 ms (Atlas)', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
+      expect(block.get('--ds-motion-enter-quick')).toBe('var(--ds-motion-enter)');
+      expect(block.get('--ds-motion-enter')).toBe('280ms');
+      expect(block.get('--ds-motion-enter-slow')).toBe('420ms');
+      expect(block.get('--ds-motion-stagger')).toBe('40ms');
+    }
+  });
+
+  it('the danger label: white on the red, ink on the default dark theme’s light red (tokenContrast.test.ts measures both)', () => {
+    expect(ROOT_TOKENS.get('--ds-on-danger')).toBe('#ffffff');
+    expect(DARK_TOKENS.get('--ds-on-danger')).toBe('#1a1915');
+    expect(ATLAS_LIGHT.get('--ds-on-danger')).toBe('#ffffff');
+    expect(ATLAS_DARK.get('--ds-on-danger')).toBe('#ffffff');
+    expect(contrastRatio(ATLAS_LIGHT.get('--ds-on-danger')!, ATLAS_LIGHT.get('--ds-danger')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('studioDesign reads them: one Z class per layer, DENSITY and the TEXT_* steps', () => {
+    expect(Object.keys(design.Z)).toEqual([...DS1A_Z]);
+    for (const l of DS1A_Z) expect(design.Z[l]).toBe(`z-[var(--ds-z-${l})]`);
+    expect(design.DENSITY).toMatchObject({
+      compact: 'min-h-[var(--ds-density-compact)]',
+      comfortable: 'min-h-[var(--ds-density-comfortable)]',
+      touch: 'min-h-[var(--ds-density-touch)]',
+      coarse: 'coarse:min-h-[var(--ds-density-touch)]'
+    });
+    expect(design.DENSITY.coarseSquare.split(' ')).toEqual(['coarse:min-h-[var(--ds-density-touch)]', 'coarse:min-w-[var(--ds-density-touch)]']);
+    expect(design.TEXT_XL).toBe('text-[length:var(--ds-text-xl)] leading-7');
+    expect(design.TEXT_2XL).toBe('text-[length:var(--ds-text-2xl)] leading-8');
+    expect(design.TEXT_3XL).toBe('text-[length:var(--ds-text-3xl)] leading-9');
+    // Every z token has its recipe, and no recipe spells a raw number.
+    const zTokens = [...ROOT_TOKENS.keys()].filter((k) => k.startsWith('--ds-z-')).map((k) => k.slice('--ds-z-'.length));
+    expect(zTokens.sort()).toEqual([...DS1A_Z].sort());
+    for (const v of Object.values(design.Z)) expect(v).not.toMatch(/z-\d|z-\[\d/);
+  });
+});
+
+/**
+ * Wave 9, the Atlas bridge (docs/design/atlas-skin.md "Wave 9 (bridge)"; master plan §1.1, redesign plan
+ * §11.3 M1a): the glass / header blur split, the chart steps, the grid dot, the spotlight ink and two radii.
+ * Their defaults ARE the Atlas values (the skin is on every host now), restated in the skin block as every
+ * token is.
+ */
+const BRIDGE_CHART = ['--ds-chart-1', '--ds-chart-2', '--ds-chart-3', '--ds-chart-4', '--ds-chart-5'];
+const BRIDGE_TOKENS = ['--ds-glass-blur', '--ds-header-blur', ...BRIDGE_CHART, '--ds-grid-dot', '--ds-spot-ink', '--ds-radius-hero', '--ds-radius-feature'];
+
+describe('Atlas skin — wave 9 bridge tokens (blur split, charts, grid dot, spotlight ink, hero and feature radii)', () => {
+  it('defines every bridge token in :root and in the skin; only the chart steps change with the theme', () => {
+    expect(BRIDGE_TOKENS.filter((k) => !ROOT_TOKENS.has(k))).toEqual([]);
+    expect(BRIDGE_TOKENS.filter((k) => !ATLAS_LIGHT.has(k))).toEqual([]);
+    expect(BRIDGE_TOKENS.filter((k) => DARK_TOKENS.has(k))).toEqual(BRIDGE_CHART);
+    expect(BRIDGE_TOKENS.filter((k) => ATLAS_DARK.has(k))).toEqual(BRIDGE_CHART);
+  });
+
+  it('charts: five monochrome steps, ink first, the same with or without the skin', () => {
+    const light = ['#0a0a0a', '#525252', '#858585', '#b0b0b0', '#d4d4d4'];
+    const dark = ['#fafafa', '#b8b8b8', '#8a8a8a', '#5e5e5e', '#3d3d3d'];
+    expect(BRIDGE_CHART.map((k) => ROOT_TOKENS.get(k))).toEqual(light);
+    expect(BRIDGE_CHART.map((k) => ATLAS_LIGHT.get(k))).toEqual(light);
+    expect(BRIDGE_CHART.map((k) => DARK_TOKENS.get(k))).toEqual(dark);
+    expect(BRIDGE_CHART.map((k) => ATLAS_DARK.get(k))).toEqual(dark);
+    // Monochrome (a step, never a hue) and ordered from the ink outward in each theme.
+    for (const steps of [light, dark]) {
+      const lum = steps.map((hex) => resolveColor(hex)).map((c) => (expect(c.r === c.g && c.g === c.b).toBe(true), c.r));
+      const sorted = [...lum].sort((a, b) => a - b);
+      expect(lum).toEqual(steps === light ? sorted : [...sorted].reverse());
+    }
+  });
+
+  it('the grid dot is ink at 14 %, the spotlight ink is the ink, the hero and feature radii 28 / 16 px (defaults = skin)', () => {
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) {
+      expect(block.get('--ds-grid-dot')).toBe('color-mix(in srgb, var(--ds-ink) 14%, transparent)');
+      expect(block.get('--ds-spot-ink')).toBe('var(--ds-ink)');
+      expect(block.get('--ds-radius-hero')).toBe('28px');
+      expect(block.get('--ds-radius-feature')).toBe('16px');
+    }
+    // The grid dot follows the theme's ink (computed per element, so the dark ink in dark).
+    expect(atlasColor('--ds-grid-dot', 'dark').r).toBeGreaterThan(200);
+    expect(atlasColor('--ds-grid-dot', 'light').r).toBeLessThan(20);
+  });
+
+  it('blur: glass 12 px by default and 0 under the skin; the header 18 px everywhere; --ds-surface-blur is an alias of the glass', () => {
+    expect(ROOT_TOKENS.get('--ds-glass-blur')).toBe('12px');
+    expect(ATLAS_LIGHT.get('--ds-glass-blur')).toBe('0');
+    expect(ROOT_TOKENS.get('--ds-header-blur')).toBe('18px');
+    expect(ATLAS_LIGHT.get('--ds-header-blur')).toBe('18px');
+    for (const block of [ROOT_TOKENS, ATLAS_LIGHT]) expect(block.get('--ds-surface-blur')).toBe('var(--ds-glass-blur)');
+    // GLASS, GLASS_STRONG and MENU take the glass blur; the sticky header's glass layer takes the header blur.
+    for (const recipe of [design.GLASS, design.GLASS_STRONG, design.MENU]) {
+      expect(recipe).toContain('backdrop-blur-[var(--ds-glass-blur)]');
+      expect(recipe).not.toContain('--ds-header-blur');
+    }
+    expect(design.HEADER_GLASS).toContain('group-data-[scrolled=true]/header:backdrop-blur-[var(--ds-header-blur)]');
+    expect(design.HEADER_GLASS).not.toMatch(/(^|\s)backdrop-blur/); // no blur at rest: nothing under the header yet
+    expect(design.STICKY_HEADER.split(' ')).toEqual(['group/header', 'sticky', 'top-0', design.Z.header]);
+    // No recipe reads the pre-split name any more.
+    for (const [name, value] of Object.entries(design)) if (typeof value === 'string') expect(value, name).not.toContain('--ds-surface-blur');
+  });
+
+  it('bridge D1: controls and chips are 8 px under the skin (Atlas rounded-md), the default theme keeps its radii', () => {
+    expect(ATLAS_LIGHT.get('--ds-radius-control')).toBe('0.5rem');
+    expect(ATLAS_LIGHT.get('--ds-radius-chip')).toBe('0.5rem');
+    expect(ROOT_TOKENS.get('--ds-radius-control')).toBe('0.75rem');
+    expect(ROOT_TOKENS.get('--ds-radius-chip')).toBe('9999px');
+  });
+
+  it('M1a: the sidebar width joins the rail width; LIFT and RISE_IN are the card lift and the entrance', () => {
+    const layout = rules.filter((r) => r.selector === ':root').map((r) => r.body).join(';');
+    expect(layout).toMatch(/--sidebar-w:\s*240px;/);
+    expect(layout).toMatch(/--rail-w:\s*72px;/);
+    const lift = design.LIFT.split(' ');
+    // Hover-capable pointers only, the rise motion-safe only, 2 px, the lift shadow, the panel time.
+    expect(lift).toEqual(expect.arrayContaining(['can-hover:hover:shadow-[shadow:var(--ds-shadow-lift)]', 'can-hover:motion-safe:hover:-translate-y-0.5', 'duration-[var(--ds-motion-panel)]', 'motion-reduce:transition-none']));
+    expect(lift.filter((c) => /translate/.test(c))).toEqual(['can-hover:motion-safe:hover:-translate-y-0.5']);
+    expect(design.RISE_IN).toBe('ds-rise-in');
+    expect(ROOT_TOKENS.get('--ds-shadow-lift')).toBeDefined();
+    expect(ATLAS_LIGHT.get('--ds-shadow-lift')).toBe('0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1)'); // Atlas shadow-xl
+    expect(ATLAS_DARK.get('--ds-shadow-lift')).toBe('0 22px 44px -18px rgb(0 0 0 / 0.8)');
+  });
+
+  it('M1a: .studio-stagger runs on the entrance and stagger tokens, not literal times', () => {
+    const stagger = rules.filter((r) => r.selector.startsWith('.studio-stagger'));
+    expect(stagger.length).toBeGreaterThan(5);
+    const body = stagger.map((r) => r.body).join(' ');
+    expect(body).toContain('animation: studioReveal var(--ds-motion-enter) var(--ds-ease-enter) both');
+    expect(body).toContain('animation-delay: calc(6 * var(--ds-motion-stagger))');
+    // The old literal 0.5 s duration and 0.05 s steps are gone (only the first child's 0 s delay is a number).
+    expect(body).not.toMatch(/(?<![\w-])0?\.\d+s\b|\d+ms\b/);
+  });
+
+  it('bridge D4: the chat markdown, skeleton and How It Works gradient read tokens (no legacy hex), the gradient takes the heading ink under the skin', () => {
+    const outside = rules.filter((r) => r.parents.length === 0 && /^(?:\.dark )?\.(?:message-body|studio-shimmer|hiw-gradient-text)\b/.test(r.selector));
+    expect(outside.map((r) => r.selector)).toEqual(expect.arrayContaining(['.message-body a', '.message-body pre', '.studio-shimmer', '.hiw-gradient-text']));
+    for (const r of outside) expect(`${r.selector} { ${r.body} }`).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(\s*\d/i);
+    expect(rules.some((r) => r.selector === '.dark .message-body a')).toBe(false);
+    expect(rules.find((r) => r.selector === '.message-body a')?.body).toContain('color: var(--ds-info-text)');
+    expect(rules.find((r) => r.selector === '.message-body pre')?.body).toContain('border: 1px solid var(--ds-hairline)');
+    const hiw = rules.find((r) => r.selector === '[data-ds-skin="atlas"] .hiw-gradient-text')?.body ?? '';
+    // The heading's own ink, not the theme token: How It Works is a legacy page that stays light in dark, so
+    // --ds-ink painted the two words #fafafa inside the slate-900 heading (1.04:1 where the gradient is white).
+    expect(hiw).toContain('color: inherit');
+    expect(hiw).not.toContain('var(--ds-ink)');
+    expect(hiw).toContain('background-image: none');
+    expect(hiw).toContain('-webkit-text-fill-color: currentColor');
+  });
+});
+
 describe('Atlas skin — (c) text contrast in both skin themes', () => {
   const pairs: Array<[string, string]> = [];
   for (const fg of ['--ds-ink', '--ds-muted']) for (const bg of ['--ds-canvas', '--ds-surface', '--ds-surface-soft', '--ds-well']) pairs.push([fg, bg]);
@@ -448,7 +692,8 @@ describe('Atlas skin — fonts', () => {
   it('does not add a Google Fonts link for them (index.html keeps only the lettering fonts)', () => {
     const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8');
     expect(html).not.toMatch(/Plex|Grotesk/i);
-    expect(html).not.toMatch(/data-ds-skin/);
+    // Bridge D5: the skin itself ships on <html> (the attribute, not a font link; dsSkinEverywhere.test.ts).
+    expect(html).toMatch(/<html lang="en" data-ds-skin="atlas">/);
   });
 });
 
@@ -460,9 +705,13 @@ describe('Atlas skin — base rules and the cross-fade', () => {
     expect(base).toContain('font-family: var(--ds-font-sans)');
     expect(base).toContain('-webkit-tap-highlight-color: transparent');
     expect(base).toMatch(/scrollbar-color: color-mix\(in srgb, var\(--ds-ink\) 22%, transparent\) transparent/);
-    const headings = skinRule((r) => r.selector === '[data-ds-skin="atlas"] :is(h1, h2, h3, h4, .ds-font-display)');
-    expect(headings?.body).toContain('font-family: var(--ds-font-display)');
-    expect(headings?.body).toContain('text-wrap-style: balance');
+    // Bridge D2: the display face only where a recipe asks for it (.ds-font-display: FONT_DISPLAY, HEADING,
+    // page titles); a bare heading is the body face and only balances its lines.
+    const display = skinRule((r) => r.selector === '[data-ds-skin="atlas"] .ds-font-display');
+    expect(display?.body).toContain('font-family: var(--ds-font-display)');
+    const headings = skinRule((r) => r.selector === '[data-ds-skin="atlas"] :is(h1, h2, h3, h4)');
+    expect(headings?.body).toBe('text-wrap-style: balance;');
+    expect(rules.filter((r) => r.selector.includes('[data-ds-skin="atlas"]') && /\bh[1-4]\b/.test(r.selector) && /font-family/.test(r.body))).toEqual([]);
     expect(skinRule((r) => r.selector === '[data-ds-skin="atlas"] :is(p, li, dd, figcaption, blockquote)')?.body).toContain('text-wrap-style: pretty');
     expect(skinRule((r) => r.selector === '[data-ds-skin="atlas"] .font-sans')?.body).toContain('var(--ds-font-sans)');
   });
@@ -675,6 +924,8 @@ describe('Atlas skin — wave 5 recipes in studioDesign (focus, fields, overlays
     expect(design.SEGMENTED_ITEM).toContain(design.FOCUS_RING_FLUSH);
     expect(classes(design.SEGMENTED_ITEM)).toEqual(expect.arrayContaining(['text-[var(--ds-muted)]', 'hover:text-[var(--ds-ink)]', 'aria-checked:text-[var(--ds-ink)]', 'aria-selected:text-[var(--ds-ink)]', 'text-[13px]']));
     expect(design.SEGMENTED_ACTIVE).toBe('bg-[var(--ds-segment-pill)] text-[var(--ds-ink)] shadow-[shadow:var(--ds-shadow-segment)]');
+    // The fill alone, for an item on SEGMENTED_ITEM (which inks the selected item itself): the same paint, no ink.
+    expect(classes(design.SEGMENTED_ACTIVE_FILL)).toEqual(classes(design.SEGMENTED_ACTIVE).filter((c) => !c.startsWith('text-')));
     expect(classes(design.SEGMENTED_PILL)).toEqual(expect.arrayContaining([
       'bg-[var(--ds-segment-pill)]', 'shadow-[shadow:var(--ds-shadow-segment)]', 'transition-[transform,width]', 'duration-[var(--ds-motion-panel)]', 'ease-[var(--ds-ease-spring)]', 'motion-reduce:transition-none'
     ]));
@@ -684,7 +935,9 @@ describe('Atlas skin — wave 5 recipes in studioDesign (focus, fields, overlays
     for (const c of ['overflow-hidden', design.RADIUS_PANEL, 'border-[var(--ds-hairline)]', 'bg-[var(--ds-surface)]', design.SHADOW_SOFT]) expect(design.SECTION_CARD, c).toContain(c);
     expect(classes(design.SECTION_HEADER)).toEqual(expect.arrayContaining(['border-b', 'border-[var(--ds-hairline)]', 'px-5', 'py-5', 'sm:px-6', 'flex-wrap']));
     expect(classes(design.SECTION_ICON_TILE)).toEqual(expect.arrayContaining(['h-9', 'w-9', 'bg-[var(--ds-well)]', 'border-[var(--ds-hairline)]']));
-    expect(classes(design.SECTION_TITLE)).toEqual(expect.arrayContaining(['text-[length:var(--ds-text-lg)]', 'font-semibold', 'leading-6', 'tracking-[-0.01em]', design.FONT_DISPLAY]));
+    expect(classes(design.SECTION_TITLE)).toEqual(expect.arrayContaining(['text-[length:var(--ds-text-lg)]', 'font-semibold', 'leading-6', 'tracking-[-0.01em]']));
+    // Bridge D2: a card title is the body face (Atlas SectionCard), never the display face.
+    expect(classes(design.SECTION_TITLE)).not.toContain(design.FONT_DISPLAY);
     expect(classes(design.SECTION_DESCRIPTION)).toEqual(expect.arrayContaining(['text-[var(--ds-muted)]', 'text-[length:var(--ds-text-base)]']));
     expect(design.SECTION_BODY).toBe('px-5 py-5 sm:px-6');
   });

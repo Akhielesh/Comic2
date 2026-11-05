@@ -16,7 +16,7 @@
 import type { Request } from 'express';
 import type { QualityTier } from '../../../shared/comic/doc.js';
 import { ANCHORS_ENV, anchorKindsFromFlag } from '../../../shared/comic/anchors.js';
-import { PAID_PLAN_IDS, resolveStudioCaps, type StudioCaps } from '../../../shared/comic/capabilities.js';
+import { PAID_PLAN_IDS, liveCapsFromEnv, resolveStudioCaps, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import { isContentRating, type ContentRating } from '../../../shared/comic/safety.js';
 import { BILLING_ENABLED } from '../config.js';
 import { TtlCache } from '../lib/cache.js';
@@ -131,7 +131,8 @@ export async function checkQualityAccess(
 export interface StudioCapsDeps extends QualityAccessDeps {
   /** Account-age ceiling (default: the safety seam, profile_private.dob, 10-min LRU there). */
   accountCeilingFor?: (userId: string) => Promise<ContentRating>;
-  /** Server env (default process.env): COMIC_CONSISTENCY_ANCHORS sets caps.anchorKinds. */
+  /** Server env (default process.env): COMIC_CONSISTENCY_ANCHORS sets caps.anchorKinds; COMIC_LIVE_QUEUE, COMIC_STEER,
+   *  COMIC_CONFLICT_GUARD, COMIC_DIALOGUE_FAST and COMIC_PRO_EDITOR_V2 set the live-agent / dialogue / Pro editor v2 caps. */
   env?: Readonly<Record<string, string | undefined>>;
 }
 
@@ -149,10 +150,16 @@ const defaultIsAdminFor = async (req: Request): Promise<boolean> => {
  *
  * The caps also carry the consistency-anchor kinds the server's runs use (pro plan §4.8): one env
  * read, anchorKindsFromFlag(COMIC_CONSISTENCY_ANCHORS). Unset = ANCHOR_KINDS_OFF, every kind off.
+ *
+ * And the agent-editor flags (plan §5, owner decision D9): each env var is a stage, off | admins | all, and the admin
+ * lookup above decides 'admins' (it fails closed, so a lookup hiccup never opens an admins-only feature). Unset =
+ * LIVE_FLAG_DEFAULTS: the queue, the conflict guard and the Pro editor v2 for admins; steering and the dialogue fast
+ * path off. The client reads these caps only, never env.
  */
 export async function studioCapsFor(req: Request, opts: { byok: boolean }, deps: StudioCapsDeps = {}): Promise<StudioCaps> {
   const caps = await accessCapsFor(req, opts, deps);
-  return { ...caps, anchorKinds: anchorKindsFromFlag((deps.env ?? process.env)[ANCHORS_ENV]) };
+  const env = deps.env ?? process.env;
+  return { ...caps, anchorKinds: anchorKindsFromFlag(env[ANCHORS_ENV]), ...liveCapsFromEnv(env, caps.admin) };
 }
 
 /** Plan, key, admin and ceiling (studioCapsFor without the server flags). */

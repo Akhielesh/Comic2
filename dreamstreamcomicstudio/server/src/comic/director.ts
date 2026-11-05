@@ -37,11 +37,20 @@ import {
 } from './replies.js';
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
+import { conflictCardFor } from './conflictGuard.js';
+import { takeSteerOf, type SteerNote } from './session.js';
 import { toolGroups } from './tools/index.js';
 import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
+
+/** The user turn a drained steer inbox becomes (agent-editor plan §3 A2): one message, numbered when there are several. */
+export const steerNoteText = (notes: readonly SteerNote[]): string => {
+  const texts = notes.map((n) => n.text.trim()).filter(Boolean);
+  if (texts.length <= 1) return `(The user added while you were working:) ${texts[0] ?? ''}`.trim();
+  return `(The user added while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+};
 /** Tool calls honored in a single round; extras are refused so one round can't fan out unboundedly. */
 export const MAX_CALLS_PER_ROUND = 12;
 /** Conversation messages the director sees verbatim each turn. */
@@ -594,7 +603,9 @@ async function directorTurnBody(
     startedAt,
     runs: [],
     bgErrors: [],
-    ipNames
+    ipNames,
+    // The creator's commits after this rev win over the director's (agent-editor plan §3 A3, conflictGuard.ts).
+    startRev: before.rev
   });
   // Core tools + the feature groups active this turn (contract §12.1).
   const toolset = buildTurnToolset(ctx, turn, toolGroups());
@@ -764,6 +775,11 @@ async function directorTurnBody(
       if (ctx.signal.aborted) throw new StudioError('CANCELLED', 'Cancelled.', { status: 499 });
       // ask_user ends the turn: the question and its chips are the reply.
       if (turn.askedUser) break;
+      // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call
+      // (drained only when that call follows, so a note is never taken into a turn that is ending). session.takeSteer()
+      // is a stub returning [] until wave 1 A2 TURN, so nothing changes yet.
+      const steered = takeSteerOf(session);
+      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered) });
     }
   } catch (err) {
     const error = err instanceof StudioError ? err : new StudioError('INTERNAL', 'The studio assistant hit a snag. Please try again.', { cause: err });
@@ -776,6 +792,12 @@ async function directorTurnBody(
     flushHeld(true);
     unwatch();
   }
+
+  // Conflicts (agent-editor plan §3 A3): what the creator changed mid-turn was kept; one card asks about the rest.
+  // conflictCardFor is null until the guard (wave 1 A3 CONFLICT) holds anything back.
+  // Asked on a Stopped turn too: the edits it held back are never dropped without a word (never silent).
+  const conflictCard = conflictCardFor(turn);
+  if (conflictCard) turn.cards.push(conflictCard);
 
   const after = session.doc;
   let text = spoken.join('\n\n').trim();

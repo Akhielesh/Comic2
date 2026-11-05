@@ -1,9 +1,11 @@
 // Design-skin boot and theme switch (docs/design/atlas-skin.md). The boot runs synchronously at the
 // very top of index.tsx, before React renders, so the page never flickers between looks:
-//   1. `data-ds-skin="atlas"` goes on <html> when the page runs on the comics host (productHost
-//      `comicsSkin`); nothing happens on the apex — there only the Comic Studio roots carry the
-//      attribute (ComicStudio, PublicComicReader, ImmersiveReader).
-//   2. The 400 and 600 body weights of IBM Plex Sans are preloaded (no inline script in
+//   1. The skin: index.html ships `data-ds-skin="atlas"` on <html> for every host (bridge D5, "Atlas
+//      everywhere"), so on the apex the attribute is already there; on the comics host the boot sets it
+//      too (productHost `hostSkin`). With the build kill switch VITE_DS_SKIN_EVERYWHERE=off the HTML
+//      ships without it and the old rule applies: the comics host only, and on the apex just the Comic
+//      Studio roots carry the attribute (ComicStudio, PublicComicReader, ImmersiveReader).
+//   2. Under the skin, the 400 and 600 body weights of IBM Plex Sans are preloaded (no inline script in
 //      index.html: its only inline script is hashed in the CSP).
 // The theme switch (Atlas wave 5, providers/ThemeProvider.tsx there): changing light/dark under the
 // skin is ONE cross-fade of the whole page — `.dark` flips inside document.startViewTransition, the
@@ -16,7 +18,7 @@
 // dropped that because it restyled every element on every frame of the fade.)
 // Pure helpers take their collaborators as arguments so the tests run them in jsdom.
 
-import { comicsSkin, DS_SKIN_ATTR, type DsSkin } from './productHost';
+import { DS_SKIN_ATTR, hostSkin, type DsSkin } from './productHost';
 
 export { DS_SKIN_ATTR };
 
@@ -33,7 +35,7 @@ export const DS_NO_TRANSITIONS_CLASS = 'ds-no-transitions';
 
 export interface BootDsSkinOptions {
   document: Document;
-  /** Defaults to the page's hostname (productHost.comicsSkin). */
+  /** Defaults to the page's hostname (productHost.hostSkin). */
   hostname?: string;
 }
 
@@ -59,12 +61,15 @@ export const preloadSkinFonts = (doc: Document, hrefs: readonly string[] = ATLAS
 };
 
 /**
- * Put the page under its host's skin. Returns the skin applied (null on the apex, where nothing is
- * touched). Safe to call more than once (the QA harness boots it per page).
+ * Put the page under its skin: the one <html> shipped with (index.html, every host unless the kill switch
+ * stripped it) or the comics host's. Returns the skin applied, or null where there is none (the apex with
+ * the kill switch off), and then nothing is touched. Safe to call more than once (the QA harness boots it
+ * per page).
  */
 export const bootDsSkin = (opts: BootDsSkinOptions): DsSkin | null => {
   const { document: doc } = opts;
-  const skin = opts.hostname === undefined ? comicsSkin() : comicsSkin(opts.hostname);
+  const shipped = doc.documentElement.getAttribute(DS_SKIN_ATTR);
+  const skin = opts.hostname === undefined ? hostSkin(undefined, shipped) : hostSkin(opts.hostname, shipped);
   if (!skin) return null;
   doc.documentElement.setAttribute(DS_SKIN_ATTR, skin);
   preloadSkinFonts(doc);

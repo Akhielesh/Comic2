@@ -53,7 +53,7 @@ import {
   type ModelSelection,
 } from './modelSelection';
 import { applyGovernanceMap, getGovernanceMap, type GovernanceMap } from './sourceGovernance';
-import { getChatMemory, setChatMemory, MAX_CHAT_MEMORY_CHARS } from './chatStorage';
+import { getChatMemory, setChatMemory, isChatMemoryConnected, markChatMemoryConnected, MAX_CHAT_MEMORY_CHARS } from './chatStorage';
 import { listCustomAgents, replaceCustomAgents, parseMemoryItems, formatMemoryItems } from './chatAgents';
 import type { CustomAgentDef } from '../apiTypes';
 import { isLocalOwner } from './localOwner';
@@ -71,6 +71,12 @@ interface CloudSnapshot {
   chat?: {
     memory?: string;
     agents?: CustomAgentDef[];
+    /**
+     * The memory holds facts distilled from connected-account content (chatStorage
+     * markChatMemoryConnected). Follows the memory to every device: merged as "either side", since
+     * the merged memory keeps both sides' lines; cleared only with the memory.
+     */
+    memoryConnected?: boolean;
   };
   /** Allowed-sources governance (explicit on/off per provider) — an OFF must follow the account. */
   sourceGovernance?: GovernanceMap;
@@ -94,6 +100,7 @@ const buildLocalSnapshot = (userId: string): CloudSnapshot => ({
   chat: {
     memory: getChatMemory(userId),
     agents: listCustomAgents(userId),
+    ...(isChatMemoryConnected(userId) ? { memoryConnected: true } : {}),
   },
   sourceGovernance: getGovernanceMap(),
 });
@@ -168,6 +175,7 @@ const applySnapshot = (snap: CloudSnapshot, userId: string) => {
     if (snap.imageModelId) setImageModelId(snap.imageModelId);
     if (snap.modelSelection) replaceModelSelection(snap.modelSelection);
     if (typeof snap.chat?.memory === 'string') setChatMemory(snap.chat.memory, userId);
+    if (snap.chat?.memoryConnected === true) markChatMemoryConnected(userId);
     if (Array.isArray(snap.chat?.agents)) replaceCustomAgents(snap.chat.agents, userId);
     if (snap.sourceGovernance) applyGovernanceMap(snap.sourceGovernance);
   } finally {
@@ -297,6 +305,7 @@ export const reconcileOnLogin = async (userId: string): Promise<LoginSyncOutcome
       chat: {
         memory: mergeMemory(local.chat?.memory || '', cloud.chat?.memory || ''),
         agents: mergeAgents(local.chat?.agents || [], cloud.chat?.agents || []),
+        ...(local.chat?.memoryConnected || cloud.chat?.memoryConnected ? { memoryConnected: true } : {}),
       },
       // Cloud wins per-provider; local explicit choices not yet synced fill the gaps.
       sourceGovernance: { ...local.sourceGovernance, ...cloud.sourceGovernance },

@@ -3,8 +3,9 @@
 // WHY: the AI agent decides when to call tools, so without a server-side governor a
 // runaway loop (or a hot user) can silently burn a free-tier quota (Tavily 1k/mo,
 // CoinGecko 10k/mo, …) or hammer fair-use endpoints. Every upstream fetch is
-// metered by hostname → provider, checked against per-minute and per-day budgets,
-// and counted (ok/error) so anomalies are visible in the dashboard and the logs.
+// metered by hostname → provider, checked against per-minute and per-day budgets (the check
+// reserves the call, so concurrent requests cannot overshoot), and counted (ok/error) so
+// anomalies are visible in the dashboard and the logs.
 //
 // Budgets are deliberately set UNDER each provider's documented free-tier limits
 // (June 2026 audit). Override any of them without a deploy via the PROVIDER_BUDGETS
@@ -16,39 +17,67 @@
 
 import { currentAccountId } from './accountContext.js';
 
+// Matched against the URL's HOST only (never its path or query string): user text ends up in
+// query strings — a Foursquare search for "pizza bing.com", a YouTube search for "api.tavily.com" —
+// and must never move a call into another provider's budget (or out of its own).
 const HOST_TO_PROVIDER: [RegExp, string][] = [
-  [/api\.tavily\.com/, 'tavily'],
-  [/api\.search\.brave\.com/, 'brave'],
-  [/google\.serper\.dev/, 'serper'],
-  [/googleapis\.com/, 'google-cse'],
-  [/duckduckgo\.com/, 'duckduckgo'],
-  [/bing\.com/, 'bing-scrape'],
-  [/wikipedia\.org/, 'wikipedia'],
-  [/api\.met\.no/, 'metno'],
-  [/open-meteo\.com/, 'open-meteo'],
-  [/nominatim\.openstreetmap\.org/, 'nominatim'],
-  [/coingecko\.com/, 'coingecko'],
-  [/frankfurter\.app/, 'frankfurter'],
-  [/finance\.yahoo\.com|fc\.yahoo\.com/, 'yahoo'],
-  [/stooq\.com/, 'stooq'],
-  [/data\.alpaca\.markets/, 'alpaca'],
-  [/ipinfo\.io/, 'ipinfo'],
-  [/ip-api\.com/, 'ip-api'],
-  [/r\.jina\.ai/, 'jina-reader'],
-  [/overpass-api\.de|overpass\.kumi\.systems/, 'overpass'],
-  [/routing\.openstreetmap\.de/, 'osrm']
+  [/(^|\.)api\.tavily\.com$/, 'tavily'],
+  [/(^|\.)api\.search\.brave\.com$/, 'brave'],
+  [/(^|\.)google\.serper\.dev$/, 'serper'],
+  [/(^|\.)googleapis\.com$/, 'google-cse'],
+  [/(^|\.)duckduckgo\.com$/, 'duckduckgo'],
+  [/(^|\.)bing\.com$/, 'bing-scrape'],
+  [/(^|\.)wikipedia\.org$/, 'wikipedia'],
+  [/(^|\.)api\.met\.no$/, 'metno'],
+  [/(^|\.)open-meteo\.com$/, 'open-meteo'],
+  [/(^|\.)nominatim\.openstreetmap\.org$/, 'nominatim'],
+  [/(^|\.)coingecko\.com$/, 'coingecko'],
+  [/(^|\.)frankfurter\.app$/, 'frankfurter'],
+  [/(^|\.)finance\.yahoo\.com$|(^|\.)fc\.yahoo\.com$/, 'yahoo'],
+  [/(^|\.)stooq\.com$/, 'stooq'],
+  [/(^|\.)data\.alpaca\.markets$/, 'alpaca'],
+  [/(^|\.)ipinfo\.io$/, 'ipinfo'],
+  [/(^|\.)ip-api\.com$/, 'ip-api'],
+  [/^r\.jina\.ai$/, 'jina-reader'],
+  [/(^|\.)overpass-api\.de$|^overpass\.kumi\.systems$/, 'overpass'],
+  [/^routing\.openstreetmap\.de$/, 'osrm'],
+  [/(^|\.)foursquare\.com$/, 'foursquare']
 ];
+
+/**
+ * Meter key for a user/model-supplied page (reader mode, link unfurl, research reads): its own
+ * per-host politeness bucket, never a named provider's — a page URL that merely CONTAINS
+ * "api.tavily.com" or "foursquare.com" must not spend (or exhaust) that provider's budget.
+ */
+export const PAGE_PROVIDER_PREFIX = 'page:';
+export const pageProviderFor = (url: string): string => {
+  try {
+    return `${PAGE_PROVIDER_PREFIX}${new URL(url).hostname.toLowerCase()}`;
+  } catch {
+    return `${PAGE_PROVIDER_PREFIX}unknown`;
+  }
+};
+/** Page hosts tracked at once (oldest dropped first): anonymous reads of many hosts stay bounded. */
+const MAX_PAGE_HOSTS = 500;
+/** Account deltas for page hosts are summed under one name so the usage log never grows per host. */
+const PAGE_ACCOUNT_PROVIDER = 'web-page';
 
 export const providerForUrl = (url: string): string => {
   // SEARXNG_URL is user-configured, so match it explicitly before the host table.
   const sx = process.env.SEARXNG_URL;
   if (sx && url.startsWith(sx.replace(/\/$/, ''))) return 'searxng';
-  for (const [re, name] of HOST_TO_PROVIDER) if (re.test(url)) return name;
+  let u: URL;
   try {
-    return new URL(url).hostname;
+    u = new URL(url);
   } catch {
     return 'unknown';
   }
+  const host = u.hostname.toLowerCase();
+  // The YouTube Data API shares the googleapis.com host with Custom Search: its path decides, so
+  // a video search never spends (or is blocked by) the search budget.
+  if (/^(www|youtube)\.googleapis\.com$/.test(host) && u.pathname.startsWith('/youtube/')) return 'youtube';
+  for (const [re, name] of HOST_TO_PROVIDER) if (re.test(host)) return name;
+  return host;
 };
 
 export interface ProviderBudget {
@@ -78,7 +107,9 @@ const DEFAULT_BUDGETS: Record<string, ProviderBudget> = {
   'ip-api': { perMin: 40, perDay: 1500 }, // hard upstream cap is 45/min
   'jina-reader': { perMin: 15, perDay: 400 }, // anonymous tier ~20 rpm/IP — stay under
   overpass: { perMin: 6, perDay: 500 }, // public instances rate-limit busy IPs hard
-  osrm: { perMin: 20, perDay: 1500 } // FOSSGIS demo server — fair use
+  osrm: { perMin: 20, perDay: 1500 }, // FOSSGIS demo server — fair use
+  foursquare: { perMin: 20, perDay: 300 }, // keyed Places API: protect the account's free calls
+  youtube: { perMin: 10, perDay: 80 } // Data API: 10,000 units/day, search = 100 units → 100/day max
 };
 const FALLBACK_BUDGET: ProviderBudget = { perMin: 60, perDay: 3000 };
 
@@ -172,11 +203,16 @@ export const flushUsageDeltas = async (): Promise<void> => {
   }
 };
 
-const noteAccountDelta = (provider: string, now: number, field: 'calls' | 'errors' | 'blocked'): void => {
+const noteAccountDelta = (meterKey: string, now: number, field: 'calls' | 'errors' | 'blocked', by: 1 | -1 = 1): void => {
+  const provider = meterKey.startsWith(PAGE_PROVIDER_PREFIX) ? PAGE_ACCOUNT_PROVIDER : meterKey;
   const account = currentAccountId() || 'anon';
   const day = dayKey(now);
   const key = `${account}|${provider}|${day}`;
   let d = pendingDeltas.get(key);
+  if (by < 0) {
+    if (d && d[field] > 0) d[field] -= 1; // a release never takes a flushed row below zero
+    return;
+  }
   if (!d) {
     d = { account_id: account, provider, day, calls: 0, errors: 0, blocked: 0 };
     pendingDeltas.set(key, d);
@@ -184,10 +220,24 @@ const noteAccountDelta = (provider: string, now: number, field: 'calls' | 'error
   d[field] += 1;
 };
 
+let pageHosts = 0;
+
 const statFor = (provider: string, now: number): ProviderStat => {
   let s = stats.get(provider);
   const dk = dayKey(now);
   if (!s) {
+    if (provider.startsWith(PAGE_PROVIDER_PREFIX)) {
+      if (pageHosts >= MAX_PAGE_HOSTS) {
+        for (const key of stats.keys()) {
+          if (key.startsWith(PAGE_PROVIDER_PREFIX)) {
+            stats.delete(key); // Map order = first seen: the oldest page host goes
+            pageHosts -= 1;
+            break;
+          }
+        }
+      }
+      pageHosts += 1;
+    }
     s = { dayKey: dk, dayCalls: 0, dayErrors: 0, blockedToday: 0, minuteStamps: [], lastCallAt: 0, lastErrorAt: 0, warned80: false };
     stats.set(provider, s);
   }
@@ -210,9 +260,15 @@ export class ProviderBudgetError extends Error {
   }
 }
 
-/** Throws ProviderBudgetError when the call would exceed the provider's budget. */
-export const assertProviderBudget = (url: string, now = Date.now()): void => {
-  const provider = providerForUrl(url);
+/**
+ * Throws ProviderBudgetError when the call would exceed the provider's budget; otherwise
+ * RESERVES the call (counted in the minute window and the day) before anything is sent, so
+ * concurrent callers each see the calls already in flight — N parallel requests can never all
+ * pass at the same count. Every check is followed by the request it admitted (or by
+ * releaseProviderReservation when the caller ends up not sending one). `provider` overrides
+ * the URL lookup (pageProviderFor for user-supplied pages).
+ */
+export const assertProviderBudget = (url: string, now = Date.now(), provider = providerForUrl(url)): void => {
   const s = statFor(provider, now);
   const b = budgetFor(provider);
   if (s.minuteStamps.length >= b.perMin) {
@@ -227,27 +283,40 @@ export const assertProviderBudget = (url: string, now = Date.now()): void => {
     console.warn(`[provider-usage] BLOCKED ${provider}: daily budget (${b.perDay}) reached`);
     throw new ProviderBudgetError(provider, 'day');
   }
-};
-
-/** Record a completed upstream call (after the fetch resolves/throws). */
-export const noteProviderCall = (url: string, ok: boolean, now = Date.now()): void => {
-  const provider = providerForUrl(url);
-  const s = statFor(provider, now);
-  const b = budgetFor(provider);
-  s.dayCalls += 1;
   s.minuteStamps.push(now);
-  s.lastCallAt = now;
+  s.dayCalls += 1;
   noteAccountDelta(provider, now, 'calls');
-  if (!ok) {
-    s.dayErrors += 1;
-    s.lastErrorAt = now;
-    noteAccountDelta(provider, now, 'errors');
-  }
   // One log line when a provider crosses 80% of its daily budget — the early-warning
   // anomaly signal ("why is the agent calling CoinGecko 250×today?").
   if (!s.warned80 && s.dayCalls >= b.perDay * 0.8) {
     s.warned80 = true;
     console.warn(`[provider-usage] ${provider} at ${s.dayCalls}/${b.perDay} daily calls (80%+) — check for runaway usage`);
+  }
+};
+
+/**
+ * Give back a reservation assertProviderBudget made for a request that was never sent (e.g. a
+ * keyed search provider that skipped because it has no key).
+ */
+export const releaseProviderReservation = (url: string, now = Date.now(), provider = providerForUrl(url)): void => {
+  const s = stats.get(provider);
+  if (!s) return;
+  if (s.dayKey === dayKey(now) && s.dayCalls > 0) s.dayCalls -= 1;
+  s.minuteStamps.pop();
+  noteAccountDelta(provider, now, 'calls', -1);
+};
+
+/**
+ * Record how an admitted call ended (after the fetch resolves/throws). The call itself was
+ * already counted when assertProviderBudget reserved it; this adds the outcome.
+ */
+export const noteProviderCall = (url: string, ok: boolean, now = Date.now(), provider = providerForUrl(url)): void => {
+  const s = statFor(provider, now);
+  s.lastCallAt = now;
+  if (!ok) {
+    s.dayErrors += 1;
+    s.lastErrorAt = now;
+    noteAccountDelta(provider, now, 'errors');
   }
 };
 
@@ -284,6 +353,7 @@ export interface ProviderUsageRow {
 export const getProviderUsageSnapshot = (now = Date.now()): ProviderUsageRow[] => {
   const rows: ProviderUsageRow[] = [];
   for (const [provider] of stats) {
+    if (provider.startsWith(PAGE_PROVIDER_PREFIX)) continue; // per-host politeness buckets, not provider quotas
     const s = statFor(provider, now);
     const b = budgetFor(provider);
     const lastMinute = s.minuteStamps.length;
@@ -318,6 +388,7 @@ export const getProviderUsageSnapshot = (now = Date.now()): ProviderUsageRow[] =
 /** Test hook. */
 export const __resetProviderUsage = (): void => {
   stats.clear();
+  pageHosts = 0;
   pendingDeltas.clear();
   envOverrides = null;
 };

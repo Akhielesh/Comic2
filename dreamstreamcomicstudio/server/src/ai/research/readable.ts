@@ -2,11 +2,15 @@
 // pull its main body text so the synthesizer can ground claims in the ACTUAL article,
 // not just a 320-char search snippet.
 //
-// SSRF posture matches the existing unfurl feature (https + public-host guard via
-// isSafeMcpUrl, size + time capped). Best-effort: returns null on anything that isn't a
-// usable HTML page, so a blocked/binary/redirect-looping source is simply skipped.
+// SSRF posture matches the existing unfurl feature: fetchPublicUrl (https + public host, the
+// resolved IP pinned for the connection, every redirect hop re-checked), one deadline over
+// headers and body, a streamed byte cap, and linear-time HTML scanning. Best-effort: returns
+// null on anything that isn't a usable HTML page, so a blocked/binary/redirect-looping source
+// is simply skipped.
 
 import { isSafeMcpUrl } from '../tools/mcpClient.js';
+import { fetchTextCapped } from '../tools/http.js';
+import { firstElement, removeElements, stripTagsLinear } from '../tools/htmlScan.js';
 
 const UA = 'Mozilla/5.0 (compatible; DreamStreamBot/1.0; +https://dreamstream)';
 const MAX_BYTES = 400_000;
@@ -23,27 +27,28 @@ const decodeEntities = (s: string): string =>
     .replace(/&#x27;|&#39;/g, "'")
     .replace(/&#x2F;/g, '/');
 
-/** Strip HTML to readable body text, preferring <article>/<main> when present. */
+/** Strip HTML to readable body text, preferring <article>/<main> when present. Linear time. */
 export const htmlToText = (html: string): string => {
-  let s = html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<(nav|header|footer|aside|form|svg|button)[\s\S]*?<\/\1>/gi, ' ');
+  let s = removeElements(html, ['script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form', 'svg', 'button'], {
+    comments: true
+  });
 
   // Lightweight readability: if a main content region exists and is substantial, use it.
-  const region = s.match(/<article[\s\S]*?<\/article>/i)?.[0] || s.match(/<main[\s\S]*?<\/main>/i)?.[0];
+  const region = firstElement(s, 'article') || firstElement(s, 'main');
   if (region && region.length > 500) s = region;
 
-  s = s
-    .replace(/<\/(p|div|li|h[1-6]|tr|section)>/gi, '\n') // keep some block structure
-    .replace(/<[^>]+>/g, ' ');
-  s = decodeEntities(s)
-    .replace(/[ \t\f\v]+/g, ' ')
-    .replace(/\n\s*\n\s*\n+/g, '\n\n')
-    .trim();
-  return s;
+  s = stripTagsLinear(s.replace(/<\/(p|div|li|h[1-6]|tr|section)>/gi, '\n')); // keep some block structure
+  const lines = decodeEntities(s)
+    .replace(/[ \t\f\v\r]+/g, ' ')
+    .split('\n')
+    .map((l) => l.trim());
+  // Collapse runs of blank lines to one (the old /\n\s*\n\s*\n+/ without its backtracking).
+  const kept: string[] = [];
+  for (const l of lines) {
+    if (!l && kept.length && !kept[kept.length - 1]) continue;
+    kept.push(l);
+  }
+  return kept.join('\n').trim();
 };
 
 /**
@@ -56,47 +61,20 @@ export const fetchReadable = async (
   maxChars = DEFAULT_MAX_CHARS
 ): Promise<string | null> => {
   if (!isSafeMcpUrl(url).ok) return null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  signal?.addEventListener('abort', onAbort, { once: true });
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': UA, Accept: 'text/html,application/xhtml+xml' },
-      redirect: 'follow',
-      signal: controller.signal
+    const page = await fetchTextCapped(url, {
+      timeoutMs: FETCH_TIMEOUT_MS,
+      accept: 'text/html,application/xhtml+xml',
+      headers: { 'User-Agent': UA },
+      signal,
+      maxBytes: MAX_BYTES,
+      publicOnly: true,
+      contentTypes: /text\/html|application\/xhtml|text\/plain/i // a PDF or image is refused before its body is read
     });
-    if (!res.ok) return null;
-    const ct = res.headers.get('content-type') || '';
-    if (ct && !/text\/html|application\/xhtml|text\/plain/i.test(ct)) return null;
-
-    let html = '';
-    const reader = (res.body as ReadableStream<Uint8Array> | null)?.getReader();
-    if (reader) {
-      const dec = new TextDecoder();
-      let total = 0;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.length;
-        html += dec.decode(value, { stream: true });
-        if (total > MAX_BYTES) {
-          controller.abort();
-          break;
-        }
-      }
-    } else {
-      html = (await res.text()).slice(0, MAX_BYTES);
-    }
-
-    const text = htmlToText(html);
+    const text = htmlToText(page.text);
     // Too short to add value over the snippet → treat as unreadable.
     return text.length > 250 ? text.slice(0, maxChars) : null;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener('abort', onAbort);
   }
 };

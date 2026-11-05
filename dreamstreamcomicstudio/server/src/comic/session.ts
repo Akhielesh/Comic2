@@ -19,7 +19,7 @@
 // is refused with 409 LIMIT (server work — renders, spend, messages — always lands).
 
 import { applyOps, type DocOp } from '../../../shared/comic/ops.js';
-import type { OpsOrigin, StudioEvent } from '../../../shared/comic/events.js';
+import type { OpsOrigin, StudioEvent, StudioFocus } from '../../../shared/comic/events.js';
 import { DOC_LIMITS as SHARED_DOC_LIMITS, MAX_ARCHIVE } from '../../../shared/comic/limits.js';
 import { REF_LIMITS } from '../../../shared/comic/refs.js';
 import {
@@ -373,6 +373,36 @@ export const archiveEvictionNotice = (count: number, now: number, opts: { histor
   };
 };
 
+// ── Live agent (agent-editor plan §3 A2; K3 contract: stubs with final signatures, wave 1 A2 TURN fills them) ──
+
+/** A note the creator sent while the director was working (POST /steer), waiting for the director's next round. */
+export interface SteerNote {
+  /** The user message it was committed as (marked `steered`). */
+  msgId: string;
+  text: string;
+  focus?: StudioFocus;
+  at: number;
+}
+
+/** One committed batch, as the recent-commit ring keeps it (A2): what the conflict guard (A3) reads after a turn's startRev. */
+export interface RecentCommit {
+  rev: number;
+  origin?: OpsOrigin;
+  ops: DocOp[];
+  at: number;
+}
+
+/** Ring-buffer bound of recentCommits (plan §3 A2: last 300 commits, size-bounded). */
+export const RECENT_COMMITS_MAX = 300;
+
+/** Steer notes waiting for `session`'s running turn (empty for a session without an inbox, e.g. a test double). */
+export const takeSteerOf = (session: StudioSessionApi): SteerNote[] =>
+  session instanceof StudioSession ? session.takeSteer() : [];
+
+/** Commits after `sinceRev` on `session` (empty for a session without the ring, e.g. a test double). */
+export const recentCommitsOf = (session: StudioSessionApi, sinceRev: number): RecentCommit[] =>
+  session instanceof StudioSession ? session.recentCommits(sinceRev) : [];
+
 // ── Session ──────────────────────────────────────────────────────────────────
 
 export interface StudioSessionOptions {
@@ -603,6 +633,34 @@ export class StudioSession implements StudioSessionApi {
       this.activeWork = Math.max(0, this.activeWork - 1);
       this.touch();
     };
+  }
+
+  // ── Live agent (agent-editor plan §3 A2). STUBS: final signatures; wave 1 A2 TURN replaces the bodies. ──
+
+  /**
+   * Drain the steer inbox (≤ STEER_LIMITS.inbox notes, oldest first). The director calls it after each tool round and
+   * before its next model call. STUB: [] (no inbox yet, so the director loop is unchanged).
+   */
+  takeSteer(): SteerNote[] {
+    return [];
+  }
+
+  /**
+   * Reserve the turn synchronously, before the stream route's first await (closes the BUSY race, G19): returns the
+   * release, or null when a turn already runs or is reserved (→ BUSY). While held, `turnRunning` is true. STUB: refuses
+   * only while a turn holds the lock, and reserves nothing.
+   */
+  reserveTurn(): (() => void) | null {
+    return this.turnRunning ? null : () => undefined;
+  }
+
+  /**
+   * Commits after `sinceRev`, oldest first, from a ring of the last RECENT_COMMITS_MAX commits (filled in commit()).
+   * The conflict guard reads the creator's (origin 'user') commits after a turn's startRev. STUB: [].
+   */
+  recentCommits(sinceRev: number): RecentCommit[] {
+    void sinceRev;
+    return [];
   }
 
   /** Whether the cache may drop this session. */

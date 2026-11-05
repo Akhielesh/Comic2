@@ -1,7 +1,8 @@
 // Device projects for the Comic Studio layout & device harness (P1-QA; mobile.md §10.2).
 //
 // 14 device projects + `reflow-320` (WCAG 1.4.10), built from Playwright's `devices[...]` where one
-// exists and custom otherwise, plus the 4 layout-smoke viewports from visualqa.md §7. The #10 sweep
+// exists and custom otherwise, plus the layout-smoke viewports (visualqa.md §7, + 1280) and the app-scene
+// matrix (redesign plan §11.3 M2, APP_SCENE_MATRIX). The #10 sweep
 // covers widths on desktop Chromium; these add ENGINES, TOUCH, DPR and ORIENTATION.
 //
 // Engines: CI installs Chromium only (fast, free), so every project runs on Chromium by default and
@@ -19,6 +20,21 @@ export interface Insets {
   right: number;
   bottom: number;
   left: number;
+}
+
+/**
+ * How a project looks beyond its device (DS-1b, master plan §1.4): the page-level skin, the theme and motion.
+ * The harness (helpers/harness.ts) asks every URL for this look unless a test names its own, and
+ * playwright.config.ts emulates the matching OS preferences. Absent: the default projects' look (no page-level
+ * skin, light, reduced motion).
+ */
+export interface ProjectLook {
+  /** `skin=atlas` on every harness URL: html[data-ds-skin="atlas"], exactly as the comics host boots it. */
+  skin?: 'atlas';
+  /** `theme=dark` on every harness URL, and the OS colour scheme is dark (`colorScheme: 'dark'`). */
+  theme?: 'dark';
+  /** 'on': prefers-reduced-motion is no-preference (every other project reduces motion). */
+  motion?: 'on';
 }
 
 export interface ComicDevice {
@@ -42,6 +58,8 @@ export interface ComicDevice {
   /** fold5-dual: the hinge between two side-by-side segments (CDP display-feature override). */
   hinge?: { offset: number; maskLength: number };
   notes?: string;
+  /** DS-1b: the look the project runs in (skin / theme / motion); absent for every device project. */
+  look?: ProjectLook;
 }
 
 const NONE: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
@@ -293,11 +311,12 @@ export const REFLOW_320: ComicDevice = {
   notes: 'WCAG reflow; assertion 1 (no horizontal overflow) must pass'
 };
 
-/** visualqa.md §7 layout-smoke matrix (light theme; Chromium; phones get touch). */
+/** visualqa.md §7 layout-smoke matrix (light theme; Chromium; phones get touch), plus 1280×800 (DS-1b, master plan §1.4). */
 export const SMOKE_VIEWPORTS: ComicDevice[] = [
   [360, 740],
   [768, 1024],
   [1024, 768],
+  [1280, 800],
   [1440, 900]
 ].map(([w, h]) => {
   const phone = w < 768;
@@ -316,7 +335,62 @@ export const SMOKE_VIEWPORTS: ComicDevice[] = [
   };
 });
 
-export const ALL_DEVICES: ComicDevice[] = [...COMIC_DEVICES, REFLOW_320, ...SMOKE_VIEWPORTS];
+const smoke = (name: string): ComicDevice => {
+  const d = SMOKE_VIEWPORTS.find((v) => v.name === name);
+  if (!d) throw new Error(`no smoke viewport ${name}`);
+  return d;
+};
+
+const comicDevice = (name: string): ComicDevice => {
+  const d = COMIC_DEVICES.find((v) => v.name === name);
+  if (!d) throw new Error(`no device ${name}`);
+  return d;
+};
+
+/**
+ * DS-1b (master plan §1.3, §1.4): the smoke under other looks. The smoke viewports above run the app scenes in
+ * light and dark; these add the page-level Atlas skin on a phone and the OS dark scheme on a desktop (both run the
+ * whole smoke: app, studio, kit and model-picker scenes), and the WCAG reflow width and motion on
+ * (prefers-reduced-motion: no-preference, for the entrances), which run the app scenes (`@app`) only
+ * (playwright.config.ts). Redesign plan §11.3 M2 adds the rest of the app-scene matrix (`@app` only): the
+ * iPhone SE 320×568, the Fold5 book posture (two segments with the hinge) and a phone in landscape, 852×393.
+ */
+export const APP_SMOKE_DEVICES: ComicDevice[] = [
+  { ...REFLOW_320, name: 'smoke-320x640', notes: 'the app scenes at the WCAG reflow width (light and dark)' },
+  { ...REFLOW_320, name: 'smoke-320x568', viewport: { width: 320, height: 568 }, notes: 'iPhone SE (1st gen): the shortest phone (M2)' },
+  { ...comicDevice('fold5-dual'), name: 'smoke-fold5-dual', notes: 'Fold5 book posture: two 441 px segments with the hinge (M2)' },
+  {
+    ...comicDevice('iphone-15-landscape'),
+    name: 'smoke-852x393',
+    viewport: { width: 852, height: 393 },
+    screen: { width: 852, height: 393 },
+    safeArea: NONE,
+    notes: 'a phone in landscape at its full screen, 852×393 (M2): the 393 px height is the squeeze'
+  },
+  { ...smoke('smoke-360x740'), name: 'smoke-360x740-atlas', look: { skin: 'atlas' }, notes: 'html[data-ds-skin="atlas"], light and dark' },
+  { ...smoke('smoke-1440x900'), name: 'smoke-1440x900-dark', look: { theme: 'dark' }, notes: 'colorScheme dark: prefers-color-scheme and the .dark theme' },
+  { ...smoke('smoke-1280x800'), name: 'motion-on', look: { motion: 'on' }, notes: 'prefers-reduced-motion: no-preference; entrances run, then the page is measured' }
+];
+
+export const ALL_DEVICES: ComicDevice[] = [...COMIC_DEVICES, REFLOW_320, ...SMOKE_VIEWPORTS, ...APP_SMOKE_DEVICES];
+
+/**
+ * The app-scene smoke matrix (redesign plan §11.3 M2): every `qa/app/scenes` page at these nine sizes, each in
+ * light and dark (one test per theme) under reduced motion (the projects' default). `reflow-320` is the
+ * 320×640 WCAG reflow width, run as smoke-320x640. Run it alone with
+ * `npx playwright test -c tests/e2e/playwright.config.ts --grep @app` plus these `--project`s.
+ */
+export const APP_SCENE_MATRIX: readonly string[] = [
+  'smoke-320x640',
+  'smoke-320x568',
+  'smoke-360x740',
+  'smoke-768x1024',
+  'smoke-1024x768',
+  'smoke-1280x800',
+  'smoke-1440x900',
+  'smoke-fold5-dual',
+  'smoke-852x393'
+];
 
 export const deviceByName = (name: string): ComicDevice | undefined => ALL_DEVICES.find((d) => d.name === name);
 

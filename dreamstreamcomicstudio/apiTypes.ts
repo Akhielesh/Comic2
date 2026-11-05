@@ -458,6 +458,12 @@ export type ChatMessagePart = ChatTextPart | ChatImagePart;
 export type ChatRequestMessage = {
   role: 'user' | 'assistant';
   content: string | ChatMessagePart[];
+  /**
+   * Connected-account provenance, echoed on an assistant turn the server marked (its reply carried
+   * `connectorData: true`) or whose tool events name a connector tool. The server then refuses a
+   * free-model turn of this conversation without a lookup (docs/DATA_CONNECTORS.md).
+   */
+  connectorData?: boolean;
 };
 
 /** A user-configured remote MCP server (Streamable HTTP / JSON-RPC). */
@@ -547,6 +553,13 @@ export type ChatRequest = {
   customAgents?: CustomAgentDef[];
   /** Files attached to the CURRENT user turn, decoded server-side for tools like run_python. */
   attachments?: ChatAttachmentInput[];
+  /**
+   * The user's long-term memory (composed into `systemPrompt`) was distilled from connected-account
+   * content (ChatMemoryResponse.connectorData, kept sticky by the client). The server strips that
+   * memory from every turn that withholds connected content (free models, unconfirmed providers),
+   * whatever the user's connections, and a paid OpenRouter turn that carries it denies data collection.
+   */
+  memoryConnected?: boolean;
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
@@ -2538,6 +2551,24 @@ export type ChatResponse = {
   notices?: CapabilityNotice[];
   usage?: ApiUsage;
   billing?: ApiBillingInfo;
+  /**
+   * True when connected-account content entered this reply. Echo it on that assistant turn
+   * (ChatRequestMessage.connectorData) so a later free-model turn of the chat is refused exactly.
+   */
+  connectorData?: boolean;
+};
+
+/** POST /api/chat/memory: the merged long-term memory. */
+export type ChatMemoryResponse = {
+  memory: string;
+  /**
+   * The memory was distilled from a conversation that carries, or may carry, connected-account
+   * content. Keep this flag with the local memory until the memory is cleared, and never compose
+   * that memory into a turn that may run on a free model.
+   */
+  connectorData?: boolean;
+  /** 'usage': the included usage is used up, so the memory came back unchanged and nothing was spent. */
+  skipped?: 'usage';
 };
 
 /** A platform capability and its current status (for the system dashboard). */
