@@ -138,8 +138,9 @@ describe('turnUsesConnectorData: each entry path flags the turn', () => {
   });
 
   it('isFreeModelId: only `:free` endpoints', () => {
-    expect(isFreeModelId('meta-llama/llama-3.3-70b-instruct:free')).toBe(true);
-    expect(isFreeModelId('google/gemini-2.5-flash')).toBe(false);
+    expect(isFreeModelId('vendor/free-a:free')).toBe(true);
+    expect(isFreeModelId('vendor/paid-a')).toBe(false);
+    expect(isFreeModelId('vendor/free-a:free-trial')).toBe(false);
     expect(isFreeModelId(undefined)).toBe(false);
   });
 });
