@@ -100,6 +100,18 @@ describe('holds and Send now', () => {
     expect(queueOf(s).force).toBe(false);
   });
 
+  it('a take of one note keeps a Stop or reload hold on the rest (only release, retry or express lift it)', () => {
+    for (const held of ['stopped', 'restored'] as const) {
+      let s = run(loaded(), { type: 'queue_add', note: note('a') }, { type: 'queue_add', note: note('b') }, { type: 'queue_hold', held });
+      s = run(s, { type: 'queue_take', ids: ['a'] });
+      expect(queueOf(s)).toMatchObject({ held, notes: [note('b')] });
+    }
+    // BUSY ("elsewhere") is about the notes that went: a take may lift it.
+    let s = run(loaded(), { type: 'queue_add', note: note('a') }, { type: 'queue_add', note: note('b') }, { type: 'queue_hold', held: 'elsewhere' });
+    s = run(s, { type: 'queue_take', ids: ['a'] });
+    expect(queueOf(s).held).toBeNull();
+  });
+
   it('express moves the note to the head and marks it; removing it clears the mark', () => {
     let s = run(loaded(), { type: 'queue_add', note: note('a') }, { type: 'queue_add', note: note('b') }, { type: 'queue_hold', held: 'stopped' }, { type: 'queue_express', id: 'b' });
     expect(queueOf(s)).toMatchObject({ express: 'b', held: null });

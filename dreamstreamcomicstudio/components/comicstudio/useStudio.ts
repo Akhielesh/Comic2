@@ -31,7 +31,8 @@
 //     composer keeps the draft). With the queue off, a send while a turn is in flight is 'refused' and nothing else
 //     changes (it used to return silently).
 //   - While the server's turn lock is held (a director turn whose reply has not landed, or plan_pages), notes queue.
-//     When the reply lands the queue drains as ONE message (D1), split only by differing focus; it holds for an open
+//     When the reply lands the queue drains as ONE message (D1), split only by differing focus; it holds while the last
+//     message failed before the server took it (the drain never replaces that failed bubble), and for an open
 //     question or spend gate, after Stop, after a reload (never auto-sent) and after a BUSY from another tab (a bounded
 //     retry). BUSY puts the notes back in Up next instead of showing a failed bubble.
 //   - sendNow(id): with caps.liveAgent.steer and a steer function, the note joins the running turn
@@ -116,12 +117,14 @@ import {
   QUEUE_LIMITS,
   QUEUE_RETRY_MS,
   readStoredQueue,
+  withoutQueuePrefix,
   writeStoredQueue,
   type DrainRequest,
   type QueueAddRefusal,
   type QueueHold,
   type QueuedNote
 } from './messageQueue';
+import { composeInStudio } from './conversation/composerBus';
 
 // Back-compat re-exports (consumers and tests import these from './useStudio').
 export { MODE_STORAGE_KEY, resolveStudioMode } from './useStudioMode';
@@ -879,11 +882,34 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
     [runStream]
   );
 
+  /**
+   * A queued send the creator asked for past a failed message ("Send anyway", "Send now") takes that failed bubble's
+   * place. Its words are never dropped (G20): they go back into the message box, after any draft, and a notice says so.
+   */
+  const keepFailedWords = useCallback((): void => {
+    const failed = stateRef.current.pendingMessage;
+    if (!failed || failed.status !== 'failed') return;
+    const parts = failed.requeue?.notes.length ? failed.requeue.notes.map((n) => n.text) : [failed.text];
+    const words = parts
+      .map((t) => withoutQueuePrefix((typeof t === 'string' ? t : '').trim()))
+      .filter(Boolean)
+      .join('\n\n');
+    const photos = (failed.attachments?.length ?? 0) + (failed.inboxPaths?.length ?? 0);
+    if (words) composeInStudio({ text: words, append: true, focus: false });
+    say({
+      kind: 'info',
+      text: words
+        ? `Your message that didn’t go is back in the message box${photos ? '. Add its photos again to send them' : ''}.`
+        : 'The photos from the message that didn’t go weren’t sent. Add them again to send them.'
+    });
+  }, [say]);
+
   /** Send one drained batch of queued notes (or the note "Send now" picked); BUSY puts them back at the head. */
   const sendQueued = useCallback(
     (batch: QueuedNote[]): void => {
       if (!batch.length) return;
       const req: DrainRequest = drainRequest(batch);
+      keepFailedWords();
       dispatch({ type: 'queue_take', ids: batch.map((n) => n.id) });
       void startMessage({
         text: req.text,
@@ -894,7 +920,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         requeue: { notes: batch, at: 'head' }
       });
     },
-    [startMessage]
+    [startMessage, keepFailedWords]
   );
 
   const send = useCallback(
@@ -930,15 +956,19 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       }
 
       // Queue on (plan §3 A1). Notes already waiting go first: a new message joins them while the turn is locked,
-      // while BUSY from another tab holds them, and while they are about to drain (their order is kept).
+      // while BUSY from another tab holds them, and while they are about to drain (their order is kept). A failed
+      // message holds them, so "Try again" (which comes back through here) goes before them.
       const q = queueOf(s);
       const locked = !!messageInFlightRef.current || isTurnLocked(s);
+      const failed = s.pendingMessage?.status === 'failed';
       const drainsNext =
-        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held }));
+        q.notes.length > 0 && (q.express !== null || q.force || q.held === 'elsewhere' || !holdReason({ doc: s.doc, held: q.held, failed }));
       // A message that can wait in Up next: no inline files (photos travel as uploaded inbox paths), no card answer.
       const note: QueuedNote | null =
         files.length || card ? null : { id: localId('note'), text: clean, ...(inbox.length ? { inboxPaths: inbox } : {}), ...(targets ? { attachmentTargets: targets } : {}), ...(focus ? { focus } : {}), at: Date.now() };
-      if (locked || drainsNext) {
+      // An options-card answer belongs to the question on screen: on a free turn it goes now, even while notes wait to
+      // drain. Only a locked turn refuses it (the server would answer BUSY).
+      if (locked || (drainsNext && !card)) {
         if (!note) {
           say({ kind: 'info', text: QUEUE_REFUSAL_COPY[card ? 'card' : 'inline'] });
           return 'refused';
@@ -1455,25 +1485,38 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const queueNotes = queueState.notes;
   // What the Up next block says. While a director turn runs only an event hold (Stop, BUSY, a reload) applies; a
   // question or a gate is judged against the reply that is about to land.
+  // The creator's last message failed before the server took it: the drain must not put a new message in its place.
+  const pendingFailed = state.pendingMessage?.status === 'failed';
   const queueHold: QueueHold | null =
-    !queueOn || !queueNotes.length ? null : messageBusy ? queueState.held : holdReason({ doc: state.doc, held: queueState.held, planning });
+    !queueOn || !queueNotes.length
+      ? null
+      : messageBusy
+        ? queueState.held
+        : holdReason({ doc: state.doc, held: queueState.held, planning, failed: pendingFailed });
   const hasBase = !!state.base;
+  /** "Send now" joins the running turn (steering on and a steer call wired) instead of stopping it. */
+  const queueSteers = queueOn && steerOn(caps) && !!(deps.steerStudio ?? DEFAULT_STEER);
 
   // Drain: the turn is free and nothing holds the queue → the first batch goes as ONE message (D1). "Send anyway"
-  // passes a question or a gate once; "Send now" (D2, after the Stop) sends its one note whatever holds.
+  // passes a question, a gate or a failed message once (its words go back to the message box); "Send now" (D2, after
+  // the Stop) sends its one note whatever holds.
   useEffect(() => {
     if (!queueOn || !hasBase || turnLocked || messageInFlightRef.current || switching) return;
     const q = queueOf(stateRef.current);
-    if (!q.notes.length) return;
+    if (!q.notes.length) {
+      // A Stop pressed with nothing waiting holds only what is typed while it stops: once that turn is over, it ends.
+      if (q.held) dispatch({ type: 'queue_clear' });
+      return;
+    }
     const express = q.express ? q.notes.find((n) => n.id === q.express) : undefined;
     if (express) {
       sendQueued([express]);
       return;
     }
-    const hold = holdReason({ doc: stateRef.current.doc, held: q.held });
-    if (hold && !(q.force && (hold === 'question' || hold === 'gate'))) return;
+    const hold = holdReason({ doc: stateRef.current.doc, held: q.held, failed: stateRef.current.pendingMessage?.status === 'failed' });
+    if (hold && !(q.force && (hold === 'question' || hold === 'gate' || hold === 'failed'))) return;
     sendQueued(batchesForDrain(q.notes)[0] ?? []);
-  }, [queueOn, hasBase, turnLocked, queueState, state.doc, switching, sendQueued]);
+  }, [queueOn, hasBase, turnLocked, queueState, state.doc, pendingFailed, switching, sendQueued]);
 
   // BUSY from another tab or device: try again a few times, spaced out (bounded — never an idle timer), then wait
   // for "Try again".
@@ -1503,8 +1546,9 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   /**
    * "Send now" on a queued note. The turn is free (the queue is only held): it goes at once. A director turn is running:
    * with steering on (caps.liveAgent.steer and a steer call) the note joins that turn; NOT_RUNNING means the turn just
-   * ended, so it goes next. Steering off, or a note with photos (a steer carries text only): Stop the director, then
-   * send it (D2). A plan_pages run is never stopped from here: the note goes the moment the plan is in.
+   * ended, so it goes next. A steer refused for its content keeps the note and says why; any other steer failure falls
+   * back to D2 with a calm notice. Steering off, or a note with photos (a steer carries text only): Stop the director,
+   * then send it (D2). A plan_pages run is never stopped from here: the note goes the moment the plan is in.
    */
   const sendNow = useCallback(
     async (id: string): Promise<SendOutcome> => {
@@ -1525,12 +1569,23 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
         } catch (err) {
           if (generation !== generationRef.current) return 'refused';
           const e = toStudioApiError(err, 'project');
-          if (e.code === 'NOT_RUNNING') {
-            dispatch({ type: 'queue_express', id });
-            return 'queued';
+          // Refused for what it says: the words are the problem, so the note stays for the creator to change.
+          if (e.kind === 'content_policy' || e.code === 'CONTENT_POLICY') {
+            dispatch({ type: 'set_error', message: e.message, ...(e.code ? { code: e.code } : {}) });
+            return 'refused';
           }
-          dispatch({ type: 'set_error', message: e.message, ...(e.code ? { code: e.code } : {}) });
-          return 'refused';
+          // NOT_RUNNING: the turn just ended, so it goes next. Anything else (a full steer inbox, steering switched off on
+          // the server, the network): fall back to D2 — Stop the director, then send it — and say so calmly.
+          dispatch({ type: 'queue_express', id });
+          if (e.code !== 'NOT_RUNNING') {
+            const stillWorking = isMessageBusy(stateRef.current);
+            say({ kind: 'info', text: stillWorking ? 'Couldn’t add it to this step, so the director stops and it goes next.' : 'Couldn’t add it to this step, so it goes next.' });
+            if (stillWorking) {
+              stopForSendNowRef.current = true;
+              void cancel();
+            }
+          }
+          return 'queued';
         }
       }
       dispatch({ type: 'queue_express', id });
@@ -1540,7 +1595,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       }
       return 'queued';
     },
-    [sendQueued, cancel]
+    [sendQueued, cancel, say]
   );
 
   return useMemo(
@@ -1603,6 +1658,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
             queueHold,
             queueSendingNow: queueState.express,
             queueRetriesLeft: queueState.busyRetries <= QUEUE_LIMITS.busyRetries,
+            queueSteers,
             turnLocked,
             editQueued,
             moveQueued,
@@ -1671,6 +1727,7 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
       queueHold,
       queueState.express,
       queueState.busyRetries,
+      queueSteers,
       turnLocked,
       editQueued,
       moveQueued,

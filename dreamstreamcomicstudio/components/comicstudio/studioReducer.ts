@@ -277,7 +277,7 @@ export type StudioReducerAction =
   | { type: 'queue_move'; id: string; dir: -1 | 1 }
   | { type: 'queue_move_to'; id: string; index: number }
   | { type: 'queue_clear' }
-  /** These notes left the queue to be sent (a drain, Send now): the event hold, the force and the express clear. */
+  /** These notes left the queue to be sent (a drain, Send now): the force, the express and a BUSY hold clear; a Stop or reload hold stays on the rest. */
   | { type: 'queue_take'; ids: string[] }
   | { type: 'queue_hold'; held: QueueEventHold }
   /** "Send anyway" / "Send" / "Try again": the hold lifts and the next drain may pass a question or a gate. */
@@ -837,7 +837,10 @@ export const studioReducer = (state: StudioState, action: StudioReducerAction): 
 
 // ── The live queue (plan §3 A1) ──────────────────────────────────────────────
 
-/** A queue that ran out of notes forgets its hold, force and express (a Stop hold set on an empty queue stays). */
+/**
+ * A queue that ran out of notes forgets its hold, force and express. A Stop hold set on an empty queue stays until the
+ * turn it stopped is over (useStudio's drain clears it then), so notes typed while "Stopping…" are held.
+ */
 const settleQueue = (q: QueueState): QueueState => (q.notes.length ? q : EMPTY_QUEUE);
 
 const withQueue = (state: StudioState, next: QueueState): StudioState => (next === queueOf(state) ? state : { ...state, queue: next });
@@ -865,7 +868,11 @@ const reduceQueue = (state: StudioState, action: StudioReducerAction): StudioSta
       // The BUSY count survives a take: the notes may come straight back (another BUSY), and the retries stay bounded.
       // It resets once the server records the message (applyOpsEvent).
       if (!notes.length) return withQueue(state, q.busyRetries ? { ...EMPTY_QUEUE, busyRetries: q.busyRetries } : EMPTY_QUEUE);
-      return withQueue(state, { ...q, notes, held: null, force: false, express: q.express && ids.has(q.express) ? null : q.express });
+      // A Stop or reload hold is about the notes still waiting: "Send now" on one of them sends that one, and the rest
+      // keep waiting for a tap (only queue_release, queue_retry and queue_express lift a hold). BUSY's hold was about
+      // the notes that went, so a take may lift it.
+      const held = q.held === 'stopped' || q.held === 'restored' ? q.held : null;
+      return withQueue(state, { ...q, notes, held, force: false, express: q.express && ids.has(q.express) ? null : q.express });
     }
     case 'queue_hold':
       return q.held === action.held ? state : withQueue(state, { ...q, held: action.held });

@@ -265,6 +265,8 @@ export interface StudioController {
   queueSendingNow?: string | null;
   /** False once the automatic retries after a BUSY (another tab or device) are used up: the queue waits for a tap. */
   queueRetriesLeft?: boolean;
+  /** "Send now" adds a text note to the director's running step (steering on and wired) instead of stopping it. */
+  queueSteers?: boolean;
   /** The server's turn lock is (or may be) held — a director turn, or a plan_pages run: a message now goes to Up next. */
   turnLocked?: boolean;
   /** Replace a queued note's text (an empty edit changes nothing). */
