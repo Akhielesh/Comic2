@@ -33,8 +33,8 @@ import { transitionAgentRun } from '../../services/comicAgentRun';
 import { AgentStageShell } from '../AgentStageShell';
 import { buildComicExportManifest, buildComicHtmlDocument } from '../../services/comicDeliverables';
 
-declare const jspdf: any;
-declare const html2canvas: any;
+import { legacyPdfErrorMessage, loadLegacyPdf } from '../../services/legacyPdfLoader';
+import { STATUS_INK, STATUS_SURFACE } from '../ds/recipes';
 
 interface ReviewExportProps {
   project: Project;
@@ -65,6 +65,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [auditSummary, setAuditSummary] = useState<string>('');
   const [auditScoresByPanel, setAuditScoresByPanel] = useState<Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }>>({});
   const [regenError, setRegenError] = useState<string | null>(null);
+  // The PDF tools load on first use (services/legacyPdfLoader.ts); a load that fails says so calmly here.
+  const [isBuildingPdf, setIsBuildingPdf] = useState(false);
+  const [pdfNotice, setPdfNotice] = useState<string | null>(null);
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const [comicCost, setComicCost] = useState<ComicCostResponse | null>(null);
   // Governed users never see dollars (P1-LIMITS): the usage status decides how spend reads.
@@ -364,50 +367,58 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
   const handleDownloadPDF = async () => {
     const comicEl = document.getElementById('comic-render-area');
-    if (!comicEl) return;
-
-    const { jsPDF } = jspdf;
-    const ratioValue = parseRatio(state.customAspectRatioEnabled && state.customAspectRatio ? state.customAspectRatio : state.styleAspectRatio) || 1;
-    const pdf = new jsPDF(ratioValue < 1 ? 'p' : 'l', 'mm', 'a4');
-
-    // Temporarily expand full height to capture everything
-    const originalHeight = comicEl.style.height;
-    const originalOverflow = comicEl.style.overflow;
-    comicEl.style.height = 'auto';
-    comicEl.style.overflow = 'visible';
-
+    if (!comicEl || isBuildingPdf) return;
+    setPdfNotice(null);
+    setIsBuildingPdf(true);
     try {
-      const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF' });
-      const imgData = canvas.toDataURL('image/png');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const { jsPDF, html2canvas } = await loadLegacyPdf();
+      const ratioValue = parseRatio(state.customAspectRatioEnabled && state.customAspectRatio ? state.customAspectRatio : state.styleAspectRatio) || 1;
+      const pdf = new jsPDF(ratioValue < 1 ? 'p' : 'l', 'mm', 'a4');
 
-      // Split into pages if too long
-      if (pdfHeight > pdf.internal.pageSize.getHeight()) {
-        let heightLeft = pdfHeight;
-        let position = 0;
-        const pageHeight = pdf.internal.pageSize.getHeight();
+      // Temporarily expand full height to capture everything
+      const originalHeight = comicEl.style.height;
+      const originalOverflow = comicEl.style.overflow;
+      comicEl.style.height = 'auto';
+      comicEl.style.overflow = 'visible';
 
-        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
+      try {
+        const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF' });
+        const imgData = canvas.toDataURL('image/png');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-        while (heightLeft >= 0) {
-          position = heightLeft - pdfHeight;
-          pdf.addPage();
+        // Split into pages if too long
+        if (pdfHeight > pdf.internal.pageSize.getHeight()) {
+          let heightLeft = pdfHeight;
+          let position = 0;
+          const pageHeight = pdf.internal.pageSize.getHeight();
+
           pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
           heightLeft -= pageHeight;
-        }
-      } else {
-        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      }
 
-      const blob = pdf.output('blob');
-      const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'dreamstream-comic';
-      downloadBlob(blob, `${safeName}.pdf`);
-      markOutputDelivered('book', 'Downloaded Book/PDF output.');
+          while (heightLeft >= 0) {
+            position = heightLeft - pdfHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
+            heightLeft -= pageHeight;
+          }
+        } else {
+          pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        }
+
+        const blob = pdf.output('blob');
+        const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'dreamstream-comic';
+        downloadBlob(blob, `${safeName}.pdf`);
+        markOutputDelivered('book', 'Downloaded Book/PDF output.');
+      } finally {
+        comicEl.style.height = originalHeight;
+        comicEl.style.overflow = originalOverflow;
+      }
+    } catch (error) {
+      console.warn('PDF export did not finish.', error);
+      setPdfNotice(legacyPdfErrorMessage(error));
     } finally {
-      comicEl.style.height = originalHeight;
-      comicEl.style.overflow = originalOverflow;
+      setIsBuildingPdf(false);
     }
   };
 
@@ -913,11 +924,16 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                 )}
                 <Button onClick={handleDownloadProjectData} variant={wantsComic ? 'primary' : 'secondary'}>Project ZIP</Button>
                 <Button onClick={handleDownloadHTML} variant={wantsHtml ? 'primary' : 'secondary'} icon={<FileCode className="h-4 w-4" />}>HTML</Button>
-                <Button onClick={handleDownloadPDF} icon={<Download className="h-4 w-4" />} variant={wantsBook ? 'primary' : 'secondary'}>
+                <Button onClick={handleDownloadPDF} isLoading={isBuildingPdf} icon={<Download className="h-4 w-4" />} variant={wantsBook ? 'primary' : 'secondary'}>
                   {wantsBook ? 'Book/PDF' : 'PDF'}
                 </Button>
               </div>
             </div>
+            {pdfNotice && (
+              <p role="status" className={`mt-3 rounded-lg border px-3 py-2 text-xs leading-5 ${STATUS_SURFACE.attention} ${STATUS_INK.attention}`}>
+                {pdfNotice}
+              </p>
+            )}
           </div>
         </div>
       </AgentStageShell>
