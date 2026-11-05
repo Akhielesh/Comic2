@@ -40,7 +40,9 @@ import {
   type ModelVerification
 } from '../services/modelCatalog';
 import { isProviderEnabled } from '../services/sourceGovernance';
-import { isTextProvider, PROVIDERS_ORDERED } from '../shared/providers';
+import { getActiveKeyValue } from '../services/apiKeys';
+import { getOpenRouterKey } from '../services/appSettings';
+import { getProviderDef, isTextProvider, PROVIDERS_ORDERED } from '../shared/providers';
 import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import {
   setSelectedModel,
@@ -591,24 +593,45 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
   );
 };
 
+// Whether this device sends the user's OWN key for a provider as a request header, exactly as
+// services/apiClient does (the active key, OpenRouter's legacy slot, source governance on). That
+// header key is the only own key /api/models/verify can see: an account-stored key is not sent there.
+const sendsOwnKey = (provider: 'openrouter' | 'nvidia'): boolean => {
+  try {
+    if (!isProviderEnabled(provider)) return false;
+    const key = getActiveKeyValue(provider) || (provider === 'openrouter' ? getOpenRouterKey() : null);
+    return Boolean(key?.trim());
+  } catch {
+    return false; // storage unavailable: no key can be sent either
+  }
+};
+
 // User-facing trust signal: shows that the catalog (and the Free/paid labels) are
 // reconciled against each source's LIVE API, not guessed. Backed by /api/models/verify.
-const VerifiedStrip: React.FC = () => {
+// SECURITY: /verify returns platform key status and credits to a server-confirmed admin only; a
+// non-admin gets just their own header key's status, and 403 without one. So the strip fetches and
+// renders only for an admin (useIsAdmin: false while loading and on error) or a user who sends their
+// own OpenRouter/NVIDIA key. Anyone else never calls the endpoint and sees nothing.
+export const VerifiedStrip: React.FC = () => {
   const { user } = useAuth();
+  const isAdmin = useIsAdmin();
+  const ownOpenRouter = sendsOwnKey('openrouter');
+  const enabled = Boolean(user) && (isAdmin || ownOpenRouter || sendsOwnKey('nvidia'));
   const [data, setData] = useState<ModelVerification | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
-    // SECURITY: the verify strip exposes per-key connection status + live spend ("$X used").
-    // Only fetch/show it for an authenticated user — never to a logged-out/anonymous session.
-    if (!user) return;
+    setData(null);
+    setFailed(false);
+    if (!enabled) return;
     let active = true;
     fetchModelVerification()
       .then((r) => { if (active) setData(r); })
+      // A 403 (or any failure) just hides the strip: no error banner, nothing logged.
       .catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
-  }, [user]);
+  }, [enabled, user?.id]);
 
-  if (!user || failed) return null;
+  if (!enabled || failed) return null;
   if (!data) {
     return (
       <div className="mt-4 border-2 border-black rounded-xl bg-slate-50 p-3 text-xs flex items-center gap-2 text-slate-500">
@@ -620,8 +643,20 @@ const VerifiedStrip: React.FC = () => {
   const when = data.catalog.fetchedAt ? new Date(data.catalog.fetchedAt).toLocaleString() : 'just now';
   const or = data.sources.openrouter;
   const nvidia = data.sources.nvidia;
-  const credits = or.credits;
-  const key = or.liveKey;
+  // A non-admin sees their OWN keys only: `connected` is true just for a key this device sent, and
+  // the server reads no shared catalog for them (no catalog totals, no OpenRouter count). So the
+  // copy speaks of "your key", and a platform-served provider (static registry data, which reveals
+  // nothing about which platform keys exist) is never told it needs a key to be used.
+  const cardStatus = (id: 'openrouter' | 'nvidia', connected: boolean, modelCount: number): string => {
+    if (isAdmin) return connected ? `connected · ${modelCount} models` : 'not connected';
+    if (connected) return id === 'nvidia' ? `your key · ${modelCount} models` : 'your key';
+    return getProviderDef(id)?.platformServed ? 'no key of yours · runs on the shared allowance' : 'no key of yours';
+  };
+  // Dollars: platform credits and key spend are for an admin only; a non-admin sees the numbers
+  // of their own OpenRouter key, never anyone else's.
+  const showDollars = isAdmin || ownOpenRouter;
+  const credits = showDollars ? or.credits : null;
+  const key = showDollars ? or.liveKey : null;
   const usd = (n: number) => `$${n.toFixed(2)}`;
   const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const keyLimit = num(key?.limit);
@@ -632,7 +667,7 @@ const VerifiedStrip: React.FC = () => {
     <div className="mt-4 border-2 border-black rounded-xl bg-green-50 p-3 shadow-comic text-xs space-y-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
         <span className="font-bold flex items-center gap-1.5 text-green-800"><ShieldCheck className="w-4 h-4" /> Verified live</span>
-        <span><span className="text-slate-500">Catalog:</span> <b>{data.catalog.total}</b> models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>
+        {isAdmin && <span><span className="text-slate-500">Catalog:</span> <b>{data.catalog.total}</b> models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>}
         <span className="text-slate-400 ml-auto">checked {when}</span>
       </div>
 
@@ -641,7 +676,7 @@ const VerifiedStrip: React.FC = () => {
         <div className="bg-white border-2 border-black rounded-lg p-2.5">
           <div className="flex items-center justify-between">
             <span className="font-bold">OpenRouter</span>
-            <span className={or.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{or.connected ? `connected · ${or.modelCount} models` : 'not connected'}</span>
+            <span className={or.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{cardStatus('openrouter', or.connected, or.modelCount)}</span>
           </div>
           {or.connected && (
             <div className="mt-1.5 space-y-1 text-[11px]">
@@ -679,7 +714,7 @@ const VerifiedStrip: React.FC = () => {
         <div className="bg-white border-2 border-black rounded-lg p-2.5">
           <div className="flex items-center justify-between">
             <span className="font-bold">NVIDIA Build</span>
-            <span className={nvidia.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{nvidia.connected ? `connected · ${nvidia.modelCount} models` : 'not connected'}</span>
+            <span className={nvidia.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{cardStatus('nvidia', nvidia.connected, nvidia.modelCount)}</span>
           </div>
           {nvidia.connected && nvidia.note && <div className="mt-1.5 text-[11px] text-slate-500 leading-snug">{nvidia.note}</div>}
         </div>
@@ -691,18 +726,24 @@ const VerifiedStrip: React.FC = () => {
         if (!extra.length) return null;
         return (
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-slate-500 font-bold">Direct providers:</span>
+            <span className="text-slate-500 font-bold">{isAdmin ? 'Direct providers:' : 'Your keys:'}</span>
             {extra.map((d) => {
               const p = data.providers![d.id]!;
+              const shared = !isAdmin && !p.connected && Boolean(d.platformServed);
+              const status = p.connected
+                ? `${isAdmin ? 'connected' : 'your key'} · ${p.modelCount} models`
+                : shared
+                  ? 'no key of yours — runs on the shared allowance; your own key is optional'
+                  : 'no key — add one in Settings → API Configuration to use these models';
               return (
                 <span
                   key={d.id}
-                  title={`${d.label}: ${p.connected ? `connected · ${p.modelCount} models` : 'no key — add one in Settings → API Configuration to use these models'}`}
+                  title={`${d.label}: ${status}`}
                   className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border-2 font-bold ${p.connected ? 'border-black bg-white text-green-800' : 'border-slate-300 bg-slate-50 text-slate-400'}`}
                 >
                   {hasProviderLogo(d.id) && <ProviderLogo provider={d.id} className="w-3 h-3" style={{ color: p.connected ? d.accent : undefined }} />}
                   {d.short}
-                  <span className="text-[9px] font-semibold">{p.connected ? '✓' : '+ key'}</span>
+                  <span className="text-[9px] font-semibold">{p.connected ? '✓' : shared ? 'shared' : '+ key'}</span>
                 </span>
               );
             })}
@@ -710,9 +751,18 @@ const VerifiedStrip: React.FC = () => {
         );
       })()}
 
-      <div className="text-slate-500">Free/paid, credits and limits are reconciled against each source’s live API — not guessed.</div>
+      <div className="text-slate-500">{isAdmin ? 'Free/paid, credits and limits are reconciled against each source’s live API — not guessed.' : 'Your keys are checked against each source’s live API — not guessed.'}</div>
     </div>
   );
+};
+
+// The strip as ModelLibrary mounts it: once per signed-in account. When the account changes while
+// the page stays open (another tab signs in as someone else), the remount drops the previous
+// account's verification data and admin answer before anything is painted, so nothing is shown or
+// fetched for the new account until its own admin check (useIsAdmin) or own key allows it.
+export const AccountVerifiedStrip: React.FC = () => {
+  const { user } = useAuth();
+  return <VerifiedStrip key={user?.id ?? 'signed-out'} />;
 };
 
 export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat }) => {
@@ -875,7 +925,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           </span>
         </div>
 
-        <VerifiedStrip />
+        <AccountVerifiedStrip />
 
         {/* Source scope — the Settings-level decision, restated where the models actually are,
             so this page always matches the Allowed-sources toggles + connected keys. */}

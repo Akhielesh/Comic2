@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
 import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
 import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from '../services/modelCatalogStore.js';
@@ -7,7 +7,8 @@ import { getModelPopularity, parsePopularityWindow } from '../services/usageAnal
 import { requireAuth } from '../middleware/auth.js';
 import { hydrateAccessProfile } from '../middleware/requireAdmin.js';
 import { listModelScores, listMonthlyUsage, loadScoreMap } from '../services/modelStats.js';
-import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
+import { annotateModels, type AnnotatedModel } from '../ai/catalogAnnotations.js';
+import { getProvider } from '../ai/gateway.js';
 import { getProviderDef, TEXT_PROVIDER_IDS, type ProviderId } from '../../../shared/providers.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
@@ -140,66 +141,123 @@ modelsRouter.get('/popularity', requireAuth, async (req: Request, res: Response,
   }
 });
 
+// Server-confirmed admin: the same role lookup requireAdmin runs (hydrateAccessProfile → rbac).
+// Fails closed: no user, an unknown user or a failed lookup all count as not admin.
+const isConfirmedAdmin = async (req: Request): Promise<boolean> => {
+  if (!req.user?.id) return false;
+  try {
+    return (await hydrateAccessProfile(req)).isAdmin === true;
+  } catch {
+    return false;
+  }
+};
+
+// The caller's OWN key for a provider: a key sent in its request header, which attachKeys marks
+// `byok` (after X-Allowed-Sources governance). Never the platform env fallback. A header that is
+// only whitespace (a lone NBSP byte, say) is no key: it must not pass the 403 gate, because the
+// gateway would trim it to '' and fall back to the platform key.
+const ownHeaderKey = (req: Request, id: ProviderId): string | null => {
+  const resolved = req.apiKeys?.providerKeys?.[id];
+  return resolved?.byok ? (resolved.key?.trim() || null) : null;
+};
+
+// One direct provider's models for /verify, asked of the provider with exactly the key given and
+// nothing else. It never goes through getProviderModels/resolveProviderContext, which turn a
+// missing or blank key into a platform key. With a key: its live listing on that key. Without
+// one: its curated seed (or nothing, for NVIDIA), with no network call. Nothing is persisted.
+const listDirectForVerify = async (id: AIProviderId, key: string | null): Promise<AnnotatedModel[]> => {
+  try {
+    return annotateModels(await getProvider(id).listModels(key ? { apiKey: key, byok: true } : { apiKey: '', byok: false }));
+  } catch {
+    return [];
+  }
+};
+
+// The response is per user (their admin role, their own key), so no cache may store it.
+const noStore = (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'private, no-store');
+  next();
+};
+
 // GET /api/models/verify
 // Verification system: reconciles what we SHOW against LIVE source data — no guessing.
-// - OpenRouter: GET /api/v1/key for the caller's real usage/limit/is_free_tier.
-// - Per-source model counts from a freshly-forced catalog refresh.
-// requireAuth. The PLATFORM keys' live data — the platform OpenRouter key's /key record and
-// account /credits, and which platform keys are configured — is operator telemetry: admins
-// only. Everyone else gets connection status and live key data for their OWN keys only (the
-// provider headers the client sends); with none, liveKey/credits are null and no /key or
-// /credits call is made. Sign-up is open, so "signed in" is not a trust boundary.
-modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => {
-  // Fail closed: an unreadable role means "not an admin".
-  const isAdmin = await hydrateAccessProfile(req).then((p) => p.isAdmin, () => false);
-  const keyFor = (header: string, env: string): string | null =>
-    req.header(header) || (isAdmin ? process.env[env] : null) || null;
-  const openRouterKey = keyFor('X-OpenRouter-Key', 'OPENROUTER_API_KEY');
-  const nvidiaKey = keyFor('X-Nvidia-Key', 'NVIDIA_API_KEY');
+// - OpenRouter: GET /api/v1/key + /credits for the key in use.
+// - Never a forced catalog refresh, and the route itself never persists anything.
+// Who gets what:
+// - Server-confirmed admin: platform data (the platform OpenRouter key's status and account
+//   credits, NVIDIA, providers[].connected from header or platform env keys), with model counts
+//   from the shared catalog as cached (getCatalog() without force). That is operator telemetry,
+//   so nobody else gets it. Known gap: on a stale or cold cache getCatalog() still revalidates in
+//   the background (and that refresh upserts), as it does for /catalog; closing it needs a
+//   read-only accessor in services/modelCatalog.ts (DreamStream's file).
+// - Signed-in non-admin who sent their OWN key in a request header: only that key's status, for
+//   that provider. No platform fallback, and `connected` reflects only their own header keys. The
+//   shared catalog is not read for them at all (so their call can't start a catalog refresh or
+//   upsert): `catalog` counts only the direct-provider lists, fetchedAt is null, and the
+//   OpenRouter model count is 0.
+// - Signed-in non-admin with no own key: 403, before any outbound call.
+modelsRouter.get('/verify', noStore, requireAuth, async (req: Request, res: Response, next) => {
+  try {
+    const admin = await isConfirmedAdmin(req);
+    const keyFor = (id: ProviderId): string | null => {
+      if (!admin) return ownHeaderKey(req, id);
+      const def = getProviderDef(id);
+      return (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
+    };
+    if (!admin && !TEXT_PROVIDER_IDS.some((id) => keyFor(id))) {
+      res.status(403).json({ error: { message: 'Admins only.' } });
+      return;
+    }
 
-  const result = await getCatalog(true); // force live refresh of the OpenRouter catalog
-  const allModels = await withDirectProviderModels(req, result.models);
+    const openRouterKey = keyFor('openrouter');
+    const nvidiaKey = keyFor('nvidia');
 
-  // Per-provider connection + model count (which sources have a usable key right now).
-  const providers: Record<string, { connected: boolean; modelCount: number }> = {};
-  for (const id of TEXT_PROVIDER_IDS) {
-    const def = getProviderDef(id);
-    const key = def ? keyFor(def.header, def.keyEnv) : null;
-    providers[id] = { connected: Boolean(key), modelCount: allModels.filter((m) => m.source === id).length };
-  }
+    // Admin only: the shared catalog as cached; /verify never forces a refresh.
+    const result = admin ? await getCatalog() : null;
+    const directLists = await Promise.all(DIRECT_SOURCES.map((id) => listDirectForVerify(id, keyFor(id as ProviderId))));
+    const allModels = [...(result?.models ?? []), ...directLists.flat()];
 
-  // Live, authoritative OpenRouter data: per-KEY status (/key) AND account CREDITS (/credits).
-  // These can differ — a key may carry its own spend cap distinct from account credits remaining.
-  const [openRouterKeyStatus, openRouterCredits] = openRouterKey
-    ? await Promise.all([fetchOpenRouterKeyStatus(openRouterKey), fetchOpenRouterCredits(openRouterKey)])
-    : [null, null];
+    // Per-provider connection + model count (which sources have a usable key right now).
+    const providers: Record<string, { connected: boolean; modelCount: number }> = {};
+    for (const id of TEXT_PROVIDER_IDS) {
+      providers[id] = { connected: Boolean(keyFor(id)), modelCount: allModels.filter((m) => m.source === id).length };
+    }
 
-  res.json({
-    verifiedAt: Date.now(),
-    catalog: {
-      fetchedAt: result.fetchedAt,
-      degraded: result.degraded,
-      message: result.message,
-      total: allModels.length,
-      freeCount: allModels.filter((m) => m.isFree).length
-    },
-    sources: {
-      openrouter: {
-        connected: Boolean(openRouterKey),
-        modelCount: allModels.filter((m) => m.source === 'openrouter').length,
-        // Real OpenRouter key data (label/usage/limit/limit_remaining/is_free_tier/rate_limit/...).
-        liveKey: openRouterKeyStatus,
-        // Account-level credits (total/usage/remaining), independent of the per-key limit above.
-        credits: openRouterCredits
+    // Live, authoritative OpenRouter data: per-KEY status (/key) AND account CREDITS (/credits).
+    // These can differ — a key may carry its own spend cap distinct from account credits remaining.
+    const [openRouterKeyStatus, openRouterCredits] = openRouterKey
+      ? await Promise.all([fetchOpenRouterKeyStatus(openRouterKey), fetchOpenRouterCredits(openRouterKey)])
+      : [null, null];
+
+    res.json({
+      verifiedAt: Date.now(),
+      catalog: {
+        fetchedAt: result?.fetchedAt ?? null,
+        degraded: result?.degraded ?? false,
+        message: result?.message,
+        total: allModels.length,
+        freeCount: allModels.filter((m) => m.isFree).length
       },
-      nvidia: {
-        connected: Boolean(nvidiaKey),
-        modelCount: allModels.filter((m) => m.source === 'nvidia').length,
-        note: 'NVIDIA Build is credit-based (free tier ~1,000 credits, 40 req/min); per-call USD cost is not reported.'
-      }
-    },
-    // Per-provider connection + counts for every direct source (openrouter, nvidia, openai,
-    // anthropic, gemini, deepseek, zai, minimax, tencent, xai).
-    providers
-  });
+      sources: {
+        openrouter: {
+          connected: Boolean(openRouterKey),
+          modelCount: allModels.filter((m) => m.source === 'openrouter').length,
+          // Real OpenRouter key data (label/usage/limit/limit_remaining/is_free_tier/rate_limit/...).
+          liveKey: openRouterKeyStatus,
+          // Account-level credits (total/usage/remaining), independent of the per-key limit above.
+          credits: openRouterCredits
+        },
+        nvidia: {
+          connected: Boolean(nvidiaKey),
+          modelCount: allModels.filter((m) => m.source === 'nvidia').length,
+          note: 'NVIDIA Build is credit-based (free tier ~1,000 credits, 40 req/min); per-call USD cost is not reported.'
+        }
+      },
+      // Per-provider connection + counts for every direct source (openrouter, nvidia, openai,
+      // anthropic, gemini, deepseek, zai, minimax, tencent, xai).
+      providers
+    });
+  } catch (err) {
+    next(err);
+  }
 });
