@@ -99,8 +99,19 @@ const PLATFORM_KEYS: Partial<Record<AIProviderId, string>> = {
   xai: XAI_API_KEY
 };
 
-const platformKeyFor = (providerId?: string): string =>
-  (providerId && PLATFORM_KEYS[providerId as AIProviderId]) || OPENROUTER_API_KEY;
+/**
+ * The platform key for a provider. An explicitly named provider gets ONLY its own platform key
+ * (or '' when the platform has none): the OpenRouter key is never handed to another vendor.
+ * Before this rule, a direct provider without its own platform key (openai, anthropic, deepseek,
+ * xai, …) received the OpenRouter secret, and the public model catalog sent it to that vendor's
+ * /models endpoint on every request. With '' the provider clients fall back to their curated
+ * seed list (listModels) or fail auth as before (generation), without leaking a key.
+ * No provider id keeps the historical default: the OpenRouter platform key.
+ */
+export const platformKeyFor = (providerId?: string): string => {
+  if (!providerId || providerId.toLowerCase() === 'openrouter') return OPENROUTER_API_KEY;
+  return PLATFORM_KEYS[providerId.toLowerCase() as AIProviderId] || '';
+};
 
 // Sensible default chat model per DIRECT provider, used by Auto when the user pinned no
 // model but their request resolves to that provider (e.g. they only connected an OpenAI
