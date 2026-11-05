@@ -58,12 +58,24 @@ export function embedSnippet(url: string, title: string, aspect: AspectRatio | s
   return `<iframe src="${escAttr(src)}" title="${escAttr(title)}" loading="lazy" allow="fullscreen" style="width:100%;max-width:560px;aspect-ratio:${ratio};border:0;border-radius:12px"></iframe>`;
 }
 
-/** "Private" / "Published · Unlisted" / "Published · Public" / "Paused". */
+/** "Private" / "Published · Link only" / "Published · In the Library + link" / "Paused". */
 export function statusLine(view: PublicationOwnerView | null | undefined): { label: string; tone: 'muted' | 'public' | 'unlisted' | 'warn' } {
   if (!view || view.visibility === 'private' || !view.slug) return { label: 'Private — only you can see it', tone: 'muted' };
   if (view.status === 'suspended') return { label: 'Paused by review — readers see “This link isn’t active”', tone: 'warn' };
-  return view.visibility === 'public' ? { label: 'Published · Public gallery', tone: 'public' } : { label: 'Published · Anyone with the link', tone: 'unlisted' };
+  return view.visibility === 'public' ? { label: 'Published · In the Library + link', tone: 'public' } : { label: 'Published · Link only', tone: 'unlisted' };
 }
+
+/**
+ * The public Library page (the shelf of listed comics): the same view StaticSiteHeader's "Library" item opens
+ * (App handleNavigate('gallery')), as the same-origin address App restores on load. Works on both hosts.
+ */
+export const LIBRARY_HREF = '/?view=gallery';
+
+/** The two ways to publish, in words (Link only / Library + link): every published comic has a read-only link. */
+export const VISIBILITY_HINT: Record<'unlisted' | 'public', string> = {
+  unlisted: "Anyone with the link can read it; it isn't listed",
+  public: 'Listed in the Library, and you get a link to share'
+};
 
 /** "abcdefgh…wxyz" for narrow screens (the full value stays selectable in the input). */
 export function middleEllipsis(text: string, max: number): string {

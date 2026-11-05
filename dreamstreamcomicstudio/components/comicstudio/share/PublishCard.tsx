@@ -65,7 +65,7 @@ export const PublishCard: React.FC<CardProps<PublishCardData>> = ({ card, studio
     <CardShell
       title={heading}
       icon={visibility === 'public' ? <Globe2 className="h-4 w-4" aria-hidden /> : <Link2 className="h-4 w-4" aria-hidden />}
-      right={!destructive ? (visibility === 'public' ? 'Public gallery' : 'Anyone with the link') : undefined}
+      right={!destructive ? (visibility === 'public' ? 'Library + link' : 'Link only') : undefined}
       aria-label={heading}
     >
       {card.status === 'pending' && !destructive && (
