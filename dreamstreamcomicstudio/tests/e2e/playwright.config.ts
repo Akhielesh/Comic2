@@ -4,6 +4,7 @@
 //   npm run qa:build                         QA_BUILD=1 vite build --outDir dist-qa (the QA entry)
 //   npx playwright test -c tests/e2e/playwright.config.ts                      full device matrix
 //   npx playwright test -c tests/e2e/playwright.config.ts --project='smoke-*'  per-PR layout smoke
+//   npx playwright test -c tests/e2e/playwright.config.ts --grep @app          the app scenes only (DS-1b)
 //   node scripts/layout-smoke.mjs                                              build + smoke + summary
 //
 // Target: `vite preview` of dist-qa/ (qa/comic-qa.html), never production — the agent gate 302s
@@ -19,12 +20,15 @@
 //   QA_WEBKIT=1       run the iOS/iPadOS projects on WebKit (needs `playwright install webkit`)
 //   QA_SCREENSHOTS=1  also compare toHaveScreenshot baselines (__screenshots__/<project>/; CI-generated)
 //   QA_WORKERS        parallel workers (default 2 — the CI runner has 4 cores)
+//   QA_PORT           the preview port (default 4179; pick another when several checkouts share a machine)
+//   QA_SKIN=atlas     every harness URL asks for the page-level Atlas skin (helpers/harness.ts), any project
+//   QA_THEME=dark     every harness URL asks for the dark theme, any project
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type PlaywrightTestConfig, type Project, type ReporterDescription } from '@playwright/test';
-import { COMIC_DEVICES, REFLOW_320, SMOKE_VIEWPORTS, type ComicDevice } from './devices';
+import { APP_SMOKE_DEVICES, COMIC_DEVICES, REFLOW_320, SMOKE_VIEWPORTS, type ComicDevice } from './devices';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = path.resolve(HERE, '../..');
@@ -70,7 +74,7 @@ const projectFor = (d: ComicDevice, extra: Partial<Project> = {}): Project => {
   const webkit = d.engine === 'webkit' && process.env.QA_WEBKIT === '1';
   return {
     name: d.name,
-    metadata: { device: d.name, engine: webkit ? 'webkit' : 'chromium', emulates: d.engine },
+    metadata: { device: d.name, engine: webkit ? 'webkit' : 'chromium', emulates: d.engine, ...(d.look ? { look: d.look } : {}) },
     use: {
       browserName: webkit ? 'webkit' : 'chromium',
       viewport: d.viewport,
@@ -79,6 +83,9 @@ const projectFor = (d: ComicDevice, extra: Partial<Project> = {}): Project => {
       isMobile: d.isMobile,
       hasTouch: d.hasTouch,
       ...(d.userAgent ? { userAgent: d.userAgent } : {}),
+      // DS-1b looks: the OS preferences a dark or motion-on project emulates (the skin is a URL param, harness.ts).
+      ...(d.look?.theme === 'dark' ? { colorScheme: 'dark' as const } : {}),
+      ...(d.look?.motion === 'on' ? { reducedMotion: 'no-preference' as const } : {}),
       ...(!webkit && CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {})
     },
     ...extra
@@ -123,6 +130,10 @@ const config: PlaywrightTestConfig = {
     // visualqa.md §7: the per-PR layout smoke (4 viewports, light) + the component scenes (qa/KitScenes.tsx).
     // (+ the model picker scenes, M1-PICKER-UI: tests/e2e/models.picker.spec.ts.)
     ...SMOKE_VIEWPORTS.map((d) => projectFor(d, { testMatch: /(layout\.smoke|kit\.scenes|models\.picker)\.spec\.ts$/ })),
+    // DS-1b (master plan §1.4): the app scenes (qa/app/scenes) at the 320 px reflow width, under the page-level
+    // Atlas skin, in the OS dark scheme and with motion on. Only the `@app` tests run here; the studio smoke
+    // keeps the projects above.
+    ...APP_SMOKE_DEVICES.map((d) => projectFor(d, { testMatch: /layout\.smoke\.spec\.ts$/, grep: /@app\b/ })),
     // Detector + allowlist self-tests (synthetic pages; proves every assertion can actually fail).
     { name: 'harness-selftest', testMatch: /harness\.selftest\.spec\.ts$/, use: { browserName: 'chromium', viewport: { width: 800, height: 600 }, ...(CHROMIUM ? { launchOptions: { executablePath: CHROMIUM } } : {}) } }
   ],

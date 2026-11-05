@@ -5,8 +5,19 @@
 // Asserts: no page overflow / offscreen / popover / spill; no visible collisions; no clipped inputs or
 // un-re-measured textareas; balloons inside the page and not colliding; the editor aside inside its
 // dialog; the phone board ≥ 45 % of the height; one <main>. Known failures live in allowlist.json.
+//
+// App scenes (DS-1b; master plan §1.4), `@app`: every scene in qa/app/scenes, discovered at RUNTIME from the
+// harness (`?surface=app` publishes window.__QA_APP_SCENES__; no list here), in light and dark, on every project
+// that runs this spec — the smoke viewports 360/768/1024/1280/1440 and the app-only projects of devices.ts
+// APP_SMOKE_DEVICES: smoke-320x640 (WCAG reflow), smoke-360x740-atlas (page-level Atlas skin),
+// smoke-1440x900-dark (OS dark scheme; dark only) and motion-on (prefers-reduced-motion: no-preference).
+// Each scene and the index: no horizontal overflow (page scroll width, nothing offscreen), exactly one <main>,
+// coarse-pointer controls ≥ 44 px where the project emulates touch, no legacy kit class in the rendered DOM,
+// axe serious/critical triaged against allowlist.json (the a11y helper), no console errors, and under reduced
+// motion no animation left in effect after settle (with motion on, the entrances finish first).
 
-import { test, expect } from './helpers/harness';
+import { test, expect, type QaHarness } from './helpers/harness';
+import type { ComicDevice } from './devices';
 import type { CheckId } from './helpers/allowlist';
 import { markConversationScroller, openComposerOptions, openMoreMenu, openQuality, openSettings, openSpend, closeTopLayer, scrollEditorTools } from './helpers/scenes';
 
@@ -140,4 +151,44 @@ test.describe('layout smoke @smoke', () => {
     await qa.settle(400);
     await qa.check('public', 'bottom', opts);
   });
+});
+
+// ── App scenes (DS-1b) ───────────────────────────────────────────────────────
+
+const appChecks = (device: ComicDevice): CheckId[] => (device.coarse ? ['overflow', 'offscreen', 'landmarks', 'hit-target'] : ['overflow', 'offscreen', 'landmarks']);
+
+/** Every app-page assertion at the current URL (index or scene). Soft: one run reports every scene's findings. */
+const checkAppPage = async (qa: QaHarness, device: ComicDevice, scene: string, theme: 'light' | 'dark'): Promise<void> => {
+  const where = `${scene} (${theme}) on ${qa.testInfo.project.name}`;
+  const reduced = await qa.prefersReducedMotion();
+  const left = await qa.settleAnimations();
+  if (reduced) expect.soft(left, `${where}: under reduced motion document.getAnimations() is empty after settle`).toEqual([]);
+  else if (left.length) qa.testInfo.annotations.push({ type: 'motion-on', description: `${where}: ${left.length} looping animation(s) after the entrances: ${left.map((a) => `${a.name} on ${a.target}`).join('; ')}` });
+  // The project's own viewport, not innerWidth: on phones Chromium widens the layout viewport to fit an overflow.
+  const widths = await qa.pageWidths();
+  expect.soft(widths.scrollWidth, `${where}: no horizontal overflow past the ${device.viewport.width} px viewport (${JSON.stringify(widths)})`).toBeLessThanOrEqual(device.viewport.width + 1);
+  expect.soft(await qa.legacyClasses(), `${where}: no legacy kit class (border-black, shadow-comic, font-comic, font-display, brand-*) in the DOM`).toEqual([]);
+  await qa.check('app', `${scene}-${theme}`, { checks: appChecks(device), axe: true, hinge: null });
+};
+
+test.describe('app scenes @smoke @app', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    test(`every app scene (${theme})`, async ({ qa, device }) => {
+      test.skip(!qa.themes.includes(theme), `this project measures ${qa.themes.join(' and ')} only`);
+      // still=0: the motion assertions need the page's real animations (still=1 zeroes every duration).
+      await qa.open({ surface: 'app', theme, still: false });
+      const { scenes, problems } = await qa.appScenes();
+      expect.soft(problems, 'every qa/app/scenes file keeps the scene contract (qa/app/index.tsx)').toEqual([]);
+      expect(scenes.length, 'the harness index lists the app scenes (window.__QA_APP_SCENES__)').toBeGreaterThan(0);
+      qa.testInfo.annotations.push({ type: 'app-scenes', description: scenes.map((s) => s.id).join(', ') });
+      await test.step(`index (${theme})`, () => checkAppPage(qa, device, 'index', theme));
+      for (const { id } of scenes) {
+        await test.step(`${id} (${theme})`, async () => {
+          await qa.open({ surface: 'app', scene: id, theme, still: false });
+          await expect.soft(qa.page.locator(`[data-qa-app-scene="${id}"]`), `${id} mounts`).toBeAttached();
+          await checkAppPage(qa, device, id, theme);
+        });
+      }
+    });
+  }
 });

@@ -6,12 +6,17 @@
 //     const ops = await qa.ops();                        // window.__qaOps
 //   });
 //
+// Looks (DS-1b): a project's `look` (devices.ts: skin=atlas, theme=dark, motion on) or the env vars
+// QA_SKIN=atlas / QA_THEME=dark make every open() ask for that skin / theme unless the test names its own;
+// projects without a look (and no env) open exactly the URLs they always did. The app surface
+// (`surface: 'app'`, qa/app/index.tsx) adds appScenes(), legacyClasses() and the motion probes.
+//
 // Every page gets: fixture images served from fixtures/genImages.ts, every other origin BLOCKED (the
 // harness is offline by construction), page errors collected as `console` findings, and the known
 // test failures of allowlist.json applied (expected-fail / skip, with the owner package in the title).
 
 import { test as base, expect, type Page, type TestInfo } from '@playwright/test';
-import { deviceByName, type ComicDevice } from '../devices';
+import { deviceByName, type ComicDevice, type ProjectLook } from '../devices';
 import { qaImageBytes, QA_IMAGE_RE } from '../fixtures/genImages';
 import { expectLayoutClean, type CleanOptions, type Finding } from './layoutAsserts';
 import { knownTestFailure } from './allowlist';
@@ -21,7 +26,8 @@ import { installVisualViewportStub } from './keyboard';
 export { expect };
 
 export type QaQuery = Partial<{
-  surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit';
+  /** 'app' / 'pro': the app-wide surfaces (DS-1b; qa/app/index.tsx, qa/pro/index.tsx). */
+  surface: 'studio' | 'board' | 'editor' | 'reader' | 'classic-reader' | 'public' | 'kit' | 'app' | 'pro';
   /** surface=kit: the component scene (qa/KitScenes.tsx). */
   kit: 'breakdown' | 'refs' | 'refs-drawer' | 'timeline' | 'art' | 'model-picker' | 'model-confirm';
   fixture: 'lake-1p' | 'heist-12p' | 'deep-40p' | 'webtoon-20p' | 'stress' | 'empty';
@@ -39,7 +45,43 @@ export type QaQuery = Partial<{
   /** The reader has a share link (endCard.shareUrl). */
   share: boolean;
   still: boolean;
+  /** surface=app|pro: the scene id (absent: the scene index). */
+  scene: string;
+  /** The page-level skin: 'atlas' (html[data-ds-skin], as on the comics host) or 'none' (taken off <html>). */
+  skin: 'atlas' | 'none';
 }>;
+
+/** One app scene as the harness publishes it (window.__QA_APP_SCENES__). */
+export interface AppSceneEntry {
+  id: string;
+  title: string;
+}
+
+/** A legacy kit class found in the rendered DOM. */
+export interface LegacyHit {
+  token: string;
+  sig: string;
+  label: string;
+}
+
+/** An animation still in effect (document.getAnimations()). */
+export interface RunningAnimation {
+  name: string;
+  target: string;
+  /** -1: infinite. */
+  iterations: number;
+  playState: string;
+}
+
+/**
+ * The look a project asks for: its device's `look` (devices.ts), else the env (QA_SKIN=atlas, QA_THEME=dark).
+ * Pure, for the self-test and the spec.
+ */
+export const lookFor = (device: ComicDevice, env: Record<string, string | undefined> = process.env): ProjectLook => ({
+  ...(env.QA_SKIN === 'atlas' ? { skin: 'atlas' as const } : {}),
+  ...(env.QA_THEME === 'dark' ? { theme: 'dark' as const } : {}),
+  ...(device.look || {})
+});
 
 export interface OpenOptions {
   /** Emulate the device's notch/home-indicator insets (default true on coarse devices). */
@@ -60,6 +102,8 @@ export class QaHarness {
   safeAreaOn = false;
   /** The fixture of the last open() (allowlist entries can be scoped to it). */
   fixture = 'heist-12p';
+  /** The project's look (skin / theme / motion) — the defaults of every open(). */
+  readonly look: ProjectLook;
   private routed = false;
 
   constructor(
@@ -67,6 +111,7 @@ export class QaHarness {
     readonly device: ComicDevice,
     readonly testInfo: TestInfo
   ) {
+    this.look = lookFor(device);
     page.on('pageerror', (e) => this.pageErrors.push(String(e.message || e).slice(0, 300)));
     page.on('console', (m) => {
       if (m.type() !== 'error') return;
@@ -103,7 +148,9 @@ export class QaHarness {
     if (opts.keyboardStub) await installVisualViewportStub(this.page);
     if (opts.hinge !== false && this.device.hinge && this.hingeResult.mode === 'none') this.hingeResult = await emulateHinge(this.page, this.device);
     const params = new URLSearchParams();
-    const merged: QaQuery = { still: true, ...q };
+    // The project's look first, then the test's own query: a test that names a theme or skin keeps it.
+    const look: QaQuery = { ...(this.look.theme ? { theme: this.look.theme } : {}), ...(this.look.skin ? { skin: this.look.skin } : {}) };
+    const merged: QaQuery = { still: true, ...look, ...q };
     this.fixture = merged.fixture || 'heist-12p';
     for (const [k, v] of Object.entries(merged)) {
       if (v === undefined || v === null || v === false) continue;
@@ -130,6 +177,106 @@ export class QaHarness {
 
   async settle(ms = 300): Promise<void> {
     await this.page.waitForTimeout(ms);
+  }
+
+  /** The themes this project measures: the one its look pins, else both. */
+  get themes(): Array<'light' | 'dark'> {
+    return this.look.theme ? [this.look.theme] : ['light', 'dark'];
+  }
+
+  /** surface=app: the scenes the harness discovered (window.__QA_APP_SCENES__) and the scene files it refused. */
+  async appScenes(): Promise<{ scenes: AppSceneEntry[]; problems: Array<{ file: string; reason: string }> }> {
+    return this.page.evaluate(() => ({ scenes: window.__QA_APP_SCENES__ || [], problems: window.__QA_APP_SCENE_PROBLEMS__ || [] }));
+  }
+
+  /**
+   * The page's widths. On an `isMobile` project Chromium widens the layout viewport to fit content that overflows
+   * it (up to 4× the device width), so `innerWidth` grows WITH the overflow and the scanner's `overflow` check
+   * (scrollWidth vs innerWidth) cannot see it there; compare `scrollWidth` with the project's viewport instead.
+   */
+  async pageWidths(): Promise<{ scrollWidth: number; innerWidth: number; clientWidth: number; visualWidth: number; scale: number }> {
+    return this.page.evaluate(() => ({
+      scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+      innerWidth: window.innerWidth,
+      clientWidth: document.documentElement.clientWidth,
+      visualWidth: Math.round(window.visualViewport?.width ?? window.innerWidth),
+      scale: Number((window.visualViewport?.scale ?? 1).toFixed(3))
+    }));
+  }
+
+  /** Does the page prefer reduced motion (the project's emulation, as the page sees it)? */
+  async prefersReducedMotion(): Promise<boolean> {
+    return this.page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  /** Every animation still in effect (CSS animations and transitions, Web Animations). */
+  async animations(): Promise<RunningAnimation[]> {
+    return this.page.evaluate(() =>
+      document.getAnimations().map((a) => {
+        const effect = a.effect as KeyframeEffect | null;
+        const el = effect?.target ?? null;
+        const timing = effect?.getComputedTiming();
+        const cls = el ? (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 4).join('.') : '';
+        const name = (a as CSSAnimation).animationName || (a as CSSTransition).transitionProperty || a.id || a.constructor.name;
+        return {
+          name,
+          target: el ? `${el.tagName.toLowerCase()}${cls ? '.' + cls : ''}`.slice(0, 120) : '',
+          iterations: timing?.iterations === Infinity ? -1 : Number(timing?.iterations ?? 0),
+          playState: a.playState
+        };
+      })
+    );
+  }
+
+  /**
+   * Under reduced motion: wait up to `ms` for every animation to end, and return the ones still in effect (the
+   * smoke expects none). With motion on: let the finite animations (entrances) finish, up to `ms`, and return the
+   * ones still running (infinite loops such as a busy spinner).
+   */
+  async settleAnimations(ms = 1500): Promise<RunningAnimation[]> {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      await this.page.evaluate(
+        (budget) =>
+          Promise.race([
+            Promise.all(
+              document
+                .getAnimations()
+                .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+                .map((a) => a.finished.catch(() => undefined))
+            ),
+            new Promise((r) => setTimeout(r, budget))
+          ]).then(() => undefined),
+        Math.max(0, Math.min(250, deadline - Date.now()))
+      );
+      const left = await this.animations();
+      if (left.length === 0 || Date.now() >= deadline) return left;
+      if (left.every((a) => a.iterations === -1)) return left;
+      await this.page.waitForTimeout(50);
+    }
+  }
+
+  /**
+   * The legacy kit in the rendered DOM (master plan §1.4; the class-level twin of DS-0's legacyKit guard):
+   * border-black (any side), shadow-comic(-hover), font-comic, Tailwind's font-display (Bangers) and any utility
+   * on a brand colour, with any variant prefix or opacity. `ds-font-display` (the token face) is not legacy.
+   */
+  async legacyClasses(): Promise<LegacyHit[]> {
+    return this.page.evaluate(() => {
+      const LEGACY = /^(?:border-(?:[xytrbl]-)?black|shadow-comic(?:-[a-z]+)?|font-comic|font-display|[a-z]+(?:-[a-z]+)*-brand-(?:yellow|blue|red|black))$/;
+      const out: Array<{ token: string; sig: string; label: string }> = [];
+      for (const el of Array.from(document.querySelectorAll('[class]'))) {
+        const classes = (el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean);
+        for (const cls of classes) {
+          const bare = cls.replace(/^.*:/, '').replace(/^!/, '').replace(/\/(?:\d+|\[[^\]]+\])$/, '');
+          if (!LEGACY.test(bare)) continue;
+          const label = ((el as HTMLElement).innerText || el.textContent || el.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+          out.push({ token: cls, sig: `${el.tagName.toLowerCase()}.${classes.slice(0, 6).join('.')}`.slice(0, 160), label });
+          if (out.length >= 40) return out;
+        }
+      }
+      return out;
+    });
   }
 
   /** Phones: switch the single-pane shell to the Board view (no-op on split layouts). */
