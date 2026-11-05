@@ -191,8 +191,6 @@ app.get('/api/health', (_req, res) => {
 // Public routes
 app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/models', systemRateLimit, modelsRouter);
-// BYOK key validation — read-only provider checks, no app login required.
-app.use('/api/keys', systemRateLimit, keysRouter);
 // Telemetry + feedback capture. Public + optionalAuth so failures that happen
 // while logged-out (or while auth itself is failing) are still recorded; userId
 // is attached when a valid session is present.
@@ -250,6 +248,10 @@ app.use('/api', attachAccountContext);
 // wherever the request didn't carry one, so every studio and device shares the
 // same keys (header > account > platform env).
 app.use('/api', attachAccountKeys);
+// BYOK key validation — read-only provider checks of the CALLER's own key (header or account
+// key; never the platform env key). Signed-in only: API Configuration lives in Settings, which
+// signed-out visitors cannot open. Must stay after attachAccountKeys.
+app.use('/api/keys', systemRateLimit, keysRouter);
 
 // Persist account-wise provider usage to Supabase (append-only deltas, ~60s flush).
 // Best-effort: without a service-role key this stays in-memory only.
