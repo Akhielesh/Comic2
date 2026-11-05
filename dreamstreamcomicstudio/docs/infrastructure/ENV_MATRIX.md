@@ -40,6 +40,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `SUPABASE_SERVICE_ROLE_KEY` | `services/supabase.ts` (admin client) | ✅ 🔐 | — | The workhorse client (~43 sites) |
 | `VITE_API_BASE_URL` | frontend | ✅ | — | Unset in production → same-origin `/api` (the `dreamstream-api` Worker → backend container) |
 | `VITE_AUTH_REDIRECT_URL` | frontend auth | ✅ | — | |
+| `VITE_DS_SKIN_EVERYWHERE` | build only (`vite.config.ts` `dsSkinEverywherePlugin`; docs/design/atlas-skin.md "Wave 9 (bridge)") | ⭕ | — | Cloudflare Pages **build** var, the kill switch for the Atlas design language on every host. Unset (the default) or any value but exactly `off` keeps the `data-ds-skin="atlas"` attribute that `index.html` (and every page entry that carries it, such as `live.html`) ships on `<html>`. `off` strips it from every HTML entry at build time; the comics host still boots the skin at runtime (`services/dsSkin.ts`) and the apex goes back to the old look. Rolling back means setting `off` and rebuilding |
 | `STORAGE_BUCKET` | `imageStorage.ts` | ⭕ | — | Defaults `comic-assets` |
 | `DATA_EGRESS_URL` / `DATA_EGRESS_SECRET` | `lib/egressProxy.ts` | ⭕ 🔐 | — | Finance host failover via data-egress worker |
 | `REDIS_URL` | `ventures:worker` / `connectors:worker` only | ⭕ | 💸 | **Keep UNSET on the always-on backend** (blocks App-Sleeping) |

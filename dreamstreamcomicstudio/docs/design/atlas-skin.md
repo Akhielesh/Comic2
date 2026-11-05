@@ -29,12 +29,18 @@ strengthens hairlines, secondary text and field edges. Dark theme = the same sys
 ## Scope and mechanism
 
 The skin is selected by one attribute, **`data-ds-skin="atlas"`**, which turns on one block of
-`--ds-*` token overrides in `index.css`. Nothing outside the attribute changes: chat, settings, home
-and Stream Studio render pixel-identical (the tests below prove it).
+`--ds-*` token overrides in `index.css`. **Since wave 9 (the bridge, D5) the attribute is on every
+host:** `index.html` ships it on `<html>`, so chat, settings, home and the public pages render in the
+Atlas language too. The old promise that "chat, settings, home and Stream Studio render
+pixel-identical" is retired on purpose: the owner asked for Atlas everywhere ("Atlas everywhere",
+master plan §1.2 step 2). Legacy-kit pages read the tokens, so they follow the skin's colours and
+radii, and look legacy in their structure until their migration package (DS-3 and on). One build
+switch rolls it all back: `VITE_DS_SKIN_EVERYWHERE=off` (docs/infrastructure/ENV_MATRIX.md) strips the
+attribute from every HTML entry, and then the old rule below (comics host only) applies again.
 
 | Where | Who sets it | When |
 | --- | --- | --- |
-| `<html>` — the whole page | `index.tsx` → `services/dsSkin.ts` `bootDsSkin()` | Synchronously at the very top of `index.tsx`, before React renders, **only on the comics host** (`services/productHost.ts` `comicsSkin()`: `comics.dreamstreamstudio.ai` and its alias) — home, gallery, sign-in, the studio, the readers and the `/c/<slug>` share pages all live there. The same boot appends the two body-weight font preloads. Never on the apex, never via an inline script in `index.html` (its only inline script is CSP-hashed). |
+| `<html>` — the whole page | `index.html` (static attribute) and `index.tsx` → `services/dsSkin.ts` `bootDsSkin()` | Every host: `index.html` ships the attribute; the boot (synchronously at the very top of `index.tsx`, before React renders) keeps it and appends the two body-weight font preloads (`services/productHost.ts` `hostSkin()`). With the kill switch `VITE_DS_SKIN_EVERYWHERE=off` the build strips the attribute (`vite.config.ts` `dsSkinEverywherePlugin`, every HTML entry, `live.html` included once it carries it) and the boot sets it **only on the comics host** (`comicsSkin()`: `comics.dreamstreamstudio.ai` and its alias). Never via an inline script in `index.html` (its only inline script is CSP-hashed); the no-flash theme script is the external `public/theme-boot.js`. |
 | The Comic Studio root (`ComicStudioShell`) | `components/comicstudio/ComicStudio.tsx` | Always — on the apex (`dreamstreamstudio.ai`) this root is the skin's boundary. |
 | The public reader root | `components/comicstudio/PublicComicReader.tsx` | Always, including while loading. |
 | The immersive reader root | `components/comicstudio/immersive/ImmersiveReader.tsx` | Always — it is portaled to `<body>`, so it must carry its own. The room stays a content surface (`--ds-reader-*`). |

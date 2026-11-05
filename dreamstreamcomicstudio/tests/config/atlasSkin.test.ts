@@ -648,7 +648,8 @@ describe('Atlas skin — fonts', () => {
   it('does not add a Google Fonts link for them (index.html keeps only the lettering fonts)', () => {
     const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8');
     expect(html).not.toMatch(/Plex|Grotesk/i);
-    expect(html).not.toMatch(/data-ds-skin/);
+    // Bridge D5: the skin itself ships on <html> (the attribute, not a font link; dsSkinEverywhere.test.ts).
+    expect(html).toMatch(/<html lang="en" data-ds-skin="atlas">/);
   });
 });
 

@@ -36,12 +36,24 @@ export const DS_SKIN_ATTR = 'data-ds-skin';
 export const COMIC_STUDIO_SKIN: DsSkin = 'atlas';
 
 /**
- * The skin the whole page runs under for this hostname: the Atlas skin on the comics host and its
- * alias (home, gallery, sign-in, studio, readers and the /c/<slug> share pages all live there), and
- * none elsewhere — the apex keeps its own look, with only the Comic Studio roots skinned.
+ * The skin the comics host always runs under: the Atlas skin on the comics host and its alias (home,
+ * gallery, sign-in, studio, readers and the /c/<slug> share pages all live there), null elsewhere.
  */
 export const comicsSkin = (hostname: string = currentHostname()): DsSkin | null =>
   isComicsHost(hostname) ? COMIC_STUDIO_SKIN : null;
+
+/** The skins a page can ship with on <html> (index.html's static `data-ds-skin`). */
+const isDsSkin = (value: string | null | undefined): value is DsSkin => value === COMIC_STUDIO_SKIN;
+
+/**
+ * The skin the whole page runs under (bridge D5, "Atlas everywhere"). index.html ships
+ * `data-ds-skin="atlas"` on <html> for every host; the build kill switch VITE_DS_SKIN_EVERYWHERE=off strips
+ * it (vite.config.ts). So: the comics host is always skinned; elsewhere the page keeps the skin it shipped
+ * with (`shipped`, the attribute the HTML arrived with), and with the switch off the apex has none, the old
+ * comics-only rule. Pure: the caller reads the attribute (this module also runs in Workers, with no DOM).
+ */
+export const hostSkin = (hostname: string = currentHostname(), shipped: string | null = null): DsSkin | null =>
+  comicsSkin(hostname) ?? (isDsSkin(shipped) ? shipped : null);
 
 const joinPath = (origin: string, path: string): string => {
   const p = String(path || '/');

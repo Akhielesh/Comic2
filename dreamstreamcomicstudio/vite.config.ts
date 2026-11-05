@@ -62,6 +62,33 @@ export function licenceModules(options: { root?: string; reportFile?: string } =
   };
 }
 
+/**
+ * Bridge D5, "Atlas everywhere": index.html (and every other page entry that opts in, such as live.html)
+ * ships `data-ds-skin="atlas"` statically on <html>. The build kill switch VITE_DS_SKIN_EVERYWHERE takes
+ * it out again: exactly `off` strips the attribute from EVERY HTML entry Vite builds (no file-name filter,
+ * so one switch rolls back every page); any other value, or none, keeps it. The comics host still boots
+ * the skin at runtime either way (services/dsSkin.ts). docs/infrastructure/ENV_MATRIX.md.
+ */
+export const DS_SKIN_EVERYWHERE_VAR = 'VITE_DS_SKIN_EVERYWHERE';
+
+/** The <html> start tag without its data-ds-skin attribute (any value, any quoting); nothing else changes. */
+export function stripDsSkinAttribute(html: string): string {
+  return html.replace(/<html\b[^>]*>/i, (tag) => tag.replace(/\s+data-ds-skin(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?(?=[\s/>])/gi, ''));
+}
+
+/** True when the build keeps the skin attribute: every value but exactly `off`. */
+export const dsSkinEverywhere = (value: string | undefined): boolean => value !== 'off';
+
+export function dsSkinEverywherePlugin(value: string | undefined): Plugin {
+  return {
+    name: 'ds-skin-everywhere',
+    transformIndexHtml: {
+      order: 'pre',
+      handler: (html) => (dsSkinEverywhere(value) ? html : stripDsSkinAttribute(html))
+    }
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   const licence = licenceModules();
@@ -85,7 +112,7 @@ export default defineConfig(({ mode }) => {
         }
       }
     },
-    plugins: [react(), licence],
+    plugins: [react(), licence, dsSkinEverywherePlugin(env[DS_SKIN_EVERYWHERE_VAR] ?? process.env[DS_SKIN_EVERYWHERE_VAR])],
     // Module workers (the baby monitor's sound-model worker imports ONNX Runtime). Their packages
     // count as browser code for the licence gate too.
     worker: { format: 'es', plugins: () => [licence.worker()] },
