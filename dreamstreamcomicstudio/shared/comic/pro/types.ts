@@ -23,7 +23,8 @@ export const MADE_IN_PRO_CHIP = 'Made in Pro · Open in Pro';
 export const IN_ART_LETTERING_NOTE = "This comic's lettering is drawn into the art — switch to overlay lettering to add editable text.";
 /** Warp on a script it may mis-shape (anything but Latin, Cyrillic and CJK editions). */
 export const WARP_SCRIPT_NOTE = "Warp isn't available for this script yet";
-/** The Layers panel's note on the band rule (lettering always stays above overlays). */
+/** The Layers panel's note on the band rule (lettering always stays above overlays). §2.4 says the panel "says so" but
+ *  gives no words: this copy is PE-0's, LEAD TO CONFIRM. */
 export const LETTERING_ON_TOP_NOTE = 'Lettering always stays on top, so a sticker or effect can never cover dialogue.';
 
 /** What a sample is in the "Start from a sample" sheet and Assets › Recipes. */

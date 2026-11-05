@@ -2,8 +2,11 @@
 // FX_GENERATORS (36 S2 entries: lines, bursts, emanata, atmosphere, borders) and renderFx; PE-TONES adds tones and
 // paper. Registered versions are never removed or changed (a stored effect must draw the same forever).
 //
-// Rule for every module this file imports later: types only from doc.ts (fx/** is reachable from shared code that
-// doc.ts users load, so a value import back into doc.ts would be a cycle).
+// Rules for PE-FX:
+// - every module this file imports: types only from doc.ts (a value import back into doc.ts would be a cycle);
+// - each FxGenerator.name is FX_NAMES[gen] (fx/names.ts, metadata only), which the editor scene and History read;
+// - keep generator implementations out of this file's static imports: the shared barrel (`comic.fx`) re-exports it, so
+//   renderFx dispatches through a lazily imported module (§2.6 "Generators … go in a lazy pro-editor chunk").
 
 import type { FxDrawContext, FxGenerator, FxNode, LayerFx } from './types.js';
 

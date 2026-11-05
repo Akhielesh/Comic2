@@ -17,7 +17,6 @@
 import {
   bookOf,
   findPage,
-  isOpaqueLayer,
   knownLayersOf,
   letterStyleOf,
   readerOf,
@@ -164,7 +163,6 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
       const index = layers.findIndex((l) => l.id === op.id);
       if (index < 0) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: null }];
       const prev = layers[index];
-      if (isOpaqueLayer(prev)) return []; // the layer op never changes an opaque layer (ops.ts): nothing to undo
       if (op.patch === null || op.patch === undefined) return [{ op: 'layer', pageId: op.pageId, id: op.id, patch: withoutId(prev), index }];
       // The whole previous overlay (a kind change drops keys the normalizer no longer allows).
       const now = findPage(after, op.pageId)?.layers?.find((l) => l.id === op.id);

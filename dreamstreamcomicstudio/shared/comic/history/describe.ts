@@ -6,7 +6,7 @@
 // No git words (branch, merge, commit, checkout, fork, HEAD, diff, rebase, revert) — the creator never sees them.
 
 import type { ComicDoc, Page, PageLayer } from '../doc.js';
-import { fxName } from '../fx/index.js';
+import { fxName } from '../fx/names.js'; // metadata only: never the registry (generators stay in the Pro chunk)
 import { motionPresetWord, type MotionTarget } from '../motion/index.js';
 import { HISTORY_LIMITS } from '../limits.js';
 import { languageSpec } from '../languages.js';
@@ -519,7 +519,8 @@ const motionTargetWords = (page: Page | undefined, target: MotionTarget | undefi
 /**
  * The words for one Pro Edit op, for an undo entry or a History line, against the doc BEFORE it: "Added speed lines",
  * "Animated “BOOM”: Shake", "Removed the animation from panel 2", "Changed the camera on page 3", "Added a sticker".
- * Undefined for any other op (an ordinary overlay keeps its existing words). Pure.
+ * Undefined for any other op (an ordinary overlay keeps its existing words). Pure. §2.3 writes the example as
+ * 'Animated 'BOOM': Shake'; the curly quotes are the house style of every History line (shortQuote): LEAD TO CONFIRM.
  */
 export const proEditLabel = (doc: Pick<ComicDoc, 'pages'>, op: DocOp): string | undefined => {
   if (!op || typeof op !== 'object') return undefined;

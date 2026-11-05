@@ -15,7 +15,7 @@
 // This module also holds what every editor operation shares: the result shape (K2a ops plus their inverse from the one
 // undo path, `inverseOps`, never a parallel undo system), refusals in plain words, locks, and fresh ids.
 
-import { fxName } from '../fx/index.js';
+import { fxName } from '../fx/names.js'; // metadata only: never the registry (generators stay in the Pro chunk)
 import { artModeOf, cutFor, knownLayersOf, layersOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type PageLayer, type Panel } from '../doc.js';
 import { i18nOf } from '../i18n.js';
 import { PLAN_W, type LetterPlan } from '../lettering/layout.js';

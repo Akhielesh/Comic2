@@ -3,6 +3,8 @@
 
 export * from './types.js';
 export * from './registry.js';
+// fxName lives in names.ts (metadata only), so the editor scene and History name an effect without the registry.
+export * from './names.js';
 import { FX_LIMITS } from '../limits.js';
 import { fxGeneratorOf } from './registry.js';
 import type { FxGenerator, FxParamValue, LayerFx } from './types.js';
@@ -45,14 +47,6 @@ export const fxParamsOf = (generator: Pick<FxGenerator, 'params'>, raw: unknown)
 /** The effect's generator, when this build has `gen@v` (undefined: kept, never drawn). */
 export const fxGeneratorFor = (fx: Pick<LayerFx, 'gen' | 'v'> | undefined): FxGenerator | undefined =>
   fx && typeof fx.gen === 'string' && typeof fx.v === 'number' ? fxGeneratorOf(fx.gen, fx.v) : undefined;
-
-/** "Speed lines": the generator's name, else the id in words ('speed-lines' → "Speed lines"), else "Effect". */
-export const fxName = (fx: Pick<LayerFx, 'gen' | 'v'> | undefined): string => {
-  const known = fxGeneratorFor(fx)?.name;
-  if (known) return known;
-  const words = typeof fx?.gen === 'string' ? fx.gen.replace(/-/g, ' ').trim() : '';
-  return words ? words[0].toUpperCase() + words.slice(1) : 'Effect';
-};
 
 /** The stored effect is within its byte budget (FX_LIMITS.fxBytes). */
 export const fxWithinBudget = (fx: unknown): boolean => {

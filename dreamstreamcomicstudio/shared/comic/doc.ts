@@ -1370,6 +1370,9 @@ const textIn = (v: unknown, max: number): string | undefined => {
 };
 const intIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : undefined);
 const rangeIn = (v: unknown, lo: number, hi: number): number | undefined => (finite(v) ? r4(Math.min(hi, Math.max(lo, v))) : undefined);
+/** Load rule (Pro Edit, see normalizeMotionKey): a finite number as stored (4 decimals), and text as stored. */
+const finiteR4 = (v: unknown): number | undefined => (finite(v) ? r4(v) : undefined);
+const storedText = (v: unknown): string | undefined => (typeof v === 'string' && v.length ? v : undefined);
 const hexColor = (v: unknown): string | undefined => (typeof v === 'string' && HEX_COLOR_RE.test(v) ? v : undefined);
 const isHex6 = (v: unknown): v is string => typeof v === 'string' && HEX6_RE.test(v);
 const textList = (v: unknown, maxItems: number, maxChars: number): string[] | undefined => {
@@ -1502,8 +1505,8 @@ export const isOpaqueLayer = (layer: Pick<PageLayer, 'kind'> | null | undefined)
 /** The page's overlays this build draws, in stored order (opaque layers left out). Renderers and the editor read this. */
 export const knownLayersOf = (page: Pick<Page, 'layers'>): PageLayer[] => (page.layers ?? []).filter((l) => !isOpaqueLayer(l));
 
-/** A stored effect, structurally valid (generator id, integer version ≥ 1, int32 seed, ≤ FX_LIMITS.paramsPerFx plain
- *  parameters, ≤ FX_LIMITS.fxBytes), or undefined. Whether `gen@v` is registered and the parameters fit its schema is
+/** A stored effect, structurally valid (generator id, integer version ≥ 1, int32 seed, plain parameters as stored,
+ *  ≤ FX_LIMITS.fxBytes in all; the per-parameter write bounds are the sanitizer's), or undefined. Whether `gen@v` is registered and the parameters fit its schema is
  *  the server sanitizer's check; an unregistered generator draws nothing (inert), so a newer build's effect is kept. */
 export const normalizeLayerFx = (raw: unknown): LayerFx | undefined => {
   if (!isObject(raw) || typeof raw.gen !== 'string' || !FX_GEN_RE.test(raw.gen)) return undefined;
@@ -1513,13 +1516,13 @@ export const normalizeLayerFx = (raw: unknown): LayerFx | undefined => {
   const params: Record<string, FxParamValue> = {};
   if (raw.params !== undefined) {
     if (!isObject(raw.params)) return undefined;
+    // Load rule (see normalizeMotionKey): any number of plain parameters, text as stored; fxBytes bounds the effect.
     for (const [key, value] of Object.entries(raw.params)) {
-      if (Object.keys(params).length >= FX_LIMITS.paramsPerFx) break;
       if (!FX_PARAM_KEY_RE.test(key) || UNSAFE_RECORD_KEYS.has(key)) continue;
       if (finite(value)) params[key] = r4(value);
       else if (typeof value === 'boolean') params[key] = value;
       else {
-        const text = textIn(value, FX_LIMITS.paramTextChars);
+        const text = storedText(value);
         if (text) params[key] = text;
       }
     }
@@ -1641,20 +1644,27 @@ const normalizeMotionTarget = (raw: unknown): MotionTarget | undefined => {
   return id ? { k, id } : undefined;
 };
 
+// LOAD RULE (Pro Edit, rollback): the load normalizers below keep structure, the plan's own bounds (§2.3, §2.5: 48 clips,
+// 12 keys, at −2000..10000 ms, dur 100..4000 ms, repeat 0..20, one camera move per panel) and the byte budgets
+// (MOTION_LIMITS.pageBytes, FX_LIMITS.fxBytes, FX_LIMITS.opaqueLayerBytes). Every other number is kept as stored when finite
+// (sign checks only) and text as stored: the write bounds this package invented (MOTION_LIMITS key ranges, holdMaxMs,
+// paramsPerClip, paramTextChars; FX_LIMITS paramsPerFx, paramTextChars) are the PE-SERVER sanitizer's and the players',
+// so S2 can widen one without a rollback truncating what it stored.
+
 const normalizeMotionKey = (raw: unknown): MotionKey | undefined => {
   if (!isObject(raw)) return undefined;
-  const t = rangeIn(raw.t, 0, 1);
+  const t = rangeIn(raw.t, 0, 1); // a fraction of the clip's duration (structural)
   if (t === undefined) return undefined;
   const out: MotionKey = { t };
-  const x = rangeIn(raw.x, -1, 1);
+  const x = finiteR4(raw.x);
   if (x !== undefined) out.x = x;
-  const y = rangeIn(raw.y, -1, 1);
+  const y = finiteR4(raw.y);
   if (y !== undefined) out.y = y;
-  const s = rangeIn(raw.s, 0, 8);
+  const s = rangeIn(raw.s, 0, Number.MAX_SAFE_INTEGER); // a scale is never negative
   if (s !== undefined) out.s = s;
-  const r = rangeIn(raw.r, -720, 720);
+  const r = finiteR4(raw.r);
   if (r !== undefined) out.r = r;
-  const o = rangeIn(raw.o, 0, 1);
+  const o = rangeIn(raw.o, 0, 1); // opacity (structural)
   if (o !== undefined) out.o = o;
   return out;
 };
@@ -1677,14 +1687,14 @@ export const normalizeMotionClip = (raw: unknown): MotionClip | undefined => {
   const ease = motionWord(raw.ease);
   if (ease) out.ease = ease as EaseId;
   if (isObject(raw.params)) {
+    // Load rule: any number of plain parameters, text as stored (pageBytes bounds the page's motion).
     const params: Record<string, MotionParamValue> = {};
     for (const [key, value] of Object.entries(raw.params)) {
-      if (Object.keys(params).length >= MOTION_LIMITS.paramsPerClip) break;
       if (!MOTION_PARAM_KEY_RE.test(key) || UNSAFE_RECORD_KEYS.has(key)) continue;
       if (finite(value)) params[key] = r4(value);
       else if (typeof value === 'boolean') params[key] = value;
       else {
-        const text = textIn(value, MOTION_LIMITS.paramTextChars);
+        const text = storedText(value);
         if (text) params[key] = text;
       }
     }
@@ -1739,11 +1749,13 @@ export const normalizePageMotion = (raw: unknown): PageMotion | undefined => {
     if (clips.length >= MOTION_LIMITS.clipsPerPage) break;
   }
   const camera = normalizeCameraMoves(raw.camera);
-  const hold = intIn(raw.hold, 0, MOTION_LIMITS.holdMaxMs);
+  const hold = intIn(raw.hold, 0, Number.MAX_SAFE_INTEGER); // load rule: holdMaxMs is a write bound
   if (!clips.length && !camera && hold === undefined) return undefined;
   const out: PageMotion = { clips };
   if (camera) out.camera = camera;
   if (hold !== undefined) out.hold = hold;
+  // The plan's per-page budget: clips past it (from the end) are dropped. A conforming writer never stores more.
+  while (out.clips.length && JSON.stringify(out).length > MOTION_LIMITS.pageBytes) out.clips.pop();
   return out;
 };
 
@@ -1786,7 +1798,8 @@ const prunedMotionPage = (page: Page, ids: Record<MotionTarget['k'], Set<string>
 /**
  * Dangling motion (master plan §2.3): a clip whose target is gone is skipped by every player, so undoing a delete brings
  * its animation back. Only a target absent from the whole doc, trash included, is pruned here (load time). Same doc
- * when no page has motion or nothing dangles.
+ * when no page has motion or nothing dangles. KNOWN LIMIT (docs/features/pro-edit.md §7): ops do not prune, so once S2
+ * writes motion a reload can differ from the live doc (History I5, a client refetch); S2 integration settles it.
  */
 export const pruneDanglingMotion = <T extends Pick<ComicDoc, 'pages' | 'trash'>>(doc: T): T => {
   const hasMotion = doc.pages.some((p) => p.motion) || (doc.trash || []).some((t) => t.page.motion);

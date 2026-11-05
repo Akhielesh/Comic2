@@ -52,7 +52,8 @@ export const MOTION_PRESETS_BY_ROLE: Readonly<Record<MotionRole, readonly Motion
 export const MOTION_PRESET_IDS: readonly MotionPresetId[] = [...ENTER_PRESET_IDS, ...EMPHASIS_PRESET_IDS, ...EXIT_PRESET_IDS, ...LOOP_PRESET_IDS];
 /** The one-tap Easy Animate row (§2.2): Pop in, Fade in, Slide in, Shake, Pulse, Typewriter. */
 export const EASY_ANIMATE_PRESETS: readonly MotionPresetId[] = ['pop', 'fade', 'slide', 'shake', 'pulse', 'typewriter'];
-/** Presets Calm motion and reduced motion never play (no shake, flicker or zoom-punch; §2.5). */
+/** Presets Calm motion and reduced motion never play. §2.5 names shake, flicker and zoom-punch; 'jitter' (a shake) and
+ *  'blink' (a flicker) are added by PE-0 on the same grounds: LEAD TO CONFIRM. */
 export const CALM_EXCLUDED_PRESETS: readonly (MotionPresetId | CameraMoveId)[] = ['shake', 'jitter', 'flicker', 'zoom-punch', 'blink'];
 
 // ── Easing (§2.5: the Atlas curves, linear, in and out, and a closed-form damped spring) ──────────────────────────
@@ -62,15 +63,19 @@ export type EaseId = (typeof EASE_IDS)[number];
 
 // ── Stored shape ─────────────────────────────────────────────────────────────
 
-/** One keyframe: `t` is 0..1 of the clip's duration; every channel is optional and overrides the preset's. */
+/**
+ * One keyframe: `t` is 0..1 of the clip's duration; every channel is optional and overrides the preset's. The channel
+ * ranges are WRITE bounds (MOTION_LIMITS keyOffsetMax, keyScaleMax, keyRotateMax; LEAD TO CONFIRM): the sanitizer and the
+ * players clamp to them, the load normalizer keeps any finite stored value (scale ≥ 0, opacity 0..1).
+ */
 export interface MotionKey {
   t: number;
-  /** Offset, page fractions −1..1. */
+  /** Offset, page fractions (written −1..1). */
   x?: number;
   y?: number;
-  /** Scale 0..8. */
+  /** Scale (written 0..8). */
   s?: number;
-  /** Rotation, degrees −720..720. */
+  /** Rotation, degrees (written −720..720). */
   r?: number;
   /** Opacity 0..1. */
   o?: number;
@@ -95,7 +100,7 @@ export interface MotionClip {
   /** Milliseconds, MOTION_LIMITS.durMin..durMax; absent = the preset's own. */
   dur?: number;
   ease?: EaseId;
-  /** Preset parameters (≤ MOTION_LIMITS.paramsPerClip; numbers, booleans, short words). */
+  /** Preset parameters: numbers, booleans, short words (written ≤ MOTION_LIMITS.paramsPerClip, a write bound). */
   params?: Record<string, MotionParamValue>;
   /** Extra plays, 0..MOTION_LIMITS.repeatMax. */
   repeat?: number;
@@ -113,7 +118,7 @@ export interface CameraMove {
 export interface PageMotion {
   clips: MotionClip[];
   camera?: CameraMove[];
-  /** Milliseconds the page holds after its last beat (0..MOTION_LIMITS.holdMaxMs). */
+  /** Milliseconds the page holds after its last beat (≥ 0; written ≤ MOTION_LIMITS.holdMaxMs, a write bound). */
   hold?: number;
 }
 

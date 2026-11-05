@@ -19,6 +19,7 @@ import {
   layersOf,
   motionClipsOf,
   normalizeDoc,
+  normalizeCameraMoves,
   normalizeLayerFx,
   normalizeMotionClip,
   normalizeOpaqueLayer,
@@ -51,7 +52,7 @@ import {
   type DocOp
 } from './ops';
 import { describeOps, inverseOps, isUndoable } from './undo';
-import { FX_LIMITS, MOTION_LIMITS, PRO_LETTER_LIMITS } from './limits';
+import { DOC_LIMITS, FX_LIMITS, MOTION_LIMITS, PRO_LETTER_LIMITS } from './limits';
 import {
   BUBBLE_SHAPES,
   PRO_BUBBLE_SHAPES,
@@ -65,6 +66,7 @@ import {
 } from './lettering/style';
 import { PRO_FONT_IDS, isProFontId } from './lettering/proFonts';
 import { FX_GENERATORS, fxName, fxParamsOf, renderFx } from './fx/index';
+import { FX_NAMES, fxName as fxNameOnly } from './fx/names';
 import { MOTION_PRESET_IDS, CAMERA_MOVE_IDS, motionPresetWord } from './motion/index';
 import { libAssetUrl, normalizeAssetLibRef } from './assets/index';
 import { PRO_EDIT_PARTS, PRO_FREE_FOOTER } from './pro/index';
@@ -227,7 +229,7 @@ describe('Pro Edit contract (PE-0): the object model round-trips', () => {
   it('normalizers keep structure only: clamps, drops the malformed, and a newer build\'s preset or generator is kept (inert)', () => {
     // A preset or generator this build does not have is kept: the server checks the registry, a player skips it.
     expect(normalizeMotionClip({ id: 'mc_x', target: { k: 'line', id: 'l1' }, role: 'enter', preset: 'future-wipe', at: { anchor: 'reveal', ms: 99999 }, dur: 1, repeat: 99, keys: [{ t: 2, x: 9 }, { t: 0.5 }] })).toEqual({
-      id: 'mc_x', target: { k: 'line', id: 'l1' }, role: 'enter', preset: 'future-wipe', at: { anchor: 'reveal', ms: MOTION_LIMITS.atMsMax }, dur: MOTION_LIMITS.durMin, repeat: MOTION_LIMITS.repeatMax, keys: [{ t: 0.5 }, { t: 1, x: 1 }]
+      id: 'mc_x', target: { k: 'line', id: 'l1' }, role: 'enter', preset: 'future-wipe', at: { anchor: 'reveal', ms: MOTION_LIMITS.atMsMax }, dur: MOTION_LIMITS.durMin, repeat: MOTION_LIMITS.repeatMax, keys: [{ t: 0.5 }, { t: 1, x: 9 }]
     });
     for (const bad of [{ id: 'x' }, { id: 'mc_a', target: { k: 'balloon', id: 'l' }, role: 'enter', preset: 'pop', at: { anchor: 'reveal', ms: 0 } }, { id: 'mc_a', target: { k: 'line', id: 'l' }, role: 'dance', preset: 'pop', at: { anchor: 'reveal', ms: 0 } }, { id: 'mc_a', target: { k: 'line', id: 'l' }, role: 'enter', preset: 'Pop!', at: { anchor: 'reveal', ms: 0 } }]) {
       expect(normalizeMotionClip(bad)).toBeUndefined();
@@ -235,7 +237,7 @@ describe('Pro Edit contract (PE-0): the object model round-trips', () => {
     expect(normalizePageMotion({ clips: [] })).toBeUndefined();
     expect(normalizePageMotion({ clips: Array.from({ length: 60 }, (_, i) => ({ id: `mc_${i}`, target: { k: 'panel', id: 'p1' }, role: 'loop', preset: 'float', at: { anchor: 'page', ms: 0 } })) })!.clips).toHaveLength(MOTION_LIMITS.clipsPerPage);
     expect(normalizePageMotion({ clips: [], camera: [{ panelId: 'p1', move: 'push' }, { panelId: 'p1', move: 'pull' }], hold: -5 })).toEqual({ clips: [], camera: [{ panelId: 'p1', move: 'push' }], hold: 0 });
-    expect(normalizeLayerFx({ gen: 'future-gen', v: 3, seed: 2 ** 31 - 1, params: { a: 1.234567, __proto__x: 1, ok: 'x'.repeat(40) } })).toEqual({ gen: 'future-gen', v: 3, seed: 2147483647, params: { a: 1.2346, ok: 'x'.repeat(FX_LIMITS.paramTextChars) } });
+    expect(normalizeLayerFx({ gen: 'future-gen', v: 3, seed: 2 ** 31 - 1, params: { a: 1.234567, __proto__x: 1, ok: 'x'.repeat(40) } })).toEqual({ gen: 'future-gen', v: 3, seed: 2147483647, params: { a: 1.2346, ok: 'x'.repeat(40) } });
     expect(normalizeLayerFx({ gen: 'g', v: 1, seed: 2 ** 31, params: {} })).toBeUndefined();
     expect(normalizeLayerFx({ gen: 'g', v: 1, seed: 1, params: { big: 'x'.repeat(32) }, extra: 'y'.repeat(2000) })).toEqual({ gen: 'g', v: 1, seed: 1, params: { big: 'x'.repeat(32) } });
     // An image needs exactly one picture: a path or a library sticker.
@@ -246,6 +248,31 @@ describe('Pro Edit contract (PE-0): the object model round-trips', () => {
     expect(pickReader({ motion: 'maybe' }).motion).toBeUndefined();
     expect(pickReader({ motion: 'on' }).motion).toBe('on');
     expect(libAssetUrl(normalizeAssetLibRef(STICKER)!)).toBe('/library/fluent-flat/abc123/fire.svg');
+  });
+
+  it('load keeps the plan\'s bounds and the byte budgets only: an invented write bound never truncates stored data', () => {
+    // Write bounds PE-0 invented (LEAD TO CONFIRM) are the sanitizer's: a newer build that widens one survives a rollback.
+    const wide = normalizeMotionClip({
+      id: 'mc_w', target: { k: 'layer', id: 'ly_fx' }, role: 'loop', preset: 'float', at: { anchor: 'page', ms: 0 },
+      params: Object.fromEntries(Array.from({ length: MOTION_LIMITS.paramsPerClip + 4 }, (_, i) => [`p${i}`, i === 0 ? 'w'.repeat(MOTION_LIMITS.paramTextChars + 20) : i])),
+      keys: [{ t: 0.5, x: MOTION_LIMITS.keyOffsetMax * 3, s: MOTION_LIMITS.keyScaleMax + 4, r: MOTION_LIMITS.keyRotateMax * 2, o: 2 }, { t: 1, s: -1 }]
+    })!;
+    expect(Object.keys(wide.params!)).toHaveLength(MOTION_LIMITS.paramsPerClip + 4);
+    expect(wide.params!.p0).toBe('w'.repeat(MOTION_LIMITS.paramTextChars + 20));
+    expect(wide.keys).toEqual([{ t: 0.5, x: 3, s: 12, r: 1440, o: 1 }, { t: 1, s: 0 }]);
+    expect(normalizePageMotion({ clips: [], hold: MOTION_LIMITS.holdMaxMs * 6 })).toEqual({ clips: [], hold: MOTION_LIMITS.holdMaxMs * 6 });
+    const fxParams = Object.fromEntries(Array.from({ length: FX_LIMITS.paramsPerFx + 4 }, (_, i) => [`k${i}`, i]));
+    expect(normalizeLayerFx({ gen: 'g', v: 1, seed: 1, params: { ...fxParams, label: 'z'.repeat(FX_LIMITS.paramTextChars + 8) } })!.params).toEqual({ ...fxParams, label: 'z'.repeat(FX_LIMITS.paramTextChars + 8) });
+    // The plan's own bounds and the byte budgets still apply on load.
+    expect(MOTION_LIMITS.cameraMoves).toBe(DOC_LIMITS.panelsPerPage);
+    expect(normalizeCameraMoves(Array.from({ length: 12 }, (_, i) => ({ panelId: `p${i}`, move: 'push' })))).toHaveLength(DOC_LIMITS.panelsPerPage);
+    expect(normalizeLayerFx({ gen: 'g', v: 1, seed: 1, params: { big: 'b'.repeat(FX_LIMITS.fxBytes) } })).toBeUndefined();
+    const heavy = (i: number) => ({ id: `mc_${i}`, target: { k: 'panel', id: 'p1' }, role: 'loop', preset: 'float', at: { anchor: 'page', ms: 0 }, params: { note: 'n'.repeat(500) } });
+    const trimmed = normalizePageMotion({ clips: Array.from({ length: MOTION_LIMITS.clipsPerPage }, (_, i) => heavy(i)) })!;
+    expect(JSON.stringify(trimmed).length).toBeLessThanOrEqual(MOTION_LIMITS.pageBytes);
+    expect(trimmed.clips.length).toBeGreaterThan(0);
+    expect(trimmed.clips.map((c) => c.id)).toEqual(Array.from({ length: trimmed.clips.length }, (_, i) => `mc_${i}`));
+    expect(normalizePageMotion(json(trimmed))).toEqual(trimmed);
   });
 
   it('an unknown layer kind round-trips through normalize as written and is never drawn, listed, patched or deleted', () => {
@@ -366,8 +393,11 @@ describe('Pro Edit contract (PE-0): ops', () => {
     const after = applyOp(doc, del);
     expect(motionClipsOf(after.pages[0]).map((c) => c.id)).toContain('mc_boom');
     expect(apply(after, inverseOps(doc, [del]))).toEqual(doc);
-    // Reloaded while the line is gone from the whole doc: that clip (only) is pruned.
+    // Reloaded while the line is gone from the whole doc: that clip (only) is pruned. KNOWN LIMIT (pro-edit.md §7, S2
+    // integration): so normalizeDoc(after) differs from `after` here, which History's I5 and a refetch will meet once
+    // motion is writable; S2 prunes in the deleting op or makes I5 and restore tolerate it, then updates this test.
     expect(motionClipsOf(normalizeDoc(json(after)).pages[0]).map((c) => c.id)).toEqual(['mc_fx', 'mc_p2']);
+    expect(normalizeDoc(json(after))).not.toEqual(after);
     // A target on a trashed page still counts: a clip on page 2 aimed at page 1's line survives page 1 going to the trash.
     const cross = applyOp(doc, { op: 'motion', pageId: 'pg_2', id: 'mc_cross', patch: { target: { k: 'line', id: 'pg_1_l4' }, role: 'emphasis', preset: 'pulse', at: { anchor: 'page', ms: 0 } } });
     const trashed = applyOp(cross, { op: 'page_delete', id: 'pg_1', deletedAt: 5 });
@@ -507,6 +537,23 @@ describe('Pro Edit contract (PE-0): history, the scene and lettering', () => {
     expect(firstLettering === -1 || scene.objects.indexOf(fx) < firstLettering).toBe(true);
     expect(layerWord({ id: 'ly_x', kind: 'effect', box: bx(0, 0, 1, 1), fx: { gen: 'focus-lines', v: 2, seed: 0, params: {} } })).toBe('Focus lines');
     expect(fxName(undefined)).toBe('Effect');
+  });
+
+  it('effect names come from fx/names.ts (metadata only): the scene and History never import the generator registry', () => {
+    expect(fxName).toBe(fxNameOnly);
+    // Every registered generator's name is its FX_NAMES entry (PE-FX keeps the two in step).
+    for (const g of FX_GENERATORS) expect(g.name, `${g.gen}@${g.v}`).toBe(FX_NAMES[g.gen]);
+    // Source scan: shared modules that the editor scene, History or every doc user loads import fx names or types only,
+    // so generator code (PE-FX) never follows into those bundles (§2.6: generators load in the lazy Pro chunk).
+    const here = dirname(fileURLToPath(import.meta.url));
+    const files = ['doc.ts', 'ops.ts', 'undo.ts', ...['editor', 'history'].flatMap((dir) => readdirSync(join(here, dir)).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts')).map((f) => join(dir, f)))];
+    expect(files).toEqual(expect.arrayContaining(['editor/scene.ts', 'history/describe.ts']));
+    const offences: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(join(here, file), 'utf8');
+      for (const m of src.matchAll(/from\s+['"]([^'"]*\/fx\/[^'"]*)['"]/g)) if (!/\/fx\/(names|types)(\.js)?$/.test(m[1])) offences.push(`${file}: ${m[1]}`);
+    }
+    expect(offences).toEqual([]);
   });
 
   it('Pro text styling is neutral and the lettering sanitizer does not accept a Pro key or id until the drawing lands', () => {
