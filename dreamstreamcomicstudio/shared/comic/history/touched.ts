@@ -276,7 +276,7 @@ const AI_JOB_OPS = new Set(['pages', 'page_panels', 'translations', 'style_optio
  * model switches → ai; a derived image (fit_render) and balloon re-fits (relayout_balloons) → editor ("no AI cost").
  * `action` (the StudioAction type that produced the batch, when the recorder knows it: jobs.ts startAction passes it)
  * decides who made a change: EDITOR_ACTIONS (panelize_page, flatten_page, rebind_panels, apply_finding, fit_render,
- * relayout_balloons) → editor; AI_ACTIONS (fix_panel, enrich_pages, plan_pages) → ai. It never re-attributes what a job
+ * relayout_balloons) → editor; AI_ACTIONS (fix_panel, enrich_pages, plan_pages, resolve_conflict) → ai. It never re-attributes what a job
  * writes around the work: a render's status, error or QC report stays 'system' (no change: no row, no clock, no run)
  * and the software's balloon placement after a check stays the editor's, so a late check never opens an AI run. Server
  * panel ops without an action are the editor's.
