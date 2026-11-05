@@ -23,17 +23,19 @@
 }
 
 /* The NEW page swings in from the turning edge and settles flat — reads as a real
-   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction). */
+   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction).
+   Transform and opacity only (reader RD-0 F7): the old filter: brightness() stops repainted the page every
+   frame; the opacity ramp already carries the "lands from the dark" feel. */
 @keyframes pageFlipNext {
-  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 @keyframes pageFlipPrev {
-  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; }
   60%  { opacity: 1; }
-  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; }
 }
 
 .animate-fade-in {

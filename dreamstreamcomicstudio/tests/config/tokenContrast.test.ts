@@ -1394,6 +1394,15 @@ describe('token contrast — the reader rooms (HUD ink, room-side focus; RD-A)',
     expect(ratio(token('--ds-accent', 'atlas light'), hexColor(READER_ROOMS.night.room))).toBeLessThan(1.1);
   });
 
+  it('the classic reader’s page flip animates only transform and opacity (RD-0 F7: no per-frame filter repaint)', () => {
+    for (const name of ['pageFlipNext', 'pageFlipPrev']) {
+      const frames = rules.filter((r) => r.parents.includes(`@keyframes ${name}`));
+      expect(frames.length, name).toBe(3);
+      const props = new Set(frames.flatMap((r) => r.body.split(';').map((d) => d.split(':')[0].trim()).filter(Boolean)));
+      expect([...props].sort(), name).toEqual(['opacity', 'transform']);
+    }
+  });
+
   it('no reader token reads the colour layer (the comic page keeps --ds-reader-*; the art supplies the colour)', () => {
     const reader = [...ROOT_TOKENS].filter(([k]) => k.startsWith('--ds-reader-'));
     expect(reader.length).toBeGreaterThanOrEqual(4);
