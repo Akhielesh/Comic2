@@ -157,6 +157,10 @@ describe('intentFromArgs (the director\'s dialogue_edit arguments)', () => {
     expect(intentFromArgs({ action: 'swap', target: { selected: true } })).toEqual({ intent: { act: 'swap', a: { selected: true, all: true }, b: { selected: true, all: true } } });
     expect(intentFromArgs({ action: 'reorder', target: { speaker: 'Mira' }, index: 0 })).toEqual({ intent: { act: 'reorder', target: { speaker: 'Mira' }, to: 'first' } });
     expect(lineRefFromArgs({ nth: -1, which: 'biggest', kind: 'nope' })).toEqual({ nth: 'last', which: 'biggest' });
+    // A size word stays relative to each line's own size.
+    expect(intentFromArgs({ action: 'restyle', target: { selected: true }, scope: 'line', style: { size: 'larger' } })).toEqual({
+      intent: { act: 'restyle', target: { selected: true }, scope: 'line', style: {}, scaleBy: 1.2 }
+    });
   });
 
   it('refuses in plain words when a needed argument is missing', () => {

@@ -1099,6 +1099,13 @@ const placementFromArgs = (raw: unknown): Placement | undefined => {
   return p.cell || p.edge || p.near || p.relation || p.nudge ? p : undefined;
 };
 
+/** dialogue_edit's style.size words ("larger", "much smaller") → a factor of each line's own size. */
+const SIZE_WORDS: Readonly<Record<string, number>> = {
+  larger: 1.2, bigger: 1.2, big: 1.2, large: 1.2, 'a bit larger': 1.1, 'a bit bigger': 1.1, 'slightly larger': 1.1, 'slightly bigger': 1.1,
+  'much larger': 1.45, 'much bigger': 1.45, huge: 1.6, smaller: 0.85, small: 0.85, 'a bit smaller': 0.9, 'slightly smaller': 0.9, 'much smaller': 0.7, tiny: 0.7
+};
+const sizeWordScale = (raw: unknown): number | undefined => (typeof raw === 'string' ? SIZE_WORDS[raw.trim().toLowerCase()] : undefined);
+
 /** The flat style args a model may send, for the parts that need no current style (B-TOOL converts the rest). */
 const styleFromArgs = (raw: unknown): LetterStylePatch => {
   if (!isObj(raw)) return {};
@@ -1179,7 +1186,11 @@ export function intentFromArgs(args: unknown, opts: { style?: LetterStylePatch }
     case 'restyle': {
       const scope = oneOf(args.scope, ['line', 'kind', 'speaker', 'comic'] as const) ?? 'line';
       const style = opts.style ?? styleFromArgs(args.style);
-      return Object.keys(style).length ? { intent: { act, target, scope, style } } : { error: 'restyle needs style changes (font, colours, shape, bold, italic…).' };
+      // "larger" / "smaller" are relative to each line's own size (compile.ts scaleBy), never one absolute number.
+      const scaleBy = opts.style ? undefined : sizeWordScale(isObj(args.style) ? args.style.size : undefined);
+      if (!Object.keys(style).length && scaleBy === undefined) return { error: 'restyle needs style changes (font, colours, shape, bold, italic, size…).' };
+      const intent = { act, target, scope, style, ...(scaleBy !== undefined ? { scaleBy } : {}) } as DialogueIntent & RestyleExtras;
+      return { intent };
     }
     case 'z': {
       const dir = oneOf(args.dir, ['front', 'back'] as const) ?? 'front';
