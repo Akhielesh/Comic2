@@ -106,6 +106,36 @@ describe('skins are index.css token blocks, as data', () => {
     }
   });
 
+  it('carries the DS-1a tokens (z ladder, densities, heading steps, motion, danger label) in both skins, as index.css does', () => {
+    // docs/design/design-system.md. Theme-invariant: one value in every skin (Atlas has no z or density
+    // tokens; its type and motion steps are the same numbers), so a drift on either side fails here and
+    // in the block comparisons above.
+    const shared: Record<string, string> = {
+      '--ds-z-stage': '0', '--ds-z-chrome': '40', '--ds-z-header': '40', '--ds-z-editor': '70', '--ds-z-reader': '80',
+      '--ds-z-scrim': '85', '--ds-z-sheet': '86', '--ds-z-popover': '90', '--ds-z-toast': '95', '--ds-z-tooltip': '100',
+      '--ds-density-compact': '28px', '--ds-density-comfortable': '36px', '--ds-density-touch': '44px',
+      '--ds-text-xl': '1.25rem', '--ds-text-2xl': '1.5rem', '--ds-text-3xl': '1.875rem',
+      '--ds-motion-enter-quick': 'var(--ds-motion-enter)', '--ds-motion-enter-slow': '420ms', '--ds-motion-stagger': '40ms',
+      '--ds-on-danger': '#ffffff',
+    };
+    for (const skin of [DREAMSTREAM_SKIN, ATLAS_SKIN]) {
+      for (const [k, v] of Object.entries(shared)) expect(skin.light[k], `${skin.id} ${k}`).toBe(v);
+      // Only the danger label has a dark value; the rest are not colours and never change with the theme.
+      expect(Object.keys(skin.dark).filter((k) => k in shared)).toEqual(['--ds-on-danger']);
+    }
+    expect(DREAMSTREAM_SKIN.dark['--ds-on-danger']).toBe('#1a1915');
+    expect(ATLAS_SKIN.dark['--ds-on-danger']).toBe('#ffffff');
+    // The alias resolves to today's entrance, so the rename trap (Atlas's 280 ms is "enter-quick") is closed.
+    expect(skinToken(DREAMSTREAM_SKIN, '--ds-motion-enter-quick')).toBe('280ms');
+    expect(skinToken(ATLAS_SKIN, '--ds-motion-enter-quick')).toBe('280ms');
+    // The label on the solid danger fill clears 4.5:1 where the fill is a plain colour (the oklch Atlas dark
+    // red is measured by tests/config/tokenContrast.test.ts).
+    for (const [skin, mode] of [[DREAMSTREAM_SKIN, 'light'], [DREAMSTREAM_SKIN, 'dark'], [ATLAS_SKIN, 'light']] as const) {
+      const ratio = contrastRatio(skinToken(skin, '--ds-on-danger', mode)!, skinToken(skin, '--ds-danger', mode)!);
+      expect(ratio, `${skin.id} ${mode}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('skinToken follows var() references and lets dark fall back to light', () => {
     expect(skinToken(ATLAS_SKIN, '--ds-accent-text')).toBe('#0a0a0a');
     expect(skinToken(DREAMSTREAM_SKIN, '--ds-accent-fill')).toBe('#D97757');
