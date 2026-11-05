@@ -23,13 +23,13 @@
       "name": "New comic",
       "short_name": "New comic",
       "url": "/?view=dashboard&new=1&source=pwa",
-      "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192", "type": "image/png" }]
+      "icons": [{ "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
       "name": "My comics",
       "short_name": "My comics",
       "url": "/?view=dashboard&source=pwa",
-      "icons": [{ "src": "/icons/app-192.png", "sizes": "192x192", "type": "image/png" }]
+      "icons": [{ "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ]
 }

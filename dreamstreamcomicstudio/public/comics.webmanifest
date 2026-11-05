@@ -17,7 +17,7 @@
     { "src": "/icons/comics-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/icons/comics-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/icons/comics-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
-    { "src": "/icons/comics-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "/icons/comics-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ],
   "shortcuts": [
     {
