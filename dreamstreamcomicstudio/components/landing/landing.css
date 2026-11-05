@@ -1,0 +1,162 @@
+/*
+ * The DreamStream home page (components/HomePage.tsx, components/landing/**): the effects only the
+ * public landing uses. Framework-free like styles/ds-motion.css, every value read from the --ds-*
+ * tokens (with the Atlas value as a fallback), so the page follows the skin and the theme.
+ *
+ *   .ds-spotlight (+ -inverse) / .ds-spotlight-grid   Atlas's spotlight group (bridge §4: "the spotlight
+ *       group is landing-only; it can live in components/landing/landing.css"). useSpotlight writes
+ *       --ds-spot-x / --ds-spot-y once per frame for a mouse only; the light fades in while the group
+ *       carries data-spotlight="on". Decoration: painted behind the content, never hit-tested, gone under
+ *       reduced motion and forced colours.
+ *   .ds-home-mark          the hero's DreamStream mark: its point drops in once, like a pin, as the page
+ *       arrives (the mark's own hover moment then takes over: components/brand/studio-marks.css).
+ *   .ds-home-meter         the baby-monitor sound level in the Stream Studio moment: a live-state loop,
+ *       so it holds still under [data-inview="false"] like every ds-motion loop.
+ *   .ds-home-blink         a blinking caret inside SVG text (the Comic Studio caption).
+ *
+ * Nothing here starts hidden: every element is visible before any script or animation runs, keyframes
+ * end on `transform: none`, and the single reduced-motion block at the end stops all of it.
+ */
+
+/* ── Spotlight ────────────────────────────────────────────────────────────────────────────── */
+
+.ds-spotlight {
+  isolation: isolate;
+}
+
+/* Zero specificity: an element that is already absolute keeps its position, and a utility such as
+   [--ds-spot-size:600px] still wins. */
+:where(.ds-spotlight) {
+  --ds-spot-color: var(--ds-spot-ink, var(--ds-ink));
+  --ds-spot-size: 440px;
+  --ds-spot-wash: 7%;
+  --ds-spot-rim: 55%;
+  position: relative;
+}
+
+.ds-spotlight-inverse {
+  --ds-spot-color: var(--ds-canvas);
+}
+
+.ds-spotlight::before,
+.ds-spotlight::after,
+.ds-spotlight-grid {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--ds-motion-enter-slow, 420ms) var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+
+.ds-spotlight::before,
+.ds-spotlight::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+}
+
+/* A soft pool of ink under the pointer, behind the card's content (isolation keeps it inside). */
+.ds-spotlight::before {
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(
+    var(--ds-spot-size) circle at var(--ds-spot-x, 50%) var(--ds-spot-y, 0%),
+    color-mix(in srgb, var(--ds-spot-color) var(--ds-spot-wash), transparent),
+    transparent 62%
+  );
+}
+
+/* The same light caught by the 1 px edge, so neighbouring cards glow as the pointer passes between them. */
+.ds-spotlight::after {
+  inset: -1px;
+  padding: 1px;
+  background: radial-gradient(
+    calc(var(--ds-spot-size) * 0.6) circle at var(--ds-spot-x, 50%) var(--ds-spot-y, 0%),
+    color-mix(in srgb, var(--ds-spot-color) var(--ds-spot-rim), transparent),
+    transparent 72%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+/* A brighter copy of .ds-grid-backdrop, revealed in a circle around the pointer. */
+.ds-spotlight-grid {
+  background-image: radial-gradient(color-mix(in srgb, var(--ds-ink) 42%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(280px circle at var(--ds-spot-x, 50%) var(--ds-spot-y, 50%), #000, transparent 72%);
+  mask-image: radial-gradient(280px circle at var(--ds-spot-x, 50%) var(--ds-spot-y, 50%), #000, transparent 72%);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  [data-spotlight="on"] .ds-spotlight::after,
+  .ds-spotlight[data-spotlight="on"]::after,
+  [data-spotlight="on"] .ds-spotlight-grid {
+    opacity: 1;
+  }
+
+  [data-spotlight="on"] .ds-spotlight:hover::before,
+  .ds-spotlight[data-spotlight="on"]:hover::before {
+    opacity: 1;
+  }
+}
+
+@media (forced-colors: active) {
+  .ds-spotlight::before,
+  .ds-spotlight::after,
+  .ds-spotlight-grid {
+    display: none;
+  }
+}
+
+/* ── The hero mark ────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Once, as the page arrives; the keyframes (studio-marks.css) start and end at rest, so the point is
+     always drawn. The hover rule there is more specific and replays it on demand. */
+  .ds-home-mark .ds-logo-point {
+    animation: ds-logo-pin 640ms var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) 360ms backwards;
+  }
+}
+
+/* ── Moments ──────────────────────────────────────────────────────────────────────────────── */
+
+/* The baby monitor's live sound level: five bars breathing at their own pace (a live state). */
+.ds-home-meter > * {
+  transform-origin: 50% 100%;
+  animation: ds-home-meter 1.4s var(--ds-ease, cubic-bezier(0.2, 0.8, 0.2, 1)) infinite alternate;
+}
+
+.ds-home-meter > :nth-child(2) { animation-delay: -0.35s; animation-duration: 1.1s; }
+.ds-home-meter > :nth-child(3) { animation-delay: -0.8s; animation-duration: 1.7s; }
+.ds-home-meter > :nth-child(4) { animation-delay: -0.2s; animation-duration: 1.25s; }
+.ds-home-meter > :nth-child(5) { animation-delay: -0.6s; animation-duration: 1.55s; }
+
+@keyframes ds-home-meter {
+  from { transform: scaleY(0.45); }
+  to { transform: none; }
+}
+
+/* A caret for SVG text (.ds-caret is an HTML box): the same blink, on a <tspan>. */
+.ds-home-blink {
+  animation: ds-caret 1s steps(1) infinite;
+}
+
+[data-inview="false"] :is(.ds-home-meter > *, .ds-home-blink) {
+  animation-play-state: paused;
+}
+
+/* ── Reduced motion: one block ────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .ds-spotlight::before,
+  .ds-spotlight::after,
+  .ds-spotlight-grid {
+    display: none;
+  }
+
+  .ds-home-mark .ds-logo-point,
+  .ds-home-meter > *,
+  .ds-home-blink {
+    animation: none;
+  }
+}
