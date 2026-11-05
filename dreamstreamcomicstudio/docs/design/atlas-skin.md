@@ -402,7 +402,7 @@ token layer this way is what makes "unify" and the fun theme two values of one a
 
 ## Synced from Atlas
 
-- Repo: `atlasd`, branch **`origin/claude/quirky-darwin-fpx23q`**, commit **`0677199b`** (2026-11-05). The design
+- The Atlas repository, its design branch, commit **`0677199b`** (2026-11-05). The design
   files are **byte-identical to `acbdaff7`**: `app/globals.css`, `tailwind.config.js`, `ui-generated/**`,
   `components/WorkspacePrimitives.tsx`, `components/shell/**`, `GlobalNotificationBar`, `PublicSiteChrome`,
   `GlobalFooter`, `WorkspaceShell`, `AuthenticatedAppHeader`, `app/layout.tsx`, `AppShell` and the UI guide; the
@@ -410,8 +410,8 @@ token layer this way is what makes "unify" and the fun theme two values of one a
   design-list hit is a copy guard for Atlas's own connector pages (`tests/lib/beta-connector-copy.test.ts`), nothing
   to port. The wave 9 bridge (changelog) ports the motion system, the effects hooks and the token decisions
   agreed with the Atlas session from this commit. Previous syncs `acbdaff7` (= `98240e5b` design files), `496f265c`,
-  `acd9fdfc`, `07935fcf`. Re-sync:
-  `git -C /home/user/atlasd diff 0677199b origin/claude/quirky-darwin-fpx23q -- app/globals.css
+  `acd9fdfc`, `07935fcf`. Re-sync, in an Atlas checkout:
+  `git diff 0677199b <design branch> -- app/globals.css
   tailwind.config.js app/layout.tsx ui-generated components/shell hooks components/effects docs/current/guides/ui-ux-and-design-language.md tests/lib`.
 - Port targets: `index.css`, `styles/ds-motion.css`, `components/chat/studioDesign.ts`, `components/ds/**`,
   `packages/platform-core/src/brand/skins/atlas.ts` and this page (master plan §1.5).
