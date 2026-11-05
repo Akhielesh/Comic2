@@ -40,6 +40,7 @@ import { aspectNumber, pageAspectOf } from './balloonGeometry';
 import { byokFromDoc, estimateDraw, estimateOne, hasImage, isBusy, jobModel, pageVisualStatus, pagesForIds, plural, renderModelNickname, sheetVisualStatus } from './boardModel';
 import { useCostFormat, type CostFormat } from './costFormat';
 import { TONE_TEXT } from '../../chat/studioDesign';
+import { keepRefusedInComposer } from '../conversation/composerBus';
 import { EmptyHint, GhostButton, IconButton, InlineField, PrimaryButton, RenderOverlay, Segmented, SectionTitle, StatusChip, Surface, SwitchRow, cx, useClickGuard } from './ui';
 
 // ── Density ──────────────────────────────────────────────────────────────────
@@ -770,9 +771,11 @@ export const PagesTab: React.FC<{ studio: StudioController; doc: ComicDoc }> = (
         edit.commit(insertOps(after, newId('pg')), `Added a blank page ${after + 1}`, { label: 'Add a page' });
         return;
       }
-      case 'write':
+      case 'write': {
         if (!page) return;
-        return void studio.send(`Write page ${page.n} for me${page.summary ? `: ${page.summary}` : ''}`);
+        const message = `Write page ${page.n} for me${page.summary ? `: ${page.summary}` : ''}`;
+        return void keepRefusedInComposer(studio.send(message), message);
+      }
       case 'move_left':
       case 'move_right': {
         if (!page) return;

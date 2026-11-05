@@ -12,6 +12,7 @@ import { ChevronUp, Images } from 'lucide-react';
 import { newId, renderTargetKey, type RenderTarget } from '../../../shared/comic/doc';
 import { PLAN_USD_PER_PAGE, PLATFORM_MARKUP } from '../../../shared/comic/models';
 import { useCostFormat } from '../conversation/cost';
+import { keepRefusedInComposer } from '../conversation/composerBus';
 import { isPhoneLayout } from '../mobile/formFactor';
 import { DOC_LIMITS } from '../../../shared/comic/limits';
 import type { StudioController } from '../types';
@@ -309,9 +310,11 @@ export const BookTimeline: React.FC<BookTimelineProps> = ({ studio, compact = fa
         return duplicate(clip);
       case 'insert':
         return insertAfter(clip.kind === 'page' ? clip.page?.n ?? pages.length : 0);
-      case 'write':
+      case 'write': {
         if (!clip.page) return;
-        return void studio.send(`Write page ${clip.page.n} for me${clip.page.summary ? `: ${clip.page.summary}` : ''}`);
+        const message = `Write page ${clip.page.n} for me${clip.page.summary ? `: ${clip.page.summary}` : ''}`;
+        return void keepRefusedInComposer(studio.send(message), message);
+      }
       case 'move_left':
         return movePage(clip, pageIndex(clip.key) - 1);
       case 'move_right':

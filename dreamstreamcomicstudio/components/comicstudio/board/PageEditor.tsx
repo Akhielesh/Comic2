@@ -104,6 +104,7 @@ import { versionCount } from '../timeline/bookModel';
 import { EditorToolbar, type EditorMode } from '../mobile/editor/EditorToolbar';
 import { EditorToolsSheet } from '../mobile/editor/EditorToolsSheet';
 import { useEditorCost } from '../mobile/editor/useEditorCost';
+import { keepRefusedInComposer } from '../conversation/composerBus';
 import {
   COACH_KEY,
   TOOLS_SHEET_KEY,
@@ -1682,7 +1683,10 @@ const EditorBody: React.FC<EditorBodyProps> = ({ studio, doc, page: sourcePage, 
           selection.select(id);
           startEditing(id);
         }}
-        onAskAI={(text) => void studio.send(`(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`, { focus: 'selection' })}
+        onAskAI={(text) => {
+          const message = `(about the selected balloon${selection.ids.length > 1 ? 's' : ''}) ${text}`;
+          void keepRefusedInComposer(studio.send(message, { focus: 'selection' }), message);
+        }}
         onDeselect={selection.clear}
         editionLang={lang}
         mode={viewMode}
