@@ -1,13 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
-  <rect x="2" y="2" width="44" height="44" rx="12" fill="#c2603f"/>
-  <g fill="none" stroke="#fdfbf7" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round" opacity=".6">
-    <rect x="9.5" y="12" width="20" height="25" rx="2.5"/>
-    <path d="M9.5 23h20M18.5 23v14"/>
-  </g>
-  <path d="M26.5 13h8.5a5 5 0 0 1 5 5v4.5a5 5 0 0 1-5 5h-3.4l-4.6 4.2v-4.2h-.5a5 5 0 0 1-5-5V18a5 5 0 0 1 5-5z" fill="#fdfbf7" stroke="#c2603f" stroke-width="2.2" stroke-linejoin="round"/>
-  <g fill="#c2603f">
-    <circle cx="26.6" cy="20.3" r="1.5"/>
-    <circle cx="30.8" cy="20.3" r="1.5"/>
-    <circle cx="35" cy="20.3" r="1.5"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Comic Studio">
+  <title>Comic Studio</title>
+  <!-- Comic Studio, "Grin": a character. The mouth is a flat-topped half-moon (the DreamStream D tipped onto its back) cut at weight 7 with mitred corners on the tile's corner radius (16); the family point is one eye over the mouth's left quarter, so the face glances instead of staring.
+       SOURCE FILE: scripts/gen-icons.mjs renders every app icon and favicon of this studio from the
+       cut path and the point below, and components/brand/studios.ts must carry the same numbers
+       (tests/config/appIcons.test.ts checks both). Construction, shared with the Atlas mark: viewBox
+       64, one rx 16 tile in currentColor, the glyph cut out through a userSpaceOnUse mask (no second
+       fill colour), one weight-7 stroke, one r 3.6 point. -->
+  <defs>
+    <mask id="ds-comics-mark" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" rx="16" fill="#fff"/>
+      <path class="ds-logo-cut" d="M16 27.5 L48 27.5 A16 16 0 0 1 16 27.5 Z" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/>
+      <circle class="ds-logo-point" cx="24" cy="15.9" r="3.6" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="currentColor" mask="url(#ds-comics-mark)"/>
 </svg>

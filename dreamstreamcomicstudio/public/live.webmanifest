@@ -6,9 +6,12 @@
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#f4f2ea",
-  "theme_color": "#f4f2ea",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
-    { "src": "/stream-studio.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    { "src": "/icons/stream-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/stream-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/stream-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/stream-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

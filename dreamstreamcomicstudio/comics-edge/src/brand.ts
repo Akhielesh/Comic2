@@ -33,6 +33,9 @@ export const BRAND = {
   shortName: 'Comics',
   manifest: '/comics.webmanifest',
   appleTouchIcon: '/icons/comics-apple-touch-180.png',
+  /** The tab icon: the Comic Studio "Grin" (SVG, light and dark), and its .ico for browsers without SVG favicons. */
+  icon: '/icons/comics-favicon.svg',
+  iconIco: '/icons/comics-favicon.ico',
   ogImage: '/icons/comics-og.png',
   ogImageWidth: '1200',
   ogImageHeight: '630',
@@ -93,7 +96,11 @@ export const registerBranding = (rewriter: Rewriter, cfg: EdgeConfig): Rewriter 
       element: (el) => void el.setAttribute('content', /dark/i.test(el.getAttribute('media') || '') ? BRAND.themeDark : BRAND.themeLight)
     })
     .on('link[rel="manifest"]', { element: (el) => void el.setAttribute('href', BRAND.manifest) })
-    .on('link[rel="apple-touch-icon"]', { element: (el) => void el.setAttribute('href', BRAND.appleTouchIcon) });
+    .on('link[rel="apple-touch-icon"]', { element: (el) => void el.setAttribute('href', BRAND.appleTouchIcon) })
+    // The suite's favicons (the DreamStream D, SVG plus /favicon.ico) become the Comic Studio ones.
+    .on('link[rel="icon"]', {
+      element: (el) => void el.setAttribute('href', /svg/i.test(el.getAttribute('type') || '') ? BRAND.icon : BRAND.iconIco)
+    });
   for (const selector of REPLACED_SELECTORS) r = r.on(selector, remove);
   return r.on('head', { element: (el) => void el.append(brandHeadTags(cfg), { html: true }) });
 };

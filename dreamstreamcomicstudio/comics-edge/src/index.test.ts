@@ -18,6 +18,8 @@ const INDEX_HTML = `<!DOCTYPE html><html lang="en"><head>
 <meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)" />
 <link rel="manifest" href="/app.webmanifest" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-180.png" />
+<link rel="icon" href="/favicon.ico" sizes="32x32" />
+<link rel="icon" href="/icons/dreamstream-favicon.svg" type="image/svg+xml" />
 <meta property="og:title" content="Old suite title" />
 <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
 </head><body><div id="root"></div></body></html>`;
@@ -191,6 +193,11 @@ describe('Pages proxy', () => {
     expect(body).toContain(`<meta name="description" content="${BRAND.description}">`);
     expect(body).toContain('<link rel="manifest" href="/comics.webmanifest">');
     expect(body).toContain('<link rel="apple-touch-icon" href="/icons/comics-apple-touch-180.png">');
+    // The suite's DreamStream favicons become Comic Studio's: the SVG and the .ico fallback.
+    expect(body).toContain('<link rel="icon" href="/icons/comics-favicon.ico" sizes="32x32">');
+    expect(body).toContain('<link rel="icon" href="/icons/comics-favicon.svg" type="image/svg+xml">');
+    expect(body).not.toContain('dreamstream-favicon');
+    expect(body).not.toContain('href="/favicon.ico"');
     expect(body).toContain('<meta name="theme-color" content="#FAF9F5" media="(prefers-color-scheme: light)">');
     expect(body).toContain('<meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">');
     expect(body).toContain('<meta name="ds-product" content="comics">');
