@@ -55,6 +55,9 @@ spend gate.
 
 ## 3. The steer contract
 
+The contract A2 implements. Today there is no `/steer` route; `takeSteer()` returns `[]` and the drain point is inert.
+The bullets below describe what A2 will build.
+
 - `POST /api/comic/projects/:id/steer` with a `SteerRequest`. With a director turn running, the text is screened like a
   chat message (a block answers `CONTENT_POLICY`), committed as a user message with `steered: true` ("Added while the
   director was working"), and queued on the session's inbox. The answer is a `SteerResponse` with that message's id.

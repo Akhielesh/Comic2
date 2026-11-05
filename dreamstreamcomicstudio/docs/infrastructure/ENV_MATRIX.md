@@ -98,6 +98,7 @@ from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberatel
 | `MCP_OUTBOUND_TOKEN` | `/api/connect` | ⭕ 🔐 | — | **missing from .env.example** |
 | `CONNECTORS_WEBHOOK_TOKEN` / `CONNECTORS_SYNC_COLOR` / `CONNECTORS_APP_RETURN_URL` | connectors | ⭕ 🔐 | — | |
 | `NANGO_SECRET_KEY` / `NANGO_HOST` | connector SaaS | ⭕ 🔐 | 💸 | In code, not in 58-var set |
+| `CONNECTOR_PROVIDERS_CONFIRMED` | `ai/privacy/providerPolicies.ts` (`routes/chat.ts`, `services/userMemory.ts`) | ⭕ | — | Comma-separated direct providers (e.g. `gemini,nvidia`) whose **platform** key the owner confirmed for connected-account content (a paid, no-training tier). Unset = none: those providers get no connector tools, connector context or memory distilled from connected content on the platform key, and that memory is stored without a Gemini embedding until `gemini` is listed. OpenAI and Anthropic need no entry; BYOK keys are never gated. See `docs/DATA_CONNECTORS.md` |
 | `GOOGLE_OAUTH_CLIENT_ID` / `_SECRET` / `_REDIRECT_URL` | Google connectors | ⭕ 🔐 | — | |
 
 ## Shared platform (wave 1: Word, PowerPoint, email drafts)

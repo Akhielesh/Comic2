@@ -71,8 +71,11 @@ Applies to the **account connectors** (Gmail, Drive, Calendar, Sheets, Maps, the
 `connected_data_search`, `nango_call_api`, which proxies any API the user connected through
 Nango, and the operator's self-hosted Nango MCP, whose tools arrive as `mcp_nango_*` when
 `STUDIO_NANGO_MCP_URL` is set). Content from those accounts must never reach a model endpoint that
-may log or train on it. Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter policy,
-provider table, reply provenance).
+may log or train on it: on OpenRouter by a per-request control (below), on a direct provider by its
+terms, and only once the owner confirmed them for the platform key (`providerPolicies.ts`,
+`CONNECTOR_PROVIDERS_CONFIRMED`). Code: `server/src/ai/privacy/` (predicate, scope, OpenRouter
+policy, provider table, reply provenance). Tool arguments that leave a connector turn by other
+routes (image APIs, third-party MCPs, web search) are listed under "Known gaps".
 
 **How connector content can enter a model call** (`turnUsesConnectorData`, `connectorData.ts`):
 
@@ -82,7 +85,7 @@ provider table, reply provenance).
 | `context` | the connector RAG block (`connectors/retrieval.ts`, injected by `ai/chat.ts` when `connectorContext` is on) | a signed-in user with any connection (or a failed lookup) |
 | `history` | earlier messages already carry connector output | connector tool calls/results in the messages, the RAG block heading, a provenance marker (`connectorData: true`, or `toolEvents` naming a connector tool), or **the server's own provenance store** (`replyProvenance.ts`): a reply it recorded as connected content, recognised when the client sends it back as plain text |
 | `inherited` | an enclosing turn already decided | the privacy scope (`scope.ts`) or the decision `prepareChat` binds to the request's `clientContext` |
-| memory | long-term memory distilled from a connected conversation, injected on a later turn | not a turn source: memory is marked when written and kept off free turns (below) |
+| memory | long-term memory distilled from a connected conversation, injected on a later turn | marked when written and kept off withheld turns (below); on a paid turn, flagged client memory still in the prompt counts as `history`, and marked server rows make that call deny data collection |
 
 **What a connector turn does** (paid OpenRouter turn where any source applies):
 - Every OpenRouter call of the turn sends `provider: { data_collection: 'deny' }` (OpenRouter:
@@ -101,8 +104,9 @@ provider table, reply provenance).
   covered only by `deny`).
 - Swarm: the planner and agents use the paid net instead of a free worker. With Free only on and
   a **paid model pinned**, the turn is a flagged paid turn, so the planner and agents run on that
-  same pinned model (never refused, never moved to another paid model). The `/swarm` hold adds the
-  planner plus up to four agents at the worker model's catalog price (`connectorSwarmHoldUsd`).
+  same pinned model (never refused, never moved to another paid model). The hold adds the planner
+  plus up to four agents at the worker model's catalog price (`connectorSwarmHoldUsd`), on `/swarm`
+  and on a chat turn that offers the `run_agent_swarm` meta-tool.
   Delegation helpers (`delegate.ts`) and the deep-research planner (`deepResearch.ts`) follow the
   same rule inside a connector turn: the caller's non-free paid net (else `TEXT_FALLBACK`), or the
   pinned paid model under Free only; outside one they keep their free worker.
@@ -111,8 +115,15 @@ provider table, reply provenance).
   context block or a connector tool's call or output (the provider reports it to the turn's egress
   probe), the engine added the connector context block to the prompt (`connectorContextUsed` on
   the `runChat` result), a connector tool ran, or the history already carried connector content. Deny is still
-  decided up front for every turn that may carry it.
-- Title, memory and follow-up helpers send the flag for a user with any connection.
+  decided up front for every turn that may carry it. The probe is registered on every turn, flagged
+  or not, and hears nested connector runs: an unflagged turn whose swarm or recipe ran a connector
+  agent is marked too.
+- The SSE `meta` event of `/stream`, `/swarm` and `/api/recipes/run` carries `connectorPrivacy`
+  (the turn may carry connected content), so the client can mark a reply the user stops before
+  `final` (below).
+- Title, memory and follow-up helpers send the flag for a user with any connection. The
+  auto-memory summary of a conversation that carries, or may carry, connected content denies data
+  collection whatever the turn was (a connected user's free turn is not flagged; its summary is).
 - Recipes (`routes/recipes.ts`): `/run` runs the whole recipe inside `prepareChat`'s decision
   (also when the request carries no `clientContext` for `runRecipe` to read it from) and marks its
   reply by the chat route's rule (`connectorContentEntered`: `connectorData: true` in the `final`
@@ -121,6 +132,9 @@ provider table, reply provenance).
   carries connector output (a connector tool's output, the RAG block heading) makes the reflection a
   connector call; a free reflection of one (`prepareChat`'s free-turn decision: Free only without a
   pinned paid model, a pinned free model) is refused with the same 409 before anything is reserved.
+  A transcript as the user saw it is plain text with no markers, so a free reflection is also
+  refused for a signed-in user who has (or may have) connections or whose replies the provenance
+  store marked (`conversationMayCarryConnectorData`).
 - If no endpoint that meets the policy can serve the model, the user is told so plainly
   (`CONNECTED_DATA_NO_PRIVATE_ENDPOINT`), never retried on a free model. A capacity failure of the
   shared key (spend cap, out of credits) says so without the generic "switch to a free model"
@@ -131,6 +145,10 @@ provider table, reply provenance).
   capped) gets **no connector tool** and **no connector context block**. When the user has
   connections, the model is told why (so it explains instead of guessing), and a message that
   asked for connected data gets a notice.
+- A free turn's swarm (the `run_agent_swarm` meta-tool, or `/swarm` on a pinned free model) gives
+  its agents **no connector tool** (`RunSwarmParams.withholdConnectorTools`, also read from the
+  request's bound decision), because its answer goes back to the free model. The run never becomes
+  a connector run, so it is never moved to a paid model for privacy either.
 - A free turn whose history already carries connector content is **refused** with HTTP 409
   `CONNECTED_DATA_NEEDS_STANDARD_MODEL` before anything is reserved or sent: what happened, why,
   and the two ways forward (switch to a standard model, or start a new chat without connected
@@ -141,14 +159,27 @@ provider table, reply provenance).
 - **Memory:** facts distilled from a conversation that carries, or may carry, connected content
   (any provider; a user with any connection) are stored with `product = 'chat_studio_connected'`
   (`CONNECTED_MEMORY_PRODUCT`), and `POST /api/chat/memory` answers `connectorData: true` for
-  them. A free turn of a user with connections gets **no memory distilled from connected
-  content**: the server memory lookup skips the marked rows (`buildUserMemoryBlock(…,
-  { excludeConnected })`: full-text and recency queries filter `product`; the vector search asks
-  for twice the rows and drops the marked ones), so the rest of their memory still personalises
-  the turn. The memory the client composes into `systemPrompt` (the "Background facts about the
-  user" block, parity-tested against the client) is stripped; the persona stays. The client keeps
-  the `connectorData: true` answer as a flag on its local memory and leaves that memory out of
-  Free only turns itself (below), which also covers users who removed every connection.
+  them. Every withheld turn (a free turn, the usage re-plan, the capped-key free chain, an
+  unconfirmed direct provider) gets **no memory distilled from connected content**, whatever the
+  user's connections (a user who removed every connection keeps the marked rows): the server memory
+  lookup skips the marked rows (`buildUserMemoryBlock(…, { excludeConnected })`: full-text and
+  recency queries filter `product`; the vector search asks for twice the rows and drops the marked
+  ones), so the rest of their memory still personalises the turn. The memory the client composes
+  into `systemPrompt` (the "Background facts about the user" block, parity-tested against the
+  client) is stripped for a user with connections, and whenever the request says that memory is
+  flagged (`ChatRequest.memoryConnected`); the persona stays.
+- On a **paid** OpenRouter turn, flagged client memory still in the prompt makes the turn carry
+  `history` (deny, no free model), and a server memory block that includes a marked row makes that
+  call deny data collection (`buildUserMemoryBlock` reports it; `ai/chat.ts` sets
+  `dataCollection: 'deny'`). Such a reply may restate that memory, so it is marked and recorded
+  like a connector reply (`connectedMemoryUsed` on the `runChat` result), and its auto-memory
+  summary is stored marked. `POST /api/chat/memory` treats a flagged `existing` memory
+  (`memoryConnected: true`) as connected content: the merge denies data collection and its result
+  is stored marked, so flagged memory is never laundered into unmarked rows.
+- Memory distilled from connected content is stored **without an embedding** until the owner lists
+  `gemini` in `CONNECTOR_PROVIDERS_CONFIRMED`: embeddings go to the Gemini API with the platform
+  key `ASSISTANT_GEMINI_API_KEY` (falling back to `GEMINI_API_KEY`). Full-text and recency
+  retrieval still find those rows.
 - The free-model fallbacks never take a conversation that carries, or may carry, connector
   content (marked history, or a user with connections and an earlier assistant reply): the capped
   shared key keeps the paid chain and its capacity failure is reported; the usage-budget re-plan
@@ -174,16 +205,30 @@ the server's and `connectorPrivacy.parity.test.ts` reads both):
 - *Memory flag.* When `POST /api/chat/memory` answers `connectorData: true`, the local memory is
   flagged (`chatStorage` `markChatMemoryConnected`). The flag is sticky until the memory is cleared
   and follows the memory to other devices in the account snapshot (merged as either side). A
-  flagged memory is never composed into a turn that may run on a free model: every Free only turn,
-  and any turn naming a free model (`:free` or $0 in the catalog). The persona is kept.
+  flagged memory is never composed into a turn that may run on a free model: an OpenRouter (or
+  Auto) turn with Free only on, and any OpenRouter turn naming a free model (`:free` or $0 in the
+  catalog). A direct-provider turn (OpenAI, Anthropic, Gemini, …) never runs on a free model, so
+  its flagged memory is kept; the server strips it where that provider's platform key is not
+  confirmed. Every chat, swarm and recipe request, and the `/memory` merge, sends
+  `memoryConnected: true` while the flag is set, so the server applies the rules above even when it
+  re-plans the turn. The persona is kept.
+- *Stopped replies.* A reply the user stops (or that is cut off) keeps its partial answer as
+  history, so it keeps the mark too: when the stream's `meta` said `connectorPrivacy: true`, or its
+  live trace (`agent_activity` steps, `swarm_trace` agents) names a connector tool
+  (`stoppedTurnMarker`). Over-marking a connected user's stopped reply is safe.
 - *Calm notice.* The 409 `CONNECTED_DATA_NEEDS_STANDARD_MODEL` (chat, swarm, recipes, or the
   provider backstop's refusal arriving mid-stream as copy alone) and a 402 whose copy carries the
   connected-content budget sentence become an info notice turn: the server's copy, `role="status"`,
   the info tone (`TONE_SURFACE.info`, `TONE_TEXT.info`), and two actions with 44 px targets on touch screens. They are never an error
   turn, never history sent back, and get no follow-ups or feedback.
-  - Free-model refusal: **Use a standard model** turns Free only off and sends the message again on a
-    standard model, or opens the model picker when a free model is pinned on the chat (or locked in
-    Settings). **New chat** is the other action.
+  - Free-model refusal: **Use a standard model** works from the model the resend would actually use
+    (`standardModelAction`, resolved as a send resolves it). When Auto picked a free model, the
+    message is sent again on Auto's best standard pick and Free only stays as it is (Free only with
+    a named paid model is a paid turn). When the user chose the free model (pinned on the chat, or
+    locked in Settings), or the turn ran on a direct provider, the model picker opens. When no model
+    is named and Free only is on, Free only is turned off and the message sent again. When the model
+    is already standard (the user just picked one), the message is sent again. **New chat** is the
+    other action.
   - Usage refusal: **New chat** and **API keys**, the two ways forward its copy names. A standard
     model is not offered there, because the usage is what ran out.
 
@@ -191,14 +236,24 @@ the server's and `connectorPrivacy.parity.test.ts` reads both):
 history): the OpenRouter body is byte-identical to before (verified by hashing the request
 bodies of a plain paid and a plain free-only turn against the previous code).
 
-**Other providers** (`providerPolicies.ts`; this table changes no routing):
+**Other providers** (`providerPolicies.ts`):
 
 | Provider | Coverage |
 |---|---|
 | OpenRouter | per-request `data_collection: 'deny'` + no free models (above) |
 | OpenAI, Anthropic | their published API terms: API data is not used for training by default |
-| Gemini (direct key) | **owner to confirm** the platform key is on a paid (billing-enabled) project: unpaid Gemini API use may be used to improve Google products and read by human reviewers |
+| Gemini (direct key) | **owner to confirm** the platform keys are on a paid (billing-enabled) project: `GEMINI_API_KEY` (chat) and `ASSISTANT_GEMINI_API_KEY` (memory embeddings; it falls back to `GEMINI_API_KEY` and may be a different project). Unpaid Gemini API use may be used to improve Google products and read by human reviewers |
 | NVIDIA, DeepSeek, Z.ai, MiniMax, Tencent, xAI | **not verified**: owner to confirm before connector content is used with them |
+
+**Fail closed until the owner confirms.** A turn on a direct provider marked "owner to confirm",
+through the **platform** key (not the user's own), is treated like a free turn until the owner
+lists the provider in `CONNECTOR_PROVIDERS_CONFIRMED` (comma-separated, e.g. `gemini,nvidia`;
+`docs/infrastructure/ENV_MATRIX.md`): no connector tools (the JSON tool protocol included), the connector context
+block off, no marked server memory, the flagged or connected client memory block stripped, the
+model told why, and a 409 `CONNECTED_DATA_NEEDS_STANDARD_MODEL` (with copy naming the provider)
+when the history already carries connected content. Its title, follow-up and memory helpers skip a
+conversation that may carry connected content ($0, nothing sent), and so does its auto-memory. A
+user's own key (BYOK, header or account key) is their own account and is not gated.
 
 **Decisions (lead, accepted 2026-11-04):**
 - *Server provenance store, fail-open.* Replies connected content entered are recognised by the server's own store
@@ -216,6 +271,12 @@ bodies of a plain paid and a plain free-only turn against the previous code).
   retry. Its swarm, delegation and deep-research workers run on that pinned model, and `/api/recipes/distill` runs it
   rather than refusing.
 
+**Awaiting the lead's confirmation:**
+- *402 notice: New chat + API keys (deviation from note 3).* Wave note 3 asks for "Use a standard model" and "New
+  chat" on both refusals. The usage refusal offers **New chat** and **API keys** instead: the usage is what ran out,
+  so a standard model cannot run, and the server's budget sentence names exactly those two ways forward. If the
+  lead does not accept it, the note's pair applies.
+
 **Known gaps** (also in `docs/infrastructure/SECURITY_FINDINGS.md`, C1):
 - *History provenance (C1a, partly fixed).* Replies are recognised by the server's provenance store
   from the day it is deployed. Not covered: replies from conversations before the deploy, a reply
@@ -229,11 +290,16 @@ bodies of a plain paid and a plain free-only turn against the previous code).
   turn retrieves it like any other unmarked row: a connected user's free turns get it (retrieval
   skips only the marked rows), and so do the free turns of a user who removed every connection.
   The client flags memory only from the day it ships, so a local memory distilled earlier is
-  unflagged. The client can only withhold flagged memory from turns it knows may be free. Two server
-  re-plans move a turn onto free models after the client composed it: the usage-budget re-plan and
-  the capped-key free chain. For a user who removed every connection, those re-plans still carry
-  flagged memory, because the server strips the block only for users with connections. The same
-  user's paid turns carry it without `deny`.
+  unflagged. Flagged memory (marked rows, flagged client memory) is handled whatever the user's
+  connections: excluded or stripped on every withheld turn, the free re-plans included, and denied
+  on paid turns.
+- *Other egress on a connector turn* (`providerPolicies.ts` `CONNECTOR_TURN_OTHER_EGRESS`). On a
+  flagged turn the model writes tool arguments that leave the deny scope, and could quote connected
+  content into them: `generate_image` calls the Gemini, Ideogram, Pixazo (Flux), OpenAI and xAI
+  image APIs directly (Ideogram and Pixazo terms are not verified); the always-on reference MCPs
+  (Context7, DeepWiki; off when external MCP is disabled); web search and the other keyless tools.
+  None of them is routed by this policy. The OpenRouter image path's deny
+  (`ai/providers/openrouter.ts` `generateImage`) is not reached by any chat path today.
 - User-configured MCP servers are the user's own services, not connectors this app holds OAuth
   grants for; their tools are not treated as connector content. The operator's Nango MCP is.
 - `OPENROUTER_FREE_TEXT_MODEL` (config, a `:free` endpoint by default) is not read by any server
