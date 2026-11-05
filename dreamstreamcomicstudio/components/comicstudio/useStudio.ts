@@ -1483,10 +1483,10 @@ export function useStudio(projectId: string, deps: UseStudioDeps = {}): ComicStu
   const turnLocked = isTurnLocked(state);
   const planning = isPlanning(state);
   const queueNotes = queueState.notes;
-  // What the Up next block says. While a director turn runs only an event hold (Stop, BUSY, a reload) applies; a
-  // question or a gate is judged against the reply that is about to land.
   // The creator's last message failed before the server took it: the drain must not put a new message in its place.
   const pendingFailed = state.pendingMessage?.status === 'failed';
+  // What the Up next block says. While a director turn runs only an event hold (Stop, BUSY, a reload) applies; a
+  // question, a gate or a failed message is judged once the turn is free.
   const queueHold: QueueHold | null =
     !queueOn || !queueNotes.length
       ? null
