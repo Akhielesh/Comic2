@@ -214,6 +214,82 @@ describe('contradiction gaps (agent-editor plan §3 A3.2: ask once, never overri
     for (const t of ['for kids please', 'a 1-page comic', 'in Telugu', 'translate it to Hindi', 'make the duck bigger']) expect(gapsOf(doc, t), t).toEqual([]);
   });
 
+  it('fires on the clear ways of setting each slot', () => {
+    for (const t of ['I want 6 pages.', '6 pages please', 'cut it down to 2 pages', 'let us do it in 8 pages', 'it should be 4 pages long', 'change the page count to 4', 'ok, 2 pages', 'make it a 4 page story'])
+      expect(gapsOf(approved(), t), t).toEqual(['contradiction_pages']);
+    const sel = { pageId: 'pg_1', lineIds: ['ln_1_2'] };
+    for (const t of ['put it in the bottom corner', 'place it at the top', 'a bit lower', 'nudge it left', 'slide it up']) expect(gapsOf(pinned(), t, sel), t).toEqual(['contradiction_pinned']);
+    expect(gapsOf(pinned(), 'tidy the balloons', { pageId: 'pg_1' })).toEqual(['contradiction_pinned']);
+    const teens = plannedDoc();
+    teens.brief.notes = ['audience: teens'];
+    for (const t of ['this is a comic for adults', 'make it for kids', 'a kids comic please', 'the audience is adults', 'for ages 8-12', 'make it R-rated']) expect(gapsOf(teens, t), t).toEqual(['contradiction_note']);
+    expect(gapsOf(teens, 'rated PG-13')).toEqual([]);
+    const telugu = plannedDoc();
+    telugu.brief.notes = ['Telugu dialogue'];
+    for (const t of ['write it in Hindi', 'a Tamil comic', 'language: English', 'switch the dialogue to Hindi', 'Hindi only']) expect(gapsOf(telugu, t), t).toEqual(['contradiction_note']);
+    const looks = plannedDoc();
+    looks.letterStyle = { presetId: 'classic', auto: false, kinds: { shout: { textColor: '#cc0000' } } };
+    for (const t of ['switch the lettering to manga', 'use the manga lettering', 'go with noir fonts', 'handwritten fonts please', 'switch to the minimal preset'])
+      expect(gapsOf(looks, t), t).toEqual(['contradiction_style']);
+  });
+
+  it('stays silent on everyday edits that only mention a number, a place, an audience word, a language or a preset name', () => {
+    // (a) A number of pages with no length context names pages to work on, never a new count.
+    for (const t of [
+      'redo 2 pages',
+      'rewrite 2 pages please',
+      'update 2 pages',
+      'polish 2 pages',
+      'regenerate 2 pages',
+      'make 2 pages brighter',
+      'change 2 pages to night',
+      'my 4 pages look great',
+      'these 2 pages are dark',
+      'add rain to 2 pages',
+      'I need 2 pages redrawn',
+      'redo the 2-page spread',
+      'fix only 2 pages.',
+      'only 2 pages are drawn'
+    ])
+      expect(gapsOf(approved(), t), t).toEqual([]);
+    // (b) put / place / position with no place to go edits the words; a page-wide move needs a real move verb.
+    const sel = { pageId: 'pg_1', lineIds: ['ln_1_2'] };
+    for (const t of ['put more emotion in this line', 'put an exclamation mark here', 'place the stress on "go"', 'position is fine, change the words', 'make the text lower case', 'change the text in the top balloon', 'shift the tone a bit'])
+      expect(gapsOf(pinned(), t, sel), t).toEqual([]);
+    for (const t of ['put the dialogue in Hindi', 'put the lines in a calmer tone', 'translate the lines', 'fix all the lines']) expect(gapsOf(pinned(), t, { pageId: 'pg_1' }), t).toEqual([]);
+    // (c) An audience word that is a character in the story, not the readers.
+    const teens = plannedDoc();
+    teens.brief.notes = ['audience: teens'];
+    for (const t of ['add a panel where the kids look for the dog', 'the child waits for her mom', 'make the kids smile for the last panel', 'a scene for the grown-ups at the party', 'Mira and Leo, ages 8 and 10, run home'])
+      expect(gapsOf(teens, t), t).toEqual([]);
+    const adults = plannedDoc();
+    adults.brief.notes = ['for adults'];
+    expect(gapsOf(adults, 'the kids hide for a while')).toEqual([]);
+    // (d) A language spoken in the story, not the comic's own.
+    const telugu = plannedDoc();
+    telugu.brief.notes = ['Telugu dialogue'];
+    for (const t of ['the sign says hello in Hindi', 'she shouts in English at the guard']) expect(gapsOf(telugu, t), t).toEqual([]);
+    // (e) A preset name as an everyday word, or a bubble look for one kind of line.
+    const looks = plannedDoc();
+    looks.letterStyle = { presetId: 'manga', auto: false, kinds: { shout: { textColor: '#cc0000' } } };
+    for (const t of ['keep the dialogue minimal', 'less text, keep the speech minimal', 'the captions feel too noir', 'use classic speech bubbles for the thoughts', 'set in a noir city, use big fonts', 'make the lettering minimal'])
+      expect(gapsOf(looks, t), t).toEqual([]);
+  });
+
+  it("contradiction_style asks only when the switch would drop the creator's base or kind looks", () => {
+    const doc = plannedDoc();
+    // Speaker, line and saved-style looks stay on top of any preset: no question.
+    doc.letterStyle = { presetId: 'classic', auto: false, speakers: { c_maya: { italic: true } } };
+    doc.pages[0].panels[1].lines[0].style = { textColor: '#0000cc' };
+    expect(gapsOf(doc, 'switch the lettering to manga')).toEqual([]);
+    // A base look would be dropped: ask, naming only what the switch drops.
+    doc.letterStyle = { ...doc.letterStyle, base: { font: 'bangers' } };
+    const [c] = contradictionsOf(doc, 'switch the lettering to manga');
+    expect(c.gap).toBe('contradiction_style');
+    expect(c.text).toContain('its own looks for the base look on top of Classic comic');
+    expect(c.text).not.toContain('Maya');
+  });
+
   it('stays silent on everyday requests across the fixtures', () => {
     const docs = [createEmptyDoc('d', 'Untitled comic', 1), plannedDoc(), approved(), pinned(), lakeDrawnDoc(), lakePlannedDoc()];
     const everyday = ['make it funnier', 'draw page 2', 'the cover is too dark', 'add a dog to page 3', 'change the title to Spice Run', 'make the shout red'];
@@ -234,10 +310,21 @@ describe('contradiction gaps (agent-editor plan §3 A3.2: ask once, never overri
     expect(requestedPageCount('the next 2 pages are wrong')).toBeUndefined();
     expect(requestedPageCount('make it 99 pages')).toBeUndefined();
     expect(requestedLetteringPreset('handwritten fonts please')).toBe('handwritten');
-    expect(requestedLetteringPreset('a pulp look for the captions')).toBe('retro_pulp');
+    expect(requestedLetteringPreset('switch the captions to the pulp lettering')).toBe('retro_pulp');
+    // A look for one kind of line is not a preset switch, and "minimal" alone is everyday speech.
+    expect(requestedLetteringPreset('a pulp look for the captions')).toBeUndefined();
+    expect(requestedLetteringPreset('keep the lettering minimal')).toBeUndefined();
+    expect(requestedLetteringPreset('use the minimal lettering style')).toBe('minimal');
     expect(requestedLetteringPreset('manga')).toBeUndefined();
     expect(statedAudience('for ages 13-15')).toBe('teens');
     expect(statedAudience('my kids like it')).toBeUndefined();
+    expect(statedAudience('the kids look for the dog')).toBeUndefined();
+    expect(statedAudience('audience: teens', true)).toBe('teens');
+    expect(requestedPageCount('redo 2 pages')).toBeUndefined();
+    expect(requestedPageCount('1 page, 4:5')).toBe(1);
+    expect(requestedPageCount('pages: 6')).toBe(6);
+    expect(statedLanguage('the sign says hello in Hindi')).toBeUndefined();
+    expect(statedLanguage('Telugu dialogue', true)).toBe('Telugu');
     expect(statedLanguage('a Tamil comic')).toBe('Tamil');
     expect(statedLanguage('Tamil')).toBeUndefined();
   });
