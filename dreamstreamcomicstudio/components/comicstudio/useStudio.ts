@@ -77,6 +77,7 @@ import {
   isAbortError,
   loadStudioProject,
   signStudioUrls,
+  steerStudio,
   streamStudio,
   toStudioApiError,
   uploadStudioRef
@@ -194,11 +195,11 @@ export interface UseStudioDeps {
 }
 
 /**
- * The steer call "Send now" uses while caps.liveAgent.steer is on. studioApi.steerStudio lands with A2 in the same
- * wave; until it is wired here (`= steerStudio`, imported from './studioApi'), steering falls back to D2: Stop the
- * director, then send.
+ * The steer call "Send now" uses while caps.liveAgent.steer is on: POST /projects/:id/steer (studioApi.steerStudio, A2).
+ * Steering itself stays behind COMIC_STEER; with it off the caps say so and "Send now" is D2 (Stop the director, then
+ * send).
  */
-const DEFAULT_STEER: SteerStudioFn | undefined = undefined;
+const DEFAULT_STEER: SteerStudioFn | undefined = steerStudio;
 
 /** Never silent: why a note could not go to Up next (the message itself is kept where it was typed). */
 const QUEUE_REFUSAL_COPY: Record<QueueAddRefusal | 'inline' | 'card', string> = {

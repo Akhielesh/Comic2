@@ -14,7 +14,8 @@ const api = vi.hoisted(() => ({
   loadStudioProject: vi.fn(),
   streamStudio: vi.fn(),
   signStudioUrls: vi.fn(),
-  cancelStudio: vi.fn()
+  cancelStudio: vi.fn(),
+  steerStudio: vi.fn()
 }));
 
 vi.mock('./studioApi', async (importOriginal) => {
@@ -80,6 +81,7 @@ beforeEach(() => {
   api.loadStudioProject.mockReset();
   api.signStudioUrls.mockReset().mockResolvedValue({});
   api.cancelStudio.mockReset().mockResolvedValue(undefined);
+  api.steerStudio.mockReset().mockResolvedValue({ ok: true, msgId: 'msg_steer' });
   api.streamStudio.mockReset().mockImplementation(
     (_id: string, req: StreamRequest, onEvent: (e: StudioEvent) => void, signal?: AbortSignal) =>
       new Promise<void>((resolve, reject) => {
@@ -482,6 +484,31 @@ describe('Send now', () => {
     expect(steerStudio).toHaveBeenCalledWith('proj_1', { text: 'make it rain', focus: { pageId: 'pg_2' } });
     expect(api.cancelStudio).not.toHaveBeenCalled();
     expect(result.current.queue).toEqual([]);
+  });
+
+  it('the live controller steers through studioApi.steerStudio (no injected steer call needed)', async () => {
+    const { result } = await setup(STEER_ON);
+    expect(result.current.queueSteers).toBe(true);
+    act(() => void result.current.send('go'));
+    await act(async () => void (await result.current.send('make it rain')));
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.sendNow!(result.current.queue![0].id);
+    });
+    expect(outcome).toBe('sent');
+    expect(api.steerStudio).toHaveBeenCalledWith('proj_1', { text: 'make it rain' });
+    expect(api.cancelStudio).not.toHaveBeenCalled();
+    expect(result.current.queue).toEqual([]);
+  });
+
+  it('steering off: the default steer call is never used (D2 stays)', async () => {
+    const { result } = await setup(QUEUE_ON);
+    expect(result.current.queueSteers).toBe(false);
+    act(() => void result.current.send('go'));
+    await act(async () => void (await result.current.send('make it rain')));
+    await act(async () => void (await result.current.sendNow!(result.current.queue![0].id)));
+    expect(api.steerStudio).not.toHaveBeenCalled();
+    expect(api.cancelStudio).toHaveBeenCalledTimes(1);
   });
 
   it('steering on but the turn already ended (NOT_RUNNING): the note stays and goes next', async () => {
