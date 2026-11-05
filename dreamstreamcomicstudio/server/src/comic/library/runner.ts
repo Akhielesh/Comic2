@@ -413,7 +413,7 @@ export function provenanceOf(entry: Pick<LibraryManifestEntry, 'model' | 'resolu
     prompt: c.prompt,
     promptHash: c.promptHash,
     seed: null,
-    // Neither Nano Banana model takes a seed (registry `unsupported`); the library never sends one.
+    // The registry says which models take no seed (`unsupported`); the library never sends one.
     seedSupported: !!spec && !(spec.unsupported || []).includes('seed'),
     resolution: entry.resolution,
     aspect: entry.aspect,

@@ -180,13 +180,13 @@ export interface LibraryBillingView {
  * never a cost (computed client-side for admins), a run id, an admin id, a provider job id or a key.
  */
 export interface LibraryProvenance {
-  /** Registry id, e.g. 'nano-banana-2.1'. */
+  /** Registry id. */
   model: string;
   /** Registry label and nickname, and the date the registry's facts were read. */
   modelLabel?: string;
   nickname?: string;
   factsAsOf?: string;
-  /** The provider's model id that was requested (e.g. 'google/gemini-nano-banana-2.1'). */
+  /** The provider's model id that was requested. */
   providerModel?: string;
   /** The model version the provider reported, when it did. */
   modelVersion?: string;
@@ -197,7 +197,7 @@ export interface LibraryProvenance {
   /** The exact final prompt sent (platform-authored, IP-linted, never user content) and its hash. */
   prompt: string;
   promptHash: string;
-  /** Neither Nano Banana model takes a seed: null with seedSupported false ("Not supported by this model"). */
+  /** Models the registry marks seedless: null with seedSupported false ("Not supported by this model"). */
   seed: null;
   seedSupported: boolean;
   resolution: string;
