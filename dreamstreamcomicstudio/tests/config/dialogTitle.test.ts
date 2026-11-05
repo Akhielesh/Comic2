@@ -8,15 +8,37 @@
  * Every modal dialog in components/comicstudio/** (an element with `aria-modal`) is classified below:
  * CENTRED ones must put the recipe on their title, the rest say why they are not a centred dialog. A
  * new modal dialog fails here until it is classified.
+ *
+ * The rest of the app (DS-0, master plan §1.4): every other scanned file — components/** outside Comic
+ * Studio, App.tsx and qa/** (tests, specs and live/** excluded; tests/config/classLists.ts
+ * SCANNED_ROOTS) — counts its `aria-modal` surfaces as `unclassified-modal` until the file is added to
+ * CENTRED (and titles with the recipe) or NOT_CENTRED (with the reason). Those counts RATCHET against
+ * tests/config/baselines/dialogTitle.json: a file not listed must count 0 (a new modal anywhere is
+ * classified first), above its entry fails, below fails until the entry is lowered
+ * (`UPDATE_BASELINES=1 npx vitest run tests/config/dialogTitle.test.ts`).
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as design from '../../components/chat/studioDesign';
+import {
+  type Counts,
+  type TokenHit,
+  compareToBaseline,
+  countTokens,
+  listScannedFiles,
+  PINNED_DIR,
+  ratchet,
+  readBaseline,
+  REAL_TREE_TIMEOUT,
+  scanTree
+} from './classLists';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCANNED_DIR = 'components/comicstudio';
+const GUARD = 'dialogTitle';
+const TEST_FILE = 'tests/config/dialogTitle.test.ts';
 const classes = (s: string) => s.split(/\s+/).filter(Boolean);
 
 /** Centred modal dialogs → the recipe their title carries. */
@@ -55,6 +77,8 @@ function listSourceFiles(dir: string): string[] {
   return files;
 }
 const read = (rel: string) => stripComments(readFileSync(path.join(ROOT, rel), 'utf8'));
+/** Files outside Comic Studio that render a modal surface (an `aria-modal` attribute). */
+const appModalFiles = () => listScannedFiles({ exclude: [PINNED_DIR] }).filter((rel) => /\baria-modal\b/.test(read(rel)));
 /** The className of every <h2> in a source (attribute text up to the tag's end). */
 const h2ClassNames = (src: string) => [...src.matchAll(/<h2\b([^>]*?)className=(\{[^}]*\}|"[^"]*")/g)].map((m) => m[2]);
 
@@ -72,14 +96,16 @@ describe('dialog titles — the recipe', () => {
 });
 
 describe('dialog titles — every modal dialog in Comic Studio is classified', () => {
-  it('finds the modal dialogs and classifies each one', () => {
+  it('finds the modal dialogs and classifies each one', { timeout: REAL_TREE_TIMEOUT }, () => {
     const modal = listSourceFiles(path.join(ROOT, SCANNED_DIR))
       .map((f) => path.relative(ROOT, f).split(path.sep).join('/'))
       .filter((rel) => /\baria-modal\b/.test(read(rel)));
     expect(modal.length).toBeGreaterThanOrEqual(10);
     const unclassified = modal.filter((rel) => !(rel in CENTRED) && !(rel in NOT_CENTRED));
     expect(unclassified, 'a new modal dialog: add it to CENTRED (title with DIALOG_TITLE) or NOT_CENTRED (with the reason)').toEqual([]);
-    for (const rel of [...Object.keys(CENTRED), ...Object.keys(NOT_CENTRED)]) expect(modal, `${rel} no longer renders a modal: drop it here`).toContain(rel);
+    // A file outside Comic Studio that a later package classifies is checked the same way.
+    const everyModal = [...modal, ...appModalFiles()];
+    for (const rel of [...Object.keys(CENTRED), ...Object.keys(NOT_CENTRED)]) expect(everyModal, `${rel} no longer renders a modal: drop it here`).toContain(rel);
   });
 
   it('centred dialogs title with DIALOG_TITLE (or DIALOG_TITLE_FROM_SM when they are a bottom sheet on phones)', () => {
@@ -99,5 +125,61 @@ describe('dialog titles — every modal dialog in Comic Studio is classified', (
         expect(c, rel).not.toMatch(/DIALOG_TITLE/);
       }
     }
+  });
+});
+
+/**
+ * The modal surfaces of one file that nothing classifies yet (`unclassified-modal`, one per
+ * `aria-modal`, comments excluded); none for a file in CENTRED or NOT_CENTRED.
+ */
+export function unclassifiedModalHits(rel: string, source: string): TokenHit[] {
+  if (rel in CENTRED || rel in NOT_CENTRED) return [];
+  const lines = source.split('\n');
+  return stripComments(source)
+    .split('\n')
+    .flatMap((text, i) => [...text.matchAll(/\baria-modal\b/g)].map(() => ({ line: i + 1, token: 'unclassified-modal', match: 'aria-modal', text: lines[i].trim() })));
+}
+
+describe('dialog titles — the rest of the app (ratchet)', () => {
+  const { baseline } = readBaseline(GUARD);
+  const PLANTED = 'components/__planted__/Fixture.tsx';
+
+  it('counts each aria-modal surface of an unclassified file, and none once the file is classified', () => {
+    const src = '<div role="dialog" aria-modal="true">\n  {/* aria-modal: centred */}\n  <h2 className="text-lg">Share</h2>\n</div>\n';
+    expect(unclassifiedModalHits(PLANTED, src).map((h) => [h.line, h.token])).toEqual([[1, 'unclassified-modal']]);
+    expect(unclassifiedModalHits('components/comicstudio/share/ShareSheet.tsx', src)).toEqual([]);
+    expect(unclassifiedModalHits('components/comicstudio/mobile/sheets/BottomSheet.tsx', src)).toEqual([]);
+  });
+
+  it('a new modal dialog in any scanned file fails until it is classified', () => {
+    const src = 'export const Fixture = () => <div role="dialog" aria-modal="true"><h2>Rename</h2></div>;\n';
+    const actual: Counts = { ...baseline, [PLANTED]: countTokens(unclassifiedModalHits(PLANTED, src)) };
+    expect(compareToBaseline(actual, baseline, TEST_FILE)).toEqual({
+      over: [`${PLANTED}  unclassified-modal: 1, baseline 0 — a file or token the baseline does not list must count 0`],
+      under: []
+    });
+  });
+
+  it('a second modal in a baselined file fails; classifying a file fails until its entry is dropped', () => {
+    const [rel, tokens] = Object.entries(baseline)[0];
+    const n = tokens['unclassified-modal'];
+    expect(compareToBaseline({ ...baseline, [rel]: { 'unclassified-modal': n + 1 } }, baseline, TEST_FILE).over).toEqual([
+      `${rel}  unclassified-modal: ${n + 1}, baseline ${n} — 1 new use`
+    ]);
+    const { [rel]: _classified, ...rest } = baseline;
+    expect(compareToBaseline(rest, baseline, TEST_FILE).under).toEqual([
+      `${rel}  unclassified-modal: 0, baseline ${n} — the count fell: lower the baseline to 0 (UPDATE_BASELINES=1 npx vitest run ${TEST_FILE}) so the gain is kept`
+    ]);
+  });
+
+  it('components/** outside Comic Studio, App.tsx and qa/** match tests/config/baselines/dialogTitle.json exactly', { timeout: REAL_TREE_TIMEOUT }, () => {
+    const files = listScannedFiles({ exclude: [PINNED_DIR] });
+    expect(files.length).toBeGreaterThan(200);
+    const { counts, stale } = scanTree(files, unclassifiedModalHits);
+    expect(stale).toEqual([]);
+    const { over, under, problems } = ratchet(GUARD, TEST_FILE, counts);
+    expect(problems).toEqual([]);
+    expect(over, 'A new modal dialog: classify it in CENTRED (title with DIALOG_TITLE / DIALOG_TITLE_FROM_SM) or NOT_CENTRED (with the reason).').toEqual([]);
+    expect(under, 'A modal was classified or removed: lower the baseline so the gain is kept.').toEqual([]);
   });
 });

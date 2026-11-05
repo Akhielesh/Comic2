@@ -1,0 +1,18 @@
+{
+  "guard": "dialogTitle",
+  "test": "tests/config/dialogTitle.test.ts",
+  "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/dialogTitle.test.ts lowers it (see README.md).",
+  "totals": { "unclassified-modal": 10 },
+  "files": {
+    "components/ComicReader.tsx": { "unclassified-modal": 1 },
+    "components/chat/CommandPalette.tsx": { "unclassified-modal": 1 },
+    "components/chat/artifacts/ArticleReader.tsx": { "unclassified-modal": 1 },
+    "components/chat/artifacts/VideoResults.tsx": { "unclassified-modal": 1 },
+    "components/chat/artifacts/kit/DetailPopover.tsx": { "unclassified-modal": 1 },
+    "components/chat/artifacts/kit/ExpandLightbox.tsx": { "unclassified-modal": 1 },
+    "components/connectors/ConnectDialog.tsx": { "unclassified-modal": 1 },
+    "components/connectors/GoogleConnectDialog.tsx": { "unclassified-modal": 1 },
+    "components/studio/kit/CommandPalette.tsx": { "unclassified-modal": 1 },
+    "components/studio/kit/ShortcutsHelp.tsx": { "unclassified-modal": 1 }
+  }
+}
