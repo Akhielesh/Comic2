@@ -10,8 +10,12 @@
     <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Stream Studio — go live from your browser (viewers join with just a name), plus a private, never-recording baby monitor." />
     <title>Stream Studio</title>
-    <link rel="icon" type="image/svg+xml" href="/stream-studio.svg" />
-    <link rel="apple-touch-icon" href="/stream-studio.svg" />
+    <!-- The On-air mark (components/brand; icons from scripts/gen-icons.mjs): the ICO for browsers
+         without SVG favicons, the SVG (ink tile on light chrome, paper on dark) for the rest, and a
+         PNG for iOS, which ignores an SVG touch icon. -->
+    <link rel="icon" href="/icons/stream-favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/icons/stream-favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/stream-apple-touch-180.png" />
     <link rel="manifest" href="/live.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -21,10 +25,12 @@
          (live/themeBoot.unit.test.ts keeps it current), so it can be cached for good. -->
     <script src="/live-theme-boot.js?v=9cf4ea09"></script>
     <!-- Chrome fonts, self-hosted (@font-face in live/styles/atlas-skin.css): the body and label
-         weights, and the display face the wordmark and page titles use. -->
+         weights, and the display face the wordmark and page titles use (600, and the wordmark's
+         "Studio" at 500, so the lockup on every screen paints without a font swap). -->
     <link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/space-grotesk-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/space-grotesk-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin />
     <!-- Hanken Grotesk is content: live/studio/compositor.ts draws it into broadcasts and recordings.
          JetBrains Mono sets the .mono figures (timers, codes, sizes). -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -36,7 +42,10 @@
     <!-- The boot splash (inside #live-root until React replaces it) and the account splash that
          follows it (live/views/account/SignInGate.tsx GateSplash) share these rules, so the swap moves
          nothing. Colours come from the bundle's tokens (its stylesheet is render-blocking, so they're
-         here at first paint), with fallbacks; without JavaScript the OS colour scheme picks. -->
+         here at first paint), with fallbacks; without JavaScript the OS colour scheme picks. The mark
+         is the shared StudioMark's markup: its loading loop (the arcs broadcast) comes from the same
+         stylesheet (components/brand/studio-marks.css), stops under reduced motion, and the wordmark
+         is set like the StudioLogo lockup ("Studio" at 500 and 55 %). -->
     <style>
       .boot-page {
         box-sizing: border-box; min-height: 100vh; min-height: 100dvh; width: 100%;
@@ -47,12 +56,11 @@
       }
       .boot { display: flex; flex-direction: column; align-items: center; gap: 14px; }
       .boot-mark { display: block; width: 44px; height: 44px; color: var(--text, #0a0a0a); }
-      .boot-mark svg { display: block; }
       .boot-word {
         font-family: "Space Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
-        font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap;
+        font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.025em; white-space: nowrap;
       }
-      .boot-word span { opacity: 0.55; }
+      .boot-word span { font-weight: 500; opacity: 0.55; }
       .boot-bar {
         position: relative; width: 120px; height: 2px; overflow: hidden; border-radius: 2px;
         background: var(--line, rgba(0, 0, 0, 0.1));
@@ -89,10 +97,11 @@
         .boot-slow { animation-duration: 0s; }
       }
     </style>
-    <noscript><style>.boot-bar, .boot-slow { display: none; }</style></noscript>
+    <!-- Without JavaScript nothing is loading: no progress line, no slow note, the mark holds still. -->
+    <noscript><style>.boot-bar, .boot-slow { display: none; } .boot-mark * { animation: none !important; }</style></noscript>
   </head>
   <body style="margin:0">
-    <div id="live-root"><div class="boot-page" data-live-boot=""><div class="boot"><svg class="boot-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true" focusable="false"><mask id="live-boot-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" rx="16" fill="#fff"/><path d="M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/><circle cx="32" cy="32" r="3.6" fill="#000"/></mask><rect width="64" height="64" rx="16" fill="currentColor" mask="url(#live-boot-cut)"/></svg><span class="boot-word" aria-hidden="true">Stream <span>Studio</span></span><span class="boot-bar" aria-hidden="true"><i></i></span><p class="boot-note" role="status"><span class="boot-sr">Opening Stream Studio…</span><span class="boot-slow">Still loading — check your connection, then reload this page.</span><noscript>Stream Studio needs JavaScript. Turn it on for this site, then reload the page.</noscript></p></div></div></div>
+    <div id="live-root"><div class="boot-page" data-live-boot=""><div class="boot"><svg class="boot-mark ds-logo-mark ds-logo-mark--stream ds-logo-mark--loading" data-studio="stream" viewBox="0 0 64 64" fill="none" aria-hidden="true" focusable="false"><mask id="live-boot-cut" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" rx="16" fill="#fff"/><path class="ds-logo-cut" d="M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/><circle class="ds-logo-point" cx="32" cy="32" r="3.6" fill="#000"/></mask><rect width="64" height="64" rx="16" fill="currentColor" mask="url(#live-boot-cut)"/></svg><span class="boot-word" aria-hidden="true">Stream <span>Studio</span></span><span class="boot-bar" aria-hidden="true"><i></i></span><p class="boot-note" role="status"><span class="boot-sr">Opening Stream Studio…</span><span class="boot-slow">Still loading — check your connection, then reload this page.</span><noscript>Stream Studio needs JavaScript. Turn it on for this site, then reload the page.</noscript></p></div></div></div>
     <!-- No inline scripts and no on* attributes here, ever: this page runs under an
          enforceable CSP with script-src 'self' (functions/_middleware.ts). Anything that
          must run before the bundle goes in a file under /assets or public/ (like

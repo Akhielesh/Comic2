@@ -9,7 +9,7 @@
 //                 opens by itself; this screen stays behind it).
 // Nothing of the studio is behind these screens: no dashboard, no events this browser remembers,
 // no settings, no tour. Links people were sent never reach here — they open as before.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { openAuth, signOutThisDevice, useAccount } from '../../account';
 import type { Gate, RouteView } from '../../accessGate';
 import { continueWithDreamStream, mainAppUrl } from '@/services/liveLink';
@@ -17,10 +17,10 @@ import { STREAM_HOST_ON, screenOfHash } from '@/shared/streamHost';
 import { ON_STREAM_HOST } from '../../host';
 import { Icon } from '../../ui/icons';
 import { LiveLegalLinks } from '../../ui/legalLinks';
-import { StreamStudioLogo, StreamStudioMark } from '../../ui/logo';
+import { StudioLogo, StudioMark } from '../../../components/brand';
 import { Avatar, Btn, type PushToast } from '../../ui/primitives';
 import { askForCode } from './StepUp';
-import { bootLineStyles } from '../../bootSplash';
+import { bootLineStyles, continueBootMark } from '../../bootSplash';
 import './account.css';
 
 export type GateScreen = Exclude<Gate, 'open'>;
@@ -54,15 +54,19 @@ export function SignInGate({ gate, view, finishing, push }: {
 
 /**
  * The same layout as live.html's boot splash (its .boot-* rules), so the boot splash hands over to
- * this one without anything moving: the mark, the wordmark, the progress line (continued from the
- * boot splash's, live/bootSplash.ts), and the line that says what's happening.
+ * this one without anything moving: the On-air mark looping its broadcast, the wordmark, the
+ * progress line, and the line that says what's happening. The loop and the line both carry on
+ * from the boot splash's (live/bootSplash.ts) rather than starting again.
  */
 function GateSplash({ finishing }: { finishing?: boolean }) {
   const [line] = useState(bootLineStyles);
+  const boot = useRef<HTMLDivElement>(null);
+  // Before the first paint of this splash, so the arcs never show a frame at the start of the loop.
+  useLayoutEffect(() => continueBootMark(boot.current?.querySelector('.boot-mark') ?? null), []);
   return (
     <main className="gate-page boot-page" aria-busy="true">
-      <div className="boot">
-        <span className="boot-mark" aria-hidden="true"><StreamStudioMark size={44} /></span>
+      <div className="boot" ref={boot}>
+        <StudioMark studio="stream" className="boot-mark" loading />
         <span className="boot-word" aria-hidden="true">Stream <span>Studio</span></span>
         <span className="boot-bar" aria-hidden="true" style={line.bar}><i style={line.sweep} /></span>
         <p className="boot-note gate-splash-text" role="status">{finishing ? 'Finishing sign-in…' : 'Checking your account…'}</p>
@@ -82,7 +86,7 @@ function GatePage({ title, children, linkNote = true }: { title: string; childre
   return (
     <main className="gate-page" aria-labelledby="gate-title">
       <div className="card card-pad gate-card">
-        <div className="gate-brand"><StreamStudioLogo /></div>
+        <div className="gate-brand"><StudioLogo studio="stream" size="compact" /></div>
         <h1 id="gate-title" ref={heading} tabIndex={-1} className="serif">{title}</h1>
         {children}
         {linkNote && (

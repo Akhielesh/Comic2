@@ -17,7 +17,7 @@ import { streamPathOf } from '../usage/sessionMeter';
 import { IceClock } from '../rtcIce';
 import { ChatRail } from '../components/rails';
 import { Icon } from '../ui/icons';
-import { StreamStudioLogo } from '../ui/logo';
+import { StudioLogo } from '../../components/brand';
 import { Btn, Pill, cx, useMediaQuery, type PushToast } from '../ui/primitives';
 
 /** How long a link may sit unconnected before we say what's going on. */
@@ -318,7 +318,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       <div className="viewer-root">
         <div className="center-screen">
           <div className="gv-card">
-            <StreamStudioLogo size={22} />
+            <StudioLogo studio="stream" size="compact" />
             <div className="banner err" style={{ marginTop: 14 }}><Icon name="alert" size={15} />{err}</div>
           </div>
         </div>
@@ -336,7 +336,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       <div className="viewer-root">
         <div className="center-screen">
           <div className="gv-card">
-            <StreamStudioLogo size={22} />
+            <StudioLogo studio="stream" size="compact" />
             <p className="muted" style={{ margin: '14px 0 16px' }}>{text}</p>
             <div className="row" style={{ gap: 8 }}>
               {gone === 'failed' && <Btn variant="solid" onClick={() => location.reload()}>Try again</Btn>}
@@ -353,7 +353,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       <div className="viewer-root">
         <div className="center-screen">
           <div className="gv-card">
-            <StreamStudioLogo size={22} />
+            <StudioLogo studio="stream" size="compact" />
             <p className="muted" style={{ margin: '14px 0 16px' }}>
               {meeting ? 'You left the meeting.' : 'You left the guest seat. The stream carries on without you.'}
             </p>
@@ -373,7 +373,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       <div className="viewer-root">
         <div className="center-screen">
           <div className="gv-card gv-setup">
-            <StreamStudioLogo size={22} />
+            <StudioLogo studio="stream" size="compact" />
             <h2 className="serif" style={{ margin: '12px 0 2px' }}>
               {meeting ? `Join “${title}”` : `Join “${title}” as a guest`}
             </h2>
@@ -426,7 +426,7 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
   return (
     <div className="gv-stage">
       <div className="gv-top">
-        <StreamStudioLogo size={20} wordmark={!isPhone} />
+        <StudioLogo studio="stream" size="compact" showLabel={!isPhone} />
         <span className="gv-title">{meta?.title ?? ''}</span>
         <span className="spacer" />
         {status === 'live' && <Pill tone="live" dot pulse>{meeting ? 'Live — you’re being broadcast' : 'LIVE'}</Pill>}

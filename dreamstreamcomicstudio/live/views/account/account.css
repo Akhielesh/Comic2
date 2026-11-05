@@ -91,8 +91,7 @@
   padding: 24px 16px calc(24px + env(safe-area-inset-bottom)); background: var(--bg);
 }
 .gate-card { width: 100%; max-width: 460px; }
-.gate-brand { margin-bottom: 18px; font-weight: 700; font-size: 15.5px; letter-spacing: -.01em; }
-.gate-brand .sub { color: var(--muted); font-weight: 500; }
+.gate-brand { margin-bottom: 18px; }   /* the shared StudioLogo (components/brand) */
 .gate-card h1 { font-size: 26px; margin: 0 0 8px; line-height: 1.2; }
 /* Focus is moved here for screen readers; the heading isn't a control, so no ring. */
 .gate-card h1:focus { outline: none; }

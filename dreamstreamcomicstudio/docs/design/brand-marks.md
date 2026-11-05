@@ -106,9 +106,9 @@ so the marks move the same where no `--ds-*` token exists.
 | `favicon.ico` | D: 16, 32, 48 px, 32-bit BMP entries | `index.html`, browsers' default request |
 | `icons/dreamstream-favicon.svg` | D: ink tile on light chrome, paper tile on dark, glyph cut out | `index.html` |
 | `icons/comics-192/512/maskable-512/apple-touch-180.png`, `comics-icon.svg`, `comics-favicon.svg/.ico` | Grin, same set | `comics.webmanifest`; the comics host's head (`comics-edge/src/brand.ts` rewrites the apple-touch and favicon links) |
-| `icons/stream-192/512/maskable-512/apple-touch-180.png`, `stream-icon.svg`, `stream-favicon.svg/.ico` | On air, same set | `stream.webmanifest`, `live.webmanifest` |
+| `icons/stream-192/512/maskable-512/apple-touch-180.png`, `stream-icon.svg`, `stream-favicon.svg/.ico` | On air, same set | `stream.webmanifest`, `live.webmanifest`; `live.html` (favicons, touch icon); notification `icon` (the 192) |
 | `icons/stream-badge-96.png` | On-air glyph alone, white on transparent | notification `badge` (Android reads its alpha) |
-| `stream-studio.svg` | On-air favicon (same as `stream-favicon.svg`) | `live.html`, notification icon/badge |
+| `stream-studio.svg` | On-air favicon (same as `stream-favicon.svg`) | the long-standing path, kept for old links and installs |
 | `icons/*-icon.svg` | opaque art for manifest `any` SVG icons | manifests |
 | `icons/{dreamstream,comics,stream}-mark.svg` | **the sources** (currentColor marks) | `scripts/gen-icons.mjs` |
 

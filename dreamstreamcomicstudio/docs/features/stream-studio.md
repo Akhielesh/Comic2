@@ -584,8 +584,8 @@ black ink, hue only for status (always with a word or an icon), IBM Plex Sans bo
   and corners (soft/sharp) stay the person's choice. A theme flip is one view-transition
   cross-fade. `<meta name="theme-color">` follows the in-app theme (`#ffffff` / `#0a0a0a`).
   New events start on the ink cover; covers stay the host's choice.
-- Fonts are self-hosted from `/fonts/*.woff2` (Plex 400 and 600 and Grotesk 600
-  preloaded). Hanken Grotesk still loads: the compositor draws it into broadcasts and
+- Fonts are self-hosted from `/fonts/*.woff2` (Plex 400 and 600 and Grotesk 600, plus
+  Grotesk 500 for the lockup's "Studio", preloaded). Hanken Grotesk still loads: the compositor draws it into broadcasts and
   recordings (content). Newsreader is gone. JetBrains Mono stays for `.mono` figures.
 - **Boot:** a static splash in `#live-root` (the on-air mark, the wordmark, a progress line
   that appears after 400 ms, a CSS-only "still loading" line after 12 s, a `<noscript>`
@@ -593,6 +593,21 @@ black ink, hue only for status (always with a word or an icon), IBM Plex Sans bo
   the page allows no inline script) applies the stored theme / density / corners before
   first paint. The account splash (`SignInGate` `GateSplash`) reuses the splash's rules and
   continues its progress line (`live/bootSplash.ts`), so the hand-over moves nothing.
+- **Brand** (the shared studio marks, `components/brand`, `docs/design/brand-marks.md`): the
+  rail, the phone top bar, the viewer / event / guest top bars and the sign-in and
+  secure-account cards wear `StudioLogo studio="stream" size="compact"` (28 px On-air mark,
+  17 px Space Grotesk wordmark: the Atlas header lockup); the studio top bar's back button is
+  the mark alone (the button carries the name, as the rail's does, since the slim rail hides
+  the wordmark). The boot splash draws the same mark's markup and loops its broadcast from the
+  render-blocking bundle CSS (`studio-marks.css`; still without JavaScript and under reduced
+  motion); the account splash's `StudioMark loading` takes the loop over at the same phase.
+  "Your studios" (Settings, and the chips in the account menu) shows each studio's own mark:
+  Comic Studio the Grin, Chat Studio the D (it lives in the DreamStream app, whose mark that
+  is), Stream Studio On air; the baby monitor, part of Stream Studio, keeps its icon in a tile
+  of the marks' size and corner. `live.html` links `/icons/stream-favicon.ico` and `.svg` and
+  the 180 px PNG touch icon (iOS ignores SVG); both manifests list the On-air PNG 192 / 512 /
+  maskable set and revalidate on every request (`public/_headers`); notifications show
+  `/icons/stream-192.png` with the white-on-transparent `/icons/stream-badge-96.png` badge.
 - **Navigation:** the phone tab bar has five places (Dashboard, Go live, Monitor, Calls,
   Settings; labels ≥ 11 px, 52 px targets, the current one an ink pill). Help & tours moved
   to the phone top bar (and stays in the account menu), next to a theme switch phones never
@@ -605,6 +620,9 @@ black ink, hue only for status (always with a word or an icon), IBM Plex Sans bo
 that colours text with a token, AA in both themes), `live/theme.unit.test.ts` (both
 looks), `live/themeBoot.unit.test.ts` (the boot script decides exactly what `theme.ts`
 decides; its content-hash URL and caching), `live/liveHtml.unit.test.ts` (the static page:
-attribute, no inline script, theme-color pair, fonts, splash), `live/LiveApp.nav.unit.test.tsx`
-(five tabs, Help and theme in the top bar, the accent picker only without the skin), and
+attribute, no inline script, theme-color pair, icons, fonts, splash and its mark against
+`components/brand/studios.ts`), `live/bootSplash.unit.test.ts` (the line and the mark's loop
+carry on), `live/LiveApp.nav.unit.test.tsx` (five tabs, Help and theme in the top bar, the
+accent picker only without the skin, the shared lockup and the rail's name),
+`live/components/StudiosCard.test.tsx` (each studio's mark), and
 `tests/edge/liveCsp.built.test.ts` against the built page.

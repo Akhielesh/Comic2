@@ -25,6 +25,12 @@ const appUrl = (hash) => new URL(hash, self.registration.scope).href;
  * holds while this worker is stopped; alerts that arrive after the next sign-in act as normal. */
 const SIGNED_OUT_KEY = '/__ds/signed-out';
 
+/* Stream Studio's On-air mark (scripts/gen-icons.mjs): a PNG icon, because Android shows no SVG in a
+ * notification, and the glyph alone, white on transparent, as the status-bar badge (Android reads
+ * only its alpha). */
+const ICON = '/icons/stream-192.png';
+const BADGE = '/icons/stream-badge-96.png';
+
 async function signedOutAt() {
   try {
     const hit = await (await caches.open(STATE_CACHE)).match(SIGNED_OUT_KEY);
@@ -129,8 +135,8 @@ async function onIt(n) {
     // Signed out here since this alert arrived: never act for whoever signed out.
     return self.registration.showNotification('Baby monitor', {
       tag: n.tag || d.tag,
-      icon: '/stream-studio.svg',
-      badge: '/stream-studio.svg',
+      icon: ICON,
+      badge: BADGE,
       timestamp: Date.now(),
       renotify: false,
       silent: true,
@@ -153,7 +159,7 @@ async function onIt(n) {
     }
   }
   const ok = status >= 200 && status < 300 && !!body && body.ok !== false;
-  const base = { tag: n.tag || d.tag, icon: '/stream-studio.svg', badge: '/stream-studio.svg', timestamp: Date.now(), renotify: false, silent: true };
+  const base = { tag: n.tag || d.tag, icon: ICON, badge: BADGE, timestamp: Date.now(), renotify: false, silent: true };
   if (ok) {
     return self.registration.showNotification('✅ You’re on it', {
       ...base,
@@ -233,8 +239,8 @@ self.addEventListener('push', (event) => {
         tag,
         renotify: !quiet,
         requireInteraction: urgent,
-        icon: '/stream-studio.svg',
-        badge: '/stream-studio.svg',
+        icon: ICON,
+        badge: BADGE,
         timestamp: data.at || Date.now(),
         // What "I'm on it" needs to acknowledge — and to put the alert back if it can't.
         // `aid`: this alert's one acknowledgement id (every retry reuses it); `got`: when it

@@ -2,12 +2,14 @@
 // live.html as a browser receives it, before any script: the Atlas skin attribute (static, so it
 // can't flash and needs no script), no inline script at all (the page's CSP is script-src 'self';
 // tests/edge/liveCsp.built.test.ts checks the BUILT page against the served header), the
-// theme-color pair, the self-hosted chrome fonts, and the static boot splash React replaces —
-// whose rules the account splash reuses, so the hand-over moves nothing.
+// theme-color pair, the On-air icons, the self-hosted chrome fonts, and the static boot splash React
+// replaces — whose rules (and the shared mark's loading loop) the account splash reuses, so the
+// hand-over moves nothing.
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
+import { MARK_POINT_RADIUS, MARK_STROKE, MARK_TILE_RADIUS, STUDIO_MARKS } from '../components/brand/studios';
 
 const path = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 const SOURCE = readFileSync(path('../live.html'), 'utf8');
@@ -43,12 +45,25 @@ describe('live.html — the page before any script', () => {
     ]);
   });
 
+  it('wears the On-air icons: an ICO and an SVG favicon, and a PNG touch icon (iOS ignores an SVG one)', () => {
+    const links = [...doc.head.querySelectorAll('link')].map((l) => [l.getAttribute('rel'), l.getAttribute('href'), l.getAttribute('type'), l.getAttribute('sizes')]);
+    expect(links.filter(([rel]) => rel === 'icon' || rel === 'apple-touch-icon')).toEqual([
+      ['icon', '/icons/stream-favicon.ico', null, '32x32'],
+      ['icon', '/icons/stream-favicon.svg', 'image/svg+xml', null],
+      ['apple-touch-icon', '/icons/stream-apple-touch-180.png', null, null],
+    ]);
+    // The main app's own manifest; main.tsx swaps in /stream.webmanifest on Stream Studio's host.
+    expect(links.filter(([rel]) => rel === 'manifest').map(([, href]) => href)).toEqual(['/live.webmanifest']);
+  });
+
   it('preloads the self-hosted chrome fonts it paints first (files that exist), crossorigin', () => {
     const preloads = [...doc.querySelectorAll('link[rel="preload"][as="font"]')];
     expect(preloads.map((l) => l.getAttribute('href'))).toEqual([
       '/fonts/ibm-plex-sans-latin-400-normal.woff2',
       '/fonts/ibm-plex-sans-latin-600-normal.woff2',
       '/fonts/space-grotesk-latin-600-normal.woff2',
+      // The lockup's "Studio" (components/brand/studio-marks.css .ds-logo-word-muted), on every screen.
+      '/fonts/space-grotesk-latin-500-normal.woff2',
     ]);
     for (const l of preloads) {
       expect(l.hasAttribute('crossorigin')).toBe(true);
@@ -83,22 +98,37 @@ describe('the boot splash (static, inside #live-root until React renders)', () =
     expect(splash!.querySelector('[role="status"]')?.textContent).toContain('Opening Stream Studio');
   });
 
-  it('draws the approved Stream Studio mark (one rx 16 tile in currentColor, the on-air cut through a mask)', () => {
+  it('draws the approved Stream Studio mark exactly as StudioMark does (one rx 16 tile in currentColor, the on-air cut through a mask)', () => {
+    const spec = STUDIO_MARKS.stream;
     const mask = splash!.querySelector('mask')!;
     expect(mask.getAttribute('maskUnits')).toBe('userSpaceOnUse');
-    expect(mask.querySelector('rect')?.getAttribute('rx')).toBe('16');
+    expect(mask.querySelector('rect')?.getAttribute('rx')).toBe(String(MARK_TILE_RADIUS));
     const cut = mask.querySelector('path')!;
-    expect(cut.getAttribute('d')).toBe('M40.99 18.16 A16.5 16.5 0 0 1 40.99 45.84 M23.01 45.84 A16.5 16.5 0 0 1 23.01 18.16');
-    expect(cut.getAttribute('stroke-width')).toBe('7');
-    expect(mask.querySelector('circle')?.getAttribute('r')).toBe('3.6');
+    expect(cut.getAttribute('d')).toBe(spec.cut);
+    expect(cut.getAttribute('stroke-width')).toBe(String(MARK_STROKE));
+    const point = mask.querySelector('circle')!;
+    expect([point.getAttribute('cx'), point.getAttribute('cy')]).toEqual(spec.point.map(String));
+    expect(point.getAttribute('r')).toBe(String(MARK_POINT_RADIUS));
     const tile = splash!.querySelector('svg > rect')!;
     expect(tile.getAttribute('fill')).toBe('currentColor');
     expect(tile.getAttribute('mask')).toBe(`url(#${mask.id})`);
   });
 
-  it('tells a visitor without JavaScript what to do (and hides the progress line for them)', () => {
+  it('loops the mark’s broadcast with the shared stylesheet’s classes (studio-marks.css, in the render-blocking bundle CSS)', () => {
+    const mark = splash!.querySelector('svg.boot-mark')!;
+    expect([...mark.classList]).toEqual(['boot-mark', 'ds-logo-mark', 'ds-logo-mark--stream', 'ds-logo-mark--loading']);
+    expect(mark.getAttribute('data-studio')).toBe('stream');
+    expect(mark.querySelector('mask path')?.getAttribute('class')).toBe('ds-logo-cut');
+    expect(mark.querySelector('mask circle')?.getAttribute('class')).toBe('ds-logo-point');
+    const brandCss = readFileSync(path('../components/brand/studio-marks.css'), 'utf8');
+    for (const cls of ['ds-logo-mark--loading', 'ds-logo-mark--stream', 'ds-logo-cut', 'ds-logo-point']) expect(brandCss).toContain(`.${cls}`);
+  });
+
+  it('tells a visitor without JavaScript what to do (no progress line, and the mark holds still: nothing is loading)', () => {
     expect(splash!.querySelector('noscript')?.textContent).toMatch(/needs JavaScript/);
-    expect([...doc.head.querySelectorAll('noscript')].map((n) => n.textContent).join('')).toMatch(/\.boot-bar[^{]*\{\s*display:\s*none/);
+    const noscript = [...doc.head.querySelectorAll('noscript')].map((n) => n.textContent).join('');
+    expect(noscript).toMatch(/\.boot-bar[^{]*\{\s*display:\s*none/);
+    expect(noscript).toMatch(/\.boot-mark \*\s*\{\s*animation:\s*none !important/);
   });
 
   it('says so if loading stalls, without a script (a CSS-delayed line, out of the layout)', () => {
@@ -119,5 +149,16 @@ describe('the boot splash (static, inside #live-root until React renders)', () =
       expect(fn, `GateSplash uses .${cls}`).toMatch(new RegExp(`className="[^"]*\\b${cls}\\b`));
       expect(style, `live.html styles .${cls}`).toMatch(new RegExp(`\\.${cls}[\\s{,]`));
     }
+    // The same mark, looping the same way, picked up at the static one's phase.
+    expect(fn).toMatch(/<StudioMark studio="stream" className="boot-mark" loading \/>/);
+    expect(fn).toContain('continueBootMark(');
+  });
+
+  it('sets the wordmark like the StudioLogo lockup: Space Grotesk 600, tight, "Studio" at 500 and 55 %', () => {
+    expect(style).toMatch(/\.boot-word\s*\{[^}]*font-weight:\s*600[^}]*letter-spacing:\s*-0\.025em/);
+    expect(style).toMatch(/\.boot-word span\s*\{\s*font-weight:\s*500;\s*opacity:\s*0\.55/);
+    const brandCss = readFileSync(path('../components/brand/studio-marks.css'), 'utf8');
+    expect(brandCss).toMatch(/\.ds-logo-word\s*\{[^}]*font-weight:\s*600;[^}]*letter-spacing:\s*-0\.025em/);
+    expect(brandCss).toMatch(/\.ds-logo-word-muted\s*\{\s*font-weight:\s*500;\s*opacity:\s*0\.55/);
   });
 });

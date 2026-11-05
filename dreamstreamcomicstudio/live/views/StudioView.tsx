@@ -50,7 +50,7 @@ import { normalizeQuick } from '../emoji';
 import { SceneSketch } from '../components/scenes';
 import { HelpButton } from '../components/Guide';
 import { Icon } from '../ui/icons';
-import { StreamStudioMark } from '../ui/logo';
+import { StudioMark } from '../../components/brand';
 import {
   Btn, FloatLayer, IconBtn, Pill, Segmented, Tabs, cx,
   useFloatingEmoji, useMediaQuery, type PushToast,
@@ -1301,7 +1301,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     return (
       <div className="studio">
         <div className="studio-top">
-          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Back to dashboard"><StreamStudioMark size={26} /></button>
+          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Back to dashboard"><StudioMark studio="stream" size={28} /></button>
           <div className="st-title">Studio</div>
         </div>
         <div style={{ padding: 24 }}>
@@ -1416,7 +1416,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             nav.dashboard();
           }}
         >
-          <StreamStudioMark size={26} />
+          <StudioMark studio="stream" size={28} />
         </button>
         <div className="st-title">{title || 'Untitled stream'}</div>
         <div className="st-meta">

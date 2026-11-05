@@ -275,9 +275,8 @@ html[data-ds-skin="atlas"] .page-title { font-size: 30px; line-height: 1.15; }
 html[data-ds-skin="atlas"] .page-sub { font-size: 14.5px; line-height: 1.55; }
 /* The metrics overlay is chrome, not broadcast content. */
 html[data-ds-skin="atlas"] .metrics-ov h4 { font-family: var(--font-sans); }
-/* The wordmark beside the mark: display face, "Studio" at 55 % (the Atlas lockup). */
-html[data-ds-skin="atlas"] :is(.rail-logo, .gate-brand) { font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -0.02em; }
-html[data-ds-skin="atlas"] :is(.rail-logo, .gate-brand) .sub { color: inherit; font-weight: 600; opacity: 0.55; }
+/* The brand lockup (rail, top bars, gate cards) is the shared StudioLogo: components/brand/studio-marks.css
+   sets its display face and "Studio" at 55 %, with or without the skin. */
 
 /* Eyebrows → the Atlas overline: 11 px / 600 / 0.12em, uppercase, muted. */
 html[data-ds-skin="atlas"] :is(.nav-sect, .inv-sect, .inv-sub, .save-label, .help-sect h3, .mv-sect-title, .mv-log-day,

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The shell's navigation in both looks: the phone tab bar holds at most five places (Help & tours
 // lives in the phone top bar and the account menu), the active place is marked for assistive tech,
-// the phone top bar carries Help and the theme switch, and the accent picker exists only without
-// the Atlas skin (hue never decorates under it). The views are stand-ins; the shell is real.
+// the phone top bar carries Help and the theme switch, the accent picker exists only without the
+// Atlas skin (hue never decorates under it), and the brand in the rail and the top bar is the
+// shared On-air lockup (components/brand). The views are stand-ins; the shell is real.
 import React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +46,7 @@ import { LiveApp, TAB_LABELS } from './LiveApp';
 const html = document.documentElement;
 const settle = () => act(async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); });
 const tabbar = () => document.querySelector<HTMLElement>('nav.tabbar')!;
+const rail = () => document.querySelector<HTMLElement>('nav.rail')!;
 const topbar = () => document.querySelector<HTMLElement>('header.mtop')!;
 
 beforeEach(() => {
@@ -127,5 +129,35 @@ describe('the accent picker', () => {
     expect(html.getAttribute('data-density')).toBe('pro');
     expect(html.getAttribute('data-corners')).toBe('sharp');
     expect(JSON.parse(localStorage.getItem('ds-live-appearance')!).accent).toBe('plum');
+  });
+});
+
+describe('the brand', () => {
+  it('is the shared Stream Studio lockup in the rail and the phone top bar: the On-air mark, decorative beside its wordmark', async () => {
+    render(<LiveApp />);
+    await settle();
+    for (const bar of [rail(), topbar()]) {
+      const logo = bar.querySelector('.rail-logo .ds-logo')!;
+      expect(logo.classList.contains('ds-logo--compact')).toBe(true);
+      expect(logo.textContent).toBe('Stream Studio');
+      const mark = logo.querySelector('svg.ds-logo-mark')!;
+      expect(mark.getAttribute('data-studio')).toBe('stream');
+      expect(mark.getAttribute('aria-hidden')).toBe('true');
+      expect(mark.classList.contains('ds-logo-mark--loading')).toBe(false);
+    }
+    // The old clay tile with its accent fill is gone.
+    expect(document.querySelector('.rail-logo [fill^="var(--accent"]')).toBeNull();
+  });
+
+  it('keeps the dashboard link named when the slim rail hides the wordmark', async () => {
+    render(<LiveApp />);
+    await settle();
+    const home = within(rail()).getByRole('button', { name: 'Stream Studio — dashboard' });
+    // The slim rail (and every rail under 880 px) hides .logo-text: the name can't depend on it.
+    expect(home.querySelector('.ds-logo-word')?.classList.contains('logo-text')).toBe(true);
+    fireEvent.click(within(rail()).getByRole('button', { name: 'Collapse navigation' }));
+    await settle();
+    expect(rail().classList.contains('slim')).toBe(true);
+    expect(within(rail()).getByRole('button', { name: 'Stream Studio — dashboard' })).toBe(home);
   });
 });

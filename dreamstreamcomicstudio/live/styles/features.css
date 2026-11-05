@@ -1175,9 +1175,17 @@
 .studios-list { display: flex; flex-direction: column; }
 .studio-row { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-top: 1px solid var(--line-soft); }
 .studio-row:first-child { border-top: none; }
-.studio-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--panel-2); color: var(--muted); flex: none; transition: transform .2s; }
-.studio-row.st-open .studio-ic { background: var(--accent-wash); color: var(--accent-ink); }
-.studio-row:hover .studio-ic { transform: translateY(-1px) rotate(-4deg); }
+/* The studio's mark (components/brand, drawn in currentColor), or for the baby monitor its icon in a
+   tile of the same size and corner (a quarter of the side, as the mark's rx 16 / 64). Ink when the
+   studio is yours, muted otherwise; the badge beside it says which in words. */
+.studio-mark, .studio-ic { width: 36px; height: 36px; flex: none; color: var(--muted); }
+.studio-ic { border-radius: 9px; display: grid; place-items: center; background: var(--panel-2); transition: transform .2s; }
+.studio-row.st-open :is(.studio-mark, .studio-ic) { color: var(--text); }
+.studio-row.st-open .studio-ic { background: var(--accent-wash); }
+/* The mark's own hover tilt (studio-marks.css springs the transform), on the whole row. */
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .studio-row:hover :is(.studio-mark, .studio-ic) { transform: rotate(-6deg) scale(1.05); }
+}
 .studio-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .studio-txt small { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .studio-detail { color: var(--faint) !important; }
@@ -1190,7 +1198,8 @@
 .studio-act { border: none; background: none; color: var(--accent-ink); font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .studios-note { font-size: 12px; margin: 8px 0 0; }
 .studio-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.studio-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px 4px 7px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.studio-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 5px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font: inherit; font-size: 11.5px; cursor: pointer; }
+.studio-chip-mark { width: 16px; height: 16px; }   /* the marks' minimum size */
 .studio-chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .studio-chip.st-open i { background: var(--green); }
 .studio-chip.st-needs_code i { background: var(--amber); }

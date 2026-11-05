@@ -44,7 +44,7 @@ import { SummaryView } from './views/SummaryView';
 import { ViewerView } from './views/ViewerView';
 import { Icon } from './ui/icons';
 import { LiveLegalLinks } from './ui/legalLinks';
-import { StreamStudioLogo } from './ui/logo';
+import { StudioLogo } from '../components/brand';
 import { Avatar, Btn, cx, useToasts, type PushToast } from './ui/primitives';
 import { askForCode, StepUpHost } from './views/account/StepUp';
 import { confirmAndSignOutEverywhere } from './views/account/SecurityPanel';
@@ -496,8 +496,9 @@ export function LiveApp() {
       {!fullBleed && (
         <nav className={cx('rail', !railOpen && 'slim')} aria-label="Main">
           <div className="rail-top">
-            <button className="rail-logo" onClick={() => nav.dashboard()}>
-              <StreamStudioLogo />
+            {/* Named on the button: the slim rail hides the wordmark, and the mark beside it is decorative. */}
+            <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Stream Studio — dashboard">
+              <StudioLogo studio="stream" size="compact" labelClassName="logo-text" />
             </button>
             <button className="rail-collapse" onClick={() => setRailOpen((o) => !o)} aria-label={railOpen ? 'Collapse navigation' : 'Expand navigation'}>
               <Icon name={railOpen ? 'chevronLeft' : 'chevronRight'} size={16} />
@@ -562,7 +563,7 @@ export function LiveApp() {
           the five places — Help lives up here (and in the account menu), not in the tab bar. */}
       {!fullBleed && (
         <header className="mtop">
-          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Stream Studio — dashboard"><StreamStudioLogo /></button>
+          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Stream Studio — dashboard"><StudioLogo studio="stream" size="compact" /></button>
           <span className="spacer" />
           <button className="iconbtn mtop-btn" onClick={openHelp} data-tour="help" aria-label="Help & tours" title="Help & tours">
             <Icon name="help" size={20} />

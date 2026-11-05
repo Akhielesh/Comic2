@@ -24,10 +24,11 @@
 .rail.slim .rail-collapse { margin-left: 0; }
 .logo-text { white-space: nowrap; }
 .rail.slim .logo-text { display: none; }
-.rail-logo { display: flex; align-items: center; gap: 10px; padding: 6px 8px 4px; font-weight: 700; font-size: 15.5px; letter-spacing: -.01em; cursor: pointer; border: none; background: none; color: inherit; font-family: inherit; }
-.rail-logo .orb { width: 26px; height: 26px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; flex: none; }
-.rail-logo .orb::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--on-accent); }
-.rail-logo .sub { color: var(--muted); font-weight: 500; }
+/* Holds the shared StudioLogo (components/brand), which sets its own mark size, face and spacing. */
+.rail-logo { display: flex; align-items: center; padding: 6px 8px 4px; cursor: pointer; border: none; background: none; color: inherit; font: inherit; }
+/* The full rail: the compact lockup and the collapse button share 195 px, so the logo gives up its
+   right padding (the row's gap separates them); the mark stays in line with the nav icons. */
+@media (min-width: 881px) { .rail:not(.slim) .rail-logo { padding-right: 0; } }
 .rail-nav { display: flex; flex-direction: column; gap: 2px; margin-top: 22px; }
 .rail.slim .rail-nav { margin-top: 18px; align-items: center; width: 100%; }
 .nav-item {
