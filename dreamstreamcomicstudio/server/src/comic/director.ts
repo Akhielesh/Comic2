@@ -39,9 +39,19 @@ import {
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { conflictCardFor } from './conflictGuard.js';
-import { openSteerOf, takeSteerOf, type SteerNote } from './session.js';
+import { LONG_MESSAGE_CHARS, openSteerOf, takeSteerOf, type SteerNote } from './session.js';
 import { toolGroups } from './tools/index.js';
-import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
+import {
+  guardModelReply,
+  modelAdviceOf,
+  modelAdviceReply,
+  modelFactLines,
+  outageCardText,
+  outageNextSteps,
+  pushOutageSteps,
+  R5_FAILURES,
+  type OutageCard
+} from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
@@ -64,15 +74,15 @@ export const steerNoteText = (notes: readonly SteerNote[], doc?: ComicDoc): stri
 
 /**
  * What the reply says about steer notes the turn never read (they came in as it ended, after a question, a failure or
- * a Stop): one honest line and one chip that sends them on (a steered note is never dropped without a word). A turn
- * reads every note it can; this covers the rest. Each note is ≤ 6000 characters (routes MAX_STEER_CHARS) and at most
- * STEER_LIMITS.inbox wait, so the chip's text is always a sendable message.
+ * a Stop): one honest line and the chips that send them on (a steered note is never dropped without a word). A turn
+ * reads every note it can; this covers the rest. A chip's text is sent as an ordinary message, so it stays within
+ * LONG_MESSAGE_CHARS (longer text would be saved as the source script): the notes go as one numbered message when that
+ * fits, else one chip per note ("Send note 1", "Send note 2", …; each note is ≤ MAX_STEER_CHARS, the same number).
  */
 export const unreadSteerReply = (notes: readonly SteerNote[], why: 'ended' | 'stopped'): { line: string; steps: NextStep[] } => {
   const texts = notes.map((n) => n.text.trim()).filter(Boolean);
   if (!texts.length) return { line: '', steps: [] };
   const one = texts.length === 1;
-  const label = one ? 'Send my note' : 'Send my notes';
   const said =
     why === 'stopped'
       ? one
@@ -81,8 +91,18 @@ export const unreadSteerReply = (notes: readonly SteerNote[], why: 'ended' | 'st
       : one
         ? "Your added note came in as I was finishing, so I haven't done it yet."
         : `Your ${texts.length} added notes came in as I was finishing, so I haven't done them yet.`;
-  const say = one ? texts[0] : `(Sent while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
-  return { line: `${said} Tap “${label}” to send ${one ? 'it' : 'them'} now.`, steps: [{ label, say }] };
+  // POST /steer caps a note at LONG_MESSAGE_CHARS; the clip only guards a note that came some other way.
+  const sendable = (text: string) => text.slice(0, LONG_MESSAGE_CHARS);
+  if (one) return { line: `${said} Tap “Send my note” to send it now.`, steps: [{ label: 'Send my note', say: sendable(texts[0]) }] };
+  const combined = `(Sent while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+  if (combined.length <= LONG_MESSAGE_CHARS) {
+    return { line: `${said} Tap “Send my notes” to send them now.`, steps: [{ label: 'Send my notes', say: combined }] };
+  }
+  // Too long for one message: one chip per note, so none turns into a pasted script.
+  return {
+    line: `${said} They're too long for one message, so each has its own chip — tap “Send note 1” and the others to send them now.`,
+    steps: texts.map((t, i) => ({ label: `Send note ${i + 1}`, say: sendable(t) }))
+  };
 };
 /** Tool calls honored in a single round; extras are refused so one round can't fan out unboundedly. */
 export const MAX_CALLS_PER_ROUND = 12;
@@ -853,8 +873,20 @@ async function directorTurnBody(
       // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call
       // (drained only when that call follows, so a note is never taken into a turn that is ending; a note that arrives
       // during the final answer buys an extra round above, and one the turn never reads is answered for in the reply).
-      const steered = takeSteerOf(session);
-      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered, session.doc) });
+      // At the tool limit the next call must answer in words, so a note read there could not act: it buys one more tool
+      // round (an extra round, ≤ STEER_LIMITS.extraRounds). With none left it stays unread, and the reply's "Send my
+      // note" chip answers for it.
+      const atToolCap = rounds >= toolRoundCap;
+      if (!atToolCap || extraRounds < STEER_LIMITS.extraRounds) {
+        const steered = takeSteerOf(session);
+        if (steered.length) {
+          if (atToolCap) {
+            extraRounds += 1;
+            toolRoundCap = rounds + 1;
+          }
+          messages.push({ role: 'user', content: steerNoteText(steered, session.doc) });
+        }
+      }
     }
   } catch (err) {
     const error = err instanceof StudioError ? err : new StudioError('INTERNAL', 'The studio assistant hit a snag. Please try again.', { cause: err });
@@ -965,10 +997,23 @@ async function directorTurnBody(
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
   // A Try-again chip only when trying again can work; a used-up allowance would fail the same way.
   if (failure && userText && !notTransient) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
-  // Notes the turn never read: one honest line, and their chip first (it never falls off the chip cap).
+  // Notes the turn never read: one honest line, and their chips first (they never fall off the chip cap). On an
+  // outage or R5 turn the retry/wait chip leads on purpose (models.md §3.6 G; a note sent now would meet the same
+  // outage), so the note chips follow the first outage chip instead.
   const unreadReply = unreadSteerReply(unread, cancelled ? 'stopped' : 'ended');
   if (unread.length) logger.info('comic_steer_unread', { projectId: ctx.projectId, count: unread.length, cancelled });
-  const nextSteps = [...unreadReply.steps, ...(cancelled ? [] : turn.nextSteps)].slice(0, DOC_LIMITS.nextSteps);
+  const replySteps = cancelled ? [] : turn.nextSteps;
+  let noteAt = 0;
+  if (unreadReply.steps.length && replySteps.length && (outages.length || (advice && (advice.streak.count >= R5_FAILURES || advice.outage)))) {
+    let outageLabels = new Set<string>();
+    try {
+      outageLabels = new Set(outageNextSteps(after, byok).map((s) => s.label));
+    } catch {
+      /* the picker chip still marks the outage chips */
+    }
+    noteAt = replySteps.findIndex((s) => outageLabels.has(s.label) || s.client?.type === 'open_model_picker') + 1;
+  }
+  const nextSteps = [...replySteps.slice(0, noteAt), ...unreadReply.steps, ...replySteps.slice(noteAt)].slice(0, DOC_LIMITS.nextSteps);
   const final: Msg = {
     id: msgId,
     role: 'assistant',

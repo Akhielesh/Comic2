@@ -9,9 +9,21 @@ import { STEER_LIMITS } from '../../../shared/comic/events.js';
 import { createEmptyDoc } from '../../../shared/comic/doc.js';
 import { MAX_TOOL_ROUNDS, runDirectorTurn, steerNoteText, unreadSteerReply } from './director.js';
 import { newSession, plannedDoc, scriptedLlm, testContext, type ScriptStep } from './orchestrator.fakes.js';
-import type { StudioSession, SteerNote } from './session.js';
+import { LONG_MESSAGE_CHARS, type StudioSession, type SteerNote } from './session.js';
+import { outageNextSteps, R5_FAILURES } from './tools/models.js';
+
+/** A model_options verdict for the turn (R5 / outage), standing in for the models tool; unset = the real one. */
+const advice = vi.hoisted(() => ({ override: undefined as unknown }));
+vi.mock('./tools/models.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./tools/models.js')>();
+  return {
+    ...real,
+    modelAdviceOf: (turn: Parameters<typeof real.modelAdviceOf>[0]) => (advice.override as ReturnType<typeof real.modelAdviceOf>) ?? real.modelAdviceOf(turn)
+  };
+});
 
 afterEach(() => {
+  advice.override = undefined;
   vi.restoreAllMocks();
 });
 
@@ -160,6 +172,52 @@ describe('a note sent during the final round buys one extra round (≤ STEER_LIM
     // The reply after the extra tool round is a forced word answer.
     expect(String(llm.calls.at(-1)!.messages.at(-1)!.content)).toMatch(/Tool limit reached/);
   });
+
+  it(`a note sent during the ${MAX_TOOL_ROUNDS}th (last allowed) tool round buys one more tool round, so it can act`, async () => {
+    const session = newSession(createEmptyDoc('proj-steer'));
+    const steps: ScriptStep[] = Array.from({ length: MAX_TOOL_ROUNDS - 1 }, (_, i) => toolCall(`c${i}`, `T${i}`));
+    steps.push(() => {
+      steer(session, 'rename it Last Call');
+      return toolCall('c_last', 'T_last');
+    });
+    steps.push(toolCall('late', 'Last Call'));
+    steps.push({ text: 'Renamed it Last Call.' });
+    const llm = scriptedLlm({ director: steps });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'go', attachments: [] });
+    expect(llm.calls).toHaveLength(MAX_TOOL_ROUNDS + 2);
+    // The call after the cap round reads the note right after its tool result, with tools still allowed.
+    const extra = llm.calls[MAX_TOOL_ROUNDS].messages;
+    expect(extra.at(-1)).toEqual({ role: 'user', content: '(The user added while you were working:) rename it Last Call' });
+    expect(extra.at(-2)).toMatchObject({ role: 'tool', tool_call_id: 'c_last' });
+    expect(extra.some((m) => /Tool limit reached/.test(String(m.content)))).toBe(false);
+    expect(session.doc.brief.title).toBe('Last Call');
+    // Then the forced word answer, and no resend chip (the note was read and acted on).
+    expect(String(llm.calls.at(-1)!.messages.at(-1)!.content)).toMatch(/Tool limit reached/);
+    expect(lastReply(session).nextSteps?.some((s) => s.label.startsWith('Send my note'))).toBeFalsy();
+  });
+
+  it(`at the tool limit with the ${STEER_LIMITS.extraRounds} extra rounds used up, a note is left unread and answered for (never read where it cannot act)`, async () => {
+    const session = newSession(createEmptyDoc('proj-steer'));
+    const steerThen = (note: string, id: string): ScriptStep => () => {
+      steer(session, note);
+      return toolCall(id, id);
+    };
+    const steps: ScriptStep[] = Array.from({ length: MAX_TOOL_ROUNDS - 1 }, (_, i) => toolCall(`c${i}`, `T${i}`));
+    // Rounds MAX, MAX+1: each takes a note at the cap (two extra rounds). Round MAX+2: a third note, no extension left.
+    steps.push(steerThen('first', 'R1'), steerThen('second', 'R2'), steerThen('third', 'R3'));
+    steps.push({ text: 'All done.' });
+    const llm = scriptedLlm({ director: steps });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'go', attachments: [] });
+    expect(llm.calls).toHaveLength(MAX_TOOL_ROUNDS + 3);
+    expect(session.doc.brief.title).toBe('R3');
+    // The last (forced word) call never saw the third note: it is not taken into a call that cannot act on it.
+    const lastCall = llm.calls.at(-1)!.messages;
+    expect(lastCall.some((m) => String(m.content).includes('third'))).toBe(false);
+    expect(String(lastCall.at(-1)!.content)).toMatch(/Tool limit reached/);
+    const reply = lastReply(session);
+    expect(reply.text).toContain("Your added note came in as I was finishing, so I haven't done it yet.");
+    expect(reply.nextSteps?.[0]).toEqual({ label: 'Send my note', say: 'third' });
+  });
 });
 
 describe('notes the turn never read are answered for, with a one-tap resend', () => {
@@ -233,6 +291,40 @@ describe('notes the turn never read are answered for, with a one-tap resend', ()
   });
 });
 
+describe('on an outage or R5 turn the retry chips lead (models.md §3.6 G); the note chip follows the first of them', () => {
+  it('a note left unread on a troubled turn: the first outage chip, then Send my note', async () => {
+    const doc = plannedDoc();
+    // Three page drawings that failed upstream (429) in the last few minutes: the studio's retry chip applies.
+    doc.pages.slice(-3).forEach((p, i) => {
+      p.render = { ...p.render, status: 'failed', error: 'Rate-limited.', errorDetail: { code: 'RATE_LIMIT', provider: 'OpenRouter', at: Date.now() - (3 - i) * 60_000, text: '429' } };
+    });
+    const session = newSession(doc);
+    advice.override = { streak: { count: R5_FAILURES } };
+    const answer = (n: number, note: string): ScriptStep => () => {
+      steer(session, note);
+      return { text: `Answer ${n}.` };
+    };
+    const llm = scriptedLlm({ director: [answer(1, 'first'), answer(2, 'second'), answer(3, 'third')] });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'go', attachments: [] });
+    const outage = outageNextSteps(session.doc, false);
+    expect(outage.map((s) => s.label)).toEqual(['Try again', 'See other models']);
+    const labels = lastReply(session).nextSteps!.map((s) => s.label);
+    expect(labels[0]).toBe(outage[0].label);
+    expect(labels[1]).toBe('Send my note');
+  });
+
+  it('without an outage the note chip leads', async () => {
+    const session = newSession(plannedDoc());
+    const answer = (n: number, note: string): ScriptStep => () => {
+      steer(session, note);
+      return { text: `Answer ${n}.` };
+    };
+    const llm = scriptedLlm({ director: [answer(1, 'first'), answer(2, 'second'), answer(3, 'third')] });
+    await runDirectorTurn(testContext(session, { llm }), { text: 'go', attachments: [] });
+    expect(lastReply(session).nextSteps?.[0]).toEqual({ label: 'Send my note', say: 'third' });
+  });
+});
+
 describe('a turn that crashes after its loop still answers for the notes it never read', () => {
   it('the crash reply carries the unread line, the note chip first and then Try again', async () => {
     const session = newSession(createEmptyDoc('proj-steer'));
@@ -284,12 +376,29 @@ describe('pure helpers', () => {
     expect(steerNoteText([{ msgId: 'c', text: '  ', at: 3 }, notes[1]], doc)).toBe('(The user added while you were working:) bigger\nIP NOTE: an original hero.');
   });
 
-  it('unreadSteerReply: nothing for no notes; one chip whose text is a sendable message', () => {
+  it('unreadSteerReply: nothing for no notes; short notes go as one numbered message', () => {
     expect(unreadSteerReply([], 'ended')).toEqual({ line: '', steps: [] });
-    const three = ['a', 'b', 'c'].map((t, i) => ({ msgId: t, text: 'x'.repeat(6000), at: i }));
+    const three = ['a', 'b', 'c'].map((t, i) => ({ msgId: t, text: `note ${t}`, at: i }));
     const out = unreadSteerReply(three, 'ended');
     expect(out.line).toBe("Your 3 added notes came in as I was finishing, so I haven't done them yet. Tap “Send my notes” to send them now.");
-    expect(out.steps).toHaveLength(1);
-    expect(out.steps[0].say!.length).toBeLessThanOrEqual(60_000);
+    expect(out.steps).toEqual([{ label: 'Send my notes', say: '(Sent while you were working:)\n1. note a\n2. note b\n3. note c' }]);
+  });
+
+  it(`unreadSteerReply: every chip says at most ${LONG_MESSAGE_CHARS} characters, so a resent note is never saved as a pasted script`, () => {
+    // Two 3500-character notes: together they would cross the pasted-script threshold, so each gets its own chip.
+    const notes = ['a', 'b'].map((t, i) => ({ msgId: t, text: t.repeat(3500), at: i }));
+    const out = unreadSteerReply(notes, 'ended');
+    expect(out.steps.map((s) => s.label)).toEqual(['Send note 1', 'Send note 2']);
+    expect(out.steps.map((s) => s.say)).toEqual(['a'.repeat(3500), 'b'.repeat(3500)]);
+    for (const step of out.steps) expect(step.say!.length).toBeLessThanOrEqual(LONG_MESSAGE_CHARS);
+    expect(out.line).toBe(
+      "Your 2 added notes came in as I was finishing, so I haven't done them yet. They're too long for one message, so each has its own chip — tap “Send note 1” and the others to send them now."
+    );
+    // Three notes at the steer cap: three chips, each within the threshold.
+    const full = unreadSteerReply(['x', 'y', 'z'].map((t, i) => ({ msgId: t, text: t.repeat(LONG_MESSAGE_CHARS), at: i })), 'stopped');
+    expect(full.steps).toHaveLength(3);
+    for (const step of full.steps) expect(step.say!.length).toBeLessThanOrEqual(LONG_MESSAGE_CHARS);
+    // One note is its own message.
+    expect(unreadSteerReply([notes[0]], 'ended').steps).toEqual([{ label: 'Send my note', say: 'a'.repeat(3500) }]);
   });
 });
