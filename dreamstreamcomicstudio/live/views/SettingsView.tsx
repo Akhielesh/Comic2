@@ -47,7 +47,7 @@ const SET_CATS = [
 ];
 
 const HOTKEYS: { keys: string[]; action: string }[] = [
-  { keys: ['G'], action: 'Go live / end stream (asks first)' },
+  { keys: ['G'], action: 'Go live (after the ready check) — ending is the End stream button' },
   { keys: ['I'], action: 'Invite people on camera' },
   { keys: ['Space'], action: 'Mute / unmute mic' },
   { keys: ['V'], action: 'Camera on / off' },

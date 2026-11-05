@@ -33,6 +33,7 @@ vi.mock('../../calls/callCenter', async (orig) => {
   };
 });
 
+import { isModalOpen } from '../../ui/hotkeys';
 import { CallHost } from './CallHost';
 
 const call = (over: Partial<Call> = {}): Call => ({
@@ -95,6 +96,13 @@ describe('answering from a call notification', () => {
 });
 
 describe('the ring screen', () => {
+  it('covers the app as a modal: a live studio underneath doesn’t act on its keys', () => {
+    history.replaceState(null, '', '/live#/studio/ev1');
+    render(<CallHost push={vi.fn()} suspended={false} />);
+    expect(screen.getByRole('alertdialog', { name: 'Sam is calling' }).getAttribute('aria-modal')).toBe('true');
+    expect(isModalOpen()).toBe(true);
+  });
+
   it('added to a call by someone else: says who', async () => {
     history.replaceState(null, '', '/live#/calls');
     h.snap = snapshot({ ringing: [ringing({ direct: { family: false, label: null, where: null, by: { uid: 'bob', name: 'Bob', family: false } } })] });

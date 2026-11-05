@@ -50,7 +50,7 @@ import { normalizeQuick } from '../emoji';
 import { SceneSketch } from '../components/scenes';
 import { HelpButton } from '../components/Guide';
 import { Icon } from '../ui/icons';
-import { isImeComposing, isModalOpen, isSpaceActivatable, shouldHandleStudioHotkey } from '../ui/hotkeys';
+import { isImeComposing, isModalOpen, shouldHandleStudioHotkey, spaceBelongsToControl, watchFocusOrigin } from '../ui/hotkeys';
 import { StreamStudioMark } from '../ui/logo';
 import {
   Btn, FloatLayer, IconBtn, Pill, Segmented, Tabs, cx,
@@ -1166,21 +1166,30 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // --------------------------------------------------------------- hotkeys
   // Plain key presses only (ui/hotkeys.ts): never ⌘/Ctrl/Alt shortcuts (⌘G Find next, Ctrl+R
   // reload, ⌘V paste), auto-repeat, IME composition or typing — and not under an open sheet.
+  // A click leaves focus on the clicked button in Chrome, Edge and Firefox (Windows/Linux), so
+  // the studio tells a control the host tabbed to from one they clicked (watchFocusOrigin).
+  useEffect(() => watchFocusOrigin(), []);
+  /** This Space press is the mute key: its auto-repeat and keyup mustn't press a clicked button. */
+  const micSpaceRef = useRef(false);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === ' ' && e.repeat && micSpaceRef.current) e.preventDefault();
       if (!shouldHandleStudioHotkey(e) || inviteOpen || pendingSave || isModalOpen()) return;
       const k = e.key.toLowerCase();
       if (k === 'g') {
-        // Ending goes through endStream's own "End the stream for everyone?" confirm.
-        if (isLive || status === 'paused') void endStream();
+        // Ending is for everyone and can't be undone, so no key does it: a stray G and the Enter
+        // after it would accept a native confirm whose default answer is OK. End stream asks.
+        if (isLive || status === 'paused') push('Use “End stream” to finish — G won’t end a live stream', { icon: 'info' });
         else if (meetingIdle) push('Use “Go live with this meeting” to broadcast — G won’t do it by accident', { icon: 'info' });
         else if (status === 'idle') requestGoLive();
       } else if (k === 'i') {
         setInviteOpen(true);
       } else if (k === ' ') {
-        // Space on a focused button, link, toggle or tab is that control's own press.
-        if (isSpaceActivatable(e.target)) return;
+        // Space on a button, toggle or tab the host reached by keyboard is that control's own
+        // press. One they clicked keeps Space as the mute key, and isn't pressed again.
+        if (spaceBelongsToControl(e.target)) return;
         e.preventDefault();
+        micSpaceRef.current = true;
         toggleMic();
       } else if (k === 'v') toggleCam();
       else if (k === 'r') toggleRec();
@@ -1196,8 +1205,18 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         if (sc) void cutScene(sc.id);
       }
     };
+    // A focused button presses on Space's keyup: cancel that too when the Space was the mute key.
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key !== ' ' || !micSpaceRef.current) return;
+      micSpaceRef.current = false;
+      e.preventDefault();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   });
 
   // ----------------------------------------------------------------- render

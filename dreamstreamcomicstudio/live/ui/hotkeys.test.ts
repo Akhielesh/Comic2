@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { isEditableTarget, isImeComposing, isModalOpen, isSpaceActivatable, shouldHandleStudioHotkey } from './hotkeys';
+import { fireEvent } from '@testing-library/react';
+import {
+  focusedByKeyboard, isEditableTarget, isImeComposing, isModalOpen, isSpaceActivatable, shouldHandleStudioHotkey, spaceBelongsToControl,
+  watchFocusOrigin,
+} from './hotkeys';
 
 const el = (html: string, pick = '[data-pick]'): Element => {
   const root = document.createElement('div');
@@ -84,6 +88,81 @@ describe('isSpaceActivatable', () => {
     expect(isSpaceActivatable(el('<a>no href</a>'))).toBe(false);
     expect(isSpaceActivatable(el('<div tabindex="0">stage</div>'))).toBe(false);
     expect(isSpaceActivatable(window)).toBe(false);
+  });
+});
+
+describe('watchFocusOrigin · focusedByKeyboard', () => {
+  /** A real click: pointerdown + mousedown, then (in Chrome / Edge / Firefox on Windows) focus stays on the button. */
+  const click = (b: HTMLElement) => {
+    fireEvent.pointerDown(b);
+    fireEvent.mouseDown(b);
+    b.focus();
+    fireEvent.click(b);
+  };
+  const tabTo = (b: HTMLElement) => {
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Tab' });
+    b.focus();
+  };
+
+  it('a clicked button is not keyboard focus, so Space stays the studio’s key there', () => {
+    const stop = watchFocusOrigin();
+    const rec = el('<button>Record</button>') as HTMLElement;
+    click(rec);
+    expect(document.activeElement).toBe(rec);
+    expect(focusedByKeyboard(rec)).toBe(false);
+    expect(spaceBelongsToControl(rec)).toBe(false);
+    // Pressing keys while it keeps focus (Space itself, hotkeys) doesn't change how it got focus.
+    fireEvent.keyDown(rec, { key: ' ' });
+    fireEvent.keyDown(rec, { key: 'm' });
+    expect(spaceBelongsToControl(rec)).toBe(false);
+    stop();
+  });
+
+  it('a control reached by Tab, Shift+Tab or arrow keys is keyboard focus: Space is its own press', () => {
+    const stop = watchFocusOrigin();
+    const a = el('<button>Chat</button>') as HTMLElement;
+    const b = el('<div role="tab" tabindex="0">People</div>') as HTMLElement;
+    tabTo(a);
+    expect(spaceBelongsToControl(a)).toBe(true);
+    fireEvent.keyDown(a, { key: 'ArrowRight' });
+    b.focus();
+    expect(spaceBelongsToControl(b)).toBe(true);
+    expect(focusedByKeyboard(a)).toBe(false); // only what has focus now
+    // Clicked afterwards: back to pointer focus — the one it had already included (no focusin then).
+    click(b);
+    expect(spaceBelongsToControl(b)).toBe(false);
+    tabTo(a);
+    click(a);
+    expect(spaceBelongsToControl(a)).toBe(false);
+    stop();
+  });
+
+  it('a ⌘/Ctrl/Alt chord is not the host moving focus (⌘Tab away and back keeps a clicked button a click)', () => {
+    const stop = watchFocusOrigin();
+    const rec = el('<button>Record</button>') as HTMLElement;
+    click(rec);
+    fireEvent.keyDown(rec, { key: 'Tab', metaKey: true });
+    fireEvent.keyDown(rec, { key: 'Tab', altKey: true });
+    rec.blur();
+    rec.focus(); // the window coming back re-focuses it
+    expect(spaceBelongsToControl(rec)).toBe(false);
+    stop();
+  });
+
+  it('does nothing until watched, and forgets when the last watcher stops', () => {
+    const b = el('<button>x</button>') as HTMLElement;
+    tabTo(b);
+    expect(focusedByKeyboard(b)).toBe(false); // nobody watching
+    const stopA = watchFocusOrigin();
+    const stopB = watchFocusOrigin();
+    b.blur();
+    tabTo(b);
+    stopA();
+    expect(focusedByKeyboard(b)).toBe(true); // still watched by B
+    stopA(); // a second stop from the same watcher is a no-op
+    expect(focusedByKeyboard(b)).toBe(true);
+    stopB();
+    expect(focusedByKeyboard(b)).toBe(false);
   });
 });
 

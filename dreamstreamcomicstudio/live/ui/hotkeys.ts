@@ -66,7 +66,74 @@ export function isSpaceActivatable(target: EventTarget | null | undefined): bool
   return !!asElement(target)?.closest(SPACE_ACTIVATES);
 }
 
-/** Some modal sheet or dialog is open over the page (every live/** sheet sets aria-modal). */
+/*
+ * How the focused control got focus. Chrome and Edge everywhere, and Firefox on Windows and
+ * Linux, leave focus on a <button> after a mouse click, so "a button has focus" doesn't mean
+ * the host is driving the page by keyboard: after clicking Record, Space must still mute the
+ * mic, not press Record again. Only a control reached by the keyboard (Tab, arrow keys, or
+ * focus moved right after a keystroke) gets Space as its own press. `:focus-visible` can't
+ * tell the two apart: Chromium turns it on at the Space keydown itself.
+ */
+let lastInputKeyboard = false;
+let keyboardFocused: EventTarget | null = null;
+let focusWatchers = 0;
+
+const onAnyKeyDown = (e: KeyboardEvent) => {
+  // ⌘/Ctrl/Alt chords (⌘Tab, Ctrl+L, Alt+Tab) are the browser or OS, not the host moving focus here.
+  if (!e.metaKey && !e.ctrlKey && !e.altKey) lastInputKeyboard = true;
+};
+const onAnyPointerDown = () => {
+  lastInputKeyboard = false;
+  // Clicking the control that already has focus fires no focusin: it's a clicked control now.
+  keyboardFocused = null;
+};
+const onAnyFocusIn = (e: FocusEvent) => {
+  keyboardFocused = lastInputKeyboard ? e.target : null;
+};
+const FOCUS_EVENTS: [string, EventListener][] = [
+  ['keydown', onAnyKeyDown as EventListener],
+  ['pointerdown', onAnyPointerDown],
+  ['mousedown', onAnyPointerDown],
+  ['focusin', onAnyFocusIn as EventListener],
+];
+
+/**
+ * Start telling keyboard focus from pointer focus (see above) for as long as a hotkey surface is
+ * mounted; returns the stop function, so it drops straight into a `useEffect`. Counted, so two
+ * surfaces can share it.
+ */
+export function watchFocusOrigin(win: Window | null = typeof window === 'undefined' ? null : window): () => void {
+  if (!win) return () => undefined;
+  if (focusWatchers++ === 0) for (const [type, fn] of FOCUS_EVENTS) win.addEventListener(type, fn, true);
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (--focusWatchers > 0) return;
+    for (const [type, fn] of FOCUS_EVENTS) win.removeEventListener(type, fn, true);
+    lastInputKeyboard = false;
+    keyboardFocused = null;
+  };
+}
+
+/** Did the keyboard put focus on this element (rather than a click or tap)? Needs `watchFocusOrigin`. */
+export function focusedByKeyboard(target: EventTarget | null | undefined): boolean {
+  return !!target && target === keyboardFocused;
+}
+
+/**
+ * Space here is the focused control's own press (a button, toggle or tab the host reached by
+ * keyboard), not the studio's mute hotkey.
+ */
+export function spaceBelongsToControl(target: EventTarget | null | undefined): boolean {
+  return isSpaceActivatable(target) && focusedByKeyboard(target);
+}
+
+/**
+ * Some modal sheet or dialog is open over the page. Every live/** sheet and full-screen
+ * surface sets aria-modal (the call ring and call screen included; the call's floating
+ * mini window doesn't, so the studio still answers its keys).
+ */
 export function isModalOpen(doc: Document | null = typeof document === 'undefined' ? null : document): boolean {
   return !!doc?.querySelector('[aria-modal="true"]');
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEvent, openRoomSocket } from '../api';
 import { DiskRecorder } from '../recorder';
 import type { Nav } from '../nav';
+import type { PushToast } from '../ui/primitives';
 import { StudioView } from './StudioView';
 
 /* Media fakes: the studio's camera → compositor → recorder pipeline, without a browser. */
@@ -107,12 +108,14 @@ const meta = (status: 'idle' | 'live') => ({
 let sent: Record<string, unknown>[];
 let nav: Nav;
 let confirmSpy: ReturnType<typeof vi.spyOn>;
+let push: ReturnType<typeof vi.fn<PushToast>>;
 
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   sent = [];
   nav = { summary: vi.fn(), dashboard: vi.fn(), settings: vi.fn() } as unknown as Nav;
+  push = vi.fn<PushToast>();
   vi.stubGlobal('MediaStream', fakes.FakeStream);
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
   confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
@@ -128,7 +131,7 @@ afterEach(() => {
 /** Opens the studio and waits for the camera pipeline (the mic button + program stream). */
 async function openStudio(status: 'idle' | 'live') {
   vi.mocked(getEvent).mockResolvedValue(meta(status) as never);
-  render(<StudioView eventId="ev1" hostKey="hk" nav={nav} push={vi.fn()} />);
+  render(<StudioView eventId="ev1" hostKey="hk" nav={nav} push={push} />);
   const mic = await screen.findByRole('button', { name: 'Microphone (Space)' });
   await waitFor(() => expect(openRoomSocket).toHaveBeenCalled());
   // Media is up once the camera button no longer says it is waiting.
@@ -146,22 +149,51 @@ const press = (key: string, init: KeyboardEventInit = {}, target: Window | Eleme
     fireEvent.keyDown(target, { key, ...init });
   });
 
-describe('StudioView hotkeys · ending a stream', () => {
-  it('G while live asks before ending; declining keeps the stream on air', async () => {
-    await openStudio('live');
-    press('g');
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(confirmSpy).toHaveBeenCalledWith('End the stream for everyone?');
-    expect(sent).not.toContainEqual(expect.objectContaining({ t: 'state', status: 'ended' }));
-    expect(nav.summary).not.toHaveBeenCalled();
-  });
+const ended = () => sent.some((m) => m.t === 'state' && m.status === 'ended');
 
-  it('G then confirming ends the stream', async () => {
+describe('StudioView hotkeys · ending a stream', () => {
+  it('no key ends a live stream: a stray “gg⏎” never reaches a confirm, G says to use End stream', async () => {
     await openStudio('live');
+    // Even if a confirm were up, its default answer (OK) would be taken by the Enter.
     confirmSpy.mockReturnValue(true);
     press('g');
+    press('g');
+    press('Enter');
+    await settle();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(ended()).toBe(false);
+    expect(nav.summary).not.toHaveBeenCalled();
+    expect(push).toHaveBeenCalledWith('Use “End stream” to finish — G won’t end a live stream', { icon: 'info' });
+  });
+
+  it('G while paused (BRB) does not end it either', async () => {
+    await openStudio('live');
+    press('b');
+    await waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ t: 'state', status: 'paused' })));
+    confirmSpy.mockReturnValue(true);
+    press('g');
+    await settle();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(ended()).toBe(false);
+  });
+
+  it('the End stream button still asks first, and ends on OK', async () => {
+    await openStudio('live');
+    const end = screen.getByRole('button', { name: 'End stream' });
+    fireEvent.click(end);
+    expect(confirmSpy).toHaveBeenCalledWith('End the stream for everyone?');
+    expect(ended()).toBe(false);
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(end);
     await waitFor(() => expect(nav.summary).toHaveBeenCalledWith('ev1', 'hk'));
-    expect(sent).toContainEqual(expect.objectContaining({ t: 'state', status: 'ended' }));
+    expect(ended()).toBe(true);
+  });
+
+  it('G when idle opens the ready check (go live keeps its countdown)', async () => {
+    await openStudio('idle');
+    press('g');
+    expect(await screen.findByText('Ready check')).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('⌘G / Ctrl+G (Find next), a held-down G and an IME keystroke never reach the end-stream confirm', async () => {
@@ -216,22 +248,89 @@ describe('StudioView hotkeys · browser shortcuts do nothing', () => {
   });
 });
 
+/** A real Space press on whatever has focus: keydown then keyup, both cancelable (as in a browser). */
+const space = (target: Element) => {
+  const down = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+  const up = new KeyboardEvent('keyup', { key: ' ', bubbles: true, cancelable: true });
+  act(() => {
+    target.dispatchEvent(down);
+    target.dispatchEvent(up);
+  });
+  // A browser presses a focused button unless the keydown or keyup was cancelled.
+  return { pressedControl: !down.defaultPrevented && !up.defaultPrevented };
+};
+/** A mouse click: Chrome, Edge and Firefox (Windows/Linux) leave focus on the clicked button. */
+const click = (b: HTMLElement) => {
+  fireEvent.pointerDown(b);
+  fireEvent.mouseDown(b);
+  b.focus();
+  fireEvent.mouseUp(b);
+  fireEvent.click(b);
+};
+
 describe('StudioView hotkeys · Space and focus', () => {
-  it('Space toggles the mic from the page, but not while a button has focus', async () => {
+  it('Space toggles the mic from the page', async () => {
     const { mic } = await openStudio('idle');
     press(' ');
     expect(mic).toHaveClass('off');
     press(' ');
     expect(mic).not.toHaveClass('off');
+  });
 
-    const help = screen.getByRole('button', { name: 'Help & tours' });
-    help.focus();
-    const ev = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
-    act(() => {
-      help.dispatchEvent(ev);
-    });
+  it('after clicking Record, Space still mutes — it does not press Record again', async () => {
+    const { mic } = await openStudio('idle');
+    const rec = screen.getByRole('button', { name: 'Record' });
+    click(rec);
+    await waitFor(() => expect(DiskRecorder.start).toHaveBeenCalledTimes(1));
+    expect(document.activeElement).toBe(rec);
+    expect(space(rec).pressedControl).toBe(false);
+    expect(mic).toHaveClass('off');
+    expect(space(rec).pressedControl).toBe(false);
     expect(mic).not.toHaveClass('off');
-    expect(ev.defaultPrevented).toBe(false); // the button's own Space press still happens
+  });
+
+  it('after clicking a rail tab or End stream (then Cancel), Space mutes and presses neither', async () => {
+    const { mic } = await openStudio('live');
+    const tab = screen.getAllByRole('tab')[0];
+    click(tab);
+    expect(space(tab).pressedControl).toBe(false);
+    expect(mic).toHaveClass('off');
+    const end = screen.getByRole('button', { name: 'End stream' });
+    click(end); // confirm → Cancel; focus comes back to the button
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(space(end).pressedControl).toBe(false);
+    expect(mic).not.toHaveClass('off');
+  });
+
+  it('holding Space after a click: the auto-repeat and the keyup never press the clicked button', async () => {
+    const { mic } = await openStudio('idle');
+    const metrics = screen.getByRole('button', { name: 'Metrics' });
+    click(metrics);
+    const shown = !!screen.queryByText('Studio metrics');
+    const down = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true });
+    const held = new KeyboardEvent('keydown', { key: ' ', repeat: true, bubbles: true, cancelable: true });
+    const up = new KeyboardEvent('keyup', { key: ' ', bubbles: true, cancelable: true });
+    act(() => {
+      metrics.dispatchEvent(down);
+      metrics.dispatchEvent(held);
+      metrics.dispatchEvent(up);
+    });
+    expect([down.defaultPrevented, held.defaultPrevented, up.defaultPrevented]).toEqual([true, true, true]);
+    expect(mic).toHaveClass('off'); // one press, one toggle
+    expect(!!screen.queryByText('Studio metrics')).toBe(shown);
+  });
+
+  it('a control the host tabbed to keeps Space as its own press', async () => {
+    const { mic } = await openStudio('idle');
+    const help = screen.getByRole('button', { name: 'Help & tours' });
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    help.focus();
+    expect(space(help).pressedControl).toBe(true); // the button's own Space press still happens
+    expect(mic).not.toHaveClass('off');
+    // Clicked afterwards, Space is the mute key again.
+    click(help);
+    expect(space(help).pressedControl).toBe(false);
+    expect(mic).toHaveClass('off');
   });
 
   it('typing in a contentEditable region is not a hotkey', async () => {
@@ -251,6 +350,29 @@ describe('StudioView hotkeys · Space and focus', () => {
     press(' ');
     expect(cam).not.toHaveClass('off');
     expect(screen.getByRole('button', { name: 'Microphone (Space)' })).not.toHaveClass('off');
+  });
+});
+
+describe('StudioView hotkeys · under a call', () => {
+  it('a call ringing or open over the studio (CallHost, full-screen aria-modal) takes the keys; minimized, the studio has them back', async () => {
+    const { mic, cam } = await openStudio('live');
+    const call = document.createElement('div');
+    call.className = 'call-root';
+    call.setAttribute('role', 'dialog');
+    call.setAttribute('aria-modal', 'true');
+    document.body.appendChild(call);
+    press(' ', {}, call);
+    press('v', {}, call);
+    press('r', {}, call);
+    press('2', {}, call);
+    await settle();
+    expect(mic).not.toHaveClass('off');
+    expect(cam).not.toHaveClass('off');
+    expect(DiskRecorder.start).not.toHaveBeenCalled();
+    expect(sent).not.toContainEqual(expect.objectContaining({ t: 'log', tag: 'SCENE' }));
+    call.removeAttribute('aria-modal'); // the call's mini window
+    press('v');
+    expect(cam).toHaveClass('off');
   });
 });
 
