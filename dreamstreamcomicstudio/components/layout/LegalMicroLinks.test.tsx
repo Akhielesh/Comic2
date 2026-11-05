@@ -6,9 +6,9 @@ import { LEGAL_DOCS } from '../legal/legalRoutes';
 import { LegalMicroLinks } from './LegalMicroLinks';
 
 describe('LegalMicroLinks', () => {
-  it('sends Contact to the DreamStream Studio domain we own', () => {
+  it('sends Contact to the routed support mailbox on the domain we own', () => {
     render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
-    expect(screen.getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:contact@dreamstreamstudio.ai');
+    expect(screen.getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:support@dreamstreamstudio.ai');
   });
 
   it('links every legal document by its real path, and calls the Terms "Terms of Service"', () => {

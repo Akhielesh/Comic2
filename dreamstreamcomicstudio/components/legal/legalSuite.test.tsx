@@ -12,9 +12,11 @@ import { LIVE_LEGAL_LINKS } from '../../live/ui/legalLinks';
 import { AcceptableUsePolicy } from './AcceptableUsePolicy';
 import { CookiesNotice, DOCUMENTED_STORAGE_KEYS } from './CookiesNotice';
 import { CopyrightPolicy } from './CopyrightPolicy';
-import { AI_PROVIDERS, CORE, NOT_IN_USE, OTHER_SERVICES, SubprocessorsPage, TOOL_SERVICES } from './SubprocessorsPage';
+import { AI_PROVIDERS, BROWSER_SERVICES, CORE, NOT_IN_USE, OTHER_SERVICES, SubprocessorsPage, TOOL_SERVICES } from './SubprocessorsPage';
 import {
+    BROWSER_THIRD_PARTIES,
     DIRECT_AI_PROVIDERS,
+    EVENT_ROOM_KEPT,
     GOOGLE_PRIVACY_POLICY_URL,
     GOOGLE_SECURITY_PERMISSIONS_URL,
     LEGAL_LAST_UPDATED,
@@ -48,6 +50,7 @@ const renderDoc = (id: LegalDocId, onOpenDoc = vi.fn()) => {
 
 afterEach(() => {
     window.location.hash = '';
+    window.history.replaceState({}, '', '/');
 });
 
 describe('legal suite: every document renders as a complete page', () => {
@@ -203,7 +206,10 @@ describe('Privacy Policy', () => {
         const emails = textOf(renderDoc('privacy').main.querySelector('#emails') as HTMLElement);
         expect(emails).toContain('contain a tiny image that tells us when the email is first opened');
         expect(emails).toContain('double opt-in');
-        expect(emails).toContain('(Comic Studio, Chat Studio, Code Studio, Stream Studio or Dashboards)');
+        // The studio list lives in the code (and changes): the page doesn't pin one.
+        expect(emails).toContain('the studios or features you pick');
+        expect(emails).not.toMatch(/Code Studio|Dashboards/);
+        expect(emails).toContain('for every email our backend sends');
         expect(emails).toContain('up to 1,000 characters');
         expect(emails).toContain('suppression list');
     });
@@ -290,7 +296,7 @@ describe('Cookies & Local Storage', () => {
 
 describe('Subprocessors', () => {
     it('names the infrastructure, every AI provider, and what is set up but unused', () => {
-        const names = [...CORE, ...AI_PROVIDERS, ...TOOL_SERVICES, ...OTHER_SERVICES, ...NOT_IN_USE].map((s) => s.name).join(' | ');
+        const names = [...CORE, ...AI_PROVIDERS, ...TOOL_SERVICES, ...BROWSER_SERVICES, ...OTHER_SERVICES, ...NOT_IN_USE].map((s) => s.name).join(' | ');
         for (const p of ['Cloudflare', 'Supabase', 'OpenRouter', 'Google (Gemini API)', 'Ideogram', 'Pixazo', 'Jina Reader', 'ip-api.com', 'Pwned Passwords', 'Google APIs', 'Stripe', 'Railway']) {
             expect(names).toContain(p);
         }
@@ -298,6 +304,118 @@ describe('Subprocessors', () => {
         const text = textOf(renderDoc('subprocessors').main);
         expect(text).toContain('Nothing today: billing is switched off.');
         expect(text).toContain('United States (US West, Oregon)');
+    });
+});
+
+describe('what the browser loads, the assistant, keys and other disclosures', () => {
+    it('Cookies and Subprocessors both list every service the browser loads, and no longer say tools are server-only', () => {
+        const cookies = textOf(renderDoc('cookies').main.querySelector('#third-parties') as HTMLElement);
+        const subs = renderDoc('subprocessors').main;
+        const browser = textOf(subs.querySelector('#loaded-by-your-browser') as HTMLElement);
+        for (const p of BROWSER_THIRD_PARTIES) {
+            expect(cookies).toContain(p.name);
+            expect(browser).toContain(p.name);
+            for (const h of p.hosts.filter((h) => h !== '*')) expect(cookies).toContain(h);
+        }
+        for (const h of ['basemaps.cartocdn.com', 'api.qrserver.com', 'cdn.jsdelivr.net', '*.codesandbox.io', 'stun.l.google.com']) expect(browser).toContain(h);
+        expect(textOf(subs)).not.toMatch(/made by our server, not your browser/);
+        expect(textOf(subs.querySelector('#chat-tools') as HTMLElement)).toContain('loaded by your browser instead');
+        for (const n of ['agify', 'Amadeus', 'Finnhub', 'FRED', 'similar public sources']) expect(textOf(subs)).toContain(n);
+    });
+
+    it('Privacy: API keys, the assistant, usage events, location, images, emails, events and sign-in records', () => {
+        const text = textOf(renderDoc('privacy').main);
+        expect(text).toContain('it is stored with your account, encrypted with AES-256-GCM, so it works on all your devices');
+        expect(text).toContain('The site-wide assistant:');
+        expect(text).toContain('that message is also saved as feedback automatically');
+        expect(text).toContain('never the text of your message or the answer');
+        expect(text).toContain('That location, with your timezone and language, is included in each request to the AI model');
+        expect(text).toContain('plain HTTP');
+        expect(text).toContain('anyone who has one of those addresses can open that image without signing in, even if the project is private');
+        expect(text).toContain('someone who knows your username can find out the email address that goes with it');
+        expect(text).not.toMatch(/Email addresses are never shown|Every table in our database|weekly summaries/);
+        expect(text).toContain(`the last ${EVENT_ROOM_KEPT.chatMessages} messages`);
+        expect(text).toContain('there is no way to delete an event in the app today');
+        expect(text).toContain('also records the IP address and browser of each sign-in session');
+        expect(text).toContain('in-app notifications');
+        expect(text).toContain(`about ${RETENTION.trackerDeletedDays} days later`);
+        expect(text).toContain('STUN servers run by Cloudflare and Google');
+        expect(text).not.toMatch(/(?<!third-party )(advertising|ad) or analytics trackers/);
+    });
+
+    it('Terms: the assistant is in the AI notice, the training heading is narrow, invitations are described as they work', () => {
+        const text = textOf(renderDoc('terms').main);
+        expect(text).toContain('the site-wide assistant on our pages');
+        expect(text).toContain("We don't train our own AI models on your content.");
+        expect(text).not.toMatch(/We don't train on your content\./);
+        expect(text).toContain("The main site's sign-up form opens only with an invitation");
+    });
+
+    it('Cookies: keys stored with the account survive clearing site data; no blanket "no tracking pixels" claim', () => {
+        const text = textOf(renderDoc('cookies').main);
+        expect(text).toContain('API keys you added while signed in stay stored with your account');
+        expect(text).not.toMatch(/tracking pixels in our apps/);
+    });
+
+    it('AUP names the automatic pause Comic Studio applies', () => {
+        expect(textOf(renderDoc('acceptable-use').main)).toContain('repeated blocked requests pause generation for 15 minutes, or for 24 hours');
+    });
+
+    it('tables label every cell for phones, where the header row is hidden', () => {
+        const retention = renderDoc('privacy').main.querySelector('#retention table') as HTMLTableElement;
+        expect(retention.querySelector('thead')?.className).toMatch(/^hidden\b.*\bsm:table-header-group\b/);
+        const firstValue = retention.querySelector('tbody tr td') as HTMLElement;
+        expect(firstValue.querySelector('span')).toHaveTextContent('How long');
+        expect(firstValue.querySelector('span')?.className).toContain('sm:hidden');
+    });
+});
+
+describe('Back and Forward between documents opened in the app', () => {
+    it('a cross-link and the legal navigation each add a history entry, so Back has somewhere to go', () => {
+        const swallow = (e: MouseEvent) => e.preventDefault();
+        document.addEventListener('click', swallow);
+        window.history.replaceState({}, '', '/terms');
+        const before = window.history.length;
+        const { main, onOpenDoc } = renderDoc('terms');
+        fireEvent.click(within(main).getAllByRole('link', { name: 'Acceptable Use Policy' })[0]);
+        expect(onOpenDoc).toHaveBeenCalledWith('acceptable-use');
+        expect(window.location.pathname).toBe('/acceptable-use');
+        expect(window.history.length).toBe(before + 1);
+        fireEvent.click(within(within(main).getByRole('navigation', { name: 'Legal documents' })).getByRole('link', { name: 'Cookies' }));
+        expect(window.location.pathname).toBe('/cookies');
+        expect(window.history.length).toBe(before + 2);
+        document.removeEventListener('click', swallow);
+    });
+
+    it('popstate to another document opens it, to a non-legal path goes Back, and a #section move is left alone', () => {
+        const onBack = vi.fn();
+        const onOpenDoc = vi.fn();
+        window.history.replaceState({}, '', '/privacy');
+        render(<PrivacyPolicy onBack={onBack} onOpenDoc={onOpenDoc} />);
+
+        window.history.replaceState({}, '', '/privacy#retention');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(onOpenDoc).not.toHaveBeenCalled();
+        expect(onBack).not.toHaveBeenCalled();
+
+        window.history.replaceState({}, '', '/terms');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(onOpenDoc).toHaveBeenCalledWith('terms');
+
+        window.history.replaceState({}, '', '/');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        expect(onBack).toHaveBeenCalledTimes(1);
+    });
+
+    it('the shared footer adds a history entry too', () => {
+        const swallow = (e: MouseEvent) => e.preventDefault();
+        document.addEventListener('click', swallow);
+        const before = window.history.length;
+        render(<LegalMicroLinks onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} onOpenLegal={vi.fn()} />);
+        fireEvent.click(screen.getByRole('link', { name: 'Terms of Service' }));
+        expect(window.location.pathname).toBe('/terms');
+        expect(window.history.length).toBe(before + 1);
+        document.removeEventListener('click', swallow);
     });
 });
 
@@ -325,6 +443,26 @@ describe('footers and other entry points reach the documents', () => {
         expect(sheet).toContain("mainAppUrl(legalPath('terms'))");
         expect(sheet).toContain("mainAppUrl(legalPath('privacy'))");
         expect(sheet).toContain('>Terms of Service</a>');
+    });
+
+    it('support links go to the routed support mailbox, not the unrouted contact@', () => {
+        for (const f of ['components/layout/LegalMicroLinks.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx']) expect(read(f), f).not.toContain('contact@');
+        expect(LIVE_LEGAL_LINKS.find((l) => l.label === 'Support')?.href).toBe(`mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support`);
+        for (const id of ['acceptable-use', 'copyright'] as const) {
+            expect(LIVE_LEGAL_LINKS.some((l) => legalDocForPath(new URL(l.href, 'https://dreamstreamstudio.ai').pathname) === id)).toBe(true);
+        }
+    });
+
+    it('Settings → Legal links to the documents instead of carrying an old copy', () => {
+        const settings = read('components/AccountSettings.tsx');
+        expect(settings).not.toMatch(/Feb 11, 2026|Stripe for subscriptions|Token-based limits apply/);
+        expect(settings).toContain('LEGAL_DOCS.map((doc)');
+    });
+
+    it('the sign-up consent checkbox calls them the Terms of Service', () => {
+        const auth = read('components/AuthPage.tsx');
+        expect(auth).not.toMatch(/Terms (&|and) Conditions/);
+        expect(auth).toContain('>Terms of Service</button>');
     });
 
     it('the wrong live statements are gone', () => {

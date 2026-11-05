@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } fro
 import { Icon } from '../ui/icons';
 import { Btn, cx } from '../ui/primitives';
 import { STREAM_HOST_ON, STREAM_HOSTNAME } from '@/shared/streamHost';
+import { SUPPORT_EMAIL } from '@/components/legal/legalFacts';
 
 export interface TourStep {
   target?: string;
@@ -503,7 +504,7 @@ const HELP: { section: string; icon: string; items: HelpItem[] }[] = [
       { q: 'Black video or “can’t decode”', a: 'Ask the host to stream from Chrome/Edge/Safari (MP4). iPhones can’t play WebM streams.' },
       { q: 'No sound', a: 'Browsers start muted — tap the speaker / “Tap to hear”.' },
       { q: 'Camera or mic blocked', a: 'Allow camera & microphone for this site in your browser’s site settings, then reload.' },
-      { q: 'Contact support', a: 'Email contact@dreamstreamstudio.ai with what you were doing and the device/browser.' },
+      { q: 'Contact support', a: `Email ${SUPPORT_EMAIL} with what you were doing and the device/browser.` },
     ],
   },
 ];
@@ -570,7 +571,7 @@ function HelpPanel({ screenTour, initialGuide, onClose }: { screenTour: TourId |
               )}
             </section>
           )}
-          {results.length === 0 && guides.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email contact@dreamstreamstudio.ai.</div>}
+          {results.length === 0 && guides.length === 0 && <div className="faint" style={{ padding: 16 }}>No answers for “{q}”. Try other words, or email {SUPPORT_EMAIL}.</div>}
           {results.map((s) => (
             <section key={s.section} className="help-sect">
               <h3><Icon name={s.icon} size={15} />{s.section}</h3>

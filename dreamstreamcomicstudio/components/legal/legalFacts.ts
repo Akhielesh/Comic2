@@ -76,6 +76,8 @@ export const RETENTION = {
   monitorSleepDays: 400,
   /** live-worker/src/trackerStore.ts TRACK_RETAIN_MS (3 × 366 days). */
   trackerYears: 3,
+  /** live-worker/src/trackerStore.ts purge(): entries someone deleted are soft-deleted, then removed. */
+  trackerDeletedDays: 60,
   /** server/sql/comic_safety.sql purge_comic_safety_events (pg_cron, daily). */
   safetyEventsDays: 180,
   closedSafetyCasesDays: 365,
@@ -100,6 +102,13 @@ export const STREAM_FAIR_USE = {
 /** live-worker/src/directCalls.ts DIRECT_LOG_CAP: calls kept in a member's recent-calls list. */
 export const RECENT_CALLS_KEPT = 60;
 
+/**
+ * What a Stream Studio event's room keeps (live-worker/src/eventRoom.ts CHAT_CAP, RSVP_CAP, LOG_CAP).
+ * The room's storage is never wiped: there is no way to delete an event today, and the retention
+ * sweep only removes replays and 7-day copies ("The event and its links stay").
+ */
+export const EVENT_ROOM_KEPT = { chatMessages: 200, rsvpNames: 500, logEntries: 400 } as const;
+
 /** Stream Studio's people search (server/sql/live_accounts_and_monitor.sql live_search_people). */
 export const PEOPLE_SEARCH = { minLetters: 2, maxResults: 12 } as const;
 
@@ -121,3 +130,106 @@ export const DIRECT_AI_PROVIDERS = [
 
 /** Production keeps Stripe billing off (api-proxy/wrangler.jsonc BILLING_ENABLED "false"). */
 export const BILLING_LIVE = false;
+
+/**
+ * Services people's BROWSERS contact directly while they use our apps (not through our servers),
+ * listed on the Cookies notice and the Subprocessors page. components/legal/legalFacts.test.ts scans
+ * the client code, the HTML entries, the main site's CSP and Stream Studio's ICE servers, and fails
+ * on any third-party host this list doesn't name.
+ */
+export interface BrowserThirdParty {
+  name: string;
+  /** Hostnames the browser contacts ("*.x" covers subdomains of x; "*" means any website). */
+  hosts: readonly string[];
+  /** When the browser contacts it. */
+  when: string;
+  /** What it receives, besides the IP address and browser details every request carries. */
+  receives: string;
+}
+
+export const BROWSER_THIRD_PARTIES: readonly BrowserThirdParty[] = [
+  {
+    name: 'Cloudflare Turnstile',
+    hosts: ['challenges.cloudflare.com'],
+    when: "The bot check on the main site's sign-in and sign-up, Stream Studio's password reset and email resend, and some forms.",
+    receives: 'Signals from your browser that tell people from bots. It may set its own cookies to do that.'
+  },
+  {
+    name: 'Google Fonts',
+    hosts: ['fonts.googleapis.com', 'fonts.gstatic.com'],
+    when: 'Every page, for the typefaces it uses.',
+    receives: 'Only the request for the font.'
+  },
+  {
+    name: 'cdnjs (Cloudflare)',
+    hosts: ['cdnjs.cloudflare.com'],
+    when: 'The main site, for two libraries that make PDFs and images of pages (jsPDF and html2canvas).',
+    receives: 'Only the request for the library.'
+  },
+  {
+    name: 'jsDelivr',
+    hosts: ['cdn.jsdelivr.net'],
+    when: 'When you run Python code in Chat Studio: the Python runtime (Pyodide) and the packages the code needs load from it.',
+    receives: 'Which packages the code needs.'
+  },
+  {
+    name: 'CodeSandbox (Sandpack)',
+    hosts: ['*.codesandbox.io'],
+    when: 'When Chat Studio shows a live preview of web or React code.',
+    receives: "The preview's code, which runs in CodeSandbox's frame in your browser and loads the packages it needs from CodeSandbox."
+  },
+  {
+    name: 'CARTO',
+    hosts: ['basemaps.cartocdn.com'],
+    when: 'Maps and directions in Chat Studio.',
+    receives: "The map tiles you view, which show the area you're looking at."
+  },
+  {
+    name: 'RainViewer',
+    hosts: ['api.rainviewer.com', 'tilecache.rainviewer.com'],
+    when: 'The weather-radar layer on Chat Studio maps.',
+    receives: "The radar tiles for the area you're looking at."
+  },
+  {
+    name: 'Google (site icons)',
+    hosts: ['www.google.com'],
+    when: 'The small site icons next to sources and news in Chat Studio answers.',
+    receives: 'The web address (domain) of each source shown.'
+  },
+  {
+    name: 'Parqet, Financial Modeling Prep',
+    hosts: ['assets.parqet.com', 'financialmodelingprep.com'],
+    when: 'Company and coin logos on Chat Studio market cards.',
+    receives: 'The ticker symbol shown.'
+  },
+  {
+    name: 'goQR (api.qrserver.com)',
+    hosts: ['api.qrserver.com'],
+    when: 'QR codes on Chat Studio boarding-pass cards, and QR codes you ask Chat Studio to make.',
+    receives: 'The text inside the QR code: the booking confirmation code (or flight number), or whatever you asked it to encode.'
+  },
+  {
+    name: 'YouTube, Vimeo',
+    hosts: ['www.youtube-nocookie.com', 'www.youtube.com', 'player.vimeo.com'],
+    when: 'When you play a video Chat Studio shows (YouTube through youtube-nocookie.com where it can).',
+    receives: 'Which video you play. Their own cookies may apply once it plays.'
+  },
+  {
+    name: 'Google Drive',
+    hosts: ['www.googleapis.com'],
+    when: 'When you save a Stream Studio recording to Google Drive: your browser uploads it straight to Google.',
+    receives: 'The recording, with your Google permission for the upload.'
+  },
+  {
+    name: 'STUN servers (Cloudflare, Google)',
+    hosts: ['stun.cloudflare.com', 'stun.l.google.com'],
+    when: 'Stream Studio calls, meetings, streams and the baby monitor, to set up a direct connection between devices.',
+    receives: 'Your IP address, which they report back so your devices can connect.'
+  },
+  {
+    name: 'Images in answers',
+    hosts: ['*'],
+    when: 'Images in Chat Studio answers (search results, news, places, products and similar) load from the websites they come from.',
+    receives: 'Which image is shown.'
+  }
+];

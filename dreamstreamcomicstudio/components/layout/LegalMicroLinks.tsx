@@ -1,5 +1,6 @@
 import React from 'react';
-import { LEGAL_DOCS, clearFragment, type LegalDocId } from '../legal/legalRoutes';
+import { SUPPORT_EMAIL } from '../legal/legalFacts';
+import { LEGAL_DOCS, pushLegalPath, type LegalDocId } from '../legal/legalRoutes';
 
 interface LegalMicroLinksProps {
   onOpenPrivacy: () => void;
@@ -13,7 +14,8 @@ interface LegalMicroLinksProps {
 const LINK = 'hover:text-black transition-colors';
 
 // Every legal document has a real address (/privacy, /terms, …): a plain click opens it inside the
-// app, and a middle-click, a copied link or a new tab still lands on the right page.
+// app (with its own history entry, so Back returns here), and a middle-click, a copied link or a new
+// tab still lands on the right page.
 export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
   onOpenPrivacy,
   onOpenTerms,
@@ -37,7 +39,7 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
               onClick={(e) => {
                 if (!open || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                 e.preventDefault();
-                clearFragment();
+                pushLegalPath(doc.id);
                 open();
               }}
             >
@@ -48,7 +50,7 @@ export const LegalMicroLinks: React.FC<LegalMicroLinksProps> = ({
         <button type="button" onClick={onOpenFaq} className={LINK}>
           FAQs
         </button>
-        <a href="mailto:contact@dreamstreamstudio.ai" className={LINK}>
+        <a href={`mailto:${SUPPORT_EMAIL}`} className={LINK}>
           Contact
         </a>
       </div>

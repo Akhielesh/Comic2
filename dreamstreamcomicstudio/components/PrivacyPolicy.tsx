@@ -6,6 +6,7 @@ import {
     COVERED_SITES,
     DATABASE_REGION_LABEL,
     DIRECT_AI_PROVIDERS,
+    EVENT_ROOM_KEPT,
     GOOGLE_CONNECTIONS_URL,
     GOOGLE_PRIVACY_POLICY_URL,
     GOOGLE_SECURITY_PERMISSIONS_URL,
@@ -114,7 +115,7 @@ const googleUserData = (
             <li>Google access and refresh tokens are encrypted with AES-256-GCM on our servers before they are stored. They are kept separately from your other data, and neither the tokens nor the encryption key are ever sent to your browser.</li>
             <li>Connecting uses Google's OAuth with PKCE and a one-time state value, so an intercepted authorization code is useless to anyone else.</li>
             <li>Your connected-account data is stored in database tables that only your own signed-in account and our servers can read, and every request our servers make for it is limited to your account.</li>
-            <li>Data travels over encrypted HTTPS connections.</li>
+            <li>Data travels between your browser, our servers, Google and the AI providers over encrypted HTTPS connections.</li>
             <li>We ask for read-only access wherever a feature only needs to read.</li>
         </ul>
 
@@ -160,14 +161,15 @@ const sections: LegalSection[] = [
                     <li><strong>Account and profile data:</strong> your email address, username, first name, last name (optional), phone number (optional), date of birth (required), Stream Studio display name, and avatar if you add one.</li>
                     <li><strong>Password:</strong> when you create an account, your password travels to our server over an encrypted connection so we can check it against known data breaches (only the first five characters of a one-way hash of it leave our server, to the Pwned Passwords service), and it is stored by our authentication provider, Supabase, in hashed form.</li>
                     <li><strong>Consent and preferences:</strong> whether you accepted the Terms and this policy at sign-up (we store a yes/no, not which version or when), whether you agreed to marketing, and your email preferences.</li>
-                    <li><strong>Devices:</strong> on the main site, a list of the browsers you've signed in from (a random device ID kept in your browser, a name such as "Mac · Chrome", the browser's user-agent string and when it was last seen), so you can review them in Settings.</li>
+                    <li><strong>Devices:</strong> on the main site, a list of the browsers you've signed in from (a random device ID kept in your browser, a name such as "Mac · Chrome", the browser's user-agent string and when it was last seen), so you can review them in Settings. Our sign-in provider, Supabase, also records the IP address and browser of each sign-in session, and keeps a log of sign-in events with the IP address they came from.</li>
+                    <li><strong>API keys you add:</strong> if you add your own key for an AI or image provider while you're signed in, it is stored with your account, encrypted with AES-256-GCM, so it works on all your devices. Our servers use it for your requests to that provider. Deleting the key in Settings removes the stored copy.</li>
                 </ul>
 
                 <SubHeading>What you create and share</SubHeading>
                 <ul className={LIST}>
                     <li><strong>Comic Studio:</strong> projects, scripts, prompts, story and character notes, reference images you upload, generated pages and images, lettering, translations, versions and publication settings.</li>
                     <li><strong>Chat Studio:</strong> your conversations (kept in your browser, and synced to your account when you're signed in), memory notes, files you attach, custom agents and recipes you create, and MCP servers you add.</li>
-                    <li><strong>Community:</strong> your public profile, comments, likes, follows, reviews and views of public projects.</li>
+                    <li><strong>Community:</strong> your public profile, comments, likes, follows, reviews and views of public projects, and the in-app notifications they create (for example who followed you, or liked or commented on your work, and whether you've read it).</li>
                     <li><strong>Connected Google accounts:</strong> the data described in <a href="#google-user-data" className={LINK}>Google User Data</a>.</li>
                     <li><strong>Stream Studio:</strong> described in its own section, <a href="#stream-studio" className={LINK}>Stream Studio, the baby monitor and calls</a>.</li>
                 </ul>
@@ -175,7 +177,7 @@ const sections: LegalSection[] = [
                 <SubHeading>When you contact us or report something</SubHeading>
                 <ul className={LIST}>
                     <li><strong>Support:</strong> the messages you email us and anything you include in them.</li>
-                    <li><strong>Feedback:</strong> feedback you give in the app (for example a thumbs up or down, a category and a comment).</li>
+                    <li><strong>Feedback:</strong> feedback you give in the app (for example a thumbs up or down, a category and a comment). When a message you send to the site-wide assistant sounds frustrated or negative, that message is also saved as feedback automatically.</li>
                     <li><strong>Reports:</strong> if you report a shared comic, the reason, any note and page you add, your account if you're signed in, and a salted hash of your IP address that changes every day, used only to spot duplicate reports (never the IP address itself).</li>
                 </ul>
 
@@ -183,10 +185,10 @@ const sections: LegalSection[] = [
                 <ul className={LIST}>
                     <li><strong>Usage and cost records:</strong> which AI features and models your account used, when, and what they cost us, so usage allowances can be applied.</li>
                     <li><strong>Safety records:</strong> Comic Studio's automated safety checks record the category and decision of each check, a one-way fingerprint and its cost, never the text or image that was checked. We also keep the moderation status of accounts and the outcome of reports and appeals.</li>
-                    <li><strong>Diagnostics:</strong> error and diagnostic events from the app (what went wrong and where, with a random ID for that visit), stored together with your IP address and your browser's user-agent string. Feedback is stored the same way.</li>
+                    <li><strong>Diagnostics and usage events:</strong> error reports from the app (what went wrong and where, with a random ID for that visit), and a usage event for each Chat Studio answer (which model and tools it used, how long it took and how long the answer was; never the text of your message or the answer). They are linked to your account if you're signed in, and stored with the page you were on, your IP address and your browser's user-agent string. Feedback is stored the same way.</li>
                     <li><strong>Request data:</strong> our servers and hosting provider handle your IP address, browser user agent and the address you request to deliver pages, block abuse and limit request rates.</li>
-                    <li><strong>Approximate location:</strong> when you use Chat Studio and your browser hasn't shared its location, our server looks up an approximate city for your IP address (through the ip-api.com service) so that questions like "weather near me" work. Your precise location is used only if you allow it in your browser.</li>
-                    <li><strong>Bot protection:</strong> sign-in, sign-up and some forms use Cloudflare Turnstile, which checks signals from your browser to tell people from bots.</li>
+                    <li><strong>Approximate location:</strong> when you use Chat Studio and your browser hasn't shared its location, our server looks up an approximate city and rough coordinates for your IP address through the ip-api.com service, whose free service is reached over plain HTTP rather than HTTPS. That location, with your timezone and language, is included in each request to the AI model so that questions like "weather near me" work (see AI processing). Your precise location is used instead only if you allow it in your browser.</li>
+                    <li><strong>Bot protection:</strong> on the main site, sign-in, sign-up and some forms use Cloudflare Turnstile, which checks signals from your browser to tell people from bots. Stream Studio uses it for password resets and resending emails; its sign-up uses a welcome code instead.</li>
                     <li><strong>Automated visitors:</strong> if an AI agent or automated browser asks for one of our pages, it is redirected to a check-in page, and the visit (IP address, user agent, country, network and some request headers) is logged in an analytics database that the operator of DreamStream also uses for other websites.</li>
                     <li><strong>On your device:</strong> the <DocLink to="cookies" /> notice lists what the apps store in your browser.</li>
                 </ul>
@@ -203,6 +205,8 @@ const sections: LegalSection[] = [
                 <ul className={LIST}>
                     <li><strong>Stream Studio live-event data:</strong> event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
                     <li>Viewers and guests join with just a name and are never asked for an account or their age. A live stream's video passes through our servers to its viewers, and replay segments are stored for about {RETENTION.replayHours} hours after the stream ends. Meetings and calls connect device to device where networks allow; otherwise an encrypted relay forwards them.</li>
+                    <li><strong>Connecting devices:</strong> to set up a call, meeting, stream or baby-monitor connection, your browser asks STUN servers run by Cloudflare and Google for its public IP address, so they receive your IP address.</li>
+                    <li><strong>What an event keeps:</strong> the event's chat (the last {EVENT_ROOM_KEPT.chatMessages} messages), the names of viewers and guests who joined or chatted, RSVP names, and an activity and moderation log (the last {EVENT_ROOM_KEPT.logEntries} entries). These stay with the event: there is no way to delete an event in the app today (see How long we keep information).</li>
                     <li><strong>Recordings</strong> are made on the host's own device. A host can save them to their device, share them, save them to Google Drive, or choose a 7-day cloud copy that is stored on our servers and deleted after about {RETENTION.cloudCopyDays} days. Stream Studio does not currently show viewers or guests that a host is recording.</li>
                 </ul>
 
@@ -211,7 +215,7 @@ const sections: LegalSection[] = [
                     <li><strong>Nursery details:</strong> the nursery's name, your baby's name, and (if you add them) your baby's birth date and sex, the zones you draw, the people you add with their roles and labels, and your cameras' device names.</li>
                     <li><strong>Live video and sound are never recorded.</strong> They go device to device, end-to-end encrypted, wherever the network allows. For a moment while a connection starts, when a network blocks direct video, or when the camera is full, they pass through our server instead, in memory only and never stored, and we don't treat that path as end-to-end encrypted. Privacy pause stops the picture for everyone.</li>
                     <li><strong>Detection happens on the camera phone.</strong> Sound detection (Google's YAMNet model plus our own cry and alarm analysers) and smart vision (Google MediaPipe models) run on the phone itself; the audio and frames they analyse never leave it.</li>
-                    <li><strong>What our servers keep:</strong> alerts and events (what was detected, when, by which camera, for how long, with what confidence and sound level), incidents and who responded, a minute-by-minute summary of the baby's state and the room's sound level, sleep sessions, and weekly summaries.</li>
+                    <li><strong>What our servers keep:</strong> alerts and events (what was detected, when, by which camera, for how long, with what confidence and sound level), incidents and who responded, a minute-by-minute summary of the baby's state and the room's sound level, and sleep sessions. The weekly comparison in the app is calculated from these when you look at it; it isn't stored separately.</li>
                     <li><strong>Share links:</strong> the guest's name, when they last watched, and the passcode in scrambled form only. Your IP address is used to slow down repeated wrong passcodes.</li>
                 </ul>
 
@@ -225,7 +229,7 @@ const sections: LegalSection[] = [
                 </ul>
 
                 <SubHeading>Finding people</SubHeading>
-                <p>Your Stream Studio display name can be found by any signed-in Stream Studio member who types {PEOPLE_SEARCH.minLetters} or more letters of it (up to {PEOPLE_SEARCH.maxResults} results at a time). Email addresses are never shown. There is no setting to hide from this search today. Unless you change "Who can call you" to only the people in your nurseries, anyone who finds you can call you; you can decline and block them.</p>
+                <p>Your Stream Studio display name can be found by any signed-in Stream Studio member who types {PEOPLE_SEARCH.minLetters} or more letters of it (up to {PEOPLE_SEARCH.maxResults} results at a time). Search results show display names only, never email addresses. There is no setting to hide from this search today. Unless you change "Who can call you" to only the people in your nurseries, anyone who finds you can call you; you can decline and block them.</p>
 
                 <SubHeading>Alerts and usage</SubHeading>
                 <ul className={LIST}>
@@ -243,10 +247,10 @@ const sections: LegalSection[] = [
                 <ul className={LIST}>
                     <li><strong>Account emails:</strong> sign-up confirmations, sign-in links, password resets, security notices, invitations and welcome messages. We send these when you need them, even if you opted out of marketing.</li>
                     <li><strong>Updates (newsletter):</strong> if you sign up, we store your email address and send a confirmation email first. You only receive updates after you confirm (double opt-in). Every update includes a one-click unsubscribe link.</li>
-                    <li><strong>Early access and interest registrations:</strong> if you ask for early access or register interest, we store your email address, the studios you pick (Comic Studio, Chat Studio, Code Studio, Stream Studio or Dashboards), any note you add (up to 1,000 characters) and the page you signed up from, and we email you to confirm we received it. We check whether your address already has an account or a pending invitation, so we can point you to sign-in or re-send your invitation instead.</li>
+                    <li><strong>Early access and interest registrations:</strong> if you ask for early access or register interest, we store your email address, the studios or features you pick, any note you add (up to 1,000 characters) and the page you signed up from, and we email you to confirm we received it. We check whether your address already has an account or a pending invitation, so we can point you to sign-in or re-send your invitation instead.</li>
                     <li><strong>Unsubscribing</strong> records when you unsubscribed and puts your address on a suppression list, which we keep so that we don't email you marketing again.</li>
                     <li><strong>Invitations you send:</strong> if you invite someone, we store their email address, who invited them and how many times, to send the invitation and avoid repeats.</li>
-                    <li><strong>Delivery records:</strong> for every email we send, we record the address, which email it was, whether it was sent, and when.</li>
+                    <li><strong>Delivery records:</strong> for every email our backend sends, we record the address, which email it was, whether it was sent, and when.</li>
                     <li><strong>Open tracking:</strong> emails our server sends contain a tiny image that tells us when the email is first opened, and we store that time with the delivery record. Sign-in links, sign-up confirmations and password-reset emails never contain it. Blocking images in your email app prevents it.</li>
                 </ul>
                 <p>To stop marketing emails, use the unsubscribe link or change your email preferences in Settings. To have your sign-up or interest registration deleted, email <PrivacyEmail />.</p>
@@ -280,12 +284,12 @@ const sections: LegalSection[] = [
                     head={['Legal basis', 'What it covers']}
                     rows={[
                         ['Performing our contract with you', 'Running your account and the studios, doing what you ask, Stream Studio, connected accounts you choose to connect, and account emails.'],
-                        ['Legitimate interests', 'Security, bot protection, rate limits, safety checks and abuse investigations; diagnostics and fixing bugs; usage allowances and cost control; approximate location for Chat Studio answers; logging automated visitors. We balance these against your rights, and you can object (see Your rights).'],
+                        ['Legitimate interests', 'Security, bot protection, rate limits, safety checks and abuse investigations; diagnostics, chat usage events and fixing bugs; automatically saving assistant messages that sound frustrated as feedback; usage allowances and cost control; approximate location for Chat Studio answers; logging automated visitors. We balance these against your rights, and you can object (see Your rights).'],
                         ['Consent', 'Updates and marketing emails, precise location if you allow it in your browser, and alerts on your device. You can withdraw consent at any time; that doesn\'t affect what happened before.'],
                         ['Legal obligation', 'Keeping records and responding to requests where the law requires it.']
                     ]}
                 />
-                <p>Baby tracker entries can be health information. We process them only because you chose to enter them, to provide the tracker to you and your nursery's members.</p>
+                <p>Baby tracker entries can be health information. We use them only to provide the tracker to you and your nursery's members. The tracker does not yet ask for separate, explicit consent before the first entry.</p>
             </>
         )
     },
@@ -297,7 +301,8 @@ const sections: LegalSection[] = [
                 <p>When you use generation features, relevant request data (for example prompts, selected model, and any reference images you submit) is sent to AI model providers to produce output.</p>
                 <ul className={LIST}>
                     <li><strong>Comic Studio:</strong> the parts of your project a task needs, such as your prompts, script, story and character notes, reference images, and pages to check or translate, are sent to the model that does the work: Google's Gemini API, or a model reached through OpenRouter.</li>
-                    <li><strong>Chat Studio:</strong> your messages, files you attach, memory notes and, if you connected accounts, the items described in <a href="#google-user-data" className={LINK}>Google User Data</a>, are sent through OpenRouter or directly to the provider you choose: {DIRECT_AI_PROVIDERS.join(', ')}. Image requests can also go to Ideogram or a Flux image service (Pixazo).</li>
+                    <li><strong>Chat Studio:</strong> your messages, files you attach, memory notes, your approximate location (the city and rough coordinates looked up from your IP address, unless your browser shared a precise one), your timezone and language and, if you connected accounts, the items described in <a href="#google-user-data" className={LINK}>Google User Data</a>, are sent through OpenRouter or directly to the provider you choose: {DIRECT_AI_PROVIDERS.join(', ')}. Image requests can also go to Ideogram or a Flux image service (Pixazo).</li>
+                    <li><strong>The site-wide assistant:</strong> the floating assistant on the main site (on the home page, the legal pages, Settings and other pages, but not in Chat Studio, Comic Studio, the comic reader or shared comic pages) is also AI, whether or not you're signed in. What you type to it, the conversation so far and the page you're on and, if you're signed in, your username, a masked form of your email address, your plan and usage, and a summary of your Comic Studio projects (names, counts and progress) are sent through OpenRouter to the model it picks: a free model, unless you added your own OpenRouter key.</li>
                     <li><strong>Your own keys:</strong> requests made with your own API key run under your account with that provider.</li>
                     <li><strong>Safety checks</strong> on Comic Studio content run on DreamStream's own provider account.</li>
                     <li><strong>On-device AI:</strong> Stream Studio's sound detection and smart vision run on the camera phone; nothing they analyse is sent to us or to an AI provider.</li>
@@ -316,7 +321,7 @@ const sections: LegalSection[] = [
         title: 'Who we share information with',
         content: (
             <>
-                <p>We do not sell personal information, and we do not share it for cross-context behavioural or targeted advertising. There are no advertising or analytics trackers in our apps. We share information only:</p>
+                <p>We do not sell personal information, and we do not share it for cross-context behavioural or targeted advertising. There are no third-party advertising or analytics trackers in our apps. We share information only:</p>
                 <ul className={LIST}>
                     <li><strong>With service providers</strong> that run parts of the Service for us: hosting, database and storage, email delivery, bot protection, AI models and the tools Chat Studio uses. The <DocLink to="subprocessors" /> page lists each one, what it receives and why.</li>
                     <li><strong>With other people, when you choose:</strong> readers of comics you publish, viewers and guests of your events, members of your nurseries, people you call, and anyone you share a link with.</li>
@@ -332,8 +337,9 @@ const sections: LegalSection[] = [
         title: 'What other people can see',
         content: (
             <ul className={LIST}>
-                <li>Projects are private unless you mark them public or publish them. Public projects, published comics, your profile (username and avatar), comments, likes, follows and view counts can be seen by others. An unlisted share link works for anyone who has it.</li>
+                <li>Projects are private unless you mark them public or publish them: other people can't find or open a private project. The images in your projects (generated pages and images, and reference photos uploaded with earlier versions of Comic Studio) are stored at long, unguessable web addresses, though, and anyone who has one of those addresses can open that image without signing in, even if the project is private. Public projects, published comics, your profile (username and avatar), comments, likes, follows and view counts can be seen by others. An unlisted share link works for anyone who has it.</li>
                 <li>Stream Studio viewer links are intended for people with the link. Private studio, guest, and recap links may grant control or private access; treat them like passwords and share them only with trusted collaborators.</li>
+                <li>Your email address is not shown on your profile or in search results. It isn't fully private, though: today, someone who knows your username can find out the email address that goes with it.</li>
                 <li>Your Stream Studio display name can be found by other members, as described above. Members of a nursery see its live picture, alerts, history and tracker, and who else is a member.</li>
                 <li>A viewer's name and chat messages are seen by the host and the other people in the event.</li>
             </ul>
@@ -343,7 +349,7 @@ const sections: LegalSection[] = [
         id: 'cookies',
         title: 'Cookies and device storage',
         content: (
-            <p>Our own code doesn't set cookies. The apps keep your sign-in, preferences, caches, unsaved work and Stream Studio settings in your browser's storage, and load a few services from other companies (Cloudflare Turnstile, Google Fonts and, on the main site, two PDF libraries from Cloudflare's cdnjs). There are no advertising or analytics trackers. The <DocLink to="cookies" /> notice lists everything and how to clear it.</p>
+            <p>Our own code doesn't set cookies. The apps keep your sign-in, preferences, caches, unsaved work and Stream Studio settings in your browser's storage. Your browser also loads some things straight from other companies: Cloudflare Turnstile, Google Fonts and, on the main site, two PDF libraries from Cloudflare's cdnjs; in Chat Studio, map tiles (CARTO), weather radar (RainViewer), site icons (Google), market logos (Parqet, Financial Modeling Prep), QR codes (goQR), the Python runtime (jsDelivr), code previews (CodeSandbox), videos (YouTube, Vimeo) and images from the websites they come from; and in Stream Studio, STUN servers (Cloudflare, Google) and Google Drive uploads. Each sees your IP address and browser details. There are no third-party advertising or analytics trackers. The <DocLink to="cookies" /> notice lists everything and how to clear it.</p>
         )
     },
     {
@@ -356,21 +362,25 @@ const sections: LegalSection[] = [
                     head={['Information', 'How long']}
                     rows={[
                         ['Account and profile', 'Until your account is deleted (on request, by email).'],
+                        ['API keys you add (stored encrypted)', 'Until you delete the key in Settings or your account is deleted.'],
+                        ['Sign-in sessions and sign-in log (IP address and browser), kept by Supabase', 'Sessions until you sign out or your account is deleted; the sign-in log under Supabase\'s own retention.'],
+                        ['In-app notifications', 'Until your account is deleted.'],
                         ['Comic projects, uploads and generated images', `Until you delete them or your account. Stored images that no project uses any more are marked to expire after about ${RETENTION.imageUnusedDays} days unused and become due for removal about ${RETENTION.imageExpiryGraceDays} days later.`],
                         ['Chats', 'In your browser until you delete them; the copy synced to your account until you delete the chat or your account.'],
                         ['Memory notes', 'Until you ask us to delete them.'],
                         ['Connected accounts and their indexes', 'Until you disconnect or your account is deleted.'],
                         ['Live stream replays', `About ${RETENTION.replayHours} hours after the stream ends.`],
+                        ['Live-event details (title, schedule, chat, viewer and guest names, RSVPs, activity and moderation log)', 'Kept with the event, which can\'t be deleted in the app today; it is not removed automatically, even when the host\'s account is deleted. Email us to have an event erased.'],
                         ['7-day cloud copies of recordings', `About ${RETENTION.cloudCopyDays} days. If deleting fails, our servers keep retrying for up to ${RETENTION.recordingSweepGraceDays} more days.`],
                         ['Baby monitor history', `Alerts, events and incidents ${RETENTION.monitorEventsDays} days; minute-by-minute summaries ${RETENTION.monitorMinutesDays} days; sleep sessions ${RETENTION.monitorSleepDays} days. Older entries are removed on a rolling basis while the nursery is in use.`],
-                        ['Baby tracker entries', `About ${RETENTION.trackerYears} years, removed on a rolling basis while the nursery is in use.`],
+                        ['Baby tracker entries', `About ${RETENTION.trackerYears} years, removed on a rolling basis while the nursery is in use. Entries you delete are removed from storage about ${RETENTION.trackerDeletedDays} days later.`],
                         ['A deleted nursery', 'Everyone loses access at once. Its stored history and tracker entries are not erased automatically at that moment; email us to have them erased.'],
                         ['Recent calls', `Your last ${RECENT_CALLS_KEPT} calls.`],
                         ['Alert subscriptions', 'Until you turn alerts off, sign out on that device, or your browser ends the subscription.'],
                         ['Comic Studio safety records', `Check records ${RETENTION.safetyEventsDays} days; closed reports and appeals ${RETENTION.closedSafetyCasesDays} days after they close; quarantined items ${RETENTION.quarantineDays} days.`],
                         ['Image-generation call logs', `${RETENTION.imageCallLogDays} days.`],
                         ['Devices list', `Until you remove a device or your account is deleted (Settings shows those seen in the last ${RETENTION.deviceActiveDays} days).`],
-                        ['Diagnostics and feedback (with IP address and user agent)', 'Not deleted automatically today; email us to have yours deleted.'],
+                        ['Diagnostics, chat usage events and feedback (with IP address and user agent)', 'Not deleted automatically today; email us to have yours deleted.'],
                         ['Email delivery records and open times', 'Not deleted automatically today.'],
                         ['Update sign-ups and interest registrations', 'Until you ask us to delete them. Unsubscribing keeps a record of the opt-out so it is respected.'],
                         ['Welcome-code attempts (a hashed IP address and the time)', 'Not deleted automatically today.'],
@@ -387,9 +397,9 @@ const sections: LegalSection[] = [
         content: (
             <>
                 <ul className={LIST}>
-                    <li>Data travels over encrypted HTTPS connections, and our sites tell browsers to use HTTPS only.</li>
-                    <li>Every table in our database has row-level security switched on, which limits what a signed-in account can read and change.</li>
-                    <li>Google tokens are encrypted with AES-256-GCM before they are stored.</li>
+                    <li>Traffic between your browser and our sites is encrypted (HTTPS), and our sites tell browsers to use HTTPS only. Our servers reach other services over HTTPS too, except a few free services that only offer plain HTTP: the approximate-location lookup (ip-api.com, which receives your IP address) and some of Chat Studio's public-data lookups.</li>
+                    <li>Row-level security is switched on for every table our apps can reach, which limits what each signed-in account can read and change.</li>
+                    <li>Google tokens, and API keys you store with your account, are encrypted with AES-256-GCM before they are stored.</li>
                     <li>Passwords chosen at sign-up are checked against known data breaches without the password itself leaving our server.</li>
                     <li>Bot protection and rate limits guard sign-in, sign-up, forms, share-link passcodes and welcome codes.</li>
                     <li>The baby monitor uses end-to-end encryption for device-to-device video and sound wherever the network allows, with keys our servers can't read.</li>
@@ -475,7 +485,7 @@ const intro = (
 const summary = (
     <Callout title="The short version">
         <ul className={LIST}>
-            <li>We don't sell your information, and there are no ad or analytics trackers in our apps.</li>
+            <li>We don't sell your information, and there are no third-party ad or analytics trackers in our apps.</li>
             <li>What you ask an AI to do is sent to the AI provider that does it; we don't train AI models of our own on your content.</li>
             <li>The baby monitor never records. Live video goes device to device where it can; detection runs on the camera phone.</li>
             <li>Other Stream Studio members can find you by display name and, by default, call you.</li>

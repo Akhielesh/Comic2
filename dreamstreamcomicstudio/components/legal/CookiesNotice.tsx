@@ -1,6 +1,6 @@
 import React from 'react';
 import { Callout, DataTable, DocLink, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
-import { PRIVACY_EMAIL } from './legalFacts';
+import { BROWSER_THIRD_PARTIES, PRIVACY_EMAIL } from './legalFacts';
 import type { LegalDocId } from './legalRoutes';
 
 // Cookies & Local Storage: what the apps keep in the browser, by purpose, with the real key names
@@ -53,9 +53,9 @@ const sections: LegalSection[] = [
         content: (
             <ul className={LIST}>
                 <li>Our own code doesn't set cookies.</li>
-                <li>There are no advertising cookies, analytics tools or tracking pixels in our apps.</li>
+                <li>Our apps contain no advertising cookies and no third-party advertising or analytics trackers. Emails our server sends contain an open-tracking image (see Emails).</li>
                 <li>The apps store what they need in your browser's own storage (local storage, session storage, IndexedDB and, for Stream Studio, a service worker and its cache), mostly so you stay signed in, your settings stick, and your work isn't lost.</li>
-                <li>A few things are loaded from other companies' servers, which see your IP address and browser details when they are (see Services from other companies).</li>
+                <li>Some things are loaded by your browser straight from other companies' servers, which see your IP address and browser details when they are (see Services from other companies).</li>
             </ul>
         )
     },
@@ -85,7 +85,7 @@ const sections: LegalSection[] = [
                         ],
                         [
                             'Your own API keys',
-                            'Keys you add for AI or image providers, kept in local storage on this device (see the Privacy Policy for how they are used).',
+                            'Keys you add for AI or image providers, kept in local storage on this device. If you\'re signed in, a copy is also stored with your account, encrypted, so the key works on your other devices (see the Privacy Policy).',
                             <><Key>dreamstream_api_keys_v2</Key> <Key>dreamstream_openrouter_key</Key> <Key>dreamstream_flux_key</Key></>
                         ],
                         [
@@ -129,14 +129,16 @@ const sections: LegalSection[] = [
         title: 'Services from other companies',
         content: (
             <>
-                <p>These are loaded into our pages from other companies' servers. When they load, your browser sends them your IP address and browser details, and they handle that under their own policies:</p>
+                <p>Your browser loads these straight from other companies' servers, not through ours. When it does, it sends them your IP address and browser details, and they handle that under their own policies:</p>
                 <ul className={LIST}>
-                    <li><strong>Cloudflare Turnstile</strong> (challenges.cloudflare.com): the bot check on sign-in, sign-up and some forms. It looks at signals from your browser to tell people from bots, and may set its own cookies to do that.</li>
-                    <li><strong>Google Fonts</strong> (fonts.googleapis.com and fonts.gstatic.com): the typefaces our pages use.</li>
-                    <li><strong>cdnjs</strong> (cdnjs.cloudflare.com): two libraries the main site uses to make PDFs and images of pages (jsPDF and html2canvas).</li>
-                    <li><strong>Video embeds:</strong> if Chat Studio shows you a YouTube or Vimeo video, it loads from YouTube (using youtube-nocookie.com where it can) or Vimeo when it plays.</li>
-                    <li><strong>Google Drive:</strong> if you save a Stream Studio recording to Drive, your browser uploads it straight to Google.</li>
+                    {BROWSER_THIRD_PARTIES.map((p) => (
+                        <li key={p.name}>
+                            <strong>{p.name}</strong>
+                            {p.hosts[0] !== '*' && <> ({p.hosts.join(', ')})</>}: {p.when} {p.receives}
+                        </li>
+                    ))}
                 </ul>
+                <p>The <DocLink to="subprocessors" /> page lists these too, with the services our servers use.</p>
                 <p>Our hosting provider, Cloudflare, may also set strictly necessary security cookies of its own to protect our sites from attacks.</p>
             </>
         )
@@ -155,11 +157,11 @@ const sections: LegalSection[] = [
             <>
                 <ul className={LIST}>
                     <li><strong>Sign out.</strong> Signing out of Stream Studio, or of DreamStream, removes Stream Studio's personal data from that device and ends its alert subscription. Your preferences (theme, camera lens, tours seen) stay.</li>
-                    <li><strong>Clear site data.</strong> Your browser's settings can remove everything our sites store. You'll be signed out, and work that hasn't been saved to your account, such as guest projects, unsaved recordings and API keys kept on the device, is lost.</li>
+                    <li><strong>Clear site data.</strong> Your browser's settings can remove everything our sites store. You'll be signed out, and work that hasn't been saved to your account, such as guest projects and unsaved recordings, is lost. API keys you added while signed in stay stored with your account; keys added while signed out are lost.</li>
                     <li><strong>Block storage.</strong> If you block site storage, signing in and most features won't work.</li>
                 </ul>
                 <Callout>
-                    <p>Because everything we store is needed for the Service to work, or is something you chose to keep, we don't show a cookie banner. If we ever add analytics or advertising, we will ask first where the law requires it, and update this page.</p>
+                    <p>Because everything we store is needed for the Service to work, or is something you chose to keep, we don't show a cookie banner. If we ever add third-party analytics or advertising, we will ask first where the law requires it, and update this page.</p>
                 </Callout>
                 <p>Questions: <MailLink email={PRIVACY_EMAIL} />.</p>
             </>

@@ -1,6 +1,6 @@
 import React from 'react';
-import { Callout, DataTable, DocLink, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
-import { DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, PRIVACY_EMAIL } from './legalFacts';
+import { Callout, DataTable, DocLink, LINK, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
+import { BROWSER_THIRD_PARTIES, DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, PRIVACY_EMAIL } from './legalFacts';
 import type { LegalDocId } from './legalRoutes';
 
 // Subprocessors: every third party that receives personal information when DreamStream runs,
@@ -18,14 +18,14 @@ const PROVIDER_LOCATION = 'Where the provider operates';
 export const CORE: Subprocessor[] = [
     {
         name: 'Cloudflare',
-        purpose: 'Hosts our sites and servers: the website, our API and the backend it runs, Stream Studio\'s real-time rooms, storage for live-stream replays and 7-day copies, the encrypted relay for calls and meetings, email sending, bot protection (Turnstile) and the cdnjs library mirror.',
-        data: 'Everything sent to or from the Service, including IP addresses and browser details; Stream Studio room data (events and chat, nursery history and tracker entries, call lists and settings); replays and 7-day copies; email addresses and the emails we send.',
+        purpose: 'Hosts our sites and servers: the website, our API and the backend it runs, Stream Studio\'s real-time rooms, storage for live-stream replays and 7-day copies, the encrypted relay for calls and meetings, the STUN service that helps devices connect directly, email sending, bot protection (Turnstile) and the cdnjs library mirror.',
+        data: 'Everything sent to or from the Service, including IP addresses and browser details; Stream Studio room data (events and chat, nursery history and tracker entries, call lists and settings); replays and 7-day copies; email addresses and the emails we send. Its STUN service sees your IP address when your devices set up a call, meeting or monitor connection.',
         where: 'Cloudflare\'s global network'
     },
     {
         name: 'Supabase',
         purpose: 'Accounts and sign-in, our database, and file storage for Comic Studio images.',
-        data: 'Account and profile data, projects and images, synced chats and memory notes, encrypted connected-account tokens and indexes, Stream Studio accounts and nurseries, email sign-ups and delivery records, diagnostics and feedback.',
+        data: 'Account and profile data, the IP address and browser of each sign-in session, projects and images, synced chats and memory notes, API keys you add (encrypted), encrypted connected-account tokens and indexes, Stream Studio accounts and nurseries, notifications, email sign-ups and delivery records, diagnostics, chat usage events and feedback.',
         where: DATABASE_REGION_LABEL
     },
     {
@@ -39,8 +39,8 @@ export const CORE: Subprocessor[] = [
 export const AI_PROVIDERS: Subprocessor[] = [
     {
         name: 'OpenRouter',
-        purpose: 'Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model.',
-        data: 'What a request needs: your prompt and conversation, attached files, memory notes, items from connected accounts included in it, and Comic Studio project content.',
+        purpose: 'Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it.',
+        data: 'What a request needs: your prompt and conversation, attached files, memory notes, your approximate location, timezone and language, items from connected accounts included in it, and Comic Studio project content. For the site-wide assistant: what you type, the page you\'re on and, if you\'re signed in, your username, masked email, plan and a summary of your Comic Studio projects.',
         where: 'OpenRouter, and the model provider it routes to'
     },
     {
@@ -89,30 +89,50 @@ export const TOOL_SERVICES: Subprocessor[] = [
         where: PROVIDER_LOCATION
     },
     {
-        name: 'Approximate location: ip-api.com; IP lookups: IPinfo',
-        purpose: 'ip-api.com turns your IP address into an approximate city when you use Chat Studio without sharing your location. IPinfo answers questions about an IP address or domain you ask about.',
-        data: 'Your IP address (ip-api.com); the IP address or domain you ask about (IPinfo).',
+        name: 'Approximate location: ip-api.com; IP lookups: IPinfo, ip-api.com',
+        purpose: 'ip-api.com turns your IP address into an approximate city when you use Chat Studio without sharing your location; its free service is reached over plain HTTP, not HTTPS. IPinfo (or ip-api.com) answers questions about an IP address or domain you ask about.',
+        data: 'Your IP address (approximate location); the IP address or domain you ask about (lookups).',
         where: PROVIDER_LOCATION
     },
     {
-        name: 'News and finance: Google News, Yahoo Finance, Stooq, Alpaca, CoinGecko, Frankfurter',
-        purpose: 'Headlines, prices and exchange rates.',
-        data: 'The topic, ticker or currency asked about.',
+        name: 'News, markets and economic data: for example Google News, Yahoo Finance, Stooq, Alpaca, Finnhub (when enabled), CoinGecko, Binance, OKX, DefiLlama, Polymarket, Manifold, CNN and alternative.me (market sentiment), FRED (Federal Reserve Bank of St. Louis), the US Treasury, the CFTC, Frankfurter, and similar public sources',
+        purpose: 'Headlines, prices, market and economic data, prediction markets and exchange rates.',
+        data: 'The topic, ticker, market or currency asked about.',
         where: PROVIDER_LOCATION
     },
     {
-        name: 'Knowledge and open data: Wikipedia, Open Library, USGS, TheMealDB, TheCocktailDB, GitHub, npm, PyPI, Hacker News, TVmaze, Hugging Face and similar public sources',
-        purpose: 'Facts, books, science, recipes, developer and entertainment lookups.',
+        name: 'Knowledge and open data: for example Wikipedia, Open Library, arXiv, NASA, USGS, TheMealDB, TheCocktailDB, GitHub, npm, PyPI, Hacker News, TVmaze, Hugging Face, and similar public sources',
+        purpose: 'Facts, books, science, recipes, developer and entertainment lookups. A few of these free services are reached over plain HTTP, not HTTPS.',
         data: 'The lookup the AI writes.',
         where: PROVIDER_LOCATION
     },
     {
-        name: 'Reference services: Context7, DeepWiki; MCP servers you add',
+        name: 'Names: agify, genderize, nationalize',
+        purpose: 'Statistical guesses of the age, gender and nationality associated with a first name, when you ask about a name.',
+        data: 'The first name asked about.',
+        where: PROVIDER_LOCATION
+    },
+    {
+        name: 'Travel: Amadeus (when enabled)',
+        purpose: 'Flight search.',
+        data: 'The route, dates and number of travellers asked about.',
+        where: PROVIDER_LOCATION
+    },
+    {
+        name: 'Reference services: Context7, DeepWiki; MCP servers you add (including those from the catalog in Chat Studio)',
         purpose: 'Documentation lookups, and any tools you connect yourself.',
         data: 'The request the AI writes. MCP servers you add receive whatever the AI sends them, under your control.',
         where: PROVIDER_LOCATION
     }
 ];
+
+/** What people's browsers load straight from other companies (components/legal/legalFacts.ts). */
+export const BROWSER_SERVICES: Subprocessor[] = BROWSER_THIRD_PARTIES.map((p) => ({
+    name: p.hosts[0] === '*' ? p.name : `${p.name} (${p.hosts.join(', ')})`,
+    purpose: p.when,
+    data: `Your IP address and browser details. ${p.receives}`,
+    where: p.hosts[0] === '*' ? 'The website the image comes from' : PROVIDER_LOCATION
+}));
 
 export const OTHER_SERVICES: Subprocessor[] = [
     {
@@ -176,8 +196,18 @@ const sections: LegalSection[] = [
         title: 'Chat Studio tools',
         content: (
             <>
-                <p>While answering in Chat Studio, the AI can use tools that contact the services below. These requests are made by our server, not your browser, and contain only what the AI writes for that request (apart from ip-api.com, which receives your IP address).</p>
+                <p>While answering in Chat Studio, the AI can use tools that contact the services below. Our server sends these requests, and they contain only what the AI writes for that request (apart from the approximate-location lookup, which receives your IP address). Maps, images, logos, QR codes and code previews in an answer are loaded by your browser instead: see <a href="#loaded-by-your-browser" className={LINK}>Loaded by your browser</a>.</p>
                 {table('Chat Studio tool services', TOOL_SERVICES)}
+            </>
+        )
+    },
+    {
+        id: 'loaded-by-your-browser',
+        title: 'Loaded by your browser',
+        content: (
+            <>
+                <p>Some services are contacted by your browser itself, not by our servers, when a page or a feature needs them. Each one sees your IP address and browser details, plus what the table says. The <DocLink to="cookies" /> notice lists them too.</p>
+                {table('Services your browser loads', BROWSER_SERVICES)}
             </>
         )
     },

@@ -8,12 +8,16 @@ All notable user-facing changes. Format loosely follows
 ### Added
 - **The full legal suite (2026-11-05):** six documents, each at its own address, all dated
   November 5, 2026 and written to match what the product does today: **Terms of Service**
-  (`/terms`; one name everywhere, with the YouTube Terms of Service agreement, the AI notice,
+  (`/terms`; one name on the legal pages, the footers, Stream Studio and the sign-up form, with
+  the YouTube Terms of Service agreement, the AI notice,
   Stream Studio recording consent, the baby monitor's safety terms and "no charges today"),
   an expanded **Privacy Policy** (`/privacy`; every category we collect, Stream Studio's
   monitor, tracker, calls, people search and alerts, the email open-tracking image, interest
-  registrations, legal bases, a retention table, rights and how to use them; the
-  `#google-user-data` section is unchanged apart from the YouTube revocation link), and new
+  registrations, legal bases, a retention table, rights and how to use them; in the
+  `#google-user-data` section, the Limited Use statements are unchanged, and the additions are the
+  YouTube Terms of Service sentence, the YouTube revocation link, a sentence that DreamStream
+  doesn't train AI models of its own on Google user data, and an HTTPS line that now names the
+  connections it covers), and new
   **Acceptable Use** (`/acceptable-use`), **Copyright & DMCA** (`/copyright`), **Cookies & Local
   Storage** (`/cookies`) and **Subprocessors** (`/subprocessors`) pages. Every page has a table of
   contents and stable section anchors. `?view=privacy` and `?view=terms` still work (the Google
@@ -21,6 +25,19 @@ All notable user-facing changes. Format loosely follows
   real paths. Tests tie the retention numbers, providers, contacts and age rule to the code.
 
 ### Fixed
+- **Legal suite review fixes (2026-11-05):** the pages now name everything a browser loads
+  straight from other companies (map tiles, radar, site icons, market logos, QR codes, the Python
+  runtime, code previews, STUN servers, images in answers), on both the Cookies notice and a new
+  Subprocessors section, with a test that fails on a new host in the client code, the CSP, the
+  ICE servers or Chat Studio's tools. The Privacy Policy now covers API keys stored with your
+  account, the site-wide assistant (and the feedback it saves automatically), per-answer usage
+  events, the approximate location sent to the model (and its plain-HTTP lookup), project images
+  at unguessable public addresses, that a username can reveal its email address today, what a
+  Stream Studio event keeps, Supabase sign-in records, notifications and deleted tracker entries.
+  Settings → Legal links to the documents instead of an old copy. Support links use the routed
+  support@ mailbox. Back and Forward work between legal pages opened in the app. Tables read as
+  cards on phones. Stream Studio links the Acceptable Use and Copyright policies. The sign-up
+  checkbox says "Terms of Service".
 - **Legal wording that didn't match the product (2026-11-05):** the sign-in page's copyright
   line said "DreamStream Inc." (it is "DreamStream Studio"); the footer called the Terms
   "Terms & Conditions"; the Stream Studio help said "we never ask for your Google

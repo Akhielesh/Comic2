@@ -149,6 +149,7 @@ const sections: LegalSection[] = [
                 <ul className={LIST}>
                     <li>Remove content, or make a project private.</li>
                     <li>Limit an account (for example, pause its uploads and publishing while it can still read and edit its comics).</li>
+                    <li>Pause generation automatically: in Comic Studio, repeated blocked requests pause generation for 15 minutes, or for 24 hours if they keep happening over a week.</li>
                     <li>Suspend or end an account, or end access to a link or event.</li>
                     <li>Report illegal content to the authorities, where the law requires or allows it.</li>
                 </ul>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { SUPPORT_EMAIL } from '@/components/legal/legalFacts';
 import { legalPath } from '@/components/legal/legalRoutes';
 import { mainAppUrl } from '@/services/liveLink';
 import { cx } from './primitives';
@@ -8,7 +9,10 @@ import { cx } from './primitives';
 export const LIVE_LEGAL_LINKS = [
   { label: 'Privacy', href: mainAppUrl(legalPath('privacy')) },
   { label: 'Terms', href: mainAppUrl(legalPath('terms')) },
-  { label: 'Support', href: 'mailto:contact@dreamstreamstudio.ai?subject=Stream%20Studio%20support' },
+  // Viewers and guests are bound by the Acceptable Use Policy too (Terms §Stream Studio).
+  { label: 'Acceptable use', href: mainAppUrl(legalPath('acceptable-use')) },
+  { label: 'Copyright', href: mainAppUrl(legalPath('copyright')) },
+  { label: 'Support', href: `mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support` },
 ] as const;
 
 type LiveLegalLinksProps = {

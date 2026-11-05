@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { LEGAL_LAST_UPDATED, OPERATOR_NAME } from './legalFacts';
-import { LEGAL_DOCS, clearFragment, legalDoc, type LegalDocId } from './legalRoutes';
+import { LEGAL_DOCS, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
 
 // The shared frame of every legal page: title, date, the legal navigation, a table of contents and
 // numbered sections with stable #anchors. Theme tokens only (--ds-*, see index.css), so every page
@@ -40,7 +40,7 @@ export const DocLink: React.FC<{ to: LegalDocId; hash?: string; children?: React
                 // A section of another page needs a real load to land on its anchor.
                 if (!open || hash || !plainClick(e)) return;
                 e.preventDefault();
-                clearFragment();
+                pushLegalPath(to);
                 open(to);
             }}
         >
@@ -63,12 +63,16 @@ export const Callout: React.FC<{ title?: string; children: React.ReactNode }> = 
     </div>
 );
 
-/** A simple, scrollable table (headers + rows of cells). */
+/**
+ * A table (headers + rows of cells). From the sm breakpoint up it is a normal table (scrolling
+ * sideways if it must); on a phone each row becomes a card, every cell under its column's name, so
+ * no column is cut off at the screen's edge.
+ */
 export const DataTable: React.FC<{ caption: string; head: string[]; rows: React.ReactNode[][] }> = ({ caption, head, rows }) => (
-    <div className="overflow-x-auto rounded-lg border border-[var(--ds-hairline)]">
-        <table className="w-full min-w-[36rem] border-collapse text-left text-sm">
+    <div className="rounded-lg border border-[var(--ds-hairline)] sm:overflow-x-auto">
+        <table className="block w-full border-collapse text-left text-sm sm:table sm:min-w-[36rem]">
             <caption className="sr-only">{caption}</caption>
-            <thead className="bg-[var(--ds-well)]">
+            <thead className="hidden bg-[var(--ds-well)] sm:table-header-group">
                 <tr>
                     {head.map((h) => (
                         <th key={h} scope="col" className="border-b border-[var(--ds-hairline)] px-3 py-2 font-semibold text-[var(--ds-ink)]">
@@ -77,16 +81,17 @@ export const DataTable: React.FC<{ caption: string; head: string[]; rows: React.
                     ))}
                 </tr>
             </thead>
-            <tbody>
+            <tbody className="block sm:table-row-group">
                 {rows.map((cells, r) => (
-                    <tr key={r} className="align-top">
+                    <tr key={r} className="block border-b border-[var(--ds-hairline)] py-1 last:border-b-0 sm:table-row sm:py-0 sm:align-top">
                         {cells.map((cell, c) =>
                             c === 0 ? (
-                                <th key={c} scope="row" className="border-b border-[var(--ds-hairline)] px-3 py-2 font-medium text-[var(--ds-ink)]">
+                                <th key={c} scope="row" className="block px-3 py-2 font-semibold text-[var(--ds-ink)] sm:table-cell sm:border-b sm:border-[var(--ds-hairline)] sm:font-medium">
                                     {cell}
                                 </th>
                             ) : (
-                                <td key={c} className="border-b border-[var(--ds-hairline)] px-3 py-2">
+                                <td key={c} className="block px-3 pb-2 sm:table-cell sm:border-b sm:border-[var(--ds-hairline)] sm:py-2">
+                                    <span className="block text-xs font-semibold text-[var(--ds-muted)] sm:hidden">{head[c]}</span>
                                     {cell}
                                 </td>
                             )
@@ -138,6 +143,25 @@ const useLandOnFragment = () => {
     }, []);
 };
 
+/**
+ * Back and Forward between pages the reader opened in the app (pushLegalPath gives each its own
+ * history entry): another legal document's path opens that document, any other path goes back to
+ * where the page's Back button goes, and a move between #sections of this page is left to the browser.
+ */
+const useLegalHistory = (doc: LegalDocId, onBack: () => void, onOpenDoc?: (id: LegalDocId) => void) => {
+    useEffect(() => {
+        if (!onOpenDoc) return;
+        const onPop = () => {
+            const target = legalDocForPath(window.location.pathname);
+            if (target === doc) return;
+            if (target) onOpenDoc(target);
+            else onBack();
+        };
+        window.addEventListener('popstate', onPop);
+        return () => window.removeEventListener('popstate', onPop);
+    }, [doc, onBack, onOpenDoc]);
+};
+
 const useDocumentTitle = (title: string) => {
     useEffect(() => {
         const previous = document.title;
@@ -152,6 +176,7 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
     const { title } = legalDoc(doc);
     useLandOnFragment();
     useDocumentTitle(title);
+    useLegalHistory(doc, onBack, onOpenDoc);
 
     return (
         <OpenDocContext.Provider value={onOpenDoc}>
@@ -184,7 +209,7 @@ export const LegalDocument: React.FC<LegalDocumentProps> = ({ doc, intro, summar
                                                 if (!onOpenDoc || !plainClick(e)) return;
                                                 e.preventDefault();
                                                 if (current) return;
-                                                clearFragment();
+                                                pushLegalPath(d.id);
                                                 onOpenDoc(d.id);
                                             }}
                                             className={

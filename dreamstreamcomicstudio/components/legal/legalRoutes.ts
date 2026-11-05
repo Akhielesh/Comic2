@@ -72,6 +72,22 @@ export const clearFragment = (): void => {
 };
 
 /**
+ * Give an in-app move to a legal document its own history entry (App's address sync only replaces
+ * the current one), so the browser's or the phone's Back returns to the page the reader came from
+ * instead of leaving the site. The new entry carries no #fragment, so the document starts at its
+ * top. LegalDocument's popstate listener maps Back and Forward to the right view again.
+ */
+export const pushLegalPath = (id: LegalDocId): void => {
+  try {
+    const path = legalPath(id);
+    if (window.location.pathname === path && !window.location.hash && !window.location.search) return;
+    window.history.pushState({}, '', path);
+  } catch {
+    clearFragment();
+  }
+};
+
+/**
  * Keep the address bar in step with the view App shows (its ?view= sync effect calls this).
  * A legal view gets its document's path and no ?view=; leaving a legal page for another view puts
  * the path back to "/" so a refresh doesn't reopen the document. Returns true when it handled the

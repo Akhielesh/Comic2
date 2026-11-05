@@ -13,7 +13,9 @@ describe('LiveLegalLinks', () => {
     expect(within(nav).getByRole('link', { name: /terms/i })).toHaveAttribute('href', '/terms');
     expect(within(nav).getByRole('link', { name: /support/i })).toHaveAttribute(
       'href',
-      'mailto:contact@dreamstreamstudio.ai?subject=Stream%20Studio%20support'
+      'mailto:support@dreamstreamstudio.ai?subject=Stream%20Studio%20support'
     );
+    expect(within(nav).getByRole('link', { name: /acceptable use/i })).toHaveAttribute('href', '/acceptable-use');
+    expect(within(nav).getByRole('link', { name: /copyright/i })).toHaveAttribute('href', '/copyright');
   });
 });
