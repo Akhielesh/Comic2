@@ -314,6 +314,9 @@ user's own key (BYOK, header or account key) is their own account and is not gat
   (`ai/providers/openrouter.ts` `generateImage`) is not reached by any chat path today.
 - User-configured MCP servers are the user's own services, not connectors this app holds OAuth
   grants for; their tools are not treated as connector content. The operator's Nango MCP is.
+  Neither a chat request nor a saved server can take its URL over (to rename its tools out of
+  `mcp_nango_*` or swap its headers), and a request can never mark its own server `trusted`
+  (`server/src/lib/mcpRequestServers.ts`, web-surface-1).
 - `OPENROUTER_FREE_TEXT_MODEL` (config, a `:free` endpoint by default) is not read by any server
   path today.
 - The public privacy policy's Limited Use statement ("never to free models") must ship **after**

@@ -56,6 +56,8 @@ import { applyGuardrails } from '../ai/guardrails.js';
 import type { CapabilityNotice, McpServerConfig } from '../../../apiTypes.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
 import { readArticle } from '../ai/tools/readArticle.js';
+import { sanitizeRequestMcpServers, withoutOperatorUrls } from '../lib/mcpRequestServers.js';
+import { readUrlLimit, SIGNED_IN_REFRESH_TOOLS, toolRefreshLimit, unfurlLimit } from '../middleware/publicDataLimits.js';
 import {
   attachBillingToPayload,
   consumeAllowanceNotices,
@@ -906,11 +908,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // a broken/blocked server is skipped rather than failing the chat. Sources are the
   // request body (legacy/localStorage clients) AND the user's server-side registry
   // (Phase 10), merged + deduped by url so saved servers sync across devices.
+  //
+  // web-surface-1 (lib/mcpRequestServers.ts): a request entry is rebuilt from plain fields (a body's
+  // `trusted` never reaches buildMcpTools), must pass the strict SSRF guard, and at most 10 count; no
+  // request or saved entry replaces an operator server by reusing its URL. This sits after the free-turn
+  // and connector-tool decisions above and BEFORE `tools` / connectorPrivacy below, which must see every
+  // MCP tool name: a request-supplied server's tools ride the same connected-account gates as the rest.
   let mcpTools: ChatTool[] = [];
   if (resolved.provider === 'openrouter') {
-    const requestServers = Array.isArray(body.mcpServers)
-      ? body.mcpServers.filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
-      : [];
+    const operatorServers = envDesignMcpServers();
+    const requestServers = sanitizeRequestMcpServers(body.mcpServers);
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
     // DreamStream chat gets the always-on reference MCPs (Context7, DeepWiki) and any operator
     // self-hosted design/connector MCPs (ai/studio/designSystem.ts), plus the user's own servers.
@@ -922,9 +929,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     if (userUsingTools) {
       // Always-on reference MCPs are third-party; skip them when external MCP is disabled (privacy).
       if (externalMcpEnabled()) for (const s of ALWAYS_ON_STUDIO_MCP_SERVERS) byUrl.set(s.url, s as McpServerConfig);
-      for (const s of envDesignMcpServers()) byUrl.set(s.url, s as McpServerConfig & { trusted?: boolean });
+      for (const s of operatorServers) byUrl.set(s.url, s as McpServerConfig & { trusted?: boolean });
     }
-    for (const s of [...savedServers, ...requestServers]) byUrl.set(s.url, s as McpServerConfig);
+    for (const s of withoutOperatorUrls([...savedServers, ...requestServers], operatorServers)) byUrl.set(s.url, s);
     const servers = [...byUrl.values()].slice(0, 10);
     if (servers.length) mcpTools = await buildMcpTools(servers);
   }
@@ -2340,12 +2347,17 @@ export const chatPublicRouter = Router();
 // Live widget refresh: re-execute the single whitelisted tool call that produced an
 // artifact (its `origin`), so the client updates the widget in place with fresh data.
 // No model round-trip, no billing reservation — these are keyless data tools.
+// Limits (middleware/publicDataLimits.ts, after optionalAuth): per account, or per IP / IPv6 /64.
 const REFRESHABLE = new Set<string>(REFRESHABLE_TOOLS);
-chatPublicRouter.post('/tool-refresh', async (req, res) => {
+chatPublicRouter.post('/tool-refresh', toolRefreshLimit, async (req, res) => {
   const body = (req.body ?? {}) as { tool?: unknown; args?: unknown; clientContext?: unknown };
   const tool = typeof body.tool === 'string' ? body.tool : '';
   if (!REFRESHABLE.has(tool)) {
     return res.status(400).json({ error: { message: 'This widget cannot be refreshed.' } });
+  }
+  // Places and video search spend a platform key with a paid quota: signed-in callers only.
+  if (SIGNED_IN_REFRESH_TOOLS.has(tool) && !req.user?.id) {
+    return res.status(401).json({ error: { message: 'Sign in to refresh this widget.', code: 'SIGN_IN_REQUIRED' } });
   }
   const args =
     body.args && typeof body.args === 'object' && !Array.isArray(body.args)
@@ -2387,7 +2399,7 @@ chatPublicRouter.post('/tool-refresh', async (req, res) => {
 });
 
 // Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
-chatPublicRouter.get('/unfurl', async (req, res) => {
+chatPublicRouter.get('/unfurl', unfurlLimit, async (req, res) => {
   const url = String(req.query.url || '');
   if (!url) return res.status(400).json({ error: { message: 'url is required' } });
   try {
@@ -2399,12 +2411,14 @@ chatPublicRouter.get('/unfurl', async (req, res) => {
 });
 
 // Reader mode: fetch a public article and return its extracted readable content so the
-// chat can show it inline (news sites block iframing). SSRF-guarded in readArticle.
-chatPublicRouter.get('/read-url', async (req, res) => {
+// chat can show it inline (news sites block iframing). SSRF-guarded in readArticle. Only a
+// signed-in caller may fall back to the budgeted Jina reader; said explicitly here rather
+// than left to readArticle's account-context default.
+chatPublicRouter.get('/read-url', readUrlLimit, async (req, res) => {
   const url = String(req.query.url || '');
   if (!url) return res.status(400).json({ error: { message: 'url is required' } });
   try {
-    const data = await readArticle(url);
+    const data = await readArticle(url, undefined, { allowJina: Boolean(req.user?.id) });
     res.json(data);
   } catch (err) {
     res.status(200).json({ url, host: '', blocks: [], ok: false, error: (err as Error)?.message || 'read failed' });

@@ -11,9 +11,11 @@
  * Hard constraints:
  *  - GET only, https only, hostname must be in ALLOWED_HOSTS (public market
  *    data — this can never be a general proxy).
- *  - Optional shared secret: set EGRESS_SHARED_SECRET (wrangler secret) and
- *    the same value as DATA_EGRESS_SECRET on the backend to require the
- *    x-egress-key header. Unset = open but still allowlisted-only.
+ *  - Shared secret, REQUIRED: EGRESS_SHARED_SECRET (wrangler secret) must
+ *    equal the backend's DATA_EGRESS_SECRET, which it sends as x-egress-key
+ *    (server/src/lib/egressProxy.ts). Unset fails CLOSED (503, logged) — an
+ *    open relay let anyone spend this worker on the allowlisted hosts
+ *    (abuse-ops-12). The header is compared in constant time.
  *  - accept / user-agent / cookie pass through (Yahoo's crumb flow needs the
  *    cookie); set-cookie passes back.
  */
@@ -33,6 +35,7 @@ const ALLOWED_HOSTS = new Set([
 const FORWARD_REQ_HEADERS = ['accept', 'user-agent', 'cookie', 'accept-language'];
 const FORWARD_RES_HEADERS = ['content-type', 'set-cookie'];
 const UPSTREAM_TIMEOUT_MS = 12_000;
+let warnedUnset = false;
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -40,7 +43,15 @@ export default {
     if (req.method !== 'GET' || !url.pathname.endsWith('/fetch')) {
       return json(404, 'Not found — GET <route>/fetch?url=…');
     }
-    if (env.EGRESS_SHARED_SECRET && req.headers.get('x-egress-key') !== env.EGRESS_SHARED_SECRET) {
+    const secret = (env.EGRESS_SHARED_SECRET || '').trim(); // the backend trims DATA_EGRESS_SECRET too
+    if (!secret) {
+      // Deploy order: set the secret on this worker AND on the backend first (owner step O4).
+      // Logged once per isolate (every refused request still gets the 503).
+      if (!warnedUnset) console.error('[data-egress] EGRESS_SHARED_SECRET is not set: refusing every request (fail closed). Set it with `wrangler secret put EGRESS_SHARED_SECRET` and the same value as the backend\'s DATA_EGRESS_SECRET.');
+      warnedUnset = true;
+      return json(503, 'Relay not configured');
+    }
+    if (!(await sameSecret(req.headers.get('x-egress-key') || '', secret))) {
       return json(403, 'Bad or missing x-egress-key');
     }
 
@@ -79,6 +90,24 @@ export default {
     }
   }
 };
+
+/**
+ * Constant-time comparison of the presented key with the secret: both are hashed first (SHA-256), so
+ * neither the content nor the length of the secret shows in the timing. Web Crypto only, which the
+ * Workers runtime and Node (tests) both have.
+ */
+export async function sameSecret(presented: string, secret: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(presented)),
+    crypto.subtle.digest('SHA-256', enc.encode(secret))
+  ]);
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0 && presented.length > 0;
+}
 
 const json = (status: number, message: string): Response =>
   new Response(JSON.stringify({ error: { message } }), {

@@ -5,8 +5,10 @@
   // those public endpoints from Cloudflare's IPs instead. Mounted on the zone
   // so the backend has a deterministic URL (no per-account workers.dev guess):
   //   https://dreamstreamstudio.ai/egress/fetch?url=…
-  // Optional hardening: `wrangler secret put EGRESS_SHARED_SECRET` here and
-  // set the same value as DATA_EGRESS_SECRET on the backend.
+  // REQUIRED secret (unset = 503 for every request): `wrangler secret put
+  // EGRESS_SHARED_SECRET` here, the same value as DATA_EGRESS_SECRET on the
+  // backend and as the EGRESS_SHARED_SECRET secret of the production-deploy
+  // GitHub Environment (the deploy probe sends it).
   "name": "dreamstream-data-egress",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
