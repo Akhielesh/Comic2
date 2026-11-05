@@ -235,6 +235,36 @@ describe('useQaController', () => {
     expect(editor.focusedPageId).toBe('pg_3');
   });
 
+  it('state=queued: the director is working and Up next holds real, editable notes (A1, for the DS harness)', async () => {
+    expect(parseQaParams('?state=queued').state).toBe('queued');
+    const { result } = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('?state=queued'))));
+    const c = result.current;
+    expect(c).toMatchObject({ messageBusy: true, turnLocked: true, queueHold: null, queueSendingNow: null, queueRetriesLeft: true, queueSteers: false });
+    expect(c.queue?.map((n) => n.id)).toEqual(['qn_1', 'qn_2', 'qn_3']);
+    expect(c.queue?.[1].focus).toEqual({ pageId: c.doc!.pages[1].id });
+    act(() => result.current.editQueued!('qn_1', 'Make the rain much heavier'));
+    act(() => result.current.moveQueued!('qn_3', -1));
+    act(() => result.current.removeQueued!('qn_2'));
+    expect(result.current.queue?.map((n) => [n.id, n.text.slice(0, 25)])).toEqual([
+      ['qn_1', 'Make the rain much heavie'],
+      ['qn_3', 'After that, try a quieter']
+    ]);
+    // A message typed while the director works joins Up next.
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.send('One more: a lightning flash on page 1');
+    });
+    expect(outcome).toBe('queued');
+    expect(result.current.queue).toHaveLength(3);
+    await act(async () => void (await result.current.sendNow!('qn_3')));
+    expect(result.current.queueSendingNow).toBe('qn_3');
+    expect(qaOps().filter((o) => o.kind === 'queue').map((o) => (o.payload as { action: string }).action)).toEqual(['edit', 'move', 'remove', 'send_now']);
+    // Every other state has no queue at all (today's behaviour), and a send there is recorded only.
+    const idle = renderHook(() => useQaController(qaSceneFromParams(parseQaParams('')))).result.current;
+    expect('queue' in idle).toBe(false);
+    expect('turnLocked' in idle).toBe(false);
+  });
+
   it('recordQaOp stores JSON copies (later mutation never rewrites history)', () => {
     const payload = { a: [1] };
     recordQaOp('act', payload);

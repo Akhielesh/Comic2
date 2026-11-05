@@ -10,9 +10,10 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { mapAssetRefs, variantFor, type AssetRef, type ClientAction, type ComicDoc, type NextStep, type RenderTarget, type StudioTab } from '../../../shared/comic/doc';
 import { applyOps, type DocOp, type StudioAction } from '../../../shared/comic/ops';
-import { DEFAULT_CAPS, type StudioCaps, type StudioMode } from '../../../shared/comic/capabilities';
+import { DEFAULT_CAPS, steerOn, type StudioCaps, type StudioMode } from '../../../shared/comic/capabilities';
 import type { ComicStudioController } from '../useStudio';
-import type { ActivityItem, PatchOptions, ReaderRequest, SendOptions, StudioNotice, StudioSelection } from '../types';
+import type { ActivityItem, PatchOptions, ReaderRequest, SendOptions, SendOutcome, StudioNotice, StudioSelection } from '../types';
+import { add as addNote, edit as editNote, move as moveNote, moveTo as moveNoteTo, remove as removeNote, type QueuedNote } from '../messageQueue';
 import { requestOpenModelPicker } from '../models/openPicker';
 import { QA_FIXTURES, QA_NOW, isQaFixture, makeQaDoc, parseQaImagePath, type QaFixtureName } from './qaFixtures';
 
@@ -22,7 +23,11 @@ export const QA_SURFACES = ['studio', 'board', 'editor', 'reader', 'classic-read
 export type QaSurface = (typeof QA_SURFACES)[number];
 
 /** Scene states layered on a fixture (`state=`). */
-export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy'] as const;
+/**
+ * `queued` (agent-editor plan §3 A1): the director is working and Up next holds QA_QUEUE_NOTES, with every queue member
+ * live (edit, move, remove, Send now), so the harness can screenshot Up next, its chip and its sheet.
+ */
+export const QA_STATES = ['idle', 'loading', 'load-error', 'streaming', 'failed-send', 'error', 'busy', 'queued'] as const;
 export type QaState = (typeof QA_STATES)[number];
 
 export type QaImageMode = 'png' | 'svg';
@@ -105,6 +110,7 @@ export type QaOpKind =
   | 'retry'
   | 'dismiss'
   | 'publication'
+  | 'queue'
   | 'net';
 
 export interface QaOp {
@@ -251,10 +257,24 @@ export const qaSceneFromParams = (p: QaParams): QaSceneInit => {
   };
 };
 
+/** Up next in the `queued` scene: a plain note, one about page 2 (when the fixture has it), and a longer one. */
+export const qaQueueNotes = (doc: ComicDoc | null): QueuedNote[] => {
+  const page2 = doc?.pages[1]?.id;
+  return [
+    { id: 'qn_1', text: 'Make the rain heavier on every rooftop panel', at: QA_NOW - 40_000 },
+    { id: 'qn_2', text: 'Give Maya her red scarf back here', ...(page2 ? { focus: { pageId: page2 } } : {}), at: QA_NOW - 25_000 },
+    {
+      id: 'qn_3',
+      text: 'After that, try a quieter ending: the two of them on the station bench, no dialogue, just the last train pulling away in the rain',
+      at: QA_NOW - 10_000
+    }
+  ];
+};
+
 const STREAM_DRAFT = 'Page 3 is on its way — I’m keeping Maya’s red scarf and the rain consistent with page 2… ';
 
 const sceneActivity = (state: QaState | undefined): ActivityItem[] =>
-  state === 'streaming' || state === 'busy'
+  state === 'streaming' || state === 'busy' || state === 'queued'
     ? [
         { id: 'ac1', label: 'Drawing page 3 of 12 in the noir ink style with every character sheet as a reference', phase: 'start', at: QA_NOW, cost: 'image' },
         { id: 'ac2', label: 'Checked the plan — free, done by the editor', phase: 'end', ok: true, at: QA_NOW, cost: 'free' }
@@ -284,6 +304,13 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
   const redoStack = useRef<{ doc: ComicDoc; label?: string }[]>([]);
   const [, bump] = useState(0);
   const caps = useMemo<StudioCaps>(() => ({ ...DEFAULT_CAPS, ...(init.caps || {}) }), [init.caps]);
+  // Up next (state=queued): real local state through the shared queue helpers; every call is recorded as 'queue'.
+  const queued = init.state === 'queued';
+  const [queue, setQueue] = useState<QueuedNote[]>(() => (queued ? qaQueueNotes(init.doc) : []));
+  const [queueSendingNow, setQueueSendingNow] = useState<string | null>(null);
+  const queueSeq = useRef(0);
+  const queueRef = useRef(queue);
+  queueRef.current = queue;
   const urlFor = useMemo(() => makeQaUrlFor(() => docRef.current, init.img || 'svg'), [init.img]);
 
   const patch = useCallback(async (ops: DocOp[], opts?: PatchOptions) => {
@@ -369,9 +396,46 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
     [undo]
   );
 
-  const send = useCallback(async (text: string, opts?: SendOptions | unknown[]) => {
-    recordQaOp('send', { text, opts: Array.isArray(opts) ? { attachments: opts.length } : opts });
+  const send = useCallback(
+    async (text: string, opts?: SendOptions | unknown[]): Promise<SendOutcome | void> => {
+      recordQaOp('send', { text, opts: Array.isArray(opts) ? { attachments: opts.length } : opts });
+      if (!queued) return;
+      // The director is working: a message joins Up next, as with the live queue.
+      const focus = !Array.isArray(opts) && opts?.focus && opts.focus !== 'selection' ? opts.focus : undefined;
+      const res = addNote(queueRef.current, { id: `qn_new_${(queueSeq.current += 1)}`, text, ...(focus ? { focus } : {}), at: QA_NOW });
+      if (!res.added) return 'refused';
+      queueRef.current = res.notes;
+      setQueue(res.notes);
+      return 'queued';
+    },
+    [queued]
+  );
+  const changeQueue = useCallback((action: string, payload: Record<string, unknown>, next: (notes: QueuedNote[]) => QueuedNote[]) => {
+    recordQaOp('queue', { action, ...payload });
+    queueRef.current = next(queueRef.current);
+    setQueue(queueRef.current);
   }, []);
+  const queueMembers: Partial<ComicStudioController> = queued
+    ? {
+        queue,
+        queueHold: null,
+        queueSendingNow,
+        queueRetriesLeft: true,
+        queueSteers: steerOn(caps),
+        turnLocked: true,
+        editQueued: (id, text) => changeQueue('edit', { id, text }, (n) => editNote(n, id, text)),
+        moveQueued: (id, dir) => changeQueue('move', { id, dir }, (n) => moveNote(n, id, dir)),
+        moveQueuedTo: (id, index) => changeQueue('move_to', { id, index }, (n) => moveNoteTo(n, id, index)),
+        removeQueued: (id) => changeQueue('remove', { id }, (n) => removeNote(n, id)),
+        clearQueue: () => changeQueue('clear', {}, () => []),
+        releaseQueue: () => recordQaOp('queue', { action: 'release' }),
+        sendNow: async (id) => {
+          recordQaOp('queue', { action: 'send_now', id });
+          setQueueSendingNow(id);
+          return 'queued';
+        }
+      }
+    : {};
   const act = useCallback(async (action: StudioAction) => {
     recordQaOp('act', action);
   }, []);
@@ -407,7 +471,7 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
     []
   );
 
-  const streaming = init.state === 'streaming' || init.state === 'busy';
+  const streaming = init.state === 'streaming' || init.state === 'busy' || queued;
   const renderingTotal = doc
     ? doc.pages.filter((p) => p.render.status === 'queued' || p.render.status === 'rendering').length +
       doc.cast.filter((c) => c.sheet.status === 'queued' || c.sheet.status === 'rendering').length +
@@ -485,6 +549,7 @@ export const useQaController = (init: QaSceneInit): ComicStudioController => {
     lastSpentUsd: 0.06,
     lastSavedUsd: 0.12,
     byok: caps.byok,
-    renderingTotal
+    renderingTotal,
+    ...queueMembers
   };
 };
