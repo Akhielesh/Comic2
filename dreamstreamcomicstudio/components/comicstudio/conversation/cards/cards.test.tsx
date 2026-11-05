@@ -109,6 +109,40 @@ describe('OptionsCard', () => {
     expect(screen.getByRole('button', { name: /Playful/ })).toBeDisabled();
   });
 
+  it('with the live queue on it follows the turn lock: locked (plan_pages) disables it, a free turn with renders streaming does not', () => {
+    const { unmount } = render(<OptionsCard card={card} studio={makeFakeStudio({ doc: makeSampleDoc(), turnLocked: true, messageBusy: false })} />);
+    expect(screen.getByRole('button', { name: /Playful/ })).toBeDisabled();
+    unmount();
+    const studio = makeFakeStudio({ doc: makeSampleDoc(), turnLocked: false, messageBusy: true });
+    render(<OptionsCard card={card} studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: /Playful/ }));
+    expect(studio.send).toHaveBeenCalledWith('Playful', { card: { id: 'card_o', choiceIds: ['b'] } });
+  });
+
+  it('a refused answer opens the card again (send() said why); a typed answer goes back in its box', async () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc() });
+    studio.send.mockImplementation(async () => 'refused');
+    render(<OptionsCard card={{ ...card, allowCustom: true }} studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: /Playful/ }));
+    expect(studio.send).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Epic/ })).toBeEnabled());
+    expect(screen.getByRole('button', { name: /Playful/ })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('Your own answer'), { target: { value: 'Bittersweet' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }));
+    await waitFor(() => expect(screen.getByLabelText('Your own answer')).toHaveValue('Bittersweet'));
+    expect(screen.queryByText(/You answered/)).toBeNull();
+  });
+
+  it('an answer that went (or an older controller that resolves void) keeps the card answered', async () => {
+    const studio = makeFakeStudio({ doc: makeSampleDoc() });
+    studio.send.mockImplementation(async () => 'sent');
+    render(<OptionsCard card={card} studio={studio} />);
+    fireEvent.click(screen.getByRole('button', { name: /Playful/ }));
+    await Promise.resolve();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Epic/ })).toBeDisabled());
+    expect(screen.getByRole('button', { name: /Playful/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('joinChoices reads naturally', () => {
     expect(joinChoices(['a'])).toBe('a');
     expect(joinChoices(['a', 'b'])).toBe('a and b');

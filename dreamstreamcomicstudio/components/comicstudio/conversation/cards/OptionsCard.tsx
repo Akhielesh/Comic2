@@ -24,6 +24,7 @@ import { BubblePreview } from '../../library/procedural/BubblePreview';
 import { LayoutGlyph } from '../../library/procedural/LayoutGlyph';
 import { PresetThumb } from '../../library/procedural/PresetThumb';
 import type { ComicStudioController } from '../../useStudio';
+import { sendOutcomeOf } from '../../messageQueue';
 import { CardShell, ChipButton, PrimaryButton, cx } from '../ui';
 import { CastAvatar, KindIcon } from './castVisual';
 
@@ -229,7 +230,11 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
   const answered = serverAnswered.length ? serverAnswered : localAnswer || [];
   const isAnswered = answered.length > 0;
   const wasChosen = (c: OptionChoice) => answered.includes(c.id) || answered.includes(c.label);
-  const disabled = isAnswered || studio.messageBusy || !studio.doc;
+  // With the live queue on (agent-editor plan §3 A1) an answer can go whenever the server's turn lock is free — also
+  // while renders still stream — and never while it is held (a director turn, a plan_pages run): send() would refuse it.
+  // Without the queue, today's rule: not while a message is in flight.
+  const turnBusy = studio.turnLocked ?? studio.messageBusy;
+  const disabled = isAnswered || turnBusy || !studio.doc;
 
   const answer = (ids: string[], text: string) => {
     const reply = text.trim();
@@ -237,7 +242,16 @@ export const OptionsCard: React.FC<{ card: OptionsCardData; studio: ComicStudioC
     setLocalAnswer(ids.length ? ids : [reply]);
     // Name the card this answers (DIR-8): the server records it on THIS card — a typed answer
     // too — instead of guessing from the text (two open cards can share a label).
-    void studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
+    const sent = studio.send(reply, typeof card.id === 'string' && card.id ? { card: ids.length ? { id: card.id, choiceIds: ids } : { id: card.id, custom: reply } } : undefined);
+    // Refused (the turn was locked after all; send() says why): the card opens again so the question can be answered,
+    // with a typed answer back in its box.
+    void Promise.resolve(sent)
+      .then(sendOutcomeOf, () => 'refused' as const)
+      .then((outcome) => {
+        if (outcome !== 'refused') return;
+        setLocalAnswer(null);
+        if (!ids.length) setCustom((prev) => (prev.trim() ? prev : reply));
+      });
   };
 
   const toggle = (c: OptionChoice) => setPicked((prev) => (prev.includes(c.id) ? prev.filter((id) => id !== c.id) : [...prev, c.id]));
