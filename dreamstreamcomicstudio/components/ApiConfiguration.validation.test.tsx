@@ -26,18 +26,25 @@ vi.mock('../services/usageAllowance', () => ({
 }));
 
 const { ApiConfiguration } = await import('./ApiConfiguration');
-const { addKey, setKeyValidation, PROVIDER_META } = await import('../services/apiKeys');
+const { addKey, listKeys, setKeyValidation, PROVIDER_META } = await import('../services/apiKeys');
 
 const HOUR = 60 * 60 * 1000;
 const T0 = new Date('2026-11-05T12:00:00Z').getTime();
 
-const seedKey = (provider: 'openrouter' | 'nvidia', key: string, checkedAgoMs: number) => {
+const seedKey = (
+  provider: 'openrouter' | 'nvidia',
+  key: string,
+  checkedAgoMs: number,
+  verdict: { state: 'valid' | 'invalid'; message: string } = { state: 'valid', message: 'Valid key.' }
+) => {
   vi.setSystemTime(T0 - checkedAgoMs);
   const k = addKey({ provider, label: `${provider} mine`, key });
-  setKeyValidation(k.id, 'valid', 'Valid key.');
+  setKeyValidation(k.id, verdict.state, verdict.message);
   vi.setSystemTime(T0);
   return k;
 };
+
+const UNAVAILABLE = { provider: 'openrouter', status: 'unavailable' as const, valid: false, message: 'Sign in again to check this key.' };
 
 const openProvider = (provider: 'openrouter' | 'nvidia') => {
   fireEvent.click(screen.getAllByText(PROVIDER_META[provider].label)[0]);
@@ -101,5 +108,57 @@ describe('API Configuration key validation', () => {
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
     expect(validateApiKey).toHaveBeenCalledTimes(1);
     expect(validateApiKey).toHaveBeenCalledWith('openrouter', 'sk-or-new');
+  });
+
+  it('a check that could not run shows no Invalid badge, stores nothing, and the next open re-checks', async () => {
+    seedKey('openrouter', 'sk-or-mine', 25 * HOUR);
+    validateApiKey.mockResolvedValueOnce(UNAVAILABLE as never);
+    render(<ApiConfiguration />);
+    await act(async () => { openProvider('openrouter'); });
+    expect(validateApiKey).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status')).toHaveTextContent('Sign in again to check this key.');
+    expect(screen.queryByText('Invalid')).not.toBeInTheDocument();
+    // The previous verdict and its time are kept — nothing was recorded.
+    expect(listKeys()[0]).toMatchObject({ validation: 'valid', validatedAt: T0 - 25 * HOUR, validationMessage: 'Valid key.' });
+    // Close and reopen the card: the stale verdict is checked again.
+    await act(async () => { openProvider('openrouter'); });
+    await act(async () => { openProvider('openrouter'); });
+    expect(validateApiKey).toHaveBeenCalledTimes(2);
+  });
+
+  it('a new key whose first check could not run reads Unchecked, not Invalid', async () => {
+    validateApiKey.mockResolvedValueOnce({ ...UNAVAILABLE, message: 'Couldn’t check this key right now — try Verify.' } as never);
+    render(<ApiConfiguration />);
+    if (!screen.queryByPlaceholderText(/Paste OpenRouter API key/)) await act(async () => { openProvider('openrouter'); });
+    fireEvent.change(screen.getByPlaceholderText(/Paste OpenRouter API key/), { target: { value: 'sk-or-new' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Add$/ })); });
+    expect(screen.getByText('Unchecked')).toBeInTheDocument();
+    expect(screen.queryByText('Invalid')).not.toBeInTheDocument();
+    expect(listKeys()[0].validatedAt).toBeUndefined();
+  });
+
+  it.each([
+    'Validation failed (HTTP 401).',
+    'Could not validate: Failed to fetch.',
+    'Could not reach NVIDIA Build: connect ECONNREFUSED 10.0.0.7:443.',
+    'NVIDIA returned 503.',
+    'OpenRouter rejected this key (or it could not be reached).'
+  ])('an old non-verdict stored as Invalid (%s) under 24 h old is not shown, and is re-checked on open', async (message) => {
+    seedKey('openrouter', 'sk-or-mine', HOUR, { state: 'invalid', message });
+    render(<ApiConfiguration />);
+    await act(async () => { openProvider('openrouter'); });
+    expect(validateApiKey).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('Invalid')).not.toBeInTheDocument();
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+    expect(screen.getByText('Valid')).toBeInTheDocument();
+  });
+
+  it('a real Invalid verdict under 24 h old stays, with its reason, and is not re-checked', async () => {
+    seedKey('openrouter', 'sk-or-mine', HOUR, { state: 'invalid', message: 'OpenRouter rejected this key.' });
+    render(<ApiConfiguration />);
+    await act(async () => { openProvider('openrouter'); });
+    expect(validateApiKey).not.toHaveBeenCalled();
+    expect(screen.getByText('Invalid')).toBeInTheDocument();
+    expect(screen.getByText('OpenRouter rejected this key.')).toBeInTheDocument();
   });
 });

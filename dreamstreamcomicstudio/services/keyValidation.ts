@@ -6,12 +6,21 @@
 //
 // Exactly one key travels per call — the one being checked, in its header (never in the body
 // or URL) — plus the session token: the route is signed-in only.
+//
+// Only a 200 answer from the route carries a verdict on the key. When the route itself can't
+// answer (expired session → 401, rate limit → 429, 5xx, offline) the result is `unavailable`:
+// a "couldn't check" state the UI shows WITHOUT storing it as the key's verdict, so a passing
+// failure never marks a good key Invalid.
 
 import { buildApiUrl } from './clientConfig';
 import { PROVIDER_META, type ApiKeyProvider } from './apiKeys';
 import { supabase } from './supabase';
 
-export type KeyValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing';
+export type KeyValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing' | 'unavailable';
+
+/** Copy for a check that could not run (never a verdict on the key). */
+export const KEY_CHECK_UNAVAILABLE_COPY = 'Couldn’t check this key right now — try Verify.';
+export const KEY_CHECK_SIGNED_OUT_COPY = 'Sign in again to check this key.';
 
 export interface KeyValidationResult {
   provider: string;
@@ -37,15 +46,15 @@ export const validateApiKey = async (
       body: JSON.stringify({ provider })
     });
     if (!res.ok) {
-      return { provider, status: 'invalid', valid: false, message: `Validation failed (HTTP ${res.status}).` };
+      return {
+        provider,
+        status: 'unavailable',
+        valid: false,
+        message: res.status === 401 ? KEY_CHECK_SIGNED_OUT_COPY : KEY_CHECK_UNAVAILABLE_COPY
+      };
     }
     return (await res.json()) as KeyValidationResult;
-  } catch (err) {
-    return {
-      provider,
-      status: 'invalid',
-      valid: false,
-      message: `Could not validate: ${(err as Error)?.message || 'network error'}.`
-    };
+  } catch {
+    return { provider, status: 'unavailable', valid: false, message: KEY_CHECK_UNAVAILABLE_COPY };
   }
 };

@@ -8,6 +8,7 @@ import {
   PROVIDER_META,
   type ManagedApiKey,
   type ApiKeyProvider,
+  type KeyValidationState,
   listKeys,
   addKey,
   updateKey,
@@ -162,18 +163,40 @@ const McpServersPanel: React.FC = () => {
 // awake. Otherwise keys are checked on add and on the explicit "Verify" button.
 const VALIDATION_STALE_MS = 24 * 60 * 60 * 1000;
 
-const runValidation = async (k: ManagedApiKey): Promise<void> => {
+// Messages that earlier versions stored as an 'invalid' verdict although no verdict was reached:
+// our own route failed (expired session, rate limit, 5xx, offline) or the provider was
+// unreachable or errored. Tabs still running the old code may keep writing them for a while
+// after a deploy. They count as "not checked": the row shows Unchecked and re-checks on open,
+// instead of a red Invalid under a good key for a day.
+const NON_VERDICT_MESSAGE =
+  /^(Validation failed \(HTTP \d+\)|Could not validate|Could not reach )| returned \d{3}\.$|\(or it could not be reached\)\.$/;
+
+/** The stored verdict to show and trust — 'unknown' when there is none, or it wasn't a verdict. */
+const storedVerdict = (k: ManagedApiKey): KeyValidationState => {
+  const v = k.validation;
+  if (v !== 'valid' && v !== 'invalid' && v !== 'unsupported') return 'unknown';
+  if (v === 'invalid' && k.validationMessage && NON_VERDICT_MESSAGE.test(k.validationMessage)) return 'unknown';
+  return v;
+};
+
+/**
+ * Check a key. A verdict is stored with its time; a check that could not run is returned as a
+ * notice for the row and NOT stored, so the previous verdict stays and the next open re-checks.
+ */
+const runValidation = async (k: ManagedApiKey): Promise<string | null> => {
   const r = await validateApiKey(k.provider, k.key);
+  if (r.status === 'unavailable') return r.message;
   const state = r.status === 'missing' ? 'invalid' : r.status;
   setKeyValidation(k.id, state, r.message);
+  return null;
 };
 
 const BADGE_BASE = `text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-full ${HAIRLINE} flex items-center gap-1`;
 
 const ValidationBadge: React.FC<{ k: ManagedApiKey; checking: boolean }> = ({ k, checking }) => {
   if (checking) return <span className={`${BADGE_BASE} bg-[var(--ds-well)] ${MUTED}`}><Loader2 className="w-3 h-3 animate-spin" /> Checking</span>;
-  const state = k.validation ?? 'unknown';
-  const title = k.validationMessage || '';
+  const state = storedVerdict(k);
+  const title = state === 'unknown' ? '' : k.validationMessage || '';
   if (state === 'valid') return <span title={title} className={`${BADGE_BASE} bg-green-500/10 text-green-600`}><ShieldCheck className="w-3 h-3" /> Valid</span>;
   if (state === 'invalid') return <span title={title} className={`${BADGE_BASE} bg-red-500/10 text-red-600`}><ShieldX className="w-3 h-3" /> Invalid</span>;
   if (state === 'unsupported') return <span title={title} className={`${BADGE_BASE} bg-[var(--ds-well)] ${MUTED}`}><ShieldQuestion className="w-3 h-3" /> Not verifiable</span>;
@@ -216,17 +239,20 @@ const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: (
   const [label, setLabel] = useState(k.label);
   const [limit, setLimit] = useState(k.limitUsd != null ? String(k.limitUsd) : '');
   const [checking, setChecking] = useState(false);
+  // A check that could not run this time ("Couldn't check…"). Shown, never stored.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const verify = async () => {
     if (checking) return;
     setChecking(true);
-    await runValidation(k);
+    setNotice(await runValidation(k));
     setChecking(false);
     onChange();
   };
 
   useEffect(() => {
-    const stale = !k.validatedAt || Date.now() - k.validatedAt > VALIDATION_STALE_MS;
+    const stale =
+      storedVerdict(k) === 'unknown' || !k.validatedAt || Date.now() - k.validatedAt > VALIDATION_STALE_MS;
     if (stale) void verify();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [k.id, k.key]);
@@ -260,9 +286,14 @@ const KeyRow: React.FC<{ k: ManagedApiKey; fundsUrl?: string | null; onChange: (
             </div>
           )}
           <div className={`text-[11px] font-mono ${MUTED} mt-0.5`}>{mask(k.key)}</div>
-          {!editing && !checking && k.validation === 'invalid' && k.validationMessage && (
+          {!editing && !checking && storedVerdict(k) === 'invalid' && k.validationMessage && (
             <div className="text-[11px] text-red-600 font-medium mt-0.5 flex items-start gap-1">
               <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{k.validationMessage}
+            </div>
+          )}
+          {!editing && !checking && notice && (
+            <div role="status" className={`text-[11px] ${MUTED} mt-0.5 flex items-start gap-1`}>
+              <ShieldQuestion className="w-3 h-3 shrink-0 mt-0.5" />{notice}
             </div>
           )}
 
