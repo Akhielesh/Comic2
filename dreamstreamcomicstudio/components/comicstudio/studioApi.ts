@@ -464,9 +464,10 @@ export async function cancelStudio(id: string): Promise<void> {
  * server screens it like a chat message, commits it as a user message marked `steered` and the director reads it
  * before its next model call. Resolves with that message's id. Every refusal changes nothing on the server and rejects
  * with a StudioApiError whose `code` says what to do with the note:
- * - `NOT_RUNNING` (no director turn is running), `BUSY` (STEER_LIMITS.inbox notes already wait) or `LIMIT` (a note over
- *   6000 characters goes as its own message): keep the note queued and send it as a message when the turn ends;
- * - `NOT_AVAILABLE`: steering is off for this account (D2: Stop the director, then send);
+ * - `NOT_RUNNING` (no director turn is reading notes: none runs, or a message is still being prepared or screened),
+ *   `BUSY` (STEER_LIMITS.inbox notes already wait or are being screened) or `LIMIT` (a note over 6000 characters goes as
+ *   its own message): keep the note queued and send it as a message when the turn ends;
+ * - `NOT_AVAILABLE`: steering is off for this account, whatever the note (D2: Stop the director, then send);
  * - `CONTENT_POLICY`: nothing was added (show the message, keep the draft); `COOLDOWN`: a short safety break.
  */
 export async function steerStudio(projectId: string, req: SteerRequest, opts: { signal?: AbortSignal } = {}): Promise<SteerResponse> {

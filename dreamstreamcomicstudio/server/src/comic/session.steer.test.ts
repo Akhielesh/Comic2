@@ -92,6 +92,41 @@ describe('the steer inbox', () => {
     expect(closeSecond().map((n) => n.text)).toEqual(['second turn']);
   });
 
+  it('holdSteerSeat: a note being screened holds a seat, so at most STEER_LIMITS.inbox are screened or waiting', () => {
+    const session = newSession(createEmptyDoc('p'));
+    expect(session.holdSteerSeat()).toBeNull(); // no turn reads the inbox
+    expect(session.steerRefusal()).toBe('NOT_RUNNING');
+    const close = session.openSteer();
+    const seats = Array.from({ length: STEER_LIMITS.inbox }, () => session.holdSteerSeat());
+    expect(seats.every((s) => typeof s === 'function')).toBe(true);
+    // Every seat is taken by a screen in flight: a further note is BUSY before its own screen.
+    expect(session.steerRefusal()).toBe('BUSY');
+    expect(session.holdSteerSeat()).toBeNull();
+    // A seat holder gives its seat back before it pushes, so its push always has room…
+    seats[0]!();
+    seats[0]!(); // idempotent
+    expect(session.pushSteer(note('screened'))).toBe(true);
+    expect(session.steerRefusal()).toBe('BUSY'); // 1 waiting + 2 being screened
+    seats[1]!();
+    seats[2]!();
+    expect(session.steerRefusal()).toBeNull();
+    // …and the inbox itself stays bounded however notes arrive.
+    expect(session.pushSteer(note('b'))).toBe(true);
+    expect(session.pushSteer(note('c'))).toBe(true);
+    expect(session.pushSteer(note('d'))).toBe(false);
+    expect(close().map((n) => n.text)).toEqual(['screened', 'b', 'c']);
+  });
+
+  it('pushSteer bounds only the inbox: a note pushed while others are screened still fits, and the screened one then meets BUSY', () => {
+    const session = newSession(createEmptyDoc('p'));
+    session.openSteer();
+    const seat = session.holdSteerSeat()!;
+    for (let i = 0; i < STEER_LIMITS.inbox; i += 1) expect(session.pushSteer(note(`direct ${i}`))).toBe(true);
+    seat();
+    expect(session.pushSteer(note('late'))).toBe(false);
+    expect(session.steerRefusal()).toBe('BUSY');
+  });
+
   it('openSteerOf opens a real session and is inert for a session double', () => {
     const session = newSession(plannedDoc());
     const close = openSteerOf(session);

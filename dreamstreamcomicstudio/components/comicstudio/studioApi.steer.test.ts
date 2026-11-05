@@ -44,8 +44,8 @@ describe('steerStudio', () => {
   });
 
   it.each([
-    [409, 'NOT_RUNNING', "The director isn't working on anything right now — your note goes as a new message."],
-    [409, 'BUSY', 'The director already has 3 notes to read — this one waits in Up next and goes when it finishes.'],
+    [409, 'NOT_RUNNING', "The director can't take a note right now — yours goes as a new message as soon as it's free."],
+    [409, 'BUSY', 'The director already has 3 notes in hand — yours stays in Up next and goes when it finishes.'],
     [409, 'LIMIT', 'That note is long, so it goes as its own message once the director finishes (long scripts are saved as the source).']
   ])('a %i %s refusal keeps its code (the client queues the note) and the server copy', async (status, code, message) => {
     api.post.mockRejectedValueOnce(httpError(status, code, message));
@@ -55,7 +55,7 @@ describe('steerStudio', () => {
   });
 
   it('steering off (501 NOT_AVAILABLE), a block (422 CONTENT_POLICY) and a network failure map to their kinds', async () => {
-    api.post.mockRejectedValueOnce(httpError(501, 'NOT_AVAILABLE', "Adding a note while the director works isn't on yet — your note waits in Up next and goes when it finishes."));
+    api.post.mockRejectedValueOnce(httpError(501, 'NOT_AVAILABLE', "Adding a note while the director works isn't on — Send now stops the director and sends your note."));
     await expect(steerStudio('p', { text: 'x' })).rejects.toMatchObject({ kind: 'not_available', code: 'NOT_AVAILABLE' });
     api.post.mockRejectedValueOnce(httpError(422, 'CONTENT_POLICY', "That note doesn't fit DreamStream's content rules, so it wasn't added. Try different wording — bold action and spooky moments are fine."));
     await expect(steerStudio('p', { text: 'x' })).rejects.toMatchObject({ kind: 'content_policy', code: 'CONTENT_POLICY' });

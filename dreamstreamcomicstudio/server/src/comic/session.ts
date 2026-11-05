@@ -402,8 +402,18 @@ export const RECENT_COMMITS_MAX = 300;
 /**
  * The ring's size bound: the serialized ops it may hold (≈ bytes of JSON). The newest commit is always kept, however
  * big; older ones leave first. recentCommitsComplete says when a gap means the ring no longer covers a turn.
+ * LEAD TO CONFIRM: the plan says only "size-bounded"; 1 MB is a sixth of DOC_LIMITS.docBytesMax, held per cached
+ * session (evicted after SESSION_IDLE_MS idle).
  */
 export const RECENT_COMMITS_BYTES = 1_000_000;
+
+/**
+ * Message text longer than this is a pasted script: the stream route saves it as the source script instead of keeping
+ * it in the conversation (routes/comic.ts prepareMessage). One number for the three places that must agree: that
+ * threshold, the longest steer note (routes/comic.ts MAX_STEER_CHARS) and the longest text a "Send my note" chip says
+ * (director.ts unreadSteerReply), so a note sent again is always an ordinary message, never a pasted script.
+ */
+export const LONG_MESSAGE_CHARS = 6000;
 
 /** Steer notes waiting for `session`'s running turn (empty for a session without an inbox, e.g. a test double). */
 export const takeSteerOf = (session: StudioSessionApi): SteerNote[] =>
@@ -478,6 +488,8 @@ export class StudioSession implements StudioSessionApi {
   private reserved = false;
   /** The running director turn's steer inbox; null while no director turn reads it (POST /steer → NOT_RUNNING). */
   private steerInbox: SteerNote[] | null = null;
+  /** Notes POST /steer is screening right now, each holding an inbox seat (holdSteerSeat). */
+  private steerPending = 0;
   /** The last commits, oldest first (≤ RECENT_COMMITS_MAX entries, ≤ RECENT_COMMITS_BYTES of ops). */
   private readonly recent: { commit: RecentCommit; bytes: number }[] = [];
   private recentBytes = 0;
@@ -676,18 +688,39 @@ export class StudioSession implements StudioSessionApi {
   }
 
   /**
-   * Why a steer note would be refused right now, or null when pushSteer takes it. POST /steer asks before its (async)
-   * safety screen, so a note nobody will read is refused for free, and again right before it commits.
+   * Why a new steer note would be refused right now, or null when it may go ahead: NOT_RUNNING while no director turn
+   * reads the inbox, BUSY when the notes waiting plus the notes being screened (holdSteerSeat) already fill
+   * STEER_LIMITS.inbox. POST /steer asks before its (async) safety screen, so a note nobody will read is refused for free.
    */
   steerRefusal(): SteerRefusal | null {
     if (!this.steerInbox) return 'NOT_RUNNING';
-    return this.steerInbox.length >= STEER_LIMITS.inbox ? 'BUSY' : null;
+    return this.steerInbox.length + this.steerPending >= STEER_LIMITS.inbox ? 'BUSY' : null;
   }
 
-  /** Queue a note for the running director turn: false when no director turn reads the inbox or it is full. */
+  /**
+   * Hold an inbox seat for a note POST /steer is about to screen (the screen may call the capped safety classifier):
+   * null when steerRefusal() refuses (ask it why), else the release, which is idempotent. The route releases the seat
+   * once the screen is over and before pushSteer. So however many steer requests arrive at once, at most
+   * STEER_LIMITS.inbox notes are being screened or waiting for the turn.
+   */
+  holdSteerSeat(): (() => void) | null {
+    if (this.steerRefusal()) return null;
+    this.steerPending += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.steerPending -= 1;
+    };
+  }
+
+  /**
+   * Queue a note for the running director turn: false when no director turn reads the inbox or STEER_LIMITS.inbox notes
+   * already wait (the hard bound; seats only bound the screens). POST /steer commits the note only when this says true.
+   */
   pushSteer(note: SteerNote): boolean {
-    if (this.steerRefusal()) return false;
-    this.steerInbox!.push(note);
+    if (!this.steerInbox || this.steerInbox.length >= STEER_LIMITS.inbox) return false;
+    this.steerInbox.push(note);
     return true;
   }
 

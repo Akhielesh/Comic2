@@ -17,7 +17,16 @@ import { KEYS, fakeAssetStore, fakeBilling, fakeDocStore, fakeImages, plannedDoc
 import { registryPriceBook } from '../comic/models/index.js';
 import { __setModelHealthForTests, type ModelHealthPort } from '../comic/models/health.js';
 import { fakeModelHealth } from '../comic/models/health.fakes.js';
-import { MAX_STEER_CHARS, STEER_BLOCKED_MESSAGE, STEER_NOT_RUNNING_MESSAGE, createComicRouter, parseSteerRequest } from './comic.js';
+import { LONG_MESSAGE_CHARS } from '../comic/session.js';
+import {
+  MAX_STEER_CHARS,
+  STEER_BLOCKED_MESSAGE,
+  STEER_FULL_MESSAGE,
+  STEER_NOT_RUNNING_MESSAGE,
+  STEER_OFF_MESSAGE,
+  createComicRouter,
+  parseSteerRequest
+} from './comic.js';
 
 let store: FakeDocStore;
 let assets: FakeAssetStore;
@@ -312,11 +321,92 @@ describe('POST /projects/:id/steer', () => {
     const turn = await startTurn(doc.id, () => ({ text: 'Ok.' }));
     const res = await steer(doc.id, { text: 'add rain' });
     expect(res.status).toBe(501);
-    expect(res.json.error?.code).toBe('NOT_AVAILABLE');
+    expect(res.json.error).toEqual({ code: 'NOT_AVAILABLE', message: STEER_OFF_MESSAGE });
     expect(screenCalls).toEqual(['Make the market busier']);
     turn.release();
     await turn.done;
     expect(conversation(doc.id).some((m) => m.text === 'add rain')).toBe(false);
+  });
+
+  it('COMIC_STEER off answers 501 NOT_AVAILABLE whatever the body (a long note is not LIMIT, an empty one not 400), so the client takes D2', async () => {
+    steerStage = undefined;
+    const doc = seed();
+    for (const body of [{ text: 'x'.repeat(MAX_STEER_CHARS + 1) }, { text: '   ' }, {}]) {
+      const res = await steer(doc.id, body);
+      expect(res.status).toBe(501);
+      expect(res.json.error?.code).toBe('NOT_AVAILABLE');
+    }
+  });
+
+  it('the turn ends while the note is being screened: 409 NOT_RUNNING and nothing committed (never a 200 for a note no turn reads)', async () => {
+    const doc = seed();
+    const turn = await startTurn(doc.id, () => ({ text: 'Ok.' }));
+    const held = deferred<ScreenResult>();
+    screen = (input) => (input.text === 'add rain' ? held.promise : Promise.resolve(ALLOW));
+    const pending = steer(doc.id, { text: 'add rain' });
+    await until(() => screenCalls.includes('add rain'));
+    turn.release();
+    await turn.done;
+    held.resolve(ALLOW);
+    const res = await pending;
+    expect(res.status).toBe(409);
+    expect(res.json.error).toEqual({ code: 'NOT_RUNNING', message: STEER_NOT_RUNNING_MESSAGE });
+    expect(conversation(doc.id).some((m) => m.text === 'add rain')).toBe(false);
+    // The director never read it either: one model call, no note.
+    expect(llm.calls.filter((c) => c.role === 'director')).toHaveLength(1);
+  });
+
+  it('the inbox fills while the note is being screened: 409 BUSY and nothing committed', async () => {
+    const doc = seed();
+    const turn = await startTurn(doc.id, () => ({ text: 'Ok.' }));
+    llm.script.director!.push({ text: 'Read your notes.' });
+    const held = deferred<ScreenResult>();
+    screen = (input) => (input.text === 'add rain' ? held.promise : Promise.resolve(ALLOW));
+    const pending = steer(doc.id, { text: 'add rain' });
+    await until(() => screenCalls.includes('add rain'));
+    const session = peekStudioSession(doc.id)!;
+    for (let i = 0; i < STEER_LIMITS.inbox; i += 1) expect(session.pushSteer({ msgId: `direct_${i}`, text: `direct ${i}`, at: Date.now() })).toBe(true);
+    held.resolve(ALLOW);
+    const res = await pending;
+    expect(res.status).toBe(409);
+    expect(res.json.error).toEqual({ code: 'BUSY', message: STEER_FULL_MESSAGE });
+    expect(conversation(doc.id).some((m) => m.text === 'add rain')).toBe(false);
+    turn.release();
+    await turn.done;
+    expect(JSON.stringify(llm.calls)).not.toContain('add rain');
+  });
+
+  it(`at most ${STEER_LIMITS.inbox} notes are screened at once: a further steer during their screens is BUSY and never screened`, async () => {
+    const doc = seed();
+    const turn = await startTurn(doc.id, () => ({ text: 'Ok.' }));
+    llm.script.director!.push({ text: 'Read your notes.' });
+    const held = deferred<ScreenResult>();
+    screen = (input) => (input.text.startsWith('held') ? held.promise : Promise.resolve(ALLOW));
+    const inFlight = Array.from({ length: STEER_LIMITS.inbox }, (_, i) => steer(doc.id, { text: `held ${i}` }));
+    await until(() => screenCalls.filter((t) => t.startsWith('held')).length === STEER_LIMITS.inbox);
+    const extra = await steer(doc.id, { text: 'held extra' });
+    expect(extra.status).toBe(409);
+    expect(extra.json.error?.code).toBe('BUSY');
+    expect(screenCalls).not.toContain('held extra');
+    held.resolve(ALLOW);
+    expect((await Promise.all(inFlight)).map((r) => r.status)).toEqual(Array(STEER_LIMITS.inbox).fill(200));
+    expect(conversation(doc.id).filter((m) => m.steered).map((m) => m.text).sort()).toEqual(Array.from({ length: STEER_LIMITS.inbox }, (_, i) => `held ${i}`));
+    turn.release();
+    await turn.done;
+    // Every seat came back: the turn is over, so a new steer is NOT_RUNNING (not BUSY).
+    expect((await steer(doc.id, { text: 'after' })).json.error?.code).toBe('NOT_RUNNING');
+  });
+
+  it('a failed cooldown lookup or screen still gives the seat back', async () => {
+    const doc = seed();
+    const turn = await startTurn(doc.id, () => ({ text: 'Ok.' }));
+    llm.script.director!.push({ text: 'Read your notes.' });
+    cooldown = async () => ({ until: Date.now() + 60_000 });
+    for (let i = 0; i < STEER_LIMITS.inbox + 1; i += 1) expect((await steer(doc.id, { text: `c ${i}` })).status).toBe(429);
+    cooldown = async () => null;
+    for (let i = 0; i < STEER_LIMITS.inbox; i += 1) expect((await steer(doc.id, { text: `ok ${i}` })).status).toBe(200);
+    turn.release();
+    await turn.done;
   });
 
   it('a safety cooldown answers 429 COOLDOWN before any screen', async () => {
@@ -341,6 +431,10 @@ describe('POST /projects/:id/steer', () => {
     const long = await steer(doc.id, { text: 'x'.repeat(MAX_STEER_CHARS + 1) });
     expect(long.status).toBe(409);
     expect(long.json.error?.code).toBe('LIMIT');
+  });
+
+  it('the steer cap is the pasted-script threshold: a note at the cap is sent again as an ordinary message', () => {
+    expect(MAX_STEER_CHARS).toBe(LONG_MESSAGE_CHARS);
   });
 
   it('parseSteerRequest trims, keeps valid focus parts only, and bounds the text', () => {
