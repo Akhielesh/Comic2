@@ -1,0 +1,3129 @@
+{
+ "_about": "Agent-editor plan §3 B4: every row of the table, run through grammar → resolve → compile on __fixtures__/dialogueDoc.ts. `args` rows are the director's structured dialogue_edit arguments (Hindi, Telugu, and English rows for an unknown font and a stale line id), not grammar. `preset` rows letter the comic with that preset. Goldens: regenerate only on a reviewed behaviour change.",
+ "rows": [
+  {
+   "id": "whisper-selected",
+   "b4": "make it a whisper",
+   "say": "make it a whisper",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "selected": true
+      },
+      "kind": "whisper"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "kind": "whisper"
+      }
+     }
+    ],
+    "label": "Make it a whisper",
+    "note": "Made “Wait for me” a whisper.",
+    "followUps": [
+     "Make it a shout",
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "whisper-ask",
+   "b4": "make it a whisper",
+   "say": "make it a whisper",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {},
+      "kind": "whisper"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_leo1",
+     "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "pronoun-nobody",
+   "b4": "make it a whisper",
+   "say": "make her second line a whisper",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "her",
+       "nth": 2
+      },
+      "kind": "whisper"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Who do you mean by “her”? Select one of her balloons or say her name.",
+    "ask": "Who do you mean by “her”? Select one of her balloons or say her name.",
+    "followUps": [
+     "Mira Patel",
+     "Leo",
+     "Bolt",
+     "Asha Patel"
+    ]
+   }
+  },
+  {
+   "id": "ids-dropped",
+   "b4": "make it a whisper",
+   "lang": "en",
+   "say": "make these whispers (one id is stale)",
+   "args": {
+    "action": "set_kind",
+    "target": {
+     "line_ids": [
+      "l_leo1",
+      "gone1"
+     ]
+    },
+    "kind": "whisper"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "lineIds": [
+        "l_leo1",
+        "gone1"
+       ]
+      },
+      "kind": "whisper"
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "kind": "whisper"
+      }
+     }
+    ],
+    "label": "Make it a whisper",
+    "note": "Made “Wait for me” a whisper. 1 of those lines isn't in the comic any more, so it was left out.",
+    "followUps": [
+     "Make it a shout",
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "thought-from-speech",
+   "b4": "turn that into a thought bubble",
+   "say": "turn that into a thought bubble",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "selected": true
+      },
+      "kind": "thought"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "kind": "thought"
+      }
+     }
+    ],
+    "label": "Make it a thought balloon",
+    "note": "Made “Wait for me” a thought balloon.",
+    "followUps": [
+     "Make it speech",
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "thought-from-caption-asks-who",
+   "b4": "turn that into a thought bubble",
+   "say": "turn that into a thought bubble",
+   "selected": [
+    "l_cap"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "selected": true
+      },
+      "kind": "thought"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [],
+    "note": "“The lab, midnight.” is a caption, so it has no speaker yet. Who's thinking it?",
+    "ask": "Who's thinking it?",
+    "followUps": [
+     "Mira Patel",
+     "Leo",
+     "Bolt",
+     "Asha Patel"
+    ]
+   }
+  },
+  {
+   "id": "narration",
+   "b4": "this is narration",
+   "say": "this is narration",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "selected": true
+      },
+      "kind": "caption"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "kind": "caption"
+      }
+     }
+    ],
+    "label": "Make it a caption",
+    "note": "Made “Wait for me” a caption. Captions have no speaker, so it is no longer Leo's line.",
+    "followUps": [
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "caption",
+   "b4": "make it a caption",
+   "say": "make it a caption",
+   "selected": [
+    "l_bolt1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "selected": true
+      },
+      "kind": "caption"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_bolt1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_3",
+      "id": "l_bolt1",
+      "patch": {
+       "kind": "caption"
+      }
+     }
+    ],
+    "label": "Make it a caption",
+    "note": "Made “Intruder detected” a caption. Captions have no speaker, so it is no longer Bolt's line.",
+    "followUps": [
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "mira-shout-run",
+   "b4": "Mira should shout 'Run!'",
+   "say": "Mira should shout 'Run!'",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 3
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "mira"
+      },
+      "kind": "shout"
+     },
+     {
+      "act": "edit_text",
+      "target": {
+       "speaker": "mira"
+      },
+      "text": "Run!"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ],
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_3",
+      "id": "l_mira3",
+      "patch": {
+       "kind": "shout",
+       "text": "Run!"
+      }
+     }
+    ],
+    "label": "Make it a shout · Change the words",
+    "note": "Made “Bolt, quiet!” a shout. Changed “Bolt, quiet!” to “Run!”."
+   }
+  },
+  {
+   "id": "mira-shout-run-asks",
+   "b4": "Mira should shout 'Run!'",
+   "say": "Mira should shout 'Run!'",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "mira"
+      },
+      "kind": "shout"
+     },
+     {
+      "act": "edit_text",
+      "target": {
+       "speaker": "mira"
+      },
+      "text": "Run!"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "panel-needs-shout",
+   "b4": "the second panel needs a shout",
+   "say": "the second panel needs a shout",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 2
+      },
+      "kind": "shout",
+      "orChange": true
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "Change a line in panel 2 to a shout, or add a new one?",
+    "ask": "Change a line in panel 2 to a shout, or add a new one?",
+    "followUps": [
+     "Make “We have to go” a shout",
+     "Make “Wait for me” a shout",
+     "Make “Quietly now” a shout",
+     "New shout…",
+     "New shout by Mira Patel",
+     "New shout by Leo"
+    ]
+   }
+  },
+  {
+   "id": "add-sfx-no-words",
+   "b4": "the second panel needs a shout",
+   "say": "add a sound effect in panel 2",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 2
+      },
+      "kind": "sfx"
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "What should the sound effect in panel 2 say? Type the words.",
+    "ask": "What should the sound effect in panel 2 say? Type the words."
+   }
+  },
+  {
+   "id": "add-shout-no-words",
+   "b4": "the second panel needs a shout",
+   "say": "add a shout in panel 2",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 2
+      },
+      "kind": "shout"
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "What should the shout in panel 2 say, and who shouts it? Type the words, or pick who first.",
+    "ask": "What should the shout in panel 2 say, and who shouts it? Type the words, or pick who first.",
+    "followUps": [
+     "New shout by Mira Patel",
+     "New shout by Leo",
+     "New shout by Bolt",
+     "New shout by Asha Patel"
+    ]
+   }
+  },
+  {
+   "id": "add-boom",
+   "b4": "add BOOM in panel 3",
+   "say": "add BOOM in panel 3",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 3
+      },
+      "kind": "sfx",
+      "text": "BOOM"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     []
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_3",
+      "id": "le1",
+      "patch": {
+       "kind": "sfx",
+       "text": "BOOM"
+      },
+      "index": 3
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "le1",
+      "patch": {
+       "x": 0.527,
+       "y": 0.9053,
+       "w": 0.16
+      }
+     }
+    ],
+    "label": "Add a sound effect",
+    "note": "Added a sound effect: “BOOM” in panel 3 on page 1.",
+    "followUps": [
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "add-boom-page-unknown",
+   "b4": "add BOOM in panel 3",
+   "say": "add BOOM in panel 3",
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": 3
+      },
+      "kind": "sfx",
+      "text": "BOOM"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     []
+    ],
+    "ops": [],
+    "note": "Which page is panel 3 on?",
+    "ask": "Which page is panel 3 on?"
+   }
+  },
+  {
+   "id": "leo-says-last-panel",
+   "b4": "Leo says 'wait for me' in the last panel",
+   "say": "Leo says 'wait for me' in the last panel",
+   "focus": {
+    "pageId": "pg_2"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "add",
+      "panel": {
+       "panel": "last"
+      },
+      "kind": "speech",
+      "speaker": "leo",
+      "text": "wait for me"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     []
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_2",
+      "panelId": "pn_5",
+      "id": "le1",
+      "patch": {
+       "kind": "speech",
+       "text": "wait for me",
+       "speakerId": "c_leo"
+      },
+      "index": 1
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_2",
+      "lineId": "le1",
+      "patch": {
+       "x": 0.665,
+       "y": 0.484,
+       "w": 0.16,
+       "tailX": 0.745,
+       "tailY": 0.5511
+      }
+     }
+    ],
+    "label": "Add a speech balloon",
+    "note": "Added a speech balloon by Leo: “wait for me” in panel 2 on page 2.",
+    "followUps": [
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "move-mira-top-left",
+   "b4": "move Mira's line to the top left",
+   "say": "move Mira's line to the top left",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 3
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "speaker": "mira"
+      },
+      "place": {
+       "frame": "panel",
+       "cell": "top-left"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.5302,
+       "y": 0.5136,
+       "pinned": true,
+       "w": 0.16
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Bolt, quiet!” to the top left of panel 3. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "move-mira-top-left-asks",
+   "b4": "move Mira's line to the top left",
+   "say": "move Mira's line to the top left",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "speaker": "mira"
+      },
+      "place": {
+       "frame": "panel",
+       "cell": "top-left"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "page-top-left",
+   "b4": "put it at the top left of the page",
+   "say": "put it at the top left of the page",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "page",
+       "cell": "top-left"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "x": 0.0332,
+       "y": 0.0216,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Wait for me” to the top left of page 1. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "narration-caption-box-bottom",
+   "b4": "put the narration in a caption box at the bottom",
+   "say": "put the narration in a caption box at the bottom",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "kind": "caption"
+      },
+      "kind": "caption"
+     },
+     {
+      "act": "move",
+      "target": {
+       "kind": "caption"
+      },
+      "place": {
+       "frame": "panel",
+       "cell": "bottom"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_cap"
+     ],
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_cap",
+      "patch": {
+       "x": 0.35,
+       "y": 0.4267,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "It's already a caption. Moved “The lab, midnight.” to the bottom of panel 1. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "caption-across-top",
+   "b4": "caption across the top",
+   "say": "caption across the top",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "kind": "caption"
+      },
+      "place": {
+       "frame": "panel",
+       "edge": "top"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_cap",
+      "patch": {
+       "x": 0.042,
+       "y": 0.042,
+       "pinned": true,
+       "w": 0.916
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “The lab, midnight.” to a full-width bar across the top of panel 1. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "caption-across-top-scroll",
+   "b4": "caption across the top",
+   "say": "caption across the top",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "preset": "storybook",
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "kind": "caption"
+      },
+      "place": {
+       "frame": "panel",
+       "edge": "top"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_cap"
+      ],
+      "patch": {
+       "shape": "rect"
+      }
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_cap",
+      "patch": {
+       "x": 0.042,
+       "y": 0.042,
+       "pinned": true,
+       "w": 0.916
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “The lab, midnight.” to a full-width bar across the top of panel 1. Pinned, so auto-layout won't move it. Its bubble is now a rectangle, so the bar runs edge to edge. Say “of the page” to use the whole page.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "up-a-bit",
+   "b4": "move it up a bit",
+   "say": "move it up a bit",
+   "selected": [
+    "l_mira1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "nudge": "up",
+       "amount": "bit"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira1",
+      "patch": {
+       "x": 0.06,
+       "y": 0.51,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “We have to go” a bit higher. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "up-a-bit-asks",
+   "b4": "move it up a bit",
+   "say": "move it up a bit",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {},
+      "place": {
+       "frame": "panel",
+       "nudge": "up",
+       "amount": "bit"
+      }
+     }
+    ],
+    "confident": false,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_leo1",
+     "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "a-lot-higher",
+   "b4": "a lot higher",
+   "say": "a lot higher",
+   "selected": [
+    "l_mira1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "nudge": "up",
+       "amount": "lot"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira1",
+      "patch": {
+       "x": 0.06,
+       "y": 0.45,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “We have to go” a lot higher. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "above-mira-head",
+   "b4": "put it above Mira's head",
+   "say": "put it above Mira's head",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "near": "mira",
+       "relation": "above"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "x": 0.06,
+       "y": 0.6963,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Wait for me” above Mira Patel's head. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "above-robot-staged",
+   "b4": "put it above Mira's head",
+   "say": "put it above the robot",
+   "selected": [
+    "l_mira3"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "near": "the robot",
+       "relation": "above"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.7948,
+       "y": 0.6043,
+       "pinned": true,
+       "w": 0.16
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Bolt, quiet!” above Bolt's head. Pinned, so auto-layout won't move it. Placed by the staging: there's no face data for Bolt on page 1 yet.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "above-leo-absent",
+   "b4": "put it above Mira's head",
+   "say": "put it above Leo's head",
+   "selected": [
+    "l_bolt1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "near": "leo",
+       "relation": "above"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_bolt1"
+     ]
+    ],
+    "ops": [],
+    "note": "Leo isn't in panel 3 (they appear in panel 2 on page 1). Move the line to Leo's panel, or place it somewhere in panel 3?",
+    "ask": "Leo isn't in panel 3 (they appear in panel 2 on page 1). Move the line to Leo's panel, or place it somewhere in panel 3?",
+    "followUps": [
+     "Move it to panel 2",
+     "Above Bolt",
+     "Above Mira Patel",
+     "Top of the panel"
+    ]
+   }
+  },
+  {
+   "id": "between-them",
+   "b4": "put it between them",
+   "say": "put it between them",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "relation": "between"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "x": 0.18,
+       "y": 0.6763,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Wait for me” between Mira Patel and Leo. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "between-nobody",
+   "b4": "put it between them",
+   "say": "put it between them",
+   "selected": [
+    "l_cap"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "panel",
+       "relation": "between"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_cap"
+     ]
+    ],
+    "ops": [],
+    "note": "Panel 1 has nobody in it, so there's no “between” there. Where should it go?",
+    "ask": "Panel 1 has nobody in it, so there's no “between” there. Where should it go?",
+    "followUps": [
+     "Top of the panel"
+    ]
+   }
+  },
+  {
+   "id": "tail-at-robot",
+   "b4": "the tail should point at the robot",
+   "say": "the tail should point at the robot",
+   "selected": [
+    "l_mira3"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "aim_tail",
+      "target": {
+       "selected": true
+      },
+      "to": "the robot"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.5302,
+       "y": 0.6505,
+       "w": 0.16,
+       "tailX": 0.879,
+       "tailY": 0.7176
+      }
+     }
+    ],
+    "label": "Aim the tail",
+    "note": "Pointed the tail of “Bolt, quiet!” at Bolt. Aimed where the page staged Bolt: there's no face data for page 1 yet."
+   }
+  },
+  {
+   "id": "tail-at-robot-absent",
+   "b4": "the tail should point at the robot",
+   "say": "the tail should point at the robot",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "aim_tail",
+      "target": {
+       "selected": true
+      },
+      "to": "the robot"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [],
+    "note": "Bolt isn't in panel 2 (they appear in panel 3 on page 1). Point the tail at someone in panel 2, or move the line to Bolt's panel?",
+    "ask": "Bolt isn't in panel 2 (they appear in panel 3 on page 1). Point the tail at someone in panel 2, or move the line to Bolt's panel?",
+    "followUps": [
+     "Point at Mira Patel",
+     "Point at Leo",
+     "Move it to panel 3",
+     "Off-panel voice"
+    ]
+   }
+  },
+  {
+   "id": "tail-her-mouth",
+   "b4": "point the tail at her mouth",
+   "say": "point the tail at her mouth",
+   "selected": [
+    "l_mira2"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "aim_tail",
+      "target": {
+       "selected": true
+      },
+      "to": "mouth"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira2"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira2",
+      "patch": {
+       "x": 0.0893,
+       "y": 0.8566,
+       "w": 0.16,
+       "tailX": 0.15,
+       "tailY": 0.81
+      }
+     }
+    ],
+    "label": "Aim the tail",
+    "note": "Pointed the tail of “Quietly now” at Mira Patel's mouth."
+   }
+  },
+  {
+   "id": "tail-no-mouth-mark",
+   "b4": "point the tail at her mouth",
+   "say": "point the tail at his mouth",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "aim_tail",
+      "target": {
+       "selected": true
+      },
+      "to": "mouth"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "tailX": 0.38,
+       "tailY": 0.76
+      }
+     }
+    ],
+    "label": "Aim the tail",
+    "note": "Pointed the tail of “Wait for me” at Leo's mouth. There's no mouth mark for Leo on page 1, so the tail points at the head."
+   }
+  },
+  {
+   "id": "no-tail",
+   "b4": "no tail",
+   "say": "no tail",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "tail_style",
+      "target": {
+       "selected": true
+      },
+      "tail": "none"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "tail": "none"
+      }
+     }
+    ],
+    "label": "Remove the tail",
+    "note": "Removed the tail of “Wait for me”."
+   }
+  },
+  {
+   "id": "lightning-tail",
+   "b4": "lightning tail",
+   "say": "lightning tail",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "tail_style",
+      "target": {
+       "selected": true
+      },
+      "tail": "lightning"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "tail": "lightning"
+      }
+     }
+    ],
+    "label": "Lightning tail",
+    "note": "Gave “Wait for me” a lightning tail."
+   }
+  },
+  {
+   "id": "swap-two",
+   "b4": "swap these two lines",
+   "say": "swap these two lines",
+   "selected": [
+    "l_mira1",
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "swap",
+      "a": {
+       "selected": true,
+       "all": true
+      },
+      "b": {
+       "selected": true,
+       "all": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira1",
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_move",
+      "pageId": "pg_1",
+      "id": "l_leo1",
+      "toPanelId": "pn_2",
+      "index": 0
+     }
+    ],
+    "label": "Swap lines",
+    "note": "Swapped “We have to go” and “Wait for me” in panel 2."
+   }
+  },
+  {
+   "id": "swap-three",
+   "b4": "swap these two lines",
+   "say": "swap these two lines",
+   "selected": [
+    "l_mira1",
+    "l_leo1",
+    "l_mira2"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "swap",
+      "a": {
+       "selected": true,
+       "all": true
+      },
+      "b": {
+       "selected": true,
+       "all": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "none",
+    "lines": [
+     [
+      "l_mira1",
+      "l_leo1",
+      "l_mira2"
+     ]
+    ],
+    "ops": [],
+    "note": "Swapping needs exactly two lines; that matched 3 lines. Select the two balloons, or name them."
+   }
+  },
+  {
+   "id": "mira-first",
+   "b4": "Mira speaks first",
+   "say": "Mira speaks first",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 3
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "reorder",
+      "target": {
+       "speaker": "mira"
+      },
+      "to": "first"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_move",
+      "pageId": "pg_1",
+      "id": "l_mira3",
+      "toPanelId": "pn_3",
+      "index": 0
+     }
+    ],
+    "label": "Reorder lines",
+    "note": "“Bolt, quiet!” now comes first in panel 3."
+   }
+  },
+  {
+   "id": "to-panel-3-asks",
+   "b4": "move this line to panel 3",
+   "say": "move this line to panel 3",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move_to_panel",
+      "target": {
+       "selected": true
+      },
+      "panel": 3
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [],
+    "note": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, add Leo to the panel, or give the line to someone drawn there?",
+    "ask": "Leo isn't drawn in panel 3. Move the line there as an off-panel voice, add Leo to the panel, or give the line to someone drawn there?",
+    "followUps": [
+     "Off-panel voice",
+     "Add Leo to panel 3",
+     "Give it to Bolt"
+    ]
+   }
+  },
+  {
+   "id": "to-panel-3-off-panel",
+   "b4": "move this line to panel 3",
+   "say": "move this line to panel 3 as an off-panel voice",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move_to_panel",
+      "target": {
+       "selected": true
+      },
+      "panel": 3
+     },
+     {
+      "act": "set_speaker",
+      "target": {
+       "selected": true
+      },
+      "speaker": "off_panel"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ],
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_move",
+      "pageId": "pg_1",
+      "id": "l_leo1",
+      "toPanelId": "pn_3"
+     },
+     {
+      "op": "balloons",
+      "pageId": "pg_1",
+      "balloons": [
+       {
+        "lineId": "l_cap",
+        "x": 0.05,
+        "y": 0.05,
+        "w": 0.3
+       },
+       {
+        "lineId": "l_mira1",
+        "x": 0.06,
+        "y": 0.53,
+        "w": 0.2,
+        "tailX": 0.15,
+        "tailY": 0.81,
+        "pinned": true
+       },
+       {
+        "lineId": "l_bolt1",
+        "x": 0.55,
+        "y": 0.53,
+        "w": 0.2
+       },
+       {
+        "lineId": "l_sfx",
+        "x": 0.75,
+        "y": 0.85,
+        "w": 0.15,
+        "locked": true,
+        "pinned": true
+       }
+      ]
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "x": 0.5743,
+       "y": 0.9243,
+       "w": 0.16,
+       "tailX": 0.6543,
+       "tailY": 0.97
+      }
+     }
+    ],
+    "label": "Move lines to panel 3 · Make it an off-panel voice",
+    "note": "Moved “Wait for me” to panel 3. Leo speaks off-panel in panel 3. Its balloon is placed fresh in panel 3. Leo now speaks from off-panel: the tail points at the bottom edge of panel 3."
+   }
+  },
+  {
+   "id": "leo-not-mira",
+   "b4": "that's Leo talking, not Mira",
+   "say": "that's Leo talking, not Mira",
+   "selected": [
+    "l_mira1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_speaker",
+      "target": {
+       "selected": true
+      },
+      "speaker": "leo"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_mira1",
+      "patch": {
+       "speakerId": "c_leo"
+      }
+     },
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira1",
+      "patch": {
+       "tailX": 0.38,
+       "tailY": 0.76
+      }
+     }
+    ],
+    "label": "Give the line to Leo",
+    "note": "Gave “We have to go” to Leo."
+   }
+  },
+  {
+   "id": "leo-not-mira-asks",
+   "b4": "that's Leo talking, not Mira",
+   "say": "that's Leo talking, not Mira",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_speaker",
+      "target": {
+       "speaker": "mira"
+      },
+      "speaker": "leo"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_mira2"
+    ]
+   }
+  },
+  {
+   "id": "off-panel-voice",
+   "b4": "the voice comes from off-panel",
+   "say": "the voice comes from off-panel",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "set_speaker",
+      "target": {
+       "selected": true
+      },
+      "speaker": "off_panel"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "tailX": 0.485,
+       "tailY": 0.6161
+      }
+     }
+    ],
+    "label": "Make it an off-panel voice",
+    "note": "Leo now speaks from off-panel: the tail points at the right edge of panel 2."
+   }
+  },
+  {
+   "id": "change-words",
+   "b4": "change it to 'We have to go'",
+   "say": "change it to 'We have to go'",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "edit_text",
+      "target": {
+       "selected": true
+      },
+      "text": "We have to go"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "text": "We have to go"
+      }
+     }
+    ],
+    "label": "Change the words",
+    "note": "Changed “Wait for me” to “We have to go”."
+   }
+  },
+  {
+   "id": "change-words-and-red",
+   "b4": "change it to 'We have to go'",
+   "say": "change the text to 'Hi' and make it red",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "edit_text",
+      "target": {
+       "selected": true
+      },
+      "text": "Hi"
+     },
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "textColor": "#e63946"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ],
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": {
+       "text": "Hi"
+      }
+     },
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "textColor": "#e63946"
+      }
+     }
+    ],
+    "label": "Change the words · Restyle balloon",
+    "note": "Changed “Wait for me” to “Hi”. Restyled “Wait for me” (red text)."
+   }
+  },
+  {
+   "id": "delete-bubble",
+   "b4": "delete this bubble",
+   "say": "delete this bubble",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "delete",
+      "target": {
+       "selected": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": null
+     }
+    ],
+    "label": "Delete balloon",
+    "note": "Deleted “Wait for me”. Undo brings it back with its translations."
+   }
+  },
+  {
+   "id": "shouts-red",
+   "b4": "make all the shouts red",
+   "say": "make all the shouts red",
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "kind": "shout",
+       "all": true
+      },
+      "scope": "kind",
+      "style": {
+       "textColor": "#e63946"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     []
+    ],
+    "ops": [
+     {
+      "op": "letter_style",
+      "patch": {
+       "kinds": {
+        "shout": {
+         "textColor": "#e63946"
+        }
+       }
+      }
+     }
+    ],
+    "label": "Restyle every shout",
+    "note": "Restyled every shout (red text)."
+   }
+  },
+  {
+   "id": "leo-italic",
+   "b4": "make Leo's lines italic",
+   "say": "make Leo's lines italic",
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "leo",
+       "all": true
+      },
+      "scope": "speaker",
+      "style": {
+       "italic": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "letter_style",
+      "patch": {
+       "speakers": {
+        "c_leo": {
+         "italic": true
+        }
+       }
+      }
+     }
+    ],
+    "label": "Restyle Leo's lines",
+    "note": "Restyled every line Leo says (italic)."
+   }
+  },
+  {
+   "id": "bigger",
+   "b4": "make this bubble bigger",
+   "say": "make this bubble bigger",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {},
+      "scaleBy": 1.2
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "sizeScale": 1.2
+      }
+     }
+    ],
+    "label": "Restyle balloon",
+    "note": "Restyled “Wait for me” (bigger text). Bigger text; say “wider bubble” for the box."
+   }
+  },
+  {
+   "id": "yellow-see-through",
+   "b4": "yellow box, a bit see-through",
+   "say": "yellow box, a bit see-through",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "fill": "#ffd60ab3"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "fill": "#ffd60ab3"
+      }
+     }
+    ],
+    "label": "Restyle balloon",
+    "note": "Restyled “Wait for me” (yellow, see-through fill)."
+   }
+  },
+  {
+   "id": "cloud-bubble",
+   "b4": "cloud / burst / jagged bubble",
+   "say": "cloud bubble",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "shape": "cloud"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "shape": "cloud"
+      }
+     }
+    ],
+    "label": "Restyle balloon",
+    "note": "Restyled “Wait for me” (cloud bubble)."
+   }
+  },
+  {
+   "id": "burst-bubble",
+   "b4": "cloud / burst / jagged bubble",
+   "say": "make it a burst bubble",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "shape": "burst"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_leo1"
+      ],
+      "patch": {
+       "shape": "burst"
+      }
+     }
+    ],
+    "label": "Restyle balloon",
+    "note": "Restyled “Wait for me” (burst bubble)."
+   }
+  },
+  {
+   "id": "handwritten-leo",
+   "b4": "use a handwritten font for Leo",
+   "say": "use a handwritten font for Leo",
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "leo",
+       "all": true
+      },
+      "scope": "speaker",
+      "style": {
+       "font": "patrick-hand"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "letter_style",
+      "patch": {
+       "speakers": {
+        "c_leo": {
+         "font": "patrick-hand"
+        }
+       }
+      }
+     }
+    ],
+    "label": "Restyle Leo's lines",
+    "note": "Restyled every line Leo says (Patrick Hand font)."
+   }
+  },
+  {
+   "id": "font-unknown",
+   "b4": "use a handwritten font for Leo",
+   "say": "use a comic sans font for Leo",
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "leo",
+       "all": true
+      },
+      "scope": "speaker",
+      "style": {},
+      "unknownFont": "comic sans"
+     }
+    ],
+    "confident": true,
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [],
+    "note": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead?",
+    "ask": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead?",
+    "followUps": [
+     "Use Comic Neue",
+     "Use Noto Sans",
+     "Use Patrick Hand"
+    ]
+   }
+  },
+  {
+   "id": "font-unknown-args",
+   "b4": "use a handwritten font for Leo",
+   "lang": "en",
+   "say": "use Comic Sans for Leo, bold",
+   "args": {
+    "action": "restyle",
+    "scope": "speaker",
+    "target": {
+     "speaker": "Leo"
+    },
+    "style": {
+     "font": "Comic Sans",
+     "bold": true
+    }
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "Leo"
+      },
+      "scope": "speaker",
+      "style": {
+       "weight": 700
+      },
+      "unknownFont": "Comic Sans"
+     }
+    ],
+    "status": "ask",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [],
+    "note": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead? Nothing changed yet: the bold comes with the font you pick.",
+    "ask": "I don't have a font called “Comic Sans”. Use Comic Neue, Noto Sans or Patrick Hand for Leo's lines instead? Nothing changed yet: the bold comes with the font you pick.",
+    "followUps": [
+     "Use Comic Neue",
+     "Use Noto Sans",
+     "Use Patrick Hand"
+    ]
+   }
+  },
+  {
+   "id": "radio",
+   "b4": "make it sound like a radio",
+   "say": "make it sound like a radio",
+   "selected": [
+    "l_bolt1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "line",
+      "style": {
+       "shape": "electronic"
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_bolt1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line_style",
+      "pageId": "pg_1",
+      "lineIds": [
+       "l_bolt1"
+      ],
+      "patch": {
+       "shape": "electronic"
+      }
+     }
+    ],
+    "label": "Restyle balloon",
+    "note": "Restyled “Intruder detected” (electronic bubble)."
+   }
+  },
+  {
+   "id": "same-style-captions",
+   "b4": "same style as this one for every caption",
+   "say": "same style as this one for every caption",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "selected": true
+      },
+      "scope": "kind",
+      "style": {},
+      "asKind": "caption"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "letter_style",
+      "patch": {
+       "kinds": {
+        "caption": {
+         "fill": "#ffffff",
+         "shape": "squircle"
+        }
+       }
+      }
+     }
+    ],
+    "label": "Restyle every caption",
+    "note": "Restyled every caption to match “Wait for me” (white fill, squircle bubble)."
+   }
+  },
+  {
+   "id": "front",
+   "b4": "bring it to the front",
+   "say": "bring it to the front",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "z",
+      "target": {
+       "selected": true
+      },
+      "dir": "front"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "z": 1
+      }
+     }
+    ],
+    "label": "Bring to front",
+    "note": "Brought “Wait for me” to the front."
+   }
+  },
+  {
+   "id": "back",
+   "b4": "send it back",
+   "say": "send it back",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "z",
+      "target": {
+       "selected": true
+      },
+      "dir": "back"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "z": -1
+      }
+     }
+    ],
+    "label": "Send to back",
+    "note": "Sent “Wait for me” to the back."
+   }
+  },
+  {
+   "id": "lock",
+   "b4": "lock it",
+   "say": "lock it",
+   "selected": [
+    "l_mira3"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "lock",
+      "target": {
+       "selected": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.5302,
+       "y": 0.6505,
+       "w": 0.16,
+       "tailX": 0.606,
+       "tailY": 0.7176,
+       "locked": true,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Lock balloon",
+    "note": "Locked “Bolt, quiet!”: auto-layout and drags won't move it."
+   }
+  },
+  {
+   "id": "dont-move",
+   "b4": "don't move this one",
+   "say": "don't move this one",
+   "selected": [
+    "l_mira3"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "lock",
+      "target": {
+       "selected": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.5302,
+       "y": 0.6505,
+       "w": 0.16,
+       "tailX": 0.606,
+       "tailY": 0.7176,
+       "locked": true,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Lock balloon",
+    "note": "Locked “Bolt, quiet!”: auto-layout and drags won't move it."
+   }
+  },
+  {
+   "id": "join-two",
+   "b4": "join these two balloons",
+   "say": "join these two balloons",
+   "selected": [
+    "l_mira1",
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "link",
+      "target": {
+       "selected": true,
+       "all": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira1",
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "linkTo": "l_mira1"
+      }
+     }
+    ],
+    "label": "Link balloons",
+    "note": "Linked 2 balloons in panel 2 on page 1 with connector necks, in reading order."
+   }
+  },
+  {
+   "id": "join-across-panels",
+   "b4": "join these two balloons",
+   "say": "join these two balloons",
+   "selected": [
+    "l_leo1",
+    "l_bolt1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "link",
+      "target": {
+       "selected": true,
+       "all": true
+      }
+     }
+    ],
+    "confident": true,
+    "status": "none",
+    "lines": [
+     [
+      "l_leo1",
+      "l_bolt1"
+     ]
+    ],
+    "ops": [],
+    "note": "Linked balloons must be in the same panel; these are in panels 2 and 3."
+   }
+  },
+  {
+   "id": "tidy",
+   "b4": "tidy the bubbles",
+   "say": "tidy the bubbles",
+   "focus": {
+    "pageId": "pg_1"
+   },
+   "expect": {
+    "intents": [],
+    "confident": false,
+    "status": "none",
+    "lines": [],
+    "ops": [],
+    "note": "I didn't find a dialogue edit in that."
+   }
+  },
+  {
+   "id": "bold-one-word",
+   "b4": "make 'never' bold",
+   "say": "make 'never' bold",
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "emphasis",
+      "target": {
+       "selected": true
+      },
+      "words": [
+       "never"
+      ],
+      "style": "bold"
+     }
+    ],
+    "confident": true,
+    "status": "none",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [],
+    "note": "I can bold the whole balloon now; single-word bold isn't available yet.",
+    "followUps": [
+     "Bold the balloon"
+    ]
+   }
+  },
+  {
+   "id": "run-on",
+   "b4": "um so move Mira's line up top and like make it a whisper",
+   "say": "um so move Mira's line up top and like make it a whisper",
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 3
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "speaker": "mira"
+      },
+      "place": {
+       "frame": "panel",
+       "cell": "top"
+      }
+     },
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "mira"
+      },
+      "kind": "whisper"
+     }
+    ],
+    "confident": true,
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ],
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.6625,
+       "y": 0.5136,
+       "pinned": true,
+       "w": 0.16
+      }
+     },
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_3",
+      "id": "l_mira3",
+      "patch": {
+       "kind": "whisper"
+      }
+     }
+    ],
+    "label": "Move balloon · Make it a whisper",
+    "note": "Moved “Bolt, quiet!” to the top of panel 3. Pinned, so auto-layout won't move it. Say “of the page” to use the whole page. Made “Bolt, quiet!” a whisper.",
+    "followUps": [
+     "Make it a shout",
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "hi-whisper",
+   "b4": "make it a whisper",
+   "lang": "hi",
+   "say": "मीरा की लाइन को फुसफुसाहट बना दो",
+   "args": {
+    "action": "set_kind",
+    "target": {
+     "speaker": "Mira"
+    },
+    "kind": "whisper"
+   },
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 3
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "set_kind",
+      "target": {
+       "speaker": "Mira"
+      },
+      "kind": "whisper"
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_3",
+      "id": "l_mira3",
+      "patch": {
+       "kind": "whisper"
+      }
+     }
+    ],
+    "label": "Make it a whisper",
+    "note": "Made “Bolt, quiet!” a whisper.",
+    "followUps": [
+     "Make it a shout",
+     "Try another font",
+     "Move it"
+    ]
+   }
+  },
+  {
+   "id": "hi-page-top-left",
+   "b4": "put it at the top left of the page",
+   "lang": "hi",
+   "say": "इसे पेज के ऊपर बाएँ कोने में रखो",
+   "args": {
+    "action": "move",
+    "target": {
+     "selected": true
+    },
+    "place": {
+     "frame": "page",
+     "cell": "top-left"
+    }
+   },
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "move",
+      "target": {
+       "selected": true
+      },
+      "place": {
+       "frame": "page",
+       "cell": "top-left"
+      }
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_leo1",
+      "patch": {
+       "x": 0.0332,
+       "y": 0.0216,
+       "pinned": true
+      }
+     }
+    ],
+    "label": "Move balloon",
+    "note": "Moved “Wait for me” to the top left of page 1. Pinned, so auto-layout won't move it.",
+    "followUps": [
+     "A bit higher",
+     "Lock it"
+    ]
+   }
+  },
+  {
+   "id": "hi-tail-robot",
+   "b4": "the tail should point at the robot",
+   "lang": "hi",
+   "say": "पूंछ को रोबोट की ओर करो",
+   "args": {
+    "action": "aim_tail",
+    "target": {
+     "selected": true
+    },
+    "tail_to": "the robot"
+   },
+   "selected": [
+    "l_mira3"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "aim_tail",
+      "target": {
+       "selected": true
+      },
+      "to": "the robot"
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_mira3"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "balloon",
+      "pageId": "pg_1",
+      "lineId": "l_mira3",
+      "patch": {
+       "x": 0.5302,
+       "y": 0.6505,
+       "w": 0.16,
+       "tailX": 0.879,
+       "tailY": 0.7176
+      }
+     }
+    ],
+    "label": "Aim the tail",
+    "note": "Pointed the tail of “Bolt, quiet!” at Bolt. Aimed where the page staged Bolt: there's no face data for page 1 yet."
+   }
+  },
+  {
+   "id": "te-leo-italic",
+   "b4": "make Leo's lines italic",
+   "lang": "te",
+   "say": "లియో డైలాగ్‌ని ఇటాలిక్‌గా చేయండి",
+   "args": {
+    "action": "restyle",
+    "target": {
+     "speaker": "Leo"
+    },
+    "scope": "speaker",
+    "style": {
+     "italic": true
+    }
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "restyle",
+      "target": {
+       "speaker": "Leo"
+      },
+      "scope": "speaker",
+      "style": {
+       "italic": true
+      }
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1",
+      "l_p2leo"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "letter_style",
+      "patch": {
+       "speakers": {
+        "c_leo": {
+         "italic": true
+        }
+       }
+      }
+     }
+    ],
+    "label": "Restyle Leo's lines",
+    "note": "Restyled every line Leo says (italic)."
+   }
+  },
+  {
+   "id": "te-delete",
+   "b4": "delete this bubble",
+   "lang": "te",
+   "say": "ఈ బబుల్‌ని తొలగించు",
+   "args": {
+    "action": "delete",
+    "target": {
+     "selected": true
+    }
+   },
+   "selected": [
+    "l_leo1"
+   ],
+   "expect": {
+    "intents": [
+     {
+      "act": "delete",
+      "target": {
+       "selected": true
+      }
+     }
+    ],
+    "status": "apply",
+    "lines": [
+     [
+      "l_leo1"
+     ]
+    ],
+    "ops": [
+     {
+      "op": "line",
+      "pageId": "pg_1",
+      "panelId": "pn_2",
+      "id": "l_leo1",
+      "patch": null
+     }
+    ],
+    "label": "Delete balloon",
+    "note": "Deleted “Wait for me”. Undo brings it back with its translations."
+   }
+  },
+  {
+   "id": "te-swap-ask",
+   "b4": "swap these two lines",
+   "lang": "te",
+   "say": "ఈ రెండు లైన్‌లను మార్చు",
+   "args": {
+    "action": "swap",
+    "target": {
+     "speaker": "Mira"
+    },
+    "second": {
+     "speaker": "Leo"
+    }
+   },
+   "focus": {
+    "pageId": "pg_1",
+    "panelN": 2
+   },
+   "expect": {
+    "intents": [
+     {
+      "act": "swap",
+      "a": {
+       "speaker": "Mira"
+      },
+      "b": {
+       "speaker": "Leo"
+      }
+     }
+    ],
+    "status": "ask",
+    "lines": [],
+    "ops": [],
+    "note": "Which line?",
+    "ask": "Which line?",
+    "options": [
+     "l_mira1",
+     "l_mira2"
+    ]
+   }
+  }
+ ]
+}
