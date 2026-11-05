@@ -2428,7 +2428,8 @@ describe('Live agent, dialogue and Pro editor v2 contract (K3)', () => {
     // An activity without `where` is exactly the old event on the wire.
     expect(encodeStudioEvent({ type: 'activity', id: 'a', label: 'x', phase: 'end' })).toBe('{"type":"activity","id":"a","label":"x","phase":"end"}');
     expectTypeOf<SteerRequest>().toEqualTypeOf<{ text: string; focus?: StudioFocus }>();
-    expect(STEER_LIMITS).toEqual({ inbox: 3, extraRounds: 2, whereLines: 20 });
+    // noteChars: the longest steer note, one number for client and server (session.ts LONG_MESSAGE_CHARS reads it).
+    expect(STEER_LIMITS).toEqual({ inbox: 3, extraRounds: 2, whereLines: 20, noteChars: 6000 });
   });
 
   it('doc: the conflict card is a Card, round-trips normalizeDoc and the wire unchanged, and malformed parts are dropped', () => {

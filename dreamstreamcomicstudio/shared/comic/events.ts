@@ -48,8 +48,9 @@ export interface SteerResponse {
   ok: true;
   msgId: string;
 }
-/** Steering bounds (plan §3 A2): inbox size, extra director rounds a late note may add, presence ids per event. */
-export const STEER_LIMITS = { inbox: 3, extraRounds: 2, whereLines: 20 } as const;
+/** Steering bounds (plan §3 A2): inbox size, extra director rounds a late note may add, presence ids per event, and the
+ *  longest note (characters; a longer one goes to Up next as an ordinary message, server LONG_MESSAGE_CHARS). */
+export const STEER_LIMITS = { inbox: 3, extraRounds: 2, whereLines: 20, noteChars: 6000 } as const;
 
 /** Optional quick-assign of one image attachment. */
 export type AttachmentTarget = RefOwner | { kind: 'new_character'; name: string; castKind?: CastKind } | null;

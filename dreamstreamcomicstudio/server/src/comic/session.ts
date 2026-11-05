@@ -43,7 +43,7 @@ import {
 import { canServeToOwner } from '../../../shared/comic/safety.js';
 import { logger } from '../lib/logger.js';
 import { isLibraryPath, isPublicationPath, isQuarantinePath } from './storagePaths.js';
-import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioEventListener, type StudioSessionApi } from './types.js';
+import { StudioError, type AssetStore, type DocStore, type ProjectRowSummary, type StudioErrorCode, type StudioEventListener, type StudioSessionApi } from './types.js';
 // --- history (versions plan §4.1; H0 seam: no-op hooks until H2) ---
 import { createHistoryHooks, type HistoryHooks } from './history/hooks.js';
 
@@ -387,7 +387,7 @@ export interface SteerNote {
 }
 
 /** Why the steer inbox takes no note right now: no director turn is reading it (NOT_RUNNING), or it is full (BUSY). */
-export type SteerRefusal = 'NOT_RUNNING' | 'BUSY';
+export type SteerRefusal = Extract<StudioErrorCode, 'NOT_RUNNING' | 'BUSY'>;
 
 /** One committed batch, as the recent-commit ring keeps it (A2): what the conflict guard (A3) reads after a turn's startRev. */
 export interface RecentCommit {
@@ -413,7 +413,7 @@ export const RECENT_COMMITS_BYTES = 1_000_000;
  * threshold, the longest steer note (routes/comic.ts MAX_STEER_CHARS) and the longest text a "Send my note" chip says
  * (director.ts unreadSteerReply), so a note sent again is always an ordinary message, never a pasted script.
  */
-export const LONG_MESSAGE_CHARS = 6000;
+export const LONG_MESSAGE_CHARS = STEER_LIMITS.noteChars;
 
 /** Steer notes waiting for `session`'s running turn (empty for a session without an inbox, e.g. a test double). */
 export const takeSteerOf = (session: StudioSessionApi): SteerNote[] =>

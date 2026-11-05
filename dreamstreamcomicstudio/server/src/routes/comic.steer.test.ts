@@ -435,6 +435,8 @@ describe('POST /projects/:id/steer', () => {
 
   it('the steer cap is the pasted-script threshold: a note at the cap is sent again as an ordinary message', () => {
     expect(MAX_STEER_CHARS).toBe(LONG_MESSAGE_CHARS);
+    // One number for client and server: the shared STEER_LIMITS.noteChars (A2 wave note 7).
+    expect(LONG_MESSAGE_CHARS).toBe(STEER_LIMITS.noteChars);
   });
 
   it('parseSteerRequest trims, keeps valid focus parts only, and bounds the text', () => {
