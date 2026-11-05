@@ -97,12 +97,12 @@ describe('named styles: never in a spec hash, but a change since publishing', ()
   });
 });
 
-describe('session.ts stubs (A2 TURN fills them)', () => {
-  it('takeSteer drains nothing, recentCommits is empty, reserveTurn refuses only while a turn runs', async () => {
+describe('session.ts steering seams (A2 TURN filled them)', () => {
+  it('takeSteer drains nothing without a turn; recentCommits records each commit; reserveTurn refuses while a turn runs', async () => {
     const session = newSession(plannedDoc());
     expect(session.takeSteer()).toEqual([]);
     session.commit([{ op: 'brief', patch: { title: 'X' } }], { origin: 'user' });
-    expect(session.recentCommits(0)).toEqual([]);
+    expect(session.recentCommits(session.doc.rev - 1)).toMatchObject([{ rev: session.doc.rev, origin: 'user', ops: [{ op: 'brief', patch: { title: 'X' } }] }]);
     expect(RECENT_COMMITS_MAX).toBe(300);
     const release = session.reserveTurn();
     expect(typeof release).toBe('function');
@@ -175,7 +175,7 @@ describe('tools.ts: the reserved dialogue tool and offer_next (B-TOOL fills them
   });
 });
 
-describe('conflict stubs (A3 CONFLICT fills them)', () => {
+describe('conflict guard with the flag off (A3 fills it)', () => {
   it('the guard allows every op; the tool note and the card stay silent until something is held back', () => {
     const ctx = testContext(newSession(plannedDoc()));
     const turn = createDirectorTurn();
@@ -196,7 +196,7 @@ describe('conflict stubs (A3 CONFLICT fills them)', () => {
     expect(card).toMatchObject({ type: 'conflict', items: [{ where: blocked[0].where, mine: 'We have to go', theirs: 'Run!', proposed: blocked[0].proposed }] });
   });
 
-  it('resolve_conflict is a registered free action whose stub refuses NOT_AVAILABLE and changes nothing', async () => {
+  it('resolve_conflict is a registered free action, refused NOT_AVAILABLE while the conflict guard is off', async () => {
     expect(NON_SPEND_ACTION_TYPES.has('resolve_conflict')).toBe(true);
     expect(CORE_ACTION_TYPES.has('resolve_conflict')).toBe(false);
     expect(ACTION_HANDLERS.resolve_conflict).toMatchObject({ type: 'resolve_conflict', spend: false });
@@ -220,7 +220,7 @@ describe('director.ts call sites', () => {
       ]
     });
 
-  it('drains the steer inbox after each tool round, before the next model call (stub inbox: nothing changes)', async () => {
+  it('drains the steer inbox after each tool round, before the next model call', async () => {
     const quiet = newSession(createEmptyDoc('proj-1'));
     const llmQuiet = toolThenReply();
     await runDirectorTurn(testContext(quiet, { llm: llmQuiet }), { text: 'Call it Spice Run', attachments: [] });
