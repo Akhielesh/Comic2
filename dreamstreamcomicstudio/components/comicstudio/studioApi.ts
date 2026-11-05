@@ -11,7 +11,7 @@ import { del, get, patch as apiPatch, post, postStream } from '../../services/ap
 import { buildApiUrl } from '../../services/clientConfig';
 import { readSSEStream } from '../../services/sse';
 import { REDRAW_SCOPES, normalizeDoc, type ComicDoc, type QualityTier, type RedrawScope, type RefAsset, type RefLabel, type RefOwner, type RenderTarget } from '../../shared/comic/doc';
-import { STREAM_EVENT_NAMES, type StreamRequest, type StudioEvent } from '../../shared/comic/events';
+import { STREAM_EVENT_NAMES, type SteerRequest, type SteerResponse, type StreamRequest, type StudioEvent } from '../../shared/comic/events';
 import { getImageModel, type ImageModelSpec, type TierPreset } from '../../shared/comic/models';
 import type { DocOp, StudioAction } from '../../shared/comic/ops';
 import type { StudioActOutcome } from './types';
@@ -457,6 +457,31 @@ export async function cancelStudio(id: string): Promise<void> {
   } catch (err) {
     throw toStudioApiError(err, 'project');
   }
+}
+
+/**
+ * POST /projects/:id/steer (agent-editor plan §3 A2, COMIC_STEER): add a note to the director turn that is running. The
+ * server screens it like a chat message, commits it as a user message marked `steered` and the director reads it
+ * before its next model call. Resolves with that message's id. Every refusal changes nothing on the server and rejects
+ * with a StudioApiError whose `code` says what to do with the note:
+ * - `NOT_RUNNING` (no director turn is reading notes: none runs, or a message is still being prepared or screened),
+ *   `BUSY` (STEER_LIMITS.inbox notes already wait or are being screened) or `LIMIT` (a note over 6000 characters goes as
+ *   its own message): keep the note queued and send it as a message when the turn ends;
+ * - `NOT_AVAILABLE`: steering is off for this account, whatever the note (D2: Stop the director, then send);
+ * - `CONTENT_POLICY`: nothing was added (show the message, keep the draft); `COOLDOWN`: a short safety break.
+ */
+export async function steerStudio(projectId: string, req: SteerRequest, opts: { signal?: AbortSignal } = {}): Promise<SteerResponse> {
+  const body: SteerRequest = { text: req.text, ...(req.focus ? { focus: req.focus } : {}) };
+  let res: unknown;
+  try {
+    res = await post<SteerRequest, unknown>(`${projectPath(projectId)}/steer`, body, opts);
+  } catch (err) {
+    throw toStudioApiError(err, 'project');
+  }
+  if (!isObject(res) || res.ok !== true || typeof res.msgId !== 'string' || !res.msgId) {
+    throw new StudioApiError('server', "The studio didn't confirm your note was added. Send it again once the director finishes.", { status: 200 });
+  }
+  return { ok: true, msgId: res.msgId };
 }
 
 /** Fresh signed URLs for storage paths the doc references (missing paths are omitted). */
