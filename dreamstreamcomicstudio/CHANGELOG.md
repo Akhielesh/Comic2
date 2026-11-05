@@ -124,14 +124,15 @@ All notable user-facing changes. Format loosely follows
   battery and data on your phone, less load on ours.
 
 ### Security
-- **Abuse limits (2026-11-05):** sign-up checks whether a username is free without ever looking
-  up the email behind it. Sign-in emails (confirm, password reset, magic link) keep a share of
-  the daily and monthly email allowance that newsletter and invite mail can't use, and a
+- **Abuse limits (2026-11-05):** sign-in emails (confirm, password reset, magic link) keep a
+  share of the daily and monthly email allowance that newsletter and invite mail can't use, and a
   newsletter address is re-sent its confirm link at most once every 10 minutes and 3 times a
-  day. Invite-page RSVPs refuse links as names and are limited per network and per event
-  ("Add your name — links aren't allowed here."). Error reports from signed-out visitors are
-  capped so they can't fill the database. Rate limits now treat an IPv6 network (/64) as one
-  visitor. Server logs no longer show full email addresses.
+  day (new product picks you add meanwhile are still saved). Invite-page RSVPs refuse links as
+  names and are limited per network and per event ("Add your name — links aren't allowed
+  here."); a full guest list says so instead of dropping the first guests. Error reports and
+  feedback are capped per visitor and per account so they can't fill the database. Rate limits
+  now treat an IPv6 network (/64) as one visitor. Server logs no longer show full email
+  addresses.
 
 ### Fixed
 - **Calls connect faster and say why when they can't (2026-10-22):** answering is about twice

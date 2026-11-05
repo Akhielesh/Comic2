@@ -9,14 +9,17 @@
 //   persisted:false so the caller/route stays honest.
 // - Enrich server-side. The client supplies the payload; the server stamps the
 //   request id, ip, user agent and the authoritative server receive time.
-// - Bound what anyone without an account can store (abuse-ops-3: the free-plan database is
-//   500 MB and these routes are public). A row not tied to an account — a signed-out client's
-//   event or feedback, or a server error from a signed-out request — is stored only when it is
-//   warn / error / critical, with a 1,000-character message and 4,500 bytes of metadata, within
-//   an in-memory budget of 300 rows per IPv4 address or IPv6 /64 and 3,000 rows in all per UTC
-//   day. Above 150 MB in the two tables (public.telemetry_table_bytes(),
+// - Bound what anyone can make the free-plan database keep (abuse-ops-3: it is 500 MB and these
+//   routes are public). A signed-out client's row is stored only when it is warn / error /
+//   critical, with a 1,000-character message and 4,500 bytes of metadata, within an in-memory
+//   budget of 300 rows per IPv4 address or IPv6 /64 and 3,000 rows in all per UTC day. A signed-in
+//   account may store 5,000 events and 50 feedback rows a UTC day. Server-side 5xx records have a
+//   budget of their own (the same sizes), so a flood of client events can't stop them being kept.
+//   Above 150 MB in the two tables (public.telemetry_table_bytes(),
 //   server/sql/telemetry_table_bytes_2026_11.sql; the check is skipped while that function is
-//   absent) only a signed-in person's feedback is still stored. Everything refused is still logged.
+//   absent) nothing more is stored, except signed-in feedback up to 160 MB; between two size
+//   reads (5 minutes apart) the bytes stored since the last read count too. Everything refused is
+//   still logged.
 
 import type { FeedbackInput, TelemetryEventInput, TelemetrySeverity } from '../../../apiTypes.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
@@ -83,47 +86,67 @@ const sanitizeMetadata = (value: unknown, maxBytes = METADATA_MAX_BYTES): Record
   }
 };
 
-// ── Anonymous storage budget (abuse-ops-3) ──────────────────────────────────────
-// In memory, per process: it resets when the container restarts or sleeps, which only ever
-// happens after 15 quiet minutes — a flood keeps it awake and counting. A brake on what an
-// unauthenticated sender can make us store, not an exact meter.
+// ── Storage budgets (abuse-ops-3) ───────────────────────────────────────────────
+// In memory, per process: they reset when the container restarts or sleeps, which only ever
+// happens after 15 quiet minutes — a flood keeps it awake and counting. A brake on what one
+// sender can make us store, not an exact meter.
 /** Severities a signed-out caller's row is stored for; debug / info are logged only. */
 const ANON_STORED_SEVERITIES: ReadonlySet<string> = new Set(['warn', 'error', 'critical']);
 export const ANON_ROWS_PER_DAY = 3_000;
 export const ANON_ROWS_PER_CLIENT_PER_DAY = 300;
+/** A signed-in account's events a UTC day: far above what one person's tabs send, far below a flood. */
+export const ACCOUNT_EVENT_ROWS_PER_DAY = 5_000;
+/** A signed-in account's feedback rows a UTC day (each one is a deliberate click or comment). */
+export const ACCOUNT_FEEDBACK_ROWS_PER_DAY = 50;
+/** Server-side 5xx records: per account or sender, and in all. */
+export const SERVER_ROWS_PER_SENDER_PER_DAY = 300;
+export const SERVER_ROWS_PER_DAY = 3_000;
+
+type Pool = 'anon' | 'account_events' | 'account_feedback' | 'server';
+const POOL_LIMITS: Record<Pool, { perSender: number; perDay: number }> = {
+  anon: { perSender: ANON_ROWS_PER_CLIENT_PER_DAY, perDay: ANON_ROWS_PER_DAY },
+  account_events: { perSender: ACCOUNT_EVENT_ROWS_PER_DAY, perDay: Number.POSITIVE_INFINITY },
+  account_feedback: { perSender: ACCOUNT_FEEDBACK_ROWS_PER_DAY, perDay: Number.POSITIVE_INFINITY },
+  server: { perSender: SERVER_ROWS_PER_SENDER_PER_DAY, perDay: SERVER_ROWS_PER_DAY }
+};
 
 let budgetDay = '';
-let anonRowsToday = 0;
-const anonRowsByClient = new Map<string, number>();
+const poolUse = new Map<Pool, { today: number; bySender: Map<string, number> }>();
 const budgetRefusals = new Map<string, number>();
 
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
-/** How many of `wanted` rows this sender may still store today (and count them as stored). */
-const takeAnonBudget = (ip: string | undefined, wanted: number, now = Date.now()): number => {
+/** The budget key: the account when signed in, else the IPv4 address / IPv6 /64. */
+const senderKey = (ctx: TelemetryContext): string => (ctx.userId ? `u:${ctx.userId}` : `ip:${clientKey(ctx.ip) ?? 'unknown'}`);
+
+/** How many of `wanted` rows this sender may still store today in `pool` (and count them as stored). */
+const takeBudget = (pool: Pool, sender: string, wanted: number, now = Date.now()): number => {
   const day = utcDay(now);
   if (day !== budgetDay) {
     budgetDay = day;
-    anonRowsToday = 0;
-    anonRowsByClient.clear();
+    poolUse.clear();
     budgetRefusals.clear();
   }
-  const key = clientKey(ip) ?? 'unknown';
-  const used = anonRowsByClient.get(key) ?? 0;
-  const granted = Math.max(0, Math.min(wanted, ANON_ROWS_PER_CLIENT_PER_DAY - used, ANON_ROWS_PER_DAY - anonRowsToday));
-  // Only a sender that was granted something is remembered, so the map holds at most
-  // ANON_ROWS_PER_DAY keys however many /64s a flood rotates through.
+  const limits = POOL_LIMITS[pool];
+  let use = poolUse.get(pool);
+  if (!use) poolUse.set(pool, (use = { today: 0, bySender: new Map() }));
+  const used = use.bySender.get(sender) ?? 0;
+  const granted = Math.max(0, Math.min(wanted, limits.perSender - used, limits.perDay - use.today));
+  // Only a sender that was granted something is remembered: a signed-out pool holds at most its
+  // per-day rows in keys however many /64s a flood rotates through; an account pool holds the
+  // accounts that stored something today.
   if (granted > 0) {
-    anonRowsByClient.set(key, used + granted);
-    anonRowsToday += granted;
+    use.bySender.set(sender, used + granted);
+    use.today += granted;
   }
   if (granted < wanted) {
-    const scope = anonRowsToday >= ANON_ROWS_PER_DAY ? 'day' : 'client';
-    const n = (budgetRefusals.get(scope) ?? 0) + 1;
-    budgetRefusals.set(scope, n);
+    const scope = use.today >= limits.perDay ? 'day' : 'sender';
+    const key = `${pool}:${scope}`;
+    const n = (budgetRefusals.get(key) ?? 0) + 1;
+    budgetRefusals.set(key, n);
     // One line at the 1st, 10th, 100th … refusal of each kind per day — never a log flood.
     if (Number.isInteger(Math.log10(n))) {
-      logger.warn('telemetry_anon_budget_exhausted', { scope, refusals: n, rowsToday: anonRowsToday, day });
+      logger.warn('telemetry_budget_exhausted', { pool, scope, refusals: n, rowsToday: use.today, day });
     }
   }
   return granted;
@@ -131,51 +154,85 @@ const takeAnonBudget = (ip: string | undefined, wanted: number, now = Date.now()
 
 // ── Table-size gate (abuse-ops-3) ───────────────────────────────────────────────
 export const TELEMETRY_STORAGE_LIMIT_BYTES = 150 * 1024 * 1024;
+/** Signed-in feedback still lands up to here: deliberate, 50 a day per account, so 10 MB of room. */
+export const FEEDBACK_STORAGE_LIMIT_BYTES = 160 * 1024 * 1024;
 const SIZE_CHECK_TTL_MS = 5 * 60_000;
-let sizeCheck: { at: number; full: boolean } | null = null;
-let sizeCheckInFlight: Promise<boolean> | null = null;
+/** The last size read (null bytes: unknown — function absent or the call failed). */
+let sizeCheck: { at: number; bytes: number | null } | null = null;
+let sizeCheckInFlight: Promise<number | null> | null = null;
+/**
+ * Bytes stored since the last size read (JSON size of each inserted row): without it, one account
+ * at the route limit could add ~100 MB after the table passed the limit before the cached answer
+ * flipped. An estimate (indexes and TOAST differ), corrected at every read.
+ */
+let bytesSinceCheck = 0;
+let fullLoggedAt = 0;
 
 const isMissingFunction = (error: { code?: string; message?: string }) =>
   error.code === 'PGRST202' || error.code === '42883' || /could not find the function|does not exist/i.test(error.message || '');
 
-/**
- * True when telemetry_events + user_feedback are past TELEMETRY_STORAGE_LIMIT_BYTES. Asks
- * public.telemetry_table_bytes() at most once per 5 minutes. Fails open: before that function
- * exists (or if the call fails) the check is skipped, as before this gate existed.
- */
-const telemetryStorageFull = async (): Promise<boolean> => {
-  if (sizeCheck && Date.now() - sizeCheck.at < SIZE_CHECK_TTL_MS) return sizeCheck.full;
+/** The last read of public.telemetry_table_bytes(), at most once per 5 minutes. */
+const lastTableBytes = async (): Promise<number | null> => {
+  if (sizeCheck && Date.now() - sizeCheck.at < SIZE_CHECK_TTL_MS) return sizeCheck.bytes;
   if (sizeCheckInFlight) return sizeCheckInFlight;
+  // Reset when the read is issued, not when it answers: a row stored meanwhile may then be counted
+  // twice (in the read and here), never not at all.
+  bytesSinceCheck = 0;
   sizeCheckInFlight = (async () => {
-    let full = false;
+    let bytes: number | null = null;
     try {
       const { data, error } = await getSupabaseAdmin().rpc('telemetry_table_bytes');
       if (error) {
         if (!isMissingFunction(error)) logger.warn('telemetry_size_check_failed', { code: error.code, message: error.message });
       } else {
-        const bytes = Number(data);
-        full = Number.isFinite(bytes) && bytes > TELEMETRY_STORAGE_LIMIT_BYTES;
-        if (full) logger.warn('telemetry_storage_full', { bytes, limitBytes: TELEMETRY_STORAGE_LIMIT_BYTES });
+        const n = Number(data);
+        bytes = Number.isFinite(n) ? n : null;
       }
     } catch (err) {
       logger.warn('telemetry_size_check_threw', { message: (err as Error)?.message || String(err) });
     }
-    sizeCheck = { at: Date.now(), full };
-    return full;
+    sizeCheck = { at: Date.now(), bytes };
+    return bytes;
   })().finally(() => {
     sizeCheckInFlight = null;
   });
   return sizeCheckInFlight;
 };
 
+/**
+ * True when telemetry_events + user_feedback (the last read plus what was stored since) are past
+ * `limitBytes`. Fails open: before telemetry_table_bytes() exists (or if the call fails) the
+ * check is skipped, as before this gate existed.
+ */
+const telemetryStorageFull = async (limitBytes = TELEMETRY_STORAGE_LIMIT_BYTES): Promise<boolean> => {
+  const last = await lastTableBytes();
+  if (last === null) return false;
+  const bytes = last + bytesSinceCheck;
+  if (bytes <= limitBytes) return false;
+  if (sizeCheck && fullLoggedAt !== sizeCheck.at) {
+    fullLoggedAt = sizeCheck.at; // once per size read
+    logger.warn('telemetry_storage_full', { bytes, lastReadBytes: last, limitBytes });
+  }
+  return true;
+};
+
+const noteStored = (rows: unknown): void => {
+  try {
+    bytesSinceCheck += Buffer.byteLength(JSON.stringify(rows));
+  } catch {
+    // unreachable for the plain rows built here; never let accounting break a write
+  }
+};
+
 /** Test hook: forget the day's budgets and the cached size check. */
 export const resetTelemetryLimits = (): void => {
   budgetDay = '';
-  anonRowsToday = 0;
-  anonRowsByClient.clear();
+  poolUse.clear();
   budgetRefusals.clear();
   sizeCheck = null;
   sizeCheckInFlight = null;
+  bytesSinceCheck = 0;
+  fullLoggedAt = 0;
 };
 
 const normalizeEvent = (raw: unknown, ctx: TelemetryContext) => {
@@ -208,10 +265,10 @@ export interface RecordResult {
   persisted: boolean;
 }
 
-export const recordTelemetryEvents = async (
-  rawEvents: unknown[],
-  ctx: TelemetryContext
-): Promise<RecordResult> => {
+/** Where the rows come from: a client batch, or the server's own 5xx record (its own budget). */
+type EventOrigin = 'client' | 'server';
+
+const recordEvents = async (rawEvents: unknown[], ctx: TelemetryContext, origin: EventOrigin): Promise<RecordResult> => {
   const rows = (Array.isArray(rawEvents) ? rawEvents : [])
     .map((raw) => normalizeEvent(raw, ctx))
     .filter((row) => row.event_type);
@@ -237,10 +294,11 @@ export const recordTelemetryEvents = async (
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
     return { accepted: rows.length, persisted: false };
   }
-  // Not tied to an account: only warn and above, within the sender's and the day's budget.
+  // Not tied to an account: only warn and above. Then the sender's day budget in its pool.
   let toStore = ctx.userId ? rows : rows.filter((row) => ANON_STORED_SEVERITIES.has(row.severity));
   if (toStore.length === 0 || (await telemetryStorageFull())) return { accepted: rows.length, persisted: false };
-  if (!ctx.userId) toStore = toStore.slice(0, takeAnonBudget(ctx.ip, toStore.length));
+  const pool: Pool = origin === 'server' ? 'server' : ctx.userId ? 'account_events' : 'anon';
+  toStore = toStore.slice(0, takeBudget(pool, senderKey(ctx), toStore.length));
   if (toStore.length === 0) return { accepted: rows.length, persisted: false };
 
   try {
@@ -249,6 +307,7 @@ export const recordTelemetryEvents = async (
       logger.warn('telemetry_persist_failed', { code: (error as { code?: string }).code, message: error.message });
       return { accepted: rows.length, persisted: false };
     }
+    noteStored(toStore);
     // Honest: true only when every accepted event was stored.
     return { accepted: rows.length, persisted: toStore.length === rows.length };
   } catch (error) {
@@ -256,6 +315,10 @@ export const recordTelemetryEvents = async (
     return { accepted: rows.length, persisted: false };
   }
 };
+
+/** A client's batch (routes/telemetry.ts). */
+export const recordTelemetryEvents = (rawEvents: unknown[], ctx: TelemetryContext): Promise<RecordResult> =>
+  recordEvents(rawEvents, ctx, 'client');
 
 const normalizeFeedback = (raw: unknown, ctx: TelemetryContext) => {
   const f = (raw && typeof raw === 'object' ? raw : {}) as Partial<FeedbackInput>;
@@ -308,11 +371,12 @@ export const recordFeedback = async (raw: unknown, ctx: TelemetryContext): Promi
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
     return { persisted: false };
   }
-  // Signed-out feedback shares the anonymous budget and stops at the size limit; a signed-in
-  // person's feedback (low volume, deliberately submitted) is always stored.
-  if (!ctx.userId && ((await telemetryStorageFull()) || takeAnonBudget(ctx.ip, 1) < 1)) {
-    return { persisted: false };
-  }
+  // Signed-out feedback shares the anonymous budget and stops at the size limit. A signed-in
+  // person's (deliberate, low volume) has 50 a day and 10 MB of room past the limit.
+  const refused = ctx.userId
+    ? (await telemetryStorageFull(FEEDBACK_STORAGE_LIMIT_BYTES)) || takeBudget('account_feedback', senderKey(ctx), 1) < 1
+    : (await telemetryStorageFull()) || takeBudget('anon', senderKey(ctx), 1) < 1;
+  if (refused) return { persisted: false };
 
   try {
     const { error } = await getSupabaseAdmin().from('user_feedback').insert(row);
@@ -320,6 +384,7 @@ export const recordFeedback = async (raw: unknown, ctx: TelemetryContext): Promi
       logger.warn('feedback_persist_failed', { code: (error as { code?: string }).code, message: error.message });
       return { persisted: false };
     }
+    noteStored(row);
     return { persisted: true };
   } catch (error) {
     logger.warn('feedback_persist_threw', { message: (error as Error)?.message || String(error) });
@@ -330,6 +395,8 @@ export const recordFeedback = async (raw: unknown, ctx: TelemetryContext): Promi
 // Best-effort capture of a server-side error as a telemetry event. Called from the
 // error-handling middleware for 5xx failures so "every failed request" lands in the
 // same store as client-reported failures. Fire-and-forget; never blocks the response.
+// Its rows draw on the server pool, never a client's: a flood of client-sent events must not
+// stop the 5xx records the failure-spike check reads (verification/checks/telemetryFailureSpike.ts).
 export const recordServerError = (fields: {
   requestId?: string;
   path?: string;
@@ -340,7 +407,7 @@ export const recordServerError = (fields: {
   userId?: string | null;
   ip?: string;
 }): void => {
-  void recordTelemetryEvents(
+  void recordEvents(
     [
       {
         eventType: 'server_error',
@@ -351,6 +418,7 @@ export const recordServerError = (fields: {
         metadata: { status: fields.status, code: fields.code, method: fields.method }
       }
     ],
-    { userId: fields.userId ?? null, requestId: fields.requestId, ip: fields.ip }
+    { userId: fields.userId ?? null, requestId: fields.requestId, ip: fields.ip },
+    'server'
   );
 };

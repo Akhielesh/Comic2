@@ -127,12 +127,16 @@ as $$
   limit 1;
 $$;
 
--- Not granted to anon/authenticated here (authz-data-6: it maps any username to its email). On
--- production the client grant still exists for AuthPage's username sign-in, and it is revoked only
--- in SECURITY-PLAN §2.5a, after the client stops calling it (sign-up availability now uses
--- public.username_available, username_available_2026_11.sql; sign-in awaits the owner's decision).
--- `revoke … from public` does not touch that explicit grant, so re-running this file changes nothing
--- live; a fresh database built from these files simply has no client resolver.
+-- This file grants it to no client role (authz-data-6: it maps any username to its email), but that
+-- does NOT make it server-only. On Supabase the default privileges (pg_default_acl for postgres and
+-- supabase_admin; SECURITY-PLAN N4) grant EXECUTE on every new public function to anon and
+-- authenticated directly, and `revoke … from public` does not remove those grants: a fresh Supabase
+-- build of these files still lets anon resolve a username to its email, as production does today.
+-- AuthPage's sign-up check and username sign-in both rely on that client grant. It is revoked only
+-- in SECURITY-PLAN §2.5a, after the client stops calling it (sign-up moves to
+-- public.username_available, username_available_2026_11.sql, in PR-3; sign-in awaits the owner's
+-- decision O9). Do not add anon/authenticated to the revoke below before then: a re-run would break
+-- live username sign-in.
 revoke all on function public.resolve_email_from_username(text) from public;
 grant execute on function public.resolve_email_from_username(text) to service_role;
 

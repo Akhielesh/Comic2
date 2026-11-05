@@ -202,7 +202,7 @@ export async function getStats(id: string, hostKey: string): Promise<StatsRespon
   return res.json();
 }
 
-/** An RSVP the Worker refused, in words the invite page can show (a link as a name, too many tries). */
+/** An RSVP the Worker refused, in words the invite page can show (a link as a name, too many tries, a full list). */
 export class RsvpRefused extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -220,7 +220,7 @@ export async function rsvpEvent(id: string, name: string): Promise<{ ok: boolean
   assertWorkerResponse(res);
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
-    if ((res.status === 400 || res.status === 429) && typeof body?.message === 'string') throw new RsvpRefused(body.message, res.status);
+    if ((res.status === 400 || res.status === 409 || res.status === 429) && typeof body?.message === 'string') throw new RsvpRefused(body.message, res.status);
     throw new Error(`rsvp failed (${res.status})`);
   }
   return res.json();

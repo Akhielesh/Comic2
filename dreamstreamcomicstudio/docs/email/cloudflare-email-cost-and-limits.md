@@ -64,16 +64,23 @@ use up what sign-in needs:
   Every other template (newsletter, access requests, invites, admin sends) stops at the cap minus
   the reserve and is logged `rate_limited` with `error='auth_reserve'`. Auth mail may use the
   whole cap. A reserve is never more than half its cap; `0` turns it off.
-- `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` — default **10**: mail a signed-out request triggers
-  (newsletter confirm, access-request acknowledgement) per IPv4 address / IPv6 /64 in a rolling
-  day, in memory (`error='anon_sender_cap'`). `0` turns it off.
+- `EMAIL_ANON_MAX_PER_CLIENT_PER_DAY` — default **10**: mail a signed-out `/api/newsletter/subscribe`
+  triggers (newsletter confirm, access-request acknowledgement) per IPv4 address / IPv6 /64 in a
+  rolling day, in memory (`error='anon_sender_cap'`). The welcome after a confirm click is not
+  counted (the click needs the token from the inbox). `0` turns it off.
+- The caps count mail in flight (`status='queued'`) as well as `sent`, and the read-check-log step
+  runs one send at a time per process, so parallel requests at the edge of a cap cannot all pass it.
 - A pending newsletter address is re-sent its confirm link at most once per 10 minutes and 3
-  times a day (`email_log`); otherwise the link already in its inbox stays valid.
+  times a day, both read from `email_log` (`queued` / `sent`), so a confirm that was refused or
+  failed never blocks a retry; otherwise the link already in its inbox stays valid, and a
+  throttled re-submit still records any new product picks or feedback.
 - `getEmailUsageStatus()` (Admin → Email) also reports `authDay` / `authMonth`, `otherDay` /
   `otherMonth` against `otherMaxPerDay` / `otherMaxPerMonth`, and the effective reserves.
-- Mailer log lines name recipients masked (`a***@example.com`), never in full (abuse-ops-15). **You cannot incur overage charges unless you deliberately
-raise `EMAIL_MAX_PER_MONTH` above 3,000.** Usage is countable any time from `email_log`
-(`status='sent'`) or via `getEmailUsageStatus()`.
+- Mailer log lines name recipients masked (`a***@example.com`), never in full (abuse-ops-15).
+
+**You cannot incur overage charges unless you deliberately raise `EMAIL_MAX_PER_MONTH` above
+3,000.** Usage is countable any time from `email_log` (`status` `queued` or `sent`) or via
+`getEmailUsageStatus()`.
 
 **Exception — Supabase auth emails.** Once the Send Email Hook is enabled
 (`docs/email/SETUP.md` §5), sign-up / reset / email-change mail goes Supabase →

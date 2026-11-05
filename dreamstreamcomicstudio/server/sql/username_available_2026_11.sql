@@ -3,9 +3,10 @@
 -- Why (authz-data-6): sign-up used to check availability with resolve_email_from_username, which
 -- returns the email address behind any username to anyone holding the public anon key. This
 -- function answers the only thing sign-up needs — taken or free — and nothing else.
--- components/AuthPage.tsx calls it for the availability check; while it is absent there (before this
--- file is applied) AuthPage skips the pre-check and the unique index profiles_username_lower_unique
--- still refuses a taken name at account creation.
+-- Repo-only for now: nothing calls it yet. SECURITY-PLAN PR-3 Commit E (ask-first: sign-up) switches
+-- components/AuthPage.tsx's availability check to it, and this file must be applied BEFORE that
+-- deploy — without it the client could only skip the pre-check and leave a taken name to the unique
+-- index profiles_username_lower_unique at account creation (after the captcha), a worse sign-up.
 --
 -- Agreed shape (with the DreamStream session): returns boolean only; SECURITY DEFINER (anon cannot
 -- read public.profiles directly for every row); STABLE; `search_path = ''` with every name
@@ -18,8 +19,8 @@
 -- It does not throttle: availability is an enumeration oracle by nature, the same one the unique
 -- index exposes at sign-up, and usernames are public on profiles already.
 --
--- Additive and idempotent. Apply before (or with) the AuthPage deploy; the resolver revoke comes
--- later (SECURITY-PLAN §2.5a: after the sign-in decision and 24 h of zero resolver calls).
+-- Additive and idempotent. Apply before the PR-3 AuthPage deploy; the resolver revoke comes later
+-- (SECURITY-PLAN §2.5a: after the sign-in decision and 24 h of zero resolver calls).
 -- Rollback: drop function if exists public.username_available(text);
 
 create or replace function public.username_available(p_username text)

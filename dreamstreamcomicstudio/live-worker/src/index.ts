@@ -453,8 +453,9 @@ export default {
       // POST /api/events/:id/rsvp — save a spot on the invite page (name only; no account, by
       // design — whether the "going" names stay public is an open product decision). At the edge
       // (abuse-ops-13), before the room is woken: a body that can only be `{"name": "…"}` (512
-      // bytes), then 3 a minute per IPv4 address / IPv6 /64 per event (RL_RSVP). The room still
-      // refuses links as names and caps how many new names an event takes in an hour.
+      // bytes, counted as it streams in), then 3 a minute per IPv4 address / IPv6 /64 per event
+      // (RL_RSVP). The room still refuses links as names, caps the new names one sender adds in an
+      // hour (10) and an event takes in an hour (120), and refuses new names once 500 are listed.
       if (sub === 'rsvp' && req.method === 'POST') {
         const body = await readBody(req, RSVP_MAX_BYTES);
         if (body == null) return withCors(json({ error: 'too_large' }, 413), cors);
@@ -466,7 +467,8 @@ export default {
           await roomCall(env, id, '/rsvp', {
             method: 'POST',
             body,
-            headers: { 'content-type': 'application/json' },
+            // The room's per-sender hourly cap keys on this; the Worker sets it, a client can't.
+            headers: { 'content-type': 'application/json', ...(ipKey ? { 'x-rsvp-client': ipKey } : {}) },
           }),
           cors,
         );

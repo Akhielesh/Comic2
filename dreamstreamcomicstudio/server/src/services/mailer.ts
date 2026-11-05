@@ -139,6 +139,17 @@ const anonymousSenderOverLimit = async (ip: string): Promise<boolean> => {
   }
 };
 
+// The check-then-log step of a send (read usage → apply the caps → log `queued`) runs one at a
+// time in this process, so parallel requests at the edge of a cap cannot all read the same count
+// and all pass: the next one reads the `queued` row the previous one wrote. Only that step is
+// serialized — the round trip to the email Worker is not.
+let capGate: Promise<unknown> = Promise.resolve();
+const oneAtATime = <T>(step: () => Promise<T>): Promise<T> => {
+  const run = capGate.then(step, step);
+  capGate = run.catch(() => undefined);
+  return run;
+};
+
 /** Usage snapshot + caps, for ops/cost dashboards and honest cost alerts. */
 export const getEmailUsageStatus = async () => {
   const usage = await getUsage();
@@ -200,57 +211,63 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     return { ok: false, skipped: 'rate_limited' };
   }
 
-  // (3b) hard cost cap — never exceed the configured ceiling
-  const usage = await getUsage();
-  const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
-  const overDay = EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY;
-  if (overMonth || overDay) {
-    console.error(
-      `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
-        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
-        `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
-    );
-    await logSend({ ...baseLog, status: 'rate_limited' });
-    return { ok: false, skipped: 'rate_limited' };
-  }
-  // (3c) the auth reserve: every other template stops at its share of the caps
-  const parts = usageParts(usage);
-  const share = otherShare();
-  if (!isAuthTemplate(template)) {
-    const overShareDay = EMAIL_MAX_PER_DAY > 0 && parts.otherDay >= share.day;
-    const overShareMonth = EMAIL_MAX_PER_MONTH > 0 && parts.otherMonth >= share.month;
-    if (overShareDay || overShareMonth) {
-      console.warn(
-        `[email][RESERVE] Non-auth mail reached its share (day ${parts.otherDay}/${share.day}, month ` +
-          `${parts.otherMonth}/${share.month}); the rest is kept for sign-in and password mail. ` +
-          `Skipping ${template} → ${maskEmail(to)}.`
+  // (3b)–(4) under the cap gate: the caps read in-flight sends, and this send is logged `queued`
+  // before the next one reads them.
+  const admitted = await oneAtATime(async (): Promise<{ refused: SendResult } | { logId: string | null; unsubscribeUrl?: string }> => {
+    // (3b) hard cost cap — never exceed the configured ceiling
+    const usage = await getUsage();
+    const overMonth = EMAIL_MAX_PER_MONTH > 0 && usage.month >= EMAIL_MAX_PER_MONTH;
+    const overDay = EMAIL_MAX_PER_DAY > 0 && usage.day >= EMAIL_MAX_PER_DAY;
+    if (overMonth || overDay) {
+      console.error(
+        `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
+          `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
+          `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
       );
-      await logSend({ ...baseLog, status: 'rate_limited', error: 'auth_reserve' });
-      return { ok: false, skipped: 'rate_limited' };
+      await logSend({ ...baseLog, status: 'rate_limited' });
+      return { refused: { ok: false, skipped: 'rate_limited' } };
     }
-  }
-  // Honest early warnings at 50% and 80%: all mail against the caps, other mail against its share.
-  noteThreshold('all mail', 'day', usage.day, EMAIL_MAX_PER_DAY);
-  noteThreshold('all mail', 'month', usage.month, EMAIL_MAX_PER_MONTH);
-  if (!isAuthTemplate(template)) {
-    noteThreshold('non-auth mail', 'day', parts.otherDay, share.day);
-    noteThreshold('non-auth mail', 'month', parts.otherMonth, share.month);
-  }
-
-  // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
-  let unsubscribeUrl = params.unsubscribeUrl;
-  if (kind === 'marketing' && !unsubscribeUrl) {
-    if (!EMAIL_PUBLIC_BASE_URL) {
-      console.warn(`[email] Refusing marketing send (${template}) — EMAIL_PUBLIC_BASE_URL unset; cannot build unsubscribe link.`);
-      await logSend({ ...baseLog, status: 'skipped', error: 'no_unsub_base' });
-      return { ok: false, skipped: 'no_unsub_base' };
+    // (3c) the auth reserve: every other template stops at its share of the caps
+    const parts = usageParts(usage);
+    const share = otherShare();
+    if (!isAuthTemplate(template)) {
+      const overShareDay = EMAIL_MAX_PER_DAY > 0 && parts.otherDay >= share.day;
+      const overShareMonth = EMAIL_MAX_PER_MONTH > 0 && parts.otherMonth >= share.month;
+      if (overShareDay || overShareMonth) {
+        console.warn(
+          `[email][RESERVE] Non-auth mail reached its share (day ${parts.otherDay}/${share.day}, month ` +
+            `${parts.otherMonth}/${share.month}); the rest is kept for sign-in and password mail. ` +
+            `Skipping ${template} → ${maskEmail(to)}.`
+        );
+        await logSend({ ...baseLog, status: 'rate_limited', error: 'auth_reserve' });
+        return { refused: { ok: false, skipped: 'rate_limited' } };
+      }
     }
-    unsubscribeUrl = `${EMAIL_PUBLIC_BASE_URL}/api/newsletter/unsubscribe?e=${encodeURIComponent(to)}&t=${unsubscribeToken(to)}`;
-  }
-  if (unsubscribeUrl) params.unsubscribeUrl = unsubscribeUrl;
+    // Honest early warnings at 50% and 80%: all mail against the caps, other mail against its share.
+    noteThreshold('all mail', 'day', usage.day, EMAIL_MAX_PER_DAY);
+    noteThreshold('all mail', 'month', usage.month, EMAIL_MAX_PER_MONTH);
+    if (!isAuthTemplate(template)) {
+      noteThreshold('non-auth mail', 'day', parts.otherDay, share.day);
+      noteThreshold('non-auth mail', 'month', parts.otherMonth, share.month);
+    }
 
-  // (4) log 'queued' first so we have an id for the read-receipt pixel
-  const logId = await logSend({ ...baseLog, status: 'queued' });
+    // (5) working unsubscribe (marketing only) — legally required, so refuse if we can't build it
+    let unsubscribeUrl = params.unsubscribeUrl;
+    if (kind === 'marketing' && !unsubscribeUrl) {
+      if (!EMAIL_PUBLIC_BASE_URL) {
+        console.warn(`[email] Refusing marketing send (${template}) — EMAIL_PUBLIC_BASE_URL unset; cannot build unsubscribe link.`);
+        await logSend({ ...baseLog, status: 'skipped', error: 'no_unsub_base' });
+        return { refused: { ok: false, skipped: 'no_unsub_base' } };
+      }
+      unsubscribeUrl = `${EMAIL_PUBLIC_BASE_URL}/api/newsletter/unsubscribe?e=${encodeURIComponent(to)}&t=${unsubscribeToken(to)}`;
+    }
+
+    // (4) log 'queued' first so we have an id for the read-receipt pixel (and the next send's caps see it)
+    return { logId: await logSend({ ...baseLog, status: 'queued' }), unsubscribeUrl };
+  });
+  if ('refused' in admitted) return admitted.refused;
+  const { logId } = admitted;
+  if (admitted.unsubscribeUrl) params.unsubscribeUrl = admitted.unsubscribeUrl;
   if (opts.track === false) {
     delete params.pixelUrl;
   } else if (logId && EMAIL_PUBLIC_BASE_URL) {

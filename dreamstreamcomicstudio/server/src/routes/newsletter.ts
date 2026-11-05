@@ -9,6 +9,7 @@ import {
 import {
   confirmSubscriber,
   markUnsubscribed,
+  mergeSubscriberIntent,
   newConfirmToken,
   newsletterConfirmThrottled,
   normalizeEmail,
@@ -26,10 +27,13 @@ export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// A signed-out request's mail counts against its sender's daily allowance (mailer.ts, abuse-ops-4).
-const reqMeta = (req: Request) => ({
-  userId: req.user?.id ?? null,
-  requestId: req.requestId ?? null,
+const reqIds = (req: Request) => ({ userId: req.user?.id ?? null, requestId: req.requestId ?? null });
+// Mail a signed-out /subscribe triggers counts against its sender's daily allowance (mailer.ts,
+// abuse-ops-4). The welcome after a confirm click does not: that click needs the token from the
+// inbox, so it is no way to make us mail anyone, and counting it would halve a shared network's
+// allowance for real sign-ups.
+const subscribeMeta = (req: Request) => ({
+  ...reqIds(req),
   ...(req.user ? {} : { anonymousClientIp: req.ip ?? '' })
 });
 
@@ -130,7 +134,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       // NEW signup: acknowledge with the access-requested template (essential) —
       // best-effort and non-blocking; a mailer failure is logged by the mailer and
       // must never fail the signup itself.
-      void sendAccessRequested(email, firstName, reqMeta(req));
+      void sendAccessRequested(email, firstName, subscribeMeta(req));
       return res.json({
         ok: true,
         status: 'joined',
@@ -140,8 +144,10 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     }
 
     // Newsletter double opt-in. A pending address re-submitted too soon (or too often) keeps
-    // the link already in its inbox: no new token, no new email (abuse-ops-11).
+    // the link already in its inbox: no new token, no new email (abuse-ops-11). New picks or
+    // feedback it sent are still recorded, as on any re-submit.
     if (await newsletterConfirmThrottled(email)) {
+      await mergeSubscriberIntent(email, 'updates', intent);
       return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
     }
     const token = newConfirmToken();
@@ -150,7 +156,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
     }
     const confirmUrl = `${baseUrl(req)}/api/newsletter/confirm?e=${encodeURIComponent(email)}&t=${token}`;
-    void sendNewsletterConfirm(email, confirmUrl, firstName, reqMeta(req));
+    void sendNewsletterConfirm(email, confirmUrl, firstName, subscribeMeta(req));
     return res.json({ ok: true, message: 'Almost there! Check your inbox to confirm your subscription.' });
   } catch (err) {
     next(err);
@@ -168,7 +174,7 @@ newsletterRouter.get('/confirm', async (req, res, next) => {
     if (!confirmed) return res.redirect(302, redirectToApp('invalid'));
 
     // Welcome is marketing → only goes out once they've opted in (here).
-    void sendNewsletterWelcome(email, undefined, reqMeta(req));
+    void sendNewsletterWelcome(email, undefined, reqIds(req));
     return res.redirect(302, redirectToApp('confirmed'));
   } catch (err) {
     next(err);

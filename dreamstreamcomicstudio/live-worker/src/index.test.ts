@@ -864,6 +864,40 @@ describe('invite-page RSVPs at the edge (abuse-ops-13)', () => {
     expect(w.roomHits('/rsvp')).toHaveLength(0);
     await rsvp(w, '203.0.113.5', '{"name":"Ana"}');
     expect(w.roomHits('/rsvp')[0].body).toBe('{"name":"Ana"}');
+    // The room learns the sender from the Worker, never from the client.
+    expect(w.roomHits('/rsvp')[0].headers.get('x-rsvp-client')).toBe('4:203.0.113.5');
+    await w.go('/api/events/abc123/rsvp', {
+      method: 'POST',
+      body: '{"name":"Raj"}',
+      headers: { 'cf-connecting-ip': '198.51.100.7', 'x-rsvp-client': '4:1.2.3.4', 'content-type': 'application/json' },
+    });
+    expect(w.roomHits('/rsvp')[1].headers.get('x-rsvp-client')).toBe('4:198.51.100.7');
+  });
+
+  it('a streamed body with no Content-Length is counted as it arrives and cut off past 512 bytes', async () => {
+    const w = edgeWorld();
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new TextEncoder().encode('x'.repeat(200));
+    const endless = new ReadableStream<Uint8Array>({
+      pull(ctl) {
+        pulled++;
+        ctl.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const res = await w.go('/api/events/abc123/rsvp', {
+      method: 'POST',
+      body: endless,
+      headers: { 'cf-connecting-ip': '203.0.113.5', 'content-type': 'application/json' },
+      duplex: 'half',
+    } as RequestInit & { headers: Record<string, string> });
+    expect(res.status).toBe(413);
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThanOrEqual(5); // 3 chunks pass the cap; a stream is never read to the end
+    expect(w.roomHits('/rsvp')).toHaveLength(0);
   });
 
   it('fails open without the binding, as every edge limit does', async () => {

@@ -18,11 +18,20 @@ vi.hoisted(() => {
 
 const store = vi.hoisted(() => ({
   usage: { day: 0, month: 0, authDay: 0, authMonth: 0 },
+  /** When set, usage is derived from the logged rows (queued / sent count), answered after a DB-like delay. */
+  live: false,
   logs: [] as Record<string, unknown>[]
 }));
 vi.mock('./emailStore.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./emailStore.js')>()),
-  getUsage: vi.fn(async () => ({ ...store.usage })),
+  getUsage: vi.fn(async () => {
+    if (!store.live) return { ...store.usage };
+    // Like the database: the count is taken when the query runs, the answer arrives later.
+    const counted = store.logs.filter((l) => l.status === 'queued' || l.status === 'sent');
+    const auth = counted.filter((l) => String(l.template).startsWith('auth-')).length;
+    await new Promise((r) => setTimeout(r, 5));
+    return { day: store.usage.day + counted.length, month: store.usage.month + counted.length, authDay: store.usage.authDay + auth, authMonth: store.usage.authMonth + auth };
+  }),
   isSuppressed: vi.fn(async () => false),
   logSend: vi.fn(async (entry: Record<string, unknown>) => (store.logs.push(entry), 'log-1')),
   patchLog: vi.fn(async () => undefined)
@@ -45,6 +54,7 @@ beforeEach(() => {
   warn.mockClear();
   error.mockClear();
   store.logs.length = 0;
+  store.live = false;
   store.usage = { day: 0, month: 0, authDay: 0, authMonth: 0 };
   resetMailerWarnings();
 });
@@ -95,6 +105,24 @@ describe('the auth reserve (abuse-ops-4)', () => {
       otherMaxPerMonth: 80,
       authReservePerMonth: 20
     });
+  });
+
+  it('parallel sends at the edge of the share: one goes out, the rest are refused (in-flight sends count)', async () => {
+    // 4 of other mail's 5 already sent; five requests arrive at once.
+    store.usage = { day: 4, month: 4, authDay: 0, authMonth: 0 };
+    store.live = true;
+    const results = await Promise.all(
+      ['a', 'b', 'c', 'd', 'e'].map((n) => sendNewsletterConfirm(`${n}@example.com`, 'https://api.test/c'))
+    );
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => r.skipped === 'rate_limited')).toHaveLength(4);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The auth reserve is intact: sign-in mail still goes out, in parallel too, up to the hard cap.
+    const auth = await Promise.all(
+      Array.from({ length: 7 }, (_, i) => sendEmail({ to: `u${i}@example.com`, template: 'auth-recovery', track: false }))
+    );
+    expect(auth.filter((r) => r.ok)).toHaveLength(5); // 10 − 4 − 1
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
   it('warns once at 50% and once at 80%, not on every send', async () => {

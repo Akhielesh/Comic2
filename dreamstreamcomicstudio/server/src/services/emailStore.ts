@@ -132,7 +132,7 @@ export const suppress = async (
 };
 
 export interface EmailUsage {
-  /** Every template, sent this UTC day / month. */
+  /** Every template, sent (or in flight) this UTC day / month. */
   day: number;
   month: number;
   /** The auth-* templates alone (abuse-ops-4: they have a reserve the rest cannot use). */
@@ -143,7 +143,12 @@ export interface EmailUsage {
 /** Templates that count as auth mail for the reserve: every `auth-*` template. */
 export const isAuthTemplate = (template: string): boolean => template.startsWith('auth-');
 
-/** Count emails actually SENT in the current UTC day + month, in all and for auth mail (drives the hard cap). */
+/**
+ * Count emails sent — or going out now (`queued`: logged, the email Worker not yet answered) — in
+ * the current UTC day + month, in all and for auth mail (drives the hard cap and the auth reserve).
+ * In-flight sends count so that parallel requests cannot all pass the same check; a send that fails
+ * is patched to `failed` and drops out.
+ */
 export const getUsage = async (): Promise<EmailUsage> => {
   const db = adminOrNull();
   if (!db) return { day: 0, month: 0, authDay: 0, authMonth: 0 };
@@ -155,7 +160,7 @@ export const getUsage = async (): Promise<EmailUsage> => {
       let query = db
         .from('email_log')
         .select('id', { count: 'exact', head: true })
-        .eq('status', 'sent')
+        .in('status', ['queued', 'sent'])
         .gte('created_at', since);
       if (authOnly) query = query.like('template', 'auth-%');
       const { count: c } = await query;
@@ -335,11 +340,12 @@ export const NEWSLETTER_CONFIRM_MIN_INTERVAL_MS = 10 * 60_000;
 export const NEWSLETTER_CONFIRM_MAX_PER_DAY = 3;
 
 /**
- * True when a confirm email must NOT be re-sent to this pending address now: the last one went
- * out under 10 minutes ago, or 3 already went out in the last 24 hours (email_log, template
- * newsletter-confirm, queued or sent). The caller then leaves the row — and its live token —
- * alone, so the link already in the inbox keeps working. A confirmed or unknown address is
- * never throttled here (upsertSubscriber answers those).
+ * True when a confirm email must NOT be re-sent to this pending address now: one went out (or is
+ * going out) under 10 minutes ago, or 3 did in the last 24 hours — both read from email_log
+ * (template newsletter-confirm, status queued or sent), so a confirm the mailer refused or that
+ * failed at the email Worker never blocks a retry. The caller then leaves the row — and its live
+ * token — alone, so the link already in the inbox keeps working. A confirmed or unknown address
+ * is never throttled here (upsertSubscriber answers those).
  */
 export const newsletterConfirmThrottled = async (email: string, now = Date.now()): Promise<boolean> => {
   const db = adminOrNull();
@@ -348,27 +354,46 @@ export const newsletterConfirmThrottled = async (email: string, now = Date.now()
   try {
     const { data: row } = await db
       .from('waitlist_signups')
-      .select('confirmed, confirm_sent_at')
+      .select('confirmed')
       .eq('email', normalized)
       .eq('kind', 'updates')
       .limit(1)
       .maybeSingle();
-    const existing = row as { confirmed?: boolean; confirm_sent_at?: string | null } | null;
+    const existing = row as { confirmed?: boolean } | null;
     if (!existing || existing.confirmed) return false;
-    const sentAt = existing.confirm_sent_at ? Date.parse(existing.confirm_sent_at) : NaN;
-    if (Number.isFinite(sentAt) && now - sentAt < NEWSLETTER_CONFIRM_MIN_INTERVAL_MS) return true;
-    const { count, error } = await db
+    const { data: sends, error } = await db
       .from('email_log')
-      .select('id', { count: 'exact', head: true })
+      .select('created_at')
       .eq('to_email', normalized)
       .eq('template', 'newsletter-confirm')
       .in('status', ['queued', 'sent'])
-      .gte('created_at', new Date(now - 24 * 3_600_000).toISOString());
+      .gte('created_at', new Date(now - 24 * 3_600_000).toISOString())
+      .order('created_at', { ascending: false })
+      .limit(NEWSLETTER_CONFIRM_MAX_PER_DAY);
     if (error) return false;
-    return (count ?? 0) >= NEWSLETTER_CONFIRM_MAX_PER_DAY;
+    const recent = (sends as { created_at?: string }[] | null) ?? [];
+    if (recent.length >= NEWSLETTER_CONFIRM_MAX_PER_DAY) return true;
+    const last = recent[0]?.created_at ? Date.parse(recent[0].created_at) : NaN;
+    return Number.isFinite(last) && now - last < NEWSLETTER_CONFIRM_MIN_INTERVAL_MS;
   } catch (err) {
     console.warn('[email] newsletterConfirmThrottled error', (err as Error)?.message);
     return false;
+  }
+};
+
+/**
+ * Merge newly provided intent (product interests / feedback) onto an existing waitlist row, and
+ * nothing else — what a re-submit records even when its confirm email is throttled. Fields not
+ * sent are left as they are. Best-effort.
+ */
+export const mergeSubscriberIntent = async (email: string, kind: 'updates' | 'access', intent?: SubscriberIntent): Promise<void> => {
+  const db = adminOrNull();
+  const cols = sanitizeIntent(intent);
+  if (!db || !Object.keys(cols).length) return;
+  try {
+    await db.from('waitlist_signups').update(cols).eq('email', normalizeEmail(email)).eq('kind', kind);
+  } catch (err) {
+    console.warn('[email] mergeSubscriberIntent error', (err as Error)?.message);
   }
 };
 

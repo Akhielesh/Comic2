@@ -70,18 +70,26 @@ describe('no repo SQL re-opens a locked function', () => {
     }
   });
 
-  it('the resolver files keep it callable by the server only, and say why the live grant is untouched', () => {
+  // Only what the files say: they grant the resolver to no client role. On Supabase the default ACL
+  // still grants anon/authenticated EXECUTE when the function is created (plan N4), so a fresh build
+  // is NOT server-only; the client revoke is plan §2.5a, and the comment must say so.
+  it('the resolver files grant it to no client role, and say the default ACL still does until §2.5a', () => {
     for (const f of ['supabase_auth_profile_migration.sql', 'auth_signup_policy_min_age_8.sql']) {
       const raw = read(f);
       const sql = executableSql(raw);
       expect(sql).toContain('revoke all on function public.resolve_email_from_username(text) from public;');
       expect(sql).toContain('grant execute on function public.resolve_email_from_username(text) to service_role;');
+      // Not revoked from anon/authenticated here: a re-run must not break live username sign-in.
+      expect(sql).not.toMatch(/revoke [^;]*resolve_email_from_username[^;]*\b(anon|authenticated)\b/);
+      expect(raw).toMatch(/does NOT make it server-only/);
+      expect(raw).toMatch(/default privileges[\s\S]*grant EXECUTE on every new public function to anon and\s+-- authenticated/);
       expect(raw).toMatch(/revoked only\s+-- in SECURITY-PLAN §2\.5a/);
+      expect(raw).not.toMatch(/simply has no client resolver/);
     }
   });
 });
 
-describe('username_available_2026_11.sql (sign-up availability without an email)', () => {
+describe('username_available_2026_11.sql (sign-up availability without an email; repo-only until PR-3)', () => {
   const raw = existsSync(path.join(SQL_DIR, 'username_available_2026_11.sql')) ? read('username_available_2026_11.sql') : '';
   const sql = executableSql(raw);
 
