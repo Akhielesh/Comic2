@@ -24,10 +24,13 @@ import { isFreeOnly, setFreeOnly } from '../../services/freeOnlyMode';
 import {
   connectedDataNoticeOf,
   connectorMarkerFor,
+  isFreeModel,
   mayRunOnFreeModel,
   standardModelStep,
+  stoppedTurnMarker,
   type ConnectedDataAction
 } from './connectorPrivacy';
+import { API_KEYS_HREF } from '../usage/links';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -221,6 +224,18 @@ export const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
 export const isHistoryTurn = (turn: ChatTurn): boolean => !turn.error && !turn.notice;
 
 /**
+ * The assistant turn a STOPPED (or cut off) generation leaves: its partial answer stays and is sent
+ * back as history, so it keeps a connected-content marker when the stream's `meta` said the turn may
+ * carry connected content, or its live trace shows a connector tool (connectorPrivacy.ts
+ * stoppedTurnMarker). The live trace is settled so its card stops spinning.
+ */
+export const toStoppedTurn = (turn: ChatTurn, metaConnectorPrivacy = false): ChatTurn => ({
+  ...turn,
+  ...stoppedTurnMarker({ metaConnectorPrivacy, artifacts: turn.artifacts }),
+  artifacts: settleLiveTrace(turn.artifacts)
+});
+
+/**
  * The assistant turn a connected-data refusal leaves (connectorPrivacy.ts connectedDataNoticeOf): the
  * server's copy as a calm notice, with what the attempt had started cleared. Never an error turn.
  */
@@ -329,17 +344,58 @@ export const withAnswer = (t: ChatTurn, res: AnswerPayload, durationMs: number, 
 /**
  * The system prompt of one turn: the persona and the user's long-term memory, except that memory
  * flagged as distilled from connected-account content stays out of a turn that may run on a free
- * model (Free only on, or a free model named: connectorPrivacy.ts mayRunOnFreeModel).
+ * model (an OpenRouter or Auto turn with Free only on, or a free model named:
+ * connectorPrivacy.ts mayRunOnFreeModel). A direct-provider turn keeps it: it never runs on a free
+ * model, and the server strips flagged memory itself where that provider is not confirmed for it.
  */
 export const turnSystemPrompt = (
   userId: string | undefined,
   persona: string | undefined,
-  model: { id?: string; isFree?: boolean }
+  model: { id?: string; isFree?: boolean; source?: string }
 ): string | undefined =>
   composeSystemPrompt(getChatMemory(userId), persona, {
     memoryConnected: isChatMemoryConnected(userId),
-    freeTurn: mayRunOnFreeModel({ freeOnly: isFreeOnly(), model: model.id, modelIsFree: model.isFree })
+    freeTurn: mayRunOnFreeModel({ freeOnly: isFreeOnly(), model: model.id, modelIsFree: model.isFree, source: model.source })
   });
+
+/**
+ * What "Use a standard model" does (the calm notice), from the model the resend would actually use
+ * (connectorPrivacy.ts standardModelStep): Auto's free pick → resend on Auto's best standard pick,
+ * Free only left as it is; a free model the user chose (or a direct provider) → the model picker;
+ * no model named under Free only → Free only off, then resend; already standard → resend.
+ */
+export type StandardModelAction =
+  | { kind: 'pick-model' }
+  | { kind: 'resend'; freeOnlyOff: boolean; overrideModel?: CatalogModel };
+
+export const standardModelAction = (input: {
+  freeOnly: boolean;
+  /** The chat is on Auto and no model is locked in Settings. */
+  auto: boolean;
+  /** The resend's model and source, resolved as a send resolves them (resolveRequest). */
+  reqModel?: string;
+  reqSource?: string;
+  /** The catalog says the resend's model is free (a $0 model without the `:free` suffix). */
+  modelIsFree?: boolean;
+  /** The refused message: Auto picks the standard model for it. */
+  text: string;
+  /** The models Auto may pick from (in scope, the chat's locked source). */
+  candidates: CatalogModel[];
+}): StandardModelAction => {
+  const step = standardModelStep({
+    freeOnly: input.freeOnly,
+    model: input.reqModel,
+    modelIsFree: input.modelIsFree,
+    auto: input.auto,
+    source: input.reqSource
+  });
+  if (step === 'pick-model') return { kind: 'pick-model' };
+  if (step === 'free-only-off') return { kind: 'resend', freeOnlyOff: true };
+  if (step === 'resend') return { kind: 'resend', freeOnlyOff: false };
+  const standard = input.candidates.filter((m) => !isFreeModel(m.id, m.isFree));
+  const best = recommendModels(input.text || 'general question', standard, 1)[0]?.model;
+  return best ? { kind: 'resend', freeOnlyOff: false, overrideModel: best } : { kind: 'pick-model' };
+};
 
 /**
  * Keep what POST /api/chat/memory answered: the merged memory when it changed (returned, so the UI
@@ -870,6 +926,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // Resolve which model/source/tools to use for a message. In Auto mode the app
   // picks the best model + the right tools per message; otherwise it uses the
   // session's pinned model (or a suggester override).
+  // The models Auto may pick from: in scope, and from the chat's locked source when it has one.
+  const autoCandidates = (): CatalogModel[] =>
+    Array.from(catalog.values()).filter((m) => {
+      if (activeSession?.lockedSource && m.source !== activeSession.lockedSource) return false;
+      return isSourceInScope(m.source);
+    });
+
   const resolveRequest = (
     text: string,
     overrideModel?: CatalogModel
@@ -878,10 +941,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     let reqSource: ModelSourceId | undefined = overrideModel ? overrideModel.source : activeSession?.source || undefined;
     let reqTools = activeSession?.tools || [];
     if (activeSession?.autoMode && !overrideModel) {
-      const candidates = Array.from(catalog.values()).filter((m) => {
-        if (activeSession.lockedSource && m.source !== activeSession.lockedSource) return false;
-        return isSourceInScope(m.source);
-      });
+      const candidates = autoCandidates();
       const best = recommendModels(text || 'general question', candidates, 1)[0]?.model;
       if (best) {
         reqModel = best.id;
@@ -935,7 +995,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       .map(toRequestMessage);
     recent.push({ role: 'assistant', content: answerText, ...(answerConnectorData ? { connectorData: true } : {}) });
     const current = getChatMemory(user.id);
-    void updateChatMemory(recent, current)
+    void updateChatMemory(recent, current, { memoryConnected: isChatMemoryConnected(user.id) })
       .then((res) => {
         const next = storeMemoryUpdate(user.id, current, res);
         if (next) setMemory(next);
@@ -972,6 +1032,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const turnStartedAt = Date.now();
     // The answer text on screen so far (a refusal after some of it streamed is not a notice).
     let streamedText = '';
+    // The stream's `meta` said this turn may carry connected content: a reply the user stops (or that
+    // is cut off) before `final` keeps that mark on its partial answer (toStoppedTurn).
+    let metaConnectorPrivacy = false;
+    const onMeta = (meta: { connectorPrivacy?: boolean }) => {
+      if (meta.connectorPrivacy === true) metaConnectorPrivacy = true;
+    };
 
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
@@ -1019,8 +1085,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         webSearch: session.webSearch,
         systemPrompt: turnSystemPrompt(user?.id, session.systemPrompt, {
           id: reqModel,
-          isFree: reqModel ? catalog.get(reqModel)?.isFree : undefined
+          isFree: reqModel ? catalog.get(reqModel)?.isFree : undefined,
+          source: reqSource
         }),
+        // The long-term memory is flagged as distilled from connected content: the server keeps it off
+        // every turn that withholds connected content, and a paid turn carrying it denies data collection.
+        ...(isChatMemoryConnected(user?.id) ? { memoryConnected: true } : {}),
         ...(clientContext ? { clientContext } : {}),
         ...(reqTools.length ? { tools: reqTools } : {}),
         // Custom agents only matter to the swarm (mode or tool); send them only then.
@@ -1092,9 +1162,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
                 messages: reqMessages,
                 model: reqSource === 'openrouter' ? reqModel : undefined,
                 source: 'openrouter',
-                systemPrompt: reqBody.systemPrompt
+                systemPrompt: reqBody.systemPrompt,
+                ...(reqBody.memoryConnected ? { memoryConnected: true } : {})
               },
-              { onDelta, onTrace },
+              { onDelta, onTrace, onMeta },
               controller.signal
             );
             if (outcome.error) throw new Error(outcome.error);
@@ -1114,8 +1185,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             };
           })()
         : useSwarm
-          ? await runSwarmStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onTrace })
-          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onReset, onAgentStep });
+          ? await runSwarmStream(reqBody, { signal: controller.signal, onMeta, onDelta, onReasoning, onTrace })
+          : await sendChatMessageStream(reqBody, { signal: controller.signal, onMeta, onDelta, onReasoning, onReset, onAgentStep });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
@@ -1158,10 +1229,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true);
     } catch (err) {
       if (controller.signal.aborted) {
-        // Stopped mid-run: settle the live agent trace so its card doesn't spin forever.
+        // Stopped mid-run: settle the live agent trace so its card doesn't spin forever, and keep the
+        // connected-content mark on the partial answer that stays (it is sent back as history).
         updateSession(sessionId, (s) => ({
           ...s,
-          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, artifacts: settleLiveTrace(t.artifacts) } : t)),
+          turns: s.turns.map((t) => (t.id === aiTurnId ? toStoppedTurn(t, metaConnectorPrivacy) : t)),
           updatedAt: Date.now()
         }));
         return;
@@ -1213,7 +1285,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           // else). Surface the failure as a soft note appended below the partial content.
           const partial = (t.content || '').trim();
           if (partial) {
-            return { ...t, artifacts: settleLiveTrace(t.artifacts), content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
+            // The partial answer stays history, like a stopped one: it keeps the connected-content mark.
+            return { ...toStoppedTurn(t, metaConnectorPrivacy), content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
           }
           return {
             ...t,
@@ -1291,7 +1364,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
   // prior answer(s) as selectable versions.
-  const handleRegenerate = async (turnId: string) => {
+  const handleRegenerate = async (turnId: string, overrideModel?: CatalogModel) => {
     if (!activeSession || busy) return;
     const turns = activeSession.turns;
     const idx = turns.findIndex((t) => t.id === turnId);
@@ -1326,14 +1399,17 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // The conversation up to (but excluding) this assistant turn is the prompt context.
     const baseTurns = turns.slice(0, idx);
     const lastUser = [...baseTurns].reverse().find((t) => t.role === 'user');
-    const { reqModel, reqSource, reqTools } = resolveRequest(lastUser?.content || '');
+    const { reqModel, reqSource, reqTools } = resolveRequest(lastUser?.content || '', overrideModel);
     await runGeneration({ sessionId: activeSession.id, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId: turnId });
   };
 
   // The calm connected-data notice's actions (connectorPrivacy.ts CONNECTED_DATA_ACTIONS).
-  //  - "Use a standard model": a free model pinned on this chat (or locked in Settings) is swapped in
-  //    the model picker; otherwise Free only chose the free model, so it is turned off (the notice
-  //    says so: "turn off Free only") and the refused message is sent again on a standard model.
+  //  - "Use a standard model": resolved from the model the resend would actually use
+  //    (standardModelAction): Auto's free pick is replaced by Auto's best standard pick and the
+  //    refused message is sent again (Free only stays as it is); a free model the user chose (pinned,
+  //    or locked in Settings) opens the model picker; with no model named, Free only chose the free
+  //    model, so it is turned off and the message sent again; a model that is already standard (the
+  //    user just picked one) sends it again.
   //  - "New chat": a fresh chat with no connected content keeps working on free models.
   //  - "API keys": Settings → API keys (the usage refusal's other way forward).
   const handleNoticeAction = (turnId: string, action: ConnectedDataAction) => {
@@ -1344,31 +1420,39 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     }
     if (action === 'api-keys') {
       try {
-        window.location.assign('/?view=settings&tab=settings');
+        window.location.assign(API_KEYS_HREF);
       } catch {
         /* navigation unavailable */
       }
       return;
     }
     if (!activeSession) return;
+    const idx = activeSession.turns.findIndex((t) => t.id === turnId);
+    if (idx < 0) return;
+    const lastUser = [...activeSession.turns.slice(0, idx)].reverse().find((t) => t.role === 'user');
+    const text = lastUser?.content || '';
     const lock = applyLockedChatModel({
       locked: getLockedChatModel(),
       hasOverride: false,
       autoMode: Boolean(activeSession.autoMode),
       sessionModelId: activeSession.modelId
     });
-    const pinnedModel = lock?.id || (activeSession.autoMode ? null : activeSession.modelId);
-    const step = standardModelStep({
+    const { reqModel, reqSource } = resolveRequest(text);
+    const plan = standardModelAction({
       freeOnly: isFreeOnly(),
-      pinnedModel,
-      pinnedIsFree: pinnedModel ? catalog.get(pinnedModel)?.isFree : undefined
+      auto: Boolean(activeSession.autoMode) && !lock,
+      reqModel,
+      reqSource,
+      modelIsFree: reqModel ? catalog.get(reqModel)?.isFree : undefined,
+      text,
+      candidates: autoCandidates()
     });
-    if (step === 'pick-model') {
+    if (plan.kind === 'pick-model') {
       setShowModelPicker(true);
       return;
     }
-    setFreeOnly(false);
-    void handleRegenerate(turnId);
+    if (plan.freeOnlyOff) setFreeOnly(false);
+    void handleRegenerate(turnId, plan.overrideModel);
   };
 
   // Edit a user message and resend: replace its text, drop everything after it, and

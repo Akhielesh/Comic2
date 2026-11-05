@@ -12,9 +12,10 @@ import {
   isConnectorToolName,
   mayRunOnFreeModel,
   standardModelStep,
+  stoppedTurnMarker,
   turnCarriesConnectorData
 } from './connectorPrivacy';
-import { sendChatMessageStream } from '../../services/chatApi';
+import { runSwarmStream, sendChatMessageStream } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
 import {
   CONNECTED_DATA_BUDGET_SENTENCE as SERVER_BUDGET_SENTENCE,
@@ -91,6 +92,36 @@ describe('the server mark reaches the chat on every path', () => {
   });
 });
 
+describe('the stream’s meta flag reaches the chat (for a reply the user stops before final)', () => {
+  const META = 'event: meta\ndata: {"model":"m","source":"openrouter","connectorPrivacy":true}\n\n';
+  it('chat stream, swarm stream and recipe run all hand it to onMeta', async () => {
+    const seen: unknown[] = [];
+    respondWith(() => sse([META, 'event: final\ndata: {"text":"Two meetings.","model":"m"}\n\n']));
+    await sendChatMessageStream({ messages: [{ role: 'user', content: 'calendar?' }] }, { onMeta: (m) => seen.push(m.connectorPrivacy) });
+    respondWith(() => sse([META, 'event: final\ndata: {"text":"Two meetings.","model":"m"}\n\n']));
+    await runSwarmStream({ messages: [{ role: 'user', content: 'calendar?' }] }, { onMeta: (m) => seen.push(m.connectorPrivacy) });
+    respondWith(() => sse([META, 'event: final\ndata: {"text":"Inbox summary."}\n\n']));
+    await runRecipe({ recipeId: 'inbox', values: {} }, { onMeta: (m) => seen.push(m.connectorPrivacy) });
+    expect(seen).toEqual([true, true, true]);
+  });
+});
+
+describe('stoppedTurnMarker: a stopped reply keeps the mark', () => {
+  it('when meta flagged the turn, or its live trace names a connector tool; otherwise none', () => {
+    expect(stoppedTurnMarker({ metaConnectorPrivacy: true })).toEqual({ connectorData: true });
+    expect(
+      stoppedTurnMarker({ artifacts: [{ type: 'agent_activity', data: { steps: [{ tool: 'web_search' }, { tool: 'gmail_search' }] } }] })
+    ).toEqual({ connectorData: true });
+    expect(
+      stoppedTurnMarker({
+        artifacts: [{ type: 'swarm_trace', data: { goal: 'g', agents: [{ id: 'scheduling', toolEvents: [{ tool: 'calendar_agenda', ok: true }] }] } }]
+      })
+    ).toEqual({ connectorData: true });
+    expect(stoppedTurnMarker({ metaConnectorPrivacy: false, artifacts: [{ type: 'agent_activity', data: { steps: [{ tool: 'web_search' }] } }] })).toEqual({});
+    expect(stoppedTurnMarker({})).toEqual({});
+  });
+});
+
 describe('mayRunOnFreeModel: the turns flagged memory stays out of', () => {
   it('every Free only turn, whatever model it names', () => {
     expect(mayRunOnFreeModel({ freeOnly: true })).toBe(true);
@@ -103,6 +134,14 @@ describe('mayRunOnFreeModel: the turns flagged memory stays out of', () => {
   it('not a paid turn', () => {
     expect(mayRunOnFreeModel({ freeOnly: false, model: 'vendor/paid-model' })).toBe(false);
     expect(mayRunOnFreeModel({ freeOnly: false })).toBe(false);
+  });
+  it('not a direct-provider turn, even with Free only on: only OpenRouter (or Auto) has free models', () => {
+    for (const source of ['openai', 'anthropic', 'gemini', 'nvidia']) {
+      expect(mayRunOnFreeModel({ freeOnly: true, source }), source).toBe(false);
+      expect(mayRunOnFreeModel({ freeOnly: true, model: 'vendor-direct-model', source }), source).toBe(false);
+    }
+    expect(mayRunOnFreeModel({ freeOnly: true, source: 'openrouter' })).toBe(true);
+    expect(mayRunOnFreeModel({ freeOnly: true, source: null })).toBe(true);
   });
 });
 
@@ -178,14 +217,21 @@ describe('the two actions', () => {
     expect(CONNECTED_DATA_ACTIONS.budget).toEqual(['new-chat', 'api-keys']);
   });
 
-  it('"Use a standard model" turns Free only off — or opens the picker for a pinned free model', () => {
+  it('"Use a standard model" follows the model the resend would use', () => {
+    // Auto picked a free model: resend on a standard pick (Free only untouched), whatever Free only says.
+    expect(standardModelStep({ freeOnly: true, model: 'vendor/some-model:free', auto: true })).toBe('resend-paid');
+    expect(standardModelStep({ freeOnly: false, model: 'vendor/zero-priced', modelIsFree: true, auto: true })).toBe('resend-paid');
+    // The user chose that free model (pinned, or locked in Settings): the picker.
+    expect(standardModelStep({ freeOnly: true, model: 'vendor/some-model:free', auto: false })).toBe('pick-model');
+    expect(standardModelStep({ freeOnly: false, model: 'vendor/zero-priced', modelIsFree: true })).toBe('pick-model');
+    // No model named under Free only: Free only chose the free model.
     expect(standardModelStep({ freeOnly: true })).toBe('free-only-off');
-    expect(standardModelStep({ freeOnly: true, pinnedModel: null })).toBe('free-only-off');
-    expect(standardModelStep({ freeOnly: true, pinnedModel: 'vendor/paid-model' })).toBe('free-only-off');
-    expect(standardModelStep({ freeOnly: true, pinnedModel: 'vendor/some-model:free' })).toBe('pick-model');
-    expect(standardModelStep({ freeOnly: false, pinnedModel: 'vendor/some-model:free' })).toBe('pick-model');
-    expect(standardModelStep({ freeOnly: false, pinnedModel: 'vendor/zero-priced', pinnedIsFree: true })).toBe('pick-model');
-    // Free only already off and nothing pinned (Auto named a free model): the picker names a standard one.
-    expect(standardModelStep({ freeOnly: false })).toBe('pick-model');
+    expect(standardModelStep({ freeOnly: true, model: null, auto: true })).toBe('free-only-off');
+    // Already standard (the user just picked one in the picker): resend — never the picker again.
+    expect(standardModelStep({ freeOnly: false, model: 'vendor/paid-model', auto: false })).toBe('resend');
+    expect(standardModelStep({ freeOnly: true, model: 'vendor/paid-model', auto: false })).toBe('resend');
+    expect(standardModelStep({ freeOnly: false })).toBe('resend');
+    // A direct provider the server will not send connected content to: the picker names another model.
+    expect(standardModelStep({ freeOnly: false, model: 'vendor-direct-model', source: 'nvidia' })).toBe('pick-model');
   });
 });

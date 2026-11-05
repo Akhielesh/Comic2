@@ -5,7 +5,7 @@
 //    and turns on a free model, until the memory is cleared;
 //  - the calm notice: a refused turn becomes a notice, never an error, and never history.
 // Real chatStorage, freeOnlyMode and localStorage; the server's own reader judges the echo.
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../usage/useUsageAllowance', () => ({ useUsageAllowance: () => null }));
 
@@ -13,12 +13,17 @@ import {
   applyVariant,
   composeSystemPrompt,
   isHistoryTurn,
+  standardModelAction,
   storeMemoryUpdate,
   toNoticeTurn,
   toRequestMessage,
+  toStoppedTurn,
   turnSystemPrompt,
   withAnswer
 } from './AIChatPlatform';
+import { sendChatMessageStream } from '../../services/chatApi';
+import { recommendModels } from '../../services/chatSuggest';
+import type { CatalogModel } from '../../services/modelCatalog';
 import { buildMessages as followUpMessages } from './FollowUpChips';
 import type { ChatTurn } from '../../services/chatStorage';
 import { createEmptySession, getChatMemory, isChatMemoryConnected, setChatMemory } from '../../services/chatStorage';
@@ -37,6 +42,9 @@ const turn = (over: Partial<ChatTurn>): ChatTurn => ({ id: crypto.randomUUID(), 
 
 beforeEach(() => {
   localStorage.clear();
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('note 2(a): toRequestMessage echoes connected-account provenance', () => {
@@ -208,5 +216,124 @@ describe('follow-up suggestions see the same conversation', () => {
       { role: 'assistant', content: 'Two meetings.', connectorData: true },
       { role: 'user', content: 'And on Friday?' }
     ]);
+  });
+});
+
+describe('a reply the user stops goes back marked when its stream said it may carry connected content', () => {
+  /** A stream that sends `meta` and one delta, then waits until the request is aborted. */
+  const stoppableStream = (meta: Record<string, unknown>) =>
+    vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const enc = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(`event: meta\ndata: ${JSON.stringify(meta)}\n\n`));
+          c.enqueue(enc.encode('event: delta\ndata: {"content":"You have two meet"}\n\n'));
+          init?.signal?.addEventListener('abort', () => c.error(new DOMException('The user aborted a request.', 'AbortError')));
+        }
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    });
+
+  const stopAfterFirstDelta = async () => {
+    const controller = new AbortController();
+    let flagged = false;
+    let partial = '';
+    const run = sendChatMessageStream(
+      { messages: [{ role: 'user', content: 'What is on my calendar?' }] },
+      {
+        signal: controller.signal,
+        onMeta: (m) => {
+          if (m.connectorPrivacy === true) flagged = true;
+        },
+        onDelta: (d) => {
+          partial += d;
+          controller.abort();
+        }
+      }
+    );
+    await expect(run).rejects.toBeTruthy();
+    return { flagged, partial };
+  };
+
+  it('a flagged stream stopped after a delta: the kept partial answer is history and carries connectorData: true', async () => {
+    vi.stubGlobal('fetch', stoppableStream({ model: 'vendor/paid-model', source: 'openrouter', connectorPrivacy: true }));
+    const { flagged, partial } = await stopAfterFirstDelta();
+    expect(partial).toBe('You have two meet');
+    const stopped = toStoppedTurn(turn({ content: partial }), flagged);
+    expect(isHistoryTurn(stopped)).toBe(true);
+    expect(toRequestMessage(stopped)).toEqual({ role: 'assistant', content: 'You have two meet', connectorData: true });
+    expect(messagesCarryConnectorData([toRequestMessage(stopped)])).toBe(true);
+  });
+
+  it('an unflagged stream stopped the same way stays unmarked, unless its live trace shows a connector tool', async () => {
+    vi.stubGlobal('fetch', stoppableStream({ model: 'vendor/paid-model', source: 'openrouter', connectorPrivacy: false }));
+    const { flagged, partial } = await stopAfterFirstDelta();
+    expect(toRequestMessage(toStoppedTurn(turn({ content: partial }), flagged))).toEqual({ role: 'assistant', content: 'You have two meet' });
+
+    const traced = toStoppedTurn(
+      turn({ content: partial, artifacts: [{ type: 'agent_activity', data: { steps: [{ tool: 'calendar_agenda', status: 'running' }] } }] }),
+      flagged
+    );
+    expect(toRequestMessage(traced).connectorData).toBe(true);
+    // The live card stops spinning.
+    expect((traced.artifacts?.[0].data as { steps: { status: string }[] }).steps[0].status).not.toBe('running');
+  });
+});
+
+describe('"Use a standard model" resolves the model the resend would actually use', () => {
+  const model = (id: string, isFree: boolean): CatalogModel =>
+    ({
+      id,
+      name: id,
+      source: 'openrouter',
+      contextLength: 128_000,
+      inputModalities: ['text'],
+      outputModalities: ['text'],
+      supportedParameters: ['tools', 'temperature'],
+      pricing: { promptPerToken: isFree ? 0 : 0.000001, completionPerToken: isFree ? 0 : 0.000002, imagePerImage: 0, requestFlat: 0 },
+      isFree,
+      costClass: isFree ? 'free_verified' : 'paid',
+      supportsImageOutput: false,
+      supportsImageInput: false,
+      supportsJsonOutput: false,
+      roles: [],
+      costBand: 'low',
+      drawbacks: [],
+      possibilities: []
+    }) as unknown as CatalogModel;
+  const FREE = model('vendor/assistant:free', true);
+  const PAID = model('vendor/assistant', false);
+  const ASK = 'what is on my calendar this week';
+
+  it('Auto under Free only picks the free model for this message (the refused turn); the action resends on the standard one and leaves Free only on', () => {
+    // The precondition the refusal came from: Auto prefers the free model.
+    expect(recommendModels(ASK, [FREE, PAID], 1)[0]?.model.id).toBe(FREE.id);
+    const plan = standardModelAction({ freeOnly: true, auto: true, reqModel: FREE.id, reqSource: 'openrouter', modelIsFree: true, text: ASK, candidates: [FREE, PAID] });
+    expect(plan).toEqual({ kind: 'resend', freeOnlyOff: false, overrideModel: PAID });
+  });
+
+  it('a standard model the user just picked (Free only off): resend, never the model picker again', () => {
+    expect(standardModelAction({ freeOnly: false, auto: false, reqModel: PAID.id, reqSource: 'openrouter', modelIsFree: false, text: ASK, candidates: [FREE, PAID] })).toEqual({
+      kind: 'resend',
+      freeOnlyOff: false
+    });
+  });
+
+  it('a free model the user pinned opens the picker; nothing named under Free only turns it off', () => {
+    expect(standardModelAction({ freeOnly: true, auto: false, reqModel: FREE.id, reqSource: 'openrouter', modelIsFree: true, text: ASK, candidates: [FREE, PAID] })).toEqual({ kind: 'pick-model' });
+    expect(standardModelAction({ freeOnly: true, auto: true, text: ASK, candidates: [] })).toEqual({ kind: 'resend', freeOnlyOff: true });
+    // Auto had only free models to choose from: the picker is the way to name a standard one.
+    expect(standardModelAction({ freeOnly: true, auto: true, reqModel: FREE.id, modelIsFree: true, text: ASK, candidates: [FREE] })).toEqual({ kind: 'pick-model' });
+  });
+});
+
+describe('flagged memory on a direct-provider turn', () => {
+  it('is kept under Free only (a direct provider never runs on a free model); an OpenRouter or Auto turn leaves it out', () => {
+    setChatMemory(MEMORY, U);
+    storeMemoryUpdate(U, MEMORY, { memory: MEMORY, connectorData: true });
+    setFreeOnly(true);
+    expect(turnSystemPrompt(U, PERSONA, { id: 'vendor-direct-model', source: 'openai' })).toContain('Planning the launch with Dana');
+    expect(turnSystemPrompt(U, PERSONA, { id: 'vendor/paid-model', source: 'openrouter' })).toBe(PERSONA);
+    expect(turnSystemPrompt(U, PERSONA, {})).toBe(PERSONA);
   });
 });

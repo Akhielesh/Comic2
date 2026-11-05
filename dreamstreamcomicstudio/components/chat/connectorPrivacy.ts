@@ -89,6 +89,42 @@ export const turnCarriesConnectorData = (turn: ConnectorProvenance): boolean =>
 export const connectorMarkerFor = (turn: ConnectorProvenance): { connectorData?: true } =>
   turnCarriesConnectorData(turn) ? { connectorData: true } : {};
 
+const recordOf = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+
+/** A live trace artifact (agent_activity steps, swarm_trace agents' tool events) names a connector tool. */
+const traceNamesConnectorTool = (artifacts: readonly { type?: unknown; data?: unknown }[] | undefined): boolean =>
+  (artifacts || []).some((a) => {
+    const data = recordOf(a?.data);
+    if (!data) return false;
+    if (a.type === 'agent_activity') {
+      return Array.isArray(data.steps) && data.steps.some((step) => isConnectorToolName(recordOf(step)?.tool));
+    }
+    if (a.type === 'swarm_trace') {
+      return (
+        Array.isArray(data.agents) &&
+        data.agents.some((agent) => {
+          const events = recordOf(agent)?.toolEvents;
+          return Array.isArray(events) && events.some((e) => isConnectorToolName(recordOf(e)?.tool));
+        })
+      );
+    }
+    return false;
+  });
+
+/**
+ * The marker a reply the user STOPPED keeps. A stopped reply has no `final` payload (no server mark,
+ * no tool events), but its partial text is kept and sent back as history, so it is marked when the
+ * stream's `meta` said the turn may carry connected content (`metaConnectorPrivacy`), or when its live
+ * trace already shows a connector tool. Over-marking a connected user's stopped reply is safe: a later
+ * free-model turn of that chat is refused instead of receiving it.
+ */
+export const stoppedTurnMarker = (input: {
+  metaConnectorPrivacy?: boolean;
+  artifacts?: readonly { type?: unknown; data?: unknown }[];
+}): { connectorData?: true } =>
+  input.metaConnectorPrivacy === true || traceNamesConnectorTool(input.artifacts) ? { connectorData: true } : {};
+
 // ── Free-model turns and the long-term memory flag ───────────────────────────────────────────
 
 /** A model id that is a free endpoint: the catalog says so, or the `:free` suffix. */
@@ -96,11 +132,22 @@ export const isFreeModel = (model: string | null | undefined, catalogIsFree?: bo
   Boolean(model) && (catalogIsFree === true || hasFreeSuffix(model));
 
 /**
- * The client's view of whether a turn may run on a free model: Free only is on (every Free only turn,
- * whatever model is pinned), or the model it names is free. Flagged memory stays out of these turns.
+ * The client's view of whether a turn may run on a free model. Only OpenRouter has free models, so a
+ * turn whose source is a direct provider never does (its key is the user's own, or the server
+ * withholds flagged memory itself for an unconfirmed platform key). An OpenRouter turn (or Auto, no
+ * source yet) may: Free only is on (every Free only turn, whatever model is pinned), or the model it
+ * names is free. Flagged memory stays out of these turns.
  */
-export const mayRunOnFreeModel = (input: { freeOnly: boolean; model?: string | null; modelIsFree?: boolean }): boolean =>
-  input.freeOnly || isFreeModel(input.model, input.modelIsFree);
+export const mayRunOnFreeModel = (input: {
+  freeOnly: boolean;
+  model?: string | null;
+  modelIsFree?: boolean;
+  /** The turn's source (ModelSourceId); unset = Auto, which runs on OpenRouter. */
+  source?: string | null;
+}): boolean => {
+  if (input.source && input.source !== 'openrouter') return false;
+  return input.freeOnly || isFreeModel(input.model, input.modelIsFree);
+};
 
 // ── The calm notice ───────────────────────────────────────────────────────────────────────────
 
@@ -150,15 +197,31 @@ export const connectedDataNoticeOf = (err: unknown): { kind: ConnectedDataNotice
 };
 
 /**
- * What "Use a standard model" does: a free model pinned on the chat (or locked in Settings) is
- * replaced in the model picker; otherwise Free only is what chose the free model, so it is turned off.
- * With Free only already off and nothing pinned, the picker is the one way to name a standard model.
+ * What "Use a standard model" does, from the model the resend WOULD use (the client resolves it the
+ * way a send does: Auto's pick, the chat's pinned model, or the model locked in Settings):
+ *  - 'resend-paid': Auto picked a free model. Resend on Auto's best standard (non-free) pick instead;
+ *    Free only is left as it is (Free only with a named paid model is a paid turn).
+ *  - 'pick-model': the user chose that free model (pinned, or locked in Settings), or the turn ran on
+ *    a direct provider the server will not send connected content to: the model picker names another.
+ *  - 'free-only-off': no model is named and Free only is on, so Free only chose the free model: turn
+ *    it off, then resend.
+ *  - 'resend': the model is already standard (say the user just picked one in the picker): resend.
+ * Only 'free-only-off' changes Free only.
  */
+export type StandardModelStep = 'resend-paid' | 'pick-model' | 'free-only-off' | 'resend';
+
 export const standardModelStep = (input: {
   freeOnly: boolean;
-  pinnedModel?: string | null;
-  pinnedIsFree?: boolean;
-}): 'pick-model' | 'free-only-off' => {
-  if (input.pinnedModel && isFreeModel(input.pinnedModel, input.pinnedIsFree)) return 'pick-model';
-  return input.freeOnly ? 'free-only-off' : 'pick-model';
+  /** The model the resend would use (undefined: none named, the server picks). */
+  model?: string | null;
+  modelIsFree?: boolean;
+  /** The chat is on Auto and nothing locked the model: Auto chose it. */
+  auto?: boolean;
+  /** The resend's source; a direct provider never runs connected content on the shared key unconfirmed. */
+  source?: string | null;
+}): StandardModelStep => {
+  if (input.source && input.source !== 'openrouter') return 'pick-model';
+  if (input.model && isFreeModel(input.model, input.modelIsFree)) return input.auto ? 'resend-paid' : 'pick-model';
+  if (!input.model && input.freeOnly) return 'free-only-off';
+  return 'resend';
 };

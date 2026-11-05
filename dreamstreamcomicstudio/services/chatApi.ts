@@ -155,12 +155,16 @@ export const generateChatTitle = (
 export const updateChatMemory = (
   messages: ChatRequest['messages'],
   memory: string,
-  options?: { signal?: AbortSignal }
+  options?: {
+    signal?: AbortSignal;
+    /** `memory` was distilled from connected-account content (the sticky flag): the merge follows that policy. */
+    memoryConnected?: boolean;
+  }
 ): Promise<ChatMemoryResponse> =>
-  post<{ messages: ChatRequest['messages']; memory: string }, ChatMemoryResponse>(
+  post<{ messages: ChatRequest['messages']; memory: string; memoryConnected?: boolean }, ChatMemoryResponse>(
     '/api/chat/memory',
-    { messages, memory },
-    options
+    { messages, memory, ...(options?.memoryConnected ? { memoryConnected: true } : {}) },
+    options?.signal ? { signal: options.signal } : undefined
   );
 
 /**
@@ -197,7 +201,22 @@ export const fetchFollowUps = (
     options
   );
 
+/** The `meta` event that opens a chat, swarm or recipe stream. */
+export interface ChatStreamMeta {
+  model?: string;
+  requestedModel?: string;
+  source?: string;
+  /**
+   * The turn may carry connected-account content (the server denies data collection on it). The
+   * client keeps it for a reply the user stops before `final`, so the stopped reply still goes back
+   * marked (components/chat/connectorPrivacy.ts stoppedTurnMarker).
+   */
+  connectorPrivacy?: boolean;
+}
+
 export interface ChatStreamHandlers {
+  /** The stream's opening `meta` event. */
+  onMeta?: (meta: ChatStreamMeta) => void;
   /** Incremental answer text. */
   onDelta?: (content: string) => void;
   /** Incremental reasoning trace. */
@@ -318,7 +337,9 @@ export const sendChatMessageStream = async (
     let final: ChatResponse | null = null;
     let streamError: string | null = null;
     await consumeEventStream(res, (event, parsed) => {
-      if (event === 'delta' && typeof parsed.content === 'string') {
+      if (event === 'meta') {
+        handlers.onMeta?.(parsed as ChatStreamMeta);
+      } else if (event === 'delta' && typeof parsed.content === 'string') {
         receivedAny = true;
         receivedContent = true;
         handlers.onDelta?.(parsed.content);
@@ -426,7 +447,8 @@ export const runSwarmStream = async (
   let final: ChatResponse | null = null;
   let streamError: string | null = null;
   await consumeEventStream(res, (event, parsed) => {
-    if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
+    if (event === 'meta') handlers.onMeta?.(parsed as ChatStreamMeta);
+    else if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
     else if (event === 'reasoning' && typeof parsed.reasoning === 'string') handlers.onReasoning?.(parsed.reasoning);
     else if (event === 'trace') handlers.onTrace?.(parsed as SwarmTraceArtifact);
     else if (event === 'final') final = parsed as ChatResponse;
