@@ -179,7 +179,7 @@ describe('contradiction gaps (agent-editor plan §3 A3.2: ask once, never overri
     doc.letterStyle = { presetId: 'classic', auto: false, kinds: { shout: { textColor: '#cc0000' } } };
     expect(gapsOf(doc, 'switch the lettering to manga')).toEqual(['contradiction_style']);
     expect(contradictionsOf(doc, 'use the manga lettering')[0].text).toBe(
-      'the user asked for the Manga lettering, but the comic has its own looks for shouts on top of Classic comic — ask_user once: "Keep my looks" (switch with keepOverrides) / "Start fresh" (the base and kind looks are dropped), naming those looks. Never drop them silently.'
+      'the user asked for the Manga lettering, but the comic has its own looks for shouts on top of Classic comic — ask_user once: "Keep my looks" (stay on Classic comic) / "Switch to Manga" (drops the base and kind looks; speaker and line looks stay on top), naming those looks. Never drop them silently.'
     );
     // Silent: no own looks, the same preset, or no lettering words ("make it noir" is the art).
     expect(gapsOf(plannedDoc(), 'switch the lettering to manga')).toEqual([]);

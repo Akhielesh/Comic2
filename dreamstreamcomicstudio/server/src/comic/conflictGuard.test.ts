@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { CONFLICT_LIMITS, type ComicDoc } from '../../../shared/comic/doc.js';
 import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilities.js';
 import type { DocOp } from '../../../shared/comic/ops.js';
-import { conflictCardFor, conflictToolNote, guardUserEdits, recordConflicts, styleWords, type BlockedEdit } from './conflictGuard.js';
+import { conflictCardFor, conflictCardText, conflictToolNote, guardUserEdits, recordConflicts, styleWords, type BlockedEdit } from './conflictGuard.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
 import type { RecentCommit, StudioSession } from './session.js';
 import { createDirectorTurn } from './tools.js';
@@ -177,6 +177,16 @@ describe('recordConflicts and conflictCardFor', () => {
     const card = conflictCardFor(turn)!;
     expect(card.items).toHaveLength(CONFLICT_LIMITS.items);
     expect(card.more).toBe(3);
+  });
+
+  it('conflictCardText tells the director what was answered and what still waits', () => {
+    const turn = createDirectorTurn();
+    recordConflicts(turn, [blocked('ln_a', 'Run!'), blocked('ln_b', 'Go!')]);
+    const card = conflictCardFor(turn)!;
+    card.items[0] = { ...card.items[0], resolved: 'mine' };
+    expect(conflictCardText(card)).toBe("[conflict: line ln_a — kept the creator's; line ln_b — waiting for an answer]");
+    expect(conflictCardText({ ...card, more: 2 })).toBe("[conflict: line ln_a — kept the creator's; line ln_b — waiting for an answer; and 2 more left alone]");
+    expect(conflictCardText({ type: 'conflict', id: 'x', items: [] })).toBe('');
   });
 
   it('styleWords names what a restyle changes', () => {

@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyDoc, type AssetRef, type ComicDoc } from '../../../shared/comic/doc.js';
 import { IMAGE_MODELS } from '../../../shared/comic/models.js';
-import { DECIDED_MAX_CHARS, decidedLine, ownLooks, pinnedBalloons, pinnedLabel } from './decided.js';
+import { CONFLICT_PROMPT_LINE, DECIDED_MAX_CHARS, decidedLine, ownLooks, pinnedBalloons, pinnedLabel } from './decided.js';
 import { plannedDoc } from './orchestrator.fakes.js';
 
 const drawnAsset = (path: string): AssetRef => ({ path, source: 'generated', at: 5 });
@@ -60,6 +60,10 @@ describe('decidedLine', () => {
 });
 
 describe('helpers', () => {
+  it('the prompt rule names both DECIDED and the guard’s Conflict: results', () => {
+    expect(CONFLICT_PROMPT_LINE).toBe('If a request contradicts DECIDED or a Conflict: result, ask once; never override silently.');
+  });
+
   it('pinnedBalloons in page and reading order, with a label that quotes the line', () => {
     const pinned = pinnedBalloons(settledDoc());
     expect(pinned.map((p) => [p.line.id, p.locked])).toEqual([

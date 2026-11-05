@@ -12,6 +12,12 @@ import { LETTERING_PRESETS, type LetteringPresetId } from '../../../shared/comic
 import { lockOf } from '../../../shared/comic/modelLock.js';
 import { getImageModel } from '../../../shared/comic/models.js';
 
+/**
+ * The director's prompt rule that goes with the DECIDED line and the guard's "Conflict:" tool results (plan §3 A3.2),
+ * added to the system prompt while the conflict guard is on (director.ts, A2).
+ */
+export const CONFLICT_PROMPT_LINE = 'If a request contradicts DECIDED or a Conflict: result, ask once; never override silently.';
+
 /** Longest DECIDED line (the summary tail is never clipped, so it stays short). */
 export const DECIDED_MAX_CHARS = 600;
 

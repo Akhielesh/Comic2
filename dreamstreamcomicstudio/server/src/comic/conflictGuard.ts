@@ -428,6 +428,20 @@ export function recordConflicts(turn: DirectorTurn, blocked: readonly BlockedEdi
 }
 
 /**
+ * The conflict card as words for the director's history (director.ts cardText, A2): "[conflict: page 2 · panel 1 ·
+ * line 2 — kept the creator's; page 3 · panel 1 — waiting for an answer]", so the next turn knows what was answered
+ * and never redoes a held-back edit on its own.
+ */
+export function conflictCardText(card: ConflictCard): string {
+  const items = Array.isArray(card?.items) ? card.items : [];
+  if (!items.length) return '';
+  const state = (it: ConflictItem) => (it.resolved === 'mine' ? "kept the creator's" : it.resolved === 'theirs' ? "used the director's" : 'waiting for an answer');
+  const parts = items.slice(0, 5).map((it) => `${it.where?.label ?? 'a change'} — ${state(it)}`);
+  const more = Math.max(0, items.length - 5) + (typeof card.more === 'number' && card.more > 0 ? card.more : 0);
+  return `[conflict: ${parts.join('; ')}${more > 0 ? `; and ${more} more left alone` : ''}]`;
+}
+
+/**
  * After the director loop: one conflict card for everything the guard held back this turn ("We both changed page 2 ·
  * panel 1." Keep mine / Use the director's / Show me), or null (plan §3 A3.1). Cheap and synchronous: it runs on a
  * Stopped turn too and assumes nothing about how the turn ended; bounded by normalizeConflictCard (items past

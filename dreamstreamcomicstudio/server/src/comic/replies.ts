@@ -440,7 +440,7 @@ export function contradictionsOf(doc: ComicDoc, userText: string, focus?: Studio
       const dropped = looks.base || looks.kinds.length;
       out.push({
         gap: 'contradiction_style',
-        text: `the user asked for the ${letteringPresetName(preset)} lettering, but the comic has its own looks for ${joinList(looks.words.slice(0, 5))} on top of ${letteringPresetName(ls.presetId)} — ask_user once: "Keep my looks" (switch with keepOverrides) / "Start fresh"${dropped ? ' (the base and kind looks are dropped)' : ''}, naming those looks. Never drop them silently.`
+        text: `the user asked for the ${letteringPresetName(preset)} lettering, but the comic has its own looks for ${joinList(looks.words.slice(0, 5))} on top of ${letteringPresetName(ls.presetId)} — ask_user once: "Keep my looks" (stay on ${letteringPresetName(ls.presetId)}) / "Switch to ${letteringPresetName(preset)}" (${dropped ? 'drops the base and kind looks; speaker and line looks stay on top' : 'the speaker and line looks stay on top'}), naming those looks. Never drop them silently.`
       });
     }
   }
