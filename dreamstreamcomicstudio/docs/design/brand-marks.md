@@ -61,22 +61,28 @@ Mask ids come from `useId()`, sanitised to id-safe characters, so any number of 
 **`StudioLogo`** props: `studio`, `size?` (`'header'` default, `'display'`, `'compact'`), `endorsed?`
 (Comic and Stream only; ignored for the house mark and Atlas), `showLabel?` (default true),
 `loading?`, `className?`, `markClassName?`, `labelClassName?`, `style?`. The wordmark is
-"`<First>` Studio" in `var(--ds-font-display, "Space Grotesk")` 600 with −0.025em tracking, "Studio"
-at weight 500 and 55% opacity; the overline is the overline recipe (11 px, 600, 0.12em, uppercase,
-55%). The visible text is the accessible name (inside a link it names the link); `translate="no"`
-keeps machine translation off the brand name. Other sizes: set `--ds-logo-mark-size`,
-`--ds-logo-text-size` and `--ds-logo-gap` from a class or `style`.
+"`<First>` Studio" in Space Grotesk 600 with −0.025em tracking, "Studio" at weight 500 and 55%
+opacity; the overline is the overline recipe (11 px, 600, 0.12em, uppercase, 55%) in IBM Plex Sans.
+Both faces are fixed, not read from `--ds-font-display` / `--ds-font-sans` (outside the Atlas skin
+those are Inter), so the lockup looks the same on every host. The visible text is the accessible
+name (inside a link it names the link); `translate="no"` keeps machine translation off the brand
+name. Other sizes: set `--ds-logo-mark-size`, `--ds-logo-text-size` and `--ds-logo-gap` from a class
+(`className="[--ds-logo-mark-size:28px]"`) or `style`, or size the parts directly
+(`markClassName="h-7 w-7"`, `labelClassName="text-[17px]"`). Every lockup default sits in `:where()`
+(zero specificity), so a class wins whatever order the stylesheets load in.
 
 **Fonts.** The wordmark needs Space Grotesk 500/600 (and the overline IBM Plex Sans 600) loaded by the
-page: `index.css` declares them for the main app; Stream Studio self-hosts the same `/fonts/*.woff2`.
-Without them the lockup falls back to `system-ui`.
+page: `index.css` declares them for the main app, with or without the skin. Stream Studio self-hosts
+the same `/fonts/*.woff2` from step 2a; until then `live.html` loads neither, so a lockup there falls
+back to `system-ui`.
 
 **Motion** (`studio-marks.css`, the Atlas logo's): hover tilts the tile −6° and 1.05 on
 `--ds-ease-spring` over `--ds-motion-panel`; a press squeezes it to 0.94 over `--ds-motion-fast`;
 each studio's moment runs inside the mask (the tile never changes colour). Hover applies inside a
 `.ds-logo`, or when the mark or lockup is the direct child of a hovered link or button, and only on
 devices that can hover. `loading` loops the moment; loops pause under any `[data-inview="false"]`
-ancestor (`useInViewPause` / `InViewPause`), so wrap a loading mark that can scroll off screen. Under
+ancestor, so wrap a loading mark that can scroll off screen. Set the attribute yourself for now;
+`useInViewPause` / `InViewPause` (`components/ds`) will set it once the shared token commit lands. Under
 `prefers-reduced-motion: reduce` nothing moves. Every token is read with its Atlas value as fallback,
 so the marks move the same where no `--ds-*` token exists.
 
@@ -98,19 +104,19 @@ so the marks move the same where no `--ds-*` token exists.
 
 ## Icons and favicons
 
-| File(s) | What | Used by |
-|---|---|---|
-| `icons/app-192.png`, `app-512.png` | D: ink tile, paper glyph, clear corners (`any`) | `app.webmanifest` |
-| `icons/app-maskable-512.png` | D: full-bleed ink, glyph inside the 80% safe zone (`maskable`) | `app.webmanifest` |
-| `icons/apple-touch-180.png` | D: full bleed (iOS rounds the corners) | `index.html` |
-| `favicon.ico` | D: 16, 32, 48 px, 32-bit BMP entries | `index.html`, browsers' default request |
-| `icons/dreamstream-favicon.svg` | D: ink tile on light chrome, paper tile on dark, glyph cut out | `index.html` |
-| `icons/comics-192/512/maskable-512/apple-touch-180.png`, `comics-icon.svg`, `comics-favicon.svg/.ico` | Grin, same set | `comics.webmanifest`; the comics host's head (`comics-edge/src/brand.ts` rewrites the apple-touch and favicon links) |
-| `icons/stream-192/512/maskable-512/apple-touch-180.png`, `stream-icon.svg`, `stream-favicon.svg/.ico` | On air, same set | `stream.webmanifest`, `live.webmanifest` |
-| `icons/stream-badge-96.png` | On-air glyph alone, white on transparent | notification `badge` (Android reads its alpha) |
-| `stream-studio.svg` | On-air favicon (same as `stream-favicon.svg`) | `live.html`, notification icon/badge |
-| `icons/*-icon.svg` | opaque art for manifest `any` SVG icons | manifests |
-| `icons/{dreamstream,comics,stream}-mark.svg` | **the sources** (currentColor marks) | `scripts/gen-icons.mjs` |
+| File(s) | What | Used by | Status |
+|---|---|---|---|
+| `icons/app-192.png`, `app-512.png` | D: ink tile, paper glyph, clear corners (`any`) | `app.webmanifest` | wired |
+| `icons/app-maskable-512.png` | D: full-bleed ink, glyph inside the 80% safe zone (`maskable`) | `app.webmanifest` | wired |
+| `icons/apple-touch-180.png` | D: full bleed (iOS rounds the corners) | `index.html` | wired |
+| `favicon.ico` | D: 16, 32, 48 px, 32-bit BMP entries | `index.html`, browsers' default request | wired (Pages serves it on every host: a client that skips the page's links and asks for `/favicon.ico` gets the D on the comics and Stream hosts too) |
+| `icons/dreamstream-favicon.svg` | D: ink tile on light chrome, paper tile on dark, glyph cut out | `index.html` | wired |
+| `icons/comics-192/512/maskable-512/apple-touch-180.png`, `comics-icon.svg`, `comics-favicon.svg/.ico` | Grin, same set | `comics.webmanifest`; the comics host's head (`comics-edge/src/brand.ts` rewrites the apple-touch and favicon links) | wired |
+| `icons/stream-192/512/maskable-512.png`, `stream-icon.svg` | On air, same set | `stream.webmanifest`, `live.webmanifest` | wired |
+| `icons/stream-favicon.svg/.ico`, `stream-apple-touch-180.png` | On air: tab favicons, the PNG touch icon iOS needs | `live.html` (step 2a) | generated, not wired yet: `live.html` belongs to step 2a, which links them |
+| `icons/stream-badge-96.png` | On-air glyph alone, white on transparent | notification `badge` (Android reads its alpha), with `stream-192.png` as the `icon` | generated, not wired yet: `public/live-sw.js` and `live/monitor/push.ts` belong to step 2a |
+| `stream-studio.svg` | On-air favicon (same art as `stream-favicon.svg`) | `live.html` favicon and touch icon, notification icon and badge | wired; step 2a moves these to the files above |
+| `icons/{dreamstream,comics,stream}-mark.svg` | **the sources** (currentColor marks) | `scripts/gen-icons.mjs` | source |
 
 Raster icons put a paper glyph on an ink tile: a transparent cut would show a dark launcher's colour
 through the glyph. Colours are Atlas ink `#0a0a0a` and paper `#ffffff` (the favicon's dark-chrome
@@ -126,12 +132,15 @@ node scripts/gen-icons.mjs --check   # exit 1 if a committed output is stale
 ```
 
 To change a mark: edit its source in `public/icons/*-mark.svg` (it must stay a 64-unit rx 16
-`currentColor` tile with one weight-7 cut and one r 3.6 point in a mask; the generator refuses
-anything else), put the same numbers in `components/brand/studios.ts`, run `npm run gen:icons`, and
-commit the sources with the outputs. `tests/config/appIcons.test.ts` fails if the sources and
-`studios.ts` disagree, if an output differs from what the sources make (SVGs byte for byte, rasters
-pixel for pixel within 2/255, so another libvips build is not drift), if any manifest, page head,
-the comics edge or app code points at a missing icon or one whose real format or size differs from
-what it declares, if `/favicon.ico` is not a real ICO, or if maskable art leaves the safe zone.
+`currentColor` tile with one weight-7 cut and one r 3.6 point in a `userSpaceOnUse` mask: a white
+64 × 64 rx 16 keep rect, a black stroke-only cut with mitred corners and butt ends, a black point;
+the generator refuses anything else, naming what is wrong), put the same numbers in
+`components/brand/studios.ts`, run `npm run gen:icons`, and commit the sources with the outputs.
+`tests/config/appIcons.test.ts` fails if the sources and `studios.ts` disagree, if an output differs
+from what the sources make (SVGs byte for byte, rasters pixel for pixel within 2/255, so another
+libvips build is not drift), if any manifest, page head, the comics edge or app code points at a
+missing icon or one whose real format or size differs from what it declares, if a generated icon is
+used by none of them (except the Stream files step 2a wires, listed in the test), if `/favicon.ico`
+is not a real ICO, or if maskable art leaves the safe zone.
 `tests/config/studioMarksGuard.test.ts` keeps `components/brand/**` free of the legacy comic kit,
 hue and Tailwind, and holds the motion contract above.

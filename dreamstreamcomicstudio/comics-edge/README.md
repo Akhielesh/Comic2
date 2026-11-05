@@ -22,7 +22,9 @@ On top of that:
 - **HTML** (except `/c/*`, owned by the share Pages Function, and legacy `/?view=read&id=` reader heads)
   gets the Comic Studio head through `HTMLRewriter`: title "Comic Studio — DreamStream", description,
   `og:*`/`twitter:*` defaults with `/icons/comics-og.png`, `<meta name="ds-product" content="comics">`,
-  theme colours and the `/comics.webmanifest` manifest. Nothing from the request is reflected.
+  theme colours, the `/comics.webmanifest` manifest, and the apple-touch-icon and favicon links
+  (apple-touch → `/icons/comics-apple-touch-180.png`; an SVG icon link → `/icons/comics-favicon.svg`,
+  any other icon link → `/icons/comics-favicon.ico`). Nothing from the request is reflected.
 - **Security headers on every response:** `Strict-Transport-Security: max-age=31536000` (never
   `includeSubDomains` — other subdomains are separate products), `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin`, a minimal `Permissions-Policy`, and
