@@ -225,6 +225,14 @@ describe('Atlas skin — (b) the defaults reproduce today’s look outside the s
     expect([...restated].sort()).toEqual(derived.sort());
   });
 
+  it('legacy-kit form controls keep the light scheme in dark (dark applies on every page since D5; their ink stays slate-900)', () => {
+    const shim = rules.filter((r) => r.parents.length === 0 && r.selector === '.dark :is(input, select, textarea).border-black');
+    expect(shim).toHaveLength(1);
+    expect(shim[0].body.trim()).toBe('color-scheme: light;');
+    // Only the kit's marked controls: a DS Field (token edge, no border-black) still takes the dark scheme.
+    expect(rules.some((r) => r.parents.length === 0 && /\.dark\b[^{]*\b(input|select|textarea)\b/.test(r.selector) && r.selector !== shim[0].selector)).toBe(false);
+  });
+
   it('every .dark token exists in :root, and a NEW token is only redefined in .dark when its dark value differs', () => {
     for (const k of DARK_TOKENS.keys()) expect(ROOT_TOKENS.get(k), `${k} exists in :root`).toBeDefined();
     // (--ds-accent is pre-existing and theme-invariant by design; the new tokens must not add noise.)

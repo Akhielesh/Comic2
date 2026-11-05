@@ -467,7 +467,11 @@ primitives) and DS-1b (the QA harness).
   `VITE_DS_SKIN_EVERYWHERE=off` strips it from every HTML entry (`vite.config.ts`, no file-name filter, so
   `live.html` rolls back with it once it carries the attribute). `initTheme()` runs at the app root and
   `public/theme-boot.js` (external, CSP `'self'`) sets `.dark` before first paint. The single inline script
-  and its CSP hash are unchanged.
+  and its CSP hash are unchanged. Found in the visual check: the legacy-kit pages (dashboard, settings) keep
+  their light surfaces in dark, but a bare form control took the dark UA field from
+  `.dark { color-scheme: dark }` under the page's slate-900 ink (typed text 1.5:1). The kit's controls
+  (`border-black`) keep `color-scheme: light` in dark until their package moves them to the DS Field
+  (`index.css`; `atlasSkin.test.ts`).
 - D6: the named `ds` colours in Tailwind (`bg-ds-canvas`, `text-ds-ink/60` via color-mix).
 - D7: `styles/ds-motion.css`, Atlas's motion system on the `--ds-*` tokens (entrances, stagger, scroll
   reveal, disclosure, lift, link, skeleton, shimmer text, indeterminate progress, live dot, caret,
