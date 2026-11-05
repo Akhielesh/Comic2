@@ -113,8 +113,11 @@ describe('placeLine / placementFor', () => {
 
   it('nudge: 0.02 of the page for "a bit", 0.08 for "a lot", from where it is drawn; never off the page', () => {
     const g = lineGeo(geo, 'l_mira1')!; // pinned: drawn where stored
-    expect(placementFor(doc, 'pg_1', 'l_mira1', { frame: 'panel', nudge: 'up', amount: 'bit' })).toEqual({ x: g.text.x, y: +(g.text.y - NUDGE_STEP.bit).toFixed(4) });
-    expect(placementFor(doc, 'pg_1', 'l_mira1', { frame: 'panel', nudge: 'right', amount: 'lot' })).toEqual({ x: +(g.text.x + NUDGE_STEP.lot).toFixed(4), y: g.text.y });
+    // The plan's steps: 0.02 of the page for "a bit", 0.08 for "a lot".
+    expect(NUDGE_STEP).toEqual({ bit: 0.02, lot: 0.08 });
+    expect(placementFor(doc, 'pg_1', 'l_mira1', { frame: 'panel', nudge: 'up', amount: 'bit' })).toEqual({ x: g.text.x, y: +(g.text.y - 0.02).toFixed(4) });
+    expect(placementFor(doc, 'pg_1', 'l_mira1', { frame: 'panel', nudge: 'right', amount: 'lot' })).toEqual({ x: +(g.text.x + 0.08).toFixed(4), y: g.text.y });
+    expect(placementFor(doc, 'pg_1', 'l_mira1', { frame: 'panel', nudge: 'down' })).toEqual({ x: g.text.x, y: +(g.text.y + 0.02).toFixed(4) });
     const top = placementFor(doc, 'pg_1', 'l_cap', { frame: 'panel', nudge: 'up', amount: 'lot' });
     expect(top!.note).toBe('It stopped at the page edge so its outline stays visible.');
     expect(top!.y).toBeGreaterThan(0.05 - NUDGE_STEP.lot);
