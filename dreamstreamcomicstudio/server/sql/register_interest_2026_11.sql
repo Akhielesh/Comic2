@@ -59,6 +59,22 @@ set
   )
 where not (product_interests <@ array['comic_studio', 'stream_studio', 'chat_studio', 'atlas_studio', 'future_studios']::text[]);
 
+-- 2b) Repeated ids. Until section 7 is applied, the public anon key can insert any picks, so a row
+--     can hold more entries than the CHECK below allows while every entry is a known id (say
+--     comic_studio six times). Section 2 leaves such a row alone, and the CHECK would then refuse
+--     the table and stop this file before its lockdown (sections 7-8) runs, or roll all of it back
+--     when it runs as one transaction. Keep each id once, in first-seen order. Matches no row once
+--     it has run (and matched none on 2026-11-05).
+update public.waitlist_signups
+set product_interests = array(
+  select u.x
+  from unnest(product_interests) with ordinality as u(x, n)
+  where u.x is not null
+  group by u.x
+  order by min(u.n)
+)
+where cardinality(product_interests) > (select count(distinct x) from unnest(product_interests) as x);
+
 -- 3) Only known studio ids, and no more of them than the list holds (the server also dedupes).
 --    Dropped and re-added, so re-running this file after the list changes updates the constraint.
 alter table public.waitlist_signups drop constraint if exists waitlist_signups_product_interests_known;

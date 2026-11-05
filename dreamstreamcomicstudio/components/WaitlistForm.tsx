@@ -12,6 +12,8 @@ import {
 import { STUDIO_INTERESTS, sanitizeStudioInterests, type StudioInterestId } from '../services/studioInterests';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
+import { PRIVACY_EMAIL, SUPPORT_EMAIL } from './legal/legalFacts';
+import { legalPath } from './legal/legalRoutes';
 
 interface WaitlistFormProps {
   /**
@@ -48,11 +50,10 @@ const okTone = (isDark: boolean) =>
 const errorInk = (isDark: boolean) => (isDark ? 'text-red-400' : 'text-red-600');
 
 /**
- * Where the privacy policy lives: a restorable app view that works logged out (the legal pages'
- * own /privacy path keeps restoring it). Opened in a new tab so a half-filled form survives.
+ * The Privacy Policy's section on these emails (its canonical path, which works logged out).
+ * Opened in a new tab so a half-filled form survives.
  */
-const PRIVACY_HREF = '/?view=privacy';
-const CONTACT_EMAIL = 'contact@dreamstreamstudio.ai';
+const PRIVACY_HREF = `${legalPath('privacy')}#emails`;
 
 export const WaitlistForm: React.FC<WaitlistFormProps> = (props) =>
   props.kind === 'access' ? <AccessRequestForm {...props} /> : <RegisterInterestForm {...props} />;
@@ -66,7 +67,7 @@ type InterestPhase = 'idle' | 'loading' | 'pending' | 'error' | 'unavailable';
 const LANDING_COPY: Record<NewsletterLanding, { tone: 'ok' | 'warn'; text: string }> = {
   confirmed: {
     tone: 'ok',
-    text: 'You’re confirmed. We’ll send occasional updates, focused on the studios you picked. Every email has a one-click unsubscribe.'
+    text: 'You’re confirmed. We’ll send occasional updates, focused on the studios you picked. Every update has a one-click unsubscribe.'
   },
   invalid: {
     tone: 'warn',
@@ -74,11 +75,11 @@ const LANDING_COPY: Record<NewsletterLanding, { tone: 'ok' | 'warn'; text: strin
   },
   unsubscribed: {
     tone: 'ok',
-    text: 'You’re unsubscribed. We won’t send you any more updates, and your studio picks have been removed.'
+    text: 'You’re unsubscribed. We won’t send you any more updates, and the studio picks for your updates have been removed.'
   },
   'unsub-invalid': {
     tone: 'warn',
-    text: `That unsubscribe link didn’t work. Use the link in our most recent email, or write to ${CONTACT_EMAIL}.`
+    text: `That unsubscribe link didn’t work. Use the link in our most recent email, or write to ${PRIVACY_EMAIL}.`
   }
 };
 
@@ -228,8 +229,8 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
         <div ref={resultRef} tabIndex={-1} role="status" className={`rounded-xl border-2 px-4 py-3 text-sm font-bold focus:outline-none ${warnPanel}`}>
           {/* Our own copy (not the server message, which spells out the address as text too). */}
           Registering interest isn’t available right now. Email{' '}
-          <a href={`mailto:${CONTACT_EMAIL}`} className={linkClass}>
-            {CONTACT_EMAIL}
+          <a href={`mailto:${SUPPORT_EMAIL}`} className={linkClass}>
+            {SUPPORT_EMAIL}
           </a>{' '}
           and we’ll add you by hand.
         </div>
@@ -353,7 +354,7 @@ const RegisterInterestForm: React.FC<WaitlistFormProps> = ({
 
         <p id={ids.consent} className={`mt-2 text-xs leading-relaxed ${isDark ? 'text-zinc-400' : 'text-slate-500'}`}>
           We’ll email you once to confirm your address. Once you confirm, we’ll send occasional DreamStream updates,
-          focused on the studios you picked. Every email has a one-click unsubscribe, and we never sell your
+          focused on the studios you picked. Every update has a one-click unsubscribe, and we never sell your
           address. See our{' '}
           <a href={PRIVACY_HREF} target="_blank" rel="noopener noreferrer" className={linkClass}>
             Privacy Policy<span className="sr-only"> (opens in a new tab)</span>

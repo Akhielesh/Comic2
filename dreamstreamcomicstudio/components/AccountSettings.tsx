@@ -1014,6 +1014,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     };
 
     // The legal documents live at their own pages (components/legal/): link to them, never a copy.
+    // Each opens in a new tab, so Settings stays where it was: an in-app move would leave Back
+    // on the document's own Back target (Dashboard or Home), not this tab.
     const renderLegal = () => (
         <div className="space-y-6 animate-fade-in max-w-3xl">
             <div className="bg-white border-2 border-black rounded-xl p-6">
@@ -1024,16 +1026,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <ul className="space-y-2">
                     {LEGAL_DOCS.map((doc) => (
                         <li key={doc.id}>
-                            <a
-                                href={doc.path}
-                                onClick={(e) => {
-                                    if (!onNavigate || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                                    e.preventDefault();
-                                    onNavigate(doc.id);
-                                }}
-                                className="font-bold underline"
-                            >
+                            <a href={doc.path} target="_blank" rel="noopener noreferrer" className="font-bold underline">
                                 {doc.title}
+                                <span className="sr-only"> (opens in a new tab)</span>
                             </a>
                         </li>
                     ))}

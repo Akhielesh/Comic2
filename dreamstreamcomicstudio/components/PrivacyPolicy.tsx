@@ -4,6 +4,8 @@ import {
     ASSISTANT_SCRIPT_PREVIEW_CHARS,
     ATLAS_GOOGLE_USER_DATA_URL,
     COMIC_PG_CEILING_UNDER_AGE,
+    CONFIRM_EMAIL_LIMITS,
+    CONFIRM_LINK_DAYS,
     COVERED_SITES,
     DATABASE_REGION_LABEL,
     DIRECT_AI_PROVIDERS,
@@ -247,14 +249,14 @@ const sections: LegalSection[] = [
             <>
                 <ul className={LIST}>
                     <li><strong>Account emails:</strong> sign-up confirmations, sign-in links, password resets, security notices, invitations and welcome messages. We send these when you need them, even if you opted out of marketing.</li>
-                    <li><strong>Updates (newsletter):</strong> if you sign up, we store your email address and send a confirmation email first. You only receive updates after you confirm (double opt-in). Every update includes a one-click unsubscribe link.</li>
-                    <li><strong>Early access and interest registrations:</strong> if you ask for early access or register interest, we store your email address, the studios or features you pick, any note you add (up to 1,000 characters) and the page you signed up from, and we email you to confirm we received it. We check whether your address already has an account or a pending invitation, so we can point you to sign-in or re-send your invitation instead.</li>
-                    <li><strong>Unsubscribing</strong> records when you unsubscribed and puts your address on a suppression list, which we keep so that we don't email you marketing again.</li>
+                    <li><strong>Updates and interest registrations (double opt-in):</strong> if you sign up for updates or register interest in a studio, we store your email address, the studios you pick, the page you signed up from and any note you add (up to 1,000 characters). We then email you a confirmation link, and nothing else until you press Confirm. If the address is registered again, by you or by anyone who types it in, we send the confirmation email again, at most once every {CONFIRM_EMAIL_LIMITS.minIntervalMinutes} minutes and {CONFIRM_EMAIL_LIMITS.maxPerDay} times in any 24 hours. A link stops working {CONFIRM_LINK_DAYS} days after we first sent it, even when a later email carries it again. With the registration we also store whether you have confirmed; when you first registered, when we last sent you a confirmation email and when you confirmed; and the signed one-time code in your link, which we delete when you confirm or unsubscribe. If you already get updates and pick more studios, the new picks are kept apart and only added when you press Confirm in a new confirmation email. The registration itself stores no IP address, device details or account ID. Every update includes a one-click unsubscribe link.</li>
+                    <li><strong>Early access requests:</strong> if you ask for early access, we store your email address, the studios or features you pick, any note you add (up to 1,000 characters), the page you signed up from and when you asked. When our server handles the request, it first checks whether your address already has an account, a pending invitation or an earlier request, so we can point you to sign-in, re-send your invitation or tell you you're already on the list; otherwise it emails you to confirm we received it. If our server can't be reached or turns the request away (for example while it starts up, or after many requests from one network), your browser saves the request directly instead, without that email or check.</li>
+                    <li><strong>Unsubscribing</strong> stops updates and records when you unsubscribed. For updates and interest registrations it also deletes, at once, your studio picks (including any still waiting for your confirmation), your note and any unused confirmation link; an early-access request keeps its details, with the unsubscribe time added. Your address goes on a suppression list, which we keep so that we don't email you marketing again, unless you sign up and confirm again.</li>
                     <li><strong>Invitations you send:</strong> if you invite someone, we store their email address, who invited them and how many times, to send the invitation and avoid repeats.</li>
-                    <li><strong>Delivery records:</strong> for every email our backend sends, we record the address, which email it was, whether it was sent, and when.</li>
-                    <li><strong>Open tracking:</strong> emails our server sends contain a tiny image that tells us when the email is first opened, and we store that time with the delivery record. Sign-in links, sign-up confirmations and password-reset emails never contain it. Blocking images in your email app prevents it.</li>
+                    <li><strong>Delivery records:</strong> for every email our backend sends, we record the address, which email it was, whether it was sent (and if not, why, with any error message), when, the message ID our email provider gives it, an ID for the request that caused it, and the account it relates to, if any: yours when the email is about your account, or the sender's for an invitation or an email our team sends.</li>
+                    <li><strong>Open tracking:</strong> emails our server sends contain a tiny image that tells us when the email is first opened, and we store that time with the delivery record. Sign-in links, sign-up confirmations, password-reset emails and the email that asks you to confirm updates or an interest registration never contain it. Blocking images in your email app prevents it.</li>
                 </ul>
-                <p>To stop marketing emails, use the unsubscribe link or change your email preferences in Settings. To have your sign-up or interest registration deleted, email <PrivacyEmail />.</p>
+                <p>To stop marketing emails, use the unsubscribe link in any of them. The email preferences in Settings are saved with your account, but they don't yet change which emails we send. To have your sign-up, interest registration or early-access request deleted, email <PrivacyEmail />.</p>
             </>
         )
     },
@@ -284,7 +286,7 @@ const sections: LegalSection[] = [
                     caption="Legal bases for processing"
                     head={['Legal basis', 'What it covers']}
                     rows={[
-                        ['Performing our contract with you', 'Running your account and the studios, doing what you ask, Stream Studio, connected accounts you choose to connect, and account emails.'],
+                        ['Performing our contract with you', 'Running your account and the studios, doing what you ask, Stream Studio, connected accounts you choose to connect, and account emails; and steps you ask for before you have an account: an early-access request, its receipt email and the check for an existing account or invitation.'],
                         ['Legitimate interests', 'Security, bot protection, rate limits, safety checks and abuse investigations; diagnostics, chat usage events and fixing bugs; automatically saving assistant messages that sound frustrated as feedback and in diagnostics; usage allowances and cost control; approximate location for Chat Studio answers; logging automated visitors. We balance these against your rights, and you can object (see Your rights).'],
                         ['Consent', 'Updates and marketing emails, precise location if you allow it in your browser, and alerts on your device. You can withdraw consent at any time; that doesn\'t affect what happened before.'],
                         ['Legal obligation', 'Keeping records and responding to requests where the law requires it.']
@@ -340,7 +342,7 @@ const sections: LegalSection[] = [
             <ul className={LIST}>
                 <li>Projects are private unless you mark them public or publish them: other people can't find or open a private project. The images in your projects (generated pages and images, and reference photos uploaded with earlier versions of Comic Studio) are stored at long, unguessable web addresses, though, and anyone who has one of those addresses can open that image without signing in, even if the project is private. Public projects, published comics, your profile (username and avatar), comments, likes, follows and view counts can be seen by others. An unlisted share link works for anyone who has it.</li>
                 <li>Stream Studio viewer links are intended for people with the link. Private studio, guest, and recap links may grant control or private access; treat them like passwords and share them only with trusted collaborators.</li>
-                <li>Your email address is not shown on your profile or in search results. It isn't fully private, though: today, someone who knows your username can find out the email address that goes with it.</li>
+                <li>Your email address is not shown on your profile or in search results. It isn't fully private, though: today, someone who knows your username can find out the email address that goes with it, and anyone who enters your email address in the early-access form is told whether it already has a DreamStream account or a pending invitation, or is already on the early-access list. (The form for updates and interest registrations gives the same answer for every address.)</li>
                 <li>Your Stream Studio display name can be found by other members, as described above. Members of a nursery see its live picture, alerts, history and tracker, and who else is a member.</li>
                 <li>A viewer's name and chat messages are seen by the host and the other people in the event.</li>
             </ul>
@@ -383,7 +385,8 @@ const sections: LegalSection[] = [
                         ['Devices list', `Until you remove a device or your account is deleted (Settings shows those seen in the last ${RETENTION.deviceActiveDays} days).`],
                         ['Diagnostics, chat usage events and feedback (with IP address and user agent)', 'Not deleted automatically today; email us to have yours deleted.'],
                         ['Email delivery records and open times', 'Not deleted automatically today.'],
-                        ['Update sign-ups and interest registrations', 'Until you ask us to delete them. Unsubscribing keeps a record of the opt-out so it is respected.'],
+                        ['Update sign-ups and interest registrations', `Until you ask us to delete them. A confirmation link stops working ${CONFIRM_LINK_DAYS} days after we first sent it. Unsubscribing deletes their studio picks and note at once, and keeps a record of the opt-out so it is respected.`],
+                        ['Early-access requests', 'Until you ask us to delete them. Unsubscribing adds the time you unsubscribed and keeps the request.'],
                         ['Welcome-code attempts (a hashed IP address and the time)', 'Not deleted automatically today.'],
                         ['Automated-visitor log', 'No automatic deletion is set up.']
                     ]}
@@ -418,7 +421,7 @@ const sections: LegalSection[] = [
             <>
                 <SubHeading>In the app</SubHeading>
                 <ul className={LIST}>
-                    <li>Edit your profile and email preferences in Settings, and unsubscribe from any update.</li>
+                    <li>Edit your profile in Settings, and unsubscribe from any update with the link in it.</li>
                     <li>Delete projects, chats and comments; unpublish a comic.</li>
                     <li>Disconnect a Google account (Chat Studio → Settings → Connectors).</li>
                     <li>In Stream Studio: choose who can call you, block people, remove people from a nursery, use privacy pause, delete a nursery, and download monitor history and tracker entries as CSV files.</li>

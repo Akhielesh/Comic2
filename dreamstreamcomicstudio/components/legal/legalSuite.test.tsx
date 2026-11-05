@@ -16,6 +16,8 @@ import { AI_PROVIDERS, BROWSER_SERVICES, CORE, NOT_IN_USE, OTHER_SERVICES, Subpr
 import {
     ASSISTANT_SCRIPT_PREVIEW_CHARS,
     BROWSER_THIRD_PARTIES,
+    CONFIRM_EMAIL_LIMITS,
+    CONFIRM_LINK_DAYS,
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
     GOOGLE_PRIVACY_POLICY_URL,
@@ -215,6 +217,66 @@ describe('Privacy Policy', () => {
         expect(emails).toContain('suppression list');
     });
 
+    it('describes register interest as the updates double opt-in, with everything it stores (legalFacts.test.ts ties each part to the code)', () => {
+        const section = renderDoc('privacy').main.querySelector('#emails') as HTMLElement;
+        const items = [...section.querySelectorAll('li')].map(textOf);
+        const item = (label: string) => items.find((t) => t.startsWith(label)) ?? '';
+        const interest = item('Updates and interest registrations (double opt-in):');
+        expect(interest).toContain('if you sign up for updates or register interest in a studio');
+        expect(interest).toContain('We then email you a confirmation link, and nothing else until you press Confirm.');
+        // A repeat registration (anyone can type the address) re-sends it, within the throttle...
+        expect(interest).toContain(
+            `If the address is registered again, by you or by anyone who types it in, we send the confirmation email again, at most once every ${CONFIRM_EMAIL_LIMITS.minIntervalMinutes} minutes and ${CONFIRM_EMAIL_LIMITS.maxPerDay} times in any 24 hours.`
+        );
+        // ...with the same link, whose lifetime runs from the first send.
+        expect(interest).toContain(`A link stops working ${CONFIRM_LINK_DAYS} days after we first sent it, even when a later email carries it again.`);
+        expect(interest).not.toMatch(/send one email|stops working after/);
+        expect(interest).toContain('whether you have confirmed; when you first registered, when we last sent you a confirmation email and when you confirmed');
+        expect(interest).toContain('the signed one-time code in your link, which we delete when you confirm or unsubscribe');
+        expect(interest).toContain('the new picks are kept apart and only added when you press Confirm');
+        expect(interest).toContain('The registration itself stores no IP address, device details or account ID.');
+        // The receipt and the account/invitation check are early access only.
+        expect(interest).not.toMatch(/confirm we received it|pending invitation/);
+        const access = item('Early access requests:');
+        expect(access).toContain('When our server handles the request, it first checks whether your address already has an account, a pending invitation or an earlier request');
+        expect(access).toContain('otherwise it emails you to confirm we received it');
+        // services/waitlist.ts falls back to a direct insert when the backend doesn't answer normally.
+        expect(access).toContain('your browser saves the request directly instead, without that email or check');
+        const unsub = item('Unsubscribing');
+        expect(unsub).toContain('your studio picks (including any still waiting for your confirmation), your note and any unused confirmation link');
+        expect(unsub).toContain('an early-access request keeps its details, with the unsubscribe time added');
+        expect(unsub).toContain('unless you sign up and confirm again');
+        const delivery = item('Delivery records:');
+        for (const part of ['why, with any error message', 'the message ID our email provider gives it', 'an ID for the request that caused it', 'yours when the email is about your account', "the sender's for an invitation"]) {
+            expect(delivery).toContain(part);
+        }
+        // The app's register-interest and early-access requests carry no session, so their
+        // records never name an account (legalFacts.test.ts checks the two clients).
+        expect(delivery).not.toMatch(/signed in when you asked|registering interest while signed in/);
+        expect(item('Open tracking:')).toContain('password-reset emails and the email that asks you to confirm updates or an interest registration never contain it');
+        // Nothing reads the Settings email preferences when sending (legalFacts.test.ts), so the
+        // page offers only the unsubscribe link, and says so.
+        const after = textOf(section.querySelector('p') as HTMLElement);
+        expect(after).toContain('To stop marketing emails, use the unsubscribe link in any of them.');
+        expect(after).toContain("The email preferences in Settings are saved with your account, but they don't yet change which emails we send.");
+        expect(textOf(renderDoc('privacy').main)).not.toMatch(/change your email preferences|email preferences in Settings, and/);
+    });
+
+    it('early-access requests have a retention row and a legal basis, and the early-access answers are disclosed', () => {
+        const { main } = renderDoc('privacy');
+        const retention = textOf(main.querySelector('#retention') as HTMLElement);
+        expect(retention).toContain('Early-access requests');
+        expect(retention).toContain('Until you ask us to delete them. Unsubscribing adds the time you unsubscribed and keeps the request.');
+        expect(textOf(main.querySelector('#legal-bases') as HTMLElement)).toContain(
+            'steps you ask for before you have an account: an early-access request, its receipt email and the check for an existing account or invitation'
+        );
+        const visible = textOf(main.querySelector('#public') as HTMLElement);
+        expect(visible).toContain(
+            'anyone who enters your email address in the early-access form is told whether it already has a DreamStream account or a pending invitation, or is already on the early-access list'
+        );
+        expect(visible).toContain('The form for updates and interest registrations gives the same answer for every address.');
+    });
+
     it('carries the retention numbers the code enforces, and says plainly what is not deleted automatically', () => {
         const retention = textOf(renderDoc('privacy').main.querySelector('#retention') as HTMLElement);
         for (const fragment of [
@@ -225,7 +287,8 @@ describe('Privacy Policy', () => {
             `sleep sessions ${RETENTION.monitorSleepDays} days`,
             `About ${RETENTION.trackerYears} years`,
             `Check records ${RETENTION.safetyEventsDays} days`,
-            'Not deleted automatically today'
+            'Not deleted automatically today',
+            `Until you ask us to delete them. A confirmation link stops working ${CONFIRM_LINK_DAYS} days after we first sent it.`
         ]) {
             expect(retention).toContain(fragment);
         }
@@ -292,6 +355,12 @@ describe('Cookies & Local Storage', () => {
         const text = textOf(renderDoc('cookies').main);
         for (const host of ['challenges.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com']) expect(text).toContain(host);
         expect(text).toContain("Our own code doesn't set cookies.");
+    });
+
+    it('names the register-interest session key, and the confirmation email among those without the tracking image', () => {
+        const { main } = renderDoc('cookies');
+        expect(textOf(main.querySelector('#what-we-store') as HTMLElement)).toContain('ds.interest.unavailable');
+        expect(textOf(main.querySelector('#emails') as HTMLElement)).toContain('the email that asks you to confirm updates or an interest registration never do');
     });
 });
 
@@ -490,7 +559,7 @@ describe('footers and other entry points reach the documents', () => {
     });
 
     it('support links go to the routed support mailbox, not the unrouted contact@', () => {
-        for (const f of ['components/layout/LegalMicroLinks.tsx', 'components/ComicReader.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx']) expect(read(f), f).not.toContain('contact@');
+        for (const f of ['components/layout/LegalMicroLinks.tsx', 'components/ComicReader.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx', 'components/WaitlistForm.tsx', 'server/src/routes/interest.ts']) expect(read(f), f).not.toContain('contact@');
         expect(LIVE_LEGAL_LINKS.find((l) => l.label === 'Support')?.href).toBe(`mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support`);
         for (const id of ['acceptable-use', 'copyright'] as const) {
             expect(LIVE_LEGAL_LINKS.some((l) => legalDocForPath(new URL(l.href, 'https://dreamstreamstudio.ai').pathname) === id)).toBe(true);
@@ -501,6 +570,9 @@ describe('footers and other entry points reach the documents', () => {
         const settings = read('components/AccountSettings.tsx');
         expect(settings).not.toMatch(/Feb 11, 2026|Stripe for subscriptions|Token-based limits apply/);
         expect(settings).toContain('LEGAL_DOCS.map((doc)');
+        // In a new tab: an in-app move would put Back on the document's own target (Dashboard or
+        // Home) instead of Settings, since App doesn't restore a view from a popped address yet.
+        expect(settings).toContain('<a href={doc.path} target="_blank" rel="noopener noreferrer"');
     });
 
     it('the sign-up consent checkbox calls them the Terms of Service', () => {

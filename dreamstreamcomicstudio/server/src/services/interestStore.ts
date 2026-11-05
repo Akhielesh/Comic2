@@ -16,9 +16,10 @@
 //     an existing row's free-text note is never replaced;
 //   * picks are written with a conditional update on what was read (savePicks), so parallel
 //     requests for one address keep every request's picks, sent or throttled;
-//   * a per-recipient throttle on the confirmation email (security finding abuse-ops-11): none
-//     within 10 minutes of the last one, at most 3 a day. The send slot is CLAIMED atomically (a
-//     conditional update on confirm_sent_at) before mailing, so parallel requests send one email;
+//   * a per-inbox throttle on the confirmation email (security finding abuse-ops-11; aliases of one
+//     address count together): none within 10 minutes of the last one, at most 3 a day. The
+//     send slot is CLAIMED atomically (a conditional update on confirm_sent_at) before mailing,
+//     so parallel requests send one email;
 //   * confirmation mail as a whole may use only CONFIRM_EMAIL_BUDGET_SHARE of the daily and
 //     monthly email caps, so it can never crowd out sign-in, recovery and invite mail;
 //   * tokens are signed (services/confirmToken.ts): only one this server issued for this address
@@ -35,9 +36,8 @@ import { confirmTokenExpired, confirmTokenIssuedAt, confirmTokensAvailable, issu
 import {
   PENDING_INTERESTS_KEY,
   countConfirmEmailsSince,
-  countRecentConfirmEmails,
-  latestConfirmEmailAt,
-  normalizeEmail
+  normalizeEmail,
+  recentConfirmEmailsToInbox
 } from './emailStore.js';
 import {
   STUDIO_INTERESTS,
@@ -48,7 +48,10 @@ import {
 const TABLE = 'waitlist_signups';
 const DAY_MS = 86_400_000;
 
-/** Confirmation-email limits per recipient (email_log, status queued|sent, template newsletter-confirm). */
+/**
+ * Confirmation-email limits per recipient inbox (email_log, status queued|sent, template
+ * newsletter-confirm; +tags and Gmail dots count as the same inbox, emailStore.inboxKey).
+ */
 export const INTEREST_CONFIRM_THROTTLE = { minIntervalMs: 10 * 60_000, maxPerDay: 3 } as const;
 
 /** Share of EMAIL_MAX_PER_DAY / EMAIL_MAX_PER_MONTH that newsletter-confirm mail may use. */
@@ -134,7 +137,8 @@ const sentAtOf = (value: string | null | undefined, now: number): number => {
 export type ConfirmThrottle = { code: 'too_soon' | 'too_many'; retryAfterS: number };
 
 /**
- * May we send this address another confirmation email now? The cooldown runs from the later of
+ * May we send this address another confirmation email now? Counted per inbox, so aliases of one
+ * address (+tags, Gmail dots) can't each get their own allowance. The cooldown runs from the later of
  * the last logged send and the row's own confirm_sent_at (stamped before every send), so neither
  * a lagging nor an unreadable log means "unlimited". Only mail that went out (or is going out)
  * counts toward the daily cap: a failed send never locks anyone out. A confirm_sent_at in the
@@ -146,9 +150,10 @@ export const checkConfirmThrottle = async (
   confirmSentAt: string | null,
   now = Date.now()
 ): Promise<ConfirmThrottle | null> => {
-  const dayAgo = iso(now - DAY_MS);
-  const [latestLogged, lastDay] = await Promise.all([latestConfirmEmailAt(email), countRecentConfirmEmails(email, dayAgo)]);
-  const latest = Math.max(timeOf(latestLogged), sentAtOf(confirmSentAt, now));
+  // One read covers both limits: every send to this inbox (any alias of it) in the last day.
+  const sends = await recentConfirmEmailsToInbox(email, iso(now - DAY_MS));
+  const lastDay = sends ? sends.length : null;
+  const latest = Math.max(timeOf(sends?.[0]), sentAtOf(confirmSentAt, now));
   const waitMs = INTEREST_CONFIRM_THROTTLE.minIntervalMs - (now - latest);
   if (Number.isFinite(waitMs) && waitMs > 0) {
     return { code: 'too_soon', retryAfterS: Math.max(1, Math.ceil(waitMs / 1000)) };
@@ -302,10 +307,14 @@ const loadRowById = async (id: string): Promise<InterestRow | null> => {
 
 const SAVE_PICKS_ATTEMPTS = 3;
 
+/** The waiting picks inside metadata, as a PostgREST JSON path (metadata->'pending_interests'). */
+const PENDING_PATH = `metadata->${PENDING_INTERESTS_KEY}`;
+
 /**
  * Write this request's picks into an existing row without losing a parallel request's. The
  * update only lands while the row still holds exactly what picksUpdate read: the same picks, the
- * same metadata (waiting picks), and the same subscribed state, which decides where new picks go.
+ * same waiting picks (metadata.pending_interests), and the same subscribed state, which decides
+ * where new picks go.
  * (Mutual containment is equality here: both sides are sets of studio ids.) On a miss the row is
  * read again and the merge redone. Runs before the throttle and the send claim, so the picks are
  * kept whether or not this request ends up sending the email. Returns the row as written.
@@ -318,17 +327,27 @@ const savePicks = async (initial: InterestRow, picked: readonly StudioInterestId
     if (!Object.keys(fields).length) return row;
     let query = adminOrUnavailable().from(TABLE).update(fields).eq('id', row.id).eq('confirmed', row.confirmed);
     query = row.unsubscribed_at == null ? query.is('unsubscribed_at', null) : query.not('unsubscribed_at', 'is', null);
-    if (Array.isArray(row.product_interests)) {
+    if (Array.isArray(row.product_interests) && row.product_interests.every((id) => typeof id === 'string')) {
       const picks = textArrayLiteral(row.product_interests);
       query = query.filter('product_interests', 'cs', picks).filter('product_interests', 'cd', picks);
-    } else {
+    } else if (row.product_interests == null) {
       query = query.is('product_interests', null);
     }
-    if (row.metadata == null) {
-      query = query.is('metadata', null);
-    } else {
-      const metadata = JSON.stringify(row.metadata);
-      query = query.filter('metadata', 'cs', metadata).filter('metadata', 'cd', metadata);
+    // (A picks array holding non-strings, e.g. a NULL element only the old all-column client
+    // insert could plant, isn't compared: whenever this update writes the picks, it writes the
+    // cleaned list in its place.)
+    // Of the metadata, only the waiting picks: the one part picksUpdate decides from. Never the
+    // whole object: a client can insert any metadata, and a value JavaScript can't hold exactly
+    // (a 20-digit number) never compares equal after the round trip, so every guarded update
+    // missed and the address got 503 for good. The waiting picks are compared only while they
+    // are plain strings (exact both ways); anything else there is planted, and this update
+    // replaces or removes it whenever it writes the metadata.
+    const waiting = plainObject(row.metadata)[PENDING_INTERESTS_KEY];
+    if (waiting === undefined) {
+      query = query.is(PENDING_PATH, null);
+    } else if (Array.isArray(waiting) && waiting.every((id) => typeof id === 'string')) {
+      const json = JSON.stringify(waiting);
+      query = query.filter(PENDING_PATH, 'cs', json).filter(PENDING_PATH, 'cd', json);
     }
     const { data, error } = await query.select(ROW_COLUMNS);
     if (error) raise(error, 'update');

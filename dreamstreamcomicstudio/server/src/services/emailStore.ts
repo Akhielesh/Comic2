@@ -222,41 +222,60 @@ export const latestAuthEmailAt = async (email: string): Promise<string | null> =
 
 export const NEWSLETTER_CONFIRM_TEMPLATE = 'newsletter-confirm';
 
-/** When this address was last sent a confirmation email (ISO); null = never; undefined = log unreadable. */
-export const latestConfirmEmailAt = async (email: string): Promise<string | null | undefined> => {
+/**
+ * The inbox an address delivers to, for per-recipient limits only (mail always goes to, and is
+ * logged under, the address as typed): lowercased, without a +tag (most providers deliver
+ * a+tag@x to a@x), and for Gmail without dots, with googlemail.com folded into gmail.com. So
+ * "victim+1@gmail.com", "v.ictim@gmail.com" and "victim@googlemail.com" share one allowance.
+ */
+export const inboxKey = (email: string): string => {
+  const normalized = normalizeEmail(email);
+  const at = normalized.lastIndexOf('@');
+  if (at <= 0) return normalized;
+  let local = normalized.slice(0, at);
+  let domain = normalized.slice(at + 1);
+  const plus = local.indexOf('+');
+  if (plus > 0) local = local.slice(0, plus);
+  if (domain === 'googlemail.com') domain = 'gmail.com';
+  if (domain === 'gmail.com') local = local.replace(/\./g, '');
+  return `${local}@${domain}`;
+};
+
+/** LIKE pattern characters escaped (PostgREST passes the backslashes through to ILIKE). */
+const escapeLike = (value: string) => value.replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/**
+ * Confirmation-log rows read per lookup. The confirmation budget (interestStore.ts
+ * CONFIRM_EMAIL_BUDGET_SHARE of EMAIL_MAX_PER_DAY) keeps a day's sends far below this.
+ */
+const INBOX_LOOKUP_LIMIT = 1000;
+
+/**
+ * When confirmation emails went (or are going) to this INBOX since `sinceIso`, newest first: the
+ * address itself and every alias of it (inboxKey). Rows are read by domain and matched here, since
+ * the aliases can't be listed up front. null = log unreadable.
+ */
+export const recentConfirmEmailsToInbox = async (email: string, sinceIso: string): Promise<string[] | null> => {
   const db = adminOrNull();
-  if (!db) return undefined;
+  if (!db) return null;
+  const key = inboxKey(email);
+  const domain = key.slice(key.lastIndexOf('@') + 1);
+  // Both Gmail domains in one pattern (the match below drops anything else it catches).
+  const pattern = domain === 'gmail.com' ? '%@g%mail.com' : `%@${escapeLike(domain)}`;
   try {
     const { data, error } = await db
       .from('email_log')
-      .select('created_at')
-      .eq('to_email', normalizeEmail(email))
+      .select('to_email, created_at')
+      .ilike('to_email', pattern)
       .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
       .in('status', AUTH_EMAIL_COUNTED_STATUSES)
+      .gte('created_at', sinceIso)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) return undefined;
-    return (data as { created_at?: string } | null)?.created_at ?? null;
-  } catch {
-    return undefined;
-  }
-};
-
-/** Confirmation emails sent to this address since `sinceIso`; null = log unreadable. */
-export const countRecentConfirmEmails = async (email: string, sinceIso: string): Promise<number | null> => {
-  const db = adminOrNull();
-  if (!db) return null;
-  try {
-    const { count, error } = await db
-      .from('email_log')
-      .select('id', { count: 'exact', head: true })
-      .eq('to_email', normalizeEmail(email))
-      .eq('template', NEWSLETTER_CONFIRM_TEMPLATE)
-      .in('status', AUTH_EMAIL_COUNTED_STATUSES)
-      .gte('created_at', sinceIso);
+      .limit(INBOX_LOOKUP_LIMIT);
     if (error) return null;
-    return count ?? 0;
+    return ((data as Array<{ to_email?: string; created_at?: string }> | null) ?? [])
+      .filter((r) => typeof r.to_email === 'string' && typeof r.created_at === 'string' && inboxKey(r.to_email) === key)
+      .map((r) => r.created_at as string);
   } catch {
     return null;
   }

@@ -51,12 +51,15 @@ describe('WaitlistForm — register interest', () => {
   it('shows the consent text with a link to the privacy policy, in a new tab so the form survives', () => {
     render(<WaitlistForm />);
     const link = screen.getByRole('link', { name: /Privacy Policy/ });
-    expect(link).toHaveAttribute('href', '/?view=privacy');
+    // The policy's section on these emails, at its canonical path.
+    expect(link).toHaveAttribute('href', '/privacy#emails');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link.getAttribute('rel')).toMatch(/noopener/);
     expect(link).toHaveTextContent('opens in a new tab');
     expect(link.closest('p')).toHaveTextContent(/confirm your address/);
-    expect(link.closest('p')).toHaveTextContent(/one-click unsubscribe/);
+    // The confirmation email itself is essential mail with no unsubscribe link: only updates have one.
+    expect(link.closest('p')).toHaveTextContent(/Every update has a one-click unsubscribe/);
+    expect(link.closest('p')).not.toHaveTextContent(/Every email/);
   });
 
   it('asks for a studio before sending anything', async () => {
@@ -145,9 +148,10 @@ describe('WaitlistForm — register interest', () => {
     await settle();
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     const panel = screen.getByRole('status');
-    expect(panel).toHaveTextContent('Registering interest isn’t available right now. Email contact@dreamstreamstudio.ai and we’ll add you by hand.');
-    expect(panel.textContent?.match(/contact@dreamstreamstudio\.ai/g)).toHaveLength(1);
-    expect(screen.getByRole('link', { name: 'contact@dreamstreamstudio.ai' })).toHaveAttribute('href', 'mailto:contact@dreamstreamstudio.ai');
+    // The routed support mailbox (contact@ has no route).
+    expect(panel).toHaveTextContent('Registering interest isn’t available right now. Email support@dreamstreamstudio.ai and we’ll add you by hand.');
+    expect(panel.textContent?.match(/support@dreamstreamstudio\.ai/g)).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'support@dreamstreamstudio.ai' })).toHaveAttribute('href', 'mailto:support@dreamstreamstudio.ai');
     unmount();
 
     // A later mount (another page) stays hidden without asking the backend again — and without
@@ -178,6 +182,21 @@ describe('WaitlistForm — register interest', () => {
     expect(window.location.search).toBe('?view=privacy');
     fireEvent.click(within(banner).getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByText(text)).toBeNull();
+  });
+
+  it('the landing banners promise an unsubscribe on updates only, name a routed mailbox, and say only the updates picks go', () => {
+    window.history.replaceState(null, '', '/?newsletter=confirmed');
+    const { unmount } = render(<WaitlistForm />);
+    expect(screen.getByText(/You’re confirmed/)).toHaveTextContent('Every update has a one-click unsubscribe.');
+    unmount();
+    window.history.replaceState(null, '', '/?newsletter=unsub-invalid');
+    const second = render(<WaitlistForm />);
+    expect(screen.getByText(/unsubscribe link didn’t work/)).toHaveTextContent('or write to privacy@dreamstreamstudio.ai.');
+    second.unmount();
+    // Unsubscribing clears the picks of the updates row only; an early-access request keeps its own.
+    window.history.replaceState(null, '', '/?newsletter=unsubscribed');
+    render(<WaitlistForm />);
+    expect(screen.getByText(/You’re unsubscribed/)).toHaveTextContent('the studio picks for your updates have been removed.');
   });
 });
 

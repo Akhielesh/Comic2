@@ -45,12 +45,19 @@ const bodyOf = (req: Request): Body => (req.body && typeof req.body === 'object'
 const fail = (res: Response, status: number, code: string, message: string, extra: Record<string, unknown> = {}) =>
   res.status(status).json({ ok: false, code, message, ...extra });
 
+/**
+ * The routed support mailbox. Mirrors SUPPORT_EMAIL in components/legal/legalFacts.ts (kept as its
+ * own constant so the backend bundle doesn't reach into components/); legalFacts.test.ts keeps the
+ * two equal.
+ */
+export const INTEREST_SUPPORT_EMAIL = 'support@dreamstreamstudio.ai';
+
 const unavailable = (res: Response) =>
   fail(
     res,
     503,
     'interest_unavailable',
-    'Registering interest isn’t available right now. Email contact@dreamstreamstudio.ai and we’ll add you by hand.'
+    `Registering interest isn’t available right now. Email ${INTEREST_SUPPORT_EMAIL} and we’ll add you by hand.`
   );
 
 /** A surface tag like "home-stay-updated" or "/pricing": short, printable, nothing else. */

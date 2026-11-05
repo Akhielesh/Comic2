@@ -19,6 +19,8 @@ import {
     BILLING_LIVE,
     BROWSER_THIRD_PARTIES,
     COMIC_PG_CEILING_UNDER_AGE,
+    CONFIRM_EMAIL_LIMITS,
+    CONFIRM_LINK_DAYS,
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
     MIN_SIGNUP_AGE_YEARS,
@@ -48,6 +50,14 @@ const constValue = (rel: string, name: string): number => {
     if (!/^[\d\s*+()]+$/.test(expr)) throw new Error(`${name} in ${rel} is not plain arithmetic: ${expr}`);
     return Function(`"use strict"; return (${expr});`)() as number;
 };
+
+/** Every non-test file under `dir` with this extension (.ts by default), relative to the app root. */
+const sourceFiles = (dir: string, ext = /\.ts$/): string[] =>
+    readdirSync(path.join(ROOT, dir)).flatMap((name) => {
+        const rel = path.join(dir, name);
+        if (statSync(path.join(ROOT, rel)).isDirectory()) return sourceFiles(rel, ext);
+        return ext.test(name) && !/\.test\./.test(name) ? [rel] : [];
+    });
 
 /** `key: <arithmetic>,` inside the object literal assigned to NAME. */
 const objectField = (rel: string, name: string, key: string): number => {
@@ -115,6 +125,49 @@ describe('legal facts match the code: retention', () => {
     it('recent calls kept per member', () => {
         expect(constValue('live-worker/src/directCalls.ts', 'DIRECT_LOG_CAP')).toBe(RECENT_CALLS_KEPT);
     });
+
+    it(`confirmation links for updates and interest registrations stop working after ${CONFIRM_LINK_DAYS} days`, () => {
+        const ttl = /NEWSLETTER_CONFIRM_TTL_HOURS = parseIntegerEnv\(\s*process\.env\.NEWSLETTER_CONFIRM_TTL_HOURS,\s*(\d+),/.exec(read('server/src/config.ts'));
+        expect(Number(ttl?.[1]) * HOUR).toBe(CONFIRM_LINK_DAYS * DAY);
+        expect(read('server/src/services/confirmToken.ts')).toMatch(/now - issuedAtMs > NEWSLETTER_CONFIRM_TTL_HOURS \* 3_600_000/);
+        // Production config sets no override (D1 backend_env was checked by hand on 2026-11-05).
+        expect(read('api-proxy/wrangler.jsonc')).not.toContain('NEWSLETTER_CONFIRM_TTL_HOURS');
+    });
+
+    // The page says "Until you ask us to delete them" / "Not deleted automatically today" for
+    // update and interest rows and delivery records. True while only the unapplied SQL file purges
+    // them; see the TODO on RETENTION in legalFacts.ts.
+    it('no server code deletes update/interest rows or delivery records; the 30-day purges exist only in the unapplied register_interest_2026_11.sql', () => {
+        const deleters = sourceFiles('server/src').filter((f) =>
+            /from\(\s*(?:'waitlist_signups'|'email_log'|TABLE)\s*\)\s*\.delete\(/.test(read(f))
+        );
+        expect(deleters).toEqual([]);
+        const sql = read('server/sql/register_interest_2026_11.sql');
+        expect(sql).toContain("'waitlist-interest-retention-daily'");
+        expect(sql).toMatch(/delete from public\.waitlist_signups as w[\s\S]*?< now\(\) - interval '30 days'[\s\S]*?< now\(\) - interval '30 days';/);
+        expect(sql).toMatch(/delete from public\.email_log as l\s+where l\.template = 'newsletter-confirm'[\s\S]*?now\(\) - interval '30 days'/);
+        // Its purge covers update/interest rows only: early-access requests (kind 'access') stay
+        // until someone asks, which their own retention row says.
+        expect(sql).toMatch(/delete from public\.waitlist_signups as w\s+where w\.kind = 'updates'/);
+        // When that file is applied, the retention rows change (the TODO in legalFacts.ts).
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).toContain("['Update sign-ups and interest registrations', `Until you ask us to delete them.");
+        expect(policy).toContain("['Email delivery records and open times', 'Not deleted automatically today.']");
+        expect(policy).toContain("['Early-access requests', 'Until you ask us to delete them. Unsubscribing adds the time you unsubscribed and keeps the request.']");
+    });
+
+    it(`a repeat registration re-sends the confirmation at most every ${CONFIRM_EMAIL_LIMITS.minIntervalMinutes} minutes and ${CONFIRM_EMAIL_LIMITS.maxPerDay} times a day per inbox, with the link first sent`, () => {
+        const store = read('server/src/services/interestStore.ts');
+        const limits = /INTEREST_CONFIRM_THROTTLE = \{ minIntervalMs: (\d+) \* 60_000, maxPerDay: (\d+) \}/.exec(store);
+        expect(Number(limits?.[1])).toBe(CONFIRM_EMAIL_LIMITS.minIntervalMinutes);
+        expect(Number(limits?.[2])).toBe(CONFIRM_EMAIL_LIMITS.maxPerDay);
+        // Counted over the inbox (every alias of the address), over a rolling day.
+        expect(store).toContain('const sends = await recentConfirmEmailsToInbox(email, iso(now - DAY_MS));');
+        // The re-sent email carries the stored link while more than an hour of it is left, and its
+        // lifetime runs from when it was first issued (confirmToken.ts never extends it).
+        expect(store).toContain('return confirmTokenExpired(issuedAt, now, 3_600_000) ? null : row.confirm_token;');
+        expect(store).toContain('const token = reusableToken(row, email, now) ?? issueConfirmToken(email, now);');
+    });
 });
 
 describe('legal facts match the code: accounts, people and calls', () => {
@@ -163,15 +216,136 @@ describe('legal facts match the code: providers, billing, email and contacts', (
         expect(read('api-proxy/wrangler.jsonc')).toMatch(/"BILLING_ENABLED":\s*"false"/);
     });
 
-    it('the email open-tracking image is on by default and off only for auth mail', () => {
-        expect(read('server/src/services/mailer.ts')).toMatch(/params\.pixelUrl = `\$\{EMAIL_PUBLIC_BASE_URL\}\/api\/email\/o\/\$\{logId\}\.gif`/);
+    it('the email open-tracking image is on by default, and off for auth mail and the updates confirmation email', () => {
+        const mailer = read('server/src/services/mailer.ts');
+        expect(mailer).toMatch(/params\.pixelUrl = `\$\{EMAIL_PUBLIC_BASE_URL\}\/api\/email\/o\/\$\{logId\}\.gif`/);
+        expect(mailer).toMatch(/if \(opts\.track === false\) \{\s*delete params\.pixelUrl;/);
         expect(read('server/src/routes/authEmail.ts')).toMatch(/track: false/);
+        // The double opt-in email (POST /api/interest and /api/newsletter/subscribe both send it).
+        expect(mailer).toMatch(/sendEmail\(\{ to: email, template: 'newsletter-confirm', [^\n]*track: false/);
+        // Every other convenience sender keeps the image (the page says only those emails go without).
+        const untracked = [...mailer.matchAll(/template: '([a-z-]+)'[^\n]*track: false/g)].map((m) => m[1]);
+        expect(untracked).toEqual(['newsletter-confirm']);
     });
 
     it('interest registrations keep at most a 1,000-character note (the studio list itself is not pinned: the page says "the studios or features you pick")', () => {
         const store = read('server/src/services/emailStore.ts');
         expect(store).toContain('intent.feedback.trim().slice(0, 1000)');
         expect(store).toMatch(/export const WAITLIST_PRODUCTS = /);
+        expect(read('server/src/services/interestStore.ts')).toContain("feedback.trim().slice(0, 1000)");
+    });
+
+    it('register interest is the updates double opt-in: a kind "updates" row and a confirmation link, no receipt and no account or invitation check', () => {
+        const route = read('server/src/routes/interest.ts');
+        expect(route).toContain('registerInterest({ email, studios, source })');
+        expect(route).toContain('sendNewsletterConfirm(email, confirmUrl');
+        expect(route).not.toMatch(/sendAccessRequested|accountExistsForEmail|resendPendingInvite/);
+        expect(read('server/src/services/interestStore.ts')).toMatch(/\.insert\(\{\s*email,\s*kind: 'updates',/);
+        // The receipt and the account/invitation check belong to early access (kind 'access') only.
+        const newsletter = read('server/src/routes/newsletter.ts');
+        const access = newsletter.slice(newsletter.indexOf("if (kind === 'access') {"), newsletter.indexOf('// Newsletter double opt-in'));
+        for (const call of ['accountExistsForEmail(email)', 'resendPendingInvite(email', 'sendAccessRequested(email']) expect(access).toContain(call);
+    });
+
+    it('what a registration stores: picks, source, note, confirmed flag, timestamps and a signed one-time code; no IP, device or account ID', () => {
+        const store = read('server/src/services/interestStore.ts');
+        const insert = /await db\.from\(TABLE\)\.insert\(\{([\s\S]*?)\}\);/.exec(store)?.[1] ?? '';
+        const keys = [...insert.matchAll(/^\s*(?:\.\.\.\(feedback \? \{ (feedback) \}|([a-z_]+)(?=[:,\n]))/gm)].map((m) => m[1] ?? m[2]);
+        expect(keys.sort()).toEqual(['confirm_sent_at', 'confirm_token', 'confirmed', 'email', 'feedback', 'kind', 'metadata', 'product_interests', 'source']);
+        // created_at (when you first registered) is the column default; confirmed_at is stamped on the click.
+        expect(read('server/sql/waitlist_signups.sql')).toContain('created_at timestamptz not null default now()');
+        const email = read('server/src/services/emailStore.ts');
+        expect(email).toContain('if (!wasSubscribed) fields.confirmed_at = new Date().toISOString();');
+        // The code is signed and single-use: confirming clears it.
+        expect(read('server/src/services/confirmToken.ts')).toContain("crypto.createHmac('sha256', EMAIL_HMAC_SECRET)");
+        expect(email).toContain('const fields: Record<string, unknown> = { confirmed: true, confirm_token: null, unsubscribed_at: null };');
+        // A subscriber's new picks wait in metadata until their click.
+        expect(email).toContain("export const PENDING_INTERESTS_KEY = 'pending_interests';");
+        expect(store).toMatch(/if \(row\.confirmed && !row\.unsubscribed_at\) \{[\s\S]*?\[PENDING_INTERESTS_KEY\]: next/);
+        // Neither server writer of these rows (registerInterest, and upsertSubscriber for early
+        // access) stores the IP, the user agent or the account; the table has no such column.
+        const upsert = email.slice(email.indexOf('export const upsertSubscriber'), email.indexOf('// ── Confirming'));
+        for (const [name, code] of [['interestStore.ts', store], ['upsertSubscriber', upsert]] as const) {
+            expect(code, name).not.toMatch(/\b(ip|ip_address|user_agent|userAgent|user_id|userId|device)\b\s*:/);
+        }
+        expect(read('server/sql/waitlist_signups.sql')).not.toMatch(/\b(ip|ip_address|user_agent|user_id)\b/);
+        expect(read('services/waitlist.ts')).toMatch(/\.insert\(\{\s*email,\s*kind,\s*source: [^\n]+\n\s*metadata: \{ \.\.\.metadata, \.\.\.cleanIntent \}\s*\}\)/);
+    });
+
+    it('unsubscribing clears an updates row\'s picks, note and code (early access only gets the time); confirming again lifts the marketing suppression', () => {
+        const email = read('server/src/services/emailStore.ts');
+        const unsub = email.slice(email.indexOf('export const markUnsubscribed'));
+        expect(unsub).toContain("await suppress(normalized, 'user_unsubscribe', 'marketing');");
+        expect(unsub).toMatch(/\.update\(\{ unsubscribed_at: new Date\(\)\.toISOString\(\) \}\)\s*\.eq\('email', normalized\);/);
+        expect(unsub).toMatch(/\.update\(\{ product_interests: \[\], feedback: null, confirm_token: null \}\)\s*\.eq\('email', normalized\)\s*\.eq\('kind', 'updates'\);/);
+        expect(unsub).toContain('delete metadata[PENDING_INTERESTS_KEY];');
+        expect(email).toContain(".from('email_suppressions').delete().eq('email', normalized).eq('scope', 'marketing');");
+    });
+
+    it('delivery records: address, email, status and error, time, provider message ID, request ID and the related account', () => {
+        const log = read('server/src/services/emailStore.ts');
+        const insert = /\.from\('email_log'\)\s*\.insert\(\{([\s\S]*?)\}\)/.exec(log)?.[1] ?? '';
+        for (const col of ['to_email', 'template', 'kind', 'status', 'message_id', 'error', 'user_id', 'request_id']) expect(insert).toContain(`${col}:`);
+        expect(read('server/sql/email_system.sql')).toMatch(/create table if not exists public\.email_log[\s\S]*?opened_at[\s\S]*?created_at timestamptz not null default now\(\)/);
+        // The app's own register-interest and early-access requests carry no session (only a
+        // content-type header), so optionalAuth never sets req.user and their records name no
+        // account: the page claims none for them.
+        for (const f of ['services/interest.ts', 'services/waitlist.ts']) {
+            const client = read(f);
+            expect(client, f).toContain("headers: { 'content-type': 'application/json' },");
+            expect(client, f).not.toMatch(/authorization|getSession|access_token/i);
+        }
+        // An invitation's record carries the inviter; a team send, the admin who sent it.
+        expect(read('server/src/routes/invites.ts')).toContain('{ userId: req.user.id, requestId: req.requestId }');
+        expect(read('server/src/services/invites.ts')).toContain('{ userId: pending.sentBy, requestId: meta?.requestId ?? null }');
+        expect(read('server/src/routes/adminEmail.ts')).toContain('userId: req.user?.id ?? null');
+    });
+
+    it('no sender reads the Settings email preferences, so the page offers only the unsubscribe link', () => {
+        // authEmail.ts only copies the sign-up choices into the profile; assistantPolicy.ts only
+        // keeps them out of the assistant's context. Nothing that sends mail reads them.
+        const readers = [...sourceFiles('server/src'), ...sourceFiles('email-worker/src'), ...sourceFiles('api-proxy/src')].filter((f) => /email_pref|marketing_consent/.test(read(f)));
+        expect(readers.sort()).toEqual(['server/src/ai/assistantPolicy.ts', 'server/src/routes/authEmail.ts']);
+        // Marketing mail is held back only by the suppression list, and no SQL copies a preference into it.
+        expect(read('server/src/services/mailer.ts')).toContain("if (kind === 'marketing' && (await isSuppressed(to))) {");
+        for (const f of sourceFiles('server/sql', /\.sql$/)) {
+            const sql = read(f);
+            expect(/email_pref|marketing_consent/.test(sql) && /email_suppressions/.test(sql), f).toBe(false);
+        }
+        const policy = read('components/PrivacyPolicy.tsx');
+        expect(policy).not.toContain('change your email preferences in Settings');
+        expect(policy).toContain("The email preferences in Settings are saved with your account, but they don't yet change which emails we send.");
+    });
+
+    it('early access: the backend sends a receipt and checks accounts, invitations and earlier requests, and tells the visitor; when it doesn\'t answer normally the browser saves the request itself', () => {
+        const newsletter = read('server/src/routes/newsletter.ts');
+        const access = newsletter.slice(newsletter.indexOf("if (kind === 'access') {"), newsletter.indexOf('// Newsletter double opt-in'));
+        for (const answer of ["status: 'account-exists'", "status: 'already-invited'", "status: 'already-registered'", 'void sendAccessRequested(email']) {
+            expect(access).toContain(answer);
+        }
+        // The account check is exact (no pattern): an escaped ILIKE, or eq for an address with '*'.
+        expect(newsletter).toContain("const exact = email.includes('*') ? query.eq('email', email) : query.ilike('email', escapeLike(email));");
+        const client = read('services/waitlist.ts');
+        expect(client).toMatch(/const apiResult = await subscribeViaApi\([^)]*\);\s*if \(apiResult\) return apiResult;\s*\/\/ Fallback: write directly to Supabase/);
+        // A 429 from the per-IP limiter or a 5xx has no ok/message body: that falls back too.
+        expect(client).toMatch(/if \(httpStatus === 400 && data\?\.message\) return \{ ok: false, message: data\.message \};\s*return null;/);
+        expect(read('server/src/index.ts')).toContain("app.use('/api/newsletter/subscribe', interestRateLimit);");
+    });
+
+    it('the Unsubscribe link in an email only opens a page (scanners fetch links); its button or the One-Click POST unsubscribes', () => {
+        const newsletter = read('server/src/routes/newsletter.ts');
+        const get = newsletter.slice(newsletter.indexOf("newsletterRouter.get('/unsubscribe'"), newsletter.indexOf("newsletterRouter.post('/unsubscribe'"));
+        expect(get).toContain('return sendUnsubscribePage(res, email, token);');
+        expect(get).not.toContain('markUnsubscribed');
+        expect(newsletter.slice(newsletter.indexOf("newsletterRouter.post('/unsubscribe'"))).toContain('await markUnsubscribed(email);');
+        expect(read('email-worker/src/index.ts')).toContain("headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';");
+    });
+
+    it('the register-interest form and its API send people to routed mailboxes', () => {
+        expect(read('server/src/routes/interest.ts')).toContain(`export const INTEREST_SUPPORT_EMAIL = '${SUPPORT_EMAIL}';`);
+        const form = read('components/WaitlistForm.tsx');
+        expect(form).toContain("import { PRIVACY_EMAIL, SUPPORT_EMAIL } from './legal/legalFacts';");
+        expect(form).not.toContain('contact@');
     });
 
     it('security reports go where security.txt says', () => {

@@ -74,6 +74,16 @@ describe('server/sql/register_interest_2026_11.sql agrees with the shared list',
     expect(executable).toContain(`cardinality(product_interests) <= ${STUDIO_INTEREST_IDS.length}`);
   });
 
+  // A planted row of repeated known ids (comic_studio x6) passes section 2 but not the CHECK, which
+  // would stop the file before its lockdown. Checked against Postgres in PGlite on 2026-11-05: the
+  // CHECK failed on such a row without 2b, and 2b leaves {comic_studio} and is idempotent.
+  it('dedupes repeated ids before adding the CHECK', () => {
+    const dedupe = executable.indexOf('group by u.x');
+    expect(dedupe).toBeGreaterThan(-1);
+    expect(executable).toContain('where cardinality(product_interests) > (select count(distinct x) from unnest(product_interests) as x);');
+    expect(dedupe).toBeLessThan(executable.indexOf('add constraint waitlist_signups_product_interests_known'));
+  });
+
   it('is additive and idempotent where it touches structure', () => {
     expect(executable).not.toMatch(/drop (table|column|policy)/i);
     expect(executable).toMatch(/add column if not exists product_interests text\[\] not null default '\{\}'::text\[\]/);

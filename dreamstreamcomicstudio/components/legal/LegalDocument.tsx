@@ -147,7 +147,8 @@ const useLandOnFragment = () => {
  * Back and Forward between pages the reader opened in the app (pushLegalPath gives each its own
  * history entry): another legal document's path opens that document (followLegalHistory, which
  * also covers a Forward after this page has closed), any other path goes back to where the page's
- * Back button goes, and a move between #sections of this page is left to the browser.
+ * Back button goes (App's onBack: Dashboard or Home, not necessarily the view that entry named;
+ * see pushLegalPath), and a move between #sections of this page is left to the browser.
  */
 const useLegalHistory = (doc: LegalDocId, onBack: () => void, onOpenDoc?: (id: LegalDocId) => void) => {
     useEffect(() => {

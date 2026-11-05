@@ -34,6 +34,7 @@ export const DOCUMENTED_STORAGE_KEYS = [
     'dreamstream_chat',
     'dreamstream_chat_memory',
     'ds_telemetry_session_id',
+    'ds.interest.unavailable',
     'ds-live-owner',
     'ds-live-prefs',
     'ds-live-my-events',
@@ -100,6 +101,11 @@ const sections: LegalSection[] = [
                             <Key>ds_telemetry_session_id</Key>
                         ],
                         [
+                            'Registering interest',
+                            'A note, in session storage, that registering interest isn\'t available right now, so the form stays hidden instead of failing again. It holds no email address and is deleted when you close the tab.',
+                            <Key>ds.interest.unavailable</Key>
+                        ],
+                        [
                             'Stream Studio',
                             'Your display name and settings, the host keys of events you created, recordings in progress and not yet saved (written to the browser\'s private file storage as you record), the name you used as a viewer, nursery and alert settings, the tracker\'s offline queue, usage counts, call settings, and a welcome ticket while you sign up.',
                             <><Key>ds-live-owner</Key> <Key>ds-live-prefs</Key> <Key>ds-live-my-events</Key> <Key>ds-live-my-recordings</Key> <Key>ds-live-unsaved-recordings</Key> <Key>ds-live-viewer-name</Key> <Key>ds-live-welcome-ticket</Key> <Key>ds-monitor-device</Key> <Key>ds-call-ring</Key></>
@@ -148,7 +154,7 @@ const sections: LegalSection[] = [
         id: 'emails',
         title: 'Emails',
         content: (
-            <p>Emails our server sends contain a tiny image that tells us when the email is first opened. Sign-in links, sign-up confirmations and password-reset emails never do. You can stop it by blocking images in your email app. The <DocLink to="privacy" hash="emails">Privacy Policy</DocLink> has the details.</p>
+            <p>Emails our server sends contain a tiny image that tells us when the email is first opened. Sign-in links, sign-up confirmations, password-reset emails and the email that asks you to confirm updates or an interest registration never do. You can stop it by blocking images in your email app. The <DocLink to="privacy" hash="emails">Privacy Policy</DocLink> has the details.</p>
         )
     },
     {

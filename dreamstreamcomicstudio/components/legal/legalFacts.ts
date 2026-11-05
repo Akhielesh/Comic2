@@ -89,7 +89,34 @@ export const RETENTION = {
   imageExpiryGraceDays: 15,
   /** services/deviceSessions.ts ACTIVE_WINDOW_DAYS: how long a device shows as active. */
   deviceActiveDays: 45
+  // TODO(owner applies server/sql/register_interest_2026_11.sql): its section 6 job
+  // waitlist_interest_retention (pg_cron, daily) deletes never-confirmed update/interest rows
+  // 30 days after the last confirmation email, unsubscribed ones 30 days after unsubscribing,
+  // and newsletter-confirm email_log rows older than 30 days and from before the current UTC
+  // month. The file is NOT applied in production (2026-11-05) and no server code deletes those
+  // rows (legalFacts.test.ts checks both), so the Privacy Policy's retention rows still say
+  // "Until you ask us to delete them" and "Not deleted automatically today". Once it is applied:
+  // add the three periods here, then change those two rows ("Update sign-ups and interest
+  // registrations", "Email delivery records and open times") and the test that pins them.
 } as const;
+
+/**
+ * Confirmation links for updates and interest registrations stop working this long after they
+ * were issued: server/src/config.ts NEWSLETTER_CONFIRM_TTL_HOURS (default 168 hours), checked by
+ * server/src/services/confirmToken.ts confirmTokenExpired. Production sets no override (no var in
+ * api-proxy/wrangler.jsonc, no backend_env row in D1 on 2026-11-05).
+ */
+export const CONFIRM_LINK_DAYS = 7;
+
+/**
+ * How often the confirmation email for updates and interest registrations can go to one inbox
+ * when the address is registered again (by its owner or by anyone who types it):
+ * server/src/services/interestStore.ts INTEREST_CONFIRM_THROTTLE (10 minutes apart, 3 in any
+ * rolling 24 hours, counted per inbox so +tags and Gmail dots share one allowance). A re-sent
+ * email carries the same link while more than an hour of its CONFIRM_LINK_DAYS is left
+ * (interestStore.ts reusableToken), so its lifetime runs from when it was first sent.
+ */
+export const CONFIRM_EMAIL_LIMITS = { minIntervalMinutes: 10, maxPerDay: 3 } as const;
 
 /** shared/stream/usage.ts FAIR_USE: allowances, never charges. */
 export const STREAM_FAIR_USE = {

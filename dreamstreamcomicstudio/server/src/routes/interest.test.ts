@@ -119,7 +119,15 @@ const h = vi.hoisted(() => {
       if (!/^\{.*\}$/.test(literal)) throw new Error(`fake: not an array literal ${literal}`);
       return [...literal.slice(1, -1).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, '$1'));
     };
-    // jsonb / array containment (@>), the way Postgres compares them.
+    // A column, or a jsonb path into one (metadata->pending_interests), as PostgREST reads it.
+    const valueAt = (r: Row, col: string): unknown => {
+      const [base, ...keys] = col.split('->');
+      let v: unknown = r[base];
+      for (const k of keys) v = v && typeof v === 'object' && !Array.isArray(v) ? (v as Row)[k] : undefined;
+      return v;
+    };
+    // jsonb / array containment (@>), the way Postgres compares them: a stored PgNumeric (a jsonb
+    // number JavaScript can't hold exactly) equals only itself, never the double it parses to.
     const contains = (a: unknown, b: unknown): boolean => {
       if (Array.isArray(b)) return Array.isArray(a) && b.every((x) => a.some((y) => contains(y, x)));
       if (b && typeof b === 'object') {
@@ -128,9 +136,9 @@ const h = vi.hoisted(() => {
       return a === b;
     };
     const containFilter = (col: string, oper: string, value: string): Filter => {
-      const given = col === 'metadata' ? JSON.parse(value) : parseTextArray(value);
-      if (oper === 'cs') return (r) => r[col] != null && contains(r[col], given);
-      if (oper === 'cd') return (r) => r[col] != null && contains(given, r[col]);
+      const given = col.startsWith('metadata') ? JSON.parse(value) : parseTextArray(value);
+      if (oper === 'cs') return (r) => valueAt(r, col) != null && contains(valueAt(r, col), given);
+      if (oper === 'cd') return (r) => valueAt(r, col) != null && contains(given, valueAt(r, col));
       throw new Error(`fake: unsupported filter operator ${oper}`);
     };
     // ILIKE with backslash escapes; '*' is PostgREST's alias for '%'.
@@ -164,7 +172,7 @@ const h = vi.hoisted(() => {
       eq: (col: string, val: unknown) => (filters.push((r) => r[col] === val), q),
       in: (col: string, vals: unknown[]) => (filters.push((r) => vals.includes(r[col])), q),
       gte: (col: string, val: string) => (filters.push((r) => String(r[col]) >= val), q),
-      is: (col: string, val: unknown) => (filters.push((r) => (r[col] ?? null) === val), q),
+      is: (col: string, val: unknown) => (filters.push((r) => (valueAt(r, col) ?? null) === val), q),
       or: (expr: string) => (filters.push(orFilter(expr)), q),
       filter: (col: string, oper: string, value: string) => (filters.push(containFilter(col, oper, value)), q),
       not: (col: string, oper: string, value: unknown) => {
@@ -261,7 +269,7 @@ const { interestRouter, adminInterestRouter } = await import('./interest.js');
 const { newsletterRouter } = await import('./newsletter.js');
 const { requireAdmin } = await import('../middleware/requireAdmin.js');
 const { CONFIRM_EMAIL_BUDGET_SHARE, INTEREST_CONFIRM_THROTTLE, checkConfirmThrottle } = await import('../services/interestStore.js');
-const { WAITLIST_PRODUCTS } = await import('../services/emailStore.js');
+const { WAITLIST_PRODUCTS, inboxKey } = await import('../services/emailStore.js');
 const { STUDIO_INTEREST_IDS } = await import('../../../services/studioInterests.js');
 
 // Mirrors the production mounts in server/src/index.ts (minus the per-IP limiters), with a
@@ -348,6 +356,33 @@ const pressConfirm = (email: string, token: string) =>
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ e: email, t: token }).toString()
   });
+/** The Unsubscribe link in an email (the mailer fake's verifyUnsubscribeToken accepts 'valid-unsub'). */
+const unsubUrl = (email: string, token = 'valid-unsub') => `${base}/api/newsletter/unsubscribe?e=${encodeURIComponent(email)}&t=${token}`;
+/** What a mail scanner or a person's first click does with it: GET. */
+const openUnsubscribe = (email: string, token?: string) => fetch(unsubUrl(email, token), { redirect: 'manual' });
+/** The Unsubscribe button on that page: a form POST back to the link. */
+const pressUnsubscribe = (email: string, token?: string) =>
+  fetch(unsubUrl(email, token), {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'via=page'
+  });
+/** A mail provider's RFC 8058 One-Click POST (List-Unsubscribe-Post), on the person's request. */
+const oneClickUnsubscribe = (email: string, token?: string) =>
+  fetch(unsubUrl(email, token), {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'List-Unsubscribe=One-Click'
+  });
+
+/** A jsonb number JavaScript can't hold exactly: it serialises to the nearest double, as a real read does. */
+class PgNumeric {
+  constructor(readonly text: string) {}
+  toJSON() {
+    return Number(this.text);
+  }
+}
 
 describe('the shared studio list', () => {
   it('is the one the server accepts (emailStore whitelist = services/studioInterests.ts)', () => {
@@ -486,7 +521,7 @@ describe('POST /api/interest — registration and double opt-in', () => {
   it('an unsubscribed address must confirm again; only the button press re-activates it', async () => {
     await register({ studios: ['comic_studio'] });
     await pressConfirm('ada@example.com', tokenFromLastEmail());
-    await fetch(`${base}/api/newsletter/unsubscribe?e=ada%40example.com&t=valid-unsub`, { redirect: 'manual' });
+    await oneClickUnsubscribe('ada@example.com');
     expect(h.tables.email_suppressions).toHaveLength(1);
     const unsubscribedAt = row().unsubscribed_at;
     age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
@@ -519,7 +554,8 @@ describe('POST /api/interest — registration and double opt-in', () => {
     age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
     await register({ studios: ['stream_studio'] }); // waits for a click
     expect(row().metadata).toMatchObject({ pending_interests: ['stream_studio'] });
-    const unsub = await fetch(`${base}/api/newsletter/unsubscribe?e=ada%40example.com&t=valid-unsub`, { redirect: 'manual' });
+    const unsub = await pressUnsubscribe('ada@example.com');
+    expect(unsub.status).toBe(303);
     expect(unsub.headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=unsubscribed');
     expect(row()).toMatchObject({ product_interests: [], confirm_token: null });
     expect(row().metadata).not.toHaveProperty('pending_interests');
@@ -528,6 +564,55 @@ describe('POST /api/interest — registration and double opt-in', () => {
     expect((await openLink('ada@example.com', token)).headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=invalid');
     expect((await pressConfirm('ada@example.com', tokenFromLastEmail())).headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=invalid');
     expect(h.tables.email_suppressions).toHaveLength(1);
+  });
+});
+
+describe('/api/newsletter/unsubscribe — the email link only shows a page; the button or One-Click unsubscribes', () => {
+  it('a GET (a mail scanner, or the first click) changes nothing; the page’s button unsubscribes', async () => {
+    await register({ studios: ['comic_studio'] });
+    await pressConfirm('ada@example.com', tokenFromLastEmail());
+    for (let i = 0; i < 2; i++) {
+      const page = await openUnsubscribe('ada@example.com');
+      expect(page.status).toBe(200);
+      expect(page.headers.get('content-type')).toMatch(/text\/html/);
+      expect(page.headers.get('cache-control')).toBe('no-store');
+      expect(page.headers.get('referrer-policy')).toBe('same-origin');
+      expect(page.headers.get('content-security-policy')).toMatch(/form-action 'self' https:\/\/dreamstreamstudio\.ai/);
+      expect(page.headers.get('content-security-policy')).not.toMatch(/script-src/);
+      const html = await page.text();
+      expect(html).toContain('<form method="post" action="/api/newsletter/unsubscribe?e=ada%40example.com&amp;t=valid-unsub">');
+      expect(html).toContain('<input type="hidden" name="via" value="page">');
+      expect(html).not.toMatch(/<script/i);
+    }
+    expect(row()).toMatchObject({ confirmed: true, unsubscribed_at: null, product_interests: ['comic_studio'] });
+    expect(h.tables.email_suppressions).toHaveLength(0);
+
+    const press = await pressUnsubscribe('ada@example.com');
+    expect(press.status).toBe(303);
+    expect(press.headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=unsubscribed');
+    expect(row()).toMatchObject({ product_interests: [] });
+    expect(typeof row().unsubscribed_at).toBe('string');
+    expect(h.tables.email_suppressions).toMatchObject([{ email: 'ada@example.com', scope: 'marketing' }]);
+  });
+
+  it('the RFC 8058 One-Click POST unsubscribes at once and answers JSON', async () => {
+    await register({ studios: ['comic_studio'] });
+    const res = await oneClickUnsubscribe('ada@example.com');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(typeof row().unsubscribed_at).toBe('string');
+  });
+
+  it('a link that doesn’t verify: the GET and the button bounce to the banner, One-Click gets 400, nothing changes', async () => {
+    await register({ studios: ['comic_studio'] });
+    expect((await openUnsubscribe('ada@example.com', 'forged')).headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=unsub-invalid');
+    const press = await pressUnsubscribe('ada@example.com', 'forged');
+    expect(press.status).toBe(303);
+    expect(press.headers.get('location')).toBe('https://dreamstreamstudio.ai/?newsletter=unsub-invalid');
+    expect((await oneClickUnsubscribe('ada@example.com', 'forged')).status).toBe(400);
+    expect(row().unsubscribed_at ?? null).toBeNull();
+    expect(row().product_interests).toEqual(['comic_studio']);
+    expect(h.tables.email_suppressions).toHaveLength(0);
   });
 });
 
@@ -640,6 +725,27 @@ describe('POST /api/interest — per-recipient throttle (abuse-ops-11)', () => {
     expect(row().product_interests).toEqual(['comic_studio', 'chat_studio']);
     // The link already in the inbox still works.
     expect(row().confirm_token).toBe(token);
+  });
+
+  it('counts per inbox: +tags, Gmail dots and googlemail.com share one allowance', async () => {
+    expect(inboxKey('V.ictim+promo@GoogleMail.com')).toBe('victim@gmail.com');
+    expect(inboxKey('first.last+x@example.com')).toBe('first.last@example.com');
+    expect(inboxKey('+only@example.com')).toBe('+only@example.com');
+    const send = (email: string) => register({ email, studios: ['comic_studio'] });
+    const answers = [await send('victim@gmail.com'), await send('victim+1@gmail.com'), await send('v.i.c.t.i.m@googlemail.com')];
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+    expect(new Set(answers.map((a) => JSON.stringify(a.body))).size).toBe(1);
+    // Other inboxes are not affected (a dot outside Gmail is a different mailbox).
+    await send('victim2@gmail.com');
+    await send('vic.tim@example.com');
+    await send('victim@example.com');
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(4);
+    // Three a day per inbox, whichever alias each one went to.
+    for (const alias of ['victim+2@gmail.com', 'vic.tim+3@gmail.com', 'victim+4@gmail.com']) {
+      age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
+      await send(alias);
+    }
+    expect(h.sendNewsletterConfirm.mock.calls.filter(([to]) => inboxKey(String(to)) === 'victim@gmail.com')).toHaveLength(INTEREST_CONFIRM_THROTTLE.maxPerDay);
   });
 
   it('after the cooldown re-sends the SAME still-valid link', async () => {
@@ -785,11 +891,31 @@ describe('POST /api/interest — rows planted, links re-sent, parallel picks, in
     expect(row()).toMatchObject({ confirmed: true });
   });
 
+  it('planted metadata JavaScript can’t hold exactly never blocks registering (only the waiting picks are compared)', async () => {
+    // Any client can still insert metadata after register_interest_2026_11.sql (section 7).
+    h.tables.waitlist_signups.push({ id: 'planted', email: 'vic@example.com', kind: 'updates', confirmed: false, confirm_token: null, confirm_sent_at: null, unsubscribed_at: null, product_interests: [], metadata: { n: new PgNumeric('12345678901234567890') } });
+    const res = await register({ email: 'vic@example.com', studios: ['comic_studio'] });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('pending');
+    expect(row().product_interests).toEqual(['comic_studio']);
+    expect(h.sendNewsletterConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it('planted waiting picks that are not plain strings are replaced, not compared', async () => {
+    // Before section 7, the anon key could also plant a "confirmed" row with junk waiting picks.
+    h.tables.waitlist_signups.push({ id: 'planted', email: 'vic@example.com', kind: 'updates', confirmed: true, confirm_token: null, confirm_sent_at: null, unsubscribed_at: null, product_interests: ['comic_studio'], metadata: { pending_interests: [new PgNumeric('1e400')] } });
+    const res = await register({ email: 'vic@example.com', studios: ['stream_studio'] });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('pending');
+    expect(row().metadata).toEqual({ pending_interests: ['stream_studio'] });
+    expect(row().product_interests).toEqual(['comic_studio']);
+  });
+
   it('back after unsubscribing: a second request re-sends the first link, which still works', async () => {
     await register({ studios: ['comic_studio'] });
     const beforeUnsubscribe = tokenFromLastEmail();
     await pressConfirm('ada@example.com', beforeUnsubscribe);
-    await fetch(`${base}/api/newsletter/unsubscribe?e=ada%40example.com&t=valid-unsub`, { redirect: 'manual' });
+    await oneClickUnsubscribe('ada@example.com');
     age(INTEREST_CONFIRM_THROTTLE.minIntervalMs + 1000);
     // age() leaves unsubscribed_at alone; the unsubscribe was a while ago too (a token's issue
     // time has one-second resolution, and one from the same second as the unsubscribe is rotated).
@@ -871,6 +997,20 @@ describe('POST /api/interest — rows planted, links re-sent, parallel picks, in
 describe('POST /api/newsletter/subscribe kind=access — an existing request is never replaced', () => {
   const access = (over: Record<string, unknown>) =>
     post({ email: 'vic@example.com', kind: 'access', captchaToken: 'good-token', ...over }, '/api/newsletter/subscribe');
+
+  it('the account check matches one address exactly: no wildcard, and an underscore is just an underscore', async () => {
+    h.tables.profiles = [{ id: 'p1', email: 'boss@corp.example' }, { id: 'p2', email: 'a_b@corp.example' }];
+    try {
+      for (const email of ['*@corp.example', 'b*@corp.example', 'axb@corp.example', 'b%@corp.example']) {
+        expect((await access({ email })).body.status, email).not.toBe('account-exists');
+      }
+      for (const email of ['a_b@corp.example', 'BOSS@corp.example']) {
+        expect((await access({ email })).body.status, email).toBe('account-exists');
+      }
+    } finally {
+      h.tables.profiles = [];
+    }
+  });
 
   it('adds new picks to the stored ones and keeps the stored note', async () => {
     h.tables.waitlist_signups.push({ id: 'acc-1', email: 'vic@example.com', kind: 'access', confirmed: false, product_interests: ['comic_studio', 'stream_studio'], feedback: 'my real note', metadata: {} });

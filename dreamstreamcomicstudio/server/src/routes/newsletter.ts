@@ -37,7 +37,10 @@ import { verifyTurnstile } from '../services/turnstile.js';
 // Confirming takes two steps on purpose: GET /confirm (the link in the email) only checks the
 // link and shows a page with a Confirm button; POST /confirm (that button) subscribes the address
 // and lifts an earlier unsubscribe. Mail-security scanners fetch every link in incoming mail, and
-// such a fetch must never opt anyone in or undo their opt-out.
+// such a fetch must never opt anyone in or undo their opt-out. The Unsubscribe link in an email
+// works the same way (GET /unsubscribe shows a page, its button POSTs), so a scanner can't opt
+// anyone out or delete their picks either; the List-Unsubscribe One-Click POST (RFC 8058), which
+// mail providers send only on the person's request, still unsubscribes at once.
 export const newsletterRouter = Router();
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -52,20 +55,23 @@ const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter
 
 const COULD_NOT_SEND = 'We couldn’t send the confirmation email right now. Please try again in a few minutes.';
 
+/** LIKE pattern characters escaped (PostgREST passes the backslashes through to ILIKE). */
+const escapeLike = (value: string) => value.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 /**
- * Does this email already belong to an account (profiles, service role)? Best-effort:
- * any failure (no service role, transient DB error) returns false so the lookup can
- * never block a waitlist capture.
+ * Does this email already belong to an account (profiles, service role)? An exact match, never a
+ * pattern: case-insensitive ILIKE with every pattern character escaped. PostgREST also reads '*'
+ * as '%' and has no escape for it, so an address with a '*' (allowed by EMAIL_REGEX) is compared
+ * with eq instead (stored addresses are lowercase). Otherwise "*@company.com" would say whether
+ * anyone at company.com has an account. Best-effort: any failure (no service role, transient DB
+ * error) returns false so the lookup can never block a waitlist capture.
  */
 const accountExistsForEmail = async (email: string): Promise<boolean> => {
   try {
     const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('profiles')
-      .select('id')
-      .ilike('email', email.replace(/[%_]/g, ''))
-      .limit(1)
-      .maybeSingle();
+    const query = admin.from('profiles').select('id');
+    const exact = email.includes('*') ? query.eq('email', email) : query.ilike('email', escapeLike(email));
+    const { data, error } = await exact.limit(1).maybeSingle();
     return !error && Boolean(data?.id);
   } catch {
     return false;
@@ -304,27 +310,78 @@ newsletterRouter.post('/confirm', express.urlencoded({ extended: false, limit: '
   }
 });
 
-// GET /api/newsletter/unsubscribe?e=&t= — clicked from an email; verify + bounce to the app.
+/**
+ * The page the Unsubscribe link in an email opens: one button that POSTs the link back. Like the
+ * Confirm page, no script and nothing happens on the GET, because mail-security scanners fetch
+ * every link in incoming mail (the welcome email reaches a new subscriber moments after they
+ * confirm, and a scanner's fetch must not unsubscribe them and delete their picks).
+ */
+const sendUnsubscribePage = (res: Response, email: string, token: string) => {
+  const appOrigin = originOf(APP_PUBLIC_URL);
+  const action = `/api/newsletter/unsubscribe?e=${encodeURIComponent(email)}&t=${encodeURIComponent(token)}`;
+  res
+    .status(200)
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .set('Cache-Control', 'no-store')
+    .set('X-Robots-Tag', 'noindex, nofollow')
+    // same-origin, as on the Confirm page: under no-referrer a form POST carries `Origin: null`,
+    // which the CORS check rejects.
+    .set('Referrer-Policy', 'same-origin')
+    .set(
+      'Content-Security-Policy',
+      `default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'${appOrigin ? ` ${appOrigin}` : ''}`
+    )
+    .send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Unsubscribe · DreamStream</title>
+<style>
+:root{color-scheme:light dark}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#1a1915;background:#FAF9F5}
+main{max-width:26rem;padding:2rem 1.5rem}
+h1{font-size:1.35rem;line-height:1.3;margin:0 0 .6rem}
+p{margin:.5rem 0}
+.muted{color:#6e6a60;font-size:.85rem}
+button{margin-top:1rem;font:inherit;font-weight:600;padding:.7rem 1.4rem;border-radius:.6rem;border:1px solid #1a1915;background:#1a1915;color:#FAF9F5;cursor:pointer}
+button:focus-visible{outline:3px solid #c2643f;outline-offset:2px}
+@media (prefers-color-scheme:dark){body{color:#f1efe8;background:#1f1e1b}.muted{color:#a8a397}button{background:#f1efe8;color:#1f1e1b;border-color:#f1efe8}}
+</style></head>
+<body><main>
+<h1>Unsubscribe from DreamStream updates</h1>
+<p>Press Unsubscribe to stop DreamStream updates to <strong>${escapeHtml(email)}</strong>. The studios you picked for your updates are deleted too.</p>
+<form method="post" action="${escapeHtml(action)}">
+<input type="hidden" name="via" value="page">
+<button type="submit">Unsubscribe</button>
+</form>
+<p class="muted">Changed your mind? Just close this page. Nothing changes unless you press Unsubscribe.</p>
+</main></body></html>`);
+};
+
+// GET /api/newsletter/unsubscribe?e=&t= — the link in an email. Read-only: checks the link, then
+// shows the Unsubscribe page.
 newsletterRouter.get('/unsubscribe', async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.query.e ?? ''));
-    const token = String(req.query.t ?? '');
+    const email = normalizeEmail(str(req.query.e));
+    const token = str(req.query.t);
     if (!email || !verifyUnsubscribeToken(email, token)) return res.redirect(302, redirectToApp('unsub-invalid'));
-    await markUnsubscribed(email);
-    return res.redirect(302, redirectToApp('unsubscribed'));
+    return sendUnsubscribePage(res, email, token);
   } catch (err) {
     next(err);
   }
 });
 
-// POST /api/newsletter/unsubscribe?e=&t= — RFC 8058 One-Click target (List-Unsubscribe-Post).
-newsletterRouter.post('/unsubscribe', async (req, res, next) => {
+// POST /api/newsletter/unsubscribe?e=&t= — the page's button (form field via=page: bounce to the
+// app) and the RFC 8058 One-Click target (List-Unsubscribe-Post: answers JSON). Mail providers send
+// that POST only when the person chooses to unsubscribe; scanners don't.
+newsletterRouter.post('/unsubscribe', express.urlencoded({ extended: false, limit: '4kb' }), async (req, res, next) => {
   try {
-    const email = normalizeEmail(String(req.query.e ?? ''));
-    const token = String(req.query.t ?? '');
-    if (!email || !verifyUnsubscribeToken(email, token)) return res.status(400).json({ ok: false });
+    const email = normalizeEmail(str(req.query.e));
+    const token = str(req.query.t);
+    const fromPage = (req.body as Record<string, unknown> | undefined)?.via === 'page';
+    if (!email || !verifyUnsubscribeToken(email, token)) {
+      return fromPage ? res.redirect(303, redirectToApp('unsub-invalid')) : res.status(400).json({ ok: false });
+    }
     await markUnsubscribed(email);
-    return res.json({ ok: true });
+    return fromPage ? res.redirect(303, redirectToApp('unsubscribed')) : res.json({ ok: true });
   } catch (err) {
     next(err);
   }

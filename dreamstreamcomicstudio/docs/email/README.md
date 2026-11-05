@@ -79,7 +79,7 @@ the worker, so authentication, branding and abuse-control live in one auditable 
 | [`email-worker/`](../../email-worker) | Cloudflare Worker: `/send` (HMAC), `/auth-hook` (Supabase), `/health`. |
 | `server/src/services/mailer.ts` | Backend send API: dormant-until-configured, hard cost cap, suppression, logging, unsubscribe + read-receipt links, typed helpers. |
 | `server/src/services/emailStore.ts` | Supabase (service-role) persistence: `email_log`, `email_suppressions`, waitlist double opt-in. |
-| `server/src/routes/newsletter.ts` | Public subscribe / confirm (GET page + POST button) / unsubscribe (one-click GET + RFC 8058 POST). |
+| `server/src/routes/newsletter.ts` | Public subscribe / confirm (GET page + POST button) / unsubscribe (GET page + POST button, and the RFC 8058 one-click POST). |
 | `server/src/services/confirmToken.ts` | Signed double opt-in tokens (address + issue time, HMAC under `EMAIL_HMAC_SECRET`). |
 | `server/src/routes/interest.ts` | Public `POST /api/interest` (register interest in studios: Turnstile, per-IP limit, double opt-in through the newsletter row) + admin `GET /api/admin/interest/summary` (counts only). |
 | `server/src/services/interestStore.ts` | Interest registration on the `kind='updates'` waitlist row: merged studio picks, the confirmation throttle, token reuse, missing-schema detection, the admin summary. |

@@ -86,9 +86,13 @@ const entryHasBackLayers = (): boolean => {
 
 /**
  * Give an in-app move to a legal document its own history entry (App's address sync only replaces
- * the current one), so the browser's or the phone's Back returns to the page the reader came from
- * instead of leaving the site. The new entry carries no #fragment, so the document starts at its
- * top. Back and Forward onto it reopen the document (followLegalHistory).
+ * the current one), so the browser's or the phone's Back leaves the document instead of leaving the
+ * site. Back onto another document's entry opens that document; Back onto any other entry goes where
+ * the page's own Back button goes (App's onBack: Dashboard when signed in, else Home), because App
+ * doesn't yet restore a view from a popped address. That is the page the reader came from only when
+ * they came from Dashboard or Home (restoring any view is an App.tsx change, proposed for review).
+ * The new entry carries no #fragment, so the document starts at its top. Back and Forward onto it
+ * reopen the document (followLegalHistory).
  *
  * Not on an entry a back-stack layer owns: the reader leaves its layer first, which pops that
  * layer's entry, and App's address sync then puts the document's path on the entry under it. A new
