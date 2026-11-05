@@ -2,7 +2,7 @@
   "guard": "terracotta",
   "test": "tests/config/terracottaGuard.test.ts",
   "note": "Ratchet baseline: per-file, per-token counts of the uses that predate the guard. A file or token not listed must count 0; a count above its entry fails; a count below fails until the entry is lowered. Generated, never typed: UPDATE_BASELINES=1 npx vitest run tests/config/terracottaGuard.test.ts lowers it (see README.md).",
-  "totals": { "#c2643f": 3, "#d97757": 376 },
+  "totals": { "#c2643f": 3, "#d97757": 374 },
   "files": {
     "components/ApiConfiguration.tsx": { "#d97757": 2 },
     "components/ComicReader.tsx": { "#d97757": 2 },
@@ -112,7 +112,7 @@
     "components/comicstudio/share/QrCode.tsx": { "#d97757": 1 },
     "components/comicstudio/share/ShareButton.tsx": { "#d97757": 1 },
     "components/comicstudio/share/ShareLinkCard.tsx": { "#d97757": 3 },
-    "components/comicstudio/share/ShareSheet.tsx": { "#d97757": 4 },
+    "components/comicstudio/share/ShareSheet.tsx": { "#d97757": 2 },
     "components/comicstudio/share/ShareStats.tsx": { "#d97757": 1 },
     "components/comicstudio/timeline/CompareView.tsx": { "#d97757": 3 },
     "components/comicstudio/timeline/MediaBin.tsx": { "#d97757": 5 },
