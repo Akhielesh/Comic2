@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="DreamStream Studio">
+  <title>DreamStream Studio</title>
+  <!-- DreamStream Studio, the house mark: a D cut at weight 7 with mitred corners, its bowl drawn on the tile's own corner radius (16), and the family point at the area centroid of the counter. Letter plus point, the same grammar as the Atlas A.
+       SOURCE FILE: scripts/gen-icons.mjs renders every app icon and favicon of this studio from the
+       cut path and the point below, and components/brand/studios.ts must carry the same numbers
+       (tests/config/appIcons.test.ts checks both). Construction, shared with the Atlas mark: viewBox
+       64, one rx 16 tile in currentColor, the glyph cut out through a userSpaceOnUse mask (no second
+       fill colour), one weight-7 stroke, one r 3.6 point. -->
+  <defs>
+    <mask id="ds-dreamstream-mark" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64">
+      <rect width="64" height="64" rx="16" fill="#fff"/>
+      <path class="ds-logo-cut" d="M21 16 L31 16 A16 16 0 0 1 31 48 L21 48 Z" fill="none" stroke="#000" stroke-width="7" stroke-linejoin="miter"/>
+      <circle class="ds-logo-point" cx="33" cy="32" r="3.6" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="currentColor" mask="url(#ds-dreamstream-mark)"/>
+</svg>
