@@ -703,7 +703,8 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
     const kind = scopeKind(intent.target, lines, extras);
     if (!kind) return asking('Which kind of balloon: speech, thought, whisper, shout, caption or sound effect?');
     const patch = sizeAt(resolveLetterStyle(doc, { id: '', kind, text: '' }));
-    return result([{ op: 'letter_style', patch: { kinds: { [kind]: patch } } }], `Restyle every ${KIND_NOUN[kind]}`, [], join(`Every ${KIND_NOUN[kind]} now has ${describeStyle(style, scaleBy)}.`, sizeTip));
+    const from = extras.asKind && lines.length === 1 ? ` to match ${quote(lines[0].text, 30)}` : '';
+    return result([{ op: 'letter_style', patch: { kinds: { [kind]: patch } } }], `Restyle every ${KIND_NOUN[kind]}`, [], join(`Restyled every ${KIND_NOUN[kind]}${from} (${describeStyle(style, scaleBy)}).`, sizeTip));
   }
   if (scope === 'speaker') {
     let id: string | undefined;
@@ -719,10 +720,10 @@ function compileRestyle(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'r
     if (!id) return asking('Whose lines?', castChips(doc, undefined, 4, (name) => `Restyle ${name}'s lines`));
     const patch = sizeAt(resolveLetterStyle(doc, { id: '', kind: 'speech', text: '', speakerId: id }));
     const name = speakerName(doc, id) ?? 'their';
-    return result([{ op: 'letter_style', patch: { speakers: { [id]: patch } } }], `Restyle ${name}'s lines`, [], join(`Every line ${name} says now has ${describeStyle(style, scaleBy)}.`, sizeTip));
+    return result([{ op: 'letter_style', patch: { speakers: { [id]: patch } } }], `Restyle ${name}'s lines`, [], join(`Restyled every line ${name} says (${describeStyle(style, scaleBy)}).`, sizeTip));
   }
   const patch = sizeAt(resolveLetterStyle(doc, { id: '', kind: 'speech', text: '' }));
-  return result([{ op: 'letter_style', patch: { base: patch } }], 'Restyle all lettering', [], join(`All the lettering now has ${describeStyle(style, scaleBy)}.`, sizeTip));
+  return result([{ op: 'letter_style', patch: { base: patch } }], 'Restyle all lettering', [], join(`Restyled all the lettering (${describeStyle(style, scaleBy)}).`, sizeTip));
 }
 
 function compileZ(doc: ComicDoc, dir: 'front' | 'back', lines: LineHit[]): CompileOutcome {
