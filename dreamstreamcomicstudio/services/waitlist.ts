@@ -1,9 +1,12 @@
 import { supabase } from './supabase';
-import { API_BASE_URL, buildApiUrl } from './clientConfig';
+import { buildApiUrl } from './clientConfig';
+import { STUDIO_INTEREST_IDS, type StudioInterestId } from './studioInterests';
 
 /**
  * Two intents share one table:
- *   - 'updates' — "stay in the loop" newsletter capture.
+ *   - 'updates' — "stay in the loop" newsletter capture. The current form registers this
+ *     through services/interest.ts (POST /api/interest, studio picks + double opt-in);
+ *     submitWaitlistEmail(…, 'updates') still works for any older caller.
  *   - 'access'  — request early access while signups are invite-only.
  */
 export type WaitlistKind = 'updates' | 'access';
@@ -11,9 +14,9 @@ export type WaitlistKind = 'updates' | 'access';
 /** Machine-readable outcome, set by the backend for 'access' signups. */
 export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists' | 'already-invited';
 
-/** Products a signup can ask for first access to (server-accepted values). */
-export const PRODUCT_INTERESTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
-export type ProductInterest = (typeof PRODUCT_INTERESTS)[number];
+/** Studios a signup can ask for first access to: the one shared list (services/studioInterests.ts). */
+export const PRODUCT_INTERESTS = STUDIO_INTEREST_IDS;
+export type ProductInterest = StudioInterestId;
 
 const MAX_FEEDBACK_CHARS = 1000;
 
@@ -69,10 +72,12 @@ export const interpretSubscribeResponse = (
 };
 
 /**
- * When the backend is configured, route signups through it so we can send a confirmation
- * email (double opt-in for 'updates', thank-you for 'access') and dedupe against existing
- * accounts. Returns null on any failure so the caller falls back to the direct Supabase
- * insert below — capturing the lead must never fail.
+ * Route signups through the backend so it can send a confirmation email (double opt-in for
+ * 'updates', thank-you for 'access') and dedupe against existing accounts and invites. The API
+ * is same-origin (/api/* on the site) when VITE_API_BASE_URL is empty — the production setup —
+ * so an empty base must NOT skip the backend (it used to, which sent every production signup
+ * straight to the direct insert below). Returns null on any failure so the caller falls back to
+ * the direct Supabase insert — capturing the lead must never fail.
  */
 const subscribeViaApi = async (
   email: string,
@@ -81,7 +86,6 @@ const subscribeViaApi = async (
   captchaToken?: string,
   intent: WaitlistIntent = {}
 ): Promise<WaitlistResult | null> => {
-  if (!API_BASE_URL) return null;
   try {
     const res = await fetch(buildApiUrl('/api/newsletter/subscribe'), {
       method: 'POST',

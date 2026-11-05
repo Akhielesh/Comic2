@@ -24,6 +24,7 @@ import {
 } from '../config.js';
 import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
 import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
+import { maskEmail } from './authEmailLinks.js';
 
 export { APP_PUBLIC_URL };
 
@@ -119,7 +120,7 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
   if (overMonth || overDay) {
     console.error(
       `[email][COST-CAP] Hard send limit reached (day ${usage.day}/${EMAIL_MAX_PER_DAY}, ` +
-        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${to}. ` +
+        `month ${usage.month}/${EMAIL_MAX_PER_MONTH}). Skipping ${template} → ${maskEmail(to)}. ` +
         `Raise EMAIL_MAX_PER_* to allow more (Cloudflare bills past 3,000/mo).`
     );
     await logSend({ ...baseLog, status: 'rate_limited' });
@@ -177,12 +178,12 @@ export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
     }
     const error = json?.error || `worker responded ${res.status}`;
     if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send failed (${template} → ${to}): ${error}`);
+    console.warn(`[email] send failed (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } catch (err) {
     const error = (err as Error)?.message || 'network error';
     if (logId) await patchLog(logId, { status: 'failed', error });
-    console.warn(`[email] send error (${template} → ${to}): ${error}`);
+    console.warn(`[email] send error (${template} → ${maskEmail(to)}): ${error}`);
     return { ok: false, error };
   } finally {
     clearTimeout(timer);
@@ -195,8 +196,10 @@ const meta = (req?: { userId?: string | null; requestId?: string | null }) => ({
   requestId: req?.requestId ?? null
 });
 
+// No read-receipt pixel on the double opt-in email (like auth mail): it carries a one-time link
+// for someone who hasn't agreed to anything yet, so we don't record whether they opened it.
 export const sendNewsletterConfirm = (email: string, confirmUrl: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
-  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, ...meta(req) });
+  sendEmail({ to: email, template: 'newsletter-confirm', params: { confirmUrl, firstName }, track: false, ...meta(req) });
 
 export const sendNewsletterWelcome = (email: string, firstName?: string, req?: Parameters<typeof meta>[0]) =>
   sendEmail({ to: email, template: 'newsletter-welcome', params: { firstName }, ...meta(req) });
