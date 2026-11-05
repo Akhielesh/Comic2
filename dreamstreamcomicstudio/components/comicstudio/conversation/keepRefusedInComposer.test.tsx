@@ -21,7 +21,7 @@ let composed: ComposeRequest[] = [];
 const onCompose = (e: Event) => composed.push((e as CustomEvent<ComposeRequest>).detail);
 /** Lets the send promise and the helper's `.then`s settle. */
 const settle = () => act(async () => {});
-const sendResolving = (outcome: SendOutcome | undefined) => vi.fn(async () => outcome);
+const sendResolving = (outcome: SendOutcome | undefined) => vi.fn<(text: string, opts?: unknown) => Promise<SendOutcome | undefined>>(async () => outcome);
 
 beforeEach(() => {
   composed = [];
