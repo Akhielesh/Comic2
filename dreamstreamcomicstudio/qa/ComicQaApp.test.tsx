@@ -15,7 +15,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 const net = vi.hoisted(() => ({ get: vi.fn(async () => ({})), post: vi.fn(async () => ({})) }));
 vi.mock('../services/apiClient', async (orig) => ({ ...(await orig<object>()), get: net.get, post: net.post }));
 
-import { ComicQaApp, parseQaHarnessParams, QA_HARNESS_SURFACES } from './ComicQaApp';
+import { ComicQaApp, parseQaHarnessParams, qaBootState, QA_HARNESS_SURFACES } from './ComicQaApp';
 import { APP_SCENES, applyQaAppLook, appSceneHref, collectAppScenes, QaAppSurface, type QaAppScene } from './app/index';
 import { QA_PRO_SCENES } from './pro/index';
 import { clearQaOps, parseQaParams, QA_SURFACES } from '../components/comicstudio/testing/qaController';
@@ -118,6 +118,28 @@ describe('harness params: the app-wide surfaces on top of the Comic Studio ones'
   });
 });
 
+describe('boot state (what boot() puts on <html> and window per URL)', () => {
+  it('window.__qa describes a comic fixture: set for the Comic Studio surfaces, never for the app-wide ones', () => {
+    for (const search of ['?surface=app', '?surface=app&scene=recipes&theme=dark', '?surface=pro&scene=layers&fixture=stress']) {
+      expect(qaBootState(parseQaHarnessParams(search)).qa, search).toBeUndefined();
+    }
+    const studio = qaBootState(parseQaHarnessParams('?surface=studio&fixture=heist-12p'));
+    expect(studio.qa).toMatchObject({ ready: false, params: { surface: 'studio', fixture: 'heist-12p' } });
+    expect(studio.qa!.pageCount).toBeGreaterThan(0);
+    expect(studio.qa!.pageIds).toHaveLength(studio.qa!.pageCount);
+    expect(qaBootState(parseQaHarnessParams('?surface=kit&kit=art')).qa?.params.surface).toBe('kit');
+    // A loading studio has no doc yet: __qa is still there, with no pages.
+    expect(qaBootState(parseQaHarnessParams('?surface=studio&state=loading')).qa).toMatchObject({ pageCount: 0, pageIds: [] });
+  });
+
+  it('skin=atlas boots the page-level skin on every surface; theme and still map to <html>', () => {
+    expect(qaBootState(parseQaHarnessParams('?surface=app&skin=atlas'))).toMatchObject({ atlasSkin: true, dark: false });
+    expect(qaBootState(parseQaHarnessParams('?surface=studio&skin=atlas&theme=dark&still=1'))).toMatchObject({ atlasSkin: true, dark: true, still: true });
+    expect(qaBootState(parseQaHarnessParams('?surface=app&skin=none')).atlasSkin).toBe(false);
+    expect(qaBootState(parseQaHarnessParams('?surface=studio')).atlasSkin).toBe(false);
+  });
+});
+
 describe('scene discovery (qa/app/scenes, the scene contract)', () => {
   it('lists valid fake scene modules sorted by id and refuses every contract break with a reason', () => {
     const index = collectAppScenes({
@@ -173,7 +195,6 @@ describe('?surface=app', () => {
     expect(new URLSearchParams(recipes.getAttribute('href')!.slice(1)).toString()).toBe('surface=app&scene=recipes&theme=dark&skin=atlas');
     expect(window.__QA_APP_SCENES__).toEqual(APP_SCENES.scenes.map(({ id, title }) => ({ id, title })));
     expect(window.__QA_APP_SCENE_PROBLEMS__).toEqual([]);
-    // The app surface is not a comic fixture: no doc-shaped __qa is claimed for it.
     expect(document.querySelectorAll('[data-qa-crash]')).toHaveLength(0);
   });
 
@@ -195,6 +216,11 @@ describe('?surface=app', () => {
     expect(screen.getByRole('radio', { name: 'Easy' }).getAttribute('aria-checked')).toBe('false');
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByRole('status')).toBeNull();
+    // Every id is unique, so each <label for> and aria-labelledby names its own element (the scene is the model later ones copy).
+    const ids = Array.from(document.querySelectorAll('[id]'), (e) => e.id);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+    expect((screen.getByLabelText('Comic title') as HTMLInputElement).value).toBe('The Lake at Night');
+    expect(screen.getByRole('main').getAttribute('aria-labelledby')).toBe(screen.getByRole('heading', { level: 1 }).id);
     await waitFor(() => expect(root.hasAttribute('data-qa-ready')).toBe(true));
     // Leaving restores <html> as it was (the look is the surface's, not a leak into the next mount).
     unmount();
@@ -265,6 +291,8 @@ describe('?surface=pro (Program 2 placeholder) and the Comic Studio surfaces', (
     expect(main).not.toBeNull();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Pro Edit scenes');
     expect(main?.textContent).toMatch(/No Pro Edit scene named "layers" yet/);
+    // The placeholder is told the surface it runs on (Pro scenes may branch on params.surface).
+    expect(main?.getAttribute('data-qa-surface')).toBe('pro');
     await waitFor(() => expect(document.documentElement.hasAttribute('data-qa-ready')).toBe(true));
   });
 

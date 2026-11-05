@@ -42,7 +42,7 @@ import { QA_PROJECT_ID, makeQaDoc, qaImagePaths } from '../components/comicstudi
 import { HistoryApiProvider } from '../components/comicstudio/history/historyApi';
 import { createFakeHistoryApi } from '../components/comicstudio/history/historyApi.fake';
 import { historyFixture } from '../components/comicstudio/history/__scenes__/historyFixtures';
-import { parseQaParams, QA_SURFACES, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams } from '../components/comicstudio/testing/qaController';
+import { parseQaParams, QA_SURFACES, qaImageUrl, qaSceneFromParams, recordQaOp, useQaController, type QaParams, type QaRuntimeInfo } from '../components/comicstudio/testing/qaController';
 import { bootDsSkin } from '../services/dsSkin';
 import { COMICS_HOST } from '../services/productHost';
 import { KIT_SCENES, KitSurface, isKitScene } from './KitScenes';
@@ -250,7 +250,7 @@ const StudioSurface: React.FC<{ params: QaParams }> = ({ params }) => {
 const Surface: React.FC<{ params: QaHarnessParams }> = ({ params }) => {
   if (isStudioParams(params)) return <StudioSurface params={params} />;
   if (params.surface === 'app') return <QaAppSurface scene={params.scene ?? null} theme={params.theme} skin={params.skin ?? null} />;
-  return <QaProSurface params={{ ...params, surface: 'studio' }} scene={params.scene ?? null} />;
+  return <QaProSurface params={{ ...params, surface: 'pro' }} scene={params.scene ?? null} />;
 };
 
 /**
@@ -281,26 +281,44 @@ export const ComicQaApp: React.FC<{ params: QaHarnessParams }> = ({ params }) =>
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
+/** What boot() puts on <html> and window for one URL. */
+export interface QaBootState {
+  /** `.dark` on <html> (and the stored theme). */
+  dark: boolean;
+  /** `data-qa-still` on <html> (every duration zeroed, qa-fonts.css). */
+  still: boolean;
+  /** `?skin=atlas`: boot the page-level skin exactly as the comics host does (attribute, token registration, local font preloads). */
+  atlasSkin: boolean;
+  /** window.__qa: it describes a comic fixture, so only the Comic Studio surfaces get one (the app-wide surfaces publish __QA_APP_SCENES__). */
+  qa?: QaRuntimeInfo;
+}
+
+/** The page state for one URL's params. Pure: boot() applies it, and the test checks it per surface. */
+export const qaBootState = (params: QaHarnessParams): QaBootState => {
+  const state: QaBootState = { dark: params.theme === 'dark', still: params.still, atlasSkin: params.skin === 'atlas' };
+  if (isStudioParams(params)) {
+    const doc = params.state === 'loading' || params.state === 'load-error' ? null : makeQaDoc(params.fixture, { rtl: params.rtl });
+    state.qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
+  }
+  return state;
+};
+
 const boot = () => {
   const el = document.getElementById('root');
   if (!el) return;
   const params = parseQaHarnessParams(window.location.search, { webdriver: navigator.webdriver === true });
+  const state = qaBootState(params);
   try {
     window.localStorage.setItem('ds.theme.v1', params.theme);
   } catch {
     /* private mode: the class below still applies the theme */
   }
-  document.documentElement.classList.toggle('dark', params.theme === 'dark');
-  if (params.still) document.documentElement.setAttribute('data-qa-still', '1');
-  // ?skin=atlas: the page-level skin exactly as the comics host boots it (attribute, token
-  // registration, local font preloads). Without it only the studio/reader roots are skinned.
-  if (params.skin === 'atlas') bootDsSkin({ document, hostname: COMICS_HOST });
+  document.documentElement.classList.toggle('dark', state.dark);
+  if (state.still) document.documentElement.setAttribute('data-qa-still', '1');
+  // Without ?skin=atlas only the studio/reader roots are skinned (the apex case).
+  if (state.atlasSkin) bootDsSkin({ document, hostname: COMICS_HOST });
   window.__qaOps = window.__qaOps || [];
-  // window.__qa describes a comic fixture: the app-wide surfaces have none (they publish __QA_APP_SCENES__).
-  if (isStudioParams(params)) {
-    const doc = params.state === 'loading' || params.state === 'load-error' ? null : makeQaDoc(params.fixture, { rtl: params.rtl });
-    window.__qa = { params, ready: false, pageCount: doc?.pages.length ?? 0, pageIds: doc?.pages.map((p) => p.id) ?? [] };
-  }
+  if (state.qa) window.__qa = state.qa;
   installNetworkShim(params);
   createRoot(el).render(<ComicQaApp params={params} />);
 };

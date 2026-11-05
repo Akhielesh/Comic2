@@ -129,10 +129,10 @@ const Actions: React.FC = () => {
 const Fields: React.FC = () => (
   <Section id="fields" title="Fields" description="FIELD alone, FIELD_GROUP around FIELD_EMBEDDED, and a FIELD textarea." icon={<Search className="size-4" />}>
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label htmlFor="recipes-title" className={cn('text-[length:var(--ds-text-sm)] font-medium', INK)}>
+      <label htmlFor="recipes-comic-title" className={cn('text-[length:var(--ds-text-sm)] font-medium', INK)}>
         Comic title
       </label>
-      <input id="recipes-title" defaultValue="The Lake at Night" className={cn(FIELD, CONTROL_H, 'w-full min-w-0 px-3 text-[length:var(--ds-text-base)]')} />
+      <input id="recipes-comic-title" defaultValue="The Lake at Night" className={cn(FIELD, CONTROL_H, 'w-full min-w-0 px-3 text-[length:var(--ds-text-base)]')} />
     </div>
     <div className={cn(FIELD_GROUP, 'min-w-0 pl-3')}>
       <Search aria-hidden="true" className={cn('size-4 shrink-0', MUTED)} />
