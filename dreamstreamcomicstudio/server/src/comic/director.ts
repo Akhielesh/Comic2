@@ -9,6 +9,7 @@
 // the doc. See docs/features/comic-studio-v4.md §6.8.
 
 import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type NextStep, type RefAsset } from '../../../shared/comic/doc.js';
+import { conflictGuardOn } from '../../../shared/comic/capabilities.js';
 import { STEER_LIMITS, type StudioFocus } from '../../../shared/comic/events.js';
 import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
@@ -38,7 +39,8 @@ import {
 } from './replies.js';
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
-import { conflictCardFor } from './conflictGuard.js';
+import { conflictCardFor, conflictCardText } from './conflictGuard.js';
+import { CONFLICT_PROMPT_LINE, decidedLine } from './decided.js';
 import { LONG_MESSAGE_CHARS, openSteerOf, takeSteerOf, type SteerNote } from './session.js';
 import { toolGroups } from './tools/index.js';
 import {
@@ -197,7 +199,9 @@ const focusLine = (doc: ComicDoc, focus?: StudioFocus): string => {
 /**
  * Compact, model-facing state of the comic (≈ ≤ 3k tokens). `extraLines` are the active
  * feature groups' summary lines (ToolGroup.summaryLines), placed before the money lines.
- * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected.
+ * `opts.userText` adds the OPEN QUESTIONS line (materialGaps); `opts.focus` what the user selected. With
+ * `opts.contradictions` (the conflict guard is on, conflictGuardOn) the tail also carries the DECIDED line (decided.ts:
+ * what the creator settled) before OPEN QUESTIONS, and the open question may be a contradiction of it (A3).
  *
  * The summary has a body (story, cast, places, pages) and a tail (feature lines, the user's
  * focus, the money settings and spend — with the governed "never in dollars" instruction —
@@ -210,7 +214,7 @@ export function summarizeDocForDirector(
   doc: ComicDoc,
   byok = false,
   extraLines: readonly string[] = [],
-  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter } = {}
+  opts: { userText?: string; focus?: StudioFocus; cost?: CostFormatter; contradictions?: boolean } = {}
 ): string {
   // Prices in the user's terms: a governed user's director never even sees a dollar figure to repeat.
   const c = opts.cost ?? costFormatter();
@@ -235,7 +239,11 @@ export function summarizeDocForDirector(
   if (doc.planStatus === 'none') tail.push(`Planning the pages: ${planPagesQuoteText(doc, c, byok)}`);
   tail.push(`Spend so far: ${c(doc.spend.totalUsd)}${c.governed ? ' (quote prices as a share of the user\'s usage, never in dollars)' : ''}`);
   if (doc.gate?.status === 'open') tail.push(`Waiting on approval: ${clip(doc.gate.title, 80)} ${c.approx(doc.gate.estimateUsd)} (${doc.gate.reason})`);
-  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText) : '';
+  if (opts.contradictions) {
+    const decided = decidedLine(doc);
+    if (decided) tail.push(decided);
+  }
+  const open = opts.userText !== undefined ? openQuestionsLine(doc, opts.userText, { contradictions: opts.contradictions === true, focus: opts.focus }) : '';
   if (open) tail.push(open);
   const tailText = tail.join('\n');
 
@@ -332,6 +340,8 @@ const cardText = (card: Card, cardDoc?: ComicDoc): string => {
       return `[${card.tone}: ${clip(card.text, 200)}]`;
     case 'model_outage':
       return outageCardText(card);
+    case 'conflict':
+      return conflictCardText(card);
     default:
       return '';
   }
@@ -691,13 +701,16 @@ async function directorTurnBody(
 
   const doc = session.doc;
   const { summary: memory } = parseMemory(doc.memory);
-  const prompt = toolset.promptRules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${toolset.promptRules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
+  // With the conflict guard on, the model also hears the A3 rule: ask once before overriding DECIDED or a Conflict: result.
+  const contradictions = conflictGuardOn(ctx.caps);
+  const rules = [...toolset.promptRules, ...(contradictions ? [CONFLICT_PROMPT_LINE] : [])];
+  const prompt = rules.length ? `${DIRECTOR_SYSTEM_PROMPT}\n\n${rules.join('\n')}` : DIRECTOR_SYSTEM_PROMPT;
   // The comic model's facts (models.md §3.8, reliability.md §2): a crowded page, an unusable lock, and the
   // model_status fact — health is read live only when something is wrong, bounded, and never fails the turn.
   const modelLines = await modelFactLines(ctx, doc, userText, { drawIntent: turn.drawIntent });
   const system = [
     prompt,
-    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost }),
+    summarizeDocForDirector(doc, byok, [...toolset.summaryLines, ...modelLines], { userText, focus: input.focus, cost, contradictions }),
     memory ? `MEMORY (older conversation):\n${clip(memory, 3000)}` : ''
   ]
     .filter(Boolean)
