@@ -142,6 +142,30 @@ function declarations(source: string): Array<{ prop: string; value: string; with
   return out;
 }
 
+/** True when every comma-separated part of a selector is only :where(…) groups and combinators. */
+const zeroSpecificity = (selector: string) =>
+  selector.split(',').every((part) => part.replace(/:where\((?:[^()]|\([^()]*\))*\)/g, '').replace(/[\s>+~]/g, '') === '');
+
+describe('studio-marks.css lets the consumer size the mark and the lockup', () => {
+  // Tailwind's utilities are unlayered and load before this file (index.css is linked ahead of the
+  // bundle), so a default at even one class would beat markClassName="h-7 w-7", labelClassName=
+  // "text-[17px]" or a [--ds-logo-mark-size:24px] class. Zero specificity lets any class win in any order.
+  const topLevel = declarations(css).filter((d) => d.within.length === 1 && !/^transform-(?:box|origin)$/.test(d.prop));
+
+  it('declares every size, face and layout default at zero specificity (:where)', () => {
+    for (const v of ['--ds-logo-mark-size', '--ds-logo-text-size', '--ds-logo-gap', '--ds-logo-overline-size', '--ds-logo-stack-gap']) {
+      expect(topLevel.some((d) => d.prop === v && d.within[0] === ':where(.ds-logo)'), v).toBe(true);
+    }
+    for (const prop of ['width', 'height', 'font-size', 'font-family', 'gap', 'display']) expect(topLevel.some((d) => d.prop === prop), prop).toBe(true);
+    for (const d of topLevel) expect(zeroSpecificity(d.within[0]), `${d.within[0]} { ${d.prop} }`).toBe(true);
+  });
+
+  it('sizes a lockup mark from the lockup variable, still at zero specificity', () => {
+    const size = topLevel.filter((d) => d.within[0] === ':where(.ds-logo) > :where(.ds-logo-mark)');
+    expect(size.map((d) => `${d.prop}: ${d.value}`)).toEqual(['width: var(--ds-logo-mark-size)', 'height: var(--ds-logo-mark-size)']);
+  });
+});
+
 describe('studio-marks.css motion contract', () => {
   const decls = declarations(css);
   const inKeyframes = (d: { within: string[] }) => d.within.some((p) => p.startsWith('@keyframes'));
@@ -158,7 +182,12 @@ describe('studio-marks.css motion contract', () => {
     for (const token of ['--ds-ease-spring', '--ds-ease', '--ds-motion-panel', '--ds-motion-fast']) {
       expect(css, token).toMatch(new RegExp(`var\\(${token}, `));
     }
-    expect(css).toContain('font-family: var(--ds-font-display, "Space Grotesk", system-ui, sans-serif);');
+  });
+
+  it('sets the lockup in the brand faces, not the skin tokens (outside the Atlas skin those are Inter)', () => {
+    expect(css).toContain('font-family: "Space Grotesk", system-ui, sans-serif;');
+    expect(css).toContain('font-family: "IBM Plex Sans", system-ui, sans-serif;');
+    expect(css).not.toMatch(/var\(--ds-font-/);
   });
 
   it('moves nothing outside prefers-reduced-motion: no-preference', () => {

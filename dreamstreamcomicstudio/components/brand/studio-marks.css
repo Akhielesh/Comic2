@@ -11,7 +11,8 @@
  *   DreamStream, Atlas  the point drops in like a pin
  *   Comic               the eye blinks
  *   Stream              the arcs broadcast once (looped: the point pulses with them)
- * `loading` loops the moment. Loops pause under [data-inview="false"] (useInViewPause / InViewPause);
+ * `loading` loops the moment. Loops pause under any [data-inview="false"] ancestor (set it yourself
+ * today; components/ds's useInViewPause / InViewPause will set it once the token commit lands);
  * reduced motion stops everything.
  */
 
@@ -38,7 +39,13 @@
 
 /* ── The lockup ───────────────────────────────────────────────────────────────────────────── */
 
-.ds-logo {
+/* Every lockup rule is zero specificity too (:where), so whatever the consumer adds wins in either
+ * stylesheet order: a class or utility on the lockup that sets --ds-logo-mark-size,
+ * --ds-logo-text-size or --ds-logo-gap, markClassName on the mark (h-7 w-7), labelClassName on the
+ * wordmark (text-[17px]) and `style`. Later rules here beat earlier ones only by order, so the size
+ * variants follow the base and the endorsed variants come last. */
+
+:where(.ds-logo) {
   --ds-logo-mark-size: 32px;
   --ds-logo-text-size: 20px;
   --ds-logo-gap: 10px;
@@ -51,26 +58,26 @@
   vertical-align: middle;
 }
 
-.ds-logo--display {
+:where(.ds-logo--display) {
   --ds-logo-mark-size: 56px;
   --ds-logo-text-size: 34px;
   --ds-logo-gap: 18px;
 }
 
-.ds-logo--compact {
+:where(.ds-logo--compact) {
   --ds-logo-mark-size: 28px;
   --ds-logo-text-size: 17px;
   --ds-logo-gap: 9px;
 }
 
 /* Endorsed: the mark grows to the two lines (overline plus wordmark). */
-.ds-logo--endorsed.ds-logo--header {
+:where(.ds-logo--endorsed.ds-logo--header) {
   --ds-logo-mark-size: 40px;
   --ds-logo-text-size: 22px;
   --ds-logo-gap: 12px;
 }
 
-.ds-logo--endorsed.ds-logo--display {
+:where(.ds-logo--endorsed.ds-logo--display) {
   --ds-logo-mark-size: 68px;
   --ds-logo-text-size: 34px;
   --ds-logo-gap: 20px;
@@ -78,7 +85,7 @@
   --ds-logo-stack-gap: 6px;
 }
 
-.ds-logo--endorsed.ds-logo--compact {
+:where(.ds-logo--endorsed.ds-logo--compact) {
   --ds-logo-mark-size: 34px;
   --ds-logo-text-size: 17px;
   --ds-logo-gap: 10px;
@@ -86,13 +93,16 @@
   --ds-logo-stack-gap: 3px;
 }
 
-.ds-logo > .ds-logo-mark {
+:where(.ds-logo) > :where(.ds-logo-mark) {
   width: var(--ds-logo-mark-size);
   height: var(--ds-logo-mark-size);
 }
 
-.ds-logo-word {
-  font-family: var(--ds-font-display, "Space Grotesk", system-ui, sans-serif);
+/* The brand faces are fixed, not the skin's tokens: outside the Atlas skin --ds-font-display and
+ * --ds-font-sans are Inter, and the lockup is Space Grotesk and IBM Plex Sans everywhere (the family
+ * sheet). index.css declares both faces for the main app; Stream Studio self-hosts them from step 2a. */
+:where(.ds-logo-word) {
+  font-family: "Space Grotesk", system-ui, sans-serif;
   font-size: var(--ds-logo-text-size);
   font-weight: 600;
   letter-spacing: -0.025em;
@@ -100,12 +110,12 @@
   white-space: nowrap;
 }
 
-.ds-logo-word-muted {
+:where(.ds-logo-word-muted) {
   font-weight: 500;
   opacity: 0.55;
 }
 
-.ds-logo-stack {
+:where(.ds-logo-stack) {
   display: inline-flex;
   flex-direction: column;
   gap: var(--ds-logo-stack-gap);
@@ -113,8 +123,8 @@
 }
 
 /* The overline recipe (11 px, semibold, 0.12em, uppercase) at the lockup's scale. */
-.ds-logo-overline {
-  font-family: var(--ds-font-sans, "IBM Plex Sans", system-ui, sans-serif);
+:where(.ds-logo-overline) {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
   font-size: var(--ds-logo-overline-size);
   font-weight: 600;
   letter-spacing: 0.12em;

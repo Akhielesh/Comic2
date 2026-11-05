@@ -194,23 +194,76 @@ describe('page heads', () => {
   });
 });
 
-describe('icon paths named in code', () => {
-  const SCANNED = ['live', 'components', 'services', 'functions', 'comics-edge/src', 'public/live-sw.js', 'App.tsx', 'index.tsx'];
-  const SOURCE = /\.(tsx?|jsx?|mjs)$/;
-  const files = (rel: string): string[] => {
-    const full = path.join(ROOT, rel);
-    if (!existsSync(full)) return [];
-    if (!statSync(full).isDirectory()) return [rel];
-    return readdirSync(full).flatMap((e) => (e === 'node_modules' || e.startsWith('.') ? [] : files(path.join(rel, e))));
-  };
+const SCANNED = ['live', 'components', 'services', 'functions', 'comics-edge/src', 'public/live-sw.js', 'App.tsx', 'index.tsx'];
+const SOURCE = /\.(tsx?|jsx?|mjs)$/;
+const files = (rel: string): string[] => {
+  const full = path.join(ROOT, rel);
+  if (!existsSync(full)) return [];
+  if (!statSync(full).isDirectory()) return [rel];
+  return readdirSync(full).flatMap((e) => (e === 'node_modules' || e.startsWith('.') ? [] : files(path.join(rel, e))));
+};
 
+/** Every literal /icons/…, /favicon.ico or /stream-studio.svg in the app code, with the file naming it. */
+function codeRefs(): Map<string, string> {
+  const refs = new Map<string, string>();
+  for (const rel of SCANNED.flatMap(files).filter((f) => SOURCE.test(f) && !/\.test\.|\.unit\.test\./.test(f))) {
+    for (const m of read(rel).matchAll(/['"`](\/(?:icons\/[\w.-]+|favicon\.ico|stream-studio\.svg))['"`]/g)) refs.set(m[1], rel);
+  }
+  return refs;
+}
+
+/**
+ * Generated for Stream Studio, wired by step 2a, which owns the files that name them: live.html (the
+ * ICO and SVG favicons, the PNG touch icon iOS needs) and public/live-sw.js + live/monitor/push.ts (the
+ * PNG notification icon and badge). docs/design/brand-marks.md lists them as "not wired yet".
+ */
+const STAGED_FOR_STREAM = new Set([
+  '/icons/stream-favicon.ico',
+  '/icons/stream-favicon.svg',
+  '/icons/stream-apple-touch-180.png',
+  '/icons/stream-badge-96.png',
+]);
+
+/**
+ * Generated at a long-standing address that must keep answering after nothing current names it.
+ * /stream-studio.svg: step 2a moves live.html, public/live-sw.js and live/monitor/push.ts to the
+ * files above, but installs, bookmarks and notifications made before that still ask for it, so it
+ * stays a generator output (the On-air favicon) and stays a static file (public/_routes.json).
+ */
+const KEPT_FOR_OLD_LINKS = new Set(['/stream-studio.svg']);
+
+const GENERATED = ICON_SETS.flatMap((s) => s.outputs.map((o) => `/${o.file.replace(/^public\//, '')}`));
+
+describe('icon paths named in code', () => {
   it('every literal /icons/…, /favicon.ico or /stream-studio.svg in the app code exists', () => {
-    const refs = new Map<string, string>();
-    for (const rel of SCANNED.flatMap(files).filter((f) => SOURCE.test(f) && !/\.test\.|\.unit\.test\./.test(f))) {
-      for (const m of read(rel).matchAll(/['"`](\/(?:icons\/[\w.-]+|favicon\.ico|stream-studio\.svg))['"`]/g)) refs.set(m[1], rel);
-    }
+    const refs = codeRefs();
     expect(refs.size).toBeGreaterThan(3);
     for (const [src, from] of refs) expect(existsSync(publicFile(src)), `${src} (named in ${from})`).toBe(true);
+  });
+
+  it('every generated icon is used: by a manifest, a page head, the comics edge or app code (or staged for Stream Studio, or kept for old links)', () => {
+    const used = new Set<string>([
+      ...MANIFESTS.flatMap((rel) => {
+        const m = manifest(rel);
+        return [...m.icons, ...(m.shortcuts ?? []).flatMap((s) => s.icons ?? [])].map((i) => i.src);
+      }),
+      ...['index.html', 'live.html'].flatMap((rel) => headLinks(rel).map((l) => l.href)),
+      BRAND.appleTouchIcon,
+      BRAND.icon,
+      BRAND.iconIco,
+      ...codeRefs().keys(),
+    ]);
+    const exempt = (src: string) => STAGED_FOR_STREAM.has(src) || KEPT_FOR_OLD_LINKS.has(src);
+    expect(GENERATED.filter((src) => !used.has(src) && !exempt(src))).toEqual([]);
+    for (const src of STAGED_FOR_STREAM) expect(GENERATED, src).toContain(src);
+  });
+
+  it('a path kept for old links is still generated and still served as a static file', () => {
+    const routes = JSON.parse(read('public/_routes.json')) as { exclude: string[] };
+    for (const src of KEPT_FOR_OLD_LINKS) {
+      expect(GENERATED, `${src} is a scripts/gen-icons.mjs output`).toContain(src);
+      expect(routes.exclude, `${src} stays outside Pages Functions`).toContain(src);
+    }
   });
 });
 
@@ -314,6 +367,14 @@ describe('sources, React marks and generated outputs agree', () => {
     expect(() => parseMarkSvg(good.replace('r="3.6"', 'r="4"'), 'x')).toThrow(/r must be 3.6/);
     expect(() => parseMarkSvg(good.replace('viewBox="0 0 64 64"', 'viewBox="0 0 48 48"'), 'x')).toThrow(/viewBox/);
     expect(() => parseMarkSvg(good.replace('fill="currentColor"', 'fill="#000"'), 'x')).toThrow(/currentColor/);
+    // The mask itself: what it keeps and how the cut is drawn (the outputs are always mitred, butt-ended).
+    expect(() => parseMarkSvg(good.replace('stroke-linejoin="miter"', 'stroke-linejoin="round"'), 'x')).toThrow(/mitred/);
+    expect(() => parseMarkSvg(good.replace('stroke-width="7"', 'stroke-width="7" stroke-linecap="round"'), 'x')).toThrow(/butt/);
+    expect(() => parseMarkSvg(good.replace('rx="16" fill="#fff"', 'rx="4" fill="#fff"'), 'x')).toThrow(/keep rect must have rx="16"/);
+    expect(() => parseMarkSvg(good.replace('stroke="#000"', 'stroke="#fff"'), 'x')).toThrow(/black stroke/);
+    expect(() => parseMarkSvg(good.replace('r="3.6" fill="#000"', 'r="3.6" fill="#fff"'), 'x')).toThrow(/point must be cut in black/);
+    expect(() => parseMarkSvg(good.replace('maskUnits="userSpaceOnUse"', 'maskUnits="objectBoundingBox"'), 'x')).toThrow(/userSpaceOnUse/);
+    for (const variant of [good, good.replace(' stroke-linejoin="miter"', '')]) expect(parseMarkSvg(variant, 'x').join).toBe('miter');
   });
 
   it('every committed icon is exactly what npm run gen:icons makes from the sources', async () => {

@@ -11,7 +11,8 @@ import './studio-marks.css';
  *   compact  28 / 17  tight headers, menus, the studio switcher
  * `endorsed` stacks a small DREAMSTREAM overline over the wordmark and grows the mark to the two
  * lines (header 40 / 22, as on the sheet). Other sizes: set --ds-logo-mark-size,
- * --ds-logo-text-size and --ds-logo-gap from a class or `style`.
+ * --ds-logo-text-size and --ds-logo-gap from a class or `style`, or size the parts directly with
+ * markClassName / labelClassName. Every lockup default is zero specificity, so any class wins.
  */
 export type StudioLogoSize = 'header' | 'display' | 'compact';
 

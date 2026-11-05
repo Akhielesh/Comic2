@@ -10,10 +10,10 @@
  *   public/icons/comics-mark.svg        Comic Studio, "Grin" (comics.dreamstreamstudio.ai)
  *   public/icons/stream-mark.svg        Stream Studio, "On air" (stream.dreamstreamstudio.ai, /live)
  * Each is the shipped theme-agnostic mark: a 64-unit tile (rx 16) in currentColor with one weight-7
- * cut and one r 3.6 point through a mask. The generator reads the cut path, its line join and the
- * point from the mask, so a redrawn glyph only needs its source file (and the same numbers in
- * components/brand/studios.ts, which the React marks draw from; tests/config/appIcons.test.ts
- * fails if the two drift).
+ * cut (mitred corners, butt ends) and one r 3.6 point through a mask. The generator reads the cut
+ * path and the point from the mask and refuses a source built any other way, so a redrawn glyph only
+ * needs its source file (and the same numbers in components/brand/studios.ts, which the React marks
+ * draw from; tests/config/appIcons.test.ts fails if the two drift).
  *
  * OUTPUTS per studio (prefix `app` for DreamStream, `comics`, `stream`):
  *   <prefix>-192.png, -512.png       manifest purpose "any": ink tile with transparent corners
@@ -22,8 +22,9 @@
  *   <prefix>-apple-touch-180.png     iOS home screen: full bleed (iOS rounds the corners itself and
  *                                    shows black behind transparent pixels). DreamStream's keeps its
  *                                    old name, apple-touch-180.png.
- *   <studio>-icon.svg                the same art as SVG, for manifests (opaque, so the glyph never
- *                                    takes a dark launcher's colour)
+ *   <studio>-icon.svg                the same art as SVG, for the comics and Stream manifests (opaque,
+ *                                    so the glyph never takes a dark launcher's colour; the apex
+ *                                    manifest lists PNGs only, so DreamStream has none)
  *   <studio>-favicon.svg             browser tab: ink tile on light chrome, paper tile on dark
  *                                    (prefers-color-scheme), glyph cut out; Atlas's app/icon.svg
  *   favicon.ico / <studio>-favicon.ico   16, 32 and 48 px, 32-bit BMP entries with an AND mask
@@ -68,7 +69,6 @@ export const ICON_SETS = [
       { file: 'public/icons/app-512.png', kind: 'tile', size: 512 },
       { file: 'public/icons/app-maskable-512.png', kind: 'square', size: 512 },
       { file: 'public/icons/apple-touch-180.png', kind: 'square', size: 180 },
-      { file: 'public/icons/dreamstream-icon.svg', kind: 'icon-svg' },
       { file: 'public/icons/dreamstream-favicon.svg', kind: 'favicon-svg' },
       { file: 'public/favicon.ico', kind: 'ico' },
     ],
@@ -109,9 +109,15 @@ export const ICON_SETS = [
 
 const attr = (tag, name) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
 
+const WHITE = ['#fff', '#ffffff'];
+const BLACK = ['#000', '#000000'];
+const isOneOf = (value, allowed) => value !== undefined && allowed.includes(value.toLowerCase());
+
 /**
- * The glyph of a source mark: the cut's path data and line join and the point's centre, read from
- * the mask. Throws, naming the problem, when the file is not built the family way.
+ * The glyph of a source mark: the cut's path data and the point's centre, read from the mask (the
+ * join is always miter: the family has no other). Throws, naming the problem, when the file is not
+ * built the family way: the mask keeps a white 64-unit rx 16 rect and cuts a black weight-7 stroke
+ * (no fill, mitred corners, butt ends) and a black r 3.6 point, in user space.
  */
 export function parseMarkSvg(svg, label = 'mark') {
   const fail = (why) => {
@@ -119,7 +125,15 @@ export function parseMarkSvg(svg, label = 'mark') {
   };
   const root = svg.match(/<svg\b[^>]*>/)?.[0] ?? fail('no <svg> element');
   if (attr(root, 'viewBox') !== `0 0 ${VIEWBOX} ${VIEWBOX}`) fail(`viewBox must be "0 0 ${VIEWBOX} ${VIEWBOX}"`);
-  const mask = svg.match(/<mask\b[^>]*>([\s\S]*?)<\/mask>/)?.[1] ?? fail('no <mask>');
+  const maskMatch = svg.match(/(<mask\b[^>]*>)([\s\S]*?)<\/mask>/) ?? fail('no <mask>');
+  const [, maskTag, mask] = maskMatch;
+  if (attr(maskTag, 'maskUnits') !== 'userSpaceOnUse') fail('the <mask> must use maskUnits="userSpaceOnUse"');
+  const keeps = mask.match(/<rect\b[^>]*>/g) ?? [];
+  if (keeps.length !== 1) fail(`the mask needs exactly one keep <rect>, found ${keeps.length}`);
+  const [keepTag] = keeps;
+  if (attr(keepTag, 'width') !== String(VIEWBOX) || attr(keepTag, 'height') !== String(VIEWBOX)) fail(`the mask's keep rect must be ${VIEWBOX} x ${VIEWBOX}`);
+  if (attr(keepTag, 'rx') !== String(TILE_RADIUS)) fail(`the mask's keep rect must have rx="${TILE_RADIUS}"`);
+  if (!isOneOf(attr(keepTag, 'fill'), WHITE)) fail('the mask\'s keep rect must be white (fill="#fff")');
   const paths = mask.match(/<path\b[^>]*>/g) ?? [];
   const circles = mask.match(/<circle\b[^>]*>/g) ?? [];
   if (paths.length !== 1) fail(`the mask needs exactly one cut <path>, found ${paths.length}`);
@@ -127,7 +141,12 @@ export function parseMarkSvg(svg, label = 'mark') {
   const [cutTag] = paths;
   const [pointTag] = circles;
   if (attr(cutTag, 'stroke-width') !== String(STROKE)) fail(`the cut's stroke-width must be ${STROKE}`);
+  if (!isOneOf(attr(cutTag, 'stroke'), BLACK)) fail('the cut must be a black stroke (stroke="#000")');
+  if (attr(cutTag, 'fill') !== 'none') fail('the cut is a stroke only (fill="none")');
+  if ((attr(cutTag, 'stroke-linejoin') ?? 'miter') !== 'miter') fail('the cut\'s corners must be mitred (stroke-linejoin="miter")');
+  if ((attr(cutTag, 'stroke-linecap') ?? 'butt') !== 'butt') fail('the cut\'s ends must be butt (stroke-linecap="butt" or none)');
   if (attr(pointTag, 'r') !== String(POINT_RADIUS)) fail(`the point's r must be ${POINT_RADIUS}`);
+  if (!isOneOf(attr(pointTag, 'fill'), BLACK)) fail('the point must be cut in black (fill="#000")');
   const tiles = svg.match(/<rect\b[^>]*>/g) ?? [];
   if (!tiles.some((t) => attr(t, 'fill') === 'currentColor' && attr(t, 'rx') === String(TILE_RADIUS))) {
     fail(`the drawn tile must be a rect with rx="${TILE_RADIUS}" and fill="currentColor"`);
@@ -137,7 +156,7 @@ export function parseMarkSvg(svg, label = 'mark') {
   const cy = Number(attr(pointTag, 'cy'));
   if (!cut) fail('the cut <path> has no d');
   if (!Number.isFinite(cx) || !Number.isFinite(cy)) fail('the point <circle> needs numeric cx and cy');
-  return { cut, join: attr(cutTag, 'stroke-linejoin') ?? 'miter', point: [cx, cy] };
+  return { cut, join: 'miter', point: [cx, cy] };
 }
 
 // ── Building the art ───────────────────────────────────────────────────────────────────────

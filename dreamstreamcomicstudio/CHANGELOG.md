@@ -94,7 +94,8 @@ All notable user-facing changes. Format loosely follows
 ### Changed
 - **New DreamStream marks and app icons (2026-11-05):** DreamStream, Comic Studio and Stream
   Studio have new black-and-white marks built like Atlas's: one rounded tile, one cut, one
-  point. DreamStream is a **D**, Comic Studio a **grin**, Stream Studio **on air**. Installed
+  point. DreamStream is a **D**, Comic Studio a **grin**, Stream Studio **on air**. They show up
+  first on app icons and browser tabs, and in the headers with the next update. Installed
   apps get the new icons (Stream Studio now has proper PNG and Android "maskable" icons instead
   of a single SVG, and a white splash), browser tabs finally show a DreamStream favicon (light
   and dark), and the comics site shows its own. The marks are shared components
