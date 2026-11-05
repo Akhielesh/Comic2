@@ -111,7 +111,7 @@ import { feature as modelsFeature } from './models/index';
 import { feature as insightsFeature } from './insights/index';
 import { feature as reliabilityFeature } from './reliability/index';
 import { feature as historyFeature } from './history/index';
-import { CardRenderer } from './conversation/cards/CardRenderer';
+import { CARD_TYPES, CardRenderer } from './conversation/cards/CardRenderer';
 import { BoardPane } from './board/BoardPane';
 import { makeFakeStudio, makeSampleDoc } from './conversation/testing/fixtures';
 
@@ -132,6 +132,11 @@ describe('features registry', () => {
     expect(registeredHeaderSlots().find((s) => s.id === 'usage')?.order).toBe(220);
     // Admin sections keep feature order: safety (real) before library (mock).
     expect(registeredAdminSections().map((s) => s.id)).toEqual(['comic-safety', 'library', 'model-lab', 'provider-status']);
+  });
+
+  it("the built-in card types are exactly the ones CardRenderer draws itself (A3's conflict card included)", () => {
+    expect([...BUILTIN_CARD_TYPES].sort()).toEqual([...CARD_TYPES].sort());
+    expect(BUILTIN_CARD_TYPES.has('conflict')).toBe(true);
   });
 
   it('W-M seams: models, insights and reliability are registered last (lowest precedence) with their real registrations', () => {
