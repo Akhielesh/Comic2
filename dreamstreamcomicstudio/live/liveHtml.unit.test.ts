@@ -157,8 +157,10 @@ describe('the boot splash (static, inside #live-root until React renders)', () =
   it('sets the wordmark like the StudioLogo lockup: Space Grotesk 600, tight, "Studio" at 500 and 55 %', () => {
     expect(style).toMatch(/\.boot-word\s*\{[^}]*font-weight:\s*600[^}]*letter-spacing:\s*-0\.025em/);
     expect(style).toMatch(/\.boot-word span\s*\{\s*font-weight:\s*500;\s*opacity:\s*0\.55/);
+    // The lockup's rules sit in :where() (zero specificity), so the selector may close a paren before the brace.
     const brandCss = readFileSync(path('../components/brand/studio-marks.css'), 'utf8');
-    expect(brandCss).toMatch(/\.ds-logo-word\s*\{[^}]*font-weight:\s*600;[^}]*letter-spacing:\s*-0\.025em/);
-    expect(brandCss).toMatch(/\.ds-logo-word-muted\s*\{\s*font-weight:\s*500;\s*opacity:\s*0\.55/);
+    expect(style).toMatch(/\.boot-word\s*\{[^}]*font-family:\s*"Space Grotesk"/);
+    expect(brandCss).toMatch(/\.ds-logo-word\)?\s*\{[^}]*font-family:\s*"Space Grotesk"[^}]*font-weight:\s*600;[^}]*letter-spacing:\s*-0\.025em/);
+    expect(brandCss).toMatch(/\.ds-logo-word-muted\)?\s*\{\s*font-weight:\s*500;\s*opacity:\s*0\.55/);
   });
 });
