@@ -1,6 +1,6 @@
 import React from 'react';
 import { Callout, DataTable, DocLink, LINK, LIST, LegalDocument, MailLink, type LegalSection } from './LegalDocument';
-import { BROWSER_THIRD_PARTIES, DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, PRIVACY_EMAIL } from './legalFacts';
+import { ASSISTANT_SCRIPT_PREVIEW_CHARS, BROWSER_THIRD_PARTIES, DATABASE_REGION_LABEL, DIRECT_AI_PROVIDERS, PRIVACY_EMAIL } from './legalFacts';
 import type { LegalDocId } from './legalRoutes';
 
 // Subprocessors: every third party that receives personal information when DreamStream runs,
@@ -40,7 +40,7 @@ export const AI_PROVIDERS: Subprocessor[] = [
     {
         name: 'OpenRouter',
         purpose: 'Our AI gateway. On Auto, and whenever you pick a model it serves, it passes the request to the company that runs the model. The site-wide assistant always runs through it.',
-        data: 'What a request needs: your prompt and conversation, attached files, memory notes, your approximate location, timezone and language, items from connected accounts included in it, and Comic Studio project content. For the site-wide assistant: what you type, the page you\'re on and, if you\'re signed in, your username, masked email, plan and a summary of your Comic Studio projects.',
+        data: `What a request needs: your prompt and conversation, attached files, memory notes, your approximate location, timezone and language, items from connected accounts included in it, and Comic Studio project content. For the site-wide assistant: what you type, the page you're on and, if you're signed in, your username, masked email, plan and a summary of your Comic Studio projects, plus, for the project you have open, its story overview, the first ${ASSISTANT_SCRIPT_PREVIEW_CHARS} characters of its script and its style, layout and cover prompts.`,
         where: 'OpenRouter, and the model provider it routes to'
     },
     {
@@ -79,7 +79,7 @@ export const TOOL_SERVICES: Subprocessor[] = [
     {
         name: 'Maps and places: OpenStreetMap (Nominatim, Overpass), FOSSGIS routing, Foursquare, Google Maps',
         purpose: 'Find places and addresses and plan routes.',
-        data: 'The place, address or route you ask about.',
+        data: 'The place, address or route you ask about, or your location (approximate, or precise if you shared it) when you search for places near you.',
         where: PROVIDER_LOCATION
     },
     {
@@ -97,7 +97,7 @@ export const TOOL_SERVICES: Subprocessor[] = [
     {
         name: 'News, markets and economic data: for example Google News, Yahoo Finance, Stooq, Alpaca, Finnhub (when enabled), CoinGecko, Binance, OKX, DefiLlama, Polymarket, Manifold, CNN and alternative.me (market sentiment), FRED (Federal Reserve Bank of St. Louis), the US Treasury, the CFTC, Frankfurter, and similar public sources',
         purpose: 'Headlines, prices, market and economic data, prediction markets and exchange rates.',
-        data: 'The topic, ticker, market or currency asked about.',
+        data: 'The topic, ticker, market or currency asked about; for news, also your country and language.',
         where: PROVIDER_LOCATION
     },
     {
@@ -196,7 +196,7 @@ const sections: LegalSection[] = [
         title: 'Chat Studio tools',
         content: (
             <>
-                <p>While answering in Chat Studio, the AI can use tools that contact the services below. Our server sends these requests, and they contain only what the AI writes for that request (apart from the approximate-location lookup, which receives your IP address). Maps, images, logos, QR codes and code previews in an answer are loaded by your browser instead: see <a href="#loaded-by-your-browser" className={LINK}>Loaded by your browser</a>.</p>
+                <p>While answering in Chat Studio, the AI can use tools that contact the services below. Our server sends these requests. They contain what the AI writes for that request, plus your location (approximate, or precise if you shared it) when you search for places near you, and your country and language for news; the approximate-location lookup receives your IP address. Maps, images, logos, QR codes and code previews in an answer are loaded by your browser instead: see <a href="#loaded-by-your-browser" className={LINK}>Loaded by your browser</a>.</p>
                 {table('Chat Studio tool services', TOOL_SERVICES)}
             </>
         )

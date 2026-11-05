@@ -28,6 +28,7 @@ export const DOCUMENTED_STORAGE_KEYS = [
     'dreamstream_api_keys_v2',
     'dreamstream_openrouter_key',
     'dreamstream_flux_key',
+    'dreamstream_mcp_servers',
     'dreamstream_local_cache',
     'dreamstream_comic_studio',
     'dreamstream_chat',
@@ -85,8 +86,8 @@ const sections: LegalSection[] = [
                         ],
                         [
                             'Your own API keys',
-                            'Keys you add for AI or image providers, kept in local storage on this device. If you\'re signed in, a copy is also stored with your account, encrypted, so the key works on your other devices (see the Privacy Policy).',
-                            <><Key>dreamstream_api_keys_v2</Key> <Key>dreamstream_openrouter_key</Key> <Key>dreamstream_flux_key</Key></>
+                            'Keys you add for AI or image providers, and the address and any access token of MCP servers you add (in Settings or Chat Studio\'s tools), kept in local storage on this device. If you\'re signed in, a copy of a provider key is also stored with your account, encrypted, so the key works on your other devices (see the Privacy Policy). MCP servers stay on this device: the ones you turn on in a chat are sent, token included, with that chat\'s requests so our server can call them.',
+                            <><Key>dreamstream_api_keys_v2</Key> <Key>dreamstream_openrouter_key</Key> <Key>dreamstream_flux_key</Key> <Key>dreamstream_mcp_servers</Key></>
                         ],
                         [
                             'Your work',

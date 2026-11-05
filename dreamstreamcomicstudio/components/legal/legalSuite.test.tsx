@@ -2,7 +2,7 @@ import React from 'react';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { PrivacyPolicy } from '../PrivacyPolicy';
@@ -14,6 +14,7 @@ import { CookiesNotice, DOCUMENTED_STORAGE_KEYS } from './CookiesNotice';
 import { CopyrightPolicy } from './CopyrightPolicy';
 import { AI_PROVIDERS, BROWSER_SERVICES, CORE, NOT_IN_USE, OTHER_SERVICES, SubprocessorsPage, TOOL_SERVICES } from './SubprocessorsPage';
 import {
+    ASSISTANT_SCRIPT_PREVIEW_CHARS,
     BROWSER_THIRD_PARTIES,
     DIRECT_AI_PROVIDERS,
     EVENT_ROOM_KEPT,
@@ -26,7 +27,7 @@ import {
     SUPPORT_EMAIL,
     YOUTUBE_TERMS_URL
 } from './legalFacts';
-import { LEGAL_DOCS, legalDocForPath, type LegalDocId } from './legalRoutes';
+import { LEGAL_DOCS, isLegalDocId, legalDocForPath, legalPath, type LegalDocId } from './legalRoutes';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -319,7 +320,11 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         }
         for (const h of ['basemaps.cartocdn.com', 'api.qrserver.com', 'cdn.jsdelivr.net', '*.codesandbox.io', 'stun.l.google.com']) expect(browser).toContain(h);
         expect(textOf(subs)).not.toMatch(/made by our server, not your browser/);
-        expect(textOf(subs.querySelector('#chat-tools') as HTMLElement)).toContain('loaded by your browser instead');
+        const tools = textOf(subs.querySelector('#chat-tools') as HTMLElement);
+        expect(tools).toContain('loaded by your browser instead');
+        expect(tools).not.toMatch(/contain only what the AI writes/);
+        expect(tools).toContain('plus your location (approximate, or precise if you shared it) when you search for places near you, and your country and language for news');
+        expect(textOf(subs.querySelector('#ai-models') as HTMLElement)).toContain(`the first ${ASSISTANT_SCRIPT_PREVIEW_CHARS} characters of its script`);
         for (const n of ['agify', 'Amadeus', 'Finnhub', 'FRED', 'similar public sources']) expect(textOf(subs)).toContain(n);
     });
 
@@ -327,7 +332,12 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
         const text = textOf(renderDoc('privacy').main);
         expect(text).toContain('it is stored with your account, encrypted with AES-256-GCM, so it works on all your devices');
         expect(text).toContain('The site-wide assistant:');
-        expect(text).toContain('that message is also saved as feedback automatically');
+        expect(text).toContain('that message is also saved automatically, as feedback and in our diagnostics log');
+        expect(text).toContain('the classic editor and Page Studio that older projects open in');
+        expect(text).toContain('It is not in Chat Studio, the current Comic Studio or shared comic pages, and its button is hidden in the comic reader.');
+        expect(text).toContain(`that project's story overview, the first ${ASSISTANT_SCRIPT_PREVIEW_CHARS} characters of its script, its style, layout and cover prompts`);
+        expect(text).toContain('sent to the place-search services (Foursquare or OpenStreetMap) when you ask for places near you');
+        expect(text).toContain('websites the AI reads that are only available over plain HTTP');
         expect(text).toContain('never the text of your message or the answer');
         expect(text).toContain('That location, with your timezone and language, is included in each request to the AI model');
         expect(text).toContain('plain HTTP');
@@ -354,6 +364,7 @@ describe('what the browser loads, the assistant, keys and other disclosures', ()
     it('Cookies: keys stored with the account survive clearing site data; no blanket "no tracking pixels" claim', () => {
         const text = textOf(renderDoc('cookies').main);
         expect(text).toContain('API keys you added while signed in stay stored with your account');
+        expect(text).toContain('the address and any access token of MCP servers you add');
         expect(text).not.toMatch(/tracking pixels in our apps/);
     });
 
@@ -407,6 +418,39 @@ describe('Back and Forward between documents opened in the app', () => {
         expect(onBack).toHaveBeenCalledTimes(1);
     });
 
+    it('Back to another view and then Forward reopens the document (the address and the view stay in step)', async () => {
+        // App in miniature: one view, the shared footer, the legal page, and App's address sync (replaceState).
+        const Shell: React.FC = () => {
+            const [view, setView] = React.useState<string>('home');
+            React.useEffect(() => {
+                window.history.replaceState({}, '', isLegalDocId(view) ? legalPath(view) : '/');
+            }, [view]);
+            if (view === 'privacy') return <PrivacyPolicy onBack={() => setView('home')} onOpenDoc={setView} />;
+            return (
+                <div>
+                    <p>Home view</p>
+                    <LegalMicroLinks onOpenPrivacy={() => setView('privacy')} onOpenTerms={() => setView('terms')} onOpenLegal={setView} onOpenFaq={vi.fn()} />
+                </div>
+            );
+        };
+        const swallow = (e: MouseEvent) => e.preventDefault();
+        document.addEventListener('click', swallow);
+        window.history.replaceState({}, '', '/');
+        render(<Shell />);
+        fireEvent.click(screen.getByRole('link', { name: 'Privacy Policy' }));
+        document.removeEventListener('click', swallow);
+        expect(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument();
+        expect(window.location.pathname).toBe('/privacy');
+
+        window.history.back();
+        await waitFor(() => expect(screen.getByText('Home view')).toBeInTheDocument());
+        expect(window.location.pathname).toBe('/');
+
+        window.history.forward();
+        await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Privacy Policy' })).toBeInTheDocument());
+        expect(window.location.pathname).toBe('/privacy');
+    });
+
     it('the shared footer adds a history entry too', () => {
         const swallow = (e: MouseEvent) => e.preventDefault();
         document.addEventListener('click', swallow);
@@ -446,7 +490,7 @@ describe('footers and other entry points reach the documents', () => {
     });
 
     it('support links go to the routed support mailbox, not the unrouted contact@', () => {
-        for (const f of ['components/layout/LegalMicroLinks.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx']) expect(read(f), f).not.toContain('contact@');
+        for (const f of ['components/layout/LegalMicroLinks.tsx', 'components/ComicReader.tsx', 'live/ui/legalLinks.tsx', 'live/components/Guide.tsx']) expect(read(f), f).not.toContain('contact@');
         expect(LIVE_LEGAL_LINKS.find((l) => l.label === 'Support')?.href).toBe(`mailto:${SUPPORT_EMAIL}?subject=Stream%20Studio%20support`);
         for (const id of ['acceptable-use', 'copyright'] as const) {
             expect(LIVE_LEGAL_LINKS.some((l) => legalDocForPath(new URL(l.href, 'https://dreamstreamstudio.ai').pathname) === id)).toBe(true);

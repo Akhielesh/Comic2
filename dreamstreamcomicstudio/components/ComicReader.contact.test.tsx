@@ -72,12 +72,12 @@ afterEach(() => {
 });
 
 describe('phone reader Info sheet', () => {
-  it('Contact writes to contact@dreamstreamstudio.ai', () => {
+  it('Contact writes to the routed support mailbox (support@dreamstreamstudio.ai)', () => {
     setPhone();
     render(<ComicReader project={project} onClose={vi.fn()} onUpdateProject={vi.fn()} onNavigate={vi.fn()} onOpenPrivacy={vi.fn()} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Info/ }));
     const sheet = screen.getByRole('dialog', { name: 'Comic Info' });
-    expect(within(sheet).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:contact@dreamstreamstudio.ai');
+    expect(within(sheet).getByRole('link', { name: 'Contact' })).toHaveAttribute('href', 'mailto:support@dreamstreamstudio.ai');
   });
 });

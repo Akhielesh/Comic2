@@ -109,6 +109,13 @@ export const RECENT_CALLS_KEPT = 60;
  */
 export const EVENT_ROOM_KEPT = { chatMessages: 200, rsvpNames: 500, logEntries: 400 } as const;
 
+/**
+ * How much of the open project's script the site-wide assistant receives (services/assistantContext.ts
+ * buildProjectSnapshot scriptPreview). Its per-scene, per-panel, per-character and per-comment samples
+ * never reach the model: server/src/ai/assistantPolicy.ts keeps three levels of nesting, which drops them.
+ */
+export const ASSISTANT_SCRIPT_PREVIEW_CHARS = 600;
+
 /** Stream Studio's people search (server/sql/live_accounts_and_monitor.sql live_search_people). */
 export const PEOPLE_SEARCH = { minLetters: 2, maxResults: 12 } as const;
 

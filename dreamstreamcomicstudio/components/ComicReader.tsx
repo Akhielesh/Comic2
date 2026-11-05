@@ -12,6 +12,7 @@ import { submitReview } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
+import { SUPPORT_EMAIL } from './legal/legalFacts';
 import { isStudioV4Project } from '../services/studioDeepLink';
 import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import { halftone } from './comicstudio/library/procedural/textures';
@@ -1174,9 +1175,9 @@ const ClassicComicReader: React.FC<ComicReaderProps> = ({
             <div className="text-xs uppercase font-bold text-slate-500">DreamStream</div>
             <div className="mt-1 flex flex-wrap items-center gap-x-1 text-[13px] font-semibold text-slate-600">
               <button type="button" onClick={leaveTo(onOpenPrivacy)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Privacy Policy</button>
-              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms &amp; Conditions</button>
+              <button type="button" onClick={leaveTo(onOpenTerms)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">Terms of Service</button>
               <button type="button" onClick={leaveTo(onOpenFaq)} className="min-h-[44px] rounded-lg px-2 hover:text-black hover:bg-slate-100">FAQs</button>
-              <a href="mailto:contact@dreamstreamstudio.ai" className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
+              <a href={`mailto:${SUPPORT_EMAIL}`} className="inline-flex min-h-[44px] items-center rounded-lg px-2 hover:text-black hover:bg-slate-100">Contact</a>
             </div>
           </div>
         </PhoneSheet>

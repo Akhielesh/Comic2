@@ -169,7 +169,7 @@ describe('phone reading mode', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More reader options' }));
     fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /Info/ }));
     const sheet = screen.getByRole('dialog', { name: 'Comic Info' });
-    expect(within(sheet).getByRole('button', { name: 'Terms & Conditions' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Terms of Service' })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'FAQs' })).toBeInTheDocument();
     fireEvent.click(within(sheet).getByRole('button', { name: 'Privacy Policy' }));
     await waitFor(() => expect(p.onOpenPrivacy).toHaveBeenCalled());

@@ -72,19 +72,66 @@ export const clearFragment = (): void => {
 };
 
 /**
+ * The history-state key under which the comic reader's back stack records its layers
+ * (components/comicstudio/mobile/backStack.ts HISTORY_LAYERS_KEY; legalRoutes.test.ts keeps the two equal).
+ */
+export const BACK_LAYERS_STATE_KEY = 'csLayers';
+
+/** The current history entry belongs to an open back-stack layer (the comic reader, a sheet). */
+const entryHasBackLayers = (): boolean => {
+  const state = window.history.state as Record<string, unknown> | null;
+  const layers = state && typeof state === 'object' ? state[BACK_LAYERS_STATE_KEY] : undefined;
+  return Array.isArray(layers) && layers.length > 0;
+};
+
+/**
  * Give an in-app move to a legal document its own history entry (App's address sync only replaces
  * the current one), so the browser's or the phone's Back returns to the page the reader came from
  * instead of leaving the site. The new entry carries no #fragment, so the document starts at its
- * top. LegalDocument's popstate listener maps Back and Forward to the right view again.
+ * top. Back and Forward onto it reopen the document (followLegalHistory).
+ *
+ * Not on an entry a back-stack layer owns: the reader leaves its layer first, which pops that
+ * layer's entry, and App's address sync then puts the document's path on the entry under it. A new
+ * entry here would hide the layer's entry from that leave and strand it in the history.
  */
 export const pushLegalPath = (id: LegalDocId): void => {
   try {
+    if (entryHasBackLayers()) return;
     const path = legalPath(id);
     if (window.location.pathname === path && !window.location.hash && !window.location.search) return;
     window.history.pushState({}, '', path);
   } catch {
     clearFragment();
   }
+};
+
+let openDoc: ((id: LegalDocId) => void) | null = null;
+let shownDoc: LegalDocId | null = null;
+let followingHistory = false;
+
+const onLegalPopState = () => {
+  const target = legalDocForPath(window.location.pathname);
+  if (target && target !== shownDoc && openDoc) openDoc(target);
+};
+
+/**
+ * Back and Forward onto a legal document's address open that document, also after it was closed:
+ * Back from /privacy to the dashboard, then Forward, lands on /privacy again, and the view has to
+ * follow (App has no history listener of its own). LegalDocument calls this while a document is
+ * shown, with App's view setter; the one listener stays for the rest of the visit and does nothing
+ * on other addresses or on a move between sections of the document already shown. Returns the
+ * cleanup for when the document closes.
+ */
+export const followLegalHistory = (doc: LegalDocId, open: (id: LegalDocId) => void): (() => void) => {
+  openDoc = open;
+  shownDoc = doc;
+  if (!followingHistory && typeof window !== 'undefined') {
+    window.addEventListener('popstate', onLegalPopState);
+    followingHistory = true;
+  }
+  return () => {
+    if (shownDoc === doc) shownDoc = null;
+  };
 };
 
 /**

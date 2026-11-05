@@ -38,6 +38,18 @@ All notable user-facing changes. Format loosely follows
   support@ mailbox. Back and Forward work between legal pages opened in the app. Tables read as
   cards on phones. Stream Studio links the Acceptable Use and Copyright policies. The sign-up
   checkbox says "Terms of Service".
+- **Legal suite second review (2026-11-05):** the site-wide assistant's entry now says where it
+  runs (the main site and the comics site, including the classic editor and Page Studio) and
+  that it receives the open project's story overview, the first 600 characters of its script
+  and its style, layout and cover prompts. Chat Studio's place searches near you send your
+  location to Foursquare or OpenStreetMap, and news gets your country and language; the
+  Subprocessors page and the Privacy Policy say so. Frustrated assistant messages are named as a
+  diagnostics event too, MCP servers you add (and their tokens) are in the Cookies notice, and
+  the plain-HTTP exception covers websites the AI reads over HTTP. The comic reader's phone
+  sheet says "Terms of Service" (so does the server's sign-up error) and its Contact goes to
+  support@. A legal link in the reader's footer no longer leaves a stale reader entry in
+  the history, and Forward after Back reopens a legal page instead of leaving its address over
+  another view.
 - **Legal wording that didn't match the product (2026-11-05):** the sign-in page's copyright
   line said "DreamStream Inc." (it is "DreamStream Studio"); the footer called the Terms
   "Terms & Conditions"; the Stream Studio help said "we never ask for your Google

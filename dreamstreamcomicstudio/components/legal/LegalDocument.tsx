@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect } from 'react';
 import { LEGAL_LAST_UPDATED, OPERATOR_NAME } from './legalFacts';
-import { LEGAL_DOCS, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
+import { LEGAL_DOCS, followLegalHistory, legalDoc, legalDocForPath, pushLegalPath, type LegalDocId } from './legalRoutes';
 
 // The shared frame of every legal page: title, date, the legal navigation, a table of contents and
 // numbered sections with stable #anchors. Theme tokens only (--ds-*, see index.css), so every page
@@ -145,20 +145,22 @@ const useLandOnFragment = () => {
 
 /**
  * Back and Forward between pages the reader opened in the app (pushLegalPath gives each its own
- * history entry): another legal document's path opens that document, any other path goes back to
- * where the page's Back button goes, and a move between #sections of this page is left to the browser.
+ * history entry): another legal document's path opens that document (followLegalHistory, which
+ * also covers a Forward after this page has closed), any other path goes back to where the page's
+ * Back button goes, and a move between #sections of this page is left to the browser.
  */
 const useLegalHistory = (doc: LegalDocId, onBack: () => void, onOpenDoc?: (id: LegalDocId) => void) => {
     useEffect(() => {
         if (!onOpenDoc) return;
+        const stopFollowing = followLegalHistory(doc, onOpenDoc);
         const onPop = () => {
-            const target = legalDocForPath(window.location.pathname);
-            if (target === doc) return;
-            if (target) onOpenDoc(target);
-            else onBack();
+            if (!legalDocForPath(window.location.pathname)) onBack();
         };
         window.addEventListener('popstate', onPop);
-        return () => window.removeEventListener('popstate', onPop);
+        return () => {
+            stopFollowing();
+            window.removeEventListener('popstate', onPop);
+        };
     }, [doc, onBack, onOpenDoc]);
 };
 

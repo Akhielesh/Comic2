@@ -7,11 +7,15 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RECORDING_RETENTION_MS, REPLAY_WINDOW_MS } from '../../live/protocol';
+import { sanitizeAssistantContext } from '../../server/src/ai/assistantPolicy';
+import { buildProjectSnapshot } from '../../services/assistantContext';
+import { assistantChrome } from '../../services/assistantChrome';
 import { FAIR_USE } from '../../shared/stream/usage';
 import { TOOL_SERVICES } from './SubprocessorsPage';
 import {
+    ASSISTANT_SCRIPT_PREVIEW_CHARS,
     BILLING_LIVE,
     BROWSER_THIRD_PARTIES,
     COMIC_PG_CEILING_UNDER_AGE,
@@ -27,6 +31,9 @@ import {
     STREAM_FAIR_USE,
     SUPPORT_EMAIL
 } from './legalFacts';
+
+// buildProjectSnapshot's module also loads artifacts from the database; nothing here touches it.
+vi.mock('../../services/db', () => ({ loadArtifactsForProject: async () => [] }));
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const read = (rel: string) => readFileSync(path.join(ROOT, rel), 'utf8');
@@ -230,18 +237,82 @@ describe('legal facts match the code: what Chat Studio, the assistant and the ac
         for (const col of ['user_id: ctx.userId', 'ip: str(ctx.ip', 'user_agent: str(ctx.userAgent', 'surface: str(loggablePath(e.surface)']) expect(store).toContain(col);
     });
 
-    it('the site-wide assistant runs on the pages the policy names and saves frustrated messages as feedback', () => {
+    it('the site-wide assistant runs on the pages the policy names and saves frustrated messages as feedback and as a diagnostics event', () => {
         const chrome = read('services/assistantChrome.ts');
         expect(chrome).toContain("const NOT_MOUNTED = new Set(['auth-callback', 'shared', 'chat', 'comicstudio', 'publiccomic']);");
+        // The classic editor and Page Studio (older projects) have it; the reader keeps it mounted with its button hidden.
+        for (const view of ['home', 'dashboard', 'privacy', 'settings', 'editor', 'pagestudio']) expect(assistantChrome(view).mounted, view).toBe(true);
+        expect(assistantChrome('reader')).toEqual({ mounted: true, hideLauncher: true });
         const assistant = read('components/UniversalAssistant.tsx');
         expect(assistant).toMatch(/const sentiment = detectSentiment\(message\);[\s\S]*?submitFeedback\(\{[\s\S]*?comment: message/);
+        expect(assistant).toMatch(/const sentiment = detectSentiment\(message\);\s*if \(sentiment\) \{\s*captureEvent\(\{\s*eventType: 'assistant_user_sentiment',[\s\S]*?\bmessage,/);
+        expect(read('server/src/services/telemetryStore.ts')).toMatch(/message: str\(typeof e\.message === 'string'/);
         expect(assistant).toMatch(/maskedEmail: maskEmail\(/);
+        expect(assistant).toContain('projectSnapshot: activeProject ? buildProjectSnapshot(activeProject) : undefined');
         expect(read('server/src/routes/assistant.ts')).toContain('The assistant runs on a free OpenRouter model.');
+    });
+
+    it('what the assistant gets about the open project: overview, script start and prompts; the server drops the per-item samples', () => {
+        const project = {
+            id: 'p1',
+            name: 'NAME-MARK',
+            updatedAt: 1,
+            state: {
+                step: 2,
+                overview: 'OVERVIEW-MARK',
+                script: `SCRIPT-MARK ${'x'.repeat(2000)}`,
+                stylePrompt: 'STYLE-MARK',
+                customLayoutPrompt: 'LAYOUT-MARK',
+                coverPrompt: 'COVER-MARK',
+                generationStatus: { isActive: true, progress: 40, currentStepDescription: 'STEP-MARK' },
+                scenes: [{ id: 's1', synopsis: 'SYNOPSIS-MARK', setting: 'SETTING-MARK', characters: ['CAST-MARK'] }],
+                panels: [{ id: 'pa', sceneId: 's1', description: 'PANEL-MARK', dialogue: 'DIALOGUE-MARK' }],
+                characters: [{ id: 'c1', name: 'CHARNAME-MARK', description: 'CHARDESC-MARK' }],
+                items: [{ id: 'i1', name: 'ITEMNAME-MARK', description: 'ITEMDESC-MARK' }],
+                locations: [{ id: 'l1', name: 'LOCNAME-MARK', description: 'LOCDESC-MARK' }],
+                comments: [{ id: 'k1', author: 'AUTHOR-MARK', text: 'COMMENT-MARK', likes: 1, dislikes: 0, createdAt: 1 }],
+                styleVariants: []
+            }
+        } as unknown as Parameters<typeof buildProjectSnapshot>[0];
+        const built = JSON.stringify(buildProjectSnapshot(project));
+        // The client builds samples of scenes, panels, cast and comments…
+        for (const mark of ['SYNOPSIS-MARK', 'DIALOGUE-MARK', 'CHARDESC-MARK', 'AUTHOR-MARK', 'COMMENT-MARK']) expect(built).toContain(mark);
+        // …and the server's sanitizer (what the model sees) keeps only the top of the snapshot.
+        const sent = sanitizeAssistantContext({ view: 'editor', projectSnapshot: buildProjectSnapshot(project) }, { isAuthenticated: true }).projectSnapshot as Record<string, unknown>;
+        const json = JSON.stringify(sent);
+        for (const mark of ['NAME-MARK', 'OVERVIEW-MARK', 'SCRIPT-MARK', 'STYLE-MARK', 'LAYOUT-MARK', 'COVER-MARK', 'STEP-MARK']) expect(json, mark).toContain(mark);
+        for (const mark of ['SYNOPSIS-MARK', 'SETTING-MARK', 'CAST-MARK', 'PANEL-MARK', 'DIALOGUE-MARK', 'CHARNAME-MARK', 'CHARDESC-MARK', 'ITEMDESC-MARK', 'LOCDESC-MARK', 'AUTHOR-MARK', 'COMMENT-MARK']) {
+            expect(json, mark).not.toContain(mark);
+        }
+        expect(String(sent.scriptPreview)).toHaveLength(ASSISTANT_SCRIPT_PREVIEW_CHARS);
     });
 
     it('the approximate location goes into the model prompt, and its lookup is plain HTTP', () => {
         expect(read('server/src/ai/chat.ts')).toContain('- Approximate user location: ');
         expect(read('server/src/ai/clientGeo.ts')).toContain('`http://ip-api.com/json/');
+    });
+
+    it('place searches near you send your location (Foursquare or OpenStreetMap), news gets your country, and the public refresh does the same', () => {
+        const registry = read('server/src/ai/tools/registry.ts');
+        expect(registry).toMatch(/const userLocation =\s*ctx\?\.location && typeof ctx\.location\.lat === 'number' && typeof ctx\.location\.lng === 'number'/);
+        expect(registry).toMatch(/findPlacesFoursquare\(\s*\{ query, near: near \|\| undefined, userLocation,/);
+        expect(registry).toMatch(/findPlaces\(\{ query, near: near \|\| undefined, userLocation \}/);
+        expect(read('server/src/ai/tools/foursquare.ts')).toContain("params.set('ll', `${args.userLocation.lat},${args.userLocation.lng}`)");
+        expect(read('server/src/ai/tools/places.ts')).toContain("anchor = { lat: args.userLocation.lat, lng: args.userLocation.lng, label: 'your location' }");
+        expect(registry).toContain('const region = ctx?.location?.country ||');
+        const chat = read('server/src/routes/chat.ts');
+        expect(chat).toMatch(/chatPublicRouter\.post\('\/tool-refresh'[\s\S]*?resolveClientGeo\(clientIpFromReq\(req\)\)[\s\S]*?location: clientContext\?\.location/);
+    });
+
+    it('the page reader also fetches plain-HTTP websites', () => {
+        expect(read('server/src/ai/tools/readArticle.ts')).toContain("if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;");
+    });
+
+    it('MCP servers (with any access token) stay in local storage and go with each chat request that turns them on', () => {
+        const mcp = read('services/mcpServers.ts');
+        expect(mcp).toContain("const STORAGE = 'dreamstream_mcp_servers';");
+        expect(mcp).toContain('{ headers: { Authorization: input.authorization.trim() } }');
+        expect(read('components/chat/AIChatPlatform.tsx')).toContain('mcpServers: getMcpServersByIds(session.mcpServers || [])');
     });
 
     it('project images sit in the public (unguessable, not listable) bucket; only references and quarantine are private', () => {

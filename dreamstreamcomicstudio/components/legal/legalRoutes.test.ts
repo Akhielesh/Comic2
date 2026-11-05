@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { LEGAL_DOCS, LEGAL_DOC_IDS, isLegalDocId, legalDocForPath, legalPath, syncLegalPath } from './legalRoutes';
+import { HISTORY_LAYERS_KEY } from '../comicstudio/mobile/backStack';
+import { BACK_LAYERS_STATE_KEY, LEGAL_DOCS, LEGAL_DOC_IDS, isLegalDocId, legalDocForPath, legalPath, syncLegalPath } from './legalRoutes';
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
@@ -59,6 +60,10 @@ describe('legal routes', () => {
     for (const id of LEGAL_DOC_IDS) expect(restorable).toContain(`'${id}'`);
     expect(app).toContain('legalDocForPath(window.location.pathname)');
     expect(app).toContain('syncLegalPath(url, currentView)');
+  });
+
+  it('reads the back stack\'s layers under the key the back stack writes them', () => {
+    expect(BACK_LAYERS_STATE_KEY).toBe(HISTORY_LAYERS_KEY);
   });
 
   it('is served by the SPA fallback, and the Pages middleware passes these paths through untouched', () => {

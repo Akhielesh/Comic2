@@ -1,9 +1,12 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { historyLayers, leaveLayer, pushLayer, resetBackStack } from '../comicstudio/mobile/backStack';
 import { LEGAL_DOCS } from '../legal/legalRoutes';
 import { LegalMicroLinks } from './LegalMicroLinks';
+
+afterEach(() => resetBackStack());
 
 describe('LegalMicroLinks', () => {
   it('sends Contact to the routed support mailbox on the domain we own', () => {
@@ -30,5 +33,24 @@ describe('LegalMicroLinks', () => {
     expect(onOpenPrivacy).toHaveBeenCalledTimes(1);
     expect(onOpenLegal).toHaveBeenCalledTimes(1);
     expect(onOpenLegal).toHaveBeenCalledWith('subprocessors');
+  });
+
+  it('under a back-stack layer (the comic reader), leaves the history to the layer: its entry is popped, none is added', async () => {
+    window.history.replaceState({}, '', '/?view=read&id=c1');
+    const id = pushLayer('reader:c1', vi.fn());
+    const withLayer = window.history.length;
+    expect(historyLayers()).toEqual([id]);
+    const openPrivacy = vi.fn();
+    // The reader's footer: each link leaves the reader's layer first, then opens the page.
+    render(<LegalMicroLinks onOpenPrivacy={() => leaveLayer(id, openPrivacy)} onOpenTerms={vi.fn()} onOpenFaq={vi.fn()} />);
+    const swallow = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener('click', swallow);
+    fireEvent.click(screen.getByRole('link', { name: 'Privacy Policy' }));
+    document.removeEventListener('click', swallow);
+    await waitFor(() => expect(openPrivacy).toHaveBeenCalledTimes(1));
+    // Back on the entry under the layer (App's address sync then puts /privacy on it): no stale reader entry.
+    expect(historyLayers()).toEqual([]);
+    expect(window.location.search).toBe('?view=read&id=c1');
+    expect(window.history.length).toBe(withLayer);
   });
 });
