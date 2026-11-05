@@ -8,7 +8,7 @@ import { DEFAULT_CAPS, type StudioCaps } from '../../../shared/comic/capabilitie
 import type { DocOp } from '../../../shared/comic/ops.js';
 import { conflictCardFor, conflictCardText, conflictToolNote, guardUserEdits, recordConflicts, styleWords, type BlockedEdit } from './conflictGuard.js';
 import { newSession, plannedDoc, testContext } from './orchestrator.fakes.js';
-import type { RecentCommit, StudioSession } from './session.js';
+import { RECENT_COMMITS_MAX, type RecentCommit, type StudioSession } from './session.js';
 import { createDirectorTurn } from './tools.js';
 
 const ON: StudioCaps = { ...DEFAULT_CAPS, liveAgent: { queue: false, steer: false, conflicts: true } };
@@ -93,6 +93,32 @@ describe('guardUserEdits', () => {
     // A turn that predates startRev is never guarded.
     session.commit([text('ln_a', 'Mine')], { origin: 'user' });
     expect(guardUserEdits(ctx, createDirectorTurn(), [text('ln_a', 'Theirs')]).blocked).toEqual([]);
+  });
+
+  it('when the recent-commit ring no longer reaches the turn start, every planned entity is held back and the gap is logged', () => {
+    // The real ring (no withRing stand-in): the creator commits past RECENT_COMMITS_MAX during one director turn, so
+    // the oldest of their commits since startRev are gone and the guard cannot tell what they touched.
+    const session = newSession(docWithBalloons());
+    const ctx = testContext(session, { caps: ON });
+    const turn = createDirectorTurn({ startRev: session.doc.rev });
+    const planned: DocOp[] = [text('ln_a', 'Run!'), move('ln_b', 0.7), { op: 'brief', patch: { title: 'Y' } }];
+    session.commit([{ op: 'brief', patch: { title: 'Mine 0' } }], { origin: 'user' });
+    // Still covered: nothing the creator committed touches ln_a or ln_b, so everything goes through.
+    expect(session.recentCommitsComplete(turn.startRev!)).toBe(true);
+    expect(guardUserEdits(ctx, turn, planned)).toEqual({ allowed: planned, blocked: [] });
+
+    for (let i = 1; i <= RECENT_COMMITS_MAX; i++) session.commit([{ op: 'brief', patch: { title: `Mine ${i}` } }], { origin: 'user' });
+    expect(session.recentCommitsComplete(turn.startRev!)).toBe(false);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { allowed, blocked } = guardUserEdits(ctx, turn, planned);
+    // Ops with no entity (the brief) still go; the line and the balloon wait for the creator.
+    expect(allowed).toEqual([{ op: 'brief', patch: { title: 'Y' } }]);
+    expect(blocked.map((b) => b.where.lineId)).toEqual(['ln_a', 'ln_b']);
+    expect(blocked.flatMap((b) => b.proposed)).toEqual([text('ln_a', 'Run!'), move('ln_b', 0.7)]);
+    expect(warn.mock.calls.map((c) => JSON.parse(String(c[0])))).toEqual([
+      expect.objectContaining({ level: 'warn', event: 'comic_conflict_ring_incomplete', startRev: turn.startRev, planned: 3 })
+    ]);
+    warn.mockRestore();
   });
 
   it('a restyle of several lines applies to the lines the creator did not restyle', () => {

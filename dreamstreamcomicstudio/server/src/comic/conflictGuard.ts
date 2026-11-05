@@ -15,6 +15,7 @@ import { conflictGuardOn } from '../../../shared/comic/capabilities.js';
 import { entityKeys, keysCollide, type EntityKey } from '../../../shared/comic/conflicts.js';
 import { LETTERING_PRESETS, type LetterStylePatch } from '../../../shared/comic/lettering/style.js';
 import { CLIENT_PATCHABLE_OPS, type DocOp } from '../../../shared/comic/ops.js';
+import { logger } from '../lib/logger.js';
 import { recentCommitsOf } from './session.js';
 import type { DirectorTurn } from './tools.js';
 import type { StudioContext } from './types.js';
@@ -436,14 +437,31 @@ export function userKeysSince(ctx: StudioContext, startRev: number): EntityKey[]
 }
 
 /**
+ * Whether the session's recent-commit ring still holds every commit after `startRev`. The ring keeps the last
+ * RECENT_COMMITS_MAX commits and RECENT_COMMITS_BYTES of ops (session.ts); past that it drops the oldest, so some of
+ * the creator's edits since the turn began would be unseen. A session without the ring (a test double) counts as
+ * complete: it has nothing to drop.
+ */
+const ringCovers = (ctx: StudioContext, startRev: number): boolean =>
+  (ctx.session as { recentCommitsComplete?: (sinceRev: number) => boolean }).recentCommitsComplete?.(startRev) ?? true;
+
+/**
  * Split `plannedOps` into the ones that may commit and the ones the creator's mid-turn edits block (plan §3 A3.1).
  * Off (caps.liveAgent.conflicts false), on a turn without a startRev, or when the creator committed nothing since,
- * it allows everything, exactly as before. Pure apart from reading the session; synchronous; never throws.
+ * it allows everything, exactly as before. When the recent-commit ring no longer reaches back to startRev
+ * (recentCommitsComplete false), every planned entity is held back and the gap is logged: unseen edits never lose to
+ * the director. Pure apart from reading the session (and that log line); synchronous; never throws.
  */
 export function guardUserEdits(ctx: StudioContext, turn: DirectorTurn, plannedOps: DocOp[]): GuardResult {
   const pass: GuardResult = { allowed: plannedOps, blocked: [] };
   if (!plannedOps.length || !conflictGuardOn(ctx.caps) || typeof turn.startRev !== 'number') return pass;
-  const mine = userKeysSince(ctx, turn.startRev);
+  let mine = userKeysSince(ctx, turn.startRev);
+  if (!ringCovers(ctx, turn.startRev)) {
+    // The ring dropped commits since the turn began, so the creator may have changed anything the director is about
+    // to touch. Never guess in the director's favour: hold every planned entity back and let the card ask.
+    mine = [...new Set([...mine, ...plannedOps.flatMap((op) => entityKeys(op))])];
+    logger.warn('comic_conflict_ring_incomplete', { projectId: ctx.projectId, startRev: turn.startRev, rev: ctx.session.doc.rev, planned: plannedOps.length });
+  }
   if (!mine.length) return pass;
   const hit = (key: EntityKey) => mine.some((k) => keysCollide(key, k));
   const doc = ctx.session.doc;
