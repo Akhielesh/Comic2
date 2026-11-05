@@ -4,12 +4,21 @@
  * tokens, no install scripts or @latest tools next to deploy secrets, Dependabot with a cooldown,
  * code owners on the risky paths, SRI on third-party scripts, a lockfile that only names the
  * npm registry, the dependency floors this phase set, and a security.txt that hasn't expired.
+ *
+ * PF-1 (PROGRAM3, perf lens F1): the classic wizard's jsPDF + html2canvas no longer load with every
+ * page. services/legacyPdfLoader.ts injects the same SRI-pinned cdnjs files when someone exports;
+ * "the classic wizard's PDF tools" below keeps index.html free of them, the pins identical to the
+ * licence records, the CSP open to them, and every caller on the loader.
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
+import { mainCsp } from '../../functions/_middleware';
+import { buildCsp } from '../../functions/_shared/csp';
+import { LEGACY_PDF_SCRIPTS } from '../../services/legacyPdfLoader';
+import { allowsUrl, parsePolicy } from './cspEval';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO = path.join(ROOT, '..');
@@ -144,7 +153,7 @@ describe('third-party code in the pages', () => {
   it('index.html pins every external script with Subresource Integrity', () => {
     const doc = new JSDOM(app('index.html')).window.document;
     const external = [...doc.querySelectorAll('script[src]')].filter((s) => /^https?:/i.test(s.getAttribute('src') ?? ''));
-    expect(external.length).toBeGreaterThan(0);
+    // Since PF-1 the page may carry none (the PDF tools load on demand); any that come back are pinned.
     for (const s of external) {
       expect(s.getAttribute('integrity'), s.getAttribute('src')!).toMatch(/^sha(384|512)-[A-Za-z0-9+/]+=*$/);
       expect(s.getAttribute('crossorigin'), s.getAttribute('src')!).toBe('anonymous');
@@ -158,6 +167,77 @@ describe('third-party code in the pages', () => {
     expect(code).not.toMatch(/https?:\/\//);
     expect(code).toMatch(/const MODEL_URL = '\/models\/yamnet\/yamnet-v1\.onnx'/);
     expect(code).toMatch(/MODEL_SHA256 = '[0-9a-f]{64}'/);
+  });
+});
+
+describe("the classic wizard's PDF tools (PF-1: loaded on demand, not with every page)", () => {
+  const PINS = Object.values(LEGACY_PDF_SCRIPTS);
+  const IS_LEGACY_PDF = /\/(jspdf|html2canvas)\//i;
+
+  // Reads the SOURCE index.html: Vite copies external <script src> and <link> tags into dist/index.html
+  // untouched (its only HTML transform, vite.config.ts dsSkinEverywherePlugin, strips one attribute), so
+  // what holds here holds for the built page. Green once DS-2 applies PF-1's index.html wave note.
+  it('index.html loads neither script, and warms no connection to cdnjs for them', () => {
+    const doc = new JSDOM(app('index.html')).window.document;
+    const legacy = [...doc.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')!).filter((src) => IS_LEGACY_PDF.test(src));
+    expect(legacy, 'move these to services/legacyPdfLoader.ts (deferred classic scripts hold the module entry back)').toEqual([]);
+    const warmed = [...doc.querySelectorAll('link[rel~="preconnect"], link[rel~="dns-prefetch"]')]
+      .map((l) => l.getAttribute('href') ?? '')
+      .filter((href) => /cdnjs\.cloudflare\.com/i.test(href));
+    expect(warmed).toEqual([]);
+  });
+
+  it('the loader pins exactly the cdnjs files the licence policy records, each SHA-512 SRI-pinned', () => {
+    const policy = JSON.parse(app('scripts/licence-policy.json')) as { externalScripts: { src: string; name: string; version: string }[] };
+    expect(PINS.map((p) => p.name).sort()).toEqual(['html2canvas', 'jspdf']);
+    for (const pin of PINS) {
+      expect(pin.src).toBe(`https://cdnjs.cloudflare.com/ajax/libs/${pin.name}/${pin.version}/${pin.src.split('/').pop()}`);
+      expect(pin.version).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(pin.integrity, pin.src).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/);
+      expect(policy.externalScripts, `${pin.src} needs its licence record (THIRD-PARTY-NOTICES)`).toContainEqual(expect.objectContaining({ src: pin.src, name: pin.name, version: pin.version }));
+    }
+    // Every CDN licence record is something a page or the loader still loads (no stale notices).
+    const loaded = new Set([
+      ...PINS.map((p) => p.src),
+      ...['index.html', 'live.html'].flatMap((f) => [...new JSDOM(app(f)).window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')!))
+    ]);
+    for (const record of policy.externalScripts) expect(loaded.has(record.src), record.src).toBe(true);
+  });
+
+  it('the CSP still lets the loader inject them: script-src(-elem) allows each pinned URL', () => {
+    const mainPage = 'https://dreamstreamstudio.ai/';
+    const sharePage = 'https://comics.dreamstreamstudio.ai/c/Ab3dEf6hIj9kLm2nP';
+    const policies = [
+      { name: 'main app (functions/_middleware.ts mainCsp)', policy: parsePolicy(mainCsp({ origin: 'https://dreamstreamstudio.ai' })), self: mainPage },
+      // A shared-comic page is the same SPA shell, and in-app navigation keeps its (enforced) policy.
+      { name: 'shared comic (functions/_shared/csp.ts buildCsp)', policy: parsePolicy(buildCsp({ hashes: { scripts: [], handlers: [] }, supabaseOrigin: 'https://bdjfmxfmhqhzvgrhbbzm.supabase.co', embed: false })), self: sharePage },
+    ];
+    for (const { name, policy, self } of policies) {
+      for (const pin of PINS) expect(allowsUrl(policy, 'script-src-elem', pin.src, self), `${name}: ${pin.src}`).toBe(true);
+    }
+  });
+
+  it('nothing reads the window globals directly: every caller awaits services/legacyPdfLoader.ts', () => {
+    // A direct read works only while index.html still carries the tags; after PF-1 it throws on export.
+    const GLOBAL_READ = /\bdeclare\s+(?:const|let|var)\s+(?:jspdf|html2canvas)\b|\bwindow\b[^;\n]*?\.(?:jspdf|html2canvas)\b/;
+    /** Call sites another package moves onto the loader (wave notes). An entry that no longer matches must go. */
+    const PENDING: Record<string, string> = {
+      'components/modals/ProjectInfoModal.tsx': 'DS-3 wave note (PF-1): buildPdfBlob awaits loadJsPdf()',
+    };
+    const roots = ['components', 'services', 'hooks', 'lib', 'App.tsx', 'index.tsx'];
+    const files: string[] = [];
+    const walk = (rel: string) => {
+      const abs = path.join(ROOT, rel);
+      if (!existsSync(abs)) return;
+      if (statSync(abs).isDirectory()) {
+        for (const name of readdirSync(abs)) if (name !== 'node_modules') walk(path.join(rel, name));
+      } else if (/\.(tsx?|jsx?)$/.test(rel) && !/\.(test|spec)\.[tj]sx?$/.test(rel)) files.push(rel.split(path.sep).join('/'));
+    };
+    roots.forEach(walk);
+    expect(files).toContain('services/legacyPdfLoader.ts');
+    const readers = files.filter((f) => f !== 'services/legacyPdfLoader.ts' && GLOBAL_READ.test(app(f)));
+    expect(readers.filter((f) => !PENDING[f]), 'await loadJsPdf() / loadHtml2Canvas() / loadLegacyPdf() instead').toEqual([]);
+    for (const f of Object.keys(PENDING)) expect(readers, `${f} is on the loader now: remove it from PENDING`).toContain(f);
   });
 });
 
