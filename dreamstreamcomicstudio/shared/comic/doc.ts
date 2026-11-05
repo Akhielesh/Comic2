@@ -411,6 +411,11 @@ export interface Line {
   lang?: string;
   /** Never translate this line (spell, made-up word, song). Never hashed. */
   noTranslate?: boolean;
+  /** A named lettering style this line uses (agent-editor plan §3 C7; LINKED: editing the style restyles every line
+   *  using it): a key of `letterStyle.named`. Optional; never part of a spec hash (pageSpecHash, planInputHash: a style
+   *  reference changes no drawn art). The publication fingerprint does count it once set (a restyle is a change since
+   *  publishing), appended only when present so old comics keep their fingerprint. */
+  styleId?: string;
 }
 
 export interface Panel {
@@ -955,12 +960,21 @@ export interface NextStep {
   usd?: number;
 }
 
+/** The nine cells of a panel or a page (agent-editor plan §3 B1 `Pos9`; the director's balloon positions). */
+export const POS9 = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const;
+export type Pos9 = (typeof POS9)[number];
+
 export type OptionVisual =
   | { kind: 'layout'; panels: number; layout?: string }
   | { kind: 'pages'; count: number }
   | { kind: 'preset'; presetId: string }
   | { kind: 'cast'; characterId: string }
-  | { kind: 'lettering'; presetId: string };
+  | { kind: 'lettering'; presetId: string }
+  // --- live agent (agent-editor plan §3 A3.3; K3): a "Which line?" / "Where?" option shows a picture ---
+  /** A crop of this balloon from its page. */
+  | { kind: 'balloon'; pageId: string; lineId: string }
+  /** A page thumbnail with one cell highlighted: of panel `panelN` (frame 'panel') or of the whole page (frame 'page'). */
+  | { kind: 'spot'; pageId: string; panelN?: number; cell: Pos9; frame: 'panel' | 'page' };
 
 export interface OptionChoice {
   id: string;
@@ -976,6 +990,51 @@ export interface NoticeFix {
   label: string;
   free: boolean;
   action: import('./ops.js').StudioAction;
+}
+
+// --- live agent (agent-editor plan §3 A3; K3): the creator's edit and the director's collided ---
+
+/**
+ * Bounds of a stored conflict card (A3: at most 50 stored ops, size-capped). The per-item, item, text and label caps are
+ * K3 choices for the lead to confirm. An op list is never cut: an item whose ops do not fit is kept with `proposed: []`
+ * and `tooBig`, and collisions past `items` are counted in `more`, so nothing the director held back vanishes unseen.
+ */
+export const CONFLICT_LIMITS = { items: 10, opsPerItem: 20, ops: 50, textChars: 300, labelChars: 120 } as const;
+/** Where two edits collided: ids for "Show me" (opens the page with that balloon selected) and the card's words. */
+export interface ConflictWhere {
+  pageId?: string;
+  panelId?: string;
+  lineId?: string;
+  /** "page 2 · panel 1 · line 2". */
+  label: string;
+}
+/**
+ * One collision (D3: the creator's edit always wins). `mine` is the creator's current version, `theirs` what the director
+ * would have written; `proposed` are the director's held-back ops, re-sanitized against the CURRENT doc when the creator
+ * picks theirs (resolve_conflict) and committed with origin 'director', so they are undoable.
+ */
+export interface ConflictItem {
+  id: string;
+  where: ConflictWhere;
+  mine: string;
+  theirs: string;
+  proposed: import('./ops.js').DocOp[];
+  /**
+   * The held-back edit could not be stored whole (over CONFLICT_LIMITS, or unreadable): `proposed` is [] and "Use the
+   * director's" refuses it in plain words ("That change is too big to apply from here; Show me opens it"), never a
+   * partial edit.
+   */
+  tooBig?: true;
+  /** Set once the creator answered (the card then shows the outcome, its buttons gone). */
+  resolved?: 'mine' | 'theirs';
+}
+/** "We both changed page 2 · panel 1." Yours vs the director's, side by side: [Keep mine] [Use the director's] [Show me]. */
+export interface ConflictCard {
+  type: 'conflict';
+  id: string;
+  items: ConflictItem[];
+  /** Collisions past CONFLICT_LIMITS.items, not on the card: the card says how many more it left alone ("…and 3 more"). */
+  more?: number;
 }
 
 /** Interactive cards that live inside the conversation. Every card renders LIVE doc state. */
@@ -1018,7 +1077,9 @@ export type Card =
       chargedUsd?: number;
     }
   // --- history (versions plan §3.3): ids only; renders by fetching from the owner API ---
-  | HistoryCard;
+  | HistoryCard
+  // --- live agent (agent-editor plan §3 A3; K3) ---
+  | ConflictCard;
 
 /** StudioAction type names (ops.ts defines the union and re-exports these). Spend actions may be gated. */
 export const SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
@@ -1038,7 +1099,9 @@ export const NON_SPEND_ACTION_TYPES: ReadonlySet<string> = new Set([
   // --- Ship 2 (pro plan §5.3): free editor actions ---
   'panelize_page', 'rebind_panels', 'apply_finding', 'flatten_page',
   // --- history (versions plan §3.3): every history path is free ---
-  'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative'
+  'history_save', 'history_restore', 'history_undo_ai', 'history_forget_photo', 'history_alternative',
+  // --- live agent (agent-editor plan §3 A3; K3): answering a conflict card is free ---
+  'resolve_conflict'
 ]);
 
 export type RenderTarget =
@@ -1059,6 +1122,8 @@ export interface Msg {
   suggestions?: string[];
   /** Acting chips (≤ DOC_LIMITS.nextSteps). `suggestions: string[]` stays for old clients. */
   nextSteps?: NextStep[];
+  /** A user note sent while the director was working ("Added while the director was working"; agent-editor plan §3 A2). */
+  steered?: true;
 }
 
 export interface ComicDoc {
@@ -1745,13 +1810,15 @@ const normalizePageShip2 = (page: Page): Page => {
 };
 
 const normalizeLine = (l: Line): Line => {
-  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l; // identity
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined && l.styleId === undefined) return l; // identity
   const next: Line = { ...l }; // key order kept
   const style = sanitizeLetterStylePatch(l.style);
   if (style) next.style = style;
   else delete next.style;
   if (typeof l.lang !== 'string' || !l.lang) delete next.lang;
   if (l.noTranslate !== true) delete next.noTranslate;
+  // A named style reference (agent-editor plan §3 C7): a short id; whether it names a saved style is the sanitizer's check.
+  if (typeof l.styleId !== 'string' || !l.styleId || l.styleId.length > 64) delete next.styleId;
   return next;
 };
 
@@ -1881,9 +1948,55 @@ export const normalizeNoticeCard = (card: Extract<Card, { type: 'notice' }>): Ex
   return out;
 };
 
-/** Cards of a message: `model_outage` cards are validated (dropped when malformed) and notice fix chips are
- *  validated; every other card is kept exactly as stored (their renderers read live doc state). Returns the SAME
- *  array when nothing changed. */
+const clipStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
+const optId = (v: unknown): string | undefined => (typeof v === 'string' && v && v.length <= 80 ? v : undefined);
+const isOpLike = (op: unknown): op is import('./ops.js').DocOp => isObject(op) && typeof op.op === 'string';
+
+/**
+ * A stored conflict card, well-formed (agent-editor plan §3 A3): items with an id, a where-label and both versions; at most
+ * CONFLICT_LIMITS ops (each an object naming its op — the server re-sanitizes them against the live doc on resolve).
+ * An item's op list is kept WHOLE or not at all: one that is over the per-item cap or the card's remaining budget, or
+ * holds anything that is not an op, becomes `proposed: []` + `tooBig`, so "Use the director's" can never apply half an
+ * edit. Items past CONFLICT_LIMITS.items add to `more`. Undefined when nothing usable is left; the SAME object when
+ * already clean (old docs stay identical).
+ */
+export const normalizeConflictCard = (value: unknown): ConflictCard | undefined => {
+  if (!isObject(value) || value.type !== 'conflict' || typeof value.id !== 'string' || !value.id) return undefined;
+  if (!Array.isArray(value.items)) return undefined;
+  let budget: number = CONFLICT_LIMITS.ops;
+  const items: ConflictItem[] = [];
+  for (const raw of value.items.slice(0, CONFLICT_LIMITS.items)) {
+    if (!isObject(raw) || typeof raw.id !== 'string' || !raw.id || !isObject(raw.where) || typeof raw.where.label !== 'string') continue;
+    const where: ConflictWhere = { label: clipStr(raw.where.label, CONFLICT_LIMITS.labelChars) };
+    for (const key of ['pageId', 'panelId', 'lineId'] as const) {
+      const id = optId(raw.where[key]);
+      if (id) where[key] = id;
+    }
+    const list: unknown[] = Array.isArray(raw.proposed) ? raw.proposed : [];
+    const whole = raw.tooBig !== true && list.length <= Math.min(CONFLICT_LIMITS.opsPerItem, budget) && list.every(isOpLike);
+    const item: ConflictItem = {
+      id: raw.id,
+      where,
+      mine: clipStr(raw.mine, CONFLICT_LIMITS.textChars),
+      theirs: clipStr(raw.theirs, CONFLICT_LIMITS.textChars),
+      proposed: whole ? (list as import('./ops.js').DocOp[]) : []
+    };
+    if (whole) budget -= list.length;
+    else item.tooBig = true;
+    if (raw.resolved === 'mine' || raw.resolved === 'theirs') item.resolved = raw.resolved;
+    items.push(item);
+  }
+  if (!items.length) return undefined;
+  const stored = typeof value.more === 'number' && Number.isInteger(value.more) && value.more > 0 ? value.more : 0;
+  const more = stored + Math.max(0, value.items.length - CONFLICT_LIMITS.items);
+  const next: ConflictCard = { type: 'conflict', id: value.id, items };
+  if (more) next.more = more;
+  return stableStringify(next) === stableStringify(value) ? (value as unknown as ConflictCard) : next;
+};
+
+/** Cards of a message: `model_outage` cards are validated (dropped when malformed), notice fix chips are validated and
+ *  conflict cards are validated (normalizeConflictCard; dropped when nothing usable is left); every other card is kept
+ *  exactly as stored (their renderers read live doc state). Returns the SAME array when nothing changed. */
 const normalizeCards = (cards: unknown): Card[] | undefined => {
   if (!Array.isArray(cards)) return undefined;
   let changed = false;
@@ -1901,6 +2014,10 @@ const normalizeCards = (cards: unknown): Card[] | undefined => {
       const next = normalizeNoticeCard(card);
       if (next !== card) changed = true;
       out.push(next);
+    } else if (isObject(card) && (card as { type?: unknown }).type === 'conflict') {
+      const next = normalizeConflictCard(card);
+      if ((next as unknown) !== card) changed = true;
+      if (next) out.push(next);
     } else out.push(card);
   }
   return changed ? out : (cards as Card[]);
@@ -2492,9 +2609,9 @@ export const displayAssetPaths = (doc: ComicDoc): string[] => {
 
 /** Keys that never affect drawn art. Lines without them keep object identity → identical JSON. */
 const hashableLine = (l: Line): Line => {
-  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined) return l;
+  if (l.style === undefined && l.lang === undefined && l.noTranslate === undefined && l.styleId === undefined) return l;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { style: _s, lang: _l, noTranslate: _n, ...rest } = l; // insertion order of the rest is preserved
+  const { style: _s, lang: _l, noTranslate: _n, styleId: _id, ...rest } = l; // insertion order of the rest is preserved
   return rest as Line;
 };
 

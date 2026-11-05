@@ -19,6 +19,8 @@ import { createHash } from 'node:crypto';
 import { getSupabaseAdmin } from './supabase.js';
 import { ASSISTANT_GEMINI_API_KEY, GEMINI_BASE_URL } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { CONNECTED_MEMORY_PRODUCT } from '../ai/privacy/connectorData.js';
+import { connectorProviderConfirmed } from '../ai/privacy/providerPolicies.js';
 
 export type MemoryKind = 'fact' | 'preference' | 'project' | 'style';
 
@@ -142,7 +144,13 @@ export const rememberUserMemories = async (
         kind: item.kind,
         content: item.content,
         content_hash: hashContent(item.content),
-        embedding: await embedText(item.content, 'RETRIEVAL_DOCUMENT'),
+        // Memory distilled from connected content is embedded through the platform Gemini key
+        // (ASSISTANT_GEMINI_API_KEY, else GEMINI_API_KEY) only once the owner confirmed that key's data
+        // terms for connected accounts (CONNECTOR_PROVIDERS_CONFIRMED, ai/privacy/providerPolicies.ts).
+        // Until then the row is stored without an embedding: full-text and recency retrieval still find it.
+        embedding: product === CONNECTED_MEMORY_PRODUCT && !connectorProviderConfirmed('gemini')
+          ? null
+          : await embedText(item.content, 'RETRIEVAL_DOCUMENT'),
         updated_at: new Date().toISOString()
       }))
     );
@@ -158,21 +166,44 @@ export const rememberUserMemories = async (
 };
 
 // ── Retrieval ───────────────────────────────────────────────────────────────────
-const fetchByVector = async (userId: string, queryEmbedding: number[]): Promise<UserMemoryRow[]> => {
+export interface MemoryRetrieveOptions {
+  /**
+   * Leave out memory distilled from a chat that carried, or may have carried, connected-account
+   * content (`product` CONNECTED_MEMORY_PRODUCT, ai/privacy/connectorData.ts). Set for a free-model
+   * turn of a user with connected accounts: free models never receive that memory, while the user's
+   * other memory still personalises the turn.
+   */
+  excludeConnected?: boolean;
+  /**
+   * Filled in by buildUserMemoryBlock: `connected` turns true when the block it returned includes a
+   * row distilled from connected content, so the engine can deny data collection for that call
+   * (ai/chat.ts). Callers that pass nothing are unchanged.
+   */
+  report?: { connected: boolean };
+}
+
+const withoutConnected = (rows: UserMemoryRow[]): UserMemoryRow[] => rows.filter((r) => r.product !== CONNECTED_MEMORY_PRODUCT);
+
+const fetchByVector = async (userId: string, queryEmbedding: number[], opts: MemoryRetrieveOptions = {}): Promise<UserMemoryRow[]> => {
+  // match_user_memories() has no product filter, so an excluding lookup asks for twice the rows and
+  // filters here (no SQL change). None left → the caller falls back to the filtered recency query.
   const { data, error } = await getSupabaseAdmin().rpc('match_user_memories', {
     p_user_id: userId,
     p_embedding: queryEmbedding,
-    p_limit: RETRIEVE_LIMIT
+    p_limit: opts.excludeConnected ? RETRIEVE_LIMIT * 2 : RETRIEVE_LIMIT
   });
   if (error) throw new Error(error.message);
-  return (data || []) as UserMemoryRow[];
+  const rows = (data || []) as UserMemoryRow[];
+  return opts.excludeConnected ? withoutConnected(rows).slice(0, RETRIEVE_LIMIT) : rows;
 };
 
-const fetchByText = async (userId: string, query: string): Promise<UserMemoryRow[]> => {
-  const { data, error } = await getSupabaseAdmin()
+const fetchByText = async (userId: string, query: string, opts: MemoryRetrieveOptions = {}): Promise<UserMemoryRow[]> => {
+  let q = getSupabaseAdmin()
     .from('user_memories')
     .select('id, product, kind, content, updated_at')
-    .eq('user_id', userId)
+    .eq('user_id', userId);
+  if (opts.excludeConnected) q = q.neq('product', CONNECTED_MEMORY_PRODUCT);
+  const { data, error } = await q
     .textSearch('content', query, { type: 'websearch', config: 'english' })
     .order('updated_at', { ascending: false })
     .limit(RETRIEVE_LIMIT);
@@ -180,32 +211,36 @@ const fetchByText = async (userId: string, query: string): Promise<UserMemoryRow
   return (data || []) as UserMemoryRow[];
 };
 
-const fetchRecent = async (userId: string, limit = RETRIEVE_LIMIT): Promise<UserMemoryRow[]> => {
-  const { data, error } = await getSupabaseAdmin()
+const fetchRecent = async (userId: string, limit = RETRIEVE_LIMIT, opts: MemoryRetrieveOptions = {}): Promise<UserMemoryRow[]> => {
+  let q = getSupabaseAdmin()
     .from('user_memories')
     .select('id, product, kind, content, updated_at')
-    .eq('user_id', userId)
-    .order('updated_at', { ascending: false })
-    .limit(limit);
+    .eq('user_id', userId);
+  if (opts.excludeConnected) q = q.neq('product', CONNECTED_MEMORY_PRODUCT);
+  const { data, error } = await q.order('updated_at', { ascending: false }).limit(limit);
   if (error) throw new Error(error.message);
   return (data || []) as UserMemoryRow[];
 };
 
 /** Raw memory rows relevant to a query (vector → FTS → recency). */
-export const retrieveUserMemories = async (userId: string, queryText: string): Promise<UserMemoryRow[]> => {
+export const retrieveUserMemories = async (
+  userId: string,
+  queryText: string,
+  opts: MemoryRetrieveOptions = {}
+): Promise<UserMemoryRow[]> => {
   const query = (queryText || '').trim();
   try {
     if (query) {
       const queryEmbedding = await embedText(query, 'RETRIEVAL_QUERY');
       if (queryEmbedding) {
-        const rows = await fetchByVector(userId, queryEmbedding);
+        const rows = await fetchByVector(userId, queryEmbedding, opts);
         if (rows.length) return rows;
       } else {
-        const rows = await fetchByText(userId, query).catch(() => []);
+        const rows = await fetchByText(userId, query, opts).catch(() => []);
         if (rows.length) return rows;
       }
     }
-    return await fetchRecent(userId);
+    return await fetchRecent(userId, RETRIEVE_LIMIT, opts);
   } catch (err) {
     logger.warn('user_memory_retrieve_failed', { message: (err as Error)?.message });
     return [];
@@ -215,10 +250,15 @@ export const retrieveUserMemories = async (userId: string, queryText: string): P
 /**
  * The system-prompt block injected before every model call (any provider, any
  * studio). Returns null when memory is off, empty, or unavailable.
+ * `opts.excludeConnected` leaves out memory distilled from connected content (see MemoryRetrieveOptions).
  */
-export const buildUserMemoryBlock = async (userId: string, queryText: string): Promise<string | null> => {
+export const buildUserMemoryBlock = async (
+  userId: string,
+  queryText: string,
+  opts: MemoryRetrieveOptions = {}
+): Promise<string | null> => {
   if (!(await isMemoryEnabled(userId))) return null;
-  const rows = await retrieveUserMemories(userId, queryText);
+  const rows = await retrieveUserMemories(userId, queryText, opts);
   if (!rows.length) return null;
   const lines: string[] = [];
   let used = 0;
@@ -227,6 +267,7 @@ export const buildUserMemoryBlock = async (userId: string, queryText: string): P
     if (used + line.length > BLOCK_CHAR_BUDGET) break;
     lines.push(line);
     used += line.length;
+    if (opts.report && row.product === CONNECTED_MEMORY_PRODUCT) opts.report.connected = true;
   }
   if (!lines.length) return null;
   return `\n\nUSER MEMORY (durable facts this user chose to have remembered across DreamStream products; use them to personalize, never recite them unprompted, never present them as things the user said in THIS conversation):\n${lines.join('\n')}`;

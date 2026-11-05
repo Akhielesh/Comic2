@@ -36,6 +36,8 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/travel-planner.md` | Travel planner: the `plan_trip` tool (coercion, Nominatim + Open-Meteo enrichment), `ItineraryArtifact`, the day-tabbed itinerary card, `/trip` skill + recipe, related tools and travel MCPs. |
 | `features/mcp-directory.md` | MCP support: per-user registry + SSRF guards, `/api/mcp` routes, tool proxying into the agentic loop, the 13-entry curated catalog, marketplace UI, and the outbound `/api/connect/mcp` endpoint. |
 | `features/comic-studio.md` | The finalized comic creation flow: Story/Cast/Pages stages, Phase 0 auto style anchor + reference sheets, soft gates, models, sharing. (ADR 0004 removed ComicForge + Test Lab.) |
+| `features/live-agent.md` | Comic Studio's live agent: the message queue, steering a running turn, conflict cards (the creator's edit wins), their flags, limits and the packages that fill the wave 0 stubs. |
+| `features/dialogue.md` | Comic Studio's dialogue understanding: the tool-hint fix, the dialogue vocabulary and pipeline stubs, the reserved `dialogue_edit` seat, named styles and the packages that fill them. |
 
 ## Conventions
 

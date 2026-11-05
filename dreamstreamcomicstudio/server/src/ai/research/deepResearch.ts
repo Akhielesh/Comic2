@@ -22,6 +22,8 @@ import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { composePersona } from '../persona.js';
 import { spentUsageOf, withSpentUsage, type MeteredUsage } from '../usage.js';
+import { isFreeModelId } from '../privacy/connectorData.js';
+import { connectorPrivacyActive } from '../privacy/scope.js';
 import type { ChatMessage, AIProviderId } from '../providers/types.js';
 import type {
   ApiUsage,
@@ -159,9 +161,20 @@ const runDeepResearchWith = async (p: DeepResearchParams, usageParts: ApiUsage[]
   const topic = p.topic.trim();
   const toolEvents: ChatToolEvent[] = [];
   const freeOnly = p.noPaidRetry === true;
+  // The planner runs on a free model by default. Inside a connector turn (ai/privacy/scope.ts) no
+  // free model may take it, so the choice is explicit (the swarm's rule, orchestrator.ts): the paid
+  // net the caller priced, or — Free only with a pinned paid model, a flagged paid turn — that same
+  // pinned model. Free-only never falls back to a paid pick otherwise.
+  const connectorRun = connectorPrivacyActive();
   const workerModel = freeOnly
-    ? await pickTextModel({ costPref: 'free-only' }).catch(() => p.model)
-    : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
+    ? connectorRun && !isFreeModelId(p.model)
+      ? p.model
+      : await pickTextModel({ costPref: 'free-only' }).catch(() => p.model)
+    : connectorRun
+      ? p.fallbackModel && !isFreeModelId(p.fallbackModel)
+        ? p.fallbackModel
+        : TEXT_FALLBACK
+      : await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
   const baseReq = {
     provider: p.provider,
     apiKey: p.apiKey,

@@ -4,6 +4,7 @@ import type { ChatSession } from '../../services/chatStorage';
 import { fetchFollowUps } from '../../services/chatApi';
 import type { ChatRequest } from '../../apiTypes';
 import { PILL, LABEL, HOVER_LIFT } from './studioDesign';
+import { connectorMarkerFor } from './connectorPrivacy';
 
 // Proactive follow-up suggestions. After the assistant finishes an answer, we ask a
 // fast model what THIS user is most likely to want next and render those as clickable
@@ -12,11 +13,13 @@ import { PILL, LABEL, HOVER_LIFT } from './studioDesign';
 // assistant turn, vanish while a new turn is streaming, and silently render nothing
 // when there's no useful suggestion (or no key configured).
 
-const buildMessages = (session: ChatSession): ChatRequest['messages'] =>
+// A notice turn is not part of the conversation; an answer connected-account content entered keeps
+// its provenance marker, so the follow-up helper treats this chat as connected (connectorPrivacy.ts).
+export const buildMessages = (session: ChatSession): ChatRequest['messages'] =>
   session.turns
-    .filter((t) => (t.role === 'user' || t.role === 'assistant') && !t.error && t.content.trim())
+    .filter((t) => (t.role === 'user' || t.role === 'assistant') && !t.error && !t.notice && t.content.trim())
     .slice(-6)
-    .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content.trim().slice(0, 8000) }));
+    .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content.trim().slice(0, 8000), ...connectorMarkerFor(t) }));
 
 export const FollowUpChips: React.FC<{
   session: ChatSession;
@@ -26,7 +29,7 @@ export const FollowUpChips: React.FC<{
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const lastTurn = session.turns[session.turns.length - 1];
   // Only suggest after a real, completed assistant answer.
-  const ready = !busy && lastTurn?.role === 'assistant' && !lastTurn.error && Boolean(lastTurn.content.trim());
+  const ready = !busy && lastTurn?.role === 'assistant' && !lastTurn.error && !lastTurn.notice && Boolean(lastTurn.content.trim());
   const anchorId = ready ? lastTurn.id : '';
   // Track which anchor turn the current suggestions belong to, so we clear stale chips
   // immediately when a new turn starts (rather than showing last turn's follow-ups).

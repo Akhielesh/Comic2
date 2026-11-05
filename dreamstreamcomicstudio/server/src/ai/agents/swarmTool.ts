@@ -35,6 +35,12 @@ export interface SwarmToolContext {
   noPaidRetry?: boolean;
   /** Free-only: the turn's free chain, carried by the synthesis (RunSwarmParams.fallbackModels). */
   fallbackModels?: string[];
+  /**
+   * The chat turn that offers this tool withholds connected-account content (a free turn): the
+   * swarm's agents get no connector tool (RunSwarmParams.withholdConnectorTools), because the
+   * swarm's answer is fed back to the turn's free model.
+   */
+  withholdConnectorTools?: boolean;
   timeoutMs?: number;
 }
 
@@ -67,6 +73,7 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         extraAgents: ctx.extraAgents,
         fallbackModel: ctx.noPaidRetry ? undefined : ctx.fallbackModel,
         ...(ctx.noPaidRetry ? { noPaidRetry: true, fallbackModels: ctx.fallbackModels } : {}),
+        ...(ctx.withholdConnectorTools ? { withholdConnectorTools: true } : {}),
         timeoutMs: ctx.timeoutMs,
         signal
       });

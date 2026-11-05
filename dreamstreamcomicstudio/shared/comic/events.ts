@@ -27,6 +27,30 @@ export interface StudioFocus {
   /** Selected overlays ('ly_…'). */
   layerIds?: string[];
 }
+// --- live agent (agent-editor plan §3 A2; K3 contract) ---
+/** Where the director is working right now (presence): the page editor outlines "Director is editing this balloon". */
+export interface ActivityWhere {
+  pageId?: string;
+  /** Balloons the running tool is changing (≤ STEER_LIMITS.whereLines). */
+  lineIds?: string[];
+}
+/**
+ * POST /api/comic/projects/:id/steer body (plan §3 A2): a note for the RUNNING director turn. Screened like a chat message,
+ * committed as a user message marked `steered`, and read by the director before its next model call. No turn running →
+ * error code NOT_RUNNING and the client queues the note instead.
+ */
+export interface SteerRequest {
+  text: string;
+  focus?: StudioFocus;
+}
+/** The steer route's success body: the id of the user message it committed. */
+export interface SteerResponse {
+  ok: true;
+  msgId: string;
+}
+/** Steering bounds (plan §3 A2): inbox size, extra director rounds a late note may add, presence ids per event. */
+export const STEER_LIMITS = { inbox: 3, extraRounds: 2, whereLines: 20 } as const;
+
 /** Optional quick-assign of one image attachment. */
 export type AttachmentTarget = RefOwner | { kind: 'new_character'; name: string; castKind?: CastKind } | null;
 
@@ -38,7 +62,7 @@ export type StudioEvent =
   /** Streaming assistant text for message `msgId` (append). */
   | { type: 'delta'; msgId: string; text: string }
   /** Agent / job activity for the live status line ("Drawing page 3…"). cost: tiny badge on the status line. */
-  | { type: 'activity'; id: string; label: string; phase: 'start' | 'end'; ok?: boolean; cost?: 'free' | 'text' | 'image' }
+  | { type: 'activity'; id: string; label: string; phase: 'start' | 'end'; ok?: boolean; cost?: 'free' | 'text' | 'image'; where?: ActivityWhere }
   /** Signed, short-lived URLs for storage paths referenced by the doc. */
   | { type: 'urls'; urls: Record<string, string> }
   /** `code` is one of STREAM_ERROR_CODES (additive strings; clients must tolerate unknown codes). */
@@ -67,7 +91,8 @@ export type StreamRequest =
 /**
  * Known `error` event codes (contract §7). FORBIDDEN (P2-AMEND, from P1-ROUTES) = a restricted account was refused
  * a spend, approve_gate, upload, publish, update_publication or regenerate_link; BUSY = another turn holds the
- * project; COOLDOWN = a short safety break. The list is additive: never switch on it exhaustively.
+ * project; COOLDOWN = a short safety break; NOT_RUNNING (agent-editor plan §3 A2) = a steer arrived with no director
+ * turn running (the client queues the note). The list is additive: never switch on it exhaustively.
  */
 export const STREAM_ERROR_CODES = [
   'CONTENT_POLICY',
@@ -77,7 +102,8 @@ export const STREAM_ERROR_CODES = [
   'LIMIT',
   'NOT_READY',
   'CONFLICT',
-  'NOT_AVAILABLE'
+  'NOT_AVAILABLE',
+  'NOT_RUNNING'
 ] as const;
 export type StreamErrorCode = (typeof STREAM_ERROR_CODES)[number];
 export const isStreamErrorCode = (code: unknown): code is StreamErrorCode =>
