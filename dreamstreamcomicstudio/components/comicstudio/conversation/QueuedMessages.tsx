@@ -3,8 +3,9 @@
 // Docked under the live activity line. Each note can be edited inline, moved up or down (dragged with a mouse),
 // removed, and the first one sent now ("Send now": into the running turn with steering on, otherwise Stop the
 // director, then send it — D2). The header says, in words, what the queue is waiting for: the director finishing this
-// step, an unanswered question or an open spend gate ("or Send anyway"), Stop ("Send now" · "Clear"), a reload
-// ("Send" · "Clear"), a plan_pages run, or another tab or device holding the turn ("Try again"). Never silent.
+// step, an unanswered question or an open spend gate ("or Send anyway"), a message that didn't go ("Try again or dismiss
+// it first, or Send anyway"), Stop ("Send now" · "Clear"), a reload ("Send" · "Clear"), a plan_pages run, or another tab
+// or device holding the turn ("Try again"). Never silent: an edit too long to wait keeps its editor open and says so.
 //
 // On a phone it is one chip, "Up next · 2", that opens a bottom sheet with the same controls. Renders nothing while
 // the queue is off (the controller has no `queue`) or empty.
@@ -13,7 +14,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Loader2, Pencil, Send, X } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { FOCUS_RING, MUTED, OVERLINE, PRESS, RADIUS_CONTROL, RADIUS_PANEL, RADIUS_PILL, STATUS_DOT, STATUS_INK, TRANSITION, type StatusState } from '../../chat/studioDesign';
-import { holdLine, noteFocusLabel, type QueueHold, type QueuedNote } from '../messageQueue';
+import { holdLine, noteFocusLabel, QUEUE_NOTE_MAX_CHARS, type QueueHold, type QueuedNote } from '../messageQueue';
 import type { ComicStudioController } from '../useStudio';
 import { AdaptiveSheet } from '../mobile/sheets/AdaptiveSheet';
 import { isPhoneLayout } from '../mobile/formFactor';
@@ -28,12 +29,21 @@ export interface QueuedMessagesProps {
 
 /** The tone of the dot beside the queue's line (always paired with its words). */
 const holdState = (hold: QueueHold | null, working: boolean): StatusState => {
-  if (hold === 'elsewhere' || hold === 'gate' || hold === 'question') return 'attention';
+  if (hold === 'elsewhere' || hold === 'gate' || hold === 'question' || hold === 'failed') return 'attention';
   if (hold === 'stopped' || hold === 'restored') return 'waiting';
   return working ? 'active' : 'waiting';
 };
 
 const ACTION_LABEL = { send_anyway: 'Send anyway', retry: 'Try again' } as const;
+
+/** What "Send now" does for this note right now, in words (its tooltip). */
+const sendNowTitle = (studio: Pick<ComicStudioController, 'messageBusy' | 'turnLocked' | 'queueSteers'>, note: Pick<QueuedNote, 'inboxPaths'>): string => {
+  // A steer carries text only: a note with photos stops the director instead.
+  if (studio.messageBusy && studio.queueSteers && !note.inboxPaths?.length) return 'Adds it to what the director is doing now';
+  if (studio.messageBusy) return 'Send this note now — the director stops its current step first';
+  if (studio.turnLocked) return 'Sends it as soon as the plan is in';
+  return 'Send this note now';
+};
 
 /** Small text buttons: 32 px with a mouse, 44 px on touch. */
 const TEXT_BTN = cn(
@@ -86,10 +96,12 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
   const photos = note.inboxPaths?.length ?? 0;
   const meta = [focus, photos ? `${photos} ${photos === 1 ? 'photo' : 'photos'}` : null].filter(Boolean).join(' · ');
   const stopping = studio.queueSendingNow === note.id;
+  // Up next would refuse it (it must still fit one message once drained): the editor stays open and says so.
+  const tooLong = draft.trim().length > QUEUE_NOTE_MAX_CHARS;
 
   const save = () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || text.length > QUEUE_NOTE_MAX_CHARS) return;
     if (text !== note.text) studio.editQueued?.(note.id, text);
     setEditing(false);
   };
@@ -139,6 +151,8 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
                 rows={2}
                 aria-label={`Edit note ${n}`}
                 onChange={(e) => setDraft(e.target.value)}
+                aria-invalid={tooLong || undefined}
+                aria-describedby={tooLong ? `queued-too-long-${note.id}` : undefined}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') {
                     e.preventDefault();
@@ -156,10 +170,15 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
                 )}
               />
               <div className="mt-1 flex flex-wrap items-center justify-end gap-1">
+                {tooLong && (
+                  <p id={`queued-too-long-${note.id}`} role="alert" className={cn('mr-auto min-w-0 text-[12px] [overflow-wrap:anywhere]', STATUS_INK.attention)}>
+                    Too long to wait in Up next. Shorten it, or send it once the director finishes this step.
+                  </p>
+                )}
                 <button type="button" onClick={cancelEdit} className={TEXT_BTN}>
                   Cancel
                 </button>
-                <button type="button" onClick={save} disabled={!draft.trim()} className={OUTLINE_BTN}>
+                <button type="button" onClick={save} disabled={!draft.trim() || tooLong} className={OUTLINE_BTN}>
                   Save
                 </button>
               </div>
@@ -180,7 +199,7 @@ const QueuedRow: React.FC<RowProps> = ({ note, index, count, studio, draggable, 
               onClick={() => void sendNow()}
               disabled={sending || stopping}
               aria-busy={sending || stopping || undefined}
-              title={studio.turnLocked ? 'Send this note now — the director stops its current step first' : 'Send this note now'}
+              title={sendNowTitle(studio, note)}
               className={cn(OUTLINE_BTN, 'mr-auto')}
             >
               {sending || stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}

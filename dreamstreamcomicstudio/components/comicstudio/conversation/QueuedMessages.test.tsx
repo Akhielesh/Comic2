@@ -7,7 +7,7 @@ import { QueuedMessages } from './QueuedMessages';
 import { ConversationPane } from './ConversationPane';
 import { makeFakeStudio } from './testing/fixtures';
 import { FormFactorProvider, formFactorFor } from '../mobile/useFormFactor';
-import type { QueuedNote } from '../messageQueue';
+import { QUEUE_NOTE_MAX_CHARS, type QueuedNote } from '../messageQueue';
 import type { ComicStudioController } from '../useStudio';
 
 const DESKTOP = formFactorFor({ w: 1440, h: 900, coarse: false });
@@ -93,6 +93,25 @@ describe('QueuedMessages', () => {
     expect(studio.editQueued).toHaveBeenLastCalledWith('n3', 'add two cats');
   });
 
+  it('an edit too long to wait keeps the editor open and says so — never dropped without a word', () => {
+    const studio = queueStudio();
+    renderAt(studio);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note 1' }));
+    const box = screen.getByRole('textbox', { name: 'Edit note 1' });
+    fireEvent.change(box, { target: { value: 'x'.repeat(QUEUE_NOTE_MAX_CHARS + 1) } });
+    expect(screen.getByRole('alert')).toHaveTextContent('Too long to wait in Up next.');
+    expect(box).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(studio.editQueued).not.toHaveBeenCalled();
+    expect(screen.getByRole('textbox', { name: 'Edit note 1' })).toHaveValue('x'.repeat(QUEUE_NOTE_MAX_CHARS + 1));
+    // Back within the bound, it saves.
+    fireEvent.change(box, { target: { value: 'x'.repeat(QUEUE_NOTE_MAX_CHARS) } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(studio.editQueued).toHaveBeenCalledWith('n1', 'x'.repeat(QUEUE_NOTE_MAX_CHARS));
+  });
+
   it('reorders with ↑ / ↓ (disabled at the ends) and by dragging with a mouse', () => {
     const studio = queueStudio();
     renderAt(studio);
@@ -135,12 +154,48 @@ describe('QueuedMessages', () => {
     expect(screen.getByRole('button', { name: /Stopping, then sending/ })).toBeDisabled();
   });
 
+  it("Send now's tooltip says what it will really do: steer, stop first, wait for the plan, or send", () => {
+    const titleWith = (over: Partial<ComicStudioController>, list: QueuedNote[] = notes) => {
+      const { unmount } = renderAt(queueStudio({ queue: list, ...over }));
+      const title = screen.getByRole('button', { name: /Send now/ }).getAttribute('title');
+      unmount();
+      return title;
+    };
+    expect(titleWith({ queueSteers: true })).toBe('Adds it to what the director is doing now');
+    // A steer carries text only: a note with photos stops the director first.
+    expect(titleWith({ queueSteers: true }, [notes[2], notes[0]])).toBe('Send this note now — the director stops its current step first');
+    expect(titleWith({ queueSteers: false })).toBe('Send this note now — the director stops its current step first');
+    expect(titleWith({ messageBusy: false, turnLocked: true })).toBe('Sends it as soon as the plan is in');
+    expect(titleWith({ messageBusy: false, turnLocked: false, queueHold: 'restored' })).toBe('Send this note now');
+  });
+
   it('every hold has its words and its one tap out', () => {
     const question = queueStudio({ queueHold: 'question', turnLocked: false, messageBusy: false });
     const { rerender } = renderAt(question);
     expect(screen.getByRole('status')).toHaveTextContent('Answer the question above first, or');
     fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
     expect(question.releaseQueue).toHaveBeenCalled();
+
+    // An open spend gate reads the same as an unanswered question (plan §3 A1).
+    const gate = queueStudio({ queueHold: 'gate', turnLocked: false, messageBusy: false });
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <QueuedMessages studio={gate} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Answer the question above first, or');
+    fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
+    expect(gate.releaseQueue).toHaveBeenCalled();
+
+    const failed = queueStudio({ queueHold: 'failed', turnLocked: false, messageBusy: false });
+    rerender(
+      <FormFactorProvider value={DESKTOP}>
+        <QueuedMessages studio={failed} />
+      </FormFactorProvider>
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('Your last message didn’t go. Try again or dismiss it first, or');
+    fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
+    expect(failed.releaseQueue).toHaveBeenCalled();
 
     const stopped = queueStudio({ queueHold: 'stopped', turnLocked: false, messageBusy: false });
     rerender(
