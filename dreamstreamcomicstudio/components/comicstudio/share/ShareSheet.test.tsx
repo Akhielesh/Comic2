@@ -135,6 +135,15 @@ describe('ShareSheet', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Safety checks are unavailable');
   });
 
+  it('a refusal with no words of its own says so in the house style (typographic apostrophe)', async () => {
+    const studio = studioWith(view({ visibility: 'private', status: null, slug: undefined, url: undefined }));
+    vi.mocked(api.publishComic).mockRejectedValue(new Error(''));
+    render(<ShareSheet studio={studio} open onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Link only' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Publish' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That didn’t work. Nothing changed — try again.');
+  });
+
   it('Private on a live link asks first, then unpublishes; "Get a new link" confirms too', async () => {
     const studio = studioWith(view());
     vi.mocked(api.unpublishComic).mockResolvedValue(view({ visibility: 'private', status: 'unpublished', slug: undefined }));

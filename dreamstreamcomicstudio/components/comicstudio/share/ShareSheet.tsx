@@ -160,7 +160,7 @@ export const ShareSheet: React.FC<ShareSheetProps> = ({ studio, open, onClose })
         setPublishAs(null);
         setConfirm(null);
       } catch (err) {
-        setError((err as Error)?.message || "That didn't work. Nothing changed — try again.");
+        setError((err as Error)?.message || 'That didn’t work. Nothing changed — try again.');
         // A refusal can still teach us something (the safety check records which page it
         // blocked): refresh readiness so "Publish without page N" can appear right away.
         studio.refreshPublication().catch(() => undefined);

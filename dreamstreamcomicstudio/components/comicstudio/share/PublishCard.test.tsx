@@ -46,6 +46,11 @@ describe('PublishCard', () => {
     expect(screen.getByText(/published pages stay the same/)).toBeInTheDocument();
   });
 
+  it('a failed card with no words of its own says so in the house style (typographic apostrophe)', () => {
+    render(<PublishCard card={card({ status: 'failed' })} message={msg} studio={makeFakeStudio()} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('That didn’t work. Nothing changed.');
+  });
+
   it('Not now declines', async () => {
     const studio = makeFakeStudio();
     render(<PublishCard card={card()} message={msg} studio={studio} />);
