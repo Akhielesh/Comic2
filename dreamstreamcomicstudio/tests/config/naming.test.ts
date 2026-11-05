@@ -75,6 +75,8 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     expect(landing.some((s) => /Browse the Library/.test(s))).toBe(true);
     expect(uiText('components/PublicGallery.tsx')).toContain('Library');
     expect(uiText('components/layout/StaticSiteHeader.tsx').filter((s) => s === 'Library')).toHaveLength(2);
+    // Its menu describes the shelf without the old word (DS-R0 note 6).
+    expect(uiText('components/layout/StaticSiteHeader.tsx').filter((s) => /\bgallery\b/i.test(s) && !isAddress(s))).toEqual([]);
     expect(uiText('components/modals/ProjectInfoModal.tsx')).toContain('Visible in the Library');
   });
 
@@ -107,6 +109,12 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
       ])
     );
     expect(uiText('components/comicstudio/share/PublishPanel.tsx')).toContain('It’s listed in the Library, and anyone with the link can read it.');
+    // The header's Share button and the chat's share card name the same two choices (DS-R0 notes 5, 9).
+    for (const file of ['components/comicstudio/share/ShareButton.tsx', 'components/comicstudio/share/ShareCardView.tsx']) {
+      const text = uiText(file);
+      expect(text, file).toEqual(expect.arrayContaining(['Library + link', 'Link only']));
+      expect(text.filter((s) => /\b(unlisted|public)\b/i.test(s) && !isAddress(s)), file).toEqual([]);
+    }
   });
 
   it('the board tab for every image in the comic is "Assets" (its id stays media)', () => {
@@ -114,5 +122,10 @@ describe('naming: Library, My comics, Link only / Library + link, Assets', () =>
     expect(text).toContain('Assets');
     expect(text).not.toContain('Media');
     expect(text).toContain('media');
+    // The dock's shortcut to it and the deleted-image hint use the same name (DS-R0 notes 1, 2).
+    for (const file of ['components/comicstudio/timeline/BookTimeline.tsx', 'components/comicstudio/timeline/VersionsCard.tsx']) {
+      expect(uiText(file).filter((s) => /\bMedia\b/.test(s)), file).toEqual([]);
+    }
+    expect(uiText('components/comicstudio/timeline/BookTimeline.tsx')).toEqual(expect.arrayContaining(['Assets', 'Open Assets: every image in this comic']));
   });
 });
