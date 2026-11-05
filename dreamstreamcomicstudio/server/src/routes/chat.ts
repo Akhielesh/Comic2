@@ -1018,7 +1018,7 @@ export const connectorContentEntered = (
  * A reply that connected-account content entered says so (`connectorData: true`) and is recorded in
  * the server's provenance store (ai/privacy/replyProvenance.ts), so a later free turn whose history
  * carries it is refused even though today's client sends history as plain text. The client echoing
- * the flag on that assistant turn (wave note) makes it exact without a lookup. Other replies are
+ * the flag on that assistant turn (components/chat/connectorPrivacy.ts) makes it exact without a lookup. Other replies are
  * unchanged.
  */
 const markConnectorData = <T extends { text?: string }>(p: PreparedChat, entered: boolean, payload: T): T => {

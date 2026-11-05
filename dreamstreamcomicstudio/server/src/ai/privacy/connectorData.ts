@@ -28,7 +28,7 @@
 //     connector content is recorded (a hash of its text, per user), and a later turn whose history
 //     contains that reply is recognised (`historyKnown`);
 //   - turns answered from connected content carry `connectorData: true` in their response, which
-//     the client echoes back on those assistant turns (wave note) — exact, with no lookup.
+//     the client echoes back on those assistant turns (components/chat/connectorPrivacy.ts) — exact, with no lookup.
 // Long-term memory distilled from such a conversation is a separate path, kept off free turns by
 // routes/chat.ts (CONNECTED_MEMORY_PRODUCT, withoutClientMemoryBlock below). See
 // docs/DATA_CONNECTORS.md, "Connected-account privacy".

@@ -20,6 +20,14 @@ import type { ChatArtifact, MapArtifact, AgentActivityEvent, AgentActivityArtifa
 import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { getAdminAccess } from '../../services/billing';
+import { isFreeOnly, setFreeOnly } from '../../services/freeOnlyMode';
+import {
+  connectedDataNoticeOf,
+  connectorMarkerFor,
+  mayRunOnFreeModel,
+  standardModelStep,
+  type ConnectedDataAction
+} from './connectorPrivacy';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -101,7 +109,7 @@ import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, prettyModelLabel, sourceLabel, type CatalogModel } from '../../services/modelCatalog';
 import { setActiveModelInfo } from '../../services/activeModelBeacon';
-import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
+import type { ChatMemoryResponse, ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory, generateChatTitle, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
@@ -125,7 +133,9 @@ import {
   deriveSessionTitle,
   getChatMemory,
   getLastActiveChatSessionId,
+  isChatMemoryConnected,
   isChatOwnedBy,
+  markChatMemoryConnected,
   listChatProjects,
   listChatSessions,
   saveChatProject,
@@ -180,7 +190,13 @@ const decodeTextAttachment = (dataUrl: string): string => {
   }
 };
 
-const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
+/**
+ * One stored turn as a request message. An assistant turn that connected-account content entered
+ * carries `connectorData: true` (the server's mark on its reply, or a connector tool among its tool
+ * events), so the server refuses a free-model turn of this chat without a lookup
+ * (components/chat/connectorPrivacy.ts).
+ */
+export const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
   const atts = turn.attachments || [];
   // Pasted long-text chips are folded back into the prompt so the model sees every word.
   let text = turn.content || '';
@@ -196,14 +212,34 @@ const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
     const parts: ChatMessagePart[] = [];
     if (text) parts.push({ type: 'text', text });
     for (const att of imageAtts) parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
-    return { role: turn.role, content: parts };
+    return { role: turn.role, content: parts, ...connectorMarkerFor(turn) };
   }
-  return { role: turn.role, content: text };
+  return { role: turn.role, content: text, ...connectorMarkerFor(turn) };
 };
+
+/** A turn that is part of the conversation the model sees: not a failed attempt, not a notice. */
+export const isHistoryTurn = (turn: ChatTurn): boolean => !turn.error && !turn.notice;
+
+/**
+ * The assistant turn a connected-data refusal leaves (connectorPrivacy.ts connectedDataNoticeOf): the
+ * server's copy as a calm notice, with what the attempt had started cleared. Never an error turn.
+ */
+export const toNoticeTurn = (
+  turn: ChatTurn,
+  notice: { kind: NonNullable<ChatTurn['notice']>['kind']; message: string }
+): ChatTurn => ({
+  ...turn,
+  artifacts: settleLiveTrace(turn.artifacts),
+  content: notice.message,
+  notice: { kind: notice.kind },
+  error: undefined,
+  reasoning: undefined,
+  durationMs: undefined
+});
 
 // Project a stored variant's fields onto the visible assistant turn (used when
 // finalizing a new answer and when the user flips between regenerated versions).
-const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
+export const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
   ...turn,
   content: v.content,
   model: v.model,
@@ -217,13 +253,26 @@ const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
   artifacts: v.artifacts,
   notices: v.notices,
   durationMs: v.durationMs,
-  error: v.error
+  error: v.error,
+  connectorData: v.connectorData,
+  notice: undefined
 });
 
-const composeSystemPrompt = (memory: string, persona?: string): string | undefined => {
+/**
+ * The persona plus the long-term memory block. Memory distilled from connected-account content
+ * (`memoryConnected`) is left out of a turn that may run on a free model (`freeTurn`): free models
+ * never receive connected content, and the server can only strip this block for users who still
+ * have a connection (docs/DATA_CONNECTORS.md). The persona is always kept.
+ */
+export const composeSystemPrompt = (
+  memory: string,
+  persona?: string,
+  privacy: { memoryConnected?: boolean; freeTurn?: boolean } = {}
+): string | undefined => {
   const parts: string[] = [];
   if (persona && persona.trim()) parts.push(persona.trim());
-  if (memory && memory.trim()) {
+  const withholdMemory = Boolean(privacy.memoryConnected && privacy.freeTurn);
+  if (memory && memory.trim() && !withholdMemory) {
     // Inject stored memory WITH a relevance guard. Without this the model forced every
     // stored fact onto every question — e.g. applying a stale "10 years of job-search
     // experience" note to a student's biology question. Memory is background, not a lens.
@@ -233,6 +282,76 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
     );
   }
   return parts.length ? parts.join('\n\n') : undefined;
+};
+
+/** What a finished generation returns (a chat, swarm or recipe reply). */
+type AnswerPayload = {
+  text?: string;
+  model?: string;
+  requestedModel?: string;
+  reasoningLevel?: ChatReasoningLevel;
+  webSearch?: boolean;
+  reasoning?: string;
+  citations?: ChatTurnVariant['citations'];
+  toolEvents?: ChatTurnVariant['toolEvents'];
+  images?: ChatTurnVariant['images'];
+  artifacts?: ChatTurnVariant['artifacts'];
+  notices?: ChatTurnVariant['notices'];
+  connectorData?: boolean;
+};
+
+/**
+ * The turn a finished generation leaves: the answer becomes a new version, shown as the active one.
+ * The server's `connectorData` mark is kept on that version (and so on the turn), so the answer goes
+ * back marked in every later request (toRequestMessage).
+ */
+export const withAnswer = (t: ChatTurn, res: AnswerPayload, durationMs: number, now = Date.now()): ChatTurn => {
+  const variant: ChatTurnVariant = {
+    content: res.text || t.content || '(no response)',
+    model: res.model,
+    requestedModel: res.requestedModel,
+    reasoningLevel: res.reasoningLevel,
+    webSearch: res.webSearch,
+    reasoning: res.reasoning,
+    citations: res.citations,
+    toolEvents: res.toolEvents,
+    images: res.images,
+    artifacts: settleLiveTrace(res.artifacts),
+    notices: res.notices,
+    durationMs,
+    createdAt: now,
+    ...(res.connectorData === true ? { connectorData: true } : {})
+  };
+  const variants = [...(t.variants || []), variant];
+  return { ...applyVariant(t, variant), variants, activeVariant: variants.length - 1 };
+};
+
+/**
+ * The system prompt of one turn: the persona and the user's long-term memory, except that memory
+ * flagged as distilled from connected-account content stays out of a turn that may run on a free
+ * model (Free only on, or a free model named: connectorPrivacy.ts mayRunOnFreeModel).
+ */
+export const turnSystemPrompt = (
+  userId: string | undefined,
+  persona: string | undefined,
+  model: { id?: string; isFree?: boolean }
+): string | undefined =>
+  composeSystemPrompt(getChatMemory(userId), persona, {
+    memoryConnected: isChatMemoryConnected(userId),
+    freeTurn: mayRunOnFreeModel({ freeOnly: isFreeOnly(), model: model.id, modelIsFree: model.isFree })
+  });
+
+/**
+ * Keep what POST /api/chat/memory answered: the merged memory when it changed (returned, so the UI
+ * can show it), and the connected-content flag when the server set it — sticky until the memory is
+ * cleared, even when this exchange added nothing new.
+ */
+export const storeMemoryUpdate = (userId: string, current: string, res: ChatMemoryResponse): string | null => {
+  const updated = typeof res.memory === 'string' ? res.memory : '';
+  const changed = Boolean(updated.trim()) && updated.trim() !== current.trim();
+  if (changed) setChatMemory(updated, userId);
+  if (res.connectorData === true) markChatMemoryConnected(userId);
+  return changed ? updated : null;
 };
 
 // When a turn ends — finishes, errors, or is STOPPED — any LIVE trace card must stop
@@ -800,23 +919,26 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // FIRST exchange — the previous "every other, skip the first" throttle meant something the
   // user said up front (name, location, what they're building) wasn't remembered until later.
   // It's cheap (a small, fast model call) and best-effort.
-  const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string, chatOwner: string | undefined) => {
+  const updateMemoryInBackground = (
+    priorTurns: ChatTurn[],
+    answerText: string,
+    chatOwner: string | undefined,
+    answerConnectorData = false
+  ) => {
     if (!user?.id || !answerText.trim()) return;
     // Facts learned from a chat go into its OWNER's memory only: a chat still on screen after
     // another tab switched this browser to a different account must not teach that account.
     if (!isChatOwnedBy(chatOwner, user.id)) return;
     const recent: ChatRequestMessage[] = priorTurns
-      .filter((t) => !t.error)
+      .filter(isHistoryTurn)
       .slice(-5)
       .map(toRequestMessage);
-    recent.push({ role: 'assistant', content: answerText });
+    recent.push({ role: 'assistant', content: answerText, ...(answerConnectorData ? { connectorData: true } : {}) });
     const current = getChatMemory(user.id);
     void updateChatMemory(recent, current)
-      .then(({ memory: updated }) => {
-        if (updated && updated.trim() && updated.trim() !== current.trim()) {
-          setChatMemory(updated, user.id);
-          setMemory(updated);
-        }
+      .then((res) => {
+        const next = storeMemoryUpdate(user.id, current, res);
+        if (next) setMemory(next);
       })
       .catch(() => {
         /* memory is best-effort */
@@ -848,6 +970,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     abortMap.current.set(sessionId, controller);
     // Per-turn timing for observability (the chat_turn telemetry event below).
     const turnStartedAt = Date.now();
+    // The answer text on screen so far (a refusal after some of it streamed is not a notice).
+    let streamedText = '';
 
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
@@ -858,7 +982,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       setSessionState((s) => ({
         ...s,
         turns: s.turns.map((t) =>
-          t.id === aiTurnId ? { ...t, content: '', reasoning: undefined, error: false, startedAt: turnStartedAt, durationMs: undefined } : t
+          t.id === aiTurnId
+            ? { ...t, content: '', reasoning: undefined, error: false, notice: undefined, startedAt: turnStartedAt, durationMs: undefined }
+            : t
         )
       }));
     } else {
@@ -869,7 +995,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     }
 
     try {
-      const reqMessages = baseTurns.filter((t) => !t.error).map(toRequestMessage);
+      const reqMessages = baseTurns.filter(isHistoryTurn).map(toRequestMessage);
       // Situational context (date/timezone/locale/units/coarse location) so the model
       // isn't flying blind on "today"/"latest"/"near me". Never prompts for permission.
       const clientContext = await gatherClientContext().catch(() => undefined);
@@ -891,7 +1017,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         source: reqSource,
         reasoningLevel: session.reasoningLevel,
         webSearch: session.webSearch,
-        systemPrompt: composeSystemPrompt(getChatMemory(user?.id), session.systemPrompt),
+        systemPrompt: turnSystemPrompt(user?.id, session.systemPrompt, {
+          id: reqModel,
+          isFree: reqModel ? catalog.get(reqModel)?.isFree : undefined
+        }),
         ...(clientContext ? { clientContext } : {}),
         ...(reqTools.length ? { tools: reqTools } : {}),
         // Custom agents only matter to the swarm (mode or tool); send them only then.
@@ -900,11 +1029,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         ...(session.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
       };
-      const onDelta = (chunk: string) =>
+      const onDelta = (chunk: string) => {
+        streamedText += chunk;
         setSessionState((s) => ({
           ...s,
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: t.content + chunk } : t))
         }));
+      };
       // Stream the reasoning trace live so the user sees the model "thinking".
       const onReasoning = (chunk: string) =>
         setSessionState((s) => ({
@@ -913,11 +1044,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }));
       // A new turn is starting after tools ran — clear the prior turn's streamed
       // pre-tool narration so it doesn't pile up above the real answer.
-      const onReset = () =>
+      const onReset = () => {
+        streamedText = '';
         setSessionState((s) => ({
           ...s,
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: '', reasoning: undefined } : t))
         }));
+      };
 
       // Live plan/agent trace → a swarm_trace artifact on the turn (shared by the swarm
       // path and swarm-backed recipes like /research and /market).
@@ -976,7 +1109,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
               toolEvents: outcome.toolEvents,
               images: outcome.images,
               artifacts: outcome.artifacts,
-              notices: outcome.notices
+              notices: outcome.notices,
+              connectorData: outcome.connectorData
             };
           })()
         : useSwarm
@@ -986,26 +1120,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
         ...s,
-        turns: s.turns.map((t) => {
-          if (t.id !== aiTurnId) return t;
-          const variant: ChatTurnVariant = {
-            content: res.text || t.content || '(no response)',
-            model: res.model,
-            requestedModel: res.requestedModel,
-            reasoningLevel: res.reasoningLevel,
-            webSearch: res.webSearch,
-            reasoning: res.reasoning,
-            citations: res.citations,
-            toolEvents: res.toolEvents,
-            images: res.images,
-            artifacts: settleLiveTrace(res.artifacts),
-            notices: res.notices,
-            durationMs: Date.now() - turnStartedAt,
-            createdAt: Date.now()
-          };
-          const variants = [...(t.variants || []), variant];
-          return { ...applyVariant(t, variant), variants, activeVariant: variants.length - 1 };
-        }),
+        turns: s.turns.map((t) => (t.id === aiTurnId ? withAnswer(t, res, Date.now() - turnStartedAt) : t)),
         updatedAt: Date.now()
       }));
       // Fold the tools that ran into local usage analytics (Settings → Tools).
@@ -1040,13 +1155,33 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
-      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId);
+      updateMemoryInBackground(baseTurns, res.text || '', session.ownerUserId, res.connectorData === true);
     } catch (err) {
       if (controller.signal.aborted) {
         // Stopped mid-run: settle the live agent trace so its card doesn't spin forever.
         updateSession(sessionId, (s) => ({
           ...s,
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, artifacts: settleLiveTrace(t.artifacts) } : t)),
+          updatedAt: Date.now()
+        }));
+        return;
+      }
+      // The calm refusals of connected-account privacy (a free model would have received this
+      // chat's connected content, or usage is used up and the free fallback is off for it): nothing
+      // was sent or spent, so the turn becomes an info notice with two ways forward — never an
+      // error turn, never "Couldn't complete that", never part of the history sent back.
+      const notice = streamedText.trim() ? null : connectedDataNoticeOf(err);
+      if (notice) {
+        captureEvent({
+          eventType: 'chat_connected_data_notice',
+          severity: 'info',
+          source: 'ai_chat',
+          sessionId,
+          metadata: { kind: notice.kind, requestedModel: reqModel, source: reqSource, swarm: Boolean(session.swarm), recipe: recipeRun?.recipeId }
+        });
+        updateSession(sessionId, (s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? toNoticeTurn(t, notice) : t)),
           updatedAt: Date.now()
         }));
         return;
@@ -1163,9 +1298,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (idx < 0 || turns[idx].role !== 'assistant') return;
 
     // Preserve the existing answer as version 1 if it isn't already tracked (older
-    // turns predate variant history), so regenerating never discards it.
+    // turns predate variant history), so regenerating never discards it. A notice is not an
+    // answer: re-running it replaces it.
     const target = turns[idx];
-    if (!target.variants || target.variants.length === 0) {
+    if ((!target.variants || target.variants.length === 0) && !target.notice) {
       const seed: ChatTurnVariant = {
         content: target.content,
         model: target.model,
@@ -1178,7 +1314,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         images: target.images,
         artifacts: target.artifacts,
         createdAt: target.createdAt,
-        error: target.error
+        error: target.error,
+        connectorData: target.connectorData
       };
       updateSession(activeSession.id, (s) => ({
         ...s,
@@ -1191,6 +1328,47 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const lastUser = [...baseTurns].reverse().find((t) => t.role === 'user');
     const { reqModel, reqSource, reqTools } = resolveRequest(lastUser?.content || '');
     await runGeneration({ sessionId: activeSession.id, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId: turnId });
+  };
+
+  // The calm connected-data notice's actions (connectorPrivacy.ts CONNECTED_DATA_ACTIONS).
+  //  - "Use a standard model": a free model pinned on this chat (or locked in Settings) is swapped in
+  //    the model picker; otherwise Free only chose the free model, so it is turned off (the notice
+  //    says so: "turn off Free only") and the refused message is sent again on a standard model.
+  //  - "New chat": a fresh chat with no connected content keeps working on free models.
+  //  - "API keys": Settings → API keys (the usage refusal's other way forward).
+  const handleNoticeAction = (turnId: string, action: ConnectedDataAction) => {
+    if (action === 'new-chat') {
+      handleNew();
+      setView('chat');
+      return;
+    }
+    if (action === 'api-keys') {
+      try {
+        window.location.assign('/?view=settings&tab=settings');
+      } catch {
+        /* navigation unavailable */
+      }
+      return;
+    }
+    if (!activeSession) return;
+    const lock = applyLockedChatModel({
+      locked: getLockedChatModel(),
+      hasOverride: false,
+      autoMode: Boolean(activeSession.autoMode),
+      sessionModelId: activeSession.modelId
+    });
+    const pinnedModel = lock?.id || (activeSession.autoMode ? null : activeSession.modelId);
+    const step = standardModelStep({
+      freeOnly: isFreeOnly(),
+      pinnedModel,
+      pinnedIsFree: pinnedModel ? catalog.get(pinnedModel)?.isFree : undefined
+    });
+    if (step === 'pick-model') {
+      setShowModelPicker(true);
+      return;
+    }
+    setFreeOnly(false);
+    void handleRegenerate(turnId);
   };
 
   // Edit a user message and resend: replace its text, drop everything after it, and
@@ -1375,6 +1553,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onRegenerate={handleRegenerate}
         onEditUserMessage={handleEditUserMessage}
         onSelectVariant={handleSelectVariant}
+        onNoticeAction={handleNoticeAction}
         onReasoningChange={(level) =>
           activeId && updateSession(activeId, (s) => ({ ...s, reasoningLevel: level, updatedAt: Date.now() }))
         }

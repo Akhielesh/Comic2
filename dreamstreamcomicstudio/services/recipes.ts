@@ -79,6 +79,8 @@ export interface RecipeRunOutcome {
   artifacts?: ChatArtifact[];
   structured?: unknown;
   activities?: string[];
+  /** Connected-account content entered this run's reply (the server marked it; echo it on the turn). */
+  connectorData?: boolean;
   error?: string;
 }
 
@@ -105,6 +107,7 @@ export const runRecipe = async (
     artifacts?: ChatArtifact[];
     structured?: unknown;
     activities?: string[];
+    connectorData?: boolean;
   } | null = null;
 
   await readSSEStream(res.body, ({ event, data }) => {
@@ -137,6 +140,7 @@ export const runRecipe = async (
       artifacts: final.artifacts,
       structured: final.structured,
       activities: final.activities,
+      ...(final.connectorData === true ? { connectorData: true } : {}),
       error
     };
   }

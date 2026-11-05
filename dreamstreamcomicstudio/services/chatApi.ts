@@ -1,5 +1,5 @@
 import { get, post, postStream, ApiError } from './apiClient';
-import type { AgentActivityEvent, ChatArtifact, ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
+import type { AgentActivityEvent, ChatArtifact, ChatMemoryResponse, ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
 
 /**
  * True when an error looks like a transport/connectivity failure rather than a
@@ -149,14 +149,15 @@ export const generateChatTitle = (
 /**
  * Distill durable facts about the user from a recent exchange and merge them into
  * their long-term memory. Returns the updated memory (or the existing one if there
- * was nothing new / no key configured). Best-effort — callers ignore failures.
+ * was nothing new / no key configured), and `connectorData: true` when the exchange
+ * may carry connected-account content. Best-effort — callers ignore failures.
  */
 export const updateChatMemory = (
   messages: ChatRequest['messages'],
   memory: string,
   options?: { signal?: AbortSignal }
-): Promise<{ memory: string }> =>
-  post<{ messages: ChatRequest['messages']; memory: string }, { memory: string }>(
+): Promise<ChatMemoryResponse> =>
+  post<{ messages: ChatRequest['messages']; memory: string }, ChatMemoryResponse>(
     '/api/chat/memory',
     { messages, memory },
     options

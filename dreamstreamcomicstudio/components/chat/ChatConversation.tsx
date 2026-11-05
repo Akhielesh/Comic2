@@ -14,6 +14,7 @@ import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
 import { ChatModelChip } from './ChatModelChip';
 import { FollowUpChips } from './FollowUpChips';
+import type { ConnectedDataAction } from './connectorPrivacy';
 import {
   CANVAS_BG, GLASS, HAIRLINE, MENU, MUTED, INK, TRANSITION, SHADOW_SOFT,
   CONTROL_BTN, PILL, HEADING, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
@@ -36,6 +37,8 @@ interface ChatConversationProps {
   onRegenerate: (turnId: string) => void;
   onEditUserMessage: (turnId: string, newText: string) => void;
   onSelectVariant: (turnId: string, index: number) => void;
+  /** An action on a calm connected-data notice turn (components/chat/connectorPrivacy.ts). */
+  onNoticeAction?: (turnId: string, action: ConnectedDataAction) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
@@ -148,6 +151,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onRegenerate,
   onEditUserMessage,
   onSelectVariant,
+  onNoticeAction,
   onReasoningChange,
   onWebToggle,
   onDreamstreamToggle,
@@ -365,6 +369,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               onRegenerate={turn.role === 'assistant' ? () => onRegenerate(turn.id) : undefined}
               onEdit={turn.role === 'user' ? (text) => onEditUserMessage(turn.id, text) : undefined}
               onSelectVariant={(index) => onSelectVariant(turn.id, index)}
+              onNoticeAction={turn.notice && onNoticeAction ? (action) => onNoticeAction(turn.id, action) : undefined}
               isLast={i === session.turns.length - 1}
             />
           ))
