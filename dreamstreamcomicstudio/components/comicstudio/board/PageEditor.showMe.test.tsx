@@ -48,6 +48,8 @@ describe('PageEditor: Show me pre-selects the balloon', () => {
       const { unmount } = render(<PageEditor studio={studio} doc={doc} pageId="pg_1" />);
       expect(document.querySelectorAll('[data-testid="balloon-hit"][aria-pressed="true"]')).toHaveLength(0);
       expect(screen.queryByTestId('lettering-inspector')).toBeNull();
+      // A line that is not on this page never reaches the chat focus, not even for one render.
+      expect(setSelectionCalls(studio).filter((sel) => sel?.lineIds?.includes('pg_1_gone'))).toEqual([]);
       unmount();
     }
   });
