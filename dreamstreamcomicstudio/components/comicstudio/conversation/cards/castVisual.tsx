@@ -2,12 +2,14 @@
 // non-human cast (animals, creatures, robots, toys, vehicles, props are first-class), the
 // "×3" group badge, the derived "Companion" label and a small avatar (sheet thumb, first
 // reference, or initials on a stable tint). Pure presentation; reads nothing but the
-// character it is given.
+// character it is given. The avatar loads the ≤ 480w variant of the sheet or reference (lazy, async
+// decode), never the full original, and never a blocked image (perf F2; see renderTile `tileSources`).
 
 import React from 'react';
 import { Bot, Car, Ghost, Package, PawPrint, ToyBrick, User, type LucideIcon } from 'lucide-react';
 import { CAST_KINDS, castKindOf, isCompanion, type AssetRef, type CastKind, type Character } from '../../../../shared/comic/doc';
 import { cx } from '../ui';
+import { tileSources } from './renderTile';
 
 export const KIND_NAME: Record<CastKind, string> = {
   person: 'Person',
@@ -82,7 +84,8 @@ export const initialsOf = (name: string) =>
 /** Square avatar: sheet art when ready, else the first reference, else initials (or the kind icon). */
 export const CastAvatar: React.FC<{
   character: Character;
-  urlFor: (asset?: AssetRef | string | null) => string | undefined;
+  /** The studio's signer (`studio.urlFor`); a width asks it for a stored variant. */
+  urlFor: (asset?: AssetRef | string | null, opts?: { width?: number }) => string | undefined;
   size?: number;
   busy?: boolean;
   /** Draw the "×3" group badge (off where the name line already says it). */
@@ -90,14 +93,25 @@ export const CastAvatar: React.FC<{
   className?: string;
 }> = ({ character: c, urlFor, size = 40, busy, showCount = true, className }) => {
   const kind = kindOf(c);
-  const url = c.sheet.status === 'ready' && c.sheet.asset ? urlFor(c.sheet.asset) : c.refs[0] ? urlFor(c.refs[0]) : undefined;
+  const src = tileSources(urlFor, c.sheet.status === 'ready' && c.sheet.asset ? c.sheet.asset : c.refs[0], `${size}px`);
+  const url = src.url;
   const n = groupCount(c);
   const badge = Math.max(14, Math.round(size * 0.42));
   return (
     <span className={cx('relative inline-block shrink-0', className)} style={{ width: size, height: size }}>
       <span className="block h-full w-full overflow-hidden rounded-xl" style={{ background: tintFor(c.id) }}>
         {url ? (
-          <img src={url} alt="" className="h-full w-full object-cover object-left" />
+          <img
+            src={url}
+            srcSet={src.srcSet}
+            sizes={src.srcSet ? src.sizes : undefined}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            draggable={false}
+            className="h-full w-full object-cover object-left"
+            {...(src.heavy ? { 'data-heavy-img': '' } : {})}
+          />
         ) : kind !== 'person' ? (
           <span className="grid h-full w-full place-items-center text-[#3d3a33]">
             <KindIcon kind={kind} className={size >= 32 ? 'h-4 w-4' : 'h-3 w-3'} />

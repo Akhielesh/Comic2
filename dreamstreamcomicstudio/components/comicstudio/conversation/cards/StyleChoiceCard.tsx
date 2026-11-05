@@ -2,6 +2,8 @@
 // finish; tap one to lock it as the comic's style (pick_style). "More options" draws a
 // fresh set (a gated spend like any other). Failed boards read calm (when + why, details on
 // tap) and, when several failed, one "Retry N failed" redraws just those directions.
+// Boards load as ≤ 480w variants (perf F2); a drawing board says how long it has taken against the
+// model's usual time, and which model draws it (styles M4).
 
 import React from 'react';
 import { Lock, Palette, RefreshCw, RotateCcw } from 'lucide-react';
@@ -10,7 +12,7 @@ import type { ComicStudioController } from '../../useStudio';
 import { useCostFormat } from '../cost';
 import { CardShell, GhostButton, plural } from '../ui';
 import { STYLE_DIRECTION_COUNT, quoteStyleOptions } from '../panels/StylePanel';
-import { RenderThumb } from './renderTile';
+import { RenderThumb, tileModel, tileSources } from './renderTile';
 import { failureSummary, retryAllFailed } from './RendersCard';
 import { useAction, useStudioSequenceGuard } from './useAction';
 
@@ -43,6 +45,7 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
     .filter((o) => o.render.status === 'failed')
     .map((o) => ({ target: { kind: 'style_option' as const, id: o.id }, render: o.render }));
   const retry = failed.length > 1 ? retryAllFailed(doc, failed, studio.byok) : null;
+  const drawnBy = tileModel(doc, 'style_option');
 
   const status = locked
     ? `Locked: ${doc.style.name || 'style'}`
@@ -62,13 +65,18 @@ export const StyleChoiceCard: React.FC<{ card: StyleChoiceData; studio: ComicStu
           {options.map((o) => {
             const ready = o.render.status === 'ready' && !!o.render.asset;
             const selected = locked === o.id;
-            const url = studio.urlFor(o.render.asset);
+            const src = tileSources(studio.urlFor, o.render.asset, '(max-width: 640px) 33vw, 200px');
             const thumb = (
               <RenderThumb
                 render={o.render}
                 label={o.name}
                 aspect="4 / 5"
-                url={url}
+                url={src.url}
+                srcSet={src.srcSet}
+                sizes={src.sizes}
+                heavy={src.heavy}
+                model={drawnBy.model}
+                typicalSec={drawnBy.typicalSec}
                 selected={selected}
                 onRetry={() =>
                   void run(`retry:${o.id}`, {
