@@ -57,8 +57,12 @@ const mem = vi.hoisted(() => ({
 vi.mock('../services/userMemory.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/userMemory.js')>()),
   isMemoryEnabled: async () => true,
-  buildUserMemoryBlock: async (_userId: string, _query: string, opts?: { excludeConnected?: boolean }) =>
-    opts?.excludeConnected ? mem.unmarkedBlock : mem.block,
+  // The full block always holds a marked row in these tests, so it reports one (services/userMemory.ts report).
+  buildUserMemoryBlock: async (_userId: string, _query: string, opts?: { excludeConnected?: boolean; report?: { connected: boolean } }) => {
+    if (opts?.excludeConnected) return mem.unmarkedBlock;
+    if (mem.block && opts?.report) opts.report.connected = true;
+    return mem.block;
+  },
   rememberUserMemories: async (userId: string, product: string, _session: string | null, items: { content: string }[]) => {
     mem.writes.push({ userId, product, items });
     return items.length;
@@ -160,7 +164,8 @@ const {
   CONNECTED_DATA_BUDGET_SENTENCE,
   CONNECTED_DATA_FREE_MODEL_CODE,
   CONNECTED_MEMORY_PRODUCT,
-  connectedDataFreeModelMessage
+  connectedDataFreeModelMessage,
+  messagesCarryConnectorData
 } = await import('../ai/privacy/connectorData.js');
 
 const used = (userId: string) =>
@@ -194,6 +199,8 @@ type Body = {
 };
 type Step = { toolCalls?: { id: string; name: string; arguments: string }[]; text?: string };
 const or = vi.hoisted(() => ({ bodies: [] as Body[], script: [] as Step[], fail: null as null | { status: number; body: unknown } }));
+// A direct provider (NVIDIA, OpenAI-compatible) on the platform key: every request body is recorded.
+const nv = vi.hoisted(() => ({ bodies: [] as Body[] }));
 const realFetch = globalThis.fetch;
 const reply = (body: Body) => {
   const step = or.script.shift();
@@ -204,6 +211,11 @@ const reply = (body: Body) => {
 };
 const fakeFetch = async (input: unknown, init?: { body?: string }) => {
   const url = String(input);
+  if (url.startsWith('https://integrate.api.nvidia.com/')) {
+    nv.bodies.push(JSON.parse(String(init?.body || '{}')) as Body);
+    const data = { model: 'nvidia-model', choices: [{ message: { content: 'Direct answer.' } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } };
+    return new Response(JSON.stringify(data), { status: 200, headers: { 'content-type': 'application/json' } });
+  }
   if (!url.startsWith('https://openrouter.ai/')) return realFetch(input as string, init as RequestInit);
   const body = JSON.parse(String(init?.body || '{}')) as Body;
   or.bodies.push(body);
@@ -225,7 +237,14 @@ app.use(express.json({ limit: '10mb' }));
 app.use((req, _res, next) => {
   const r = req as unknown as Record<string, unknown>;
   r.user = { id: String(req.header('x-test-user') || 'user-1'), email: 'tester@example.com' };
-  r.apiKeys = { providerKeys: { openrouter: { key: 'sk-platform', byok: false } } };
+  // `x-test-nvidia: platform | byok` adds an NVIDIA key (the platform's, or the user's own).
+  const nvidiaKey = req.header('x-test-nvidia');
+  r.apiKeys = {
+    providerKeys: {
+      openrouter: { key: 'sk-platform', byok: false },
+      ...(nvidiaKey ? { nvidia: { key: 'nv-key', byok: nvidiaKey === 'byok' } } : {})
+    }
+  };
   next();
 });
 app.use('/api/chat', chatRouter);
@@ -246,6 +265,8 @@ afterAll(async () => {
 });
 beforeEach(() => {
   or.bodies = [];
+  nv.bodies = [];
+  delete process.env.CONNECTOR_PROVIDERS_CONFIRMED;
   or.script = [];
   or.fail = null;
   mcp.nango = false;
@@ -628,11 +649,15 @@ describe('memory distilled from connected content never reaches a free model', (
     expect(sys).toContain('Answer like a pirate.');
   });
 
-  it('a plain user’s free turn keeps both memories (unchanged)', async () => {
+  it('a plain user’s free turn keeps their unflagged client memory and the unmarked server memory', async () => {
     mem.block = MEMORY_BLOCK;
+    mem.unmarkedBlock = UNMARKED_BLOCK;
     await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
     const sys = systemText(turnBodies()[0]);
-    expect(sys).toContain('Planning the launch with Dana');
+    // Marked server rows stay off every free turn, connections or not (a user may have removed them all).
+    expect(sys).toContain('Likes oceanography');
+    expect(sys).not.toContain('Planning the launch with Dana');
+    // The client memory is not flagged: kept, as before.
     expect(sys).toContain('Dana launch Friday');
   });
 
@@ -725,5 +750,240 @@ describe('a connector swarm run holds for its paid planner and agents', () => {
 
     const plainId = user('plain');
     expect(await holdOf('/api/chat/swarm', plainId)).toBeCloseTo(await holdOf('/api/chat', plainId), 9);
+  });
+});
+
+// ── Review fixes, round 2 ──────────────────────────────────────────────────────────────────────
+const connectorTools = (b: Body) => toolNames(b).filter((n) => /^(gmail_|drive_|calendar_|sheets_|connected_data_|maps_lookup|nango_call_api|mcp_nango_)/.test(n));
+
+describe('a free turn’s swarm never reads a connected account', () => {
+  const ASK_CAL = 'What is on my calendar this week, and the weather?';
+  const PLAN = { text: '[{"agent":"scheduling","task":"check the calendar this week"}]' };
+
+  it('the run_agent_swarm meta-tool on a pinned free model (Free only off): no connector tool, no paid swap, nothing connected sent', async () => {
+    or.script = [
+      { toolCalls: [{ id: 's1', name: 'run_agent_swarm', arguments: JSON.stringify({ goal: ASK_CAL }) }] },
+      PLAN,
+      { text: 'I could not see a calendar.' },
+      { text: 'No calendar was checked.' },
+      { text: 'Here is your week.' }
+    ];
+    const r = await post('/api/chat', { messages: [{ role: 'user', content: ASK_CAL }], model: FREE_B, tools: ['run_agent_swarm'] }, { 'x-test-user': user('connected') });
+    expect(r.status).toBe(200);
+    const bodies = turnBodies();
+    // The main turn, the planner, the agent, the synthesis and the main turn's answer.
+    expect(bodies.length).toBeGreaterThanOrEqual(4);
+    for (const b of bodies) {
+      expect(connectorTools(b)).toEqual([]);
+      // No connector call, output or context block in anything the free model received.
+      expect(messagesCarryConnectorData(b.messages)).toBe(false);
+      // Never swapped to the paid net for privacy: every call runs on a free model, with no deny.
+      expect(/:free$/.test(b.model)).toBe(true);
+      expect('provider' in b).toBe(false);
+    }
+    expect(r.json && 'connectorData' in r.json).toBe(false);
+  });
+
+  it('/swarm on a pinned free model (Free only off): the same', async () => {
+    or.script = [PLAN, { text: 'I could not see a calendar.' }, { text: 'No calendar was checked.' }];
+    const res = await postStream('/api/chat/swarm', { messages: [{ role: 'user', content: ASK_CAL }], model: FREE_B }, { 'x-test-user': user('connected') });
+    expect(res.text).toContain('event: final');
+    const bodies = turnBodies();
+    expect(bodies.length).toBeGreaterThanOrEqual(3);
+    for (const b of bodies) {
+      expect(connectorTools(b)).toEqual([]);
+      expect(messagesCarryConnectorData(b.messages)).toBe(false);
+      expect(/:free$/.test(b.model)).toBe(true);
+      expect('provider' in b).toBe(false);
+    }
+  });
+
+  it('an unflagged paid swarm whose agent read a connector is still marked, and its reply recorded', async () => {
+    // A user with no connections here: the turn itself carries nothing connected (no deny on the planner).
+    const id = user('plain');
+    const ask = { messages: [{ role: 'user', content: 'Sort out Friday for me' }] };
+    or.script = [
+      { text: '[{"agent":"scheduling","task":"look at Friday"}]' },
+      { toolCalls: [{ id: 'k1', name: 'calendar_agenda', arguments: '{}' }] },
+      { text: 'Friday is open after 2pm.' },
+      { text: 'You are free after 2pm.' }
+    ];
+    const final = streamFinal((await postStream('/api/chat/swarm', ask, { 'x-test-user': id })).text);
+    expect('provider' in turnBodies()[0]).toBe(false);
+    expect(final?.connectorData).toBe(true);
+    // Recorded: the same reply sent back as plain text on a Free only turn is refused.
+    or.bodies = [];
+    const history = [...ask.messages, { role: 'assistant', content: 'You are free after 2pm.' }, { role: 'user', content: 'Thanks' }];
+    const again = await post('/api/chat', { messages: history }, { 'x-test-user': id, 'X-Free-Only': 'true' });
+    expect(again.status).toBe(409);
+    expect(or.bodies).toHaveLength(0);
+  });
+});
+
+describe('the SSE meta event says whether the turn may carry connected content', () => {
+  it('/stream and /swarm: true for a connected user’s paid turn, false for a plain one', async () => {
+    const metaOf = (text: string) => JSON.parse(/event: meta\ndata: (.*)\n/.exec(text)![1]);
+    expect(metaOf((await postStream('/api/chat/stream', ASK_EMAIL, { 'x-test-user': user('connected') })).text).connectorPrivacy).toBe(true);
+    expect(metaOf((await postStream('/api/chat/stream', ASK_PLAIN, { 'x-test-user': user('plain') })).text).connectorPrivacy).toBe(false);
+    expect(metaOf((await postStream('/api/chat/swarm', ASK_PLAIN, { 'x-test-user': user('connected') })).text).connectorPrivacy).toBe(true);
+  });
+});
+
+describe('memory distilled from connected content, for a user with no connections left', () => {
+  const MEMORY_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Planning the launch with Dana on Friday\n- Likes oceanography';
+  const UNMARKED_BLOCK = '\n\nUSER MEMORY (durable facts):\n- Likes oceanography';
+  const CLIENT_MEMORY =
+    'Answer like a pirate.\n\nBackground facts about the user (from earlier conversations) — use ONLY when they are clearly relevant to the current question:\n- Dana launch Friday\n\n' +
+    'Relevance rules: treat these as optional background, never a frame. If stored facts seem to contradict the current message, trust the current message.';
+
+  it('a free turn never gets the marked server rows, nor the client memory the client flagged', async () => {
+    mem.block = MEMORY_BLOCK;
+    mem.unmarkedBlock = UNMARKED_BLOCK;
+    await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY, memoryConnected: true }, { 'x-test-user': user('plain'), 'X-Free-Only': 'true' });
+    const sys = systemText(turnBodies()[0]);
+    expect(sys).not.toContain('Planning the launch with Dana');
+    expect(sys).not.toContain('Dana launch Friday');
+    expect(sys).toContain('Answer like a pirate.');
+    expect(sys).toContain('Likes oceanography');
+  });
+
+  it('the usage re-plan onto free models strips flagged client memory too', async () => {
+    const id = user('plain');
+    exhaust(id);
+    const r = await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY, memoryConnected: true }, { 'x-test-user': id });
+    expect(r.status).toBe(200);
+    const [body] = turnBodies();
+    expect(/:free$/.test(body.model)).toBe(true);
+    expect(systemText(body)).not.toContain('Dana launch Friday');
+    expect(systemText(body)).toContain('Answer like a pirate.');
+  });
+
+  it('a paid turn carrying flagged client memory, or marked server rows, denies data collection', async () => {
+    await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY, memoryConnected: true }, { 'x-test-user': user('plain') });
+    const [flagged] = turnBodies();
+    expect(systemText(flagged)).toContain('Dana launch Friday');
+    expect(flagged.provider).toEqual(DENY);
+    expect(anyFree(flagged)).toBe(false);
+
+    or.bodies = [];
+    mem.block = MEMORY_BLOCK;
+    await post('/api/chat', ASK_PLAIN, { 'x-test-user': user('plain') });
+    const [marked] = turnBodies();
+    expect(systemText(marked)).toContain('Planning the launch with Dana');
+    expect(marked.provider).toEqual(DENY);
+
+    // Unflagged memory and no marked rows: unchanged.
+    or.bodies = [];
+    mem.block = null;
+    await post('/api/chat', { ...ASK_PLAIN, systemPrompt: CLIENT_MEMORY }, { 'x-test-user': user('plain') });
+    expect('provider' in turnBodies()[0]).toBe(false);
+  });
+
+  it('a paid reply that drew on marked server rows is marked and recorded, and its auto-memory stays marked', async () => {
+    // No connections left: nothing else makes this conversation connected.
+    const id = user('plain');
+    mem.block = MEMORY_BLOCK;
+    or.script = [{ text: 'Your launch with Dana is on Friday.' }, { text: '- Launch with Dana on Friday' }];
+    const r = await post('/api/chat', ASK_PLAIN, { 'x-test-user': id });
+    expect(r.json?.connectorData).toBe(true);
+    // The summary denies data collection and is stored as connected memory, never as a plain row.
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === id)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === id)?.product).toBe(CONNECTED_MEMORY_PRODUCT);
+    for (const b of or.bodies.filter(isHelper)) expect(b.provider).toEqual(DENY);
+    // Recorded: the reply sent back as plain text on a Free only turn is refused, nothing sent.
+    mem.block = null;
+    or.bodies = [];
+    const history = [...ASK_PLAIN.messages, { role: 'assistant', content: 'Your launch with Dana is on Friday.' }, { role: 'user', content: 'Thanks' }];
+    const again = await post('/api/chat', { messages: history }, { 'x-test-user': id, 'X-Free-Only': 'true' });
+    expect(again.status).toBe(409);
+    expect(or.bodies).toHaveLength(0);
+  });
+
+  it('POST /memory merging flagged memory denies data collection and keeps the result marked', async () => {
+    const exchange = { messages: [{ role: 'user', content: 'Tell me about tides' }, { role: 'assistant', content: 'The moon pulls the sea.' }] };
+    or.script = [{ text: '- Dana launch Friday\n- Likes tides' }];
+    const id = user('plain');
+    const r = await post('/api/chat/memory', { ...exchange, memory: '- Dana launch Friday', memoryConnected: true }, { 'x-test-user': id });
+    expect(r.json?.connectorData).toBe(true);
+    expect(or.bodies[0].provider).toEqual(DENY);
+    await vi.waitFor(() => expect(mem.writes.some((w) => w.userId === id)).toBe(true));
+    expect(mem.writes.find((w) => w.userId === id)?.product).toBe(CONNECTED_MEMORY_PRODUCT);
+  });
+});
+
+describe('the auto-memory summary of a connected conversation denies data collection, whatever the turn', () => {
+  it('a connected user’s free turn: the turn is not flagged, its summary is', async () => {
+    or.script = [{ text: 'Tides come from the moon.' }, { text: '- Likes tides' }];
+    await post('/api/chat', ASK_PLAIN, { 'x-test-user': user('connected'), 'X-Free-Only': 'true' });
+    expect('provider' in turnBodies()[0]).toBe(false);
+    await vi.waitFor(() => expect(or.bodies.some(isHelper)).toBe(true));
+    for (const b of or.bodies.filter(isHelper)) expect(b.provider).toEqual(DENY);
+  });
+});
+
+describe('a direct provider on the platform key, not confirmed for connected accounts, fails closed', () => {
+  const NV = { 'X-Text-Source': 'nvidia' };
+  const bodyText = (b: Body) => JSON.stringify(b.messages);
+  // The JSON tool protocol lists each offered tool as "- <name>: <description>" (ai/tools/jsonToolProtocol.ts).
+  const offersTool = (b: Body, name: string) => systemText(b).includes(`- ${name}: `);
+
+  it('no connector tool, no connector context, no marked memory — and the model is told why', async () => {
+    mem.block = '\n\nUSER MEMORY (durable facts):\n- Planning the launch with Dana on Friday';
+    mem.unmarkedBlock = null;
+    const r = await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('connected'), 'x-test-nvidia': 'platform', ...NV });
+    expect(r.status).toBe(200);
+    expect(nv.bodies.length).toBeGreaterThan(0);
+    const text = bodyText(nv.bodies[0]);
+    expect(offersTool(nv.bodies[0], 'web_search')).toBe(true);
+    expect(offersTool(nv.bodies[0], 'gmail_search')).toBe(false);
+    expect(text).not.toContain('Planning the launch with Dana');
+    expect(text).toContain('CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY');
+    expect(text).toContain('NVIDIA');
+    expect(conn.ragBlock).not.toHaveBeenCalled();
+    expect(or.bodies).toHaveLength(0);
+  });
+
+  it('once the owner confirms the provider (CONNECTOR_PROVIDERS_CONFIRMED), or with the user’s own key, nothing is withheld', async () => {
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'gemini, nvidia';
+    await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('connected'), 'x-test-nvidia': 'platform', ...NV });
+    expect(offersTool(nv.bodies[0], 'gmail_search')).toBe(true);
+    expect(conn.ragBlock).toHaveBeenCalled();
+
+    delete process.env.CONNECTOR_PROVIDERS_CONFIRMED;
+    nv.bodies = [];
+    await post('/api/chat', ASK_EMAIL, { 'x-test-user': user('connected'), 'x-test-nvidia': 'byok', ...NV });
+    expect(offersTool(nv.bodies[0], 'gmail_search')).toBe(true);
+  });
+
+  it('a conversation that already carries connected content is refused (409), nothing sent', async () => {
+    const r = await post('/api/chat', { messages: MARKED_HISTORY }, { 'x-test-user': user('plain'), 'x-test-nvidia': 'platform', ...NV });
+    expect(r.status).toBe(409);
+    expect(r.json?.error?.code).toBe(CONNECTED_DATA_FREE_MODEL_CODE);
+    expect(r.json?.error?.message).toContain('NVIDIA');
+    expect(r.json?.error?.message).not.toContain('free model');
+    expect(nv.bodies).toHaveLength(0);
+  });
+
+  it('its helpers never read a connected conversation (title, follow-ups, memory: skipped, $0)', async () => {
+    const exchange = { messages: [{ role: 'user', content: 'Summarise my unread email' }, { role: 'assistant', content: 'Dana asked to move the launch.' }] };
+    const headers = { 'x-test-user': user('connected'), 'x-test-nvidia': 'platform', ...NV };
+    const title = await post('/api/chat/title', { ...exchange, source: 'nvidia' }, headers);
+    expect(title.json?.title).toBe('Summarise my unread email');
+    expect((await post('/api/chat/followups', { ...exchange, source: 'nvidia' }, headers)).json?.suggestions).toEqual([]);
+    expect((await post('/api/chat/memory', { ...exchange, source: 'nvidia', memory: '- Likes tides' }, headers)).json?.memory).toBe('- Likes tides');
+    expect(nv.bodies).toHaveLength(0);
+  });
+});
+
+describe('a connector swarm through the run_agent_swarm meta-tool is held like /swarm', () => {
+  it('a connected user’s turn offering the meta-tool holds for the planner and agents', async () => {
+    const id = user('connected');
+    reservedEstimates.length = 0;
+    await post('/api/chat', ASK_PLAIN, { 'x-test-user': id });
+    const plainTurn = reservedEstimates.find((e) => e.userId === id)?.estimateUsd ?? NaN;
+    reservedEstimates.length = 0;
+    await post('/api/chat', { ...ASK_PLAIN, tools: ['run_agent_swarm'] }, { 'x-test-user': id });
+    const withSwarm = reservedEstimates.find((e) => e.userId === id)?.estimateUsd ?? NaN;
+    expect(withSwarm).toBeGreaterThan(plainTurn + 0.001);
   });
 });

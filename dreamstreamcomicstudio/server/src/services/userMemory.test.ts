@@ -15,7 +15,9 @@ const db = vi.hoisted(() => ({
   rows: [] as Row[],
   /** Every filter a user_memories query applied, per query. */
   queries: [] as { neq: [string, unknown][]; textSearch?: string; limit?: number }[],
-  rpc: [] as { name: string; args: Record<string, unknown> }[]
+  rpc: [] as { name: string; args: Record<string, unknown> }[],
+  /** Rows written by rememberUserMemories. */
+  upserts: [] as { product: string; content: string; embedding: number[] | null }[]
 }));
 
 vi.mock('./supabase.js', () => {
@@ -38,7 +40,11 @@ vi.mock('./supabase.js', () => {
       neq: (k: string, v: unknown) => (filters.neq.push([k, v]), q),
       textSearch: (_col: string, query: string) => ((filters.textSearch = query), q),
       order: () => q,
-      limit: async (n: number) => ((filters.limit = n), run())
+      limit: async (n: number) => ((filters.limit = n), run()),
+      upsert: async (rows: { product: string; content: string; embedding: number[] | null }[]) => {
+        db.upserts.push(...rows);
+        return { error: null };
+      }
     };
     return q;
   };
@@ -73,7 +79,7 @@ vi.stubGlobal(
   )
 );
 
-const { buildUserMemoryBlock, retrieveUserMemories } = await import('./userMemory.js');
+const { buildUserMemoryBlock, rememberUserMemories, retrieveUserMemories } = await import('./userMemory.js');
 
 let seq = 0;
 const row = (userId: string, product: string, content: string): Row => ({
@@ -93,7 +99,10 @@ beforeEach(() => {
   db.rows = [];
   db.queries = [];
   db.rpc = [];
+  db.upserts = [];
   embed.ok = false;
+  delete process.env.CONNECTOR_PROVIDERS_CONFIRMED;
+  vi.mocked(fetch).mockClear();
 });
 
 describe('buildUserMemoryBlock(…, { excludeConnected })', () => {
@@ -169,5 +178,35 @@ describe('buildUserMemoryBlock(…, { excludeConnected })', () => {
     for (let i = 0; i < 16; i += 1) db.rows.push(row(USER, 'chat_studio', `${PLAIN_FACT} #${i}`));
     const rows = await retrieveUserMemories(USER, 'launch', { excludeConnected: true });
     expect(rows).toHaveLength(8);
+  });
+});
+
+describe('memory distilled from connected content and the platform Gemini embedding key', () => {
+  it('is stored without an embedding (nothing sent to Gemini) until the owner confirms gemini; other memory is embedded as before', async () => {
+    embed.ok = true;
+    await rememberUserMemories(USER, CONNECTED_MEMORY_PRODUCT, null, [{ content: CONNECTED_FACT }]);
+    expect(db.upserts[0]).toMatchObject({ product: CONNECTED_MEMORY_PRODUCT, embedding: null });
+    expect(fetch).not.toHaveBeenCalled();
+
+    await rememberUserMemories(USER, 'chat_studio', null, [{ content: PLAIN_FACT }]);
+    expect(Array.isArray(db.upserts[1].embedding)).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    process.env.CONNECTOR_PROVIDERS_CONFIRMED = 'gemini';
+    await rememberUserMemories(USER, CONNECTED_MEMORY_PRODUCT, null, [{ content: `${CONNECTED_FACT} (again)` }]);
+    expect(Array.isArray(db.upserts[2].embedding)).toBe(true);
+  });
+});
+
+describe('buildUserMemoryBlock reports a marked row in the block it returns', () => {
+  it('report.connected is true only when a row distilled from connected content was included', async () => {
+    db.rows = [row(USER, CONNECTED_MEMORY_PRODUCT, CONNECTED_FACT), row(USER, 'chat_studio', PLAIN_FACT)];
+    const withMarked = { connected: false };
+    expect(await buildUserMemoryBlock(USER, '', { report: withMarked })).toContain(CONNECTED_FACT);
+    expect(withMarked.connected).toBe(true);
+
+    const without = { connected: false };
+    expect(await buildUserMemoryBlock(USER, '', { excludeConnected: true, report: without })).not.toContain(CONNECTED_FACT);
+    expect(without.connected).toBe(false);
   });
 });

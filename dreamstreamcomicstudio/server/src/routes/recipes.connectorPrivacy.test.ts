@@ -319,6 +319,12 @@ describe('/run follows prepareChat’s privacy decision', () => {
     expect(recorded).not.toHaveBeenCalled();
   });
 
+  it('the meta event says whether the run may carry connected content (kept by the client for a stopped run)', async () => {
+    const metaOf = (sse: string) => JSON.parse(/event: meta\ndata: (.*)\n/.exec(sse)![1]);
+    expect(metaOf((await post('/run', single(), { 'x-test-user': user('connected') })).text).connectorPrivacy).toBe(true);
+    expect(metaOf((await post('/run', single(), { 'x-test-user': user('plain') })).text).connectorPrivacy).toBe(false);
+  });
+
   it('a connected user’s swarm recipe holds for its paid planner and agents too', async () => {
     const plain = user('plain');
     await post('/run', team, { 'x-test-user': plain });
@@ -366,6 +372,19 @@ describe('/distill: the transcript is connected content when it carries connecto
     const [body] = turnBodies();
     expect(body.model).toBe('vendor/smart');
     expect(body.provider).toEqual(DENY);
+  });
+
+  it('a plain-text transcript of a connected user’s chat (no markers) is refused on a free reflection too; a paid one runs denied', async () => {
+    const id = user('connected');
+    const r = await post('/distill', { goal: 'Plan my week', transcript: PLAIN_TRANSCRIPT, messages: ASK }, { 'x-test-user': id, ...FREE_ONLY });
+    expect(r.status).toBe(409);
+    expect(r.json?.error?.code).toBe(CONNECTED_DATA_FREE_MODEL_CODE);
+    expect(or.bodies).toHaveLength(0);
+    expect(runEvents(id)).toHaveLength(0);
+
+    const paid = await post('/distill', { goal: 'Plan my week', transcript: PLAIN_TRANSCRIPT, messages: ASK }, { 'x-test-user': id });
+    expect(paid.status).toBe(200);
+    for (const b of turnBodies()) expect(b.provider).toEqual(DENY);
   });
 
   it('a plain transcript is unchanged: a free-only reflection runs on a free model with no provider field', async () => {

@@ -11,6 +11,7 @@ import {
   chatPricedModels,
   connectorContentEntered,
   connectorSwarmHoldUsd,
+  conversationMayCarryConnectorData,
   preparedInputTokens,
   prepareChat,
   settleSpentOrRelease
@@ -207,7 +208,14 @@ recipesRouter.post('/run', async (req, res, next) => {
     'X-Accel-Buffering': 'no'
   });
   const send = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  send('meta', { model: p.model, recipe: { id: recipe.id, title: recipe.title }, source: p.resolved.provider });
+  // `connectorPrivacy`: the run may carry connected content; the client keeps it for a run the user
+  // stops before `final`, so the stopped reply still goes back marked.
+  send('meta', {
+    model: p.model,
+    recipe: { id: recipe.id, title: recipe.title },
+    source: p.resolved.provider,
+    connectorPrivacy: Boolean(p.connectorPrivacy?.connectorData)
+  });
 
   // Once the settle has started, the catch never releases (a release after a successful settle
   // would erase the run's real spend — see routes/chat.ts POST /).
@@ -327,7 +335,13 @@ recipesRouter.post('/distill', async (req, res, next) => {
     // "Free" is prepareChat's own decision (Free only with a pinned paid model is a paid turn).
     transcriptConnectorData = messagesCarryConnectorData([{ role: 'user', content: transcript }]);
     const freeDistill = p.connectorPrivacy ? p.connectorPrivacy.freeTurn : Boolean(p.noPaidRetry) || isFreeModelId(p.model);
-    if (transcriptConnectorData && freeDistill) {
+    // A transcript of a connected chat as the user saw it is plain text: none of the markers above
+    // appear in it. So a FREE reflection for a signed-in user who has (or may have) connected
+    // accounts, or whose replies the provenance store marked, is refused as well (the same rule the
+    // chat helpers use, conversationMayCarryConnectorData; a failed lookup counts).
+    const transcriptMayCarry =
+      transcriptConnectorData || (freeDistill && Boolean(req.user?.id) && (await conversationMayCarryConnectorData(req.user?.id, [])));
+    if (transcriptMayCarry && freeDistill) {
       const freeOnly = p.connectorPrivacy ? p.connectorPrivacy.freeOnly : p.noPaidRetry === true;
       return res.status(409).json({ error: { message: connectedDataFreeModelMessage(freeOnly), code: CONNECTED_DATA_FREE_MODEL_CODE } });
     }

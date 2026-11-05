@@ -188,8 +188,10 @@ export interface RunChatParams {
   userMemory?: boolean;
   /**
    * With userMemory: leave out memory distilled from connected-account content
-   * (services/userMemory.ts excludeConnected). Set for a free-model turn of a user with connected
-   * accounts, which keeps the rest of their memory.
+   * (services/userMemory.ts excludeConnected). Set for every turn that withholds connected content
+   * (a free-model turn, or an unconfirmed direct provider on the platform key), which keeps the rest
+   * of the user's memory. When such rows ARE injected (a paid turn), every OpenRouter call of the
+   * turn denies data collection (`dataCollection: 'deny'`), whether or not the turn was flagged.
    */
   userMemoryExcludeConnected?: boolean;
   /**
@@ -604,6 +606,12 @@ type RunChatResult = {
    * of this turn. routes/chat.ts reads it to mark the reply as connected content (ai/privacy).
    */
   connectorContextUsed?: true;
+  /**
+   * The server memory block of this turn included a row distilled from connected content
+   * (CONNECTED_MEMORY_PRODUCT). routes/chat.ts marks the reply as connected content and keeps its
+   * auto-memory summary marked, so that memory is never laundered into unmarked history or rows.
+   */
+  connectedMemoryUsed?: true;
 };
 
 /** The latest user message flattened to text (the usage record's prompt seed). */
@@ -644,6 +652,7 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
   // Cross-product user memory: retrieved fresh per request and injected as plain
   // text, so it works identically for every provider and model. Time-boxed so a
   // slow lookup can never stall the chat; failures simply mean "no memory".
+  let connectedMemoryUsed = false;
   if (params.userId && params.userMemory) {
     const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
     const memoryQuery =
@@ -652,11 +661,19 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
         : Array.isArray(lastUser?.content)
           ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
           : '';
+    const memoryReport = { connected: false };
     const memoryBlock = await Promise.race([
-      buildUserMemoryBlock(params.userId, memoryQuery, { excludeConnected: params.userMemoryExcludeConnected === true }).catch(() => null),
+      buildUserMemoryBlock(params.userId, memoryQuery, {
+        excludeConnected: params.userMemoryExcludeConnected === true,
+        report: memoryReport
+      }).catch(() => null),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500))
     ]);
-    if (memoryBlock) systemContent += memoryBlock;
+    if (memoryBlock) {
+      systemContent += memoryBlock;
+      // Memory distilled from connected content is in this prompt: deny data collection on it.
+      if (memoryReport.connected) connectedMemoryUsed = true;
+    }
   }
   // RAG over the user's connected ACCOUNT connectors (Gmail/Drive/…). Same fail-open,
   // time-boxed contract as memory: a slow or failing lookup just means "no connector context".
@@ -760,7 +777,10 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
     ...(params.noPaidRetry ? { freeOnly: true } : {}),
     ...(params.provider === 'openrouter' && params.fallbackModels?.length ? { models: params.fallbackModels } : {}),
     ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
-    ...(useWeb ? { webSearch: true } : {})
+    ...(useWeb ? { webSearch: true } : {}),
+    // A prompt carrying memory distilled from connected content follows the connected-account data
+    // policy (OpenRouter: provider.data_collection 'deny', no free model; ai/providers/openrouter.ts).
+    ...(connectedMemoryUsed && params.provider === 'openrouter' ? { dataCollection: 'deny' as const } : {})
   };
 
   const toolEvents: ChatToolEvent[] = [];
@@ -967,7 +987,8 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
       images: images.length ? images : undefined,
       artifacts: artifacts.length ? artifacts : undefined,
       notices: notices.length ? notices : undefined,
-      ...(connectorContextUsed ? { connectorContextUsed: true as const } : {})
+      ...(connectorContextUsed ? { connectorContextUsed: true as const } : {}),
+      ...(connectedMemoryUsed ? { connectedMemoryUsed: true as const } : {})
     };
   }
 
@@ -1137,7 +1158,8 @@ const runChatMetered = async (params: RunChatParams, meter: UsageMeter): Promise
     images: images.length ? images : undefined,
     artifacts: artifacts.length ? artifacts : undefined,
     notices: notices.length ? notices : undefined,
-    ...(connectorContextUsed ? { connectorContextUsed: true as const } : {})
+    ...(connectorContextUsed ? { connectorContextUsed: true as const } : {}),
+    ...(connectedMemoryUsed ? { connectedMemoryUsed: true as const } : {})
   };
 };
 

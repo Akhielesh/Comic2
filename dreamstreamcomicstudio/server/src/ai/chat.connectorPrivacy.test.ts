@@ -26,9 +26,13 @@ vi.mock('./gateway.js', () => {
 });
 
 const memory = vi.hoisted(() => ({
-  build: vi.fn(async (_userId: string, _query: string, opts?: { excludeConnected?: boolean }) =>
-    opts?.excludeConnected ? '\n\nUSER MEMORY:\n- Likes oceanography' : '\n\nUSER MEMORY:\n- Planning the launch with Dana\n- Likes oceanography'
-  )
+  // As services/userMemory.ts: the marked row ("Planning the launch…") is left out on request, and the
+  // report says when the returned block includes one.
+  build: vi.fn(async (_userId: string, _query: string, opts?: { excludeConnected?: boolean; report?: { connected: boolean } }) => {
+    if (opts?.excludeConnected) return '\n\nUSER MEMORY:\n- Likes oceanography';
+    if (opts?.report) opts.report.connected = true;
+    return '\n\nUSER MEMORY:\n- Planning the launch with Dana\n- Likes oceanography';
+  })
 }));
 vi.mock('../services/userMemory.js', () => ({ buildUserMemoryBlock: memory.build }));
 const rag = vi.hoisted(() => ({ block: null as string | null, calls: 0 }));
@@ -62,7 +66,7 @@ describe('runChat: memory without the rows distilled from connected content', ()
   it('userMemoryExcludeConnected reaches the lookup as excludeConnected, and only that memory is sent', async () => {
     await runChat({ ...base, userMemoryExcludeConnected: true });
     expect(memory.build).toHaveBeenCalledTimes(1);
-    expect(memory.build.mock.calls[0][2]).toEqual({ excludeConnected: true });
+    expect(memory.build.mock.calls[0][2]).toMatchObject({ excludeConnected: true });
     const system = systemOf(fake.requests[0]);
     expect(system).toContain('Likes oceanography');
     expect(system).not.toContain('Planning the launch with Dana');
@@ -70,8 +74,20 @@ describe('runChat: memory without the rows distilled from connected content', ()
 
   it('without it the lookup is unfiltered (unchanged)', async () => {
     await runChat(base);
-    expect(memory.build.mock.calls[0][2]).toEqual({ excludeConnected: false });
+    expect(memory.build.mock.calls[0][2]).toMatchObject({ excludeConnected: false });
     expect(systemOf(fake.requests[0])).toContain('Planning the launch with Dana');
+  });
+
+  it('a prompt carrying memory distilled from connected content denies data collection (OpenRouter); without it nothing changes', async () => {
+    await runChat(base);
+    expect(fake.requests[0].dataCollection).toBe('deny');
+    fake.requests = [];
+    await runChat({ ...base, userMemoryExcludeConnected: true });
+    expect('dataCollection' in fake.requests[0]).toBe(false);
+    fake.requests = [];
+    // A direct provider has no per-request control: its request is unchanged.
+    await runChat({ ...base, provider: 'openai' as never, model: 'vendor-direct-model' });
+    expect('dataCollection' in fake.requests[0]).toBe(false);
   });
 
   it('no memory at all when userMemory is off', async () => {

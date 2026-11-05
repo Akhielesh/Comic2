@@ -673,7 +673,10 @@ const generateImage = async (
     usage: { include: true }
   };
   // An image made inside a connected-account turn (its prompt may quote that content) follows the
-  // same data policy as the turn's text calls.
+  // same data policy as the turn's text calls. Defence in depth only: no chat path reaches this today.
+  // Chat's generate_image tool (ai/tools/imageGen.ts) calls the Gemini, Ideogram, Pixazo, OpenAI and
+  // xAI image APIs directly, outside this policy (docs/DATA_CONNECTORS.md "Known gaps";
+  // ai/privacy/providerPolicies.ts CONNECTOR_TURN_OTHER_EGRESS).
   const body = connectorPrivacyActive() ? withDataCollectionDenied(imageBody) : imageBody;
 
   const data = await withRetry(

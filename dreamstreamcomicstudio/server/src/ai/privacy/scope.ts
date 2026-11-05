@@ -26,10 +26,10 @@ export type ConnectorEgressProbe = { sent: boolean };
 /** A fresh probe for one run. */
 export const connectorEgressProbe = (): ConnectorEgressProbe => ({ sent: false });
 
-type PrivacyStore = { readonly connectorData: true; readonly probes: readonly ConnectorEgressProbe[] };
+type PrivacyStore = { readonly connectorData: boolean; readonly probes: readonly ConnectorEgressProbe[] };
 
 const store = new AsyncLocalStorage<PrivacyStore>();
-const ACTIVE: PrivacyStore = Object.freeze({ connectorData: true as const, probes: Object.freeze([]) as readonly ConnectorEgressProbe[] });
+const ACTIVE: PrivacyStore = Object.freeze({ connectorData: true, probes: Object.freeze([]) as readonly ConnectorEgressProbe[] });
 
 /** True while running inside a turn that carries connected-account content. */
 export const connectorPrivacyActive = (): boolean => store.getStore()?.connectorData === true;
@@ -39,15 +39,20 @@ export const connectorPrivacyActive = (): boolean => store.getStore()?.connector
  * (an enclosing scope, if any, stays in force). `probe` (optional) learns whether any model call
  * inside the scope actually sent connector content; a nested scope reports to every enclosing
  * probe as well.
+ *
+ * A probe is registered even when this run is not flagged (`connectorData` false, no enclosing
+ * scope): the run itself denies nothing, but a nested flagged run inside it (the swarm's connector
+ * agents, a recipe's connector run) reports to it, so the route still learns that connector content
+ * was sent and marks the reply.
  */
 export const runWithConnectorPrivacy = <T>(connectorData: boolean, fn: () => T, probe?: ConnectorEgressProbe): T => {
   const current = store.getStore();
-  if (current) {
-    // Sticky: already in force. A new probe joins the enclosing ones for this nested run.
-    return probe ? store.run({ connectorData: true, probes: [...current.probes, probe] }, fn) : fn();
-  }
-  if (!connectorData) return fn();
-  return store.run(probe ? { connectorData: true, probes: [probe] } : ACTIVE, fn);
+  // Sticky: an enclosing flagged scope stays in force; a nested flag turns it on.
+  const active = connectorData || current?.connectorData === true;
+  const probes = probe ? [...(current?.probes || []), probe] : current?.probes || [];
+  if (current && current.connectorData === active && !probe) return fn();
+  if (!current && !active && !probe) return fn();
+  return store.run(active && !probes.length ? ACTIVE : { connectorData: active, probes }, fn);
 };
 
 /** Called by the provider when a scoped request body carries connector content. */

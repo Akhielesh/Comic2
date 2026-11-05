@@ -28,7 +28,7 @@ import {
 } from './connectorData.js';
 import { routeForConnectorData, withDataCollectionDenied } from './openrouterPolicy.js';
 import { bindConnectorPrivacy, connectorPrivacyActive, connectorPrivacyBound, runWithConnectorPrivacy } from './scope.js';
-import { PROVIDER_PRIVACY_POLICIES } from './providerPolicies.js';
+import { connectorProviderConfirmed, CONNECTOR_TURN_OTHER_EGRESS, PROVIDER_PRIVACY_POLICIES } from './providerPolicies.js';
 import { CONNECTOR_TOOL_NAMES } from '../tools/connectors.js';
 import { KNOWN_TOOL_NAMES } from '../tools/registry.js';
 import { spotlightToolOutput } from '../tools/spotlight.js';
@@ -343,10 +343,35 @@ describe('review fixes: the egress probe and the bound decision', () => {
     const idle = connectorEgressProbe();
     await runWithConnectorPrivacy(true, async () => undefined, idle);
     expect(idle.sent).toBe(false);
-    // Not a connector run: no scope, nothing heard.
+    // Not a connector run itself: nothing is denied in it, and its probe stays quiet…
+    const quiet = connectorEgressProbe();
+    let activeInside = true;
+    await runWithConnectorPrivacy(false, async () => {
+      activeInside = connectorPrivacyActive();
+    }, quiet);
+    expect(activeInside).toBe(false);
+    expect(quiet.sent).toBe(false);
+    // …but it still hears a nested connector run (an unflagged turn whose swarm or recipe ran a
+    // connector agent), so the route marks that reply.
     const off = connectorEgressProbe();
-    await runWithConnectorPrivacy(false, async () => noteConnectorEgress(), off);
-    expect(off.sent).toBe(false);
+    let nestedActive = false;
+    await runWithConnectorPrivacy(
+      false,
+      async () =>
+        runWithConnectorPrivacy(true, async () => {
+          nestedActive = connectorPrivacyActive();
+          noteConnectorEgress();
+        }),
+      off
+    );
+    expect(nestedActive).toBe(true);
+    expect(off.sent).toBe(true);
+    // And the nested flag does not leak back out to the unflagged scope.
+    await runWithConnectorPrivacy(false, async () => {
+      await runWithConnectorPrivacy(true, async () => undefined);
+      activeInside = connectorPrivacyActive();
+    }, connectorEgressProbe());
+    expect(activeInside).toBe(false);
   });
 
   it('binds the whole decision; the older flag-only binding keeps working', () => {
@@ -359,5 +384,29 @@ describe('review fixes: the egress probe and the bound decision', () => {
     expect(connectorTurnDecision(ctx)).toEqual({ connectorData: true, freeTurn: true });
     expect(connectorPrivacyBound(ctx)).toBe(true);
     expect(connectorTurnDecision(undefined)).toBeUndefined();
+  });
+});
+
+describe('connectorProviderConfirmed: direct providers on the platform key fail closed until the owner confirms them', () => {
+  it('terms that cover it: yes; owner_must_confirm: no, until CONNECTOR_PROVIDERS_CONFIRMED lists it', () => {
+    expect(connectorProviderConfirmed('openai', {})).toBe(true);
+    expect(connectorProviderConfirmed('anthropic', {})).toBe(true);
+    expect(connectorProviderConfirmed('openrouter', {})).toBe(true);
+    for (const id of ['gemini', 'nvidia', 'deepseek', 'zai', 'minimax', 'tencent', 'xai']) {
+      expect(connectorProviderConfirmed(id, {}), id).toBe(false);
+    }
+    const env = { CONNECTOR_PROVIDERS_CONFIRMED: ' Gemini , nvidia,unknown' };
+    expect(connectorProviderConfirmed('gemini', env)).toBe(true);
+    expect(connectorProviderConfirmed('nvidia', env)).toBe(true);
+    expect(connectorProviderConfirmed('xai', env)).toBe(false);
+    // An unknown provider is never confirmed.
+    expect(connectorProviderConfirmed('unknown', env)).toBe(false);
+  });
+
+  it('names both platform Gemini keys and documents the other egress paths (image APIs, third-party MCPs)', () => {
+    expect(PROVIDER_PRIVACY_POLICIES.gemini.note).toContain('ASSISTANT_GEMINI_API_KEY');
+    const reaches = CONNECTOR_TURN_OTHER_EGRESS.map((e) => e.reaches).join(' ');
+    for (const name of ['Gemini', 'Ideogram', 'Pixazo', 'OpenAI', 'xAI']) expect(reaches).toContain(name);
+    expect(CONNECTOR_TURN_OTHER_EGRESS.map((e) => e.path).join(' ')).toContain('Context7');
   });
 });

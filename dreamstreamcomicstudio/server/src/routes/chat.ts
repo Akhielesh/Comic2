@@ -75,9 +75,11 @@ import { hasFreeSuffix } from '../../../shared/pricing.js';
 import type { LimitExceededDetails } from '../../../shared/types/billing.js';
 import { logger } from '../lib/logger.js';
 import {
+  CLIENT_MEMORY_HEADING,
   connectedAccountsWithheldNote,
   connectedAccountsWithheldNotice,
   connectedDataFreeModelMessage,
+  connectedDataProviderMessage,
   CONNECTED_DATA_BUDGET_SENTENCE,
   CONNECTED_DATA_FREE_MODEL_CODE,
   CONNECTED_MEMORY_PRODUCT,
@@ -99,6 +101,7 @@ import {
 } from '../ai/privacy/scope.js';
 import { historyHasConnectorReply, recordConnectorReply } from '../ai/privacy/replyProvenance.js';
 import { registerZeroPricedModelLookup } from '../ai/privacy/openrouterPolicy.js';
+import { connectorProviderConfirmed } from '../ai/privacy/providerPolicies.js';
 
 export const chatRouter = Router();
 
@@ -262,8 +265,20 @@ type ConnectorTurnPrivacy = {
   connectorData: boolean;
   /** How connector content enters the turn (empty when it does not). */
   sources: ConnectorDataSource[];
-  /** The turn runs on a free model, so connector tools and the connector context block were withheld. */
+  /** The turn runs on a free model (OpenRouter), so connected content is withheld (see `withheld`). */
   freeTurn: boolean;
+  /**
+   * Nothing derived from connected content reaches this turn: connector tools, the connector context
+   * block, server memory rows distilled from connected content, and (for a user with connections, or
+   * flagged client memory) the memory block the client composed. Set on a free turn, and on a direct
+   * provider used through the platform key whose data terms the owner has not confirmed
+   * (`unconfirmedProvider`; ai/privacy/providerPolicies.ts connectorProviderConfirmed).
+   */
+  withheld: boolean;
+  /** The display name of the unconfirmed direct provider that made this turn `withheld` (for the copy). */
+  unconfirmedProvider?: string;
+  /** The client said its long-term memory was distilled from connected content (ChatRequest.memoryConnected). */
+  memoryConnected: boolean;
   /** No free-model fallback (usage re-plan) may take this conversation: its history carries, or may carry, connector content. */
   blocksFreeFallback: boolean;
   /** The user has connected accounts (null: the lookup failed). */
@@ -278,20 +293,31 @@ type ConnectorTurnPrivacy = {
 const connectorTurn = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean => Boolean(p.connectorPrivacy?.connectorData);
 
 /**
- * A free-model turn of a user who has (or may have) connected accounts: nothing derived from
- * connected content reaches it — connector tools, the connector context block, and long-term memory
- * that may have been distilled from connected content (the marked server rows, and the memory the
- * client composed into the prompt).
+ * A turn that withholds connected content (a free turn, or an unconfirmed direct provider): connector
+ * tools out, the connector context block off, the client-composed memory block stripped, and
+ * (connections confirmed) a note so the model explains instead of guessing. `provider` names the
+ * unconfirmed direct provider, when that is the reason.
  */
-const withholdsConnectedContent = (p: { connectorPrivacy?: ConnectorTurnPrivacy }): boolean =>
-  Boolean(p.connectorPrivacy?.freeTurn && p.connectorPrivacy.hasConnections !== false);
+const withheldSystemPrompt = (
+  systemPrompt: string | undefined,
+  hasConnections: boolean | null,
+  freeOnly: boolean,
+  provider?: string
+): string | undefined =>
+  hasConnections === true ? [systemPrompt, connectedAccountsWithheldNote(freeOnly, provider)].filter(Boolean).join('\n\n') : systemPrompt;
 
 /**
- * A free-model turn of a user with connected accounts: connector tools out, the connector context
- * block off, and (connections confirmed) a note so the model explains instead of guessing.
+ * A direct provider (not OpenRouter) used through the PLATFORM key whose data terms the owner has not
+ * confirmed for connected accounts (ai/privacy/providerPolicies.ts, CONNECTOR_PROVIDERS_CONFIRMED):
+ * fail closed — nothing derived from connected content goes to it. A user's own key is their account.
  */
-const withheldSystemPrompt = (systemPrompt: string | undefined, hasConnections: boolean | null, freeOnly: boolean): string | undefined =>
-  hasConnections === true ? [systemPrompt, connectedAccountsWithheldNote(freeOnly)].filter(Boolean).join('\n\n') : systemPrompt;
+const unconfirmedPlatformProvider = (req: any, provider: string): boolean => {
+  if (provider === 'openrouter') return false;
+  const byok = Boolean(
+    (req.apiKeys?.providerKeys as Partial<Record<string, { byok?: boolean }>> | undefined)?.[provider]?.byok
+  );
+  return !byok && !connectorProviderConfirmed(provider);
+};
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
 
@@ -356,8 +382,13 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // null = lookup failed). The store lookup starts now and runs alongside the model resolution below.
   const markedHistory = messagesCarryConnectorData(incoming);
   const priorAssistantTurn = messages.some((m) => m.role === 'assistant');
+  // A direct provider on the platform key the owner has not confirmed for connected accounts is
+  // treated like a free turn below (fail closed), so its history is checked the same way.
+  const unconfirmedProvider = unconfirmedPlatformProvider(req, resolved.provider);
+  // The client's long-term memory (composed into systemPrompt) was distilled from connected content.
+  const memoryConnected = body.memoryConnected === true;
   const knownHistoryLookup: Promise<boolean> =
-    !markedHistory && priorAssistantTurn && resolved.provider === 'openrouter' && req.user?.id
+    !markedHistory && priorAssistantTurn && (resolved.provider === 'openrouter' || unconfirmedProvider) && req.user?.id
       ? historyHasConnectorReply(req.user.id, incoming)
       : Promise.resolve(false);
   let connectionsMemo: Promise<ConnectionRow[] | null> | undefined;
@@ -556,11 +587,19 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const historyConnectorData = markedHistory || historyKnown;
   const freeTurn =
     resolved.provider === 'openrouter' && ((freeOnly && !requestedModel) || pinnedFree || cappedFree || isFreeModelId(model));
-  if (freeTurn && historyConnectorData) {
+  // Every turn that withholds connected content: a free turn, or an unconfirmed direct provider.
+  const withheldTurn = freeTurn || unconfirmedProvider;
+  const unconfirmedLabel = unconfirmedProvider ? providerLabel(resolved.provider) : undefined;
+  if (withheldTurn && historyConnectorData) {
     return {
       error: {
         status: 409,
-        body: { error: { message: connectedDataFreeModelMessage(freeOnly), code: CONNECTED_DATA_FREE_MODEL_CODE } }
+        body: {
+          error: {
+            message: unconfirmedLabel && !freeTurn ? connectedDataProviderMessage(unconfirmedLabel) : connectedDataFreeModelMessage(freeOnly),
+            code: CONNECTED_DATA_FREE_MODEL_CODE
+          }
+        }
       }
     };
   }
@@ -708,15 +747,17 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // A FREE turn gets no connector tool at all when the user has (or may have) connected accounts:
   // free models never receive connected-account content (ai/privacy). The model is told why, so it
   // explains instead of guessing; a message that asked for connected data also gets a notice.
+  // The same holds for a direct provider on the platform key the owner has not confirmed for
+  // connected accounts (withheldTurn): fail closed until CONNECTOR_PROVIDERS_CONFIRMED lists it.
   const keywordConnectorIntent = routedToolNames.some(isConnectorToolName);
   let hasConnections: boolean | null = false;
-  if (toolsEnabledForProvider && req.user?.id) {
+  if (req.user?.id && (toolsEnabledForProvider || withheldTurn)) {
     try {
       const connections = await connectorRows();
       if (!connections) throw new Error('connection lookup failed');
       hasConnections = connections.length > 0;
       const linkedIds = connections.filter((c) => c.status !== 'disconnected').map((c) => c.connector_id);
-      const connectorTools = freeTurn ? [] : primaryConnectorToolNames(linkedIds);
+      const connectorTools = withheldTurn || !toolsEnabledForProvider ? [] : primaryConnectorToolNames(linkedIds);
       if (connectorTools.length) {
         routedToolNames = Array.from(new Set([...connectorTools, ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
       }
@@ -724,12 +765,14 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       /* connector lookup is best-effort — never block a chat on it */
       hasConnections = null;
     }
-    if (freeTurn && hasConnections !== false) {
-      routedToolNames = withoutConnectorTools(routedToolNames);
-      // The long-term memory the client composes into the system prompt is distilled from earlier
-      // chats, which may have read connected accounts: it stays off free models too.
-      systemPrompt = withheldSystemPrompt(withoutClientMemoryBlock(systemPrompt), hasConnections, freeOnly);
-    }
+  }
+  if (withheldTurn && hasConnections !== false) routedToolNames = withoutConnectorTools(routedToolNames);
+  // The long-term memory the client composes into the system prompt is distilled from earlier chats,
+  // which may have read connected accounts: it stays off these turns too — for a user who has (or may
+  // have) connections, and whenever the client says it was distilled from connected content (a user
+  // who has since removed every connection keeps that memory).
+  if (withheldTurn && (hasConnections !== false || memoryConnected)) {
+    systemPrompt = withheldSystemPrompt(withoutClientMemoryBlock(systemPrompt), hasConnections, freeOnly, freeTurn ? undefined : unconfirmedLabel);
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 
@@ -767,7 +810,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         clientContext,
         extraAgents: customAgents,
         ...metaToolNet,
-        ...(freeOnly ? { fallbackModels } : {})
+        ...(freeOnly ? { fallbackModels } : {}),
+        // A free turn's swarm reads no connected account: its answer comes back to this free model.
+        ...(freeTurn ? { withholdConnectorTools: true } : {})
       })
     );
   }
@@ -893,8 +938,11 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // `provider.data_collection: 'deny'` and keeps free models out of its chain; a free turn already
   // had all of it withheld above. Turns of users with no connections (and no marked history) are
   // left exactly as before.
+  // Client memory flagged as distilled from connected content that is still in this turn's prompt (a
+  // paid turn: a withheld turn stripped it above) is history the turn carries: deny, no free model.
+  const clientMemoryFlagged = memoryConnected && Boolean(systemPrompt?.includes(CLIENT_MEMORY_HEADING));
   let connectorPrivacy: ConnectorTurnPrivacy | undefined;
-  if (resolved.provider === 'openrouter' && (req.user?.id || historyConnectorData)) {
+  if (resolved.provider === 'openrouter' && (req.user?.id || historyConnectorData || clientMemoryFlagged)) {
     const sources = freeTurn
       ? []
       : connectorDataSources({
@@ -902,12 +950,14 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
           // The connector context block (ai/chat.ts) can only add items for a user with connections.
           connectorContext: Boolean(req.user?.id) && hasConnections !== false,
           messages: incoming,
-          historyKnown
+          historyKnown: historyKnown || clientMemoryFlagged
         });
     connectorPrivacy = {
       connectorData: sources.length > 0,
       sources,
       freeTurn,
+      withheld: freeTurn,
+      memoryConnected,
       blocksFreeFallback: historyConnectorData || (priorAssistantTurn && hasConnections === true),
       hasConnections,
       connectorIntent: keywordConnectorIntent && hasConnections === true,
@@ -920,6 +970,21 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       // The agent paths that start from this request (recipes, the swarm) read the decision too.
       bindConnectorPrivacy(clientContext, true);
     }
+  } else if (unconfirmedProvider && req.user?.id) {
+    // An unconfirmed direct provider on the platform key: withheld like a free turn (above). It has
+    // no free models and no per-request control, so nothing else changes.
+    connectorPrivacy = {
+      connectorData: false,
+      sources: [],
+      freeTurn: false,
+      withheld: true,
+      unconfirmedProvider: unconfirmedLabel,
+      memoryConnected,
+      blocksFreeFallback: false,
+      hasConnections,
+      connectorIntent: keywordConnectorIntent && hasConnections === true,
+      freeOnly
+    };
   }
   // The whole decision (free turn included) for runRecipe, which then needs no re-derivation.
   if (resolved.provider === 'openrouter') {
@@ -996,23 +1061,28 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
 /**
  * Did connected-account content actually enter this reply? The deny decision is made up front for a
  * turn that MAY carry it (a connected user's every paid turn); the provenance mark is narrower:
- *   - a model call of the turn really sent connector content (the egress probe: the connector
- *     context block, a connector tool's call or output — ai/privacy/scope.ts);
+ *   - a model call of the run really sent connector content (the egress probe: the connector
+ *     context block, a connector tool's call or output — ai/privacy/scope.ts). The probe hears
+ *     nested flagged runs too, so an unflagged turn whose swarm or recipe ran a connector agent
+ *     is marked;
  *   - the engine added the connector context block to the prompt (`connectorContextUsed`, ai/chat.ts:
  *     known where it happens, without relying on the provider's egress report);
- *   - a connector tool ran (its tool events name one);
+ *   - a connector tool ran (its tool events name one), whether or not the turn itself was flagged;
+ *   - the server memory block included a row distilled from connected content
+ *     (`connectedMemoryUsed`, ai/chat.ts), so the reply may restate it;
  *   - the history already carried connector content (markers, or the provenance store).
+ * Over-marking is safe (a later free turn of the chat is refused); under-marking is not.
  */
 export const connectorContentEntered = (
   p: PreparedChat,
-  result: { toolEvents?: { tool?: unknown }[]; connectorContextUsed?: unknown },
+  result: { toolEvents?: { tool?: unknown }[]; connectorContextUsed?: unknown; connectedMemoryUsed?: unknown },
   probe?: ConnectorEgressProbe
 ): boolean =>
-  connectorTurn(p) &&
-  (Boolean(probe?.sent) ||
-    result.connectorContextUsed === true ||
-    (result.toolEvents || []).some((e) => isConnectorToolName(e?.tool)) ||
-    (p.connectorPrivacy?.sources || []).includes('history'));
+  Boolean(probe?.sent) ||
+  result.connectorContextUsed === true ||
+  result.connectedMemoryUsed === true ||
+  (result.toolEvents || []).some((e) => isConnectorToolName(e?.tool)) ||
+  (p.connectorPrivacy?.sources || []).includes('history');
 
 /**
  * A reply that connected-account content entered says so (`connectorData: true`) and is recorded in
@@ -1029,8 +1099,18 @@ const markConnectorData = <T extends { text?: string }>(p: PreparedChat, entered
 
 /** A free turn that asked for connected data says honestly why the accounts weren't used. */
 const withWithheldNotice = (p: PreparedChat, notices: CapabilityNotice[] | undefined): CapabilityNotice[] | undefined =>
-  p.connectorPrivacy?.freeTurn && p.connectorPrivacy.connectorIntent
-    ? [...(notices || []), { tool: 'connectors', level: 'info', message: connectedAccountsWithheldNotice(p.connectorPrivacy.freeOnly) }]
+  p.connectorPrivacy?.withheld && p.connectorPrivacy.connectorIntent
+    ? [
+        ...(notices || []),
+        {
+          tool: 'connectors',
+          level: 'info',
+          message: connectedAccountsWithheldNotice(
+            p.connectorPrivacy.freeOnly,
+            p.connectorPrivacy.freeTurn ? undefined : p.connectorPrivacy.unconfirmedProvider
+          )
+        }
+      ]
     : notices;
 
 /**
@@ -1074,15 +1154,16 @@ const runChatParams = (p: PreparedChat, reserve: ChatReservation | null = null) 
   dreamstreamContextJson: p.dreamstreamContextJson,
   userId: p.userId,
   // Server-side long-term memory can hold facts distilled from connected content (marked
-  // CONNECTED_MEMORY_PRODUCT): a free-model turn of a user with connected accounts gets the rest of
-  // their memory, never those rows (services/userMemory.ts excludeConnected).
+  // CONNECTED_MEMORY_PRODUCT): every turn that withholds connected content (a free turn, an
+  // unconfirmed direct provider) gets the rest of the user's memory, never those rows
+  // (services/userMemory.ts excludeConnected) — whether or not the user still has connections.
   userMemory: Boolean(p.userId),
-  userMemoryExcludeConnected: withholdsConnectedContent(p),
+  userMemoryExcludeConnected: Boolean(p.connectorPrivacy?.withheld),
   // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
   // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
   // it's safe to enable for any signed-in user. (Was declared but never set → connector
   // context never reached the model.)
-  connectorContext: Boolean(p.userId) && !p.connectorPrivacy?.freeTurn,
+  connectorContext: Boolean(p.userId) && !p.connectorPrivacy?.withheld,
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
@@ -1356,6 +1437,8 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
   // history carries connector content never gets here (reserveChat refuses it).
   const privacy = p.connectorPrivacy;
   const withhold = Boolean(privacy && privacy.hasConnections !== false);
+  // Flagged client memory is stripped whatever the connections (a user may have removed them all).
+  const stripMemory = Boolean(privacy && (withhold || privacy.memoryConnected));
   return {
     ...p,
     model: chain[0],
@@ -1371,14 +1454,15 @@ export const freeModelsOnlyPlan = async (p: PreparedChat): Promise<PreparedChat 
       ? {
           // Memory the client composed into the prompt goes too (see prepareChat); server memory
           // skips the marked rows through runChatParams (freeTurn below).
-          systemPrompt: withhold
+          systemPrompt: stripMemory
             ? withheldSystemPrompt(withoutClientMemoryBlock(p.systemPrompt), privacy.hasConnections, privacy.freeOnly)
             : p.systemPrompt,
           connectorPrivacy: {
             ...privacy,
             connectorData: false,
             sources: [],
-            freeTurn: true
+            freeTurn: true,
+            withheld: true
           }
         }
       : {})
@@ -1415,11 +1499,12 @@ export const SWARM_HOLD_MAX_AGENTS = 4;
  * The model a connector swarm run's planner and agents are billed on, when they leave the free
  * worker (ai/agents/orchestrator.ts): the caller's paid net (TEXT_FALLBACK) on a flagged run, the
  * user's own pinned model on a Free only run with a pinned paid model, and the paid net for a
- * connected user's unflagged paid-mode run (a pinned free model), which moves to it as soon as it
- * plans an agent with a connector tool. Null when the workers stay free (plain users, Free only).
+ * connected user's unflagged paid-mode run, which moves to it as soon as it plans an agent with a
+ * connector tool. Null when the workers stay free (plain users, Free only, and every free turn: its
+ * swarm withholds connector tools, RunSwarmParams.withholdConnectorTools).
  */
 const connectorSwarmWorkerModel = (p: PreparedChat): string | null => {
-  if (p.resolved.provider !== 'openrouter' || p.freeModelsOnly || !p.connectorPrivacy) return null;
+  if (p.resolved.provider !== 'openrouter' || p.freeModelsOnly || !p.connectorPrivacy || p.connectorPrivacy.freeTurn) return null;
   if (connectorTurn(p)) return p.noPaidRetry ? p.model : TEXT_FALLBACK;
   if (!p.noPaidRetry && p.connectorPrivacy.hasConnections !== false) return TEXT_FALLBACK;
   return null;
@@ -1448,7 +1533,9 @@ const reserveChatPlan = async (req: any, p: PreparedChat, metadata: Record<strin
   const inputTokens = preparedInputTokens(p);
   const hold = chatHoldTokens(p, inputTokens);
   const baseFloorUsd = await catalogHoldFloorUsd([p.model, ...(priced || [])], hold.inputTokens, hold.outputTokens);
-  const swarmUsd = metadata.swarm ? await connectorSwarmHoldUsd(p, inputTokens) : undefined;
+  // The run_agent_swarm meta-tool runs the same planner and agents inside the turn.
+  const swarmRun = Boolean(metadata.swarm) || p.tools.some((t) => t.name === SWARM_TOOL_NAME);
+  const swarmUsd = swarmRun ? await connectorSwarmHoldUsd(p, inputTokens) : undefined;
   const floorUsd = swarmUsd ? Number(((baseFloorUsd || 0) + swarmUsd).toFixed(6)) : baseFloorUsd;
   const reserve = await reserveForOperation({
     req: view,
@@ -1646,11 +1733,19 @@ const helperCarriesConnectorData = async (req: any, provider: AIProviderId, inco
   provider === 'openrouter' && conversationMayCarryConnectorData(req.user?.id, incoming);
 
 /**
+ * A helper on a direct provider whose platform key is not confirmed for connected accounts
+ * (unconfirmedPlatformProvider) never reads a conversation that carries, or may carry, connected
+ * content: it is skipped ($0, nothing sent), as a free turn would be refused.
+ */
+const helperWithheld = async (req: any, provider: AIProviderId, incoming: unknown[]): Promise<boolean> =>
+  unconfirmedPlatformProvider(req, provider) && conversationMayCarryConnectorData(req.user?.id, incoming);
+
+/**
  * The conversation carries, or may carry, connected-account content, whatever the provider (a
  * connector tool reads the account on any provider): marked history, a user with any connection on
  * record (a failed lookup counts), or a reply the provenance store recorded for this user.
  */
-const conversationMayCarryConnectorData = async (userId: string | undefined, incoming: unknown[]): Promise<boolean> => {
+export const conversationMayCarryConnectorData = async (userId: string | undefined, incoming: unknown[]): Promise<boolean> => {
   if (messagesCarryConnectorData(incoming)) return true;
   if (!userId) return false;
   const connected = await listConnections(userId).then(
@@ -1792,6 +1887,11 @@ chatRouter.post('/title', async (req, res, next) => {
 
     const resolved = resolveChatProvider(req, body.source);
     if (!resolved) return res.json({ title: '' }); // silent no-op without a key
+    if (await helperWithheld(req, resolved.provider, incoming)) {
+      // An unconfirmed direct provider never reads connected content: a $0 title from the user's words.
+      const firstUser = turns.find((t) => t.role === 'user');
+      return res.json({ title: firstUser ? localChatTitle(textOf(firstUser)) : '' });
+    }
 
     const transcript = turns
       .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
@@ -1855,7 +1955,7 @@ const MAX_MEMORY_CHARS = 1500;
 
 chatRouter.post('/memory', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { messages?: unknown; memory?: string; source?: string };
+    const body = (req.body || {}) as { messages?: unknown; memory?: string; source?: string; memoryConnected?: unknown };
     const existing = typeof body.memory === 'string' ? body.memory.trim().slice(0, MAX_MEMORY_CHARS) : '';
     const incoming = Array.isArray(body.messages) ? body.messages : [];
     const turns = incoming
@@ -1866,6 +1966,11 @@ chatRouter.post('/memory', async (req, res, next) => {
 
     const resolved = resolveChatProvider(req, body.source);
     if (!resolved) return res.json({ memory: existing }); // silent no-op without a key
+    // The existing memory the client sends was distilled from connected content (its sticky flag):
+    // merging it is a connector call too, and what comes back stays marked.
+    const existingConnected = body.memoryConnected === true;
+    if (await helperWithheld(req, resolved.provider, incoming)) return res.json({ memory: existing });
+    if (existingConnected && unconfirmedPlatformProvider(req, resolved.provider)) return res.json({ memory: existing });
 
     const transcript = turns
       .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
@@ -1889,7 +1994,7 @@ chatRouter.post('/memory', async (req, res, next) => {
     // Connected content: the summary call denies data collection (OpenRouter), and the result is
     // marked as distilled from connected content — the server rows (CONNECTED_MEMORY_PRODUCT) and the
     // response (`connectorData: true`, so the client never composes it into a free-model turn).
-    const connected = await conversationMayCarryConnectorData(req.user?.id, incoming);
+    const connected = existingConnected || (await conversationMayCarryConnectorData(req.user?.id, incoming));
     const connectorData = resolved.provider === 'openrouter' && connected;
     const result = await runHeldHelper(hold, meter, () =>
       runWithConnectorPrivacy(connectorData, () =>
@@ -1974,7 +2079,13 @@ chatRouter.delete('/memory/:id', async (req, res, next) => {
 // every few minutes. Fire-and-forget — never delays or fails the chat response.
 const AUTO_MEMORY_THROTTLE_MS = 5 * 60_000;
 const lastAutoMemoryAt = new Map<string, number>();
-const maybeAutoRemember = (req: any, p: PreparedChat, answerText: string): void => {
+const maybeAutoRemember = (
+  req: any,
+  p: PreparedChat,
+  answerText: string,
+  /** The turn's reply drew on connected content (connectorContentEntered): its summary is marked too. */
+  replyConnected = false
+): void => {
   const userId = p.userId;
   if (!userId || !answerText) return;
   // A free-models-only turn means the user's usage can't cover paid calls: no paid write-back.
@@ -1993,6 +2104,13 @@ const maybeAutoRemember = (req: any, p: PreparedChat, answerText: string): void 
       const model = p.resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
       const content = `EXISTING MEMORY:\n(none)\n\nRECENT CONVERSATION:\n${transcript}`;
       const meter = { operation: 'chat.memory.auto', provider: p.resolved.provider, model };
+      // A summary of a connected-account conversation follows its data policy (whether or not THIS
+      // turn was flagged: a connected user's free turn is not), and what it distils is marked as
+      // connected content (never offered to a later free-model turn). An unconfirmed direct provider
+      // on the platform key never summarises such a conversation.
+      const connected =
+        replyConnected || connectorTurn(p) || (await conversationMayCarryConnectorData(userId, p.messages));
+      if (connected && unconfirmedPlatformProvider(req, p.resolved.provider)) return;
       // Metered like the other helpers, on its own hold (never the chat turn's).
       const hold = await holdForChatHelper(req, {
         ...meter,
@@ -2001,11 +2119,8 @@ const maybeAutoRemember = (req: any, p: PreparedChat, answerText: string): void 
         maxTokens: 400
       });
       if (!hold.run) return;
-      // A summary of a connected-account turn follows the turn's data policy, and what it distils is
-      // marked as connected content (never offered to a later free-model turn).
-      const connected = connectorTurn(p) || (await conversationMayCarryConnectorData(userId, p.messages));
       const result = await runHeldHelper(hold, meter, () =>
-        runWithConnectorPrivacy(connectorTurn(p), () =>
+        runWithConnectorPrivacy(p.resolved.provider === 'openrouter' && connected, () =>
           runChat({
             provider: p.resolved.provider,
             apiKey: p.resolved.apiKey,
@@ -2169,6 +2284,7 @@ chatRouter.post('/followups', async (req, res, next) => {
 
     const resolved = resolveChatProvider(req, body.source);
     if (!resolved) return res.json({ suggestions: [] }); // silent no-op without a key
+    if (await helperWithheld(req, resolved.provider, incoming)) return res.json({ suggestions: [] });
 
     const transcript = turns
       .map((t) => `${t.role === 'user' ? 'User' : 'Assistant'}: ${textOf(t)}`)
@@ -2331,7 +2447,7 @@ chatRouter.post('/', async (req, res, next) => {
         : null;
 
       const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result, probe), gate, result.model));
-      maybeAutoRemember(req, p, result.text || '');
+      maybeAutoRemember(req, p, result.text || '', (payload as { connectorData?: boolean }).connectorData === true);
       recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
       res.json(reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
     } catch (error) {
@@ -2399,7 +2515,9 @@ const streamChatTurn = async (
 ): Promise<void> => {
   const { p, reserve } = gate;
   const send = openEventStream(res);
-  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+  // `connectorPrivacy`: this turn may carry connected content (deny). The client keeps it for a reply
+  // the user stops before `final`, so a stopped connector reply still goes back marked.
+  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider, connectorPrivacy: connectorTurn(p) });
   const heartbeat = startHeartbeat(res);
   const metadata = { route: req.path, historyLength: p.messages.length, ...(opts.swarm ? { swarm: true } : {}) };
 
@@ -2443,7 +2561,7 @@ const streamChatTurn = async (
       : null;
 
     const payload = withAllowanceNotices(req, withFreeModelsNotice(buildPayload(p, result, probe), gate, result.model, opts));
-    maybeAutoRemember(req, p, result.text || '');
+    maybeAutoRemember(req, p, result.text || '', (payload as { connectorData?: boolean }).connectorData === true);
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {
@@ -2523,7 +2641,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
 
   const { p, reserve } = gate;
   const send = openEventStream(res);
-  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider, connectorPrivacy: connectorTurn(p) });
   const heartbeat = startHeartbeat(res);
 
   // Once the settle has started, never release (see POST /).
@@ -2543,6 +2661,9 @@ chatRouter.post('/swarm', async (req, res, next) => {
       // Free-only: the prepared free chain rides on the synthesis (one throttled free model falls
       // through to the next free one, as the single-model answer it replaced did).
       ...(p.noPaidRetry ? { noPaidRetry: true, fallbackModels: p.fallbackModels } : {}),
+      // A free turn (a pinned free model, Free only) gives its agents no connector tool: the run
+      // never reads an account and never moves to a paid model for privacy.
+      ...(p.connectorPrivacy?.freeTurn ? { withholdConnectorTools: true } : {}),
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
@@ -2579,7 +2700,7 @@ chatRouter.post('/swarm', async (req, res, next) => {
       notices: withGuardrailNotices(result),
       usage: result.usage
     }));
-    maybeAutoRemember(req, p, result.text || '');
+    maybeAutoRemember(req, p, result.text || '', (payload as { connectorData?: boolean }).connectorData === true);
     recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     send('final', reserve ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
   } catch (error) {

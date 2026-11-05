@@ -206,6 +206,16 @@ export const connectedDataFreeModelMessage = (freeOnly: boolean): string =>
 /** The Free only variant (the common case; kept for callers and tests). */
 export const CONNECTED_DATA_FREE_MODEL_MESSAGE = connectedDataFreeModelMessage(true);
 
+/**
+ * The same refusal (same code, CONNECTED_DATA_FREE_MODEL_CODE) for a direct provider on the shared
+ * platform key whose data terms the owner has not confirmed for connected accounts
+ * (providerPolicies.ts connectorProviderConfirmed). `provider` is its display name.
+ */
+export const connectedDataProviderMessage = (provider: string): string =>
+  "This chat includes content from your connected accounts (such as Gmail, Drive or Calendar), so this message wasn't sent. " +
+  `It was going to ${provider} through the shared key, and your connected content only goes to model providers confirmed not to keep or learn from it. ` +
+  `Nothing was sent and nothing was spent. To continue, pick a standard model (or add your own ${provider} key in Settings → API keys), or start a new chat without connected content.`;
+
 /** Appended to a usage-budget refusal when the free re-plan is off because of connected content. */
 export const CONNECTED_DATA_BUDGET_SENTENCE =
   "This chat includes content from your connected accounts, which is never sent to free models, so it can't continue on one. " +
@@ -216,16 +226,24 @@ export const CONNECTED_DATA_BUDGET_SENTENCE =
  * `freeOnly`: the user chose free models (the way forward is turning Free only off); otherwise the
  * free model came from a fallback (used-up usage, a busy shared service) and that advice would be wrong.
  */
-export const connectedAccountsWithheldNote = (freeOnly: boolean): string =>
-  "CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY. It runs on a free model, and the user's connected accounts (Gmail, Drive, Calendar and other connectors) are never sent to free models, because free model endpoints may keep or learn from what they receive. " +
-  `If the user asks about their email, files, calendar or other connected data, say so plainly in one sentence and give the two ways forward: ${
-    freeOnly ? 'switch to a standard model (turn off Free only)' : 'try again on a standard model later'
-  }, or ask without their connected content. Never guess or invent their data.`;
+export const connectedAccountsWithheldNote = (freeOnly: boolean, provider?: string): string =>
+  provider
+    ? `CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY. It runs on ${provider} through the shared key, and the user's connected accounts (Gmail, Drive, Calendar and other connectors) are only sent to model providers confirmed not to keep or learn from what they receive. ` +
+      `If the user asks about their email, files, calendar or other connected data, say so plainly in one sentence and give the two ways forward: pick a standard model (or add their own ${provider} key in Settings → API keys), or ask without their connected content. Never guess or invent their data.`
+    : "CONNECTED ACCOUNTS ARE OFF FOR THIS REPLY. It runs on a free model, and the user's connected accounts (Gmail, Drive, Calendar and other connectors) are never sent to free models, because free model endpoints may keep or learn from what they receive. " +
+      `If the user asks about their email, files, calendar or other connected data, say so plainly in one sentence and give the two ways forward: ${
+        freeOnly ? 'switch to a standard model (turn off Free only)' : 'try again on a standard model later'
+      }, or ask without their connected content. Never guess or invent their data.`;
 
-/** Shown to the user when a free-model turn asked about connected data and the tools were withheld. */
-export const connectedAccountsWithheldNotice = (freeOnly: boolean): string =>
-  "Your connected accounts weren't used for this reply: it ran on a free model, and connected content is only sent to standard models. " +
-  (freeOnly ? 'Switch to a standard model (turn off Free only) to use them.' : 'They work again once replies come from a standard model.');
+/**
+ * Shown to the user when a turn that withholds connected content (a free model, or `provider`: a direct
+ * provider on the shared key not confirmed for connected accounts) asked about connected data.
+ */
+export const connectedAccountsWithheldNotice = (freeOnly: boolean, provider?: string): string =>
+  provider
+    ? `Your connected accounts weren't used for this reply: it ran on ${provider} through the shared key, which isn't confirmed for connected content yet. Pick a standard model, or add your own ${provider} key, to use them.`
+    : "Your connected accounts weren't used for this reply: it ran on a free model, and connected content is only sent to standard models. " +
+      (freeOnly ? 'Switch to a standard model (turn off Free only) to use them.' : 'They work again once replies come from a standard model.');
 
 /** The free-only variants (the common case). */
 export const CONNECTED_ACCOUNTS_WITHHELD_NOTE = connectedAccountsWithheldNote(true);

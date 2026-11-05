@@ -553,6 +553,13 @@ export type ChatRequest = {
   customAgents?: CustomAgentDef[];
   /** Files attached to the CURRENT user turn, decoded server-side for tools like run_python. */
   attachments?: ChatAttachmentInput[];
+  /**
+   * The user's long-term memory (composed into `systemPrompt`) was distilled from connected-account
+   * content (ChatMemoryResponse.connectorData, kept sticky by the client). The server strips that
+   * memory from every turn that withholds connected content (free models, unconfirmed providers),
+   * whatever the user's connections, and a paid OpenRouter turn that carries it denies data collection.
+   */
+  memoryConnected?: boolean;
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };

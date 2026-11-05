@@ -23,7 +23,7 @@ import {
 } from './registry.js';
 import { composePersona, withAgentPersona } from '../persona.js';
 import { isConnectorToolName, isFreeModelId, messagesCarryConnectorData, withoutConnectorTools } from '../privacy/connectorData.js';
-import { connectorPrivacyActive, connectorPrivacyBound, runWithConnectorPrivacy } from '../privacy/scope.js';
+import { connectorPrivacyActive, connectorPrivacyBound, connectorTurnDecision, runWithConnectorPrivacy } from '../privacy/scope.js';
 import { verifyFindings, verificationBlock, type AgentFinding } from './verify.js';
 import type {
   ChatArtifact,
@@ -79,6 +79,15 @@ export interface RunSwarmParams {
    * `noPaidRetry` (a paid run keeps its single paid net).
    */
   fallbackModels?: string[];
+  /**
+   * The caller's turn withholds connected-account content (routes/chat.ts prepareChat: a free turn —
+   * Free only, a pinned free model, the capped-key free chain). The agents get no connector tool, so
+   * the run never becomes a connector run: it never reads an account, never moves to a paid model
+   * for privacy, and its answer (fed back to the caller's free model) carries no connected content.
+   * The request's bound decision (ai/privacy/scope.ts connectorTurnDecision) says the same as a
+   * second source.
+   */
+  withholdConnectorTools?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   /** User-defined agents to add to the deployable pool for this run. */
@@ -268,7 +277,11 @@ const runSwarmWith = async (params: RunSwarmParams, usageParts: ApiUsage[]): Pro
   // An agent offered a connector tool (the calendar agent, a custom agent listing gmail_search…)
   // makes the rest of the run a connector run: those agents and the synthesis follow the policy
   // above. On a free-only run the agents get no connector tools at all.
-  const freeAgents = freeOnly && !pinnedPaidConnectorRun;
+  // A free turn's swarm (the run_agent_swarm meta-tool, or /swarm on a pinned free model) withholds
+  // connector tools the same way, whatever Free only says: its answer goes back to a free model.
+  const withheldByCaller =
+    params.withholdConnectorTools === true || connectorTurnDecision(params.clientContext)?.freeTurn === true;
+  const freeAgents = (freeOnly && !pinnedPaidConnectorRun) || withheldByCaller;
   const toolsFor = (def: AgentDefinition): string[] => (freeAgents ? withoutConnectorTools(def.toolNames) : def.toolNames);
   const connectorRun =
     !freeAgents && (inheritedConnectorData || plan.some((p) => (pool[p.agent]?.toolNames || []).some(isConnectorToolName)));
