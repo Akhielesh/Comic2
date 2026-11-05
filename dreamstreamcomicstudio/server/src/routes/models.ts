@@ -5,6 +5,7 @@ import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from 
 import { getModelLatency } from '../services/telemetryAnalytics.js';
 import { getModelPopularity, parsePopularityWindow } from '../services/usageAnalytics.js';
 import { requireAuth } from '../middleware/auth.js';
+import { hydrateAccessProfile } from '../middleware/requireAdmin.js';
 import { listModelScores, listMonthlyUsage, loadScoreMap } from '../services/modelStats.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 import { getProviderDef, TEXT_PROVIDER_IDS, type ProviderId } from '../../../shared/providers.js';
@@ -143,11 +144,18 @@ modelsRouter.get('/popularity', requireAuth, async (req: Request, res: Response,
 // Verification system: reconciles what we SHOW against LIVE source data — no guessing.
 // - OpenRouter: GET /api/v1/key for the caller's real usage/limit/is_free_tier.
 // - Per-source model counts from a freshly-forced catalog refresh.
-// requireAuth: with no BYOK header this falls back to PLATFORM keys and reports
-// their live usage/limits/credits — that's operator telemetry, not public data.
+// requireAuth. The PLATFORM keys' live data — the platform OpenRouter key's /key record and
+// account /credits, and which platform keys are configured — is operator telemetry: admins
+// only. Everyone else gets connection status and live key data for their OWN keys only (the
+// provider headers the client sends); with none, liveKey/credits are null and no /key or
+// /credits call is made. Sign-up is open, so "signed in" is not a trust boundary.
 modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => {
-  const openRouterKey = req.header('X-OpenRouter-Key') || process.env.OPENROUTER_API_KEY || null;
-  const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
+  // Fail closed: an unreadable role means "not an admin".
+  const isAdmin = await hydrateAccessProfile(req).then((p) => p.isAdmin, () => false);
+  const keyFor = (header: string, env: string): string | null =>
+    req.header(header) || (isAdmin ? process.env[env] : null) || null;
+  const openRouterKey = keyFor('X-OpenRouter-Key', 'OPENROUTER_API_KEY');
+  const nvidiaKey = keyFor('X-Nvidia-Key', 'NVIDIA_API_KEY');
 
   const result = await getCatalog(true); // force live refresh of the OpenRouter catalog
   const allModels = await withDirectProviderModels(req, result.models);
@@ -156,7 +164,7 @@ modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => 
   const providers: Record<string, { connected: boolean; modelCount: number }> = {};
   for (const id of TEXT_PROVIDER_IDS) {
     const def = getProviderDef(id);
-    const key = (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
+    const key = def ? keyFor(def.header, def.keyEnv) : null;
     providers[id] = { connected: Boolean(key), modelCount: allModels.filter((m) => m.source === id).length };
   }
 

@@ -47,8 +47,24 @@ request header (this device's key)  >  account key (user_api_keys, encrypted)  >
   providers. `middleware/accountKeys.ts` fills in the account-stored key when no header is
   present. `X-Allowed-Sources` governance nulls any disabled provider's key everywhere.
 - **Validation**: `POST /api/keys/validate` does a cheap read-only `/models` call per
-  provider (200 = valid, 401/403 = invalid). Providers with no public listing are
-  reported "not verifiable" rather than guessed.
+  provider (OpenRouter: `/key`, status code only — the body is never read) (200 = valid,
+  401/403 = invalid). Providers with no public listing — and Pixazo / Ideogram, which have
+  no validation endpoint — are reported "not verifiable" rather than guessed. Signed-in only
+  (mounted after `requireAuth` + `attachAccountKeys`); it checks only the caller's own key
+  (the provider header, else the account key) — never the platform env key (no caller key, or
+  a source turned off by `X-Allowed-Sources` → `missing`, with no outbound call) — and answers
+  `{ provider, status, valid, message }` only (no usage/limit records). Messages are fixed
+  text: an unreachable provider is "Could not reach <Provider> right now." (the error itself
+  — hosts, IPs, a configured base URL — goes to the server log only), and an unknown provider
+  is a 400 "Unknown provider." that never echoes the input. `unavailable` (unreachable, or an
+  upstream error that is not 401/403) is **not** a verdict on the key. The Gemini key goes
+  upstream in `x-goog-api-key`, not the URL. The client checks a key on add, on Verify, and on
+  open when the last verdict is over 24 h old — never on a timer — and stores only verdicts
+  from a 200 answer: when the check can't run (our route's 401/429/5xx, offline, or
+  `unavailable`) the row says "Couldn't check…" / "Sign in again…" without recording it, so the
+  previous verdict stays and the next open re-checks. Older stored non-verdicts ("Validation
+  failed (HTTP …)", "Could not validate…", "Could not reach…", "… returned 503.") are treated
+  as unchecked.
 
 ## The catalog
 
