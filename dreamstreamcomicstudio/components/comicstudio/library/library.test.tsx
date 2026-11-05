@@ -133,7 +133,8 @@ describe('LibraryImage', () => {
       fireEvent.load(img);
     });
     expect(img.className).toContain('opacity-100');
-    expect(container.querySelector('[aria-hidden="true"]')).toHaveClass('invisible');
+    // MO-1: once the picture is in, the procedural fallback is unmounted (not merely hidden).
+    expect(container.querySelector('[aria-hidden="true"]')).toBeNull();
     act(() => {
       fireEvent.error(img);
     });
