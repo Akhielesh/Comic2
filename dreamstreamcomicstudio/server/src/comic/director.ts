@@ -8,8 +8,9 @@
 // The director never sees or writes image prompts; the job runner compiles those from
 // the doc. See docs/features/comic-studio-v4.md §6.8.
 
-import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type RefAsset } from '../../../shared/comic/doc.js';
-import type { StudioFocus } from '../../../shared/comic/events.js';
+import { castKindOf, newId, totalPanels, isPageStale, type AssetRef, type Card, type ComicDoc, type Msg, type NextStep, type RefAsset } from '../../../shared/comic/doc.js';
+import { STEER_LIMITS, type StudioFocus } from '../../../shared/comic/events.js';
+import { DOC_LIMITS } from '../../../shared/comic/limits.js';
 import { aspectFromSize, aspectMatches, resolveImageJob } from '../../../shared/comic/models.js';
 import { unitPrice } from '../../../shared/comic/plan.js';
 import { deriveLock } from '../../../shared/comic/modelLock.js';
@@ -38,18 +39,50 @@ import {
 import { REDIRECT_COPY, prefilterText } from './safety/index.js';
 import { buildTurnToolset, createDirectorTurn, pushNextSteps, type DirectorTool, type DirectorTurn } from './tools.js';
 import { conflictCardFor } from './conflictGuard.js';
-import { takeSteerOf, type SteerNote } from './session.js';
+import { openSteerOf, takeSteerOf, type SteerNote } from './session.js';
 import { toolGroups } from './tools/index.js';
 import { guardModelReply, modelAdviceOf, modelAdviceReply, modelFactLines, outageCardText, pushOutageSteps, R5_FAILURES, type OutageCard } from './tools/models.js';
 import { StudioError, type LlmResult, type StudioContext } from './types.js';
 
 export const MAX_TOOL_ROUNDS = 8;
 
-/** The user turn a drained steer inbox becomes (agent-editor plan §3 A2): one message, numbered when there are several. */
-export const steerNoteText = (notes: readonly SteerNote[]): string => {
+/**
+ * The user turn a drained steer inbox becomes (agent-editor plan §3 A2): one message, numbered when there are several.
+ * With `doc`, a note's focus (the page or balloons the creator had selected when they sent it) follows it as a Focus
+ * line, and so does its safety note (an adapt verdict or an IP steer from the screen), like a chat message's.
+ */
+export const steerNoteText = (notes: readonly SteerNote[], doc?: ComicDoc): string => {
+  const items = notes
+    .map((n) => ({
+      text: n.text.trim(),
+      extra: [doc && n.focus ? focusLine(doc, n.focus) : '', (n.safetyNote || '').trim()].filter(Boolean)
+    }))
+    .filter((n) => n.text);
+  if (items.length <= 1) return [`(The user added while you were working:) ${items[0]?.text ?? ''}`.trim(), ...(items[0]?.extra ?? [])].join('\n');
+  return `(The user added while you were working:)\n${items.map((n, i) => [`${i + 1}. ${n.text}`, ...n.extra.map((e) => `   ${e}`)].join('\n')).join('\n')}`;
+};
+
+/**
+ * What the reply says about steer notes the turn never read (they came in as it ended, after a question, a failure or
+ * a Stop): one honest line and one chip that sends them on (a steered note is never dropped without a word). A turn
+ * reads every note it can; this covers the rest. Each note is ≤ 6000 characters (routes MAX_STEER_CHARS) and at most
+ * STEER_LIMITS.inbox wait, so the chip's text is always a sendable message.
+ */
+export const unreadSteerReply = (notes: readonly SteerNote[], why: 'ended' | 'stopped'): { line: string; steps: NextStep[] } => {
   const texts = notes.map((n) => n.text.trim()).filter(Boolean);
-  if (texts.length <= 1) return `(The user added while you were working:) ${texts[0] ?? ''}`.trim();
-  return `(The user added while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+  if (!texts.length) return { line: '', steps: [] };
+  const one = texts.length === 1;
+  const label = one ? 'Send my note' : 'Send my notes';
+  const said =
+    why === 'stopped'
+      ? one
+        ? 'I stopped before reading the note you added.'
+        : `I stopped before reading the ${texts.length} notes you added.`
+      : one
+        ? "Your added note came in as I was finishing, so I haven't done it yet."
+        : `Your ${texts.length} added notes came in as I was finishing, so I haven't done them yet.`;
+  const say = one ? texts[0] : `(Sent while you were working:)\n${texts.map((t, i) => `${i + 1}. ${t}`).join('\n')}`;
+  return { line: `${said} Tap “${label}” to send ${one ? 'it' : 'them'} now.`, steps: [{ label, say }] };
 };
 /** Tool calls honored in a single round; extras are refused so one round can't fan out unboundedly. */
 export const MAX_CALLS_PER_ROUND = 12;
@@ -549,33 +582,53 @@ export async function runDirectorTurn(ctx: StudioContext, input: DirectorTurnInp
   }
   session.commit([{ op: 'message', msg: userMsg }]);
   const msgId = newId('msg');
+  const body: TurnBody = { userMsg, msgId, startedAt, userText, attachments, unread: [] };
   try {
-    await directorTurnBody(ctx, input, { userMsg, msgId, startedAt, userText, attachments });
+    await directorTurnBody(ctx, input, body);
   } catch (err) {
     // Never silent, even when something outside the model loop breaks (a malformed doc, a seam that
-    // throws): the user's message always gets an honest answer and a way to try again.
-    if (ctx.signal.aborted || session.doc.conversation.some((m) => m.id === msgId)) return;
+    // throws): the user's message always gets an honest answer and a way to try again. Steer notes the
+    // turn never read are answered for here too (only a Stop with nothing left unread ends quietly).
+    if (session.doc.conversation.some((m) => m.id === msgId)) return;
+    const unread = unreadSteerReply(body.unread, ctx.signal.aborted ? 'stopped' : 'ended');
+    if (ctx.signal.aborted) {
+      if (unread.line) {
+        session.commit([{ op: 'message', msg: { id: msgId, role: 'assistant', text: `Stopped.\n\n${unread.line}`, at: Date.now(), nextSteps: unread.steps } }]);
+      }
+      return;
+    }
     logger.error('comic_director_turn_crashed', { projectId: ctx.projectId, message: (err as Error)?.message });
+    const steps = [...unread.steps, ...(userText ? [{ label: 'Try again', say: userText }] : [])];
     session.commit([
       {
         op: 'message',
         msg: {
           id: msgId,
           role: 'assistant',
-          text: "Sorry — I couldn't finish that just now. Try again in a moment.",
+          text: ["Sorry — I couldn't finish that just now. Try again in a moment.", unread.line].filter(Boolean).join('\n\n'),
           at: Date.now(),
           cards: [noticeCard('error', 'The studio assistant hit a snag. Please try again.')],
-          ...(userText ? { nextSteps: [{ label: 'Try again', say: userText }] } : {})
+          ...(steps.length ? { nextSteps: steps } : {})
         }
       }
     ]);
   }
 }
 
+/** One turn's fixed inputs, plus the steer notes it never read (set when its loop ends, read by the crash path). */
+interface TurnBody {
+  userMsg: Msg;
+  msgId: string;
+  startedAt: number;
+  userText: string;
+  attachments: AssetRef[];
+  unread: SteerNote[];
+}
+
 async function directorTurnBody(
   ctx: StudioContext,
   input: DirectorTurnInput,
-  t: { userMsg: Msg; msgId: string; startedAt: number; userText: string; attachments: AssetRef[] }
+  t: TurnBody
 ): Promise<void> {
   const session = ctx.session;
   const { userMsg, msgId, startedAt, userText, attachments } = t;
@@ -706,10 +759,17 @@ async function directorTurnBody(
 
   let failure: StudioError | null = null;
   let cancelled = false;
+  // Steering (agent-editor plan §3 A2): from here to the end of the loop, POST /steer queues notes for this turn.
+  const closeSteer = openSteerOf(session);
+  let unread: SteerNote[] = [];
+  /** Extra rounds a note that came in during the model's final answer bought (≤ STEER_LIMITS.extraRounds). */
+  let extraRounds = 0;
+  /** Tool rounds allowed: MAX_TOOL_ROUNDS, plus one per extra round that starts at the limit (so a late note can act). */
+  let toolRoundCap = MAX_TOOL_ROUNDS;
   try {
     let rounds = 0;
     for (;;) {
-      const allowTools = rounds < MAX_TOOL_ROUNDS && !turn.askedUser;
+      const allowTools = rounds < toolRoundCap && !turn.askedUser;
       // On the forced final round we KEEP sending the tool specs: the history already holds
       // assistant tool_calls and their tool results, and some providers (Anthropic) reject a
       // request that carries those but defines no tools. We discard any tool call made here
@@ -729,7 +789,22 @@ async function directorTurnBody(
       const said = (result.text || '').trim();
       if (said) spoken.push(said);
       const calls = allowTools ? result.toolCalls || [] : [];
-      if (!calls.length) break;
+      if (!calls.length) {
+        // The model has answered. A note the creator sent while it was answering gets one more round instead of
+        // being stranded (at most STEER_LIMITS.extraRounds per turn): the answer so far stays, the note follows it.
+        if (!turn.askedUser && extraRounds < STEER_LIMITS.extraRounds && !ctx.signal.aborted) {
+          const late = takeSteerOf(session);
+          if (late.length) {
+            extraRounds += 1;
+            toolRoundCap = Math.max(toolRoundCap, rounds + 1);
+            // An empty answer adds no assistant turn (providers merge the user turns that then meet).
+            if (said) messages.push({ role: 'assistant', content: result.text || said });
+            messages.push({ role: 'user', content: steerNoteText(late, session.doc) });
+            continue;
+          }
+        }
+        break;
+      }
       rounds += 1;
       messages.push({
         role: 'assistant',
@@ -776,10 +851,10 @@ async function directorTurnBody(
       // ask_user ends the turn: the question and its chips are the reply.
       if (turn.askedUser) break;
       // Steering (agent-editor plan §3 A2): notes the creator sent while this round ran join before the next model call
-      // (drained only when that call follows, so a note is never taken into a turn that is ending). session.takeSteer()
-      // is a stub returning [] until wave 1 A2 TURN, so nothing changes yet.
+      // (drained only when that call follows, so a note is never taken into a turn that is ending; a note that arrives
+      // during the final answer buys an extra round above, and one the turn never reads is answered for in the reply).
       const steered = takeSteerOf(session);
-      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered) });
+      if (steered.length) messages.push({ role: 'user', content: steerNoteText(steered, session.doc) });
     }
   } catch (err) {
     const error = err instanceof StudioError ? err : new StudioError('INTERNAL', 'The studio assistant hit a snag. Please try again.', { cause: err });
@@ -791,6 +866,10 @@ async function directorTurnBody(
   } finally {
     flushHeld(true);
     unwatch();
+    // No later note joins this turn (POST /steer answers NOT_RUNNING and the client queues it); the reply answers for
+    // any it never read.
+    unread = closeSteer();
+    t.unread = unread;
   }
 
   // Conflicts (agent-editor plan §3 A3): what the creator changed mid-turn was kept; one card asks about the rest.
@@ -856,7 +935,7 @@ async function directorTurnBody(
       else if (!turn.nextSteps.some((s) => s.client?.type === 'open_model_picker')) pushNextSteps(turn, modelAdviceReply(advice, cost).steps.filter((s) => s.client));
     }
   }
-  if (cancelled && !text && !cards.length) {
+  if (cancelled && !text && !cards.length && !unread.length) {
     recordTextSpend(ctx, tracker, 'chat', 'Director');
     return;
   }
@@ -886,14 +965,18 @@ async function directorTurnBody(
   if (!cancelled && run.failed.length && !run.busy.length) pushNextSteps(turn, retryNextSteps(after, run.failed, byok));
   // A Try-again chip only when trying again can work; a used-up allowance would fail the same way.
   if (failure && userText && !notTransient) pushNextSteps(turn, [{ label: 'Try again', say: userText }]);
+  // Notes the turn never read: one honest line, and their chip first (it never falls off the chip cap).
+  const unreadReply = unreadSteerReply(unread, cancelled ? 'stopped' : 'ended');
+  if (unread.length) logger.info('comic_steer_unread', { projectId: ctx.projectId, count: unread.length, cancelled });
+  const nextSteps = [...unreadReply.steps, ...(cancelled ? [] : turn.nextSteps)].slice(0, DOC_LIMITS.nextSteps);
   const final: Msg = {
     id: msgId,
     role: 'assistant',
-    text: spokeBeforeStop ? `${text} (stopped)` : text,
+    text: [spokeBeforeStop ? `${text} (stopped)` : text, unreadReply.line].filter(Boolean).join('\n\n'),
     at: Date.now(),
     ...(cards.length ? { cards } : {}),
     ...(!cancelled && !failure ? { suggestions: suggestNextSteps(after) } : {}),
-    ...(!cancelled && turn.nextSteps.length ? { nextSteps: turn.nextSteps } : {})
+    ...(nextSteps.length ? { nextSteps } : {})
   };
   const ops = [{ op: 'message' as const, msg: final }];
   session.commit(ops);
