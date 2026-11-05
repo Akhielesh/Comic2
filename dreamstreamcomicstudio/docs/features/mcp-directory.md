@@ -31,7 +31,9 @@ User-supplied URLs go through four layers:
    servers may pass `allowInternal` (self-hosted sidecars): `buildMcpTools` grants it when the
    server carries `trusted: true` **and** its URL is one `envDesignMcpServers()` lists
    (`mayUseInternalHosts`). The flag alone never counts — it travels on objects a request body
-   can shape (SEC-DS web-surface-1, 2026-11-05).
+   can shape (SEC-DS web-surface-1, 2026-11-05). Such a server is then sent exactly as the
+   operator configured it: the env URL and its env `*_HEADERS`, never headers a request attached
+   to a copy of that URL.
 2. **DNS resolution guard** — `assertResolvedHostSafe`: resolves the host and rejects if
    **any** resolved IP is private/loopback/link-local/CGNAT/metadata/ULA (`isPrivateAddress`
    in `safeNet.ts`, which also decodes IPv4-mapped, NAT64 and 6to4 forms). Re-checked on
@@ -43,6 +45,10 @@ User-supplied URLs go through four layers:
    (SEC-DS N8). IP-literal hosts are checked up front (no lookup runs for them).
 4. **No redirects** — MCP requests use `redirect: 'manual'` and treat a 3xx as an error;
    `fetchPublicUrl` follows at most 3 redirects and re-runs layers 1-3 on every hop.
+
+Every JSON-RPC response is read with a byte cap (`MCP_MAX_RESPONSE_BYTES`, 8 MB after
+decompression; an error body 16 KB, `cappedBody.ts`): a larger body — or a small gzip/brotli
+body that inflates past it — fails the call as "too large" and its stream is cancelled.
 
 `assertSafePublicUrl` packages 1+2, and `fetchPublicUrl` 1-4, for any other outbound fetch
 of a user/model-supplied URL (reader mode, link unfurl, deep-research reads — all through
