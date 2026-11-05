@@ -180,4 +180,17 @@ describe('ComicsLanding', () => {
     for (const target of [...screen.getAllByRole('button'), ...screen.getAllByRole('link')]) expect(target.className).toMatch(/min-h-\[44px\]/);
     expect(screen.getByTestId('comics-hero-art')).toHaveAttribute('aria-hidden');
   });
+
+  it('primary buttons put the on-accent ink on the accent fill, never hard white (white on near-white in Atlas dark)', () => {
+    for (const signedIn of [false, true]) {
+      const { unmount } = render(<ComicsLanding signedIn={signedIn} {...handlers()} />);
+      const primaries = screen.getAllByRole('button').filter((b) => b.className.includes('bg-[var(--ds-accent)]'));
+      expect(primaries.length).toBeGreaterThanOrEqual(3);
+      for (const b of primaries) {
+        expect(b.className.split(/\s+/)).not.toContain('text-white');
+        expect(b.className).toContain('text-[var(--ds-on-accent)]');
+      }
+      unmount();
+    }
+  });
 });
