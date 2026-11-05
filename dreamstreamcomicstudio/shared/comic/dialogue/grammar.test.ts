@@ -117,6 +117,17 @@ describe('parseDialogue', () => {
     const r = parseDialogue(long, { selected: true });
     expect(Date.now() - t0).toBeLessThan(1500);
     expect(r.intents.length).toBeGreaterThan(0);
+    // Pathological shapes stay linear-ish (no catastrophic backtracking on user text).
+    for (const s of ["'".repeat(1500), '"'.repeat(1500), 'a '.repeat(1000), `move ${"x's ".repeat(400)}line to the top`, `between ${'mira and '.repeat(200)}`, `swap ${'x and '.repeat(300)}`]) {
+      const t = Date.now();
+      parseDialogue(s, { selected: true });
+      expect(Date.now() - t, s.slice(0, 20)).toBeLessThan(500);
+    }
+  });
+
+  it('a bare name before the kind is the speaker whose line it is ("make Mira whisper")', () => {
+    expect(parseDialogue('make Mira whisper').intents).toEqual([{ act: 'set_kind', target: { speaker: 'mira' }, kind: 'whisper' }]);
+    expect(parseDialogue('make the robot a whisper').intents).toEqual([{ act: 'set_kind', target: { speaker: 'the robot' }, kind: 'whisper' }]);
   });
 });
 

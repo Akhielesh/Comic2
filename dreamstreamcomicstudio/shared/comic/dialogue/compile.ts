@@ -59,6 +59,11 @@ const KIND_PLURAL: Record<LineKind, string> = { speech: 'speech balloons', thoug
 const WHO_VERB: Record<LineKind, string> = { speech: 'Who says it?', thought: "Who's thinking it?", whisper: "Who's whispering it?", shout: "Who's shouting it?", caption: 'Who says it?', sfx: 'Who says it?' };
 const DO_VERB: Record<LineKind, string> = { speech: 'say', thought: 'think', whisper: 'whisper', shout: 'shout', caption: 'say', sfx: 'say' };
 
+/** "a pov shot", "an establishing shot". */
+const shotWords = (shot: string): string => {
+  const w = shot.replace(/_/g, ' ');
+  return `${/^[aeiou]/.test(w) ? 'an' : 'a'} ${w} shot`;
+};
 const quote = (text: string, max = 40): string => {
   const t = (text || '').replace(/\s+/g, ' ').trim();
   return `“${t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t}”`;
@@ -289,7 +294,7 @@ function compileSetSpeaker(doc: ComicDoc, speaker: string, lines: LineHit[]): Co
     }
     ops.push({ op: 'line', pageId: w.page.id, panelId: w.panel.id, id: w.line.id, patch });
     const drawnHere = (w.panel.castIds ?? []).includes(id) || (w.page.render?.qc?.heads ?? []).some((h) => h.panel === w.panel.n && h.characterId === id);
-    if (!drawnHere) notes.push(`${name} isn't drawn in panel ${w.panel.n}, so the line reads as an off-panel voice${OFF_PANEL_SHOTS.has(w.panel.shot) ? ` (heard, not drawn: a ${w.panel.shot.replace('_', ' ')} shot)` : ''}.`);
+    if (!drawnHere) notes.push(`${name} isn't drawn in panel ${w.panel.n}, so the line reads as an off-panel voice${OFF_PANEL_SHOTS.has(w.panel.shot) ? ` (heard, not drawn: ${shotWords(w.panel.shot)})` : ''}.`);
     // A tail someone aimed at the old speaker follows the new one (or the panel edge for an off-panel voice).
     const stored = w.page.balloons.find((b) => b.lineId === w.line.id);
     if (!inArt(doc) && stored && typeof stored.tailX === 'number' && typeof stored.tailY === 'number' && !stored.locked) {
@@ -374,7 +379,7 @@ function compileAdd(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'add' 
   const ops: DocOp[] = [{ op: 'line', pageId: page.id, panelId: panel.id, id, patch, index: panel.lines.length }];
   const notes: string[] = [];
   if (speakerId && !(panel.castIds ?? []).includes(speakerId)) {
-    notes.push(`${speakerName(doc, speakerId)} isn't drawn in panel ${panel.n}, so the line reads as an off-panel voice${OFF_PANEL_SHOTS.has(panel.shot) ? ` (heard, not drawn: a ${panel.shot.replace('_', ' ')} shot)` : ''}.`);
+    notes.push(`${speakerName(doc, speakerId)} isn't drawn in panel ${panel.n}, so the line reads as an off-panel voice${OFF_PANEL_SHOTS.has(panel.shot) ? ` (heard, not drawn: ${shotWords(panel.shot)})` : ''}.`);
   }
   if (!inArt(doc)) {
     const preview = applyOps(doc, ops);
@@ -416,7 +421,7 @@ function placeOps(doc: ComicDoc, page: Page, lineId: string, place: Placement, s
   if (!g) return { ok: false as const, reason: 'That line has no balloon on this page.' };
   let y = out.y;
   // Several balloons sent to one spot stack in reading order, outline to outline, never on top of each other.
-  if (stackAfter && stackAfter.panelIndex === g.panelIndex) {
+  if (stackAfter && (place.frame === 'page' || stackAfter.panelIndex === g.panelIndex)) {
     const by = g.box.y - g.text.y;
     y = stackAfter.fromBottom ? Math.min(y, stackAfter.top - 0.01 - (by + g.box.h)) : Math.max(y, stackAfter.bottom + 0.01 - by);
   }
@@ -439,7 +444,8 @@ function compileMove(doc: ComicDoc, place: Placement, lines: LineHit[]): Compile
   for (const hit of lines) {
     const w = whereOf(doc, hit.lineId);
     if (!w) continue;
-    const key = `${w.page.id}|${w.panel.id}`;
+    // One spot per region: a page-frame spot is shared by every panel's line, so they stack too.
+    const key = place.frame === 'page' ? w.page.id : `${w.page.id}|${w.panel.id}`;
     const stackable = !place.nudge && lines.length > 1;
     const res = placeOps(doc, w.page, w.line.id, place, stackable ? stacks.get(key) : undefined);
     if (res.ok === false) {
@@ -543,7 +549,7 @@ function moveToPanelOps(doc: ComicDoc, w: Where, dest: Panel, index: number | un
   const sp = w.line.speakerId;
   if (dest.id !== w.panel.id && sp && SPOKEN.has(w.line.kind) && !(dest.castIds ?? []).includes(sp)) {
     const name = speakerName(doc, sp) ?? 'The speaker';
-    if (OFF_PANEL_SHOTS.has(dest.shot)) note = `${name} speaks off-panel there (heard, not drawn: a ${dest.shot.replace('_', ' ')} shot).`;
+    if (OFF_PANEL_SHOTS.has(dest.shot)) note = `${name} speaks off-panel there (heard, not drawn: ${shotWords(dest.shot)}).`;
     else if (offPanelOk) note = `${name} speaks off-panel in panel ${dest.n}.`;
     else {
       // Never re-assign a speaker when moving a line: ask how the line should work there.
@@ -835,7 +841,13 @@ function compileLink(doc: ComicDoc, intent: LinkIntent, lines: LineHit[], opts: 
   return result(ops, 'Link balloons', [], `Linked ${plural(chain.length, 'balloon')} in panel ${ws[0].panel.n} on page ${page.n} with connector necks, in reading order.`);
 }
 
-function compileEmphasis(intent: Extract<DialogueIntent, { act: 'emphasis' }>, lines: LineHit[]): CompileOutcome {
+const bare = (s: string): string => (s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+function compileEmphasis(doc: ComicDoc, intent: Extract<DialogueIntent, { act: 'emphasis' }>, lines: LineHit[]): CompileOutcome {
+  // "make 'Run!' bold" where the balloon says just "Run!": the whole balloon is the word, so style the balloon.
+  if (lines.length === 1 && bare(lines[0].text) && bare(lines[0].text) === bare(intent.words.join(' '))) {
+    return compileRestyle(doc, { act: 'restyle', target: intent.target, scope: 'line', style: intent.style === 'italic' ? { italic: true } : { weight: 700 } }, lines);
+  }
   const words = intent.words.filter(Boolean).map((w) => `“${w}”`).join(', ') || 'single words';
   const q = lines.length === 1 ? quote(lines[0].text, 30) : 'it';
   return {
@@ -896,7 +908,7 @@ export function compileWith(doc: ComicDoc, intent: DialogueIntent, lines: LineHi
     case 'unlink':
       return compileLink(doc, intent as LinkIntent, hits, opts);
     case 'emphasis':
-      return compileEmphasis(intent, hits);
+      return compileEmphasis(doc, intent, hits);
     default:
       return nothing("That isn't a dialogue edit I know.");
   }

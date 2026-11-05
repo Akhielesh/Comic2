@@ -910,7 +910,8 @@ const setKindX: Extractor = (c, prep, selected) => {
   const finish = (targetPhrase: string, term: string, who?: string): Clause | null => {
     const kind = kindOfTerm(term);
     if (!kind) return null;
-    const r = targetFrom(targetPhrase, prep, selected);
+    // "make Mira whisper": a bare name is the speaker whose line it is.
+    const r = targetFrom(targetPhrase, prep, selected) ?? subjectRef(targetPhrase, prep, selected);
     if (!r) return null;
     const ref = { ...r.ref };
     // "all the shouts → whispers": the target's own kind word is the old kind, never the new one.
@@ -921,11 +922,11 @@ const setKindX: Extractor = (c, prep, selected) => {
   };
   const tail = by(c);
   const s = tail.s;
-  if ((m = new RegExp(`\\b(?:make|turn|change|convert|switch|transform|have)\\s+(.*?)\\s*(?:into|to|in|as)?\\s*(?:a|an|some)?\\s*(${KIND_ALT})(?:\\s+(?:bubble|balloon|box|instead|again))?\\s*$`).exec(s))) {
+  if ((m = new RegExp(`\\b(?:make|turn|change|convert|switch|transform|have)\\s+(.*?)(?:\\s+(?:into|to|in|as))?(?:\\s+(?:a|an|some))?\\s+(${KIND_ALT})(?:\\s+(?:bubble|balloon|box|instead|again))?\\s*$`).exec(` ${s}`))) {
     if (/^(?:sound|sounds)$/.test(m[2])) return null;
     return finish(m[1], m[2], tail.who);
   }
-  if ((m = new RegExp(`^(.+?)\\s+(?:is|should be|must be|needs to be|has to be|becomes?|is actually|was)\\s+(?:a|an)?\\s*(${KIND_ALT})(?:\\s+(?:bubble|balloon|box))?\\s*$`).exec(s))) return finish(m[1], m[2], tail.who);
+  if ((m = new RegExp(`^(.+?)\\s+(?:is|should be|must be|needs to be|has to be|becomes?|is actually|was)\\s+(?:(?:a|an)\\s+)?(${KIND_ALT})(?:\\s+(?:bubble|balloon|box))?\\s*$`).exec(s))) return finish(m[1], m[2], tail.who);
   if ((m = new RegExp(`^${NAME}\\s+(?:should\\s+)?(whispers?|shouts?|yells?|screams?|thinks?|murmurs?)(?:\\s+(?:it|this|that|instead|here))?\\s*$`, 'u').exec(s))) {
     const kind = KIND_VERB[m[2]];
     const r = /^(?:she|he|they|it)$/.test(m[1]) ? { ref: selected ? { selected: true } : {}, anchored: false, deixis: true } : subjectRef(m[1], prep, selected);

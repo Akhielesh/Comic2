@@ -5,6 +5,7 @@ import type { ComicDoc } from '../doc';
 import { applyOps, type DocOp } from '../ops';
 import { inverseOps } from '../undo';
 import { IN_ART_REFUSAL, compileDialogue, compileIntent, compileWith, mergeLineOps } from './compile';
+import { parseDialogue } from './grammar';
 import { hitOf } from './resolve';
 import type { DialogueIntent, LineHit } from './types';
 import { apply, dialogueDoc, line } from './__fixtures__/dialogueDoc';
@@ -163,6 +164,39 @@ describe('compileIntent', () => {
     expect(r.ops).toEqual([]);
     expect(r.note).toBe("I can make the whole balloon bold now; bold on single words like “never” isn't available yet.");
     expect(r.followUps).toEqual([{ label: 'Make the balloon bold', say: 'Make “Wait for me” bold' }]);
+  });
+
+  it('"make \'Run!\' bold" when the balloon says just that word styles the whole balloon', () => {
+    const run = dialogueDoc((d) => {
+      d.pages[0].panels[2].lines[1].text = 'Run!';
+    });
+    const r = opsOf(run, { act: 'emphasis', target: {}, words: ['Run!'], style: 'bold' }, 'l_mira3');
+    expect(r.ops).toEqual([{ op: 'line_style', pageId: 'pg_1', lineIds: ['l_mira3'], patch: { weight: 700 } }]);
+  });
+
+  it('several balloons sent to one spot of the page stack instead of covering each other', () => {
+    const r = opsOf(doc, { act: 'move', target: {}, place: { frame: 'page', cell: 'top' } }, 'l_leo1', 'l_bolt1');
+    expect(r.ops).toHaveLength(2);
+    const after = applyOps(doc, r.ops);
+    const [a, b] = ['l_leo1', 'l_bolt1'].map((id) => after.pages[0].balloons.find((x) => x.lineId === id)!);
+    expect(b.y).toBeGreaterThan(a.y + 0.02);
+  });
+
+  it('the follow-up chips are sentences the grammar understands (the fast path can answer them)', () => {
+    const chips = [
+      ...opsOf(doc, { act: 'set_kind', target: {}, kind: 'thought' }, 'l_cap').followUps,
+      ...opsOf(doc, { act: 'set_kind', target: {}, kind: 'whisper' }, 'l_leo1').followUps,
+      ...opsOf(doc, { act: 'move', target: {}, place: { frame: 'panel', cell: 'top' } }, 'l_leo1').followUps,
+      ...opsOf(doc, { act: 'move_to_panel', target: {}, panel: 3 }, 'l_leo1').followUps.slice(0, 1),
+      ...opsOf(doc, { act: 'set_speaker', target: {}, speaker: 'Patel' }, 'l_leo1').followUps,
+      ...opsOf(doc, { act: 'emphasis', target: {}, words: ['never'], style: 'bold' }, 'l_leo1').followUps
+    ].filter((c) => !/another font/.test(c.label));
+    expect(chips.length).toBeGreaterThan(8);
+    for (const chip of chips) {
+      const g = parseDialogue(chip.say!);
+      expect([chip.say, g.confident], chip.say).toEqual([chip.say, true]);
+      expect(compileDialogue(doc, g.intents, { pageId: 'pg_1' }).status, chip.say).toBe('apply');
+    }
   });
 
   it('link chains in reading order within one panel; unlink clears both ends; across panels is refused', () => {
