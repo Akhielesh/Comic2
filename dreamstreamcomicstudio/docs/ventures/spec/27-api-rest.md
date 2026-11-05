@@ -61,7 +61,7 @@ before it are public or use `optionalAuth` (fail-open guest access). Three auth 
 |---|---|---|---|
 | **Required** | `requireAuth` | 401 without a valid token | studio, agents, ventures, chat, image |
 | **Optional** | `optionalAuth` | proceeds as guest; `req.user` set if a valid token is present | billing, shares, assistant |
-| **Public** | none | open | `/api/health`, `/api/models/catalog`, `/api/keys/validate` |
+| **Public** | none | open | `/api/health`, `/api/models/catalog` |
 
 > **F3 forward-note.** Today auth round-trips to Supabase per request. F3 moves to **local
 > JWKS verification + first-party session records** (idle/absolute timeouts, step-up re-auth
@@ -225,7 +225,7 @@ does not duplicate them. Summary catalog (verified against `server/src/index.ts`
 | **Health** | `/api/health` | public | liveness | ✅ shipped |
 | **System** | `/api/system` | public | `status`, `capabilities`, `dashboard`, `version`, `ready`, `diagnostics` | ✅ shipped |
 | **Models** | `/api/models` | public | `catalog` (stale-while-revalidate), `verify` | ✅ shipped |
-| **Keys** | `/api/keys` | public | BYOK provider key `validate` | ✅ shipped |
+| **Keys** | `/api/keys` | required | BYOK provider key `validate` (caller's own key only) | ✅ shipped |
 | **Assistant** | `/api/assistant` | optional | in-app help `chat` | ✅ shipped |
 | **Billing** | `/api/billing` | optional | pricing catalog, summary, subscription, Stripe checkout/portal, credits, spend cap, usage history, coupons | ✅ shipped |
 | **Webhook** | `/api/webhook` | signature | inbound `stripe` (raw body) | ✅ shipped |

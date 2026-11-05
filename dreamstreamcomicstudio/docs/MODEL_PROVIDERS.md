@@ -48,7 +48,12 @@ request header (this device's key)  >  account key (user_api_keys, encrypted)  >
   present. `X-Allowed-Sources` governance nulls any disabled provider's key everywhere.
 - **Validation**: `POST /api/keys/validate` does a cheap read-only `/models` call per
   provider (200 = valid, 401/403 = invalid). Providers with no public listing are
-  reported "not verifiable" rather than guessed.
+  reported "not verifiable" rather than guessed. Signed-in only (mounted after
+  `requireAuth` + `attachAccountKeys`); it checks only the caller's own key (the provider
+  header, else the account key) — never the platform env key (no caller key → `missing`) —
+  and answers `{ provider, status, valid, message }` only (no usage/limit records). The
+  Gemini key goes upstream in `x-goog-api-key`, not the URL. The client checks a key on add,
+  on Verify, and on open when the last verdict is over 24 h old — never on a timer.
 
 ## The catalog
 

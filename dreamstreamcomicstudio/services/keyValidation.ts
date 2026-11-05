@@ -3,9 +3,13 @@
 // Sends a candidate key in its provider header (the same header apiClient uses) so we can
 // live-check ANY key — including one being typed or one that isn't the active key — and get
 // back a valid / invalid / unsupported verdict for the API Configuration badges.
+//
+// Exactly one key travels per call — the one being checked, in its header (never in the body
+// or URL) — plus the session token: the route is signed-in only.
 
 import { buildApiUrl } from './clientConfig';
 import { PROVIDER_META, type ApiKeyProvider } from './apiKeys';
+import { supabase } from './supabase';
 
 export type KeyValidationStatus = 'valid' | 'invalid' | 'unsupported' | 'missing';
 
@@ -14,7 +18,6 @@ export interface KeyValidationResult {
   status: KeyValidationStatus;
   valid: boolean;
   message: string;
-  detail?: Record<string, unknown>;
 }
 
 export const validateApiKey = async (
@@ -23,10 +26,12 @@ export const validateApiKey = async (
 ): Promise<KeyValidationResult> => {
   const header = PROVIDER_META[provider].header;
   try {
+    const token = (await supabase.auth.getSession()).data.session?.access_token;
     const res = await fetch(buildApiUrl('/api/keys/validate'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         [header]: keyValue
       },
       body: JSON.stringify({ provider })

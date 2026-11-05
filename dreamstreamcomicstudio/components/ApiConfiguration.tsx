@@ -157,7 +157,10 @@ const McpServersPanel: React.FC = () => {
 
 // ── Key validation ────────────────────────────────────────────────────────────
 
-const VALIDATION_STALE_MS = 10 * 60 * 1000;
+// A stored verdict is re-checked when a key row is shown (the provider card is opened) and the
+// verdict is over a day old — never on a timer: a timed /api call keeps the sleepable backend
+// awake. Otherwise keys are checked on add and on the explicit "Verify" button.
+const VALIDATION_STALE_MS = 24 * 60 * 60 * 1000;
 
 const runValidation = async (k: ManagedApiKey): Promise<void> => {
   const r = await validateApiKey(k.provider, k.key);
@@ -575,15 +578,6 @@ export const ApiConfiguration: React.FC = () => {
   });
   const [counts, setCounts] = useState<Record<string, number>>({});
   const refresh = () => { setKeys(listKeys()); setGovVersion((v) => v + 1); };
-
-  useEffect(() => {
-    const id = setInterval(async () => {
-      const current = listKeys();
-      await Promise.all(current.map((k) => runValidation(k)));
-      setKeys(listKeys());
-    }, VALIDATION_STALE_MS);
-    return () => clearInterval(id);
-  }, []);
 
   // Live per-provider model counts, so each provider row shows what it actually offers.
   useEffect(() => {
