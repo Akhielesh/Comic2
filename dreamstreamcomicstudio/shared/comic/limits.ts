@@ -164,3 +164,73 @@ export const PRO_PAGE_LIMITS = {
    *  IMAGE_MODELS refs.total; a contract test holds it). The comic's model lock caps the real call. */
   maxRefsMax: 16
 } as const;
+
+// --- Pro Edit (master plan §2.3, §2.5; PE-0): one constant each, so a change is a one-line edit.
+//     LOAD vs WRITE: the doc.ts load normalizers apply only the plan's own bounds (marked "plan") and the byte budgets, so
+//     a rollback never truncates what a newer build stored. The bounds marked "WRITE, LEAD TO CONFIRM" were invented by
+//     PE-0 (the plan names none): only the PE-SERVER sanitizer and the players apply them, and S2 may change them freely. ---
+
+/** Page motion (`Page.motion`, the `motion` / `page_motion` ops). Times are milliseconds. */
+export const MOTION_LIMITS = {
+  /** Clips per page (plan §2.3). */
+  clipsPerPage: 48,
+  /** Keyframes per clip (plan §2.5). */
+  keysPerClip: 12,
+  /** Camera moves per page: at most one per panel (structural). */
+  cameraMoves: DOC_LIMITS.panelsPerPage,
+  /** A clip's offset from its anchor (reveal, panel or page) (plan §2.5). */
+  atMsMin: -2000,
+  atMsMax: 10000,
+  /** A clip's duration (plan §2.5). */
+  durMin: 100,
+  durMax: 4000,
+  /** Extra plays (plan §2.5). */
+  repeatMax: 20,
+  /** WRITE, LEAD TO CONFIRM: how long a page holds after its last beat. */
+  holdMaxMs: 10000,
+  /** WRITE, LEAD TO CONFIRM: preset parameters per clip, and the length of a text value. */
+  paramsPerClip: 8,
+  paramTextChars: 32,
+  /** WRITE, LEAD TO CONFIRM: keyframe channels: offset x/y in page fractions ±keyOffsetMax, scale 0..keyScaleMax, rotation
+   *  ±keyRotateMax degrees (t and opacity are 0..1 by definition). */
+  keyOffsetMax: 1,
+  keyScaleMax: 8,
+  keyRotateMax: 720,
+  /** JSON size of one page's motion (plan; the load normalizer drops clips past it), and of every page's motion together
+   *  (plan; server sanitizer). */
+  pageBytes: 16_384,
+  docBytes: 262_144,
+  /** Flash, flicker and blink at most this often (plan; WCAG 2.3.1; server sanitizer and the motion engine). */
+  flashHzMax: 3
+} as const;
+export type MotionLimitKey = keyof typeof MOTION_LIMITS;
+
+/** Procedural effects (`PageLayer.fx`) and the layer passthrough rule. */
+export const FX_LIMITS = {
+  /** JSON size of one layer's `fx` (plan §2.3: "At most 1 KB"). */
+  fxBytes: 1024,
+  /** WRITE, LEAD TO CONFIRM: parameters per effect, and the length of a text value (each generator's schema decides). */
+  paramsPerFx: 16,
+  paramTextChars: 32,
+  /** Segments one generator may draw (PE-FX; S3 tones may draw up to tonePrimitivesMax). */
+  segmentsMax: 400,
+  tonePrimitivesMax: 3000,
+  /** JSON size of a layer of a kind this build does not know, kept as written (opaque passthrough; plan §2.3: 2 KB). */
+  opaqueLayerBytes: 2048
+} as const;
+export type FxLimitKey = keyof typeof FX_LIMITS;
+
+/** Pro text styling (lettering/style.ts PRO_STYLE_KEYS) and named styles. */
+export const PRO_LETTER_LIMITS = {
+  /** Stacked outline strokes on one line's text (§2.3; the load normalizer keeps at most this many too). */
+  strokes: 3,
+  /** WRITE bounds, LEAD TO CONFIRM (not in the plan): stroke width and glow size in em, warp −max..max. Only the client
+   *  sanitizer (PE-LETTER / PE-SERVER) and the drawing apply them; the load normalizer keeps any finite stored value. */
+  strokeWMax: 0.3,
+  glowSizeMax: 0.5,
+  warpAmountMax: 1,
+  /** `letterStyle.named` (§2.3): at most this many saved styles, names of at most this many characters. */
+  namedStyles: 32,
+  namedNameChars: 40
+} as const;
+export type ProLetterLimitKey = keyof typeof PRO_LETTER_LIMITS;

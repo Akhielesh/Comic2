@@ -38,3 +38,11 @@ export * from './directions.js';
 export * from './anchors.js';
 // Ship 2 (B9): the pro editor's engine, under one namespace (comic.editor.*) so its many helpers never shadow a name
 export * as editor from './editor/index.js';
+// Pro Edit (master plan §2.3; PE-0): the Pro lettering font seam, and the effect, motion, asset and editor contracts under
+// their own namespaces (comic.fx.*, comic.motion.*, comic.assets.*, comic.pro.*) so their helpers never shadow a name.
+// The stored types (PageMotion, MotionClip, LayerFx, AssetLibRef…) are also re-exported by doc.ts.
+export * from './lettering/proFonts.js';
+export * as fx from './fx/index.js';
+export * as motion from './motion/index.js';
+export * as assets from './assets/index.js';
+export * as pro from './pro/index.js';

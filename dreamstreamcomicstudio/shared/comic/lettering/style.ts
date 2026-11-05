@@ -7,6 +7,7 @@
 // so every existing doc (normalized to `{ presetId: 'classic' }`) letters exactly as before.
 
 import type { Brief, ComicDoc, Format, Line, LineKind } from '../doc.js';
+import { PRO_LETTER_LIMITS } from '../limits.js'; // dependency-free constants (no cycle)
 
 export type LatinFontId =
   | 'comic-neue' | 'bangers' | 'patrick-hand' | 'kalam' | 'shantell-sans' | 'andika'
@@ -49,6 +50,46 @@ export const SFX_EFFECTS: readonly SfxEffect[] = ['filled_stroke', 'outlined', '
 export const FONT_WEIGHTS = [400, 500, 600, 700, 800, 900] as const;
 export const LINE_KINDS: readonly LineKind[] = ['speech', 'thought', 'caption', 'sfx', 'whisper', 'shout'];
 
+// ── Pro Edit lettering ids and text styling (master plan §2.3, §2.4; PE-0 contract, drawn by PE-LETTER) ─────────────
+//
+// New ids sit in PRO_* lists that sanitizeLetterStylePatch does NOT accept from a client until the drawing lands (S2), so
+// no client can store them yet. They are separate types on purpose: BubbleShape and SfxEffect key exhaustive records
+// elsewhere, and PE-LETTER folds the lists in when it draws them. Free text is already a caption with shape 'none'.
+//
+// Rollback rule (the opaque-layer rule, master plan §2.3 graft 1 and §6.4): the LOAD normalizer (normalizeDoc, through
+// `{keepStoredPro: true}`) keeps what a newer build stored, structurally checked, and resolveLetterStyle treats a stored
+// Pro id it cannot draw as absent. So S2 can be rolled back to this build without losing a creator's Pro lettering.
+
+export type ProBubbleShape = 'radio' | 'monster' | 'telepathic' | 'icicle' | 'heart' | 'sticky';
+export const PRO_BUBBLE_SHAPES: readonly ProBubbleShape[] = ['radio', 'monster', 'telepathic', 'icicle', 'heart', 'sticky'];
+/** extrude3d, outline_stack, wobble, shatter and gradient draw in S2; halftone_fill needs canvas patterns (S3). */
+export type ProSfxEffect = 'extrude3d' | 'outline_stack' | 'wobble' | 'shatter' | 'gradient' | 'halftone_fill';
+export const PRO_SFX_EFFECTS: readonly ProSfxEffect[] = ['extrude3d', 'outline_stack', 'wobble', 'shatter', 'gradient', 'halftone_fill'];
+/** Text warp (per glyph): offered for Latin, Cyrillic and CJK editions only (§2.4). */
+export type WarpStyle = 'none' | 'arc' | 'bulge' | 'wave' | 'rise' | 'flag';
+export const WARP_STYLES: readonly WarpStyle[] = ['none', 'arc', 'bulge', 'wave', 'rise', 'flag'];
+
+/** A two-stop text fill; `angle` in degrees (0 = left to right). */
+export interface FillGradient { from: Color; to: Color; angle: number }
+/** One of up to PRO_LETTER_LIMITS.strokes stacked outlines (supersedes `textStroke` when present); `w` in em. */
+export interface StrokeLayer { color: Color; w: number }
+/** A soft glow drawn as stacked strokes (never a filter, so SVG and canvas match); `size` in em. */
+export interface Glow { color: Color; size: number }
+
+/** The Pro text-styling fields of a LetterStyle, all present (PRO_LETTER_DEFAULTS fills the absent ones). */
+export interface ProLetterStyle {
+  fillGradient: FillGradient | null;
+  strokes: StrokeLayer[];
+  glow: Glow | null;
+  warp: WarpStyle;
+  /** −PRO_LETTER_LIMITS.warpAmountMax..warpAmountMax. */
+  warpAmount: number;
+}
+/** Neutral: a style without them draws exactly as today, so resolveLetterStyle stays byte-identical for old docs. */
+export const PRO_LETTER_DEFAULTS: Readonly<ProLetterStyle> = Object.freeze({ fillGradient: null, strokes: [], glow: null, warp: 'none', warpAmount: 0 });
+/** The Pro keys, in stored order (lineStyleBytes 2048 still caps the whole Line.style). */
+export const PRO_STYLE_KEYS: readonly (keyof ProLetterStyle)[] = ['fillGradient', 'strokes', 'glow', 'warp', 'warpAmount'];
+
 /** Fully resolved style of one line (every field present after resolveLetterStyle). */
 export interface LetterStyle {
   font: FontId;
@@ -73,8 +114,25 @@ export interface LetterStyle {
   rotate: number | 'auto'; // deg −30..30; 'auto' = today's SFX hash tilt
   sfxEffect: SfxEffect; // read only for kind 'sfx'
   arc: number; // −1..1
+  // --- Pro Edit text styling (master plan §2.3; PE-0). Optional and absent from every preset, so the resolved style of an
+  //     existing line is unchanged; read them through proLetterOf. Not accepted from a client until PE-LETTER; kept on
+  //     load (keepStoredPro) and skipped by resolveLetterStyle (no preset has them), so they draw nothing yet. ---
+  fillGradient?: FillGradient | null;
+  strokes?: StrokeLayer[];
+  glow?: Glow | null;
+  warp?: WarpStyle;
+  warpAmount?: number;
 }
 export type LetterStylePatch = Partial<LetterStyle>;
+
+/** A style's Pro text styling with the neutral defaults filled in (a fresh object; never the frozen defaults). */
+export const proLetterOf = (style: Partial<ProLetterStyle> | null | undefined): ProLetterStyle => ({
+  fillGradient: style?.fillGradient ?? PRO_LETTER_DEFAULTS.fillGradient,
+  strokes: Array.isArray(style?.strokes) ? style!.strokes.slice() : [],
+  glow: style?.glow ?? PRO_LETTER_DEFAULTS.glow,
+  warp: style?.warp ?? PRO_LETTER_DEFAULTS.warp,
+  warpAmount: typeof style?.warpAmount === 'number' && Number.isFinite(style.warpAmount) ? style.warpAmount : PRO_LETTER_DEFAULTS.warpAmount
+});
 
 export type LetteringPresetId = 'classic' | 'manga' | 'storybook' | 'noir' | 'webtoon' | 'retro_pulp' | 'minimal' | 'handwritten';
 export const LETTERING_PRESET_IDS: readonly LetteringPresetId[] = [
@@ -93,7 +151,9 @@ export interface LetteringStyle {
   /** Saved, named looks ("Villain", "Radio"), keyed by style id; lines use one through `Line.styleId` (agent-editor plan
    *  §3 C7, owner decision D6: LINKED — editing a style restyles every line using it). Optional; never part of a spec hash,
    *  but part of the publication fingerprint (through doc.letterStyle), so a style edit shows as a change since publishing.
-   *  The cascade and the sanitizer learn it in wave 2 (C-STYLES); until then sanitizeLetteringStyle drops it. */
+   *  The cascade and the client sanitizer learn it in wave 2 (C-STYLES). Until then no client can write it and the cascade
+   *  ignores it, but the load normalizer keeps it (≤ PRO_LETTER_LIMITS.namedStyles, names ≤ namedNameChars), and so do
+   *  the `letter_style` op and its inverse, so a rollback never loses a creator's saved styles. */
   named?: Record<string, NamedLetterStyle>;
 }
 /** One saved lettering look (agent-editor plan §3 C7): the name the creator gave it and the overrides it applies. */
@@ -478,9 +538,71 @@ const STYLE_KEYS: readonly (keyof LetterStyle)[] = [
   'padding', 'rotate', 'sfxEffect', 'arc'
 ];
 
-const sanitizeKey = (key: keyof LetterStyle, v: unknown): unknown => {
+/** Options of the lettering sanitizers. */
+export interface LetterSanitizeOptions {
+  /**
+   * LOAD ONLY: normalizeDoc (normalizeLine and the doc's letterStyle) passes it; client patch sanitizers never do. Also
+   * keeps the Pro lettering a newer build stored, when structurally valid: the PRO_STYLE_KEYS, a PRO_BUBBLE_SHAPES shape,
+   * a PRO_SFX_EFFECTS effect, a Pro font id (any well-formed id: PRO_FONT_IDS is empty until PE-FONTS) and
+   * `letterStyle.named`. The server hydrates through normalizeDoc and writes the whole doc back, so without it a
+   * rollback to this build would strip them for good. Numbers are kept as stored when finite (sign checks only): the
+   * write bounds (PRO_LETTER_LIMITS strokeWMax, glowSizeMax, warpAmountMax) are the client sanitizer's and the drawing's,
+   * so S2 may change them without another load-side deploy. resolveLetterStyle never draws a kept Pro id.
+   */
+  keepStoredPro?: boolean;
+}
+
+/** A stored font id this build may not ship (a Pro face, PE-FONTS): lower-case words joined by '-'. Load only. */
+const STORED_FONT_ID_RE = /^[a-z][a-z0-9-]{1,47}$/;
+/** A named style's key ('st_…' or any short id) as stored. */
+const NAMED_STYLE_KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+const finiteNum = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : undefined);
+const nonNegNum = (v: unknown): number | undefined => {
+  const n = finiteNum(v);
+  return n !== undefined && n >= 0 ? n : undefined;
+};
+
+/** A stored Pro text-styling value, structurally valid (load only), or undefined. */
+const storedProKey = (key: keyof ProLetterStyle, v: unknown): unknown => {
   switch (key) {
-    case 'font': return oneOf(v, FONT_IDS);
+    case 'fillGradient': {
+      if (v === null) return null;
+      if (!isObj(v)) return undefined;
+      const from = normalizeColor(v.from);
+      const to = normalizeColor(v.to);
+      const angle = finiteNum(v.angle);
+      return from && to && angle !== undefined ? { from, to, angle } : undefined;
+    }
+    case 'strokes': {
+      if (!Array.isArray(v)) return undefined;
+      const out: StrokeLayer[] = [];
+      for (const s of v) {
+        if (out.length >= PRO_LETTER_LIMITS.strokes) break;
+        if (!isObj(s)) continue;
+        const color = normalizeColor(s.color);
+        const w = nonNegNum(s.w);
+        if (color && w !== undefined) out.push({ color, w });
+      }
+      // [] is kept (no strokes, superseding textStroke); a list with nothing valid in it is dropped.
+      return out.length || !v.length ? out : undefined;
+    }
+    case 'glow': {
+      if (v === null) return null;
+      if (!isObj(v)) return undefined;
+      const color = normalizeColor(v.color);
+      const size = nonNegNum(v.size);
+      return color && size !== undefined ? { color, size } : undefined;
+    }
+    case 'warp': return oneOf(v, WARP_STYLES);
+    case 'warpAmount': return finiteNum(v);
+    default: return undefined;
+  }
+};
+
+const sanitizeKey = (key: keyof LetterStyle, v: unknown, keep = false): unknown => {
+  switch (key) {
+    case 'font': return oneOf(v, FONT_IDS) ?? (keep && typeof v === 'string' && STORED_FONT_ID_RE.test(v) ? v : undefined);
     case 'sizeScale': return num(v, 0.5, 3.5);
     case 'weight': return snapWeight(v);
     case 'italic': return typeof v === 'boolean' ? v : undefined;
@@ -495,25 +617,37 @@ const sanitizeKey = (key: keyof LetterStyle, v: unknown): unknown => {
     case 'shadow': return sanitizeShadow(v);
     case 'borderWidth': return num(v, 0, 4);
     case 'borderStyle': return oneOf(v, BORDER_STYLES);
-    case 'shape': return oneOf(v, BUBBLE_SHAPES);
+    case 'shape': return oneOf(v, BUBBLE_SHAPES) ?? (keep ? oneOf(v, PRO_BUBBLE_SHAPES) : undefined);
     case 'tail': return oneOf(v, TAIL_STYLES);
     case 'tailWidth': return num(v, 0.4, 2);
     case 'padding': return num(v, 0, 3);
     case 'rotate': return v === 'auto' ? 'auto' : num(v, -30, 30);
-    case 'sfxEffect': return oneOf(v, SFX_EFFECTS);
+    case 'sfxEffect': return oneOf(v, SFX_EFFECTS) ?? (keep ? oneOf(v, PRO_SFX_EFFECTS) : undefined);
     case 'arc': return num(v, -1, 1);
     default: return undefined;
   }
 };
 
-/** Clamp ranges, validate enums/font ids/colours (normalizeColor); drop unknown keys; undefined if nothing valid. */
-export function sanitizeLetterStylePatch(raw: unknown): LetterStylePatch | undefined {
+/**
+ * Clamp ranges, validate enums/font ids/colours (normalizeColor); drop unknown keys; undefined if nothing valid.
+ * A client patch (no options) never keeps a Pro key or id; `{keepStoredPro: true}` is the load normalizer's (see
+ * LetterSanitizeOptions), and puts the Pro keys after the base keys in PRO_STYLE_KEYS order (idempotent).
+ */
+export function sanitizeLetterStylePatch(raw: unknown, opts?: LetterSanitizeOptions): LetterStylePatch | undefined {
   if (!isObj(raw)) return undefined;
+  const keep = opts?.keepStoredPro === true;
   const out: Record<string, unknown> = {};
   for (const key of STYLE_KEYS) {
     if (!(key in raw)) continue;
-    const value = sanitizeKey(key, raw[key]);
+    const value = sanitizeKey(key, raw[key], keep);
     if (value !== undefined) out[key] = value;
+  }
+  if (keep) {
+    for (const key of PRO_STYLE_KEYS) {
+      if (!(key in raw)) continue;
+      const value = storedProKey(key, raw[key]);
+      if (value !== undefined) out[key] = value;
+    }
   }
   return Object.keys(out).length ? (out as LetterStylePatch) : undefined;
 }
@@ -531,41 +665,68 @@ export function mergeStylePatch(a: LetterStylePatch | undefined, b: LetterStyleP
   return Object.keys(out).length ? (out as LetterStylePatch) : undefined;
 }
 
-const sanitizeKinds = (raw: unknown): Partial<Record<LineKind, LetterStylePatch>> | undefined => {
+const sanitizeKinds = (raw: unknown, opts?: LetterSanitizeOptions): Partial<Record<LineKind, LetterStylePatch>> | undefined => {
   if (!isObj(raw)) return undefined;
   const out: Partial<Record<LineKind, LetterStylePatch>> = {};
   for (const k of LINE_KINDS) {
-    const p = sanitizeLetterStylePatch(raw[k]);
+    const p = sanitizeLetterStylePatch(raw[k], opts);
     if (p) out[k] = p;
   }
   return Object.keys(out).length ? out : undefined;
 };
-const sanitizeSpeakers = (raw: unknown, allow?: ReadonlySet<string>): Record<string, LetterStylePatch> | undefined => {
+const sanitizeSpeakers = (raw: unknown, allow?: ReadonlySet<string>, opts?: LetterSanitizeOptions): Record<string, LetterStylePatch> | undefined => {
   if (!isObj(raw)) return undefined;
   const out: Record<string, LetterStylePatch> = {};
   for (const [id, v] of Object.entries(raw)) {
     if (!id || id.length > 64 || (allow && !allow.has(id))) continue;
-    const p = sanitizeLetterStylePatch(v);
+    const p = sanitizeLetterStylePatch(v, opts);
     if (p) out[id] = p;
   }
   return Object.keys(out).length ? out : undefined;
 };
 
-/** Missing/invalid → DEFAULT_LETTERING (no auto). */
-export function sanitizeLetteringStyle(raw: unknown): LetteringStyle {
+/**
+ * Stored named styles (load only), structurally valid: a key of 1..64 id characters (never __proto__ and friends), a
+ * name of 1..PRO_LETTER_LIMITS.namedNameChars characters, an object patch (sanitized with the Pro keys kept; it may be
+ * empty), at most PRO_LETTER_LIMITS.namedStyles in stored order. Undefined when none is left.
+ */
+const storedNamedStyles = (raw: unknown): Record<string, NamedLetterStyle> | undefined => {
+  if (!isObj(raw)) return undefined;
+  const out: Record<string, NamedLetterStyle> = {};
+  let n = 0;
+  for (const [id, v] of Object.entries(raw)) {
+    if (n >= PRO_LETTER_LIMITS.namedStyles) break;
+    if (!NAMED_STYLE_KEY_RE.test(id) || UNSAFE_KEYS.has(id) || !isObj(v)) continue;
+    if (typeof v.name !== 'string' || !v.name.trim() || v.name.length > PRO_LETTER_LIMITS.namedNameChars || !isObj(v.patch)) continue;
+    out[id] = { name: v.name, patch: sanitizeLetterStylePatch(v.patch, { keepStoredPro: true }) ?? {} };
+    n += 1;
+  }
+  return n ? out : undefined;
+};
+
+/**
+ * Missing/invalid → DEFAULT_LETTERING (no auto). `{keepStoredPro: true}` (normalizeDoc only) also keeps the Pro keys in
+ * base, kinds and speakers, and `named` (see LetterSanitizeOptions).
+ */
+export function sanitizeLetteringStyle(raw: unknown, opts?: LetterSanitizeOptions): LetteringStyle {
   if (!isObj(raw)) return { ...DEFAULT_LETTERING };
   const presetId = oneOf(raw.presetId, LETTERING_PRESET_IDS);
   if (!presetId) return { ...DEFAULT_LETTERING };
+  const keep: LetterSanitizeOptions | undefined = opts?.keepStoredPro === true ? { keepStoredPro: true } : undefined;
   const out: LetteringStyle = { presetId };
   if (typeof raw.auto === 'boolean') out.auto = raw.auto;
-  const base = sanitizeLetterStylePatch(raw.base);
+  const base = sanitizeLetterStylePatch(raw.base, keep);
   if (base) out.base = base;
-  const kinds = sanitizeKinds(raw.kinds);
+  const kinds = sanitizeKinds(raw.kinds, keep);
   if (kinds) out.kinds = kinds;
-  const speakers = sanitizeSpeakers(raw.speakers);
+  const speakers = sanitizeSpeakers(raw.speakers, undefined, keep);
   if (speakers) out.speakers = speakers;
   const margin = num(raw.safeMargin, 0, MAX_SAFE_MARGIN);
   if (margin !== undefined) out.safeMargin = margin;
+  if (keep) {
+    const named = storedNamedStyles(raw.named);
+    if (named) out.named = named;
+  }
   return out;
 }
 
@@ -631,11 +792,20 @@ export function sanitizeLetteringStyleOpPatch(raw: unknown, castIds: ReadonlySet
 
 // ── Resolution ───────────────────────────────────────────────────────────────
 
+const DRAWN_SHAPES: ReadonlySet<string> = new Set(BUBBLE_SHAPES);
+const DRAWN_SFX_EFFECTS: ReadonlySet<string> = new Set(SFX_EFFECTS);
+const DRAWN_FONTS: ReadonlySet<string> = new Set(FONT_IDS);
+/** A stored value this build can draw. A Pro shape, SFX effect or font a newer build stored (kept on load) is not: the
+ *  cascade skips it, so every exhaustive record keyed by them (place.ts, ShapePicker, fonts.ts) only sees drawn ids. */
+const drawable = (k: string, v: unknown): boolean =>
+  k === 'shape' ? DRAWN_SHAPES.has(v as string) : k === 'sfxEffect' ? DRAWN_SFX_EFFECTS.has(v as string) : k === 'font' ? DRAWN_FONTS.has(v as string) : true;
+
 const applyPatch = (style: LetterStyle, patch: LetterStylePatch | null | undefined): LetterStyle => {
   if (!patch) return style;
   const out = { ...style } as Record<string, unknown>;
+  // `k in style`: the Pro text keys are in no preset, so a stored one is skipped too (it draws nothing yet).
   for (const [k, v] of Object.entries(patch)) {
-    if (v !== undefined && k in style) out[k] = v;
+    if (v !== undefined && k in style && drawable(k, v)) out[k] = v;
   }
   return out as unknown as LetterStyle;
 };

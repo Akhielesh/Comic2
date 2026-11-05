@@ -5,7 +5,9 @@
 // cost", "History starts here", "Where you left off".
 // No git words (branch, merge, commit, checkout, fork, HEAD, diff, rebase, revert) — the creator never sees them.
 
-import type { ComicDoc } from '../doc.js';
+import type { ComicDoc, Page, PageLayer } from '../doc.js';
+import { fxName } from '../fx/names.js'; // metadata only: never the registry (generators stay in the Pro chunk)
+import { motionPresetWord, type MotionTarget } from '../motion/index.js';
 import { HISTORY_LIMITS } from '../limits.js';
 import { languageSpec } from '../languages.js';
 import type { DocOp } from '../ops.js';
@@ -37,7 +39,11 @@ export type PanelMoment =
   /** A dismissed check brought back (finding op with dismissed false/null). */
   | 'check_back'
   /** "Show as drawn": the page left panels mode, nothing else changed. */
-  | 'as_drawn';
+  | 'as_drawn'
+  // --- Pro Edit (PE-0): effects and stickers are overlays (`layer` ops); motion is the page's animation ---
+  | 'effects'
+  | 'stickers'
+  | 'motion';
 
 /**
  * A ChangeItem refined by its panel moment: types.ts ChangeItem with `moment` present (additive: `what` stays an
@@ -48,7 +54,7 @@ export type PanelChangeItem = ChangeItem & { moment: PanelMoment };
 
 const PANEL_MOMENTS: ReadonlySet<string> = new Set<PanelMoment>([
   'layout', 'editable', 'rebind', 'flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'overlays', 'continuity', 'scenes', 'finding',
-  'check_back', 'as_drawn'
+  'check_back', 'as_drawn', 'effects', 'stickers', 'motion'
 ]);
 export const isPanelChangeItem = (c: unknown): c is PanelChangeItem =>
   !!c && typeof c === 'object' && typeof (c as PanelChangeItem).moment === 'string' && PANEL_MOMENTS.has((c as PanelChangeItem).moment);
@@ -68,7 +74,10 @@ const MOMENT_WHAT: Record<PanelMoment, ChangeWhat> = {
   scenes: 'details',
   finding: 'art',
   check_back: 'art',
-  as_drawn: 'panels'
+  as_drawn: 'panels',
+  effects: 'page_text',
+  stickers: 'page_text',
+  motion: 'page_text'
 };
 const ART_MOMENTS: ReadonlySet<PanelMoment> = new Set<PanelMoment>(['flatten', 'redraw_panel', 'draw_panel', 'enrich', 'cuts', 'finding', 'check_back']);
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
@@ -174,7 +183,11 @@ export const panelMomentsOfOps = (
         add('cuts', op.pageId);
         break;
       case 'layer':
-        add('overlays', op.pageId);
+        add(layerMoment(op, doc), op.pageId);
+        break;
+      case 'motion':
+      case 'page_motion':
+        add('motion', op.pageId);
         break;
       case 'continuity':
         add('continuity', op.pageId);
@@ -192,6 +205,16 @@ export const panelMomentsOfOps = (
     }
   }
   return [...items.values()];
+};
+
+/** Pro Edit (PE-0): an effect or a sticker overlay is worded as one ("changed the effects on page 2"); any other overlay
+ *  as an overlay. The op's patch decides, else the layer as it is in `doc` (a deleted one reads as an overlay). */
+const layerMoment = (op: Extract<DocOp, { op: 'layer' }>, doc?: Pick<ComicDoc, 'pages'>): PanelMoment => {
+  const patch = op.patch && typeof op.patch === 'object' ? op.patch : undefined;
+  const layer = doc?.pages.find((p) => p.id === op.pageId)?.layers?.find((l) => l.id === op.id);
+  if (patch?.kind === 'effect' || patch?.fx || (!patch?.kind && layer?.kind === 'effect')) return 'effects';
+  if (patch?.src?.lib || (!patch?.src && layer?.src?.lib)) return 'stickers';
+  return 'overlays';
 };
 
 /** Diff items a moment on the same page stands for (its own words replace them); dialogue edits are kept. */
@@ -248,14 +271,20 @@ const momentPhrase = (moment: PanelMoment, list: PanelChangeItem[], actor: Histo
       return `brought back a check on ${pages}`;
     case 'as_drawn':
       return `showed ${pages} as drawn`;
+    case 'effects':
+      return `changed the effects on ${pages}`;
+    case 'stickers':
+      return `changed the stickers on ${pages}`;
+    case 'motion':
+      return `changed the animation on ${pages}`;
     default:
       return `changed ${pages}`;
   }
 };
 
 const MOMENT_ORDER: readonly PanelMoment[] = [
-  'redraw_panel', 'draw_panel', 'enrich', 'flatten', 'editable', 'rebind', 'layout', 'as_drawn', 'cuts', 'overlays', 'finding', 'check_back',
-  'continuity', 'scenes'
+  'redraw_panel', 'draw_panel', 'enrich', 'flatten', 'editable', 'rebind', 'layout', 'as_drawn', 'cuts', 'overlays', 'effects', 'stickers',
+  'motion', 'finding', 'check_back', 'continuity', 'scenes'
 ];
 const momentPhrases = (items: PanelChangeItem[], actor: HistoryActor): string[] =>
   MOMENT_ORDER.flatMap((m) => {
@@ -458,3 +487,72 @@ export const changeItemsFromDiff = (diff: BookDiff, by: HistoryActor, b?: Pick<C
 
 /** How many lines a set of changes touched (the "12 lines need updating" count). */
 export const changedLineCount = (changes: readonly ChangeItem[]): number => linesOf(changes.filter((c) => c.what === 'dialogue' || c.what === 'translation'));
+
+// ── Pro Edit (master plan §2.3 History; PE-0): plain words for one Pro edit ─────────────────────────────────────────
+
+const lowerFirst = (s: string): string => (s ? s[0].toLowerCase() + s.slice(1) : s);
+const shortQuote = (text: string, max = 24): string => {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return `“${t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t}”`;
+};
+const layerNoun = (layer: Pick<PageLayer, 'name' | 'kind' | 'fx' | 'src'> | undefined): string => {
+  if (!layer) return 'an overlay';
+  if (layer.name) return shortQuote(layer.name);
+  if (layer.kind === 'effect') return lowerFirst(fxName(layer.fx));
+  if (layer.src?.lib) return 'the sticker';
+  return layer.kind === 'shape' ? 'the shape' : 'the picture';
+};
+/** What a clip animates, in words: a line's text (“BOOM”), an overlay, or "panel 2". */
+const motionTargetWords = (page: Page | undefined, target: MotionTarget | undefined): string => {
+  if (!target || !page) return 'an object';
+  if (target.k === 'line') {
+    const line = page.panels.flatMap((p) => p.lines).find((l) => l.id === target.id);
+    return line ? shortQuote(line.text) : 'a balloon';
+  }
+  if (target.k === 'panel') {
+    const panel = page.panels.find((p) => p.id === target.id);
+    return panel ? `panel ${panel.n}` : 'a panel';
+  }
+  return layerNoun(page.layers?.find((l) => l.id === target.id));
+};
+
+/**
+ * The words for one Pro Edit op, for an undo entry or a History line, against the doc BEFORE it: "Added speed lines",
+ * "Animated “BOOM”: Shake", "Removed the animation from panel 2", "Changed the camera on page 3", "Added a sticker".
+ * Undefined for any other op (an ordinary overlay keeps its existing words). Pure. §2.3 writes the example as
+ * 'Animated 'BOOM': Shake'; the curly quotes are the house style of every History line (shortQuote): LEAD TO CONFIRM.
+ */
+export const proEditLabel = (doc: Pick<ComicDoc, 'pages'>, op: DocOp): string | undefined => {
+  if (!op || typeof op !== 'object') return undefined;
+  switch (op.op) {
+    case 'motion': {
+      const page = doc.pages.find((p) => p.id === op.pageId);
+      const prev = page?.motion?.clips.find((c) => c.id === op.id);
+      const patch = op.patch && typeof op.patch === 'object' ? op.patch : undefined;
+      const what = motionTargetWords(page, patch?.target ?? prev?.target);
+      if (!patch) return prev ? `Removed the animation from ${what}` : undefined;
+      if (!prev) return `Animated ${what}: ${motionPresetWord(patch.preset ?? '')}`;
+      if (patch.preset && patch.preset !== prev.preset) return `Animated ${what}: ${motionPresetWord(patch.preset)}`;
+      return `Changed the animation of ${what}`;
+    }
+    case 'page_motion': {
+      const n = doc.pages.find((p) => p.id === op.pageId)?.n;
+      const where = n ? `page ${n}` : 'the page';
+      if (!op.patch) return `Cleared the camera on ${where}`;
+      return 'camera' in op.patch ? `Changed the camera on ${where}` : `Changed how long ${where} holds`;
+    }
+    case 'layer': {
+      const prev = doc.pages.find((p) => p.id === op.pageId)?.layers?.find((l) => l.id === op.id);
+      const patch = op.patch && typeof op.patch === 'object' ? op.patch : undefined;
+      const effect = patch?.kind === 'effect' || !!patch?.fx || (!patch?.kind && prev?.kind === 'effect');
+      const sticker = !effect && (!!patch?.src?.lib || (!patch?.src && !!prev?.src?.lib));
+      if (!effect && !sticker) return undefined;
+      const noun = effect ? lowerFirst(fxName(patch?.fx ?? prev?.fx)) : 'a sticker';
+      if (!patch) return prev ? `Removed ${effect ? noun : 'a sticker'}` : undefined;
+      if (!prev) return `Added ${noun}`;
+      return `Changed ${effect ? noun : 'the sticker'}`;
+    }
+    default:
+      return undefined;
+  }
+};

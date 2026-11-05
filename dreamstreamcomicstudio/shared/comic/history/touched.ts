@@ -225,6 +225,10 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
         return [K.page(op.pageId), K.art(op.pageId), ...editionPageKeys(doc, op.pageId)];
       case 'layer':
       case 'continuity':
+      // Pro Edit (PE-0): a page's motion is a page field like its overlays (captured by exclusion in `page:<id>`);
+      // effects and stickers are `layer` ops.
+      case 'motion':
+      case 'page_motion':
         return [K.page(op.pageId)];
       case 'page_cuts':
         // New cuts can move the page's lettering (clipped overlays, balloons, translated overrides) like a frame move.
@@ -245,10 +249,12 @@ export const touchedKeys = (op: DocOp, doc?: ComicDoc): string[] => {
 /** Free software actions: their batches are the editor's ("no AI cost"), whoever asked: the Ship 2 panel actions, a
  *  fitted image (fit_render, derived art) and balloon re-fits (relayout_balloons) (§4.2). */
 export const EDITOR_ACTIONS: ReadonlySet<string> = new Set(['panelize_page', 'flatten_page', 'rebind_panels', 'apply_finding', 'fit_render', 'relayout_balloons']);
-/** Paid actions: their batches are the AI's, whoever clicked them ("Plan the pages" runs the writer; §4.2, §4.3 #1). */
-export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages', 'plan_pages']);
-/** Panel ops the server writes as free software when no action names the batch. */
-const EDITOR_JOB_OPS: ReadonlySet<string> = new Set(['page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'finding', 'continuity']);
+/** Actions whose batches are the AI's, whoever clicked them: the paid ones ("Plan the pages" runs the writer; §4.2,
+ *  §4.3 #1) and answering a conflict card, whose 'theirs' commit applies the director's held-back changes (live agent A3;
+ *  free, but the work is the director's). */
+export const AI_ACTIONS: ReadonlySet<string> = new Set(['fix_panel', 'enrich_pages', 'plan_pages', 'resolve_conflict']);
+/** Panel ops the server writes as free software when no action names the batch (Pro Edit motion included). */
+const EDITOR_JOB_OPS: ReadonlySet<string> = new Set(['page_frames', 'page_cuts', 'panels_order', 'panel_add', 'panel_remove', 'layer', 'finding', 'continuity', 'motion', 'page_motion']);
 
 /** The render fields a job writes around a drawing without making one: its status, error, attempts, QC report and a
  *  safety withhold. A render patch made only of these changes nothing in the book ('system', §4.2). */

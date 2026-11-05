@@ -11,10 +11,13 @@
 // Server-only ops (render, message, plan_input_hash, …) have no inverse: a batch holding one is not undoable.
 // Ship 2 (K2a): the panels/consistency ops (ops.ts PRO_PAGE_PATCH_OPS) are inverted too; their inverses are Ship 2 ops
 // and v5 patchable ops. While PRO_PAGE_OPS_PATCHABLE is off a client cannot send them, so isUndoable says false.
+// Pro Edit (PE-0): `motion` and `page_motion` (ops.ts PRO_EDIT_OPS) are inverted exactly from day one; their inverses
+// are the same two ops. While PRO_EDIT_OPS_PATCHABLE is off, isUndoable says false for a batch holding one.
 
 import {
   bookOf,
   findPage,
+  knownLayersOf,
   letterStyleOf,
   readerOf,
   getRender,
@@ -85,7 +88,8 @@ const lettersRestore = (doc: ComicDoc, page: Page, lineIds: string[]): DocOp[] =
 const followRestore = (doc: ComicDoc, after: ComicDoc, page: Page, now: Page): DocOp[] => {
   const restore: DocOp[] = [];
   if (!sameJson(page.balloons, now.balloons)) restore.push({ op: 'balloons', pageId: page.id, balloons: page.balloons });
-  for (const layer of page.layers || []) {
+  // Opaque layers never follow (ops.ts), so they are never patched back: the server refuses any patch to one.
+  for (const layer of knownLayersOf(page)) {
     const moved = now.layers?.find((l) => l.id === layer.id);
     if (moved && !sameJson(moved.box, layer.box)) restore.push({ op: 'layer', pageId: page.id, id: layer.id, patch: { box: layer.box } });
   }
@@ -148,7 +152,8 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
       const moved = new Set([...(op.lineHomes || []).map((h) => h.lineId), ...(op.linesTo ? removed.lines.map((l) => l.id) : [])]);
       const deleted = removed.lines.map((l) => l.id).filter((id) => !moved.has(id));
       if (deleted.length) restore.push(...lettersRestore(doc, page, deleted));
-      for (const layer of page.layers || []) if (layer.clip === op.id) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { clip: op.id } });
+      // Only the overlays it unclipped: an opaque layer keeps its clip (ops.ts), and the server refuses a patch to one.
+      for (const layer of knownLayersOf(page)) if (layer.clip === op.id) restore.push({ op: 'layer', pageId: op.pageId, id: layer.id, patch: { clip: op.id } });
       return restore;
     }
     case 'layer': {
@@ -183,6 +188,31 @@ const invertShip2 = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null 
     case 'finding': {
       const prev = findPage(doc, op.pageId)?.render.qc?.findings?.find((f) => f.id === op.id);
       return prev ? [{ op: 'finding', pageId: op.pageId, id: op.id, patch: { dismissed: prev.dismissed ?? null } }] : [];
+    }
+    default:
+      return null;
+  }
+};
+
+/** Pro Edit (PE-0): the exact inverse of a page-motion op (every op it returns is in INVERTIBLE_OPS). */
+const invertMotion = (doc: ComicDoc, op: DocOp, after: ComicDoc): DocOp[] | null => {
+  switch (op.op) {
+    case 'motion': {
+      const page = findPage(doc, op.pageId);
+      if (!page) return [];
+      const clips = page.motion?.clips || [];
+      const index = clips.findIndex((c) => c.id === op.id);
+      if (index < 0) return [{ op: 'motion', pageId: op.pageId, id: op.id, patch: null }];
+      const prev = clips[index];
+      if (op.patch === null || op.patch === undefined) return [{ op: 'motion', pageId: op.pageId, id: op.id, patch: withoutId(prev) as never, index }];
+      // The whole previous clip (null for keys it did not have), so a patch that adds keys is undone too.
+      const now = findPage(after, op.pageId)?.motion?.clips.find((c) => c.id === op.id);
+      return [{ op: 'motion', pageId: op.pageId, id: op.id, patch: withoutId(restoreFull(prev, now)) as never }];
+    }
+    case 'page_motion': {
+      const page = findPage(doc, op.pageId);
+      if (!page) return [];
+      return [{ op: 'page_motion', pageId: op.pageId, patch: { camera: page.motion?.camera ?? null, hold: page.motion?.hold ?? null } }];
     }
     default:
       return null;
@@ -431,6 +461,10 @@ const invertOne = (doc: ComicDoc, op: DocOp): DocOp[] | null => {
     case 'consistency':
     case 'finding':
       return invertShip2(doc, op, after);
+    // --- Pro Edit (PE-0) ---
+    case 'motion':
+    case 'page_motion':
+      return invertMotion(doc, op, after);
     case 'glossary_term': {
       const prev = i18nOf(doc).glossary.find((t) => t.id === op.id);
       if (!prev) return [{ op: 'glossary_term', id: op.id, patch: null }];
@@ -524,7 +558,10 @@ const LABELS: Partial<Record<DocOp['op'], [string, string?]>> = {
   scene: ['edit a scene', 'edit {n} scenes'],
   consistency: ['change consistency settings'],
   // Neutral: a finding op both dismisses a check and brings one back.
-  finding: ['change a check', 'change {n} checks']
+  finding: ['change a check', 'change {n} checks'],
+  // --- Pro Edit (PE-0) ---
+  motion: ['change an animation', 'change {n} animations'],
+  page_motion: ['change the page animation']
 };
 
 /** Human label for an undo entry ("restyle 3 balloons", "move page 4"). */

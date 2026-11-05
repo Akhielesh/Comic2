@@ -2,8 +2,12 @@
 //
 //   band 0  the page (paper, frame style)
 //   band 1  the art: panel frames, and the overlays kept inside a panel (drawn with their frame)
-//   band 2  page overlays (stickers, images, shapes not kept in a panel)
+//   band 2  page overlays (stickers, images, shapes and effects not kept in a panel)
 //   band 3  lettering (balloons, captions, sound effects), always on top
+//
+// Pro Edit (PE-0): effect layers and library stickers are overlays like any other (band 1 inside a panel, band 2 on the
+// page). A layer of a kind this build does not know (kept as written for a newer build) is not in the scene at all: it
+// is never drawn, hit or edited.
 //
 // Z-order is free only WITHIN a band, so a sticker can never bury dialogue. Reading order belongs to panels and their
 // lines (readingOrder.ts), never to z. Pure: no React, no server imports, no clock, no I/O.
@@ -11,7 +15,8 @@
 // This module also holds what every editor operation shares: the result shape (K2a ops plus their inverse from the one
 // undo path, `inverseOps`, never a parallel undo system), refusals in plain words, locks, and fresh ids.
 
-import { artModeOf, cutFor, layersOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type PageLayer, type Panel } from '../doc.js';
+import { fxName } from '../fx/names.js'; // metadata only: never the registry (generators stay in the Pro chunk)
+import { artModeOf, cutFor, knownLayersOf, layersOf, type Balloon, type Box, type ComicDoc, type Line, type LineKind, type Page, type PageLayer, type Panel } from '../doc.js';
 import { i18nOf } from '../i18n.js';
 import { PLAN_W, type LetterPlan } from '../lettering/layout.js';
 import type { DocOp } from '../ops.js';
@@ -97,8 +102,14 @@ export const quoteOf = (text: string, max = 24): string => {
   return `“${t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t}”`;
 };
 const SHAPE_WORD: Record<string, string> = { rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line' };
-export const layerWord = (layer: PageLayer): string =>
-  layer.name || (layer.kind === 'shape' ? SHAPE_WORD[layer.shape?.type ?? 'rect'] ?? 'Shape' : 'Image');
+/** An overlay in words: its name, else "Rectangle", "Image", "Sticker", or the effect's name ("Speed lines"). */
+export const layerWord = (layer: PageLayer): string => {
+  if (layer.name) return layer.name;
+  if (layer.kind === 'shape') return SHAPE_WORD[layer.shape?.type ?? 'rect'] ?? 'Shape';
+  if (layer.kind === 'effect') return fxName(layer.fx);
+  if (layer.kind === 'image') return layer.src?.lib ? 'Sticker' : 'Image';
+  return 'Overlay';
+};
 
 /** Design §6.4: "May look soft: shown 1.8× larger than drawn", naming the panel. */
 export const softNote = (page: Pick<Page, 'panels'>, panelId: string, up: number): string => `${cap1(panelWord(page, panelId))} may look soft: shown ${up}× larger than drawn`;
@@ -207,7 +218,7 @@ export const lockedReason = (page: Page, ref: SceneRef): string | undefined => {
     return p?.frame?.locked ? `${cap1(panelWord(page, p.id))} is locked. Unlock it to change it.` : undefined;
   }
   if (ref.kind === 'overlay') {
-    const l = layersOf(page).find((x) => x.id === ref.id);
+    const l = knownLayersOf(page).find((x) => x.id === ref.id);
     return l?.locked ? `${layerWord(l)} is locked. Unlock it to change it.` : undefined;
   }
   if (ref.kind === 'balloon') {
@@ -332,7 +343,7 @@ export function buildScene(doc: ComicDoc, page: Page, opts: SceneOptions = {}): 
   const shown = framesShown(doc, page);
   const objects: SceneObject[] = [{ kind: 'page', id: page.id, band: BANDS.page, box: { ...UNIT_BOX }, z: 0, rot: 0, locked: false, label: `Page ${page.n}` }];
 
-  const layers = layersOf(page);
+  const layers = knownLayersOf(page);
   const frameIndex = new Map(page.panels.map((p, i) => [p.id, i]));
   const frames = page.panels
     .map((panel, i) => ({ panel, i, z: panel.frame?.z ?? 0 }))

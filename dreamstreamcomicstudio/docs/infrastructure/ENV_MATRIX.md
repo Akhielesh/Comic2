@@ -134,6 +134,25 @@ free software: none adds a model or image call of its own, and nothing here bypa
 `dialogue_edit` (a reserved core director tool), the `GROUP_HINTS` fix and the `read_pages` line ids need no flag: they
 only make the existing director more accurate.
 
+## Comic Studio: Pro Edit (master plan §2.10)
+
+Read once per request by `server/src/comic/access.ts` (`studioCapsFor` → `proCapsFromEnv`,
+`shared/comic/capabilities.ts`) into `caps.proMotion`, `caps.proStickers` and `caps.readerMotion`; the client reads the
+caps only (`proMotionOn`, `proStickersOn`, `readerMotionOn`), never env. `COMIC_PRO_MOTION` and `COMIC_PRO_STICKERS`
+take the stages above (`off` | `admins` | `all`, same synonyms; a bare `on` means admins only).
+`COMIC_READER_MOTION` takes `off` | `all` only: readers are not signed in, so `admins` (and a bare `on`) read as `off`
+(`readerMotionStage`). Every one defaults to `off`, so leaving them unset changes nothing. All Pro Edit work is free
+software: no flag here adds a model or image call. The workspace itself stays behind `COMIC_PRO_EDITOR_V2` (above).
+`PRO_EDIT_OPS_PATCHABLE` is a code constant in `shared/comic/ops.ts`, not env: it lets clients send the `motion` /
+`page_motion` ops and is flipped only after the PE-SERVER sanitizer is deployed. Backend env: a `vars` entry in
+`api-proxy/wrangler.jsonc` or a D1 `backend_env` row. Rolling back = set `off`.
+
+| Var | Turns on | Default | Cost | Safe to go to `all` when |
+|---|---|---|---|---|
+| `COMIC_PRO_MOTION` | `caps.proMotion`: the Easy Animate row, the Animate timeline, motion edits in the editor and "Export this page as video" | `off` (then `admins` after S3) | — | Frame-determinism and flash (≤ 3 Hz) tests pass; the phone playback budget is met |
+| `COMIC_PRO_STICKERS` | `caps.proStickers`: the Stickers tab in Assets | `off` | — | D6 approved, the licence gate (PE-LICENCE) merged, the credits block live |
+| `COMIC_READER_MOTION` | `caps.readerMotion`: readers play the creator's motion (guided view; loops only on screen). `off` \| `all` only | `off` | — | Reduced-motion and Calm motion checks pass on the public reader |
+
 ## Admin cost centre (optional live Cloudflare usage)
 
 | Var | Consumer | Req? | Cost | Notes |
