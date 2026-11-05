@@ -164,3 +164,60 @@ export const PRO_PAGE_LIMITS = {
    *  IMAGE_MODELS refs.total; a contract test holds it). The comic's model lock caps the real call. */
   maxRefsMax: 16
 } as const;
+
+// --- Pro Edit (master plan §2.3, §2.5; PE-0): one constant each, so a change is a one-line edit. The normalizers in
+//     doc.ts clamp counts and ranges; the byte budgets, the flash rule and the registries are the server sanitizer's. ---
+
+/** Page motion (`Page.motion`, the `motion` / `page_motion` ops). Times are milliseconds. */
+export const MOTION_LIMITS = {
+  /** Clips per page. */
+  clipsPerPage: 48,
+  /** Keyframes per clip. */
+  keysPerClip: 12,
+  /** Camera moves per page (at most one per panel). */
+  cameraMoves: 9,
+  /** A clip's offset from its anchor (reveal, panel or page). */
+  atMsMin: -2000,
+  atMsMax: 10000,
+  durMin: 100,
+  durMax: 4000,
+  repeatMax: 20,
+  /** How long a page holds after its last beat. */
+  holdMaxMs: 10000,
+  /** Preset parameters per clip, and the length of a text value. */
+  paramsPerClip: 8,
+  paramTextChars: 32,
+  /** JSON size of one page's motion, and of every page's motion together (server sanitizer). */
+  pageBytes: 16_384,
+  docBytes: 262_144,
+  /** Flash, flicker and blink at most this often (WCAG 2.3.1; server sanitizer and the motion engine). */
+  flashHzMax: 3
+} as const;
+export type MotionLimitKey = keyof typeof MOTION_LIMITS;
+
+/** Procedural effects (`PageLayer.fx`) and the layer passthrough rule. */
+export const FX_LIMITS = {
+  /** JSON size of one layer's `fx`. */
+  fxBytes: 1024,
+  /** Parameters per effect, and the length of a text value. */
+  paramsPerFx: 16,
+  paramTextChars: 32,
+  /** Segments one generator may draw (PE-FX; S3 tones may draw up to tonePrimitivesMax). */
+  segmentsMax: 400,
+  tonePrimitivesMax: 3000,
+  /** JSON size of a layer of a kind this build does not know, kept as written (opaque passthrough). */
+  opaqueLayerBytes: 2048
+} as const;
+export type FxLimitKey = keyof typeof FX_LIMITS;
+
+/** Pro text styling (lettering/style.ts PRO_STYLE_KEYS). */
+export const PRO_LETTER_LIMITS = {
+  /** Stacked outline strokes on one line's text. */
+  strokes: 3,
+  /** Stroke width and glow size, in em. */
+  strokeWMax: 0.3,
+  glowSizeMax: 0.5,
+  /** Warp amount is −warpAmountMax..warpAmountMax. */
+  warpAmountMax: 1
+} as const;
+export type ProLetterLimitKey = keyof typeof PRO_LETTER_LIMITS;

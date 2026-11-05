@@ -1413,7 +1413,7 @@ describe('P2-AMEND events, models, caps, safety text, versions, public payload',
 import { expectTypeOf } from 'vitest';
 import { HISTORY_ACTION_TYPES, type HistoryCard } from './history/types';
 import { HISTORY_LIMITS, MAX_ALTERNATIVES } from './limits';
-import { KNOWN_DOC_OPS, isKnownDocOp } from './ops';
+import { KNOWN_DOC_OPS, PRO_EDIT_OPS, PRO_EDIT_OPS_PATCHABLE, isKnownDocOp } from './ops';
 import { STREAM_EVENT_NAMES, normalizeTimeZone } from './events';
 import { HISTORY_ENV, historyEnabled, historyFlagOn, maxAlternativesOf, resolveStudioCaps, withHistoryCaps } from './capabilities';
 
@@ -1424,8 +1424,11 @@ describe('Comic History contract (H0)', () => {
     for (const op of SERVER_ONLY_OPS) expect(CLIENT_PATCHABLE_OPS.has(op), op).toBe(false);
     expect(isKnownDocOp({ op: 'history_restore' })).toBe(true);
     expect(isKnownDocOp({ op: 'panel_frames_from_the_future' })).toBe(false);
-    // K2a: the Ship 2 ops are known to every client even while they are not client-patchable yet.
-    expect(KNOWN_DOC_OPS.size).toBe(CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length + (PRO_PAGE_OPS_PATCHABLE ? 0 : PRO_PAGE_PATCH_OPS.length));
+    // K2a: the Ship 2 ops are known to every client even while they are not client-patchable yet; PE-0: so are the Pro
+    // Edit ops (motion, page_motion), off until PRO_EDIT_OPS_PATCHABLE is flipped.
+    expect(KNOWN_DOC_OPS.size).toBe(
+      CLIENT_PATCHABLE_OPS.size + SERVER_ONLY_OPS.length + (PRO_PAGE_OPS_PATCHABLE ? 0 : PRO_PAGE_PATCH_OPS.length) + (PRO_EDIT_OPS_PATCHABLE ? 0 : PRO_EDIT_OPS.length)
+    );
     const doc = richDoc();
     const restore: DocOp = { op: 'history_restore', set: { brief: { ...doc.brief, title: 'Then' } }, mode: 'merge', versionId: 'v1', at: 5 };
     expect(isUndoable(doc, [restore])).toBe(false);

@@ -49,6 +49,42 @@ export const SFX_EFFECTS: readonly SfxEffect[] = ['filled_stroke', 'outlined', '
 export const FONT_WEIGHTS = [400, 500, 600, 700, 800, 900] as const;
 export const LINE_KINDS: readonly LineKind[] = ['speech', 'thought', 'caption', 'sfx', 'whisper', 'shout'];
 
+// ── Pro Edit lettering ids and text styling (master plan §2.3, §2.4; PE-0 contract, drawn by PE-LETTER) ─────────────
+//
+// New ids sit in PRO_* lists that sanitizeLetterStylePatch does NOT accept until the drawing lands (S2), so no client
+// can store them yet. They are separate types on purpose: BubbleShape and SfxEffect key exhaustive records elsewhere,
+// and PE-LETTER folds the lists in when it draws them. Free text is already a caption with shape 'none'.
+
+export type ProBubbleShape = 'radio' | 'monster' | 'telepathic' | 'icicle' | 'heart' | 'sticky';
+export const PRO_BUBBLE_SHAPES: readonly ProBubbleShape[] = ['radio', 'monster', 'telepathic', 'icicle', 'heart', 'sticky'];
+/** extrude3d, outline_stack, wobble, shatter and gradient draw in S2; halftone_fill needs canvas patterns (S3). */
+export type ProSfxEffect = 'extrude3d' | 'outline_stack' | 'wobble' | 'shatter' | 'gradient' | 'halftone_fill';
+export const PRO_SFX_EFFECTS: readonly ProSfxEffect[] = ['extrude3d', 'outline_stack', 'wobble', 'shatter', 'gradient', 'halftone_fill'];
+/** Text warp (per glyph): offered for Latin, Cyrillic and CJK editions only (§2.4). */
+export type WarpStyle = 'none' | 'arc' | 'bulge' | 'wave' | 'rise' | 'flag';
+export const WARP_STYLES: readonly WarpStyle[] = ['none', 'arc', 'bulge', 'wave', 'rise', 'flag'];
+
+/** A two-stop text fill; `angle` in degrees (0 = left to right). */
+export interface FillGradient { from: Color; to: Color; angle: number }
+/** One of up to PRO_LETTER_LIMITS.strokes stacked outlines (supersedes `textStroke` when present); `w` in em. */
+export interface StrokeLayer { color: Color; w: number }
+/** A soft glow drawn as stacked strokes (never a filter, so SVG and canvas match); `size` in em. */
+export interface Glow { color: Color; size: number }
+
+/** The Pro text-styling fields of a LetterStyle, all present (PRO_LETTER_DEFAULTS fills the absent ones). */
+export interface ProLetterStyle {
+  fillGradient: FillGradient | null;
+  strokes: StrokeLayer[];
+  glow: Glow | null;
+  warp: WarpStyle;
+  /** −PRO_LETTER_LIMITS.warpAmountMax..warpAmountMax. */
+  warpAmount: number;
+}
+/** Neutral: a style without them draws exactly as today, so resolveLetterStyle stays byte-identical for old docs. */
+export const PRO_LETTER_DEFAULTS: Readonly<ProLetterStyle> = Object.freeze({ fillGradient: null, strokes: [], glow: null, warp: 'none', warpAmount: 0 });
+/** The Pro keys, in stored order (lineStyleBytes 2048 still caps the whole Line.style). */
+export const PRO_STYLE_KEYS: readonly (keyof ProLetterStyle)[] = ['fillGradient', 'strokes', 'glow', 'warp', 'warpAmount'];
+
 /** Fully resolved style of one line (every field present after resolveLetterStyle). */
 export interface LetterStyle {
   font: FontId;
@@ -73,8 +109,24 @@ export interface LetterStyle {
   rotate: number | 'auto'; // deg −30..30; 'auto' = today's SFX hash tilt
   sfxEffect: SfxEffect; // read only for kind 'sfx'
   arc: number; // −1..1
+  // --- Pro Edit text styling (master plan §2.3; PE-0). Optional and absent from every preset, so the resolved style of an
+  //     existing line is unchanged; read them through proLetterOf. Not accepted by the sanitizer until PE-LETTER. ---
+  fillGradient?: FillGradient | null;
+  strokes?: StrokeLayer[];
+  glow?: Glow | null;
+  warp?: WarpStyle;
+  warpAmount?: number;
 }
 export type LetterStylePatch = Partial<LetterStyle>;
+
+/** A style's Pro text styling with the neutral defaults filled in (a fresh object; never the frozen defaults). */
+export const proLetterOf = (style: Partial<ProLetterStyle> | null | undefined): ProLetterStyle => ({
+  fillGradient: style?.fillGradient ?? PRO_LETTER_DEFAULTS.fillGradient,
+  strokes: Array.isArray(style?.strokes) ? style!.strokes.slice() : [],
+  glow: style?.glow ?? PRO_LETTER_DEFAULTS.glow,
+  warp: style?.warp ?? PRO_LETTER_DEFAULTS.warp,
+  warpAmount: typeof style?.warpAmount === 'number' && Number.isFinite(style.warpAmount) ? style.warpAmount : PRO_LETTER_DEFAULTS.warpAmount
+});
 
 export type LetteringPresetId = 'classic' | 'manga' | 'storybook' | 'noir' | 'webtoon' | 'retro_pulp' | 'minimal' | 'handwritten';
 export const LETTERING_PRESET_IDS: readonly LetteringPresetId[] = [
