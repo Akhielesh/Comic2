@@ -3,13 +3,14 @@ import { ChevronDown, ExternalLink, AlertTriangle, ShieldCheck } from 'lucide-re
 import { MODEL_BENCHMARKS } from '../../services/modelBenchmarks';
 import { IMAGE_MODEL_RANKING } from '../../services/imageModelRanking';
 import { isStale } from '../../services/modelDataAudit';
+import { ScrollX } from './ScrollX';
 
 interface Row { label: string; asOf: string; source: string; sourceUrl: string }
 
 const SourceTable: React.FC<{ title: string; rows: Row[] }> = ({ title, rows }) => (
   <div>
     <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">{title}</div>
-    <div className="overflow-x-auto">
+    <ScrollX label={`${title} sources`} hint="Scroll sideways for more">
       <table className="w-full text-[12px] border-collapse">
         <tbody>
           {rows.map((r) => {
@@ -32,7 +33,7 @@ const SourceTable: React.FC<{ title: string; rows: Row[] }> = ({ title, rows }) 
           })}
         </tbody>
       </table>
-    </div>
+    </ScrollX>
   </div>
 );
 

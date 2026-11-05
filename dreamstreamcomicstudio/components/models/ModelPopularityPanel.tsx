@@ -6,8 +6,13 @@ import { fetchModelPopularity, type ModelPopularity, type PopularityWindow } fro
 // "What DreamStream users run" — an OpenRouter-style popularity ranking of the models
 // the platform's users actually call, from /api/models/popularity (hourly server cache).
 // Built from the calm-studio Primitive Kit (Surface + RangeTabs, --ds-* tokens, inline
-// bars — no chart libs). Degrades gracefully: loading skeleton first, and the whole
-// panel hides itself if the endpoint doesn't exist yet or returns an error.
+// bars — no chart libs). The route is served behind sign-in, so the Model Library renders this
+// panel only for a signed-in user. Loading skeleton first; then the ranking, or a calm empty state.
+// The server lists a model only once enough distinct people used it in the window (a k-anonymity
+// floor), so an empty list is the normal answer on a young platform, and only a list known to be
+// empty gets that explanation. fetchModelPopularity (services/modelPopularity) currently answers null
+// both for an empty list and for a failed request: null gets neutral words that give no reason, and is
+// not kept, so switching windows or reopening the view asks again.
 
 const WINDOW_LABELS = ['Weekly', 'Monthly', 'All-time'] as const;
 type WindowLabel = (typeof WINDOW_LABELS)[number];
@@ -94,44 +99,63 @@ export const ModelPopularityCard: React.FC<{
           </div>
         ))}
       </div>
-    ) : data ? (
+    ) : data && data.models.length > 0 ? (
       <ModelPopularityList data={data} />
+    ) : data ? (
+      <ModelPopularityEmpty />
     ) : (
-      <div className="px-3 pb-4 text-[11px] text-[var(--ds-muted)]">No usage data for this range yet.</div>
+      <ModelPopularityUnavailable />
     )}
   </Surface>
+);
+
+/** Nothing could be shown, and the reason is not known (an empty list or a failed read): no reason given. */
+export const ModelPopularityUnavailable: React.FC = () => (
+  <div className="px-3 pb-4 pt-1" data-popularity-unavailable>
+    <p className="text-[12px] font-medium text-[var(--ds-ink)]">No rankings to show right now</p>
+    <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-[var(--ds-muted)]">Check back later.</p>
+  </div>
+);
+
+/** The empty state: the window was read and no model has enough distinct users in it to be listed. */
+export const ModelPopularityEmpty: React.FC = () => (
+  <div className="px-3 pb-4 pt-1" data-popularity-empty>
+    <p className="text-[12px] font-medium text-[var(--ds-ink)]">No rankings to show yet</p>
+    <p className="mt-0.5 max-w-prose text-[11px] leading-snug text-[var(--ds-muted)]">
+      A model appears here once enough different people have used it in this period, so no one&apos;s usage can be singled out.
+    </p>
+  </div>
 );
 
 /** Live panel: Weekly / Monthly / All-time tabs over /api/models/popularity. */
 export const ModelPopularityPanel: React.FC = () => {
   const [label, setLabel] = useState<WindowLabel>('Weekly');
-  const [cache, setCache] = useState<Partial<Record<PopularityWindow, ModelPopularity>>>({});
-  const [failed, setFailed] = useState<Partial<Record<PopularityWindow, boolean>>>({});
+  // Per window, what was read (kept: the server caches hourly). A null answer is not kept.
+  const [results, setResults] = useState<Partial<Record<PopularityWindow, ModelPopularity>>>({});
+  // The window whose last read answered null (an empty list or a failure; not told apart yet).
+  const [unavailable, setUnavailable] = useState<PopularityWindow | null>(null);
 
   const win = LABEL_TO_WINDOW[label];
-  const data = cache[win] ?? null;
-  const loading = !data && !failed[win];
+  const result = results[win];
+  const loading = !result && unavailable !== win;
 
   useEffect(() => {
-    if (cache[win] || failed[win]) return;
+    if (results[win]) return;
+    setUnavailable(null);
     let on = true;
     void fetchModelPopularity(win).then((res) => {
       if (!on) return;
-      if (res) setCache((c) => ({ ...c, [win]: res }));
-      else setFailed((f) => ({ ...f, [win]: true }));
+      if (res) setResults((r) => ({ ...r, [win]: res }));
+      else setUnavailable(win);
     });
     return () => {
       on = false;
     };
-  }, [win, cache, failed]);
-
-  // Endpoint missing/erroring and nothing ever loaded → hide the panel entirely.
-  const anyData = Object.keys(cache).length > 0;
-  if (failed[win] && !anyData) return null;
+  }, [win, results]);
 
   return (
     <ModelPopularityCard
-      data={data}
+      data={result ?? null}
       loading={loading}
       right={<RangeTabs<WindowLabel> options={WINDOW_LABELS} value={label} accent={ACCENT} onChange={setLabel} />}
     />

@@ -30,6 +30,7 @@ export const SectionHeader: React.FC<{
       </div>
       {subtitle && <p className="text-xs text-slate-600 mt-0.5 max-w-2xl">{subtitle}</p>}
     </div>
-    {right && <div className="flex items-center gap-2 shrink-0">{right}</div>}
+    {/* Wraps (never wider than the header) so two action buttons fit a 390 px screen. */}
+    {right && <div className="flex flex-wrap items-center gap-2 shrink-0 max-w-full">{right}</div>}
   </div>
 );

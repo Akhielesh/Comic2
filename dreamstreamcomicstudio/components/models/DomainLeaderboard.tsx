@@ -18,6 +18,10 @@ import { setSelectedModel } from '../../services/modelSelection';
 import { CODING_RECOMMENDATIONS, recommendedCodingMatch, TIER_LABEL } from '../../services/codingRecommendations';
 import { ModelProviderIcon, SourceIcon } from './ProviderIcon';
 import { SectionHeader } from './SectionHeader';
+import { ScrollX } from './ScrollX';
+import { curatedLabel } from './curated';
+import { allRowsInDollars, modelCostText, type CostView } from './costView';
+import { CostValue } from './CostValue';
 
 type SourceFilter = 'all' | ModelSource;
 
@@ -69,10 +73,12 @@ const SourceBadge: React.FC<{ source: ModelSource }> = ({ source }) => (
 
 export interface DomainLeaderboardProps {
   models: CatalogModel[];
+  /** Who is looking and the catalog's usage bands (components/models/costView). */
+  cost: CostView;
   onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
 }
 
-export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, onStartChat }) => {
+export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, cost, onStartChat }) => {
   const [domainIdx, setDomainIdx] = useState(0);
   const [sortBy, setSortBy] = useState<SortKey>('strength');
   const [freeOnly, setFreeOnly] = useState(false);
@@ -84,6 +90,9 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
 
   const tab = LEADERBOARD_DOMAINS[domainIdx];
   const meta = DOMAIN_META[tab.domain];
+  // The price column is "$/M out" (list price) only when every row shows dollars; otherwise it is "Usage",
+  // and each row reads in the viewer's terms (dollars on their own key, else a usage band).
+  const dollarColumn = allRowsInDollars(cost.audience);
 
   const rows = useMemo(() => {
     let list: Row[] = models
@@ -113,6 +122,9 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
     return list;
   }, [models, tab, sortBy, freeOnly, source]);
 
+  // The strength and benchmark columns come from the bundled curated snapshot; dated from the rows shown.
+  const curated = useMemo(() => curatedLabel(rows.map((r) => getModelBenchmarks(r.model.id)?.asOf)), [rows]);
+
   const useText = (m: CatalogModel) => { setSelectedModel('text', m.id, 'specific', m.source); setRecent({ id: m.id, kind: 'text' }); };
 
   // Curated coding recommendations (chips) — coding tab only.
@@ -124,8 +136,8 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
     return [...hits].sort((a, b) => (a.isFree === b.isFree ? domainStrength(b, 'coding') - domainStrength(a, 'coding') : a.isFree ? -1 : 1))[0];
   };
 
-  const SortHeader: React.FC<{ k: SortKey; label: string; align?: 'left' | 'right' }> = ({ k, label, align = 'right' }) => (
-    <th className={`px-2 py-2 font-bold ${align === 'right' ? 'text-right' : 'text-left'}`}>
+  const SortHeader: React.FC<{ k: SortKey; label: string; align?: 'left' | 'right'; title?: string }> = ({ k, label, align = 'right', title }) => (
+    <th className={`px-2 py-2 font-bold ${align === 'right' ? 'text-right' : 'text-left'}`} title={title}>
       <button onClick={() => setSortBy(k)} className={`inline-flex items-center gap-1 hover:underline ${sortBy === k ? 'text-black' : 'text-slate-500'}`}>
         {label}<ArrowUpDown className="w-3 h-3" />
       </button>
@@ -197,18 +209,23 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
       </div>
 
       {/* Ranked table */}
-      <div className="mt-3 overflow-x-auto border-2 border-black rounded-xl bg-white">
+      <ScrollX
+        label={`${meta.label} leaderboard table`}
+        hint="Scroll sideways for more columns"
+        className="mt-3"
+        boxClassName="border-2 border-black rounded-xl bg-white overflow-hidden"
+      >
         <table className="w-full text-xs min-w-[760px]">
           <thead className="bg-slate-100 border-b-2 border-black text-left sticky top-0">
             <tr>
               <th className="px-2 py-2 font-bold w-10">#</th>
               <th className="px-2 py-2 font-bold">Model</th>
-              <SortHeader k="strength" label={meta.label} align="left" />
+              <SortHeader k="strength" label={meta.label} align="left" title={curated} />
               {tab.metrics.map((id, i) => (
-                <SortHeader key={id} k={`m${i}` as SortKey} label={BENCHMARK_METRICS[id].label} />
+                <SortHeader key={id} k={`m${i}` as SortKey} label={BENCHMARK_METRICS[id].label} title={curated} />
               ))}
               <SortHeader k="context" label="Context" />
-              <SortHeader k="price" label="$/M out" />
+              <SortHeader k="price" label={dollarColumn ? '$/M out' : 'Usage'} title={dollarColumn ? 'List price per 1M output tokens' : 'Relative to the other text models listed here'} />
               <th className="px-2 py-2 font-bold text-right whitespace-nowrap" title="Median observed response time from real chat telemetry">Speed</th>
               <th className="px-2 py-2 font-bold text-right">Use</th>
             </tr>
@@ -246,7 +263,11 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
                     </td>
                   ))}
                   <td className="px-2 py-2 tabular-nums text-right">{r.contextK ? `${r.contextK}K` : <span className="text-slate-300">—</span>}</td>
-                  <td className="px-2 py-2 tabular-nums text-right">{r.pricePerM === 0 ? <span className="text-green-600 font-bold">free</span> : r.pricePerM != null ? `$${r.pricePerM.toFixed(2)}` : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-2 py-2 tabular-nums text-right whitespace-nowrap">
+                    {r.pricePerM === 0 ? <span className="text-green-600 font-bold">free</span>
+                      : !dollarColumn ? <CostValue cost={modelCostText(r.model, cost.audience, cost.bands)} withNote />
+                      : r.pricePerM != null ? `$${r.pricePerM.toFixed(2)}` : <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="px-2 py-2 tabular-nums text-right whitespace-nowrap">
                     {(() => {
                       const sp = speed[r.model.id];
@@ -286,10 +307,12 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
             })}
           </tbody>
         </table>
-      </div>
+      </ScrollX>
       <p className="mt-2 text-[11px] text-slate-400">
-        {meta.label} strength is derived from curated, source-attributed benchmark snapshots (see each model's detail card) and is
-        approximate — verify at the source links. Download-only models are excluded because they can't be called via the hosted APIs.
+        <span className="font-bold text-slate-500">{meta.label} strength and benchmark columns: {curated}.</span>{' '}
+        Derived from curated, source-attributed benchmark snapshots (see each model's detail card) — verify at the source links.
+        Download-only models are excluded because they can't be called via the hosted APIs.
+        {dollarColumn ? ' Prices are list prices.' : ' Usage compares each model with the other text models listed here.'}
       </p>
     </div>
   );

@@ -6,7 +6,9 @@ import { fetchModelUsageMonthly, type ModelUsageRow } from '../../services/model
 // Model-choice trends — how the platform's model usage moves month by month:
 // a total-requests trend chart (kit Chart, inline SVG) plus a "Top models this
 // month" ranking with per-product chips. All counts are monthly aggregates;
-// nothing here is tied to an individual user. Built from the calm-studio
+// nothing here is tied to an individual user: /api/models/usage-monthly is signed-in only and
+// returns a row only when that model had enough distinct users that month (the same k-floor as
+// /api/models/popularity), so an empty list is the normal answer today. Built from the calm-studio
 // Primitive Kit — no chart libraries, --ds-* tokens only.
 
 const ACCENT = '#D97757'; // theme-invariant terracotta accent (see studioDesign.ts)
@@ -126,7 +128,9 @@ export const ModelUsageTrends: React.FC = () => {
     return (
       <Surface accent={ACCENT} header={header}>
         <div className="px-3 pb-4 text-[12px] text-[var(--ds-muted)]">
-          No usage data published yet — monthly trends will appear here once requests are aggregated.
+          {rows
+            ? 'No usage trends to show yet. A model appears here once enough different people have used it in a month, so no one’s usage can be singled out.'
+            : 'No usage trends to show right now. Check back later.'}
         </div>
       </Surface>
     );

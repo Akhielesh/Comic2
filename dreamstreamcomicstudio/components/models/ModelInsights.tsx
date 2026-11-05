@@ -7,6 +7,7 @@ import type { CatalogModel } from '../../services/modelCatalog';
 import { getModelDomains, topDomains, DOMAIN_META, type DomainId, type DomainStrength } from '../../services/modelDomains';
 import { getModelBenchmarks, BENCHMARK_METRICS, normalizeScore, formatScore, type BenchmarkMetricId } from '../../services/modelBenchmarks';
 import { InfoTooltip, InfoDot } from '../common/InfoTooltip';
+import { curatedLabel } from './curated';
 
 // Visual building blocks for the richer Model Library: domain tags, a benchmark bar chart with
 // honest source attribution, and a radar/spider chart of domain strengths. All read from the
@@ -86,7 +87,7 @@ export const BenchmarkBars: React.FC<{ model: CatalogModel }> = ({ model }) => {
         </a>
       </div>
       <p className="text-[10px] leading-snug text-slate-400">
-        Curated from public leaderboards &amp; model cards — point-in-time and approximate. Verify at the source.
+        <span className="font-bold text-slate-500">{curatedLabel([bm.asOf])}.</span> Curated from public leaderboards &amp; model cards — verify at the source.
       </p>
     </div>
   );

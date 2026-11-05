@@ -6,8 +6,15 @@ import { searchModels } from '../../services/modelSearch';
 import { ProviderIcon } from './ProviderIcon';
 import { getModelSize } from '../../services/modelParams';
 import { getModelBenchmarks } from '../../services/modelBenchmarks';
+import { ScrollX } from './ScrollX';
+import { curatedLabel } from './curated';
+import { allRowsInDollars, modelCostKey, modelCostText, type CostView, type UsageBand } from './costView';
+import { CostValue } from './CostValue';
 
-type SortKey = 'vendor' | 'name' | 'context' | 'inPrice' | 'outPrice' | 'image' | 'elo';
+type SortKey = 'vendor' | 'name' | 'context' | 'inPrice' | 'outPrice' | 'image' | 'usage' | 'elo';
+
+// Sort order of the Usage column: free first, then the bands, then rows with no band.
+const BAND_ORDER: Record<UsageBand, number> = { lower: 1, moderate: 2, higher: 3 };
 type Modality = 'all' | 'text' | 'image';
 
 const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}` : '—');
@@ -19,9 +26,9 @@ const releasedOf = (m: CatalogModel): string => getModelBenchmarks(m.id)?.asOf
 const infoUrl = (m: CatalogModel): string | undefined =>
   m.source === 'openrouter' ? `https://openrouter.ai/${m.id}` : getModelVendor(m).url;
 
-const Th: React.FC<{ id: SortKey; label: string; sort: SortKey; dir: 1 | -1; onSort: (k: SortKey) => void; align?: 'left' | 'right' }> =
-  ({ id, label, sort, dir, onSort, align = 'left' }) => (
-    <th className={`py-2 px-2 whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
+const Th: React.FC<{ id: SortKey; label: string; sort: SortKey; dir: 1 | -1; onSort: (k: SortKey) => void; align?: 'left' | 'right'; title?: string }> =
+  ({ id, label, sort, dir, onSort, align = 'left', title }) => (
+    <th className={`py-2 px-2 whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`} title={title}>
       <button onClick={() => onSort(id)} className={`inline-flex items-center gap-1 hover:text-black ${sort === id ? 'text-black' : 'text-slate-500'}`}>
         {label}<ArrowUpDown className="w-3 h-3" />{sort === id && <span className="text-[9px]">{dir === 1 ? '▲' : '▼'}</span>}
       </button>
@@ -33,7 +40,14 @@ const Th: React.FC<{ id: SortKey; label: string; sort: SortKey; dir: 1 | -1; onS
  * size/params, the four price axes, Arena Elo, modalities, release, link), with a LEFT filter rail
  * (provider checkboxes, modality, free-only, search) so the whole landscape is scannable at a glance.
  */
-export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ models }) => {
+export const ProviderAggregatorTable: React.FC<{
+  models: CatalogModel[];
+  /** Who is looking and the catalog's usage bands (components/models/costView). */
+  cost: CostView;
+}> = ({ models, cost }) => {
+  // The three per-axis price columns only when every row shows dollars (signed out, admin); otherwise one
+  // Usage column, where each row reads in the viewer's terms (dollars on their own key, else a band).
+  const dollarColumns = allRowsInDollars(cost.audience);
   const [sort, setSort] = useState<SortKey>('vendor');
   const [dir, setDir] = useState<1 | -1>(1);
   const [limit, setLimit] = useState(75);
@@ -69,6 +83,11 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
         case 'inPrice': return m.pricing.promptPerToken || 0;
         case 'outPrice': return m.pricing.completionPerToken || 0;
         case 'image': return m.pricing.imagePerImage || 0;
+        case 'usage': {
+          if (m.isFree) return 0;
+          const band = cost.bands.get(modelCostKey(m));
+          return band ? BAND_ORDER[band] : 4;
+        }
         case 'elo': return eloOf(m);
       }
     };
@@ -78,9 +97,11 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
       if (av > bv) return 1 * dir;
       return a.name.localeCompare(b.name);
     });
-  }, [filtered, sort, dir]);
+  }, [filtered, sort, dir, cost.bands]);
 
   const shown = sorted.slice(0, limit);
+  // Size, Arena and Released come from the bundled curated datasets, not the live catalog.
+  const curated = curatedLabel(shown.map((m) => getModelBenchmarks(m.id)?.asOf));
   const toggleVendor = (id: string) => setVendorSel((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   return (
@@ -131,19 +152,25 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
           <span className="font-display text-lg">Provider aggregator</span>
           <span className="text-[11px] text-slate-500">{filtered.length} of {models.length} models · click a header to sort</span>
         </div>
-        <div className="overflow-x-auto">
+        <ScrollX label="Provider aggregator table" hint="Scroll sideways for more columns">
           <table className="w-full text-[12px] border-collapse">
             <thead>
               <tr className="text-[10px] font-bold uppercase border-b-2 border-black bg-slate-50">
                 <Th id="vendor" label="Provider" sort={sort} dir={dir} onSort={onSort} />
                 <Th id="name" label="Model" sort={sort} dir={dir} onSort={onSort} />
                 <Th id="context" label="Context" sort={sort} dir={dir} onSort={onSort} align="right" />
-                <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500">Size / params</th>
-                <Th id="inPrice" label="In $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
-                <Th id="outPrice" label="Out $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
-                <Th id="image" label="$/img" sort={sort} dir={dir} onSort={onSort} align="right" />
-                <Th id="elo" label="Arena" sort={sort} dir={dir} onSort={onSort} align="right" />
-                <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500 hidden md:table-cell">Released</th>
+                <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500" title={curatedLabel([])}>Size / params</th>
+                {dollarColumns ? (
+                  <>
+                    <Th id="inPrice" label="In $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
+                    <Th id="outPrice" label="Out $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
+                    <Th id="image" label="$/img" sort={sort} dir={dir} onSort={onSort} align="right" />
+                  </>
+                ) : (
+                  <Th id="usage" label="Usage" sort={sort} dir={dir} onSort={onSort} align="right" title="Relative to comparable models (text or image) in the catalog" />
+                )}
+                <Th id="elo" label="Arena" sort={sort} dir={dir} onSort={onSort} align="right" title={curated} />
+                <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500 hidden md:table-cell" title={curated}>Released</th>
                 <th className="py-2 px-2"></th>
               </tr>
             </thead>
@@ -168,9 +195,15 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
                     </td>
                     <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{ctxLabel(m.contextLength)}</td>
                     <td className="py-1.5 px-2 whitespace-nowrap text-slate-600">{size?.params ?? '—'}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.promptPerToken)}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.completionPerToken)}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—'}</td>
+                    {dollarColumns ? (
+                      <>
+                        <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.promptPerToken)}</td>
+                        <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.completionPerToken)}</td>
+                        <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—'}</td>
+                      </>
+                    ) : (
+                      <td className="py-1.5 px-2 whitespace-nowrap text-right"><CostValue cost={modelCostText(m, cost.audience, cost.bands)} withNote /></td>
+                    )}
                     <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{elo || '—'}</td>
                     <td className="py-1.5 px-2 text-slate-500 hidden md:table-cell whitespace-nowrap">{releasedOf(m)}</td>
                     <td className="py-1.5 px-2">
@@ -181,13 +214,18 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
               })}
             </tbody>
           </table>
-        </div>
+        </ScrollX>
         {sorted.length > limit && (
           <div className="p-3 border-t-2 border-black text-center">
             <button onClick={() => setLimit((l) => l + 100)} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Show more ({sorted.length - limit} remaining)</button>
           </div>
         )}
-        <div className="px-4 py-2 text-[10px] text-slate-500 border-t border-dashed border-slate-200">Prices are per 1M tokens (input/output) or per image, from the live catalog. Arena Elo &amp; release are approximate.</div>
+        <div className="px-4 py-2 text-[10px] text-slate-500 border-t border-dashed border-slate-200">
+          {dollarColumns
+            ? 'List prices per 1M tokens (input/output) or per image, from the live catalog.'
+            : 'Usage compares each model with comparable models (text or image) in the catalog; dollars appear only for providers you pay with your own key.'}{' '}
+          Size, Arena and Released: {curated}.
+        </div>
       </div>
     </div>
   );

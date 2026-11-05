@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useIsAdmin } from '../hooks/useIsAdmin';
-import { ModelBenchPanel } from './models/ModelBenchPanel';
+import { lazyImportWithRetry } from '../services/lazyImportWithRetry';
 import {
   ArrowLeft,
   Search,
@@ -31,7 +31,6 @@ import {
   fetchModelCatalog,
   fetchModelVerification,
   loadCachedCatalog,
-  costLabel,
   providerOrigin,
   sourceLabel,
   sourceShortLabel,
@@ -69,7 +68,7 @@ import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
 import { ModelDataSources } from './models/ModelDataSources';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
-import { describeCost, classBadge } from '../shared/pricing';
+import { classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
 import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
@@ -77,6 +76,49 @@ import { recommendModels, accuracyElo } from '../services/modelRecommendations';
 import { getModelSize } from '../services/modelParams';
 import { useModelSourceScope } from '../hooks/useModelSourceScope';
 import type { ModelSource } from '../services/modelCatalog';
+import { useModalA11y } from './models/useModalA11y';
+import { ScrollX } from './models/ScrollX';
+import { curatedLabel } from './models/curated';
+import {
+  allRowsInDollars,
+  costSafeText,
+  dollarAxes,
+  modelBandIndex,
+  modelCostKey,
+  modelCostText,
+  rowCostMode,
+  useCostAudience,
+  type CostText,
+  type CostView,
+  type UsageBand
+} from './models/costView';
+import { CostValue } from './models/CostValue';
+import { RADIUS_CONTROL, TONE_CHIP } from './chat/studioDesign';
+
+// Admin-only bench (start runs, poll, CSV export). Loaded on demand and rendered only once the server
+// has confirmed admin (useIsAdmin fails closed: false while loading, signed out, or on any error), so
+// its chunk and services/modelBench are never downloaded by signed-out or non-admin visitors.
+const ModelBenchPanel = lazyImportWithRetry(() =>
+  import('./models/ModelBenchPanel').then((m) => ({ default: m.ModelBenchPanel }))
+);
+
+/** Keeps a failed bench-chunk load inside the Bench view instead of taking down the whole page. */
+class BenchBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    if (this.state.failed) {
+      return (
+        <div className={`mt-4 ${RADIUS_CONTROL} border p-3 text-sm flex items-start gap-2 ${TONE_CHIP.danger}`} role="alert">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> Couldn’t load the bench panel. Reload the page to try again.
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -124,22 +166,25 @@ const BAND_COLOR: Record<Band, string> = {
 
 const MAX_COMPARE = 5;
 
-const Badge: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${className}`}>{children}</span>
+const Badge: React.FC<{ children: React.ReactNode; className?: string; title?: string }> = ({ children, className = '', title }) => (
+  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${className}`} title={title}>{children}</span>
 );
 
 const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 'image' : 'text');
 
-const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
+// Cost words and figures come from components/models/costView, one rule for the whole page: list prices
+// for a signed-out visitor; for a signed-in viewer, dollars only for an admin or on the user's own key,
+// otherwise a share of their usage or a relative usage band.
+const costOf = (model: CatalogModel, cost: CostView): CostText => modelCostText(model, cost.audience, cost.bands);
 
-// Plain-language, multi-dimensional cost line for a model. Routes through shared/pricing
-// so client + server use the exact same wording and never collapse to "free/paid".
-const costStatement = (model: CatalogModel): string =>
-  describeCost({
-    modelId: model.id,
-    pricing: model.pricing,
-    supportsImageOutput: model.supportsImageOutput
-  });
+// The compare "Cost" chip keeps its colour scale: the catalog's own band in dollars, the usage band otherwise.
+const USAGE_BAND_COLOR: Record<UsageBand, Band> = { lower: 'low', moderate: 'medium', higher: 'high' };
+const costChipColor = (model: CatalogModel, text: CostText, cost: CostView): string => {
+  if (text.mode === 'dollars') return BAND_COLOR[model.costBand];
+  if (text.mode === 'fixed' && text.short === 'Free') return BAND_COLOR.free;
+  const band = cost.bands.get(modelCostKey(model));
+  return text.mode === 'bands' && band ? BAND_COLOR[USAGE_BAND_COLOR[band]] : 'bg-[var(--ds-well)] text-[var(--ds-ink)]';
+};
 
 const COST_CLASS_COLOR: Record<string, string> = {
   free_verified: 'bg-green-500 text-white',
@@ -153,10 +198,18 @@ const COST_CLASS_LABEL: Record<string, string> = {
   per_image_only: 'Per image',
   paid: 'Paid'
 };
-// Cost classes that have a glossary explanation (the surprising ones worth a hover).
-const COST_CLASS_GLOSSARY: Record<string, keyof typeof GLOSSARY> = {
-  free_verified: 'free_verified',
-  zero_priced_token_billed: 'token_billed'
+// Cost classes worth a hover (the surprising ones). The words are the glossary's (free_verified,
+// token_billed) without its "$0": the tooltip is read by every viewer, and on this page a dollar figure
+// is shown only where the row is in dollars (components/models/costView).
+const COST_CLASS_INFO: Record<string, { title: string; body: string }> = {
+  free_verified: {
+    title: 'Verified free',
+    body: 'Confirmed free on every cost axis (input, output, per-image, per-request) against the live source: genuinely free to run, not just labelled free.'
+  },
+  zero_priced_token_billed: {
+    title: 'Token-billed (NOT free)',
+    body: "Labelled free per image, but still charged per token behind the scenes, so it is NOT actually free. The app flags these so you're never surprised."
+  }
 };
 
 // Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
@@ -290,13 +343,20 @@ const ModelCard: React.FC<{
   model: CatalogModel;
   selection: ModelSelection;
   compared: boolean;
-  onOpen: () => void;
+  cost: CostView;
+  /** `opener` is the card's name button: the detail modal hands focus back to it when it closes. */
+  onOpen: (opener: HTMLElement | null) => void;
   onUse: (slot: ModelSlot) => void;
   onToggleCompare: () => void;
   onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
-}> = ({ model, selection, compared, onOpen, onUse, onToggleCompare, onStartChat }) => (
+}> = ({ model, selection, compared, cost, onOpen, onUse, onToggleCompare, onStartChat }) => (
   <div
-    onClick={onOpen}
+    onClick={(e) => {
+      // The name button is the card's keyboard opener, whichever part of the card was clicked.
+      const opener = e.currentTarget.querySelector<HTMLElement>('[data-card-opener]');
+      opener?.focus({ preventScroll: true });
+      onOpen(opener);
+    }}
     className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
   >
     {/* Header: chips WRAP (never overlap the cost badge), the badge never shrinks, and the
@@ -316,7 +376,15 @@ const ModelCard: React.FC<{
       </div>
       <Badge className={`shrink-0 ${COST_CLASS_COLOR[model.costClass]}`}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
     </div>
-    <div className="font-bold leading-tight line-clamp-2 -mt-1" title={model.name}>{model.name}</div>
+    <button
+      type="button"
+      data-card-opener
+      onClick={(e) => { e.stopPropagation(); onOpen(e.currentTarget); }}
+      className="block w-full -mt-1 text-left hover:underline focus-visible:underline"
+      title={model.name}
+    >
+      <span className="font-bold leading-tight line-clamp-2">{model.name}</span>
+    </button>
 
     <div className="flex flex-wrap gap-1">
       {model.apiCallable === false && (
@@ -324,7 +392,7 @@ const ModelCard: React.FC<{
       )}
       {(() => {
         const size = getModelSize(model.id);
-        return size ? <Badge className="bg-slate-800 text-white" >{size.params}</Badge> : null;
+        return size ? <Badge className="bg-slate-800 text-white" title={`Parameter size. ${curatedLabel([])}.`}>{size.params}</Badge> : null;
       })()}
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
@@ -332,9 +400,12 @@ const ModelCard: React.FC<{
     {/* What it's actually good at — benchmark-backed domain tags. */}
     <DomainTags model={model} />
 
-    <p className="text-[11px] text-slate-700 leading-snug" title="Cost varies per axis (input tokens, output tokens, per-image, per-request).">{costStatement(model)}</p>
+    <p className="text-[11px] text-slate-700 leading-snug"><CostValue cost={costOf(model, cost)} form="sentence" /></p>
 
-    {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
+    {(() => {
+      const note = costSafeText(model.editorialNote, rowCostMode(cost.audience, model.source));
+      return note ? <p className="text-xs text-slate-600 line-clamp-2">{note}</p> : null;
+    })()}
 
     {/* Action row: WRAPS instead of overflowing — on narrow cards (4-col grid, small
         devices) the two button groups stack as full rows rather than spilling past the
@@ -357,7 +428,8 @@ const ModelCard: React.FC<{
         <button
           onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
           className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 whitespace-nowrap ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
-          title="Add to comparison"
+          title={compared ? 'Remove from comparison' : 'Add to comparison'}
+          aria-pressed={compared}
         >
           <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
         </button>
@@ -366,17 +438,48 @@ const ModelCard: React.FC<{
   </div>
 );
 
-const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
+const DetailModal: React.FC<{
+  model: CatalogModel;
+  selection: ModelSelection;
+  cost: CostView;
+  /** The control that opened the modal: focus goes back to it on close. */
+  openerRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onUse: (slot: ModelSlot) => void;
+  onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
+}> = ({ model, selection, cost, openerRef, onClose, onUse, onStartChat }) => {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useModalA11y(panelRef, onClose, openerRef);
+  const costText = costOf(model, cost);
+  // The four list-price axes, only when this viewer sees dollars for this model's route.
+  const rowMode = rowCostMode(cost.audience, model.source);
+  const axes = dollarAxes(model, rowMode);
+  // The model's own words, under the same rule (no dollar figure unless this row is in dollars).
+  const safe = (text: string | null | undefined) => costSafeText(text, rowMode);
+  const editorialNote = safe(model.editorialNote);
+  const description = safe(model.description);
+  const possibilities = model.possibilities.map(safe).filter(Boolean);
+  const drawbacks = model.drawbacks.map(safe).filter(Boolean);
+  return (
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-    <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto focus:outline-none"
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className="sticky top-0 z-10 bg-white rounded-t-lg border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3 shadow-[0_2px_0_0_rgba(0,0,0,0.06)]">
         <div className="min-w-0 flex items-start gap-2.5">
           <ModelProviderIcon model={model} className="w-7 h-7 shrink-0 mt-1" />
           <div className="min-w-0">
-            <div className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1">
+            <div className="text-[10px] font-bold uppercase text-slate-500 inline-flex flex-wrap items-center gap-1">
               {getModelVendor(model).label} · <SourceIcon source={providerOrigin(model)} className="w-3 h-3" /> {sourceLabel(providerOrigin(model))}
             </div>
-            <h2 className="text-xl font-display leading-tight truncate">{model.name}</h2>
+            <h2 id={titleId} className="text-xl font-display leading-tight truncate">{model.name}</h2>
             <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
           </div>
         </div>
@@ -387,7 +490,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="inline-flex items-center gap-0.5">
             <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
-            {COST_CLASS_GLOSSARY[model.costClass] && <InfoDot term={COST_CLASS_GLOSSARY[model.costClass]} />}
+            {COST_CLASS_INFO[model.costClass] && <InfoDot content={COST_CLASS_INFO[model.costClass]} />}
           </span>
           {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Text→Image</Badge>}
           {getCapabilities(model).imageInput && !model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Image→Text (vision)</Badge>}
@@ -396,7 +499,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           {getCapabilities(model).reasoning && <span className="inline-flex items-center gap-0.5"><Badge className="bg-indigo-600 text-white">Reasoning</Badge><InfoDot term="reasoning" /></span>}
           {model.supportsJsonOutput && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge><InfoDot term="structured_json" /></span>}
           {typeof model.contextLength === 'number' && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge><InfoDot term="context_length" /></span>}
-          <span className="ml-auto flex items-center gap-2">
+          <span className="ml-auto flex flex-wrap items-center gap-2">
             <FeedbackButtons modelId={model.id} showCounts />
             {onStartChat && canChatWith(model) && (
               <button
@@ -414,12 +517,12 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
         <DomainTags model={model} limit={6} threshold={45} />
         <ModelInsightsPanel model={model} />
 
-        {model.editorialNote && (
+        {editorialNote && (
           <div className="bg-brand-yellow/30 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
-            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" /><span>{model.editorialNote}</span>
+            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" /><span>{editorialNote}</span>
           </div>
         )}
-        {model.description && <p className="text-sm text-slate-600">{model.description}</p>}
+        {description && <p className="text-sm text-slate-600">{description}</p>}
 
         <div className="border-2 border-black rounded-lg p-3 space-y-1.5">
           <div className="text-[10px] uppercase font-bold text-slate-500">Where it's hosted &amp; sourced</div>
@@ -434,15 +537,17 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           </div>
         </div>
 
-        <div className="grid sm:grid-cols-4 gap-3 text-[11px]">
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{perMillion(model.pricing.completionPerToken)}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{model.pricing.imagePerImage > 0 ? `$${model.pricing.imagePerImage.toFixed(3)}` : '—'}</div></div>
-          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per request</div><div className="font-mono">{model.pricing.requestFlat > 0 ? `$${model.pricing.requestFlat.toFixed(4)}` : '—'}</div></div>
-        </div>
+        {axes && (
+          <div className="grid sm:grid-cols-4 gap-3 text-[11px]">
+            <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{axes.input}</div></div>
+            <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{axes.output}</div></div>
+            <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{axes.image}</div></div>
+            <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per request</div><div className="font-mono">{axes.request}</div></div>
+          </div>
+        )}
         <div className="bg-slate-50 border-2 border-black rounded-lg p-3 text-[12px] text-slate-700 leading-snug">
-          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">Cost (each axis is independent)</div>
-          {costStatement(model)}
+          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">{axes ? 'Cost (each axis is independent)' : 'Usage'}</div>
+          <CostValue cost={costText} form="sentence" />
         </div>
 
         <div>
@@ -464,7 +569,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           <div>
             <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><Check className="w-4 h-4 text-green-600" /> What's possible</h3>
             <ul className="space-y-1.5">
-              {model.possibilities.length ? model.possibilities.map((item, i) => (
+              {possibilities.length ? possibilities.map((item, i) => (
                 <li key={i} className="text-xs text-slate-700 flex gap-1.5"><Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" />{item}</li>
               )) : <li className="text-xs text-slate-400">—</li>}
             </ul>
@@ -472,7 +577,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           <div>
             <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-amber-600" /> Drawbacks</h3>
             <ul className="space-y-1.5">
-              {model.drawbacks.length ? model.drawbacks.map((item, i) => (
+              {drawbacks.length ? drawbacks.map((item, i) => (
                 <li key={i} className="text-xs text-slate-700 flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />{item}</li>
               )) : <li className="text-xs text-slate-400">None noted</li>}
             </ul>
@@ -486,7 +591,8 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
       </div>
     </div>
   </div>
-);
+  );
+};
 
 // Benchmark order shown in the compare table.
 const COMPARE_BENCH_ORDER: BenchmarkMetricId[] = ['arena_elo', 'mmlu', 'gpqa', 'humaneval', 'swebench', 'math'];
@@ -497,14 +603,46 @@ const benchCell = (m: CatalogModel, metric: BenchmarkMetricId): React.ReactNode 
 
 type CompareRow = { label: string; info?: keyof typeof GLOSSARY; render: (m: CatalogModel) => React.ReactNode };
 
-const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection; onClose: () => void; onUse: (model: CatalogModel, slot: ModelSlot) => void }> = ({ models, selection, onClose, onUse }) => {
+const CompareModal: React.FC<{
+  models: CatalogModel[];
+  selection: ModelSelection;
+  cost: CostView;
+  /** The control that opened the modal: focus goes back to it on close. */
+  openerRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onUse: (model: CatalogModel, slot: ModelSlot) => void;
+}> = ({ models, selection, cost, openerRef, onClose, onUse }) => {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  useModalA11y(panelRef, onClose, openerRef);
   const inUse = (m: CatalogModel) => selection.textModel === m.id || selection.imageModel === m.id;
+  // The Benchmarks rows come from the bundled curated snapshot, dated from the families of the models shown.
+  const benchNote = curatedLabel(models.map((m) => getModelBenchmarks(m.id)?.asOf));
+  // Per-axis prices only for the models this viewer sees in dollars; the rest read in usage words (Cost row).
+  const axesOf = (m: CatalogModel) => dollarAxes(m, rowCostMode(cost.audience, m.source));
+  // The first non-empty line of a model's own words, under the same rule.
+  const firstSafe = (m: CatalogModel, items: string[]) => items.map((t) => costSafeText(t, rowCostMode(cost.audience, m.source))).find(Boolean);
+  const anyDollars = models.some((m) => axesOf(m) !== null);
+  const usageOnly = <span className="text-slate-300">see Cost</span>;
+  const axisCell = (value: string | undefined) => (value === undefined ? usageOnly : value === '—' ? <span className="text-slate-300">—</span> : value);
 
-  const sections: { title: string; rows: CompareRow[] }[] = [
+  const sections: { title: string; note?: string; rows: CompareRow[] }[] = [
     {
       title: 'Overview',
       rows: [
-        { label: 'Cost', render: (m) => <Badge className={BAND_COLOR[m.costBand]}>{costLabel(m)}</Badge> },
+        {
+          label: 'Cost',
+          render: (m) => {
+            const text = costOf(m, cost);
+            if (text.mode === 'loading') return <CostValue cost={text} />;
+            return (
+              <span className="inline-flex flex-col items-start gap-0.5">
+                <Badge className={costChipColor(m, text, cost)} title={text.note || undefined}>{text.short}</Badge>
+                {text.mode === 'dollars' && text.note && <span className="text-[10px] text-slate-500">{text.note}</span>}
+              </span>
+            );
+          }
+        },
         { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
         { label: 'Context', info: 'context_length', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
         { label: 'Best at', render: (m) => { const d = topDomains(m, 3, 55); return d.length ? d.map((x) => DOMAIN_META[x.id].label).join(', ') : <span className="text-slate-300">—</span>; } }
@@ -512,6 +650,7 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
     },
     {
       title: 'Benchmarks',
+      note: benchNote,
       rows: COMPARE_BENCH_ORDER.map((metric) => ({
         label: BENCHMARK_METRICS[metric].label,
         info: BENCHMARK_METRICS[metric].glossary,
@@ -527,31 +666,40 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
         { label: 'Structured JSON', info: 'structured_json', render: (m) => (m.supportsJsonOutput ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) }
       ]
     },
-    {
-      title: 'Pricing',
+    ...(anyDollars ? [{
+      title: allRowsInDollars(cost.audience) ? 'Pricing · list price' : 'Pricing · on your own keys',
       rows: [
-        { label: 'Input / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.promptPerToken) },
-        { label: 'Output / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.completionPerToken) },
-        { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : <span className="text-slate-300">—</span>) }
-      ]
-    },
+        { label: 'Input / 1M tok', info: 'token', render: (m) => axisCell(axesOf(m)?.input) },
+        { label: 'Output / 1M tok', info: 'token', render: (m) => axisCell(axesOf(m)?.output) },
+        { label: 'Per image', render: (m) => axisCell(axesOf(m)?.image) }
+      ] as CompareRow[]
+    }] : []),
     {
       title: 'In practice',
       rows: [
-        { label: 'Best for', render: (m) => (m.possibilities[0] || <span className="text-slate-300">—</span>) },
-        { label: 'Watch out', render: (m) => (m.drawbacks[0] || <span className="text-slate-400">None noted</span>) }
+        { label: 'Best for', render: (m) => (firstSafe(m, m.possibilities) || <span className="text-slate-300">—</span>) },
+        { label: 'Watch out', render: (m) => (firstSafe(m, m.drawbacks) || <span className="text-slate-400">None noted</span>) }
       ]
     }
   ];
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-5xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 z-10 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-display flex items-center gap-2"><Scale className="w-5 h-5" /> Comparing {models.length} models</h2>
-          <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="bg-white border-4 border-black rounded-xl shadow-comic max-w-5xl w-full max-h-[85vh] overflow-y-auto focus:outline-none"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 z-10 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between gap-3">
+          <h2 id={titleId} className="text-xl font-display flex items-center gap-2 min-w-0"><Scale className="w-5 h-5 shrink-0" /> Comparing {models.length} models</h2>
+          <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0" aria-label="Close comparison"><X className="w-4 h-4" /></button>
         </div>
-        <div className="p-4 overflow-x-auto">
+        {/* `isolate` keeps the table's sticky first column (z-10) in its own stack, under the sticky header. */}
+        <ScrollX label="Comparison table" hint="Scroll sideways for more models" className="m-4" boxClassName="isolate">
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr>
@@ -571,7 +719,10 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
               {sections.map((section) => (
                 <React.Fragment key={section.title}>
                   <tr>
-                    <td colSpan={models.length + 1} className="sticky left-0 bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 border-y border-slate-200">{section.title}</td>
+                    <td colSpan={models.length + 1} className="sticky left-0 bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 border-y border-slate-200" title={section.note}>
+                      {section.title}
+                      {section.note && <span className="ml-1.5 normal-case tracking-normal font-semibold">· approximate</span>}
+                    </td>
                   </tr>
                   {section.rows.map((row) => (
                     <tr key={section.title + row.label} className="border-t border-slate-100">
@@ -585,7 +736,8 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollX>
+        <p className="px-5 pb-4 -mt-2 text-[10px] text-slate-500">Benchmark rows: {benchNote}. Verify at each model’s source link.</p>
       </div>
     </div>
   );
@@ -742,6 +894,16 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
   const { user } = useAuth();
   const isAdmin = useIsAdmin();
+  // Who is looking, for prices only (components/models/costView): read from the shared allowance store,
+  // never from useIsAdmin (the admin flag unlocks consoles; it does not choose a cost view).
+  const costAudience = useCostAudience(user?.id ?? null);
+  // The controls that opened each modal, so focus returns there even where a click does not focus a button.
+  const detailOpenerRef = useRef<HTMLElement | null>(null);
+  const compareOpenerRef = useRef<HTMLElement | null>(null);
+  const openDetail = (model: CatalogModel, opener: HTMLElement | null) => {
+    detailOpenerRef.current = opener;
+    setSelected(model);
+  };
 
   useEffect(() => {
     const onChange = () => setSelection(getModelSelection());
@@ -823,6 +985,15 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const compareModels = useMemo(() => compareIds.map((id) => scopedModels.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, scopedModels]);
   const vendorOptions = useMemo(() => availableVendors(scopedModels), [scopedModels]);
   const picks = useMemo(() => recommendModels(scopedModels, 2), [scopedModels]);
+  // Usage bands are tertiles over every model in scope, so a model's band does not move with the filters.
+  const costBands = useMemo(() => modelBandIndex(scopedModels), [scopedModels]);
+  const cost = useMemo<CostView>(() => ({ audience: costAudience, bands: costBands }), [costAudience, costBands]);
+  // Domain tags, Elo and the top picks come from the bundled curated datasets: visible captions, dated from the rows.
+  const visibleCurated = useMemo(() => curatedLabel(visible.map((m) => getModelBenchmarks(m.id)?.asOf)), [visible]);
+  const picksCurated = useMemo(
+    () => curatedLabel([...picks.bestValue, ...(picks.topImage ? [picks.topImage] : [])].map((m) => getModelBenchmarks(m.id)?.asOf)),
+    [picks]
+  );
 
   const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
   const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
@@ -847,15 +1018,31 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   // Domain-aware single pick: "what's the best model for coding / science / …" across your active sources.
   const runDomainPick = (domain: DomainId, mode: SmartMode) => setDomainPick({ domain, best: pickBestForDomain(scopedModels, domain, mode), mode });
 
-  const toggleCompare = (id: string) =>
-    setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
+  // A 6th add is refused with a visible, announced message (the tray's live region) instead of being
+  // silently ignored. The counter re-keys the message so a repeated attempt is announced again; any
+  // removal (or Clear) withdraws it.
+  const [capAttempts, setCapAttempts] = useState(0);
+  const toggleCompare = (id: string) => {
+    if (compareIds.includes(id)) {
+      setCompareIds((prev) => prev.filter((x) => x !== id));
+      setCapAttempts(0);
+      return;
+    }
+    if (compareIds.length >= MAX_COMPARE) {
+      setCapAttempts((n) => n + 1);
+      return;
+    }
+    setCompareIds((prev) => (prev.includes(id) || prev.length >= MAX_COMPARE ? prev : [...prev, id]));
+  };
+  const clearCompare = () => { setCompareIds([]); setCapAttempts(0); };
+  const showCapNotice = capAttempts > 0 && compareIds.length >= MAX_COMPARE;
 
   const selectedImage = models.find((m) => m.id === selection.imageModel);
   const selectedText = models.find((m) => m.id === selection.textModel);
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-24">
-      <div className="max-w-7xl mx-auto px-6 py-8">
+    <div className="min-h-screen bg-slate-50 pb-32 overflow-x-clip">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         <button onClick={onBack} className="flex items-center gap-1 text-sm font-bold hover:underline mb-4"><ArrowLeft className="w-4 h-4" /> Back</button>
 
         <h1 className="text-4xl font-display">Model Library</h1>
@@ -867,11 +1054,11 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         {/* Current selection */}
         <div className="mt-4 flex flex-wrap gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <ImageIcon className="w-3.5 h-3.5" /> Image: <span className="font-bold">{selectedImage?.name || (selection.imageModel || 'Auto')}</span>
+          <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
+            <ImageIcon className="w-3.5 h-3.5 shrink-0" /> Image: <span className="font-bold truncate min-w-0">{selectedImage?.name || (selection.imageModel || 'Auto')}</span>
           </span>
-          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Auto')}</span>
+          <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
+            <TypeIcon className="w-3.5 h-3.5 shrink-0" /> Text: <span className="font-bold truncate min-w-0">{selectedText?.name || (selection.textModel || 'Auto')}</span>
           </span>
         </div>
 
@@ -914,36 +1101,50 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         )}
 
         {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking).
-            Bench (admin-only): the in-app trigger for the all-models live test. */}
-        <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
-          <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
-          <button onClick={() => setView('table')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
-          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Leaderboards</button>
-          <button onClick={() => setView('benchmarks')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'benchmarks' ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Gauge className="w-4 h-4" /> Benchmarks</button>
-          {isAdmin && (
-            <button onClick={() => setView('bench')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'bench' ? 'bg-amber-500 text-black' : 'bg-white hover:bg-slate-100'}`}><FlaskConical className="w-4 h-4" /> Bench</button>
-          )}
-        </div>
+            Bench (admin-only): the in-app trigger for the all-models live test. On a phone the
+            switcher scrolls sideways inside its own frame (with an edge fade) instead of widening
+            the page. */}
+        <ScrollX label="Model Library views" className="mt-4 w-fit" boxClassName="rounded-xl border-2 border-black overflow-hidden">
+          <div className="flex">
+            <button onClick={() => setView('library')} aria-pressed={view === 'library'} className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
+            <button onClick={() => setView('table')} aria-pressed={view === 'table'} className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
+            <button onClick={() => setView('leaderboard')} aria-pressed={view === 'leaderboard'} className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Leaderboards</button>
+            <button onClick={() => setView('benchmarks')} aria-pressed={view === 'benchmarks'} className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'benchmarks' ? 'bg-indigo-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Gauge className="w-4 h-4" /> Benchmarks</button>
+            {isAdmin && (
+              <button onClick={() => setView('bench')} aria-pressed={view === 'bench'} className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'bench' ? 'bg-amber-500 text-black' : 'bg-white hover:bg-slate-100'}`}><FlaskConical className="w-4 h-4" /> Bench</button>
+            )}
+          </div>
+        </ScrollX>
 
         {view === 'bench' && isAdmin ? (
-          <ModelBenchPanel />
+          <BenchBoundary>
+            <Suspense fallback={<div className="mt-4 flex items-center gap-2 text-sm text-slate-500" role="status"><Loader2 className="w-4 h-4 animate-spin" /> Loading the bench…</div>}>
+              <ModelBenchPanel />
+            </Suspense>
+          </BenchBoundary>
         ) : view === 'benchmarks' ? (
-          /* Public benchmark + usage view — DRS scores from the latest published
-             bench run, plus aggregated monthly model-choice trends. */
+          /* Benchmark + usage view — public DRS scores from the latest published bench run, plus the
+             aggregated monthly model-choice trends, which /api/models/usage-monthly serves to signed-in
+             users only (k-anonymous rows), so visitors are told what sign-in adds instead. */
           <div className="mt-2">
             <DrsBenchScores />
-            <ModelUsageTrends />
+            {user ? (
+              <ModelUsageTrends />
+            ) : (
+              <p className="mt-4 text-xs text-[var(--ds-muted)]">Sign in to see which models DreamStream users run, month by month.</p>
+            )}
           </div>
         ) : view === 'leaderboard' ? (
           <>
-            {/* Live popularity ranking — what the platform's users actually run. Hides itself
-                while the /api/models/popularity backend isn't deployed yet. */}
-            <div className="mt-4"><ModelPopularityPanel /></div>
-            <DomainLeaderboard models={scopedModels} onStartChat={onStartChat} />
+            {/* Live popularity ranking — what the platform's users actually run. The route
+                (/api/models/popularity) is served behind sign-in, so the panel is rendered only for a
+                signed-in user (no 401 round trip for visitors); with no rows to list it shows a calm empty state. */}
+            {user && <div className="mt-4"><ModelPopularityPanel /></div>}
+            <DomainLeaderboard models={scopedModels} cost={cost} onStartChat={onStartChat} />
           </>
         ) : view === 'table' ? (
           <>
-            <ProviderAggregatorTable models={scopedModels} />
+            <ProviderAggregatorTable models={scopedModels} cost={cost} />
             <ModelDataSources />
           </>
         ) : (
@@ -982,9 +1183,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                   {(Object.keys(TASK_PROFILES) as SmartTask[]).map((t) => {
                     const pick = smartTeam.perTask[t];
                     return (
-                      <div key={t} className="flex justify-between gap-2">
-                        <span className="text-slate-400">{TASK_PROFILES[t].label}</span>
-                        <span className="font-mono truncate">{pick ? pick.model.name : '—'}</span>
+                      <div key={t} className="flex justify-between gap-2 min-w-0">
+                        <span className="text-slate-400 shrink-0">{TASK_PROFILES[t].label}</span>
+                        <span className="font-mono truncate min-w-0">{pick ? pick.model.name : '—'}</span>
                       </div>
                     );
                   })}
@@ -1014,11 +1215,11 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
               {domainPick.best ? (
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   <span className="font-bold uppercase text-slate-500">Best for {DOMAIN_META[domainPick.domain].label}:</span>
-                  <button onClick={() => setSelected(domainPick.best!.model)} className="font-bold underline">{domainPick.best.model.name}</button>
+                  <button onClick={(e) => openDetail(domainPick.best!.model, e.currentTarget)} className="font-bold underline">{domainPick.best.model.name}</button>
                   <span className="text-slate-500">{domainPick.best.reasons.join(' · ')}</span>
                   <button onClick={() => useModel(domainPick.best!.model, slotOf(domainPick.best!.model))} className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Use it</button>
                   {(() => { const free = pickBestForDomain(scopedModels, domainPick.domain, 'free'); return free && free.model.id !== domainPick.best!.model.id
-                    ? <span className="basis-full text-slate-500">Best <span className="font-bold text-green-700">free</span>: <button onClick={() => setSelected(free.model)} className="font-bold underline">{free.model.name}</button> ({free.strength}/100)</span>
+                    ? <span className="basis-full text-slate-500">Best <span className="font-bold text-green-700">free</span>: <button onClick={(e) => openDetail(free.model, e.currentTarget)} className="font-bold underline">{free.model.name}</button> ({free.strength}/100)</span>
                     : null; })()}
                 </div>
               ) : (
@@ -1034,11 +1235,11 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models, capabilities, domains…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full focus:outline-none focus:bg-brand-yellow/10" />
           </div>
-          <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-2 bg-white text-sm font-bold cursor-pointer">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-2 bg-white text-sm font-bold cursor-pointer max-w-full">
               <ArrowUpDown className="w-4 h-4 text-slate-500" />
               <span className="sr-only">Sort by</span>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortKey)} className="bg-transparent focus:outline-none cursor-pointer pr-1">
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortKey)} className="bg-transparent focus:outline-none cursor-pointer pr-1 min-w-0 max-w-full">
                 {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
               </select>
             </label>
@@ -1173,7 +1374,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   {picks.bestValue.map((m, i) => (
-                    <button key={`${m.source}:${m.id}`} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                    <button key={`${m.source}:${m.id}`} onClick={(e) => openDetail(m, e.currentTarget)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-brand-blue text-white">#{i + 1} value</span>
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(m).color}`}>{getModelVendor(m).label}</span>
@@ -1182,31 +1383,35 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                       <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
                         <span title="Arena Elo (LMArena)">★ {accuracyElo(m)} Elo</span>
                         <span>·</span>
-                        <span>{costLabel(m)}</span>
+                        <CostValue cost={costOf(m, cost)} withNote />
                       </div>
                     </button>
                   ))}
                   {picks.topImage && (
-                    <button onClick={() => setSelected(picks.topImage!)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                    <button onClick={(e) => openDetail(picks.topImage!, e.currentTarget)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-fuchsia-600 text-white">Top image</span>
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(picks.topImage).color}`}>{getModelVendor(picks.topImage).label}</span>
                       </div>
                       <div className="font-bold text-sm leading-tight truncate">{picks.topImage.name}</div>
-                      <div className="text-[11px] text-slate-600 mt-1">{costLabel(picks.topImage)}{picks.topImage.supportsImageInput ? ' · reference-capable' : ''}</div>
+                      <div className="text-[11px] text-slate-600 mt-1"><CostValue cost={costOf(picks.topImage, cost)} withNote />{picks.topImage.supportsImageInput ? ' · reference-capable' : ''}</div>
                     </button>
                   )}
                 </div>
-                <div className="text-[10px] text-slate-500 mt-2">Ranked by Arena-Elo accuracy per dollar of output. Free models can rate-limit; verify pricing at the source.</div>
+                <div className="text-[10px] text-slate-500 mt-2">
+                  Ranked by Arena-Elo accuracy for the price of output. Free models can rate-limit; verify pricing at the source.{' '}
+                  <span className="font-bold">Arena Elo: {picksCurated}.</span>
+                </div>
               </div>
             )}
             {activeFilterCount === 0 && !query.trim() && (
-              <div className="mt-4"><ImageModelRanking /></div>
+              <div className="mt-4"><ImageModelRanking audience={cost.audience} /></div>
             )}
             <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
               {visible.length} models{groupByProvider ? ' · grouped by provider' : ''}
               {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
             </div>
+            <p className="mt-1 text-[11px] text-[var(--ds-muted)]">Domain tags and Elo: {visibleCurated}. Parameter sizes: {curatedLabel([])}.</p>
             {groupByProvider ? (
               <ProviderSections
                 models={visible}
@@ -1215,7 +1420,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                     model={model}
                     selection={selection}
                     compared={compareIds.includes(model.id)}
-                    onOpen={() => setSelected(model)}
+                    cost={cost}
+                    onOpen={(opener) => openDetail(model, opener)}
                     onUse={(slot) => useModel(model, slot)}
                     onToggleCompare={() => toggleCompare(model.id)}
                     onStartChat={onStartChat}
@@ -1233,7 +1439,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                   model={model}
                   selection={selection}
                   compared={compareIds.includes(model.id)}
-                  onOpen={() => setSelected(model)}
+                  cost={cost}
+                  onOpen={(opener) => openDetail(model, opener)}
                   onUse={(slot) => useModel(model, slot)}
                   onToggleCompare={() => toggleCompare(model.id)}
                   onStartChat={onStartChat}
@@ -1249,17 +1456,18 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         )}
       </div>
 
-      {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} onStartChat={onStartChat} />}
-      {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} onClose={() => setShowCompare(false)} onUse={useModel} />}
+      {selected && <DetailModal model={selected} selection={selection} cost={cost} openerRef={detailOpenerRef} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} onStartChat={onStartChat} />}
+      {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} cost={cost} openerRef={compareOpenerRef} onClose={() => setShowCompare(false)} onUse={useModel} />}
 
       {/* Compare tray — shows the actual models picked (as removable chips), not just a count. */}
       {compareIds.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t-4 border-black shadow-comic">
-          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-3">
+          {/* Phone: label + actions on one row, the chips on their own scrolling row below. */}
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-2">
             <div className="text-sm font-bold flex items-center gap-1.5 shrink-0">
               <Scale className="w-4 h-4" /> Compare <span className="font-normal text-slate-400">{compareIds.length}/{MAX_COMPARE}</span>
             </div>
-            <div className="flex items-center gap-1.5 flex-1 overflow-x-auto py-0.5">
+            <div className="order-last sm:order-none basis-full sm:basis-auto flex items-center gap-1.5 flex-1 min-w-0 overflow-x-auto py-0.5">
               {compareModels.map((m) => (
                 <span key={`${m.source}:${m.id}`} className="flex items-center gap-1 shrink-0 text-[11px] font-bold border-2 border-black rounded-full pl-2 pr-1 py-0.5 bg-brand-yellow/40 max-w-[14rem]">
                   <span className="truncate">{m.name}</span>
@@ -1267,10 +1475,18 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 </span>
               ))}
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button onClick={() => setCompareIds([])} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Clear</button>
-              <button onClick={() => setShowCompare(true)} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Scale className="w-3 h-3" /> Compare {compareIds.length}</button>
+            <div className="flex items-center gap-2 shrink-0 ml-auto sm:ml-0">
+              <button onClick={clearCompare} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Clear</button>
+              <button onClick={(e) => { compareOpenerRef.current = e.currentTarget; setShowCompare(true); }} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Scale className="w-3 h-3" /> Compare {compareIds.length}</button>
             </div>
+          </div>
+          {/* Always mounted while the tray is, so the cap message is announced when it appears. */}
+          <div role="status" aria-live="polite" className="max-w-7xl mx-auto px-4 sm:px-6">
+            {showCapNotice && (
+              <p key={capAttempts} className={`mb-3 -mt-1 inline-flex items-center gap-1.5 text-xs font-semibold ${RADIUS_CONTROL} border px-2.5 py-1 ${TONE_CHIP.warning}`}>
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden /> You can compare up to {MAX_COMPARE} models. Remove one to add another.
+              </p>
+            )}
           </div>
         </div>
       )}

@@ -2,6 +2,16 @@ import React, { useState } from 'react';
 import { Star, Check, X, ExternalLink, ChevronDown, Image as ImageIcon } from 'lucide-react';
 import { IMAGE_MODEL_RANKING, formatImagePrice, type ImageTier } from '../../services/imageModelRanking';
 import { getModelVendor } from '../../services/modelVendors';
+import { ScrollX } from './ScrollX';
+import { curatedLabel } from './curated';
+import { allRowsInDollars, buildBandIndex, curatedCostText, perImageYardstick, type CostAudience } from './costView';
+import { CostValue } from './CostValue';
+
+// The whole table is the bundled curated ranking (services/imageModelRanking.ts), dated from its rows.
+const CURATED = curatedLabel(IMAGE_MODEL_RANKING.map((m) => m.asOf));
+// Its approximate per-image prices, banded among its own rows (these models have no route of their own,
+// so no payer applies: dollars only for a signed-out visitor or an admin).
+const RANKING_BANDS = buildBandIndex(IMAGE_MODEL_RANKING, (m) => m.id, (m) => perImageYardstick(m.approxUsdPerImage));
 
 const TIER_CLASS: Record<ImageTier, string> = {
   flagship: 'bg-brand-red text-white',
@@ -14,8 +24,9 @@ const TIER_CLASS: Record<ImageTier, string> = {
  * reference / identity consistency (keeping a character on-model across panels), so that column is
  * called out. Collapsible so it doesn't crowd the catalog grid.
  */
-export const ImageModelRanking: React.FC<{ defaultOpen?: boolean }> = ({ defaultOpen = false }) => {
+export const ImageModelRanking: React.FC<{ audience: CostAudience; defaultOpen?: boolean }> = ({ audience, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
+  const dollars = allRowsInDollars(audience);
 
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden">
@@ -33,16 +44,16 @@ export const ImageModelRanking: React.FC<{ defaultOpen?: boolean }> = ({ default
 
       {open && (
         <div className="px-4 pb-4">
-          <div className="overflow-x-auto">
+          <ScrollX label="Image model ranking table" hint="Scroll sideways for more columns">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="text-[10px] font-bold uppercase text-slate-500 border-b-2 border-black">
                   <th className="text-left py-2 pr-2">#</th>
                   <th className="text-left py-2 pr-2">Model</th>
                   <th className="text-left py-2 pr-2">Tier</th>
-                  <th className="text-center py-2 px-2" title="Native multi-image reference — keeps characters on-model across panels">Ref&nbsp;consistency</th>
-                  <th className="text-left py-2 pr-2">~Price</th>
-                  <th className="text-left py-2 pr-2 hidden md:table-cell">Size</th>
+                  <th className="text-center py-2 px-2" title={`Native multi-image reference — keeps characters on-model across panels. ${CURATED}.`}>Ref&nbsp;consistency</th>
+                  <th className="text-left py-2 pr-2" title={dollars ? `List price per image. ${CURATED}.` : 'Per image, relative to the other models in this ranking'}>{dollars ? '~Price' : 'Usage'}</th>
+                  <th className="text-left py-2 pr-2 hidden md:table-cell" title={CURATED}>Size</th>
                   <th className="text-left py-2 pr-2 hidden lg:table-cell">Best at</th>
                   <th className="py-2"></th>
                 </tr>
@@ -68,7 +79,9 @@ export const ImageModelRanking: React.FC<{ defaultOpen?: boolean }> = ({ default
                           ? <Check className="w-4 h-4 text-green-600 inline" aria-label="Reference-capable" />
                           : <X className="w-4 h-4 text-slate-300 inline" aria-label="No native reference" />}
                       </td>
-                      <td className="py-2 pr-2 font-mono text-[12px] whitespace-nowrap">{formatImagePrice(m)}</td>
+                      <td className="py-2 pr-2 font-mono text-[12px] whitespace-nowrap">
+                        <CostValue cost={curatedCostText(perImageYardstick(m.approxUsdPerImage), audience, RANKING_BANDS.get(m.id), formatImagePrice(m))} />
+                      </td>
                       <td className="py-2 pr-2 text-[11px] text-slate-600 hidden md:table-cell whitespace-nowrap">{m.size || '—'}</td>
                       <td className="py-2 pr-2 text-[11px] text-slate-600 hidden lg:table-cell">{m.strengths.slice(0, 2).join(', ')}</td>
                       <td className="py-2">
@@ -81,9 +94,9 @@ export const ImageModelRanking: React.FC<{ defaultOpen?: boolean }> = ({ default
                 })}
               </tbody>
             </table>
-          </div>
+          </ScrollX>
           <div className="text-[10px] text-slate-500 mt-2">
-            ★ = recommended for this app. Figures are approximate, point-in-time — verify pricing/size at each source link.
+            <span className="font-bold">{CURATED}.</span> ★ = recommended for this app. {dollars ? 'Prices are approximate list prices; verify' : 'Usage compares the models in this ranking; verify'} pricing and size at each source link.
           </div>
         </div>
       )}

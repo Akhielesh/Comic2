@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, FlaskConical, Gauge, Zap } from 'lucide-react';
 import { Surface, SurfaceTitle, SurfaceSubtitle, BULL, BEAR, withAlpha } from '../chat/artifacts/kit';
+import { ScrollX } from './ScrollX';
 import { fetchBenchScores, type BenchScores, type BenchScore } from '../../services/modelBenchScores';
 
 // DRS Benchmark Scores — the public, OpenRouter-style view of the latest published
@@ -212,7 +213,7 @@ export const DrsBenchScores: React.FC = () => {
     <div>
       {/* Score table */}
       <Surface accent={ACCENT} header={header}>
-        <div className="max-h-[30rem] overflow-y-auto px-1 pb-2">
+        <ScrollX label="DRS benchmark scores table" hint="Scroll sideways for more columns" fade="surface" scrollClassName="max-h-[30rem] overflow-y-auto px-1 pb-2">
           <table className="w-full text-[12px]">
             <thead className="sticky top-0 z-10 bg-[var(--ds-surface)]">
               <tr className="text-left text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">
@@ -252,7 +253,7 @@ export const DrsBenchScores: React.FC = () => {
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollX>
         <div className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-1.5 text-[10px] text-[var(--ds-muted)]">
           Score is the DRS composite (0–100) from the latest published run · dots are per-phase pass/fail — hover one for TTFT and throughput.
         </div>
